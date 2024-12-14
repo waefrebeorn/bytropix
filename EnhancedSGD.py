@@ -269,11 +269,12 @@ class EnhancedSGD(Optimizer):
                     q_action = self.q_controller.choose_action(q_state)
 
                     # Apply Q-Learning adjustments
-                    lr_scale = q_action['lr_scale']
+                    lr_scale = q_action.get('lr_scale', 1.0)
                     group['lr'] = group['lr'] * lr_scale
                     
                     if self.adaptive_momentum:
-                        group['momentum'] = group['momentum'] * q_action['momentum_scale']
+                        momentum_scale = q_action.get('momentum_scale', 1.0)
+                        group['momentum'] = group['momentum'] * momentum_scale
 
                 # Apply updates
                 self._apply_gradient_updates(p, grad, group, state)
@@ -285,7 +286,7 @@ class EnhancedSGD(Optimizer):
         # Update patch size statistics
         if len(self.state['patch_boundaries']) >= 2:
             avg_patch_size = (self.state['patch_boundaries'][-1] - 
-                            self.state['patch_boundaries'][-2])
+                              self.state['patch_boundaries'][-2])
             self.stats['patch_sizes'].append(avg_patch_size)
 
         return loss

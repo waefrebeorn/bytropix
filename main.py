@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import sys
 import numpy as np
@@ -11,7 +9,7 @@ from typing import Optional, Tuple, List
 import math
 from dataclasses import dataclass
 from torch import amp
-from torch.cuda.amp import autocast
+from torch.cuda.amp import autocast  # This will be updated
 import gc
 import wandb
 import argparse
@@ -20,6 +18,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group, is_initialized
 import socket
 import subprocess
+
+from EnhancedSGD import EnhancedSGD  # Import the enhanced optimizer
 
 # ----------------------------
 # Dataset Preparation
@@ -93,29 +93,177 @@ def entropy_based_sampling(logits: torch.Tensor, config: SamplerConfig) -> torch
 # Model Architecture
 # ----------------------------
 
-class TransformerBlock(nn.Module):
-    def __init__(self, hidden_size: int, num_heads: int, dropout_rate: float = 0.1):
+class SplineActivation(nn.Module):
+    def __init__(self, num_knots=10):
         super().__init__()
-        self.attention = nn.MultiheadAttention(hidden_size, num_heads, dropout=dropout_rate, batch_first=True)
-        self.norm1 = nn.LayerNorm(hidden_size)
-        self.norm2 = nn.LayerNorm(hidden_size)
+        self.knots = nn.Parameter(torch.linspace(-1, 1, num_knots))
+        self.weights = nn.Parameter(torch.randn(num_knots))
+        
+    def forward(self, x):
+        # Simplified B-spline computation
+        distances = torch.abs(x.unsqueeze(-1) - self.knots)
+        weights = torch.softmax(-distances, dim=-1)
+        return (weights * self.weights).sum(-1)
+
+class EntropyGuidedAttention(nn.Module):
+    def __init__(self, hidden_size, num_heads, dropout_rate=0.1):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = hidden_size // num_heads
+        
+        self.qkv = nn.Linear(hidden_size, 3 * hidden_size)
+        self.entropy_proj = nn.Linear(hidden_size, num_heads)
+        self.out_proj = nn.Linear(hidden_size, hidden_size)
+        self.dropout = nn.Dropout(dropout_rate)
+        
+    def forward(self, x, attention_mask=None):
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        
+        # Compute attention with entropy guidance
+        attn = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        if attention_mask is not None:
+            attn = attn.masked_fill(attention_mask.unsqueeze(1) == 0, float('-inf'))
+            
+        # Entropy weighting
+        entropy_weights = torch.sigmoid(self.entropy_proj(x)).unsqueeze(-1)
+        attn = attn * entropy_weights
+        
+        attn = torch.softmax(attn, dim=-1)
+        attn = self.dropout(attn)
+        
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.out_proj(x)
+        return x
+
+class EnhancedTransformerBlock(nn.Module):
+    def __init__(self, hidden_size, num_heads, dropout_rate=0.1):
+        super().__init__()
+        self.attention = EntropyGuidedAttention(hidden_size, num_heads, dropout_rate)
         self.feed_forward = nn.Sequential(
             nn.Linear(hidden_size, 4 * hidden_size),
-            nn.SiLU(),
+            SplineActivation(),  # KAN-inspired activation
             nn.Dropout(dropout_rate),
             nn.Linear(4 * hidden_size, hidden_size),
             nn.Dropout(dropout_rate)
         )
+        self.norm1 = nn.LayerNorm(hidden_size)
+        self.norm2 = nn.LayerNorm(hidden_size)
+        
+    def forward(self, x, attention_mask=None):
+        attn_output = self.attention(x, attention_mask)
+        x = self.norm1(x + attn_output)
+        ff_output = self.feed_forward(x)
+        return self.norm2(x + ff_output)
+
+class LocalEncoderWithNGrams(nn.Module):
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.byte_embeddings = nn.Embedding(256, hidden_size)
+        
+        # N-gram hash embeddings
+        self.ngram_tables = nn.ModuleDict({
+            f'ngram_{n}': nn.Embedding(500000, hidden_size)
+            for n in range(3, 9)
+        })
+        
+        self.hash_projection = nn.Linear(hidden_size * 6, hidden_size)
+        
+    def compute_ngram_hashes(self, x):
+        batch_size, seq_len = x.shape
+        ngram_embeddings = []
+        
+        for n in range(3, 9):
+            if seq_len >= n:
+                # Rolling hash computation
+                ngrams = x.unfold(1, n, 1)
+                multiplier = torch.tensor([256**i for i in range(n)], 
+                                       device=x.device, dtype=torch.long)
+                hashed = (ngrams * multiplier).sum(-1) % 500000
+                emb = self.ngram_tables[f'ngram_{n}'](hashed)
+                # Pad to match the original seq_len
+                pad_size = n - 1
+                # emb shape: (batch_size, seq_len - n +1, hidden_size)
+                # After padding: (batch_size, seq_len, hidden_size)
+                emb = F.pad(emb, (0, 0, 0, pad_size), value=0)
+                ngram_embeddings.append(emb)
+            else:
+                # If ngram not possible, pad with zeros
+                pad_size = n - 1
+                emb = torch.zeros(batch_size, seq_len, self.ngram_tables[f'ngram_{n}'].embedding_dim, device=x.device)
+                ngram_embeddings.append(emb)
+        
+        if ngram_embeddings:
+            concatenated = torch.cat(ngram_embeddings, dim=-1)  # Shape: (batch_size, seq_len, hidden_size *6)
+            projected = self.hash_projection(concatenated)       # Shape: (batch_size, seq_len, hidden_size)
+            return projected
+        else:
+            return torch.zeros(x.size(0), x.size(1), self.hash_projection.out_features, device=x.device)
+    
+    def forward(self, x):
+        byte_embeddings = self.byte_embeddings(x)
+        ngram_features = self.compute_ngram_hashes(x)
+        return byte_embeddings + ngram_features
+
+class EnhancedByteTransformer(nn.Module):
+    """Improved Byte-Level Transformer architecture."""
+    def __init__(self, hidden_size=256, num_heads=8, num_layers=4, dropout_rate=0.1, context_size=8):
+        super().__init__()
+        self.context_size = context_size
+        
+        # Local encoder with n-gram embeddings
+        self.local_encoder = LocalEncoderWithNGrams(hidden_size)
+        
+        # Enhanced transformer with entropy-based attention
+        self.latent_transformer = nn.ModuleList([
+            EnhancedTransformerBlock(
+                hidden_size=hidden_size,
+                num_heads=num_heads,
+                dropout_rate=dropout_rate
+            ) for _ in range(num_layers)
+        ])
+        
+        # Local decoder with spline activations
+        self.local_decoder = LocalDecoderWithSplines(hidden_size)
+        
+        # Positional encoding
+        self.pos_encoding = PositionalEncoding(hidden_size, dropout_rate)
+        
+        self.norm = nn.LayerNorm(hidden_size)
+        
+        # Initialize with improved scheme
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.xavier_uniform_(module.weight, gain=1/math.sqrt(2))
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.ones_(module.weight)
+            torch.nn.init.zeros_(module.bias)
 
     def forward(self, x, attention_mask=None):
-        # Self-attention with optional mask
-        attn_output, _ = self.attention(x, x, x, attn_mask=attention_mask)
-        x = self.norm1(x + attn_output)
-
-        # Feed-forward
-        ff_output = self.feed_forward(x)
-        x = self.norm2(x + ff_output)
-        return x
+        # Local encoding with n-grams
+        local_features = self.local_encoder(x)
+        
+        # Positional encoding
+        local_features = self.pos_encoding(local_features)
+        
+        # Process through enhanced transformer layers
+        latent = local_features
+        for block in self.latent_transformer:
+            latent = block(latent, attention_mask)
+        
+        latent = self.norm(latent)
+        
+        # Local decoding with spline activations
+        output = self.local_decoder(latent)
+        
+        return output
 
 class PositionalEncoding(nn.Module):
     def __init__(self, hidden_size: int, dropout_rate: float, max_len: int = 5000):
@@ -133,55 +281,12 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
-class LocalEncoder(nn.Module):
-    """Local encoder for processing byte sequences."""
-    def __init__(self, hidden_size: int, num_heads: int = 4, num_layers: int = 1):
-        super().__init__()
-        self.embedding = nn.Embedding(256, hidden_size)
-        self.transformer = nn.ModuleList([
-            TransformerBlock(hidden_size, num_heads, dropout_rate=0.1)
-            for _ in range(num_layers)
-        ])
-        self.norm = nn.LayerNorm(hidden_size)
-
-        # Hash n-gram embeddings
-        self.ngram_embeddings = nn.ModuleDict({
-            f'ngram_{n}': nn.Embedding(500000, hidden_size)
-            for n in range(3, 9)
-        })
-
-    def compute_ngram_embeddings(self, x):
-        batch_size, seq_len = x.shape
-        embeddings = []
-        for n in range(3, 9):
-            if seq_len >= n:
-                # Simple rolling hash for n-grams
-                ngrams = x.unfold(1, n, 1)  # Shape: (batch_size, seq_len - n +1, n)
-                # Create a tensor for [256^0, 256^1, ..., 256^(n-1)]
-                multiplier = torch.tensor([256**i for i in range(n)], device=x.device, dtype=torch.long)
-                hashed = (ngrams * multiplier).sum(-1) % 500000  # Shape: (batch_size, seq_len -n +1)
-                emb = self.ngram_embeddings[f'ngram_{n}'](hashed)  # Shape: (batch_size, seq_len -n +1, hidden_size)
-                # Pad to match the original seq_len
-                pad_size = n - 1
-                emb = F.pad(emb, (0, 0, 0, pad_size), value=0)  # Shape: (batch_size, seq_len, hidden_size)
-                embeddings.append(emb)
-        return sum(embeddings) if embeddings else torch.zeros_like(self.embedding(x))
-
-    def forward(self, x):
-        x_emb = self.embedding(x)  # Shape: (batch_size, seq_len, hidden_size)
-        ngram_emb = self.compute_ngram_embeddings(x)  # Shape: (batch_size, seq_len, hidden_size)
-        x = x_emb + ngram_emb
-        for layer in self.transformer:
-            x = layer(x)
-        return self.norm(x)  # Shape: (batch_size, seq_len, hidden_size)
-
-class LocalDecoder(nn.Module):
-    """Local decoder for generating bytes."""
-    def __init__(self, hidden_size: int, num_heads: int = 4, num_layers: int = 9):
+class LocalDecoderWithSplines(nn.Module):
+    def __init__(self, hidden_size):
         super().__init__()
         self.transformer = nn.ModuleList([
-            TransformerBlock(hidden_size, num_heads, dropout_rate=0.1)
-            for _ in range(num_layers)
+            EnhancedTransformerBlock(hidden_size, num_heads=8, dropout_rate=0.1)
+            for _ in range(9)
         ])
         self.norm = nn.LayerNorm(hidden_size)
         self.output = nn.Linear(hidden_size, 256)
@@ -191,52 +296,6 @@ class LocalDecoder(nn.Module):
             x = layer(x)
         x = self.norm(x)
         return self.output(x)  # Shape: (batch_size, seq_len, 256)
-
-class ByteLatentTransformer(nn.Module):
-    """Improved Byte-Level Transformer architecture."""
-    def __init__(self, hidden_size: int = 256, num_layers: int = 4, 
-                 num_heads: int = 8, dropout_rate: float = 0.1, context_size: int = 8):
-        super().__init__()
-        self.context_size = context_size
-        self.local_encoder = LocalEncoder(hidden_size)
-        self.local_decoder = LocalDecoder(hidden_size)
-        self.latent_transformer = nn.ModuleList([
-            TransformerBlock(hidden_size, num_heads, dropout_rate)
-            for _ in range(num_layers)
-        ])
-        self.norm = nn.LayerNorm(hidden_size)
-        self.pos_encoding = PositionalEncoding(hidden_size, dropout_rate)
-
-        # Initialize parameters with better defaults
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.xavier_uniform_(module.weight, gain=1/math.sqrt(2))
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
-            torch.nn.init.ones_(module.weight)
-            torch.nn.init.zeros_(module.bias)
-
-    def forward(self, x, attention_mask=None):
-        # Local encoding
-        local_features = self.local_encoder(x)  # Shape: (batch_size, seq_len, hidden_size)
-
-        # Positional encoding
-        local_features = self.pos_encoding(local_features)
-
-        # Global processing
-        latent = local_features
-        for block in self.latent_transformer:
-            latent = block(latent, attention_mask)
-        latent = self.norm(latent)
-
-        # Local decoding
-        output = self.local_decoder(latent)  # Shape: (batch_size, seq_len, 256)
-        return output
 
 # ----------------------------
 # Distributed Training Setup
@@ -351,11 +410,20 @@ def train_model(
     if world_size > 1:
         model = DDP(model, device_ids=[device.index] if device.type == 'cuda' else None, find_unused_parameters=False)
     
-    optimizer = torch.optim.AdamW(
+    optimizer = EnhancedSGD(
         model.parameters(),
         lr=learning_rate,
+        momentum=0.9,
+        smoothing_factor=0.1,
+        entropy_threshold=0.3,
+        patch_size=6,
         weight_decay=0.01,
-        betas=(0.9, 0.95)
+        apply_noise=True,
+        adaptive_momentum=True,
+        gradient_centering=True,
+        gradient_clipping=True,
+        noise_scale=1e-4,
+        max_grad_norm=1.0
     )
     
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -378,7 +446,7 @@ def train_model(
             target = target.to(device, non_blocking=True)
             
             # Mixed precision forward pass
-            with autocast():
+            with amp.autocast(device_type='cuda', dtype=None):
                 logits = model(context)
                 loss = F.cross_entropy(logits[:, -1, :], target)
                 loss = loss / gradient_accumulation_steps
@@ -456,16 +524,16 @@ def generate_text(
     with torch.no_grad():
         for _ in range(length):
             # Ensure we have enough context
-            if len(generated) < model.module.context_size:
+            if len(generated) < model.context_size:
                 context_bytes = generated
                 # Pad if necessary
-                context_bytes = [0]*(model.module.context_size - len(context_bytes)) + context_bytes
+                context_bytes = [0]*(model.context_size - len(context_bytes)) + context_bytes
             else:
-                context_bytes = generated[-model.module.context_size:]
+                context_bytes = generated[-model.context_size:]
 
             context = torch.tensor([context_bytes], dtype=torch.long).to(device)
 
-            with autocast():
+            with amp.autocast(device_type='cuda', dtype=None):
                 logits = model(context)
                 last_logits = logits[:, -1, :] / temperature  # Apply temperature
 
@@ -480,7 +548,7 @@ def generate_text(
 # ----------------------------
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Byte-Level Transformer Training Script")
+    parser = argparse.ArgumentParser(description="Enhanced Byte-Level Transformer Training Script")
     parser.add_argument('--distributed', action='store_true', help='Enable Distributed Data Parallel training')
     parser.add_argument('--rank', type=int, default=0, help='Rank of the current process')
     parser.add_argument('--local_rank', type=int, default=0, help='Local rank for distributed training')
@@ -506,7 +574,7 @@ def main():
     }
     
     # Initialize model
-    model = ByteLatentTransformer(
+    model = EnhancedByteTransformer(
         hidden_size=256,
         num_layers=4, 
         num_heads=8,
