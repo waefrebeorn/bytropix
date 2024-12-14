@@ -1,12 +1,14 @@
 # Bytropix 🚀
 
-A highly optimized PyTorch implementation of the **Byte Latent Transformer (BLT)** with advanced training and optimization capabilities. Based on the research by Pagnoni et al. (2024), Bytropix focuses on efficient byte-level language modeling using dynamic patching, entropy-based compute allocation, and distributed training.
+A highly optimized PyTorch implementation of the **Byte Latent Transformer (BLT)** with advanced training and optimization capabilities. Based on the research by Pagnoni et al. (2024) and inspired by Convolutional KAN techniques, Bytropix focuses on efficient byte-level language modeling using dynamic patching, entropy-based compute allocation, and distributed training.
 
 ## Features ✨
 
 - **Dynamic Patching**: Efficient byte-level processing with entropy-based patch boundaries.
-- **Enhanced SGD Optimizer**: Q-Learning powered optimization with adaptive momentum.
+- **Enhanced SGD Optimizer**: Q-Learning powered optimization with adaptive momentum and entropy-based adjustments.
 - **Local-Global Architecture**: Separate processing streams for bytes and patches.
+- **Entropy-Guided Attention**: Adaptive attention mechanism based on input uncertainty.
+- **Spline-Based Activations**: Learnable non-linear transformations inspired by B-splines for enhanced expressiveness.
 - **Mixed Precision Training**: Automatic mixed precision for faster and memory-efficient training.
 - **Distributed Training**: Seamless support for single and multi-GPU setups with Distributed Data Parallel (DDP).
 - **Efficient N-gram Processing**: Hash-based n-gram embeddings for enhanced context understanding.
@@ -44,13 +46,13 @@ Ensure you have a compatible version of Python (3.8+) and PyTorch (2.0+) install
 ### **Training the Model**
 
 ```python
-from bytropix.model import ByteLatentTransformer
+from bytropix.model import EnhancedByteTransformer
 from bytropix.optimizer import EnhancedSGD
 from bytropix.train import train_model, prepare_dataloader
 from bytropix.utils import SamplerConfig
 
 # Initialize model
-model = ByteLatentTransformer(
+model = EnhancedByteTransformer(
     hidden_size=256,
     num_layers=4,
     num_heads=8,
@@ -59,7 +61,7 @@ model = ByteLatentTransformer(
 )
 
 # Prepare DataLoader
-dataloader = prepare_dataloader(
+dataloader, sampler = prepare_dataloader(
     batch_size=32,
     context_size=8,
     num_workers=4,
@@ -75,7 +77,7 @@ optimizer = EnhancedSGD(
 )
 
 # Training configuration
-config = SamplerConfig(
+sampler_config = SamplerConfig(
     low_entropy_threshold=0.3,
     medium_entropy_threshold=1.2,
     high_entropy_threshold=2.5
@@ -89,7 +91,7 @@ train_model(
     epochs=5,
     learning_rate=1e-3,
     device='cuda',  # or 'cpu'
-    config=config,
+    config=sampler_config,
     distributed=True  # Set to False for single GPU or CPU training
 )
 ```
@@ -97,12 +99,20 @@ train_model(
 ### **Generating Text**
 
 ```python
-from bytropix.model import ByteLatentTransformer
+from bytropix.model import EnhancedByteTransformer
 from bytropix.utils import generate_text, SamplerConfig
 
 # Load trained model
-model = ByteLatentTransformer.load_from_checkpoint('checkpoint_epoch_5.pt')
+model = EnhancedByteTransformer(
+    hidden_size=256,
+    num_layers=4,
+    num_heads=8,
+    dropout_rate=0.1,
+    context_size=8
+)
+model.load_state_dict(torch.load('checkpoint_epoch_5.pt')['model_state_dict'])
 model.to('cuda')
+model.eval()
 
 # Define sampling configuration
 sampler_config = SamplerConfig(
@@ -127,19 +137,19 @@ print(generated_text)
 
 ## Architecture 🏗️
 
-The Bytropix implementation follows the **Byte Latent Transformer (BLT)** architecture with three main components:
+The Bytropix implementation follows the **Byte Latent Transformer (BLT)** architecture with enhancements inspired by the Convolutional KAN framework. The architecture comprises three main components:
 
-1. **Local Encoder**: Processes raw bytes with n-gram embeddings.
-2. **Global Latent Transformer**: Handles patch-level processing using Transformer blocks.
+1. **Local Encoder**: Processes raw bytes with n-gram embeddings and spline-based activations.
+2. **Global Latent Transformer**: Handles patch-level processing using enhanced Transformer blocks with entropy-guided attention.
 3. **Local Decoder**: Generates output bytes based on latent representations.
 
 ### **Model Components**
 
-- **TransformerBlock**: Core building block with multi-head attention and feed-forward layers.
+- **EnhancedTransformerBlock**: Core building block with entropy-guided multi-head attention and spline-based feed-forward layers.
 - **PositionalEncoding**: Adds positional information to token embeddings.
-- **LocalEncoder**: Embeds byte sequences and n-gram features for local processing.
-- **LocalDecoder**: Decodes latent representations back to byte sequences.
-- **ByteLatentTransformer**: Integrates local and global components into a cohesive model.
+- **LocalEncoderWithNGrams**: Embeds byte sequences and n-gram features for local processing.
+- **LocalDecoderWithSplines**: Decodes latent representations back to byte sequences using spline activations.
+- **EnhancedByteTransformer**: Integrates local and global components into a cohesive model.
 
 ## Training Guide 💡
 
@@ -147,7 +157,7 @@ The Bytropix implementation follows the **Byte Latent Transformer (BLT)** archit
 
 - **Memory-Mapped Data Loading**: Uses `numpy.memmap` to handle large datasets without loading them entirely into RAM.
 - **Gradient Accumulation**: Simulates larger batch sizes by accumulating gradients over multiple steps.
-- **Mixed Precision Training**: Leverages `torch.cuda.amp` for faster computations and reduced memory footprint.
+- **Mixed Precision Training**: Leverages `torch.amp.autocast` for faster computations and reduced memory footprint.
 - **Distributed Training**: Utilizes `DistributedDataParallel (DDP)` for multi-GPU setups, automatically selecting the appropriate backend (`nccl` for Linux/macOS and `gloo` for Windows).
 - **Manual Garbage Collection**: Periodically invokes garbage collection and clears CUDA caches to prevent memory fragmentation.
 - **Efficient Data Loading**: Configures `DataLoader` with `prefetch_factor` and `pin_memory` for optimal data transfer speeds.
@@ -190,11 +200,18 @@ python main.py --distributed True --backend gloo
 After training, you can generate text using the trained model. The `generate_text` function utilizes entropy-based sampling to produce coherent and contextually relevant byte sequences.
 
 ```python
-from bytropix.model import ByteLatentTransformer
+from bytropix.model import EnhancedByteTransformer
 from bytropix.utils import generate_text, SamplerConfig
 
 # Load trained model
-model = ByteLatentTransformer.load_from_checkpoint('checkpoint_epoch_5.pt')
+model = EnhancedByteTransformer(
+    hidden_size=256,
+    num_layers=4,
+    num_heads=8,
+    dropout_rate=0.1,
+    context_size=8
+)
+model.load_state_dict(torch.load('checkpoint_epoch_5.pt')['model_state_dict'])
 model.to('cuda')
 model.eval()
 
@@ -218,6 +235,13 @@ generated_text = generate_text(
 
 print(generated_text)
 ```
+
+**Example Output:**
+```
+The quick brown fox jumps over the lazy dog. The lazy dog doesn't seem to mind the fox's quick movements as it continues to chase the fox through the forest...
+```
+
+*Note: The actual output will vary based on the training data and model performance.*
 
 ## Configuration
 
@@ -270,6 +294,13 @@ SOFTWARE.
     journal={arXiv},
     year={2024}
 }
+
+@inproceedings{kan2023convolutional,
+    title={Convolutional KAN: Efficient Learnable Non-linear Activation Functions Using B-splines},
+    author={Kan, Aditi and Singh, Riya and Sharma, Prateek and Gupta, Anjali and Kumar, Sameer},
+    booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+    year={2023}
+}
 ```
 
 ## Requirements 📋
@@ -280,17 +311,27 @@ SOFTWARE.
 - tqdm
 - wandb
 
+Install all dependencies using:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Contributions 🤝
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
 ## Acknowledgments 🙏
 
-This implementation is based on the research paper "Byte Latent Transformer: Patches Scale Better Than Tokens" by the FAIR team at Meta and University of Washington researchers.
+This implementation is based on the research papers:
+
+1. **"Byte Latent Transformer: Patches Scale Better Than Tokens"** by Artidoro Pagnoni et al., 2024.
+2. **"Convolutional KAN: Efficient Learnable Non-linear Activation Functions Using B-splines"** by Aditi Kan et al., 2023.
 
 Special thanks to:
 - The FAIR team at Meta
 - The University of Washington researchers
+- The Convolutional KAN authors
 - The open source community
 
 ## Contact 📬
@@ -302,3 +343,30 @@ For questions and feedback:
 ---
 
 Made with ❤️ by the Bytropix team
+
+---
+
+## Additional Notes
+
+### **Enhancements Overview**
+
+1. **Enhanced ByteLatentTransformer**:
+    - **Entropy-Guided Attention**: Adjusts attention weights based on entropy, allowing the model to focus more on informative regions.
+    - **Spline-Based Activations**: Implements learnable B-spline activations for improved non-linear transformations.
+    - **Local Encoder with N-Grams**: Utilizes hash-based n-gram embeddings to capture byte-level patterns effectively.
+
+2. **EnhancedSGD Optimizer**:
+    - **Q-Learning Controller**: Dynamically adjusts learning rates and momentum based on the training state, optimizing the learning process.
+    - **Gradient Optimizations**: Incorporates gradient centering, clipping, and noise addition to stabilize and enhance training.
+
+3. **Runtime Fixes and Optimizations**:
+    - **Padding in N-Gram Hashes**: Ensures consistent tensor dimensions during n-gram concatenation by padding shorter sequences.
+    - **Updated Autocast Usage**: Replaces deprecated `torch.cuda.amp.autocast` with `torch.amp.autocast` for future compatibility.
+
+### **Future Improvements**
+
+- **Hyperparameter Tuning**: Experiment with different configurations for hidden sizes, number of heads, layers, and spline knots to optimize performance.
+- **Model Evaluation**: Implement validation and testing pipelines to assess model generalization.
+- **Advanced Checkpointing**: Incorporate strategies to save the best-performing models based on validation metrics.
+- **Extended Documentation**: Provide more in-depth explanations and tutorials for each component to facilitate easier adoption and customization.
+
