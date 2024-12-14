@@ -54,6 +54,7 @@ echo Creating requirements.txt...
     echo tensorboard
     echo psutil
     echo scikit-learn
+	echo wandb
 ) > requirements.txt
 
 REM Install the appropriate version of PyTorch based on CUDA availability
