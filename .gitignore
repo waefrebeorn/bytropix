@@ -1,0 +1,243 @@
+### Python ###
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.dll
+*.dylib
+
+### Virtual Environment ###
+venv/
+env/
+ENV/
+onnx/
+.env
+.venv/
+.ENV/
+.python-version
+
+### Build and Distribution ###
+build/
+bin/
+lib/
+dist/
+*.egg-info/
+*.egg
+*.whl
+*.manifest
+*.spec
+_build/
+out/
+
+### Vulkan Specific ###
+*.spv
+!shaders/*.spv  # Keep tracked shader binaries
+vulkan_debug.txt
+vk_layer_settings.txt
+VkLayer_*.json
+*.spx
+renderdoc.cap
+
+### ONNX ###
+onnx/*.pb
+onnx/*.pb.h
+onnx/*.pb.cc
+!onnx/onnx.pb.h  # Keep the main ONNX protobuf header
+!onnx/onnx.pb.cc # Keep the main ONNX protobuf source
+*.onnx
+*.mlmodel
+
+### Protobuf ###
+*.pb.h
+*.pb.cc
+protobuf-*/
+protoc-*/
+
+### CMake ###
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+CMakeSettings.json
+Testing/
+.cmake/
+Makefile
+*.make
+*.cmake
+
+### Visual Studio ###
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.user
+*.userosscache
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.aps
+*.ncb
+*.opendb
+*.cachefile
+*.VC.VC.opendb
+ipch/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+
+### Visual Studio Code ###
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+### JetBrains IDEs ###
+.idea/
+*.iml
+*.iws
+*.ipr
+cmake-build-*/
+out/
+.idea_modules/
+atlassian-ide-plugin.xml
+
+### Object files and Binaries ###
+*.o
+*.obj
+*.ko
+*.elf
+*.exp
+*.lib
+*.ilk
+*.pdb
+*.map
+*.a
+*.la
+*.lo
+*.gch
+*.pch
+
+### Logs and Debugging ###
+*.log
+logs/
+debug/
+Debug/
+*.dmp
+*.tlog
+*.lastbuildstate
+gmon.out
+core
+*.core
+
+### OS Generated Files ###
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+### Temporary Files ###
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+*.temp
+*.pid
+*.seed
+*.pid.lock
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+### CUDA ###
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
+*.cudafe1.*
+*.cudafe2.*
+*.module_id
+*.cmake.*
+*.dSYM/
+
+### Project Specific ###
+# Keep these directories
+!comp/        # Compute shader source directory
+!src/         # Source code directory
+!include/     # Header files directory
+!tests/       # Test files directory
+!examples/    # Example files directory
+!docs/        # Documentation directory
+
+# Custom Project Files to Keep
+!CMakeLists.txt
+!.gitignore
+!README.md
+!LICENSE
+!requirements.txt
+!setup.py
+!setup.cfg
+!pyproject.toml
+!MANIFEST.in
+!.clang-format
+!.clang-tidy
+!.editorconfig
+
+### Dependencies ###
+node_modules/
+jspm_packages/
+.pnp/
+.pnp.js
+vendor/
+third_party/*
+!third_party/README.md
+
+### Coverage ###
+coverage/
+*.coverage
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+htmlcov/
+
+### Documentation ###
+docs/_build/
+doc/_build/
+/site
+
+### Packaging ###
+*.tar.gz
+*.zip
+*.rar
+*.7z
