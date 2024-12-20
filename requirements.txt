@@ -1,0 +1,12 @@
+torch
+torchvision
+datasets
+transformers
+tokenizers
+torchtext
+matplotlib
+scipy
+tensorboard
+psutil
+scikit-learn
+wandb
