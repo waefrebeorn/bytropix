@@ -9,9 +9,54 @@ import numpy as np
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG to capture detailed logs
+    level=logging.INFO,  # Set to INFO to capture essential logs
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+
+class GradientStats:
+    """Tracks gradient statistics for reporting."""
+    def __init__(self):
+        self.reset()
+    
+    def reset(self):
+        self.total_gradients = 0
+        self.clipped_gradients = 0
+        self.max_gradient_norm = 0
+        self.sum_clip_ratios = 0
+        self.step_stats = {}
+    
+    def record_gradient(self, original_norm: float, clipped: bool, clip_ratio: float = None):
+        self.total_gradients += 1
+        if clipped:
+            self.clipped_gradients += 1
+            if clip_ratio:
+                self.sum_clip_ratios += clip_ratio
+        self.max_gradient_norm = max(self.max_gradient_norm, original_norm)
+    
+    def get_step_stats(self) -> dict:
+        if self.total_gradients == 0:
+            return {
+                "gradients_clipped": 0,
+                "total_gradients": 0,
+                "clip_ratio": 0,
+                "max_gradient": 0,
+                "avg_clip_amount": 0
+            }
+            
+        return {
+            "gradients_clipped": self.clipped_gradients,
+            "total_gradients": self.total_gradients,
+            "clip_ratio": self.clipped_gradients / self.total_gradients,
+            "max_gradient": self.max_gradient_norm,
+            "avg_clip_amount": self.sum_clip_ratios / self.clipped_gradients if self.clipped_gradients > 0 else 0
+        }
+    
+    def record_step(self, step: int):
+        stats = self.get_step_stats()
+        self.step_stats[step] = stats
+        self.reset()
+        return stats
 
 
 class QLearningController:
@@ -50,8 +95,8 @@ class QLearningController:
 
         # Refined action space with more granular options
         self.action_ranges = {
-            'lr_scale': np.array([0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15]),
-            'momentum_scale': np.array([0.95, 0.975, 0.99, 1.0, 1.01, 1.025, 1.05])
+            'lr_scale': np.array([0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5]),
+            'momentum_scale': np.array([0.95, 0.975, 0.99, 1.0, 1.01, 1.025, 1.05, 1.075, 1.1, 1.125, 1.15, 1.175, 1.2])
         }
 
         # Initialize success tracking
@@ -59,44 +104,44 @@ class QLearningController:
         self.action_counts = {k: np.zeros(len(v)) for k, v in self.action_ranges.items()}
 
         # Consistent improvement tracking
-        self.consistent_improvement = deque(maxlen=10)
+        self.consistent_improvement = deque(maxlen=25)  # Reduced from 50
 
         # Q-Table memory management
         self.max_q_table_size = max_q_table_size
 
-    def get_state(self, lr: float, momentum: float, grad_var: float, loss: float) -> tuple:
+    def get_state(self, lr: float, momentum: float, grad_var: float, loss: float, should_log: bool = False) -> tuple:
         """Enhanced state representation with current hyperparameters and gradient metrics."""
-        # Track loss history
+        # Track history
         self.loss_window.append(loss)
         self.grad_window.append(grad_var)
-
-        # Track learning rate and momentum changes
         self.lr_window.append(lr)
         self.momentum_window.append(momentum)
-
-        # Compute loss trend
+        
+        # More informative loss trend calculation
         if len(self.loss_window) >= 3:
             recent_losses = list(self.loss_window)[-3:]
-            loss_trend = np.polyfit(range(3), recent_losses, 1)[0]
-            loss_trend_bin = np.digitize(loss_trend, bins=[-0.1, -0.01, -0.001, 0.001, 0.01, 0.1])
+            loss_trend = (recent_losses[0] - recent_losses[-1]) / recent_losses[0]  # Relative improvement
+            loss_trend_bin = np.digitize(loss_trend, bins=[-0.1, -0.01, 0, 0.01, 0.1])
         else:
-            loss_trend_bin = 3  # Middle bin as default
-
-        # Compute gradient stability
+            loss_trend_bin = 2  # Middle bin as default
+        
+        # Better gradient stability metric
         if len(self.grad_window) >= 3:
-            grad_std = np.std(list(self.grad_window)[-3:])
-            grad_stability_bin = np.digitize(grad_std, bins=[1e-6, 1e-4, 1e-2, 1e-1])
+            recent_grads = list(self.grad_window)[-3:]
+            grad_stability = np.std(recent_grads) / (np.mean(recent_grads) + 1e-8)  # Coefficient of variation
+            grad_stability_bin = np.digitize(grad_stability, bins=[0.1, 0.3, 0.5, 1.0])
         else:
-            grad_stability_bin = 2  # Middle bin as default
-
-        # Current learning rate bin
-        lr_bin = np.digitize(lr, bins=[0.5, 0.7, 0.9, 1.0, 1.1, 1.3])
-
-        # Current momentum bin
-        momentum_bin = np.digitize(momentum, bins=[0.8, 0.9, 1.0, 1.1, 1.2])
-
+            grad_stability_bin = 2
+        
+        # More granular learning rate bins
+        lr_bin = np.digitize(lr, bins=[0.1, 0.5, 1.0, 2.0, 5.0])
+        
+        # More granular momentum bins
+        momentum_bin = np.digitize(momentum, bins=[0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2])
+        
         state = (lr_bin, momentum_bin, loss_trend_bin, grad_stability_bin)
-        logging.debug(f"Generated state: {state}")
+        if should_log:
+            logging.info(f"Generated state: {state}")
         return state
 
     def compute_reward(
@@ -104,51 +149,43 @@ class QLearningController:
         loss_trend: float,
         grad_health: float,
         consistent_improvement: bool,
-        no_change: bool = False
+        no_change: bool = False,
+        should_log: bool = False
     ) -> float:
         """Enhanced reward computation emphasizing stability and consistent improvement."""
-        # Linear scaling for loss improvement within bounds
-        loss_improvement = np.clip(loss_trend, -0.5, 0.5)  # Define bounds
-        base_reward = loss_improvement  # Linear scaling
-
-        # Gradient health factor with stronger influence
-        grad_factor = np.clip(grad_health, 0, 1)
-
-        # Enhanced stability reward
-        stability_factor = np.clip(grad_health * 1.5, 0, 1)
-
-        # Consistent improvement bonus
-        consistency_bonus = 0.1 if consistent_improvement else 0.0
-
-        # Penalize extreme changes
-        smoothness_penalty = -0.1 * (1.0 - stability_factor)
-
-        # Combine all factors
+        # Stronger emphasis on loss improvement
+        loss_improvement = np.clip(loss_trend, -1.0, 1.0)
+        base_reward = 2.0 * loss_improvement  # Double the impact
+        
+        # Gradient health with exponential scaling
+        grad_factor = 2.0 * np.exp(-grad_health) - 1.0  # Maps [0, inf) to (-1, 1)
+        
+        # Stronger consistency bonus
+        consistency_bonus = 0.5 if consistent_improvement else -0.2
+        
+        # Stronger penalty for no changes when not improving
+        no_change_penalty = -0.5 if no_change and not consistent_improvement else 0.0
+        
+        # Combine rewards with adjusted weights
         reward = (
-            base_reward * 0.4 +
-            grad_factor * 0.3 +
-            stability_factor * 0.2 +
-            consistency_bonus +
-            smoothness_penalty
+            base_reward * 0.6 +  # Increased weight on loss improvement
+            grad_factor * 0.2 +  # Reduced weight on gradient health
+            consistency_bonus * 0.2 +  # Added weight for consistency
+            no_change_penalty
         )
-
-        # Apply reduced penalty for no changes
-        if no_change:
-            penalty = -0.2  # Reduced from -0.5
-            reward += penalty
-            logging.debug("Applied reduced no-change penalty to the reward.")
-
-        logging.debug(f"Computed reward: {reward} (base_reward={base_reward}, grad_factor={grad_factor}, "
-                      f"stability_factor={stability_factor}, consistency_bonus={consistency_bonus}, "
-                      f"smoothness_penalty={smoothness_penalty})")
+        
+        if should_log:
+            logging.info(f"Computed reward: {reward} (base_reward={base_reward}, grad_factor={grad_factor}, "
+                         f"consistency_bonus={consistency_bonus}, no_change_penalty={no_change_penalty})")
         return float(np.clip(reward, -1.0, 1.0))
 
-    def update(self, state: tuple, action: Dict[str, float], reward: float, next_state: Optional[tuple]):
+    def update(self, state: tuple, action: Dict[str, float], reward: float, next_state: Optional[tuple], should_log: bool = False):
         """Enhanced Q-learning update with experience tracking."""
         # Record reward and update state memory
         self.state_memory.append((state, action, reward))
-        logging.debug(f"State memory updated with state={state}, action={action}, reward={reward}")
-
+        if should_log:
+            logging.info(f"State memory updated with state={state}, action={action}, reward={reward}")
+    
         # Initialize Q-values if needed
         for s in [state, next_state] if next_state is not None else [state]:
             if s not in self.q_table:
@@ -156,86 +193,97 @@ class QLearningController:
                     param: np.zeros(len(space))
                     for param, space in self.action_ranges.items()
                 }
-
+    
         # Q-Table memory management: Evict least recently used states if Q-table exceeds max size
         if len(self.q_table) > self.max_q_table_size:
             oldest_state = self.state_memory.popleft()[0]
             if oldest_state in self.q_table:
                 del self.q_table[oldest_state]
-                logging.debug(f"Evicted oldest state from Q-table: {oldest_state}")
-
+                if should_log:
+                    logging.info(f"Evicted oldest state from Q-table: {oldest_state}")
+    
         # Update Q-values with adaptive learning rate
         for param, value in action.items():
             space = self.action_ranges[param]
             action_idx = np.abs(space - value).argmin()
-
+    
             # Get max future Q-value
-            if next_state is not None:
+            if next_state is not None and next_state in self.q_table:
                 next_q_values = self.q_table[next_state][param]
                 max_future_q = np.max(next_q_values)
             else:
                 max_future_q = 0.0
-
+    
             # Current Q-value
             current_q = self.q_table[state][param][action_idx]
-
+    
             # Compute TD error with less aggressive clipping
             td_error = reward + self.gamma * max_future_q - current_q
             td_error = np.clip(td_error, -1.0, 1.0)  # Reduced clipping range
-
+    
             # Adaptive learning rate based on visit count
             self.action_counts[param][action_idx] += 1
             visit_count = self.action_counts[param][action_idx]
             effective_lr = self.alpha / (1 + np.log1p(visit_count) * 0.1)
-
+    
             # Update Q-value
             self.q_table[state][param][action_idx] += effective_lr * td_error
-
-            logging.debug(f"Updated Q-table for state={state}, param={param}, action_idx={action_idx}: "
-                          f"current_q={current_q}, max_future_q={max_future_q}, td_error={td_error}, "
-                          f"effective_lr={effective_lr}")
-
+    
+            if should_log:
+                logging.info(f"Updated Q-table for state={state}, param={param}, action_idx={action_idx}: "
+                             f"current_q={current_q:.4f}, max_future_q={max_future_q:.4f}, td_error={td_error:.4f}, "
+                             f"effective_lr={effective_lr:.6f}")
+    
             # Update success tracking
             if reward > 0:
                 self.action_success[param][action_idx] += 1
 
-    def choose_action(self, state: tuple) -> Dict[str, float]:
+    def choose_action(self, state: tuple, should_log: bool = False) -> Dict[str, float]:
         """Enhanced action selection with success-based exploration and adaptive epsilon decay."""
         if state not in self.q_table:
             self.q_table[state] = {
                 param: np.zeros(len(space))
                 for param, space in self.action_ranges.items()
             }
-
-        # Compute success rates for each action
-        success_rates = {}
-        for param, space in self.action_ranges.items():
-            counts = self.action_counts[param]
-            successes = self.action_success[param]
-            rates = np.where(counts > 0, successes / counts, 0.5)
-            success_rates[param] = rates
-
+    
         action = {}
-        if np.random.random() < self.epsilon:
-            # Smart exploration based on success rates
-            for param, space in self.action_ranges.items():
-                rates = success_rates[param]
-                # Softmax temperature decreases with more experience
-                temp = 1.0 / (1.0 + len(self.state_memory) * 0.01)
-                probs = np.exp(rates / temp)
-                probs /= probs.sum()
-                chosen_action = float(np.random.choice(space, p=probs))
-                action[param] = chosen_action
-                logging.debug(f"Exploratory action chosen for {param}: {chosen_action}")
-        else:
-            # Greedy selection
-            for param, space in self.action_ranges.items():
+        # Separate exploration rates for lr and momentum
+        explore_lr = np.random.random() < self.epsilon
+        explore_momentum = np.random.random() < self.epsilon * 0.8  # Less exploration for momentum
+    
+        for param, space in self.action_ranges.items():
+            should_explore = explore_lr if param == 'lr_scale' else explore_momentum
+            
+            if should_explore:
+                # Smart exploration based on past performance
+                if len(self.state_memory) > 10:
+                    recent_rewards = [r for _, _, r in list(self.state_memory)[-10:]]
+                    if np.mean(recent_rewards) < 0:  # If performing poorly, explore more widely
+                        chosen_idx = np.random.randint(len(space))
+                    else:  # If performing well, explore near current value
+                        current_idx = np.argmin(np.abs(space - 1.0))
+                        chosen_idx = np.clip(
+                            current_idx + np.random.randint(-2, 3),
+                            0, len(space) - 1
+                        )
+                else:
+                    chosen_idx = np.random.randint(len(space))
+                chosen_action = float(space[chosen_idx])
+                if should_log:
+                    logging.info(f"Exploratory action chosen for {param}: {chosen_action:.4f}")
+            else:
+                # Greedy selection with tie-breaking
                 q_values = self.q_table[state][param]
-                best_idx = np.argmax(q_values)
+                max_q = np.max(q_values)
+                best_actions = np.where(q_values == max_q)[0]
+                # Prefer actions closer to 1.0 when tied
+                best_idx = min(best_actions, key=lambda i: abs(space[i] - 1.0))
                 chosen_action = float(space[best_idx])
-                action[param] = chosen_action
-                logging.debug(f"Greedy action chosen for {param}: {chosen_action}")
-
+                if should_log:
+                    logging.info(f"Greedy action chosen for {param}: {chosen_action:.4f}")
+            
+            action[param] = chosen_action
+        
         # Adaptive epsilon decay based on recent rewards
         recent_rewards = [record[2] for record in list(self.state_memory)[-50:]]
         if recent_rewards:
@@ -247,9 +295,11 @@ class QLearningController:
                 decay_factor = 0.995
             old_epsilon = self.epsilon
             self.epsilon = max(0.05, self.epsilon * decay_factor)
-            logging.debug(f"Epsilon decayed from {old_epsilon:.4f} to {self.epsilon:.4f}")
+            if should_log:
+                logging.info(f"Epsilon decayed from {old_epsilon:.4f} to {self.epsilon:.4f}")
 
-        logging.info(f"Action chosen: {action}")
+        if should_log:
+            logging.info(f"Action chosen: {action}")
         return action
 
 
@@ -264,11 +314,12 @@ class EnhancedSGD(Optimizer):
         weight_decay: float = 0.01,
         smoothing_factor: float = 0.03,
         entropy_threshold: float = 0.2,
-        max_grad_norm: float = 0.5,
-        noise_scale: float = 1e-5,
+        max_grad_norm: float = 2.0,      # Increased clipping threshold
+        noise_scale: float = 0.01,       # Reduced base noise scale
         lr_scale_bounds: tuple = (0.5, 1.5),
         momentum_scale_bounds: tuple = (0.8, 1.2),
         warmup_steps: int = 50,          # Shortened warmup steps
+        stability_window: int = 25,      # Reduced stability window
         **kwargs
     ):
         # Ensure params is properly formatted as parameter groups
@@ -276,7 +327,7 @@ class EnhancedSGD(Optimizer):
             param_groups = params
         else:
             param_groups = [{'params': params}]
-
+    
         # Enhanced parameter group initialization
         for group in param_groups:
             group.setdefault('lr', lr)
@@ -286,9 +337,9 @@ class EnhancedSGD(Optimizer):
             group.setdefault('initial_lr', lr)        # Initial learning rate
             group.setdefault('warmup_factor', 1.0)    # Warmup scaling factor
             group.setdefault('q_scale', 1.0)          # Q-learning scaling factor
-
+    
         super().__init__(param_groups, dict(lr=lr, momentum=momentum, weight_decay=weight_decay))
-
+    
         # Initialize optimization state
         self._init_optimization_state(
             smoothing_factor=smoothing_factor,
@@ -298,9 +349,10 @@ class EnhancedSGD(Optimizer):
             lr_scale_bounds=lr_scale_bounds,
             momentum_scale_bounds=momentum_scale_bounds,
             warmup_steps=warmup_steps,
+            stability_window=stability_window,
             **kwargs
         )
-
+    
         # Pre-allocate buffers with proper device handling
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.stats = {
@@ -333,6 +385,9 @@ class EnhancedSGD(Optimizer):
 
         # Initialize gradient memory
         self.grad_memory = deque(maxlen=100)  # Store recent gradients
+
+        # Initialize GradientStats
+        self.gradient_stats = GradientStats()
 
     def _track_gradient_memory(self, grad_norm: float):
         """Track gradient history for better adaptation."""
@@ -372,22 +427,25 @@ class EnhancedSGD(Optimizer):
                     stats[f'std_{key}'] = 0.0
         return stats
 
-    def _apply_warmup(self):
+    def _apply_warmup(self, should_log: bool):
         """Warmup logic applied per step with gradient clipping."""
         if self._step_count < self.warmup_steps:
+            # Scale learning rate between empirically determined optimal values (e.g., 0.005 to 0.006)
             warmup_factor = float(self._step_count) / float(max(1, self.warmup_steps))
+            scaled_lr = 0.005 + (0.006 - 0.005) * warmup_factor  # Example scaling
             for group in self.param_groups:
                 group['warmup_factor'] = warmup_factor
                 # Apply warmup to the effective learning rate
-                group['lr'] = group['base_lr'] * group['warmup_factor'] * group['q_scale']
-            logging.info(f"Applying warmup: step={self._step_count}, warmup_factor={warmup_factor:.4f}")
+                group['lr'] = scaled_lr * group['q_scale']
+            if should_log:
+                logging.info(f"Applying warmup: step={self._step_count}, warmup_factor={warmup_factor:.4f}, scaled_lr={scaled_lr:.6f}")
         else:
-            # After warmup, ensure warmup_factor is 1.0
+            # After warmup, ensure warmup_factor is 1.0 and set lr accordingly
             for group in self.param_groups:
                 if group['warmup_factor'] != 1.0:
                     group['warmup_factor'] = 1.0
                     group['lr'] = group['base_lr'] * group['q_scale']
-            if self._step_count == self.warmup_steps:
+            if self._step_count == self.warmup_steps and should_log:
                 logging.info("Warmup completed, transitioning to Q-learning control")
 
     @torch.no_grad()
@@ -426,7 +484,7 @@ class EnhancedSGD(Optimizer):
             self.stats['grad_norms'].append(mean_grad_norm)
             self._track_gradient_memory(mean_grad_norm)
 
-            is_anomalous = mean_grad_norm > self.max_grad_norm * 10 or \
+            is_anomalous = mean_grad_norm > self.max_grad_norm * 5 or \
                            np.isnan(mean_grad_norm) or \
                            np.isnan(mean_grad_var)
 
@@ -434,66 +492,67 @@ class EnhancedSGD(Optimizer):
         entropy = self._compute_entropy(torch.tensor(grad_vars)) if grad_vars else 0.0
         self.stats['entropy_values'].append(entropy)
 
+        # Determine if we should log (every 10 steps)
+        should_log = (self._step_count % 10 == 0)
+
         # Apply warmup with gradient clipping
-        self._apply_warmup()
+        self._apply_warmup(should_log=should_log)
 
         # Apply Q-learning adjustments if we have gradients and loss
         if saw_grads and loss is not None:
             current_loss = loss.item()
 
-            # If there is a previous state and action, compute reward and update Q-table
-            if self.q_controller.prev_loss is not None and self.q_controller.prev_state is not None and self.q_controller.prev_action is not None:
-                loss_improvement = self.q_controller.prev_loss - current_loss
+            # Get current state
+            q_state = self.q_controller.get_state(
+                lr=self.param_groups[0]['lr'],
+                momentum=self.param_groups[0]['momentum'],
+                grad_var=mean_grad_var,
+                loss=current_loss,
+                should_log=should_log
+            )
+
+            # Update Q-table with previous experience if available
+            if self.q_controller.prev_loss is not None and \
+               self.q_controller.prev_state is not None and \
+               self.q_controller.prev_action is not None:
+                # Calculate relative loss improvement
+                loss_improvement = (self.q_controller.prev_loss - current_loss) / self.q_controller.prev_loss
                 grad_health = 1.0 / (1.0 + mean_grad_var)
-                stability = float(abs(loss_improvement) < self.q_controller.prev_loss * 0.1)
-
-                # Check if actions resulted in no changes
-                no_change = all(
-                    action == 1.0 for action in self.q_controller.prev_action.values()
-                )
-
+                
                 # Check for consistent improvement
-                self.q_controller.consistent_improvement.append(1 if loss_improvement < 0 else 0)
+                self.q_controller.consistent_improvement.append(loss_improvement > 0)
                 consistent_improvement = all(self.q_controller.consistent_improvement)
-
+                
+                # Improved no_change detection
+                no_change = all(
+                    abs(action - 1.0) < 1e-5 
+                    for action in self.q_controller.prev_action.values()
+                )
+                
                 # Compute reward for the previous action
                 reward = self.q_controller.compute_reward(
-                    loss_trend=stability,
+                    loss_trend=loss_improvement,
                     grad_health=grad_health,
                     consistent_improvement=consistent_improvement,
-                    no_change=no_change
+                    no_change=no_change,
+                    should_log=should_log
                 )
-
-                # Get the current state for next state reference
-                q_state = self.q_controller.get_state(
-                    lr=self.param_groups[0]['lr'],
-                    momentum=self.param_groups[0]['momentum'],
-                    grad_var=mean_grad_var,
-                    loss=current_loss
-                )
-
+                
                 # Update Q-table with the previous state, action, and received reward
                 self.q_controller.update(
                     state=self.q_controller.prev_state,
                     action=self.q_controller.prev_action,
                     reward=reward,
-                    next_state=q_state
-                )
-            else:
-                # If no previous state/action, initialize current state
-                q_state = self.q_controller.get_state(
-                    lr=self.param_groups[0]['lr'],
-                    momentum=self.param_groups[0]['momentum'],
-                    grad_var=mean_grad_var,
-                    loss=current_loss
+                    next_state=q_state,
+                    should_log=should_log
                 )
 
             # Choose new action based on the current state
-            q_action = self.q_controller.choose_action(q_state)
+            q_action = self.q_controller.choose_action(q_state, should_log=should_log)
 
             # Determine if the new action results in no changes
             no_change = all(
-                action == 1.0 for action in q_action.values()
+                abs(action - 1.0) < 1e-5 for action in q_action.values()
             )
 
             # Apply learning rate adjustment
@@ -523,7 +582,7 @@ class EnhancedSGD(Optimizer):
                 ))
 
             # Log Q-learning adjustments
-            if self._step_count % 10 == 0:
+            if should_log:
                 for i, group in enumerate(self.param_groups):
                     # Calculate mean Q-values for logging
                     state = self.q_controller.prev_state
@@ -544,7 +603,7 @@ class EnhancedSGD(Optimizer):
 
             # If the new action results in no change, apply a penalty
             if saw_grads and self.q_controller.prev_action and no_change:
-                logging.debug("No-change action detected. Applying penalty.")
+                logging.warning("No-change action detected. Applying penalty.")
                 # The penalty is already incorporated in the reward function
 
         # Apply updates with the adjusted learning rates
@@ -555,8 +614,8 @@ class EnhancedSGD(Optimizer):
 
                 grad = p.grad
                 if is_anomalous:
-                    grad = torch.clamp(grad, -1.0, 1.0)
-                    logging.debug("Applied gradient clipping to prevent blowout.")
+                    grad = torch.clamp(grad, -self.max_grad_norm, self.max_grad_norm)
+                    # Removed individual gradient clipping warnings
 
                 state = self.state[p]
                 saw_grads = True
@@ -581,8 +640,20 @@ class EnhancedSGD(Optimizer):
             # Adjust hyperparameters more frequently
             if self._step_count % 10 == 0:
                 self._adjust_hyperparameters()
-            # Log optimization statistics
-            self.log_optimization_stats()
+            # Log optimization statistics every 10 steps
+            if should_log:
+                self.log_optimization_stats()
+
+            # Record and log gradient clipping statistics
+            stats = self.gradient_stats.record_step(self._step_count)
+            if self._step_count % 10 == 0:
+                logging.info(
+                    f"Step {self._step_count} gradient stats: "
+                    f"Clipped {stats['gradients_clipped']}/{stats['total_gradients']} "
+                    f"({stats['clip_ratio']:.1%}) gradients. "
+                    f"Max norm: {stats['max_gradient']:.3f}, "
+                    f"Avg clip amount: {stats['avg_clip_amount']:.3f}"
+                )
 
         return loss
 
@@ -599,32 +670,43 @@ class EnhancedSGD(Optimizer):
         """Enhanced parameter update with improved gradient handling."""
         buf = state['momentum_buffer']
 
-        # Apply weight decay with gentler scaling
+        # Apply weight decay with smoother sigmoid scaling
         if weight_decay != 0:
             param_norm = torch.norm(p)
-            # Reduced weight decay scaling using tanh for smoother transitions
-            adaptive_wd = weight_decay * (0.5 + torch.tanh(param_norm * 0.1))
+            # Replaced tanh with sigmoid for smoother transitions and reduced scaling factor
+            adaptive_wd = weight_decay * (1.0 / (1.0 + torch.exp(-param_norm * 0.05)))
             grad = grad.add(p, alpha=adaptive_wd)
             logging.debug(f"Applied adaptive weight decay: {adaptive_wd:.6f}")
 
         # Apply gradient clipping before updating the momentum buffer
         grad_norm = torch.norm(grad)
-        max_grad_norm = 10.0  # Increased from previous value
-        if grad_norm > max_grad_norm:
-            grad.mul_(max_grad_norm / (grad_norm + 1e-6))
-            logging.debug(f"Clipped gradient norm from {grad_norm:.6f} to {max_grad_norm:.6f}")
+        was_clipped = False
+        clip_ratio = 0
+
+        if grad_norm > self.max_grad_norm:
+            clip_ratio = float(self.max_grad_norm / grad_norm)
+            grad.mul_(clip_ratio)
+            was_clipped = True
+
+        # Record gradient clipping statistics
+        self.gradient_stats.record_gradient(
+            original_norm=float(grad_norm),
+            clipped=was_clipped,
+            clip_ratio=clip_ratio
+        )
 
         # Smoother momentum update
         buf.mul_(momentum).add_(grad, alpha=1.0 - momentum)
         logging.debug(f"Updated momentum buffer with grad: {grad_norm:.6f}, momentum: {momentum:.4f}")
 
         # Adaptive noise injection based on training progress
-        noise_factor = 0.1 * np.exp(-self._step_count / 1000)  # Decay noise over time
-        stability = 1.0 / (1.0 + np.var(list(self.grad_memory)) if self.grad_memory else 1.0)
-        noise_scale = min(0.1, noise_factor * stability)  # Cap maximum noise
-        noise = torch.randn_like(buf) * noise_scale
-        buf.add_(noise)
-        logging.debug(f"Injected noise with scale {noise_scale:.6f}")
+        if self._step_count < 1000:
+            noise_factor = 0.01 * np.exp(-self._step_count / 200)  # Exponential decay with 200-step half-life
+            stability = 1.0 / (1.0 + np.var(list(self.grad_memory)) if self.grad_memory else 1.0)
+            noise_scale = min(0.01, noise_factor * stability)  # Reduced base noise scale from 0.1 to 0.01
+            noise = torch.randn_like(buf) * noise_scale
+            buf.add_(noise)
+            logging.debug(f"Injected noise with scale {noise_scale:.6f}")
 
         # Compute base update
         update = -lr * buf
@@ -639,14 +721,14 @@ class EnhancedSGD(Optimizer):
         update_norm = torch.norm(update).item()
         if len(self.stats['update_norms']) > 0:
             avg_update_norm = np.mean(self.stats['update_norms'])
-            clip_threshold = max(1.0, avg_update_norm * 5.0)  # More permissive clipping threshold
+            clip_threshold = max(2.0, avg_update_norm * 5.0)  # Increased base clipping threshold to 2.0
 
             if update_norm > clip_threshold:
                 scale_factor = clip_threshold / (update_norm + 1e-6)
-                # Apply soft clipping using tanh
-                scale_factor = 0.5 * (1.0 + np.tanh(2.0 * (scale_factor - 0.5)))
+                # Apply soft clipping using sigmoid-like transition
+                scale_factor = 1.0 / (1.0 + np.exp(-10 * (scale_factor - 0.5)))  # Smooth transition
                 update.mul_(scale_factor)
-                logging.debug(f"Soft clipped update norm from {update_norm:.6f} to {update_norm * scale_factor:.6f}")
+                logging.info(f"Adaptive clipping applied: scale_factor={scale_factor:.4f}")
 
         # Update statistics
         self.stats['update_norms'].append(float(update_norm))
@@ -656,7 +738,8 @@ class EnhancedSGD(Optimizer):
         if update_norm > max_failsafe_norm:
             scale_factor = max_failsafe_norm / (update_norm + 1e-6)
             update.mul_(scale_factor)
-            logging.debug(f"Failsafe clipping applied: update norm reduced to {max_failsafe_norm:.6f} (scale factor {scale_factor:.4f})")
+            self.stats['update_norms'].append(float(update_norm))
+            logging.warning(f"Failsafe clipping applied: update norm reduced to {max_failsafe_norm:.6f} (scale factor {scale_factor:.4f})")
 
         # Apply gradient clipping on parameter update
         max_update_norm_final = 1.0  # Prevent too large updates
@@ -664,7 +747,7 @@ class EnhancedSGD(Optimizer):
         if update_norm_final > max_update_norm_final:
             update.mul_(max_update_norm_final / (update_norm_final + 1e-6))
             self.stats['update_norms'].append(float(update_norm_final))
-            logging.debug(f"Final clipping applied: update norm from {update_norm_final:.6f} to {max_update_norm_final:.6f}")
+            logging.warning(f"Final clipping applied: update norm from {update_norm_final:.6f} to {max_update_norm_final:.6f}")
 
         # Update parameters with smoothing for stability
         smooth_factor = min(1.0, self._step_count / 100.0)  # Faster warmup
@@ -720,7 +803,7 @@ class EnhancedSGD(Optimizer):
         update_norm_mean = np.mean(recent_update_norms)
 
         # Detect training instability
-        is_unstable = grad_norm_std / (grad_norm_mean + 1e-8) > 0.5
+        is_unstable = grad_norm_std / (grad_norm_mean + 1e-8) > 0.3  # Lowered instability threshold from 0.5 to 0.3
         is_diverging = grad_norm_mean > 10.0 * self.max_grad_norm
         updates_too_small = update_norm_mean < 1e-7
 
@@ -734,8 +817,8 @@ class EnhancedSGD(Optimizer):
             original_weight_decay = current_weight_decay
 
             if is_unstable:
-                # Reduce learning rate and increase momentum for stability
-                group['lr'] = max(1e-8, current_lr * 0.9)
+                # Reduce learning rate and increase momentum for stability with more gradual factor
+                group['lr'] = max(1e-8, current_lr * 0.95)  # Changed from 0.9 to 0.95
                 group['momentum'] = min(1.1, current_momentum * 1.02)
                 logging.info(
                     f"Param Group {i}: Adjusted LR from {original_lr:.6f} to {group['lr']:.6f} "
