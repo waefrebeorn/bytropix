@@ -274,7 +274,7 @@ class BabylonIndex:
             if 0 < boundary < len(byte_seq_np):
                 boundaries.append(boundary)
 
-        # Now prioritize the boundaries using entropy and features
+        # Now, use the BabylonIndex's prioritize method to sort boundaries
         prioritized_boundaries = self.prioritize(byte_seq_np)
         selected_boundaries = []
         for hash_val, metrics in prioritized_boundaries:
@@ -451,14 +451,14 @@ class GlobalLatentTransformer(nn.Module):
             normed = layer['norm1'](x)
 
             # Self-attention with causal masking
-            attn_out, _ = layer['attention'](
+            attn_output, _ = layer['attention'](
                 query=normed,
                 key=normed,
                 value=normed,
                 attn_mask=mask,
                 need_weights=False
             )
-            x = x + attn_out
+            x = x + attn_output
 
             # Pre-LayerNorm for MLP
             normed = layer['norm2'](x)
@@ -627,157 +627,6 @@ class BLTModel(nn.Module):
         return -torch.sum(true_dist * F.log_softmax(logits, dim=-1), dim=-1).mean()
 
 # ----------------------------
-# RLHFTrainer
-# ----------------------------
-
-class RLHFTrainer:
-    """Trainer class that integrates RLHF mechanisms with the training loop."""
-    def __init__(self, model: nn.Module, optimizer: Optimizer, babylon_index: BabylonIndex, tokenizer: ByteTokenizer, device: torch.device):
-        self.model = model
-        self.optimizer = optimizer
-        self.babylon_index = babylon_index
-        self.tokenizer = tokenizer
-        self.device = device
-        self.criterion = nn.CrossEntropyLoss()
-        self.scaler = amp.GradScaler(enabled=True)
-        self._step_count = 0  # Initialize step count
-
-    def train_step(self, context: torch.Tensor, target: torch.Tensor, accumulation_steps: int = 1) -> float:
-        """
-        Perform a single training step with gradient accumulation.
-
-        Args:
-            context (torch.Tensor): Input byte sequences [batch_size, context_size].
-            target (torch.Tensor): Target bytes [batch_size].
-            accumulation_steps (int): Number of steps to accumulate gradients.
-
-        Returns:
-            float: Loss value.
-        """
-        self.model.train()
-        loss = None
-        with autocast(device_type='cuda', enabled=self.scaler.is_enabled()):
-            # Forward pass with proper handling of cross-attention masking
-            logits = self.model(context)  # [batch_size, 1, 256]
-            loss = self.model.compute_loss(logits, target) / accumulation_steps
-
-        self.scaler.scale(loss).backward()
-
-        if (self._step_count + 1) % accumulation_steps == 0:
-            # Optimizer step
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            self.optimizer.zero_grad(set_to_none=True)
-
-        self._step_count += 1
-
-        return loss.item()
-
-    def save_model(self, epoch: int, checkpoint_dir: str = "checkpoints"):
-        """Save model checkpoint along with optimizer state."""
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch}.pt')
-        model_state_dict = self.model.module.state_dict() if isinstance(
-            self.model, DDP
-        ) else self.model.state_dict()
-
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model_state_dict,
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scaler_state_dict': self.scaler.state_dict(),
-        }, checkpoint_path)
-        logging.info(f'Checkpoint saved at {checkpoint_path}')
-
-    def load_model(self, checkpoint_path: str) -> int:
-        """Load model checkpoint along with optimizer state."""
-        if not os.path.exists(checkpoint_path):
-            logging.error(f"Checkpoint file {checkpoint_path} does not exist.")
-            return 0  # Starting from epoch 0
-
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        model_state_dict = checkpoint['model_state_dict']
-        optimizer_state_dict = checkpoint['optimizer_state_dict']
-        scaler_state_dict = checkpoint['scaler_state_dict']
-        epoch = checkpoint.get('epoch', 0)
-
-        if isinstance(self.model, DDP):
-            self.model.module.load_state_dict(model_state_dict)
-        else:
-            self.model.load_state_dict(model_state_dict)
-        self.optimizer.load_state_dict(optimizer_state_dict)
-        self.scaler.load_state_dict(scaler_state_dict)
-
-        logging.info(f"Loaded checkpoint from {checkpoint_path}, epoch {epoch}")
-        return epoch
-
-    def evaluate(self, validation_loader: DataLoader, device: torch.device, use_amp: bool, scaler: amp.GradScaler) -> float:
-        """Evaluate the model on the validation set with entropy feedback."""
-        entropies = []
-        total_loss = 0.0
-        self.model.eval()
-        with torch.no_grad():
-            for inputs, targets in validation_loader:
-                inputs = inputs.to(device, non_blocking=True)
-                targets = targets.to(device, non_blocking=True)
-                with autocast('cuda', enabled=use_amp):
-                    outputs = self.model(inputs)
-                    loss = self.model.compute_loss(outputs, targets)
-                    total_loss += loss.item()
-
-                    # Calculate entropy
-                    probs = F.softmax(outputs, dim=-1)
-                    entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1).mean()
-                    entropies.append(entropy.item())
-
-        avg_loss = total_loss / len(validation_loader)
-        avg_entropy = np.mean(entropies) if entropies else 0.0
-        logging.info(f'Validation Loss: {avg_loss:.4f}, Average Entropy: {avg_entropy:.4f}')
-
-        if isinstance(self.optimizer, EnhancedSGD):
-            self.optimizer._adjust_hyperparameters()
-
-        self.model.train()
-        return avg_loss
-
-# ----------------------------
-# entropy_based_sampling and calculate_entropy
-# ----------------------------
-
-def entropy_based_sampling(logits: torch.Tensor, config: SamplerConfig) -> torch.Tensor:
-    """Sample next tokens based on entropy thresholds."""
-    probs = F.softmax(logits, dim=-1)
-    entropy = calculate_entropy(probs)
-
-    # Initialize output tensor
-    sampled = torch.zeros_like(entropy, dtype=torch.long)
-
-    # Low entropy: greedy sampling
-    low_mask = entropy < config.low_entropy_threshold
-    if low_mask.any():
-        sampled[low_mask] = torch.argmax(probs[low_mask], dim=-1)
-
-    # Medium entropy: top-k sampling
-    med_mask = (entropy >= config.low_entropy_threshold) & (entropy < config.medium_entropy_threshold)
-    if med_mask.any():
-        top_k = 10
-        top_k_probs, top_k_indices = torch.topk(probs[med_mask], k=top_k, dim=-1)
-        top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
-        sampled_indices = torch.multinomial(top_k_probs, num_samples=1).squeeze(-1)
-        sampled[med_mask] = top_k_indices.gather(1, sampled_indices.unsqueeze(-1)).squeeze(-1)
-
-    # High entropy: random sampling
-    high_mask = entropy >= config.medium_entropy_threshold
-    if high_mask.any():
-        sampled[high_mask] = torch.multinomial(probs[high_mask], num_samples=1).squeeze(-1)
-
-    return sampled
-
-def calculate_entropy(probs: torch.Tensor) -> torch.Tensor:
-    """Calculate entropy for each sample in the batch."""
-    return -torch.sum(probs * torch.log2(probs + 1e-10), dim=-1)
-
-# ----------------------------
 # LocalEncoder
 # ----------------------------
 
@@ -846,16 +695,10 @@ class LocalEncoder(nn.Module):
             powers = torch.tensor([pow(256, i, 2**32) for i in range(n)], 
                                  dtype=torch.long, device=device)
 
-            # Compute hashes with bounds checking
-            valid_length = n_gram.size(1)
-            hash_vals = torch.zeros((batch_size, valid_length), 
-                                  dtype=torch.long, device=device)
-
-            if valid_length > 0:  # Only compute if we have valid n-grams
-                # Compute hash: sum(byte * (256^i)) mod 2^32
-                hash_vals = (n_gram * powers).sum(dim=-1) % 2**32
-                # **FIX**: Map hash_vals to [0, n_gram_vocab_size - 1]
-                hash_vals = hash_vals % self.n_gram_vocab_size
+            # Compute hash: sum(byte * (256^i)) mod 2^32
+            hash_vals = (n_gram * powers).sum(dim=-1) % 2**32
+            # Map hash_vals to [0, n_gram_vocab_size - 1]
+            hash_vals = hash_vals % self.n_gram_vocab_size
 
             hashes[n] = hash_vals
 
@@ -1076,7 +919,7 @@ class LocalDecoder(nn.Module):
 
         # Sample next byte
         next_byte_idx = torch.multinomial(probs, num_samples=1)
-        next_byte = torch.gather(top_k_indices, -1, next_byte_idx)
+        next_byte = torch.gather(top_k_indices, -1, next_byte_idx).squeeze(-1)
 
         return next_byte
 
@@ -1432,11 +1275,6 @@ def validate(model, validation_loader, device, use_amp, scaler: amp.GradScaler) 
     avg_entropy = np.mean(entropies) if entropies else 0.0
     logging.info(f'Validation Loss: {avg_loss:.4f}, Average Entropy: {avg_entropy:.4f}')
 
-    if isinstance(model, DDP):
-        model = model.module
-    if isinstance(model, BLTModel):
-        pass  # Add any specific BLTModel evaluations if necessary
-
     if isinstance(model.optimizer, EnhancedSGD):
         model.optimizer._adjust_hyperparameters()
 
@@ -1515,7 +1353,7 @@ def log_optimizer_stats(trainer: RLHFTrainer):
     if isinstance(trainer.optimizer, EnhancedSGD):
         stats = trainer.optimizer.get_statistics()
         wandb.log({
-            'avg_grad_norms': stats.get('avg_grad_norms', 0.0),
+            'avg_grad_norms': stats.get('avg_grad_norm', 0.0),
             'avg_learning_rates': stats.get('avg_learning_rates', 0.0),
             'avg_momentum_values': stats.get('avg_momentum_values', 0.0),
             'avg_entropy_values': stats.get('avg_entropy_values', 0.0),
@@ -1527,7 +1365,7 @@ def adjust_batch_size_for_optimizer(trainer: RLHFTrainer, current_batch_size: in
     """Adjust the batch size based on current memory usage."""
     if isinstance(trainer.optimizer, EnhancedSGD):
         stats = trainer.optimizer.get_statistics()
-        grad_norm = stats.get('avg_grad_norms', 0)
+        grad_norm = stats.get('avg_grad_norm', 0)
         if grad_norm > trainer.optimizer.max_grad_norm * 2:
             return max(1, current_batch_size // 2)
     return current_batch_size
@@ -1567,14 +1405,27 @@ def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> EnhancedSGD:
         }
     ]
 
-    return EnhancedSGD(parameter_groups, 
-                       smoothing_factor=config.get('smoothing_factor', 0.03),
-                       entropy_threshold=config.get('entropy_threshold', 0.2),
-                       max_grad_norm=config.get('max_grad_norm', 0.5),
-                       noise_scale=config.get('noise_scale', 1e-5),
-                       lr_scale_bounds=config.get('lr_scale_bounds', (0.8, 1.2)),
-                       momentum_scale_bounds=config.get('momentum_scale_bounds', (0.8, 1.2))
-                      )
+    q_learning_config = {
+        'learning_rate': 0.02,     # Reduced from 0.03
+        'discount': 0.97,          # Increased from 0.95
+        'epsilon': 0.15,            # Reduced from 0.2
+        'epsilon_decay': 0.999,    # Slower decay
+        'initial_mix_prob': 0.9,    # Increased from 0.8
+        'lr_scale_bounds': (0.8, 1.2),
+        'momentum_scale_bounds': (0.8, 1.2),
+        'min_weight_decay': 0.001  # New minimum threshold
+    }
+
+    return EnhancedSGD(
+        parameter_groups, 
+        smoothing_factor=config.get('smoothing_factor', 0.03),
+        entropy_threshold=config.get('entropy_threshold', 0.2),
+        max_grad_norm=config.get('max_grad_norm', 0.5),
+        noise_scale=config.get('noise_scale', 1e-5),
+        lr_scale_bounds=q_learning_config['lr_scale_bounds'],
+        momentum_scale_bounds=q_learning_config['momentum_scale_bounds'],
+        q_learning_config=q_learning_config
+    )
 
 # ----------------------------
 # Inspect Dataset Function
