@@ -63,7 +63,11 @@ class ByteTokenizer:
 
 class ByteIterableDataset(IterableDataset):
     """Byte-level dataset for efficient streaming from large text files."""
-    
+    def __len__(self):
+        """Return the size of the dataset."""
+        # Determine how many complete context windows we can form
+        return max(0, (self.data_size - self.context_size - 1))
+        
     def __init__(self, npy_file_path: str, context_size: int = 128):
         """
         Initialize the dataset.
@@ -1859,6 +1863,271 @@ class RLHFTrainer:
         
         return epoch
 
+def parse_args():
+    """Parse command-line arguments for Bytropix training."""
+    parser = argparse.ArgumentParser(description="Bytropix - Byte Latent Transformer Training")
+    
+    # Data parameters
+    parser.add_argument("--data_path", type=str, default="C:/projects/bytropix/data/wikitext_train.npy",
+                        help="Path to training data numpy file")
+    parser.add_argument("--val_data_path", type=str, default="C:/projects/bytropix/data/wikitext_val.npy",
+                        help="Path to validation data numpy file")
+    parser.add_argument("--context_size", type=int, default=128,
+                        help="Context size for training")
+    
+    # Model parameters
+    parser.add_argument("--local_hidden_size", type=int, default=256,
+                        help="Hidden size for local encoder/decoder")
+    parser.add_argument("--global_hidden_size", type=int, default=512,  # Reduced from 1024 for lower memory usage
+                        help="Hidden size for global transformer")
+    parser.add_argument("--num_local_encoder_layers", type=int, default=1,
+                        help="Number of layers in local encoder")
+    parser.add_argument("--num_global_layers", type=int, default=8,  # Reduced from 16 for lower memory usage
+                        help="Number of layers in global transformer")
+    parser.add_argument("--num_local_decoder_layers", type=int, default=4,
+                        help="Number of layers in local decoder")
+    parser.add_argument("--window_size", type=int, default=256,
+                        help="Window size for local encoding")
+    
+    # Training parameters
+    parser.add_argument("--batch_size", type=int, default=16,  # Smaller batch size for memory efficiency
+                        help="Batch size for training")
+    parser.add_argument("--learning_rate", type=float, default=0.003,
+                        help="Initial learning rate")
+    parser.add_argument("--epochs", type=int, default=10,
+                        help="Number of training epochs")
+    parser.add_argument("--grad_accum_steps", type=int, default=4,
+                        help="Gradient accumulation steps")
+    parser.add_argument("--checkpoint_dir", type=str, default="C:/projects/bytropix/checkpoints",
+                        help="Directory to save checkpoints")
+    parser.add_argument("--log_interval", type=int, default=10,
+                        help="Logging interval in steps")
+    parser.add_argument("--save_interval", type=int, default=100,
+                        help="Checkpoint saving interval in steps")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to checkpoint to resume from")
+    
+    # Distributed training parameters
+    parser.add_argument("--local_rank", type=int, default=-1,
+                        help="Local rank for distributed training")
+    
+    # Misc
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed")
+    parser.add_argument("--wandb", action="store_true", default=False,
+                        help="Enable Weights & Biases logging")
+    parser.add_argument("--wandb_project", type=str, default="bytropix",
+                        help="Weights & Biases project name")
+    parser.add_argument("--no_amp", action="store_true", default=False,
+                        help="Disable automatic mixed precision")
+    
+    args = parser.parse_args()
+    
+    # Create checkpoint directory if it doesn't exist
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    
+    return args
+
+def train(args):
+    """Main training function."""
+    # Set random seed for reproducibility
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    
+    # Set up device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info(f"Using device: {device}")
+    
+    # Initialize distributed training if needed
+    distributed = False
+    if args.local_rank != -1:
+        if not torch.distributed.is_initialized():
+            torch.cuda.set_device(args.local_rank)
+            device = torch.device("cuda", args.local_rank)
+            try:
+                init_process_group(backend="nccl")
+                distributed = True
+                logging.info(f"Initialized distributed training with rank {args.local_rank}")
+            except Exception as e:
+                logging.warning(f"Failed to initialize distributed training: {e}")
+    
+    # Initialize wandb if enabled
+    if args.wandb and (not distributed or args.local_rank == 0):
+        try:
+            wandb.init(project=args.wandb_project)
+            wandb.config.update(args)
+            logging.info("Initialized wandb logging")
+        except Exception as e:
+            logging.warning(f"Failed to initialize wandb: {e}")
+            args.wandb = False
+    
+    # Create datasets
+    try:
+        logging.info(f"Loading training data from {args.data_path}")
+        train_dataset = ByteIterableDataset(args.data_path, context_size=args.context_size)
+        
+        logging.info(f"Loading validation data from {args.val_data_path}")
+        val_dataset = ByteIterableDataset(args.val_data_path, context_size=args.context_size)
+    except Exception as e:
+        logging.error(f"Failed to load datasets: {e}")
+        return
+    
+    # Create data samplers and loaders
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if distributed else None
+    
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        sampler=train_sampler,
+        num_workers=2,
+        pin_memory=True
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True
+    )
+    
+    # Log dataset sizes
+    logging.info(f"Training data size: {train_dataset.data_size} bytes")
+    logging.info(f"Validation data size: {val_dataset.data_size} bytes")
+    
+    # Create model
+    logging.info("Initializing BLTModel")
+    model = BLTModel(
+        local_hidden_size=args.local_hidden_size,
+        global_hidden_size=args.global_hidden_size,
+        num_local_encoder_layers=args.num_local_encoder_layers,
+        num_global_layers=args.num_global_layers,
+        num_local_decoder_layers=args.num_local_decoder_layers,
+        window_size=args.window_size
+    )
+    model.to(device)
+    
+    # Log model architecture
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logging.info(f"Model initialized with {total_params:,} total parameters ({trainable_params:,} trainable)")
+    
+    # Wrap model with DDP if using distributed training
+    if distributed:
+        model = DistributedDataParallel(
+            model,
+            device_ids=[args.local_rank],
+            output_device=args.local_rank
+        )
+        logging.info("Model wrapped with DistributedDataParallel")
+    
+    # Create optimizer with Q-Learning enhanced SGD
+    logging.info("Creating EnhancedSGD optimizer")
+    optimizer = EnhancedSGD(
+        model.parameters(),
+        lr=args.learning_rate,
+        momentum=0.9,
+        weight_decay=0.005,
+        q_learning_config={
+            "learning_rate": 0.02,
+            "discount": 0.97,
+            "epsilon": 0.15
+        }
+    )
+    
+    # Create GradScaler for AMP
+    scaler = amp.GradScaler(enabled=not args.no_amp)
+    logging.info(f"Created GradScaler (AMP {'enabled' if not args.no_amp else 'disabled'})")
+    
+    # Create trainer
+    trainer = RLHFTrainer(model, optimizer, device, scaler)
+    
+    # Resume from checkpoint if specified
+    start_epoch = 0
+    if args.resume:
+        try:
+            start_epoch = trainer.load_checkpoint(args.resume)
+            logging.info(f"Resumed from checkpoint {args.resume} at epoch {start_epoch}")
+        except Exception as e:
+            logging.error(f"Failed to load checkpoint: {e}")
+            if not os.path.exists(args.resume):
+                logging.error(f"Checkpoint file {args.resume} does not exist")
+    
+    # Training loop
+    logging.info(f"Starting training for {args.epochs} epochs")
+    try:
+        for epoch in range(start_epoch, args.epochs):
+            if distributed:
+                train_sampler.set_epoch(epoch)
+            
+            # Train for one epoch
+            epoch_loss = 0.0
+            for i, (context, target) in enumerate(train_loader):
+                context = context.to(device)
+                target = target.to(device)
+                
+                loss = trainer.train_step(context, target, args.grad_accum_steps)
+                epoch_loss += loss
+                
+                global_step = epoch * len(train_loader) + i
+                
+                # Log progress
+                if i % args.log_interval == 0:
+                    logging.info(f"Epoch {epoch}, Step {i}/{len(train_loader)}, Loss: {loss:.4f}")
+                    if args.wandb and (not distributed or args.local_rank == 0):
+                        wandb.log({
+                            "loss": loss, 
+                            "epoch": epoch, 
+                            "step": i,
+                            "global_step": global_step,
+                            "learning_rate": optimizer.param_groups[0]['lr']
+                        })
+                
+                # Save checkpoint
+                if (i + 1) % args.save_interval == 0 and (not distributed or args.local_rank == 0):
+                    checkpoint_path = os.path.join(args.checkpoint_dir, f"checkpoint_step_{global_step}.pt")
+                    trainer.save_checkpoint(checkpoint_path, epoch)
+                    logging.info(f"Saved checkpoint at step {global_step} to {checkpoint_path}")
+            
+            # Average epoch loss
+            avg_epoch_loss = epoch_loss / len(train_loader)
+            logging.info(f"Epoch {epoch} completed with average loss: {avg_epoch_loss:.4f}")
+            
+            # Validate at the end of epoch
+            if not distributed or args.local_rank == 0:
+                try:
+                    val_metrics = trainer.validate(val_loader)
+                    logging.info(f"Epoch {epoch} validation: {val_metrics}")
+                    
+                    if args.wandb:
+                        wandb.log({**val_metrics, "epoch": epoch})
+                    
+                    # Save epoch checkpoint
+                    checkpoint_path = os.path.join(args.checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
+                    trainer.save_checkpoint(checkpoint_path, epoch, val_metrics)
+                    logging.info(f"Saved checkpoint for epoch {epoch} to {checkpoint_path}")
+                except Exception as e:
+                    logging.error(f"Error during validation: {e}")
+    
+    except KeyboardInterrupt:
+        logging.info("Training interrupted by user")
+    except Exception as e:
+        logging.error(f"Error during training: {e}")
+    finally:
+        # Clean up distributed training
+        if distributed and is_initialized():
+            destroy_process_group()
+        
+        # Final checkpoint
+        if not distributed or args.local_rank == 0:
+            final_checkpoint_path = os.path.join(args.checkpoint_dir, "checkpoint_final.pt")
+            trainer.save_checkpoint(final_checkpoint_path, epoch)
+            logging.info(f"Saved final checkpoint to {final_checkpoint_path}")
+    
+    logging.info("Training completed")
 
 # =====================================================================
 # Main Function
