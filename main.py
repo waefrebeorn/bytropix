@@ -1,87 +1,139 @@
-# main.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Bytropix - Byte Latent Transformer with Babylon Index and Q-Learning Optimization
+"""
 
 import os
 import sys
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset
-from typing import Optional, Tuple, List, Dict, Any, Iterable, Union
-import math
-from dataclasses import dataclass
-from torch import amp
-from torch.amp import autocast  # Corrected import
-import gc
-import wandb
-import argparse
-import platform
-from torch.optim import Optimizer
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group, is_initialized
-import socket
-from collections import deque
-import logging
 import numpy as np
+import math
 import random
+import argparse
+import logging
+import wandb
+from datetime import datetime
+from typing import List, Dict, Tuple, Optional, Union, Any, Iterable
+from collections import deque
+import gc
+import socket
+import platform
+from torch.nn.parallel import DistributedDataParallel
+from torch.distributed import init_process_group, destroy_process_group, is_initialized
+from torch import amp
+from dataclasses import dataclass
 import itertools
-
-from EnhancedSGD import EnhancedSGD  # Ensure this is correctly implemented and accessible
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Changed to INFO for standard logs
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# ----------------------------
-# Sampler Configuration
-# ----------------------------
+# =====================================================================
+# Data Structures and Configuration Classes
+# =====================================================================
 
 @dataclass
 class SamplerConfig:
+    """Configuration for entropy-based sampling."""
     low_entropy_threshold: float = 0.3
     medium_entropy_threshold: float = 1.2
     high_entropy_threshold: float = 2.5
 
-# ----------------------------
-# ByteTokenizer
-# ----------------------------
+# =====================================================================
+# ByteTokenizer and ByteIterableDataset
+# =====================================================================
 
 class ByteTokenizer:
+    """Simple tokenizer for byte-level processing."""
+    
     def encode(self, text: str) -> List[int]:
+        """Convert text to bytes."""
         return [b for b in text.encode('utf-8')]
-
+    
     def decode(self, byte_sequence: Iterable[int]) -> str:
+        """Convert bytes back to text."""
         return bytes(byte_sequence).decode('utf-8', errors='replace')
 
-# ----------------------------
-# BabylonIndex
-# ----------------------------
+
+class ByteIterableDataset(IterableDataset):
+    """Byte-level dataset for efficient streaming from large text files."""
+    
+    def __init__(self, npy_file_path: str, context_size: int = 128):
+        """
+        Initialize the dataset.
+        
+        Args:
+            npy_file_path: Path to numpy array file containing byte data
+            context_size: Size of context window
+        """
+        self.npy_file_path = npy_file_path
+        self.context_size = context_size
+        
+        # Validate file exists
+        if not os.path.exists(npy_file_path):
+            raise FileNotFoundError(f"File not found: {npy_file_path}")
+        
+        # Get size for efficient streaming
+        self.data_size = np.load(npy_file_path, mmap_mode='r').shape[0]
+    
+    def __iter__(self):
+        """Generate (context, target) pairs from byte data."""
+        # Memory-map the file for efficient access
+        bytes_data = np.load(self.npy_file_path, mmap_mode='r')
+        data_len = len(bytes_data)
+        
+        # Determine valid starting positions (account for context size and target)
+        valid_starts = max(0, data_len - self.context_size - 1)
+        
+        # Generate random indices for starting positions
+        indices = torch.randperm(valid_starts).tolist()
+        
+        for idx in indices:
+            # Ensure we don't go out of bounds
+            if idx + self.context_size + 1 <= data_len:
+                context = bytes_data[idx:idx + self.context_size]
+                target = bytes_data[idx + self.context_size]
+                
+                # Convert to tensors
+                context_tensor = torch.tensor(context, dtype=torch.long)
+                target_tensor = torch.tensor(target, dtype=torch.long)
+                
+                yield context_tensor, target_tensor
+
+
+# =====================================================================
+# Babylon Index for Byte Sequence Analysis
+# =====================================================================
 
 class BabylonIndex:
-    """Enhanced index for byte sequence analysis with efficient window management."""
-
+    """Entropy-based index for byte sequence analysis with efficient window management."""
+    
     def __init__(
-        self, 
+        self,  
         scales: List[int] = [3, 5, 7],
         max_cache_size: int = 100000,
         min_entropy_threshold: float = 0.3
     ):
         self.scales = scales
         self.hash_index = {}  # Maps hash values to window positions
-        self.entropy_cache = {}  # LRU cache for entropy values
+        self.entropy_cache = {}  # Cache for entropy values
         self.max_cache_size = max_cache_size
         self.min_entropy_threshold = min_entropy_threshold
-
-        # Pre-compute base powers for efficiency
+        
+        # Pre-compute base powers for efficient hashing
         self.base = 256
         self.mod = 2**32
         self.base_powers = {
             scale: [pow(self.base, i, self.mod) for i in range(scale)]
             for scale in scales
         }
-
+    
     def _clean_cache(self):
         """Clean entropy cache if it exceeds max size."""
         if len(self.entropy_cache) > self.max_cache_size:
@@ -90,11 +142,12 @@ class BabylonIndex:
             old_keys = list(self.entropy_cache.keys())[:remove_count]
             for k in old_keys:
                 del self.entropy_cache[k]
-
+    
     def _is_valid_utf8_boundary(self, byte_seq: List[int], boundary: int) -> bool:
         """Check if a boundary in the byte sequence does not split a multi-byte UTF-8 character."""
         if boundary == 0 or boundary >= len(byte_seq):
             return True
+            
         # Check the byte before the boundary to see if it's a continuation byte
         # Continuation bytes have the form 10xxxxxx
         prev_byte = byte_seq[boundary - 1]
@@ -117,29 +170,21 @@ class BabylonIndex:
                 return True  # Single-byte character or invalid, allow boundary
             return num_continuations < (expected - 1)
         return True  # Not a continuation byte, allow boundary
-
+    
     def rolling_hash(self, byte_sequence: List[int], scale: int) -> List[Tuple[int, List[int]]]:
-        """Compute rolling hashes with corresponding windows.
-
-        Args:
-            byte_sequence: Input bytes as list of integers
-            scale: Window size
-
-        Returns:
-            List of tuples (hash_value, window_bytes)
-        """
+        """Compute rolling hashes with corresponding windows."""
         results = []
         byte_len = len(byte_sequence)
         if byte_len < scale:
             return results
-
+        
         # Initialize hash value for the first window
         window = byte_sequence[:scale]
         hash_val = 0
         for b in window:
             hash_val = (hash_val * self.base + b) % self.mod
         results.append((hash_val, window.copy()))
-
+        
         # Rolling hash
         for i in range(1, byte_len - scale + 1):
             # Remove the leftmost byte and add the new rightmost byte
@@ -148,38 +193,24 @@ class BabylonIndex:
             hash_val = (hash_val * self.base - left_byte * self.base_powers[scale][-1] + new_byte) % self.mod
             window = byte_sequence[i:i + scale]
             results.append((hash_val, window.copy()))
-
+            
             # Update hash index for future lookups
             self.hash_index[hash_val] = (i, i + scale)
-
+        
         return results
-
+    
     def compute_entropy(self, byte_window: np.ndarray) -> float:
-        """Compute Shannon entropy of byte window.
-
-        Args:
-            byte_window: Numpy array of bytes
-
-        Returns:
-            Entropy value
-        """
+        """Compute Shannon entropy of byte window."""
         # Use numpy for efficient counting
         byte_counts = np.bincount(byte_window, minlength=256)
         total_bytes = byte_counts.sum()
-
+        
         # Handle zero counts
         probs = byte_counts[byte_counts > 0] / total_bytes
         return float(-np.sum(probs * np.log2(probs)))
-
+    
     def get_window_features(self, window: List[int]) -> Dict[str, float]:
-        """Extract additional features from byte window.
-
-        Args:
-            window: List of bytes
-
-        Returns:
-            Dictionary of feature values
-        """
+        """Extract additional features from byte window."""
         arr = np.array(window)
         return {
             'mean': float(np.mean(arr)),
@@ -187,23 +218,16 @@ class BabylonIndex:
             'unique_ratio': len(np.unique(arr)) / len(arr),
             'max_run': max(len(list(g)) for _, g in itertools.groupby(window))
         }
-
+    
     def prioritize(self, byte_sequence: List[int]) -> List[Tuple[int, Dict[str, float]]]:
-        """Prioritize sequence regions based on entropy and features.
-
-        Args:
-            byte_sequence: Input byte sequence as list of integers
-
-        Returns:
-            List of (hash_value, metrics) tuples sorted by priority
-        """
-        self._clean_cache()  # Maintain cache size
-
+        """Prioritize sequence regions based on entropy and features."""
+        self._clean_cache()
+        
         # Process each scale
         all_scores = []
         for scale in self.scales:
             hash_windows = self.rolling_hash(byte_sequence, scale)
-
+            
             for hash_val, window in hash_windows:
                 if hash_val in self.entropy_cache:
                     metrics = self.entropy_cache[hash_val]
@@ -211,7 +235,7 @@ class BabylonIndex:
                     # Compute entropy and features
                     window_arr = np.array(window)
                     entropy = self.compute_entropy(window_arr)
-
+                    
                     # Only process high-entropy regions
                     if entropy > self.min_entropy_threshold:
                         features = self.get_window_features(window)
@@ -222,7 +246,7 @@ class BabylonIndex:
                         }
                         self.entropy_cache[hash_val] = metrics
                         all_scores.append((hash_val, metrics))
-
+        
         # Sort by composite score
         def score_window(metrics):
             return (
@@ -231,28 +255,18 @@ class BabylonIndex:
                 (1.0 / metrics['scale']) * 0.2 +  # Prefer smaller windows
                 (1.0 / (1.0 + metrics['max_run'])) * 0.1  # Penalize long runs
             )
-
+        
         all_scores.sort(key=lambda x: score_window(x[1]), reverse=True)
         return all_scores
-
+    
     def get_window_position(self, hash_val: int) -> Optional[Tuple[int, int]]:
         """Get the position of a window from its hash value."""
         return self.hash_index.get(hash_val)
-
-    def analyze_region(self, byte_sequence: List[int], start: int, end: int) -> Dict[str, float]:
-        """Detailed analysis of a specific sequence region."""
-        if start >= end or end > len(byte_sequence):
-            return {}
-
-        region = byte_sequence[start:end]
-        return {
-            'entropy': self.compute_entropy(np.array(region)),
-            **self.get_window_features(region)
-        }
-
+    
     def find_patch_boundaries(self, byte_seq: torch.Tensor) -> List[int]:
         """Find patch boundaries ensuring no multi-byte UTF-8 characters are split."""
         byte_seq_np = byte_seq.cpu().numpy().tolist()[0]  # Assuming batch size 1
+        
         # Decode to string with replacement for invalid sequences
         try:
             decoded_str = bytes(byte_seq_np).decode('utf-8', errors='replace')
@@ -266,57 +280,763 @@ class BabylonIndex:
         except Exception as e:
             logging.error(f"Error decoding byte sequence: {e}")
             byte_indices = []
-
-        # Now, use the byte_indices as possible patch boundaries
-        boundaries = []
-        for boundary in byte_indices:
-            # Ensure boundary is valid in the original byte sequence
-            if 0 < boundary < len(byte_seq_np):
-                boundaries.append(boundary)
-
-        # Now, use the BabylonIndex's prioritize method to sort boundaries
+        
+        # Use the BabylonIndex's prioritize method to sort boundaries
         prioritized_boundaries = self.prioritize(byte_seq_np)
         selected_boundaries = []
         for hash_val, metrics in prioritized_boundaries:
             pos = self.get_window_position(hash_val)
             if pos and self._is_valid_utf8_boundary(byte_seq_np, pos[0]):
                 selected_boundaries.append(pos[0])
-
+        
         # Ensure boundaries are sorted and unique
         selected_boundaries = sorted(list(set(selected_boundaries)))
-
+        
         # Final boundaries aligned with valid UTF-8 character boundaries
         final_boundaries = [b for b in selected_boundaries if b in byte_indices]
-
+        
         return final_boundaries
 
     def create_patches(self, byte_seq: torch.Tensor) -> List[torch.Tensor]:
         """Convert byte sequence into patches based on entropy boundaries."""
         boundaries = self.find_patch_boundaries(byte_seq)
         patches = []
-
+        
         start_idx = 0
         for end_idx in boundaries:
             if end_idx > start_idx:
                 patch = byte_seq[:, start_idx:end_idx]  
                 patches.append(patch)
                 start_idx = end_idx
-
+        
         # Add final patch
         if start_idx < byte_seq.size(1):
             patches.append(byte_seq[:, start_idx:])
-
+        
         return patches
-
+    
     @torch.no_grad()
     def reset_context(self):
         """Reset context when starting new document/segment."""
         # Clear any stateful buffers in entropy model
         pass
 
-# ----------------------------
-# CrossAttentionBlock
-# ----------------------------
+
+# =====================================================================
+# Q-Learning Controller for Adaptive Optimization
+# =====================================================================
+
+class GradientStats:
+    """Tracks gradient statistics for reporting."""
+    def __init__(self):
+        self.reset()
+    
+    def reset(self):
+        self.total_gradients = 0
+        self.clipped_gradients = 0
+        self.max_gradient_norm = 0
+        self.sum_clip_ratios = 0
+        self.step_stats = {}
+    
+    def record_gradient(self, original_norm: float, clipped: bool, clip_ratio: float = None):
+        self.total_gradients += 1
+        if clipped:
+            self.clipped_gradients += 1
+            if clip_ratio:
+                self.sum_clip_ratios += clip_ratio
+        self.max_gradient_norm = max(self.max_gradient_norm, original_norm)
+    
+    def get_step_stats(self) -> dict:
+        if self.total_gradients == 0:
+            return {
+                "gradients_clipped": 0,
+                "total_gradients": 0,
+                "clip_ratio": 0,
+                "max_gradient": 0,
+                "avg_clip_amount": 0
+            }
+            
+        return {
+            "gradients_clipped": self.clipped_gradients,
+            "total_gradients": self.total_gradients,
+            "clip_ratio": self.clipped_gradients / self.total_gradients,
+            "max_gradient": self.max_gradient_norm,
+            "avg_clip_amount": self.sum_clip_ratios / self.clipped_gradients if self.clipped_gradients > 0 else 0
+        }
+    
+    def record_step(self, step: int):
+        stats = self.get_step_stats()
+        self.step_stats[step] = stats
+        self.reset()
+        return stats
+
+
+class QController:
+    """Q-Learning Controller with adaptive exploration and state management."""
+    
+    def __init__(
+        self,
+        learning_rate: float = 0.02,
+        discount: float = 0.97,
+        epsilon: float = 0.15,
+        epsilon_decay: float = 0.999,
+        initial_mix_prob: float = 0.9,
+        lr_scale_bounds: tuple = (0.85, 1.15),
+        momentum_scale_bounds: tuple = (0.9, 1.1),
+        min_weight_decay: float = 1e-4,
+        state_memory_size: int = 300,
+        max_q_table_size: int = 15000
+    ):
+        self.q_table = {}
+        self.alpha = learning_rate
+        self.gamma = discount
+        self.epsilon = epsilon
+        self.epsilon_decay = epsilon_decay
+        self.mix_prob = initial_mix_prob
+        self.prev_loss = None
+        self.prev_state = None
+        self.prev_action = None
+        self.lr_scale_bounds = lr_scale_bounds
+        self.momentum_scale_bounds = momentum_scale_bounds
+        self.min_weight_decay = min_weight_decay
+
+        # Enhanced state tracking
+        self.state_memory = deque(maxlen=state_memory_size)
+        self.loss_window = deque(maxlen=15)
+        self.grad_window = deque(maxlen=15)
+        self.lr_window = deque(maxlen=8)
+        self.momentum_window = deque(maxlen=8)
+        
+        # Action space
+        self.action_ranges = {
+            'lr_scale': np.array([0.85, 0.9, 0.925, 0.95, 0.975, 1.0, 1.025, 1.05, 1.075, 1.1, 1.15]),
+            'momentum_scale': np.array([0.9, 0.95, 0.975, 0.99, 1.0, 1.01, 1.025, 1.05, 1.075, 1.1])
+        }
+
+        # Success tracking with decay
+        self.action_success = {k: np.zeros(len(v)) for k, v in self.action_ranges.items()}
+        self.action_counts = {k: np.zeros(len(v)) for k, v in self.action_ranges.items()}
+        self.success_decay = 0.99
+
+        # Performance tracking
+        self.performance_window = deque(maxlen=50)
+        self.stable_steps = 0
+
+        # Q-Table memory management
+        self.max_q_table_size = max_q_table_size
+    
+    def get_state(self, lr: float, momentum: float, grad_var: float, loss: float) -> tuple:
+        """Enhanced state representation with more nuanced binning."""
+        self.loss_window.append(loss)
+        self.grad_window.append(grad_var)
+        self.lr_window.append(lr)
+        self.momentum_window.append(momentum)
+        
+        # Improved loss trend calculation with exponential moving average
+        if len(self.loss_window) >= 3:
+            weights = np.exp([-0.1 * i for i in range(3)])
+            weights = weights / weights.sum()
+            recent_losses = list(self.loss_window)[-3:]
+            weighted_loss_trend = np.sum(weights * [(recent_losses[0] - x) / recent_losses[0] for x in recent_losses[1:]])
+            loss_trend_bin = np.digitize(weighted_loss_trend, 
+                                            bins=[-0.1, -0.03, -0.01, 0.01, 0.03, 0.1])
+        else:
+            loss_trend_bin = 3  # Middle bin
+        
+        # Improved gradient stability metric using exponential moving average
+        if len(self.grad_window) >= 3:
+            recent_grads = list(self.grad_window)[-3:]
+            weights = np.exp([-0.1 * i for i in range(3)])
+            weights = weights / weights.sum()
+            weighted_grad_mean = np.sum(weights * recent_grads)
+            grad_stability = np.std(recent_grads) / (weighted_grad_mean + 1e-8)
+            grad_stability_bin = np.digitize(grad_stability, 
+                                                bins=[0.05, 0.1, 0.2, 0.3, 0.5])
+        else:
+            grad_stability_bin = 3
+        
+        # Learning rate bins with relative scaling
+        lr_base = 0.001
+        lr_relative = lr / lr_base
+        lr_bin = np.digitize(lr_relative, 
+                                 bins=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
+        
+        # Momentum bins
+        momentum_bin = np.digitize(momentum, 
+                                    bins=[0.85, 0.9, 0.93, 0.95, 0.97, 0.99, 1.0])
+        
+        return (lr_bin, momentum_bin, loss_trend_bin, grad_stability_bin)
+    
+    def compute_reward(
+        self,
+        loss_trend: float,
+        grad_health: float,
+        consistent_improvement: bool
+    ) -> float:
+        """Enhanced reward computation with stability bonus."""
+        # Base reward from loss improvement
+        base_reward = 2.0 * loss_trend if loss_trend > 0 else 1.5 * loss_trend
+        
+        # Enhanced stability bonus
+        stability_threshold = 0.9
+        stability_bonus = 0.0
+        if grad_health > stability_threshold:
+            bonus_scale = (grad_health - stability_threshold) / (1 - stability_threshold)
+            stability_bonus = 0.5 * bonus_scale
+        
+        # Progressive consistency reward
+        if consistent_improvement:
+            self.stable_steps += 1
+            consistency_reward = min(1.0, 0.2 * np.log1p(self.stable_steps))
+        else:
+            self.stable_steps = max(0, self.stable_steps - 1)
+            consistency_reward = 0.0
+        
+        # Combine rewards with dynamic weighting
+        combined_reward = (
+            base_reward +
+            stability_bonus +
+            consistency_reward
+        )
+        
+        # Smooth reward scaling
+        scaled_reward = np.tanh(combined_reward)
+        
+        return float(scaled_reward)
+    
+    def choose_action(self, state: tuple) -> Dict[str, float]:
+        """Enhanced action selection with adaptive exploration."""
+        if state not in self.q_table:
+            self.q_table[state] = {
+                param: np.zeros(len(space))
+                for param, space in self.action_ranges.items()
+            }
+
+        action = {}
+        
+        # Compute recent performance
+        recent_rewards = [r for _, _, r in list(self.state_memory)[-20:]]
+        avg_reward = np.mean(recent_rewards) if recent_rewards else 0.0
+        
+        # Adaptive exploration rates
+        explore_lr = np.random.random() < self.epsilon * (1.0 - max(0, avg_reward))
+        explore_momentum = np.random.random() < self.epsilon * 0.7 * (1.0 - max(0, avg_reward))
+
+        for param, space in self.action_ranges.items():
+            should_explore = explore_lr if param == 'lr_scale' else explore_momentum
+            
+            if should_explore:
+                # Smart exploration based on action success history
+                success_rates = self.action_success[param] / (self.action_counts[param] + 1)
+                
+                if len(recent_rewards) > 0 and np.mean(recent_rewards) < -0.2:
+                    # If performing poorly, explore more widely but favor previously successful actions
+                    p = self._softmax(success_rates + 0.1)
+                    chosen_idx = np.random.choice(len(space), p=p)
+                else:
+                    # If performing well, explore near current value
+                    current_idx = np.argmin(np.abs(space - 1.0))
+                    exploration_range = 2
+                    valid_indices = np.arange(
+                        max(0, current_idx - exploration_range),
+                        min(len(space), current_idx + exploration_range + 1)
+                    )
+                    chosen_idx = np.random.choice(valid_indices)
+                
+                chosen_action = float(space[chosen_idx])
+            else:
+                # Enhanced greedy selection with success history influence
+                q_values = self.q_table[state][param]
+                success_rates = self.action_success[param] / (self.action_counts[param] + 1)
+                
+                # Combine Q-values with success history
+                combined_values = q_values + 0.2 * success_rates
+                max_val = np.max(combined_values)
+                best_actions = np.where(np.abs(combined_values - max_val) < 1e-6)[0]
+                
+                # Choose action closest to 1.0 when tied
+                chosen_idx = min(best_actions, key=lambda i: abs(space[i] - 1.0))
+                chosen_action = float(space[chosen_idx])
+            
+            action[param] = chosen_action
+
+        # Adaptive epsilon decay based on performance
+        if len(self.performance_window) > 20:
+            avg_performance = np.mean(self.performance_window)
+            if avg_performance > 0.3:
+                self.epsilon = max(0.05, self.epsilon * 0.997)
+            else:
+                self.epsilon = max(0.05, self.epsilon * 0.995)
+
+        return action
+    
+    def _softmax(self, x: np.ndarray) -> np.ndarray:
+        """Compute softmax values for scores."""
+        e_x = np.exp(x - np.max(x))
+        return e_x / e_x.sum()
+
+    def update(self, state: tuple, action: Dict[str, float], reward: float, next_state: Optional[tuple], should_log: bool = False):
+        """Enhanced Q-learning update with experience tracking."""
+        # Record reward and update state memory
+        self.state_memory.append((state, action, reward))
+        if should_log:
+            logging.info(f"State memory updated with state={state}, action={action}, reward={reward}")
+
+        # Initialize Q-values if needed
+        for s in [state, next_state] if next_state is not None else [state]:
+            if s not in self.q_table:
+                self.q_table[s] = {
+                    param: np.zeros(len(space))
+                    for param, space in self.action_ranges.items()
+                }
+
+        # Q-Table memory management
+        if len(self.q_table) > self.max_q_table_size:
+            oldest_state = self.state_memory.popleft()[0]
+            if oldest_state in self.q_table:
+                del self.q_table[oldest_state]
+                if should_log:
+                    logging.info(f"Evicted oldest state from Q-table: {oldest_state}")
+
+        # Update Q-values with adaptive learning rate
+        for param, value in action.items():
+            space = self.action_ranges[param]
+            action_idx = np.abs(space - value).argmin()
+
+            # Get max future Q-value
+            if next_state is not None and next_state in self.q_table:
+                next_q_values = self.q_table[next_state][param]
+                max_future_q = np.max(next_q_values)
+            else:
+                max_future_q = 0.0
+
+            # Current Q-value
+            current_q = self.q_table[state][param][action_idx]
+
+            # Compute TD error with less aggressive clipping
+            td_error = reward + self.gamma * max_future_q - current_q
+            td_error = np.clip(td_error, -1.0, 1.0)
+
+            # Adaptive learning rate based on visit count
+            self.action_counts[param][action_idx] += 1
+            visit_count = self.action_counts[param][action_idx]
+            effective_lr = self.alpha / (1 + np.log1p(visit_count) * 0.1)
+
+            # Update Q-value
+            self.q_table[state][param][action_idx] += effective_lr * td_error
+
+            if should_log:
+                logging.info(f"Updated Q-table for state={state}, param={param}, action_idx={action_idx}: "
+                             f"current_q={current_q:.4f}, max_future_q={max_future_q:.4f}, td_error={td_error:.4f}, "
+                             f"effective_lr={effective_lr:.6f}")
+
+            # Update success tracking with decay
+            if reward > 0:
+                self.action_success[param][action_idx] = (self.action_success[param][action_idx] * self.success_decay) + 1
+            else:
+                self.action_success[param][action_idx] *= self.success_decay
+
+
+class EnhancedSGD(torch.optim.Optimizer):
+    """Enhanced SGD Optimizer with Q-Learning based Adaptive Hyperparameter Tuning."""
+
+    def __init__(
+        self,
+        params: Iterable[torch.nn.Parameter],
+        lr: float = 0.003,
+        momentum: float = 0.9,
+        weight_decay: float = 0.005,
+        smoothing_factor: float = 0.05,
+        entropy_threshold: float = 0.3,
+        max_grad_norm: float = 1.0,
+        noise_scale: float = 0.001,
+        lr_scale_bounds: tuple = (0.7, 1.3),
+        momentum_scale_bounds: tuple = (0.85, 1.1),
+        q_learning_config: Dict[str, Any] = {},
+        **kwargs
+    ):
+        """
+        Initializes the EnhancedSGD optimizer.
+
+        Args:
+            params: Iterable of parameters to optimize.
+            lr: Initial learning rate.
+            momentum: Initial momentum.
+            weight_decay: Initial weight decay.
+            smoothing_factor: Smoothing factor for updates.
+            entropy_threshold: Threshold for entropy-based adjustments.
+            max_grad_norm: Maximum gradient norm for clipping.
+            noise_scale: Scale of noise to inject.
+            lr_scale_bounds: Bounds for learning rate scaling.
+            momentum_scale_bounds: Bounds for momentum scaling.
+            q_learning_config: Configuration for Q-Learning controller.
+            **kwargs: Additional keyword arguments.
+        """
+        # Ensure params is properly formatted as parameter groups
+        if isinstance(params, (list, tuple)) and len(params) > 0 and isinstance(params[0], dict):
+            param_groups = params
+        else:
+            param_groups = [{'params': params}]
+        
+        # Enhanced parameter group initialization
+        for group in param_groups:
+            group.setdefault('lr', lr)
+            group.setdefault('momentum', momentum)
+            group.setdefault('weight_decay', weight_decay)
+            group.setdefault('base_lr', lr)
+            group.setdefault('q_scale', 1.0)
+            # Add minimum weight decay
+            group.setdefault('min_weight_decay', weight_decay * 0.2)
+        
+        super().__init__(param_groups, dict(lr=lr, momentum=momentum, weight_decay=weight_decay))
+        
+        # Initialize optimization state
+        self._init_optimization_state(
+            smoothing_factor=smoothing_factor,
+            entropy_threshold=entropy_threshold,
+            max_grad_norm=max_grad_norm,
+            noise_scale=noise_scale,
+            lr_scale_bounds=lr_scale_bounds,
+            momentum_scale_bounds=momentum_scale_bounds,
+            q_learning_config=q_learning_config,
+            **kwargs
+        )
+        
+        # Pre-allocate buffers with proper device handling
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.stats = {
+            'grad_norms': deque(maxlen=100),
+            'learning_rates': deque(maxlen=100),
+            'momentum_values': deque(maxlen=100),
+            'entropy_values': deque(maxlen=100),
+            'update_norms': deque(maxlen=100)
+        }
+
+    def _init_optimization_state(self, **kwargs):
+        """Initialize optimization state with safe handling."""
+        smoothing_factor = kwargs.get('smoothing_factor', 0.05)
+        entropy_threshold = kwargs.get('entropy_threshold', 0.3)
+        max_grad_norm = kwargs.get('max_grad_norm', 1.0)
+        noise_scale = kwargs.get('noise_scale', 0.001)
+        lr_scale_bounds = kwargs.get('lr_scale_bounds', (0.7, 1.3))
+        momentum_scale_bounds = kwargs.get('momentum_scale_bounds', (0.85, 1.1))
+        q_learning_config = kwargs.get('q_learning_config', {})
+
+        self.max_grad_norm = max_grad_norm
+
+        self.q_controller = QController(
+            learning_rate=q_learning_config.get('learning_rate', 0.02),
+            discount=q_learning_config.get('discount', 0.97),
+            epsilon=q_learning_config.get('epsilon', 0.15),
+            epsilon_decay=q_learning_config.get('epsilon_decay', 0.999),
+            initial_mix_prob=q_learning_config.get('initial_mix_prob', 0.9),
+            lr_scale_bounds=lr_scale_bounds,
+            momentum_scale_bounds=momentum_scale_bounds,
+            min_weight_decay=q_learning_config.get('min_weight_decay', 1e-4)
+        )
+        
+        self._step_count = 0
+        self.prev_state = None
+        self.prev_action = None
+        self.prev_loss = None
+        
+        # Initialize gradient memory
+        self.grad_memory = deque(maxlen=100)
+        
+        # Initialize GradientStats
+        self.gradient_stats = GradientStats()
+
+    def _track_gradient_memory(self, grad_norm: float):
+        """Track gradient history for better adaptation."""
+        self.grad_memory.append(grad_norm)
+
+    def _compute_entropy(self, tensor: torch.Tensor) -> float:
+        """Efficient entropy computation using torch operations with safe calculations."""
+        if tensor.numel() <= 1:
+            return 0.0
+        
+        values = tensor.flatten()
+        # Safe histogram calculation
+        hist = torch.histc(values, bins=min(100, values.numel()))
+        # Add small epsilon to prevent log(0)
+        eps = 1e-7
+        hist = hist / (hist.sum() + eps) + eps
+        return float(-torch.sum(hist * torch.log(hist)).item())
+
+    def get_statistics(self) -> Dict[str, float]:
+        """Compute and return statistics using pre-allocated deques."""
+        stats = {}
+
+        # Add current learning rate from first param group
+        if len(self.param_groups) > 0:
+            stats['current_lr'] = float(self.param_groups[0]['lr'])
+
+        # Add other statistics
+        for key, values in self.stats.items():
+            if values:
+                try:
+                    tensor_values = torch.tensor(list(values), dtype=torch.float32)
+                    stats[f'avg_{key}'] = float(torch.mean(tensor_values).item())
+                    stats[f'std_{key}'] = float(torch.std(tensor_values).item())
+                except (RuntimeError, ValueError) as e:
+                    logging.warning(f"Error computing statistics for {key}: {e}")
+                    stats[f'avg_{key}'] = 0.0
+                    stats[f'std_{key}'] = 0.0
+        return stats
+
+    def _get_gradient_stats(self) -> Dict[str, Any]:
+        """Gather gradient statistics for the current step."""
+        grad_norms = []
+        grad_vars = []
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                grad_norms.append(torch.norm(grad).item())
+                if p.grad.numel() > 1:
+                    grad_vars.append(torch.var(grad.float()).item())
+        
+        saw_grads = len(grad_norms) > 0
+        
+        if saw_grads:
+            mean_grad_norm = np.mean(grad_norms)
+            mean_grad_var = np.mean(grad_vars) if grad_vars else 0.0
+        else:
+            mean_grad_norm = 0.0
+            mean_grad_var = 0.0
+        
+        grad_stats = {
+            'saw_grads': saw_grads,
+            'mean_grad_norm': mean_grad_norm,
+            'mean_grad_var': mean_grad_var
+        }
+        return grad_stats
+        
+    @torch.no_grad()
+    def step(self, closure: Optional[callable] = None) -> Optional[torch.Tensor]:
+        """Optimizes the parameters based on the current gradient."""
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        # Get gradient statistics
+        grad_stats = self._get_gradient_stats()
+
+        # Apply Q-learning adjustments if we have gradients and loss
+        if grad_stats['saw_grads'] and loss is not None:
+            current_loss = loss.item()
+
+            # Get current state
+            q_state = self.q_controller.get_state(
+                lr=self.param_groups[0]['lr'],
+                momentum=self.param_groups[0]['momentum'],
+                grad_var=grad_stats['mean_grad_var'],
+                loss=current_loss
+            )
+
+            # Update Q-table with previous experience if available
+            if self.q_controller.prev_loss is not None and \
+               self.q_controller.prev_state is not None and \
+               self.q_controller.prev_action is not None:
+                # Calculate relative loss improvement
+                loss_improvement = (self.q_controller.prev_loss - current_loss) / self.q_controller.prev_loss
+                grad_health = 1.0 / (1.0 + grad_stats['mean_grad_var'])
+                
+                # Check for consistent improvement
+                self.q_controller.performance_window.append(loss_improvement)
+                consistent_improvement = all([r > 0 for r in list(self.q_controller.performance_window)[-10:]])
+
+                # Compute reward for the previous action
+                reward = self.q_controller.compute_reward(
+                    loss_trend=loss_improvement,
+                    grad_health=grad_health,
+                    consistent_improvement=consistent_improvement
+                )
+                
+                # Update Q-table with the previous state, action, and received reward
+                self.q_controller.update(
+                    state=self.q_controller.prev_state,
+                    action=self.q_controller.prev_action,
+                    reward=reward,
+                    next_state=q_state,
+                    should_log=(self._step_count % 10 == 0)
+                )
+
+            # Choose new action based on the current state
+            q_action = self.q_controller.choose_action(q_state)
+
+            # Apply learning rate and momentum adjustments
+            for group in self.param_groups:
+                # Scale learning rate
+                group['q_scale'] *= float(np.clip(
+                    q_action['lr_scale'],
+                    self.q_controller.lr_scale_bounds[0],
+                    self.q_controller.lr_scale_bounds[1]
+                ))
+                group['lr'] = group['base_lr'] * group['q_scale']
+
+                # Scale momentum
+                group['momentum'] = float(np.clip(
+                    group['momentum'] * q_action['momentum_scale'],
+                    self.q_controller.momentum_scale_bounds[0],
+                    self.q_controller.momentum_scale_bounds[1]
+                ))
+
+            # Update Q-learning state for the next step
+            self.q_controller.prev_state = q_state
+            self.q_controller.prev_action = q_action
+            self.q_controller.prev_loss = current_loss
+
+        # Apply updates with the adjusted learning rates
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+
+                grad = p.grad
+                if grad_stats['mean_grad_norm'] > self.max_grad_norm * 5 or \
+                   np.isnan(grad_stats['mean_grad_norm']) or \
+                   np.isnan(grad_stats['mean_grad_var']):
+                    grad = torch.clamp(grad, -self.max_grad_norm, self.max_grad_norm)
+
+                state = self.state[p]
+
+                # Initialize momentum buffer if needed
+                if 'momentum_buffer' not in state:
+                    state['momentum_buffer'] = torch.zeros_like(p)
+                
+                # Apply update with current learning rate
+                self._apply_update(
+                    p=p,
+                    grad=grad,
+                    momentum=group['momentum'],
+                    lr=group['lr'],
+                    weight_decay=group['weight_decay'],
+                    state=state,
+                    current_loss=self.q_controller.prev_loss if self.q_controller.prev_loss is not None else 0.0
+                )
+
+        if grad_stats['saw_grads']:
+            self._step_count += 1
+            # Record and log gradient clipping statistics
+            stats = self.gradient_stats.record_step(self._step_count)
+            if self._step_count % 10 == 0:
+                logging.info(
+                    f"Step {self._step_count} gradient stats: "
+                    f"Clipped {stats['gradients_clipped']}/{stats['total_gradients']} "
+                    f"({stats['clip_ratio']:.1%}) gradients. "
+                    f"Max norm: {stats['max_gradient']:.3f}, "
+                    f"Avg clip amount: {stats['avg_clip_amount']:.3f}"
+                )
+
+        return loss
+        
+    def _apply_update(
+        self,
+        p: torch.Tensor,
+        grad: torch.Tensor,
+        momentum: float,
+        lr: float,
+        weight_decay: float,
+        state: dict,
+        current_loss: float
+    ):
+        """Enhanced parameter update with improved gradient handling."""
+        buf = state['momentum_buffer']
+
+        # Apply weight decay with smoother sigmoid scaling
+        if weight_decay != 0:
+            param_norm = torch.norm(p)
+            # Use sigmoid for smoother transitions
+            adaptive_wd = weight_decay * (1.0 / (1.0 + torch.exp(-param_norm * 0.05)))
+            grad = grad.add(p, alpha=adaptive_wd)
+
+        # Apply gradient clipping before updating the momentum buffer
+        grad_norm = torch.norm(grad)
+        was_clipped = False
+        clip_ratio = 0
+
+        if grad_norm > self.max_grad_norm:
+            clip_ratio = float(self.max_grad_norm / grad_norm)
+            grad.mul_(clip_ratio)
+            was_clipped = True
+
+        # Record gradient clipping statistics
+        self.gradient_stats.record_gradient(
+            original_norm=float(grad_norm),
+            clipped=was_clipped,
+            clip_ratio=clip_ratio
+        )
+
+        # Update momentum buffer
+        buf.mul_(momentum).add_(grad, alpha=1.0 - momentum)
+
+        # Compute update
+        update = -lr * buf
+
+        # Apply gradient clipping on parameter update
+        update_norm = torch.norm(update).item()
+        max_update_norm = 1.0  # Prevent too large updates
+        if update_norm > max_update_norm:
+            update.mul_(max_update_norm / (update_norm + 1e-6))
+
+        # Update parameters
+        p.data.add_(update)
+        
+    def state_dict(self) -> Dict[str, Any]:
+        """Returns the optimizer's state dict with safe serialization."""
+        state_dict = super().state_dict()
+        try:
+            state_dict['statistics'] = self.get_statistics()
+            state_dict['q_table'] = self.q_controller.q_table
+            state_dict['epsilon'] = float(self.q_controller.epsilon)
+        except Exception as e:
+            logging.error(f"Error creating state dict: {e}")
+            state_dict['statistics'] = {}
+            state_dict['q_table'] = {}
+            state_dict['epsilon'] = 0.15
+        return state_dict
+
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        """Loads optimizer state with safe type handling."""
+        try:
+            statistics = state_dict.pop('statistics', None)
+            q_table = state_dict.pop('q_table', None)
+            epsilon = state_dict.pop('epsilon', None)
+
+            super().load_state_dict(state_dict)
+
+            if statistics is not None:
+                for key in self.stats:
+                    avg_key = f'avg_{key}'
+                    if avg_key in statistics:
+                        # Fill the deque with the average value for simplicity
+                        self.stats[key].extend([float(statistics[avg_key])] * self.stats[key].maxlen)
+
+            if q_table is not None:
+                self.q_controller.q_table = q_table
+
+            if epsilon is not None:
+                self.q_controller.epsilon = float(epsilon)
+
+        except Exception as e:
+            logging.error(f"Error loading state dict: {e}")
+            # Initialize fresh statistics and Q-table if loading fails
+            self.stats = {
+                'grad_norms': deque(maxlen=100),
+                'learning_rates': deque(maxlen=100),
+                'momentum_values': deque(maxlen=100),
+                'entropy_values': deque(maxlen=100),
+                'update_norms': deque(maxlen=100)
+            }
+            self.q_controller.q_table = {}
+            self.q_controller.epsilon = 0.15
+
+
+# =====================================================================
+# Model Architecture
+# =====================================================================
 
 class CrossAttentionBlock(nn.Module):
     """Cross-attention block that properly mixes byte and patch information."""
@@ -368,17 +1088,17 @@ class CrossAttentionBlock(nn.Module):
         v = kv[:, :, 2*self.hidden_size:]
 
         # Split heads
-        q = q.view(batch_size, num_queries, self.num_heads, self.head_dim).transpose(1, 2)  # [batch_size, num_heads, num_queries, head_dim]
-        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)      # [batch_size, num_heads, seq_len, head_dim]
-        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)      # [batch_size, num_heads, seq_len, head_dim]
+        q = q.view(batch_size, num_queries, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
         # Compute attention scores
         scale = 1.0 / math.sqrt(self.head_dim)
-        scores = torch.matmul(q, k.transpose(-2, -1)) * scale  # [batch_size, num_heads, num_queries, seq_len]
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scale
 
         if attention_mask is not None:
             # Expand mask to match attention scores shape
-            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # [batch_size, 1, 1, seq_len]
+            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
             scores = scores.masked_fill(~attention_mask, float('-inf'))
 
         # Convert scores to probabilities
@@ -386,7 +1106,7 @@ class CrossAttentionBlock(nn.Module):
         attn_probs = self.dropout(attn_probs)
 
         # Apply attention to values
-        output = torch.matmul(attn_probs, v)  # [batch_size, num_heads, num_queries, head_dim]
+        output = torch.matmul(attn_probs, v)
 
         # Reshape and project output
         output = output.transpose(1, 2).contiguous().view(batch_size, num_queries, self.hidden_size)
@@ -395,16 +1115,13 @@ class CrossAttentionBlock(nn.Module):
 
         return output
 
-# ----------------------------
-# GlobalLatentTransformer
-# ----------------------------
 
 class GlobalLatentTransformer(nn.Module):
     """Large global transformer that processes patch representations."""
     def __init__(
         self,
-        hidden_size: int = 1024,  # Reduced from 4096
-        num_layers: int = 16,      # Reduced from 32
+        hidden_size: int = 1024,
+        num_layers: int = 16,
         num_heads: int = 32,
         dropout: float = 0.1
     ):
@@ -468,167 +1185,6 @@ class GlobalLatentTransformer(nn.Module):
 
         return self.final_norm(x)
 
-# ----------------------------
-# EntropyGuidedAttention Placeholder
-# ----------------------------
-
-class EntropyGuidedAttention(nn.Module):
-    """Placeholder for EntropyGuidedAttention. Replace with actual implementation."""
-    def __init__(self, hidden_size: int, num_heads: int, dropout: float = 0.1):
-        super().__init__()
-        self.multihead_attn = nn.MultiheadAttention(hidden_size, num_heads, dropout=dropout, batch_first=True)
-        self.dropout = nn.Dropout(dropout)
-        self.norm = nn.LayerNorm(hidden_size, eps=1e-6)
-
-    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        attn_output, _ = self.multihead_attn(x, x, x, attn_mask=attention_mask)
-        attn_output = self.dropout(attn_output)
-        x = self.norm(x + attn_output)
-        return x
-
-# ----------------------------
-# BLTModel
-# ----------------------------
-
-class BLTModel(nn.Module):
-    """Complete Byte Latent Transformer model implementation."""
-    def __init__(
-        self,
-        local_hidden_size: int = 256,  # Adjusted to 256
-        global_hidden_size: int = 1024,  # Reduced from 4096
-        num_local_encoder_layers: int = 1,
-        num_global_layers: int = 16,      # Reduced from 32
-        num_local_decoder_layers: int = 4,  # Reduced from 9
-        dropout: float = 0.1,
-        window_size: int = 256,        # Smaller window for better memory handling
-        n_gram_sizes: List[int] = [3, 4],  # Reduced n-gram sizes
-        n_gram_vocab_size: int = 30000      # Smaller n-gram vocab
-    ):
-        super().__init__()
-
-        # Enable memory-efficient attention
-        if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
-            torch.backends.cuda.enable_mem_efficient_sdp(True)
-
-        # Entropy-based patching
-        self.patcher = BabylonIndex(
-            scales=n_gram_sizes,
-            max_cache_size=100000,
-            min_entropy_threshold=0.3
-        )
-
-        # Local encoder for bytes to patches
-        self.local_encoder = LocalEncoder(
-            hidden_size=local_hidden_size,
-            num_layers=num_local_encoder_layers,
-            num_heads=8,
-            window_size=window_size,
-            n_gram_sizes=n_gram_sizes,
-            n_gram_vocab_size=n_gram_vocab_size
-        )
-
-        # Project patches to global hidden size
-        self.patch_projection = nn.Sequential(
-            nn.Linear(local_hidden_size, global_hidden_size),
-            nn.LayerNorm(global_hidden_size, eps=1e-6)
-        )
-
-        # Global transformer for patches
-        self.global_transformer = GlobalLatentTransformer(
-            hidden_size=global_hidden_size,
-            num_layers=num_global_layers,
-            num_heads=32,
-            dropout=dropout
-        )
-
-        # Project back to local hidden size
-        self.patch_deprojection = nn.Sequential(
-            nn.Linear(global_hidden_size, local_hidden_size),
-            nn.LayerNorm(local_hidden_size, eps=1e-6)
-        )
-
-        # Local decoder for patches to bytes
-        self.local_decoder = LocalDecoder(
-            hidden_size=local_hidden_size,
-            num_layers=num_local_decoder_layers,
-            num_heads=8,
-            dropout=dropout
-        )
-
-        self.context_size = window_size  # For sampling purposes
-
-    def forward(
-        self, 
-        byte_seq: torch.Tensor,  # [batch_size, seq_len]
-        return_patch_boundaries: bool = False
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[int]]]:
-        """Complete forward pass of BLT model."""
-        batch_size, seq_len = byte_seq.size()
-        device = byte_seq.device
-
-        # Find patch boundaries using entropy model
-        patch_boundaries = self.patcher.find_patch_boundaries(byte_seq)
-
-        # Encode bytes into patches
-        patch_repr = self.local_encoder(byte_seq, patch_boundaries)  # [batch_size, num_patches, local_hidden]
-
-        # Project to global hidden size
-        patch_repr = self.patch_projection(patch_repr)  # [batch_size, num_patches, global_hidden]
-
-        # Process with global transformer
-        patch_repr = self.global_transformer(patch_repr)  # [batch_size, num_patches, global_hidden]
-
-        # Project back to local hidden size
-        patch_repr = self.patch_deprojection(patch_repr)  # [batch_size, num_patches, local_hidden]
-
-        # Create causal mask for decoder
-        history_len = 1  # Changed from min(seq_len, 256) to 1 for single-byte prediction
-        causal_mask = torch.ones(history_len, history_len, device=device).bool()  # No masking needed for single byte
-
-        # Get byte history embeddings
-        history = byte_seq[:, -history_len:]
-        history_embeds = self.local_encoder.byte_embeddings(history)
-
-        # Decode to byte predictions
-        byte_logits = self.local_decoder(
-            patches=patch_repr,
-            byte_history=history_embeds,
-            causal_mask=causal_mask
-        )  # [batch_size, 1, 256]
-
-        if return_patch_boundaries:
-            return byte_logits, patch_boundaries
-        return byte_logits
-
-    @staticmethod
-    def compute_loss(
-        logits: torch.Tensor,  # [batch_size, 1, 256] 
-        targets: torch.Tensor,  # [batch_size]
-        smoothing: float = 0.1
-    ) -> torch.Tensor:
-        """Compute cross entropy loss with label smoothing."""
-        vocab_size = logits.size(-1)
-
-        # Reshape logits and targets for loss computation
-        logits = logits.view(-1, vocab_size)  # [(batch_size * 1), 256]
-        targets = targets.view(-1)             # [(batch_size * 1)]
-
-        # Check target indices are within [0, vocab_size-1]
-        if targets.max() >= vocab_size or targets.min() < 0:
-            logging.error(f"Target indices out of bounds: min={targets.min()}, max={targets.max()}")
-            raise ValueError("Target indices exceed vocabulary size!")
-
-        # Create smoothed target distribution
-        with torch.no_grad():
-            true_dist = torch.zeros_like(logits)
-            true_dist.fill_(smoothing / (vocab_size - 1))
-            true_dist.scatter_(-1, targets.unsqueeze(-1), 1.0 - smoothing)
-
-        return -torch.sum(true_dist * F.log_softmax(logits, dim=-1), dim=-1).mean()
-
-# ----------------------------
-# LocalEncoder
-# ----------------------------
 
 class LocalEncoder(nn.Module):
     """Local encoder that efficiently maps bytes to patches."""
@@ -658,7 +1214,7 @@ class LocalEncoder(nn.Module):
 
         self.n_gram_sizes = n_gram_sizes
         self.window_size = window_size
-        self.n_gram_vocab_size = n_gram_vocab_size  # Store for use in hashing
+        self.n_gram_vocab_size = n_gram_vocab_size
 
         # Local transformer layers with fixed window attention
         encoder_layer = nn.TransformerEncoderLayer(
@@ -693,7 +1249,7 @@ class LocalEncoder(nn.Module):
             # Use safe indexing with proper bounds checking
             n_gram = byte_seq.unfold(1, n, 1)  # [batch_size, seq_len - n + 1, n]
             powers = torch.tensor([pow(256, i, 2**32) for i in range(n)], 
-                                 dtype=torch.long, device=device)
+                                        dtype=torch.long, device=device)
 
             # Compute hash: sum(byte * (256^i)) mod 2^32
             hash_vals = (n_gram * powers).sum(dim=-1) % 2**32
@@ -707,7 +1263,7 @@ class LocalEncoder(nn.Module):
     def create_local_attention_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
         """Create local window attention mask with proper bounds checking."""
         mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=device)
-        window_size = min(self.window_size, seq_len)  # Ensure window size doesn't exceed sequence length
+        window_size = min(self.window_size, seq_len)
 
         for i in range(seq_len):
             start = max(0, i - window_size)
@@ -717,7 +1273,7 @@ class LocalEncoder(nn.Module):
         return mask
 
     def forward(
-        self, 
+        self,  
         byte_seq: torch.Tensor,
         patch_boundaries: List[int]
     ) -> torch.Tensor:
@@ -727,7 +1283,7 @@ class LocalEncoder(nn.Module):
         # Input validation
         if seq_len == 0:
             return torch.zeros((batch_size, 1, self.byte_embeddings.embedding_dim), 
-                             device=byte_seq.device)
+                               device=byte_seq.device)
 
         # Get byte embeddings
         x = self.byte_embeddings(byte_seq)  # [batch_size, seq_len, hidden_size]
@@ -798,16 +1354,13 @@ class LocalEncoder(nn.Module):
 
         return self.norm(patches)
 
-# ----------------------------
-# LocalDecoder
-# ----------------------------
 
 class LocalDecoder(nn.Module):
     """Local decoder that maps patches back to bytes."""
     def __init__(
         self,
-        hidden_size: int = 256,  # Adjusted to 256
-        num_layers: int = 4,      # Reduced from 9
+        hidden_size: int = 256,
+        num_layers: int = 4,
         num_heads: int = 8,
         dropout: float = 0.1
     ):
@@ -923,906 +1476,414 @@ class LocalDecoder(nn.Module):
 
         return next_byte
 
-# ----------------------------
-# RLHFTrainer
-# ----------------------------
+
+# =====================================================================
+# BLTModel: Complete Model Architecture
+# =====================================================================
+
+class BLTModel(nn.Module):
+    """Complete Byte Latent Transformer model implementation."""
+    def __init__(
+        self,
+        local_hidden_size: int = 256,
+        global_hidden_size: int = 1024,
+        num_local_encoder_layers: int = 1,
+        num_global_layers: int = 16,
+        num_local_decoder_layers: int = 4,
+        dropout: float = 0.1,
+        window_size: int = 256,
+        n_gram_sizes: List[int] = [3, 4],
+        n_gram_vocab_size: int = 30000
+    ):
+        super().__init__()
+
+        # Enable memory-efficient attention if available
+        if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+
+        # Entropy-based patching
+        self.patcher = BabylonIndex(
+            scales=n_gram_sizes,
+            max_cache_size=100000,
+            min_entropy_threshold=0.3
+        )
+
+        # Local encoder for bytes to patches
+        self.local_encoder = LocalEncoder(
+            hidden_size=local_hidden_size,
+            num_layers=num_local_encoder_layers,
+            num_heads=8,
+            window_size=window_size,
+            n_gram_sizes=n_gram_sizes,
+            n_gram_vocab_size=n_gram_vocab_size
+        )
+
+        # Project patches to global hidden size
+        self.patch_projection = nn.Sequential(
+            nn.Linear(local_hidden_size, global_hidden_size),
+            nn.LayerNorm(global_hidden_size, eps=1e-6)
+        )
+
+        # Global transformer for patches
+        self.global_transformer = GlobalLatentTransformer(
+            hidden_size=global_hidden_size,
+            num_layers=num_global_layers,
+            num_heads=32,
+            dropout=dropout
+        )
+
+        # Project back to local hidden size
+        self.patch_deprojection = nn.Sequential(
+            nn.Linear(global_hidden_size, local_hidden_size),
+            nn.LayerNorm(local_hidden_size, eps=1e-6)
+        )
+
+        # Local decoder for patches to bytes
+        self.local_decoder = LocalDecoder(
+            hidden_size=local_hidden_size,
+            num_layers=num_local_decoder_layers,
+            num_heads=8,
+            dropout=dropout
+        )
+
+        self.context_size = window_size  # For sampling purposes
+
+    def forward(
+        self,  
+        byte_seq: torch.Tensor,  # [batch_size, seq_len]
+        return_patch_boundaries: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[int]]]:
+        """Complete forward pass of BLT model."""
+        batch_size, seq_len = byte_seq.size()
+        device = byte_seq.device
+
+        # Find patch boundaries using entropy model
+        patch_boundaries = self.patcher.find_patch_boundaries(byte_seq)
+
+        # Encode bytes into patches
+        patch_repr = self.local_encoder(byte_seq, patch_boundaries)  # [batch_size, num_patches, local_hidden]
+
+        # Project to global hidden size
+        patch_repr = self.patch_projection(patch_repr)  # [batch_size, num_patches, global_hidden]
+
+        # Process with global transformer
+        patch_repr = self.global_transformer(patch_repr)  # [batch_size, num_patches, global_hidden]
+
+        # Project back to local hidden size
+        patch_repr = self.patch_deprojection(patch_repr)  # [batch_size, num_patches, local_hidden]
+
+        # Create causal mask for decoder
+        history_len = 1  # For single-byte prediction
+        causal_mask = torch.ones(history_len, history_len, device=device).bool()
+
+        # Get byte history embeddings
+        history = byte_seq[:, -history_len:]
+        history_embeds = self.local_encoder.byte_embeddings(history)
+
+        # Decode to byte predictions
+        byte_logits = self.local_decoder(
+            patches=patch_repr,
+            byte_history=history_embeds,
+            causal_mask=causal_mask
+        )  # [batch_size, 1, 256]
+
+        if return_patch_boundaries:
+            return byte_logits, patch_boundaries
+        return byte_logits
+
+    @staticmethod
+    def compute_loss(
+        logits: torch.Tensor,  # [batch_size, 1, 256]  
+        targets: torch.Tensor,  # [batch_size]
+        smoothing: float = 0.1
+    ) -> torch.Tensor:
+        """Compute cross entropy loss with label smoothing."""
+        vocab_size = logits.size(-1)
+
+        # Reshape logits and targets for loss computation
+        logits = logits.view(-1, vocab_size)  # [(batch_size * 1), 256]
+        targets = targets.view(-1)          # [(batch_size * 1)]
+
+        # Check target indices are within [0, vocab_size-1]
+        if targets.max() >= vocab_size or targets.min() < 0:
+            logging.error(f"Target indices out of bounds: min={targets.min()}, max={targets.max()}")
+            raise ValueError("Target indices exceed vocabulary size!")
+
+        # Create smoothed target distribution
+        with torch.no_grad():
+            true_dist = torch.zeros_like(logits)
+            true_dist.fill_(smoothing / (vocab_size - 1))
+            true_dist.scatter_(-1, targets.unsqueeze(-1), 1.0 - smoothing)
+
+        return -torch.sum(true_dist * F.log_softmax(logits, dim=-1), dim=-1).mean()
+        
+    def generate(
+        self,
+        seed_bytes: torch.Tensor,  
+        max_length: int = 100,
+        temperature: float = 1.0,
+        sampling_config: SamplerConfig = None
+    ) -> torch.Tensor:
+        """
+        Generate new bytes starting from seed bytes.
+        
+        Args:
+            seed_bytes: Starting byte sequence [batch_size, seed_len]
+            max_length: Maximum number of bytes to generate
+            temperature: Sampling temperature
+            sampling_config: Config for entropy-based sampling
+            
+        Returns:
+            Generated byte sequence [batch_size, seed_len + max_length]
+        """
+        device = seed_bytes.device
+        batch_size, seed_len = seed_bytes.size()
+        generated = seed_bytes.clone()
+        
+        # Use default sampling config if not provided
+        if sampling_config is None:
+            sampling_config = SamplerConfig()
+            
+        # Reset context for generation
+        self.patcher.reset_context()
+        
+        # Generate bytes one by one
+        for _ in range(max_length):
+            # Get context window
+            if generated.size(1) <= self.context_size:
+                context = generated
+            else:
+                context = generated[:, -self.context_size:]
+                
+            # Get next byte predictions
+            with torch.no_grad():
+                logits = self(context)  # [batch_size, 1, 256]
+                next_byte_logits = logits[:, -1]  # [batch_size, 256]
+                
+                # Apply temperature
+                scaled_logits = next_byte_logits / temperature
+                
+                # Sample based on entropy
+                probs = F.softmax(scaled_logits, dim=-1)
+                entropy = -torch.sum(probs * torch.log2(probs + 1e-10), dim=-1)
+                
+                # Low entropy: greedy sampling
+                low_mask = entropy < sampling_config.low_entropy_threshold
+                med_mask = (entropy >= sampling_config.low_entropy_threshold) & (entropy < sampling_config.medium_entropy_threshold)
+                high_mask = entropy >= sampling_config.medium_entropy_threshold
+                
+                next_bytes = torch.zeros(batch_size, dtype=torch.long, device=device)
+                
+                # Apply different sampling strategies based on entropy
+                if low_mask.any():
+                    next_bytes[low_mask] = torch.argmax(probs[low_mask], dim=-1)
+                    
+                if med_mask.any():
+                    top_k = 10
+                    top_k_probs, top_k_indices = torch.topk(probs[med_mask], k=top_k, dim=-1)
+                    top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
+                    sampled_indices = torch.multinomial(top_k_probs, num_samples=1).squeeze(-1)
+                    next_bytes[med_mask] = top_k_indices.gather(1, sampled_indices.unsqueeze(-1)).squeeze(-1)
+                    
+                if high_mask.any():
+                    next_bytes[high_mask] = torch.multinomial(probs[high_mask], num_samples=1).squeeze(-1)
+                
+            # Append to generated sequence
+            next_bytes = next_bytes.unsqueeze(1)  # [batch_size, 1]
+            generated = torch.cat([generated, next_bytes], dim=1)
+            
+        return generated
+        
+        
+# =====================================================================
+# Trainer Class
+# =====================================================================
 
 class RLHFTrainer:
-    """Trainer class that integrates RLHF mechanisms with the training loop."""
-    def __init__(self, model: nn.Module, optimizer: Optimizer, babylon_index: BabylonIndex, tokenizer: ByteTokenizer, device: torch.device):
+    """Trainer class that integrates Q-Learning with the training loop."""
+    def __init__(
+        self,  
+        model: nn.Module,  
+        optimizer: torch.optim.Optimizer,  
+        device: torch.device,
+        scaler = None
+    ):
         self.model = model
         self.optimizer = optimizer
-        self.babylon_index = babylon_index
-        self.tokenizer = tokenizer
         self.device = device
-        self.criterion = nn.CrossEntropyLoss()
-        self.scaler = amp.GradScaler(enabled=True)
-        self._step_count = 0  # Initialize step count
-
-    def train_step(self, context: torch.Tensor, target: torch.Tensor, accumulation_steps: int = 1) -> float:
+        self.scaler = scaler if scaler is not None else amp.GradScaler(enabled=True)
+        self._step_count = 0
+        
+    def train_step(
+        self,  
+        context: torch.Tensor,  
+        target: torch.Tensor,  
+        accumulation_steps: int = 1
+    ) -> float:
         """
         Perform a single training step with gradient accumulation.
-
+        
         Args:
-            context (torch.Tensor): Input byte sequences [batch_size, context_size].
-            target (torch.Tensor): Target bytes [batch_size].
-            accumulation_steps (int): Number of steps to accumulate gradients.
-
+            context: Input byte sequences [batch_size, context_size]
+            target: Target bytes [batch_size]
+            accumulation_steps: Number of steps to accumulate gradients
+            
         Returns:
-            float: Loss value.
+            loss: Loss value
         """
         self.model.train()
-        loss = None
-        with autocast(device_type='cuda', enabled=self.scaler.is_enabled()):
-            # Forward pass with proper handling of cross-attention masking
+        
+        with amp.autocast(device_type=self.device.type, enabled=self.scaler.is_enabled()):
+            # Forward pass
             logits = self.model(context)  # [batch_size, 1, 256]
             loss = self.model.compute_loss(logits, target) / accumulation_steps
-
+        
+        # Backward pass with gradient scaling
         self.scaler.scale(loss).backward()
-
+        
+        # Optimizer step
         if (self._step_count + 1) % accumulation_steps == 0:
-            # Optimizer step
             self.scaler.step(self.optimizer)
             self.scaler.update()
             self.optimizer.zero_grad(set_to_none=True)
-
+            
         self._step_count += 1
-
+        
         return loss.item()
-
-    def save_model(self, epoch: int, checkpoint_dir: str = "checkpoints"):
-        """Save model checkpoint along with optimizer state."""
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch}.pt')
-        model_state_dict = self.model.module.state_dict() if isinstance(
-            self.model, DDP
-        ) else self.model.state_dict()
-
-        torch.save({
+    
+    def validate(
+        self,  
+        dataloader: torch.utils.data.DataLoader
+    ) -> Dict[str, float]:
+        """
+        Validate the model on the validation dataset.
+        
+        Args:
+            dataloader: Validation dataloader
+            
+        Returns:
+            metrics: Dictionary of validation metrics
+        """
+        self.model.eval()
+        total_loss = 0.0
+        entropy_vals = []
+        
+        with torch.no_grad():
+            for context, target in dataloader:
+                context = context.to(self.device)
+                target = target.to(self.device)
+                
+                with amp.autocast(device_type=self.device.type, enabled=self.scaler.is_enabled()):
+                    logits = self.model(context)
+                    loss = self.model.compute_loss(logits, target)
+                    
+                    # Calculate entropy
+                    probs = F.softmax(logits, dim=-1)
+                    entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1).mean()
+                    
+                total_loss += loss.item() * context.size(0)
+                entropy_vals.append(entropy.item())
+            
+        avg_loss = total_loss / len(dataloader.dataset)
+        avg_entropy = np.mean(entropy_vals)
+        
+        metrics = {
+            'val_loss': avg_loss,
+            'val_entropy': avg_entropy
+        }
+        
+        self.model.train()
+        return metrics
+    
+    def save_checkpoint(
+        self,  
+        filepath: str,  
+        epoch: int,  
+        val_metrics: Optional[Dict[str, float]] = None
+    ):
+        """
+        Save model checkpoint with optimizer state.
+        
+        Args:
+            filepath: Path to save checkpoint
+            epoch: Current epoch
+            val_metrics: Validation metrics
+        """
+        # Create parent directory if it doesn't exist
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        # Get model state dict, handling DDP if necessary
+        if isinstance(self.model, DistributedDataParallel):
+            model_state = self.model.module.state_dict()
+        else:
+            model_state = self.model.state_dict()
+            
+        checkpoint = {
             'epoch': epoch,
-            'model_state_dict': model_state_dict,
+            'model_state_dict': model_state,
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scaler_state_dict': self.scaler.state_dict(),
-        }, checkpoint_path)
-        logging.info(f'Checkpoint saved at {checkpoint_path}')
-
-    def load_model(self, checkpoint_path: str) -> int:
-        """Load model checkpoint along with optimizer state."""
-        if not os.path.exists(checkpoint_path):
-            logging.error(f"Checkpoint file {checkpoint_path} does not exist.")
-            return 0  # Starting from epoch 0
-
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        model_state_dict = checkpoint['model_state_dict']
-        optimizer_state_dict = checkpoint['optimizer_state_dict']
-        scaler_state_dict = checkpoint['scaler_state_dict']
-        epoch = checkpoint.get('epoch', 0)
-
-        if isinstance(self.model, DDP):
-            self.model.module.load_state_dict(model_state_dict)
+            'val_metrics': val_metrics
+        }
+        
+        torch.save(checkpoint, filepath)
+        logging.info(f"Checkpoint saved to {filepath}")
+        
+    def load_checkpoint(self, filepath: str) -> int:
+        """
+        Load model checkpoint with optimizer state.
+        
+        Args:
+            filepath: Path to checkpoint
+            
+        Returns:
+            epoch: Epoch of checkpoint
+        """
+        if not os.path.exists(filepath):
+            logging.error(f"Checkpoint {filepath} does not exist")
+            return 0
+            
+        checkpoint = torch.load(filepath, map_location=self.device)
+        
+        # Load model state, handling DDP if necessary
+        if isinstance(self.model, DistributedDataParallel):
+            self.model.module.load_state_dict(checkpoint['model_state_dict'])
         else:
-            self.model.load_state_dict(model_state_dict)
-        self.optimizer.load_state_dict(optimizer_state_dict)
-        self.scaler.load_state_dict(scaler_state_dict)
-
-        logging.info(f"Loaded checkpoint from {checkpoint_path}, epoch {epoch}")
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
+        epoch = checkpoint.get('epoch', 0)
+        logging.info(f"Loaded checkpoint from epoch {epoch}")
+        
         return epoch
 
-    def evaluate(self, validation_loader: DataLoader, device: torch.device, use_amp: bool, scaler: amp.GradScaler) -> float:
-        """Evaluate the model on the validation set with entropy feedback."""
-        entropies = []
-        total_loss = 0.0
-        self.model.eval()
-        with torch.no_grad():
-            for inputs, targets in validation_loader:
-                inputs = inputs.to(device, non_blocking=True)
-                targets = targets.to(device, non_blocking=True)
-                with autocast('cuda', enabled=use_amp):
-                    outputs = self.model(inputs)
-                    loss = self.model.compute_loss(outputs, targets)
-                    total_loss += loss.item()
 
-                    # Calculate entropy
-                    probs = F.softmax(outputs, dim=-1)
-                    entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1).mean()
-                    entropies.append(entropy.item())
-
-        avg_loss = total_loss / len(validation_loader)
-        avg_entropy = np.mean(entropies) if entropies else 0.0
-        logging.info(f'Validation Loss: {avg_loss:.4f}, Average Entropy: {avg_entropy:.4f}')
-
-        if isinstance(self.optimizer, EnhancedSGD):
-            self.optimizer._adjust_hyperparameters()
-
-        self.model.train()
-        return avg_loss
-
-# ----------------------------
-# entropy_based_sampling and calculate_entropy
-# ----------------------------
-
-def entropy_based_sampling(logits: torch.Tensor, config: SamplerConfig) -> torch.Tensor:
-    """Sample next tokens based on entropy thresholds."""
-    probs = F.softmax(logits, dim=-1)
-    entropy = calculate_entropy(probs)
-
-    # Initialize output tensor
-    sampled = torch.zeros_like(entropy, dtype=torch.long)
-
-    # Low entropy: greedy sampling
-    low_mask = entropy < config.low_entropy_threshold
-    if low_mask.any():
-        sampled[low_mask] = torch.argmax(probs[low_mask], dim=-1)
-
-    # Medium entropy: top-k sampling
-    med_mask = (entropy >= config.low_entropy_threshold) & (entropy < config.medium_entropy_threshold)
-    if med_mask.any():
-        top_k = 10
-        top_k_probs, top_k_indices = torch.topk(probs[med_mask], k=top_k, dim=-1)
-        top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
-        sampled_indices = torch.multinomial(top_k_probs, num_samples=1).squeeze(-1)
-        sampled[med_mask] = top_k_indices.gather(1, sampled_indices.unsqueeze(-1)).squeeze(-1)
-
-    # High entropy: random sampling
-    high_mask = entropy >= config.medium_entropy_threshold
-    if high_mask.any():
-        sampled[high_mask] = torch.multinomial(probs[high_mask], num_samples=1).squeeze(-1)
-
-    return sampled
-
-def calculate_entropy(probs: torch.Tensor) -> torch.Tensor:
-    """Calculate entropy for each sample in the batch."""
-    return -torch.sum(probs * torch.log2(probs + 1e-10), dim=-1)
-
-# ----------------------------
-# ByteIterableDataset
-# ----------------------------
-
-class ByteIterableDataset(IterableDataset):
-    def __init__(self, csv_file: str, context_size: int = 64):
-        """
-        Args:
-            csv_file (str): Path to the CSV file containing text data.
-            context_size (int): Size of the context window.
-        """
-        self.csv_file = csv_file
-        self.context_size = context_size
-
-    def parse_csv(self):
-        """Generator that yields texts line by line from the CSV."""
-        try:
-            for chunk in pd.read_csv(self.csv_file, chunksize=1000):
-                texts = chunk['text'].dropna().astype(str).tolist()
-                for text in texts:
-                    yield text
-        except Exception as e:
-            logging.error(f"Error reading CSV file {self.csv_file}: {e}")
-            return
-
-    def __iter__(self):
-        return self.generator()
-
-    def generator(self):
-        """Generator function to yield (context, target) pairs."""
-        for text in self.parse_csv():
-            if len(text.strip()) == 0:
-                continue  # Skip empty texts
-
-            try:
-                bytes_data = text.encode('utf-8', errors='replace')
-            except Exception as e:
-                logging.error(f"Encoding error for text: {e}")
-                continue  # Skip texts that cause encoding errors
-
-            if len(bytes_data) < self.context_size + 1:
-                continue  # Skip texts that are too short
-
-            byte_seq = [b for b in bytes_data]
-            for i in range(len(byte_seq) - self.context_size):
-                context = byte_seq[i:i + self.context_size]
-                target = byte_seq[i + self.context_size]
-
-                last_byte = context[-1]
-                if not (0x80 <= last_byte <= 0xBF):
-                    yield (torch.tensor(context, dtype=torch.long), torch.tensor(target, dtype=torch.long))
-                else:
-                    # Ensure that we're not in the middle of a multi-byte character
-                    # Skip this target to prevent partial character prediction
-                    continue
-
-# ----------------------------
-# Utility Functions
-# ----------------------------
-
-def decode_bytes(byte_tensor: torch.Tensor) -> str:
-    """Convert a tensor of byte values back to text."""
-    try:
-        return bytes(byte_tensor.cpu().numpy().tolist()).decode('utf-8', errors='replace')
-    except Exception as e:
-        logging.error(f"Error decoding bytes: {e}")
-        return ""
-
-def byte_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, smoothing: float = 0.1) -> torch.Tensor:
-    """
-    Custom cross entropy with label smoothing for byte-level training.
-
-    Args:
-        logits: Shape [batch_size, vocab_size]
-        targets: Shape [batch_size]
-        smoothing: Label smoothing factor
-    """
-    if logits.size(0) != targets.size(0):
-        raise ValueError(f"Batch size mismatch: logits {logits.size(0)}, targets {targets.size(0)}")
-
-    confidence = 1.0 - smoothing
-    logprobs = F.log_softmax(logits, dim=-1)
-    nll_loss = -logprobs.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
-    smooth_loss = -logprobs.mean(dim=-1)
-    loss = confidence * nll_loss + smoothing * smooth_loss
-    return loss.mean()
-
-def generate_text(model: nn.Module, seed_text: str, length: int, config: SamplerConfig, device: torch.device) -> str:
-    """
-    Generate text using the trained model based on the seed_text.
-
-    Args:
-        model (nn.Module): Trained model.
-        seed_text (str): Seed text to start generation.
-        length (int): Number of bytes to generate.
-        config (SamplerConfig): Configuration for entropy-based sampling.
-        device (torch.device): Device to run the model on.
-
-    Returns:
-        str: Generated text.
-    """
-    model.eval()
-    generated = seed_text.encode('utf-8')
-    context_size = model.context_size
-    context_bytes = generated[-context_size:] if len(generated) >= context_size else generated
-    context = torch.tensor([byte for byte in context_bytes], dtype=torch.long).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        for _ in range(length):
-            logits = model(context)  # [batch_size, 1, 256]
-            sampled_byte = entropy_based_sampling(logits[:, -1, :], config)  # [batch_size]
-            sampled_byte = sampled_byte.to(device)
-            generated += sampled_byte.cpu().numpy().tolist()
-            # Update context
-            if len(generated) >= context_size + 1:
-                new_context = generated[-context_size:]
-            else:
-                new_context = generated
-            context = torch.tensor([byte for byte in new_context], dtype=torch.long).unsqueeze(0).to(device)
-
-    return decode_bytes(torch.tensor(generated))
-
-# ----------------------------
-# Checkpointing Functions
-# ----------------------------
-
-def save_checkpoint(
-    epoch: int,
-    trainer: RLHFTrainer,
-    checkpoint_dir: str = "checkpoints"
-):
-    """Save model checkpoint."""
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch}.pt')
-    model_state_dict = trainer.model.module.state_dict() if isinstance(
-        trainer.model, DDP
-    ) else trainer.model.state_dict()
-
-    torch.save({
-        'epoch': epoch,
-        'model_state_dict': model_state_dict,
-        'optimizer_state_dict': trainer.optimizer.state_dict(),
-        'scaler_state_dict': trainer.scaler.state_dict(),
-    }, checkpoint_path)
-    logging.info(f'Checkpoint saved at {checkpoint_path}')
-
-def load_checkpoint(
-    trainer: RLHFTrainer,
-    checkpoint_path: str
-) -> int:
-    """Load model checkpoint."""
-    if not os.path.exists(checkpoint_path):
-        logging.error(f"Checkpoint file {checkpoint_path} does not exist.")
-        return 0  # Starting from epoch 0
-
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    model_state_dict = checkpoint['model_state_dict']
-    optimizer_state_dict = checkpoint['optimizer_state_dict']
-    scaler_state_dict = checkpoint['scaler_state_dict']
-    epoch = checkpoint.get('epoch', 0)
-
-    if isinstance(trainer.model, DDP):
-        trainer.model.module.load_state_dict(model_state_dict)
-    else:
-        trainer.model.load_state_dict(model_state_dict)
-    if isinstance(trainer.optimizer, EnhancedSGD):
-        trainer.optimizer.load_state_dict(optimizer_state_dict)
-    else:
-        trainer.optimizer.load_state_dict(optimizer_state_dict)
-    trainer.scaler.load_state_dict(scaler_state_dict)
-
-    logging.info(f"Loaded checkpoint from {checkpoint_path}, epoch {epoch}")
-    return epoch
-
-# ----------------------------
-# Validation Function
-# ----------------------------
-
-def validate(model, validation_loader, device, use_amp, scaler: amp.GradScaler) -> float:
-    """Validation loop with mixed precision."""
-    model.eval()
-    entropies = []
-    total_loss = 0.0
-    with torch.no_grad():
-        for inputs, targets in validation_loader:
-            inputs = inputs.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-            with autocast('cuda', enabled=use_amp):
-                outputs = model(inputs)
-                loss = model.compute_loss(outputs, targets)
-                total_loss += loss.item()
-
-                # Calculate entropy
-                probs = F.softmax(outputs, dim=-1)
-                entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1).mean()
-                entropies.append(entropy.item())
-
-    avg_loss = total_loss / len(validation_loader)
-    avg_entropy = np.mean(entropies) if entropies else 0.0
-    logging.info(f'Validation Loss: {avg_loss:.4f}, Average Entropy: {avg_entropy:.4f}')
-
-    if isinstance(model.optimizer, EnhancedSGD):
-        model.optimizer._adjust_hyperparameters()
-
-    model.train()
-    return avg_loss
-
-# ----------------------------
-# DataLoader Preparation
-# ----------------------------
-
-def prepare_dataloaders(
-    train_csv: str,
-    test_csv: str,
-    batch_size: int,
-    context_size: int,
-    num_workers: int = 4,
-    pin_memory: bool = True
-) -> Tuple[DataLoader, DataLoader]:
-    """
-    Prepare train and test DataLoaders from CSV files.
-
-    Args:
-        train_csv (str): Path to training CSV file.
-        test_csv (str): Path to test CSV file.
-        batch_size (int): Batch size.
-        context_size (int): Context window size.
-        num_workers (int): Number of worker processes.
-        pin_memory (bool): Whether to pin memory for GPU transfer.
-
-    Returns:
-        tuple: (train_loader, test_loader)
-    """
-    # Create IterableDatasets
-    train_dataset = ByteIterableDataset(
-        csv_file=train_csv,
-        context_size=context_size
-    )
-    test_dataset = ByteIterableDataset(
-        csv_file=test_csv,
-        context_size=context_size
-    )
-
-    # Create DataLoaders with optimized memory settings
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=False,  # IterableDataset doesn't support shuffle
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        prefetch_factor=1,        # Reduced from 2
-        persistent_workers=True,  # Keeps workers alive to reduce memory overhead
-        drop_last=True             # Avoid irregular batch sizes
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        prefetch_factor=1,
-        persistent_workers=True,
-        drop_last=True
-    )
-
-    logging.info(f"Train dataset is an IterableDataset.")
-    logging.info(f"Test dataset is an IterableDataset.")
-
-    return train_loader, test_loader
-
-# ----------------------------
-# Additional Memory Optimization Functions
-# ----------------------------
-
-def log_optimizer_stats(trainer: RLHFTrainer):
-    """Log optimizer statistics."""
-    if isinstance(trainer.optimizer, EnhancedSGD):
-        stats = trainer.optimizer.get_statistics()
-        wandb.log({
-            'avg_grad_norms': stats.get('avg_grad_norm', 0.0),
-            'avg_learning_rates': stats.get('avg_learning_rates', 0.0),
-            'avg_momentum_values': stats.get('avg_momentum_values', 0.0),
-            'avg_entropy_values': stats.get('avg_entropy_values', 0.0),
-            'q_table_size': len(trainer.optimizer.q_controller.q_table),
-            'epsilon': trainer.optimizer.q_controller.epsilon
-        })
-
-def adjust_batch_size_for_optimizer(trainer: RLHFTrainer, current_batch_size: int) -> int:
-    """Adjust the batch size based on current memory usage."""
-    if isinstance(trainer.optimizer, EnhancedSGD):
-        stats = trainer.optimizer.get_statistics()
-        grad_norm = stats.get('avg_grad_norm', 0)
-        if grad_norm > trainer.optimizer.max_grad_norm * 2:
-            return max(1, current_batch_size // 2)
-    return current_batch_size
-
-def cleanup_q_table(trainer: RLHFTrainer, max_size: int = 10000):
-    """Clean up the Q-table to prevent memory bloat."""
-    if isinstance(trainer.optimizer, EnhancedSGD):
-        q_controller = trainer.optimizer.q_controller
-        if len(q_controller.q_table) > max_size:
-            # Keep most recently used states
-            states = list(q_controller.q_table.keys())
-            for old_state in states[:-max_size]:
-                del q_controller.q_table[old_state]
-            logging.info(f"Cleaned up Q-table to maintain max size of {max_size}.")
-
-# ----------------------------
-# Parameter Group Optimization
-# ----------------------------
-
-def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> EnhancedSGD:
-    """Create EnhancedSGD optimizer with parameter group optimization."""
-    parameter_groups = [
-        {
-            'params': model.local_encoder.parameters(),
-            'lr': config['learning_rate'],
-            'weight_decay': 0.01
-        },
-        {
-            'params': model.global_transformer.parameters(),
-            'lr': config['learning_rate'] * 0.1,
-            'weight_decay': 0.02
-        },
-        {
-            'params': model.local_decoder.parameters(),
-            'lr': config['learning_rate'],
-            'weight_decay': 0.01
-        }
-    ]
-
-    q_learning_config = {
-        'learning_rate': 0.02,     # Reduced from 0.03
-        'discount': 0.97,          # Increased from 0.95
-        'epsilon': 0.15,            # Reduced from 0.2
-        'epsilon_decay': 0.999,    # Slower decay
-        'initial_mix_prob': 0.9,    # Increased from 0.8
-        'lr_scale_bounds': (0.8, 1.2),
-        'momentum_scale_bounds': (0.8, 1.2),
-        'min_weight_decay': 0.001  # New minimum threshold
-    }
-
-    return EnhancedSGD(
-        parameter_groups, 
-        smoothing_factor=config.get('smoothing_factor', 0.03),
-        entropy_threshold=config.get('entropy_threshold', 0.2),
-        max_grad_norm=config.get('max_grad_norm', 0.5),
-        noise_scale=config.get('noise_scale', 1e-5),
-        lr_scale_bounds=q_learning_config['lr_scale_bounds'],
-        momentum_scale_bounds=q_learning_config['momentum_scale_bounds'],
-        q_learning_config=q_learning_config
-    )
-
-# ----------------------------
-# Inspect Dataset Function
-# ----------------------------
-
-def inspect_dataset(dataset: IterableDataset, num_samples: int = 5):
-    """Inspect a few samples from the dataset."""
-    logging.info(f"Inspecting {num_samples} samples from the dataset:")
-    for i, (context, target) in enumerate(dataset):
-        if i >= num_samples:
-            break
-        logging.info(f"Sample {i+1}: Context={context.tolist()}, Target={target.item()}")
-
-# ----------------------------
-# Distributed Setup and Utility Functions
-# ----------------------------
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Enhanced Byte-Level Transformer Training Script")
-    parser.add_argument('--distributed', action='store_true', help='Enable Distributed Data Parallel training')
-    parser.add_argument('--rank', type=int, default=0, help='Rank of the current process')
-    parser.add_argument('--local_rank', type=int, default=0, help='Local rank for distributed training')
-    parser.add_argument('--epochs', type=int, default=25, help='Number of training epochs')  # Updated to 25
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size per GPU')  # Set to 128 to prevent memory issues
-    parser.add_argument('--learning_rate', type=float, default=5e-3, help='Initial learning rate')  # Increased to 5e-3
-    parser.add_argument('--context_size', type=int, default=64, help='Context size for the model')  # Updated to 64
-    parser.add_argument('--num_workers', type=int, default=8, help='Number of DataLoader workers')  # Increased to 8
-    parser.add_argument('--validation', action='store_true', help='Enable validation during training')
-    parser.add_argument('--validation_batch_size', type=int, default=128, help='Batch size for validation')  # Adjusted as needed
-    parser.add_argument('--no_anomaly', action='store_true', help='Disable anomaly detection for faster training')
-    parser.add_argument('--gpu_index', type=int, default=None, help='Specify GPU index to use (if multiple GPUs are present)')
-    parser.add_argument('--project', type=str, default="blt-training", help='WandB project name')
-    return parser.parse_args()
-
-def setup_distributed(args: argparse.Namespace) -> Tuple[torch.device, int]:
-    """Initialize distributed training if multiple GPUs are available and enabled.
-
-    Ensures that the NVIDIA GeForce RTX 4050 GPU is selected for training.
-
-    Args:
-        args: Parsed command-line arguments.
-
-    Returns:
-        tuple: (device, world_size)
-    """
-    if args.distributed and torch.cuda.is_available():
-        available_gpus = torch.cuda.device_count()
-        logging.info(f"Number of CUDA devices available: {available_gpus}")
-
-        # Attempt to find the NVIDIA GeForce RTX 4050
-        target_gpu_name = "NVIDIA GeForce RTX 4050"
-        target_gpu_index = None
-        for i in range(available_gpus):
-            gpu_name = torch.cuda.get_device_name(i)
-            logging.info(f"CUDA Device {i}: {gpu_name}")
-            if target_gpu_name.lower() in gpu_name.lower():
-                target_gpu_index = i
-                logging.info(f"Selected GPU {i}: {gpu_name}")
-                break
-
-        if target_gpu_index is None:
-            logging.warning(f"{target_gpu_name} not found. Using default CUDA device.")
-            target_gpu_index = 0  # Default to first CUDA device
-
-        # Set CUDA device
-        torch.cuda.set_device(target_gpu_index)
-        device = torch.device(f'cuda:{target_gpu_index}')
-
-        # Initialize Distributed Data Parallel if multiple GPUs are present
-        if available_gpus > 1:
-            if platform.system() == "Windows":
-                backend = "gloo"
-            else:
-                backend = "nccl"
-
-            # Automatically find a free port for initialization
-            port = find_free_port()
-            init_method = f'tcp://127.0.0.1:{port}'
-
-            world_size = available_gpus
-            os.environ['WORLD_SIZE'] = str(world_size)
-            os.environ['MASTER_ADDR'] = '127.0.0.1'
-            os.environ['MASTER_PORT'] = str(port)
-
-            try:
-                init_process_group(backend=backend, init_method=init_method, world_size=world_size, rank=args.rank)
-                logging.info(f"Distributed training initialized on device {device}")
-                return device, world_size
-            except Exception as e:
-                logging.error(f"Distributed initialization failed: {e}")
-                logging.info("Falling back to single GPU training.")
-                return device, 1
-        else:
-            logging.info(f"Training on single GPU: {device}")
-            return device, 1
-    else:
-        if torch.cuda.is_available():
-            # Attempt to find the NVIDIA GeForce RTX 4050
-            available_gpus = torch.cuda.device_count()
-            logging.info(f"Number of CUDA devices available: {available_gpus}")
-
-            target_gpu_name = "NVIDIA GeForce RTX 4050"
-            target_gpu_index = None
-            for i in range(available_gpus):
-                gpu_name = torch.cuda.get_device_name(i)
-                logging.info(f"CUDA Device {i}: {gpu_name}")
-                if target_gpu_name.lower() in gpu_name.lower():
-                    target_gpu_index = i
-                    logging.info(f"Selected GPU {i}: {gpu_name}")
-                    break
-
-            if target_gpu_index is None:
-                logging.warning(f"{target_gpu_name} not found. Using default CUDA device.")
-                target_gpu_index = 0  # Default to first CUDA device
-
-            # Set CUDA device
-            torch.cuda.set_device(target_gpu_index)
-            device = torch.device(f'cuda:{target_gpu_index}')
-            logging.info(f"Training on GPU: {device}")
-            return device, 1
-        else:
-            logging.info("CUDA not available. Training on CPU.")
-            device = torch.device("cpu")
-            return device, 1
-
-def find_free_port() -> int:
-    """Find a free port on localhost."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
-
-# ----------------------------
-# Main Function and Entry Point
-# ----------------------------
+# =====================================================================
+# Main Function
+# =====================================================================
 
 def main():
+    """Main function."""
     args = parse_args()
-    device, world_size = setup_distributed(args)
-
-    # Initialize wandb only on the first process
-    if args.rank == 0:
-        wandb.init(project=args.project, config={
-            "epochs": args.epochs,
-            "batch_size": args.batch_size * world_size,
-            "learning_rate": args.learning_rate,
-            "context_size": args.context_size,
-            "num_workers": args.num_workers,
-            "world_size": world_size
-        })
-
-    # Optionally enable anomaly detection for debugging
-    if not args.no_anomaly:
-        torch.autograd.set_detect_anomaly(True)
-
-    # Updated configuration
-    config = {
-        "context_size": args.context_size,         # Set to 64
-        "batch_size": args.batch_size,             # Set to 128
-        "epochs": args.epochs,                     # Set to 25
-        "learning_rate": args.learning_rate,       # Set to 5e-3
-        "num_workers": args.num_workers,           # Set to 8
-        "gradient_clip_norm": 1.0,                 # Increased from 0.5
-        "weight_decay": 0.02,                      # Increased from 0.01
-        "checkpoint_dir": "checkpoints",           # Default checkpoint directory
-        "log_interval": 10,
-        "val_interval": 2,
-        "save_interval": 5,
-        "use_amp": True,
-        "use_gradient_checkpointing": False,        # Set to True if needed
-        "rank": args.rank,
-        "smoothing_factor": 0.03,
-        "entropy_threshold": 0.2,
-        "max_grad_norm": 0.5,
-        "noise_scale": 1e-5,
-        "lr_scale_bounds": (0.8, 1.2),
-        "momentum_scale_bounds": (0.8, 1.2),
-        "accumulation_steps": 1
-    }
-
-    # Prepare DataLoaders
-    train_loader, test_loader = prepare_dataloaders(
-        train_csv="data/wikitext_train.csv",  # Update dataset file path as needed
-        test_csv="data/wikitext_test.csv",    # Update dataset file path as needed
-        batch_size=config["batch_size"],
-        context_size=config["context_size"],
-        num_workers=config["num_workers"],
-        pin_memory=True
+    
+    # Set up logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(f"bytropix_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+        ]
     )
+    
+    # Log args
+    logging.info(f"Arguments: {args}")
+    
+    # Start training
+    train(args)
 
-    # Initialize model with memory-optimized configuration
-    model = BLTModel(
-        local_hidden_size=256,                   # Adjusted to 256
-        global_hidden_size=1024,                 # Reduced from 4096
-        num_local_encoder_layers=1,
-        num_global_layers=16,                     # Reduced from 32
-        num_local_decoder_layers=4,               # Reduced from 9
-        dropout=0.05,                             # Reduced to save VRAM
-        window_size=256,                          # Smaller window for better memory handling
-        n_gram_sizes=[3, 4],                      # Reduced n-gram sizes
-        n_gram_vocab_size=30000                   # Smaller n-gram vocab
-    ).to(device)
-
-    # If using Distributed Data Parallel
-    if world_size > 1:
-        model = DDP(model, device_ids=[device.index] if device.type == 'cuda' else None)
-
-    # Configure optimizer using parameter group optimization
-    optimizer = create_optimizer(model, config)
-
-    # Initialize BabylonIndex and Tokenizer
-    babylon_index = BabylonIndex(scales=[3, 4])
-    tokenizer = ByteTokenizer()
-
-    # Initialize RLHFTrainer
-    rlhf_trainer = RLHFTrainer(
-        model=model,
-        optimizer=optimizer,
-        babylon_index=babylon_index,
-        tokenizer=tokenizer,
-        device=device
-    )
-
-    # Optionally prepare validation DataLoader
-    validation_dataloader = None
-
-    if args.validation:
-        validation_data_path = "data/wikitext_validation.csv"
-        try:
-            validation_dataset = ByteIterableDataset(
-                csv_file=validation_data_path,
-                context_size=config["context_size"]
-            )
-            validation_dataloader = DataLoader(
-                validation_dataset,
-                batch_size=args.validation_batch_size,
-                shuffle=False,
-                num_workers=args.num_workers,
-                pin_memory=True,
-                prefetch_factor=1,        # Reduced from 2
-                persistent_workers=True,
-                drop_last=True
-            )
-            logging.info(f"Validation dataset is an IterableDataset.")
-            inspect_dataset(validation_dataloader.dataset, num_samples=5)
-
-        except FileNotFoundError:
-            logging.error(f"Validation dataset file '{validation_data_path}' not found. Skipping validation.")
-        except pd.errors.EmptyDataError:
-            logging.error(f"Validation dataset file '{validation_data_path}' is empty. Skipping validation.")
-        except Exception as e:
-            logging.error(f"Validation dataset file at '{validation_data_path}' has an incompatible format or is corrupted. Skipping validation.")
-            logging.error(f"Error details: {e}")
-
-    # Train with byte-optimized parameters
-    setup_training(
-        trainer=rlhf_trainer,
-        train_loader=train_loader,
-        validation_loader=validation_dataloader,
-        config=config
-    )
-
-    # Sampling Configuration
-    sampler_config = SamplerConfig(
-        low_entropy_threshold=0.3,
-        medium_entropy_threshold=1.2,
-        high_entropy_threshold=2.5
-    )
-
-    # Generate Text (Ensure this runs only on one process to avoid multiple outputs)
-    if args.rank == 0:
-        seed_text = "The quick brown fox jumps over the lazy dog."
-        logging.info("\nGenerating Text:")
-        generated_text = generate_text(
-            model=model,
-            seed_text=seed_text,
-            length=100,
-            config=sampler_config,
-            device=device
-        )
-        print(generated_text)
-
-    # Clean up distributed training
-    if is_initialized():
-        destroy_process_group()
-
-# ----------------------------
-# Setup Training Function
-# ----------------------------
-
-def setup_training(
-    trainer: RLHFTrainer,
-    train_loader: DataLoader,
-    validation_loader: Optional[DataLoader],
-    config: Dict[str, Any]
-):
-    """Optimized training setup for better GPU utilization and memory efficiency."""
-    logging.info("Starting training setup...")
-    # Enable mixed precision for better GPU memory efficiency
-    use_amp = config.get("use_amp", True)
-    # Set cudnn settings for improved performance
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.enabled = True
-    # Gradient checkpointing for memory-constrained systems
-    if config.get("use_gradient_checkpointing", False):
-        model = trainer.model
-        model.apply(torch.utils.checkpoint.checkpoint_sequential)
-    # Initialize statistics tracking
-    running_loss = deque(maxlen=100)
-    global_step = 0
-    trainer._step_count = 0  # Initialize step count
-
-    # Training loop
-    start_epoch = config.get("start_epoch", 0)
-    for epoch in range(start_epoch, config["epochs"]):
-        epoch_loss = 0.0
-        num_batches = 0
-
-        for batch_idx, (context, target) in enumerate(train_loader):
-            try:
-                # Move data to device
-                inputs = context.to(trainer.device, non_blocking=True)
-                targets = target.to(trainer.device, non_blocking=True)
-                # Perform training step with gradient accumulation
-                loss = trainer.train_step(inputs, targets, accumulation_steps=config.get("accumulation_steps", 1))
-
-                # Accumulate loss
-                running_loss.append(loss)
-                epoch_loss += loss
-                num_batches += 1
-                global_step += 1
-                # Log progress
-                if config.get("rank", 0) == 0 and batch_idx % config.get("log_interval", 10) == 0:
-                    avg_loss = sum(running_loss) / len(running_loss) if running_loss else loss
-
-                    # Get current learning rate directly from optimizer's statistics
-                    optimizer_stats = trainer.optimizer.get_statistics()
-                    current_lr = optimizer_stats.get('current_lr', 0.0)
-
-                    wandb.log({
-                        "batch_loss": loss,
-                        "running_loss": avg_loss,
-                        "learning_rate": current_lr,
-                        "global_step": global_step
-                    })
-
-                    logging.info(
-                        f'Epoch {epoch}, Batch {batch_idx}, '
-                        f'Loss: {loss:.4f}, '
-                        f'Running Loss: {avg_loss:.4f}, '
-                        f'LR: {current_lr:.6f}, '
-                        f'Step: {global_step}'
-                    )
-
-                    # Log optimizer statistics
-                    log_optimizer_stats(trainer)
-
-                # Dynamic batch size adjustment
-                current_batch_size = config["batch_size"]
-                new_batch_size = adjust_batch_size_for_optimizer(trainer, current_batch_size)
-                if new_batch_size != current_batch_size:
-                    config["batch_size"] = new_batch_size
-                    logging.info(f"Adjusted batch size to {new_batch_size} based on gradient norms.")
-
-                # Memory optimization for Q-Table
-                cleanup_q_table(trainer, max_size=10000)
-
-            except RuntimeError as e:
-                logging.error(f"Error in batch {batch_idx}: {str(e)}")
-                trainer.optimizer.zero_grad(set_to_none=True)  # Reset gradients
-                continue
-
-        # End of epoch processing
-        if num_batches > 0:
-            avg_epoch_loss = epoch_loss / num_batches
-            if config.get("rank", 0) == 0:
-                wandb.log({
-                    "epoch": epoch,
-                    "epoch_loss": avg_epoch_loss,
-                    "global_step": global_step
-                })
-                logging.info(f'Epoch {epoch} completed, Average Loss: {avg_epoch_loss:.4f}')
-
-        # Validation
-        if validation_loader and (epoch + 1) % config.get("val_interval", 2) == 0:
-            val_loss = trainer.evaluate(validation_loader, trainer.device, use_amp, trainer.scaler)
-            if config.get("rank", 0) == 0:
-                wandb.log({"val_loss": val_loss})
-                logging.info(f'Validation Loss: {val_loss:.4f}')
-
-        # Save checkpoint
-        if (epoch + 1) % config.get("save_interval", 5) == 0 and config.get("rank", 0) == 0:
-            trainer.save_model(epoch, config.get("checkpoint_dir", "checkpoints"))
-    logging.info("Training completed.")
-
-# ----------------------------
-# Entry Point Check
-# ----------------------------
 
 if __name__ == "__main__":
     main()
