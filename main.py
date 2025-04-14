@@ -1936,11 +1936,11 @@ def train(args):
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
-    
+
     # Set up device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
-    
+
     # Initialize distributed training if needed
     distributed = False
     if args.local_rank != -1:
@@ -1953,7 +1953,7 @@ def train(args):
                 logging.info(f"Initialized distributed training with rank {args.local_rank}")
             except Exception as e:
                 logging.warning(f"Failed to initialize distributed training: {e}")
-    
+
     # Initialize wandb if enabled
     if args.wandb and (not distributed or args.local_rank == 0):
         try:
@@ -1963,29 +1963,51 @@ def train(args):
         except Exception as e:
             logging.warning(f"Failed to initialize wandb: {e}")
             args.wandb = False
-    
+
     # Create datasets
     try:
         logging.info(f"Loading training data from {args.data_path}")
+        # IMPORTANT: Ensure ByteIterableDataset returns meaningful items for __len__
+        # or that len(train_loader) works correctly.
         train_dataset = ByteIterableDataset(args.data_path, context_size=args.context_size)
-        
+
         logging.info(f"Loading validation data from {args.val_data_path}")
         val_dataset = ByteIterableDataset(args.val_data_path, context_size=args.context_size)
     except Exception as e:
         logging.error(f"Failed to load datasets: {e}")
         return
-    
+
     # Create data samplers and loaders
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if distributed else None
-    
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True) if distributed else None # Iterable dataset usually doesn't need shuffle=True here
+
+    # Calculate approximate batches per epoch for IterableDataset
+    # This is often tricky. If the dataset size and batch size are fixed, you can estimate.
+    # If using an IterableDataset that doesn't report length, len(train_loader) won't work directly.
+    # You might need to manually set steps_per_epoch based on dataset size and batch size.
+    # For demonstration, assuming __len__ is implemented correctly on the dataset:
+    try:
+        # This relies heavily on Dataset.__len__ and Batch Size
+        approx_total_steps_per_epoch = (len(train_dataset) + args.batch_size - 1) // args.batch_size
+        if distributed:
+             # Adjust for DDP - each rank gets a fraction
+             approx_total_steps_per_epoch = (approx_total_steps_per_epoch + dist.get_world_size() -1) // dist.get_world_size()
+        logging.info(f"Estimated steps per epoch: {approx_total_steps_per_epoch}")
+    except TypeError:
+        logging.warning("Could not determine dataset length. Mid-epoch saving might be inaccurate or disabled.")
+        # Fallback or fixed number if length is unknown
+        approx_total_steps_per_epoch = getattr(args, 'steps_per_epoch', 10000) # Use arg or a large default
+        logging.warning(f"Using fallback steps per epoch: {approx_total_steps_per_epoch}")
+
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         sampler=train_sampler,
-        num_workers=2,
-        pin_memory=True
+        num_workers=2, # Be careful with num_workers > 0 and IterableDatasets, ensure worker seeding/state is correct
+        pin_memory=True,
+        drop_last=True # Good practice for consistent epoch lengths with DDP
     )
-    
+
     val_loader = DataLoader(
         val_dataset,
         batch_size=args.batch_size,
@@ -1993,11 +2015,11 @@ def train(args):
         num_workers=2,
         pin_memory=True
     )
-    
+
     # Log dataset sizes
-    logging.info(f"Training data size: {train_dataset.data_size} bytes")
-    logging.info(f"Validation data size: {val_dataset.data_size} bytes")
-    
+    logging.info(f"Training data size: {getattr(train_dataset, 'data_size', 'N/A')} bytes")
+    logging.info(f"Validation data size: {getattr(val_dataset, 'data_size', 'N/A')} bytes")
+
     # Create model
     logging.info("Initializing BLTModel")
     model = BLTModel(
@@ -2009,21 +2031,22 @@ def train(args):
         window_size=args.window_size
     )
     model.to(device)
-    
+
     # Log model architecture
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logging.info(f"Model initialized with {total_params:,} total parameters ({trainable_params:,} trainable)")
-    
+
     # Wrap model with DDP if using distributed training
     if distributed:
         model = DistributedDataParallel(
             model,
             device_ids=[args.local_rank],
-            output_device=args.local_rank
+            output_device=args.local_rank,
+            find_unused_parameters=False # Set to True if you encounter issues, but potentially slower
         )
         logging.info("Model wrapped with DistributedDataParallel")
-    
+
     # Create optimizer with Q-Learning enhanced SGD
     logging.info("Creating EnhancedSGD optimizer")
     optimizer = EnhancedSGD(
@@ -2037,98 +2060,196 @@ def train(args):
             "epsilon": 0.15
         }
     )
-    
+
     # Create GradScaler for AMP
     scaler = amp.GradScaler(enabled=not args.no_amp)
     logging.info(f"Created GradScaler (AMP {'enabled' if not args.no_amp else 'disabled'})")
-    
+
     # Create trainer
     trainer = RLHFTrainer(model, optimizer, device, scaler)
-    
+    # Reset step count for the trainer instance for grad accum simulation
+    trainer.step_count = 0
+
     # Resume from checkpoint if specified
     start_epoch = 0
     if args.resume:
         try:
+            # Ensure checkpoint dir exists if resuming from specific dir/epoch format
+            if not os.path.exists(args.resume) and args.checkpoint_dir:
+                 potential_path = os.path.join(args.checkpoint_dir, args.resume)
+                 if os.path.exists(potential_path):
+                     args.resume = potential_path
+                 else:
+                      potential_path = os.path.join(args.checkpoint_dir, f"checkpoint_epoch_{args.resume}.pt")
+                      if os.path.exists(potential_path):
+                          args.resume = potential_path
+
             start_epoch = trainer.load_checkpoint(args.resume)
             logging.info(f"Resumed from checkpoint {args.resume} at epoch {start_epoch}")
         except Exception as e:
-            logging.error(f"Failed to load checkpoint: {e}")
-            if not os.path.exists(args.resume):
-                logging.error(f"Checkpoint file {args.resume} does not exist")
-    
+            logging.error(f"Failed to load checkpoint '{args.resume}': {e}", exc_info=True)
+            # Decide if you want to exit or start fresh
+            logging.warning("Starting training from scratch.")
+            start_epoch = 0
+
+    # Create checkpoint directory if it doesn't exist
+    if args.checkpoint_dir and (not distributed or args.local_rank == 0):
+         os.makedirs(args.checkpoint_dir, exist_ok=True)
+
     # Training loop
-    logging.info(f"Starting training for {args.epochs} epochs")
+    logging.info(f"Starting training from epoch {start_epoch} for {args.epochs} total epochs")
     try:
         for epoch in range(start_epoch, args.epochs):
             if distributed:
+                # Set epoch for sampler to ensure proper shuffling/data distribution
                 train_sampler.set_epoch(epoch)
-            
-            # Train for one epoch
+
+            model.train() # Set model to training mode
             epoch_loss = 0.0
-            for i, (context, target) in enumerate(train_loader):
-                context = context.to(device)
-                target = target.to(device)
-                
-                loss = trainer.train_step(context, target, args.grad_accum_steps)
-                epoch_loss += loss
-                
-                global_step = epoch * len(train_loader) + i
-                
-                # Log progress
-                if i % args.log_interval == 0:
-                    logging.info(f"Epoch {epoch}, Step {i}/{len(train_loader)}, Loss: {loss:.4f}")
-                    if args.wandb and (not distributed or args.local_rank == 0):
-                        wandb.log({
-                            "loss": loss, 
-                            "epoch": epoch, 
-                            "step": i,
-                            "global_step": global_step,
-                            "learning_rate": optimizer.param_groups[0]['lr']
-                        })
-                
-                # Save checkpoint
-                if (i + 1) % args.save_interval == 0 and (not distributed or args.local_rank == 0):
-                    checkpoint_path = os.path.join(args.checkpoint_dir, f"checkpoint_step_{global_step}.pt")
-                    trainer.save_checkpoint(checkpoint_path, epoch)
-                    logging.info(f"Saved checkpoint at step {global_step} to {checkpoint_path}")
-            
-            # Average epoch loss
-            avg_epoch_loss = epoch_loss / len(train_loader)
-            logging.info(f"Epoch {epoch} completed with average loss: {avg_epoch_loss:.4f}")
-            
-            # Validate at the end of epoch
+            # Calculate mid-epoch step based on the estimated total steps for this epoch
+            # Note: If using an IterableDataset without a reliable length, this might be inaccurate.
+            mid_epoch_step = approx_total_steps_per_epoch // 2 - 1
+
+            # Use the estimated steps for the loop termination and progress reporting
+            # This requires careful handling if the loader doesn't stop automatically
+            inner_loop_iterator = enumerate(train_loader)
+
+            for i, batch_data in inner_loop_iterator:
+                 # Check if manual termination needed based on steps_per_epoch
+                 # (Often not needed if DataLoader with Sampler handles epochs correctly)
+                 # if i >= approx_total_steps_per_epoch:
+                 #    break # Exit loop if exceeding estimated steps
+
+                 # --- Batch Processing ---
+                 try:
+                      # Adjust depending on your dataset's output format
+                      if isinstance(batch_data, (list, tuple)) and len(batch_data) == 2:
+                          context, target = batch_data
+                      else:
+                          # Handle cases where batch might be structured differently
+                          # This is a placeholder - adapt to your specific data structure
+                          context, target = batch_data[0], batch_data[0] # Example fallback
+                          logging.debug(f"Unexpected batch format at step {i}, attempting fallback.")
+
+                      context = context.to(device, non_blocking=True)
+                      target = target.to(device, non_blocking=True)
+
+                      loss = trainer.train_step(context, target, args.grad_accum_steps)
+                      if loss is not None: # train_step might return None if not optimizing this step
+                          epoch_loss += loss
+                      else:
+                          loss = 0.0 # Assign a value for logging if None
+
+                 except Exception as batch_ex:
+                      logging.error(f"Error processing batch {i} in epoch {epoch}: {batch_ex}", exc_info=True)
+                      # Option: skip batch or re-raise
+                      continue # Skip to next batch
+
+                 # global_step calculation (optional, but useful for logging/tracking)
+                 # Be mindful if resuming - epoch might not start at 0
+                 global_step = (epoch * approx_total_steps_per_epoch) + i + 1
+
+                 # Log progress at intervals
+                 if (i + 1) % args.log_interval == 0:
+                     avg_loss_so_far = epoch_loss / (i + 1) # Avg loss up to this point in epoch
+                     logging.info(f"Epoch {epoch+1}/{args.epochs} | Step {i+1}/{approx_total_steps_per_epoch} | Loss: {loss:.4f} | Avg Epoch Loss: {avg_loss_so_far:.4f}")
+                     if args.wandb and (not distributed or args.local_rank == 0):
+                         wandb.log({
+                             "train/loss_step": loss,
+                             "train/avg_epoch_loss": avg_loss_so_far,
+                             "train/epoch": epoch + 1, # Log 1-based epoch
+                             "train/step_in_epoch": i + 1,
+                             "train/global_step": global_step,
+                             "train/learning_rate": optimizer.param_groups[0]['lr']
+                         })
+
+                 # --- MODIFIED CHECKPOINT LOGIC ---
+                 # Save checkpoint at the half-epoch mark
+                 save_now_mid = (i == mid_epoch_step and mid_epoch_step >= 0) # Ensure mid_epoch_step is valid
+
+                 if save_now_mid and args.checkpoint_dir and (not distributed or args.local_rank == 0):
+                     checkpoint_suffix = f"epoch_{epoch}_half"
+                     log_description = f"half epoch {epoch + 1}"
+                     checkpoint_path = os.path.join(args.checkpoint_dir, f"checkpoint_{checkpoint_suffix}.pt")
+                     try:
+                         trainer.save_checkpoint(checkpoint_path, epoch) # Save with current epoch index
+                         logging.info(f"Saved checkpoint for {log_description} at step {i + 1}/{approx_total_steps_per_epoch} to {checkpoint_path}")
+                     except Exception as save_ex:
+                         logging.error(f"Failed to save mid-epoch checkpoint {checkpoint_path}: {save_ex}", exc_info=True)
+                 # --- End of Modified Checkpoint Logic ---
+
+
+            # --- End of Inner Loop (Epoch Training Steps) ---
+
+            # Calculate average epoch loss (ensure division by non-zero count)
+            steps_in_epoch = i + 1 # Actual steps completed
+            if steps_in_epoch > 0:
+                 avg_epoch_loss = epoch_loss / steps_in_epoch
+                 logging.info(f"Epoch {epoch + 1} training completed with average loss: {avg_epoch_loss:.4f}")
+                 if args.wandb and (not distributed or args.local_rank == 0):
+                      wandb.log({"train/epoch_loss": avg_epoch_loss, "epoch": epoch + 1})
+            else:
+                 logging.warning(f"Epoch {epoch + 1} completed with 0 steps.")
+                 avg_epoch_loss = 0.0
+
+            # Validate at the end of epoch on the main process
             if not distributed or args.local_rank == 0:
+                model.eval() # Set model to evaluation mode
+                val_metrics = {}
                 try:
-                    val_metrics = trainer.validate(val_loader)
-                    logging.info(f"Epoch {epoch} validation: {val_metrics}")
-                    
+                    with torch.no_grad(): # Disable gradient calculation for validation
+                         val_metrics = trainer.validate(val_loader) # Ensure validate uses torch.no_grad() internally too
+                    logging.info(f"Epoch {epoch + 1} validation | Metrics: {val_metrics}")
+
                     if args.wandb:
-                        wandb.log({**val_metrics, "epoch": epoch})
-                    
-                    # Save epoch checkpoint
-                    checkpoint_path = os.path.join(args.checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
-                    trainer.save_checkpoint(checkpoint_path, epoch, val_metrics)
-                    logging.info(f"Saved checkpoint for epoch {epoch} to {checkpoint_path}")
+                        # Prefix validation metrics for clarity in wandb
+                        wandb_val_metrics = {f"val/{k}": v for k, v in val_metrics.items()}
+                        wandb_val_metrics["epoch"] = epoch + 1
+                        wandb.log(wandb_val_metrics)
+
+                    # --- EXISTING END-OF-EPOCH CHECKPOINT SAVE ---
+                    # Save checkpoint after successful validation
+                    if args.checkpoint_dir:
+                         checkpoint_path = os.path.join(args.checkpoint_dir, f"checkpoint_epoch_{epoch + 1}.pt") # Use epoch+1 for completed epoch
+                         try:
+                             trainer.save_checkpoint(checkpoint_path, epoch + 1, val_metrics) # Save completed epoch number
+                             logging.info(f"Saved checkpoint for completed epoch {epoch + 1} to {checkpoint_path}")
+                         except Exception as save_ex:
+                             logging.error(f"Failed to save end-of-epoch checkpoint {checkpoint_path}: {save_ex}", exc_info=True)
+                    # --- End of Existing End-of-Epoch Save ---
+
                 except Exception as e:
-                    logging.error(f"Error during validation: {e}")
-    
+                    logging.error(f"Error during validation for epoch {epoch + 1}: {e}", exc_info=True)
+                finally:
+                    model.train() # Switch back to training mode
+
     except KeyboardInterrupt:
-        logging.info("Training interrupted by user")
+        logging.info("Training interrupted by user.")
     except Exception as e:
-        logging.error(f"Error during training: {e}")
+        logging.error(f"Unhandled error during training loop: {e}", exc_info=True)
     finally:
+        # Final checkpoint save regardless of how loop finished
+        if args.checkpoint_dir and (not distributed or args.local_rank == 0):
+            final_checkpoint_path = os.path.join(args.checkpoint_dir, "checkpoint_final.pt")
+            try:
+                 current_final_epoch = epoch if 'epoch' in locals() else start_epoch # Use last known epoch
+                 trainer.save_checkpoint(final_checkpoint_path, current_final_epoch)
+                 logging.info(f"Saved final checkpoint (epoch {current_final_epoch}) to {final_checkpoint_path}")
+            except Exception as save_ex:
+                 logging.error(f"Failed to save final checkpoint {final_checkpoint_path}: {save_ex}", exc_info=True)
+
+
         # Clean up distributed training
         if distributed and is_initialized():
             destroy_process_group()
-        
-        # Final checkpoint
-        if not distributed or args.local_rank == 0:
-            final_checkpoint_path = os.path.join(args.checkpoint_dir, "checkpoint_final.pt")
-            trainer.save_checkpoint(final_checkpoint_path, epoch)
-            logging.info(f"Saved final checkpoint to {final_checkpoint_path}")
-    
-    logging.info("Training completed")
+            logging.info("Destroyed process group.")
 
+        # Finish wandb run
+        if args.wandb and wandb.run:
+            wandb.finish()
+
+    logging.info("Training script finished.")
+    
 # =====================================================================
 # Main Function
 # =====================================================================
