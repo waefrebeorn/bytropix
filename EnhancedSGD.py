@@ -1,1089 +1,1011 @@
-# EnhancedSGD.py
+# EnhancedSGD_innovative_stable.py
 
 import torch
 from torch.optim import Optimizer
 from collections import deque
 import logging
-from typing import Iterable, Optional, Dict, Any
+from typing import Iterable, Optional, Dict, Any, List, Tuple, Union
 import numpy as np
+import random
+import math
+import os # Added for QController seed
+import itertools # Added for Q-Table pruning
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Set to INFO to capture essential logs
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s', # Consistent format
+    force=True # Override any root logger configs set by libraries
 )
 
-
 def softmax(x: np.ndarray) -> np.ndarray:
-    """Compute softmax values for each set of scores in x."""
-    e_x = np.exp(x - np.max(x))  # Subtract max for numerical stability
-    return e_x / e_x.sum()
+    """Compute softmax values for each set of scores in x (needed for adaptive exploration)."""
+    if x.size == 0: return np.array([])
+    # Ensure input is float for exponentiation
+    x_float = x.astype(np.float64)
+    e_x = np.exp(x_float - np.max(x_float)) # Subtract max for numerical stability
+    return e_x / (e_x.sum() + 1e-9) # Add epsilon for division stability
 
 
 class GradientStats:
-    """Tracks gradient statistics for reporting."""
+    """Tracks gradient statistics for reporting (Unchanged from stabilized version)."""
     def __init__(self):
         self.reset()
-    
+
     def reset(self):
         self.total_gradients = 0
         self.clipped_gradients = 0
-        self.max_gradient_norm = 0
-        self.sum_clip_ratios = 0
+        self.max_gradient_norm = 0.0 # Use float
+        self.sum_clip_ratios = 0.0 # Use float
         self.step_stats = {}
-    
-    def record_gradient(self, original_norm: float, clipped: bool, clip_ratio: float = None):
+
+    def record_gradient(self, original_norm: float, clipped: bool, clip_ratio: Optional[float] = None):
         self.total_gradients += 1
+        self.max_gradient_norm = max(self.max_gradient_norm, original_norm)
         if clipped:
             self.clipped_gradients += 1
-            if clip_ratio:
-                self.sum_clip_ratios += clip_ratio
-        self.max_gradient_norm = max(self.max_gradient_norm, original_norm)
-    
+            self.sum_clip_ratios += (clip_ratio if clip_ratio is not None else 0.0)
+
     def get_step_stats(self) -> dict:
         if self.total_gradients == 0:
             return {
                 "gradients_clipped": 0,
                 "total_gradients": 0,
-                "clip_ratio": 0,
-                "max_gradient": 0,
-                "avg_clip_amount": 0
+                "clip_ratio_avg": 0.0,
+                "max_gradient": 0.0,
+                "clip_percentage": 0.0
             }
-            
+
+        clip_percentage = (self.clipped_gradients / self.total_gradients) * 100 if self.total_gradients > 0 else 0.0
+        avg_clip_ratio = self.sum_clip_ratios / self.clipped_gradients if self.clipped_gradients > 0 else 0.0
+
         return {
             "gradients_clipped": self.clipped_gradients,
             "total_gradients": self.total_gradients,
-            "clip_ratio": self.clipped_gradients / self.total_gradients,
+            "clip_ratio_avg": avg_clip_ratio,
             "max_gradient": self.max_gradient_norm,
-            "avg_clip_amount": self.sum_clip_ratios / self.clipped_gradients if self.clipped_gradients > 0 else 0
+            "clip_percentage": clip_percentage
         }
-    
+
     def record_step(self, step: int):
         stats = self.get_step_stats()
         self.step_stats[step] = stats
-        self.reset()
+        # Don't reset here, reset happens in EnhancedSGD step after logging
         return stats
 
 
 class ImprovedQLearningController:
-    """Enhanced Q-Learning Controller with adaptive exploration and better state management."""
-    
+    """ Merged Q-Learning Controller: Retains stable state/update but adds back features."""
+
     def __init__(
         self,
-        learning_rate: float = 0.02,        # Reduced from 0.03
-        discount: float = 0.97,             # Increased for longer-term planning
-        epsilon: float = 0.15,              # Reduced initial exploration
-        epsilon_decay: float = 0.999,       # Slower decay
-        initial_mix_prob: float = 0.9,      # Increased stability
-        lr_scale_bounds: tuple = (0.85, 1.15),  # Tighter bounds
-        momentum_scale_bounds: tuple = (0.9, 1.1),
-        min_weight_decay: float = 1e-4,
-        state_memory_size: int = 300,       # Increased memory
-        max_q_table_size: int = 15000       # Increased table size
+        learning_rate: float = 0.02,
+        discount: float = 0.97,
+        epsilon: float = 0.15,
+        epsilon_decay: float = 0.9995, # Use stable decay
+        min_epsilon: float = 0.02,    # Use stable min epsilon
+        lr_scale_bounds: tuple = (0.85, 1.15), # Use stable bounds
+        momentum_scale_bounds: tuple = (0.9, 1.1), # Use stable bounds
+        min_weight_decay: float = 1e-4, # Keep min_weight_decay concept
+        state_memory_size: int = 300,
+        max_q_table_size: int = 15000,
+        success_decay: float = 0.99 # Decay for action success tracking
     ):
         self.q_table = {}
-        self.alpha = learning_rate
-        self.gamma = discount
+        self.alpha = learning_rate # Q-learning rate
+        self.gamma = discount      # Q-learning discount factor
         self.epsilon = epsilon
-        self.epsilon_decay = epsilon_decay
-        self.mix_prob = initial_mix_prob
-        self.prev_loss = None
-        self.prev_state = None
-        self.prev_action = None
+        self.min_epsilon = min_epsilon
+        self.epsilon_decay = epsilon_decay # Use this for decay logic now
         self.lr_scale_bounds = lr_scale_bounds
         self.momentum_scale_bounds = momentum_scale_bounds
         self.min_weight_decay = min_weight_decay
 
-        # Enhanced state tracking
+        # Reintroduce state memory for reward/exploration logic
         self.state_memory = deque(maxlen=state_memory_size)
-        self.loss_window = deque(maxlen=15)  # Increased from 10
-        self.grad_window = deque(maxlen=15)
-        self.lr_window = deque(maxlen=8)    # Increased from 5
+
+        # State representation windows (from stable version)
+        self.loss_window = deque(maxlen=15)
+        self.grad_var_window = deque(maxlen=15)
+        self.lr_window = deque(maxlen=8)
         self.momentum_window = deque(maxlen=8)
-        
-        # More granular action space
+
+        # More granular action space (from old 'Improved' version)
         self.action_ranges = {
             'lr_scale': np.array([0.85, 0.9, 0.925, 0.95, 0.975, 1.0, 1.025, 1.05, 1.075, 1.1, 1.15]),
             'momentum_scale': np.array([0.9, 0.95, 0.975, 0.99, 1.0, 1.01, 1.025, 1.05, 1.075, 1.1])
         }
 
-        # Success tracking with decay
+        # Reintroduce success tracking (from old 'Improved' version)
         self.action_success = {k: np.zeros(len(v)) for k, v in self.action_ranges.items()}
         self.action_counts = {k: np.zeros(len(v)) for k, v in self.action_ranges.items()}
-        self.success_decay = 0.99  # Decay factor for historical success
+        self.success_decay = success_decay
 
-        # Performance tracking
+        # Performance tracking (from stable version)
         self.performance_window = deque(maxlen=50)
         self.stable_steps = 0
 
-        # Q-Table memory management
+        # Q-Table memory management (access count based, from stable version)
         self.max_q_table_size = max_q_table_size
+        self.q_table_access_count = {}
+
+        # Keep track of previous state/action/loss (from stable version)
+        self.prev_loss = None
+        self.prev_state = None
+        self.prev_action = None
 
     def get_state(self, lr: float, momentum: float, grad_var: float, loss: float) -> tuple:
-        """Enhanced state representation with more nuanced binning."""
+        """State representation using stable version's logic."""
+        # --- Same as stable QController ---
         self.loss_window.append(loss)
-        self.grad_window.append(grad_var)
+        self.grad_var_window.append(grad_var)
         self.lr_window.append(lr)
         self.momentum_window.append(momentum)
-        
-        # Improved loss trend calculation with exponential moving average
-        if len(self.loss_window) >= 3:
-            weights = np.exp([-0.1 * i for i in range(3)])
-            weights = weights / weights.sum()
-            recent_losses = list(self.loss_window)[-3:]
-            weighted_loss_trend = np.sum(weights * [(recent_losses[0] - x) / recent_losses[0] for x in recent_losses[1:]])
-            loss_trend_bin = np.digitize(weighted_loss_trend, 
-                                       bins=[-0.1, -0.03, -0.01, 0.01, 0.03, 0.1])
-        else:
-            loss_trend_bin = 3  # Middle bin
-        
-        # Improved gradient stability metric using exponential moving average
-        if len(self.grad_window) >= 3:
-            recent_grads = list(self.grad_window)[-3:]
-            weights = np.exp([-0.1 * i for i in range(3)])
-            weights = weights / weights.sum()
-            weighted_grad_mean = np.sum(weights * recent_grads)
-            grad_stability = np.std(recent_grads) / (weighted_grad_mean + 1e-8)
-            grad_stability_bin = np.digitize(grad_stability, 
-                                           bins=[0.05, 0.1, 0.2, 0.3, 0.5])
-        else:
-            grad_stability_bin = 3
-        
-        # More granular learning rate bins with relative scaling
-        lr_base = 0.001  # Base learning rate
-        lr_relative = lr / lr_base
-        lr_bin = np.digitize(lr_relative, 
-                            bins=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
-        
-        # Momentum bins focused around typical values
-        momentum_bin = np.digitize(momentum, 
-                                 bins=[0.85, 0.9, 0.93, 0.95, 0.97, 0.99, 1.0])
-        
-        return (lr_bin, momentum_bin, loss_trend_bin, grad_stability_bin)
-        
+
+        # Loss trend binning (simplified)
+        loss_trend_bin = 2 # Default: stable
+        if len(self.loss_window) >= 5:
+            y = np.array(list(self.loss_window)[-5:])
+            x = np.arange(len(y))
+            try:
+                if np.all(y == y[0]): slope = 0.0
+                else: slope = np.polyfit(x, y, 1)[0]
+                if np.isfinite(slope):
+                     avg_loss = np.mean(y) + 1e-6
+                     normalized_slope = slope / avg_loss
+                     loss_trend_bin = np.digitize(normalized_slope, bins=[-0.05, -0.005, 0.005, 0.05])
+            except (np.linalg.LinAlgError, ValueError): loss_trend_bin = 2
+
+        # Gradient variance binning
+        grad_var_bin = 2 # Default: medium variance
+        if self.grad_var_window:
+            median_grad_var = np.median(list(self.grad_var_window))
+            if np.isfinite(median_grad_var):
+                 grad_var_bin = np.digitize(median_grad_var, bins=[1e-5, 1e-3, 0.1, 1.0])
+
+        # Learning rate binning
+        lr_bin = np.digitize(lr, bins=[1e-6, 1e-5, 1e-4, 1e-3, 1e-2])
+        # Momentum binning
+        momentum_bin = np.digitize(momentum, bins=[0.85, 0.9, 0.95, 0.99])
+        # --- End stable state logic ---
+
+        state = (loss_trend_bin, grad_var_bin, lr_bin, momentum_bin)
+        # Track access count (stable version's logic)
+        self.q_table_access_count[state] = self.q_table_access_count.get(state, 0) + 1
+        return state
+
     def compute_reward(
         self,
-        loss_trend: float,
-        grad_health: float,
-        consistent_improvement: bool
+        loss_improvement: float, # Relative improvement: (prev_loss - current_loss) / (abs(prev_loss) + 1e-9)
+        grad_health: float, # Inverse relationship with variance: 1 / (1 + grad_var)
+        consistent_improvement: bool # Flag indicating recent positive trend
     ) -> float:
-        """Enhanced reward computation with stability bonus."""
-        # Base reward from loss improvement
-        base_reward = 2.0 * loss_trend if loss_trend > 0 else 1.5 * loss_trend
-        
-        # Enhanced stability bonus
-        stability_threshold = 0.9
+        """ Enhanced reward computation with stability bonus (closer to old 'Improved')."""
+        # Base reward from relative loss improvement (stable version's scale)
+        base_reward = 2.0 * loss_improvement if loss_improvement > 0 else 1.0 * loss_improvement
+
+        # Stability bonus based on gradient health (more like old 'Improved' logic)
+        stability_threshold = 0.8 # Health threshold
         stability_bonus = 0.0
         if grad_health > stability_threshold:
-            bonus_scale = (grad_health - stability_threshold) / (1 - stability_threshold)
-            stability_bonus = 0.5 * bonus_scale
-        
-        # Progressive consistency reward
+            # Bonus scales from 0 to 0.4 as health goes from threshold to 1.0
+            bonus_scale = (grad_health - stability_threshold) / (1.0 - stability_threshold + 1e-9)
+            stability_bonus = 0.4 * bonus_scale
+
+        # Consistency reward/penalty (from stable version)
+        consistency_reward = 0.0
         if consistent_improvement:
             self.stable_steps += 1
-            consistency_reward = min(1.0, 0.2 * np.log1p(self.stable_steps))
+            consistency_reward = min(0.3, 0.05 * math.log1p(self.stable_steps)) # Capped log bonus
         else:
-            self.stable_steps = max(0, self.stable_steps - 1)
-            consistency_reward = 0.0
-        
-        # Combine rewards with dynamic weighting
-        combined_reward = (
-            base_reward +
-            stability_bonus +
-            consistency_reward
-        )
-        
-        # Smooth reward scaling
-        scaled_reward = np.tanh(combined_reward)  # Bound between -1 and 1
-        
+            self.stable_steps = 0 # Reset streak
+
+        # Combine rewards
+        combined_reward = base_reward + stability_bonus + consistency_reward
+
+        # Smooth reward scaling (tanh)
+        scaled_reward = np.tanh(combined_reward) # Bound between -1 and 1
+
+        # Track performance (stable version)
+        self.performance_window.append(scaled_reward)
+
         return float(scaled_reward)
-        
+
     def choose_action(self, state: tuple) -> Dict[str, float]:
-        """Enhanced action selection with adaptive exploration."""
+        """ Enhanced action selection with adaptive exploration (merged logic)."""
         if state not in self.q_table:
             self.q_table[state] = {
                 param: np.zeros(len(space))
                 for param, space in self.action_ranges.items()
             }
+            self._manage_q_table_size() # Prune if needed
 
         action = {}
-        
-        # Compute recent performance
-        recent_rewards = [r for _, _, r in list(self.state_memory)[-20:]]
-        avg_reward = np.mean(recent_rewards) if recent_rewards else 0.0
-        
-        # Adaptive exploration rates
-        explore_lr = np.random.random() < self.epsilon * (1.0 - max(0, avg_reward))
-        explore_momentum = np.random.random() < self.epsilon * 0.7 * (1.0 - max(0, avg_reward))
+
+        # --- Adaptive Epsilon Decay (based on performance window) ---
+        if len(self.performance_window) >= 20: # Need enough history
+            avg_performance = np.mean(list(self.performance_window)[-20:]) # Use last 20 rewards
+            # Decay faster if performance is poor, slower if good
+            decay_factor = self.epsilon_decay
+            if avg_performance < -0.1: decay_factor = 0.998 # Faster decay
+            elif avg_performance > 0.2: decay_factor = 0.9998 # Slower decay
+            self.epsilon = max(self.min_epsilon, self.epsilon * decay_factor)
+        else:
+            # Standard decay if not enough history
+            self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+        # --- End Adaptive Epsilon ---
+
+        # --- Adaptive Exploration Probability ---
+        # Calculate probability of exploring based on current epsilon
+        explore_prob = self.epsilon
+        # Optional: Slightly reduce exploration if recent performance is very good
+        # if len(self.performance_window) >= 10 and np.mean(list(self.performance_window)[-10:]) > 0.3:
+        #     explore_prob *= 0.8
+        # --- End Adaptive Exploration Prob ---
+
 
         for param, space in self.action_ranges.items():
-            should_explore = explore_lr if param == 'lr_scale' else explore_momentum
-            
-            if should_explore:
-                # Smart exploration based on action success history
-                success_rates = self.action_success[param] / (self.action_counts[param] + 1)
-                
-                if len(recent_rewards) > 0 and np.mean(recent_rewards) < -0.2:
-                    # If performing poorly, explore more widely but favor previously successful actions
-                    p = softmax(success_rates + 0.1)  # Add small constant for exploration
-                    chosen_idx = np.random.choice(len(space), p=p)
-                else:
-                    # If performing well, explore near current value
-                    current_idx = np.argmin(np.abs(space - 1.0))
-                    exploration_range = 2  # Explore within ±2 indices
-                    valid_indices = np.arange(
-                        max(0, current_idx - exploration_range),
-                        min(len(space), current_idx + exploration_range + 1)
-                    )
-                    chosen_idx = np.random.choice(valid_indices)
-                
-                chosen_action = float(space[chosen_idx])
-            else:
-                # Enhanced greedy selection with success history influence
-                q_values = self.q_table[state][param]
-                success_rates = self.action_success[param] / (self.action_counts[param] + 1)
-                
-                # Combine Q-values with success history
-                combined_values = q_values + 0.2 * success_rates
-                max_val = np.max(combined_values)
-                best_actions = np.where(np.abs(combined_values - max_val) < 1e-6)[0]
-                
-                # Choose action closest to 1.0 when tied
-                chosen_idx = min(best_actions, key=lambda i: abs(space[i] - 1.0))
-                chosen_action = float(space[chosen_idx])
-            
-            action[param] = chosen_action
+            if random.random() < explore_prob:
+                # --- Smart Exploration (using success history) ---
+                success_rates = self.action_success[param] / (self.action_counts[param] + 1e-6) # Avoid div by zero
 
-        # Adaptive epsilon decay based on performance
-        if len(self.performance_window) > 20:
-            avg_performance = np.mean(self.performance_window)
-            if avg_performance > 0.3:
-                self.epsilon = max(0.05, self.epsilon * 0.997)  # Slower decay
+                # Option 1: Softmax sampling based on success
+                # Add small temp to encourage exploring less successful actions occasionally
+                exploration_temp = 0.1
+                probabilities = softmax(success_rates / exploration_temp)
+
+                # Option 2: Bias towards successful actions but allow others
+                # probabilities = success_rates + 0.05 # Add small base probability
+                # probabilities = probabilities / (probabilities.sum() + 1e-9)
+
+                if probabilities.sum() > 1e-9 and np.all(np.isfinite(probabilities)): # Check validity
+                    chosen_idx = np.random.choice(len(space), p=probabilities)
+                else:
+                    # Fallback to uniform random if probabilities are invalid
+                    logging.warning(f"Invalid probabilities for exploration in {param}, using uniform.")
+                    chosen_idx = random.randrange(len(space))
+                # --- End Smart Exploration ---
             else:
-                self.epsilon = max(0.05, self.epsilon * 0.995)  # Faster decay
+                # --- Exploitation (Greedy based on Q-values, tie-break towards 1.0) ---
+                q_values = self.q_table[state][param]
+                if len(q_values) > 0 and np.any(np.isfinite(q_values)):
+                     max_q = np.nanmax(q_values)
+                     # Find all indices with Q-value close to maximum
+                     best_indices = np.where(np.abs(q_values - max_q) < 1e-6)[0]
+                     if len(best_indices) > 0:
+                          # Tie-breaking: choose action closest to 1.0 among the best
+                          chosen_idx = min(best_indices, key=lambda i: abs(space[i] - 1.0))
+                     else: # Fallback if all are NaN or some other issue
+                          chosen_idx = random.randrange(len(space))
+                else: # Fallback if q_values is empty or all non-finite
+                     chosen_idx = random.randrange(len(space))
+                # --- End Exploitation ---
+
+            action[param] = float(space[chosen_idx])
 
         return action
 
     def update(self, state: tuple, action: Dict[str, float], reward: float, next_state: Optional[tuple], should_log: bool = False):
-        """Enhanced Q-learning update with experience tracking."""
-        # Record reward and update state memory
+        """ Q-learning update using stable version's core logic, adds success tracking."""
+        # Record experience in state memory (for adaptive exploration/reward)
         self.state_memory.append((state, action, reward))
-        if should_log:
-            logging.info(f"State memory updated with state={state}, action={action}, reward={reward}")
 
-        # Initialize Q-values if needed
-        for s in [state, next_state] if next_state is not None else [state]:
-            if s not in self.q_table:
-                self.q_table[s] = {
-                    param: np.zeros(len(space))
-                    for param, space in self.action_ranges.items()
-                }
+        # Initialize Q-values if needed (stable version's logic)
+        if next_state is not None and next_state not in self.q_table:
+            self.q_table[next_state] = {
+                param: np.zeros(len(space))
+                for param, space in self.action_ranges.items()
+            }
+            self._manage_q_table_size() # Prune if needed
 
-        # Q-Table memory management: Evict least recently used states if Q-table exceeds max size
-        if len(self.q_table) > self.max_q_table_size:
-            oldest_state = self.state_memory.popleft()[0]
-            if oldest_state in self.q_table:
-                del self.q_table[oldest_state]
-                if should_log:
-                    logging.info(f"Evicted oldest state from Q-table: {oldest_state}")
-
-        # Update Q-values with adaptive learning rate
+        # Update Q-values (stable version's core update logic)
         for param, value in action.items():
             space = self.action_ranges[param]
-            action_idx = np.abs(space - value).argmin()
+            try:
+                action_idx = np.abs(space - value).argmin()
+                if not np.isclose(space[action_idx], value): raise ValueError("Action value not found precisely.")
+            except ValueError:
+                logging.warning(f"Q-update: Action value {value} not found for {param}. Skipping update.")
+                continue
 
             # Get max future Q-value
+            max_future_q = 0.0
             if next_state is not None and next_state in self.q_table:
                 next_q_values = self.q_table[next_state][param]
-                max_future_q = np.max(next_q_values)
-            else:
-                max_future_q = 0.0
+                if len(next_q_values) > 0 and np.any(np.isfinite(next_q_values)):
+                     max_future_q = np.nanmax(next_q_values)
 
-            # Current Q-value
             current_q = self.q_table[state][param][action_idx]
+            td_target = reward + self.gamma * max_future_q
+            td_error = td_target - current_q
 
-            # Compute TD error with less aggressive clipping
-            td_error = reward + self.gamma * max_future_q - current_q
-            td_error = np.clip(td_error, -1.0, 1.0)  # Reduced clipping range
-
-            # Adaptive learning rate based on visit count
+            # --- Adaptive Learning Rate (based on visit count, from old 'Improved') ---
             self.action_counts[param][action_idx] += 1
             visit_count = self.action_counts[param][action_idx]
-            effective_lr = self.alpha / (1 + np.log1p(visit_count) * 0.1)
+            # Decay LR for specific state-action pairs that have been visited often
+            effective_alpha = self.alpha / (1 + math.log1p(visit_count * 0.1)) # Log decay based on visits
+            effective_alpha = max(effective_alpha, 0.001) # Minimum alpha
+            # --- End Adaptive Learning Rate ---
 
-            # Update Q-value
-            self.q_table[state][param][action_idx] += effective_lr * td_error
+            # Update Q-value using effective alpha
+            self.q_table[state][param][action_idx] += effective_alpha * td_error
 
-            if should_log:
-                logging.info(f"Updated Q-table for state={state}, param={param}, action_idx={action_idx}: "
-                             f"current_q={current_q:.4f}, max_future_q={max_future_q:.4f}, td_error={td_error:.4f}, "
-                             f"effective_lr={effective_lr:.6f}")
-
-            # Update success tracking with decay
-            if reward > 0:
+            # --- Update Success Tracking ---
+            if reward > 0.1: # Use a threshold to count success
+                # Decay old successes and add new one
                 self.action_success[param][action_idx] = (self.action_success[param][action_idx] * self.success_decay) + 1
             else:
+                # Only decay if not successful
                 self.action_success[param][action_idx] *= self.success_decay
+            # --- End Success Tracking ---
+
+            if should_log:
+                logging.info(f"Q-Update state={state}, param={param}, action_idx={action_idx}: "
+                             f"Q={current_q:.3f} -> {self.q_table[state][param][action_idx]:.3f} | "
+                             f"R={reward:.3f} | FutQ={max_future_q:.3f} | TD_err={td_error:.3f} | EffAlpha={effective_alpha:.4f}")
+
+
+    def _manage_q_table_size(self):
+        """ Prunes Q-table using access counts (stable version's logic)."""
+        # --- Same as stable QController ---
+        if len(self.q_table) > self.max_q_table_size:
+            try:
+                if self.q_table_access_count:
+                     sorted_states = sorted(self.q_table_access_count.items(), key=lambda item: item[1])
+                     num_to_remove = len(self.q_table) - int(self.max_q_table_size * 0.9)
+                     num_removed = 0
+                     for state, count in sorted_states:
+                         if num_removed >= num_to_remove: break
+                         if state in self.q_table: del self.q_table[state]
+                         if state in self.q_table_access_count: del self.q_table_access_count[state]
+                         num_removed += 1
+                     logging.info(f"Pruned {num_removed} states from Q-table (new size: {len(self.q_table)}).")
+            except (ValueError, KeyError) as e:
+                logging.warning(f"Could not prune Q-table: {e}")
+        # --- End stable pruning logic ---
 
 
 class EnhancedSGD(Optimizer):
-    """Enhanced SGD Optimizer with Q-Learning based Adaptive Hyperparameter Tuning."""
+    """ Merged EnhancedSGD: Integrates adaptive adjustments with stability fixes."""
 
     def __init__(
         self,
         params: Iterable[torch.nn.Parameter],
-        lr: float = 0.003,               # Reduced initial LR
+        lr: float = 0.003,
         momentum: float = 0.9,
-        weight_decay: float = 0.005,     # Reduced initial weight decay
-        smoothing_factor: float = 0.05,  # Increased for stability
-        entropy_threshold: float = 0.3,
-        max_grad_norm: float = 1.0,      # Reduced based on gradient stats
-        noise_scale: float = 0.001,      # Reduced since gradients have good variance
-        lr_scale_bounds: tuple = (0.7, 1.3),
-        momentum_scale_bounds: tuple = (0.85, 1.1),
+        weight_decay: float = 0.005,
+        max_grad_norm: float = 1.0,
+        # Reintroduce parameters for adaptive features if needed
+        noise_scale_initial: float = 0.001, # Initial noise scale
+        noise_decay_steps: int = 500, # Steps over which noise decays
+        update_clip_factor: float = 5.0, # Multiplier for avg update norm clipping threshold
+        adjust_interval: int = 50, # How often to run _adjust_hyperparameters
+        lr_scale_bounds: tuple = (0.85, 1.15), # Q-Controller bounds
+        momentum_scale_bounds: tuple = (0.9, 1.1), # Q-Controller bounds
         q_learning_config: Dict[str, Any] = {},
         **kwargs
     ):
-        """
-        Initializes the EnhancedSGD optimizer.
-
-        Args:
-            params (Iterable[torch.nn.Parameter]): Iterable of parameters to optimize.
-            lr (float, optional): Initial learning rate. Defaults to 0.003.
-            momentum (float, optional): Initial momentum. Defaults to 0.9.
-            weight_decay (float, optional): Initial weight decay. Defaults to 0.005.
-            smoothing_factor (float, optional): Smoothing factor for updates. Defaults to 0.05.
-            entropy_threshold (float, optional): Threshold for entropy-based adjustments. Defaults to 0.3.
-            max_grad_norm (float, optional): Maximum gradient norm for clipping. Defaults to 1.0.
-            noise_scale (float, optional): Scale of noise to inject. Defaults to 0.001.
-            lr_scale_bounds (tuple, optional): Bounds for learning rate scaling. Defaults to (0.7, 1.3).
-            momentum_scale_bounds (tuple, optional): Bounds for momentum scaling. Defaults to (0.85, 1.1).
-            q_learning_config (Dict[str, Any], optional): Configuration for Q-Learning controller. Defaults to {}.
-            **kwargs: Additional keyword arguments.
-        """
-        # Ensure params is properly formatted as parameter groups
+        # --- Parameter group setup (from stable version) ---
         if isinstance(params, (list, tuple)) and len(params) > 0 and isinstance(params[0], dict):
             param_groups = params
         else:
+            if not isinstance(params, Iterable): params = list(params)
             param_groups = [{'params': params}]
-    
-        # Enhanced parameter group initialization
+
         for group in param_groups:
             group.setdefault('lr', lr)
             group.setdefault('momentum', momentum)
             group.setdefault('weight_decay', weight_decay)
             group.setdefault('base_lr', lr)
             group.setdefault('q_scale', 1.0)
-            # Add minimum weight decay
-            group.setdefault('min_weight_decay', weight_decay * 0.2)  # 20% of initial as minimum
-    
+            # Add min_weight_decay concept from QController
+            group.setdefault('min_weight_decay', q_learning_config.get('min_weight_decay', 1e-4))
+        # --- End stable param group setup ---
+
         super().__init__(param_groups, dict(lr=lr, momentum=momentum, weight_decay=weight_decay))
-        
-        # Initialize optimization state
+
+        # --- Initialize optimization state ---
         self._init_optimization_state(
-            smoothing_factor=smoothing_factor,
-            entropy_threshold=entropy_threshold,
             max_grad_norm=max_grad_norm,
-            noise_scale=noise_scale,
+            noise_scale_initial=noise_scale_initial,
+            noise_decay_steps=noise_decay_steps,
+            update_clip_factor=update_clip_factor,
+            adjust_interval=adjust_interval,
             lr_scale_bounds=lr_scale_bounds,
             momentum_scale_bounds=momentum_scale_bounds,
             q_learning_config=q_learning_config,
             **kwargs
         )
-    
-        # Pre-allocate buffers with proper device handling
+
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.stats = {
-            'grad_norms': deque(maxlen=100),
-            'learning_rates': deque(maxlen=100),
-            'momentum_values': deque(maxlen=100),
-            'entropy_values': deque(maxlen=100),
-            'update_norms': deque(maxlen=100)  # Track update norms
-        }
 
     def _init_optimization_state(self, **kwargs):
-        """Initialize optimization state with safe handling."""
-        smoothing_factor = kwargs.get('smoothing_factor', 0.05)
-        entropy_threshold = kwargs.get('entropy_threshold', 0.3)
-        max_grad_norm = kwargs.get('max_grad_norm', 1.0)
-        noise_scale = kwargs.get('noise_scale', 0.001)
-        lr_scale_bounds = kwargs.get('lr_scale_bounds', (0.7, 1.3))
-        momentum_scale_bounds = kwargs.get('momentum_scale_bounds', (0.85, 1.1))
+        """Initialize optimization state, including adaptive feature parameters."""
+        self.max_grad_norm = kwargs.get('max_grad_norm', 1.0)
+        self.noise_scale_initial = kwargs.get('noise_scale_initial', 0.001)
+        self.noise_decay_steps = kwargs.get('noise_decay_steps', 500)
+        self.update_clip_factor = kwargs.get('update_clip_factor', 5.0)
+        self.adjust_interval = kwargs.get('adjust_interval', 50) # Store adjust interval
+        lr_scale_bounds = kwargs.get('lr_scale_bounds', (0.85, 1.15))
+        momentum_scale_bounds = kwargs.get('momentum_scale_bounds', (0.9, 1.1))
         q_learning_config = kwargs.get('q_learning_config', {})
 
-        self.max_grad_norm = max_grad_norm  # Initialize max_grad_norm
-
+        # Initialize QController (now ImprovedQLearningController)
         self.q_controller = ImprovedQLearningController(
             learning_rate=q_learning_config.get('learning_rate', 0.02),
             discount=q_learning_config.get('discount', 0.97),
             epsilon=q_learning_config.get('epsilon', 0.15),
-            epsilon_decay=q_learning_config.get('epsilon_decay', 0.999),
-            initial_mix_prob=q_learning_config.get('initial_mix_prob', 0.9),
+            epsilon_decay=q_learning_config.get('epsilon_decay', 0.9995),
+            min_epsilon=q_learning_config.get('min_epsilon', 0.02),
             lr_scale_bounds=lr_scale_bounds,
             momentum_scale_bounds=momentum_scale_bounds,
-            min_weight_decay=q_learning_config.get('min_weight_decay', 1e-4)
+            min_weight_decay=q_learning_config.get('min_weight_decay', 1e-4),
+            max_q_table_size=q_learning_config.get('max_q_table_size', 15000),
+            success_decay=q_learning_config.get('success_decay', 0.99) # Pass success decay
         )
-    
+
         self._step_count = 0
-        self.prev_state = None
-        self.prev_action = None
-        self.prev_loss = None
-    
-        # Initialize gradient memory
-        self.grad_memory = deque(maxlen=100)  # Store recent gradients
-    
-        # Initialize GradientStats
+        # GradientStats (from stable version)
         self.gradient_stats = GradientStats()
+        # Reintroduce self.stats deque for adaptive adjustments
+        self.stats = {
+            'grad_norms': deque(maxlen=100), # Norms of gradients before clipping
+            'update_norms': deque(maxlen=100) # Norms of final updates applied to parameters
+        }
 
-    def _track_gradient_memory(self, grad_norm: float):
-        """Track gradient history for better adaptation."""
-        self.grad_memory.append(grad_norm)
-
-    def _compute_entropy(self, tensor: torch.Tensor) -> float:
-        """Efficient entropy computation using torch operations with safe calculations."""
-        if tensor.numel() <= 1:
-            return 0.0  # Return default entropy for single-element tensors
-    
-        values = tensor.flatten()
-        # Safe histogram calculation
-        hist = torch.histc(values, bins=min(100, values.numel()))
-        # Add small epsilon to prevent log(0)
-        eps = 1e-7
-        hist = hist / (hist.sum() + eps) + eps
-        return float(-torch.sum(hist * torch.log(hist)).item())
-
-    def get_statistics(self) -> Dict[str, float]:
-        """Compute and return statistics using pre-allocated deques."""
-        stats = {}
-
-        # Add current learning rate from first param group
-        if len(self.param_groups) > 0:
-            stats['current_lr'] = float(self.param_groups[0]['lr'])
-
-        # Add other statistics
-        for key, values in self.stats.items():
-            if values:
-                try:
-                    tensor_values = torch.tensor(list(values), dtype=torch.float32)
-                    stats[f'avg_{key}'] = float(torch.mean(tensor_values).item())
-                    stats[f'std_{key}'] = float(torch.std(tensor_values).item())
-                except (RuntimeError, ValueError) as e:
-                    logging.warning(f"Error computing statistics for {key}: {e}")
-                    stats[f'avg_{key}'] = 0.0
-                    stats[f'std_{key}'] = 0.0
-        return stats
-
+    # --- Robust Gradient Stats Calculation (from stable version) ---
     def _get_gradient_stats(self) -> Dict[str, Any]:
-        """Gather gradient statistics for the current step."""
+        """Gather gradient statistics, checking for finite values."""
+        # --- Same as stable EnhancedSGD ---
         grad_norms = []
         grad_vars = []
+        num_finite_params = 0
+        num_non_finite_params = 0
         for group in self.param_groups:
             for p in group['params']:
-                if p.grad is None:
-                    continue
-                grad = p.grad
-                grad_norms.append(torch.norm(grad).item())
-                if p.grad.numel() > 1:
-                    grad_vars.append(torch.var(grad.float()).item())
-    
-        saw_grads = len(grad_norms) > 0
-    
-        if saw_grads:
-            mean_grad_norm = np.mean(grad_norms)
+                if p.grad is None: continue
+                grad = p.grad.detach()
+                if torch.isfinite(grad).all():
+                    grad_float = grad.float()
+                    norm = torch.norm(grad_float).item()
+                    grad_norms.append(norm)
+                    if grad_float.numel() > 1: grad_vars.append(torch.var(grad_float).item())
+                    num_finite_params += 1
+                else: num_non_finite_params += 1
+
+        saw_grads = num_finite_params + num_non_finite_params > 0
+        saw_finite_grads = num_finite_params > 0
+        if saw_finite_grads:
+            mean_grad_norm = np.mean(grad_norms) if grad_norms else 0.0
             mean_grad_var = np.mean(grad_vars) if grad_vars else 0.0
-        else:
-            mean_grad_norm = 0.0
-            mean_grad_var = 0.0
-    
-        grad_stats = {
-            'saw_grads': saw_grads,
-            'mean_grad_norm': mean_grad_norm,
-            'mean_grad_var': mean_grad_var
+        else: mean_grad_norm, mean_grad_var = 0.0, 0.0
+
+        is_norm_finite = np.isfinite(mean_grad_norm)
+        is_var_finite = np.isfinite(mean_grad_var)
+        return {
+            'saw_grads': saw_grads, 'saw_finite_grads': saw_finite_grads,
+            'mean_grad_norm': mean_grad_norm if is_norm_finite else 0.0,
+            'mean_grad_var': mean_grad_var if is_var_finite else float('inf'),
+            'num_non_finite_params': num_non_finite_params,
+            'is_norm_finite': is_norm_finite, 'is_var_finite': is_var_finite,
+            # Add raw norms list for _adjust_hyperparameters
+            '_raw_grad_norms': grad_norms
         }
-        return grad_stats
+        # --- End stable gradient stats ---
 
     @torch.no_grad()
     def step(self, closure: Optional[callable] = None) -> Optional[torch.Tensor]:
-        """Optimizes the parameters based on the current gradient."""
+        """ Performs optimization step, integrating Q-learning and adaptive adjustments. """
         loss = None
         if closure is not None:
-            loss = closure()
+            try:
+                with torch.enable_grad(): loss = closure()
+            except Exception as e:
+                logging.error(f"Error in closure execution: {e}", exc_info=True); return None
 
         # Get gradient statistics
         grad_stats = self._get_gradient_stats()
 
-        # Apply Q-learning adjustments if we have gradients and loss
-        if grad_stats['saw_grads'] and loss is not None:
+        # --- Q-Learning Update (adapted from stable version) ---
+        if grad_stats['saw_finite_grads'] and loss is not None and torch.isfinite(loss):
             current_loss = loss.item()
+            safe_grad_var = grad_stats['mean_grad_var'] if grad_stats['is_var_finite'] else 0.0
 
-            # Get current state
             q_state = self.q_controller.get_state(
-                lr=self.param_groups[0]['lr'],
-                momentum=self.param_groups[0]['momentum'],
-                grad_var=grad_stats['mean_grad_var'],
-                loss=current_loss
+                lr=self.param_groups[0]['lr'], momentum=self.param_groups[0]['momentum'],
+                grad_var=safe_grad_var, loss=current_loss
             )
 
-            # Update Q-table with previous experience if available
             if self.q_controller.prev_loss is not None and \
                self.q_controller.prev_state is not None and \
                self.q_controller.prev_action is not None:
-                # Calculate relative loss improvement
-                loss_improvement = (self.q_controller.prev_loss - current_loss) / self.q_controller.prev_loss
-                grad_health = 1.0 / (1.0 + grad_stats['mean_grad_var'])
-                
-                # Check for consistent improvement
-                self.q_controller.performance_window.append(loss_improvement)
-                consistent_improvement = all([r > 0 for r in list(self.q_controller.performance_window)[-10:]])
+                if np.isfinite(self.q_controller.prev_loss) and abs(self.q_controller.prev_loss) > 1e-9:
+                    loss_improvement = (self.q_controller.prev_loss - current_loss) / abs(self.q_controller.prev_loss + 1e-9)
+                    grad_health = 1.0 / (1.0 + max(0, safe_grad_var))
+                    consistent_improvement = all([r > -0.01 for r in list(self.q_controller.performance_window)[-10:]])
+                    reward = self.q_controller.compute_reward(loss_improvement, grad_health, consistent_improvement)
+                    if np.isfinite(reward):
+                        self.q_controller.update(self.q_controller.prev_state, self.q_controller.prev_action, reward, q_state, should_log=(self._step_count % 50 == 0))
+                    else: logging.warning(f"Step {self._step_count}: Skipping Q-update due to non-finite reward.")
+                else: logging.warning(f"Step {self._step_count}: Skipping Q-update due to non-finite or zero previous loss.")
 
-                # Compute reward for the previous action
-                reward = self.q_controller.compute_reward(
-                    loss_trend=loss_improvement,
-                    grad_health=grad_health,
-                    consistent_improvement=consistent_improvement
-                )
-                
-                # Update Q-table with the previous state, action, and received reward
-                self.q_controller.update(
-                    state=self.q_controller.prev_state,
-                    action=self.q_controller.prev_action,
-                    reward=reward,
-                    next_state=q_state,
-                    should_log=(self._step_count % 10 == 0)
-                )
-
-            # Choose new action based on the current state
             q_action = self.q_controller.choose_action(q_state)
 
-            # Determine if the new action results in no changes
-            no_change = all(
-                abs(action - 1.0) < 1e-5 for action in q_action.values()
-            )
-
-            # Apply learning rate and momentum adjustments
             for group in self.param_groups:
-                # Scale learning rate
-                group['q_scale'] *= float(np.clip(
-                    q_action['lr_scale'],
-                    self.q_controller.lr_scale_bounds[0],
-                    self.q_controller.lr_scale_bounds[1]
-                ))
-                group['lr'] = group['base_lr'] * group['q_scale']
+                group['q_scale'] *= float(np.clip(q_action['lr_scale'], self.q_controller.lr_scale_bounds[0], self.q_controller.lr_scale_bounds[1]))
+                min_lr, max_lr = 1e-7, 0.01
+                group['lr'] = float(np.clip(group['base_lr'] * group['q_scale'], min_lr, max_lr))
+                group['momentum'] = float(np.clip(group['momentum'] * q_action['momentum_scale'], self.q_controller.momentum_scale_bounds[0], self.q_controller.momentum_scale_bounds[1]))
 
-                # Scale momentum
-                group['momentum'] = float(np.clip(
-                    group['momentum'] * q_action['momentum_scale'],
-                    self.q_controller.momentum_scale_bounds[0],
-                    self.q_controller.momentum_scale_bounds[1]
-                ))
-
-            # Log Q-learning adjustments
-            if self._step_count % 10 == 0:
-                for i, group in enumerate(self.param_groups):
-                    # Calculate mean Q-values for logging
-                    state = self.q_controller.prev_state
-                    mean_q_lr = np.mean(self.q_controller.q_table.get(state, {}).get('lr_scale', np.zeros(len(self.q_controller.action_ranges['lr_scale']))))
-                    mean_q_momentum = np.mean(self.q_controller.q_table.get(state, {}).get('momentum_scale', np.zeros(len(self.q_controller.action_ranges['momentum_scale']))))
-
-                    logging.info(
-                        f"Step {self._step_count} - Group {i} - Q-Learning adjustments: "
-                        f"lr_scale={q_action['lr_scale']:.4f}, momentum_scale={q_action['momentum_scale']:.4f}, "
-                        f"mean_Q_lr={mean_q_lr:.4f}, mean_Q_momentum={mean_q_momentum:.4f}, "
-                        f"effective_lr={group['lr']:.6f}, momentum={group['momentum']:.4f}"
-                    )
-
-            # Update Q-learning state for the next step
             self.q_controller.prev_state = q_state
             self.q_controller.prev_action = q_action
             self.q_controller.prev_loss = current_loss
+        # --- End Q-Learning Update ---
 
-            # If the new action results in no change, apply a penalty
-            if grad_stats['saw_grads'] and self.q_controller.prev_action and no_change:
-                logging.warning("No-change action detected. Applying penalty.")
-                # The penalty is already incorporated in the reward function
-
-        # Apply updates with the adjusted learning rates
+        # --- Parameter Update Loop ---
+        num_params_updated = 0
         for group in self.param_groups:
+            lr = group['lr']
+            momentum = group['momentum']
+            weight_decay = group['weight_decay']
+            min_weight_decay = group['min_weight_decay'] # Get min WD for this group
+
             for p in group['params']:
-                if p.grad is None:
-                    continue
-
-                grad = p.grad
-                if grad_stats['mean_grad_norm'] > self.max_grad_norm * 5 or \
-                   np.isnan(grad_stats['mean_grad_norm']) or \
-                   np.isnan(grad_stats['mean_grad_var']):
-                    grad = torch.clamp(grad, -self.max_grad_norm, self.max_grad_norm)
-                    # Removed individual gradient clipping warnings
-
+                if p.grad is None: continue
                 state = self.state[p]
-                saw_grads = True
-
-                # Initialize momentum buffer if needed
-                if 'momentum_buffer' not in state:
-                    state['momentum_buffer'] = torch.zeros_like(p)
-    
-                # Apply update with current learning rate
-                self._apply_update(
-                    p=p,
-                    grad=grad,
-                    momentum=group['momentum'],
-                    lr=group['lr'],
-                    weight_decay=group['weight_decay'],
-                    state=state,
-                    current_loss=self.q_controller.prev_loss if self.q_controller.prev_loss is not None else 0.0
+                updated = self._apply_update(
+                    p=p, grad_in=p.grad, momentum=momentum, lr=lr,
+                    weight_decay=weight_decay, min_weight_decay=min_weight_decay, # Pass min WD
+                    state=state
                 )
+                if updated: num_params_updated += 1
+        # --- End Parameter Update Loop ---
 
-        if grad_stats['saw_grads']:
-            self._step_count += 1
-            # Adjust hyperparameters more frequently
-            if self._step_count % 10 == 0:
-                self._adjust_hyperparameters()
-            # Log optimization statistics every 10 steps
-            if self._step_count % 10 == 0:
-                self.log_optimization_stats()
+        if num_params_updated > 0:
+             self._step_count += 1
 
-            # Record and log gradient clipping statistics
-            stats = self.gradient_stats.record_step(self._step_count)
-            if self._step_count % 10 == 0:
-                logging.info(
-                    f"Step {self._step_count} gradient stats: "
-                    f"Clipped {stats['gradients_clipped']}/{stats['total_gradients']} "
-                    f"({stats['clip_ratio']:.1%}) gradients. "
-                    f"Max norm: {stats['max_gradient']:.3f}, "
-                    f"Avg clip amount: {stats['avg_clip_amount']:.3f}"
-                )
+             # --- Call _adjust_hyperparameters periodically ---
+             if self._step_count % self.adjust_interval == 0:
+                 self._adjust_hyperparameters(grad_stats) # Pass current grad_stats
+             # --- End Adjust Hyperparameters ---
+
+             # Log gradient stats (using GradientStats)
+             grad_clip_stats = self.gradient_stats.get_step_stats() # Get stats for the step
+             self.gradient_stats.reset() # Reset for next step
+
+             if self._step_count % 50 == 0: # Log less frequently
+                 lr_scale = self.q_controller.prev_action.get('lr_scale', 1.0) if self.q_controller.prev_action else 1.0
+                 mom_scale = self.q_controller.prev_action.get('momentum_scale', 1.0) if self.q_controller.prev_action else 1.0
+                 current_lr = self.param_groups[0]['lr']
+                 current_mom = self.param_groups[0]['momentum']
+                 logging.info(
+                     f"Step {self._step_count} | "
+                     f"LR: {current_lr:.2e} (QScale:{lr_scale:.2f}) | Mom: {current_mom:.3f} (QScale:{mom_scale:.2f}) | "
+                     f"Grad Clip: {grad_clip_stats['gradients_clipped']}/{grad_clip_stats['total_gradients']} ({grad_clip_stats['clip_percentage']:.1%}) | "
+                     f"Max Grad: {grad_clip_stats['max_gradient']:.3f}"
+                 )
+
+        elif grad_stats['saw_grads']:
+             logging.warning(f"Step {self._step_count}: Gradients present but no parameters updated.")
 
         return loss
 
+    # --- Safer Parameter Update (incorporating noise/clipping from old version) ---
     def _apply_update(
         self,
-        p: torch.Tensor,
-        grad: torch.Tensor,
-        momentum: float,
-        lr: float,
-        weight_decay: float,
-        state: dict,
-        current_loss: float
-    ):
-        """Enhanced parameter update with improved gradient handling."""
+        p: torch.Tensor, grad_in: torch.Tensor, momentum: float, lr: float,
+        weight_decay: float, min_weight_decay: float, state: dict # Added min_weight_decay
+    ) -> bool:
+        # Check for non-finite gradient (stable version)
+        if not torch.isfinite(grad_in).all():
+            grad = torch.zeros_like(grad_in)
+        else:
+            grad = grad_in.clone()
+
+        # Initialize state (stable version)
+        if 'momentum_buffer' not in state:
+            state['momentum_buffer'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+        if 'update_history' not in state: # For dynamic update scaling
+             state['update_history'] = deque(maxlen=5)
+
         buf = state['momentum_buffer']
 
-        # Apply weight decay with smoother sigmoid scaling
-        if weight_decay != 0:
-            param_norm = torch.norm(p)
-            # Replaced tanh with sigmoid for smoother transitions and reduced scaling factor
-            adaptive_wd = weight_decay * (1.0 / (1.0 + torch.exp(-param_norm * 0.05)))
-            grad = grad.add(p, alpha=adaptive_wd)
-            logging.debug(f"Applied adaptive weight decay: {adaptive_wd:.6f}")
+        # --- Adaptive Weight Decay (closer to old logic, using min_wd) ---
+        if weight_decay != 0 and torch.isfinite(grad).all():
+            param_norm = torch.norm(p).item()
+            # Sigmoid scaling, but ensure it doesn't go below min_weight_decay
+            adaptive_wd_factor = 1.0 / (1.0 + math.exp(-param_norm * 0.1)) # Gentler scaling factor than before
+            effective_wd = base_weight_decay = weight_decay # Start with base WD for group
+            effective_wd = max(min_weight_decay, base_weight_decay * adaptive_wd_factor)
+            grad = grad.add(p, alpha=effective_wd)
+        # --- End Adaptive WD ---
 
-        # Apply gradient clipping before updating the momentum buffer
-        grad_norm = torch.norm(grad)
+        # Gradient Clipping (stable version's GradientStats recording)
+        grad_norm_before_clip = torch.norm(grad).item()
         was_clipped = False
-        clip_ratio = 0
-
-        if grad_norm > self.max_grad_norm:
-            clip_ratio = float(self.max_grad_norm / grad_norm)
+        clip_ratio = 1.0
+        if grad_norm_before_clip > self.max_grad_norm:
+            clip_ratio = self.max_grad_norm / (grad_norm_before_clip + 1e-6)
             grad.mul_(clip_ratio)
             was_clipped = True
+        self.gradient_stats.record_gradient(grad_norm_before_clip, was_clipped, clip_ratio if was_clipped else 1.0)
+        # Track raw norms for _adjust_hyperparameters
+        if torch.isfinite(grad_norm_before_clip): self.stats['grad_norms'].append(grad_norm_before_clip)
 
-        # Record gradient clipping statistics
-        self.gradient_stats.record_gradient(
-            original_norm=float(grad_norm),
-            clipped=was_clipped,
-            clip_ratio=clip_ratio
-        )
 
-        # Smoother momentum update
-        buf.mul_(momentum).add_(grad, alpha=1.0 - momentum)
-        logging.debug(f"Updated momentum buffer with grad: {grad_norm:.6f}, momentum: {momentum:.4f}")
+        # Momentum buffer update (standard momentum, from stable version)
+        buf.mul_(momentum).add_(grad)
 
-        # Adaptive noise injection based on training progress
-        if self._step_count < 1000:
-            noise_factor = 0.001 * np.exp(-self._step_count / 200)  # Exponential decay with 200-step half-life
-            stability = 1.0 / (1.0 + np.var(list(self.grad_memory)) if self.grad_memory else 1.0)
-            noise_scale = min(0.001, noise_factor * stability)  # Reduced base noise scale from 0.01 to 0.001
-            noise = torch.randn_like(buf) * noise_scale
-            buf.add_(noise)
-            logging.debug(f"Injected noise with scale {noise_scale:.6f}")
+        # --- Adaptive Noise Injection (reintroduced from old version) ---
+        # Decay noise over initial steps
+        current_noise_scale = 0.0
+        if self._step_count < self.noise_decay_steps:
+             decay_progress = self._step_count / self.noise_decay_steps
+             # Exponential decay for noise scale
+             current_noise_scale = self.noise_scale_initial * math.exp(-5.0 * decay_progress)
+             # Optional: Modulate by gradient variance (if grads are stable, less noise)
+             # grad_var = np.var(list(self.stats['grad_norms'])) if len(self.stats['grad_norms']) > 1 else 0.0
+             # stability_factor = 1.0 / (1.0 + math.sqrt(grad_var))
+             # current_noise_scale *= stability_factor
 
-        # Compute base update
-        update = -lr * buf
+             if current_noise_scale > 1e-7: # Only add noise if scale is meaningful
+                 noise = torch.randn_like(buf) * current_noise_scale
+                 buf.add_(noise)
+        # --- End Noise Injection ---
 
-        # Track update history
-        if 'update_history' not in state:
-            state['update_history'] = deque(maxlen=5)
-        state['update_history'].append(update.clone())
-        logging.debug(f"Tracked update history: {update.clone().norm().item():.6f}")
+        # Calculate update step (Negated LR * buffer)
+        update = buf.mul(-lr) # Calculate update: -lr * momentum_buffer
 
-        # Dynamic update scaling based on loss and gradient statistics
+        # --- Dynamic Update Clipping (reintroduced from old version) ---
         update_norm = torch.norm(update).item()
-        if len(self.stats['update_norms']) > 0:
-            avg_update_norm = np.mean(self.stats['update_norms'])
-            clip_threshold = max(2.0, avg_update_norm * 5.0)  # Increased base clipping threshold to 2.0
+        if np.isfinite(update_norm):
+             self.stats['update_norms'].append(update_norm) # Track norm of calculated update
 
-            if update_norm > clip_threshold:
-                scale_factor = clip_threshold / (update_norm + 1e-6)
-                # Apply soft clipping using sigmoid-like transition
-                scale_factor = 1.0 / (1.0 + np.exp(-10 * (scale_factor - 0.5)))  # Smooth transition
-                update.mul_(scale_factor)
-                logging.info(f"Adaptive clipping applied: scale_factor={scale_factor:.4f}")
+             # Clip based on average historical update norm
+             if len(self.stats['update_norms']) > 10: # Need some history
+                 avg_update_norm = np.mean(list(self.stats['update_norms']))
+                 clip_threshold = avg_update_norm * self.update_clip_factor # e.g., 5x average update
 
-        # Update statistics
-        self.stats['update_norms'].append(float(update_norm))
+                 if update_norm > clip_threshold:
+                      scale_factor = clip_threshold / (update_norm + 1e-6)
+                      update.mul_(scale_factor)
+                      # Log clipping event less frequently
+                      # if self._step_count % 100 == 0:
+                      #      logging.info(f"Dynamic update clipping applied: Factor={scale_factor:.3f}, Threshold={clip_threshold:.3e}")
 
-        # Always apply gradient clipping as a failsafe
-        max_failsafe_norm = 5.0
-        if update_norm > max_failsafe_norm:
-            scale_factor = max_failsafe_norm / (update_norm + 1e-6)
-            update.mul_(scale_factor)
-            self.stats['update_norms'].append(float(update_norm))
-            logging.warning(f"Failsafe clipping applied: update norm reduced to {max_failsafe_norm:.6f} (scale factor {scale_factor:.4f})")
+             # Failsafe clipping (hard limit)
+             max_failsafe_norm = 10.0 # Generous failsafe limit
+             if update_norm > max_failsafe_norm:
+                 scale_factor = max_failsafe_norm / (update_norm + 1e-6)
+                 update.mul_(scale_factor)
+                 logging.warning(f"Failsafe update clipping triggered! Factor={scale_factor:.3f}")
+        else:
+            logging.warning(f"Non-finite update norm ({update_norm}) detected before applying update. Skipping update for safety.")
+            return False # Don't apply non-finite update
+        # --- End Dynamic Update Clipping ---
 
-        # Apply gradient clipping on parameter update
-        max_update_norm_final = 1.0  # Prevent too large updates
-        update_norm_final = torch.norm(update).item()
-        if update_norm_final > max_update_norm_final:
-            update.mul_(max_update_norm_final / (update_norm_final + 1e-6))
-            self.stats['update_norms'].append(float(update_norm_final))
-            logging.warning(f"Final clipping applied: update norm from {update_norm_final:.6f} to {max_update_norm_final:.6f}")
 
-        # Update parameters with smoothing for stability
-        smooth_factor = min(1.0, self._step_count / 100.0)  # Faster warmup
-        effective_lr = smooth_factor * (1.0 - momentum)
-        p.data.add_(update, alpha=effective_lr)
-        logging.debug(f"Applied parameter update with effective_lr={effective_lr:.6f}")
+        # Apply final update (stable version's method)
+        p.add_(update) # p = p + update (update already contains -lr)
 
-    def _adjust_hyperparameters(self) -> None:
-        """Adaptively adjust optimizer hyperparameters based on training statistics."""
-        if not hasattr(self, 'stats') or len(self.stats.get('grad_norms', [])) < 50:
-            return
+        return True
 
-        # Calculate recent statistics
-        recent_grad_norms = list(self.stats['grad_norms'])[-50:]
-        recent_update_norms = list(self.stats.get('update_norms', []))[-50:]
 
-        if not recent_update_norms:
-            return
+    # --- Reintroduce _adjust_hyperparameters ---
+    def _adjust_hyperparameters(self, current_grad_stats: Dict[str, Any]) -> None:
+        """ Adaptively adjust optimizer hyperparameters based on recent training statistics. """
+        if len(self.stats.get('grad_norms', [])) < 50 or len(self.stats.get('update_norms', [])) < 50:
+            logging.debug("Skipping hyperparameter adjustment: Insufficient statistics.")
+            return # Need enough history
+
+        # Use grad norms collected over the last interval
+        recent_grad_norms = list(self.stats['grad_norms'])
+        recent_update_norms = list(self.stats['update_norms'])
 
         grad_norm_mean = np.mean(recent_grad_norms)
         grad_norm_std = np.std(recent_grad_norms)
         update_norm_mean = np.mean(recent_update_norms)
 
-        # Detect training instability
-        is_unstable = grad_norm_std / (grad_norm_mean + 1e-8) > 0.3  # Lowered instability threshold from 0.5 to 0.3
-        is_diverging = grad_norm_mean > 10.0 * self.max_grad_norm
-        updates_too_small = update_norm_mean < 1e-7
+        # Check stability conditions
+        grad_coeff_var = grad_norm_std / (grad_norm_mean + 1e-8) if grad_norm_mean > 1e-8 else 0
+        is_unstable = grad_coeff_var > 0.4 # If coefficient of variation is high
+        is_diverging = grad_norm_mean > self.max_grad_norm * 3.0 # If avg grad norm is much larger than clip value
+        updates_too_small = update_norm_mean < 1e-6 # If parameters aren't changing much
+
+        logging.info(f"Adjusting Hyperparameters (Step {self._step_count}): Grad Mean={grad_norm_mean:.3f}, "
+                     f"Grad Std={grad_norm_std:.3f}, Grad CoeffVar={grad_coeff_var:.3f}, Update Mean={update_norm_mean:.3e}")
 
         for i, group in enumerate(self.param_groups):
-            current_lr = group['lr']
-            current_momentum = group['momentum']
-            current_weight_decay = group.get('weight_decay', 0.005)
+            original_lr = group['lr']
+            original_momentum = group['momentum']
+            original_wd = group['weight_decay']
+            lr_changed, mom_changed, wd_changed = False, False, False
 
-            original_lr = current_lr
-            original_momentum = current_momentum
-            original_weight_decay = current_weight_decay
+            if is_unstable or is_diverging:
+                # Reduce learning rate and increase momentum (more cautious adjustments)
+                factor = 0.85 if is_diverging else 0.95 # More drastic cut if diverging
+                new_lr = max(1e-7, original_lr * factor)
+                if new_lr < original_lr: group['lr'] = new_lr; lr_changed = True
 
-            if is_unstable:
-                # Reduce learning rate and increase momentum for stability with more gradual factor
-                group['lr'] = max(1e-8, current_lr * 0.95)  # Changed from 0.9 to 0.95
-                group['momentum'] = min(1.1, current_momentum * 1.02)
-                logging.info(
-                    f"Param Group {i}: Adjusted LR from {original_lr:.6f} to {group['lr']:.6f} "
-                    f"and Momentum from {original_momentum:.4f} to {group['momentum']:.4f} due to instability."
-                )
+                new_mom = min(0.99, original_momentum / 0.98) # Increase momentum slowly
+                if new_mom > original_momentum: group['momentum'] = new_mom; mom_changed = True
 
-            elif is_diverging:
-                # Significantly reduce learning rate and momentum
-                group['lr'] = max(1e-8, current_lr * 0.7)
-                group['momentum'] = max(0.85, current_momentum * 0.9)
-                logging.info(
-                    f"Param Group {i}: Adjusted LR from {original_lr:.6f} to {group['lr']:.6f} "
-                    f"and Momentum from {original_momentum:.4f} to {group['momentum']:.4f} due to divergence."
-                )
+                # Optionally increase weight decay slightly if unstable
+                if is_unstable:
+                     new_wd = original_wd * 1.05
+                     group['weight_decay'] = new_wd; wd_changed = True
+
+                reason = "divergence" if is_diverging else "instability"
+                if lr_changed or mom_changed or wd_changed:
+                     logging.warning(f"Group {i}: Adjusting for {reason}. "
+                                     f"{'LR:'+f'{original_lr:.2e} -> {group["lr"]:.2e}' if lr_changed else ''} "
+                                     f"{'Mom:'+f'{original_momentum:.3f} -> {group["momentum"]:.3f}' if mom_changed else ''} "
+                                     f"{'WD:'+f'{original_wd:.2e} -> {group["weight_decay"]:.2e}' if wd_changed else ''}")
 
             elif updates_too_small:
-                # Carefully increase learning rate
-                group['lr'] = min(10.0, current_lr * 1.05)
-                logging.info(
-                    f"Param Group {i}: Increased LR from {original_lr:.6f} to {group['lr']:.6f} "
-                    f"due to small updates."
-                )
+                # Increase learning rate cautiously, decrease momentum slightly
+                new_lr = min(0.01, original_lr * 1.05) # Careful increase, capped
+                if new_lr > original_lr: group['lr'] = new_lr; lr_changed = True
 
-            # Adjust weight decay based on gradient magnitude and gradient-to-parameter ratio
-            adjusted_weight_decay = self._adjust_weight_decay(group, {'mean_grad_norm': grad_norm_mean, 'total_norm': grad_norm_mean})
-            if adjusted_weight_decay != original_weight_decay:
-                group['weight_decay'] = adjusted_weight_decay
-                logging.info(
-                    f"Param Group {i}: Adjusted Weight Decay from {original_weight_decay:.6f} "
-                    f"to {group['weight_decay']:.6f} based on gradient norms."
-                )
+                new_mom = max(0.85, original_momentum * 0.99) # Slight decrease
+                if new_mom < original_momentum: group['momentum'] = new_mom; mom_changed = True
 
-            # Ensure learning rate and momentum do not fall below minimum thresholds
-            group['lr'] = max(1e-8, group['lr'])
-            group['momentum'] = max(0.85, group['momentum'])
+                # Decrease weight decay slightly
+                new_wd = original_wd * 0.95
+                group['weight_decay'] = max(group['min_weight_decay'], new_wd); wd_changed = True
 
-            # Track statistics for this param group
-            self.stats['learning_rates'].append(group['lr'])
-            self.stats['momentum_values'].append(group['momentum'])
 
-            # Log final parameter values for this group
-            logging.info(
-                f"Parameter Group {i} final values: "
-                f"LR={group['lr']:.6f}, "
-                f"Momentum={group['momentum']:.4f}, "
-                f"Weight Decay={group['weight_decay']:.6f}"
-            )
+                if lr_changed or mom_changed or wd_changed:
+                     logging.info(f"Group {i}: Adjusting for small updates. "
+                                  f"{'LR:'+f'{original_lr:.2e} -> {group["lr"]:.2e}' if lr_changed else ''} "
+                                  f"{'Mom:'+f'{original_momentum:.3f} -> {group["momentum"]:.3f}' if mom_changed else ''} "
+                                  f"{'WD:'+f'{original_wd:.2e} -> {group["weight_decay"]:.2e}' if wd_changed else ''}")
 
-    def _adjust_weight_decay(self, param_group: Dict[str, Any], grad_stats: Dict[str, float]) -> float:
-        """More conservative weight decay adjustment"""
-        base_weight_decay = param_group.get('weight_decay', 0.005)
-        grad_norm = grad_stats.get('total_norm', 1.0)
-        
-        # Use log scale for smoother adjustments
-        decay_factor = np.clip(np.log1p(grad_norm) / 5.0, 0.5, 2.0)
-        
-        # Apply adjustment with minimum floor
-        adjusted_weight_decay = max(
-            self.q_controller.min_weight_decay,
-            base_weight_decay * decay_factor
-        )
-        
-        logging.debug(f"Adjusted weight decay from {base_weight_decay:.6f} to {adjusted_weight_decay:.6f} "
-                      f"based on decay_factor={decay_factor:.4f}")
-        return adjusted_weight_decay
+            # --- Adaptive Weight Decay Adjustment (based on grad norm) ---
+            # This is simpler than the complex logic in the old version's _adjust_weight_decay
+            # If gradients are large, increase WD slightly; if small, decrease slightly
+            wd_adjust_factor = 1.0 + 0.1 * math.tanh(math.log1p(grad_norm_mean) - math.log1p(self.max_grad_norm)) # Compare log norm to max_grad_norm
+            wd_adjust_factor = np.clip(wd_adjust_factor, 0.8, 1.2) # Limit adjustment factor
+            new_wd = group['weight_decay'] * wd_adjust_factor
+            new_wd = max(group['min_weight_decay'], new_wd) # Ensure min WD
+            if abs(new_wd - group['weight_decay']) > 1e-7:
+                 if not wd_changed: # Avoid logging twice if changed above
+                     logging.info(f"Group {i}: Adjusting WD based on grad norm: {group['weight_decay']:.2e} -> {new_wd:.2e} (Factor: {wd_adjust_factor:.2f})")
+                 group['weight_decay'] = new_wd
+            # --- End Adaptive WD Adjustment ---
 
-    def log_optimization_stats(self):
-        """Log detailed optimization statistics."""
-        stats = {
-            'learning_rates': [],
-            'momentum_values': [],
-            'weight_decay_values': [],
-            'grad_norms': [],
-            'param_updates': []
-        }
+            # Reset Q-scale if LR was adjusted by this method, so Q-controller starts fresh
+            if lr_changed:
+                group['q_scale'] = 1.0
+                group['lr'] = max(1e-8, group['lr']) # Ensure LR bounds after adjustment
 
-        for group in self.param_groups:
-            stats['learning_rates'].append(group['lr'])
-            stats['momentum_values'].append(group['momentum'])
-            stats['weight_decay_values'].append(group['weight_decay'])
+    # --- End _adjust_hyperparameters ---
 
-        grad_stats = self._track_gradient_norms()
-        stats.update(grad_stats)
-
-        # Log to wandb if available
-        try:
-            import wandb
-            wandb.log(stats)
-        except ImportError:
-            pass
-
-        # Log to console
-        logging.info(f"Optimization stats: {stats}")
-
-    def _track_gradient_norms(self) -> Dict[str, float]:
-        """Track detailed gradient statistics."""
-        stats = {}
-        total_norm = 0.0
-        param_norms = []
-
-        for group in self.param_groups:
-            group_norm = 0.0
-            for p in group['params']:
-                if p.grad is not None:
-                    param_norm = p.grad.data.norm(2).item()
-                    param_norms.append(param_norm)
-                    group_norm += param_norm ** 2
-            group_norm = np.sqrt(group_norm)
-            total_norm += group_norm ** 2
-
-        total_norm = np.sqrt(total_norm)
-
-        stats['total_norm'] = total_norm
-        stats['mean_param_norm'] = np.mean(param_norms) if param_norms else 0.0
-        stats['std_param_norm'] = np.std(param_norms) if param_norms else 0.0
-        stats['max_param_norm'] = np.max(param_norms) if param_norms else 0.0
-
-        logging.debug(f"Gradient statistics: {stats}")
-        return stats
 
     def state_dict(self) -> Dict[str, Any]:
-        """Returns the optimizer's state dict with safe serialization."""
+        """ Returns the optimizer's state dict, including adaptive state. """
         state_dict = super().state_dict()
         try:
-            state_dict['statistics'] = self.get_statistics()
+            # Q-Controller state (from stable version)
             state_dict['q_table'] = self.q_controller.q_table
-            state_dict['epsilon'] = float(self.q_controller.epsilon)
+            state_dict['q_controller_epsilon'] = float(self.q_controller.epsilon)
+            state_dict['q_controller_prev_loss'] = self.q_controller.prev_loss
+            state_dict['q_controller_prev_state'] = self.q_controller.prev_state
+            state_dict['q_controller_prev_action'] = self.q_controller.prev_action
+            state_dict['q_controller_access_count'] = self.q_controller.q_table_access_count
+            # Add Q-controller success/count tracking state
+            state_dict['q_controller_action_success'] = self.q_controller.action_success
+            state_dict['q_controller_action_counts'] = self.q_controller.action_counts
+
+            state_dict['_step_count'] = self._step_count
+            # Save the stats deques (convert to lists)
+            state_dict['stats_grad_norms'] = list(self.stats['grad_norms'])
+            state_dict['stats_update_norms'] = list(self.stats['update_norms'])
         except Exception as e:
-            logging.error(f"Error creating state dict: {e}")
-            state_dict['statistics'] = {}
+            logging.error(f"Error creating EnhancedSGD state dict: {e}", exc_info=True)
+            # Provide defaults for Q-Controller state
             state_dict['q_table'] = {}
-            state_dict['epsilon'] = 0.15  # Updated default epsilon
+            state_dict['q_controller_epsilon'] = 0.15
+            state_dict['q_controller_action_success'] = {k: np.zeros(len(v)) for k, v in self.q_controller.action_ranges.items()}
+            state_dict['q_controller_action_counts'] = {k: np.zeros(len(v)) for k, v in self.q_controller.action_ranges.items()}
+            # Provide defaults for stats
+            state_dict['stats_grad_norms'] = []
+            state_dict['stats_update_norms'] = []
         return state_dict
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        """Loads optimizer state with safe type handling."""
-        try:
-            statistics = state_dict.pop('statistics', None)
-            q_table = state_dict.pop('q_table', None)
-            epsilon = state_dict.pop('epsilon', None)
+        """ Loads optimizer state, including adaptive state. """
+        # Pop custom state elements before calling super
+        q_table = state_dict.pop('q_table', None)
+        epsilon = state_dict.pop('q_controller_epsilon', None)
+        prev_loss = state_dict.pop('q_controller_prev_loss', None)
+        prev_state = state_dict.pop('q_controller_prev_state', None)
+        prev_action = state_dict.pop('q_controller_prev_action', None)
+        access_count = state_dict.pop('q_controller_access_count', None)
+        action_success = state_dict.pop('q_controller_action_success', None)
+        action_counts = state_dict.pop('q_controller_action_counts', None)
+        step_count = state_dict.pop('_step_count', None)
+        stats_grad_norms = state_dict.pop('stats_grad_norms', None)
+        stats_update_norms = state_dict.pop('stats_update_norms', None)
 
+        try:
             super().load_state_dict(state_dict)
 
-            if statistics is not None:
-                for key in self.stats:
-                    avg_key = f'avg_{key}'
-                    if avg_key in statistics:
-                        # Fill the deque with the average value for simplicity
-                        self.stats[key].extend([float(statistics[avg_key])] * self.stats[key].maxlen)
-                logging.info("Loaded optimizer statistics")
+            # Load Q-controller state
+            if q_table is not None: self.q_controller.q_table = q_table
+            if epsilon is not None: self.q_controller.epsilon = float(epsilon)
+            if prev_loss is not None: self.q_controller.prev_loss = float(prev_loss) if prev_loss is not None else None
+            if prev_state is not None: self.q_controller.prev_state = prev_state
+            if prev_action is not None: self.q_controller.prev_action = prev_action
+            if access_count is not None: self.q_controller.q_table_access_count = access_count
+            if action_success is not None: self.q_controller.action_success = action_success
+            if action_counts is not None: self.q_controller.action_counts = action_counts
+            if step_count is not None: self._step_count = int(step_count)
 
-            if q_table is not None:
-                self.q_controller.q_table = q_table
-                logging.info("Loaded Q-Learning controller Q-table")
+            # Restore stats deques
+            if stats_grad_norms is not None: self.stats['grad_norms'] = deque(stats_grad_norms, maxlen=self.stats['grad_norms'].maxlen)
+            if stats_update_norms is not None: self.stats['update_norms'] = deque(stats_update_norms, maxlen=self.stats['update_norms'].maxlen)
 
-            if epsilon is not None:
-                self.q_controller.epsilon = float(epsilon)
-                logging.info("Loaded Q-Learning controller epsilon")
+            # Restore parameter group state (q_scale, base_lr)
+            for group, saved_group in zip(self.param_groups, state_dict['param_groups']):
+                 if 'q_scale' in saved_group: group['q_scale'] = saved_group['q_scale']
+                 elif 'base_lr' in group and group['base_lr'] > 1e-9: group['q_scale'] = group['lr'] / group['base_lr']
+                 else: group['q_scale'] = 1.0
+                 # Restore min_weight_decay if saved (might not be in older checkpoints)
+                 group.setdefault('min_weight_decay', group.get('weight_decay', 1e-4) * 0.1) # Add default if missing
 
-        except Exception as e:
-            logging.error(f"Error loading state dict: {e}")
-            # Initialize fresh statistics and Q-table if loading fails
-            self.stats = {
-                'grad_norms': deque(maxlen=100),
-                'learning_rates': deque(maxlen=100),
-                'momentum_values': deque(maxlen=100),
-                'entropy_values': deque(maxlen=100),
-                'update_norms': deque(maxlen=100)
-            }
-            self.q_controller.q_table = {}
-            self.q_controller.epsilon = 0.15  # Updated default epsilon
-            logging.warning("Initialized fresh optimization state due to loading error")
 
-    def zero_grad(self, set_to_none: bool = False) -> None:
-        """Safely zeros gradients with optional memory efficiency."""
-        for group in self.param_groups:
-            for p in group['params']:
-                if p.grad is not None:
-                    if set_to_none:
-                        p.grad = None
-                    else:
-                        p.grad.zero_()
-
-    def add_param_group(self, param_group: dict) -> None:
-        """
-        Add a param group to the optimizer's param groups safely.
-
-        Args:
-            param_group (dict): The param group to add
-        """
-        try:
-            # Validate param group
-            required_keys = {'params', 'lr', 'momentum', 'weight_decay'}
-            if not all(key in param_group for key in required_keys):
-                raise ValueError(f"Param group must contain all of: {required_keys}")
-
-            # Ensure params is iterable
-            if isinstance(param_group['params'], torch.nn.Parameter):
-                param_group['params'] = [param_group['params']]
-
-            # Validate numerical parameters
-            for key in ['lr', 'momentum', 'weight_decay']:
-                if not isinstance(param_group[key], (int, float)):
-                    raise TypeError(f"{key} must be a number")
-                param_group[key] = float(param_group[key])
-
-            # Initialize additional scaling factors
-            param_group.setdefault('base_lr', param_group['lr'])
-            param_group.setdefault('q_scale', 1.0)
-            param_group.setdefault('min_weight_decay', param_group['weight_decay'] * 0.2)  # 20% of initial as minimum
-
-            super().add_param_group(param_group)
-            logging.info(f"Added parameter group with {len(param_group['params'])} parameters")
+            logging.info(f"Loaded checkpoint state. Resuming step {self._step_count}.")
 
         except Exception as e:
-            logging.error(f"Error adding parameter group: {e}")
-            raise
+            logging.error(f"Error loading EnhancedSGD state dict: {e}", exc_info=True)
+            # Re-initialize adaptive state if loading fails
+            self._init_optimization_state( # Call re-init with current settings
+                 max_grad_norm=self.max_grad_norm,
+                 noise_scale_initial=self.noise_scale_initial,
+                 noise_decay_steps=self.noise_decay_steps,
+                 update_clip_factor=self.update_clip_factor,
+                 adjust_interval=self.adjust_interval,
+                 lr_scale_bounds=self.q_controller.lr_scale_bounds,
+                 momentum_scale_bounds=self.q_controller.momentum_scale_bounds,
+                 q_learning_config={ # Rebuild q_config dict
+                     'learning_rate': self.q_controller.alpha,
+                     'discount': self.q_controller.gamma,
+                     'epsilon': 0.15, # Reset epsilon
+                     'epsilon_decay': self.q_controller.epsilon_decay,
+                     'min_epsilon': self.q_controller.min_epsilon,
+                     'min_weight_decay': self.q_controller.min_weight_decay,
+                     'max_q_table_size': self.q_controller.max_q_table_size,
+                     'success_decay': self.q_controller.success_decay
+                 }
+            )
+            self._step_count = 0
+            for group in self.param_groups: # Reset group state
+                 group['q_scale'] = 1.0
+                 group['lr'] = group['base_lr']
+            logging.warning("Re-initialized adaptive state due to loading error.")
 
 
-# Example Usage (for testing purposes)
+# Example Usage (Reflecting main.py and Parameter Groups)
 if __name__ == "__main__":
     import torch.nn as nn
 
-    # Dummy model
+    logging.info("Starting EnhancedSGD (Innovative + Stable) example usage...")
+
+    # Dummy model with distinct layers for group testing
     class DummyModel(nn.Module):
         def __init__(self):
-            super(DummyModel, self).__init__()
-            self.local_encoder = nn.Linear(10, 20)
-            self.global_transformer = nn.Linear(20, 20)
-            self.local_decoder = nn.Linear(20, 2)
-        
-        def forward(self, x):
-            x = self.local_encoder(x)
-            x = torch.relu(x)
-            x = self.global_transformer(x)
-            x = torch.relu(x)
-            x = self.local_decoder(x)
-            return x
+            super().__init__()
+            self.embedding = nn.Embedding(100, 10) # Smaller layer
+            self.transformer = nn.Linear(10, 10) # Larger layer
+            self.output = nn.Linear(10, 5) # Output layer
+
+        def forward(self, x_idx, x_cont):
+            emb = self.embedding(x_idx) # Shape [B, Seq, Emb]
+            # Combine embedding with continuous features (simple addition for example)
+            combined = emb.mean(dim=1) + x_cont # [B, Emb]
+            trans = torch.relu(self.transformer(combined))
+            out = self.output(trans)
+            return out
 
     model = DummyModel()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+    logging.info(f"Using device: {device}")
 
-    def create_optimizer(model: nn.Module, config: Dict[str, Any]) -> EnhancedSGD:
-        """Create EnhancedSGD with optimized parameters"""
-        parameter_groups = [
-            {
-                'params': model.local_encoder.parameters(),
-                'lr': 0.003,  # Reduced from 0.005
-                'weight_decay': 0.005,  # Reduced from 0.01
-                'min_weight_decay': 0.001  # New minimum threshold
-            },
-            {
-                'params': model.global_transformer.parameters(),
-                'lr': 0.0003,  # 1/10th of local encoder
-                'weight_decay': 0.01,  # Keep higher for transformer
-                'min_weight_decay': 0.002
-            },
-            {
-                'params': model.local_decoder.parameters(),
-                'lr': 0.003,  # Same as encoder
-                'weight_decay': 0.005,
-                'min_weight_decay': 0.001
-            }
-        ]
-
-        q_learning_config = {
-            'learning_rate': 0.02,     # Reduced from 0.03
-            'discount': 0.97,          # Increased from 0.95
-            'epsilon': 0.15,            # Reduced from 0.2
-            'epsilon_decay': 0.999,    # Slower decay
-            'initial_mix_prob': 0.9    # Increased from 0.8
+    # --- Configuration with Parameter Groups ---
+    # Example: Lower LR for embedding, higher WD for transformer
+    param_groups = [
+        {
+            'params': model.embedding.parameters(),
+            'lr': 0.001, 'base_lr': 0.001, # Store base_lr explicitly
+            'weight_decay': 0.01, 'min_weight_decay': 0.001
+        },
+        {
+            'params': model.transformer.parameters(),
+            'lr': 0.0005, 'base_lr': 0.0005,
+            'weight_decay': 0.05, 'min_weight_decay': 0.005
+        },
+        {
+            'params': model.output.parameters(),
+            'lr': 0.001, 'base_lr': 0.001,
+            'weight_decay': 0.01, 'min_weight_decay': 0.001
         }
+    ]
 
-        return EnhancedSGD(
-            parameter_groups,
-            smoothing_factor=0.05,      # Increased from 0.05
-            entropy_threshold=0.3,       # Increased from 0.3
-            max_grad_norm=1.0,          # Reduced from 1.0
-            noise_scale=0.001,          # Reduced from 0.001
-            lr_scale_bounds=(0.85, 1.15),  # Tighter bounds
-            momentum_scale_bounds=(0.9, 1.1),  # Tighter bounds
-            q_learning_config=q_learning_config
-        )
+    # Q-learning config
+    q_learning_config = {
+        "learning_rate": 0.02, "discount": 0.97, "epsilon": 0.15,
+        "epsilon_decay": 0.9995, "min_epsilon": 0.02,
+        "max_q_table_size": 20000, "min_weight_decay": 1e-4, # Base min WD
+        "success_decay": 0.99
+    }
 
-    optimizer = create_optimizer(model, config={})
+    optimizer = EnhancedSGD(
+        param_groups, # Pass parameter groups
+        momentum=0.9,
+        max_grad_norm=1.0,
+        noise_scale_initial=0.0005, # Slightly lower initial noise
+        noise_decay_steps=1000, # Longer noise decay
+        update_clip_factor=4.0, # Slightly lower update clip factor
+        adjust_interval=50, # Adjust hyperparameters every 50 steps
+        lr_scale_bounds=(0.85, 1.15),
+        momentum_scale_bounds=(0.9, 1.1),
+        q_learning_config=q_learning_config
+    )
+    logging.info("Optimizer created with parameter groups.")
 
     # Dummy training loop
-    for step in range(100):
+    num_steps = 200
+    batch_size = 8
+    seq_len = 10
+    accumulation_steps = 1 # No accumulation in this simple example
+
+    use_amp = torch.cuda.is_available()
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    logging.info(f"AMP {'enabled' if use_amp else 'disabled'}.")
+
+    global_step = 0
+    for step in range(num_steps * accumulation_steps):
+        is_optimizing_step = (step + 1) % accumulation_steps == 0
+
         # Dummy input and target
-        inputs = torch.randn(5, 10)
-        targets = torch.randint(0, 2, (5,))
-    
-        # Forward pass
-        outputs = model(inputs)
-        loss = torch.nn.functional.cross_entropy(outputs, targets)
-    
+        input_ids = torch.randint(0, 100, (batch_size, seq_len), device=device)
+        input_continuous = torch.randn(batch_size, 10, device=device)
+        targets = torch.randint(0, 5, (batch_size,), device=device)
+
+        # Closure for optimizer step
+        def closure():
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                outputs = model(input_ids, input_continuous)
+                loss_closure = torch.nn.functional.cross_entropy(outputs, targets)
+            return loss_closure
+
+        # Forward pass for backward
+        with torch.cuda.amp.autocast(enabled=use_amp):
+             outputs = model(input_ids, input_continuous)
+             loss = torch.nn.functional.cross_entropy(outputs, targets)
+             loss_scaled = loss / accumulation_steps
+
         # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-    
-        # Optimizer step
-        optimizer.step(lambda: loss)
+        optimizer.zero_grad(set_to_none=True) # Zero grad before backward
+        scaler.scale(loss_scaled).backward()
+
+        step_loss = loss.item()
+
+        if is_optimizing_step:
+            global_step += 1
+            scaler.unscale_(optimizer) # Unscale before step
+
+            # Optimizer step with closure
+            scaler.step(optimizer, closure=closure)
+            scaler.update()
+
+            if global_step % 10 == 0:
+                logging.info(f"Global Step: {global_step}, Loss: {step_loss:.4f}")
+                # Log LR/Mom for each group to see adaptation
+                for i, group in enumerate(optimizer.param_groups):
+                    logging.info(f"  Group {i}: LR={group['lr']:.2e}, Mom={group['momentum']:.3f}, WD={group['weight_decay']:.2e}")
+
+
+    logging.info("Finished EnhancedSGD (Innovative + Stable) example usage.")
