@@ -1844,55 +1844,63 @@ class BLTModel(nn.Module):
 
 
     @staticmethod
+    
     def compute_loss(
-        logits: torch.Tensor,  # [B, T, 256]
-        targets: torch.Tensor,  # [B, T]
-        mask: Optional[torch.Tensor] = None, # Optional mask [B, T] (True=IGNORE)
+        logits: torch.Tensor,  # [B, S, 256] - Raw logits from the model's forward pass
+        targets: torch.Tensor, # [B, S] - The *input* sequence (like `context`), used for shifting
+        mask: Optional[torch.Tensor] = None, # Optional mask [B, S] (True=IGNORE) - Should align with targets
         smoothing: float = 0.1
     ) -> torch.Tensor:
-        """Compute cross entropy loss with label smoothing and optional masking."""
+        """Compute cross entropy loss for next-token prediction with label smoothing."""
         batch_size, seq_len, vocab_size = logits.size()
 
+        # --- Shift logits and targets for next-token prediction ---
+        logits_shifted = logits[:, :-1, :].contiguous()  # Shape: [B, S-1, V] (Predictions for token 1 to S)
+        targets_shifted = targets[:, 1:].contiguous()    # Shape: [B, S-1] (Actual tokens 1 to S)
+
         # Reshape logits and targets for loss computation
-        logits_flat = logits.reshape(-1, vocab_size)  # [B*T, 256]
-        targets_flat = targets.reshape(-1)          # [B*T]
+        logits_flat = logits_shifted.view(-1, vocab_size)      # Shape: [B * (S-1), V]
+        targets_flat = targets_shifted.view(-1)                # Shape: [B * (S-1)]
 
-        # Validate target indices (ensure they are within [0, vocab_size-1])
-        if torch.any(targets_flat >= vocab_size) or torch.any(targets_flat < 0):
-            invalid_indices = torch.where((targets_flat < 0) | (targets_flat >= vocab_size))[0]
-            logging.error(f"Target indices out of bounds (0 <= index < {vocab_size}). Found values like: {targets_flat[invalid_indices[:10]]}")
-            # Clamp targets as a temporary fix? Or raise error? Raising is safer.
-            raise ValueError(f"Target indices exceed vocabulary size ({vocab_size})!")
+        # --- Validate target indices ---
+        current_vocab_size = logits_flat.size(-1)
+        if torch.any(targets_flat >= current_vocab_size) or torch.any(targets_flat < 0):
+            invalid_indices = torch.where((targets_flat < 0) | (targets_flat >= current_vocab_size))[0]
+            logging.error(f"Target indices out of bounds (0 <= index < {current_vocab_size}). Found values like: {targets_flat[invalid_indices[:10]]}")
+            targets_flat = torch.clamp(targets_flat, 0, current_vocab_size - 1)
 
+        # Calculate loss using cross_entropy with label smoothing
+        loss_per_element = F.cross_entropy(
+            logits_flat,
+            targets_flat,
+            label_smoothing=smoothing,
+            reduction='none'
+        ) # Output shape: [B * (S-1)]
 
-        # Create smoothed target distribution
-        with torch.no_grad():
-            true_dist = torch.zeros_like(logits_flat)
-            # Calculate smoothing values (handle vocab_size=1 case)
-            smooth_val = smoothing / (vocab_size - 1) if vocab_size > 1 else 0.0
-            fill_val = smooth_val
-            scatter_val = 1.0 - smoothing
-            true_dist.fill_(fill_val)
-            true_dist.scatter_(1, targets_flat.unsqueeze(1), scatter_val)
-
-        # Calculate KL divergence loss (equivalent to smoothed cross-entropy)
-        log_probs = F.log_softmax(logits_flat, dim=-1)
-        # Calculate loss per element
-        loss_per_element = F.kl_div(log_probs, true_dist, reduction='none').sum(dim=-1) # Sum over vocab dim -> [B*T]
-
-        # Apply mask if provided (mask=True means IGNORE the loss)
+        # Apply mask if provided
+        mean_loss = None # Initialize mean_loss
         if mask is not None:
-            mask_flat = mask.reshape(-1) # [B*T]
-            # Invert mask for multiplication (keep where mask is False)
-            loss_per_element = loss_per_element * (~mask_flat)
-            # Calculate mean loss only over non-masked elements
-            num_active_elements = (~mask_flat).sum()
-            mean_loss = loss_per_element.sum() / num_active_elements if num_active_elements > 0 else torch.tensor(0.0, device=logits.device)
-        else:
-            # Calculate mean loss over all elements if no mask
-            mean_loss = loss_per_element.mean()
+             if mask.size(1) != seq_len:
+                  logging.warning(f"Mask shape {mask.shape} does not match target sequence length {seq_len}. Masking might be incorrect.")
+                  mask_shifted = mask[:, 1:seq_len].contiguous()
+             else:
+                   mask_shifted = mask[:, 1:].contiguous()
 
+             if mask_shifted.shape == targets_shifted.shape:
+                 mask_flat = mask_shifted.view(-1)
+                 loss_per_element = loss_per_element * (~mask_flat.bool())
+                 num_active_elements = (~mask_flat.bool()).sum()
+                 mean_loss = loss_per_element.sum() / num_active_elements if num_active_elements > 0 else torch.tensor(0.0, device=logits.device)
+             else:
+                  logging.error(f"Mask shape {mask_shifted.shape} after shifting does not match target shape {targets_shifted.shape}. Skipping mask.")
+                  mean_loss = loss_per_element.mean()
+        else:
+             mean_loss = loss_per_element.mean()
+
+        
         return mean_loss
+        
+
 
     @torch.no_grad()
     def generate(
@@ -2056,8 +2064,9 @@ class RLHFTrainer: # Renaming might be confusing if no RLHF is actually happenin
             # Model expects byte_seq and target_byte_seq for teacher forcing
             logits = self.model(byte_seq=context, target_byte_seq=context) # Use context as both input and target for teacher forcing
             # Loss calculation needs logits [B, S, V] and targets [B, S]
-            loss = self.model.compute_loss(logits, target) # Compute loss against the actual target sequence
-
+            # NEW LINE: Pass 'context' as the second argument for shifting inside compute_loss
+            loss = self.model.compute_loss(logits, context)
+            
             # Scale loss for accumulation
             loss_scaled = loss / accumulation_steps
 
