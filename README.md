@@ -1,50 +1,48 @@
-# Bytropix
+# Bytropix BSFINModel - Semantic Field Interference Network
 
-A PyTorch implementation of a Byte-level Transformer with dynamic patching and adaptive optimization.
+A quantum-inspired byte-level language model with adaptive patching and reinforcement learning optimization.
 
 ## Overview
 
-Bytropix is an experimental implementation of a byte-level language model inspired by recent research in tokenizer-free transformer architectures. The model directly processes raw bytes rather than tokenized inputs, offering potential benefits in robustness, multilingual processing, and handling rare or out-of-vocabulary tokens.
+BSFINModel (Babylon Index Semantic Field Interference Network) is an experimental language model that operates directly on byte sequences rather than tokens, offering several advantages:
 
-Key features include:
+- **Tokenizer-Free Architecture**: Works with raw UTF-8 bytes instead of predefined vocabulary tokens
+- **Semantic Field Interference**: Uses quantum-inspired complex representations for better semantic understanding
+- **Adaptive Patching**: Automatically identifies important boundaries in text using entropy analysis
+- **Reinforcement Learning Optimization**: Self-tunes hyperparameters during training
 
-- **Byte-level Processing**: Operates directly on UTF-8 bytes instead of tokens
-- **Dynamic Entropy-based Patching**: Allocates compute resources adaptively based on data complexity
-- **Q-Learning Optimization**: Implements reinforcement learning for hyperparameter tuning
-- **Mixed Precision Training**: Automatic mixed precision for efficient training
-- **Distributed Training Support**: Compatible with single and multi-GPU setups
+This implementation features a hybrid architecture combining byte-level processing with quantum-inspired representations, making it especially well-suited for multilingual text, code, and specialized content where traditional tokenizers might struggle.
 
 ## Architecture
 
-Bytropix consists of three main components:
+The model consists of several innovative components:
 
-1. **Local Encoder**: Processes raw bytes with n-gram embeddings
-2. **Global Latent Transformer**: Handles patch-level processing
-3. **Local Decoder**: Generates output bytes based on latent representations
+### Babylon Index
 
-The architecture draws inspiration from the Byte Latent Transformer (BLT) approach described by Pagnoni et al. (2023), which demonstrates that byte-level models with dynamic patching can match or exceed the performance of traditional tokenization-based models while improving efficiency.
+An entropy-based patching mechanism that:
+- Analyzes byte sequences to find meaningful boundaries
+- Creates variable-sized patches based on information density
+- Ensures proper UTF-8 character boundaries are respected
 
-### Babylon Index for Entropy-based Patching
+### Quantum-Inspired Interference
 
-The `BabylonIndex` component analyzes entropy in byte sequences to determine optimal patch boundaries. This allows the model to:
+- Uses complex-valued representations (real and imaginary components)
+- Implements quantum interference patterns through specialized attention
+- Supports entangled multi-head attention with phase shifts
+- Includes rotary positional embeddings for better sequence understanding
 
-- Process predictable parts of text efficiently with larger patches
-- Devote more computational resources to complex or unpredictable segments
-- Adapt dynamically to different languages and text domains
+### Q-Learning Optimization
 
-### Q-Learning Controller for Adaptive Optimization
-
-The `QController` and `EnhancedSGD` optimizer implement a reinforcement learning approach to dynamically adjust optimization hyperparameters during training:
-
-- Learning rate adaptation based on loss trends
-- Momentum tuning for optimal convergence
-- Gradient handling with adaptive clipping
+- Dynamically adjusts learning rates and momentum parameters
+- Monitors gradient statistics for stable training
+- Adapts optimization strategy based on loss landscape
+- Provides insights into training dynamics
 
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/bytropix.git
-cd bytropix
+git clone https://github.com/yourusername/bsfin.git
+cd bsfin
 pip install -r requirements.txt
 ```
 
@@ -52,108 +50,161 @@ pip install -r requirements.txt
 
 - Python 3.8+
 - PyTorch 2.0+
-- numpy
+- NumPy
 - tqdm
-- wandb (for experiment tracking)
+- wandb (optional, for tracking experiments)
 
 ## Usage
-
-### Training
-
-```python
-from bytropix.model import BLTModel
-from bytropix.optimizer import EnhancedSGD
-from bytropix.train import RLHFTrainer
-
-# Initialize model
-model = BLTModel(
-    local_hidden_size=256,
-    global_hidden_size=1024,
-    num_local_encoder_layers=1,
-    num_global_layers=8,
-    num_local_decoder_layers=4
-)
-
-# Initialize optimizer with Q-learning
-optimizer = EnhancedSGD(
-    model.parameters(),
-    lr=0.003,
-    momentum=0.9,
-    weight_decay=0.005
-)
-
-# Initialize trainer
-trainer = RLHFTrainer(
-    model=model,
-    optimizer=optimizer,
-    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-)
-
-# Train model
-for epoch in range(num_epochs):
-    for batch in dataloader:
-        context, target = batch
-        loss = trainer.train_step(context, target)
-        # Log metrics, save checkpoints, etc.
-```
 
 ### Text Generation
 
 ```python
-from bytropix.model import BLTModel
-from bytropix.utils import SamplerConfig
+import torch
+from bsfin_main import BSFINModel, SamplerConfig, ByteTokenizer
 
-# Load model
-model = BLTModel()
-model.load_state_dict(torch.load('checkpoint.pt'))
+# Initialize tokenizer
+tokenizer = ByteTokenizer()
+
+# Initialize model (or load checkpoint)
+model = BSFINModel(
+    local_hidden_size=256,
+    complex_dim=512,
+    num_complex_layers=6,
+    num_complex_heads=8,
+    decoder_memory_dim=768
+)
+model.load_state_dict(torch.load("path/to/checkpoint.pt")["model_state_dict"])
 model.eval()
 
-# Configure sampling
-sampler_config = SamplerConfig(
+# Prepare input text
+input_text = "Once upon a time"
+input_bytes = torch.tensor([tokenizer.encode(input_text)], dtype=torch.long)
+
+# Generate continuation
+sampling_config = SamplerConfig(
     low_entropy_threshold=0.3,
     medium_entropy_threshold=1.2,
     high_entropy_threshold=2.5
 )
 
-# Generate text
-seed_text = "The quick brown fox"
-seed_bytes = torch.tensor([ord(c) for c in seed_text], dtype=torch.long).unsqueeze(0)
 generated = model.generate(
-    seed_bytes=seed_bytes,
+    seed_bytes=input_bytes,
     max_length=100,
     temperature=0.8,
-    sampling_config=sampler_config
+    sampling_config=sampling_config
 )
 
-# Decode output
-output_text = ''.join([chr(b) for b in generated[0].cpu().numpy()])
+# Decode and print
+output_text = tokenizer.decode(generated[0].tolist())
 print(output_text)
 ```
 
-## Research Background
+### Training
 
-This implementation is inspired by recent research on byte-level language models and dynamic patching approaches. The key concepts include:
+```python
+from bsfin_main import BSFINModel, ByteIterableDataset, EnhancedSGD
+from torch.utils.data import DataLoader
 
-1. **Byte-level Processing**: Operating directly on UTF-8 bytes rather than tokenized inputs, as explored in several transformer architectures (Meta AI's Byte Latent Transformer)
+# Initialize model
+model = BSFINModel(
+    local_hidden_size=256,
+    complex_dim=512,
+    num_complex_layers=6,
+    num_complex_heads=8
+)
 
-2. **Dynamic Patching**: Allocating compute resources adaptively based on data complexity, allowing more efficient processing of varied text
+# Prepare data
+train_dataset = ByteIterableDataset("training_data.npy", context_size=256)
+train_loader = DataLoader(train_dataset, batch_size=16, num_workers=4)
 
-3. **Q-Learning for Hyperparameter Optimization**: Using reinforcement learning to dynamically tune model hyperparameters during training
+# Initialize optimizer with Q-learning
+optimizer = EnhancedSGD(
+    model.parameters(),
+    lr=0.001,
+    weight_decay=0.01,
+    q_learning_config={
+        "learning_rate": 0.02,
+        "discount": 0.97,
+        "epsilon": 0.15
+    }
+)
 
-## References
+# Training loop
+for epoch in range(10):
+    for batch in train_loader:
+        context, target = batch
+        logits = model(byte_seq=context, target_byte_seq=context)
+        loss = model.compute_loss(logits, context)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        
+    # Save checkpoint
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict()
+    }, f"checkpoint_epoch_{epoch}.pt")
+```
 
-- Pagnoni, A., Pasunuru, R., Rodriguez, P., et al. (2023). "Byte Latent Transformer: Patches Scale Better Than Tokens." arXiv:2412.09871.
-- Hansen, S. (2016). "Using Deep Q-Learning to Control Optimization Hyperparameters." arXiv:1602.04062.
-- Qi, X., Xu, B. (2023). "Hyperparameter optimization of neural networks based on Q-learning." Signal, Image and Video Processing, 17, 1669–1676.
+## Interactive Inference
 
-## License
+For interactive text generation, use the provided inference script:
 
-MIT License
+```bash
+python sfin_inference.py interactive \
+    --checkpoint_path path/to/checkpoint.pt \
+    --temperature 0.8 \
+    --max_length 150
+```
+
+## Features
+
+- **Byte-Level Processing**: Works with any text in any language or code without vocabulary limitations
+- **Adaptive Complexity**: Uses entropy-based patching to focus compute on complex regions
+- **Quantum-Inspired Architecture**: Uses complex-valued interference for richer representations
+- **Self-Tuning Hyperparameters**: EnhancedSGD optimizer dynamically adjusts learning rates
+- **Flexible Generation**: Supports different sampling strategies based on text entropy
+
+## Included Scripts
+
+- `bsfin_main.py`: Main model implementation and training logic
+- `sfin_inference.py`: Script for text generation and interactive inference
+- `convertdata.py`: Data preprocessing utilities
+- `EnhancedSGD.py`: Implementation of the Q-learning optimizer
+- `LIVEBSFIN.py`: Continual learning framework for online adaptation
+
+## Limitations
+
+- May require more computational resources than standard transformer models
+- Experimental architecture that might need tuning for specific applications
+- Complex-valued operations can be sensitive to initialization and training dynamics
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## Disclaimer
+## License
 
-This is an experimental research implementation and is provided as-is without any guarantees of performance or suitability for production use cases.
+[MIT License](LICENSE)
+
+## Acknowledgments
+
+This implementation draws inspiration from research in quantum computing, byte-level language models, and reinforcement learning for hyperparameter optimization.
+
+- The ByteLatentTransformer approach (Meta AI)
+- Quantum-inspired machine learning techniques
+- Q-Learning for hyperparameter optimization
+
+## Citation
+
+If you use this code for research, please cite:
+
+```
+@software{bytropix,
+  author = {[WaefreBeorn]},
+  title = {BSFINModel: Babylon Index Semantic Field Interference Network},
+  year = {2025},
+  url = {https://github.com/waefrebeorn/bytropix}
+}
+```
