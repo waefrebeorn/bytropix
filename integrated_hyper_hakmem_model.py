@@ -2497,6 +2497,7 @@ class Trainer:
             else: metric_key = None
 
             if metric_key:
+                # Format metric value for filename
                 if abs(metric_val) < 1e-3 and metric_val != 0.0 : mf = f"{metric_val:.2e}"
                 else: mf = f"{metric_val:.3f}"
                 metric_str = f"_{metric_key}{mf}"
@@ -2505,6 +2506,7 @@ class Trainer:
         filename = f"{filename_prefix}_{state_indicator}.pt"
         filepath = os.path.join(self.checkpoint_dir, filename)
 
+        # Ensure model state is retrieved correctly (handle DDP)
         model_state = self.model.module.state_dict() if isinstance(self.model, DistributedDataParallel) else self.model.state_dict()
 
         checkpoint = {
@@ -2516,13 +2518,14 @@ class Trainer:
             'amp_enabled': self.use_amp,
             'args': getattr(self, 'args', None) # Save command line args used
         }
+        # Include Q-controller state if it exists
         if self.has_q_controller:
             q_state_data = {
                 'q_table': self.optimizer.q_controller.q_table,
                 'epsilon': self.optimizer.q_controller.epsilon,
                 'access_count': self.optimizer.q_controller.q_table_access_count,
                 'creation_time': self.optimizer.q_controller.q_table_creation_time,
-                'loss_window': list(self.optimizer.q_controller.loss_window), # Save history if needed
+                'loss_window': list(self.optimizer.q_controller.loss_window),
                 'grad_norm_window': list(self.optimizer.q_controller.grad_norm_window),
                 'prev_loss': self.optimizer.q_controller.prev_loss,
                 'prev_state': self.optimizer.q_controller.prev_state,
@@ -2530,29 +2533,33 @@ class Trainer:
             }
             checkpoint['q_controller_state'] = q_state_data
 
+        # --- Save Checkpoint Locally ---
         try:
             temp_filepath = filepath + ".tmp"
             torch.save(checkpoint, temp_filepath)
-            # Verify save integrity (optional, can slow down saving)
-            # _ = torch.load(temp_filepath)
+            # Optional integrity check (can be slow)
+            # _ = torch.load(temp_filepath, map_location='cpu')
             os.replace(temp_filepath, filepath)
-            logger.info(f"Checkpoint saved to {filepath}")
+            logger.info(f"Checkpoint saved locally to {filepath}") # Clarified log message
 
-            # Upload to WandB if enabled
-            if self.wandb_enabled and self.wandb_run:
-                try:
-                    # Use policy='live' to upload intermediate checkpoints as well
-                    wandb.save(filepath, base_path=self.checkpoint_dir, policy="live")
-                    logger.info(f"Checkpoint {filepath} uploaded to WandB.")
-                except Exception as wb_save_err:
-                    logger.error(f"Failed to save checkpoint to WandB: {wb_save_err}")
+            # === WandB Upload Section Commented Out ===
+            # # Upload to WandB if enabled
+            # if self.wandb_enabled and self.wandb_run:
+            #     try:
+            #         # Use policy='live' to upload intermediate checkpoints as well
+            #         wandb.save(filepath, base_path=self.checkpoint_dir, policy="live")
+            #         logger.info(f"Checkpoint {filepath} uploaded to WandB.")
+            #     except Exception as wb_save_err:
+            #         logger.error(f"Failed to save checkpoint to WandB: {wb_save_err}")
+            # === End of Commented Out Section ===
 
         except Exception as e:
-            logger.error(f"Failed to save checkpoint {filepath}: {e}", exc_info=True)
+            logger.error(f"Failed to save checkpoint locally {filepath}: {e}", exc_info=True) # Clarified log message
+            # Attempt to clean up temporary file on error
             if os.path.exists(temp_filepath):
                 try: os.remove(temp_filepath)
                 except OSError: pass
-
+                
     def load_checkpoint(self, filepath: str):
         """Loads state from a checkpoint file."""
         if not os.path.exists(filepath):
