@@ -29,11 +29,11 @@ set "CHECKPOINT_DIR=C:/projects/bytropix/poem_checkpoints"
 set "WANDB_PROJECT=bytropix-poem-test"
 
 REM --- Model Architecture (Common) ---
-set "LOCAL_HIDDEN_SIZE=384"
+set "LOCAL_HIDDEN_SIZE=256"
 set "DECODER_MEM_DIM=512"
 set "CONTEXT_WINDOW=256"
 set "N_GRAM_SIZES=3 4"
-set "N_GRAM_VOCAB_SIZE=30000"
+set "N_GRAM_VOCAB_SIZE=69420"
 set "DROPOUT=0.2"
 
 REM --- Model Architecture (Hyperbolic Attention Specific) ---
