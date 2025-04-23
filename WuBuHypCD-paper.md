@@ -1,5 +1,3 @@
----
-
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#9966FF', 'secondaryColor': '#D6C0FF', 'tertiaryColor': '#FFF', 'primaryTextColor': '#333', 'secondaryTextColor': '#555', 'tertiaryTextColor': '#777', 'primaryBorderColor': '#9966FF', 'secondaryBorderColor': '#D6C0FF', 'tertiaryBorderColor': '#EEE', 'lineColor': '#9966FF', 'clusterBkg': '#F5F0FF', 'mainBkg': '#FFFFFF', 'nodeBorder': '#9966FF', 'edgeLabelBackground':'#F5F0FF'}}}%%
 
 # WuBu Nesting: An Adaptive Multi-Scale Geometric Framework
@@ -325,4 +323,3 @@ Future work must focus on rigorous mathematical formalization of the concepts pr
 
 [46] Gu, A., Sala, F., Gunel, B., & Ré, C. (2019). Learning Semantic Representations using Diffusion Kernels. NeurIPS. *(Note: This paper uses product spaces, e.g., $\mathbb{R}^n \times \mathbb{S}^m$, fitting the description in Sec 2.3)*
 
----
