@@ -189,82 +189,51 @@ graph TD
 
     %% == 3. Define Subgraphs for Grouping ==
     subgraph Level1Outer
-        Proc1
-        D
-        F
-        BM1P
-        FBT1
-        LD1
-        Sigma1
-        Flow1
-        BM1
+        Proc1; D; F; BM1P; FBT1; LD1; Sigma1; Flow1; BM1;
     end
 
     subgraph InterLevelTransformationT12
-         R1
-         T1Map
-         V2
-         VectorsD2
-         Ctx2
-         Ld2In
+         R1; T1Map; V2; VectorsD2; Ctx2; Ld2In;
     end
 
      subgraph Level2Middle
-        I1
-        MapToH2
-        Proc2Input
-        Proc2
-        J1
-        L1Out
-        BM2P
-        FBT2
-        LD2
-        Sigma2
-        Flow2
-        BM2
+        I1; MapToH2; Proc2Input; Proc2; J1; L1Out; BM2P; FBT2; LD2; Sigma2; Flow2; BM2;
     end
 
      subgraph InterLevelTransformationT23
-        R2
-        T2Map
-        V3
-        VectorsD3
-        Ctx3
-        Ld3In
+        R2; T2Map; V3; VectorsD3; Ctx3; Ld3In;
     end
 
     subgraph Level3
-        M1
-        Proc3Input
-        N
+        M1; Proc3Input; N;
     end
 
     %% == 4. Styling ==
-    classDef level1 fill:#D6C0FF,stroke:#9966FF,stroke-width:1px;
-    classDef level2 fill:#F5F0FF,stroke:#D6C0FF,stroke-width:1px;
-    classDef level3 fill:#E6E6FF,stroke:#C0C0FF,stroke-width:1px;
-    classDef boundary fill:#E7DAFF, stroke:#9966FF, stroke-dasharray: 5 5, stroke-width:1px;
-    classDef rotation fill:#FFD700,stroke:#B8860B,stroke-width:2px;
-    classDef tangent fill:#FFF,stroke:#BBB,stroke-dasharray: 2 2, stroke-width:1px;
-    classDef ball fill:#EFE,stroke:#AEA, stroke-width:1px;
-    classDef transform fill:#FFE,stroke:#DDA, stroke-width:1px;
-    classDef vectorGen fill:#ADD8E6, stroke:#4682B4, stroke-width:1px;
-    classDef levelDesc fill:#FFFACD,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 3 3;
-    classDef spread fill:#FAFAD2,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 1 1;
-    classDef flow fill:#E0FFFF,stroke:#008B8B,stroke-width:1px, stroke-dasharray: 4 4;
-    classDef processing fill:#F0FFF0,stroke:#2E8B57, stroke-width:1.5px;
+    classDef level1 fill:#D6C0FF,stroke:#9966FF,stroke-width:1px
+    classDef level2 fill:#F5F0FF,stroke:#D6C0FF,stroke-width:1px
+    classDef level3 fill:#E6E6FF,stroke:#C0C0FF,stroke-width:1px
+    classDef boundary fill:#E7DAFF, stroke:#9966FF, stroke-dasharray: 5 5, stroke-width:1px
+    classDef rotation fill:#FFD700,stroke:#B8860B,stroke-width:2px
+    classDef tangent fill:#FFF,stroke:#BBB,stroke-dasharray: 2 2, stroke-width:1px
+    classDef ball fill:#EFE,stroke:#AEA, stroke-width:1px
+    classDef transform fill:#FFE,stroke:#DDA, stroke-width:1px
+    classDef vectorGen fill:#ADD8E6, stroke:#4682B4, stroke-width:1px
+    classDef levelDesc fill:#FFFACD,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 3 3
+    classDef spread fill:#FAFAD2,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 1 1
+    classDef flow fill:#E0FFFF,stroke:#008B8B,stroke-width:1px, stroke-dasharray: 4 4
+    classDef processing fill:#F0FFF0,stroke:#2E8B57, stroke-width:1.5px
 
-    class Proc1, Proc2, N processing;
-    class BM1, BM2 boundary;
-    class R1, R2 rotation;
-    class C, F, FBT1, V2, L1Out, FBT2, V3, M1 tangent; class I1 tangent;
-    class D, BM1P, J1, BM2P, MapToH2 ball;
-    class T1Map, T2Map transform;
-    class VectorsD2, VectorsD3 vectorGen;
-    class LD1, LD2, Ld2In, Ld3In levelDesc;
-    class Sigma1, Sigma2, Ctx2, Ctx3 spread;
-    class Flow1, Flow2 flow;
-    class Proc2Input, Proc3Input processing;
+    %% Apply styles - COMBINE NODES FOR EACH CLASS
+    class Proc1,Proc2,N,Proc2Input,Proc3Input processing
+    class BM1,BM2 boundary
+    class R1,R2 rotation
+    class C,F,FBT1,V2,L1Out,FBT2,V3,M1,I1 tangent
+    class D,BM1P,J1,BM2P,MapToH2 ball
+    class T1Map,T2Map transform
+    class VectorsD2,VectorsD3 vectorGen
+    class LD1,LD2,Ld2In,Ld3In levelDesc
+    class Sigma1,Sigma2,Ctx2,Ctx3 spread
+    class Flow1,Flow2 flow
 ```
 **Figure 1:** Conceptual Architecture of the Comprehensive WuBu Nesting Framework. This diagram illustrates the flow through nested hyperbolic levels ($\mathbb{H}^{n_i}_{c_i, s_i}$) with adaptive parameters. It highlights key components: learnable Boundary Manifolds ($B_{ijk}$), Level Descriptors ($\vec{ld}_i$), Level Spreads ($\sigma_i$), and Intra-Level Tangent Flows ($F_i$). Inter-level transitions involve tangent space mapping (LogMap), simultaneous Rotation ($R_i$) of primary, boundary, and descriptor vectors, followed by a Mapping ($\tilde{T}_i$). Relative Vectors ($\vec{d}_{i+1}$) are computed in the target tangent space. The next level's processing utilizes the transformed primary vector ($v_{i+1}$ or $x_{i+1}$), relative vectors ($\vec{d}_{i+1}$), transformed descriptor ($\vec{ld}_{i+1}$), and contextual spread ($\sigma_i$).
 
