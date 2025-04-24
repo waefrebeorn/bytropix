@@ -77,7 +77,7 @@ The core concept envisions data flowing through a hierarchy of processing stages
 ```mermaid
 graph TD;
     A[Input Data] --> B(Initial Euclidean Encoding);
-    B --> C{Map to Tangent Space T_o(H1)};
+    B --> C{Map to Tangent Space T_o(H1)} %% <-- Removed semicolon here
 
     subgraph "Level 1: Outer (H_n1, c1, s1)"
         style L1 fill:#D6C0FF,stroke:#9966FF,stroke-width:2px
