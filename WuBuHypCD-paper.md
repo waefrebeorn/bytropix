@@ -208,33 +208,26 @@ graph TD
         M1; Proc3Input; N;
     end
 
-    %% == 4. Styling - Revised Palette ==
-    %% Core Processing & Hierarchy
-    classDef level1 fill:#B2DFDB,stroke:#00796B,stroke-width:1.5px  %% Medium Teal
-    classDef level2 fill:#E0F2F1,stroke:#00796B,stroke-width:1px    %% Light Teal
-    classDef level3 fill:#E0F7FA,stroke:#006064,stroke-width:1px    %% Very Light Cyan/Blue
-    classDef processing fill:#C8E6C9,stroke:#388E3C,stroke-width:1.5px %% Mint Green
-
-    %% Key Operations (Distinct Accents)
-    classDef rotation fill:#FFF176,stroke:#FBC02D,stroke-width:2px   %% Yellow/Gold (Slightly softer yellow fill)
-    classDef transform fill:#FFCCBC,stroke:#E64A19,stroke-width:1.5px %% Light Orange/Terracotta
-
-    %% Data Representations & Spaces
-    classDef tangent fill:#FFFFFF,stroke:#BDBDBD,stroke-dasharray:2 2,stroke-width:1px %% White/Grey Dashed
-    classDef ball fill:#F5F5F5,stroke:#BDBDBD,stroke-width:1px           %% Light Grey (Neutral Space)
-
-    %% Geometric Features & Parameters
-    classDef boundary fill:#EEEEEE,stroke:#757575,stroke-dasharray:5 5,stroke-width:1px %% Grey Dashed Outline
-    classDef vectorGen fill:#BBDEFB,stroke:#1976D2,stroke-width:1.5px %% Light Blue (Feature Gen)
-    classDef levelDesc fill:#E0E0E0,stroke:#616161,stroke-dasharray:3 3,stroke-width:1px %% Grey Dashed (Param)
-    classDef spread fill:#CFD8DC,stroke:#546E7A,stroke-dasharray:1 1,stroke-width:1px   %% BlueGrey Dashed (Context/Param)
-    classDef flow fill:#B3E5FC,stroke:#0277BD,stroke-dasharray:4 4,stroke-width:1px     %% Light Blue Dashed (Dynamics)
+    %% == 4. Styling - Revised Palette - NO INLINE COMMENTS ==
+    classDef level1 fill:#B2DFDB,stroke:#00796B,stroke-width:1.5px
+    classDef level2 fill:#E0F2F1,stroke:#00796B,stroke-width:1px
+    classDef level3 fill:#E0F7FA,stroke:#006064,stroke-width:1px
+    classDef processing fill:#C8E6C9,stroke:#388E3C,stroke-width:1.5px
+    classDef rotation fill:#FFF176,stroke:#FBC02D,stroke-width:2px
+    classDef transform fill:#FFCCBC,stroke:#E64A19,stroke-width:1.5px
+    classDef tangent fill:#FFFFFF,stroke:#BDBDBD,stroke-dasharray:2 2,stroke-width:1px
+    classDef ball fill:#F5F5F5,stroke:#BDBDBD,stroke-width:1px
+    classDef boundary fill:#EEEEEE,stroke:#757575,stroke-dasharray:5 5,stroke-width:1px
+    classDef vectorGen fill:#BBDEFB,stroke:#1976D2,stroke-width:1.5px
+    classDef levelDesc fill:#E0E0E0,stroke:#616161,stroke-dasharray:3 3,stroke-width:1px
+    classDef spread fill:#CFD8DC,stroke:#546E7A,stroke-dasharray:1 1,stroke-width:1px
+    classDef flow fill:#B3E5FC,stroke:#0277BD,stroke-dasharray:4 4,stroke-width:1px
 
     %% Apply styles - COMBINE NODES FOR EACH CLASS
     class Proc1,Proc2,N,Proc2Input,Proc3Input processing
     class BM1,BM2 boundary
     class R1,R2 rotation
-    class C,F,FBT1,V2,L1Out,FBT2,V3,M1,I1 tangent %% Include Input Tangents
+    class C,F,FBT1,V2,L1Out,FBT2,V3,M1,I1 tangent
     class D,BM1P,J1,BM2P,MapToH2 ball
     class T1Map,T2Map transform
     class VectorsD2,VectorsD3 vectorGen
@@ -244,8 +237,8 @@ graph TD
 
     %% Apply Level Backgrounds (Apply to processing nodes within each level)
     class Proc1 level1
-    class Proc2,I1,MapToH2,Proc2Input level2 %% Style nodes associated with Level 2
-    class N,M1,Proc3Input level3           %% Style nodes associated with Level 3
+    class Proc2,I1,MapToH2,Proc2Input level2
+    class N,M1,Proc3Input level3
 ```
 **Figure 1:** Conceptual Architecture of the Comprehensive WuBu Nesting Framework. This diagram illustrates the flow through nested hyperbolic levels ($\mathbb{H}^{n_i}_{c_i, s_i}$) with adaptive parameters. It highlights key components: learnable Boundary Manifolds ($B_{ijk}$), Level Descriptors ($\vec{ld}_i$), Level Spreads ($\sigma_i$), and Intra-Level Tangent Flows ($F_i$). Inter-level transitions involve tangent space mapping (LogMap), simultaneous Rotation ($R_i$) of primary, boundary, and descriptor vectors, followed by a Mapping ($\tilde{T}_i$). Relative Vectors ($\vec{d}_{i+1}$) are computed in the target tangent space. The next level's processing utilizes the transformed primary vector ($v_{i+1}$ or $x_{i+1}$), relative vectors ($\vec{d}_{i+1}$), transformed descriptor ($\vec{ld}_{i+1}$), and contextual spread ($\sigma_i$).
 
