@@ -76,12 +76,10 @@ The core concept envisions data flowing through a hierarchy of processing stages
 
 ```mermaid
 graph TD
-    %% == 1. Define ALL Nodes Globally with SIMPLE Labels (NO UNDERSCORES / COMMENTS ON SAME LINE) ==
+    %% == 1. Define ALL Nodes Globally ==
     A(InputData)
     B(InitialEuclideanEncoding)
     C(MapToTangentSpaceH1)
-
-    %% Level 1 Nodes
     Proc1(IntraBallProcessingL1)
     LD1(L1DescLd1)
     Sigma1(L1SpreadSigma1)
@@ -91,16 +89,12 @@ graph TD
     D(L1HyperbolicRepOut)
     F(L1LogMapMain)
     FBT1(L1LogMapBoundary)
-
-    %% T(1->2) Nodes
     R1(RotationT12)
     T1Map(MappingT12)
     V2(TargetTangentH2)
     VectorsD2(RelativeVectorsD2)
     Ctx2(ContextL2Sigma1)
     Ld2In(L2InputDescLd2)
-
-    %% Level 2 Nodes
     I1(InputTangentL2)
     MapToH2(OptionalExpMapL2)
     Proc2Input(GatherInputsL2)
@@ -113,21 +107,15 @@ graph TD
     J1(L2HyperbolicRepOut)
     L1Out(L2LogMapMain)
     FBT2(L2LogMapBoundary)
-
-    %% T(2->3) Nodes
     R2(RotationT23)
     T2Map(MappingT23)
     V3(TargetTangentH3)
     VectorsD3(RelativeVectorsD3)
     Ctx3(ContextL3Sigma2)
     Ld3In(L3InputDescLd3)
-
-    %% Level 3 Nodes
     M1(InputTangentL3)
     Proc3Input(GatherInputsL3)
     N(IntraBallProcessingL3)
-
-    %% Final Nodes
     O(AggregateInformation)
     P(FinalProjectionTaskHead)
     Q(Output)
@@ -140,8 +128,6 @@ graph TD
     Proc1 --> D
     D --> F
     BM1P --> FBT1
-
-    %% T(1->2) Edges
     F --> R1
     FBT1 --> R1
     LD1 --> R1
@@ -150,8 +136,6 @@ graph TD
     T1Map --> VectorsD2
     T1Map --> Ld2In
     Sigma1 --> Ctx2
-
-    %% Connections into Level 2
     V2 --> I1
     VectorsD2 --> Proc2Input
     Ld2In --> Proc2Input
@@ -163,8 +147,6 @@ graph TD
     Proc2 --> J1
     J1 --> L1Out
     BM2P --> FBT2
-
-    %% T(2->3) Edges
     L1Out --> R2
     FBT2 --> R2
     LD2 --> R2
@@ -173,16 +155,12 @@ graph TD
     T2Map --> VectorsD3
     T2Map --> Ld3In
     Sigma2 --> Ctx3
-
-    %% Connections into Level 3
     V3 --> M1
     VectorsD3 --> Proc3Input
     Ld3In --> Proc3Input
     Ctx3 --> Proc3Input
     M1 --> Proc3Input
     Proc3Input --> N
-
-    %% Final Edges
     N --> O
     O --> P
     P --> Q
@@ -191,24 +169,24 @@ graph TD
     subgraph Level1Outer ["Level 1: Outer (H_n1, c1, s1)"]
         Proc1; D; F; BM1P; FBT1; LD1; Sigma1; Flow1; BM1;
     end
-
     subgraph InterLevelTransformationT12 ["Inter-Level Transformation T(1->2)"]
          R1; T1Map; V2; VectorsD2; Ctx2; Ld2In;
     end
-
      subgraph Level2Middle ["Level 2: Middle (H_n2, c2, s2)"]
         I1; MapToH2; Proc2Input; Proc2; J1; L1Out; BM2P; FBT2; LD2; Sigma2; Flow2; BM2;
     end
-
      subgraph InterLevelTransformationT23 ["Inter-Level Transformation T(2->3)"]
         R2; T2Map; V3; VectorsD3; Ctx3; Ld3In;
     end
-
     subgraph Level3 ["Level 3"]
         M1; Proc3Input; N;
     end
 
-    %% == 4. Styling - Revised Palette - NO INLINE COMMENTS ==
+    %% == 4. Styling - Black Text, Larger Font, White Stroke Attempt ==
+    %% Base style with common text properties
+    classDef baseStyle color:#000000,font-size:14px %% Black text, larger font
+
+    %% Specific styles inheriting from baseStyle (fill/stroke override node shape)
     classDef level1 fill:#B2DFDB,stroke:#00796B,stroke-width:1.5px
     classDef level2 fill:#E0F2F1,stroke:#00796B,stroke-width:1px
     classDef level3 fill:#E0F7FA,stroke:#006064,stroke-width:1px
@@ -223,7 +201,10 @@ graph TD
     classDef spread fill:#CFD8DC,stroke:#546E7A,stroke-dasharray:1 1,stroke-width:1px
     classDef flow fill:#B3E5FC,stroke:#0277BD,stroke-dasharray:4 4,stroke-width:1px
 
-    %% Apply styles - COMBINE NODES FOR EACH CLASS
+    %% Apply base text style to ALL nodes first
+    class A,B,C,Proc1,LD1,Sigma1,Flow1,BM1,BM1P,D,F,FBT1,R1,T1Map,V2,VectorsD2,Ctx2,Ld2In,I1,MapToH2,Proc2Input,Proc2,LD2,Sigma2,Flow2,BM2,BM2P,J1,L1Out,FBT2,R2,T2Map,V3,VectorsD3,Ctx3,Ld3In,M1,Proc3Input,N,O,P,Q baseStyle
+
+    %% Apply specific styles (These will override fill/stroke from baseStyle but keep text props)
     class Proc1,Proc2,N,Proc2Input,Proc3Input processing
     class BM1,BM2 boundary
     class R1,R2 rotation
@@ -234,9 +215,7 @@ graph TD
     class LD1,LD2,Ld2In,Ld3In levelDesc
     class Sigma1,Sigma2,Ctx2,Ctx3 spread
     class Flow1,Flow2 flow
-
-    %% Apply Level Backgrounds (Apply to processing nodes within each level)
-    class Proc1 level1
+    class Proc1 level1 %% Level backgrounds override processing fill
     class Proc2,I1,MapToH2,Proc2Input level2
     class N,M1,Proc3Input level3
 ```
