@@ -76,113 +76,111 @@ The core concept envisions data flowing through a hierarchy of processing stages
 
 ```mermaid
 graph TD
-    %% == 1. Define ALL Nodes Globally ==
-    A[Input Data]
-    B(Initial Euclidean Encoding)
-    C{Map to Tangent Space T_o(H1)}
-    
+    %% == 1. Define ALL Nodes Globally with SIMPLE Labels (NO UNDERSCORES) ==
+    A(InputData)
+    B(InitialEuclideanEncoding)
+    C(MapToTangentSpaceH1)
+
     %% Level 1 Nodes
-    Proc1{Intra-Ball Processing L1}
-    LD1(L1 Desc. ld1) %% Renamed for clarity
-    Sigma1(L1 Spread σ1)
-    Flow1(L1 Flow F1)
-    BM1{L1 Boundary Manifolds B1jk}
-    BM1_P(L1 Points {b_1jk} in H1)
-    D(L1 Hyperbolic Rep x1_out in H1)
-    F[L1 LogMap: x1_out -> v1_out]
-    FBT1(L1 LogMap: {b_1jk} -> {v_b1jk})
+    Proc1(IntraBallProcessingL1)
+    LD1(L1DescLd1)
+    Sigma1(L1SpreadSigma1)
+    Flow1(L1FlowF1)
+    BM1(L1BoundaryManifolds)
+    BM1P(L1BoundaryPointsInH1) %% ID changed
+    D(L1HyperbolicRepOut)
+    F(L1LogMapMain)
+    FBT1(L1LogMapBoundary)
 
     %% T(1->2) Nodes
-    R1{Rotate v1_out, {v_b1jk}, ld1 by R1}
-    T1(Apply Map ~T1)
-    V2{Target Tangent T_o(H2)}
-    VectorsD2(Relative Vectors {d2jk})
-    Ctx2(Context for L2: σ1)
-    Ld2_In(L2 Input Desc ld2) %% Representing the transformed ld1
+    R1(RotationT12)
+    T1Map(MappingT12)
+    V2(TargetTangentH2)
+    VectorsD2(RelativeVectorsD2)
+    Ctx2(ContextL2Sigma1)
+    Ld2In(L2InputDescLd2)
 
     %% Level 2 Nodes
-    I1{Input Tangent for L2}
-    MapToH2(Optional ExpMap: v2 -> x2_in)
-    Proc2_Input(Gather Inputs L2)
-    Proc2{Intra-Ball Processing L2}
-    LD2(L2 Desc. ld2_param) %% This level's own param
-    Sigma2(L2 Spread σ2)
-    Flow2(L2 Flow F2)
-    BM2{L2 Boundary Manifolds B2jk}
-    BM2_P(L2 Points {b_2jk} in H2)
-    J1(L2 Hyperbolic Rep x2_out in H2)
-    L1_Out[L2 LogMap: x2_out -> v2_out] %% Renamed F->L1_Out for Level 2 Output
-    FBT2(L2 LogMap: {b_2jk} -> {v_b2jk})
+    I1(InputTangentL2)
+    MapToH2(OptionalExpMapL2)
+    Proc2Input(GatherInputsL2)
+    Proc2(IntraBallProcessingL2)
+    LD2(L2DescLd2Param)
+    Sigma2(L2SpreadSigma2)
+    Flow2(L2FlowF2)
+    BM2(L2BoundaryManifolds)
+    BM2P(L2BoundaryPointsInH2) %% ID changed
+    J1(L2HyperbolicRepOut)
+    L1Out(L2LogMapMain)
+    FBT2(L2LogMapBoundary)
 
     %% T(2->3) Nodes
-    R2{Rotate v2_out, {v_b2jk}, ld2_param by R2}
-    T2(Apply Map ~T2)
-    V3{Target Tangent T_o(H3)}
-    VectorsD3(Relative Vectors {d3jk})
-    Ctx3(Context for L3: σ2)
-    Ld3_In(L3 Input Desc ld3) %% Representing the transformed ld2
+    R2(RotationT23)
+    T2Map(MappingT23)
+    V3(TargetTangentH3)
+    VectorsD3(RelativeVectorsD3)
+    Ctx3(ContextL3Sigma2)
+    Ld3In(L3InputDescLd3)
 
     %% Level 3 Nodes
-    M1{Input Tangent for L3}
-    Proc3_Input(Gather Inputs L3)
-    N[Intra-Ball Processing L3 ...] %% Placeholder
+    M1(InputTangentL3)
+    Proc3Input(GatherInputsL3)
+    N(IntraBallProcessingL3) %% Simplified label
 
     %% Final Nodes
-    O{Aggregate Information}
-    P[Final Projection / Task Head]
-    Q[Output]
+    O(AggregateInformation)
+    P(FinalProjectionTaskHead)
+    Q(Output)
 
     %% == 2. Define ALL Edges Globally ==
     A --> B
     B --> C
     C --> Proc1
-    BM1 --> BM1_P
+    BM1 --> BM1P
     Proc1 --> D
     D --> F
-    BM1_P --> FBT1
+    BM1P --> FBT1
 
     %% T(1->2) Edges
     F --> R1
     FBT1 --> R1
-    LD1 --> R1 %% Connect L1 parameter to rotation
-    R1 --> T1
-    T1 --> V2
-    T1 --> VectorsD2 %% If V2 is the primary input to vector calc
-    V2 -- Compute --> VectorsD2 %% Alt: Show computation dependency
-    T1 --> Ld2_In %% Capture transformed descriptor output
-    Sigma1 --> Ctx2 %% Pass L1 spread param as context
+    LD1 --> R1
+    R1 --> T1Map
+    T1Map --> V2
+    T1Map --> VectorsD2
+    T1Map --> Ld2In
+    Sigma1 --> Ctx2
 
     %% Connections into Level 2
     V2 --> I1
-    VectorsD2 --> Proc2_Input
-    Ld2_In --> Proc2_Input
-    Ctx2 --> Proc2_Input
+    VectorsD2 --> Proc2Input
+    Ld2In --> Proc2Input
+    Ctx2 --> Proc2Input
     I1 --> MapToH2
-    Proc2_Input --> Proc2
+    Proc2Input --> Proc2
     MapToH2 --> Proc2
-    BM2 --> BM2_P
+    BM2 --> BM2P
     Proc2 --> J1
-    J1 --> L1_Out
-    BM2_P --> FBT2
+    J1 --> L1Out
+    BM2P --> FBT2
 
     %% T(2->3) Edges
-    L1_Out --> R2
+    L1Out --> R2
     FBT2 --> R2
-    LD2 --> R2 %% Connect L2 parameter to rotation
-    R2 --> T2
-    T2 --> V3
-    T2 --> VectorsD3 %% If V3 is primary input
-    V3 -- Compute --> VectorsD3 %% Alt: Show computation dependency
-    T2 --> Ld3_In %% Capture transformed descriptor output
-    Sigma2 --> Ctx3 %% Pass L2 spread param as context
+    LD2 --> R2
+    R2 --> T2Map
+    T2Map --> V3
+    T2Map --> VectorsD3
+    T2Map --> Ld3In
+    Sigma2 --> Ctx3
 
     %% Connections into Level 3
     V3 --> M1
-    VectorsD3 --> Proc3_Input
-    Ld3_In --> Proc3_Input
-    Ctx3 --> Proc3_Input
-    M1 --> Proc3_Input
-    Proc3_Input --> N
+    VectorsD3 --> Proc3Input
+    Ld3In --> Proc3Input
+    Ctx3 --> Proc3Input
+    M1 --> Proc3Input
+    Proc3Input --> N
 
     %% Final Edges
     N --> O
@@ -190,30 +188,24 @@ graph TD
     P --> Q
 
     %% == 3. Define Subgraphs for Grouping ==
-    subgraph "Level 1: Outer (H_n1, c1, s1)"
-        Proc1; D; F; BM1_P; FBT1;
-        subgraph "Level 1 Params & State"
-             LD1; Sigma1; Flow1; BM1;
-        end
+    subgraph Level1Outer
+        Proc1; D; F; BM1P; FBT1; LD1; Sigma1; Flow1; BM1;
     end
 
-    subgraph "Inter-Level Transformation T(1->2)"
-         R1; T1; V2; VectorsD2; Ctx2; Ld2_In;
+    subgraph InterLevelTransformationT12
+         R1; T1Map; V2; VectorsD2; Ctx2; Ld2In;
     end
 
-     subgraph "Level 2: Middle (H_n2, c2, s2)"
-        MapToH2; Proc2_Input; Proc2; J1; L1_Out; BM2_P; FBT2; I1;
-         subgraph "Level 2 Params & State"
-            LD2; Sigma2; Flow2; BM2;
-         end
+     subgraph Level2Middle
+        I1; MapToH2; Proc2Input; Proc2; J1; L1Out; BM2P; FBT2; LD2; Sigma2; Flow2; BM2;
     end
 
-     subgraph "Inter-Level Transformation T(2->3)"
-        R2; T2; V3; VectorsD3; Ctx3; Ld3_In;
+     subgraph InterLevelTransformationT23
+        R2; T2Map; V3; VectorsD3; Ctx3; Ld3In;
     end
 
-    subgraph "Level 3"
-        M1; Proc3_Input; N;
+    subgraph Level3
+        M1; Proc3Input; N;
     end
 
     %% == 4. Styling ==
@@ -225,8 +217,8 @@ graph TD
     classDef tangent fill:#FFF,stroke:#BBB,stroke-dasharray: 2 2, stroke-width:1px;
     classDef ball fill:#EFE,stroke:#AEA, stroke-width:1px;
     classDef transform fill:#FFE,stroke:#DDA, stroke-width:1px;
-    classDef vector_gen fill:#ADD8E6, stroke:#4682B4, stroke-width:1px;
-    classDef leveldesc fill:#FFFACD,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 3 3;
+    classDef vectorGen fill:#ADD8E6, stroke:#4682B4, stroke-width:1px; %% Renamed style ID
+    classDef levelDesc fill:#FFFACD,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 3 3; %% Renamed style ID
     classDef spread fill:#FAFAD2,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 1 1;
     classDef flow fill:#E0FFFF,stroke:#008B8B,stroke-width:1px, stroke-dasharray: 4 4;
     classDef processing fill:#F0FFF0,stroke:#2E8B57, stroke-width:1.5px;
@@ -234,14 +226,14 @@ graph TD
     class Proc1, Proc2, N processing;
     class BM1, BM2 boundary;
     class R1, R2 rotation;
-    class C, F, FBT1, V2, L1_Out, FBT2, V3, M1 tangent; class I1 tangent;
-    class D, BM1_P, J1, BM2_P, MapToH2 ball;
-    class T1, T2 transform;
-    class VectorsD2, VectorsD3 vector_gen;
-    class LD1, LD2, Ld2_In, Ld3_In leveldesc;
+    class C, F, FBT1, V2, L1Out, FBT2, V3, M1 tangent; class I1 tangent;
+    class D, BM1P, J1, BM2P, MapToH2 ball;
+    class T1Map, T2Map transform; %% Updated node IDs
+    class VectorsD2, VectorsD3 vectorGen; %% Updated style ID
+    class LD1, LD2, Ld2In, Ld3In levelDesc; %% Updated style ID
     class Sigma1, Sigma2, Ctx2, Ctx3 spread;
     class Flow1, Flow2 flow;
-    class Proc2_Input, Proc3_Input processing;
+    class Proc2Input, Proc3Input processing;
 ```
 **Figure 1:** Conceptual Architecture of the Comprehensive WuBu Nesting Framework. This diagram illustrates the flow through nested hyperbolic levels ($\mathbb{H}^{n_i}_{c_i, s_i}$) with adaptive parameters. It highlights key components: learnable Boundary Manifolds ($B_{ijk}$), Level Descriptors ($\vec{ld}_i$), Level Spreads ($\sigma_i$), and Intra-Level Tangent Flows ($F_i$). Inter-level transitions involve tangent space mapping (LogMap), simultaneous Rotation ($R_i$) of primary, boundary, and descriptor vectors, followed by a Mapping ($\tilde{T}_i$). Relative Vectors ($\vec{d}_{i+1}$) are computed in the target tangent space. The next level's processing utilizes the transformed primary vector ($v_{i+1}$ or $x_{i+1}$), relative vectors ($\vec{d}_{i+1}$), transformed descriptor ($\vec{ld}_{i+1}$), and contextual spread ($\sigma_i$).
 
