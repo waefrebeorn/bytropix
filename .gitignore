@@ -269,3 +269,4 @@ media/
 # For example:
 # secrets/
 # *.secret
+dummy.py
