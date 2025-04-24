@@ -75,143 +75,149 @@ WuBu Nesting offers a recursive, multi-layered geometric architecture where data
 The core concept envisions data flowing through a hierarchy of processing stages, each associated with a hyperbolic space $\mathbb{H}^{n_i}_{c_i, s_i}$. An initial encoding maps the input data into the tangent space of the outermost hyperbolic level. Within each level $i$, the representation undergoes processing which may involve an intra-level tangent flow $F_i$. To transition to the next, deeper level $i+1$, the representation (along with boundary manifold representations and the level descriptor vector) is mapped to the tangent space $T_o(\mathbb{H}^{n_i})$ via the logarithmic map. Here, a learned rotation $R_i$ is applied simultaneously to all these vectors. Subsequently, a learnable non-rotational mapping $\tilde{T}_i$ transforms these rotated vectors into the tangent space $T_o(\mathbb{H}^{n_{i+1}})$ of the next level, potentially changing dimensionality. In this target tangent space, relative vectors ($\vec{d}_{i+1, j, k}$) are computed between the main transformed vector and the transformed boundary vectors. The main transformed vector $v_{i+1}$, the relative vectors $\{\vec{d}_{i+1, j, k}\}$, the transformed level descriptor $\vec{ld}_{i+1}$, and the spread parameter $\sigma_i$ from the source level collectively form the input for processing within level $i+1$. The main vector $v_{i+1}$ is typically mapped into the hyperbolic ball $\mathbb{H}^{n_{i+1}}$ using the exponential map for hyperbolic operations within that level. This process repeats recursively through the nested levels. Finally, information aggregated across relevant levels and tangent spaces is used for the final task prediction.
 
 ```mermaid
-graph TD;
-    A[Input Data] --> B(Initial Euclidean Encoding);
+graph TD
+    A[Input Data] --> B(Initial Euclidean Encoding)
 
     subgraph "Level 1: Outer (H_n1, c1, s1)"
         style L1 fill:#D6C0FF,stroke:#9966FF,stroke-width:2px
-        
-        %% Define nodes within Level 1 first
-        C{Map to Tangent Space T_o(H1)};
-        Proc1{Intra-Ball Processing L1};
-        LD1(Learnable Desc. ld1);
-        Sigma1(Learnable Spread σ1);
-        Flow1(Learnable Flow F1);
-        BM1{Boundary Manifolds B1jk};
-        BM1_P(Points {b_1jk} in H1);
-        D(Hyperbolic Rep x1_out in H1);
-        F[LogMap: x1_out -> v1_out in T_o(H1)];
-        FBT1(LogMap: {b_1jk} -> {v_b1jk} in T_o(H1));
 
-        %% Draw edges within Level 1
-        B --> C; %% Edge coming from outside
-        C -- Tangent Input v1_in --> Proc1;
-        BM1 --> BM1_P;
-        Proc1 -- Internal State --> D;
-        D --> F;
-        BM1_P --> FBT1;
+        %% Define nodes within Level 1 first - ONE PER LINE
+        C{Map to Tangent Space T_o(H1)}
+        Proc1{Intra-Ball Processing L1}
+        LD1(Learnable Desc. ld1)
+        Sigma1(Learnable Spread σ1)
+        Flow1(Learnable Flow F1)
+        BM1{Boundary Manifolds B1jk}
+        BM1_P(Points {b_1jk} in H1)
+        D(Hyperbolic Rep x1_out in H1)
+        F[LogMap: x1_out -> v1_out in T_o(H1)]
+        FBT1(LogMap: {b_1jk} -> {v_b1jk} in T_o(H1))
 
-        %% Nested subgraph for params (optional, can just use nodes above)
+        %% Draw edges within Level 1 - ONE PER LINE
+        B --> C %% Edge coming from outside
+        C -- Tangent Input v1_in --> Proc1
+        BM1 --> BM1_P
+        Proc1 -- Internal State --> D
+        D --> F
+        BM1_P --> FBT1
+
+        %% Nested subgraph for params (optional)
         subgraph "Level 1 Params & State"
-             LD1; Sigma1; Flow1; BM1;
+            LD1
+            Sigma1
+            Flow1
+            BM1
         end
     end
 
     subgraph "Inter-Level Transformation T(1->2)"
         direction TB
-        %% Define nodes
-        R1{Rotate v1_out, {v_b1jk}, ld1 by R1};
-        T1(Apply Map ~T1);
-        V2{Target Tangent T_o(H2)};
-        VectorsD2(Relative Vectors {d2jk});
-        Ctx2(Context for L2: σ1);
+        %% Define nodes - ONE PER LINE
+        R1{Rotate v1_out, {v_b1jk}, ld1 by R1}
+        T1(Apply Map ~T1)
+        V2{Target Tangent T_o(H2)}
+        VectorsD2(Relative Vectors {d2jk})
+        Ctx2(Context for L2: σ1)
 
-        %% Draw edges
-        F -- Main Tangent v1_out --> R1;
-        FBT1 -- Boundary Tangents {v_b1jk} --> R1;
-        LD1 -- Level Desc. ld1 --> R1;
-        R1 -- Rotated v1', {v_b1jk'}, ld1' --> T1;
-        T1 -- Main Tangent v2 --> V2;
-        T1 -- Transformed Boundary Tangents {v_b1jk''} --> V2;
-        T1 -- Transformed Level Desc. ld2 --> V2;
-        V2 -- Compute d2jk = v2 - v_b1jk'' --> VectorsD2;
-        Sigma1 -- Pass Context --> Ctx2;
+        %% Draw edges - ONE PER LINE
+        F -- Main Tangent v1_out --> R1
+        FBT1 -- Boundary Tangents {v_b1jk} --> R1
+        LD1 -- Level Desc. ld1 --> R1
+        R1 -- Rotated v1', {v_b1jk'}, ld1' --> T1
+        T1 -- Main Tangent v2 --> V2
+        T1 -- Transformed Boundary Tangents {v_b1jk''} --> V2
+        T1 -- Transformed Level Desc. ld2 --> V2
+        V2 -- Compute d2jk = v2 - v_b1jk'' --> VectorsD2
+        Sigma1 -- Pass Context --> Ctx2
     end
 
     %% Connect Transform Output to Next Level
-    %% Define nodes needed for connections
-    I1{Input Tangent for L2};
-    Proc2_Input(Gather Inputs);
+    %% Define nodes - ONE PER LINE
+    I1{Input Tangent for L2}
+    Proc2_Input(Gather Inputs)
 
-    %% Draw edges
-    V2 -- Main Tangent v2 --> I1;
-    VectorsD2 -- Relative Vectors {d2jk} --> Proc2_Input;
-    V2 -- Level Desc. ld2 --> Proc2_Input;
-    Ctx2 -- Spread Context σ1 --> Proc2_Input;
+    %% Draw edges - ONE PER LINE
+    V2 -- Main Tangent v2 --> I1
+    VectorsD2 -- Relative Vectors {d2jk} --> Proc2_Input
+    V2 -- Level Desc. ld2 --> Proc2_Input
+    Ctx2 -- Spread Context σ1 --> Proc2_Input
 
 
     subgraph "Level 2: Middle (H_n2, c2, s2)"
         style L2 fill:#F5F0FF,stroke:#D6C0FF,stroke-width:2px
-        %% Define Nodes
-        MapToH2(Optional ExpMap: v2 -> x2_in in H2);
-        Proc2{Intra-Ball Processing L2};
-        LD2(Learnable Desc. ld2_param);
-        Sigma2(Learnable Spread σ2);
-        Flow2(Learnable Flow F2);
-        BM2{Boundary Manifolds B2jk};
-        BM2_P(Points {b_2jk} in H2);
-        J1(Hyperbolic Rep x2_out in H2);
-        L1[LogMap: x2_out -> v2_out in T_o(H2)];
-        FBT2(LogMap: {b_2jk} -> {v_b2jk} in T_o(H2));
+        %% Define Nodes - ONE PER LINE
+        MapToH2(Optional ExpMap: v2 -> x2_in in H2)
+        Proc2{Intra-Ball Processing L2}
+        LD2(Learnable Desc. ld2_param)
+        Sigma2(Learnable Spread σ2)
+        Flow2(Learnable Flow F2)
+        BM2{Boundary Manifolds B2jk}
+        BM2_P(Points {b_2jk} in H2)
+        J1(Hyperbolic Rep x2_out in H2)
+        L1[LogMap: x2_out -> v2_out in T_o(H2)]
+        FBT2(LogMap: {b_2jk} -> {v_b2jk} in T_o(H2))
 
-        %% Draw Edges
-        I1 --> MapToH2;
-        Proc2_Input --> Proc2; %% Connect gathered inputs
-        MapToH2 --> Proc2;
-        BM2 --> BM2_P;
-        Proc2 -- Internal State --> J1;
-        J1 --> L1;
-        BM2_P --> FBT2;
+        %% Draw Edges - ONE PER LINE
+        I1 --> MapToH2
+        Proc2_Input --> Proc2 %% Connect gathered inputs
+        MapToH2 --> Proc2
+        BM2 --> BM2_P
+        Proc2 -- Internal State --> J1
+        J1 --> L1
+        BM2_P --> FBT2
 
          subgraph "Level 2 Params & State"
-             LD2; Sigma2; Flow2; BM2;
+            LD2
+            Sigma2
+            Flow2
+            BM2
          end
     end
 
     subgraph "Inter-Level Transformation T(2->3)"
         direction TB
-        %% Define Nodes
-        R2{Rotate v2_out, {v_b2jk}, ld2_param by R2};
-        T2(Apply Map ~T2);
-        V3{Target Tangent T_o(H3)};
-        VectorsD3(Relative Vectors {d3jk});
-        Ctx3(Context for L3: σ2);
+        %% Define Nodes - ONE PER LINE
+        R2{Rotate v2_out, {v_b2jk}, ld2_param by R2}
+        T2(Apply Map ~T2)
+        V3{Target Tangent T_o(H3)}
+        VectorsD3(Relative Vectors {d3jk})
+        Ctx3(Context for L3: σ2)
 
-        %% Draw Edges
-        L1 -- Main Tangent v2_out --> R2;
-        FBT2 -- Boundary Tangents {v_b2jk} --> R2;
-        LD2 -- Level Desc. ld2_param --> R2;
-        R2 -- Rotated v2', {v_b2jk'}, ld2' --> T2;
-        T2 -- Main Tangent v3 --> V3;
-        T2 -- Transformed Boundary Tangents {v_b2jk''} --> V3;
-        T2 -- Transformed Level Desc. ld3 --> V3;
-        V3 -- Compute d3jk = v3 - v_b2jk'' --> VectorsD3;
-        Sigma2 -- Pass Context --> Ctx3;
+        %% Draw Edges - ONE PER LINE
+        L1 -- Main Tangent v2_out --> R2
+        FBT2 -- Boundary Tangents {v_b2jk} --> R2
+        LD2 -- Level Desc. ld2_param --> R2
+        R2 -- Rotated v2', {v_b2jk'}, ld2' --> T2
+        T2 -- Main Tangent v3 --> V3
+        T2 -- Transformed Boundary Tangents {v_b2jk''} --> V3
+        T2 -- Transformed Level Desc. ld3 --> V3
+        V3 -- Compute d3jk = v3 - v_b2jk'' --> VectorsD3
+        Sigma2 -- Pass Context --> Ctx3
     end
 
      %% Connect Transform Output to Next Level
-     %% Define Nodes
-     M1{Input Tangent for L3};
-     Proc3_Input(Gather Inputs);
-     N[Intra-Ball Processing L3 ...]; %% Placeholder
+     %% Define Nodes - ONE PER LINE
+     M1{Input Tangent for L3}
+     Proc3_Input(Gather Inputs)
+     N[Intra-Ball Processing L3 ...] %% Placeholder
 
-     %% Draw Edges
-     V3 -- Main Tangent v3 --> M1;
-     VectorsD3 -- Relative Vectors {d3jk} --> Proc3_Input;
-     V3 -- Level Desc. ld3 --> Proc3_Input;
-     Ctx3 -- Spread Context σ2 --> Proc3_Input;
-     M1 --> Proc3_Input; %% Connect M1 to Gather node
-     Proc3_Input --> N;
+     %% Draw Edges - ONE PER LINE
+     V3 -- Main Tangent v3 --> M1
+     VectorsD3 -- Relative Vectors {d3jk} --> Proc3_Input
+     V3 -- Level Desc. ld3 --> Proc3_Input
+     Ctx3 -- Spread Context σ2 --> Proc3_Input
+     M1 --> Proc3_Input %% Connect M1 to Gather node
+     Proc3_Input --> N
 
     %% Final Stages
-    O{Aggregate Information};
-    P[Final Projection / Task Head];
-    Q[Output];
+    O{Aggregate Information}
+    P[Final Projection / Task Head]
+    Q[Output]
 
-    %% Draw Edges
-    N --> O;
-    O --> P;
-    P --> Q;
+    %% Draw Edges - ONE PER LINE
+    N --> O
+    O --> P
+    P --> Q
 
     %% Styling (Add styles for new elements)
     classDef level1 fill:#D6C0FF,stroke:#9966FF,stroke-width:1px;
