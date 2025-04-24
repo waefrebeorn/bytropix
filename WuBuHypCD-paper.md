@@ -182,11 +182,8 @@ graph TD
         M1; Proc3Input; N;
     end
 
-    %% == 4. Styling - Black Text, Larger Font, White Stroke Attempt ==
-    %% Base style with common text properties
-    classDef baseStyle color:#000000,font-size:14px %% Black text, larger font
-
-    %% Specific styles inheriting from baseStyle (fill/stroke override node shape)
+    %% == 4. Styling ==
+    classDef baseStyle color:#000000,font-size:14px
     classDef level1 fill:#B2DFDB,stroke:#00796B,stroke-width:1.5px
     classDef level2 fill:#E0F2F1,stroke:#00796B,stroke-width:1px
     classDef level3 fill:#E0F7FA,stroke:#006064,stroke-width:1px
@@ -204,7 +201,7 @@ graph TD
     %% Apply base text style to ALL nodes first
     class A,B,C,Proc1,LD1,Sigma1,Flow1,BM1,BM1P,D,F,FBT1,R1,T1Map,V2,VectorsD2,Ctx2,Ld2In,I1,MapToH2,Proc2Input,Proc2,LD2,Sigma2,Flow2,BM2,BM2P,J1,L1Out,FBT2,R2,T2Map,V3,VectorsD3,Ctx3,Ld3In,M1,Proc3Input,N,O,P,Q baseStyle
 
-    %% Apply specific styles (These will override fill/stroke from baseStyle but keep text props)
+    %% Apply specific styles
     class Proc1,Proc2,N,Proc2Input,Proc3Input processing
     class BM1,BM2 boundary
     class R1,R2 rotation
@@ -215,7 +212,9 @@ graph TD
     class LD1,LD2,Ld2In,Ld3In levelDesc
     class Sigma1,Sigma2,Ctx2,Ctx3 spread
     class Flow1,Flow2 flow
-    class Proc1 level1 %% Level backgrounds override processing fill
+
+    %% Apply Level Backgrounds
+    class Proc1 level1
     class Proc2,I1,MapToH2,Proc2Input level2
     class N,M1,Proc3Input level3
 ```
