@@ -76,7 +76,7 @@ The core concept envisions data flowing through a hierarchy of processing stages
 
 ```mermaid
 graph TD
-    %% == 1. Define ALL Nodes Globally with SIMPLE Labels (NO UNDERSCORES) ==
+    %% == 1. Define ALL Nodes Globally with SIMPLE Labels (NO UNDERSCORES / COMMENTS ON SAME LINE) ==
     A(InputData)
     B(InitialEuclideanEncoding)
     C(MapToTangentSpaceH1)
@@ -87,7 +87,7 @@ graph TD
     Sigma1(L1SpreadSigma1)
     Flow1(L1FlowF1)
     BM1(L1BoundaryManifolds)
-    BM1P(L1BoundaryPointsInH1) %% ID changed
+    BM1P(L1BoundaryPointsInH1)
     D(L1HyperbolicRepOut)
     F(L1LogMapMain)
     FBT1(L1LogMapBoundary)
@@ -109,7 +109,7 @@ graph TD
     Sigma2(L2SpreadSigma2)
     Flow2(L2FlowF2)
     BM2(L2BoundaryManifolds)
-    BM2P(L2BoundaryPointsInH2) %% ID changed
+    BM2P(L2BoundaryPointsInH2)
     J1(L2HyperbolicRepOut)
     L1Out(L2LogMapMain)
     FBT2(L2LogMapBoundary)
@@ -125,7 +125,7 @@ graph TD
     %% Level 3 Nodes
     M1(InputTangentL3)
     Proc3Input(GatherInputsL3)
-    N(IntraBallProcessingL3) %% Simplified label
+    N(IntraBallProcessingL3)
 
     %% Final Nodes
     O(AggregateInformation)
@@ -189,23 +189,54 @@ graph TD
 
     %% == 3. Define Subgraphs for Grouping ==
     subgraph Level1Outer
-        Proc1; D; F; BM1P; FBT1; LD1; Sigma1; Flow1; BM1;
+        Proc1
+        D
+        F
+        BM1P
+        FBT1
+        LD1
+        Sigma1
+        Flow1
+        BM1
     end
 
     subgraph InterLevelTransformationT12
-         R1; T1Map; V2; VectorsD2; Ctx2; Ld2In;
+         R1
+         T1Map
+         V2
+         VectorsD2
+         Ctx2
+         Ld2In
     end
 
      subgraph Level2Middle
-        I1; MapToH2; Proc2Input; Proc2; J1; L1Out; BM2P; FBT2; LD2; Sigma2; Flow2; BM2;
+        I1
+        MapToH2
+        Proc2Input
+        Proc2
+        J1
+        L1Out
+        BM2P
+        FBT2
+        LD2
+        Sigma2
+        Flow2
+        BM2
     end
 
      subgraph InterLevelTransformationT23
-        R2; T2Map; V3; VectorsD3; Ctx3; Ld3In;
+        R2
+        T2Map
+        V3
+        VectorsD3
+        Ctx3
+        Ld3In
     end
 
     subgraph Level3
-        M1; Proc3Input; N;
+        M1
+        Proc3Input
+        N
     end
 
     %% == 4. Styling ==
@@ -217,8 +248,8 @@ graph TD
     classDef tangent fill:#FFF,stroke:#BBB,stroke-dasharray: 2 2, stroke-width:1px;
     classDef ball fill:#EFE,stroke:#AEA, stroke-width:1px;
     classDef transform fill:#FFE,stroke:#DDA, stroke-width:1px;
-    classDef vectorGen fill:#ADD8E6, stroke:#4682B4, stroke-width:1px; %% Renamed style ID
-    classDef levelDesc fill:#FFFACD,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 3 3; %% Renamed style ID
+    classDef vectorGen fill:#ADD8E6, stroke:#4682B4, stroke-width:1px;
+    classDef levelDesc fill:#FFFACD,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 3 3;
     classDef spread fill:#FAFAD2,stroke:#BDB76B,stroke-width:1px, stroke-dasharray: 1 1;
     classDef flow fill:#E0FFFF,stroke:#008B8B,stroke-width:1px, stroke-dasharray: 4 4;
     classDef processing fill:#F0FFF0,stroke:#2E8B57, stroke-width:1.5px;
@@ -228,9 +259,9 @@ graph TD
     class R1, R2 rotation;
     class C, F, FBT1, V2, L1Out, FBT2, V3, M1 tangent; class I1 tangent;
     class D, BM1P, J1, BM2P, MapToH2 ball;
-    class T1Map, T2Map transform; %% Updated node IDs
-    class VectorsD2, VectorsD3 vectorGen; %% Updated style ID
-    class LD1, LD2, Ld2In, Ld3In levelDesc; %% Updated style ID
+    class T1Map, T2Map transform;
+    class VectorsD2, VectorsD3 vectorGen;
+    class LD1, LD2, Ld2In, Ld3In levelDesc;
     class Sigma1, Sigma2, Ctx2, Ctx3 spread;
     class Flow1, Flow2 flow;
     class Proc2Input, Proc3Input processing;
