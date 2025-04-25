@@ -23,85 +23,97 @@ REM ====================================================================
 REM === Set WuBu Nesting Sequence Model Parameters for Poem Dataset  ===
 REM ====================================================================
 REM === Note: List arguments (dims, curvatures, scales, etc.) MUST match NUM_LEVELS ===
-REM === For boolean flags: set VAR_FLAG="--flag-name" to enable, set VAR_FLAG="--no-flag-name" to disable, set VAR_FLAG="" to use default ===
-REM === For store_true flags (like --no_amp): set VAR_FLAG="--flag-name" to enable the flag (disable the feature), set VAR_FLAG="" to disable the flag (enable the feature) ===
 
 REM --- Data Paths ---
 set "DATA_PATH=C:/projects/bytropix/data/poems/poems_train.npy"
 set "VAL_DATA_PATH=C:/projects/bytropix/data/poems/poems_val.npy"
-set "CHECKPOINT_DIR=C:/projects/bytropix/wubunest_poem_checkpoints_v03"
-set "WANDB_PROJECT=bytropix-wubunest-poem-v03"
+set "CHECKPOINT_DIR=C:/projects/bytropix/wubunest_poem_checkpoints"
+set "WANDB_PROJECT=bytropix-wubunest-poem"
 
 REM --- Sequence Model Base Config ---
 set "LOCAL_HIDDEN_SIZE=256"
+REM Reduced decoder memory
 set "DECODER_MEM_DIM=512"
 set "CONTEXT_WINDOW=256"
 set "N_GRAM_SIZES=3 4"
+REM Smaller vocab for poems? Keep reasonable for now.
 set "N_GRAM_VOCAB_SIZE=30000"
 set "DROPOUT=0.2"
-REM Default is True for use_hierarchical_decoder. Set "--no-use-hierarchical-decoder" to disable. Use "" for default.
-set "HIERARCHICAL_DECODER_FLAG=--no-use-hierarchical-decoder"
+REM Use flat decoder for simplicity maybe
+set "NO_HIERARCHICAL_DECODER_FLAG=--no_hierarchical_decoder"
 
 REM --- WuBu Nesting Config (Defaults based on WuBuNesting.py, adjust as needed) ---
 REM --- !!! Lengths of lists below MUST match NUM_LEVELS !!! ---
 set "NUM_LEVELS=3"
+REM Reduced hyperbolic dims
 set "HYPERBOLIC_DIMS=128 64 32"
 set "INITIAL_CURVATURES=1.0 1.0 1.0"
-set "INITIAL_SCALES=1.0 1.0 1.0"
-set "BOUNDARY_POINTS_PER_LEVEL=5 4 3"
-
-REM --- Flags Controlling WuBu Features (Use "" for default, or --flag / --no-flag) ---
-REM Default is True. Set "--no-learnable-curvature" to disable. Use "" for default.
+REM Use "" to enable, "--no_learnable_curvature" to disable
 set "LEARNABLE_CURVATURE_FLAG="
-REM Default is True. Set "--no-learnable-scales" to disable. Use "" for default.
+set "INITIAL_SCALES=1.0 1.0 1.0"
+REM Use "" to enable, "--no_learnable_scales" to disable
 set "LEARNABLE_SCALES_FLAG="
-REM Default is True. Set "--no-learnable-spread" to disable. Use "" for default.
-set "LEARNABLE_SPREAD_FLAG="
-REM Default is True. Set "--no-use-level-descriptors" to disable. Use "" for default.
+set "BOUNDARY_POINTS_PER_LEVEL=5 4 3"
+REM Length NUM_LEVELS - 1. 'quat' requires dims divisible by 4.
+set "ROTATION_TYPES=so_n so_n"
+REM Length NUM_LEVELS - 1. 'quat' requires dims divisible by 4.
+set "TRANSFORM_TYPES=mlp mlp"
+REM Length NUM_LEVELS - 1. For MLP transforms.
+set "TRANSFORM_HIDDEN_DIMS=96 48"
+REM Use "" to enable, "--no_level_descriptors" to disable
 set "LEVEL_DESCRIPTORS_FLAG="
-REM Default is True. Set "--no-use-level-spread" to disable. Use "" for default.
+REM Use "" to enable, "--no_level_spread" to disable
 set "LEVEL_SPREAD_FLAG="
-REM Default is True. Set "--no-use-tangent-flow" to disable. Use "" for default.
+REM Use "" to enable, "--no_learnable_spread" to disable
+set "LEARNABLE_SPREAD_FLAG="
+REM Use "" to enable, "--no_tangent_flow" to disable
 set "TANGENT_FLOW_FLAG="
-
-REM --- Other WuBu parameters (non-flags) ---
 set "TANGENT_FLOW_TYPE=mlp"
 set "AGGREGATION_METHOD=concat_tangent"
 set "RELATIVE_VECTOR_AGGREGATION=mean"
 
 REM --- Training Hyperparameters (Adjusted for Poems) ---
+REM Very small batch size
 set "BATCH_SIZE=2"
+REM Accumulate more due to small batch
 set "GRAD_ACCUM_STEPS=4"
+REM Smaller LR for potentially complex model
 set "LEARNING_RATE=5e-5"
+REM More epochs than integrated_hyper, fewer than original
 set "EPOCHS=5"
 set "WEIGHT_DECAY=0.01"
+REM Stricter gradient clipping
 set "MAX_GRAD_NORM=0.5"
 
 REM --- Optimizer Q-Learning Controller ---
-REM Default is True for enable_q_controller. Set "--no-enable-q-controller" to disable. Use "" for default.
-set "Q_CONTROLLER_FLAG="
 set "Q_LEARNING_RATE=0.01"
 set "Q_DISCOUNT=0.95"
 set "Q_EPSILON=0.25"
+REM Slightly faster decay
 set "Q_EPSILON_DECAY=0.998"
 set "Q_MIN_EPSILON=0.02"
 
 REM --- Logging & Saving ---
+REM Log more often with small dataset
 set "LOG_INTERVAL=2"
+REM Save only at epoch end (0 disables step saving)
 set "SAVE_INTERVAL=0"
-REM Set "--wandb" to enable, "" to disable (default is False in argparse)
+REM Toggle WandB logging
 set "WANDB_FLAG=--wandb"
+REM To disable WandB, uncomment the next line and comment the line above
+REM set "WANDB_FLAG="
 
 REM --- Misc ---
 set "SEED=42"
+REM Safer default for Windows
 set "NUM_WORKERS=0"
-REM Default is False for no_amp (meaning AMP is ON by default). Set "--no_amp" to disable AMP. Use "" for default (AMP enabled).
-set "AMP_FLAG=--no_amp" REM <--- CORRECTED: Use underscore
-REM Default is False for detect_anomaly. Set "--detect-anomaly" to enable.
+REM Disable AMP initially for stability debugging
+set "AMP_FLAG=--no_amp"
+REM Use --detect_anomaly if needed
 set "DETECT_ANOMALY_FLAG="
 
 REM --- Resume Flag (Optional) ---
-REM Example: set "RESUME_FLAG=--resume C:/projects/bytropix/wubunest_poem_checkpoints_v03/checkpoint_epoch_1_final_vloss0.123.pt"
+REM e.g., set "RESUME_FLAG=--resume C:/path/to/checkpoint.pt"
 set "RESUME_FLAG="
 
 REM === Ensure the poem dataset exists ===
@@ -122,9 +134,7 @@ echo WuBu Config: Levels=%NUM_LEVELS%, Dims=%HYPERBOLIC_DIMS%
 echo.
 
 REM --- Construct the command ---
-REM Using torchrun is recommended for DDP, but this script assumes single process for simplicity now.
-REM Add 'torchrun --standalone --nproc_per_node=1' before 'python' if using DDP locally.
-python WuBuNest_Trainer.py ^
+python oldwubunest.py ^
   --data_path "%DATA_PATH%" ^
   --val_data_path "%VAL_DATA_PATH%" ^
   --checkpoint_dir "%CHECKPOINT_DIR%" ^
@@ -134,7 +144,7 @@ python WuBuNest_Trainer.py ^
   --n_gram_sizes %N_GRAM_SIZES% ^
   --n_gram_vocab_size %N_GRAM_VOCAB_SIZE% ^
   --dropout %DROPOUT% ^
-  %HIERARCHICAL_DECODER_FLAG% ^
+  %NO_HIERARCHICAL_DECODER_FLAG% ^
   --num_levels %NUM_LEVELS% ^
   --hyperbolic_dims %HYPERBOLIC_DIMS% ^
   --initial_curvatures %INITIAL_CURVATURES% ^
@@ -142,6 +152,9 @@ python WuBuNest_Trainer.py ^
   --initial_scales %INITIAL_SCALES% ^
   %LEARNABLE_SCALES_FLAG% ^
   --boundary_points_per_level %BOUNDARY_POINTS_PER_LEVEL% ^
+  --rotation_types %ROTATION_TYPES% ^
+  --transform_types %TRANSFORM_TYPES% ^
+  --transform_hidden_dims %TRANSFORM_HIDDEN_DIMS% ^
   %LEVEL_DESCRIPTORS_FLAG% ^
   %LEVEL_SPREAD_FLAG% ^
   %LEARNABLE_SPREAD_FLAG% ^
@@ -155,7 +168,6 @@ python WuBuNest_Trainer.py ^
   --epochs %EPOCHS% ^
   --weight_decay %WEIGHT_DECAY% ^
   --max_grad_norm %MAX_GRAD_NORM% ^
-  %Q_CONTROLLER_FLAG% ^
   --q_learning_rate %Q_LEARNING_RATE% ^
   --q_discount %Q_DISCOUNT% ^
   --q_epsilon %Q_EPSILON% ^
