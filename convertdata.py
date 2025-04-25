@@ -21,8 +21,8 @@ def download_and_preprocess_hh_rlhf(output_dir: str = "C:/projects/bytropix/data
     os.makedirs(output_dir, exist_ok=True)
     
     # Output file paths (same names as the original script for compatibility)
-    train_npy_path = os.path.join(output_dir, "wikitext_train.npy")
-    val_npy_path = os.path.join(output_dir, "wikitext_val.npy")
+    train_npy_path = os.path.join(output_dir, "Anthropic_HH-RLHF_train.npy")
+    val_npy_path = os.path.join(output_dir, "Anthropic_HH-RLHF_val.npy")
     
     logger.info("Loading Anthropic HH-RLHF dataset...")
     

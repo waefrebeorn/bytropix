@@ -27,8 +27,8 @@ REM === For boolean flags: set VAR_FLAG="--flag-name" to enable, set VAR_FLAG="-
 REM === For store_true flags (like --no_amp): set VAR_FLAG="--flag-name" to enable the flag (disable the feature), set VAR_FLAG="" to disable the flag (enable the feature) ===
 
 REM --- Data Paths ---
-set "DATA_PATH=C:\projects\bytropix\data\wikitext_train.npy"
-set "VAL_DATA_PATH=C:\projects\bytropix\data\wikitext_val.npy"
+set "DATA_PATH=C:/projects/bytropix/data/poems/poems_train.npy"
+set "VAL_DATA_PATH=C:/projects/bytropix/data/poems/poems_val.npy"
 
 
 set "CHECKPOINT_DIR=C:/projects/bytropix/wubunest_poem_checkpoints_v03"
