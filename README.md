@@ -151,12 +151,8 @@ During training, visualizations of the WuBu Nesting model's internal state and t
     ![Example Nested Spheres Visualization](wubu_results/visualizations/nested_spheres_epoch_20.png)
     *(Path relative to project root)*
 
--   **Nested Poincaré Disks:** Shows the 2D projection of points and boundary manifolds within each level's conceptual Poincaré disk. Useful if any level has `hyperbolic_dim=2`. Saved under `poincare_nested_epoch_N/all_levels_poincare.png`.
-    ![Example Poincaré Disk Visualization](wubu_results/visualizations/poincare_nested_epoch_20/all_levels_poincare.png)
-    *(Path relative to project root)*
-
 -   **Training Metrics:** Plots training loss over epochs/steps.
-    ![Example Training Metrics](wubu_results/visualizations/training_metrics.png)
+    ![Example Training Metrics](wubu_results/training_metrics.png)
     *(Path relative to project root)*
 
 -   **Data Visualization (Example):** Shows the structure of the input data (if using the example script).
