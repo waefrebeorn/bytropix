@@ -34,7 +34,7 @@ The WuBu Nesting stack processes representations through a series of adaptive ge
 
 -   **Adaptive Nested Geometry (`H^n_i_{c_i, s_i}`):** Each level `i` operates conceptually within a Poincaré ball of dimension `n_i`, learnable curvature `c_i`, and learnable scale `s_i`. The "Nested Spheres" visualization provides a 3D projection of these conceptual levels.
     ![Example Nested Spheres Visualization](wubu_results/visualizations/nested_spheres_epoch_20.png)
-    *(Path relative to project root)*
+    **
 -   **Boundary Manifolds (`B_{i,j}`):** Learnable points within each level representing substructures or landmarks (parameterized in the tangent space).
 -   **Tangent Space Processing:** Complex operations (rotation, mapping, relative vector calculation) occur in the Euclidean tangent spaces associated with each level. The "Poincaré Disk" visualizations show 2D tangent space embeddings for applicable levels.
 -   **Inter-Level Transformations (`T_{i → i+1} = T̃_i ∘ R_i`):** Data is mapped from level `i` to its tangent space (Log Map), undergoes a learnable **Rotation (`R_i`)**, then a learnable non-rotational **Mapping (`T̃_i`)** to the tangent space of level `i+1`. **Relative Vectors (`d_{i+1}`)** are computed in the target tangent space based on transformed boundary points.
@@ -147,19 +147,19 @@ During training, visualizations of the WuBu Nesting model's internal state and t
 
 -   **Nested Spheres (3D Projection):** Visualizes the boundary manifolds of all levels projected into 3D space using PCA. Inner spheres represent deeper levels in the nesting hierarchy. Generated periodically (e.g., `nested_spheres_epoch_20.png`).
     ![Example Nested Spheres Visualization](wubu_results/visualizations/nested_spheres_epoch_20.png)
-    *(Path relative to project root)*
+    **
 
 -   **Training Metrics:** Plots training loss over epochs/steps.
     ![Example Training Metrics](wubu_results/training_metrics.png)
-    *(Path relative to project root)*
+    **
 
 -   **Data Visualization (Example):** Shows the structure of the input data (if using the example script).
     ![Example Hierarchical Data](wubu_results/hierarchical_data.png)
-    *(Path relative to project root)*
+    **
 
 -   **Test Predictions (Example):** Visualizes model predictions on test data (if using the example script).
     ![Example Test Predictions](wubu_results/test_predictions.png)
-    *(Path relative to project root)*
+    **
 
 
 ## Hyperparameters
