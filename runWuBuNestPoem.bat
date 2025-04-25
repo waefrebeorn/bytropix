@@ -27,8 +27,10 @@ REM === For boolean flags: set VAR_FLAG="--flag-name" to enable, set VAR_FLAG="-
 REM === For store_true flags (like --no_amp): set VAR_FLAG="--flag-name" to enable the flag (disable the feature), set VAR_FLAG="" to disable the flag (enable the feature) ===
 
 REM --- Data Paths ---
-set "DATA_PATH=C:/projects/bytropix/data/poems/poems_train.npy"
-set "VAL_DATA_PATH=C:/projects/bytropix/data/poems/poems_val.npy"
+set "DATA_PATH=C:\projects\bytropix\data\wikitext_train.npy"
+set "VAL_DATA_PATH=C:\projects\bytropix\data\wikitext_val.npy"
+
+
 set "CHECKPOINT_DIR=C:/projects/bytropix/wubunest_poem_checkpoints_v03"
 set "WANDB_PROJECT=bytropix-wubunest-poem-v03"
 
@@ -70,12 +72,12 @@ set "AGGREGATION_METHOD=concat_tangent"
 set "RELATIVE_VECTOR_AGGREGATION=mean"
 
 REM --- Training Hyperparameters (Adjusted for Poems) ---
-set "BATCH_SIZE=2"
-set "GRAD_ACCUM_STEPS=4"
-set "LEARNING_RATE=5e-5"
+set "BATCH_SIZE=16"
+set "GRAD_ACCUM_STEPS=2"
+set "LEARNING_RATE=1e-4"
 set "EPOCHS=5"
 set "WEIGHT_DECAY=0.01"
-set "MAX_GRAD_NORM=0.5"
+set "MAX_GRAD_NORM=15.0"
 
 REM --- Optimizer Q-Learning Controller ---
 REM Default is True for enable_q_controller. Set "--no-enable-q-controller" to disable. Use "" for default.
@@ -96,7 +98,7 @@ REM --- Misc ---
 set "SEED=42"
 set "NUM_WORKERS=0"
 REM Default is False for no_amp (meaning AMP is ON by default). Set "--no_amp" to disable AMP. Use "" for default (AMP enabled).
-set "AMP_FLAG=--no_amp" REM <--- CORRECTED: Use underscore
+set "AMP_FLAG="
 REM Default is False for detect_anomaly. Set "--detect-anomaly" to enable.
 set "DETECT_ANOMALY_FLAG="
 
