@@ -1,345 +1,442 @@
-# Bytropix Integrated HyperHAKMEM - Hyperbolic Attention for Byte-Level Modeling
 
-An advanced byte-level language model utilizing hyperbolic geometry, Babylon Index patching, and reinforcement learning optimization for next-generation language understanding and generation.
+# Bytropix - Byte-Level Modeling with WuBu Nesting
+
+An advanced byte-level language model utilizing **WuBu Nesting** for adaptive multi-scale hyperbolic geometry, integrated with Babylon Index patching and reinforcement learning optimization for next-generation language understanding and generation.
 
 ## Overview
 
-The Integrated HyperHAKMEM model (Hyperbolic Attention Knowledge Memory Enhancer Model) is a cutting-edge language model architecture that operates directly at the byte level rather than using tokens. This design offers several advantages:
+**Bytropix** is a cutting-edge language model architecture designed to operate directly at the byte level, bypassing traditional tokenizers. It incorporates the novel **WuBu Nesting (層疊嵌套 - "layered nesting")** framework to capture complex hierarchical structures and rotational dynamics within data.
 
-- **Tokenizer-Free Architecture**: Processes raw UTF-8 bytes directly, removing vocabulary limitations and working with any language or format natively
-- **Babylon Index Patching**: Dynamically identifies semantically meaningful patches in byte streams using entropy-based analysis
-- **Hyperbolic Attention**: Leverages hyperbolic geometry to better represent hierarchical relationships in language data
-- **Q-Learning Enhanced Optimization**: Uses reinforcement learning to dynamically tune hyperparameters during training
-- **Gradient Monitoring**: Implements sophisticated gradient statistics tracking to ensure stable training
+Key features include:
 
-This implementation is designed for enhanced representation of hierarchical structures in text, making it well-suited for complex language understanding tasks, multi-lingual text processing, and specialized domains where traditional tokenizers struggle.
+-   **Tokenizer-Free Architecture**: Processes raw UTF-8 bytes directly, removing vocabulary limitations and working natively with any language or format.
+-   **Babylon Index Patching**: Dynamically identifies semantically meaningful patches in byte streams using entropy-based analysis.
+-   **WuBu Nesting**: Leverages a hierarchy of nested, adaptive hyperbolic spaces (`H^n_i_{c_i, s_i}`) with learnable geometry (curvature `c_i`, scale `s_i`), boundary manifolds, tangent space rotations, and relative vector computations to model complex, multi-scale, and rotationally-aware structures.
+-   **Q-Learning Enhanced Optimization**: Uses reinforcement learning (via `HAKMEMEnhancedSGD`) to dynamically tune optimizer hyperparameters (learning rate, momentum) during training.
+-   **Gradient Monitoring**: Implements sophisticated gradient statistics tracking for stable training.
+
+This implementation is designed for enhanced representation of deep, nested hierarchical structures, potentially involving rotations or transformations between levels, making it well-suited for complex language understanding, multi-lingual text processing, bioinformatics, robotics, and specialized domains where traditional models struggle.
 
 ## Architecture
 
-The Integrated HyperHAKMEM model combines several innovative components:
+The Bytropix model integrates WuBu Nesting into a byte-level processing pipeline:
 
 ```mermaid
 graph TD;
-    A[Input Bytes] --> B[Babylon Index Patching];
-    B --> C[Local Encoder];
-    C --> D[Projection to Hyperbolic Space];
-    D --> E[Hyperbolic Positional Encoding];
-    E --> F[Hyperbolic Attention Stack];
-    F --> G[Projection to Decoder Memory];
-    G --> H[Local Decoder];
-    I[Target Bytes] --> H;
-    H --> J[Output Logits];
-```
+    A[Input Bytes] --> B(Babylon Index Patching);
+    B --> C(Local Encoder);
+    C --> D(Project to Tangent Space L0);
+    D --> E(WuBu Nesting Stack);
+    E --> F(Aggregate Tangent Outputs);
+    F --> G(Project to Decoder Memory);
+    H[Target Bytes] --> I(Local Decoder);
+    G --> I;
+    I --> J[Output Logits];
 
-### 1. Babylon Index Patching
+    subgraph WuBu Nesting Stack
+        direction TB
+        L0(Tangent L0) --> L1(WuBu Level 1);
+        L1 --> T12(Inter-Level Transform 1->2);
+        T12 --> L2(WuBu Level 2);
+        L2 --> T2N(Inter-Level Transform 2->...);
+        T2N --> LN(WuBu Level N);
+    end
 
-This module performs entropy-based segmentation of byte sequences:
 
-```mermaid
+Babylon Index Patching: Segments raw byte streams into variable-length patches based on information density (entropy) while respecting UTF-8 boundaries.
+
+Local Encoder: Transforms byte patches into fixed-dimension Euclidean representations using byte embeddings, optional N-gram features, and a Transformer encoder, followed by cross-attention pooling.
+
+Projection to Tangent Space L0: Maps the initial patch embeddings from the Local Encoder into the Euclidean tangent space of the first WuBu Nesting level.
+
+WuBu Nesting Stack: The core geometric processing engine. Data flows sequentially through nested levels. See details below.
+
+Aggregate Tangent Outputs: Combines the final tangent space representations generated by each WuBu level (e.g., via concatenation).
+
+Projection to Decoder Memory: Maps the aggregated tangent space representation to the dimensionality required by the Local Decoder.
+
+Local Decoder: A Transformer decoder that attends to the projected memory and generates next-byte predictions based on the target byte sequence provided during training or generation.
+
+WuBu Nesting Components
+
+The WuBu Nesting stack processes representations through a series of adaptive geometric levels:
+
+graph TD
+    %% Inputs to Level i+1
+    V_in[Tangent Vector v_i+1]
+    D_rel[Relative Vectors {d_i+1}]
+    LD_in[Level Descriptor ld_i+1]
+    Sigma_in[Spread Context σ_i]
+
+    subgraph WuBu Level i+1 Processing
+        direction TB
+        InputGather(Gather Inputs) --> Combiner(Tangent Combiner MLP)
+        Combiner --> Flow(Optional: Intra-Level Flow F_i+1)
+        Flow --> ExpMap(Exponential Map exp_o)
+        ExpMap --> HypProc(Hyperbolic Processing)
+        HypProc --> LogMap(Logarithmic Map log_o)
+        LogMap --> V_out[Output Tangent v_out_i+1]
+    end
+
+    %% Connections In
+    V_in --> InputGather
+    D_rel --> InputGather
+    LD_in --> InputGather
+    Sigma_in --> InputGather
+
+    %% Output for Aggregation
+    V_out --> Aggregate(Output to Aggregation)
+
+    %% Parameters generated/used by Level i+1
+    ParamGen((Generate ld_i+1, σ_i+1))
+    V_out --> ParamGen
+    HypProc --> ParamGen
+
+    classDef input fill:#BBDEFB,stroke:#1976D2
+    classDef levelProc fill:#C8E6C9,stroke:#388E3C
+    classDef param fill:#E0E0E0,stroke:#616161
+    classDef output fill:#FFCCBC,stroke:#E64A19
+
+    class V_in,D_rel,LD_in,Sigma_in input
+    class InputGather,Combiner,Flow,ExpMap,HypProc,LogMap levelProc
+    class V_out,Aggregate output
+    class ParamGen param
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Mermaid
+IGNORE_WHEN_COPYING_END
+
+Adaptive Nested Geometry (H^n_i_{c_i, s_i}): Each level i operates conceptually within a Poincaré ball of dimension n_i, learnable curvature c_i, and learnable scale s_i.
+
+Boundary Manifolds (B_{i,j}): Learnable points within each level representing substructures or landmarks (parameterized in the tangent space).
+
+Tangent Space Processing: Complex operations (rotation, mapping, relative vector calculation) occur in the Euclidean tangent spaces associated with each level.
+
+Inter-Level Transformations (T_{i → i+1} = T̃_i ∘ R_i):
+
+Log Map: Maps representations from level i's Poincaré ball to its tangent space.
+
+Rotation (R_i): Applies a learnable SO(n_i) or Quaternion rotation simultaneously to the main vector, boundary point vectors, and the level descriptor vector ld_i.
+
+Mapping (T̃_i): Applies a learnable non-rotational map (e.g., MLP, Linear, QuatLinear) to change dimension (n_i → n_{i+1}) and transform features.
+
+Relative Vectors (d_{i+1}): Calculated in the target tangent space (T_o(H^n_{i+1})) as the difference between the transformed main vector and the transformed boundary vectors (v_{i+1} - v''_{b_{i,j,k}}).
+
+Intra-Level Processing:
+
+Input Combination: An MLP combines the incoming tangent vector, aggregated relative vectors from the previous transition, the transformed level descriptor, and the previous level's spread parameter.
+
+Tangent Flow (F_i): An optional learnable flow field applied in the tangent space to model local dynamics or adjustments.
+
+Hyperbolic Mapping: Uses scale-aware Exponential and Logarithmic maps to move between the tangent space and the Poincaré ball for potential hyperbolic operations (though current implementation focuses on tangent space).
+
+Level Information: Each level learns and passes forward:
+
+Level Descriptor (ld_i): A learnable vector capturing intrinsic level characteristics.
+
+Level Spread (σ_i): A learnable scalar representing uncertainty or density scale.
+
+Aggregation: Tangent space outputs from all levels are collected and aggregated (e.g., concatenated) before projection to the decoder.
+
+Local Decoder
+
+Memory Projection: Adapts the aggregated WuBu output dimension to the decoder's hidden size.
+
+Transformer Decoder: Uses self-attention on the target sequence and cross-attention to the projected memory.
+
+Prediction Head: Outputs byte logits, potentially using a hierarchical prediction scheme (16 coarse classes × 16 specific values).
+
+Q-Learning Enhanced SGD Optimizer
+
+Adaptively tunes learning rate and momentum during training:
+
 graph TD;
-    A[Byte Sequence] --> B[Sliding Window Entropy Analysis];
-    B --> C[Identify Information-Rich Boundaries];
-    C --> D[Split Sequence at Valid UTF-8 Boundaries];
-    D --> E[Patch 1];
-    D --> F[Patch 2];
-    D --> G[Patch N];
-```
-
-- Calculates Shannon entropy over sliding windows to identify information density patterns
-- Finds optimal patch boundaries at entropy transitions while respecting UTF-8 character boundaries
-- Creates variable-length patches that preserve meaningful units (words, symbols, etc.)
-
-### 2. Local Encoder
-
-Transforms byte patches into fixed-dimension representations:
-
-```mermaid
-graph TD;
-    A[Byte Patches] --> B[Byte Embeddings];
-    A --> C[N-gram Feature Extraction];
-    B --> D[Combine Features];
-    C --> D;
-    D --> E[Transformer Encoder Layers];
-    E --> F[Cross-Attention Pooling];
-    F --> G[Patch Representations];
-```
-
-- Embeds individual bytes into a learned vector space
-- Extracts n-gram features to capture multi-byte patterns
-- Processes with transformer layers to contextualize information
-- Uses cross-attention with a learned query to pool each patch into a fixed-size representation
-
-### 3. Hyperbolic Processing
-
-Maps and processes embeddings in hyperbolic space:
-
-```mermaid
-graph TD;
-    A[Real Patch Embeddings] --> B[Project to Euclidean Space];
-    B --> C[Map to Poincaré Ball];
-    C --> D[Map to Tangent Space];
-    D --> E[Apply Positional Encoding];
-    E --> F[Normalization];
-    F --> G[Hyperbolic Attention Layers];
-    G --> H[Map Back to Euclidean Space];
-```
-
-- Projects real embeddings to hyperbolic-compatible dimensions
-- Maps representations to the Poincaré ball model of hyperbolic space
-- Processes in the tangent space using specialized hyperbolic attention
-- Leverages hyperbolic geometry to efficiently represent hierarchical relationships
-
-### 4. Hyperbolic Attention Layers
-
-The core information processing component:
-
-```mermaid
-graph TD;
-    A[Tangent Space Input] --> B[Layer Normalization];
-    B --> C[Multi-Head Hyperbolic Attention];
-    C --> D[Residual Connection];
-    D --> E[Layer Normalization];
-    E --> F[Feed-Forward Network];
-    F --> G[Residual Connection];
-    G --> H[Output to Next Layer];
-```
-
-- Computes attention using hyperbolic distance metrics
-- Applies exponential mapping to project query and key vectors to Poincaré ball
-- Uses logarithmic mapping to bring results back to tangent space
-- Maintains stable gradients through careful normalization and clipping
-
-### 5. Local Decoder
-
-Generates output predictions:
-
-```mermaid
-graph TD;
-    A[Memory Representation] --> B[Project to Decoder Dimension];
-    C[Target Byte Sequence] --> D[Byte Embeddings + Positional Encoding];
-    B --> E[Transformer Decoder Layers];
-    D --> E;
-    E --> F[Hierarchical Output Layer];
-    F --> G[Byte Prediction Logits];
-```
-
-- Projects hyperbolic space representations to real-valued memory
-- Uses standard transformer decoder architecture with memory cross-attention
-- Employs an optional hierarchical prediction head (16 coarse classes × 16 specific values)
-- Produces next-byte prediction logits
-
-### 6. Q-Learning Enhanced SGD Optimizer
-
-Adaptively tunes hyperparameters during training:
-
-```mermaid
-graph TD;
-    A[Training Step] --> B[Monitor Metrics];
+    A[Training Step] --> B[Monitor Metrics (Loss, GradNorm)];
     B --> C[Calculate Q-State];
-    C --> D[Choose Action from Q-Table];
-    D --> E[Scale LR & Momentum];
-    E --> F[Apply Parameter Updates];
-    G[Loss & Gradient Metrics] --> H[Calculate Reward];
-    H --> I[Update Q-Table];
+    C --> D[Choose Action (LR Scale, Mom Scale)];
+    D --> E[Apply Action to Base LR/Momentum];
+    E --> F[Optimizer Parameter Updates];
+    G[Loss Change & Grad Norm] --> H[Calculate Reward];
+    H --> I[Update Q-Table (Bellman Eq)];
     I --> C;
-```
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Mermaid
+IGNORE_WHEN_COPYING_END
 
-- Discretizes the training state based on loss trends, gradient norms, and current hyperparameters
-- Learns optimal scaling actions for learning rate and momentum via Q-learning
-- Calculates rewards based on loss improvement and gradient stability
-- Balances exploration vs. exploitation via dynamic epsilon adjustment
+Discretizes the training state based on loss trends, gradient norms, and current hyperparameters.
 
-## Installation
+Learns optimal scaling factors for LR and momentum via Q-learning.
 
-```bash
-git clone https://github.com/yourusername/integrated-hyperbsfin.git
-cd integrated-hyperbsfin
+Balances exploration (random actions) vs. exploitation (best Q-value actions) using epsilon-decay.
 
-# Create and activate virtual environment
+Installation
+# Clone the repository
+git clone https://github.com/waefrebeorn/bytropix.git
+cd bytropix
+
+# Create and activate virtual environment (recommended)
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate.bat
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
-pip install torch numpy tqdm
-# Optional: For logging
+pip install torch numpy tqdm scikit-learn matplotlib
+# Optional: For logging and visualization enhancements
 pip install wandb
-```
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
+Requirements
 
-## Requirements
+Python 3.8+
 
-- Python 3.8+
-- PyTorch 2.0+ (CUDA recommended for performance)
-- NumPy
-- tqdm
-- wandb (optional, for experiment tracking)
+PyTorch 2.0+ (CUDA recommended for performance)
 
-## Usage
+NumPy
 
-### Data Preparation
+tqdm
 
-Generate byte-level datasets using the included conversion utilities:
+scikit-learn (for PCA in visualize_nested_spheres)
 
-```bash
-python convertdata.py
-# This creates train and validation .npy files with raw byte data
-```
+matplotlib (for all visualizations)
 
-Or use the poem dataset generator for quick testing:
+wandb (optional, for experiment tracking)
 
-```bash
-python poem_dataset_generator.py
-# Creates small poem datasets for testing in the data/poems directory
-```
+Usage
+Data Preparation
 
-### Training
+Use standard byte-level datasets (e.g., .npy files containing sequences of uint8 values). Ensure your data path points to such a file. Example using enwik8: download and preprocess it into a 1D .npy file.
 
-Train the model using the provided script:
+(Note: The previous convertdata.py and poem_dataset_generator.py scripts are not present in the provided file list. Ensure you have appropriate data preparation methods.)
 
-```bash
-# Basic training
-python integrated_hyper_hakmem_model.py \
-    --data_path data/wikitext_train.npy \
-    --val_data_path data/wikitext_val.npy \
+Training
+
+Train the model using the WuBuNest_Trainer.py script:
+
+# Example training command (adjust paths and hyperparameters)
+# Assumes DDP launch with torchrun if multiple GPUs are used
+# Example for 2 GPUs: torchrun --nproc_per_node=2 WuBuNest_Trainer.py [ARGS]
+
+# Single GPU / CPU example:
+python WuBuNest_Trainer.py \
+    --data_path /path/to/your/train_data.npy \
+    --val_data_path /path/to/your/val_data.npy \
+    --checkpoint_dir ./wubu_results \
     --batch_size 16 \
-    --learning_rate 5e-4 \
     --grad_accum_steps 4 \
-    --epochs 12 \
+    --epochs 10 \
+    --learning_rate 5e-4 \
+    --weight_decay 0.01 \
+    --max_grad_norm 1.0 \
+    --context_window 512 \
+    --num_workers 4 \
     --local_hidden_size 384 \
-    --hyperbolic_embedding_dim 384 \
-    --num_hyperbolic_layers 8 \
-    --num_hyperbolic_heads 8 \
     --decoder_memory_dim 768 \
-    --checkpoint_dir ./checkpoints \
-    --max_grad_norm 1.0
+    --num_levels 3 \
+    --hyperbolic_dims 128 64 32 \
+    --boundary_points_per_level 5 4 3 \
+    --rotation_types so_n so_n \
+    --transform_types mlp mlp \
+    --dropout 0.1 \
+    --wandb # Optional: Enable WandB logging
+    # Add other WuBu config args as needed (--initial_curvatures, etc.)
+    # Add Q-Learning args if desired (--q_learning_rate, etc.)
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
 
-# Or use the convenience batch file
-run_integrated.bat
-```
+Training progress, checkpoints, logs, and visualizations will be saved in the specified --checkpoint_dir (e.g., ./wubu_results).
 
-For faster testing with the poem dataset:
+Inference (Text Generation)
 
-```bash
-# Quick testing with poems dataset
-run_poem_model.bat
-```
+Use the WuBuNest_Inference.py script for text generation from a trained checkpoint:
 
-### Inference (Text Generation)
+python WuBuNest_Inference.py \
+    --checkpoint_path wubu_results/checkpoint_epoch_X_step_Y_metricZ.pt \
+    --seed_text "The concept of WuBu Nesting involves" \
+    --max_length 250 \
+    --temperature 0.75 \
+    --repetition_penalty 1.15 \
+    --top_k 40
+IGNORE_WHEN_COPYING_START
+content_copy
+download
+Use code with caution.
+Bash
+IGNORE_WHEN_COPYING_END
+Visualizations
 
-Use the model for text generation:
+During training (if configured in the training script, similar to wubu_nesting_example.py), visualizations of the WuBu Nesting model's internal state are generated and saved to the checkpoint directory (--checkpoint_dir / visualizations /).
 
-```bash
-python inference.py \
-    --checkpoint_path checkpoints/checkpoint_epoch_5_step_10000.pt \
-    --input_text "The ancient manuscript revealed" \
-    --max_length 200 \
-    --temperature 0.8 \
-    --num_hyperbolic_layers 8 \
-    --local_hidden_size 384
-```
+Nested Poincaré Disks: Shows the 2D projection of points and boundary manifolds within each level's conceptual Poincaré disk. Useful if any level has hyperbolic_dim=2. Saved under poincare_nested_epoch_N/.
 
-### Hyperparameters
+![alt text](wubu_results/visualizations/poincare_nested_epoch_20/all_levels_poincare.png)
 
-Key hyperparameters for model configuration:
+(Path relative to project root)
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| local_hidden_size | Dimension of local encoder/decoder | 384 |
-| hyperbolic_embedding_dim | Dimension of hyperbolic space | 384 |
-| num_hyperbolic_layers | Number of hyperbolic attention layers | 8 |
-| num_hyperbolic_heads | Number of attention heads per layer | 8 |
-| decoder_memory_dim | Dimension of decoder memory | 768 |
-| curvature | Hyperbolic space curvature | 0.8 |
-| clipping_radius | Poincaré ball clipping radius | 0.99 |
-| n_gram_sizes | N-gram sizes for local encoder | [3, 4] |
-| n_gram_vocab_size | Vocabulary size for N-gram hashing | 30000 |
+Nested Spheres (3D Projection): Visualizes the boundary manifolds of all levels projected into 3D space using PCA. Spheres are scaled to show nesting. Works for any level dimensions.
 
-Training hyperparameters:
+![alt text](wubu_results/visualizations/nested_spheres_epoch_20.png)
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| learning_rate | Initial learning rate | 5e-4 |
-| weight_decay | L2 regularization strength | 0.01 |
-| grad_accum_steps | Gradient accumulation steps | 4 |
-| max_grad_norm | Maximum gradient norm for clipping | 1.0 |
-| q_learning_rate | Learning rate for Q-controller | 0.01 |
-| q_discount | Discount factor for Q-learning | 0.95 |
-| q_epsilon | Initial exploration rate | 0.2 |
+(Path relative to project root)
 
-## Features
+Tangent Space Transitions: Illustrates how points and boundaries are rotated and mapped between the tangent spaces of two adjacent 2D levels.
 
-- **Byte-Level Processing**: Native handling of any UTF-8 text without vocabulary limitations
-- **Dynamic Patching**: Focuses computation on semantically meaningful segments
-- **Hyperbolic Geometry**: Better representation of hierarchical structures in language
-- **Q-Learning Optimization**: Self-adapting hyperparameters for optimal training
-- **Hierarchical Decoder**: Optional two-stage prediction for improved byte distribution modeling
-- **Gradient Monitoring**: Advanced tracking of gradient statistics for training stability
+Training Metrics: Plots training loss and accuracy (if applicable) over epochs.
 
-## Advanced Components
+![alt text](wubu_results/visualizations/training_metrics.png)
 
-### Hyperbolic Geometry
+(Path relative to project root)
 
-The model leverages the Poincaré ball model of hyperbolic geometry to represent hierarchical relationships more efficiently:
+Hyperparameters
+WuBu Nesting Configuration (wubu_config - see DEFAULT_CONFIG_WUBU in Trainer)
+Parameter	Description	Default	CLI Argument
+num_levels	Number of nested hyperbolic levels	3	--num_levels
+hyperbolic_dims	List of dimensions for each level	[128, 64, 32]	--hyperbolic_dims
+boundary_points_per_level	List of numbers of learnable boundary points per level	[5, 5, 5]	--boundary_points_per_level
+initial_curvatures	List of initial curvature values (c_i) per level	[1.0, 1.0, 1.0]	--initial_curvatures
+initial_scales	List of initial scale values (s_i) per level	[1.0, 1.0, 1.0]	--initial_scales
+initial_spread_values	List of initial spread values (σ_i) per level (opt.)	None	--initial_spread_values
+learnable_curvature	Whether to learn curvature c_i	True	--no_learnable_curvature
+learnable_scales	Whether to learn scale s_i	True	--no_learnable_scales
+learnable_spread	Whether to learn spread σ_i	True	--no_learnable_spread
+curvature_min_value	Minimum value constraint for curvature	1e-5	Set in Config
+scale_min_value	Minimum value constraint for scale	1e-5	Set in Config
+spread_min_value	Minimum value constraint for spread	1e-5	Set in Config
+use_level_descriptors	Enable learnable Level Descriptor vector ld_i	True	--no_level_descriptors
+level_descriptor_init_scale	Initialization scale for ld_i	0.01	Set in Config
+use_level_spread	Enable learnable Level Spread parameter σ_i	True	--no_level_spread
+rotation_types	List of rotation types (so_n, quat, identity) for transitions	["so_n", ...]	--rotation_types
+transform_types	List of mapping types (mlp, linear, quat) for transitions	["mlp", ...]	--transform_types
+transform_hidden_dims	List of hidden dims for MLP mappings (opt.)	[None, ...]	--transform_hidden_dims
+use_tangent_flow	Enable Intra-Level Tangent Flow F_i	True	--no_tangent_flow
+tangent_flow_type	Type of flow map (mlp, linear, none)	mlp	--tangent_flow_type
+tangent_flow_scale	Scaling factor applied to flow displacement	1.0	--tangent_flow_scale
+relative_vector_aggregation	Method to aggregate relative vectors (mean, sum, none)	mean	--relative_vector_aggregation
+aggregation_method	Method to aggregate level outputs (concat_tangent)	concat_tangent	--aggregation_method
+dropout	General dropout rate used within components	0.1	--dropout
 
-- **Exponential Mapping**: Projects from tangent space to Poincaré ball
-- **Logarithmic Mapping**: Projects from Poincaré ball back to tangent space
-- **Hyperbolic Distance**: Computes attention scores using hyperbolic metrics
-- **Stability Techniques**: Ensures numerical stability through proper clipping and normalization
+(Note: List arguments require num_levels or num_levels - 1 values as appropriate.)
 
-### Q-Learning Controller
+Sequence Model Configuration (sequence_config)
+Parameter	Description	Default	CLI Argument
+local_hidden_size	Hidden dim for Local Encoder/Decoder Transformers	256	--local_hidden_size
+decoder_memory_dim	Dimension of input memory for Local Decoder	512	--decoder_memory_dim
+context_window	Input sequence length	256	--context_window
+n_gram_sizes	N-gram sizes for Local Encoder features	[3, 4]	--n_gram_sizes
+n_gram_vocab_size	Vocab size for N-gram hashing	30000	--n_gram_vocab_size
+use_hierarchical_decoder	Use hierarchical prediction head in decoder	True	--no_hierarchical_decoder
+num_encoder_layers	Number of layers in Local Encoder Transformer	2	--num_encoder_layers
+num_decoder_layers	Number of layers in Local Decoder Transformer	4	--num_decoder_layers
+num_encoder_heads	Number of heads in Local Encoder Transformer	8	--num_encoder_heads
+num_decoder_heads	Number of heads in Local Decoder Transformer	8	--num_decoder_heads
+Training Hyperparameters
+Parameter	Description	Default	CLI Argument
+learning_rate	Base learning rate for optimizer	5e-4	--learning_rate
+weight_decay	L2 regularization strength	0.01	--weight_decay
+grad_accum_steps	Gradient accumulation steps	2	--grad_accum_steps
+max_grad_norm	Max gradient norm for clipping (0=disable)	1.0	--max_grad_norm
+batch_size	Global batch size across all GPUs	32	--batch_size
+epochs	Number of training epochs	10	--epochs
+num_workers	DataLoader workers	2	--num_workers
+no_amp	Disable Automatic Mixed Precision	False	--no_amp
+seed	Random seed	42	--seed
+detect_anomaly	Enable autograd anomaly detection (slow)	False	--detect_anomaly
+Q-Learning Controller Hyperparameters (Optional)
+Parameter	Description	Default	CLI Argument
+q_learning_rate	Q-Table learning rate (alpha)	0.1	--q_learning_rate
+q_discount	Q-Learning discount factor (gamma)	0.9	--q_discount
+q_epsilon	Initial exploration rate	0.2	--q_epsilon
+q_epsilon_decay	Epsilon decay rate (multiplicative)	0.995	--q_epsilon_decay
+q_min_epsilon	Minimum epsilon value	0.05	--q_min_epsilon
+disable_q_controller	Disable Q-Controller completely	False	--disable_q_controller
+Features
 
-The EnhancedSGD optimizer incorporates a Q-learning controller that:
+Byte-Level Processing: Native handling of any UTF-8 text without vocabulary limitations.
 
-- Monitors training dynamics (loss trends, gradient norms)
-- Learns optimal hyperparameter adjustments based on observed performance
-- Adapts learning rate and momentum dynamically during training
-- Balances exploration and exploitation through epsilon-decay scheduling
+Dynamic Patching: Babylon Index focuses computation on semantically meaningful byte segments.
 
-### Gradient Statistics
+WuBu Nesting: Models complex, multi-scale hierarchies with adaptive geometry.
 
-The training infrastructure includes detailed gradient monitoring:
+Adaptive Geometry: Learns curvature (c_i) and scale (s_i) per level.
 
-- Tracks clipping rates and magnitudes
-- Identifies and handles non-finite gradients
-- Provides insights into training dynamics
-- Helps inform the Q-controller's decision-making
+Boundary Manifolds: Explicitly models substructures (B_{i,j}) within each level.
 
-## Limitations
+Tangent Space Transitions: Performs rotations (R_i) and mappings (T̃_i) between levels in Euclidean tangent spaces.
 
-- **Computational Requirements**: More intensive than traditional token-based models
-- **Hyperbolic Sensitivity**: May require careful tuning of hyperbolic parameters
-- **Training Stability**: Complex geometry requires robust stability measures
-- **Memory Usage**: Processing at byte level can increase memory requirements
+Explicit Rotations: Models orientational changes between levels using SO(n) or Quaternions.
 
-## Contributing
+Relative Vectors: Computes rotation-aware spatial relationships (d_{i+1}) between main representation and boundaries.
+
+Level Descriptors & Spread: Captures intrinsic level characteristics (ld_i) and uncertainty (σ_i).
+
+Intra-Level Flow: Models dynamics or adjustments within a level's tangent space (F_i).
+
+Q-Learning Optimization: Self-adapting optimizer hyperparameters (LR, Momentum) for potentially improved training dynamics.
+
+Hierarchical Decoder: Optional two-stage byte prediction for improved modeling of byte distributions.
+
+Gradient Monitoring: Advanced tracking of gradient statistics for training stability analysis.
+
+Integrated Visualizations: Generates plots of internal WuBu structures (Poincaré disks, nested spheres) during training.
+
+Limitations
+
+Computational Intensity: WuBu Nesting adds complexity compared to standard architectures; byte-level processing is inherently more intensive than token-based models.
+
+Training Stability: The complex geometry and numerous learnable parameters require careful initialization, optimization, and stability measures (e.g., gradient clipping, normalization).
+
+Hyperparameter Tuning: Requires careful tuning of both sequence model and WuBu Nesting configuration parameters. The Q-Controller aims to reduce tuning effort for LR/Momentum but adds its own hyperparameters.
+
+Memory Usage: Processing at byte level can increase memory requirements, especially with long context windows.
+
+Contributing
 
 Contributions are welcome! Please feel free to submit a pull request or open an issue for bugs, features, or improvements.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Fork the repository (https://github.com/waefrebeorn/bytropix)
 
-## License
+Create your feature branch (git checkout -b feature/amazing-feature)
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+Commit your changes (git commit -m 'Add some amazing feature')
 
-## Acknowledgments
+Push to the branch (git push origin feature/amazing-feature)
 
-- The hyperbolic attention mechanism is inspired by research in hyperbolic neural networks
-- Babylon Index patching draws on information theory concepts
-- Q-learning optimization builds on reinforcement learning approaches to hyperparameter tuning
-- The model architecture incorporates elements from transformer-based language models
+Open a Pull Request
 
-## Citation
+License
 
-If you use this code or ideas from this project in your research, please consider citing:
+This project is licensed under the MIT License - see the LICENSE file for details (assuming one exists).
 
-```
-@software{Bytropix,
+Acknowledgments
+
+The WuBu Nesting framework synthesizes ideas from hyperbolic geometry, geometric deep learning, and rotation representations (Quaternions/SO(n)).
+
+Hyperbolic components inspired by research in hyperbolic neural networks [Nickel & Kiela, 2017; Ganea et al., 2018].
+
+Babylon Index patching draws on information theory concepts.
+
+Q-learning optimization builds on reinforcement learning approaches to hyperparameter tuning.
+
+The model architecture incorporates elements from Transformer-based language models.
+
+Citation
+
+If you use this code or ideas from the WuBu Nesting framework in your research, please consider citing:
+
+@software{BytropixWuBuNesting,
   author = {WaefreBeorn},
-  title = {Bytropix,
-  year = {2025},
+  title = {Bytropix: Byte-Level Modeling with WuBu Nesting},
+  year = {2024},
   url = {https://github.com/waefrebeorn/bytropix}
 }
-```
