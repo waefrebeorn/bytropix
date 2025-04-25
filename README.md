@@ -37,8 +37,6 @@ The WuBu Nesting stack processes representations through a series of adaptive ge
     *(Path relative to project root)*
 -   **Boundary Manifolds (`B_{i,j}`):** Learnable points within each level representing substructures or landmarks (parameterized in the tangent space).
 -   **Tangent Space Processing:** Complex operations (rotation, mapping, relative vector calculation) occur in the Euclidean tangent spaces associated with each level. The "Poincaré Disk" visualizations show 2D tangent space embeddings for applicable levels.
-    ![Example Poincaré Disk Visualization](wubu_results/visualizations/poincare_nested_epoch_20/all_levels_poincare.png)
-    *(Path relative to project root)*
 -   **Inter-Level Transformations (`T_{i → i+1} = T̃_i ∘ R_i`):** Data is mapped from level `i` to its tangent space (Log Map), undergoes a learnable **Rotation (`R_i`)**, then a learnable non-rotational **Mapping (`T̃_i`)** to the tangent space of level `i+1`. **Relative Vectors (`d_{i+1}`)** are computed in the target tangent space based on transformed boundary points.
 -   **Intra-Level Processing:** Within each level, inputs (incoming vector, relative vectors, level descriptor, spread context) are combined, potentially processed by an **Intra-Level Tangent Flow (`F_i`)**, and mapped between tangent space and the Poincaré ball using scale-aware Exponential/Logarithmic maps.
 -   **Level Information:** Each level learns and passes forward a **Level Descriptor (`ld_i`)** vector and a **Level Spread (`σ_i`)** scalar.
