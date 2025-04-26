@@ -61,7 +61,7 @@ The `RiemannianEnhancedSGD` optimizer supports both standard Euclidean parameter
 ├── HypCD.py                        \# (Other model/component variants)
 ├── LIVEBSFIN.py                    \# (Other model/component variants)
 ├── WuBuNesting.py                  \# ( core nesting logic)
-├── wubu\_nesting\_impl.py            \# (Potential implementation details)
+├── wubu\_nesting\_impl.py            \# ( implementation details)
 ├── wubu\_nesting\_visualization.py   \# (Visualization generation code)
 ├── WuBuHypCD-paper.md              \# (Related markdown document)
 ├── WuBuHypCD.tex                   \# (Related LaTeX document)
@@ -265,7 +265,7 @@ Configuration is managed via command-line arguments passed to `WuBuNest_Trainer.
 
 ## Limitations
 
-  * **Experimental Hyperbolic Implementation**: The "fully hyperbolic" approach increases complexity and potential numerical instability compared to standard Euclidean or hybrid models. Many operations are approximated via the tangent space bridge[cite: 105].
+  * **Experimental Hyperbolic Implementation**: The "fully hyperbolic" approach increases complexity and  numerical instability compared to standard Euclidean or hybrid models. Many operations are approximated via the tangent space bridge[cite: 105].
   * **Computational Intensity**: WuBu Nesting and hyperbolic operations are computationally more demanding than standard Transformers[cite: 109, 116]. Byte-level processing is inherently intensive.
   * **Training Stability**: Requires careful initialization, optimization (like `RiemannianEnhancedSGD`), and  techniques like gradient clipping and normalization[cite: 107, 108, 111].
   * **Hyperparameter Tuning**: A significant number of hyperparameters related to both the sequence model and the WuBu Nesting configuration need tuning.
