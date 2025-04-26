@@ -239,7 +239,7 @@ If you use this code or the WuBu Nesting framework in your research, please cite
 @techreport{WaefreBeornWuBuNesting2024,
   author = {Wubu WaefreBeorn},
   title = {WuBu Nesting: A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics},
-  year = {2024},
+  year = {2025},
   institution = {GitHub Repository},
   url = {https://github.com/waefrebeorn/bytropix},
   note = {Accessed [Date]}
@@ -248,7 +248,7 @@ If you use this code or the WuBu Nesting framework in your research, please cite
 @software{BytropixWuBuNestingCode,
   author = {WaefreBeorn},
   title = {Bytropix: Hyperbolic WuBu Nesting for Byte-Level Modeling},
-  year = {2024},
+  year = {2025},
   url = {https://github.com/waefrebeorn/bytropix},
   version = {0.04-hyp}
 }
