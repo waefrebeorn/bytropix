@@ -236,7 +236,7 @@ This project is licensed under the MIT License - see the `LICENSE` file for deta
 If you use this code or the WuBu Nesting framework in your research, please cite the accompanying paper and this repository:
 
 ```
-@techreport{WaefreBeornWuBuNesting2024,
+@techreport{WaefreBeornWuBuNesting,
   author = {Wubu WaefreBeorn},
   title = {WuBu Nesting: A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics},
   year = {2025},
