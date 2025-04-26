@@ -15,7 +15,7 @@ Key features include:
 * **Q-Learning Enhanced Optimization**: Employs a Q-learning agent (`HAKMEMQController`) within the `RiemannianEnhancedSGD` optimizer to dynamically adjust learning rate and momentum scales based on training state (loss trends, gradient norms, oscillation detection).
 * **Gradient Monitoring**: Includes sophisticated gradient statistics tracking (`GradientStats`) for monitoring training stability, including norm calculation and clipping counts.
 
-This model aims to provide a powerful and flexible inductive bias for modeling complex systems exhibiting intertwined hierarchical, rotational, dynamic, and uncertain characteristics, making it potentially suitable for complex language understanding, multi-lingual text processing, and other structured data domains[cite: 36, 91, 93, 96, 98].
+This model aims to provide a powerful and flexible inductive bias for modeling complex systems exhibiting intertwined hierarchical, rotational, dynamic, and uncertain characteristics, making it  suitable for complex language understanding, multi-lingual text processing, and other structured data domains[cite: 36, 91, 93, 96, 98].
 
 ## Architecture
 
@@ -29,7 +29,7 @@ The Bytropix model integrates WuBu Nesting into a byte-level sequence-to-sequenc
     * **Inter-Level Transitions** occur via the Euclidean tangent space ($T_p(H^{n_i}) \cong \mathbb{R}^{n_i}$)[cite: 5, 27, 63]. Points are mapped using Log maps (`logmap0`), transformed by a learnable mapping (`HyperbolicInterLevelTransform`), and mapped back using Exp maps (`expmap0`) to the next level's manifold (with projection)[cite: 87].
     * Learnable **Boundary Points** (`BoundaryManifoldHyperbolic`) exist within each level's manifold[cite: 5, 26, 62].
     * **Relative Vectors** are computed in the *target tangent space* based on the transformed main point and boundary points, encoding structure relative to boundaries[cite: 7, 31, 71].
-    * **Intra-Level Processing** combines the input point, aggregated relative tangent vectors, a learnable **Level Descriptor** point (transformed from the previous level), and a contextual **Spread** parameter ($\sigma_i$)[cite: 8, 33, 74, 77]. This combination happens in the tangent space, is processed by a combiner network (`tangent_combiner`), potentially adjusted by a **Tangent Flow** (`tangent_flow`)[cite: 9, 75, 76], and then mapped back to the manifold.
+    * **Intra-Level Processing** combines the input point, aggregated relative tangent vectors, a learnable **Level Descriptor** point (transformed from the previous level), and a contextual **Spread** parameter ($\sigma_i$)[cite: 8, 33, 74, 77]. This combination happens in the tangent space, is processed by a combiner network (`tangent_combiner`),  adjusted by a **Tangent Flow** (`tangent_flow`)[cite: 9, 75, 76], and then mapped back to the manifold.
     * The **Tangent Output** (`tangent_out`) from each level's processing (vector in $T_0 H_i$) is collected.
 5.  Tangent outputs from all levels are **Aggregated** (e.g., via concatenation - `concat_tangent`).
 6.  This aggregated tangent space representation is **Projected** by a linear layer (`tangent_to_output`) to the final **Decoder Memory** dimension (Euclidean).
@@ -56,11 +56,11 @@ The `RiemannianEnhancedSGD` optimizer supports both standard Euclidean parameter
 │   ├── nested\_spheres\_epoch\_\*.png  \# WuBu Nesting 3D boundary visualizations
 │   ├── test\_predictions.png        \# (Example visualization from old README)
 │   └── training\_metrics.png        \# Training loss plot
-├── EnhancedSGD.py                  \# (Potentially related optimizer code)
+├── EnhancedSGD.py                  \# ( related optimizer code)
 ├── HypBSFIN.py                     \# (Other model/component variants)
 ├── HypCD.py                        \# (Other model/component variants)
 ├── LIVEBSFIN.py                    \# (Other model/component variants)
-├── WuBuNesting.py                  \# (Potentially core nesting logic)
+├── WuBuNesting.py                  \# ( core nesting logic)
 ├── wubu\_nesting\_impl.py            \# (Potential implementation details)
 ├── wubu\_nesting\_visualization.py   \# (Visualization generation code)
 ├── WuBuHypCD-paper.md              \# (Related markdown document)
@@ -267,7 +267,7 @@ Configuration is managed via command-line arguments passed to `WuBuNest_Trainer.
 
   * **Experimental Hyperbolic Implementation**: The "fully hyperbolic" approach increases complexity and potential numerical instability compared to standard Euclidean or hybrid models. Many operations are approximated via the tangent space bridge[cite: 105].
   * **Computational Intensity**: WuBu Nesting and hyperbolic operations are computationally more demanding than standard Transformers[cite: 109, 116]. Byte-level processing is inherently intensive.
-  * **Training Stability**: Requires careful initialization, optimization (like `RiemannianEnhancedSGD`), and potentially techniques like gradient clipping and normalization[cite: 107, 108, 111].
+  * **Training Stability**: Requires careful initialization, optimization (like `RiemannianEnhancedSGD`), and  techniques like gradient clipping and normalization[cite: 107, 108, 111].
   * **Hyperparameter Tuning**: A significant number of hyperparameters related to both the sequence model and the WuBu Nesting configuration need tuning.
   * **Memory Usage**: Byte-level processing can increase memory requirements.
 
