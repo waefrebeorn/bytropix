@@ -77,7 +77,7 @@ set "GRAD_ACCUM_STEPS=2"
 set "LEARNING_RATE=1e-4"
 set "EPOCHS=5"
 set "WEIGHT_DECAY=0.01"
-set "MAX_GRAD_NORM=15.0"
+set "MAX_GRAD_NORM=55054544896.0"
 
 REM --- Optimizer Q-Learning Controller ---
 REM Default is True for enable_q_controller. Set "--no-enable-q-controller" to disable. Use "" for default.

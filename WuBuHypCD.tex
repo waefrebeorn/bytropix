@@ -6,26 +6,43 @@
 % - Renamed \hyp to \HypSpace
 % - Used \url{} for filename formatting (removed hyphenat)
 % - Scaled TikZ diagram further
+% --- Version 4 Corrections (Based on Compile Log) ---
+% - Added \texorpdfstring for math in titles/captions causing hyperref warnings
+% - Added \sloppypar around paragraph likely causing overfull hbox
+% --- Version 5 Corrections (Based on Compile Log) ---
+% - Correctly added $...$ inside first arg of \texorpdfstring for math commands
+% - Fixed \texorpdfstring in optional args of \subsubsection
+% - Adjusted \sloppypar placement based on new overfull hbox warnings
+% --- Version 6 Corrections (Based on Compile Log) ---
+% - Removed unnecessary \texorpdfstring from body text (abstract, paragraphs)
+% - Ensured all math in body text is correctly delimited with $...$
+% - Corrected \texorpdfstring usage in sectioning/captions
+% - Removed \sloppypar temporarily to reassess line breaks after error fixes
+% --- Version 7 Corrections (Based on Compile Log) ---
+% - Re-added \sloppypar for persistent overfull hbox before figure
+% - Simplified plain text in \texorpdfstring (removed ^, _) for hyperref warnings
+% --- Version 8 Corrections (Based on Compile Log) ---
+% - Further simplified plain text in \subsubsection optional arg for hyperref warning
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \documentclass[11pt, twoside]{article} % Use 11pt font, two-side layout typical for articles
 
 % --- Essential Packages ---
-\usepackage[utf8]{inputenc}       % Handle UTF-8 input
-\usepackage[T1]{fontenc}        % Use modern font encodings
+\usepackage[utf8]{inputenc}      % Handle UTF-8 input
+\usepackage[T1]{fontenc}       % Use modern font encodings
 \usepackage{amsmath, amssymb, amsfonts, amsthm} % AMS packages + theorem environments
-\usepackage{graphicx}             % For including figures (still needed if other figs exist)
+\usepackage{graphicx}            % For including figures (still needed if other figs exist)
 \usepackage[numbers,sort&compress]{natbib} % For numbered citations, sorted and compressed
-\usepackage{hyperref}             % For clickable links and references
-\usepackage{geometry}             % For setting page margins
-\usepackage{booktabs}             % For professional quality tables (if needed later)
-\usepackage{xcolor}               % For potential text coloring (e.g., comments)
-\usepackage{float}                % For better figure placement control (e.g., [H])
-\usepackage{microtype}            % Improves typography (subtle spacing adjustments)
-\usepackage{lmodern}              % Use Latin Modern fonts (often preferred over Computer Modern)
-\usepackage{caption}              % For customizing captions
-\usepackage{listings}             % For code listings (if needed later)
-\usepackage{enumitem}             % For customized lists
-% \usepackage[htt]{hyphenat}      % Removed - caused issues, use \url instead
+\usepackage{hyperref}            % For clickable links and references
+\usepackage{geometry}            % For setting page margins
+\usepackage{booktabs}            % For professional quality tables (if needed later)
+\usepackage{xcolor}              % For potential text coloring (e.g., comments)
+\usepackage{float}               % For better figure placement control (e.g., [H])
+\usepackage{microtype}           % Improves typography (subtle spacing adjustments)
+\usepackage{lmodern}             % Use Latin Modern fonts (often preferred over Computer Modern)
+\usepackage{caption}             % For customizing captions
+\usepackage{listings}            % For code listings (if needed later)
+\usepackage{enumitem}            % For customized lists
+% \usepackage[htt]{hyphenat}     % Removed - caused issues, use \url instead
 
 % --- TikZ Package and Libraries for Diagram ---
 \usepackage{tikz}
@@ -42,14 +59,15 @@
 }
 
 % --- Hyperref Setup ---
+% Use \texorpdfstring ONLY for commands that might go into bookmarks AND contain problematic LaTeX
 \hypersetup{
     colorlinks=true,
-    linkcolor=blue!70!black,        % Slightly darker blue for links
+    linkcolor=blue!70!black,       % Slightly darker blue for links
     citecolor=green!60!black, % Slightly darker green for citations
     filecolor=magenta,
     urlcolor=cyan!70!black,
-    pdftitle={WuBu Nesting: A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics},
-    pdfauthor={Your Name(s) Here}, % IMPORTANT: Update this
+    pdftitle={WuBu Nesting: A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics}, % Title is okay as plain text
+    pdfauthor={WaefreBeorn}, % IMPORTANT: Update this
     pdfsubject={Geometric Deep Learning, Hyperbolic Geometry, Machine Learning},
     pdfkeywords={Hyperbolic Geometry, Geometric Deep Learning, Nested Models, Rotation, Tangent Space, Hierarchy, Representation Learning},
     bookmarksopen=true,
@@ -61,11 +79,21 @@
 \bibliographystyle{plainnat} % Standard numerical style
 
 % --- Custom Commands (Optional) ---
-% CORRECTED: Renamed command to avoid conflict
-\newcommand{\HypSpace}[3]{\mathcal{H}^{#1}_{#2, #3}} % Hyperbolic space H^n_{c,s}
-\newcommand{\tangent}[2]{T_{#1}(\mathcal{H}^{#2})} % Tangent space T_p(H^n)
+% Definition now includes $...$ internally. Use directly in text.
+% \texorpdfstring is only needed if this command itself is used in a bookmark-generating context (like \section)
+% which is unlikely for a complex command like this. We rely on hyperref handling simple math in bookmarks.
+\newcommand{\HypSpaceCmd}[3]{\mathcal{H}^{#1}_{#2, #3}} % Raw command for math mode
+% Simplified plain text version for bookmarks (removed ^ and _)
+\newcommand{\HypSpace}[3]{\texorpdfstring{$\HypSpaceCmd{#1}{#2}{#3}$}{H{#1}{#2}{#3}}} % Command for use in bookmarks if needed
+
+\newcommand{\tangentCmd}[2]{T_{#1}(\mathcal{H}^{#2})} % Raw command for math mode
+% Simplified plain text version for bookmarks (removed ^ and _)
+\newcommand{\tangent}[2]{\texorpdfstring{$\tangentCmd{#1}{#2}$}{T{#1}(H{#2})}} % Command for use in bookmarks if needed
+
 \newcommand{\R}{\mathbb{R}} % Real numbers symbol
-\newcommand{\SO}[1]{\text{SO}(#1)} % SO(n) group
+\newcommand{\SOcmd}[1]{\text{SO}(#1)} % Raw command for math mode
+\newcommand{\SO}[1]{\texorpdfstring{$\SOcmd{#1}$}{SO(#1)}} % Command for use in bookmarks if needed
+
 \newcommand{\wubu}{\textbf{WuBu Nesting}} % Consistent naming
 
 % --- TikZ Styles ---
@@ -82,13 +110,12 @@
 \tikzstyle{smalllabel} = [font=\tiny, text width=2.5cm, align=center] % Style for arrow labels, smaller font
 
 % --- Title, Author, Date ---
+% \wubu is bold text, should be fine for title.
 \title{\wubu: A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics}
 
 % --- IMPORTANT: Replace with actual author names and affiliations ---
 \author{
-    Author One\thanks{Affiliation One, Email: email1@example.com}
-    \and
-    Author Two\thanks{Affiliation Two, Email: email2@example.com}
+    Wubu WaefreBeorn\thanks{Wubu WaefreBeorn, X: @WaefreBeorn Twitch: @WaefreBeorn Youtube: @WuBuStreams @WaefreBeorn}
     % Add more authors as needed
 }
 \date{} % Leave blank for arXiv date stamp
@@ -101,8 +128,9 @@
 \maketitle
 
 % --- Abstract ---
+% Removed \texorpdfstring, ensured math is delimited with $...$
 \begin{abstract}
-Real-world data frequently exhibits complex characteristics including multi-scale hierarchical organization, rotational symmetries, dynamic evolution, and regional uncertainty. While geometric deep learning offers powerful tools, existing paradigms often specialize: Euclidean models struggle with hierarchies, hyperbolic models typically handle single static hierarchies without rotational mechanics, and quaternion networks excel at rotation but lack hierarchical structure. To address these limitations, we introduce \wubu{} ("layered nesting"), a novel conceptual framework unifying these geometric properties. \wubu{} employs a recursively nested structure of hyperbolic spaces ($\HypSpace{n_1}{c_1}{s_1} \supset \HypSpace{n_2}{c_2}{s_2} \supset \dots$) where dimensionality ($n_i$), curvature ($c_i > 0$), and scale ($s_i > 0$) are learnable, allowing dynamic adaptation to data complexity. Each level $i$ incorporates learnable Boundary Sub-Manifolds representing scale-specific structures. Inter-level transitions ($i \rightarrow i+1$) occur in Euclidean tangent spaces ($T_p(\HypSpace{n_i}{}{}) \cong \R^{n_i}$), featuring a learned Rotation ($R_i$, e.g., $\SO{n_i}$ or Quaternions) applied simultaneously to primary data, boundary representations, and a learnable Level Descriptor ($\mathbf{ld}_i$). This is followed by a non-rotational Mapping ($\tilde{T}_i$) adjusting features and dimension. Relative Vectors ($\mathbf{d}_{i+1, j, k}$) are computed in the target tangent space, encoding rotation-aware structure. Each level also has a learnable Spread Parameter ($\sigma_i$) for uncertainty context and allows Intra-Level Tangent Flow ($F_i$) for local dynamics. The resulting rich information flow enables \wubu{} to capture intertwined hierarchical, rotational, dynamic, and uncertain characteristics, offering a highly flexible geometric inductive bias for complex data modeling.
+Real-world data frequently exhibits complex characteristics including multi-scale hierarchical organization, rotational symmetries, dynamic evolution, and regional uncertainty. While geometric deep learning offers powerful tools, existing paradigms often specialize: Euclidean models struggle with hierarchies, hyperbolic models typically handle single static hierarchies without rotational mechanics, and quaternion networks excel at rotation but lack hierarchical structure. To address these limitations, we introduce \wubu{} ("layered nesting"), a novel conceptual framework unifying these geometric properties. \wubu{} employs a recursively nested structure of hyperbolic spaces ($\HypSpaceCmd{n_1}{c_1}{s_1} \supset \HypSpaceCmd{n_2}{c_2}{s_2} \supset \dots$) where dimensionality ($n_i$), curvature ($c_i > 0$), and scale ($s_i > 0$) are learnable, allowing dynamic adaptation to data complexity. Each level $i$ incorporates learnable Boundary Sub-Manifolds representing scale-specific structures. Inter-level transitions ($i \rightarrow i+1$) occur in Euclidean tangent spaces ($T_p(\HypSpaceCmd{n_i}{}{}) \cong \R^{n_i}$), featuring a learned Rotation ($R_i$, e.g., $\SOcmd{n_i}$ or Quaternions) applied simultaneously to primary data, boundary representations, and a learnable Level Descriptor ($\mathbf{ld}_i$). This is followed by a non-rotational Mapping ($\tilde{T}_i$) adjusting features and dimension. Relative Vectors ($\mathbf{d}_{i+1, j, k}$) are computed in the target tangent space, encoding rotation-aware structure. Each level also has a learnable Spread Parameter ($\sigma_i$) for uncertainty context and allows Intra-Level Tangent Flow ($F_i$) for local dynamics. The resulting rich information flow enables \wubu{} to capture intertwined hierarchical, rotational, dynamic, and uncertain characteristics, offering a highly flexible geometric inductive bias for complex data modeling.
 \end{abstract}
 
 % --- Main Body Sections ---
@@ -120,17 +148,18 @@ Conversely, Quaternions \cite{Hamilton1866} offer efficient rotation representat
 
 This paper introduces \textbf{\wubu{}}, a comprehensive conceptual framework designed to bridge these gaps by unifying adaptive multi-scale hierarchical representation with explicit modeling of rotational dynamics, dynamic evolution, and regional uncertainty. Instead of a single space or parallel product, \wubu{} proposes a nested "Russian doll" architecture of recursively embedded hyperbolic manifolds. Key innovations include:
 
+% Removed \texorpdfstring from list items, ensured math is delimited with $...$
 \begin{enumerate}[label=\arabic*), wide, labelindent=0pt]
-    \item \textbf{Adaptive Nested Hyperbolic Geometry:} A sequence of nested hyperbolic spaces $\HypSpace{n_1}{c_1}{s_1} \supset \HypSpace{n_2}{c_2}{s_2} \supset \dots$, where dimensionality $n_i$, curvature $c_i > 0$, and scale $s_i > 0$ are learnable, allowing dynamic geometric adaptation.
-    \item \textbf{Boundary Sub-Manifolds:} Learnable manifolds $B_{i,j}$ within each level $\HypSpace{n_i}{}{}$ (e.g., parameterized by points $\{\mathbf{b}_{i,j,k}\}$) representing scale-specific substructures or landmarks.
-    \item \textbf{Tangent Space Transitions:} Inter-level transitions ($i \rightarrow i+1$) mediated within Euclidean tangent spaces $T_p(\HypSpace{n_i}{}{}) \cong \R^{n_i}$, enabling complex yet tractable transformations.
-    \item \textbf{Explicit Tangent Space Rotations ($R_i$):} A learnable rotation $R_i$ (e.g., $\SO{n_i}$ or Quaternions) applied within $T_o(\HypSpace{n_i}{}{})$.
+    \item \textbf{Adaptive Nested Hyperbolic Geometry:} A sequence of nested hyperbolic spaces $\HypSpaceCmd{n_1}{c_1}{s_1} \supset \HypSpaceCmd{n_2}{c_2}{s_2} \supset \dots$, where dimensionality $n_i$, curvature $c_i > 0$, and scale $s_i > 0$ are learnable, allowing dynamic geometric adaptation.
+    \item \textbf{Boundary Sub-Manifolds:} Learnable manifolds $B_{i,j}$ within each level $\HypSpaceCmd{n_i}{}{}$ (e.g., parameterized by points $\{\mathbf{b}_{i,j,k}\}$) representing scale-specific substructures or landmarks.
+    \item \textbf{Tangent Space Transitions:} Inter-level transitions ($i \rightarrow i+1$) mediated within Euclidean tangent spaces $T_p(\HypSpaceCmd{n_i}{}{}) \cong \R^{n_i}$, enabling complex yet tractable transformations.
+    \item \textbf{Explicit Tangent Space Rotations ($R_i$):} A learnable rotation $R_i$ (e.g., $\SOcmd{n_i}$ or Quaternions) applied within $T_o(\HypSpaceCmd{n_i}{}{})$.
     \item \textbf{Simultaneous Transformation:} Rotation $R_i$ applied consistently to the main tangent vector $\mathbf{v}_i$, boundary tangent vectors $\mathbf{v}_{b_{i,j,k}}$, and a learnable Level Descriptor Vector $\mathbf{ld}_i$.
-    \item \textbf{Non-Rotational Mapping ($\tilde{T}_i$):} A learnable mapping $\tilde{T}_i: T_o(\HypSpace{n_i}{}{}) \rightarrow T_o(\HypSpace{n_{i+1}}{}{})$ following rotation, handling feature transformation and dimension changes. Full tangent transform: $T_{i \rightarrow i+1} = \tilde{T}_i \circ R_i$.
-    \item \textbf{Relative Vector Generation ($\mathbf{d}_{i+1}$):} Computed in the target tangent space $T_o(\HypSpace{n_{i+1}}{}{})$ as $\mathbf{d}_{i+1, j, k} = \mathbf{v}_{i+1} - \mathbf{v}''_{b_{i,j,k}}$, encoding rotation-aware structure.
-    \item \textbf{Learnable Level Descriptor Vector ($\mathbf{ld}_i$):} An intrinsic vector $\mathbf{ld}_i \in T_o(\HypSpace{n_i}{}{})$ capturing level-specific geometric properties, transformed to $\mathbf{ld}_{i+1}$ for the next level.
+    \item \textbf{Non-Rotational Mapping ($\tilde{T}_i$):} A learnable mapping $\tilde{T}_i: T_o(\HypSpaceCmd{n_i}{}{}) \rightarrow T_o(\HypSpaceCmd{n_{i+1}}{}{})$ following rotation, handling feature transformation and dimension changes. Full tangent transform: $T_{i \rightarrow i+1} = \tilde{T}_i \circ R_i$.
+    \item \textbf{Relative Vector Generation ($\mathbf{d}_{i+1}$):} Computed in the target tangent space $T_o(\HypSpaceCmd{n_{i+1}}{}{})$ as $\mathbf{d}_{i+1, j, k} = \mathbf{v}_{i+1} - \mathbf{v}''_{b_{i,j,k}}$, encoding rotation-aware structure.
+    \item \textbf{Learnable Level Descriptor Vector ($\mathbf{ld}_i$):} An intrinsic vector $\mathbf{ld}_i \in T_o(\HypSpaceCmd{n_i}{}{})$ capturing level-specific geometric properties, transformed to $\mathbf{ld}_{i+1}$ for the next level.
     \item \textbf{Learnable Level Spread Parameter ($\sigma_i$):} A scalar $\sigma_i > 0$ representing scale-specific uncertainty or density, passed as context to level $i+1$.
-    \item \textbf{Intra-Level Tangent Flow ($F_i$):} A learnable field $F_i: T_o(\HypSpace{n_i}{}{}) \rightarrow T_o(\HypSpace{n_i}{}{})$ modeling dynamics or adjustments within level $i$.
+    \item \textbf{Intra-Level Tangent Flow ($F_i$):} A learnable field $F_i: T_o(\HypSpaceCmd{n_i}{}{}) \rightarrow T_o(\HypSpaceCmd{n_i}{}{})$ modeling dynamics or adjustments within level $i$.
     \item \textbf{Rich Hierarchical Information Flow:} Level $i+1$ processing uses the primary representation, relative vectors $\{\mathbf{d}_{i+1, j, k}\}$, transformed descriptor $\mathbf{ld}_{i+1}$, and contextual spread $\sigma_i$.
 \end{enumerate}
 
@@ -170,7 +199,10 @@ Product manifolds \cite{GuEtAl2019} (e.g., $\R^n \times S^m \times \mathcal{H}^k
 \subsection{Conceptual Architecture}
 \label{subsec:conceptual_architecture}
 
-Input data is initially encoded and mapped to the tangent space of the outermost level ($\HypSpace{n_1}{c_1}{s_1}$). Within level $i$, processing occurs, potentially including intra-level tangent flow $F_i$. For transition $i \rightarrow i+1$, the primary representation, boundary manifold representations $\{\mathbf{b}_{i,j,k}\}$, and level descriptor $\mathbf{ld}_i$ are mapped to tangent vectors ($\mathbf{v}_i^{\text{out}}, \{\mathbf{v}_{b_{i,j,k}}\}, \mathbf{ld}_i^{\text{param}}$) via $\text{Log}_{o,s_i}^{c_i}$. A rotation $R_i$ is applied simultaneously to these vectors in $T_o(\HypSpace{n_i}{}{})$. A mapping $\tilde{T}_i$ then transforms the rotated vectors into the target tangent space $T_o(\HypSpace{n_{i+1}}{}{})$, yielding $\mathbf{v}_{i+1}, \{\mathbf{v}''_{b_{i,j,k}}\}, \mathbf{ld}_{i+1}$. Relative vectors $\mathbf{d}_{i+1, j, k} = \mathbf{v}_{i+1} - \mathbf{v}''_{b_{i,j,k}}$ are computed. Level $i+1$ processing uses $\mathbf{v}_{i+1}$ (often mapped to $\mathbf{x}_{i+1}$ via $\text{exp}_{o,s_{i+1}}^{c_{i+1}}$), relative vectors $\{\mathbf{d}_{i+1, j, k}\}$, descriptor $\mathbf{ld}_{i+1}$, and spread $\sigma_i$ from level $i$. Aggregated information from relevant levels forms the final output. (See Figure \ref{fig:architecture_tikz}).
+% Re-added \sloppypar for overfull hbox reported at lines 302-304
+\begin{sloppypar}
+Input data is initially encoded and mapped to the tangent space of the outermost level ($\HypSpaceCmd{n_1}{c_1}{s_1}$). Within level $i$, processing occurs, potentially including intra-level tangent flow $F_i$. For transition $i \rightarrow i+1$, the primary representation, boundary manifold representations $\{\mathbf{b}_{i,j,k}\}$, and level descriptor $\mathbf{ld}_i$ are mapped to tangent vectors ($\mathbf{v}_i^{\text{out}}, \{\mathbf{v}_{b_{i,j,k}}\}, \mathbf{ld}_i^{\text{param}}$) via $\text{Log}_{o,s_i}^{c_i}$. A rotation $R_i$ is applied simultaneously to these vectors in $T_o(\HypSpaceCmd{n_i}{}{})$. A mapping $\tilde{T}_i$ then transforms the rotated vectors into the target tangent space $T_o(\HypSpaceCmd{n_{i+1}}{}{})$, yielding $\mathbf{v}_{i+1}, \{\mathbf{v}''_{b_{i,j,k}}\}, \mathbf{ld}_{i+1}$. Relative vectors $\mathbf{d}_{i+1, j, k} = \mathbf{v}_{i+1} - \mathbf{v}''_{b_{i,j,k}}$ are computed. Level $i+1$ processing uses $\mathbf{v}_{i+1}$ (often mapped to $\mathbf{x}_{i+1}$ via $\text{exp}_{o,s_{i+1}}^{c_{i+1}}$), relative vectors $\{\mathbf{d}_{i+1, j, k}\}$, descriptor $\mathbf{ld}_{i+1}$, and spread $\sigma_i$ from level $i$. Aggregated information from relevant levels forms the final output. (See Figure \ref{fig:architecture_tikz}).
+\end{sloppypar}
 
 % --- TikZ Diagram ---
 % Scaled down further to fit page better
@@ -179,39 +211,39 @@ Input data is initially encoded and mapped to the tangent space of the outermost
     % Added scale=0.58 and transform shape
     \begin{tikzpicture}[scale=0.58, transform shape, node distance=1.0cm and 1.3cm, auto, >=Latex] % Further reduced scale
 
-        % Nodes
+        % Nodes - Use math mode $...$ for commands like \mathcal, \mathbf
         \node (input) [data] {Input Data};
         \node (enc) [block, below=of input] {Initial Euclidean Encoding};
         \node (tan1) [map, below=of enc] {Map to $T_o(\mathcal{H}^{n_1})$};
 
         % Level 1
-        \node (proc1) [process, right=2.5cm of tan1] {Level 1 Processing (incl. $F_1$)}; % Positioned right
+        \node (proc1) [process, right=2.5cm of tan1] {Level 1 Processing (incl. $F_1$)};
         \node (ld1) [data, above left=0.5cm and 0.2cm of proc1] {$\mathbf{ld}_1$};
         \node (sig1) [data, above right=0.5cm and 0.2cm of proc1] {$\sigma_1$};
         \node (bm1) [data, above=0.8cm of proc1] {$B_1$};
         \node (logmap1) [map, below=of proc1] {LogMap to $T_o(\mathcal{H}^{n_1})$};
 
         % Transformation 1->2
-        \node (rot1) [rotation, right=2.5cm of logmap1] {Rotation $R_1$}; % Positioned right
+        \node (rot1) [rotation, right=2.5cm of logmap1] {Rotation $R_1$};
         \node (map1) [transform, below=of rot1] {Mapping $\tilde{T}_1$};
         \node (tan2) [map, below=of map1] {Target $T_o(\mathcal{H}^{n_2})$};
         \node (relvec2) [block, below right=0.3cm and 0.2cm of tan2, fill=blue!10] {RelVecs $\mathbf{d}_2$};
 
         % Level 2 Processing
-        \node (proc2) [process, right=2.5cm of tan2] {Level 2 Processing (incl. $F_2$)}; % Positioned right
+        \node (proc2) [process, right=2.5cm of tan2] {Level 2 Processing (incl. $F_2$)};
         \node (ld2) [data, above left=0.5cm and 0.2cm of proc2] {$\mathbf{ld}_2$};
         \node (sig2) [data, above right=0.5cm and 0.2cm of proc2] {$\sigma_2$};
         \node (bm2) [data, above=0.8cm of proc2] {$B_2$};
         \node (logmap2) [map, below=of proc2] {LogMap to $T_o(\mathcal{H}^{n_2})$};
 
         % Transformation 2->3
-        \node (rot2) [rotation, right=2.5cm of logmap2] {Rotation $R_2$}; % Positioned right
+        \node (rot2) [rotation, right=2.5cm of logmap2] {Rotation $R_2$};
         \node (map2) [transform, below=of rot2] {Mapping $\tilde{T}_2$};
         \node (tan3) [map, below=of map2] {Target $T_o(\mathcal{H}^{n_3})$};
         \node (relvec3) [block, below right=0.3cm and 0.2cm of tan3, fill=blue!10] {RelVecs $\mathbf{d}_3$};
 
         % Level 3 (Example - could continue)
-        \node (proc3) [process, right=2.5cm of tan3] {Level 3 Processing (incl. $F_3$)}; % Positioned right
+        \node (proc3) [process, right=2.5cm of tan3] {Level 3 Processing (incl. $F_3$)};
         \node (logmap3) [map, below=of proc3] {LogMap to $T_o(\mathcal{H}^{n_3})$}; % Output from L3
 
         % Aggregation & Output (Positioned relative to last level)
@@ -226,6 +258,7 @@ Input data is initially encoded and mapped to the tangent space of the outermost
         \draw [arrow] (proc1) -- (logmap1);
 
         % Arrows - Level 1 to Transform 1->2
+        % Use math mode $...$ for math in node labels
         \draw [arrow] (logmap1) -- node[below, midway, smalllabel] {($\mathbf{v}_1^{\text{out}}$, $\mathbf{v}_{b_1}$, $\mathbf{ld}_1^{\text{param}}$)} (rot1);
         \draw [arrow] (rot1) -- (map1);
         \draw [arrow] (map1) -- node[left, midway, smalllabel] {($\mathbf{v}_2$, $\mathbf{v}''_{b_1}$, $\mathbf{ld}_2$)} (tan2);
@@ -267,7 +300,8 @@ Input data is initially encoded and mapped to the tangent space of the outermost
         \draw [arrow, dashed] (ld2) -- (rot2); % Connect LD2 to Rotation 2
 
     \end{tikzpicture}
-    \caption{Conceptual Architecture of the Comprehensive WuBu Nesting Framework (TikZ Diagram). Illustrates data flow through nested hyperbolic levels ($\HypSpace{n_i}{c_i}{s_i}$) with adaptive parameters ($n_i, c_i, s_i$). Key components: Boundary Manifolds ($B_{i}$), Level Descriptors ($\mathbf{ld}_i$), Level Spreads ($\sigma_i$), Intra-Level Tangent Flows ($F_i$). Inter-level transitions use tangent space mapping (LogMap), simultaneous Rotation ($R_i$), and Mapping ($\tilde{T}_i$). Relative Vectors ($\mathbf{d}_{i+1}$) are computed. Level $i+1$ uses $\mathbf{v}_{i+1}$, $\mathbf{d}_{i+1}$, $\mathbf{ld}_{i+1}$, and $\sigma_i$. Aggregated information yields the final output.}
+    % Simplified plain text versions in \texorpdfstring for bookmark compatibility
+    \caption{Conceptual Architecture of the Comprehensive WuBu Nesting Framework (TikZ Diagram). Illustrates data flow through nested hyperbolic levels (\texorpdfstring{$\HypSpaceCmd{n_i}{c_i}{s_i}$}{H ni ci si}) with adaptive parameters (\texorpdfstring{$n_i, c_i, s_i$}{ni, ci, si}). Key components: Boundary Manifolds (\texorpdfstring{$B_{i}$}{Bi}), Level Descriptors (\texorpdfstring{$\mathbf{ld}_i$}{ld i}), Level Spreads (\texorpdfstring{$\sigma_i$}{sigma i}), Intra-Level Tangent Flows (\texorpdfstring{$F_i$}{Fi}). Inter-level transitions use tangent space mapping (LogMap), simultaneous Rotation (\texorpdfstring{$R_i$}{Ri}), and Mapping (\texorpdfstring{$\tilde{T}_i$}{Ttilde i}). Relative Vectors (\texorpdfstring{$\mathbf{d}_{i+1}$}{d i+1}) are computed. Level $i+1$ uses \texorpdfstring{$\mathbf{v}_{i+1}$}{v i+1}, \texorpdfstring{$\mathbf{d}_{i+1}$}{d i+1}, \texorpdfstring{$\mathbf{ld}_{i+1}$}{ld i+1}, and \texorpdfstring{$\sigma_i$}{sigma i}. Aggregated information yields the final output.}
     \label{fig:architecture_tikz}
 \end{figure}
 % --- End TikZ Diagram ---
@@ -277,11 +311,14 @@ Input data is initially encoded and mapped to the tangent space of the outermost
 \label{subsec:component_details}
 We elaborate on the framework's components.
 
-\subsubsection{Nested Hyperbolic Spaces \& Adaptive Geometry}
+% Use \texorpdfstring for section titles with math, ensuring $...$ inside first arg
+% Also provide simplified plain text version in optional argument [] for TOC/bookmarks
+% Further simplified plain text in optional arg to fix hyperref warning
+\subsubsection[Nested Hyperbolic Spaces & Adaptive Geometry (H, n, c, s)]{\texorpdfstring{Nested Hyperbolic Spaces \& Adaptive Geometry ($\HypSpaceCmd{n_i}{c_i}{s_i}, n_i, c_i, s_i$)}{Nested Hyperbolic Spaces & Adaptive Geometry (H, n, c, s)}}
 \label{ssubsec:nested_hyperbolic}
-The structure comprises nested Poincaré Balls $\HypSpace{n_i}{c_i}{s_i}$.
+The structure comprises nested Poincaré Balls $\HypSpaceCmd{n_i}{c_i}{s_i}$.
 \begin{itemize}[leftmargin=*, labelsep=5pt]
-    \item \textbf{Nesting:} Allows multi-scale hierarchical modeling ($\HypSpace{n_1}{}{} \supset \HypSpace{n_2}{}{} \supset \dots$).
+    \item \textbf{Nesting:} Allows multi-scale hierarchical modeling ($\HypSpaceCmd{n_1}{}{} \supset \HypSpaceCmd{n_2}{}{} \supset \dots$).
     \item \textbf{Dimensionality ($n_i$):} Learnable or fixed dimension per level, adapting capacity.
     \item \textbf{Curvature ($c_i > 0$):} Learnable parameter controlling geometry steepness. Requires constrained optimization.
     \item \textbf{Scale ($s_i > 0$):} Learnable parameter modulating tangent space mapping (Eq. \ref{eq:exp_map_repeat}), controlling density/zoom. Requires constrained optimization.
@@ -291,41 +328,41 @@ The structure comprises nested Poincaré Balls $\HypSpace{n_i}{c_i}{s_i}$.
     \label{eq:exp_map_repeat} % Label repeated for clarity
 \end{equation}
 
-\subsubsection{Boundary Sub-Manifolds ($B_{i,j}$)}
+\subsubsection[Boundary Sub-Manifolds (B i,j)]{\texorpdfstring{Boundary Sub-Manifolds ($B_{i,j}$)}{Boundary Sub-Manifolds (B i,j)}}
 \label{ssubsec:boundary_manifolds}
-Learnable manifolds within $\HypSpace{n_i}{}{}$, often parameterized by points $\{\mathbf{b}_{i,j,k}\}$, representing scale-specific landmarks or substructures. Mapped to tangent space for transformations.
+Learnable manifolds within $\HypSpaceCmd{n_i}{}{}$, often parameterized by points $\{\mathbf{b}_{i,j,k}\}$, representing scale-specific landmarks or substructures. Mapped to tangent space for transformations.
 
-\subsubsection{Tangent Space Logic}
+\subsubsection[Tangent Space Logic (Tp(H ni) approx R ni)]{\texorpdfstring{Tangent Space Logic ($T_p(\HypSpaceCmd{n_i}{}{}) \cong \R^{n_i}$)}{Tangent Space Logic (Tp(H ni) approx R ni)}}
 \label{ssubsec:tangent_space}
-Complex transformations occur in Euclidean tangent spaces $T_p(\HypSpace{n_i}{}{}) \cong \R^{n_i}$, using Logarithmic ($\text{Log}^{c_i}_{p,s_i}$) and Exponential ($\text{exp}^{c_i}_{p,s_i}$) maps \cite{KochurovEtAl2020} for transitions between hyperbolic and tangent spaces.
+Complex transformations occur in Euclidean tangent spaces $T_p(\HypSpaceCmd{n_i}{}{}) \cong \R^{n_i}$, using Logarithmic ($\text{Log}^{c_i}_{p,s_i}$) and Exponential ($\text{exp}^{c_i}_{p,s_i}$) maps \cite{KochurovEtAl2020} for transitions between hyperbolic and tangent spaces.
 
-\subsubsection{Tangent Space Rotations ($R_i$)}
+\subsubsection[Tangent Space Rotations (Ri)]{\texorpdfstring{Tangent Space Rotations ($R_i$)}{Tangent Space Rotations (Ri)}}
 \label{ssubsec:tangent_rotation}
-Learnable rotation $R_i$ applied in $T_o(\HypSpace{n_i}{}{})$ during transition $i \rightarrow i+1$. Implemented via unit quaternions (if $n_i=4$) or $\SO{n_i}$ matrices (parameterized via exponentiation, Cayley maps, etc. \cite{MhammediEtAl2017}). Applied simultaneously to main vector $\mathbf{v}_i$, boundary vectors $\{\mathbf{v}_{b_{i,j,k}}\}$, and descriptor $\mathbf{ld}_i$.
+Learnable rotation $R_i$ applied in $T_o(\HypSpaceCmd{n_i}{}{})$ during transition $i \rightarrow i+1$. Implemented via unit quaternions (if $n_i=4$) or $\SOcmd{n_i}$ matrices (parameterized via exponentiation, Cayley maps, etc. \cite{MhammediEtAl2017}). Applied simultaneously to main vector $\mathbf{v}_i$, boundary vectors $\{\mathbf{v}_{b_{i,j,k}}\}$, and descriptor $\mathbf{ld}_i$.
 
-\subsubsection{Non-Rotational Mapping ($\tilde{T}_i$)}
+\subsubsection[Non-Rotational Mapping (Ttilde i)]{\texorpdfstring{Non-Rotational Mapping ($\tilde{T}_i$)}{Non-Rotational Mapping (Ttilde i)}}
 \label{ssubsec:nonrot_mapping}
-Learnable mapping $\tilde{T}_i: T_o(\HypSpace{n_i}{}{}) \rightarrow T_o(\HypSpace{n_{i+1}}{}{})$ applied after rotation $R_i$. Handles feature transformation and dimension change using MLPs, linear layers, etc.
+Learnable mapping $\tilde{T}_i: T_o(\HypSpaceCmd{n_i}{}{}) \rightarrow T_o(\HypSpaceCmd{n_{i+1}}{}{})$ applied after rotation $R_i$. Handles feature transformation and dimension change using MLPs, linear layers, etc.
 
-\subsubsection{Relative Vector Generation ($\mathbf{d}_{i+1, j, k}$)}
+\subsubsection[Relative Vector Generation (d i+1,j,k)]{\texorpdfstring{Relative Vector Generation ($\mathbf{d}_{i+1, j, k}$)}{Relative Vector Generation (d i+1,j,k)}}
 \label{ssubsec:relative_vectors}
-Computed in target tangent space $T_o(\HypSpace{n_{i+1}}{}{})$ after full transformation $T_{i \rightarrow i+1} = \tilde{T}_i \circ R_i$:
+Computed in target tangent space $T_o(\HypSpaceCmd{n_{i+1}}{}{})$ after full transformation $T_{i \rightarrow i+1} = \tilde{T}_i \circ R_i$:
 \begin{equation}
     \mathbf{d}_{i+1, j, k} = \mathbf{v}_{i+1} - \mathbf{v}''_{b_{i,j,k}}
 \end{equation}
 Encodes rotation-aware structure relative to boundaries. Used as input for level $i+1$.
 
-\subsubsection{Learnable Level Descriptor Vector ($\mathbf{ld}_i$)}
+\subsubsection[Learnable Level Descriptor Vector (ld i)]{\texorpdfstring{Learnable Level Descriptor Vector ($\mathbf{ld}_i$)}{Learnable Level Descriptor Vector (ld i)}}
 \label{ssubsec:level_descriptor}
-Learnable vector $\mathbf{ld}_i \in T_o(\HypSpace{n_i}{}{})$ capturing intrinsic level properties (e.g., anisotropy). Transformed via $R_i$ and $\tilde{T}_i$ to $\mathbf{ld}_{i+1}$ and passed as input to level $i+1$.
+Learnable vector $\mathbf{ld}_i \in T_o(\HypSpaceCmd{n_i}{}{})$ capturing intrinsic level properties (e.g., anisotropy). Transformed via $R_i$ and $\tilde{T}_i$ to $\mathbf{ld}_{i+1}$ and passed as input to level $i+1$.
 
-\subsubsection{Learnable Level Spread Parameter ($\sigma_i$)}
+\subsubsection[Learnable Level Spread Parameter (sigma i)]{\texorpdfstring{Learnable Level Spread Parameter ($\sigma_i$)}{Learnable Level Spread Parameter (sigma i)}}
 \label{ssubsec:level_spread}
 Learnable positive scalar $\sigma_i > 0$ representing scale-specific uncertainty or density. Passed as context to level $i+1$. Requires constrained optimization.
 
-\subsubsection{Intra-Level Tangent Flow ($F_i$)}
+\subsubsection[Intra-Level Tangent Flow (Fi)]{\texorpdfstring{Intra-Level Tangent Flow ($F_i$)}{Intra-Level Tangent Flow (Fi)}}
 \label{ssubsec:tangent_flow}
-Learnable function $F_i: T_o(\HypSpace{n_i}{}{}) \rightarrow T_o(\HypSpace{n_i}{}{})$ applied during level $i$ processing (e.g., $\mathbf{v}_{\text{flowed}} = \mathbf{v} + \text{MLP}_i(\mathbf{v})$ or $\mathbf{v}_{\text{flowed}} = M_i \mathbf{v}$). Models local dynamics or adjustments. Can use Neural ODEs \cite{ChenEtAl2018}.
+Learnable function $F_i: T_o(\HypSpaceCmd{n_i}{}{}) \rightarrow T_o(\HypSpaceCmd{n_i}{}{})$ applied during level $i$ processing (e.g., $\mathbf{v}_{\text{flowed}} = \mathbf{v} + \text{MLP}_i(\mathbf{v})$ or $\mathbf{v}_{\text{flowed}} = M_i \mathbf{v}$). Models local dynamics or adjustments. Can use Neural ODEs \cite{ChenEtAl2018}.
 
 \subsubsection{Hierarchical Information Flow}
 \label{ssubsec:info_flow}
@@ -340,6 +377,7 @@ Information from multiple levels ($\mathbf{v}_i^{\text{out}}, \mathbf{d}_{i,j,k}
 
 We outline the conceptual flow from level $i$ to $i+1$.
 
+% Ensure math is delimited correctly
 \textbf{Inputs to Level $i$ Processing:} Primary tangent vector $\mathbf{v}_i^{\text{in}}$; Relative vectors $\{\mathbf{d}_{i, j, k}\}$; Transformed descriptor $\mathbf{ld}_i^{\text{in}}$; Contextual spread $\sigma_{i-1}$.
 
 \textbf{Parameters for Level $i$:} Geometry $c_i, s_i$; Boundary points $\{\mathbf{b}_{i,j,k}\}$; Descriptor $\mathbf{ld}_i^{\text{param}}$; Spread $\sigma_i$; Flow function $F_i$.
@@ -349,12 +387,12 @@ We outline the conceptual flow from level $i$ to $i+1$.
     \item Map $\mathbf{v}_i^{\text{in}}$ to $\mathbf{x}_i^{\text{in}} = \text{exp}_{o,s_i}^{c_i}(\mathbf{v}_i^{\text{in}})$ (optional).
     \item Internal module computes intermediate state using $\mathbf{x}_i^{\text{in}}$ (or $\mathbf{v}_i^{\text{in}}$), $\{\mathbf{d}_{i, j, k}\}$, $\mathbf{ld}_i^{\text{in}}$, $\sigma_{i-1}$.
     \item Apply flow $F_i$ to intermediate tangent representation $\mathbf{v}_{\text{intermediate}}$ to get $\mathbf{v}_{\text{flowed}}$.
-    \item Generate level output state $\mathbf{x}_i^{\text{out}} \in \HypSpace{n_i}{c_i}{s_i}$.
+    \item Generate level output state $\mathbf{x}_i^{\text{out}} \in \HypSpaceCmd{n_i}{c_i}{s_i}$.
 \end{enumerate}
 
 \textbf{B. Inter-Level Transition ($i \rightarrow i+1$):}
 \begin{enumerate}
-    \item Map to Tangent Space $T_o(\HypSpace{n_i}{}{})$:
+    \item Map to Tangent Space $T_o(\HypSpaceCmd{n_i}{}{})$:
         $\mathbf{v}_i^{\text{out}} = \text{Log}_{o,s_i}^{c_i}(\mathbf{x}_i^{\text{out}})$;
         $\mathbf{v}_{b_{i,j,k}} = \text{Log}_{o,s_i}^{c_i}(\mathbf{b}_{i,j,k})$;
         $\mathbf{ld}_i = \mathbf{ld}_i^{\text{param}}$.
@@ -365,7 +403,7 @@ We outline the conceptual flow from level $i$ to $i+1$.
     \item Apply Mapping $\tilde{T}_i$:
         $\mathbf{v}_{i+1} = \tilde{T}_i(\mathbf{v}'^{\text{out}}_i)$;
         $\mathbf{v}''_{b_{i,j,k}} = \tilde{T}_i(\mathbf{v}'_{b_{i,j,k}})$;
-        $\mathbf{ld}_{i+1} = \tilde{T}_i(\mathbf{ld}'_i)$. (Vectors now in $T_o(\HypSpace{n_{i+1}}{}{})$).
+        $\mathbf{ld}_{i+1} = \tilde{T}_i(\mathbf{ld}'_i)$. (Vectors now in $T_o(\HypSpaceCmd{n_{i+1}}{}{})$).
     \item Generate Relative Vectors: $\mathbf{d}_{i+1, j, k} = \mathbf{v}_{i+1} - \mathbf{v}''_{b_{i,j,k}}$.
     \item Gather Inputs for Level $i+1$: $\mathbf{v}_{i+1}$, $\{\mathbf{d}_{i+1, j, k}\}$, $\mathbf{ld}_{i+1}$, $\sigma_i$.
 \end{enumerate}
@@ -376,6 +414,7 @@ This process repeats recursively.
 
 While this paper introduces the \wubu{} framework conceptually, rigorous empirical validation is crucial future work. Evaluation should target datasets exhibiting the complex geometric properties the framework is designed to capture. Potential experimental directions include:
 
+% Ensure math is delimited correctly in list items
 \begin{itemize}
     \item \textbf{Hierarchical Classification/Regression:} Tasks involving natural hierarchies (e.g., WordNet noun hierarchy embedding \cite{NickelKiela2017}, biological taxonomies, molecular property prediction based on functional group hierarchies). Evaluate against standard Euclidean, single-level hyperbolic models (e.g., \cite{GaneaEtAl2018}), and product manifold models \cite{GuEtAl2019}. Metrics: Accuracy, Mean Average Precision (MAP), distortion measures, parameter efficiency.
     \item \textbf{Articulated Object Pose Estimation/Reconstruction:} Datasets like Human3.6M or animal pose datasets. Evaluate ability to model joint rotations ($R_i$) and part hierarchies. Compare against QNNs \cite{GrassucciEtAl2021} and standard pose estimation networks. Metrics: Mean Per Joint Position Error (MPJPE), angular errors. Assess the contribution of boundary manifolds and relative vectors.
@@ -393,8 +432,9 @@ Success in these experiments would validate the hypothesis that integrating adap
 
 Implementing \wubu{} involves significant challenges in mathematical rigor, numerical stability, and computational efficiency.
 
+% Ensure math is delimited correctly in list items
 \begin{itemize}[leftmargin=*, labelsep=5pt]
-    \item \textbf{Mathematical Rigor:} Requires consistent scale-aware hyperbolic maps/metrics, stable tangent space handling, and differentiable parameterizations for $\SO{n_i}$ rotations \cite{MhammediEtAl2017} and flows $F_i$.
+    \item \textbf{Mathematical Rigor:} Requires consistent scale-aware hyperbolic maps/metrics, stable tangent space handling, and differentiable parameterizations for $\SOcmd{n_i}$ rotations \cite{MhammediEtAl2017} and flows $F_i$.
     \item \textbf{Numerical Stability:} Hyperbolic operations near boundaries require robust implementations (e.g., norm clipping \cite{LiuHeHan2025}, precision). Tangent space operations need normalization. Learning positive parameters ($c_i, s_i, \sigma_i$) requires constraints (e.g., parameterizing logarithms, using softplus).
     \item \textbf{Computational Cost:} Multiple levels, boundary points, and complex transformations ($R_i, \tilde{T}_i, F_i$) increase computational load. Efficiency is key.
     \item \textbf{Component Design:} Effective parameterization of boundaries and flows, and designing modules to fuse the rich inter-level information stream are critical.
@@ -423,7 +463,7 @@ Implementing \wubu{} involves significant challenges in mathematical rigor, nume
 % REMINDER: You MUST run bibtex (or biber) after pdflatex
 %           to generate the .bbl file for citations to appear correctly.
 %           Compile sequence: pdflatex -> bibtex -> pdflatex -> pdflatex
-\bibliography{references}
+\bibliography{references} % Assumes references.bib is in the same directory
 
 \end{document}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
