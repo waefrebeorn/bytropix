@@ -270,3 +270,6 @@ media/
 # secrets/
 # *.secret
 dummy.py
+data_h5/
+checkpoints_v2/
+live_checkpoints_v1/

@@ -11,3 +11,7 @@ psutil
 scikit-learn
 wandb
 geoopt
+biopython
+h5py
+viennarna
+gffutils
