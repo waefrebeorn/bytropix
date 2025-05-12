@@ -141,54 +141,55 @@ The `WuBuSTDiffusionNet` class orchestrates the overall architecture, integratin
 
 ```mermaid
 graph TD
-    A[Input Video Frames f_t, f_t-1, ...] --> B(InitialFrameAutoencoderCNN);
-    B -- CNN Encoder Convs --> C1(Feature Maps M_t);
-    B -- CNN Encoder Convs --> C0(Feature Maps M_t-1);
+    A["Input Video Frames f_t, f_t-1, ..."] --> B("InitialFrameAutoencoderCNN");
+    B -- CNN Encoder Convs --> C1("Feature Maps M_t");
+    B -- CNN Encoder Convs --> C0("Feature Maps M_t-1");
 
     subgraph GAAD_Processing [GAAD Processing]
-        C1 --> D1(GAADFrameProcessor - Appearance);
-        D1 -- Uses f_t for coords --> E1[GAAD Appearance Features];
+        C1 --> D1("GAADFrameProcessor - Appearance");
+        D1 -- "Uses f_t for coords" --> E1["GAAD Appearance Features"];
 
-        F[Frame f_t] --> G_ComputeDiff(Compute Diff Map);
-        F_prev[Frame f_t-1] --> G_ComputeDiff;
-        G_ComputeDiff --> G_DiffMap[Diff Map (f_t, f_t-1)];
-        G_DiffMap --> H[GAADMotionRegionProposal];
-        H --> I[GAAD Motion BBoxes];
-        I -- ROIAlign on M_t, M_t-1 --> J(Raw Motion Region Feats);
-        J --> K(Motion Feature Projector);
-        K --> L[GAAD Motion Features];
+        F["Frame f_t"] --> G_ComputeDiff("Compute Diff Map");
+        F_prev["Frame f_t-1"] --> G_ComputeDiff;
+        G_ComputeDiff --> G_DiffMap["Diff Map (f_t, f_t-1)"];
+        G_DiffMap --> H["GAADMotionRegionProposal"];
+        H --> I["GAAD Motion BBoxes"];
+        I -- "ROIAlign on M_t, M_t-1" --> J("Raw Motion Region Feats");
+        J --> K("Motion Feature Projector");
+        K --> L["GAAD Motion Features"];
     end
 
-    E1 --> WuBuS(WuBu-S: Spatial Appearance);
-    WuBuS --> s_t[Spatial Features s_t];
+    E1 --> WuBuS("WuBu-S: Spatial Appearance");
+    WuBuS --> s_t["Spatial Features s_t"];
 
-    L --> WuBuM(WuBu-M: Motion);
-    WuBuM --> m_t[Motion Features m_t];
+    L --> WuBuM("WuBu-M: Motion");
+    WuBuM --> m_t["Motion Features m_t"];
 
-    s_t --> Combine(Combine Features);
+    s_t --> Combine("Combine Features");
     m_t --> Combine;
-    Combine --> WuBuT_Input(Sequence {s_t, m_t});
+    Combine --> WuBuT_Input("Sequence s_t and m_t");
 
-    WuBuT_Input --> WuBuT(WuBu-T: Temporal Dynamics);
-    WuBuT --> CTX[Temporal Context ctx];
+    WuBuT_Input --> WuBuT("WuBu-T: Temporal Dynamics");
+    WuBuT --> CTX["Temporal Context ctx"];
 
     subgraph Diffusion_Denoising_Head [Diffusion Denoising Head]
-        NoisyTarget[Noisy Target Global Features xt_target_global_features] --> PredHead;
+        NoisyTarget["Noisy Target Global Features xt_target_global_features"] --> PredHead;
         CTX --> PredHead;
-        TimeEmb[Time Embedding t] --> PredHead;
-        PredHead{Noise Prediction Head} --> PredictedNoise;
+        TimeEmb["Time Embedding t"] --> PredHead;
+        PredHead{"Noise Prediction Head"} --> PredictedNoise["PredictedNoise"];
     end
 
-    B -- Global Encode --> TargetGlobalFeats_clean(Clean Target Global Features x0_target_global_features);
-    TargetGlobalFeats_clean --> QSample(q_sample);
-    TimeEmb_Noise[Time t for q_sample] --> QSample;
-    QSample -- Noisy xt_target --> NoisyTarget;
+    B -- "Global Encode" --> TargetGlobalFeats_clean("Clean Target Global Features x0_target_global_features");
+    TargetGlobalFeats_clean --> QSample("q_sample");
+    TimeEmb_Noise["Time t for q_sample"] --> QSample;
+    QSample -- "Noisy xt_target" --> NoisyTarget;
 
     classDef wubu fill:#B2DFDB,stroke:#00796B,stroke-width:2px;
     classDef gaad fill:#FFE0B2,stroke:#FF8F00,stroke-width:2px;
     class WuBuS,WuBuM,WuBuT wubu;
     class D1,H,K gaad;
     class G_ComputeDiff,G_DiffMap gaad;
+
 
 ```
 **Figure 2:** Detailed architectural flow of `WuBuSTDiffusionNet (v0.05.2)`.
