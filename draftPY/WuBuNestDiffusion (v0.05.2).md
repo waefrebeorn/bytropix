@@ -149,9 +149,10 @@ graph TD
         C1 --> D1(GAADFrameProcessor - Appearance);
         D1 -- Uses f_t for coords --> E1[GAAD Appearance Features];
 
-        F[Frame f_t] --> G(Compute Diff Map);
-        F_prev[Frame f_t-1] --> G;
-        G[Diff Map (f_t, f_t-1)] --> H(GAADMotionRegionProposal);
+        F[Frame f_t] --> G_ComputeDiff(Compute Diff Map);
+        F_prev[Frame f_t-1] --> G_ComputeDiff;
+        G_ComputeDiff --> G_DiffMap[Diff Map (f_t, f_t-1)];
+        G_DiffMap --> H[GAADMotionRegionProposal];
         H --> I[GAAD Motion BBoxes];
         I -- ROIAlign on M_t, M_t-1 --> J(Raw Motion Region Feats);
         J --> K(Motion Feature Projector);
@@ -187,6 +188,8 @@ graph TD
     classDef gaad fill:#FFE0B2,stroke:#FF8F00,stroke-width:2px;
     class WuBuS,WuBuM,WuBuT wubu;
     class D1,H,K gaad;
+    class G_ComputeDiff,G_DiffMap gaad;
+
 ```
 **Figure 2:** Detailed architectural flow of `WuBuSTDiffusionNet (v0.05.2)`.
 
