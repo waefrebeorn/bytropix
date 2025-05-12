@@ -812,9 +812,20 @@ class InitialFrameAutoencoderCNN(nn.Module):
     def decode(self, features_vec: torch.Tensor) -> torch.Tensor:
         orig_dim=features_vec.dim(); is_batched_seq = orig_dim==3; B_orig, N_orig = features_vec.shape[0], features_vec.shape[1] if is_batched_seq else 1
         features_vec_flat = features_vec.reshape(B_orig*N_orig, self.feature_dim) if is_batched_seq else features_vec
-        x_fc_out =self.decoder_fc(features_vec_flat); x_unflat = x_fc_out.view(-1,self.conv_out_shape[1],self.conv_out_shape[2],self.conv_out_shape[3]); pixels_out=self.decoder_convs(x_unflat)
-        return pixels_out.view(B_orig,N_orig,self.image_channels,self.image_h,self.image_w) if is_batched_seq else pixels_out
+        x_fc_out =self.decoder_fc(features_vec_flat); x_unflat = x_fc_out.view(-1,self.conv_out_shape[1],self.conv_out_shape[2],self.conv_out_shape[3]);
+        pixels_out=self.decoder_convs(x_unflat)
 
+        # Add interpolation to resize to target image size before final reshape
+        # Check if spatial dimensions mismatch before resizing
+        # Access image size using stored self.image_h and self.image_w
+        target_image_size = (self.image_h, self.image_w) # Corrected line: Use individual attributes to form the tuple
+        if pixels_out.shape[2:] != target_image_size: # Compare tuple slices
+             # Log a warning if resizing is needed
+             logger.warning(f"Decoder output shape mismatch: {pixels_out.shape[2:]} vs target {target_image_size}. Resizing using interpolation.")
+             pixels_out = F.interpolate(pixels_out, size=target_image_size, mode='bilinear', align_corners=False)
+
+
+        return pixels_out.view(B_orig,N_orig,self.image_channels,self.image_h,self.image_w) if is_batched_seq else pixels_out
 class SinusoidalPhiEmbedding(nn.Module):
     def __init__(self, dim: int, base_freq_phi_scaled: float = 10000.0, use_phi_paper_scaling_arg: bool = False, phi_constant: float = PHI):
         super().__init__(); self.dim = dim; self.base_freq_for_paper_scaling = base_freq_phi_scaled; self.base_period_for_ddpm_scaling = base_freq_phi_scaled; self.use_phi_paper_scaling = use_phi_paper_scaling_arg; self.phi_constant = phi_constant; half_dim = dim // 2; denominators = torch.empty(0, dtype=torch.float)
@@ -1416,7 +1427,8 @@ def main():
                 dummy_frames_tchw = torch.randint(0, 256, (num_dummy_frames, args.num_channels, args.image_h, args.image_w), dtype=torch.uint8)
                 if VIDEO_IO_AVAILABLE and video_io is not None:
                     try:
-                        video_io.write_video(actual_video_path, dummy_frames_tchw, fps=10)
+                        # Permute dimensions to THWC before writing
+                        video_io.write_video(actual_video_path, dummy_frames_tchw.permute(0, 2, 3, 1), fps=10) # Corrected line
                         logger.info(f"Created dummy video (torchvision.io): {actual_video_path} ({num_dummy_frames} frames).")
                     except Exception as e_tv_write:
                         logger.error(f"Error creating dummy video with torchvision.io: {e_tv_write}", exc_info=True)
@@ -1428,7 +1440,8 @@ def main():
                         stream = container.add_stream('mpeg4', rate=10)
                         stream.width = args.image_w; stream.height = args.image_h; stream.pix_fmt = 'yuv420p'
                         for i_frame in range(num_dummy_frames):
-                            frame_hwc_numpy = dummy_frames_tchw[i_frame].permute(1, 2, 0).numpy()
+                            # Permute to HWC for PyAV from_ndarray
+                            frame_hwc_numpy = dummy_frames_tchw[i_frame].permute(1, 2, 0).numpy() # Needs permutation here too for PyAV fallback
                             av_frame = av.VideoFrame.from_ndarray(frame_hwc_numpy, format='rgb24')
                             for packet in stream.encode(av_frame):
                                 container.mux(packet)
