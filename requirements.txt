@@ -17,3 +17,5 @@ viennarna
 gffutils
 av
 torchmetrics
+imageio-ffmpeg
+imageio

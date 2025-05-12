@@ -1,0 +1,6 @@
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+
+and then
+
+pip install https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4+cu124torch2.5.1cxx11abiFALSE-cp310-cp310-win_amd64.whl
