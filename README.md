@@ -1,254 +1,202 @@
-# Bytropix: Hyperbolic WuBu Nesting for Byte-Level Modeling
+---
 
-An advanced byte-level language model utilizing the **Fully Hyperbolic WuBu Nesting** framework for adaptive multi-scale geometric representation, integrated with Babylon Index patching and reinforcement learning optimization for next-generation language understanding and generation. This repository also includes the research paper `WuBu Nesting.pdf` detailing the conceptual framework.
+# Bytropix: A Playground for WuBu Nesting & GAAD
 
-## Overview
+[![Status: Research Playground - Experimental](https://img.shields.io/badge/status-research%20playground%20(experimental)-orange)](https://shields.io/)
+[![Discord](https://img.shields.io/discord/1303046473985818654?label=Discord&logo=discord&style=for-the-badge)](http://wubu.waefrebeorn.com)
 
-**Bytropix** represents a significant evolution in byte-level modeling, replacing its previous Euclidean core with a **Fully Hyperbolic WuBu Nesting** architecture. This approach aims to more naturally capture complex hierarchical structures and relationships often found in real-world data by leveraging the properties of adaptive hyperbolic geometry.
+Welcome to **Bytropix**! This repository is an open, experimental playground dedicated to exploring the theoretical frameworks of **WuBu Nesting (層疊嵌套)** and **Golden Aspect Adaptive Decomposition (GAAD)**. If you're interested in pushing the boundaries of how we can model complex data, especially video, with deep geometric and compositional priors, you're in the right place.
 
-Key features include:
+Think of this as a collection of **experimental scaffolds and starting beds**. The Python scripts and batch files here are my attempts to implement these advanced mathematical theories. They are functional, but more importantly, they are designed to be pulled apart, improved, and used as inspiration. The goal isn't a polished, final product, but a space to collectively figure out what works, what doesn't, and how to make these powerful ideas better. This is for those who like to get their hands dirty with "theory math" that might be a tough sell to the "tech head goobers" without seeing it in action (or at least, in attempted action!).
 
--   **Tokenizer-Free Architecture**: Processes raw UTF-8 bytes directly, removing vocabulary limitations and working natively with any language or format.
--   **Babylon Index Patching**: Dynamically identifies semantically meaningful patches in byte streams using entropy-based analysis.
--   **Fully Hyperbolic WuBu Nesting**: Implements the core geometric processing using a hierarchy of nested Poincaré ball manifolds (`H^n_i_{c_i, s_i}`) with dynamically **adaptive geometry** (learnable curvature `c_i` and scale `s_i`). It features hyperbolic boundary points and inter-level transitions primarily orchestrated via **tangent space mappings**. (See details below and in the accompanying paper).
--   **Riemannian-Aware Optimizer**: Employs an enhanced SGD optimizer (`RiemannianEnhancedSGD`) aware of parameter manifolds, integrating momentum and Q-learning for dynamic hyperparameter tuning.
--   **Sequence Modeling (Tangent Space Compromise)**: Integrates the hyperbolic core with sequence processing using Local Encoder/Decoder modules that operate on **tangent space vectors** via standard Transformer layers.
--   **Accompanying Paper**: The conceptual framework and mathematical details are described in `WuBu Nesting.pdf`, included in this repository.
+## Core Theories Under Exploration
 
-This implementation focuses on leveraging adaptive hyperbolic geometry for deep hierarchical modeling. While the accompanying paper details a conceptual framework including explicit tangent space rotations (`R_i`), the current code implementation (`v0.04`) primarily uses learnable MLP/Linear transformations (`HyperbolicInterLevelTransform`) within the tangent spaces to map between levels.
+At the heart of Bytropix are two main theoretical constructs:
 
-## Architecture
+1.  **WuBu Nesting (層疊嵌套):** A framework for building models with recursively nested hyperbolic spaces (`H^{n_i}_{c_i,s_i}`). The geometry of these spaces (dimensionality, curvature, scale) can adapt during learning. Key features include learnable Boundary Sub-Manifolds, Level Descriptor Vectors, Level Spread Parameters, Intra-Level Tangent Flows, and, crucially, inter-level transitions orchestrated in tangent space with explicit `SO(n_i)` Rotations and Mappings. This aims to capture deep multi-scale hierarchies and rotational dynamics.
+2.  **Golden Aspect Adaptive Decomposition (GAAD):** A method inspired by the Golden Ratio (φ) for decomposing visual data (like video frames) into multi-scale, aspect-ratio agnostic regions. It uses techniques like Recursive Golden Subdivision and Phi-Spiral Patching to guide feature extraction, respecting natural compositions.
 
-The Bytropix model integrates the Hyperbolic WuBu Nesting core into a byte-level processing pipeline:
+The main application explored here is **WuBuNestDiffusion**, a video diffusion model built upon these principles, aiming to generate and understand video with a strong geometric and compositional foundation.
 
-1.  **Input Bytes** → **Babylon Index Patching** → Meaningful Byte Patches.
-2.  Byte Patches → **Hyperbolic Local Encoder** (Hyperbolic Embeddings → Tangent Vectors → Standard Transformer) → **Tangent Space Patch Representations** (`[B, NumPatches, LocalHiddenDim]`).
-3.  Tangent Patch Representations → **Fully Hyperbolic WuBu Nesting Model** (Core geometric processing across adaptive hyperbolic levels) → **Aggregated Tangent Memory** (`[B, NumPatches, DecoderMemoryDim]`).
-4.  Aggregated Tangent Memory + Target Bytes → **Hyperbolic Local Decoder** (Hyperbolic Target Embeddings → Tangent Vectors + Tangent Memory → Standard Transformer Decoder) → **Output Logits** (`[B, TargetLen, VocabSize]`).
+## The Playground: What's Inside?
 
-### Hyperbolic WuBu Nesting Components
+This repository is a collection of my explorations and implementations:
 
-The `FullyHyperbolicWuBuNestingModel` orchestrates data flow through `HyperbolicWuBuNestingLevel` modules:
+*   **Diverse Python Scripts (`draftPY/`, root):** You'll find various Python files that are more than just one final model. These include:
+    *   The main `WuBuNestDiffusion_v0.05_GAAD_MotionWuBu_Live.py`: My latest attempt at a comprehensive video diffusion model using WuBu Nesting and GAAD for appearance and motion.
+    *   Trainers for different variants: `WuBuNest_TrainerV1.py`, `WuBuNestmRnaTrainerV1.py` (and their root-level counterparts). These explore different aspects or applications of WuBu Nesting.
+    *   Inference scripts: `inference.py`, `sfin_inference.py`, `WuBuNest_Inferencev1.py`.
+    *   Supporting modules: `EnhancedSGD.py` (custom optimizer components), `HAKMEMQController.py` (Q-learning for hyperparameter tuning), components for hyperbolic math (`HypBSFIN.py`, `HypCD.py`).
+    *   Utility and data generation scripts: `create_demo_data.py`, `poem_dataset_generator.py`, `convert_video_simple.py`.
+    *   Older experimental files: `oldwubunest.py`, `integrated_hyper_hakmem_model.py`.
+*   **Batch Files (`.bat`):** These are your primary interface for running experiments! They call the Python scripts with a multitude of command-line arguments, allowing you to tweak parameters, switch components, and test different configurations of the theories without digging into the Python code immediately.
+*   **Theoretical Documents (The "Why"):**
+    *   [`WuBu_Nesting.pdf`](./WuBu_Nesting.pdf): The core PDF detailing the foundational WuBu Nesting framework. *The papers often use more elaborate naming for concepts for "elequence and appeal to goobers," but the core is WuBu Nesting & GAAD.*
+    *   Markdown Papers: Deeper dives into specific aspects and the main `WuBuNestDiffusion` model. These provide the context for the code:
+        *   [`./draftPY/WuBuNestDiffusion (v0.05.2).md`](./draftPY/WuBuNestDiffusion%20(v0.05.2).md)
+        *   [`./WuBuHypCD-paper.md`](./WuBuHypCD-paper.md) (Foundational WuBu Nesting)
+        *   [`./GAAD-WuBu-ST1.md`](./GAAD-WuBu-ST1.md) & [`./GAAD-WuBu-ST2.md`](./GAAD-WuBu-ST2.md) (GAAD and Spatio-Temporal WuBu)
+        *   [`./WuBu Spatio-Temporal Nesting.md`](./WuBu%20Spatio-Temporal%20Nesting.md)
 
--   **Adaptive Geometry (`H^n_i_{c_i, s_i}`):** Each level `i` operates on a Poincaré ball manifold whose curvature `c_i` and mapping scale `s_i` are learnable parameters, adapting the geometry to the data during training.
--   **Hyperbolic Boundary Manifolds (`BoundaryManifoldHyperbolic`):** Learnable points (`B_{i,j}`) *directly parameterized within the Poincaré ball* of level `i`, representing scale-specific landmarks. The optimizer uses Riemannian updates for these points.
--   **Tangent Space Processing:** Key operations occur in the Euclidean tangent spaces (`T_p H^n_i`) associated with each level's origin (or other points). This includes:
-    -   **Inter-Level Transitions (`HyperbolicInterLevelTransform`):** Points are mapped from level `i`'s manifold to its origin tangent space (LogMap0), transformed by a learnable Euclidean mapping (MLP or Linear), and then mapped back to level `i+1`'s manifold (ExpMap0). *Note: This differs from the paper's conceptual `T̃_i ∘ R_i` formulation by omitting an explicit rotation module (`R_i`) in the current code.*
-    -   **Relative Vector Calculation:** Relative positions between the main representation and boundary points are computed *within the tangent space* of the *target* level (`i+1`) and aggregated (e.g., mean, sum).
-    -   **Input Combination:** Incoming tangent vectors (main, relative, descriptor) and spread context are combined using a standard MLP (`tangent_combiner`).
-    -   **Intra-Level Tangent Flow (`F_i`):** An optional learnable MLP or Linear function applied to tangent vectors *within* a level to model local dynamics or adjustments.
--   **Manifold-Aware Parameters:** Learnable parameters like level descriptors (`ld_i`) and boundary points are marked with their associated manifold for the `RiemannianEnhancedSGD` optimizer.
--   **Level Information:** Learnable spread (`σ_i`) is passed between levels. Learnable level descriptors (`ld_i`) are processed within the tangent space.
--   **Aggregation (`concat_tangent`):** Tangent space outputs (`tangent_out`) from all levels are collected and concatenated before a final linear projection to the decoder memory dimension.
+## Navigating the Codebase
 
-### Sequence Model Components (Tangent Space Compromise)
-
--   **HyperbolicLocalEncoder/Decoder:** These modules use `HyperbolicEmbedding` layers but perform subsequent sequence processing (Transformer layers, positional encoding addition, memory projection, attention) on **Euclidean tangent space vectors** derived via `logmap0`. This is a common practical approach for integrating hyperbolic representations with standard sequence architectures. The final prediction head is also Euclidean.
-
-## Paper: WuBu Nesting Framework
-
-The conceptual framework underpinning this model is detailed in the included paper: **`WuBu Nesting.pdf`**.
-
-The paper provides a comprehensive theoretical description of:
--   The recursive nested structure of adaptive hyperbolic spaces.
--   The role of boundary sub-manifolds.
--   Tangent space transitions including **explicit learnable rotations (`R_i`)** and non-rotational mappings (`T̃_i`).
--   The computation of rotation-aware relative vectors (`d_{i+1}`).
--   The function of level descriptors (`ld_i`), spread parameters (`σ_i`), and tangent flows (`F_i`).
-
-Please refer to the paper for the full mathematical details and conceptual motivation. *Note potential differences between the full conceptual framework in the paper and the specific implementation choices in the current `v0.04` codebase.*
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/waefrebeorn/bytropix.git
-cd bytropix
-
-# Create and activate virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install torch numpy tqdm matplotlib
-# Optional: For logging and visualization enhancements
-# pip install wandb scikit-learn # scikit-learn needed for PCA visualization
+```
+└── ./
+    ├── draftPY/                             # Primary hub for Python experiments & latest models
+    │   ├── WuBuNestDiffusion_v0.05_GAAD_MotionWuBu_Live.py  # Main live model
+    │   ├── WuBuNestDiffusion_v0.05_GAAD_MotionWuBu_PaperCopy.py # Variant for paper
+    │   ├── WuBuNest_TrainerV1.py            # Generic WuBu Nesting trainer
+    │   ├── WuBuNestmRnaTrainerV1.py         # Specific "mRNA" variant trainer
+    │   ├── EnhancedSGD.py                   # Custom optimizer components
+    │   ├── HAKMEMQController.py             # Q-learning hyperparameter controller
+    │   ├── *.bat                            # Batch files to RUN THE EXPERIMENTS
+    │   └── ... (many other Python scripts: inference, older models, utilities)
+    ├── WuBuNest_Trainer.py                  # Root-level trainer (possibly earlier version)
+    ├── WuBuNestmRnaTrainer.py               # Root-level "mRNA" trainer
+    ├── WuBuNest_Inference.py                # Root-level inference
+    ├── wubu_nesting_impl.py                 # Core WuBu Nesting logic (example/ref)
+    ├── GAAD-WuBu-ST1.md, GAAD-WuBu-ST2.md   # Papers on GAAD + WuBu-ST
+    ├── WuBu Spatio-Temporal Nesting.md      # Paper on WuBu-ST
+    ├── WuBuHypCD-paper.md                   # Paper on foundational WuBu Nesting
+    ├── WuBu_Nesting.pdf                     # Main PDF for WuBu Nesting theory
+    ├── requirements.txt                     # Dependencies
+    ├── setup.bat, venv.bat                  # Windows environment setup
+    └── ... (other utilities, data generators like poem_dataset_generator.py)
 ```
 
-## Requirements
+**The general idea:**
+1.  Read the papers (especially `WuBu_Nesting.pdf` and `draftPY/WuBuNestDiffusion (v0.05.2).md`) to understand the theory.
+2.  Look at the Python scripts in `draftPY/` (especially `WuBuNestDiffusion_v0.05_GAAD_MotionWuBu_Live.py` and supporting modules) to see how the theory is attempted in code.
+3.  Use the `.bat` files as templates to run your own experiments, changing parameters to test different hypotheses.
 
-- Python 3.8+
-- PyTorch 2.0+ (CUDA recommended for performance)
-- NumPy
-- tqdm
-- matplotlib (for visualizations)
-- wandb (optional, for experiment tracking)
-- scikit-learn (optional, for PCA in `visualize_nested_spheres`)
+## Getting Started
 
-## Usage
+1.  **Clone the Repository:**
+    ```bash
+    git clone <https://github.com/waefrebeorn/bytropix.git> 
+    cd bytropix 
+    ```
 
-### Data Preparation
+2.  **Set up Environment (Windows):**
+    *   It's highly recommended to use a virtual environment.
+    *   Run `setup.bat`. This should attempt to create a `venv` virtual environment and install dependencies.
+    *   Activate the virtual environment: `.\venv.bat` (or `.\venv\Scripts\activate`).
 
-Use standard byte-level datasets (e.g., `.npy` files containing sequences of uint8 values).
+3.  **Install Dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+    Ensure PyTorch is installed with CUDA support for GPU acceleration.
 
-### Training
+4.  **Data:**
+    *   `draftPY/create_demo_data.py` can generate simple text DEMO data for initial tests of BYTE encoders.
+    *   For more serious experiments, prepare your video datasets and update paths in the `.bat` files or scripts.
+    *   Scripts like `poem_dataset_generator.py` hint at explorations beyond standard video.
 
-Train the model using the `WuBuNest_Trainer.py` script (v0.04).
+## Running Experiments & Exploring the Theories
 
-```bash
-# Example training command (adjust paths and hyperparameters)
-# Assumes DDP launch with torchrun if multiple GPUs are used
-# Example for 2 GPUs: torchrun --standalone --nproc_per_node=2 WuBuNest_Trainer.py [ARGS]
+This is where the "playground" comes alive!
 
-# Single GPU / CPU example:
-python WuBuNest_Trainer.py \
-    --data_path /path/to/your/train_data.npy \
-    --val_data_path /path/to/your/val_data.npy \
-    --checkpoint_dir ./wubu_results_hyp_v04 \
-    --batch_size 8 \
-    --grad_accum_steps 8 \
-    --epochs 5 \
-    --learning_rate 3e-4 \
-    --weight_decay 0.01 \
-    --max_grad_norm 1.0 \
-    --context_window 512 \
-    --num_workers 2 \
-    --local_hidden_size 256 \
-    --decoder_memory_dim 512 \
-    --num_levels 3 \
-    --hyperbolic_dims 128 64 32 \
-    --initial_curvatures 1.0 0.5 0.25 \
-    --boundary_points_per_level 5 4 3 \
-    --transform_types linear linear \
-    --dropout 0.1 \
-    --enable-q-controller \
-    --q_learning_rate 0.02 \
-    --wandb # Optional: Enable WandB logging
-    # Add other WuBu config args as needed (--learnable-curvature, etc.)
-```
+1.  **Study the `.bat` files:** These are your keys. Open them (e.g., `draftPY/run_integrated.bat` or `runWuBuNestmRnaTrainer.bat`) in a text editor. You'll see they launch Python scripts with many command-line arguments. These arguments control the theoretical knobs (WuBu levels, GAAD types, φ-influences, etc.).
+2.  **Modify & Run:**
+    *   **Test a hypothesis:** Want to see if fewer boundary points in WuBu levels simplify training without losing too much? Find the relevant argument (e.g., `--boundary_points_per_level`), change its values, save, and run.
+    *   Run from the command line: `draftPY\your_chosen_script.bat`.
+3.  **Core Scripts to Target via `.bat` files:**
+    *   `draftPY/WuBuNestDiffusion_v0.05_GAAD_MotionWuBu_Live.py`: For the main video diffusion experiments.
+    *   `draftPY/WuBuNest_TrainerV1.py` or `draftPY/WuBuNestmRnaTrainerV1.py` (and their root counterparts): For other WuBu Nesting applications.
+4.  **Interpreting Outcomes:**
+    *   Check console output for losses, metrics (LPIPS, SSIM might be logged).
+    *   If WandB is used (check batch files for `--wandb`), use its dashboard.
+    *   Look at generated videos/outputs. Do they make sense? How do they change with different theoretical settings?
+    *   **This is where you help improve things!** If something doesn't work as expected by the theory, that's a finding. If a change makes it better, that's progress!
 
-Checkpoints, logs, and visualizations will be saved in the `--checkpoint_dir`.
+## Visualizations
 
-### Inference (Text Generation)
+The project includes visualization capabilities, especially helpful for understanding the geometric aspects:
 
-Use the `WuBuNest_Inference.py` script with a checkpoint saved by the v0.04 trainer:
-
-```bash
-python WuBuNest_Inference.py \
-    --checkpoint_path wubu_results_hyp_v04/checkpoint_epoch_X_step_Y_metricZ.pt \
-    --seed_text "Hyperbolic geometry provides" \
-    --max_length 200 \
-    --temperature 0.7 \
-    --repetition_penalty 1.1 \
-    --top_k 40
-```
-
-### Visualizations
-
-During training, visualizations are generated in the checkpoint directory (`--checkpoint_dir / visualizations /`). *Note: Ensure `matplotlib` and `scikit-learn` are installed.*
-
--   **Nested Spheres (3D Projection):** Visualizes the *hyperbolic boundary points* (`B_{i,j}`) from all levels projected into 3D Euclidean space using PCA. Inner structures conceptually represent deeper nesting levels. (e.g., `nested_spheres_epoch_X.png`).
+-   **Hyperbolic Boundary Points (Conceptual):** For models using `BoundaryManifoldHyperbolic`, visualizations (like the `nested_spheres_epoch_X.png` example) can project these learned hyperbolic points into 3D Euclidean space (e.g., via PCA). This helps to intuitively grasp how the model is structuring its learned landmarks within the nested hyperbolic levels.
     ![Example Nested Spheres Visualization](wubu_results/visualizations/nested_spheres_epoch_20.png)
--   **Training Metrics:** Plots training loss, learning rate, gradient norm, Q-controller stats, and potentially learned geometric parameters (curvatures, scales) over steps/epochs. Saved periodically and logged to WandB if enabled.
+-   **Training Metrics:** Plots of training/validation loss, learning rates, gradient norms, Q-controller statistics, and potentially learned geometric parameters (curvatures, scales of WuBu levels) are essential for tracking progress and diagnosing issues.
     ![Example Training Metrics](wubu_results/training_metrics.png)
 
-## Hyperparameters
+*Note: Image paths are illustrative from a common output structure (`wubu_results/visualizations/`). Actual paths depend on your `--checkpoint_dir`.*
 
-*(Refer to the argparse definitions in `WuBuNest_Trainer.py` for the most up-to-date list)*
+## Key Hyperparameters to Play With
 
-### WuBu Nesting Configuration (`wubu_config` - see `DEFAULT_CONFIG_WUBU` in Trainer)
+The theories of WuBu Nesting and GAAD offer a vast parameter space. The best way to see them is:
+1.  Look at the `argparse` sections in the Python scripts (e.g., `draftPY/WuBuNestDiffusion_v0.05_GAAD_MotionWuBu_Live.py`).
+2.  Examine the `.bat` files for examples of how these are set.
 
-Key Hyperbolic Parameters:
+Some key areas for experimentation:
+*   **GAAD:** `gaad_num_regions`, `gaad_decomposition_type` (hybrid, subdivide, spiral), φ-influences on GAAD.
+*   **WuBu Stacks (S, M, T):** `_num_levels`, `_hyperbolic_dims`, initial/learnable `_curvatures` & `_scales`, `_boundary_points_per_level`, use of explicit rotations (if implemented in a version), tangent flows, φ-influences.
+*   **Diffusion:** `timesteps`, `beta_schedule`, time embedding types (e.g., φ-scaled).
 
-| Parameter                       | Description                                                         | Default         | CLI Argument                     |
-| :------------------------------ | :------------------------------------------------------------------ | :-------------- | :------------------------------- |
-| `num_levels`                    | Number of nested hyperbolic levels                                  | 3               | `--num_levels`                   |
-| `hyperbolic_dims`               | List of dimensions for each level's Poincaré ball                   | `[128, 64, 32]` | `--hyperbolic_dims`              |
-| `initial_curvatures`            | List of initial curvature values (`c_i > 0`) per level              | `[1.0,...]`     | `--initial_curvatures`           |
-| `initial_scales`                | List of initial scale values (`s_i > 0`) per level (tangent mapping)| `[1.0,...]`     | `--initial_scales`               |
-| `boundary_points_per_level`     | List of numbers of learnable boundary points per level              | `[5, 4, 3]`     | `--boundary_points_per_level`    |
-| `learnable_curvature`           | Whether to learn curvature `c_i`                                    | `True`          | `--learnable-curvature` (Action) |
-| `learnable_scales`              | Whether to learn scale `s_i`                                        | `True`          | `--learnable-scales` (Action)    |
-| `learnable_spread`              | Whether to learn spread `σ_i`                                       | `True`          | `--learnable-spread` (Action)    |
-| `curvature_min_value`           | Minimum value constraint for curvature                              | `1e-6`          | `--curvature_min_value`          |
-| `scale_min_value`               | Minimum value constraint for scale                                  | `1e-6`          | `--scale_min_value`              |
-| `transform_types`               | List of mapping types (`mlp`, `linear`) for tangent transitions     | `["linear",...]`| `--transform_types`              |
-| ...                             | *(Other WuBu parameters like flow, descriptors, aggregation)*        | ...             | *(See Trainer Args)*             |
+## Features of this Playground & The Theories
 
-### Sequence Model Configuration (`sequence_config`)
+*   **Exploring WuBu Nesting:**
+    *   Adaptive Hyperbolic Geometries (learnable `c_i, s_i`).
+    *   Tangent Space Transitions (with/without explicit rotations).
+    *   Hyperbolic Boundary Manifolds, Level Descriptors, Spreads, Tangent Flows.
+*   **Exploring GAAD:**
+    *   φ-inspired visual decomposition (Recursive Golden Subdiv, Phi-Spiral Patching).
+    *   Aspect-ratio agnostic processing.
+*   **Application to Video Diffusion (`WuBuNestDiffusion`):** A concrete, complex use-case.
+*   **Diverse Scaffolding:** Includes various trainers (`mRNA`, `poem`) and utilities showing different angles of attack.
+*   **Tools for Stability:** `EnhancedSGD`, `HAKMEMQController`.
 
-| Parameter                  | Description                                                 | Default | CLI Argument                  |
-| :------------------------- | :---------------------------------------------------------- | :------ | :---------------------------- |
-| `local_hidden_size`        | Hidden dim for Local Encoder/Decoder (Tangent Transformers) | 256     | `--local_hidden_size`         |
-| `decoder_memory_dim`       | Output dim of WuBu model (Tangent space)                    | 512     | `--decoder_memory_dim`      |
-| ...                        | *(Other sequence parameters like layers, heads, N-grams)*   | ...     | *(See Trainer Args)*          |
+## Spirit of the Project & Limitations
 
-### Training Hyperparameters
-
-*(Standard training parameters like LR, WD, Batch Size, Epochs - see Trainer Args)*
-
-### Q-Learning Controller Hyperparameters
-
-*(Optional Q-Controller tuning parameters - see Trainer Args)*
-
-## Features
-
--   **Byte-Level Processing**: Native UTF-8 handling.
--   **Dynamic Patching**: Babylon Index focuses computation.
--   **Fully Hyperbolic WuBu Nesting**: Models hierarchies with adaptive geometry.
-    -   **Adaptive Geometry**: Learns curvature (`c_i`) and scale (`s_i`) per level via `HyperbolicWuBuNestingLevel`.
-    -   **Hyperbolic Boundaries**: Explicitly models landmarks (`B_{i,j}`) within each level's Poincaré ball using `BoundaryManifoldHyperbolic`.
-    -   **Tangent Space Transitions**: Maps between levels using learnable Euclidean transformations (`HyperbolicInterLevelTransform`) in tangent space.
-    -   **Riemannian-Aware Parameters**: Boundary points and level descriptors are optimized respecting their manifold structure.
-    -   **Relative Vectors (Tangent)**: Computes spatial relationships in the target tangent space.
-    -   **Level Spread**: Captures uncertainty/density context (`σ_i`).
-    -   **Intra-Level Flow (Tangent)**: Models local dynamics (`F_i`).
--   **Riemannian-Aware Optimization**: `RiemannianEnhancedSGD` handles hyperbolic parameters and uses Q-Learning for LR/Momentum tuning.
--   **Tangent Space Sequence Models**: Uses standard Transformers on tangent vectors for encoder/decoder (practical compromise).
--   **Gradient Monitoring & Stability**: Includes gradient statistics and clipping.
--   **Integrated Visualizations**: Generates plots of hyperbolic boundary points and training metrics.
--   **Accompanying Paper**: Provides the full conceptual framework (`WuBu Nesting.pdf`).
-
-## Limitations
-
--   **Computational Cost**: Hyperbolic operations and the nested structure increase computational demands.
--   **Training Stability**: Requires careful tuning and stability measures due to the complex geometry and optimization landscape (Riemannian optimization is complex).
--   **Implementation Complexity**: The hyperbolic components and their interactions are intricate.
--   **Tangent Space Compromise**: The sequence encoder/decoder currently operate in tangent space, not leveraging fully hyperbolic sequence models (which are an active research area). The inter-level transform also currently omits explicit rotations described conceptually in the paper.
--   **Interpretability**: Understanding the learned geometries and transformations can be challenging.
+*   **This is Research in Progress:** The code is experimental. It's a vehicle for exploring difficult theories. Expect rough edges.
+*   **"What I did wrong, and how to make it better":** This is the core ethos. If the theory suggests X, and the code implementing X doesn't quite nail it, that's an opportunity for improvement and learning.
+*   **Computational Demands:** These models can be heavy. Deep geometric models are complex.
+*   **Optimization is Key:** Finding the right way to train these architectures is a major part of the research.
 
 ## Contributing
 
-Contributions are welcome! Please refer to the process outlined in the original README.
+Given the experimental nature, "contributions" can be:
+*   Identifying discrepancies between theory (papers) and implementation (code).
+*   Suggesting improvements to make the implementations more robust or more faithful to the theory.
+*   Sharing results of experiments that shed light on what works or doesn't.
+*   Fork, experiment, and share back if you have breakthroughs!
 
 ## License
 
-This project is licensed under the MIT License - see the `LICENSE` file for details.
+MIT License
 
 ## Acknowledgments
 
--   The WuBu Nesting framework synthesizes ideas from hyperbolic geometry [Nickel & Kiela, 2017; Ganea et al., 2018], geometric deep learning, and rotation representations. See `WuBu Nesting.pdf` for detailed background.
--   Optimizer enhancements draw from Q-Learning and gradient monitoring techniques.
--   Sequence modeling components build upon the Transformer architecture.
+The ideas explored here build upon a vast body of work in hyperbolic geometry, geometric deep learning, compositional theories, and video modeling. Specific theoretical inspirations are cited within the accompanying papers.
 
 ## Citation
 
-If you use this code or the WuBu Nesting framework in your research, please cite the accompanying paper and this repository:
+If you find the theories (WuBu Nesting, GAAD), the codebase, or the papers useful in your research, please consider citing the source documents:
 
 ```
-@techreport{WaefreBeornWuBuNesting,
-  author = {Wubu WaefreBeorn},
-  title = {WuBu Nesting: A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics},
-  year = {2025},
-  institution = {GitHub Repository},
-  url = {https://github.com/waefrebeorn/bytropix},
-  note = {Accessed [Date]}
+@misc{BytropixWuBuNestingPlayground2025,
+  author       = {W. WaefreBeorn, et al.},
+  title        = {Bytropix: A Playground for WuBu Nesting & GAAD},
+  year         = {2025},
+  howpublished = {GitHub Repository},
+  note         = {URL: https://github.com/waefrebeorn/bytropix} % Replace if public
 }
 
-@software{BytropixWuBuNestingCode,
-  author = {WaefreBeorn},
-  title = {Bytropix: Hyperbolic WuBu Nesting for Byte-Level Modeling},
-  year = {2025},
-  url = {https://github.com/waefrebeorn/bytropix},
-  version = {0.04-hyp}
+@techreport{WaefreBeornWuBuNestingPaper,
+  author       = {W. WaefreBeorn}, % Or appropriate authorship for the PDF
+  title        = {WuBu Nesting: A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics},
+  year         = {2025}, % Or year on PDF
+  institution  = {Bytropix Project},
+  note         = {Referenced from WuBu_Nesting.pdf in the Bytropix repository}
 }
+
+@techreport{WaefreBeornWuBuNestDiffusionPaper,
+  author       = {W. WaefreBeorn, et al.},
+  title        = {WuBuNestDiffusion (v0.05.2): Motion-Aware Spatio-Temporal Modeling with φ-Infused Golden Aspect Adaptive Decomposition and Adaptive Hyperbolic Nesting for Video Diffusion},
+  year         = {2025},
+  institution  = {Bytropix Project},
+  note         = {Referenced from ./draftPY/WuBuNestDiffusion (v0.05.2).md in the Bytropix repository}
+}
+```
+(And similarly for other specific markdown papers if you draw heavily from them.)
+
+---
