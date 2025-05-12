@@ -164,13 +164,13 @@ The `GAADWuBuRegionalDiffNet` class orchestrates the overall architecture, integ
 graph TD
     %% Node Definitions
     A["Input Video Frames (Batch)"]
-    B("RegionalHyperbolicEncoder (Appearance)") %% Rounded rectangle (stadium-like)
-    C("RegionalHyperbolicMotionEncoder (Motion)") %% Rounded rectangle (stadium-like)
-    D("Noise Predictor (Transformer)") %% Rounded rectangle (stadium-like)
+    B("RegionalHyperbolicEncoder (Appearance)")
+    C("RegionalHyperbolicMotionEncoder (Motion)")
+    D("Noise Predictor (Transformer)")
     Time["Time Embedding"]
     TemporalContextNode["Temporal Context (from WuBu-T)"]
-    E("Diffusion Process (q/p_sample)") %% Rounded rectangle (stadium-like)
-    F("RegionalPixelSynthesisDecoder") %% Rounded rectangle (stadium-like)
+    E("Diffusion Process (q/p_sample)")
+    F("RegionalPixelSynthesisDecoder")
     G["Output Predicted Frames"]
 
     %% Main Connections
@@ -185,7 +185,9 @@ graph TD
 
     D -- "Predicted Noise (Tangent Space)" --> E;
     E -- "Cleaned Regional Tangent Feats" --> F;
-    B -- "GAAD BBoxes (App)" --> F; %% This comment on its own line for the edge is fine
+    
+    B -- "GAAD BBoxes (App)" --> F;
+    %% Comment for the edge above: Decoder needs bboxes to place pixels for synthesis.
 
     F --> G;
 
@@ -194,7 +196,7 @@ graph TD
         direction LR
         AggAppFeats["Aggregated App Feats over time"]
         AggMotFeats["Aggregated Motion Feats over time"]
-        WuBuTStack{"WuBu-T Stack (Aggregates S+M over time)"} %% Rhombus/Diamond
+        WuBuTStack{"WuBu-T Stack (Aggregates S+M over time)"}
 
         AggAppFeats --> WuBuTStack;
         AggMotFeats --> WuBuTStack;
@@ -204,7 +206,7 @@ graph TD
     %% Styling Class Definitions
     %% text: black, bold. node outline: white.
     classDef wubu fill:#B2DFDB,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
-    classDef gaad fill:#FFE0B2,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
+    classDef gaad fill:#FFE0B2,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold; %% Defined, can be used if specific GAAD styling is needed
     classDef motion fill:#FFCDD2,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
     classDef diffusion fill:#E1BEE7,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
     classDef transformer fill:#C8E6C9,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
@@ -219,7 +221,7 @@ graph TD
     class AggAppFeats generalIO;
     class AggMotFeats generalIO;
 
-    class B wubu;
+    class B wubu; %% Node B (Appearance Encoder) uses WuBu and GAAD. Styled as 'wubu'.
     class C motion;
     class D transformer;
     class E diffusion;
