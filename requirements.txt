@@ -15,3 +15,5 @@ biopython
 h5py
 viennarna
 gffutils
+av
+torchmetrics
