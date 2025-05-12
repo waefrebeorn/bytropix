@@ -142,8 +142,8 @@ The `WuBuSTDiffusionNet` class orchestrates the overall architecture, integratin
 ```mermaid
 graph TD
     A["Input Video Frames f_t, f_t-1, ..."] --> B("InitialFrameAutoencoderCNN");
-    B -- CNN Encoder Convs --> C1("Feature Maps M_t");
-    B -- CNN Encoder Convs --> C0("Feature Maps M_t-1");
+    B -- "CNN Encoder Convs" --> C1("Feature Maps M_t");
+    B -- "CNN Encoder Convs" --> C0("Feature Maps M_t-1");
 
     subgraph GAAD_Processing [GAAD Processing]
         C1 --> D1("GAADFrameProcessor - Appearance");
@@ -184,11 +184,22 @@ graph TD
     TimeEmb_Noise["Time t for q_sample"] --> QSample;
     QSample -- "Noisy xt_target" --> NoisyTarget;
 
-    classDef wubu fill:#B2DFDB,stroke:#00796B,stroke-width:2px;
-    classDef gaad fill:#FFE0B2,stroke:#FF8F00,stroke-width:2px;
+    %% Class definitions for styling
+    %% Common style for most nodes: light gray fill, white 1px border, black bold text.
+    classDef commonNodeStyle fill:#f9f9f9,stroke:#ffffff,stroke-width:1px,color:#000000,font-weight:bold
+    
+    %% WuBu specific style: original fill, but with white 1px border and black bold text.
+    classDef wubu fill:#B2DFDB,stroke:#ffffff,stroke-width:1px,color:#000000,font-weight:bold
+    
+    %% GAAD specific style: original fill, but with white 1px border and black bold text.
+    classDef gaad fill:#FFE0B2,stroke:#ffffff,stroke-width:1px,color:#000000,font-weight:bold
+
+    %% Apply classes to specific node types
     class WuBuS,WuBuM,WuBuT wubu;
-    class D1,H,K gaad;
-    class G_ComputeDiff,G_DiffMap gaad;
+    class D1,H,K,G_ComputeDiff,G_DiffMap gaad;
+
+    %% Apply commonNodeStyle to all other explicitly defined nodes
+    class A,B,C0,C1,E1,F,F_prev,I,J,L,s_t,m_t,Combine,WuBuT_Input,CTX,NoisyTarget,PredHead,PredictedNoise,TargetGlobalFeats_clean,QSample,TimeEmb_Noise,TimeEmb commonNodeStyle;
 
 
 ```
