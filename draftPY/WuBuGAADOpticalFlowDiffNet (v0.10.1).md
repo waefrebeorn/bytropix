@@ -162,7 +162,6 @@ The `GAADWuBuRegionalDiffNet` class orchestrates the overall architecture, integ
 
 ```mermaid
 graph TD
-    %% Node Definitions
     A["Input Video Frames (Batch)"]
     B("RegionalHyperbolicEncoder (Appearance)")
     C("RegionalHyperbolicMotionEncoder (Motion)")
@@ -173,7 +172,6 @@ graph TD
     F("RegionalPixelSynthesisDecoder")
     G["Output Predicted Frames"]
 
-    %% Main Connections
     A --> B;
     A --> C;
 
@@ -187,11 +185,9 @@ graph TD
     E -- "Cleaned Regional Tangent Feats" --> F;
     
     B -- "GAAD BBoxes (App)" --> F;
-    %% Comment for the edge above: Decoder needs bboxes to place pixels for synthesis.
 
     F --> G;
 
-    %% Subgraph for Temporal Context Generation
     subgraph TemporalContextGen ["Temporal Context Generation (Implicit WuBu-T)"]
         direction LR
         AggAppFeats["Aggregated App Feats over time"]
@@ -203,17 +199,14 @@ graph TD
         WuBuTStack --> TemporalContextNode;
     end
 
-    %% Styling Class Definitions
-    %% text: black, bold. node outline: white.
     classDef wubu fill:#B2DFDB,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
-    classDef gaad fill:#FFE0B2,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold; %% Defined, can be used if specific GAAD styling is needed
+    classDef gaad fill:#FFE0B2,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
     classDef motion fill:#FFCDD2,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
     classDef diffusion fill:#E1BEE7,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
     classDef transformer fill:#C8E6C9,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
     classDef decoder fill:#BBDEFB,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
     classDef generalIO fill:#E0E0E0,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
 
-    %% Apply Classes to Nodes
     class A generalIO;
     class G generalIO;
     class Time generalIO;
@@ -221,7 +214,7 @@ graph TD
     class AggAppFeats generalIO;
     class AggMotFeats generalIO;
 
-    class B wubu; %% Node B (Appearance Encoder) uses WuBu and GAAD. Styled as 'wubu'.
+    class B wubu;
     class C motion;
     class D transformer;
     class E diffusion;
