@@ -162,15 +162,15 @@ The `GAADWuBuRegionalDiffNet` class orchestrates the overall architecture, integ
 
 ```mermaid
 graph TD
-    %% Node Definitions with Labels and Shapes
+    %% Node Definitions
     A["Input Video Frames (Batch)"]
-    B("RegionalHyperbolicEncoder (Appearance)") %% Stadium shape
-    C("RegionalHyperbolicMotionEncoder (Motion)") %% Stadium shape
-    D("Noise Predictor (Transformer)") %% Stadium shape
+    B("RegionalHyperbolicEncoder (Appearance)") %% Rounded rectangle (stadium-like)
+    C("RegionalHyperbolicMotionEncoder (Motion)") %% Rounded rectangle (stadium-like)
+    D("Noise Predictor (Transformer)") %% Rounded rectangle (stadium-like)
     Time["Time Embedding"]
     TemporalContextNode["Temporal Context (from WuBu-T)"]
-    E("Diffusion Process (q/p_sample)") %% Stadium shape
-    F("RegionalPixelSynthesisDecoder") %% Stadium shape
+    E("Diffusion Process (q/p_sample)") %% Rounded rectangle (stadium-like)
+    F("RegionalPixelSynthesisDecoder") %% Rounded rectangle (stadium-like)
     G["Output Predicted Frames"]
 
     %% Main Connections
@@ -181,11 +181,11 @@ graph TD
     C -- "Regional Hyperbolic Motion Feats (if enabled)" --> D;
 
     Time --> D;
-    TemporalContextNode --> D; %% Link from the Temporal Context Node to D
+    TemporalContextNode --> D;
 
     D -- "Predicted Noise (Tangent Space)" --> E;
     E -- "Cleaned Regional Tangent Feats" --> F;
-    B -- "GAAD BBoxes (App)" --> F; %% Comment: Decoder needs bboxes
+    B -- "GAAD BBoxes (App)" --> F; %% This comment on its own line for the edge is fine
 
     F --> G;
 
@@ -194,39 +194,37 @@ graph TD
         direction LR
         AggAppFeats["Aggregated App Feats over time"]
         AggMotFeats["Aggregated Motion Feats over time"]
-        WuBuTStack{"WuBu-T Stack (Aggregates S+M over time)"} %% Diamond shape
+        WuBuTStack{"WuBu-T Stack (Aggregates S+M over time)"} %% Rhombus/Diamond
 
         AggAppFeats --> WuBuTStack;
         AggMotFeats --> WuBuTStack;
-        WuBuTStack --> TemporalContextNode; %% Output of subgraph flows to TemporalContextNode
+        WuBuTStack --> TemporalContextNode;
     end
 
     %% Styling Class Definitions
-    %% Added color:#000000,font-weight:bold for black bold text.
-    %% Original strokes are kept for better contrast with light fills.
-    %% For a literal "white outline" on nodes, change 'stroke' in classDefs to #FFFFFF.
-    classDef wubu fill:#B2DFDB,stroke:#00796B,stroke-width:2px,color:#000000,font-weight:bold;
-    classDef gaad fill:#FFE0B2,stroke:#FF8F00,stroke-width:2px,color:#000000,font-weight:bold; %% Defined, can be used if needed
-    classDef motion fill:#FFCDD2,stroke:#E57373,stroke-width:2px,color:#000000,font-weight:bold;
-    classDef diffusion fill:#E1BEE7,stroke:#9575CD,stroke-width:2px,color:#000000,font-weight:bold;
-    classDef transformer fill:#C8E6C9,stroke:#4CAF50,stroke-width:2px,color:#000000,font-weight:bold;
-    classDef decoder fill:#BBDEFB,stroke:#2196F3,stroke-width:2px,color:#000000,font-weight:bold;
-    classDef generalIO fill:#E0E0E0,stroke:#616161,stroke-width:2px,color:#000000,font-weight:bold; %% For inputs/outputs and generic elements
+    %% text: black, bold. node outline: white.
+    classDef wubu fill:#B2DFDB,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
+    classDef gaad fill:#FFE0B2,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
+    classDef motion fill:#FFCDD2,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
+    classDef diffusion fill:#E1BEE7,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
+    classDef transformer fill:#C8E6C9,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
+    classDef decoder fill:#BBDEFB,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
+    classDef generalIO fill:#E0E0E0,stroke:#FFFFFF,stroke-width:2px,color:#000000,font-weight:bold;
 
     %% Apply Classes to Nodes
     class A generalIO;
     class G generalIO;
     class Time generalIO;
-    class TemporalContextNode generalIO; %% The node representing temporal context input to D
-    class AggAppFeats generalIO; %% Node inside subgraph
-    class AggMotFeats generalIO; %% Node inside subgraph
+    class TemporalContextNode generalIO;
+    class AggAppFeats generalIO;
+    class AggMotFeats generalIO;
 
-    class B wubu; %% RegionalHyperbolicEncoder (Appearance) - WuBu-S uses GAAD
-    class C motion; %% RegionalHyperbolicMotionEncoder (Motion)
-    class D transformer; %% Noise Predictor (Transformer)
-    class E diffusion; %% Diffusion Process
-    class F decoder; %% RegionalPixelSynthesisDecoder
-    class WuBuTStack wubu; %% WuBu-T Stack node inside subgraph
+    class B wubu;
+    class C motion;
+    class D transformer;
+    class E diffusion;
+    class F decoder;
+    class WuBuTStack wubu;
 
 ```
 
