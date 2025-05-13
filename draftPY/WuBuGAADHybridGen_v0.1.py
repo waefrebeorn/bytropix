@@ -1359,7 +1359,35 @@ class RegionalHyperbolicMotionEncoder(nn.Module):
 
         return final_motion_features, final_motion_bboxes
 
-# Renamed from RegionalPixelSynthesisDecoder
+
+# --- FiLM Layer (Helper for GAAD modulation) ---
+class FiLMLayer(nn.Module):
+    def __init__(self, channels: int, condition_dim: int):
+        super().__init__()
+        self.channels = channels
+        self.condition_dim = condition_dim
+        # MLP to produce gamma and beta from condition
+        self.to_gamma_beta = nn.Linear(condition_dim, channels * 2)
+
+    def forward(self, x: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        # x: (B, C, D, H, W) or (B, C, H, W) feature map
+        # condition: (B, condition_dim)
+        gamma_beta = self.to_gamma_beta(condition)
+        gamma, beta = torch.chunk(gamma_beta, 2, dim=-1)
+
+        # Reshape gamma and beta to be broadcastable to x
+        if x.dim() == 5: # Spatio-temporal features (B, C, D, H, W)
+            gamma = gamma.view(-1, self.channels, 1, 1, 1)
+            beta = beta.view(-1, self.channels, 1, 1, 1)
+        elif x.dim() == 4: # Spatial features (B, C, H, W)
+            gamma = gamma.view(-1, self.channels, 1, 1)
+            beta = beta.view(-1, self.channels, 1, 1)
+        else:
+            raise ValueError(f"FiLMLayer input x has unsupported dimension: {x.dim()}")
+
+        return (1 + gamma) * x + beta
+
+
 class RegionalGeneratorDecoder(nn.Module):
     def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_config: Dict, wubu_s_output_dim: int, latent_dim: int):
         super().__init__()
@@ -1367,258 +1395,546 @@ class RegionalGeneratorDecoder(nn.Module):
         self.video_config = video_config
         self.image_size = (args.image_h, args.image_w)
         self.num_regions = gaad_config['num_regions']
-        self.decoder_type = args.decoder_type
         self.num_channels = video_config['num_channels']
         self.latent_dim = latent_dim
-        self.regional_feature_dim = wubu_s_output_dim 
         self.num_predict_frames = video_config["num_predict_frames"]
-        self.logger = logging.getLogger("WuBuGAADHybridGenV01.Generator") # Instance logger
+        self.logger = logging.getLogger("WuBuGAADHybridGenV01.Generator")
 
-        gen_temporal_hidden_dim = self.latent_dim * 2 
-        self.temporal_expander = nn.Sequential(
-            nn.Linear(self.latent_dim, gen_temporal_hidden_dim),
-            nn.GELU(),
-            nn.Linear(gen_temporal_hidden_dim, self.num_predict_frames * self.num_regions * self.regional_feature_dim)
+        # --- Derived Generator Structural Parameters ---
+        # Initial spatial resolution: Aim for something like H/16 or W/16
+        # Ensure it's a power of 2 for clean upsampling, or the smallest possible (e.g., 4x4)
+        # We want self.gen_init_spatial_res * (2^self.gen_num_upsampling_layers) = self.image_size
+        min_target_dim = min(self.image_size[0], self.image_size[1])
+        if min_target_dim <= 8: # Very small images
+            self.gen_init_spatial_res = 1
+            self.gen_num_upsampling_layers = int(math.log2(min_target_dim)) if min_target_dim > 0 and math.log2(min_target_dim).is_integer() else max(1, int(math.ceil(math.log2(min_target_dim))))
+        elif min_target_dim <= 32:
+            self.gen_init_spatial_res = 2
+            self.gen_num_upsampling_layers = int(math.log2(min_target_dim / 2)) if (min_target_dim/2)>0 and math.log2(min_target_dim/2).is_integer() else max(1, int(math.ceil(math.log2(min_target_dim/2))))
+        else: # min_target_dim > 32
+            self.gen_init_spatial_res = 4 # Default starting point for larger images
+            self.gen_num_upsampling_layers = int(math.log2(min_target_dim / 4)) if (min_target_dim/4)>0 and math.log2(min_target_dim/4).is_integer() else max(1, int(math.ceil(math.log2(min_target_dim/4))))
+
+        # Check if calculated upsampling perfectly reaches target, warn if not
+        calculated_final_res = self.gen_init_spatial_res * (2**self.gen_num_upsampling_layers)
+        if calculated_final_res != min_target_dim:
+             self.logger.warning(
+                f"Generator calculated final res {calculated_final_res} (from init_res {self.gen_init_spatial_res} "
+                f"and {self.gen_num_upsampling_layers} upsample layers) does not exactly match target min_dim {min_target_dim}. "
+                f"Final adaptive pooling will be crucial."
+            )
+
+        # Initial channels: Derived from latent_dim or a fixed large value scaled down
+        # Let's make it a multiple of latent_dim, e.g., 2x or 4x latent_dim, capped for stability
+        self.gen_init_channels = min(512, max(128, self.latent_dim * 2))
+
+        # Temporal kernel size can remain a fixed arg or default
+        self.gen_temporal_kernel_size = getattr(args, 'gen_temporal_kernel_size', 3)
+
+
+        # 1. Latent to Spatio-Temporal Base
+        self.fc_expand_latent = nn.Linear(
+            self.latent_dim,
+            self.gen_init_channels * self.num_predict_frames * self.gen_init_spatial_res * self.gen_init_spatial_res
         )
 
-        if self.decoder_type == "patch_gen":
-            self.patch_size = args.decoder_patch_gen_size
-            patch_pixels = self.num_channels * self.patch_size * self.patch_size
-            self.patch_generator = nn.Sequential(
-                nn.Linear(self.regional_feature_dim, self.regional_feature_dim * 2),
+        # 2. GAAD BBox Processing for Modulation
+        # Condition dimension derived from latent_dim (e.g., latent_dim / 4 or a fixed reasonable value)
+        self.gaad_condition_dim = max(32, self.latent_dim // 4)
+        if self.num_regions > 0:
+            self.bbox_feature_dim = 4 # cx, cy, w, h (normalized)
+            # MLP to embed aggregated bbox features for a frame
+            hidden_bbox_embed_dim = max(self.gaad_condition_dim, self.num_regions * self.bbox_feature_dim // 2) # Intermediate dim
+            self.frame_gaad_embedder = nn.Sequential(
+                nn.Linear(self.num_regions * self.bbox_feature_dim, hidden_bbox_embed_dim),
                 nn.GELU(),
-                nn.Linear(self.regional_feature_dim * 2, patch_pixels),
-                nn.Tanh() 
+                nn.Linear(hidden_bbox_embed_dim, self.gaad_condition_dim)
             )
-            self.patch_resize_mode = args.decoder_patch_resize_mode
-            self.logger.info(f"Using Patch Generator (Input RegionalDim: {self.regional_feature_dim}, OutPatchSize: {self.patch_size}x{self.patch_size}, Resize: {self.patch_resize_mode})")
-        elif self.decoder_type == "transformer":
-            self.logger.warning("Decoder Transformer type NIY.")
-            raise NotImplementedError("Transformer decoder NIY")
         else:
-            raise ValueError(f"Unknown decoder_type: {self.decoder_type}")
+            self.frame_gaad_embedder = None
 
-        self.apply(init_weights_general)
 
-    def forward(self, latent_code: torch.Tensor, gaad_bboxes: torch.Tensor) -> torch.Tensor:
-        # gaad_bboxes is expected to have shape (B, N_pred, NumReg, 4)
-        # where N_pred is self.num_predict_frames
-        B = latent_code.shape[0]
-        N_pred_from_bboxes = gaad_bboxes.shape[1] # Number of frames of bboxes we received
-        NumReg = self.num_regions # From config, should match gaad_bboxes.shape[2]
+        # 3. Spatio-Temporal Upsampling and Refinement with FiLM
+        self.upsample_blocks = nn.ModuleList()
+        current_channels = self.gen_init_channels
+        padding_temp = self.gen_temporal_kernel_size // 2
+
+        # Channel reduction strategy: Halve channels per upsample, but don't go below a minimum (e.g., 32 or 64)
+        min_gen_channels = max(32, self.num_channels * 4)
+
+        for i in range(self.gen_num_upsampling_layers):
+            # Progressively reduce channels, but not too aggressively
+            if i < self.gen_num_upsampling_layers -1 : # Not the last upsampling layer
+                 out_channels = max(min_gen_channels, current_channels // 2)
+            else: # Last upsampling layer, aim closer to final channel count, e.g., 2x num_channels
+                 out_channels = max(min_gen_channels, self.num_channels * 2 if self.num_channels > 1 else min_gen_channels)
+
+            block = nn.ModuleDict()
+            block['conv_transpose'] = nn.ConvTranspose3d(
+                current_channels, out_channels,
+                kernel_size=(self.gen_temporal_kernel_size, 4, 4), # (D, H, W) kernels
+                stride=(1, 2, 2), # Stride 1 for temporal, 2 for spatial
+                padding=(padding_temp, 1, 1), # (D_pad, H_pad, W_pad)
+                bias=False
+            )
+            block['norm'] = nn.InstanceNorm3d(out_channels, affine=False) # Affine=False for FiLM
+            if self.frame_gaad_embedder is not None:
+                block['film'] = FiLMLayer(out_channels, self.gaad_condition_dim)
+            block['activation'] = nn.GELU()
+            self.upsample_blocks.append(block)
+            current_channels = out_channels
+
+        # Final convolution to map to image channels
+        # Padding for final_conv should ensure spatial dimensions are maintained if kernel is >1
+        final_conv_padding_spatial = 1 if getattr(args, 'gen_final_conv_kernel_spatial', 3) > 1 else 0
+        final_conv_padding_temporal = padding_temp # Keep consistent with other temporal convs
         
-        C, H, W = self.num_channels, self.image_size[0], self.image_size[1]
+        self.final_conv = nn.Conv3d(
+            current_channels, self.num_channels,
+            kernel_size=(self.gen_temporal_kernel_size, getattr(args, 'gen_final_conv_kernel_spatial', 3), getattr(args, 'gen_final_conv_kernel_spatial', 3)),
+            padding=(final_conv_padding_temporal, final_conv_padding_spatial, final_conv_padding_spatial)
+        )
+        self.final_activation = nn.Tanh()
+
+        self.apply(init_weights_general) # Assuming init_weights_general is defined elsewhere
+        self.logger.info(
+            f"Derived Generator Config: InitCh={self.gen_init_channels}, "
+            f"InitSpatialRes={self.gen_init_spatial_res}, NumUpsampleLayers={self.gen_num_upsampling_layers}, "
+            f"TargetImageSize={self.image_size}, FinalCalcResTargetDim={self.gen_init_spatial_res * (2**self.gen_num_upsampling_layers)}, "
+            f"GAADCondDim={self.gaad_condition_dim if self.frame_gaad_embedder else 'N/A'}"
+        )
+
+    def _normalize_bboxes(self, bboxes: torch.Tensor, H: int, W: int) -> torch.Tensor:
+        # bboxes: (B, N_frames, NumRegions, 4) [x1, y1, x2, y2]
+        # Output: (B, N_frames, NumRegions, 4) [norm_cx, norm_cy, norm_w, norm_h]
+        x1, y1, x2, y2 = bboxes.unbind(-1)
+        # Ensure W and H are not zero to prevent division by zero
+        img_W = float(W) if W > 0 else 1.0
+        img_H = float(H) if H > 0 else 1.0
+
+        norm_cx = ((x1 + x2) / 2.0) / img_W
+        norm_cy = ((y1 + y2) / 2.0) / img_H
+        norm_w = (x2 - x1) / img_W
+        norm_h = (y1 - y2) / img_H # Note: often y2 > y1, so h would be positive. If y is from top, (y2-y1) is correct.
+        return torch.stack([norm_cx, norm_cy, norm_w, norm_h], dim=-1)
+
+
+    def forward(self, latent_code: torch.Tensor, gaad_bboxes: Optional[torch.Tensor]) -> torch.Tensor:
+        B = latent_code.shape[0]
         device = latent_code.device
-        dtype = latent_code.dtype
+        dtype_in = latent_code.dtype # Match output dtype to latent_code dtype
 
-        # Temporal expander always produces features for self.num_predict_frames
-        regional_tangent_features_flat = self.temporal_expander(latent_code)
-        # Shape: (B, self.num_predict_frames * NumReg * regional_feature_dim)
-        regional_tangent_features = regional_tangent_features_flat.view(B, self.num_predict_frames, NumReg, self.regional_feature_dim)
+        # 1. Expand latent code
+        x = self.fc_expand_latent(latent_code)
+        x = x.view(
+            B,
+            self.gen_init_channels,
+            self.num_predict_frames,
+            self.gen_init_spatial_res,
+            self.gen_init_spatial_res
+        ).to(dtype_in) # Ensure dtype matches after view
 
-        # The number of frames we actually generate pixels for will be min(self.num_predict_frames, N_pred_from_bboxes)
-        # if the generator's patch assembly loop depends on the number of bbox sets.
-        # However, patch_generator input uses self.num_predict_frames.
-        # The critical part is matching `gaad_bboxes_flat` to the frames loop.
-        # Let's ensure operations use `self.num_predict_frames` consistently for generation,
-        # and that `gaad_bboxes` also has `self.num_predict_frames` in its time dimension.
+        # 2. Prepare GAAD frame-wise conditions if applicable
+        sequence_condition = None # Initialize to None
+        if self.frame_gaad_embedder is not None:
+            if gaad_bboxes is not None and \
+               (gaad_bboxes.shape[0] != B or \
+                gaad_bboxes.shape[1] != self.num_predict_frames or \
+                gaad_bboxes.shape[2] != self.num_regions):
+                self.logger.warning(
+                    f"Generator GAAD bbox shape mismatch. Expected (B={B}, N_pred={self.num_predict_frames}, NumReg={self.num_regions}, 4), "
+                    f"got {gaad_bboxes.shape}. Will use zero condition."
+                )
+                # Fallback to zero condition if shapes don't match critical dimensions
+                frame_conditions_flat = torch.zeros(B * self.num_predict_frames, self.gaad_condition_dim, device=device, dtype=dtype_in)
+            elif gaad_bboxes is not None: # Correct shape
+                norm_bboxes = self._normalize_bboxes(gaad_bboxes.to(dtype_in), self.image_size[0], self.image_size[1])
+                norm_bboxes_flat = norm_bboxes.view(B * self.num_predict_frames, -1)
+                frame_conditions_flat = self.frame_gaad_embedder(norm_bboxes_flat)
+            else: # No bboxes provided, but embedder exists
+                self.logger.debug("GAAD Embedder present but no bboxes provided to Generator. Using zero condition.")
+                frame_conditions_flat = torch.zeros(B * self.num_predict_frames, self.gaad_condition_dim, device=device, dtype=dtype_in)
 
-        if N_pred_from_bboxes != self.num_predict_frames:
-            self.logger.warning(f"Generator received {N_pred_from_bboxes} bbox sets, but configured for {self.num_predict_frames} predict frames. This might lead to issues if not handled upstream or if decoder is not robust to it. Upstream should ensure correct bbox slicing.")
-            # This warning indicates an issue in how WuBuGAADHybridGenNet.forward calls this.
-            # For robustness here, we might be forced to use min(N_pred_from_bboxes, self.num_predict_frames)
-            # or error out if the mismatch is problematic for subsequent logic.
-            # Given the temporal_expander generates for self.num_predict_frames, we should ideally have bboxes for all of them.
-            # If upstream logic in WuBuGAADHybridGenNet.forward correctly pads/truncates bboxes, this check might not be needed,
-            # or it would catch an error from upstream.
-            # For now, assume gaad_bboxes.shape[1] == self.num_predict_frames due to upstream handling.
-            if not (gaad_bboxes.shape[0] == B and gaad_bboxes.shape[1] == self.num_predict_frames and gaad_bboxes.shape[2] == NumReg):
-                 self.logger.error(f"Corrected bboxes in MainNet.forward still lead to mismatch in Generator. Bboxes shape: {gaad_bboxes.shape}. Expected N_pred={self.num_predict_frames}")
-                 # Fallback to default if bboxes are critically mis-shaped despite upstream efforts
-                 frame_dims=(W, H); default_bboxes_gen=golden_subdivide_rect_fixed_n(frame_dims, NumReg, device=device, dtype=dtype, min_size_px=self.args.gaad_min_size_px);
-                 gaad_bboxes = default_bboxes_gen.unsqueeze(0).unsqueeze(0).repeat(B, self.num_predict_frames, 1, 1)
+            # Create sequence_condition by averaging frame conditions
+            if frame_conditions_flat is not None:
+                frame_conditions_reshaped = frame_conditions_flat.view(B, self.num_predict_frames, self.gaad_condition_dim)
+                sequence_condition = torch.mean(frame_conditions_reshaped, dim=1).to(dtype_in) # (B, gaad_condition_dim)
 
 
-        regional_features_gen_input = regional_tangent_features.reshape(B * self.num_predict_frames * NumReg, self.regional_feature_dim)
-        gaad_bboxes_flat = gaad_bboxes.reshape(B * self.num_predict_frames, NumReg, 4)
+        # 3. Spatio-temporal upsampling with FiLM
+        for block_idx, block in enumerate(self.upsample_blocks):
+            x = block['conv_transpose'](x)
+            x = block['norm'](x)
+            if 'film' in block and sequence_condition is not None:
+                x = block['film'](x, sequence_condition)
+            x = block['activation'](x)
 
-        if self.decoder_type == "patch_gen":
-            generated_patch_pixels_flat = self.patch_generator(regional_features_gen_input)
-            generated_patches = generated_patch_pixels_flat.view(B * self.num_predict_frames, NumReg, C, self.patch_size, self.patch_size)
+        x = self.final_conv(x)
+        generated_frames_sequence = self.final_activation(x)
+        # Current shape: (B, num_img_channels, N_pred, H_intermediate, W_intermediate)
 
-            canvas = torch.zeros(B * self.num_predict_frames, C, H, W, device=device, dtype=dtype)
-            counts = torch.zeros(B * self.num_predict_frames, 1, H, W, device=device, dtype=dtype)
+        # Permute to (B, N_pred, num_img_channels, H_intermediate, W_intermediate)
+        generated_frames_sequence = generated_frames_sequence.permute(0, 2, 1, 3, 4)
 
-            # Loop iterates B * self.num_predict_frames times.
-            # gaad_bboxes_flat must also have B * self.num_predict_frames in its first dimension.
-            for i in range(B * self.num_predict_frames): # Iterate over each frame to be generated for each batch item
-                for r in range(NumReg):
-                    patch = generated_patches[i, r]
-                    x1, y1, x2, y2 = gaad_bboxes_flat[i, r].tolist()
-                    target_h = int(round(y2 - y1))
-                    target_w = int(round(x2 - x1))
-                    place_y1 = int(round(y1))
-                    place_x1 = int(round(x1))
+        # Final check and adaptive pooling if necessary to match exact image_size
+        # This is important because derived parameters might not lead to exact target dimensions.
+        final_h_actual, final_w_actual = generated_frames_sequence.shape[-2:]
+        if final_h_actual != self.image_size[0] or final_w_actual != self.image_size[1]:
+            self.logger.debug(
+                f"Generator output spatial size {final_h_actual}x{final_w_actual} before final pool, target {self.image_size}. "
+                f"Performing adaptive pool for exact match."
+            )
+            # Permute for adaptive_avg_pool3d: (B, C, D, H, W)
+            temp_permuted_for_pool = generated_frames_sequence.permute(0, 2, 1, 3, 4)
+            pooled = F.adaptive_avg_pool3d(
+                temp_permuted_for_pool,
+                (self.num_predict_frames, self.image_size[0], self.image_size[1]) # (D_out, H_out, W_out)
+            )
+            generated_frames_sequence = pooled.permute(0, 2, 1, 3, 4) # Back to (B, N_pred, C, H, W)
 
-                    if target_h <= 0 or target_w <= 0: continue
+        return generated_frames_sequence.to(dtype_in) # Ensure output dtype matches input
 
-                    resize_kwargs = {'size': (target_h, target_w), 
-                                     'mode': self.patch_resize_mode, 
-                                     'antialias': True if self.patch_resize_mode != 'nearest' else None}
-                    if self.patch_resize_mode != 'nearest': 
-                        resize_kwargs['align_corners'] = False # Common practice for non-nearest
-
-                    resized_patch = F.interpolate(patch.unsqueeze(0), **resize_kwargs).squeeze(0)
-
-                    place_y2 = min(H, place_y1 + target_h)
-                    place_x2 = min(W, place_x1 + target_w)
-                    place_y1 = max(0, place_y1) # Clamp to canvas bounds
-                    place_x1 = max(0, place_x1)
-                    
-                    slice_h = place_y2 - place_y1
-                    slice_w = place_x2 - place_x1
-
-                    if slice_h <= 0 or slice_w <= 0: continue
-                    
-                    canvas[i, :, place_y1:place_y2, place_x1:place_x2] += resized_patch[:, :slice_h, :slice_w]
-                    counts[i, :, place_y1:place_y2, place_x1:place_x2] += 1
-            
-            output_canvas_flat = torch.where(counts > 0, canvas / counts.clamp(min=1.0), canvas)
-            # Reshape to (B, self.num_predict_frames, C, H, W)
-            output_frames = output_canvas_flat.view(B, self.num_predict_frames, C, H, W)
-        else:
-            raise NotImplementedError(f"Decoder type {self.decoder_type} forward pass NIY.")
-
-        return output_frames
-
-# --- NEW: Discriminator ---
 class RegionalDiscriminator(nn.Module):
     def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_config: Dict, disc_config: Dict):
         super().__init__()
         self.args = args
         self.video_config = video_config
-        self.gaad_config = gaad_config
-        self.disc_config = disc_config # e.g., {"type": "regional_cnn", "cnn_channels": [64, 128], "use_wubu": False}
+        self.gaad_config = gaad_config 
+        self.disc_config = disc_config
         self.logger = logging.getLogger("WuBuGAADHybridGenV01.Discriminator")
 
         self.image_size = (args.image_h, args.image_w)
         self.num_channels = video_config['num_channels']
-        self.num_regions = gaad_config['num_regions']
-        self.gaad_min_size_px = gaad_config['min_size_px']
-        self.decomposition_type = gaad_config['decomposition_type'] # Use appearance GAAD for discriminator
+        self.num_frames_to_discriminate = video_config.get("num_predict_frames", 1)
+        if self.num_frames_to_discriminate == 0: self.num_frames_to_discriminate = 1
 
-        disc_type = self.disc_config.get("type", "regional_cnn")
-        self.logger.info(f"Initializing Discriminator Type: {disc_type}")
+        self.num_regions = self.gaad_config.get('num_regions', 0) 
+        self.use_gaad_film_condition = disc_config.get("use_gaad_film_condition", getattr(args, 'disc_use_gaad_film_condition', False)) and self.num_regions > 0
 
-        if disc_type == "regional_cnn":
-            # Feature extractor for regions (similar to encoder's but simpler)
-            self.patch_size = disc_config.get("patch_size", 16)
-            self.resize_transform = T.Resize((self.patch_size, self.patch_size), interpolation=T.InterpolationMode.BILINEAR, antialias=True)
-            cnn_channels = disc_config.get("cnn_channels", [32, 64, 128])
-            patch_feature_dim = cnn_channels[-1] # Output dim of CNN feature extractor per patch
+
+        if self.use_gaad_film_condition:
+            self.gaad_condition_dim = disc_config.get("gaad_condition_dim_disc", getattr(args, 'disc_gaad_condition_dim_disc', 64))
+            self.bbox_feature_dim = 4 
+            hidden_bbox_embed_dim = max(self.gaad_condition_dim, self.num_regions * self.bbox_feature_dim // 2)
+            self.frame_gaad_embedder_disc = nn.Sequential(
+                nn.Linear(self.num_regions * self.bbox_feature_dim, hidden_bbox_embed_dim),
+                nn.GELU(),
+                nn.Linear(hidden_bbox_embed_dim, self.gaad_condition_dim)
+            )
+            self.logger.info(f"Discriminator GAAD-FiLM conditioning ENABLED. Condition Dim: {self.gaad_condition_dim}")
+        else:
+            self.frame_gaad_embedder_disc = None
+            self.gaad_condition_dim = 0 
+            self.logger.info("Discriminator GAAD-FiLM conditioning DISABLED.")
+
+
+        self.disc_type = self.disc_config.get("type", getattr(args, 'discriminator_type', "spatio_temporal_cnn")) 
+        self.logger.info(f"Initializing Discriminator Type: {self.disc_type}")
+
+        if self.disc_type == "spatio_temporal_cnn":
+            min_input_dim = min(self.image_size[0], self.image_size[1])
+            # Ensure at least 1 downsample, target 4x4 or similar smallest feature map before pooling.
+            # Max downsamples to prevent H/W going below 1 before pooling.
+            num_spatial_downsamples_target = int(math.log2(min_input_dim / 4)) if min_input_dim >=8 else 1 
+            max_possible_downsamples = int(math.log2(min_input_dim)) if min_input_dim > 0 else 0
+            num_spatial_downsamples = max(1, min(num_spatial_downsamples_target, max_possible_downsamples))
+
+
+            base_disc_channels = disc_config.get("base_disc_channels", getattr(args, 'disc_base_disc_channels', 64))
+            cnn3d_channels_list = [base_disc_channels * (2**i) for i in range(num_spatial_downsamples)]
+            max_disc_channels = disc_config.get("max_disc_channels", getattr(args, 'disc_max_disc_channels', 512))
+            cnn3d_channels_list = [min(c, max_disc_channels) for c in cnn3d_channels_list]
+            if not cnn3d_channels_list: cnn3d_channels_list = [base_disc_channels]
+
+            temporal_kernel_size = disc_config.get("temporal_kernel_size", getattr(args, 'disc_temporal_kernel_size', 3))
+            default_temporal_stride = 1
+
             layers = []
             in_c = self.num_channels
-            for out_c in cnn_channels:
-                 layers.extend([
-                     nn.Conv2d(in_c, out_c, kernel_size=4, stride=2, padding=1, bias=False),
-                     nn.InstanceNorm2d(out_c, affine=True), # Use InstanceNorm maybe?
+            current_d_dim = self.num_frames_to_discriminate
+            current_h_dim = self.image_size[0]
+            current_w_dim = self.image_size[1]
+
+            for i, out_c in enumerate(cnn3d_channels_list):
+                # Spatial stride: 2 if we can still halve H & W and stay >= 4 (or current value if already small)
+                # And not the very last conv layer if we want to control its output size more finely before pooling
+                can_halve_spatial = current_h_dim >= 8 and current_w_dim >= 8 # Allow halving if current dim is >= 8
+                spatial_stride = 2 if can_halve_spatial and i < num_spatial_downsamples else 1
+                
+                apply_temporal_stride_val = 2
+                # Temporal stride: 2 if current temporal dim is large enough AND we are in early layers
+                can_stride_temporally = current_d_dim > temporal_kernel_size and current_d_dim >= apply_temporal_stride_val * 2
+                actual_temporal_stride = apply_temporal_stride_val if can_stride_temporally and i < 2 else default_temporal_stride # Stride temporally only in first two blocks
+                
+                current_t_kernel = min(temporal_kernel_size, current_d_dim) if current_d_dim > 1 else 1
+                current_t_padding = current_t_kernel // 2 if current_t_kernel > 1 else 0
+
+                block = nn.ModuleDict()
+                block['conv'] = nn.Conv3d(
+                    in_c, out_c,
+                    kernel_size=(current_t_kernel, 4, 4),
+                    stride=(actual_temporal_stride, spatial_stride, spatial_stride),
+                    padding=(current_t_padding, 1, 1),
+                    bias=False
+                )
+                block['norm'] = nn.InstanceNorm3d(out_c, affine=not self.use_gaad_film_condition)
+                if self.use_gaad_film_condition and self.frame_gaad_embedder_disc is not None: 
+                    block['film'] = FiLMLayer(out_c, self.gaad_condition_dim)
+                block['activation'] = nn.LeakyReLU(0.2, inplace=True)
+                layers.append(block)
+
+                in_c = out_c
+                if current_d_dim > 0: 
+                    current_d_dim = (current_d_dim + 2 * current_t_padding - current_t_kernel) // actual_temporal_stride + 1
+                if current_h_dim > 0:
+                    current_h_dim = (current_h_dim + 2 * 1 - 4) // spatial_stride + 1 
+                if current_w_dim > 0:
+                    current_w_dim = (current_w_dim + 2 * 1 - 4) // spatial_stride + 1
+                
+                # Ensure dimensions don't go to zero if strides/kernels are aggressive
+                current_d_dim = max(1, current_d_dim)
+                current_h_dim = max(1, current_h_dim)
+                current_w_dim = max(1, current_w_dim)
+
+
+            self.feature_extractor_blocks = nn.ModuleList(layers)
+            
+            _device_for_shape_calc = torch.device(self.args.device if hasattr(self.args, 'device') and self.args.device is not None else 'cpu')
+            if hasattr(self.args, 'device') and self.args.device == 'cuda' and not torch.cuda.is_available():
+                self.logger.warning("Requested CUDA device for shape calculation but CUDA not available. Using CPU.")
+                _device_for_shape_calc = torch.device('cpu')
+
+            test_input_shape = (1, self.num_channels, self.num_frames_to_discriminate, self.image_size[0], self.image_size[1])
+            test_input = torch.randn(test_input_shape, device=_device_for_shape_calc)
+
+            dummy_sequence_condition_disc = None
+            if self.use_gaad_film_condition and self.frame_gaad_embedder_disc is not None:
+                dummy_sequence_condition_disc = torch.randn(1, self.gaad_condition_dim, device=_device_for_shape_calc)
+
+            temp_features = test_input
+            original_devices = {}
+            is_module_on_diff_device = False
+            try: 
+                if len(list(self.feature_extractor_blocks.parameters())) > 0:
+                    is_module_on_diff_device = (_device_for_shape_calc != next(self.feature_extractor_blocks.parameters()).device)
+            except StopIteration: 
+                pass
+                
+            if is_module_on_diff_device:
+                for i, block_module_item in enumerate(self.feature_extractor_blocks): 
+                    original_devices[i] = next(block_module_item.parameters()).device
+                    block_module_item.to(_device_for_shape_calc)
+
+            for block_module_item in self.feature_extractor_blocks: 
+                temp_features = block_module_item['conv'](temp_features)
+                temp_features = block_module_item['norm'](temp_features)
+                if 'film' in block_module_item and dummy_sequence_condition_disc is not None:
+                    temp_features = block_module_item['film'](temp_features, dummy_sequence_condition_disc)
+                temp_features = block_module_item['activation'](temp_features)
+            
+            if is_module_on_diff_device:
+                for i, block_module_item in enumerate(self.feature_extractor_blocks): 
+                    if i in original_devices and original_devices[i] != _device_for_shape_calc:
+                        block_module_item.to(original_devices[i])
+            
+            final_feature_map_shape_pre_pool = temp_features.shape
+
+            # Pool target D: the temporal dim after all convolutions, or 1 if it's already 1 or less.
+            pool_target_d = max(1, final_feature_map_shape_pre_pool[2]) 
+            self.adaptive_pool = nn.AdaptiveAvgPool3d((pool_target_d, 1, 1))
+            
+            pooled_features_test = self.adaptive_pool(temp_features)
+            final_flattened_dim = pooled_features_test.numel() // pooled_features_test.shape[0] 
+            final_flattened_dim = max(1, final_flattened_dim)
+
+            # Adjust hidden_fc_dim based on the (now smaller) final_flattened_dim
+            # Example: make it half of flattened_dim, capped at a reasonable max (e.g., 512) and min (e.g., 64 or 1 if very small)
+            hidden_fc_dim = max( min(512, final_flattened_dim // 2), 1)
+
+
+            self.final_fc_layers = nn.Sequential(
+                nn.Linear(final_flattened_dim, hidden_fc_dim),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Linear(hidden_fc_dim, 1)
+            )
+            self.logger.info(
+                f"SpatioTemporalCNN Disc: Frames={self.num_frames_to_discriminate}, "
+                f"Derived CNN3D_Channels={cnn3d_channels_list}, "
+                f"FinalFeatMapShape (pre-pool)={final_feature_map_shape_pre_pool}, PooledFeatMapShape={pooled_features_test.shape}, FlattenedDimForFC={final_flattened_dim}, "
+                f"FiLM Active={self.use_gaad_film_condition}"
+            )
+
+        elif self.disc_type == "regional_cnn":
+            self.logger.warning("Using 'regional_cnn' discriminator (first-frame only, no FiLM).")
+            self.patch_size = disc_config.get("patch_size", getattr(args, 'disc_patch_size', 16))
+            try:
+                self.resize_transform_regional = T.Resize((self.patch_size, self.patch_size), interpolation=T.InterpolationMode.BILINEAR, antialias=True)
+            except ImportError: 
+                self.logger.error("torchvision.transforms (T) not available for RegionalDiscriminator 'regional_cnn' type. This will fail.")
+                self.resize_transform_regional = None
+
+
+            cnn_channels_2d = disc_config.get("cnn_channels_2d", getattr(args, 'disc_cnn_channels_2d', [64, 128, 256]))
+            layers_2d = []
+            in_c_2d = self.num_channels
+            for out_c_2d in cnn_channels_2d:
+                 layers_2d.extend([
+                     nn.Conv2d(in_c_2d, out_c_2d, kernel_size=4, stride=2, padding=1, bias=False),
+                     nn.InstanceNorm2d(out_c_2d, affine=True),
                      nn.LeakyReLU(0.2, inplace=True)
                  ])
-                 in_c = out_c
-            # Reduce feature map size - depends on patch_size and strides
-            # Calculate final feature map size (H_f, W_f) after convs
-            # This needs adjustment based on actual conv parameters
-            test_input = torch.randn(1, self.num_channels, self.patch_size, self.patch_size)
-            h_f, w_f = nn.Sequential(*layers)(test_input).shape[-2:]
-            self.regional_feature_extractor = nn.Sequential(*layers)
-            # Flatten and project regional features
-            final_feature_dim_per_region = cnn_channels[-1] * h_f * w_f
-            # Aggregate features across regions (simple mean) and project to single logit
-            self.final_layer = nn.Sequential(
-                nn.Linear(final_feature_dim_per_region, 1)
-                # Sigmoid is usually applied implicitly by BCEWithLogitsLoss
-            )
-            self.logger.info(f"RegionalCNN Disc: PatchSize {self.patch_size}, CNN Channels {cnn_channels}, Final Feat/Region {final_feature_dim_per_region}")
+                 in_c_2d = out_c_2d
+            
+            _temp_regional_feature_extractor_2d = nn.Sequential(*layers_2d)
+            with torch.no_grad():
+                _device_for_shape_calc = torch.device(self.args.device if hasattr(self.args, 'device') and self.args.device is not None else 'cpu')
+                if hasattr(self.args, 'device') and self.args.device == 'cuda' and not torch.cuda.is_available():
+                    _device_for_shape_calc = torch.device('cpu')
+                test_input_2d = torch.randn(1, self.num_channels, self.patch_size, self.patch_size, device=_device_for_shape_calc)
+                _temp_regional_feature_extractor_2d.to(_device_for_shape_calc)
+                h_f, w_f = _temp_regional_feature_extractor_2d(test_input_2d).shape[-2:]
+            
+            self.regional_feature_extractor_2d = _temp_regional_feature_extractor_2d
+            final_feature_dim_per_region = cnn_channels_2d[-1] * h_f * w_f
+            final_feature_dim_per_region = max(1, final_feature_dim_per_region)
+            self.final_fc_layers_regional = nn.Sequential(nn.Linear(final_feature_dim_per_region, 1))
 
-        elif disc_type == "wubu_regional":
-             # Placeholder: This would involve GAAD, Patch Extraction, WuBu-S/M/T stacks
-             # similar to the encoder, finally projecting aggregated features to a logit.
-             self.logger.warning("WuBu Discriminator NIY, using simplified CNN structure instead.")
-             # Fallback to CNN temporarily
-             self.disc_config["type"] = "regional_cnn"
-             self.__init__(args, video_config, gaad_config, self.disc_config) # Re-initialize with CNN
-
+            self.gaad_min_size_px_regional = self.gaad_config.get('min_size_px', 5)
+            self.decomposition_type_regional = self.gaad_config.get('decomposition_type', "hybrid")
         else:
-            raise ValueError(f"Unsupported discriminator type: {disc_type}")
+            raise ValueError(f"Unsupported discriminator type in __init__: '{self.disc_type}'")
 
-        self.apply(init_weights_general)
+        if 'init_weights_general' in globals() and callable(init_weights_general):
+            self.apply(init_weights_general)
+        else:
+            self.logger.warning("init_weights_general not found. Skipping custom weight initialization for Discriminator.")
 
 
-    def forward(self, frames_pixels: torch.Tensor) -> torch.Tensor:
-        # Input: (B, N_frames, C, H, W) - Discriminator typically acts per frame or on sequence features
-        # Let's assume it acts per frame for simplicity now.
-        B, N, C, H, W = frames_pixels.shape
+    def _normalize_bboxes_disc(self, bboxes: torch.Tensor, H: int, W: int) -> torch.Tensor:
+        x1, y1, x2, y2 = bboxes.unbind(-1)
+        img_W = float(W) if W > 0 else 1.0
+        img_H = float(H) if H > 0 else 1.0
+        norm_cx = ((x1 + x2) / 2.0) / img_W
+        norm_cy = ((y1 + y2) / 2.0) / img_H
+        norm_w = (x2 - x1) / img_W
+        norm_h = (y2 - y1) / img_H 
+        return torch.stack([norm_cx, norm_cy, norm_w, norm_h], dim=-1)
+
+    def forward(self, frames_pixels: torch.Tensor, gaad_bboxes_for_disc: Optional[torch.Tensor] = None) -> torch.Tensor:
+        B, N_seq, C, H, W = frames_pixels.shape
         device = frames_pixels.device
-        dtype = frames_pixels.dtype # Use input dtype
+        dtype_in = frames_pixels.dtype
 
-        # Process first frame of the sequence for simplicity
-        frame_to_disc = frames_pixels[:, 0, ...] # (B, C, H, W)
-
-        if self.disc_config.get("type", "regional_cnn") == "regional_cnn":
-            # 1. Get GAAD regions for the frame
-            gaad_bboxes_list = []
-            for b in range(B):
-                frame_dims=(W,H); max_w_scalar=float(W); max_h_scalar=float(H)
-                # Use the same GAAD logic as encoder
-                if self.decomposition_type == "hybrid":
-                    num_subdivide=self.num_regions//2; num_spiral=self.num_regions-num_subdivide; bboxes_for_item=[]
-                    if num_subdivide > 0: bboxes_for_item.append(golden_subdivide_rect_fixed_n(frame_dims,num_subdivide,device,dtype,self.gaad_min_size_px))
-                    if num_spiral > 0:
-                         spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, num_spiral, device, dtype); patch_base_size = min(frame_dims); spiral_bboxes_current = torch.zeros(num_spiral, 4, device=device, dtype=dtype); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs; val_x1=spiral_centers[:,0]-patch_ws; val_y1=spiral_centers[:,1]-patch_hs; val_x2=spiral_centers[:,0]+patch_ws; val_y2=spiral_centers[:,1]+patch_hs; spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS); spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS); min_for_x2=spiral_bboxes_current[:,0]+EPS; spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],min_for_x2); min_for_y2=spiral_bboxes_current[:,1]+EPS; spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],min_for_y2); bboxes_for_item.append(spiral_bboxes_current)
-                    frame_bboxes = torch.cat(bboxes_for_item, dim=0) if bboxes_for_item else torch.tensor([[0,0,max_w_scalar,max_h_scalar]]*self.num_regions, dtype=dtype, device=device)
-                elif self.decomposition_type == "spiral":
-                     spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, self.num_regions, device, dtype); patch_base_size = min(frame_dims); spiral_bboxes_current = torch.zeros(self.num_regions, 4, device=device, dtype=dtype); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs; val_x1=spiral_centers[:,0]-patch_ws; val_y1=spiral_centers[:,1]-patch_hs; val_x2=spiral_centers[:,0]+patch_ws; val_y2=spiral_centers[:,1]+patch_hs; spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS); spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS); min_for_x2=spiral_bboxes_current[:,0]+EPS; spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],min_for_x2); min_for_y2=spiral_bboxes_current[:,1]+EPS; spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],min_for_y2); frame_bboxes = spiral_bboxes_current
-                else: frame_bboxes = golden_subdivide_rect_fixed_n(frame_dims,self.num_regions,device,dtype,self.gaad_min_size_px)
-                if frame_bboxes.shape[0] < self.num_regions: num_to_pad=self.num_regions-frame_bboxes.shape[0]; padding_box=frame_bboxes[-1:].clone() if frame_bboxes.shape[0]>0 else torch.tensor([[0,0,max_w_scalar,max_h_scalar]],dtype=dtype,device=device); padding=padding_box.repeat(num_to_pad,1); frame_bboxes=torch.cat([frame_bboxes, padding], dim=0)
-                elif frame_bboxes.shape[0] > self.num_regions: frame_bboxes=frame_bboxes[:self.num_regions]
-                gaad_bboxes_list.append(frame_bboxes)
-            gaad_bboxes_batch = torch.stack(gaad_bboxes_list) # (B, NumReg, 4)
-
-            # 2. Extract patches and features per region
-            all_regional_features = []
-            for b in range(B):
-                batch_region_features = []
-                for r in range(self.num_regions):
-                    x1,y1,x2,y2 = gaad_bboxes_batch[b,r].round().int().tolist(); x1_c,y1_c=max(0,x1),max(0,y1); x2_c,y2_c=min(W,x2),min(H,y2)
-                    if x1_c >= x2_c or y1_c >= y2_c:
-                         # Use zero features for empty regions
-                         patch_features = torch.zeros(1, self.regional_feature_extractor[0].out_channels, 1, 1, device=device, dtype=dtype) # Shape after pooling
-                         # Calculate expected output dimension from final_layer's input
-                         feat_dim = self.final_layer[0].in_features
-                         patch_features = torch.zeros(1, feat_dim, device=device, dtype=dtype)
-
-                    else:
-                         patch = frame_to_disc[b, :, y1_c:y2_c, x1_c:x2_c]
-                         resized_patch = self.resize_transform(patch).unsqueeze(0) # (1, C, patch_size, patch_size)
-                         # Extract features using the CNN
-                         patch_features = self.regional_feature_extractor(resized_patch) # (1, C_final, H_f, W_f)
-                         patch_features = patch_features.view(1, -1) # Flatten features (1, final_feature_dim_per_region)
-                    batch_region_features.append(patch_features)
-                all_regional_features.append(torch.cat(batch_region_features, dim=0)) # (NumReg, final_feature_dim_per_region)
-
-            regional_features_tensor = torch.stack(all_regional_features) # (B, NumReg, final_feature_dim_per_region)
-
-            # 3. Aggregate regional features (e.g., mean)
-            aggregated_features = torch.mean(regional_features_tensor, dim=1) # (B, final_feature_dim_per_region)
-
-            # 4. Final layer for real/fake prediction
-            logits = self.final_layer(aggregated_features) # (B, 1)
-            return logits
-
+        if N_seq < self.num_frames_to_discriminate:
+            padding_needed = self.num_frames_to_discriminate - N_seq
+            last_frame_repeated = frames_pixels[:, -1:, ...].repeat(1, padding_needed, 1, 1, 1)
+            frames_to_process = torch.cat([frames_pixels, last_frame_repeated], dim=1)
+        elif N_seq > self.num_frames_to_discriminate:
+            frames_to_process = frames_pixels[:, :self.num_frames_to_discriminate, ...]
         else:
-             raise NotImplementedError(f"Discriminator forward not implemented for type {self.disc_config.get('type')}")
+            frames_to_process = frames_pixels
+        
+        sequence_condition_disc = None
+        if self.use_gaad_film_condition and self.frame_gaad_embedder_disc is not None:
+            if gaad_bboxes_for_disc is not None:
+                N_bboxes_seq = gaad_bboxes_for_disc.shape[1]
+                bboxes_to_process_for_film = gaad_bboxes_for_disc
+                if N_bboxes_seq != self.num_frames_to_discriminate:
+                     if N_bboxes_seq < self.num_frames_to_discriminate:
+                         bbox_padding = self.num_frames_to_discriminate - N_bboxes_seq
+                         last_bbox_set_repeated = gaad_bboxes_for_disc[:, -1:, ...].repeat(1, bbox_padding, 1, 1) 
+                         bboxes_to_process_for_film = torch.cat([gaad_bboxes_for_disc, last_bbox_set_repeated], dim=1)
+                     else: 
+                         bboxes_to_process_for_film = gaad_bboxes_for_disc[:, :self.num_frames_to_discriminate, ...]
+
+                if bboxes_to_process_for_film.shape[0] != B or \
+                   bboxes_to_process_for_film.shape[1] != self.num_frames_to_discriminate or \
+                   bboxes_to_process_for_film.shape[2] != self.num_regions: 
+                    self.logger.warning(
+                        f"Discriminator GAAD bbox shape mismatch for FiLM. Expected (B={B}, N_disc_frames={self.num_frames_to_discriminate}, NumReg={self.num_regions}, 4), "
+                        f"got {bboxes_to_process_for_film.shape}. Using zero condition."
+                    )
+                    frame_conditions_flat_disc = torch.zeros(B * self.num_frames_to_discriminate, self.gaad_condition_dim, device=device, dtype=dtype_in)
+                else:
+                    norm_bboxes_disc = self._normalize_bboxes_disc(bboxes_to_process_for_film.to(dtype_in), H, W)
+                    norm_bboxes_flat_disc = norm_bboxes_disc.view(B * self.num_frames_to_discriminate, -1)
+                    frame_conditions_flat_disc = self.frame_gaad_embedder_disc(norm_bboxes_flat_disc)
+            else: 
+                self.logger.debug("Discriminator GAAD Embedder active but no bboxes provided. Using zero condition for FiLM.")
+                frame_conditions_flat_disc = torch.zeros(B * self.num_frames_to_discriminate, self.gaad_condition_dim, device=device, dtype=dtype_in)
+
+            if frame_conditions_flat_disc is not None:
+                frame_conditions_reshaped_disc = frame_conditions_flat_disc.view(B, self.num_frames_to_discriminate, self.gaad_condition_dim)
+                sequence_condition_disc = torch.mean(frame_conditions_reshaped_disc, dim=1).to(dtype_in)
+
+        if self.disc_type == "spatio_temporal_cnn":
+            features = frames_to_process.permute(0, 2, 1, 3, 4).to(dtype_in)
+            for block_module in self.feature_extractor_blocks:
+                features = block_module['conv'](features)
+                features = block_module['norm'](features)
+                if 'film' in block_module and sequence_condition_disc is not None:
+                    features = block_module['film'](features, sequence_condition_disc)
+                features = block_module['activation'](features)
+            
+            features = self.adaptive_pool(features)
+            features_flat = features.view(B, -1)
+            logits = self.final_fc_layers(features_flat)
+            return logits.to(dtype_in)
+
+        elif self.disc_type == "regional_cnn":
+            if self.resize_transform_regional is None:
+                 raise RuntimeError("resize_transform_regional not initialized in RegionalDiscriminator 'regional_cnn' type, likely due to torchvision.transforms import issue.")
+            frame_to_disc_regional = frames_to_process[:, 0, ...].to(dtype_in)
+            gaad_bboxes_list_regional = []
+            for b_idx in range(B):
+                frame_dims_regional=(W,H); max_w_scalar=float(W); max_h_scalar=float(H)
+                if 'golden_subdivide_rect_fixed_n' not in globals() or 'phi_spiral_patch_centers_fixed_n' not in globals():
+                    self.logger.error("GAAD utility functions not found for 'regional_cnn' discriminator.")
+                    frame_bboxes_reg = torch.tensor([[0,0,max_w_scalar,max_h_scalar]]*self.num_regions, dtype=dtype_in, device=device)
+                elif self.decomposition_type_regional == "hybrid":
+                    num_subdivide=self.num_regions//2; num_spiral=self.num_regions-num_subdivide; bboxes_for_item=[]
+                    if num_subdivide > 0: bboxes_for_item.append(golden_subdivide_rect_fixed_n(frame_dims_regional,num_subdivide,device,dtype_in,self.gaad_min_size_px_regional))
+                    if num_spiral > 0:
+                         spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims_regional, num_spiral, device, dtype_in); patch_base_size = min(frame_dims_regional); spiral_bboxes_current = torch.zeros(num_spiral, 4, device=device, dtype=dtype_in); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs; val_x1=spiral_centers[:,0]-patch_ws; val_y1=spiral_centers[:,1]-patch_hs; val_x2=spiral_centers[:,0]+patch_ws; val_y2=spiral_centers[:,1]+patch_hs; EPS_local=1e-5; spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS_local); spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS_local); min_for_x2=spiral_bboxes_current[:,0]+EPS_local; spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],min_for_x2); min_for_y2=spiral_bboxes_current[:,1]+EPS_local; spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],min_for_y2); bboxes_for_item.append(spiral_bboxes_current)
+                    frame_bboxes_reg = torch.cat(bboxes_for_item, dim=0) if bboxes_for_item else torch.tensor([[0,0,max_w_scalar,max_h_scalar]]*self.num_regions, dtype=dtype_in, device=device)
+                elif self.decomposition_type_regional == "spiral":
+                     spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims_regional, self.num_regions, device, dtype_in); patch_base_size = min(frame_dims_regional); spiral_bboxes_current = torch.zeros(self.num_regions, 4, device=device, dtype=dtype_in); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs; val_x1=spiral_centers[:,0]-patch_ws; val_y1=spiral_centers[:,1]-patch_hs; val_x2=spiral_centers[:,0]+patch_ws; val_y2=spiral_centers[:,1]+patch_hs; EPS_local=1e-5; spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS_local); spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS_local); min_for_x2=spiral_bboxes_current[:,0]+EPS_local; spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],min_for_x2); min_for_y2=spiral_bboxes_current[:,1]+EPS_local; spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],min_for_y2); frame_bboxes_reg = spiral_bboxes_current
+                else: frame_bboxes_reg = golden_subdivide_rect_fixed_n(frame_dims_regional,self.num_regions,device,dtype_in,self.gaad_min_size_px_regional)
+
+                if frame_bboxes_reg.shape[0] < self.num_regions: num_to_pad=self.num_regions-frame_bboxes_reg.shape[0]; padding_box=frame_bboxes_reg[-1:].clone() if frame_bboxes_reg.shape[0]>0 else torch.tensor([[0,0,max_w_scalar,max_h_scalar]],dtype=dtype_in,device=device); padding=padding_box.repeat(num_to_pad,1); frame_bboxes_reg=torch.cat([frame_bboxes_reg, padding], dim=0)
+                elif frame_bboxes_reg.shape[0] > self.num_regions: frame_bboxes_reg=frame_bboxes_reg[:self.num_regions]
+                gaad_bboxes_list_regional.append(frame_bboxes_reg)
+            gaad_bboxes_batch_regional = torch.stack(gaad_bboxes_list_regional)
+
+            all_regional_features = []
+            for b_idx in range(B):
+                batch_region_features = []
+                for r_idx in range(self.num_regions):
+                    x1,y1,x2,y2 = gaad_bboxes_batch_regional[b_idx,r_idx].round().int().tolist(); x1_c,y1_c=max(0,x1),max(0,y1); x2_c,y2_c=min(W,x2),min(H,y2)
+                    if x1_c >= x2_c or y1_c >= y2_c:
+                         feat_dim = self.final_fc_layers_regional[0].in_features
+                         patch_features_reg = torch.zeros(1, feat_dim, device=device, dtype=dtype_in)
+                    else:
+                         patch = frame_to_disc_regional[b_idx, :, y1_c:y2_c, x1_c:x2_c]
+                         resized_patch = self.resize_transform_regional(patch).unsqueeze(0)
+                         patch_features_extracted = self.regional_feature_extractor_2d(resized_patch)
+                         patch_features_reg = patch_features_extracted.view(1, -1)
+                    batch_region_features.append(patch_features_reg)
+                all_regional_features.append(torch.cat(batch_region_features, dim=0))
+            
+            regional_features_tensor = torch.stack(all_regional_features)
+            aggregated_features = torch.mean(regional_features_tensor, dim=1)
+            logits = self.final_fc_layers_regional(aggregated_features)
+            return logits.to(dtype_in)
+        else:
+            raise NotImplementedError(f"Discriminator forward not implemented for type {self.disc_type}")
 
 
+
+
+           
+            
+            
 # =====================================================================
 # VAE-GAN Model Components
 # =====================================================================
@@ -1789,8 +2105,8 @@ class VideoFrameDataset(Dataset):
 # =====================================================================
 class HybridTrainer:
     def __init__(self,
-                 model: "WuBuGAADHybridGenNet", # Use string for forward reference
-                 discriminator: "RegionalDiscriminator", # Use string
+                 model: "WuBuGAADHybridGenNet",
+                 discriminator: "RegionalDiscriminator",
                  optimizer_enc_gen: torch.optim.Optimizer,
                  optimizer_disc: torch.optim.Optimizer,
                  device: torch.device,
@@ -1805,7 +2121,7 @@ class HybridTrainer:
         self.video_config = model.video_config; self.gaad_appearance_config = model.gaad_appearance_config
         self.lambda_recon = args.lambda_recon; self.lambda_kl = args.lambda_kl; self.lambda_gan = args.lambda_gan
         self.scaler_enc_gen = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda'); self.scaler_disc = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda')
-        self.global_step = 0; self.current_epoch = 0; self.best_val_loss = float('inf'); self.last_val_metrics: Dict[str, Any] = {}
+        self.global_step = 0; self.current_epoch = 0; self.best_val_metric_val = -float('inf') if args.val_primary_metric == "avg_val_psnr" or args.val_primary_metric == "avg_val_ssim" else float('inf'); self.last_val_metrics: Dict[str, Any] = {} # Initialize best_val based on metric type
         if self.am_main_process: os.makedirs(args.checkpoint_dir, exist_ok=True)
         self.lpips_loss_fn = None; self.ssim_metric = None
         if self.am_main_process and self.args.use_lpips_for_verification:
@@ -1822,23 +2138,42 @@ class HybridTrainer:
     def _compute_kl_loss(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1); return kl_div.mean()
     def _compute_recon_loss(self, recon_x: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        return F.mse_loss(recon_x, x)
+        return F.mse_loss(recon_x, x) # MSE is common for VAEs, could be L1
 
     def _train_discriminator_step(self, real_frames_full: torch.Tensor, m_ref: "WuBuGAADHybridGenNet", d_ref: "RegionalDiscriminator") -> Dict[str, torch.Tensor]:
         B = real_frames_full.shape[0]; device = real_frames_full.device; dtype_model = next(m_ref.parameters()).dtype
-        real_frames_disc = real_frames_full[:, 0:1, ...].to(device, dtype_model) # Discriminate first frame
+        
+        # Frames D will see (e.g., num_predict_frames)
+        frames_for_d_processing = real_frames_full[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
+        
         real_labels = torch.ones(B, 1, device=device, dtype=dtype_model); fake_labels = torch.zeros(B, 1, device=device, dtype=dtype_model)
         losses_d = {};
         for p in d_ref.parameters(): p.requires_grad = True;
         for p in m_ref.parameters(): p.requires_grad = False
+
+        # Get GAAD bboxes for REAL frames if D uses FiLM
+        gaad_bboxes_for_d_real_cond = None
+        if d_ref.use_gaad_film_condition:
+            with torch.no_grad(): # Encoder part of m_ref to get bboxes for real data
+                _, _, gaad_bboxes_from_encoder_full, _ = m_ref.encode(real_frames_full.to(device, dtype_model))
+            if gaad_bboxes_from_encoder_full is not None:
+                gaad_bboxes_for_d_real_cond = gaad_bboxes_from_encoder_full[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
+
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp and self.device.type == 'cuda'):
-            real_logits = d_ref(real_frames_disc); loss_d_real = self.adversarial_loss(real_logits, real_labels)
+            real_logits = d_ref(frames_for_d_processing, gaad_bboxes_for_d_real_cond);
+            loss_d_real = self.adversarial_loss(real_logits, real_labels)
+
             with torch.no_grad():
-                # Use m_ref.forward to get generated frames consistent with how G is trained
-                # This will internally handle bbox selection for decoder
-                fake_frames_full_sequence, _, _, _ = m_ref(real_frames_full)
-                fake_frames_disc = fake_frames_full_sequence[:, 0:1, ...].to(device, dtype_model) # Discriminate first generated frame
-            fake_logits = d_ref(fake_frames_disc.detach()); loss_d_fake = self.adversarial_loss(fake_logits, fake_labels)
+                # m_ref.forward returns: recon_frames, mu, logvar, decoder_bboxes_selected
+                fake_frames_full_sequence, _, _, bboxes_used_for_fake_gen = m_ref(real_frames_full)
+                fake_frames_for_d_processing = fake_frames_full_sequence[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
+                # GAAD bboxes for FAKE frames if D uses FiLM (these are the bboxes G used)
+                gaad_bboxes_for_d_fake_cond = None
+                if d_ref.use_gaad_film_condition and bboxes_used_for_fake_gen is not None:
+                    gaad_bboxes_for_d_fake_cond = bboxes_used_for_fake_gen[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
+
+            fake_logits = d_ref(fake_frames_for_d_processing.detach(), gaad_bboxes_for_d_fake_cond);
+            loss_d_fake = self.adversarial_loss(fake_logits, fake_labels)
             loss_d_total_micro = (loss_d_real + loss_d_fake) * 0.5; loss_d_total_scaled_micro = loss_d_total_micro / self.grad_accum_steps
         self.scaler_disc.scale(loss_d_total_scaled_micro).backward()
         losses_d['loss_d_real_micro'] = loss_d_real.detach(); losses_d['loss_d_fake_micro'] = loss_d_fake.detach(); losses_d['loss_d_total_micro'] = loss_d_total_micro.detach()
@@ -1850,18 +2185,31 @@ class HybridTrainer:
         for p in d_ref.parameters(): p.requires_grad = False;
         for p in m_ref.parameters(): p.requires_grad = True
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp and self.device.type == 'cuda'):
-            recon_frames_pred, mu, logvar, _ = m_ref(real_frames_full.to(device, dtype_model)) # m_ref.forward gives num_predict_frames
+            # m_ref.forward returns: recon_frames, mu, logvar, decoder_bboxes_selected
+            recon_frames_pred, mu, logvar, bboxes_used_by_decoder = m_ref(real_frames_full.to(device, dtype_model))
+
             start_idx_target = self.video_config["num_input_frames"]; end_idx_target = start_idx_target + self.video_config["num_predict_frames"]
             # Ensure target frames align with what recon_frames_pred represents
-            if end_idx_target > real_frames_full.shape[1] or recon_frames_pred.shape[1] != self.video_config["num_predict_frames"]:
-                self.logger.warning(f"_train_G: Frame mismatch. Real:{real_frames_full.shape[1]}, Recon:{recon_frames_pred.shape[1]}, ExpEnd:{end_idx_target}. Adjusting."); actual_pred_len = min(recon_frames_pred.shape[1], real_frames_full.shape[1] - start_idx_target, self.video_config["num_predict_frames"]);
-                if actual_pred_len <= 0: self.logger.error(f"Cannot compute recon loss with {actual_pred_len} overlapping frames. Real: {real_frames_full.shape}, Recon: {recon_frames_pred.shape}, StartIdx: {start_idx_target}"); raise ValueError("Recon loss frame error.")
-                target_frames_for_recon = real_frames_full[:, start_idx_target : start_idx_target + actual_pred_len, ...].to(device, dtype_model); recon_frames_for_loss = recon_frames_pred[:, :actual_pred_len, ...]
-            else: target_frames_for_recon = real_frames_full[:, start_idx_target:end_idx_target, ...].to(device, dtype_model); recon_frames_for_loss = recon_frames_pred
-            loss_recon = self._compute_recon_loss(recon_frames_for_loss, target_frames_for_recon); loss_kl = self._compute_kl_loss(mu, logvar)
-            fake_frames_disc_for_gen = recon_frames_pred[:, 0:1, ...].to(device, dtype_model) # Discriminate first generated frame
-            fake_logits_gen = d_ref(fake_frames_disc_for_gen); loss_g_adv = self.adversarial_loss(fake_logits_gen, real_labels)
-            loss_g_total_micro = (self.lambda_recon * loss_recon + self.lambda_kl * loss_kl + self.lambda_gan * loss_g_adv); loss_g_total_scaled_micro = loss_g_total_micro / self.grad_accum_steps
+            actual_pred_len = min(recon_frames_pred.shape[1], real_frames_full.shape[1] - start_idx_target, self.video_config["num_predict_frames"])
+            if actual_pred_len <= 0:
+                self.logger.error(f"Cannot compute recon loss with {actual_pred_len} overlapping frames. Real: {real_frames_full.shape}, Recon: {recon_frames_pred.shape}, StartIdx: {start_idx_target}"); raise ValueError("Recon loss frame error.")
+            target_frames_for_recon = real_frames_full[:, start_idx_target : start_idx_target + actual_pred_len, ...].to(device, dtype_model);
+            recon_frames_for_loss = recon_frames_pred[:, :actual_pred_len, ...]
+
+            loss_recon = self._compute_recon_loss(recon_frames_for_loss, target_frames_for_recon);
+            loss_kl = self._compute_kl_loss(mu, logvar)
+
+            # Frames for D to evaluate G's output
+            fake_frames_for_g_adv = recon_frames_pred[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
+            # GAAD bboxes for D if FiLM is used (these are the bboxes G used for these frames)
+            gaad_bboxes_for_g_adv_cond = None
+            if d_ref.use_gaad_film_condition and bboxes_used_by_decoder is not None:
+                gaad_bboxes_for_g_adv_cond = bboxes_used_by_decoder[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
+
+            fake_logits_gen = d_ref(fake_frames_for_g_adv, gaad_bboxes_for_g_adv_cond);
+            loss_g_adv = self.adversarial_loss(fake_logits_gen, real_labels)
+            loss_g_total_micro = (self.lambda_recon * loss_recon + self.lambda_kl * loss_kl + self.lambda_gan * loss_g_adv);
+            loss_g_total_scaled_micro = loss_g_total_micro / self.grad_accum_steps
         self.scaler_enc_gen.scale(loss_g_total_scaled_micro).backward()
         losses_g['loss_recon_micro'] = loss_recon.detach(); losses_g['loss_kl_micro'] = loss_kl.detach(); losses_g['loss_g_adv_micro'] = loss_g_adv.detach(); losses_g['loss_g_total_micro'] = loss_g_total_micro.detach()
         return losses_g
@@ -1875,7 +2223,7 @@ class HybridTrainer:
         for epoch in range(start_epoch, self.args.epochs):
             self.current_epoch = epoch;
             if self.am_main_process: self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting...")
-            if self.ddp_active and isinstance(self.train_loader.sampler, DistributedSampler): self.train_loader.sampler.set_epoch(epoch)
+            if self.ddp_active and hasattr(self.train_loader.sampler, 'set_epoch') and isinstance(self.train_loader.sampler, DistributedSampler): self.train_loader.sampler.set_epoch(epoch)
             m_ref.train(); d_ref.train()
             dataset_len = 0;
             try: dataset_len = len(self.train_loader.sampler) if hasattr(self.train_loader.sampler,'__len__') else (len(self.train_loader.dataset)//self.world_size if hasattr(self.train_loader.dataset,'__len__') and self.world_size>0 else 0)
@@ -1886,10 +2234,13 @@ class HybridTrainer:
 
             for batch_idx, batch_frames_raw in enumerate(prog_bar):
                 batch_frames = batch_frames_raw.to(self.device); batch_size_micro = batch_frames.size(0)
+                # --- Train Discriminator ---
                 losses_d_micro = self._train_discriminator_step(batch_frames, m_ref, d_ref)
                 if torch.isfinite(losses_d_micro['loss_d_total_micro']): accum_loss_d_q += losses_d_micro['loss_d_total_micro'].item()
                 for k,v_d in losses_d_micro.items():
                     if torch.isfinite(v_d): accum_losses_log[k.replace('_micro','')] += v_d.item() * batch_size_micro
+
+                # --- Train Generator/Encoder ---
                 losses_g_micro = self._train_generator_step(batch_frames, m_ref, d_ref)
                 if torch.isfinite(losses_g_micro['loss_g_total_micro']): accum_loss_g_q += losses_g_micro['loss_g_total_micro'].item()
                 for k,v_g in losses_g_micro.items():
@@ -1899,6 +2250,7 @@ class HybridTrainer:
                 if (batch_idx + 1) % self.grad_accum_steps == 0:
                     if self.args.global_max_grad_norm > 0: self.scaler_disc.unscale_(self.optimizer_disc); torch.nn.utils.clip_grad_norm_(d_ref.parameters(), self.args.global_max_grad_norm)
                     self.scaler_disc.step(self.optimizer_disc); self.scaler_disc.update(); self.optimizer_disc.zero_grad(set_to_none=True)
+
                     if self.args.global_max_grad_norm > 0: self.scaler_enc_gen.unscale_(self.optimizer_enc_gen); torch.nn.utils.clip_grad_norm_(m_ref.parameters(), self.args.global_max_grad_norm)
                     self.scaler_enc_gen.step(self.optimizer_enc_gen); self.scaler_enc_gen.update(); self.optimizer_enc_gen.zero_grad(set_to_none=True)
                     self.global_step += 1
@@ -1941,8 +2293,6 @@ class HybridTrainer:
                             q_last_act_g = log_metrics.get('q_ctrl_gen/lastaction', {}); q_last_act_d = log_metrics.get('q_ctrl_disc/lastaction', {})
                             q_g_lr_s = q_last_act_g.get('lr_scale', 1.0) if q_last_act_g else 1.0
                             q_d_lr_s = q_last_act_d.get('lr_scale', 1.0) if q_last_act_d else 1.0
-
-
                             log_str = (f"E {epoch+1} S{self.global_step} | G_tot:{g_total:.3f} (Rec:{g_recon:.3f} KL:{g_kl:.4f} Adv:{g_adv:.3f}) | "
                                        f"D_tot:{d_total:.3f} (Real:{d_real:.3f} Fake:{d_fake:.3f}) | "
                                        f"LR(G/D):{lr_g:.1e}/{lr_d:.1e} | Q_Eps(G/D):{q_eps_g:.2f}/{q_eps_d:.2f} | Q_Scale(G/D):{q_g_lr_s:.2f}/{q_d_lr_s:.2f}")
@@ -1954,96 +2304,129 @@ class HybridTrainer:
                 if self.args.save_interval > 0 and self.global_step > 0 and (self.global_step % self.args.save_interval == 0) and ((batch_idx + 1) % self.grad_accum_steps == 0) and self.am_main_process:
                     inter_metrics = {"train_loss_g_total": losses_g_micro.get('loss_g_total_micro', torch.tensor(0.0)).item(), "train_loss_d_total": losses_d_micro.get('loss_d_total_micro', torch.tensor(0.0)).item()}; self._save_checkpoint(is_intermediate=True, metrics=inter_metrics)
 
-            # End of Epoch
-            if (batch_idx + 1) % self.grad_accum_steps != 0: # Handle final incomplete cycle
-                self.logger.info(f"Performing final optimizer step for epoch {epoch+1} (incomplete cycle).");
+            if (batch_idx + 1) % self.grad_accum_steps != 0: # Handle final incomplete accumulation cycle
+                self.logger.info(f"Performing final optimizer step for epoch {epoch+1} (incomplete grad_accum cycle).");
                 if self.args.global_max_grad_norm > 0: self.scaler_disc.unscale_(self.optimizer_disc); torch.nn.utils.clip_grad_norm_(d_ref.parameters(), self.args.global_max_grad_norm)
                 self.scaler_disc.step(self.optimizer_disc); self.scaler_disc.update();
                 if self.args.global_max_grad_norm > 0: self.scaler_enc_gen.unscale_(self.optimizer_enc_gen); torch.nn.utils.clip_grad_norm_(m_ref.parameters(), self.args.global_max_grad_norm)
                 self.scaler_enc_gen.step(self.optimizer_enc_gen); self.scaler_enc_gen.update();
-                self.global_step += 1;
+                self.global_step += 1; # Increment global step for this final update
 
             if self.am_main_process:
-                 final_items = items_interval_log if items_interval_log > 0 else (batch_idx+1) % self.grad_accum_steps if (batch_idx+1) % self.grad_accum_steps != 0 else self.grad_accum_steps
-                 avg_g = (accum_losses_log['loss_g_total']/final_items if items_interval_log > 0 else accum_loss_g_q/final_items) if final_items > 0 else float('nan')
-                 avg_d = (accum_losses_log['loss_d_total']/final_items if items_interval_log > 0 else accum_loss_d_q/final_items) if final_items > 0 else float('nan')
-                 self.logger.info(f"Epoch {epoch+1} finished. Final Avg Loss G:{avg_g:.4f}, D:{avg_d:.4f}")
-                 if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({"epoch": epoch+1, "epoch_avg_train_loss_g": avg_g, "epoch_avg_train_loss_d": avg_d}, step=self.global_step)
+                 # Calculate final average loss for the epoch for logging
+                 final_accum_count = (batch_idx + 1) * self.train_loader.batch_size # Total items processed
+                 final_avg_g_loss = accum_losses_log['loss_g_total'] / final_accum_count if final_accum_count > 0 else float('nan')
+                 final_avg_d_loss = accum_losses_log['loss_d_total'] / final_accum_count if final_accum_count > 0 else float('nan')
+                 self.logger.info(f"Epoch {epoch+1} finished. Final Avg Loss G:{final_avg_g_loss:.4f}, D:{final_avg_d_loss:.4f}")
+                 if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({"epoch": epoch+1, "epoch_avg_train_loss_g": final_avg_g_loss, "epoch_avg_train_loss_d": final_avg_d_loss}, step=self.global_step)
 
             if self.val_loader and self.am_main_process:
                 val_metrics = self.validate(num_val_samples_to_log=self.args.num_val_samples_to_log)
                 if val_metrics:
                     if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({f"val/{k}":v for k,v in val_metrics.items()}, step=self.global_step)
-                    current_val_metric = val_metrics.get(self.args.val_primary_metric, float('inf'))
-                    if current_val_metric < self.best_val_loss: self.logger.info(f"New best val metric ({self.args.val_primary_metric}): {current_val_metric:.4f}. Save best."); self.best_val_loss = current_val_metric; self._save_checkpoint(is_best=True, metrics=val_metrics)
-            if self.am_main_process:
-                save_metrics = self.last_val_metrics.copy() if self.last_val_metrics else {}; save_metrics["epoch_end_train_loss_g_avg"] = avg_g if np.isfinite(avg_g) else -1.0; save_metrics["epoch_end_train_loss_d_avg"] = avg_d if np.isfinite(avg_d) else -1.0; self._save_checkpoint(metrics=save_metrics)
+                    current_val_metric_for_comparison = val_metrics.get(self.args.val_primary_metric, float('inf'))
+                    is_better = False
+                    if self.args.val_primary_metric in ["avg_val_psnr", "avg_val_ssim"]: # Higher is better
+                        is_better = current_val_metric_for_comparison > self.best_val_metric_val
+                    else: # Lower is better (MSE, LPIPS)
+                        is_better = current_val_metric_for_comparison < self.best_val_metric_val
+                    
+                    if is_better:
+                        self.logger.info(f"New best val metric ({self.args.val_primary_metric}): {current_val_metric_for_comparison:.4f} (prev: {self.best_val_metric_val:.4f}). Save best.");
+                        self.best_val_metric_val = current_val_metric_for_comparison;
+                        self._save_checkpoint(is_best=True, metrics=val_metrics)
+            if self.am_main_process: # Save epoch-end checkpoint
+                save_metrics = self.last_val_metrics.copy() if self.last_val_metrics else {};
+                save_metrics["epoch_end_train_loss_g_avg_approx"] = final_avg_g_loss if np.isfinite(final_avg_g_loss) else -1.0; # Use the calculated epoch avg
+                save_metrics["epoch_end_train_loss_d_avg_approx"] = final_avg_d_loss if np.isfinite(final_avg_d_loss) else -1.0;
+                self._save_checkpoint(metrics=save_metrics)
 
     @torch.no_grad()
     def validate(self, num_val_samples_to_log: int = 1) -> Optional[Dict[str, float]]:
         if not self.val_loader or not self.am_main_process: return None
         m_ref = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model; d_ref = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator
         m_ref.eval(); d_ref.eval()
-        total_recon_loss_sum = 0.0; total_psnr_sum = 0.0; total_ssim_sum = 0.0; total_lpips_sum = 0.0; total_compared_frames = 0
+        total_recon_loss_sum = 0.0; total_psnr_sum = 0.0; total_ssim_sum = 0.0; total_lpips_sum = 0.0; total_compared_frames_flat = 0
         logged_samples_count = 0; wandb_val_samples = []; dtype_model = next(m_ref.parameters()).dtype
         for batch_idx, batch_frames_raw in enumerate(tqdm(self.val_loader, desc="Validating", dynamic_ncols=True, disable=os.getenv('CI')=='true' or not self.am_main_process)):
             batch_frames = batch_frames_raw.to(self.device); real_frames_full = batch_frames.to(self.device, dtype_model); B_val = real_frames_full.shape[0]
-            recon_frames_full, mu, logvar, _ = m_ref(real_frames_full)
-            num_cond = self.video_config["num_input_frames"]; num_pred = self.video_config["num_predict_frames"]
-            available_pred_len = recon_frames_full.shape[1]; available_gt_len = real_frames_full.shape[1] - num_cond
-            compare_len = min(available_pred_len, available_gt_len, num_pred)
-            if compare_len <=0: self.logger.warning(f"Val: Skipping batch, cannot compare frames. AvailPred:{available_pred_len}, AvailGT:{available_gt_len}, NumPred:{num_pred}"); continue
-            pred_for_metrics = recon_frames_full[:, :compare_len, ...]; gt_for_metrics = real_frames_full[:, num_cond : num_cond + compare_len, ...]
-            pred_norm = (pred_for_metrics.clamp(-1, 1) + 1) / 2.0; gt_norm = (gt_for_metrics.clamp(-1, 1) + 1) / 2.0
-            pred_norm_flat = pred_norm.reshape(-1, pred_norm.shape[-3], pred_norm.shape[-2], pred_norm.shape[-1]); gt_norm_flat = gt_norm.reshape(-1, gt_norm.shape[-3], gt_norm.shape[-2], gt_norm.shape[-1])
-            current_batch_compared_frames = pred_norm_flat.shape[0] # Number of (C,H,W) frames in this flat batch
             
-            recon_loss_val_sum_pixels = F.mse_loss(pred_norm_flat, gt_norm_flat, reduction='sum')
-            if torch.isfinite(recon_loss_val_sum_pixels):
-                total_recon_loss_sum += recon_loss_val_sum_pixels.item()
-                avg_mse_per_pixel_this_batch = recon_loss_val_sum_pixels.item() / (pred_norm_flat.numel() + EPS)
-                psnr_val = 10 * torch.log10(1.0 / (avg_mse_per_pixel_this_batch + EPS))
-                total_psnr_sum += psnr_val * current_batch_compared_frames # Sum of PSNRs (weighted by num frames)
-            else: self.logger.warning("Non-finite val recon loss.")
+            # m_ref.forward returns: recon_frames, mu, logvar, decoder_bboxes_selected
+            recon_frames_full, _, _, bboxes_used_by_decoder_val = m_ref(real_frames_full)
+            
+            num_cond = self.video_config["num_input_frames"]; num_pred_config = self.video_config["num_predict_frames"]
+            available_pred_len_from_g = recon_frames_full.shape[1]
+            available_gt_len = real_frames_full.shape[1] - num_cond
+            
+            compare_len = min(available_pred_len_from_g, available_gt_len, num_pred_config)
+            if compare_len <=0: self.logger.warning(f"Val: Skipping batch, cannot compare frames. AvailPredG:{available_pred_len_from_g}, AvailGT:{available_gt_len}, NumPredCfg:{num_pred_config}"); continue
+            
+            pred_for_metrics = recon_frames_full[:, :compare_len, ...]; gt_for_metrics = real_frames_full[:, num_cond : num_cond + compare_len, ...]
+            
+            # Normalize to [0, 1] for SSIM, PSNR, LPIPS (LPIPS function might re-normalize to [-1,1])
+            pred_norm_01 = (pred_for_metrics.clamp(-1, 1) + 1) / 2.0; gt_norm_01 = (gt_for_metrics.clamp(-1, 1) + 1) / 2.0
+            
+            # Reshape for per-frame metrics: (B*compare_len, C, H, W)
+            pred_norm_flat = pred_norm_01.reshape(-1, pred_norm_01.shape[-3], pred_norm_01.shape[-2], pred_norm_01.shape[-1]);
+            gt_norm_flat = gt_norm_01.reshape(-1, gt_norm_01.shape[-3], gt_norm_01.shape[-2], gt_norm_01.shape[-1])
+            current_batch_num_flat_frames = pred_norm_flat.shape[0] # Number of (C,H,W) frames in this flat batch for metrics
+            
+            recon_loss_val_sum_pixels_batch = F.mse_loss(pred_norm_flat, gt_norm_flat, reduction='sum') # Sum over all pixels in flat batch
+            if torch.isfinite(recon_loss_val_sum_pixels_batch):
+                total_recon_loss_sum += recon_loss_val_sum_pixels_batch.item()
+                # Calculate PSNR based on per-pixel MSE for this batch
+                avg_mse_per_pixel_this_batch = recon_loss_val_sum_pixels_batch.item() / (pred_norm_flat.numel() + EPS)
+                psnr_val_batch_avg = 10 * math.log10(1.0 / (avg_mse_per_pixel_this_batch + EPS)) if avg_mse_per_pixel_this_batch > EPS else 100.0
+                total_psnr_sum += psnr_val_batch_avg * current_batch_num_flat_frames # Weighted sum of PSNRs
+            else: self.logger.warning("Non-finite val recon loss in a batch.")
 
             if self.ssim_metric:
-                try: ssim_val_batch_frames = self.ssim_metric(pred_norm_flat, gt_norm_flat); # Returns per-frame SSIM
-                except Exception as e: self.logger.warning(f"SSIM failed: {e}"); ssim_val_batch_frames=torch.zeros(current_batch_compared_frames, device=self.device);
-                if torch.isfinite(ssim_val_batch_frames).all(): total_ssim_sum += ssim_val_batch_frames.sum().item()
+                try: ssim_val_batch_frames = self.ssim_metric(pred_norm_flat, gt_norm_flat); # Returns scalar if reduction='elementwise_mean' (default)
+                except Exception as e: self.logger.warning(f"SSIM failed: {e}"); ssim_val_batch_frames=torch.tensor(0.0, device=self.device);
+                if torch.isfinite(ssim_val_batch_frames): total_ssim_sum += ssim_val_batch_frames.item() * current_batch_num_flat_frames # Multiply by num frames if it's an average
 
             if self.lpips_loss_fn:
                 try: lpips_val_batch_frames = self.lpips_loss_fn(pred_norm_flat*2-1, gt_norm_flat*2-1) # LPIPS expects [-1,1]
-                except Exception as e: self.logger.warning(f"LPIPS failed: {e}"); lpips_val_batch_frames=torch.zeros(current_batch_compared_frames,1,1,1, device=self.device);
-                if torch.isfinite(lpips_val_batch_frames).all(): total_lpips_sum += lpips_val_batch_frames.sum().item()
+                except Exception as e: self.logger.warning(f"LPIPS failed: {e}"); lpips_val_batch_frames=torch.zeros(current_batch_num_flat_frames,1,1,1, device=self.device);
+                if torch.isfinite(lpips_val_batch_frames).all(): total_lpips_sum += lpips_val_batch_frames.sum().item() # Sum if per-frame, then average later
 
-            total_compared_frames += current_batch_compared_frames
+            total_compared_frames_flat += current_batch_num_flat_frames
 
             if self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb.run and logged_samples_count < num_val_samples_to_log:
-                # ... (WandB logging for samples, unchanged) ...
                 num_log_batch = min(B_val, num_val_samples_to_log - logged_samples_count)
                 for k_idx in range(num_log_batch):
                     sample_imgs_wandb = []
-                    for frame_c_idx in range(min(num_cond, real_frames_full.shape[1])): sample_imgs_wandb.append(wandb.Image(real_frames_full[k_idx, frame_c_idx].cpu().float().clamp(-1, 1) * 0.5 + 0.5, caption=f"ValCond {frame_c_idx} S{k_idx}"))
-                    for frame_p_idx in range(min(num_pred, gt_for_metrics.shape[1])): sample_imgs_wandb.append(wandb.Image(gt_for_metrics[k_idx, frame_p_idx].cpu().float().clamp(-1, 1) * 0.5 + 0.5, caption=f"ValGT {frame_p_idx} S{k_idx}"))
-                    for frame_p_idx in range(min(num_pred, pred_for_metrics.shape[1])): sample_imgs_wandb.append(wandb.Image(pred_for_metrics[k_idx, frame_p_idx].cpu().float().clamp(-1, 1) * 0.5 + 0.5, caption=f"ValRecon {frame_p_idx} S{k_idx}"))
+                    # Log context frames (original scale [-1,1] converted to [0,1])
+                    for frame_c_idx in range(min(num_cond, real_frames_full.shape[1])):
+                        sample_imgs_wandb.append(wandb.Image( (real_frames_full[k_idx, frame_c_idx].cpu().float().clamp(-1, 1) + 1) / 2.0, caption=f"ValCond {frame_c_idx} S{k_idx} Ep{self.current_epoch+1}"))
+                    # Log ground truth predicted frames
+                    for frame_p_idx in range(min(compare_len, gt_for_metrics.shape[1])):
+                        sample_imgs_wandb.append(wandb.Image( gt_norm_01.view(B_val, compare_len, *gt_norm_01.shape[-3:])[k_idx, frame_p_idx].cpu().float(), caption=f"ValGT {frame_p_idx} S{k_idx} Ep{self.current_epoch+1}"))
+                    # Log reconstructed/predicted frames
+                    for frame_p_idx in range(min(compare_len, pred_for_metrics.shape[1])):
+                        sample_imgs_wandb.append(wandb.Image( pred_norm_01.view(B_val, compare_len, *pred_norm_01.shape[-3:])[k_idx, frame_p_idx].cpu().float(), caption=f"ValRecon {frame_p_idx} S{k_idx} Ep{self.current_epoch+1}"))
                     wandb_val_samples.extend(sample_imgs_wandb)
                 logged_samples_count += num_log_batch
+        # End of validation loop
 
-        m_ref.train(); d_ref.train()
-        avg_recon_loss_per_pixel = total_recon_loss_sum / (total_compared_frames * pred_norm_flat.shape[-3:].numel() + EPS) if total_compared_frames > 0 else float('inf')
-        avg_psnr = total_psnr_sum / total_compared_frames if total_compared_frames > 0 else 0.0
-        avg_ssim = total_ssim_sum / total_compared_frames if total_compared_frames > 0 and self.ssim_metric else 0.0
-        avg_lpips = total_lpips_sum / total_compared_frames if total_compared_frames > 0 and self.lpips_loss_fn else 0.0
-        metrics = {"avg_val_recon_mse": avg_recon_loss_per_pixel, "avg_val_psnr": avg_psnr, "avg_val_ssim": avg_ssim, "avg_val_lpips": avg_lpips}; self.last_val_metrics = metrics; self.logger.info(f"Validation Metrics: ReconMSE:{avg_recon_loss_per_pixel:.4f}, PSNR:{avg_psnr:.2f}, SSIM:{avg_ssim:.4f}, LPIPS:{avg_lpips:.4f}")
+        m_ref.train(); d_ref.train() # Set back to train mode
+        avg_recon_loss_per_pixel = total_recon_loss_sum / (total_compared_frames_flat * pred_norm_flat.shape[-3:].numel() + EPS) if total_compared_frames_flat > 0 else float('inf')
+        avg_psnr = total_psnr_sum / total_compared_frames_flat if total_compared_frames_flat > 0 else 0.0
+        avg_ssim = total_ssim_sum / total_compared_frames_flat if total_compared_frames_flat > 0 and self.ssim_metric else 0.0
+        avg_lpips = total_lpips_sum / total_compared_frames_flat if total_compared_frames_flat > 0 and self.lpips_loss_fn else 0.0
+        
+        metrics = {"avg_val_recon_mse": avg_recon_loss_per_pixel, "avg_val_psnr": avg_psnr, "avg_val_ssim": avg_ssim, "avg_val_lpips": avg_lpips};
+        self.last_val_metrics = metrics;
+        self.logger.info(f"Validation Metrics (Ep {self.current_epoch+1}): ReconMSE:{avg_recon_loss_per_pixel:.4f}, PSNR:{avg_psnr:.2f}, SSIM:{avg_ssim:.4f}, LPIPS:{avg_lpips:.4f}")
         if wandb_val_samples and self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({"validation_samples_sequence": wandb_val_samples}, step=self.global_step)
         return metrics
 
     def _save_checkpoint(self, is_intermediate: bool=False, metrics:Optional[Dict]=None, is_best:bool=False):
         if not self.am_main_process: return
         m_save = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model; d_save = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator
-        data = {'global_step': self.global_step, 'epoch': self.current_epoch, 'model_state_dict': m_save.state_dict(), 'discriminator_state_dict': d_save.state_dict(), 'optimizer_enc_gen_state_dict': self.optimizer_enc_gen.state_dict(), 'optimizer_disc_state_dict': self.optimizer_disc.state_dict(), 'scaler_enc_gen_state_dict': self.scaler_enc_gen.state_dict() if self.args.use_amp and self.device.type == 'cuda' else None, 'scaler_disc_state_dict': self.scaler_disc.state_dict() if self.args.use_amp and self.device.type == 'cuda' else None, 'args': vars(self.args), 'metrics': metrics if metrics else self.last_val_metrics, 'video_config': self.video_config, 'best_val_loss': self.best_val_loss,}
+        data = {'global_step': self.global_step, 'epoch': self.current_epoch, 'model_state_dict': m_save.state_dict(), 'discriminator_state_dict': d_save.state_dict(), 'optimizer_enc_gen_state_dict': self.optimizer_enc_gen.state_dict(), 'optimizer_disc_state_dict': self.optimizer_disc.state_dict(), 'scaler_enc_gen_state_dict': self.scaler_enc_gen.state_dict() if self.args.use_amp and self.device.type == 'cuda' else None, 'scaler_disc_state_dict': self.scaler_disc.state_dict() if self.args.use_amp and self.device.type == 'cuda' else None, 'args': vars(self.args), 'metrics': metrics if metrics else self.last_val_metrics, 'video_config': self.video_config, 'best_val_metric_val': self.best_val_metric_val,}
         q_ctrl_gen = getattr(self.optimizer_enc_gen, 'q_controller', None); q_ctrl_disc = getattr(self.optimizer_disc, 'q_controller', None)
-        if q_ctrl_gen: data['q_controller_enc_gen_state'] = q_ctrl_gen.__dict__ # Save full controller state
+        if q_ctrl_gen: data['q_controller_enc_gen_state'] = q_ctrl_gen.__dict__
         if q_ctrl_disc: data['q_controller_disc_state'] = q_ctrl_disc.__dict__
         fname_prefix="wubugaad_hybridgen_ckpt_v01"; fpath=""
         if is_best: fpath=os.path.join(self.args.checkpoint_dir, f"{fname_prefix}_best.pt")
@@ -2057,16 +2440,18 @@ class HybridTrainer:
         try: ckpt = torch.load(checkpoint_path, map_location=self.device)
         except Exception as e_load: self.logger.error(f"Failed load ckpt {checkpoint_path}: {e_load}"); return 0,0
         m_load = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model; d_load = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator
-        try: m_load.load_state_dict(ckpt['model_state_dict'], strict=False); self.logger.info("Loaded model state_dict.")
+        try: m_load.load_state_dict(ckpt['model_state_dict'], strict=self.args.load_strict if hasattr(self.args, 'load_strict') else True); self.logger.info("Loaded model state_dict.") # Added strict option
         except Exception as e: self.logger.error(f"Error loading model state_dict: {e}")
-        try: d_load.load_state_dict(ckpt['discriminator_state_dict'], strict=False); self.logger.info("Loaded discriminator state_dict.")
+        try: d_load.load_state_dict(ckpt['discriminator_state_dict'], strict=self.args.load_strict if hasattr(self.args, 'load_strict') else True); self.logger.info("Loaded discriminator state_dict.")
         except Exception as e: self.logger.error(f"Error loading discriminator state_dict: {e}")
+
         if 'optimizer_enc_gen_state_dict' in ckpt and self.optimizer_enc_gen:
             try: self.optimizer_enc_gen.load_state_dict(ckpt['optimizer_enc_gen_state_dict']); self.logger.info("Loaded enc/gen optimizer state.")
-            except Exception as e: self.logger.warning(f"Could not load Enc/Gen optimizer state: {e}")
+            except Exception as e: self.logger.warning(f"Could not load Enc/Gen optimizer state (may be ok if changing optimizers): {e}")
         if 'optimizer_disc_state_dict' in ckpt and self.optimizer_disc:
              try: self.optimizer_disc.load_state_dict(ckpt['optimizer_disc_state_dict']); self.logger.info("Loaded disc optimizer state.")
-             except Exception as e: self.logger.warning(f"Could not load Disc optimizer state: {e}")
+             except Exception as e: self.logger.warning(f"Could not load Disc optimizer state (may be ok if changing optimizers): {e}")
+
         if 'scaler_enc_gen_state_dict' in ckpt and self.scaler_enc_gen and ckpt['scaler_enc_gen_state_dict'] is not None: self.scaler_enc_gen.load_state_dict(ckpt['scaler_enc_gen_state_dict'])
         if 'scaler_disc_state_dict' in ckpt and self.scaler_disc and ckpt['scaler_disc_state_dict'] is not None: self.scaler_disc.load_state_dict(ckpt['scaler_disc_state_dict'])
         q_ctrl_gen = getattr(self.optimizer_enc_gen, 'q_controller', None); q_ctrl_disc = getattr(self.optimizer_disc, 'q_controller', None)
@@ -2076,23 +2461,34 @@ class HybridTrainer:
         if q_ctrl_disc and 'q_controller_disc_state' in ckpt and isinstance(ckpt['q_controller_disc_state'], dict):
             try: q_ctrl_disc.__dict__.update(ckpt['q_controller_disc_state']); self.logger.info("Loaded Q-Ctrl Disc state.")
             except Exception as e: self.logger.warning(f"Could not load Q-controller state for Disc: {e}")
-        loaded_global_step = ckpt.get('global_step', 0); loaded_epoch = ckpt.get('epoch', 0); self.best_val_loss = ckpt.get('best_val_loss', ckpt.get('metrics', {}).get(self.args.val_primary_metric, float('inf')))
-        self.logger.info(f"Loaded checkpoint {checkpoint_path} (Step {loaded_global_step}, Ep {loaded_epoch}). BestValLoss ({self.args.val_primary_metric}): {self.best_val_loss:.4f}")
-        return loaded_global_step, loaded_epoch
+        loaded_global_step = ckpt.get('global_step', 0); loaded_epoch = ckpt.get('epoch', 0);
+        # Initialize best_val_metric_val based on metric type from loaded checkpoint or default
+        default_best_val = -float('inf') if self.args.val_primary_metric in ["avg_val_psnr", "avg_val_ssim"] else float('inf')
+        self.best_val_metric_val = ckpt.get('best_val_metric_val', default_best_val)
+
+        self.logger.info(f"Loaded checkpoint {checkpoint_path} (Step {loaded_global_step}, Ep {loaded_epoch}). BestValMetric ({self.args.val_primary_metric}): {self.best_val_metric_val:.4f}")
+        # If resuming, make sure epoch is next one
+        return loaded_global_step, loaded_epoch # Return loaded epoch to continue from next
 
     @torch.no_grad()
     def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> torch.Tensor:
-        m_ref = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model; m_ref.eval(); device = self.device; dtype = next(m_ref.parameters()).dtype; latent_dim = self.args.latent_dim
-        if noise is None: z = torch.randn(num_samples, latent_dim, device=device, dtype=dtype)
-        else: z = noise.to(device, dtype);
+        m_ref = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model; m_ref.eval(); device = self.device; dtype_model = next(m_ref.parameters()).dtype; latent_dim = self.args.latent_dim
+        if noise is None: z = torch.randn(num_samples, latent_dim, device=device, dtype=dtype_model)
+        else: z = noise.to(device, dtype_model);
         if z.shape[0] != num_samples: self.logger.warning(f"Noise BS {z.shape[0]} != num_samples {num_samples}. Use noise BS."); num_samples = z.shape[0]
-        num_pred = self.video_config["num_predict_frames"]; num_regions = self.gaad_appearance_config["num_regions"]; frame_dims = (self.args.image_w, self.args.image_h); decoder_bboxes_list = []
+        num_pred = self.video_config["num_predict_frames"]; num_regions_app = self.gaad_appearance_config["num_regions"]; frame_dims = (self.args.image_w, self.args.image_h); decoder_bboxes_list = []
+        # For sampling, generate consistent GAAD bboxes for all predicted frames for a sample
         for _ in range(num_samples):
-            bboxes_single_sample_all_frames = []; current_frame_bboxes = golden_subdivide_rect_fixed_n(frame_dims, num_regions, device=device, dtype=dtype, min_size_px=self.args.gaad_min_size_px)
-            for _ in range(num_pred): bboxes_single_sample_all_frames.append(current_frame_bboxes)
-            decoder_bboxes_list.append(torch.stack(bboxes_single_sample_all_frames))
-        decoder_bboxes_batch = torch.stack(decoder_bboxes_list)
-        self.logger.info(f"Sampling {num_samples} sequences from prior noise..."); generated_frames = m_ref.decode(z, decoder_bboxes_batch); self.logger.info("Sampling finished.")
+            # Generate one set of bboxes for the whole sequence for this sample
+            # Using appearance GAAD config for sampling
+            current_sample_bboxes_one_frame = golden_subdivide_rect_fixed_n(frame_dims, num_regions_app, device=device, dtype=dtype_model, min_size_px=self.gaad_appearance_config['min_size_px'])
+            # Repeat this single set of bboxes for all num_pred frames
+            bboxes_single_sample_all_frames_repeated = current_sample_bboxes_one_frame.unsqueeze(0).repeat(num_pred, 1, 1) # (N_pred, NumReg, 4)
+            decoder_bboxes_list.append(bboxes_single_sample_all_frames_repeated)
+        decoder_bboxes_batch = torch.stack(decoder_bboxes_list) # (B_sample, N_pred, NumReg, 4)
+        self.logger.info(f"Sampling {num_samples} sequences from prior noise with fixed GAAD per sample...");
+        generated_frames = m_ref.decode(z, decoder_bboxes_batch);
+        self.logger.info("Sampling finished.")
         return generated_frames
 
 
@@ -2136,81 +2532,112 @@ def _configure_wubu_stack(args: argparse.Namespace, prefix: str) -> Optional[Dic
 def parse_arguments():
     parser = argparse.ArgumentParser(description="WuBu-GAAD Regional VAE-GAN w/ Optical Flow (v0.1)")
     # --- Data and DDP ---
-    parser.add_argument('--video_data_path', type=str, default="demo_video_data_dir")
-    parser.add_argument('--local_rank', type=int, default=-1); parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=2); parser.add_argument('--image_h', type=int, default=64)
-    parser.add_argument('--image_w', type=int, default=64); parser.add_argument('--num_channels', type=int, default=3)
-    parser.add_argument('--num_input_frames', type=int, default=3); parser.add_argument('--num_predict_frames', type=int, default=1) # Num frames Generator outputs
-    parser.add_argument('--frame_skip', type=int, default=1); parser.add_argument('--seed',type=int, default=42)
-    parser.add_argument('--num_workers',type=int, default=0); parser.add_argument('--checkpoint_dir',type=str, default='wubugaad_hybridgen_checkpoints_v01') # Updated dir
-    parser.add_argument('--load_checkpoint', type=str, default=None); parser.add_argument('--wandb',action='store_true')
-    parser.add_argument('--wandb_project',type=str,default='WuBuGAADHybridGenV01') # Updated project
-    parser.add_argument('--wandb_run_name',type=str,default=None); parser.add_argument('--log_interval',type=int, default=20)
-    parser.add_argument('--save_interval',type=int, default=500)
+    parser.add_argument('--video_data_path', type=str, default="demo_video_data_dir", help="Path to video file or directory containing it.")
+    parser.add_argument('--local_rank', type=int, default=-1, help="DDP local rank.")
+    parser.add_argument('--epochs', type=int, default=100, help="Total training epochs.") # Increased default
+    parser.add_argument('--batch_size', type=int, default=4, help="Batch size per GPU.") # Adjusted default
+    parser.add_argument('--image_h', type=int, default=64, help="Target image height.")
+    parser.add_argument('--image_w', type=int, default=64, help="Target image width.")
+    parser.add_argument('--num_channels', type=int, default=3, help="Number of image channels.")
+    parser.add_argument('--num_input_frames', type=int, default=3, help="Number of context frames for VAE encoder.")
+    parser.add_argument('--num_predict_frames', type=int, default=1, help="Number of frames the Generator predicts.")
+    parser.add_argument('--frame_skip', type=int, default=1, help="Frame skip in dataset.")
+    parser.add_argument('--seed',type=int, default=42, help="Random seed.")
+    parser.add_argument('--num_workers',type=int, default=2, help="DataLoader workers.") # Adjusted default
+    parser.add_argument('--checkpoint_dir',type=str, default='wubugaad_hybridgen_checkpoints_v01', help="Directory for checkpoints.")
+    parser.add_argument('--load_checkpoint', type=str, default=None, help="Path to checkpoint to load.")
+    parser.add_argument('--load_strict', action='store_true', help="Use strict=True when loading state_dict.") # New arg
+    parser.add_argument('--wandb',action='store_true', help="Enable WandB logging.")
+    parser.add_argument('--wandb_project',type=str,default='WuBuGAADHybridGenV01', help="WandB project name.")
+    parser.add_argument('--wandb_run_name',type=str,default=None, help="WandB run name (auto-generated if None).")
+    parser.add_argument('--log_interval',type=int, default=50, help="Log interval (in global steps).") # Adjusted default
+    parser.add_argument('--save_interval',type=int, default=1000, help="Checkpoint save interval (in global steps).") # Adjusted default
 
     # --- GAAD ---
-    parser.add_argument('--gaad_num_regions', type=int, default=16); parser.add_argument('--gaad_decomposition_type', type=str, default="hybrid", choices=["spiral", "subdivide", "hybrid"])
-    parser.add_argument('--gaad_min_size_px', type=int, default=4)
+    parser.add_argument('--gaad_num_regions', type=int, default=12, help="Number of regions for GAAD (appearance).") # Adjusted default
+    parser.add_argument('--gaad_decomposition_type', type=str, default="hybrid", choices=["spiral", "subdivide", "hybrid"], help="GAAD type for appearance.")
+    parser.add_argument('--gaad_min_size_px', type=int, default=4, help="Min region size for GAAD.")
 
     # --- Motion Branch ---
     parser.add_argument('--use_wubu_motion_branch', action='store_true', help="Enable GAAD+WuBu-M+OpticalFlow motion branch.")
-    parser.add_argument('--gaad_motion_num_regions', type=int, default=12)
-    parser.add_argument('--gaad_motion_decomposition_type', type=str, default="hybrid", choices=["spiral", "subdivide", "hybrid"], help="Spatial layout for motion regions.")
-    parser.add_argument('--optical_flow_net_type', type=str, default='raft_small', choices=list(FLOW_MODELS.keys()) if OPTICAL_FLOW_AVAILABLE else [], help="Type of optical flow network from torchvision.")
-    parser.add_argument('--freeze_flow_net', action='store_true', help="Freeze weights of the pre-trained optical flow network.")
-    parser.add_argument('--flow_stats_components', nargs='+', type=str, default=['mag_mean', 'angle_mean'], help="Flow statistics to embed (mag_mean, angle_mean, mag_std, angle_std). 'angle_mean' uses cos/sin.")
+    parser.add_argument('--gaad_motion_num_regions', type=int, default=8, help="GAAD regions for motion.") # Adjusted default
+    parser.add_argument('--gaad_motion_decomposition_type', type=str, default="hybrid", choices=["spiral", "subdivide", "hybrid"], help="GAAD type for motion.")
+    parser.add_argument('--optical_flow_net_type', type=str, default='raft_small', choices=list(FLOW_MODELS.keys()) if OPTICAL_FLOW_AVAILABLE else [], help="Optical flow network.")
+    parser.add_argument('--freeze_flow_net', action='store_true', help="Freeze optical flow network weights.")
+    parser.add_argument('--flow_stats_components', nargs='+', type=str, default=['mag_mean', 'angle_mean'], help="Flow stats (mag_mean, angle_mean, mag_std, angle_std).")
 
-    # --- Encoder/Generator Architecture ---
-    parser.add_argument('--latent_dim', type=int, default=128, help="Dimensionality of the VAE latent space.")
-    parser.add_argument('--encoder_use_roi_align', action='store_true'); parser.add_argument('--encoder_shallow_cnn_channels', type=int, default=32)
-    parser.add_argument('--encoder_roi_align_output_h', type=int, default=4); parser.add_argument('--encoder_roi_align_output_w', type=int, default=4)
-    parser.add_argument('--encoder_pixel_patch_size', type=int, default=16); parser.add_argument('--encoder_initial_tangent_dim', type=int, default=128) # Input dim to WuBu-S
-    parser.add_argument('--decoder_type', type=str, default="patch_gen", choices=["patch_gen", "transformer"]); parser.add_argument('--decoder_patch_gen_size', type=int, default=16)
-    parser.add_argument('--decoder_patch_resize_mode', type=str, default="bilinear", choices=["bilinear", "nearest"])
+    # --- Encoder Architecture ---
+    parser.add_argument('--latent_dim', type=int, default=256, help="VAE latent space dimensionality.") # Increased default
+    parser.add_argument('--encoder_use_roi_align', action='store_true', help="Use RoIAlign in encoder patch extractor.")
+    parser.add_argument('--encoder_shallow_cnn_channels', type=int, default=32, help="Channels for shallow CNN if RoIAlign used.")
+    parser.add_argument('--encoder_roi_align_output_h', type=int, default=4, help="RoIAlign output height.")
+    parser.add_argument('--encoder_roi_align_output_w', type=int, default=4, help="RoIAlign output width.")
+    parser.add_argument('--encoder_pixel_patch_size', type=int, default=16, help="Pixel patch size if not RoIAlign.")
+    parser.add_argument('--encoder_initial_tangent_dim', type=int, default=128, help="Input tangent dim to WuBu-S.")
+
+    # --- Generator Architecture (New Conv3D based, some args removed, some added for control) ---
+    # REMOVED: --decoder_type (as it's now primarily Conv3D based)
+    # REMOVED: --decoder_patch_gen_size
+    # REMOVED: --decoder_patch_resize_mode
+    parser.add_argument('--gen_temporal_kernel_size', type=int, default=3, help="Temporal kernel size in Generator 3D convs.")
+    parser.add_argument('--gen_final_conv_kernel_spatial', type=int, default=3, help="Spatial kernel for final Generator conv layer.")
 
     # --- Discriminator Architecture ---
-    parser.add_argument('--discriminator_type', type=str, default="regional_cnn", choices=["regional_cnn", "wubu_regional"], help="Type of discriminator architecture.")
-    # Add args for specific discriminator types if needed (e.g., --disc_cnn_channels)
+    parser.add_argument('--discriminator_type', type=str, default="spatio_temporal_cnn", choices=["spatio_temporal_cnn", "regional_cnn"], help="Discriminator architecture type.")
+    # Spatio-temporal CNN specifics (New Args)
+    parser.add_argument('--disc_base_disc_channels', type=int, default=64, help="Base channels for D's 3D CNN.")
+    parser.add_argument('--disc_max_disc_channels', type=int, default=512, help="Max channels for D's 3D CNN.")
+    parser.add_argument('--disc_temporal_kernel_size', type=int, default=3, help="Temporal kernel for D's 3D CNN.")
+    parser.add_argument('--disc_use_gaad_film_condition', action='store_true', help="Enable GAAD-based FiLM conditioning in Discriminator.")
+    parser.add_argument('--disc_gaad_condition_dim_disc', type=int, default=64, help="Condition dim for D's FiLM if enabled.")
+    # Regional CNN (fallback) specifics (Args for old type, if selected)
+    parser.add_argument('--disc_patch_size', type=int, default=16, help="Patch size for 'regional_cnn' D type.")
+    parser.add_argument('--disc_cnn_channels_2d', nargs='+', type=int, default=[64, 128, 256], help="2D CNN channels for 'regional_cnn' D type.")
+
 
     # --- WuBu Stacks ---
-    parser.add_argument('--wubu_dropout', type=float, default=0.1)
+    parser.add_argument('--wubu_dropout', type=float, default=0.1, help="Dropout for WuBu layers.")
     # WuBu-S (Encoder Appearance)
     parser.add_argument('--wubu_s_num_levels', type=int, default=2); parser.add_argument('--wubu_s_hyperbolic_dims', nargs='+', type=int, default=[64,32]); parser.add_argument('--wubu_s_initial_curvatures', nargs='+', type=float, default=[1.0,0.8]); parser.add_argument('--wubu_s_use_rotation', action='store_true'); parser.add_argument('--wubu_s_phi_influence_curvature', action='store_true'); parser.add_argument('--wubu_s_phi_influence_rotation_init', action='store_true')
     # WuBu-M (Encoder Motion)
-    parser.add_argument('--wubu_m_num_levels', type=int, default=2); parser.add_argument('--wubu_m_hyperbolic_dims', nargs='+', type=int, default=[64,32]); parser.add_argument('--wubu_m_initial_curvatures', nargs='+', type=float, default=[1.0, 0.7]); parser.add_argument('--wubu_m_use_rotation', action='store_true'); parser.add_argument('--wubu_m_phi_influence_curvature', action='store_true'); parser.add_argument('--wubu_m_phi_influence_rotation_init', action='store_true')
+    parser.add_argument('--wubu_m_num_levels', type=int, default=1); parser.add_argument('--wubu_m_hyperbolic_dims', nargs='+', type=int, default=[32]); parser.add_argument('--wubu_m_initial_curvatures', nargs='+', type=float, default=[0.7]); parser.add_argument('--wubu_m_use_rotation', action='store_true'); parser.add_argument('--wubu_m_phi_influence_curvature', action='store_true'); parser.add_argument('--wubu_m_phi_influence_rotation_init', action='store_true')
     # WuBu-T (Encoder Temporal -> Latent)
-    parser.add_argument('--wubu_t_num_levels', type=int, default=2); parser.add_argument('--wubu_t_hyperbolic_dims', nargs='+', type=int, default=[128,64]); parser.add_argument('--wubu_t_initial_curvatures', nargs='+', type=float, default=[1.0,0.5]); parser.add_argument('--wubu_t_use_rotation', action='store_true'); parser.add_argument('--wubu_t_phi_influence_curvature', action='store_true'); parser.add_argument('--wubu_t_phi_influence_rotation_init', action='store_true')
-    # Output dims (determined by WuBu stacks or projection layers)
-    parser.add_argument('--wubu_s_output_dim', type=int, default=32, help="Output dim of WuBu-S stack (input to WuBu-T or latent projection).");
-    parser.add_argument('--wubu_m_output_dim', type=int, default=32, help="Output dim of WuBu-M stack (input to WuBu-T or latent projection).");
-    # wubu_t_output_dim is intermediate before latent projection
+    parser.add_argument('--wubu_t_num_levels', type=int, default=1); parser.add_argument('--wubu_t_hyperbolic_dims', nargs='+', type=int, default=[128]); parser.add_argument('--wubu_t_initial_curvatures', nargs='+', type=float, default=[0.5]); parser.add_argument('--wubu_t_use_rotation', action='store_true'); parser.add_argument('--wubu_t_phi_influence_curvature', action='store_true'); parser.add_argument('--wubu_t_phi_influence_rotation_init', action='store_true')
+    # Output dims (mostly derived now, but these are for WuBu stack config)
+    parser.add_argument('--wubu_s_output_dim', type=int, default=32, help="Output dim of WuBu-S (if no levels, then encoder_initial_tangent_dim).");
+    parser.add_argument('--wubu_m_output_dim', type=int, default=32, help="Output dim of WuBu-M.");
+
 
     # --- Training ---
-    parser.add_argument('--lambda_recon', type=float, default=1.0, help="Weight for VAE reconstruction loss.")
-    parser.add_argument('--lambda_kl', type=float, default=0.01, help="Weight for VAE KL divergence loss.")
-    parser.add_argument('--lambda_gan', type=float, default=0.1, help="Weight for GAN adversarial loss (Generator part).")
-    parser.add_argument('--learning_rate_gen',type=float,default=2e-4); # Separate LRs common in GANs
-    parser.add_argument('--learning_rate_disc',type=float,default=2e-4);
-    parser.add_argument('--risgd_max_grad_norm',type=float,default=1.0); parser.add_argument('--global_max_grad_norm',type=float,default=1.0);
-    parser.add_argument('--q_controller_enabled',action='store_true'); # Apply to both optimizers? Needs thought.
-    parser.add_argument('--grad_accum_steps',type=int, default=1, help="Number of steps to accumulate gradients before optimizer step.")
-    parser.add_argument('--use_amp', action='store_true'); parser.add_argument('--detect_anomaly',action='store_true')
-    parser.add_argument('--log_grad_norm', action='store_true', help="Log gradient norms (can slow down training).")
+    parser.add_argument('--lambda_recon', type=float, default=10.0, help="Weight for VAE reconstruction loss (MSE).")
+    parser.add_argument('--lambda_kl', type=float, default=0.1, help="Weight for VAE KL divergence loss.")
+    parser.add_argument('--lambda_gan', type=float, default=1.0, help="Weight for GAN adversarial loss (Generator part).")
+    parser.add_argument('--learning_rate_gen',type=float,default=1e-4, help="Learning rate for Generator/Encoder.");
+    parser.add_argument('--learning_rate_disc',type=float,default=1e-4, help="Learning rate for Discriminator.");
+    parser.add_argument('--risgd_max_grad_norm',type=float,default=1.0, help="Max grad norm for Riemannian SGD parameter updates.");
+    parser.add_argument('--global_max_grad_norm',type=float,default=5.0, help="Global gradient clipping norm for optimizers.");
+    parser.add_argument('--q_controller_enabled',action='store_true', help="Enable HAKMEM Q-Controller for optimizers.");
+    parser.add_argument('--grad_accum_steps',type=int, default=1, help="Gradient accumulation steps.")
+    parser.add_argument('--use_amp', action='store_true', help="Use Automatic Mixed Precision (AMP).");
+    parser.add_argument('--detect_anomaly',action='store_true', help="Enable autograd.detect_anomaly (for debugging).")
+    parser.add_argument('--log_grad_norm', action='store_true', help="Log optimizer gradient norms (can slow training).")
 
     # --- Validation & Sampling ---
-    parser.add_argument('--use_lpips_for_verification', action='store_true'); parser.add_argument('--validation_video_path', type=str, default=None);
-    parser.add_argument('--validation_split_fraction', type=float, default=0.1);
-    parser.add_argument('--val_block_size', type=int, default=20, help="Number of consecutive samples to include in each validation block.") # Added argument
-    parser.add_argument('--val_primary_metric', type=str, default="avg_val_recon_mse", choices=["avg_val_recon_mse", "avg_val_psnr", "avg_val_ssim", "avg_val_lpips"]);
-    parser.add_argument('--num_val_samples_to_log', type=int, default=2);
-    parser.add_argument('--demo_num_samples', type=int, default=4, help="Number of samples to generate in demo.")
+    parser.add_argument('--use_lpips_for_verification', action='store_true', help="Use LPIPS metric for validation output.");
+    parser.add_argument('--validation_video_path', type=str, default=None, help="Optional separate video for validation.");
+    parser.add_argument('--validation_split_fraction', type=float, default=0.1, help="Fraction of main data for validation if no separate val video.");
+    parser.add_argument('--val_block_size', type=int, default=20, help="Block size for validation split if using block sampling.");
+    parser.add_argument('--val_primary_metric', type=str, default="avg_val_psnr", choices=["avg_val_recon_mse", "avg_val_psnr", "avg_val_ssim", "avg_val_lpips"], help="Primary metric for saving best checkpoint.");
+    parser.add_argument('--num_val_samples_to_log', type=int, default=2, help="Number of validation video samples to log to WandB.");
+    parser.add_argument('--demo_num_samples', type=int, default=4, help="Number of samples for final demo generation.")
 
     parsed_args = parser.parse_args()
 
-    # --- Argument Validation & Post-processing ---
-    if parsed_args.use_wubu_motion_branch and not OPTICAL_FLOW_AVAILABLE: parser.error("Motion branch (--use_wubu_motion_branch) needs optical flow, but torchvision.models.optical_flow unavailable.")
+    # --- Argument Validation & Post-processing (as in original) ---
+    if parsed_args.use_wubu_motion_branch and not OPTICAL_FLOW_AVAILABLE: parser.error("Motion branch needs optical flow, but torchvision.models.optical_flow unavailable.")
     if parsed_args.use_wubu_motion_branch and OPTICAL_FLOW_AVAILABLE and parsed_args.optical_flow_net_type not in FLOW_MODELS: parser.error(f"Optical flow net type '{parsed_args.optical_flow_net_type}' not in available: {list(FLOW_MODELS.keys())}")
-    def validate_wubu_config(args_obj, prefix_str, parser_ref, is_motion_branch_active):
+    # Renamed to avoid conflict if _configure_wubu_stack is also in global scope
+    def validate_wubu_config_for_argparse(args_obj, prefix_str, parser_ref, is_motion_branch_active):
         num_levels = getattr(args_obj, f"{prefix_str}_num_levels", 0); is_motion = prefix_str == "wubu_m"
         if num_levels > 0 and (not is_motion or is_motion_branch_active):
             for suffix, attr_name in [("hyperbolic_dims", f"{prefix_str}_hyperbolic_dims"), ("initial_curvatures", f"{prefix_str}_initial_curvatures")]:
@@ -2218,31 +2645,20 @@ def parse_arguments():
                 if len(val_list) != num_levels:
                     if len(val_list) == 1 and num_levels > 1: setattr(args_obj, attr_name, [val_list[0]] * num_levels)
                     elif not val_list and suffix=="initial_curvatures": setattr(args_obj, attr_name, [1.0] * num_levels)
+                    elif not val_list and suffix=="hyperbolic_dims": setattr(args_obj, attr_name, [getattr(args_obj, 'latent_dim', 32)//num_levels]*num_levels if num_levels>0 else []) # Simple default for dims
                     else: parser_ref.error(f"{prefix_str}: Length mismatch {attr_name} ({len(val_list)}) vs num_levels ({num_levels})")
-    validate_wubu_config(parsed_args, "wubu_s", parser, True); validate_wubu_config(parsed_args, "wubu_t", parser, True); validate_wubu_config(parsed_args, "wubu_m", parser, parsed_args.use_wubu_motion_branch and OPTICAL_FLOW_AVAILABLE)
+    validate_wubu_config_for_argparse(parsed_args, "wubu_s", parser, True); validate_wubu_config_for_argparse(parsed_args, "wubu_t", parser, True); validate_wubu_config_for_argparse(parsed_args, "wubu_m", parser, parsed_args.use_wubu_motion_branch and OPTICAL_FLOW_AVAILABLE)
 
-    # Update output dims based on actual WuBu configs used
-    # If WuBu-S has levels, its output dim is the last level dim. Otherwise, it's the input embed dim.
-    if parsed_args.wubu_s_num_levels > 0 and parsed_args.wubu_s_hyperbolic_dims:
-         parsed_args.wubu_s_output_dim = parsed_args.wubu_s_hyperbolic_dims[-1]
-    else:
-         parsed_args.wubu_s_output_dim = parsed_args.encoder_initial_tangent_dim
-         if parsed_args.wubu_s_num_levels > 0: parsed_args.wubu_s_num_levels = 0 # Correct config if dims missing
-
-    # Same logic for WuBu-M
-    if parsed_args.use_wubu_motion_branch and OPTICAL_FLOW_AVAILABLE and parsed_args.wubu_m_num_levels > 0 and parsed_args.wubu_m_hyperbolic_dims:
-         parsed_args.wubu_m_output_dim = parsed_args.wubu_m_hyperbolic_dims[-1]
-    else:
-         parsed_args.wubu_m_output_dim = 0 # No motion features if branch disabled or no levels/dims
-         if parsed_args.wubu_m_num_levels > 0: parsed_args.wubu_m_num_levels = 0
-
-    # WuBu-T output dim is intermediate, not a direct arg for VAE output (latent_dim is)
+    if parsed_args.wubu_s_num_levels > 0 and parsed_args.wubu_s_hyperbolic_dims: parsed_args.wubu_s_output_dim = parsed_args.wubu_s_hyperbolic_dims[-1]
+    else: parsed_args.wubu_s_output_dim = parsed_args.encoder_initial_tangent_dim; parsed_args.wubu_s_num_levels = 0 # Ensure consistency
+    if parsed_args.use_wubu_motion_branch and OPTICAL_FLOW_AVAILABLE and parsed_args.wubu_m_num_levels > 0 and parsed_args.wubu_m_hyperbolic_dims: parsed_args.wubu_m_output_dim = parsed_args.wubu_m_hyperbolic_dims[-1]
+    else: parsed_args.wubu_m_output_dim = 0; parsed_args.wubu_m_num_levels = 0 # Ensure consistency
 
     valid_stats = {'mag_mean', 'angle_mean', 'mag_std', 'angle_std'};
     if any(s not in valid_stats for s in parsed_args.flow_stats_components): parser.error(f"Invalid flow_stats_components. Allowed: {valid_stats}. Got: {parsed_args.flow_stats_components}")
 
     return parsed_args
-
+    
 def main():
     args = parse_arguments()
     ddp_active = "LOCAL_RANK" in os.environ and int(os.environ.get("WORLD_SIZE",1)) > 1
@@ -2250,247 +2666,147 @@ def main():
     else: rank=0; local_rank=0; world_size=1; device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"); _ = torch.cuda.set_device(device) if device.type=='cuda' else None
 
     am_main_process=(rank==0)
-    # Ensure logger is configured per process
-    current_logger_main = logging.getLogger("WuBuGAADHybridGenV01")
-    if current_logger_main.hasHandlers(): # Clear existing handlers if any (e.g., from re-runs)
+    current_logger_main = logging.getLogger("WuBuGAADHybridGenV01") # Use the package-level logger
+    if current_logger_main.hasHandlers():
         for handler in current_logger_main.handlers[:]: current_logger_main.removeHandler(handler)
-        for handler in current_logger_main.root.handlers[:]: current_logger_main.root.removeHandler(handler)
-    logging.basicConfig(level=logging.INFO if am_main_process else logging.WARNING, format=f'%(asctime)s R{rank} %(name)s:%(lineno)d %(levelname)s %(message)s', force=True)
-    current_logger_main.info(f"--- WuBuGAADHybridGenV01 (R{rank}/{world_size},Dev {device},DDP:{ddp_active}) ---")
+        for handler in current_logger_main.root.handlers[:]: current_logger_main.root.removeHandler(handler) # Clear root too
+    log_level = logging.INFO if am_main_process else logging.WARNING
+    logging.basicConfig(level=log_level, format=f'%(asctime)s R{rank} %(name)s:%(lineno)d %(levelname)s %(message)s', force=True) # Force reconfig
+    current_logger_main.info(f"--- WuBuGAADHybridGenV01 (R{rank}/{world_size},Dev {device},DDP:{ddp_active},AMP:{args.use_amp}) ---")
     seed_everything(args.seed,rank,world_size)
+    if args.detect_anomaly: torch.autograd.set_detect_anomaly(True); current_logger_main.warning("Autograd anomaly detection ENABLED.")
     if am_main_process: current_logger_main.info(f"Args: {vars(args)}")
 
     if am_main_process and args.wandb and WANDB_AVAILABLE:
-        run_id=wandb.util.generate_id() if wandb.run is None else wandb.run.id
-        wandb.init(project=args.wandb_project, name=args.wandb_run_name if args.wandb_run_name else f"wubuhybrid_v01_{datetime.now().strftime('%y%m%d%H%M')}", config=vars(args), resume="allow", id=run_id)
+        run_id_wandb=wandb.util.generate_id() if wandb.run is None else wandb.run.id
+        wandb.init(project=args.wandb_project, name=args.wandb_run_name if args.wandb_run_name else f"wubuhybrid_v01_{datetime.now().strftime('%y%m%d_%H%M%S')}", config=vars(args), resume="allow", id=run_id_wandb)
 
-    # --- Configure Model Components ---
-    video_config = {"image_size":(args.image_h,args.image_w),"num_channels":args.num_channels,"num_input_frames":args.num_input_frames, "num_predict_frames":args.num_predict_frames,"wubu_s_output_dim":args.wubu_s_output_dim,"wubu_m_output_dim": args.wubu_m_output_dim,} # wubu_t_output_dim is internal
+    video_config = {"image_size":(args.image_h,args.image_w),"num_channels":args.num_channels,"num_input_frames":args.num_input_frames, "num_predict_frames":args.num_predict_frames,"wubu_s_output_dim":args.wubu_s_output_dim,"wubu_m_output_dim": args.wubu_m_output_dim,}
     gaad_appearance_config = {"num_regions":args.gaad_num_regions,"decomposition_type":args.gaad_decomposition_type,"min_size_px": args.gaad_min_size_px}
     gaad_motion_config = {"num_regions": args.gaad_motion_num_regions,"decomposition_type":args.gaad_motion_decomposition_type,"min_size_px": args.gaad_min_size_px,} if args.use_wubu_motion_branch and OPTICAL_FLOW_AVAILABLE else None
 
     wubu_s_config = _configure_wubu_stack(args, "wubu_s")
-    wubu_t_config = _configure_wubu_stack(args, "wubu_t") # Used by Encoder
+    wubu_t_config = _configure_wubu_stack(args, "wubu_t")
     wubu_m_config = _configure_wubu_stack(args, "wubu_m")
 
-    # Discriminator config (example)
-    discriminator_config = {"type": args.discriminator_type}
-    if args.discriminator_type == "regional_cnn":
-        discriminator_config["patch_size"] = 16 # Example
-        discriminator_config["cnn_channels"] = [32, 64, 128] # Example
+    discriminator_config = {
+        "type": args.discriminator_type,
+        "use_gaad_film_condition": args.disc_use_gaad_film_condition,
+        "gaad_condition_dim_disc": args.disc_gaad_condition_dim_disc,
+        "base_disc_channels": args.disc_base_disc_channels,
+        "max_disc_channels": args.disc_max_disc_channels,
+        "temporal_kernel_size": args.disc_temporal_kernel_size,
+        "patch_size": args.disc_patch_size, # For regional_cnn
+        "cnn_channels_2d": args.disc_cnn_channels_2d, # For regional_cnn
+    }
 
     if am_main_process: current_logger_main.info(f"VideoCfg:{video_config}\nGAADAppCfg:{gaad_appearance_config}\nGAADMotCfg:{gaad_motion_config}\nWuBuS:{wubu_s_config}\nWuBuT:{wubu_t_config}\nWuBuM:{wubu_m_config}\nDiscCfg:{discriminator_config}")
 
-    # --- Instantiate Models ---
     model = WuBuGAADHybridGenNet(args, video_config, gaad_appearance_config, gaad_motion_config, wubu_s_config, wubu_t_config, wubu_m_config).to(device)
     discriminator = RegionalDiscriminator(args, video_config, gaad_appearance_config, discriminator_config).to(device)
 
     if am_main_process and args.wandb and WANDB_AVAILABLE and wandb.run:
-        wandb.watch(model, log="all", log_freq=max(100, args.log_interval*5), log_graph=False)
-        wandb.watch(discriminator, log="all", log_freq=max(100, args.log_interval*5), log_graph=False)
+        wandb.watch(model, log="all", log_freq=max(100, args.log_interval*10), log_graph=False) # Increased log_freq
+        wandb.watch(discriminator, log="all", log_freq=max(100, args.log_interval*10), log_graph=False)
 
     if ddp_active:
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
-        discriminator = DDP(discriminator, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False) # Disc less likely unused
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True) # find_unused can be True during dev
+        discriminator = DDP(discriminator, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
 
-    # --- Optimizers ---
     q_cfg = DEFAULT_CONFIG_QLEARN_HYBRID.copy() if args.q_controller_enabled else None
     optimizer_enc_gen = RiemannianEnhancedSGD(model.parameters(), lr=args.learning_rate_gen, q_learning_config=q_cfg, max_grad_norm_risgd=args.risgd_max_grad_norm)
-    optimizer_disc = RiemannianEnhancedSGD(discriminator.parameters(), lr=args.learning_rate_disc, q_learning_config=q_cfg, max_grad_norm_risgd=args.risgd_max_grad_norm) # Can use same Q-config or separate
+    optimizer_disc = RiemannianEnhancedSGD(discriminator.parameters(), lr=args.learning_rate_disc, q_learning_config=q_cfg, max_grad_norm_risgd=args.risgd_max_grad_norm)
 
-    # --- Prepare Data ---
     actual_video_path = args.video_data_path; demo_file_name = "dummy_video_hybridgen_v01.mp4"
     if "demo_video_data" in args.video_data_path: actual_video_path = os.path.join(args.video_data_path, demo_file_name)
-
-    # Create dummy video if needed (using imageio if available)
     if "demo_video_data" in args.video_data_path and am_main_process:
         os.makedirs(args.video_data_path, exist_ok=True)
         if not os.path.exists(actual_video_path):
             if IMAGEIO_AVAILABLE and imageio is not None:
                 current_logger_main.info(f"Creating dummy video using imageio: {actual_video_path}...")
                 min_raw_frames = (args.num_input_frames + args.num_predict_frames -1) * args.frame_skip + 1
-                num_dummy = max(50, min_raw_frames + 20)
+                num_dummy = max(100, min_raw_frames + 50) # Increased dummy frames
                 dummy_h = int(args.image_h); dummy_w = int(args.image_w)
                 frames_np_list = [np.random.randint(0, 256, (dummy_h, dummy_w, args.num_channels), dtype=np.uint8) for _ in range(num_dummy)]
-                current_fps = int(10)
-                try:
-                    imageio.mimwrite(actual_video_path, frames_np_list, fps=current_fps, quality=8) # Add quality
-                    current_logger_main.info(f"Successfully created dummy video using imageio: {actual_video_path} with {len(frames_np_list)} frames.")
-                except Exception as e_imageio_write:
-                    current_logger_main.error(f"Error creating dummy video using imageio: {e_imageio_write}", exc_info=True)
-            else:
-                current_logger_main.error("imageio library not found or failed previously. Cannot create dummy video.")
-        elif os.path.exists(actual_video_path):
-             current_logger_main.info(f"Dummy video {actual_video_path} already exists.")
+                try: imageio.mimwrite(actual_video_path, frames_np_list, fps=15, quality=8, macro_block_size=16) # Common params
+                except Exception as e_imageio_write: current_logger_main.error(f"Error creating dummy video: {e_imageio_write}", exc_info=True)
+            else: current_logger_main.error("imageio not available. Cannot create dummy video.")
+    if ddp_active: torch.distributed.barrier()
+    if not os.path.isfile(actual_video_path): current_logger_main.error(f"Video path '{actual_video_path}' not found. Exit."); sys.exit(1)
 
-    if ddp_active: torch.distributed.barrier() # Wait for main process to potentially create data
-
-    if not os.path.isfile(actual_video_path):
-        current_logger_main.error(f"Video path '{actual_video_path}' is not a file or does not exist. Check path or dummy video creation. Exiting.")
-        if ddp_active and is_initialized(): destroy_process_group()
-        sys.exit(1)
-
-    # --- Datasets and Loaders ---
-    total_frames_sample = args.num_input_frames + args.num_predict_frames # VAE needs full sequence
-    full_dataset = None
+    total_frames_sample = args.num_input_frames + args.num_predict_frames
     try: full_dataset = VideoFrameDataset(video_path=actual_video_path, num_frames_total=total_frames_sample, image_size=(args.image_h, args.image_w), frame_skip=args.frame_skip)
     except Exception as e: current_logger_main.error(f"Failed init main Dataset from {actual_video_path}: {e}", exc_info=True); sys.exit(1)
-    if not full_dataset or len(full_dataset) == 0 : current_logger_main.error("Main dataset empty/failed load. Check path/content. Exit."); sys.exit(1)
+    if not full_dataset or len(full_dataset) == 0 : current_logger_main.error("Main dataset empty. Exit."); sys.exit(1)
 
-    train_dataset, val_dataset = full_dataset, None
-    total_possible_samples = len(full_dataset)
-
-    # Validation split logic (modified for block sampling)
+    train_dataset, val_dataset = full_dataset, None; total_possible_samples = len(full_dataset)
     if args.validation_video_path and os.path.exists(args.validation_video_path) and os.path.isfile(args.validation_video_path):
         try:
             val_dataset = VideoFrameDataset(video_path=args.validation_video_path, num_frames_total=total_frames_sample, image_size=(args.image_h, args.image_w), frame_skip=args.frame_skip)
             if len(val_dataset) > 0: current_logger_main.info(f"Using separate val video: {args.validation_video_path}, {len(val_dataset)} samples.")
-            else: current_logger_main.warning(f"Validation video {args.validation_video_path} loaded 0 samples, using split instead if applicable."); val_dataset = None
-        except Exception as e: current_logger_main.warning(f"Could not load val dataset {args.validation_video_path}: {e}. Using split if applicable."); val_dataset = None
-
-    # If no separate val video, perform split with block sampling
+            else: val_dataset = None
+        except Exception as e: current_logger_main.warning(f"Could not load val dataset {args.validation_video_path}: {e}. Using split."); val_dataset = None
     if val_dataset is None and args.validation_split_fraction > 0 and total_possible_samples > 10 :
         val_block_size = args.val_block_size
-        if val_block_size <= 0:
-            current_logger_main.warning(f"val_block_size must be positive, got {val_block_size}. Falling back to simple random split.")
-            # Fallback to original random_split
-            num_val = int(total_possible_samples * args.validation_split_fraction)
-            num_train = total_possible_samples - num_val
-            if num_train > 0 and num_val > 0:
-                 train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [num_train, num_val], generator=torch.Generator().manual_seed(args.seed + rank))
-                 current_logger_main.info(f"Split main dataset (simple random): {len(train_dataset)} train, {len(val_dataset)} val.")
-            else:
-                 current_logger_main.warning(f"Not enough samples ({total_possible_samples}) for val split."); val_dataset = None
-        elif total_possible_samples < val_block_size:
-             current_logger_main.warning(f"Total samples ({total_possible_samples}) less than val_block_size ({val_block_size}). Cannot create blocks. Falling back to simple random split.")
-             # Fallback to original random_split
-             num_val = int(total_possible_samples * args.validation_split_fraction)
-             num_train = total_possible_samples - num_val
-             if num_train > 0 and num_val > 0:
-                 train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [num_train, num_val], generator=torch.Generator().manual_seed(args.seed + rank))
-                 current_logger_main.info(f"Split main dataset (simple random): {len(train_dataset)} train, {len(val_dataset)} val.")
-             else:
-                 current_logger_main.warning(f"Not enough samples ({total_possible_samples}) for val split."); val_dataset = None
-        else:
-            # Calculate target number of validation samples and blocks
-            target_val_samples = int(total_possible_samples * args.validation_split_fraction)
-            num_val_blocks = max(1, target_val_samples // val_block_size)
-
-            # Calculate the maximum possible starting index for a block
+        if val_block_size <= 0 or total_possible_samples < val_block_size: # Fallback to simple random
+            num_val = int(total_possible_samples * args.validation_split_fraction); num_train = total_possible_samples - num_val
+            if num_train > 0 and num_val > 0: train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [num_train, num_val], generator=torch.Generator().manual_seed(args.seed + rank))
+            else: val_dataset = None
+        else: # Block sampling
+            target_val_samples = int(total_possible_samples * args.validation_split_fraction); num_val_blocks = max(1, target_val_samples // val_block_size)
             max_block_start = total_possible_samples - val_block_size
-            if max_block_start < 0:
-                 current_logger_main.warning(f"max_block_start is negative ({max_block_start}). Falling back to simple random split.")
-                 # Fallback to original random_split
-                 num_val = int(total_possible_samples * args.validation_split_fraction)
-                 num_train = total_possible_samples - num_val
-                 if num_train > 0 and num_val > 0:
-                      train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [num_train, num_val], generator=torch.Generator().manual_seed(args.seed + rank))
-                      current_logger_main.info(f"Split main dataset (simple random): {len(train_dataset)} train, {len(val_dataset)} val.")
-                 else:
-                      current_logger_main.warning(f"Not enough samples ({total_possible_samples}) for val split."); val_dataset = None
+            if num_val_blocks > max_block_start + 1: block_starts = sorted(range(max_block_start + 1))
+            else: block_starts = sorted(random.Random(args.seed + rank).sample(range(max_block_start + 1), num_val_blocks))
+            val_indices_set = set();
+            for start_idx in block_starts: val_indices_set.update(range(start_idx, min(start_idx + val_block_size, total_possible_samples)))
+            train_indices = sorted(list(set(range(total_possible_samples)) - val_indices_set)); val_indices = sorted(list(val_indices_set))
+            if len(train_indices) > 0 and len(val_indices) > 0:
+                 train_dataset = torch.utils.data.Subset(full_dataset, train_indices); val_dataset = torch.utils.data.Subset(full_dataset, val_indices)
+                 current_logger_main.info(f"Split main dataset (block): {len(train_dataset)} train, {len(val_dataset)} val.")
+            else: current_logger_main.warning("Block sampling failed. No split."); val_dataset=None
+    if am_main_process and val_dataset: current_logger_main.info(f"Train samples: {len(train_dataset)}, Val samples: {len(val_dataset)}")
+    elif am_main_process: current_logger_main.info(f"Train samples: {len(train_dataset)}, No validation split.")
 
-            else:
-                # Use seeded random generator to select block starting indices
-                rng = random.Random(args.seed + rank) # Use standard library random with seed
-                # Sample unique starting indices for blocks
-                if num_val_blocks > max_block_start + 1:
-                     current_logger_main.warning(f"Number of requested validation blocks ({num_val_blocks}) exceeds possible starting positions ({max_block_start + 1}). Using all possible blocks.")
-                     block_starts = sorted(range(max_block_start + 1))
-                else:
-                    block_starts = sorted(rng.sample(range(max_block_start + 1), num_val_blocks)) # Ensure sampling within bounds and sort for easier index management
-
-                # Construct validation indices from the blocks
-                val_indices_set = set()
-                for start in block_starts:
-                    for i in range(val_block_size):
-                        # Add indices for the current block
-                        if start + i < total_possible_samples: # Ensure index is within dataset bounds
-                             val_indices_set.add(start + i)
-                        else:
-                             current_logger_main.warning(f"Skipping index {start+i} out of bounds (total samples: {total_possible_samples}) during block construction.")
-
-                # Construct all possible indices
-                all_indices_set = set(range(total_possible_samples))
-
-                # Training indices are all indices NOT in validation indices
-                train_indices_set = all_indices_set - val_indices_set
-
-                # Convert sets back to sorted lists
-                train_indices = sorted(list(train_indices_set))
-                val_indices = sorted(list(val_indices_set))
-
-                # Create Subset datasets
-                if len(train_indices) > 0 and len(val_indices) > 0:
-                     train_dataset = torch.utils.data.Subset(full_dataset, train_indices)
-                     val_dataset = torch.utils.data.Subset(full_dataset, val_indices)
-                     current_logger_main.info(f"Split main dataset (block sampling): {len(train_dataset)} train, {len(val_dataset)} val ({num_val_blocks} blocks of size {val_block_size}).")
-                else:
-                     current_logger_main.warning(f"Block sampling resulted in empty train ({len(train_indices)}) or val ({len(val_indices)}) sets. Falling back to no split.");
-                     # Fallback to no split if block sampling fails to create valid sets
-                     train_dataset = full_dataset
-                     val_dataset = None
-
-
-    # --- Sampler and DataLoader creation remains the same, using Subset if applicable ---
     partial_seed_worker = functools.partial(seed_worker_init_fn,base_seed=args.seed,rank=rank,world_size=world_size)
-    # Samplers should be applied to the Subset datasets if they were created
     train_sampler = DistributedSampler(train_dataset,num_replicas=world_size,rank=rank,shuffle=True,seed=args.seed) if ddp_active else None
     train_loader = DataLoader(train_dataset,batch_size=args.batch_size,shuffle=(train_sampler is None),num_workers=args.num_workers,sampler=train_sampler,pin_memory=(device.type=='cuda'),worker_init_fn=partial_seed_worker if args.num_workers>0 else None,drop_last=True)
-
     val_loader = None
     if val_dataset and len(val_dataset) > 0:
-        # Use SequentialSampler or DistributedSampler without shuffle for validation Subset
-        val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False) if ddp_active else None # No shuffle for val
+        val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False) if ddp_active else None
         val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, sampler=val_sampler, pin_memory=(device.type=='cuda'), drop_last=False, worker_init_fn=partial_seed_worker if args.num_workers > 0 else None)
-    elif am_main_process: current_logger_main.info("No validation dataset/loader configured or empty.")
 
-
-    # --- Trainer ---
     trainer = HybridTrainer(model, discriminator, optimizer_enc_gen, optimizer_disc, device, train_loader, val_loader, args, rank, world_size, ddp_active)
-
     start_global_step,start_epoch=0,0
-    if args.load_checkpoint: start_global_step,start_epoch=trainer.load_checkpoint(args.load_checkpoint)
+    if args.load_checkpoint:
+        start_global_step,loaded_epoch_val=trainer.load_checkpoint(args.load_checkpoint)
+        start_epoch = loaded_epoch_val # Continue from the epoch AFTER the one saved
 
-    # --- Training Loop ---
     try:
         trainer.train(start_epoch=start_epoch, initial_global_step=start_global_step)
-    except KeyboardInterrupt:
-        current_logger_main.info(f"Rank {rank}: Training interrupted by user.")
-    except Exception as e:
-        current_logger_main.error(f"Rank {rank}: Training loop crashed: {e}", exc_info=True)
+    except KeyboardInterrupt: current_logger_main.info(f"Rank {rank}: Training interrupted.")
+    except Exception as e: current_logger_main.error(f"Rank {rank}: Training loop crashed: {e}", exc_info=True)
     finally:
         if am_main_process:
             current_logger_main.info("Finalizing run...")
-            trainer._save_checkpoint(metrics=trainer.last_val_metrics if trainer.last_val_metrics else {}) # Save final checkpoint
-
-            # --- Final Demo Sampling ---
+            # Use the best_val_metric_val from trainer for final save info if available
+            final_save_metrics = trainer.last_val_metrics.copy() if trainer.last_val_metrics else {}
+            final_save_metrics['best_val_metric_val_at_end'] = trainer.best_val_metric_val
+            trainer._save_checkpoint(metrics=final_save_metrics)
             if args.epochs > 0 and hasattr(trainer, 'sample') and trainer.global_step > 0:
                 current_logger_main.info("DEMO SAMPLING...")
                 try:
-                    # Sample from prior noise
                     pred_pixels = trainer.sample(num_samples=args.demo_num_samples)
-                    current_logger_main.info(f"Demo predicted pixels shape: {pred_pixels.shape}") #(B, N_pred, C, H, W)
-
                     if pred_pixels.numel() > 0 and pred_pixels.shape[0] > 0:
                         save_dir = os.path.join(args.checkpoint_dir, "demo_samples_hybrid_v01"); os.makedirs(save_dir, exist_ok=True)
-                        # Save the first predicted frame of each sample
-                        for b in range(args.demo_num_samples):
-                            save_image(pred_pixels[b, 0].cpu().clamp(-1, 1) * 0.5 + 0.5, os.path.join(save_dir, f"demo_sample_{b}_frame_0.png"))
+                        for b_idx in range(min(args.demo_num_samples, pred_pixels.shape[0])): # Iterate up to num_samples or actual generated
+                            save_image((pred_pixels[b_idx, 0].cpu().clamp(-1, 1) + 1) / 2.0, os.path.join(save_dir, f"demo_sample_{b_idx}_frame_0_ep{trainer.current_epoch+1}.png"))
                         current_logger_main.info(f"Saved demo sample frames to {save_dir}")
-
                         if args.wandb and WANDB_AVAILABLE and wandb.run:
-                            wb_imgs=[wandb.Image(pred_pixels[b, 0].cpu().float().clamp(-1, 1) * 0.5 + 0.5, caption=f"Sample {b} Frame 0") for b in range(args.demo_num_samples)]
+                            wb_imgs=[wandb.Image((pred_pixels[b_idx, 0].cpu().float().clamp(-1, 1) + 1) / 2.0, caption=f"Sample {b_idx} Frame 0 Ep{trainer.current_epoch+1}") for b_idx in range(min(args.demo_num_samples, pred_pixels.shape[0]))]
                             wandb.log({"demo_samples_final": wb_imgs}, step=trainer.global_step)
-
-                except Exception as e_demo:
-                    current_logger_main.error(f"Demo sampling error: {e_demo}", exc_info=True)
-
-            if args.wandb and WANDB_AVAILABLE and wandb.run:
-                wandb.finish()
-
-        if ddp_active and is_initialized():
-            destroy_process_group()
-
+                except Exception as e_demo: current_logger_main.error(f"Demo sampling error: {e_demo}", exc_info=True)
+            if args.wandb and WANDB_AVAILABLE and wandb.run: wandb.finish()
+        if ddp_active and is_initialized(): destroy_process_group()
         current_logger_main.info(f"Rank {rank}: WuBuGAADHybridGen (v0.1) script finished.")
 
 
