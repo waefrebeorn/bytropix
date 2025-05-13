@@ -19,3 +19,4 @@ av
 torchmetrics
 imageio-ffmpeg
 imageio
+lpips
