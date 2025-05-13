@@ -2118,7 +2118,7 @@ class HybridTrainer:
                  ddp_active: bool):
 
         self.model = model; self.discriminator = discriminator; self.optimizer_enc_gen = optimizer_enc_gen; self.optimizer_disc = optimizer_disc; self.device = device; self.train_loader = train_loader; self.val_loader = val_loader; self.args = args; self.rank = rank; self.world_size = world_size; self.ddp_active = ddp_active; self.am_main_process = (rank == 0); self.logger = logging.getLogger("WuBuGAADHybridGenV01.Trainer")
-        self.video_config = model.video_config; self.gaad_appearance_config = model.gaad_appearance_config
+        self.video_config = model.video_config; self.gaad_appearance_config = model.gaad_appearance_config # Used for sampling GAAD
         self.lambda_recon = args.lambda_recon; self.lambda_kl = args.lambda_kl; self.lambda_gan = args.lambda_gan
         self.scaler_enc_gen = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda'); self.scaler_disc = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda')
         self.global_step = 0; self.current_epoch = 0; self.best_val_metric_val = -float('inf') if args.val_primary_metric == "avg_val_psnr" or args.val_primary_metric == "avg_val_ssim" else float('inf'); self.last_val_metrics: Dict[str, Any] = {} # Initialize best_val based on metric type
@@ -2134,16 +2134,51 @@ class HybridTrainer:
         self.adversarial_loss = nn.BCEWithLogitsLoss()
         self.grad_accum_steps = getattr(args, 'grad_accum_steps', 1)
         if self.grad_accum_steps > 1 and self.am_main_process: self.logger.info(f"Gradient accumulation enabled: {self.grad_accum_steps} steps.")
+        self.fixed_noise_for_sampling: Optional[torch.Tensor] = None # For periodic fixed noise sampling
 
     def _compute_kl_loss(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1); return kl_div.mean()
     def _compute_recon_loss(self, recon_x: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         return F.mse_loss(recon_x, x) # MSE is common for VAEs, could be L1
 
+    @torch.no_grad()
+    def _log_samples_to_wandb(self,
+                              tag_prefix: str, 
+                              frames_to_log: torch.Tensor, 
+                              num_frames_per_sequence_to_log: int = 1, # New arg: how many frames of the sequence to log
+                              num_sequences_to_log_max: int = 2):
+
+        if not (self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb.run):
+            return
+        
+        m_ref = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model
+        dtype_model = next(m_ref.parameters()).dtype
+
+
+        B_log, N_seq_log, C_log, H_log, W_log = frames_to_log.shape
+        num_to_actually_log_sequences = min(B_log, num_sequences_to_log_max)
+        num_frames_to_log_this_seq = min(N_seq_log, num_frames_per_sequence_to_log)
+        
+        wandb_images_for_log = []
+
+        for b_idx in range(num_to_actually_log_sequences):
+            for frame_idx_in_seq in range(num_frames_to_log_this_seq):
+                frame_tensor = frames_to_log[b_idx, frame_idx_in_seq, ...].cpu().float()
+                
+                img_0_1 = (frame_tensor.clamp(-1,1) + 1) / 2.0
+
+                caption = f"{tag_prefix} Sample {b_idx} Frame {frame_idx_in_seq} Ep{self.current_epoch+1} GStep{self.global_step}"
+                wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption))
+
+        if wandb_images_for_log:
+            # Log as a list for multiple images per step under one key
+            wandb.log({f"samples/{tag_prefix}": wandb_images_for_log}, step=self.global_step)
+            self.logger.debug(f"Logged {len(wandb_images_for_log)} image frames to WandB with prefix samples/{tag_prefix}")
+
+
     def _train_discriminator_step(self, real_frames_full: torch.Tensor, m_ref: "WuBuGAADHybridGenNet", d_ref: "RegionalDiscriminator") -> Dict[str, torch.Tensor]:
         B = real_frames_full.shape[0]; device = real_frames_full.device; dtype_model = next(m_ref.parameters()).dtype
         
-        # Frames D will see (e.g., num_predict_frames)
         frames_for_d_processing = real_frames_full[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
         
         real_labels = torch.ones(B, 1, device=device, dtype=dtype_model); fake_labels = torch.zeros(B, 1, device=device, dtype=dtype_model)
@@ -2151,10 +2186,9 @@ class HybridTrainer:
         for p in d_ref.parameters(): p.requires_grad = True;
         for p in m_ref.parameters(): p.requires_grad = False
 
-        # Get GAAD bboxes for REAL frames if D uses FiLM
         gaad_bboxes_for_d_real_cond = None
         if d_ref.use_gaad_film_condition:
-            with torch.no_grad(): # Encoder part of m_ref to get bboxes for real data
+            with torch.no_grad(): 
                 _, _, gaad_bboxes_from_encoder_full, _ = m_ref.encode(real_frames_full.to(device, dtype_model))
             if gaad_bboxes_from_encoder_full is not None:
                 gaad_bboxes_for_d_real_cond = gaad_bboxes_from_encoder_full[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
@@ -2164,10 +2198,8 @@ class HybridTrainer:
             loss_d_real = self.adversarial_loss(real_logits, real_labels)
 
             with torch.no_grad():
-                # m_ref.forward returns: recon_frames, mu, logvar, decoder_bboxes_selected
                 fake_frames_full_sequence, _, _, bboxes_used_for_fake_gen = m_ref(real_frames_full)
                 fake_frames_for_d_processing = fake_frames_full_sequence[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
-                # GAAD bboxes for FAKE frames if D uses FiLM (these are the bboxes G used)
                 gaad_bboxes_for_d_fake_cond = None
                 if d_ref.use_gaad_film_condition and bboxes_used_for_fake_gen is not None:
                     gaad_bboxes_for_d_fake_cond = bboxes_used_for_fake_gen[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
@@ -2179,17 +2211,28 @@ class HybridTrainer:
         losses_d['loss_d_real_micro'] = loss_d_real.detach(); losses_d['loss_d_fake_micro'] = loss_d_fake.detach(); losses_d['loss_d_total_micro'] = loss_d_total_micro.detach()
         return losses_d
 
-    def _train_generator_step(self, real_frames_full: torch.Tensor, m_ref: "WuBuGAADHybridGenNet", d_ref: "RegionalDiscriminator") -> Dict[str, torch.Tensor]:
+    def _train_generator_step(self, real_frames_full: torch.Tensor, m_ref: "WuBuGAADHybridGenNet", d_ref: "RegionalDiscriminator") \
+                              -> Tuple[Dict[str, torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        # Added return types for frames to log
         B = real_frames_full.shape[0]; device = real_frames_full.device; dtype_model = next(m_ref.parameters()).dtype
         real_labels = torch.ones(B, 1, device=device, dtype=dtype_model); losses_g = {}
+        
+        recon_frames_for_log: Optional[torch.Tensor] = None
+        # bboxes_for_log: Optional[torch.Tensor] = None # Bboxes are not directly logged as images
+
         for p in d_ref.parameters(): p.requires_grad = False;
         for p in m_ref.parameters(): p.requires_grad = True
+        
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp and self.device.type == 'cuda'):
-            # m_ref.forward returns: recon_frames, mu, logvar, decoder_bboxes_selected
             recon_frames_pred, mu, logvar, bboxes_used_by_decoder = m_ref(real_frames_full.to(device, dtype_model))
+            
+            # Store for potential logging
+            if self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and \
+               (self.global_step +1) % self.args.wandb_log_train_recon_interval == 0 : # Check before optimizer step
+                recon_frames_for_log = recon_frames_pred.detach().clone()
+                # bboxes_for_log = bboxes_used_by_decoder.detach().clone() # If needed for captioning etc.
 
-            start_idx_target = self.video_config["num_input_frames"]; end_idx_target = start_idx_target + self.video_config["num_predict_frames"]
-            # Ensure target frames align with what recon_frames_pred represents
+            start_idx_target = self.video_config["num_input_frames"]
             actual_pred_len = min(recon_frames_pred.shape[1], real_frames_full.shape[1] - start_idx_target, self.video_config["num_predict_frames"])
             if actual_pred_len <= 0:
                 self.logger.error(f"Cannot compute recon loss with {actual_pred_len} overlapping frames. Real: {real_frames_full.shape}, Recon: {recon_frames_pred.shape}, StartIdx: {start_idx_target}"); raise ValueError("Recon loss frame error.")
@@ -2199,9 +2242,7 @@ class HybridTrainer:
             loss_recon = self._compute_recon_loss(recon_frames_for_loss, target_frames_for_recon);
             loss_kl = self._compute_kl_loss(mu, logvar)
 
-            # Frames for D to evaluate G's output
             fake_frames_for_g_adv = recon_frames_pred[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
-            # GAAD bboxes for D if FiLM is used (these are the bboxes G used for these frames)
             gaad_bboxes_for_g_adv_cond = None
             if d_ref.use_gaad_film_condition and bboxes_used_by_decoder is not None:
                 gaad_bboxes_for_g_adv_cond = bboxes_used_by_decoder[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
@@ -2210,41 +2251,74 @@ class HybridTrainer:
             loss_g_adv = self.adversarial_loss(fake_logits_gen, real_labels)
             loss_g_total_micro = (self.lambda_recon * loss_recon + self.lambda_kl * loss_kl + self.lambda_gan * loss_g_adv);
             loss_g_total_scaled_micro = loss_g_total_micro / self.grad_accum_steps
+        
         self.scaler_enc_gen.scale(loss_g_total_scaled_micro).backward()
         losses_g['loss_recon_micro'] = loss_recon.detach(); losses_g['loss_kl_micro'] = loss_kl.detach(); losses_g['loss_g_adv_micro'] = loss_g_adv.detach(); losses_g['loss_g_total_micro'] = loss_g_total_micro.detach()
-        return losses_g
+        return losses_g, recon_frames_for_log # Removed bboxes_for_log as it's not directly an image
 
     def train(self, start_epoch:int=0, initial_global_step:int=0):
-        self.global_step = initial_global_step; self.current_epoch = start_epoch
-        if self.am_main_process: self.logger.info(f"Training Hybrid VAE-GAN from epoch {start_epoch}, step {initial_global_step}..."); self.logger.info(f"Grad Accum Steps: {self.grad_accum_steps}")
-        accum_losses_log = defaultdict(float); items_interval_log = 0; accum_loss_g_q = 0.0; accum_loss_d_q = 0.0
+        self.global_step = initial_global_step
+        self.current_epoch = start_epoch
+        if self.am_main_process:
+            self.logger.info(f"Training Hybrid VAE-GAN from epoch {start_epoch}, step {initial_global_step}...")
+            self.logger.info(f"Grad Accum Steps: {self.grad_accum_steps}")
+            if self.args.wandb_log_fixed_noise_samples_interval > 0:
+                self.fixed_noise_for_sampling = torch.randn(
+                    self.args.num_val_samples_to_log, 
+                    self.args.latent_dim,
+                    device=self.device,
+                    dtype=next(self.model.parameters()).dtype 
+                )
+                self.logger.info(f"Created fixed noise tensor for periodic sampling: {self.fixed_noise_for_sampling.shape}")
+
+        accum_losses_log = defaultdict(float)
+        items_interval_log = 0
+        accum_loss_g_q = 0.0
+        accum_loss_d_q = 0.0
+        
         m_ref = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model
         d_ref = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator
+
         for epoch in range(start_epoch, self.args.epochs):
-            self.current_epoch = epoch;
-            if self.am_main_process: self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting...")
-            if self.ddp_active and hasattr(self.train_loader.sampler, 'set_epoch') and isinstance(self.train_loader.sampler, DistributedSampler): self.train_loader.sampler.set_epoch(epoch)
-            m_ref.train(); d_ref.train()
-            dataset_len = 0;
-            try: dataset_len = len(self.train_loader.sampler) if hasattr(self.train_loader.sampler,'__len__') else (len(self.train_loader.dataset)//self.world_size if hasattr(self.train_loader.dataset,'__len__') and self.world_size>0 else 0)
-            except Exception: dataset_len = None
+            self.current_epoch = epoch
+            if self.am_main_process:
+                self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting...")
+            if self.ddp_active and hasattr(self.train_loader.sampler, 'set_epoch') and isinstance(self.train_loader.sampler, DistributedSampler):
+                self.train_loader.sampler.set_epoch(epoch)
+            
+            m_ref.train()
+            d_ref.train()
+            
+            dataset_len = 0
+            try:
+                dataset_len = len(self.train_loader.sampler) if hasattr(self.train_loader.sampler,'__len__') else (len(self.train_loader.dataset)//self.world_size if hasattr(self.train_loader.dataset,'__len__') and self.world_size>0 else 0)
+            except Exception:
+                dataset_len = None
+            
             total_micro_batches_estimate = math.ceil(dataset_len / (self.train_loader.batch_size or 1)) if dataset_len and dataset_len > 0 else None
             prog_bar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}", disable=not self.am_main_process or os.getenv('CI')=='true', dynamic_ncols=True, total=total_micro_batches_estimate)
-            self.optimizer_disc.zero_grad(set_to_none=True); self.optimizer_enc_gen.zero_grad(set_to_none=True)
+            
+            self.optimizer_disc.zero_grad(set_to_none=True)
+            self.optimizer_enc_gen.zero_grad(set_to_none=True)
 
             for batch_idx, batch_frames_raw in enumerate(prog_bar):
-                batch_frames = batch_frames_raw.to(self.device); batch_size_micro = batch_frames.size(0)
-                # --- Train Discriminator ---
+                batch_frames = batch_frames_raw.to(self.device)
+                batch_size_micro = batch_frames.size(0)
+                
                 losses_d_micro = self._train_discriminator_step(batch_frames, m_ref, d_ref)
-                if torch.isfinite(losses_d_micro['loss_d_total_micro']): accum_loss_d_q += losses_d_micro['loss_d_total_micro'].item()
+                if torch.isfinite(losses_d_micro['loss_d_total_micro']):
+                    accum_loss_d_q += losses_d_micro['loss_d_total_micro'].item()
                 for k,v_d in losses_d_micro.items():
-                    if torch.isfinite(v_d): accum_losses_log[k.replace('_micro','')] += v_d.item() * batch_size_micro
+                    if torch.isfinite(v_d):
+                        accum_losses_log[k.replace('_micro','')] += v_d.item() * batch_size_micro
 
-                # --- Train Generator/Encoder ---
-                losses_g_micro = self._train_generator_step(batch_frames, m_ref, d_ref)
-                if torch.isfinite(losses_g_micro['loss_g_total_micro']): accum_loss_g_q += losses_g_micro['loss_g_total_micro'].item()
-                for k,v_g in losses_g_micro.items():
-                    if torch.isfinite(v_g): accum_losses_log[k.replace('_micro','')] += v_g.item() * batch_size_micro
+                losses_g_micro, recon_frames_for_logging = self._train_generator_step(batch_frames, m_ref, d_ref)
+                
+                if torch.isfinite(losses_g_micro['loss_g_total_micro']): 
+                    accum_loss_g_q += losses_g_micro['loss_g_total_micro'].item()
+                for k,v_g in losses_g_micro.items(): 
+                    if torch.isfinite(v_g):
+                        accum_losses_log[k.replace('_micro','')] += v_g.item() * batch_size_micro
                 items_interval_log += batch_size_micro
 
                 if (batch_idx + 1) % self.grad_accum_steps == 0:
@@ -2254,7 +2328,7 @@ class HybridTrainer:
                     if self.args.global_max_grad_norm > 0: self.scaler_enc_gen.unscale_(self.optimizer_enc_gen); torch.nn.utils.clip_grad_norm_(m_ref.parameters(), self.args.global_max_grad_norm)
                     self.scaler_enc_gen.step(self.optimizer_enc_gen); self.scaler_enc_gen.update(); self.optimizer_enc_gen.zero_grad(set_to_none=True)
                     self.global_step += 1
-
+                    
                     avg_loss_g_macro = accum_loss_g_q / self.grad_accum_steps if self.grad_accum_steps > 0 and np.isfinite(accum_loss_g_q) else None
                     avg_loss_d_macro = accum_loss_d_q / self.grad_accum_steps if self.grad_accum_steps > 0 and np.isfinite(accum_loss_d_q) else None
                     grad_norm_g_val, grad_norm_d_val = None, None
@@ -2300,44 +2374,110 @@ class HybridTrainer:
                             self.logger.info(log_str)
                             if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log(log_metrics, step=self.global_step)
                         accum_losses_log = defaultdict(float); items_interval_log = 0
+                    
+                    if self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and \
+                       self.global_step % self.args.wandb_log_train_recon_interval == 0 and \
+                       recon_frames_for_logging is not None: # Check if it was populated
+                        
+                        self._log_samples_to_wandb(
+                            tag_prefix="train_recon",
+                            frames_to_log=recon_frames_for_logging, # Use the stored variable
+                            num_frames_per_sequence_to_log=recon_frames_for_logging.shape[1], # Log all predicted
+                            num_sequences_to_log_max=self.args.num_val_samples_to_log 
+                        )
+                        # Log original input frames for comparison (context + target)
+                        self._log_samples_to_wandb(
+                            tag_prefix="train_context",
+                            frames_to_log=batch_frames[:, :self.video_config["num_input_frames"], ...],
+                            num_frames_per_sequence_to_log=self.video_config["num_input_frames"],
+                            num_sequences_to_log_max=self.args.num_val_samples_to_log
+                        )
+                        start_idx_target_log = self.video_config["num_input_frames"]
+                        gt_log_len = min(self.video_config["num_predict_frames"], batch_frames.shape[1] - start_idx_target_log)
+                        if gt_log_len > 0:
+                            self._log_samples_to_wandb(
+                                tag_prefix="train_ground_truth",
+                                frames_to_log=batch_frames[:, start_idx_target_log : start_idx_target_log + gt_log_len, ...],
+                                num_frames_per_sequence_to_log=gt_log_len,
+                                num_sequences_to_log_max=self.args.num_val_samples_to_log
+                            )
 
-                if self.args.save_interval > 0 and self.global_step > 0 and (self.global_step % self.args.save_interval == 0) and ((batch_idx + 1) % self.grad_accum_steps == 0) and self.am_main_process:
-                    inter_metrics = {"train_loss_g_total": losses_g_micro.get('loss_g_total_micro', torch.tensor(0.0)).item(), "train_loss_d_total": losses_d_micro.get('loss_d_total_micro', torch.tensor(0.0)).item()}; self._save_checkpoint(is_intermediate=True, metrics=inter_metrics)
+                    if self.am_main_process and self.args.wandb_log_fixed_noise_samples_interval > 0 and \
+                       self.global_step % self.args.wandb_log_fixed_noise_samples_interval == 0 and \
+                       self.fixed_noise_for_sampling is not None: # Check fixed_noise exists
+                        
+                        m_ref.eval() 
+                        with torch.no_grad():
+                            num_fixed_samples = self.fixed_noise_for_sampling.shape[0]
+                            num_pred_frames_config = self.video_config["num_predict_frames"]
+                            num_regions_app_config = self.gaad_appearance_config["num_regions"] # Use appearance GAAD
+                            frame_dims_config = (self.args.image_w, self.args.image_h)
+                            decoder_bboxes_list_fixed = []
+                            for _ in range(num_fixed_samples):
+                                current_sample_bboxes_one_frame = golden_subdivide_rect_fixed_n(
+                                    frame_dims_config, 
+                                    num_regions_app_config, 
+                                    device=self.device, 
+                                    dtype=self.fixed_noise_for_sampling.dtype, 
+                                    min_size_px=self.gaad_appearance_config['min_size_px']
+                                )
+                                bboxes_single_sample_all_frames_repeated = current_sample_bboxes_one_frame.unsqueeze(0).repeat(num_pred_frames_config, 1, 1)
+                                decoder_bboxes_list_fixed.append(bboxes_single_sample_all_frames_repeated)
+                            decoder_bboxes_batch_fixed = torch.stack(decoder_bboxes_list_fixed)
 
-            if (batch_idx + 1) % self.grad_accum_steps != 0: # Handle final incomplete accumulation cycle
+                            fixed_noise_samples = m_ref.decode(self.fixed_noise_for_sampling, decoder_bboxes_batch_fixed)
+                        
+                        self._log_samples_to_wandb(
+                            tag_prefix="fixed_noise_generated",
+                            frames_to_log=fixed_noise_samples,
+                            num_frames_per_sequence_to_log=fixed_noise_samples.shape[1], # Log all predicted
+                            num_sequences_to_log_max=num_fixed_samples 
+                        )
+                        m_ref.train() 
+
+                    if self.args.save_interval > 0 and self.global_step > 0 and (self.global_step % self.args.save_interval == 0) and self.am_main_process:
+                        current_losses_for_save = {
+                            "train_loss_g_total": losses_g_micro.get('loss_g_total_micro', torch.tensor(0.0)).item(), 
+                            "train_loss_d_total": losses_d_micro.get('loss_d_total_micro', torch.tensor(0.0)).item()
+                        }
+                        self._save_checkpoint(is_intermediate=True, metrics=current_losses_for_save)
+            
+            if (batch_idx + 1) % self.grad_accum_steps != 0: 
                 self.logger.info(f"Performing final optimizer step for epoch {epoch+1} (incomplete grad_accum cycle).");
                 if self.args.global_max_grad_norm > 0: self.scaler_disc.unscale_(self.optimizer_disc); torch.nn.utils.clip_grad_norm_(d_ref.parameters(), self.args.global_max_grad_norm)
                 self.scaler_disc.step(self.optimizer_disc); self.scaler_disc.update();
                 if self.args.global_max_grad_norm > 0: self.scaler_enc_gen.unscale_(self.optimizer_enc_gen); torch.nn.utils.clip_grad_norm_(m_ref.parameters(), self.args.global_max_grad_norm)
                 self.scaler_enc_gen.step(self.optimizer_enc_gen); self.scaler_enc_gen.update();
-                self.global_step += 1; # Increment global step for this final update
+                self.global_step += 1; 
 
             if self.am_main_process:
-                 # Calculate final average loss for the epoch for logging
-                 final_accum_count = (batch_idx + 1) * self.train_loader.batch_size # Total items processed
-                 final_avg_g_loss = accum_losses_log['loss_g_total'] / final_accum_count if final_accum_count > 0 else float('nan')
-                 final_avg_d_loss = accum_losses_log['loss_d_total'] / final_accum_count if final_accum_count > 0 else float('nan')
-                 self.logger.info(f"Epoch {epoch+1} finished. Final Avg Loss G:{final_avg_g_loss:.4f}, D:{final_avg_d_loss:.4f}")
-                 if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({"epoch": epoch+1, "epoch_avg_train_loss_g": final_avg_g_loss, "epoch_avg_train_loss_d": final_avg_d_loss}, step=self.global_step)
+                 final_accum_count_actual = items_interval_log 
+                 if total_micro_batches_estimate is not None and (batch_idx + 1) == total_micro_batches_estimate : 
+                     final_accum_count_actual = items_interval_log 
+                 
+                 final_avg_g_loss = accum_losses_log['loss_g_total'] / final_accum_count_actual if final_accum_count_actual > 0 else float('nan')
+                 final_avg_d_loss = accum_losses_log['loss_d_total'] / final_accum_count_actual if final_accum_count_actual > 0 else float('nan')
+                 self.logger.info(f"Epoch {epoch+1} finished. Approx Avg Loss G:{final_avg_g_loss:.4f}, D:{final_avg_d_loss:.4f} (from last log interval or partial)")
+                 if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({"epoch": epoch+1, "epoch_avg_train_loss_g_approx": final_avg_g_loss, "epoch_avg_train_loss_d_approx": final_avg_d_loss}, step=self.global_step)
 
-            if self.val_loader and self.am_main_process:
+            if self.val_loader and self.am_main_process: 
                 val_metrics = self.validate(num_val_samples_to_log=self.args.num_val_samples_to_log)
                 if val_metrics:
                     if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({f"val/{k}":v for k,v in val_metrics.items()}, step=self.global_step)
                     current_val_metric_for_comparison = val_metrics.get(self.args.val_primary_metric, float('inf'))
                     is_better = False
-                    if self.args.val_primary_metric in ["avg_val_psnr", "avg_val_ssim"]: # Higher is better
+                    if self.args.val_primary_metric in ["avg_val_psnr", "avg_val_ssim"]: 
                         is_better = current_val_metric_for_comparison > self.best_val_metric_val
-                    else: # Lower is better (MSE, LPIPS)
+                    else: 
                         is_better = current_val_metric_for_comparison < self.best_val_metric_val
                     
                     if is_better:
                         self.logger.info(f"New best val metric ({self.args.val_primary_metric}): {current_val_metric_for_comparison:.4f} (prev: {self.best_val_metric_val:.4f}). Save best.");
                         self.best_val_metric_val = current_val_metric_for_comparison;
                         self._save_checkpoint(is_best=True, metrics=val_metrics)
-            if self.am_main_process: # Save epoch-end checkpoint
+            if self.am_main_process: 
                 save_metrics = self.last_val_metrics.copy() if self.last_val_metrics else {};
-                save_metrics["epoch_end_train_loss_g_avg_approx"] = final_avg_g_loss if np.isfinite(final_avg_g_loss) else -1.0; # Use the calculated epoch avg
+                save_metrics["epoch_end_train_loss_g_avg_approx"] = final_avg_g_loss if np.isfinite(final_avg_g_loss) else -1.0; 
                 save_metrics["epoch_end_train_loss_d_avg_approx"] = final_avg_d_loss if np.isfinite(final_avg_d_loss) else -1.0;
                 self._save_checkpoint(metrics=save_metrics)
 
@@ -2347,11 +2487,16 @@ class HybridTrainer:
         m_ref = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model; d_ref = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator
         m_ref.eval(); d_ref.eval()
         total_recon_loss_sum = 0.0; total_psnr_sum = 0.0; total_ssim_sum = 0.0; total_lpips_sum = 0.0; total_compared_frames_flat = 0
-        logged_samples_count = 0; wandb_val_samples = []; dtype_model = next(m_ref.parameters()).dtype
+        # logged_samples_count = 0 # This was in the old code but we now log all frames from N sequences
+        wandb_val_samples_list_of_lists = [] # To hold lists of wandb.Image objects for each sequence
+        
+        dtype_model = next(m_ref.parameters()).dtype
+        
+        num_sequences_actually_logged = 0
+
         for batch_idx, batch_frames_raw in enumerate(tqdm(self.val_loader, desc="Validating", dynamic_ncols=True, disable=os.getenv('CI')=='true' or not self.am_main_process)):
             batch_frames = batch_frames_raw.to(self.device); real_frames_full = batch_frames.to(self.device, dtype_model); B_val = real_frames_full.shape[0]
             
-            # m_ref.forward returns: recon_frames, mu, logvar, decoder_bboxes_selected
             recon_frames_full, _, _, bboxes_used_by_decoder_val = m_ref(real_frames_full)
             
             num_cond = self.video_config["num_input_frames"]; num_pred_config = self.video_config["num_predict_frames"]
@@ -2363,54 +2508,60 @@ class HybridTrainer:
             
             pred_for_metrics = recon_frames_full[:, :compare_len, ...]; gt_for_metrics = real_frames_full[:, num_cond : num_cond + compare_len, ...]
             
-            # Normalize to [0, 1] for SSIM, PSNR, LPIPS (LPIPS function might re-normalize to [-1,1])
             pred_norm_01 = (pred_for_metrics.clamp(-1, 1) + 1) / 2.0; gt_norm_01 = (gt_for_metrics.clamp(-1, 1) + 1) / 2.0
             
-            # Reshape for per-frame metrics: (B*compare_len, C, H, W)
             pred_norm_flat = pred_norm_01.reshape(-1, pred_norm_01.shape[-3], pred_norm_01.shape[-2], pred_norm_01.shape[-1]);
             gt_norm_flat = gt_norm_01.reshape(-1, gt_norm_01.shape[-3], gt_norm_01.shape[-2], gt_norm_01.shape[-1])
-            current_batch_num_flat_frames = pred_norm_flat.shape[0] # Number of (C,H,W) frames in this flat batch for metrics
+            current_batch_num_flat_frames = pred_norm_flat.shape[0] 
             
-            recon_loss_val_sum_pixels_batch = F.mse_loss(pred_norm_flat, gt_norm_flat, reduction='sum') # Sum over all pixels in flat batch
+            recon_loss_val_sum_pixels_batch = F.mse_loss(pred_norm_flat, gt_norm_flat, reduction='sum') 
             if torch.isfinite(recon_loss_val_sum_pixels_batch):
                 total_recon_loss_sum += recon_loss_val_sum_pixels_batch.item()
-                # Calculate PSNR based on per-pixel MSE for this batch
                 avg_mse_per_pixel_this_batch = recon_loss_val_sum_pixels_batch.item() / (pred_norm_flat.numel() + EPS)
                 psnr_val_batch_avg = 10 * math.log10(1.0 / (avg_mse_per_pixel_this_batch + EPS)) if avg_mse_per_pixel_this_batch > EPS else 100.0
-                total_psnr_sum += psnr_val_batch_avg * current_batch_num_flat_frames # Weighted sum of PSNRs
+                total_psnr_sum += psnr_val_batch_avg * current_batch_num_flat_frames 
             else: self.logger.warning("Non-finite val recon loss in a batch.")
 
             if self.ssim_metric:
-                try: ssim_val_batch_frames = self.ssim_metric(pred_norm_flat, gt_norm_flat); # Returns scalar if reduction='elementwise_mean' (default)
+                try: ssim_val_batch_frames = self.ssim_metric(pred_norm_flat, gt_norm_flat); 
                 except Exception as e: self.logger.warning(f"SSIM failed: {e}"); ssim_val_batch_frames=torch.tensor(0.0, device=self.device);
-                if torch.isfinite(ssim_val_batch_frames): total_ssim_sum += ssim_val_batch_frames.item() * current_batch_num_flat_frames # Multiply by num frames if it's an average
+                if torch.isfinite(ssim_val_batch_frames): total_ssim_sum += ssim_val_batch_frames.item() * current_batch_num_flat_frames 
 
             if self.lpips_loss_fn:
-                try: lpips_val_batch_frames = self.lpips_loss_fn(pred_norm_flat*2-1, gt_norm_flat*2-1) # LPIPS expects [-1,1]
+                try: lpips_val_batch_frames = self.lpips_loss_fn(pred_norm_flat*2-1, gt_norm_flat*2-1) 
                 except Exception as e: self.logger.warning(f"LPIPS failed: {e}"); lpips_val_batch_frames=torch.zeros(current_batch_num_flat_frames,1,1,1, device=self.device);
-                if torch.isfinite(lpips_val_batch_frames).all(): total_lpips_sum += lpips_val_batch_frames.sum().item() # Sum if per-frame, then average later
+                if torch.isfinite(lpips_val_batch_frames).all(): total_lpips_sum += lpips_val_batch_frames.sum().item() 
 
             total_compared_frames_flat += current_batch_num_flat_frames
 
-            if self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb.run and logged_samples_count < num_val_samples_to_log:
-                num_log_batch = min(B_val, num_val_samples_to_log - logged_samples_count)
-                for k_idx in range(num_log_batch):
-                    sample_imgs_wandb = []
-                    # Log context frames (original scale [-1,1] converted to [0,1])
-                    for frame_c_idx in range(min(num_cond, real_frames_full.shape[1])):
-                        sample_imgs_wandb.append(wandb.Image( (real_frames_full[k_idx, frame_c_idx].cpu().float().clamp(-1, 1) + 1) / 2.0, caption=f"ValCond {frame_c_idx} S{k_idx} Ep{self.current_epoch+1}"))
-                    # Log ground truth predicted frames
-                    for frame_p_idx in range(min(compare_len, gt_for_metrics.shape[1])):
-                        sample_imgs_wandb.append(wandb.Image( gt_norm_01.view(B_val, compare_len, *gt_norm_01.shape[-3:])[k_idx, frame_p_idx].cpu().float(), caption=f"ValGT {frame_p_idx} S{k_idx} Ep{self.current_epoch+1}"))
-                    # Log reconstructed/predicted frames
-                    for frame_p_idx in range(min(compare_len, pred_for_metrics.shape[1])):
-                        sample_imgs_wandb.append(wandb.Image( pred_norm_01.view(B_val, compare_len, *pred_norm_01.shape[-3:])[k_idx, frame_p_idx].cpu().float(), caption=f"ValRecon {frame_p_idx} S{k_idx} Ep{self.current_epoch+1}"))
-                    wandb_val_samples.extend(sample_imgs_wandb)
-                logged_samples_count += num_log_batch
-        # End of validation loop
+            if self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb.run and num_sequences_actually_logged < num_val_samples_to_log:
+                num_to_log_this_batch = min(B_val, num_val_samples_to_log - num_sequences_actually_logged)
+                
+                # Log Context
+                wandb_context_batch = []
+                for k_idx in range(num_to_log_this_batch):
+                    for frame_c_idx in range(min(num_cond, real_frames_full.shape[1])): # Log all context frames
+                        wandb_context_batch.append(wandb.Image((real_frames_full[k_idx, frame_c_idx].cpu().float().clamp(-1, 1) + 1) / 2.0, caption=f"ValCond_S{num_sequences_actually_logged+k_idx}_F{frame_c_idx}_Ep{self.current_epoch+1}"))
+                if wandb_context_batch: wandb_val_samples_list_of_lists.append({"val_context_samples": wandb_context_batch})
+                
+                # Log GT Predictions
+                wandb_gt_batch = []
+                for k_idx in range(num_to_log_this_batch):
+                    for frame_p_idx in range(compare_len): # Log all compared GT frames
+                         wandb_gt_batch.append(wandb.Image(gt_norm_01.view(B_val, compare_len, *gt_norm_01.shape[-3:])[k_idx, frame_p_idx].cpu().float(), caption=f"ValGT_S{num_sequences_actually_logged+k_idx}_F{frame_p_idx}_Ep{self.current_epoch+1}"))
+                if wandb_gt_batch: wandb_val_samples_list_of_lists.append({"val_ground_truth_samples": wandb_gt_batch})
 
-        m_ref.train(); d_ref.train() # Set back to train mode
-        avg_recon_loss_per_pixel = total_recon_loss_sum / (total_compared_frames_flat * pred_norm_flat.shape[-3:].numel() + EPS) if total_compared_frames_flat > 0 else float('inf')
+                # Log Reconstructions
+                wandb_recon_batch = []
+                for k_idx in range(num_to_log_this_batch):
+                    for frame_p_idx in range(compare_len): # Log all compared recon frames
+                        wandb_recon_batch.append(wandb.Image(pred_norm_01.view(B_val, compare_len, *pred_norm_01.shape[-3:])[k_idx, frame_p_idx].cpu().float(), caption=f"ValRecon_S{num_sequences_actually_logged+k_idx}_F{frame_p_idx}_Ep{self.current_epoch+1}"))
+                if wandb_recon_batch: wandb_val_samples_list_of_lists.append({"val_reconstruction_samples": wandb_recon_batch})
+                
+                num_sequences_actually_logged += num_to_log_this_batch
+        
+        m_ref.train(); d_ref.train() 
+        avg_recon_loss_per_pixel = total_recon_loss_sum / (total_compared_frames_flat * pred_norm_flat.numel() / current_batch_num_flat_frames + EPS) if total_compared_frames_flat > 0 and current_batch_num_flat_frames > 0 else float('inf') # Corrected denominator
         avg_psnr = total_psnr_sum / total_compared_frames_flat if total_compared_frames_flat > 0 else 0.0
         avg_ssim = total_ssim_sum / total_compared_frames_flat if total_compared_frames_flat > 0 and self.ssim_metric else 0.0
         avg_lpips = total_lpips_sum / total_compared_frames_flat if total_compared_frames_flat > 0 and self.lpips_loss_fn else 0.0
@@ -2418,7 +2569,10 @@ class HybridTrainer:
         metrics = {"avg_val_recon_mse": avg_recon_loss_per_pixel, "avg_val_psnr": avg_psnr, "avg_val_ssim": avg_ssim, "avg_val_lpips": avg_lpips};
         self.last_val_metrics = metrics;
         self.logger.info(f"Validation Metrics (Ep {self.current_epoch+1}): ReconMSE:{avg_recon_loss_per_pixel:.4f}, PSNR:{avg_psnr:.2f}, SSIM:{avg_ssim:.4f}, LPIPS:{avg_lpips:.4f}")
-        if wandb_val_samples and self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({"validation_samples_sequence": wandb_val_samples}, step=self.global_step)
+        
+        if wandb_val_samples_list_of_lists and self.args.wandb and WANDB_AVAILABLE and wandb.run:
+            for log_item_dict in wandb_val_samples_list_of_lists: # Log each list under its own key
+                 wandb.log(log_item_dict, step=self.global_step)
         return metrics
 
     def _save_checkpoint(self, is_intermediate: bool=False, metrics:Optional[Dict]=None, is_best:bool=False):
@@ -2440,7 +2594,7 @@ class HybridTrainer:
         try: ckpt = torch.load(checkpoint_path, map_location=self.device)
         except Exception as e_load: self.logger.error(f"Failed load ckpt {checkpoint_path}: {e_load}"); return 0,0
         m_load = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model; d_load = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator
-        try: m_load.load_state_dict(ckpt['model_state_dict'], strict=self.args.load_strict if hasattr(self.args, 'load_strict') else True); self.logger.info("Loaded model state_dict.") # Added strict option
+        try: m_load.load_state_dict(ckpt['model_state_dict'], strict=self.args.load_strict if hasattr(self.args, 'load_strict') else True); self.logger.info("Loaded model state_dict.") 
         except Exception as e: self.logger.error(f"Error loading model state_dict: {e}")
         try: d_load.load_state_dict(ckpt['discriminator_state_dict'], strict=self.args.load_strict if hasattr(self.args, 'load_strict') else True); self.logger.info("Loaded discriminator state_dict.")
         except Exception as e: self.logger.error(f"Error loading discriminator state_dict: {e}")
@@ -2462,13 +2616,11 @@ class HybridTrainer:
             try: q_ctrl_disc.__dict__.update(ckpt['q_controller_disc_state']); self.logger.info("Loaded Q-Ctrl Disc state.")
             except Exception as e: self.logger.warning(f"Could not load Q-controller state for Disc: {e}")
         loaded_global_step = ckpt.get('global_step', 0); loaded_epoch = ckpt.get('epoch', 0);
-        # Initialize best_val_metric_val based on metric type from loaded checkpoint or default
         default_best_val = -float('inf') if self.args.val_primary_metric in ["avg_val_psnr", "avg_val_ssim"] else float('inf')
         self.best_val_metric_val = ckpt.get('best_val_metric_val', default_best_val)
 
         self.logger.info(f"Loaded checkpoint {checkpoint_path} (Step {loaded_global_step}, Ep {loaded_epoch}). BestValMetric ({self.args.val_primary_metric}): {self.best_val_metric_val:.4f}")
-        # If resuming, make sure epoch is next one
-        return loaded_global_step, loaded_epoch # Return loaded epoch to continue from next
+        return loaded_global_step, loaded_epoch 
 
     @torch.no_grad()
     def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -2477,20 +2629,15 @@ class HybridTrainer:
         else: z = noise.to(device, dtype_model);
         if z.shape[0] != num_samples: self.logger.warning(f"Noise BS {z.shape[0]} != num_samples {num_samples}. Use noise BS."); num_samples = z.shape[0]
         num_pred = self.video_config["num_predict_frames"]; num_regions_app = self.gaad_appearance_config["num_regions"]; frame_dims = (self.args.image_w, self.args.image_h); decoder_bboxes_list = []
-        # For sampling, generate consistent GAAD bboxes for all predicted frames for a sample
         for _ in range(num_samples):
-            # Generate one set of bboxes for the whole sequence for this sample
-            # Using appearance GAAD config for sampling
             current_sample_bboxes_one_frame = golden_subdivide_rect_fixed_n(frame_dims, num_regions_app, device=device, dtype=dtype_model, min_size_px=self.gaad_appearance_config['min_size_px'])
-            # Repeat this single set of bboxes for all num_pred frames
-            bboxes_single_sample_all_frames_repeated = current_sample_bboxes_one_frame.unsqueeze(0).repeat(num_pred, 1, 1) # (N_pred, NumReg, 4)
+            bboxes_single_sample_all_frames_repeated = current_sample_bboxes_one_frame.unsqueeze(0).repeat(num_pred, 1, 1) 
             decoder_bboxes_list.append(bboxes_single_sample_all_frames_repeated)
-        decoder_bboxes_batch = torch.stack(decoder_bboxes_list) # (B_sample, N_pred, NumReg, 4)
+        decoder_bboxes_batch = torch.stack(decoder_bboxes_list) 
         self.logger.info(f"Sampling {num_samples} sequences from prior noise with fixed GAAD per sample...");
         generated_frames = m_ref.decode(z, decoder_bboxes_batch);
         self.logger.info("Sampling finished.")
         return generated_frames
-
 
 
 
@@ -2623,6 +2770,8 @@ def parse_arguments():
     parser.add_argument('--log_grad_norm', action='store_true', help="Log optimizer gradient norms (can slow training).")
 
     # --- Validation & Sampling ---
+    parser.add_argument('--wandb_log_train_recon_interval', type=int, default=0, help="Log training batch reconstructions to WandB every N global steps (0 to disable).")
+    parser.add_argument('--wandb_log_fixed_noise_samples_interval', type=int, default=0, help="Log samples from fixed noise to WandB every N global steps (0 to disable).")
     parser.add_argument('--use_lpips_for_verification', action='store_true', help="Use LPIPS metric for validation output.");
     parser.add_argument('--validation_video_path', type=str, default=None, help="Optional separate video for validation.");
     parser.add_argument('--validation_split_fraction', type=float, default=0.1, help="Fraction of main data for validation if no separate val video.");
