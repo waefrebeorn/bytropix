@@ -737,7 +737,7 @@ class HAKMEMQController:
         # Define default action ranges if None are provided
         _lr_options = lr_scale_options if lr_scale_options is not None else [0.8, 0.9, 1.0, 1.1, 1.2]
         _mom_options = momentum_scale_options if momentum_scale_options is not None else [0.95, 0.98, 1.0, 1.01, 1.02]
-        _lkl_options = lambda_kl_scale_options if lambda_kl_scale_options is not None else [0.95, 0.98, 1.0, 1.01, 1.02] # Example for lambda_kl
+        _lkl_options = lambda_kl_scale_options if lambda_kl_scale_options is not None else [0.94, 0.97, 1.0, 1.03, 1.06] # Example for lambda_kl
 
         self.action_ranges = {
             'lr_scale': np.array(_lr_options, dtype=np.float32),
@@ -3667,7 +3667,7 @@ def parse_arguments():
     parser.add_argument('--detect_anomaly',action='store_true', help="Enable autograd.detect_anomaly (for debugging).")
     parser.add_argument('--log_grad_norm', action='store_true', help="Log optimizer gradient norms (can slow training).")
     parser.add_argument('--lambda_kl_update_interval', type=int, default=2, 
-                        help="Global steps between lambda_kl Q-controller updates (0 to disable Q-learned lambda_kl).")
+                        help="Global steps between lambda_kl Q-controller updates. IMPORTANT: Does Not Activate in first epoch, not a bug, its a feature of not having val data. (0 to disable Q-learned lambda_kl).")
     parser.add_argument('--min_lambda_kl_q_control', type=float, default=1e-6, 
                         help="Min value for lambda_kl when Q-controlled.")
     parser.add_argument('--max_lambda_kl_q_control', type=float, default=0.5, 
