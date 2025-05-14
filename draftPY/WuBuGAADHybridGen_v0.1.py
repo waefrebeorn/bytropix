@@ -140,9 +140,6 @@ DEFAULT_CONFIG_QLEARN_HYBRID = {
     "state_history_len": 5,         # Changed as per V2 design
     "reward_clipping": (-2.0, 2.0), # Added as per V2 design
     "q_value_clipping": (-30.0, 30.0) # Added as per V2 design
-    # 'initial_lambda_kl' is NOT set here because it's specific to the trainer's current state
-    # and will be passed dynamically via `set_current_lambda_kl` if needed.
-    # The HAKMEMQController.__init__ has a default for it anyway.
 }
 
 # =====================================================================
@@ -720,7 +717,7 @@ class HAKMEMQController:
                  lambda_kl_scale_options: list[float] | None = None,
                  max_q_table_size: int = 25000,
                  state_history_len: int = 5,
-                 lambda_kl_state_history_len: int = 3,
+                 lambda_kl_state_history_len: int = 5,
                  reward_clipping: tuple[float, float] | None = (-2.0, 2.0),
                  q_value_clipping: tuple[float, float] | None = (-30.0, 30.0)
                  ):
@@ -740,7 +737,7 @@ class HAKMEMQController:
         # Define default action ranges if None are provided
         _lr_options = lr_scale_options if lr_scale_options is not None else [0.8, 0.9, 1.0, 1.1, 1.2]
         _mom_options = momentum_scale_options if momentum_scale_options is not None else [0.95, 0.98, 1.0, 1.01, 1.02]
-        _lkl_options = lambda_kl_scale_options if lambda_kl_scale_options is not None else [0.7, 0.9, 1.0, 1.1, 1.3] # Example for lambda_kl
+        _lkl_options = lambda_kl_scale_options if lambda_kl_scale_options is not None else [0.95, 0.98, 1.0, 1.01, 1.02] # Example for lambda_kl
 
         self.action_ranges = {
             'lr_scale': np.array(_lr_options, dtype=np.float32),
@@ -2657,13 +2654,11 @@ class HybridTrainer:
         self.am_main_process = (rank == 0)
         self.logger = logging.getLogger("WuBuGAADHybridGenV01.Trainer")
 
-        # Ensure model has these attributes if accessed directly
         self.video_config = getattr(model, 'video_config', {})
         self.gaad_appearance_config = getattr(model, 'gaad_appearance_config', {})
 
-
         self.lambda_recon = args.lambda_recon
-        self.lambda_kl = args.lambda_kl
+        self.lambda_kl = args.lambda_kl # Initial lambda_kl
         self.lambda_gan = args.lambda_gan
 
         self.scaler_enc_gen = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda')
@@ -2677,13 +2672,13 @@ class HybridTrainer:
         if self.am_main_process:
             os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-        self.lpips_loss_fn: Optional[lpips.LPIPS] = None # type: ignore
-        self.ssim_metric: Optional[StructuralSimilarityIndexMeasure] = None # type: ignore
+        self.lpips_loss_fn: Optional[lpips.LPIPS] = None
+        self.ssim_metric: Optional[StructuralSimilarityIndexMeasure] = None
 
         if self.am_main_process and self.args.use_lpips_for_verification:
              if LPIPS_AVAILABLE and lpips is not None:
                  try:
-                     self.lpips_loss_fn = lpips.LPIPS(net='alex', verbose=False).to(self.device) # type: ignore
+                     self.lpips_loss_fn = lpips.LPIPS(net='alex', verbose=False).to(self.device)
                      self.logger.info("LPIPS metric enabled.")
                  except Exception as e_lpips:
                      self.logger.warning(f"LPIPS init failed: {e_lpips}. Disabling LPIPS.")
@@ -2693,7 +2688,7 @@ class HybridTrainer:
 
         if self.am_main_process and TORCHMETRICS_SSIM_AVAILABLE and StructuralSimilarityIndexMeasure is not None:
              try:
-                 self.ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device) # type: ignore
+                 self.ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
                  self.logger.info("SSIM metric enabled.")
              except Exception as e:
                  self.logger.warning(f"SSIM init failed: {e}. Skip SSIM.")
@@ -2710,12 +2705,34 @@ class HybridTrainer:
 
         # --- For scheduled Lambda_KL Q-Controller ---
         self.lambda_kl_update_interval = getattr(args, 'lambda_kl_update_interval', 0)
-        if self.args.q_controller_enabled and self.lambda_kl_update_interval > 0 and self.am_main_process:
-            self.logger.info(f"Scheduled Lambda_KL Q-Control ENABLED. Update interval: {self.lambda_kl_update_interval} global steps.")
+        
+        # --- BEGIN MODIFICATION: Separate Q-Controller for Lambda_KL ---
+        self.lambda_kl_q_controller: Optional[HAKMEMQController] = None
+        if self.args.q_controller_enabled and self.lambda_kl_update_interval > 0:
+            # Create a distinct configuration for the lambda_kl Q-controller
+            # It can start with the same defaults but could be customized
+            q_cfg_lambda_kl = DEFAULT_CONFIG_QLEARN_HYBRID.copy()
+            # Example customization: slower epsilon decay for lambda_kl controller
+            # q_cfg_lambda_kl["epsilon_decay"] = 0.9999
+            # q_cfg_lambda_kl["epsilon_start"] = 0.7 # More initial exploration for lambda_kl
+            
+            self.lambda_kl_q_controller = HAKMEMQController(**q_cfg_lambda_kl)
+            if self.am_main_process:
+                self.logger.info(f"Separate Lambda_KL Q-Control ENABLED. Update interval: {self.lambda_kl_update_interval} global steps.")
+                self.logger.info(f"Lambda_KL Q-Controller Config: {q_cfg_lambda_kl}")
+            # Initialize its internal current_lambda_kl
+            if hasattr(self.lambda_kl_q_controller, 'set_current_lambda_kl'):
+                self.lambda_kl_q_controller.set_current_lambda_kl(self.lambda_kl)
+        elif self.am_main_process:
+            if not self.args.q_controller_enabled:
+                 self.logger.info("Lambda_KL Q-Control DISABLED (Q-controller globally disabled).")
+            elif self.lambda_kl_update_interval <= 0:
+                 self.logger.info("Lambda_KL Q-Control DISABLED (lambda_kl_update_interval <= 0).")
+        # --- END MODIFICATION ---
         
         self.interval_metrics_accum = defaultdict(float)
         self.interval_steps_count = 0
-        self.prev_interval_metrics_for_lambda_kl_reward: Optional[Dict[str, Union[float, None]]] = None # Python 3.10+: float | None
+        self.prev_interval_metrics_for_lambda_kl_reward: Optional[Dict[str, Union[float, None]]] = None
         
         self.min_lambda_kl_q_control = getattr(args, 'min_lambda_kl_q_control', 1e-6)
         self.max_lambda_kl_q_control = getattr(args, 'max_lambda_kl_q_control', 1.0)
@@ -2734,7 +2751,7 @@ class HybridTrainer:
                               frames_to_log: Optional[torch.Tensor],
                               num_frames_per_sequence_to_log: int = 1,
                               num_sequences_to_log_max: int = 2):
-        if not (self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb.run): # type: ignore
+        if not (self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb.run):
             return
         if frames_to_log is None or frames_to_log.numel() == 0:
             self.logger.debug(f"Skipping WandB image log for {tag_prefix} due to None or empty frames_to_log.")
@@ -2749,9 +2766,9 @@ class HybridTrainer:
                 frame_tensor = frames_to_log[b_idx, frame_idx_in_seq, ...].cpu().float()
                 img_0_1 = (frame_tensor.clamp(-1,1) + 1) / 2.0
                 caption = f"{tag_prefix} S{b_idx} F{frame_idx_in_seq} Ep{self.current_epoch+1} GStep{self.global_step}"
-                wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption)) # type: ignore
+                wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption))
         if wandb_images_for_log:
-            wandb.log({f"samples/{tag_prefix}": wandb_images_for_log}, step=self.global_step) # type: ignore
+            wandb.log({f"samples/{tag_prefix}": wandb_images_for_log}, step=self.global_step)
 
 
     def _train_discriminator_step(self, real_frames_full: torch.Tensor, m_ref: "WuBuGAADHybridGenNet", d_ref: "RegionalDiscriminator") -> Dict[str, torch.Tensor]:
@@ -2825,7 +2842,6 @@ class HybridTrainer:
             )
             if actual_pred_len_for_loss <= 0:
                 self.logger.error(f"G_Step: Cannot compute recon loss (actual_pred_len={actual_pred_len_for_loss}).")
-                # Ensure loss_recon is defined with correct dtype and device for consistency, even in error case
                 loss_recon = torch.tensor(1000.0, device=device, dtype=dtype_model) 
             else:
                 target_frames_for_recon = real_frames_full[:, start_idx_target : start_idx_target + actual_pred_len_for_loss, ...].to(device, dtype_model)
@@ -2843,7 +2859,7 @@ class HybridTrainer:
             loss_g_adv = self.adversarial_loss(fake_logits_gen, real_labels)
             
             loss_g_total_micro = (self.lambda_recon * loss_recon + 
-                                  self.lambda_kl * loss_kl +
+                                  self.lambda_kl * loss_kl + # Use self.lambda_kl here
                                   self.lambda_gan * loss_g_adv)
             loss_g_total_scaled_for_accum_micro = loss_g_total_micro / self.grad_accum_steps
 
@@ -2878,17 +2894,23 @@ class HybridTrainer:
 
         opt_gen_q_controller = getattr(self.optimizer_enc_gen, 'q_controller', None)
         opt_disc_q_controller = getattr(self.optimizer_disc, 'q_controller', None)
-        lambda_kl_q_ctrl_ref = opt_gen_q_controller
+        
+        # --- BEGIN MODIFICATION: Use self.lambda_kl_q_controller if available ---
+        # lambda_kl_q_ctrl_ref is now the dedicated controller for lambda_KL
+        lambda_kl_q_ctrl_ref = self.lambda_kl_q_controller
+        # --- END MODIFICATION ---
 
+        # Set initial lambda_kl for all relevant Q-controllers
         if opt_gen_q_controller and hasattr(opt_gen_q_controller, 'set_current_lambda_kl'):
              opt_gen_q_controller.set_current_lambda_kl(self.lambda_kl)
         if opt_disc_q_controller and hasattr(opt_disc_q_controller, 'set_current_lambda_kl'):
              opt_disc_q_controller.set_current_lambda_kl(self.lambda_kl)
+        # The dedicated lambda_kl_q_controller already had its current_lambda_kl set during __init__
 
         for epoch in range(start_epoch, self.args.epochs):
             self.current_epoch = epoch
             if self.am_main_process: self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting (current lambda_kl: {self.lambda_kl:.3e})...")
-            if self.ddp_active and hasattr(self.train_loader.sampler, 'set_epoch'): self.train_loader.sampler.set_epoch(epoch) # type: ignore
+            if self.ddp_active and hasattr(self.train_loader.sampler, 'set_epoch'): self.train_loader.sampler.set_epoch(epoch)
 
             m_ref.train(); d_ref.train()
             self.optimizer_disc.zero_grad(set_to_none=True)
@@ -2897,7 +2919,6 @@ class HybridTrainer:
             num_batches_epoch = len(self.train_loader)
             prog_bar_disabled = not self.am_main_process or os.getenv('CI') == 'true'
             prog_bar = tqdm(self.train_loader, desc=f"E{epoch+1}", disable=prog_bar_disabled, dynamic_ncols=True, total=num_batches_epoch)
-
 
             for batch_idx, batch_frames_raw in enumerate(prog_bar):
                 batch_frames = batch_frames_raw.to(self.device)
@@ -2928,10 +2949,10 @@ class HybridTrainer:
                 self.interval_steps_count += 1
 
                 if (batch_idx + 1) % self.grad_accum_steps == 0:
-                    if hasattr(self.optimizer_disc, 'grad_stats') and hasattr(self.optimizer_disc.grad_stats, 'finalize_step_stats'): # type: ignore
-                        self.optimizer_disc.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_disc.param_groups for p in grp['params'] if p.requires_grad)) # type: ignore
-                    if hasattr(self.optimizer_enc_gen, 'grad_stats') and hasattr(self.optimizer_enc_gen.grad_stats, 'finalize_step_stats'): # type: ignore
-                        self.optimizer_enc_gen.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_enc_gen.param_groups for p in grp['params'] if p.requires_grad)) # type: ignore
+                    if hasattr(self.optimizer_disc, 'grad_stats') and hasattr(self.optimizer_disc.grad_stats, 'finalize_step_stats'):
+                        self.optimizer_disc.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_disc.param_groups for p in grp['params'] if p.requires_grad))
+                    if hasattr(self.optimizer_enc_gen, 'grad_stats') and hasattr(self.optimizer_enc_gen.grad_stats, 'finalize_step_stats'):
+                        self.optimizer_enc_gen.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_enc_gen.param_groups for p in grp['params'] if p.requires_grad))
 
                     avg_g_total_macro = accum_g_total_q / self.grad_accum_steps
                     avg_g_recon_macro = accum_g_recon_q / self.grad_accum_steps
@@ -2948,7 +2969,7 @@ class HybridTrainer:
                         losses_d_q_lr_mom = {'loss_g_total': avg_g_total_macro, 'loss_g_adv': avg_g_adv_macro,
                                              'loss_d_total': avg_d_total_macro, 'loss_d_real': avg_d_real_macro, 
                                              'loss_d_fake': avg_d_fake_macro}
-                        self.optimizer_disc.q_controller_update_and_set_hyperparams(losses_d_q_lr_mom, self.lambda_kl) # type: ignore
+                        self.optimizer_disc.q_controller_update_and_set_hyperparams(losses_d_q_lr_mom, self.lambda_kl)
                     if self.args.global_max_grad_norm > 0: self.scaler_disc.unscale_(self.optimizer_disc); torch.nn.utils.clip_grad_norm_(d_ref.parameters(), self.args.global_max_grad_norm)
                     self.scaler_disc.step(self.optimizer_disc); self.scaler_disc.update()
                     
@@ -2958,7 +2979,7 @@ class HybridTrainer:
                     if opt_gen_q_controller and hasattr(self.optimizer_enc_gen, 'q_controller_update_and_set_hyperparams'):
                         losses_g_q_lr_mom = {'loss_g_total': avg_g_total_macro, 'loss_g_recon': avg_g_recon_macro, 
                                              'loss_g_kl': avg_g_kl_macro, 'loss_g_adv': avg_g_adv_macro, 'loss_d_total': avg_d_total_macro}
-                        self.optimizer_enc_gen.q_controller_update_and_set_hyperparams(losses_g_q_lr_mom, self.lambda_kl) # type: ignore
+                        self.optimizer_enc_gen.q_controller_update_and_set_hyperparams(losses_g_q_lr_mom, self.lambda_kl)
                     if self.args.global_max_grad_norm > 0: self.scaler_enc_gen.unscale_(self.optimizer_enc_gen); torch.nn.utils.clip_grad_norm_(m_ref.parameters(), self.args.global_max_grad_norm)
                     self.scaler_enc_gen.step(self.optimizer_enc_gen); self.scaler_enc_gen.update()
                     
@@ -2969,59 +2990,89 @@ class HybridTrainer:
                     accum_g_total_q, accum_g_recon_q, accum_g_kl_q, accum_g_adv_q = 0.0, 0.0, 0.0, 0.0
                     accum_d_total_q, accum_d_real_q, accum_d_fake_q = 0.0, 0.0, 0.0
                     
-                    # --- Scheduled Lambda_KL Q-Controller Update ---
-                    if self.args.q_controller_enabled and self.lambda_kl_update_interval > 0 and \
+                    # --- Scheduled Lambda_KL Q-Controller Update (uses self.lambda_kl_q_controller) ---
+                    if self.lambda_kl_q_controller is not None and self.lambda_kl_update_interval > 0 and \
                        self.global_step > 0 and self.global_step % self.lambda_kl_update_interval == 0 and \
-                       self.interval_steps_count > 0 and lambda_kl_q_ctrl_ref is not None:
+                       self.interval_steps_count > 0 : # lambda_kl_q_ctrl_ref is now self.lambda_kl_q_controller
                         
-                        current_interval_metrics: Dict[str, Union[float, None]] = { # Python 3.10+: float | None
+                        current_interval_metrics: Dict[str, Union[float, None]] = {
                             'avg_recon': self.interval_metrics_accum['recon'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
                             'avg_kl_div': self.interval_metrics_accum['kl_div'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
                             'avg_d_total': self.interval_metrics_accum['d_total'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
                             'val_metric': self.last_val_metrics.get(self.args.val_primary_metric),
-                            'current_lambda_kl_val': self.lambda_kl
+                            'current_lambda_kl_val': self.lambda_kl # Pass current self.lambda_kl
                         }
                         
-                        q_state_lambda_kl = lambda_kl_q_ctrl_ref.get_lambda_kl_state(current_interval_metrics)
+                        # --- BEGIN MODIFICATION: Detailed logging for Lambda_KL Q-Controller ---
+                        if self.am_main_process:
+                            self.logger.info(f"GStep {self.global_step}: Lambda_KL Q-Ctrl block entered. Current lambda_kl: {self.lambda_kl:.4e}")
+                            self.logger.info(f"  Interval Metrics for Q-State: { {k: (f'{v:.4f}' if isinstance(v, float) else v) for k, v in current_interval_metrics.items()} }")
+                            self.logger.info(f"  Previous Lambda_KL Q-State: {self.lambda_kl_q_controller.prev_lambda_kl_state}")
+                            self.logger.info(f"  Previous Lambda_KL Action: {self.lambda_kl_q_controller.prev_lambda_kl_action}")
+                        # --- END MODIFICATION ---
 
-                        if lambda_kl_q_ctrl_ref.prev_lambda_kl_state is not None and \
-                           lambda_kl_q_ctrl_ref.prev_lambda_kl_action is not None and \
+                        q_state_lambda_kl = self.lambda_kl_q_controller.get_lambda_kl_state(current_interval_metrics)
+                        
+                        # --- BEGIN MODIFICATION: Detailed logging for Lambda_KL Q-Controller ---
+                        if self.am_main_process and q_state_lambda_kl is not None:
+                            self.logger.info(f"  New Lambda_KL Q-State: {q_state_lambda_kl}")
+                            q_values_for_state = self.lambda_kl_q_controller.q_table.get(q_state_lambda_kl, {}).get('lambda_kl_scale')
+                            self.logger.info(f"  Q-values for this state (LKL_scale): {q_values_for_state}")
+                        # --- END MODIFICATION ---
+
+                        if self.lambda_kl_q_controller.prev_lambda_kl_state is not None and \
+                           self.lambda_kl_q_controller.prev_lambda_kl_action is not None and \
                            q_state_lambda_kl is not None and \
                            self.prev_interval_metrics_for_lambda_kl_reward is not None:
                             
-                            reward_for_lambda_kl = lambda_kl_q_ctrl_ref.compute_lambda_kl_reward(
+                            reward_for_lambda_kl = self.lambda_kl_q_controller.compute_lambda_kl_reward(
                                 current_interval_metrics,
                                 self.prev_interval_metrics_for_lambda_kl_reward
                             )
-                            lambda_kl_q_ctrl_ref.update_q_values(
-                                lambda_kl_q_ctrl_ref.prev_lambda_kl_state,
-                                lambda_kl_q_ctrl_ref.prev_lambda_kl_action,
+                            # --- BEGIN MODIFICATION: Detailed logging for Lambda_KL Q-Controller ---
+                            if self.am_main_process:
+                                self.logger.info(f"  Lambda_KL Q-Ctrl reward computed: {reward_for_lambda_kl:.3f}")
+                            # --- END MODIFICATION ---
+                            self.lambda_kl_q_controller.update_q_values(
+                                self.lambda_kl_q_controller.prev_lambda_kl_state,
+                                self.lambda_kl_q_controller.prev_lambda_kl_action,
                                 reward_for_lambda_kl,
                                 q_state_lambda_kl,
                                 mode='lambda_kl'
                             )
-                        elif q_state_lambda_kl is not None and hasattr(lambda_kl_q_ctrl_ref, 'set_initial_lambda_kl_metrics'):
-                             lambda_kl_q_ctrl_ref.set_initial_lambda_kl_metrics(current_interval_metrics)
+                        elif q_state_lambda_kl is not None and hasattr(self.lambda_kl_q_controller, 'set_initial_lambda_kl_metrics'):
+                             self.lambda_kl_q_controller.set_initial_lambda_kl_metrics(current_interval_metrics)
 
-                        if q_state_lambda_kl is not None: # Ensure state is valid before choosing action
-                            lambda_kl_action_dict = lambda_kl_q_ctrl_ref.choose_action(q_state_lambda_kl, mode='lambda_kl')
+                        if q_state_lambda_kl is not None:
+                            lambda_kl_action_dict = self.lambda_kl_q_controller.choose_action(q_state_lambda_kl, mode='lambda_kl')
                             chosen_scale = lambda_kl_action_dict.get('lambda_kl_scale', 1.0)
+                            
+                            # --- BEGIN MODIFICATION: Detailed logging for Lambda_KL Q-Controller ---
+                            if self.am_main_process:
+                                self.logger.info(f"  Lambda_KL Q-Ctrl CHOSE scale: {chosen_scale:.2f} (Epsilon: {self.lambda_kl_q_controller.epsilon:.3f})")
+                            # --- END MODIFICATION ---
                             
                             self.prev_interval_metrics_for_lambda_kl_reward = current_interval_metrics.copy()
                             
-                            new_lambda_kl_val = self.lambda_kl * chosen_scale
+                            new_lambda_kl_val = self.lambda_kl * chosen_scale # Apply scale to current self.lambda_kl
                             self.lambda_kl = float(np.clip(new_lambda_kl_val, self.min_lambda_kl_q_control, self.max_lambda_kl_q_control))
                             
                             if self.am_main_process:
-                                self.logger.info(f"GStep {self.global_step}: Lambda_KL Q-Ctrl updated lambda_kl to {self.lambda_kl:.3e} (scale: {chosen_scale:.2f})")
+                                self.logger.info(f"GStep {self.global_step}: Lambda_KL Q-Ctrl updated trainer's self.lambda_kl to {self.lambda_kl:.4e} (using scale: {chosen_scale:.2f})")
                             
-                            lambda_kl_q_ctrl_ref.prev_lambda_kl_state = q_state_lambda_kl
-                            lambda_kl_q_ctrl_ref.prev_lambda_kl_action = lambda_kl_action_dict
+                            self.lambda_kl_q_controller.prev_lambda_kl_state = q_state_lambda_kl
+                            self.lambda_kl_q_controller.prev_lambda_kl_action = lambda_kl_action_dict
                         
+                        # Update current_lambda_kl in all Q-controllers that need it
+                        # (LR/Mom controllers might use it in their state definition)
+                        newly_set_lambda_kl_for_q_ctrl = self.lambda_kl # The one just updated
                         if opt_gen_q_controller and hasattr(opt_gen_q_controller, 'set_current_lambda_kl'):
-                            opt_gen_q_controller.set_current_lambda_kl(self.lambda_kl)
+                            opt_gen_q_controller.set_current_lambda_kl(newly_set_lambda_kl_for_q_ctrl)
                         if opt_disc_q_controller and hasattr(opt_disc_q_controller, 'set_current_lambda_kl'):
-                            opt_disc_q_controller.set_current_lambda_kl(self.lambda_kl)
+                            opt_disc_q_controller.set_current_lambda_kl(newly_set_lambda_kl_for_q_ctrl)
+                        if self.lambda_kl_q_controller and hasattr(self.lambda_kl_q_controller, 'set_current_lambda_kl'):
+                            self.lambda_kl_q_controller.set_current_lambda_kl(newly_set_lambda_kl_for_q_ctrl)
+
 
                         self.interval_metrics_accum = defaultdict(float)
                         self.interval_steps_count = 0
@@ -3031,29 +3082,37 @@ class HybridTrainer:
                        log_interval_items_processed > 0 and self.am_main_process:
                         log_metrics={f"train/{k.replace('_agg','')}":v/log_interval_items_processed for k,v in log_interval_accum_losses.items()}
                         lr_g=self.optimizer_enc_gen.param_groups[0]['lr']; lr_d=self.optimizer_disc.param_groups[0]['lr']
+                        # Use self.lambda_kl for logging, as it's the one being actively managed
                         log_metrics.update({"train/lr_gen":lr_g,"train/lr_disc":lr_d,"epoch_frac":epoch+((batch_idx+1)/(num_batches_epoch or 1)),"global_step":self.global_step,"train/lambda_kl_eff":self.lambda_kl})
+                        
                         if opt_gen_q_controller and hasattr(opt_gen_q_controller, 'get_info'): log_metrics.update({f"q_ctrl_gen/{k.replace('_','')}":v for k,v in opt_gen_q_controller.get_info().items()})
                         if opt_disc_q_controller and hasattr(opt_disc_q_controller, 'get_info'): log_metrics.update({f"q_ctrl_disc/{k.replace('_','')}":v for k,v in opt_disc_q_controller.get_info().items()})
-                        
+                        # --- BEGIN MODIFICATION: Log info for separate lambda_kl_q_controller ---
+                        if self.lambda_kl_q_controller and hasattr(self.lambda_kl_q_controller, 'get_info'):
+                            log_metrics.update({f"q_ctrl_lkl/{k.replace('_','')}":v for k,v in self.lambda_kl_q_controller.get_info().items()})
+                        # --- END MODIFICATION ---
+
                         gt = log_metrics.get('train/loss_g_total',-1.0); dt = log_metrics.get('train/loss_d_total',-1.0)
                         gr = log_metrics.get('train/loss_recon',-1.0); gk = log_metrics.get('train/loss_kl',-1.0); ga = log_metrics.get('train/loss_g_adv',-1.0)
                         dr = log_metrics.get('train/loss_d_real',-1.0); df = log_metrics.get('train/loss_d_fake',-1.0)
-                        qeg = log_metrics.get('q_ctrl_gen/epsilon',-1.0); qed = log_metrics.get('q_ctrl_disc/epsilon',-1.0)
-                        
+                        qeg_lrmom = log_metrics.get('q_ctrl_gen/epsilon',-1.0); qed_lrmom = log_metrics.get('q_ctrl_disc/epsilon',-1.0)
+                        qelkl = log_metrics.get('q_ctrl_lkl/epsilon', -1.0) # Epsilon for lambda_kl controller
+
                         qag_lrmom = log_metrics.get('q_ctrl_gen/lastlrmomaction',{})
                         qad_lrmom = log_metrics.get('q_ctrl_disc/lastlrmomaction',{})
-                        qag_lkl = log_metrics.get('q_ctrl_gen/lastlambdaklaction',{}) # Assuming G's Q-Ctrl handles lambda_kl
+                        qal_lkl = log_metrics.get('q_ctrl_lkl/lastlambdaklaction',{}) # Action from lambda_kl controller
                         
                         qslg = qag_lrmom.get('lr_scale',1.0) if isinstance(qag_lrmom,dict) else 1.0
                         qsld = qad_lrmom.get('lr_scale',1.0) if isinstance(qad_lrmom,dict) else 1.0
-                        qslkl = qag_lkl.get('lambda_kl_scale',1.0) if isinstance(qag_lkl,dict) else 1.0
+                        qslkl = qal_lkl.get('lambda_kl_scale',1.0) if isinstance(qal_lkl,dict) else 1.0
 
                         log_str=(f"E{epoch+1} S{self.global_step} | G_tot:{gt:.3f}(Rec:{gr:.3f} KL:{gk:.3f} Adv:{ga:.3f}) | "
                                    f"D_tot:{dt:.3f}(R:{dr:.3f} F:{df:.3f}) | LR(G/D):{lr_g:.1e}/{lr_d:.1e} | "
-                                   f"Q_Eps:{qeg:.2f}/{qed:.2f} Q_Scl(G/D):{qslg:.2f}/{qsld:.2f} Q_LKL_Scl:{qslkl:.2f} LKL_eff:{self.lambda_kl:.2e}")
+                                   f"Q_Eps(LRM G/D):{qeg_lrmom:.2f}/{qed_lrmom:.2f} Q_Scl(LRM G/D):{qslg:.2f}/{qsld:.2f} | " # Changed log
+                                   f"Q_Eps(LKL):{qelkl:.2f} Q_Scl(LKL):{qslkl:.2f} LKL_eff:{self.lambda_kl:.2e}")
                         prog_bar.set_postfix_str(f"G:{gt:.2f} D:{dt:.2f} Rec:{gr:.3f} LKL:{self.lambda_kl:.1e}",refresh=True)
                         self.logger.info(log_str)
-                        if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log(log_metrics, step=self.global_step) # type: ignore
+                        if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log(log_metrics, step=self.global_step)
                         
                         log_interval_accum_losses = defaultdict(float)
                         log_interval_items_processed = 0
@@ -3081,7 +3140,7 @@ class HybridTrainer:
                             dbb_list_fixed = []
                             if nra_cfg > 0:
                                 for _ in range(num_fs):
-                                    cs_bbox_1f = golden_subdivide_rect_fixed_n( # type: ignore
+                                    cs_bbox_1f = golden_subdivide_rect_fixed_n(
                                         fd_cfg, nra_cfg, device=self.device,
                                         dtype=self.fixed_noise_for_sampling.dtype,
                                         min_size_px=self.gaad_appearance_config.get('min_size_px',5)
@@ -3102,20 +3161,19 @@ class HybridTrainer:
                         chkpt_metrics={'train_loss_g_total_macro':avg_g_total_macro,'train_loss_d_total_macro':avg_d_total_macro}
                         self._save_checkpoint(is_intermediate=True,metrics=chkpt_metrics)
 
-            # --- End of Epoch Actions ---
             if self.am_main_process:
                 final_avg_g_loss = float('nan')
                 final_avg_d_loss = float('nan')
-                if log_interval_items_processed > 0: # If items were processed since last log interval reset
+                if log_interval_items_processed > 0:
                     final_avg_g_loss = log_interval_accum_losses['loss_g_total_agg'] / log_interval_items_processed
                     final_avg_d_loss = log_interval_accum_losses['loss_d_total_agg'] / log_interval_items_processed
-                elif 'log_metrics' in locals() and 'train/loss_g_total' in log_metrics : # Fallback to last logged averages if any
+                elif 'log_metrics' in locals() and 'train/loss_g_total' in log_metrics :
                      final_avg_g_loss = log_metrics.get('train/loss_g_total', float('nan'))
                      final_avg_d_loss = log_metrics.get('train/loss_d_total', float('nan'))
 
                 self.logger.info(f"Epoch {epoch+1} finished. Approx Avg Loss (last interval or batch): G:{final_avg_g_loss:.4f}, D:{final_avg_d_loss:.4f}, LambdaKL_eff:{self.lambda_kl:.3e}")
-                if self.args.wandb and WANDB_AVAILABLE and wandb.run: # type: ignore
-                    wandb.log({"epoch":epoch+1, # type: ignore
+                if self.args.wandb and WANDB_AVAILABLE and wandb.run:
+                    wandb.log({"epoch":epoch+1,
                                "epoch_avg_train_loss_g_approx":final_avg_g_loss if np.isfinite(final_avg_g_loss) else -1.0, 
                                "epoch_avg_train_loss_d_approx":final_avg_d_loss if np.isfinite(final_avg_d_loss) else -1.0, 
                                "epoch_lambda_kl": self.lambda_kl}, step=self.global_step)
@@ -3123,8 +3181,8 @@ class HybridTrainer:
             if self.val_loader and self.am_main_process:
                 val_metrics = self.validate(num_val_samples_to_log=self.args.num_val_samples_to_log)
                 if val_metrics:
-                    if self.args.wandb and WANDB_AVAILABLE and wandb.run: # type: ignore
-                        wandb.log({f"val/{k}":v for k,v in val_metrics.items()}, step=self.global_step) # type: ignore
+                    if self.args.wandb and WANDB_AVAILABLE and wandb.run:
+                        wandb.log({f"val/{k}":v for k,v in val_metrics.items()}, step=self.global_step)
                     
                     metric_to_check = self.args.val_primary_metric
                     default_val = float('inf') if metric_to_check not in ["avg_val_psnr","avg_val_ssim"] else -float('inf')
@@ -3133,14 +3191,13 @@ class HybridTrainer:
                     is_better = (current_val_for_best > self.best_val_metric_val) if metric_to_check in ["avg_val_psnr","avg_val_ssim"] \
                                 else (current_val_for_best < self.best_val_metric_val)
                     
-                    if is_better and np.isfinite(current_val_for_best): # Ensure we don't save for nan/inf bests unless it's the first valid one
+                    if is_better and np.isfinite(current_val_for_best):
                         self.logger.info(f"New best val metric ({metric_to_check}): {current_val_for_best:.4f} (prev: {self.best_val_metric_val:.4f}). Save best.")
                         self.best_val_metric_val = current_val_for_best
                         self._save_checkpoint(is_best=True, metrics=val_metrics)
 
             if self.am_main_process:
                 epoch_end_metrics = self.last_val_metrics.copy() if self.last_val_metrics else {}
-                # Use 'final_avg_g_loss' as defined above for epoch end metrics
                 if 'final_avg_g_loss' in locals() and np.isfinite(final_avg_g_loss): 
                     epoch_end_metrics["epoch_end_train_loss_g_avg_approx"] = final_avg_g_loss
                 if 'final_avg_d_loss' in locals() and np.isfinite(final_avg_d_loss): 
@@ -3154,20 +3211,18 @@ class HybridTrainer:
         m_ref = self.model.module if self.ddp_active else self.model
         m_ref.eval()
 
-        total_recon_mse_sum = 0.0
-        total_psnr_sum = 0.0
-        total_ssim_sum = 0.0
-        total_lpips_sum = 0.0
-        total_comp_frames = 0
-        wb_val_samples: Dict[str, List[Any]] = defaultdict(list) # List[wandb.Image] typically
-        # logged_seq_count = 0 # Initialized but not used in the provided snippet; might be used in elided WandB logging.
+        total_recon_mse_sum = 0.0; total_psnr_sum = 0.0; total_ssim_sum = 0.0
+        total_lpips_sum = 0.0; total_comp_frames = 0
+        wb_val_samples: Dict[str, List[Any]] = defaultdict(list)
         dtype_m = next(iter(m_ref.parameters()), torch.tensor(0.0, device=self.device)).dtype
         
         prog_bar_disabled = not self.am_main_process or os.getenv('CI') == 'true'
-        for _, batch_frames_raw in enumerate(tqdm(self.val_loader, desc="Validating", disable=prog_bar_disabled, dynamic_ncols=True)):
+        logged_samples_count_this_val = 0
+
+        for batch_idx_val, batch_frames_raw in enumerate(tqdm(self.val_loader, desc="Validating", disable=prog_bar_disabled, dynamic_ncols=True)):
             real_full = batch_frames_raw.to(self.device, dtype_m)
             B,N,C,H,W = real_full.shape
-            recon_pred, _, _, _ = m_ref(real_full)
+            recon_pred, _, _, bboxes_for_val_decode_attempt = m_ref(real_full) # Get bboxes too
             
             n_cond = self.video_config.get("num_input_frames",0)
             n_pred_cfg = self.video_config.get("num_predict_frames",1)
@@ -3190,7 +3245,6 @@ class HybridTrainer:
             mse_batch = F.mse_loss(pred_flat, gt_flat, reduction='mean')
             if torch.isfinite(mse_batch):
                 total_recon_mse_sum += mse_batch.item() * curr_batch_flat_frames
-                # Use a globally defined EPS (e.g., EPS=1e-8)
                 psnr_batch_avg = 10 * math.log10(1.0 / (mse_batch.item() + EPS)) if mse_batch.item() > EPS else 100.0
                 total_psnr_sum += psnr_batch_avg * curr_batch_flat_frames
             
@@ -3199,24 +3253,46 @@ class HybridTrainer:
                     ssim_batch_avg = self.ssim_metric(pred_flat, gt_flat)
                     if torch.isfinite(ssim_batch_avg):
                          total_ssim_sum += ssim_batch_avg.item() * curr_batch_flat_frames
-                except Exception as e_ssim:
-                    self.logger.debug(f"SSIM calculation failed during validation: {e_ssim}") # Log instead of silent pass
+                except Exception as e_ssim: self.logger.debug(f"SSIM calculation failed during validation: {e_ssim}")
             
             if self.lpips_loss_fn:
                 try:
-                    # LPIPS expects images in [-1, 1] range
                     lpips_batch_frames = self.lpips_loss_fn(pred_flat * 2.0 - 1.0, gt_flat * 2.0 - 1.0)
                     if torch.isfinite(lpips_batch_frames.sum()):
                          total_lpips_sum += lpips_batch_frames.sum().item()
-                except Exception as e_lpips:
-                    self.logger.debug(f"LPIPS calculation failed during validation: {e_lpips}") # Log instead of silent pass
+                except Exception as e_lpips: self.logger.debug(f"LPIPS calculation failed during validation: {e_lpips}")
 
             total_comp_frames += curr_batch_flat_frames
-            # ... (WandB val sample logging code, potentially using logged_seq_count, was indicated as elided here)
-            # Example:
-            # if logged_seq_count < num_val_samples_to_log and WANDB_AVAILABLE and wandb.run:
-            #     # ... logic to prepare and log samples to wb_val_samples ...
-            #     logged_seq_count += B # or actual number of sequences logged from this batch
+
+            # --- Log samples to WandB from validation ---
+            if logged_samples_count_this_val < num_val_samples_to_log and self.args.wandb and WANDB_AVAILABLE and wandb.run:
+                num_sequences_to_log_from_batch = min(B, num_val_samples_to_log - logged_samples_count_this_val)
+                num_frames_to_log_per_seq = min(comp_len, 3) # Log up to 3 predicted frames
+
+                if num_sequences_to_log_from_batch > 0 and num_frames_to_log_per_seq > 0:
+                    # Log context frames
+                    self._log_samples_to_wandb(
+                        "val_context",
+                        real_full[:num_sequences_to_log_from_batch, :n_cond, ...],
+                        min(n_cond, 3), # Log up to 3 context frames
+                        num_sequences_to_log_from_batch
+                    )
+                    # Log predicted frames
+                    self._log_samples_to_wandb(
+                        "val_predicted",
+                        pred_metrics[:num_sequences_to_log_from_batch, :num_frames_to_log_per_seq, ...],
+                        num_frames_to_log_per_seq,
+                        num_sequences_to_log_from_batch
+                    )
+                    # Log ground truth for predicted frames
+                    self._log_samples_to_wandb(
+                        "val_ground_truth",
+                        gt_metrics[:num_sequences_to_log_from_batch, :num_frames_to_log_per_seq, ...],
+                        num_frames_to_log_per_seq,
+                        num_sequences_to_log_from_batch
+                    )
+                logged_samples_count_this_val += num_sequences_to_log_from_batch
+            # --- End WandB sample logging ---
 
         m_ref.train()
         avg_mse = total_recon_mse_sum / total_comp_frames if total_comp_frames > 0 else float('inf')
@@ -3228,8 +3304,7 @@ class HybridTrainer:
         self.last_val_metrics = metrics
         self.logger.info(f"Validation Metrics (Ep {self.current_epoch+1}, GStep {self.global_step}): ReconMSE:{avg_mse:.4f}, PSNR:{avg_psnr:.2f}, SSIM:{avg_ssim:.4f}, LPIPS:{avg_lpips:.4f}")
         
-        if wb_val_samples and self.args.wandb and WANDB_AVAILABLE and wandb.run: # type: ignore
-             wandb.log(dict(wb_val_samples), step=self.global_step) # type: ignore
+        # Note: _log_samples_to_wandb handles its own wb_val_samples logging now
         return metrics
 
     def _save_checkpoint(self, is_intermediate: bool=False, metrics:Optional[Dict[str, Any]]=None, is_best:bool=False):
@@ -3251,16 +3326,56 @@ class HybridTrainer:
             'metrics': metrics if metrics else self.last_val_metrics,
             'video_config': self.video_config,
             'best_val_metric_val': self.best_val_metric_val,
-            'current_lambda_kl': self.lambda_kl
+            'current_lambda_kl': self.lambda_kl # Save the trainer's current lambda_kl
         }
         
         qg_obj = getattr(self.optimizer_enc_gen,'q_controller',None)
         qd_obj = getattr(self.optimizer_disc,'q_controller',None)
-        if qg_obj and hasattr(qg_obj,'state_dict'): data['q_controller_enc_gen_state'] = qg_obj.state_dict()
-        elif qg_obj and hasattr(qg_obj,'__dict__'): data['q_controller_enc_gen_state'] = qg_obj.__dict__ # Fallback
+        if qg_obj and hasattr(qg_obj,'q_table'): data['q_controller_enc_gen_state'] = {
+            'q_table': qg_obj.q_table, 'epsilon': qg_obj.epsilon, # Save core Q-learning state
+            # Add other necessary attributes for HAKMEMQController state restoration if any
+            'prev_lr_mom_state': qg_obj.prev_lr_mom_state,
+            'prev_lr_mom_action': qg_obj.prev_lr_mom_action,
+            'loss_histories': { # Save the loss history deques
+                'g_total': list(qg_obj.loss_g_total_hist), 'g_recon': list(qg_obj.loss_g_recon_hist),
+                'g_kl': list(qg_obj.loss_g_kl_hist), 'g_adv': list(qg_obj.loss_g_adv_hist),
+                'd_total': list(qg_obj.loss_d_total_hist), 'd_real': list(qg_obj.loss_d_real_hist),
+                'd_fake': list(qg_obj.loss_d_fake_hist)
+            }
+        }
         
-        if qd_obj and hasattr(qd_obj,'state_dict'): data['q_controller_disc_state'] = qd_obj.state_dict()
-        elif qd_obj and hasattr(qd_obj,'__dict__'): data['q_controller_disc_state'] = qd_obj.__dict__ # Fallback
+        if qd_obj and hasattr(qd_obj,'q_table'): data['q_controller_disc_state'] = {
+            'q_table': qd_obj.q_table, 'epsilon': qd_obj.epsilon,
+            'prev_lr_mom_state': qd_obj.prev_lr_mom_state,
+            'prev_lr_mom_action': qd_obj.prev_lr_mom_action,
+            'loss_histories': {
+                'g_total': list(qd_obj.loss_g_total_hist), 'g_recon': list(qd_obj.loss_g_recon_hist),
+                'g_kl': list(qd_obj.loss_g_kl_hist), 'g_adv': list(qd_obj.loss_g_adv_hist),
+                'd_total': list(qd_obj.loss_d_total_hist), 'd_real': list(qd_obj.loss_d_real_hist),
+                'd_fake': list(qd_obj.loss_d_fake_hist)
+            }
+        }
+        
+        # --- BEGIN MODIFICATION: Save state of separate lambda_kl_q_controller ---
+        if self.lambda_kl_q_controller and hasattr(self.lambda_kl_q_controller, 'q_table'):
+            data['q_controller_lambda_kl_state'] = {
+                'q_table': self.lambda_kl_q_controller.q_table,
+                'epsilon': self.lambda_kl_q_controller.epsilon,
+                'prev_lambda_kl_state': self.lambda_kl_q_controller.prev_lambda_kl_state,
+                'prev_lambda_kl_action': self.lambda_kl_q_controller.prev_lambda_kl_action,
+                'interval_histories': { # Save interval metric history deques
+                    'avg_recon': list(self.lambda_kl_q_controller.interval_avg_recon_hist),
+                    'avg_kl_div': list(self.lambda_kl_q_controller.interval_avg_kl_div_hist),
+                    'avg_d_total': list(self.lambda_kl_q_controller.interval_avg_d_total_hist),
+                    'val_metric': list(self.lambda_kl_q_controller.interval_val_metric_hist)
+                },
+                # Include any other necessary attributes from HAKMEMQController
+                 'reward_hist': list(self.lambda_kl_q_controller.reward_hist),
+                 'q_table_access_count': dict(self.lambda_kl_q_controller.q_table_access_count),
+                 'q_table_creation_time': self.lambda_kl_q_controller.q_table_creation_time,
+                 'q_table_last_access_time': self.lambda_kl_q_controller.q_table_last_access_time,
+            }
+        # --- END MODIFICATION ---
 
         fprefix = "wubugaad_hybridgen_ckpt_v01"
         fp = ""
@@ -3268,7 +3383,7 @@ class HybridTrainer:
             fp = os.path.join(self.args.checkpoint_dir, f"{fprefix}_best.pt")
         elif is_intermediate:
             fp = os.path.join(self.args.checkpoint_dir, f"{fprefix}_step{self.global_step}.pt")
-        else: # End of epoch
+        else: 
             fp = os.path.join(self.args.checkpoint_dir, f"{fprefix}_ep{self.current_epoch+1}_step{self.global_step}.pt")
         
         try:
@@ -3309,34 +3424,77 @@ class HybridTrainer:
             if 'scaler_disc_state_dict' in ckpt and self.scaler_disc and ckpt['scaler_disc_state_dict'] is not None:
                 self.scaler_disc.load_state_dict(ckpt['scaler_disc_state_dict'])
         
-        q_g = getattr(self.optimizer_enc_gen, 'q_controller', None)
-        q_d = getattr(self.optimizer_disc, 'q_controller', None)
-        if q_g and 'q_controller_enc_gen_state' in ckpt and ckpt['q_controller_enc_gen_state']:
-            try:
-                if hasattr(q_g, 'load_state_dict'): q_g.load_state_dict(ckpt['q_controller_enc_gen_state'])
-                elif hasattr(q_g, '__dict__'): q_g.__dict__.update(ckpt['q_controller_enc_gen_state']) # Fallback
-                self.logger.info("Q-Controller Enc/Gen state loaded.")
-            except Exception as e: self.logger.warning(f"Could not load Q-Controller Enc/Gen state: {e}")
-        if q_d and 'q_controller_disc_state' in ckpt and ckpt['q_controller_disc_state']:
-            try:
-                if hasattr(q_d, 'load_state_dict'): q_d.load_state_dict(ckpt['q_controller_disc_state'])
-                elif hasattr(q_d, '__dict__'): q_d.__dict__.update(ckpt['q_controller_disc_state']) # Fallback
-                self.logger.info("Q-Controller Disc state loaded.")
-            except Exception as e: self.logger.warning(f"Could not load Q-Controller Disc state: {e}")
+        def _load_q_controller_state(q_ctrl_obj, state_dict_key_in_ckpt):
+            if q_ctrl_obj and state_dict_key_in_ckpt in ckpt and ckpt[state_dict_key_in_ckpt]:
+                q_state = ckpt[state_dict_key_in_ckpt]
+                try:
+                    q_ctrl_obj.q_table = q_state.get('q_table', {})
+                    q_ctrl_obj.epsilon = q_state.get('epsilon', q_ctrl_obj.epsilon_start)
+                    q_ctrl_obj.prev_lr_mom_state = q_state.get('prev_lr_mom_state') # Specific to LR/Mom mode
+                    q_ctrl_obj.prev_lr_mom_action = q_state.get('prev_lr_mom_action')
+                    q_ctrl_obj.prev_lambda_kl_state = q_state.get('prev_lambda_kl_state') # Specific to LKL mode
+                    q_ctrl_obj.prev_lambda_kl_action = q_state.get('prev_lambda_kl_action')
+
+                    # Load loss histories for LR/Mom controllers
+                    if 'loss_histories' in q_state:
+                        lh = q_state['loss_histories']
+                        q_ctrl_obj.loss_g_total_hist = deque(lh.get('g_total',[]), maxlen=q_ctrl_obj.state_history_len)
+                        q_ctrl_obj.loss_g_recon_hist = deque(lh.get('g_recon',[]), maxlen=q_ctrl_obj.state_history_len)
+                        # ... (load all loss_..._hist deques)
+                        q_ctrl_obj.loss_g_kl_hist = deque(lh.get('g_kl',[]), maxlen=q_ctrl_obj.state_history_len)
+                        q_ctrl_obj.loss_g_adv_hist = deque(lh.get('g_adv',[]), maxlen=q_ctrl_obj.state_history_len)
+                        q_ctrl_obj.loss_d_total_hist = deque(lh.get('d_total',[]), maxlen=q_ctrl_obj.state_history_len)
+                        q_ctrl_obj.loss_d_real_hist = deque(lh.get('d_real',[]), maxlen=q_ctrl_obj.state_history_len)
+                        q_ctrl_obj.loss_d_fake_hist = deque(lh.get('d_fake',[]), maxlen=q_ctrl_obj.state_history_len)
+
+
+                    # Load interval histories for Lambda_KL controller
+                    if 'interval_histories' in q_state: # Specific for lambda_kl_q_controller state
+                        ih = q_state['interval_histories']
+                        q_ctrl_obj.interval_avg_recon_hist = deque(ih.get('avg_recon',[]), maxlen=q_ctrl_obj.lambda_kl_state_history_len)
+                        # ... (load all interval_..._hist deques)
+                        q_ctrl_obj.interval_avg_kl_div_hist = deque(ih.get('avg_kl_div',[]), maxlen=q_ctrl_obj.lambda_kl_state_history_len)
+                        q_ctrl_obj.interval_avg_d_total_hist = deque(ih.get('avg_d_total',[]), maxlen=q_ctrl_obj.lambda_kl_state_history_len)
+                        q_ctrl_obj.interval_val_metric_hist = deque(ih.get('val_metric',[]), maxlen=q_ctrl_obj.lambda_kl_state_history_len)
+                    
+                    q_ctrl_obj.reward_hist = deque(q_state.get('reward_hist', []), maxlen=q_ctrl_obj.reward_hist.maxlen if q_ctrl_obj.reward_hist else 100)
+                    q_ctrl_obj.q_table_access_count = defaultdict(int, q_state.get('q_table_access_count', {}))
+                    q_ctrl_obj.q_table_creation_time = q_state.get('q_table_creation_time', {})
+                    q_ctrl_obj.q_table_last_access_time = q_state.get('q_table_last_access_time', {})
+
+                    self.logger.info(f"Q-Controller state for '{state_dict_key_in_ckpt}' loaded.")
+                except Exception as e_qc_load:
+                    self.logger.warning(f"Could not fully load Q-Controller state for '{state_dict_key_in_ckpt}': {e_qc_load}", exc_info=True)
+
+        _load_q_controller_state(getattr(self.optimizer_enc_gen, 'q_controller', None), 'q_controller_enc_gen_state')
+        _load_q_controller_state(getattr(self.optimizer_disc, 'q_controller', None), 'q_controller_disc_state')
+        _load_q_controller_state(self.lambda_kl_q_controller, 'q_controller_lambda_kl_state') # --- MODIFICATION ---
 
         loaded_gs = ckpt.get('global_step', 0)
         loaded_ep = ckpt.get('epoch', 0)
-        
-        # If not strict loading and checkpoint has progress, start next epoch. Otherwise, resume current epoch.
         next_ep_start = loaded_ep + 1 if (loaded_gs > 0 and not self.args.load_strict) else loaded_ep
         
         default_best_val = -float('inf') if self.args.val_primary_metric in ["avg_val_psnr", "avg_val_ssim"] else float('inf')
         self.best_val_metric_val = ckpt.get('best_val_metric_val', default_best_val)
         
+        # --- MODIFICATION: Load self.lambda_kl from checkpoint, then update Q-controllers ---
         loaded_lambda_kl_from_ckpt = float(ckpt.get('current_lambda_kl', self.args.lambda_kl))
-        self.lambda_kl = self.args.lambda_kl # Prioritize current run's args for lambda_kl, Q-controller will be updated
+        if self.args.load_checkpoint and 'current_lambda_kl' in ckpt: # Prioritize checkpoint if loading
+            self.lambda_kl = loaded_lambda_kl_from_ckpt
+            self.logger.info(f"Loaded self.lambda_kl from checkpoint: {self.lambda_kl:.4e}")
+        else: # Otherwise, use args.lambda_kl (initial value)
+            self.lambda_kl = self.args.lambda_kl
+            self.logger.info(f"Using initial self.lambda_kl from args: {self.lambda_kl:.4e}")
+
+        # Update all Q-controllers with the determined self.lambda_kl
+        for q_ctrl in [getattr(self.optimizer_enc_gen, 'q_controller', None),
+                       getattr(self.optimizer_disc, 'q_controller', None),
+                       self.lambda_kl_q_controller]:
+            if q_ctrl and hasattr(q_ctrl, 'set_current_lambda_kl'):
+                q_ctrl.set_current_lambda_kl(self.lambda_kl)
+        # --- END MODIFICATION ---
         
-        self.logger.info(f"Resuming training. GlobalStep: {loaded_gs}, NextEpochStart: {next_ep_start}. BestVal({self.args.val_primary_metric}): {self.best_val_metric_val:.4f}. CkptLambdaKL: {loaded_lambda_kl_from_ckpt:.3e}. CurrentRunLambdaKL (will be used): {self.lambda_kl:.3e}")
+        self.logger.info(f"Resuming training. GlobalStep: {loaded_gs}, NextEpochStart: {next_ep_start}. BestVal({self.args.val_primary_metric}): {self.best_val_metric_val:.4f}. Effective LambdaKL: {self.lambda_kl:.4e}")
         return loaded_gs, next_ep_start
 
     @torch.no_grad()
@@ -3352,7 +3510,7 @@ class HybridTrainer:
         else:
             z = noise.to(device=dev, dtype=dtype_m)
         
-        if z.shape[0] != num_samples: # Adjust num_samples if noise shape is different
+        if z.shape[0] != num_samples:
             num_samples = z.shape[0]
             self.logger.warning(f"Number of samples adjusted to noise shape: {num_samples}")
 
@@ -3363,7 +3521,7 @@ class HybridTrainer:
 
         if nra_cfg > 0:
             for _ in range(num_samples):
-                cs_bbox_1f = golden_subdivide_rect_fixed_n( # type: ignore
+                cs_bbox_1f = golden_subdivide_rect_fixed_n(
                     fd_cfg, nra_cfg, device=dev, dtype=dtype_m,
                     min_size_px=self.gaad_appearance_config.get('min_size_px',5)
                 )
@@ -3381,6 +3539,9 @@ class HybridTrainer:
         else:
             self.logger.warning("Sampling skipped: Bounding boxes required by GAAD config but could not be generated.")
             return None
+
+
+
 
 
 
@@ -3505,7 +3666,7 @@ def parse_arguments():
     parser.add_argument('--use_amp', action='store_true', help="Use Automatic Mixed Precision (AMP).");
     parser.add_argument('--detect_anomaly',action='store_true', help="Enable autograd.detect_anomaly (for debugging).")
     parser.add_argument('--log_grad_norm', action='store_true', help="Log optimizer gradient norms (can slow training).")
-    parser.add_argument('--lambda_kl_update_interval', type=int, default=25, 
+    parser.add_argument('--lambda_kl_update_interval', type=int, default=2, 
                         help="Global steps between lambda_kl Q-controller updates (0 to disable Q-learned lambda_kl).")
     parser.add_argument('--min_lambda_kl_q_control', type=float, default=1e-6, 
                         help="Min value for lambda_kl when Q-controlled.")
