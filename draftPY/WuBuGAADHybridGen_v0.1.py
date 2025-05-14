@@ -708,53 +708,70 @@ class GradientStats:
     def finalize_step_stats(self, num_params_in_optimizer_step: int): self.total_params_updated=num_params_in_optimizer_step-self.params_skipped_due_non_finite_grad; self.step_summary={"params_in_step":num_params_in_optimizer_step, "params_updated":self.total_params_updated, "params_skipped_non_finite_grad":self.params_skipped_due_non_finite_grad, "initial_finite_grads":self.total_finite_grads_processed, "initial_non_finite_grads":self.total_non_finite_grads_encountered, "max_finite_grad_norm_observed":self.max_grad_norm_observed}
     def get_step_summary_for_logging(self) -> dict: return self.step_summary.copy()
 
-class HAKMEMQController: # Renamed from HAKMEMQController_VAEGan_v2
+class HAKMEMQController:
     def __init__(self,
-                 q_learning_rate: float = 0.01, # Alpha
-                 discount_factor: float = 0.90, # Gamma
+                 q_learning_rate: float = 0.01,
+                 discount_factor: float = 0.90,
                  epsilon_start: float = 0.5,
                  epsilon_min: float = 0.05,
                  epsilon_decay: float = 0.9995,
                  lr_scale_options: list[float] | None = None,
                  momentum_scale_options: list[float] | None = None,
-                 max_q_table_size: int = 20000,
+                 lambda_kl_scale_options: list[float] | None = None,
+                 max_q_table_size: int = 25000,
                  state_history_len: int = 5,
+                 lambda_kl_state_history_len: int = 3,
                  reward_clipping: tuple[float, float] | None = (-2.0, 2.0),
-                 q_value_clipping: tuple[float, float] | None = (-30.0, 30.0),
-                 # initial_lambda_kl is passed to set_current_lambda_kl by trainer
-                 # if used by the state definition or reward.
+                 q_value_clipping: tuple[float, float] | None = (-30.0, 30.0)
                  ):
 
         self.q_table: dict[tuple, dict[str, np.ndarray]] = {}
         self.alpha = q_learning_rate
         self.gamma = discount_factor
         self.epsilon_start = epsilon_start
-        self.epsilon = epsilon_start
+        self.epsilon = self.epsilon_start # Initialize current epsilon
         self.epsilon_min = epsilon_min
         self.epsilon_decay = epsilon_decay
         self.reward_clipping = reward_clipping
         self.q_value_clipping = q_value_clipping
 
-        self.current_lambda_kl: float = 0.0001 # Default, will be updated by trainer
+        self.current_lambda_kl: float = 0.0001 # Default, trainer should update via set_current_lambda_kl
+
+        # Define default action ranges if None are provided
+        _lr_options = lr_scale_options if lr_scale_options is not None else [0.8, 0.9, 1.0, 1.1, 1.2]
+        _mom_options = momentum_scale_options if momentum_scale_options is not None else [0.95, 0.98, 1.0, 1.01, 1.02]
+        _lkl_options = lambda_kl_scale_options if lambda_kl_scale_options is not None else [0.7, 0.9, 1.0, 1.1, 1.3] # Example for lambda_kl
 
         self.action_ranges = {
-            'lr_scale': np.array(lr_scale_options if lr_scale_options else [0.8, 0.9, 1.0, 1.1, 1.2]),
-            'momentum_scale': np.array(momentum_scale_options if momentum_scale_options else [0.95, 0.98, 1.0, 1.01, 1.02])
+            'lr_scale': np.array(_lr_options, dtype=np.float32),
+            'momentum_scale': np.array(_mom_options, dtype=np.float32),
+            'lambda_kl_scale': np.array(_lkl_options, dtype=np.float32)
         }
-        self.num_actions = {p: len(s) for p, s in self.action_ranges.items()}
+        self.num_actions = {p_type: len(actions) for p_type, actions in self.action_ranges.items()}
 
+        # For LR/Momentum state (per step)
         self.state_history_len = max(3, state_history_len)
         self.loss_g_total_hist = deque(maxlen=self.state_history_len)
         self.loss_g_recon_hist = deque(maxlen=self.state_history_len)
         self.loss_g_kl_hist = deque(maxlen=self.state_history_len)
         self.loss_g_adv_hist = deque(maxlen=self.state_history_len)
         self.loss_d_total_hist = deque(maxlen=self.state_history_len)
-        self.loss_d_real_hist = deque(maxlen=self.state_history_len) # New for D state/reward
-        self.loss_d_fake_hist = deque(maxlen=self.state_history_len) # New for D state/reward
+        self.loss_d_real_hist = deque(maxlen=self.state_history_len)
+        self.loss_d_fake_hist = deque(maxlen=self.state_history_len)
 
-        self.prev_state: tuple | None = None
-        self.prev_action: dict[str, float] | None = None
-        self.reward_hist = deque(maxlen=50)
+        # For Lambda_KL state (uses metrics aggregated over an interval by the trainer)
+        self.lambda_kl_state_history_len = max(2, lambda_kl_state_history_len)
+        self.interval_avg_recon_hist = deque(maxlen=self.lambda_kl_state_history_len)
+        self.interval_avg_kl_div_hist = deque(maxlen=self.lambda_kl_state_history_len)
+        self.interval_avg_d_total_hist = deque(maxlen=self.lambda_kl_state_history_len)
+        self.interval_val_metric_hist = deque(maxlen=self.lambda_kl_state_history_len)
+
+        self.prev_lr_mom_state: tuple | None = None
+        self.prev_lr_mom_action: dict[str, float] | None = None
+        self.prev_lambda_kl_state: tuple | None = None
+        self.prev_lambda_kl_action: dict[str, float] | None = None
+        
+        self.reward_hist = deque(maxlen=100) # Increased general reward history
 
         self.max_q_table_size = max_q_table_size
         self.q_table_access_count: dict[tuple, int] = defaultdict(int)
@@ -762,75 +779,53 @@ class HAKMEMQController: # Renamed from HAKMEMQController_VAEGan_v2
         self.q_table_last_access_time: dict[tuple, float] = {}
 
         self.reward_weights = {
-            "g_recon_improvement": 2.5, # Slightly higher emphasis
-            "g_adv_improvement": 1.2,
-            "g_kl_control": 0.3,         # Penalize if KL high, recon bad, lambda_kl not tiny
-            "g_loss_stability": 0.1,
-            "d_balance": 1.5,            # Target D_total around 0.5-0.6
-            "d_real_low": 0.7,           # Reward D for low D_real_loss
-            "d_fake_low_meaningful": 0.7,# Reward D for low D_fake_loss (if G isn't collapsed)
+            "g_recon_improvement": 2.5, "g_adv_improvement": 1.2, "g_kl_control_penalty": 0.3, # Renamed
+            "g_loss_stability": 0.1, "d_balance_target": 1.5, # Renamed
+            "d_real_low_bonus": 0.7, # Renamed
+            "d_fake_low_meaningful_bonus": 0.7, # Renamed
             "d_loss_stability": 0.1,
-            "gan_balance_for_g": 0.3,    # G reward based on D's performance
-            "gan_balance_for_d": 0.3,    # D penalty if G is too strong
-            "oscillation_penalty": 0.25,
-            "extreme_loss_penalty": 0.75
+            "gan_balance_g_bonus": 0.3, # Renamed
+            "gan_balance_d_penalty": 0.3, # Renamed
+            "oscillation_penalty": 0.25, "extreme_loss_penalty": 0.75,
+            "lambda_kl_recon_focus": 1.5, "lambda_kl_kl_target_range": 1.0, # Renamed
+            "lambda_kl_val_metric_improvement": 2.0, "lambda_kl_stability_penalty": 0.5
         }
 
-        self.logger = logging.getLogger(f"WuBuGAADHybridGenV01.QController") # Simplified name
-        self.logger.info(f"HAKMEMQController (VAEGanV2 logic) initialized. Eps: {self.epsilon:.2f}->{self.epsilon_min:.2f}")
-        self._internal_step_counter = 0 # For less frequent debug logging
+        self.logger = logging.getLogger(f"WuBuGAADHybridGenV01.QController")
+        self.logger.info(
+            f"HAKMEMQController (LR/Mom + Scheduled LambdaKL) initialized. Eps: {self.epsilon_start:.2f}->{self.epsilon_min:.2f}"
+        )
+        self._internal_step_counter = 0
 
-    def _get_trend_bin(self, history: deque, current_val: float, relative_to_median: bool = True, value_scale_for_diff:float = 1.0) -> int:
-        # Ensure history is not empty and has previous values for comparison
-        if len(history) < 1 : # Need at least one past value in history to compare with current_val
-             if len(history) == 0 and current_val is not None: # First value ever
-                return 2 # Neutral trend for the very first data point
-             # If history is empty but current_val is None or NaN, also neutral
-             return 2
+    def _get_trend_bin(self, history: deque, current_val: float | None, relative_to_median: bool = True, value_scale_for_diff:float = 1.0) -> int:
+        if current_val is None or not np.isfinite(current_val):
+            return 2 # Neutral if current value is problematic
 
-
-        # Use the last element of history as previous_value for trend calculation
-        # This makes it more reactive to the immediate past step.
-        # For median-based trend, we'd need more history.
-        
-        # temp_hist_for_slope will contain [history[-1], current_val] or more if history is longer
-        # We want to compare current_val to the median of the history *before* current_val was added.
-        
         valid_history = [h for h in history if np.isfinite(h)]
-        if not valid_history: # No finite past values
-            return 2 # Neutral
+        if not valid_history: # No valid past values or history too short
+             return 2 # Neutral trend for the very first data point if history is empty
 
         prev_median = np.median(valid_history)
-        
-        # Calculate difference for trend (current vs. previous median)
-        # Polyfit is more robust for longer histories if desired, but simple diff to median is fine.
         diff = current_val - prev_median
 
         if relative_to_median:
-            # Denominator based on the scale of the values being compared
-            # Use median of history or current value if history median is too small
             denominator_scale = abs(prev_median)
-            if denominator_scale < value_scale_for_diff * 0.1: # If median is very small
-                denominator_scale = max(abs(current_val), value_scale_for_diff * 0.1) # Use current value or a minimum scale
-            denominator = denominator_scale + EPS
+            if denominator_scale < value_scale_for_diff * 0.01 + EPS: # Avoid issues with very small medians
+                denominator_scale = max(abs(current_val), value_scale_for_diff * 0.01 + EPS)
+            denominator = denominator_scale + EPS # Add EPS inside max and here
             relative_diff = diff / denominator
         else:
-            relative_diff = diff / (value_scale_for_diff + EPS) # Normalize by a general scale if not relative to median
-
+            denominator = value_scale_for_diff + EPS
+            relative_diff = diff / denominator
+        
         # Bins: Strong Decrease, Decrease, Stable, Increase, Strong Increase
-        # Tuned thresholds for more sensitivity
-        if relative_diff < -0.15: return 0  # Strong Decrease
-        if relative_diff < -0.02: return 1  # Decrease
-        if relative_diff <= 0.02: return 2  # Stable
-        if relative_diff <= 0.15: return 3  # Increase
-        return 4                             # Strong Increase
+        if relative_diff < -0.15: return 0
+        if relative_diff < -0.02: return 1
+        if relative_diff <= 0.02: return 2
+        if relative_diff <= 0.15: return 3
+        return 4
 
-    def get_state(self, current_losses: dict[str, float], 
-                  current_lr: float, current_momentum: float, # Kept for signature compatibility
-                  is_generator_q: bool) -> tuple | None:
-        self._internal_step_counter +=1
-
-        # Update history deques
+    def _update_loss_histories(self, current_losses: dict[str, float]):
         loss_map = {
             'loss_g_total': self.loss_g_total_hist, 'loss_g_recon': self.loss_g_recon_hist,
             'loss_g_kl': self.loss_g_kl_hist, 'loss_g_adv': self.loss_g_adv_hist,
@@ -838,127 +833,153 @@ class HAKMEMQController: # Renamed from HAKMEMQController_VAEGan_v2
             'loss_d_fake': self.loss_d_fake_hist
         }
         for name, deq in loss_map.items():
-            if name in current_losses and np.isfinite(current_losses[name]):
-                deq.append(current_losses[name])
-            # else:
-                # If a crucial loss is missing, we might not be able to form a state
-                # self.logger.debug(f"State: Missing or non-finite crucial loss '{name}'")
-                # return None # This is strict, handled by required_keys check below
+            loss_val = current_losses.get(name)
+            if loss_val is not None and np.isfinite(loss_val):
+                deq.append(loss_val)
 
-        # Check for required losses
-        if is_generator_q:
-            required_keys = ['loss_g_total', 'loss_g_recon', 'loss_g_kl', 'loss_g_adv', 'loss_d_total']
-        else: # Discriminator
-            required_keys = ['loss_d_total', 'loss_g_total', 'loss_d_real', 'loss_d_fake', 'loss_g_adv']
+    def get_lr_mom_state(self, current_losses: dict[str, float], current_lr: float, current_momentum: float, is_generator_q: bool) -> tuple | None:
+        self._internal_step_counter +=1 # Increment only for LR/Mom decisions
+        self._update_loss_histories(current_losses)
+
+        required_keys_g = ['loss_g_total', 'loss_g_recon', 'loss_g_kl', 'loss_g_adv', 'loss_d_total']
+        required_keys_d = ['loss_d_total', 'loss_g_total', 'loss_d_real', 'loss_d_fake', 'loss_g_adv']
         
+        required_keys = required_keys_g if is_generator_q else required_keys_d
         if not all(key in current_losses and np.isfinite(current_losses[key]) for key in required_keys):
-            # self.logger.debug(f"QState ({'G' if is_generator_q else 'D'}): Insufficient/non-finite. Need: {required_keys}, Got: {list(current_losses.keys())}")
             return None
 
-        # Ensure enough history for trends (at least one past point in relevant deques)
+        # Check history length for trends (needs at least 1 past + current = 2 for simple diff, or more for median)
+        # The _get_trend_bin handles empty history, so we only need current_losses to be valid.
+        # However, meaningful trends come from non-empty histories.
+        relevant_histories = []
         if is_generator_q:
-            if not (self.loss_g_total_hist and self.loss_g_recon_hist and self.loss_d_total_hist): return None
-        else: # Discriminator
-            if not (self.loss_d_total_hist and self.loss_g_total_hist and self.loss_d_real_hist and self.loss_d_fake_hist): return None
+            relevant_histories = [self.loss_g_total_hist, self.loss_g_recon_hist, self.loss_d_total_hist]
+        else:
+            relevant_histories = [self.loss_d_total_hist, self.loss_g_total_hist, self.loss_d_real_hist, self.loss_d_fake_hist]
+        
+        # if not all(h for h in relevant_histories): # Check if all relevant deques are non-empty for trends
+        #     return None # Or handle by _get_trend_bin returning neutral
 
-        # State components
         if is_generator_q:
-            s_g_total_trend = self._get_trend_bin(self.loss_g_total_hist, current_losses['loss_g_total'], value_scale_for_diff=1.0)
-            s_d_total_trend_opp = self._get_trend_bin(self.loss_d_total_hist, current_losses['loss_d_total'], value_scale_for_diff=0.5)
-            s_g_recon_trend = self._get_trend_bin(self.loss_g_recon_hist, current_losses['loss_g_recon'], value_scale_for_diff=0.1)
-            
-            kl_val = current_losses['loss_g_kl']
-            recon_val = current_losses['loss_g_recon']
-            s_kl_problem = 0 # No problem
-            # If KL (weighted) is much larger than Recon (weighted), and Recon is bad, and lambda_kl isn't tiny
+            s_g_total_trend = self._get_trend_bin(self.loss_g_total_hist, current_losses['loss_g_total'])
+            s_d_total_trend_opp = self._get_trend_bin(self.loss_d_total_hist, current_losses['loss_d_total'])
+            s_g_recon_trend = self._get_trend_bin(self.loss_g_recon_hist, current_losses['loss_g_recon'])
+            kl_val, recon_val = current_losses['loss_g_kl'], current_losses['loss_g_recon']
+            s_kl_problem = 0
             if (self.current_lambda_kl * kl_val > self.reward_weights.get("g_recon_improvement", 2.0) * recon_val * 2.0 and 
-                recon_val > 0.10 and self.current_lambda_kl > 0.0005):
-                s_kl_problem = 1 # KL likely too dominant
-            elif kl_val > 150.0 and recon_val > 0.15 and self.current_lambda_kl > 0.005: # General high KL, bad recon
-                s_kl_problem = 2
+                recon_val > 0.10 and self.current_lambda_kl > 0.0005): s_kl_problem = 1
+            elif kl_val > 150.0 and recon_val > 0.15 and self.current_lambda_kl > 0.005: s_kl_problem = 2
+            s_g_adv_level = np.digitize(current_losses['loss_g_adv'], [0.3, 0.6, 1.0]).item()
             
-            g_adv_val = current_losses['loss_g_adv']
-            s_g_adv_level = np.digitize(g_adv_val, [0.3, 0.6, 1.0]).item() # Low (good for G), Med, High (bad for G)
+            # Include binned LR and Momentum
+            s_lr_bin = np.digitize(current_lr, [1e-5, 5e-5, 2e-4]).item() # Example bins for LR
+            s_mom_bin = np.digitize(current_momentum, [0.85, 0.95]).item() # Example bins for momentum
 
-            state_tuple = (
-                1, # ID for G_state
-                s_g_total_trend,
-                s_d_total_trend_opp,
-                s_g_recon_trend,
-                s_kl_problem,
-                s_g_adv_level,
-                np.digitize(self.epsilon, [self.epsilon_min * 2, self.epsilon_start * 0.6]).item() # Epsilon phase
-            )
-        else: # Discriminator state
-            s_d_total_trend = self._get_trend_bin(self.loss_d_total_hist, current_losses['loss_d_total'], value_scale_for_diff=0.5)
-            s_g_total_trend_opp = self._get_trend_bin(self.loss_g_total_hist, current_losses['loss_g_total'], value_scale_for_diff=1.0)
+            state_tuple = ("LRM_G", s_g_total_trend, s_d_total_trend_opp, s_g_recon_trend, s_kl_problem, 
+                           s_g_adv_level, s_lr_bin, s_mom_bin,
+                           np.digitize(self.epsilon, [self.epsilon_min * 2, self.epsilon_start * 0.6]).item())
+        else: # Discriminator LR/Mom state
+            s_d_total_trend = self._get_trend_bin(self.loss_d_total_hist, current_losses['loss_d_total'])
+            s_g_total_trend_opp = self._get_trend_bin(self.loss_g_total_hist, current_losses['loss_g_total'])
+            s_d_balance_bin = np.digitize(current_losses['loss_d_total'], [0.35, 0.65, 0.85]).item()
+            s_d_fake_vs_real_ratio_bin = np.digitize(current_losses['loss_d_fake'] / (current_losses['loss_d_real'] + EPS), [0.8, 1.2, 2.0]).item()
             
-            d_total_abs = current_losses['loss_d_total']
-            s_d_balance_bin = np.digitize(d_total_abs, [0.35, 0.65, 0.85]).item() # 0:Low, 1:Mid-Low, 2:Mid-High, 3:High
-            
-            # Ratio of D_fake to D_real: Higher means D struggles more with fakes than reals
-            d_real_val = current_losses['loss_d_real']
-            d_fake_val = current_losses['loss_d_fake']
-            s_d_fake_vs_real_ratio_bin = np.digitize(d_fake_val / (d_real_val + EPS), [0.8, 1.2, 2.0]).item() 
-            # 0: D_fake easier than D_real; 1: About same; 2: D_fake harder; 3: D_fake much harder
+            s_lr_bin = np.digitize(current_lr, [1e-5, 5e-5, 2e-4]).item()
+            s_mom_bin = np.digitize(current_momentum, [0.85, 0.95]).item()
 
-            state_tuple = (
-                0, # ID for D_state
-                s_d_total_trend,
-                s_g_total_trend_opp,
-                s_d_balance_bin,
-                s_d_fake_vs_real_ratio_bin, 
-                np.digitize(current_losses.get('loss_g_adv', 0.7), [0.2, 0.5]).item(), # G's power level (low G_adv means G is strong)
-                np.digitize(self.epsilon, [self.epsilon_min * 2, self.epsilon_start * 0.6]).item()
-            )
+            state_tuple = ("LRM_D", s_d_total_trend, s_g_total_trend_opp, s_d_balance_bin, s_d_fake_vs_real_ratio_bin,
+                           np.digitize(current_losses.get('loss_g_adv', 0.7), [0.2, 0.5]).item(),
+                           s_lr_bin, s_mom_bin,
+                           np.digitize(self.epsilon, [self.epsilon_min * 2, self.epsilon_start * 0.6]).item())
+        
+        self._ensure_q_state_exists(state_tuple)
+        return state_tuple
 
+    def get_lambda_kl_state(self, interval_metrics: dict[str, float | None]) -> tuple | None:
+        # interval_metrics: {'avg_recon', 'avg_kl_div', 'avg_d_total', 'val_metric', 'current_lambda_kl_val'}
+        required_keys = ['avg_recon', 'avg_kl_div', 'avg_d_total', 'val_metric', 'current_lambda_kl_val']
+        if not all(key in interval_metrics and interval_metrics[key] is not None and np.isfinite(interval_metrics[key]) for key in required_keys): # type: ignore
+            self.logger.debug(f"LambdaKL QState: Insufficient/non-finite interval metrics. Need: {required_keys}, Got: {interval_metrics}")
+            return None
+
+        # Explicitly cast to float after None check for type safety with deques
+        self.interval_avg_recon_hist.append(float(interval_metrics['avg_recon'])) # type: ignore
+        self.interval_avg_kl_div_hist.append(float(interval_metrics['avg_kl_div'])) # type: ignore
+        self.interval_avg_d_total_hist.append(float(interval_metrics['avg_d_total'])) # type: ignore
+        self.interval_val_metric_hist.append(float(interval_metrics['val_metric'])) # type: ignore
+
+        # Trends require at least one previous point in history
+        # _get_trend_bin now handles empty history for the first call, but trends are more meaningful with history
+        s_interval_recon_trend = self._get_trend_bin(self.interval_avg_recon_hist, float(interval_metrics['avg_recon']))
+        s_interval_kl_trend = self._get_trend_bin(self.interval_avg_kl_div_hist, float(interval_metrics['avg_kl_div']))
+        s_interval_val_metric_trend = self._get_trend_bin(self.interval_val_metric_hist, float(interval_metrics['val_metric']))
+
+        s_current_lambda_kl_bin = np.digitize(float(interval_metrics['current_lambda_kl_val']), [0.0005, 0.005, 0.05]).item() # type: ignore
+        s_interval_d_balance_bin = np.digitize(float(interval_metrics['avg_d_total']), [0.35, 0.65, 0.85]).item() # type: ignore
+
+        state_tuple = ("LKL", s_interval_recon_trend, s_interval_kl_trend, s_interval_val_metric_trend,
+                       s_current_lambda_kl_bin, s_interval_d_balance_bin,
+                       np.digitize(self.epsilon, [self.epsilon_min * 2, self.epsilon_start * 0.6]).item())
+        
+        self._ensure_q_state_exists(state_tuple)
+        return state_tuple
+
+    def _ensure_q_state_exists(self, state_tuple: tuple): # Identical
         current_time = time.time()
         self.q_table_access_count[state_tuple] += 1
         self.q_table_last_access_time[state_tuple] = current_time
         if state_tuple not in self.q_table:
-            self.q_table[state_tuple] = {p_type: np.zeros(n_actions) for p_type, n_actions in self.num_actions.items()}
+            self.q_table[state_tuple] = {p_type: np.zeros(n_actions, dtype=np.float32) for p_type, n_actions in self.num_actions.items()}
             self.q_table_creation_time[state_tuple] = current_time
             self._manage_q_table_size()
-        return state_tuple
 
-    def choose_action(self, state: tuple | None) -> dict[str, float]:
-        # ... (choose_action method remains identical to your V2 logic)
-        default_action = {'lr_scale': 1.0, 'momentum_scale': 1.0}
+    def choose_action(self, state: tuple | None, mode: str = 'lr_mom') -> dict[str, float]: # Identical
+        default_actions = {'lr_scale': 1.0, 'momentum_scale': 1.0, 'lambda_kl_scale': 1.0}
+        action_types_to_choose = []
+        if mode == 'lr_mom': action_types_to_choose = ['lr_scale', 'momentum_scale']
+        elif mode == 'lambda_kl': action_types_to_choose = ['lambda_kl_scale']
+        else: raise ValueError(f"Invalid mode for choose_action: {mode}")
+
         if state is None or state not in self.q_table:
-            return default_action
+            return {k: default_actions[k] for k in action_types_to_choose}
+
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         chosen_actions = {}
-        for param_type, q_values_for_param in self.q_table[state].items():
+        for param_type in action_types_to_choose:
+            q_values = self.q_table[state].get(param_type)
             action_space = self.action_ranges[param_type]
-            if random.random() < self.epsilon:
-                chosen_idx = random.randrange(len(action_space))
+            if q_values is None: # Should not happen if _ensure_q_state_exists is correct
+                self.logger.error(f"Q-values for {param_type} missing in state {state}. Choosing default.")
+                chosen_actions[param_type] = default_actions[param_type]; continue
+            
+            if random.random() < self.epsilon: chosen_idx = random.randrange(len(action_space))
             else:
-                finite_q_mask = np.isfinite(q_values_for_param)
-                if np.any(finite_q_mask):
-                    q_values_finite = q_values_for_param[finite_q_mask]
-                    action_indices_finite = np.arange(len(q_values_for_param))[finite_q_mask]
-                    best_q_val_finite = np.max(q_values_finite)
-                    best_indices_options = action_indices_finite[np.isclose(q_values_finite, best_q_val_finite)]
-                    chosen_idx = random.choice(best_indices_options)
-                else:
-                    self.logger.warning(f"State {state}, PType {param_type}: All Q-vals non-finite. Random action.")
-                    chosen_idx = random.randrange(len(action_space))
+                finite_q = q_values[np.isfinite(q_values)]
+                if finite_q.size > 0:
+                    best_q_val = np.max(finite_q)
+                    # Get all indices matching best_q_val among finite values
+                    best_indices_options = np.where(np.isclose(q_values, best_q_val) & np.isfinite(q_values))[0]
+                    chosen_idx = random.choice(best_indices_options) if best_indices_options.size > 0 else random.randrange(len(action_space))
+                else: chosen_idx = random.randrange(len(action_space)); self.logger.warning(f"State {state}, PType {param_type}: All Q-vals non-finite. Random action.")
             chosen_actions[param_type] = float(action_space[chosen_idx])
-        self.prev_action = chosen_actions.copy()
+        
+        if mode == 'lr_mom': self.prev_lr_mom_action = chosen_actions.copy()
+        elif mode == 'lambda_kl': self.prev_lambda_kl_action = chosen_actions.copy()
         return chosen_actions
 
-
-    def update(self, state: tuple, action: dict[str, float], reward: float, next_state: tuple | None):
-        # ... (update method remains identical to your V2 logic)
+    def update_q_values(self, state: tuple, action: dict[str, float], reward: float, next_state: tuple | None, mode: str = 'lr_mom'): # Identical
         if state not in self.q_table: return
         if self.reward_clipping: reward = np.clip(reward, self.reward_clipping[0], self.reward_clipping[1])
-        for param_type, chosen_scale_value in action.items():
+        self.reward_hist.append(reward)
+        action_types_to_update = list(action.keys()) # action dict should only contain relevant keys for the mode
+        for param_type in action_types_to_update:
+            chosen_scale_value = action[param_type]
             action_idx_arr = np.where(np.isclose(self.action_ranges[param_type], chosen_scale_value))[0]
             if not action_idx_arr.size: continue
             action_idx = action_idx_arr[0]
             current_q_value = self.q_table[state][param_type][action_idx]
             max_future_q = 0.0
-            if next_state is not None and next_state in self.q_table:
+            if next_state is not None and next_state in self.q_table and param_type in self.q_table[next_state]:
                 next_q_vals = self.q_table[next_state][param_type]
                 if np.any(np.isfinite(next_q_vals)): max_future_q = np.max(next_q_vals[np.isfinite(next_q_vals)])
             td_target = reward + self.gamma * max_future_q
@@ -967,11 +988,8 @@ class HAKMEMQController: # Renamed from HAKMEMQController_VAEGan_v2
             if np.isfinite(new_q_value):
                 if self.q_value_clipping: new_q_value = np.clip(new_q_value, self.q_value_clipping[0], self.q_value_clipping[1])
                 self.q_table[state][param_type][action_idx] = new_q_value
-        self.reward_hist.append(reward)
 
-
-    def _manage_q_table_size(self):
-        # ... (manage_q_table_size method remains identical to your V2 logic)
+    def _manage_q_table_size(self): # Identical
         if len(self.q_table) <= self.max_q_table_size: return
         num_to_prune = len(self.q_table) - self.max_q_table_size
         current_time = time.time()
@@ -980,161 +998,142 @@ class HAKMEMQController: # Renamed from HAKMEMQController_VAEGan_v2
                                 (1.0 / (1.0 + np.log1p((current_time - self.q_table_last_access_time.get(s_tuple, current_time)) / 3600.0))))
                         for s_tuple in self.q_table.keys()}
         sorted_states_for_pruning = sorted(state_scores.keys(), key=lambda s: state_scores[s])
+        pruned_count = 0
         for i in range(num_to_prune):
-            s_rm = sorted_states_for_pruning[i]
-            self.q_table.pop(s_rm, None); self.q_table_access_count.pop(s_rm, None)
-            self.q_table_creation_time.pop(s_rm, None); self.q_table_last_access_time.pop(s_rm, None)
-        if num_to_prune > 0: self.logger.info(f"Pruned {num_to_prune} Q-table entries. New size: {len(self.q_table)}.")
+            if i < len(sorted_states_for_pruning): # Ensure we don't go out of bounds
+                s_rm = sorted_states_for_pruning[i]
+                self.q_table.pop(s_rm, None); self.q_table_access_count.pop(s_rm, None)
+                self.q_table_creation_time.pop(s_rm, None); self.q_table_last_access_time.pop(s_rm, None)
+                pruned_count +=1
+        if pruned_count > 0: self.logger.info(f"Pruned {pruned_count} Q-table entries. New size: {len(self.q_table)}.")
 
-
-    def compute_reward(self, current_losses: dict[str, float], is_generator_q: bool) -> float:
-        total_reward = 0.0
-        w = self.reward_weights # Shorthand
-
-        # --- Universal Penalty for Bad Losses ---
+    def compute_lr_mom_reward(self, current_losses: dict[str, float], is_generator_q: bool) -> float: # Identical
+        total_reward = 0.0; w = self.reward_weights
         for loss_name, loss_val in current_losses.items():
-            if not np.isfinite(loss_val):
-                total_reward -= w["extreme_loss_penalty"] * 5
-                self.logger.warning(f"Non-finite loss '{loss_name}' = {loss_val} in reward calc.")
-                current_losses[loss_name] = 100.0 # Assign high placeholder if non-finite
-            elif abs(loss_val) > 500: # Very large loss
-                total_reward -= w["extreme_loss_penalty"] * (abs(loss_val) / 500.0)
-                current_losses[loss_name] = np.sign(loss_val) * 500 # Clip for stable calculations
-
-        # Get previous median losses from history for trend calculation
+            if not np.isfinite(loss_val): total_reward -= w["extreme_loss_penalty"] * 5; current_losses[loss_name] = 100.0
+            elif abs(loss_val) > 500: total_reward -= w["extreme_loss_penalty"] * (abs(loss_val) / 500.0); current_losses[loss_name] = np.sign(loss_val) * 500
         def get_prev_median(hist_deque, current_val_fallback):
-            valid_hist = [v for v in hist_deque if np.isfinite(v)]
-            return np.median(valid_hist[:-1]) if len(valid_hist) > 1 else (valid_hist[0] if len(valid_hist) == 1 else current_val_fallback)
-
-        # --- Generator Rewards ---
+            valid_hist = [v for v in hist_deque if np.isfinite(v)]; return np.median(valid_hist[:-1]) if len(valid_hist) > 1 else (valid_hist[0] if len(valid_hist) == 1 else current_val_fallback)
         if is_generator_q:
-            loss_g_recon = current_losses.get('loss_g_recon', 1.0)
-            prev_g_recon = get_prev_median(self.loss_g_recon_hist, loss_g_recon)
-            recon_improvement = prev_g_recon - loss_g_recon
-            recon_scale = 1.0 + math.log1p(max(0, loss_g_recon - 0.02) * 20) # Reward more if recon_loss is further from ~0.02
-            total_reward += np.tanh(recon_improvement / (abs(prev_g_recon) + 0.01 + EPS) * recon_scale) * w["g_recon_improvement"]
-
-            loss_g_adv = current_losses.get('loss_g_adv', 0.7)
-            prev_g_adv = get_prev_median(self.loss_g_adv_hist, loss_g_adv)
-            adv_improvement = prev_g_adv - loss_g_adv # G wants G_adv to decrease
-            total_reward += np.tanh(adv_improvement / (abs(prev_g_adv) + EPS)) * w["g_adv_improvement"]
-
+            loss_g_recon = current_losses.get('loss_g_recon', 1.0); prev_g_recon = get_prev_median(self.loss_g_recon_hist, loss_g_recon); recon_improvement = prev_g_recon - loss_g_recon; recon_scale = 1.0 + math.log1p(max(0, loss_g_recon - 0.02) * 20); total_reward += np.tanh(recon_improvement / (abs(prev_g_recon) + 0.01 + EPS) * recon_scale) * w["g_recon_improvement"]
+            loss_g_adv = current_losses.get('loss_g_adv', 0.7); prev_g_adv = get_prev_median(self.loss_g_adv_hist, loss_g_adv); adv_improvement = prev_g_adv - loss_g_adv; total_reward += np.tanh(adv_improvement / (abs(prev_g_adv) + EPS)) * w["g_adv_improvement"]
             loss_g_kl = current_losses.get('loss_g_kl', 0.0)
-            # Penalize high KL if recon is bad and lambda_kl isn't already tiny
-            if loss_g_kl > 100.0 and self.current_lambda_kl >= 0.0005 and loss_g_recon > 0.1:
-                total_reward -= w["g_kl_control"] * min(1.0, (loss_g_kl - 100.0) / 200.0)
-            
-            loss_d_total = current_losses.get('loss_d_total', 0.7) # D's performance
-            # Reward G if D is in a "balanced" state (not too strong, not too weak)
-            if 0.4 < loss_d_total < 0.75:
-                total_reward += w["gan_balance_for_g"]
-            elif loss_d_total <= 0.3: # D is too strong
-                total_reward -= w["gan_balance_for_g"] * 1.5
-            
-            loss_g_total = current_losses.get('loss_g_total', 1.0)
-            prev_g_total = get_prev_median(self.loss_g_total_hist, loss_g_total)
-            g_total_improvement = prev_g_total - loss_g_total
-            total_reward += np.tanh(g_total_improvement / (abs(prev_g_total) + EPS)) * w["g_loss_stability"]
-
-        # --- Discriminator Rewards ---
-        else:
+            if loss_g_kl > 100.0 and self.current_lambda_kl >= 0.0005 and loss_g_recon > 0.1: total_reward -= w["g_kl_control_penalty"] * min(1.0, (loss_g_kl - 100.0) / 200.0)
             loss_d_total = current_losses.get('loss_d_total', 0.7)
-            # Reward D for being in a balanced state (loss around 0.4-0.65)
-            if 0.4 < loss_d_total < 0.65:
-                total_reward += w["d_balance"]
-            elif loss_d_total < 0.3: # D too strong or G collapsed
-                total_reward -= w["d_balance"] * 0.5 
-            elif loss_d_total > 0.8: # D struggling
-                total_reward -= w["d_balance"] * 0.75
-
+            if 0.4 < loss_d_total < 0.75: total_reward += w["gan_balance_g_bonus"]
+            elif loss_d_total <= 0.3: total_reward -= w["gan_balance_g_bonus"] * 1.5
+            loss_g_total = current_losses.get('loss_g_total', 1.0); prev_g_total = get_prev_median(self.loss_g_total_hist, loss_g_total); g_total_improvement = prev_g_total - loss_g_total; total_reward += np.tanh(g_total_improvement / (abs(prev_g_total) + EPS)) * w["g_loss_stability"]
+        else: # Discriminator Rewards
+            loss_d_total = current_losses.get('loss_d_total', 0.7)
+            if 0.4 < loss_d_total < 0.65: total_reward += w["d_balance_target"]
+            elif loss_d_total < 0.3: total_reward -= w["d_balance_target"] * 0.5 
+            elif loss_d_total > 0.8: total_reward -= w["d_balance_target"] * 0.75
             loss_d_real = current_losses.get('loss_d_real', 0.7)
-            if loss_d_real < 0.3: # Good at reals
-                total_reward += w["d_real_low"] * (0.3 - loss_d_real) / 0.3
-            
-            loss_d_fake = current_losses.get('loss_d_fake', 0.7)
-            loss_g_adv_opp = current_losses.get('loss_g_adv', 0.7) # G's adv loss from D's perspective
-            if loss_d_fake < 0.3 and loss_g_adv_opp > 0.4: # Good at fakes, and G isn't totally collapsed
-                total_reward += w["d_fake_low_meaningful"] * (0.3 - loss_d_fake) / 0.3
-            
-            # Penalize D if G is fooling it too easily
-            if loss_g_adv_opp < 0.25: 
-                total_reward -= w["gan_balance_for_d"]
-
-            prev_d_total = get_prev_median(self.loss_d_total_hist, loss_d_total)
-            d_total_improvement = prev_d_total - loss_d_total
-            total_reward += np.tanh(d_total_improvement / (abs(prev_d_total) + EPS)) * w["d_loss_stability"]
-
-        # --- Oscillation Penalty (Applied to Both) ---
-        if len(self.reward_hist) >= self.state_history_len: # Use state_history_len for consistency
-            recent_rewards = list(self.reward_hist)[-self.state_history_len:]
-            # Count sign changes in recent rewards
-            sign_flips = 0
+            if loss_d_real < 0.3: total_reward += w["d_real_low_bonus"] * (0.3 - loss_d_real) / 0.3
+            loss_d_fake = current_losses.get('loss_d_fake', 0.7); loss_g_adv_opp = current_losses.get('loss_g_adv', 0.7)
+            if loss_d_fake < 0.3 and loss_g_adv_opp > 0.4: total_reward += w["d_fake_low_meaningful_bonus"] * (0.3 - loss_d_fake) / 0.3
+            if loss_g_adv_opp < 0.25: total_reward -= w["gan_balance_d_penalty"]
+            prev_d_total = get_prev_median(self.loss_d_total_hist, loss_d_total); d_total_improvement = prev_d_total - loss_d_total; total_reward += np.tanh(d_total_improvement / (abs(prev_d_total) + EPS)) * w["d_loss_stability"]
+        if len(self.reward_hist) >= self.state_history_len:
+            recent_rewards = list(self.reward_hist)[-self.state_history_len:]; sign_flips = 0
             for i in range(len(recent_rewards) - 1):
-                if np.sign(recent_rewards[i]) != np.sign(recent_rewards[i+1]) and \
-                   abs(recent_rewards[i]) > 0.05 and abs(recent_rewards[i+1]) > 0.05: # Only count significant flips
-                    sign_flips += 1
-            if sign_flips >= (self.state_history_len // 2) : # If half or more of recent steps were flips
-                total_reward -= w["oscillation_penalty"] * (sign_flips / self.state_history_len)
+                if np.sign(recent_rewards[i]) != np.sign(recent_rewards[i+1]) and abs(recent_rewards[i]) > 0.05 and abs(recent_rewards[i+1]) > 0.05: sign_flips += 1
+            if sign_flips >= (self.state_history_len // 2) : total_reward -= w["oscillation_penalty"] * (sign_flips / self.state_history_len)
+        if self.reward_clipping: total_reward = np.clip(total_reward, self.reward_clipping[0], self.reward_clipping[1])
+        return float(total_reward)
 
-        role_char = 'G' if is_generator_q else 'D'
-        if self.logger.isEnabledFor(logging.DEBUG) and self._internal_step_counter % 50 == 1: # Log less frequently
-             self.logger.debug(
-                 f"QCRew({role_char} S{self._internal_step_counter}): RawRew={total_reward:.3f}. Losses={ {k:f'{v:.3f}' for k,v in current_losses.items()} }"
-             )
+    def compute_lambda_kl_reward(self, interval_metrics: dict[str, float | None], prev_interval_metrics: dict[str, float | None] | None) -> float:
+        total_reward = 0.0
+        w = self.reward_weights
+
+        # Ensure prev_interval_metrics is a dict, even if empty, for safe .get()
+        _prev_metrics = prev_interval_metrics if prev_interval_metrics is not None else {}
+
+        current_val_metric = interval_metrics.get('val_metric')
+        prev_val_metric = _prev_metrics.get('val_metric', current_val_metric) # Fallback to current if no previous
+        if current_val_metric is not None and prev_val_metric is not None and np.isfinite(current_val_metric) and np.isfinite(prev_val_metric):
+            val_metric_change = float(current_val_metric) - float(prev_val_metric)
+            total_reward += np.tanh(val_metric_change * 5.0) * w["lambda_kl_val_metric_improvement"]
+
+        current_avg_recon = interval_metrics.get('avg_recon')
+        prev_avg_recon = _prev_metrics.get('avg_recon', current_avg_recon)
+        if current_avg_recon is not None and prev_avg_recon is not None and np.isfinite(current_avg_recon) and np.isfinite(prev_avg_recon):
+            recon_change = float(prev_avg_recon) - float(current_avg_recon)
+            recon_penalty_factor = 1.0 if recon_change >= -0.05 else (1.0 + abs(recon_change * 10))
+            total_reward += np.tanh(recon_change * 10.0 / recon_penalty_factor) * w["lambda_kl_recon_focus"]
+        
+        current_kl_div = interval_metrics.get('avg_kl_div')
+        prev_kl_div = _prev_metrics.get('avg_kl_div', current_kl_div)
+        if current_kl_div is not None and prev_kl_div is not None and np.isfinite(current_kl_div) and np.isfinite(prev_kl_div):
+            if float(current_kl_div) > 100:
+                kl_div_decrease = float(prev_kl_div) - float(current_kl_div)
+                total_reward += np.tanh(kl_div_decrease / 50.0) * w["lambda_kl_kl_target_range"]
+            elif float(current_kl_div) < 20 and current_avg_recon is not None and float(current_avg_recon) > 0.05 :
+                total_reward -= w["lambda_kl_kl_target_range"] * 0.5
+        
+        current_avg_d_total = interval_metrics.get('avg_d_total')
+        prev_avg_d_total = _prev_metrics.get('avg_d_total', current_avg_d_total)
+        if current_avg_d_total is not None and prev_avg_d_total is not None and np.isfinite(current_avg_d_total) and np.isfinite(prev_avg_d_total):
+            d_total_stability_change = abs(float(current_avg_d_total) - float(prev_avg_d_total))
+            if d_total_stability_change > 0.2:
+                total_reward -= w["lambda_kl_stability_penalty"] * (d_total_stability_change / 0.2)
+
+        current_lambda_kl_val = interval_metrics.get('current_lambda_kl_val')
+        if current_lambda_kl_val is not None and float(current_lambda_kl_val) > 0.5 and \
+           current_avg_recon is not None and float(current_avg_recon) > 0.15:
+            total_reward -= 0.5
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+             log_mets = {k: f'{v:.3f}' if isinstance(v, (float, np.float32, np.float64)) and np.isfinite(v) else str(v) for k,v in interval_metrics.items()}
+             self.logger.debug(f"LambdaKL_Rew: Raw={total_reward:.3f}. IntervalMet: {log_mets}")
         
         if self.reward_clipping:
             total_reward = np.clip(total_reward, self.reward_clipping[0], self.reward_clipping[1])
         return float(total_reward)
 
-    def set_current_lambda_kl(self, lambda_kl_val: float):
-        if np.isfinite(lambda_kl_val):
-            self.current_lambda_kl = float(lambda_kl_val)
-        else:
-            self.logger.warning(f"Attempted to set non-finite lambda_kl: {lambda_kl_val}")
+    def set_current_lambda_kl(self, lambda_kl_val: float): # Identical
+        if np.isfinite(lambda_kl_val): self.current_lambda_kl = float(lambda_kl_val)
+        else: self.logger.warning(f"Attempted to set non-finite lambda_kl: {lambda_kl_val}")
 
-
-    def get_info(self) -> dict:
-        # ... (get_info method remains identical to your V2 logic)
+    def get_info(self) -> dict: # Identical
         q_mem_mb = 0.0
         try:
             if self.q_table: q_mem_mb = sum(sys.getsizeof(s_tuple) + sum(q_vals.nbytes + sys.getsizeof(p_type) for p_type, q_vals in q_actions.items()) for s_tuple, q_actions in self.q_table.items()) / (1024**2)
-        except Exception: q_mem_mb = -1.0 # Error calculating
+        except Exception: q_mem_mb = -1.0
         avg_reward_recent = np.mean(list(self.reward_hist)) if self.reward_hist else 0.0
         return {
-            "epsilon": round(self.epsilon, 4),
-            "q_table_size": len(self.q_table),
+            "epsilon": round(self.epsilon, 4), "q_table_size": len(self.q_table),
             "q_table_mem_mb_approx": round(q_mem_mb, 3),
-            "last_chosen_action": self.prev_action if self.prev_action else "None",
-            f"avg_reward_last_{self.reward_hist.maxlen}": round(avg_reward_recent, 3),
+            "last_lr_mom_action": self.prev_lr_mom_action if self.prev_lr_mom_action else "None",
+            "last_lambda_kl_action": self.prev_lambda_kl_action if self.prev_lambda_kl_action else "None",
+            f"avg_reward_last_{len(self.reward_hist) if self.reward_hist.maxlen is None else self.reward_hist.maxlen}": round(avg_reward_recent, 3),
         }
 
+    def set_initial_losses(self, losses: dict[str, float], is_generator_q: bool): # Identical
+        loss_map_init = {'loss_g_total': self.loss_g_total_hist, 'loss_g_recon': self.loss_g_recon_hist,'loss_g_kl': self.loss_g_kl_hist, 'loss_g_adv': self.loss_g_adv_hist,'loss_d_total': self.loss_d_total_hist, 'loss_d_real': self.loss_d_real_hist,'loss_d_fake': self.loss_d_fake_hist}
+        relevant_keys = (['loss_g_total', 'loss_g_recon', 'loss_g_kl', 'loss_g_adv', 'loss_d_total'] if is_generator_q else
+                         ['loss_d_total', 'loss_d_real', 'loss_d_fake', 'loss_g_total', 'loss_g_adv'])
+        for name in relevant_keys:
+            val = losses.get(name)
+            if val is not None and np.isfinite(val): loss_map_init[name].append(val)
+        for deq_obj in loss_map_init.values():
+            if deq_obj:
+                 while len(deq_obj) < self.state_history_len: deq_obj.appendleft(deq_obj[0])
 
-    def set_initial_losses(self, losses: dict[str, float], is_generator_q: bool):
-        # ... (set_initial_losses method remains identical to your V2 logic)
-        # This is important for the first few Q-state calculations to have some history.
-        loss_map_init = {
-            'loss_g_total': self.loss_g_total_hist, 'loss_g_recon': self.loss_g_recon_hist,
-            'loss_g_kl': self.loss_g_kl_hist, 'loss_g_adv': self.loss_g_adv_hist,
-            'loss_d_total': self.loss_d_total_hist, 'loss_d_real': self.loss_d_real_hist,
-            'loss_d_fake': self.loss_d_fake_hist
-        }
-        relevant_loss_keys = []
-        if is_generator_q:
-            relevant_loss_keys.extend(['loss_g_total', 'loss_g_recon', 'loss_g_kl', 'loss_g_adv'])
-            relevant_loss_keys.append('loss_d_total') # Opponent
-        else: # Discriminator
-            relevant_loss_keys.extend(['loss_d_total', 'loss_d_real', 'loss_d_fake'])
-            relevant_loss_keys.extend(['loss_g_total', 'loss_g_adv']) # Opponent info
+    def set_initial_lambda_kl_metrics(self, interval_metrics: dict[str, float | None]): # Identical
+        metric_map = {'avg_recon': self.interval_avg_recon_hist, 'avg_kl_div': self.interval_avg_kl_div_hist,
+                      'avg_d_total': self.interval_avg_d_total_hist, 'val_metric': self.interval_val_metric_hist}
+        for name, deq in metric_map.items():
+            val = interval_metrics.get(name)
+            if val is not None and np.isfinite(val): deq.append(float(val))
+        for deq_obj in metric_map.values():
+            if deq_obj:
+                while len(deq_obj) < self.lambda_kl_state_history_len: deq_obj.appendleft(deq_obj[0])
 
-        for name in relevant_loss_keys:
-            if name in losses and np.isfinite(losses[name]):
-                loss_map_init[name].append(losses[name])
-        
-        # Fill history deques if they are shorter than state_history_len
-        for deq_name, deq_obj in loss_map_init.items():
-            if deq_obj: # If deque is not empty after appending
-                 while len(deq_obj) < self.state_history_len:
-                    deq_obj.appendleft(deq_obj[0]) # Pad with the earliest available value
+
+
+
+
 
 
 class RiemannianEnhancedSGD(torch.optim.Optimizer):
@@ -1199,67 +1198,66 @@ class RiemannianEnhancedSGD(torch.optim.Optimizer):
         # self.grad_stats.reset() # Keep here if optimizer manages its own grad_stats lifecycle fully
 
     def q_controller_update_and_set_hyperparams(self,
-                                                # Average losses over the last macro-batch
                                                 avg_losses_dict: Dict[str, Optional[float]],
                                                 current_lambda_kl_value: Optional[float] = None
                                                ):
         if not self.q_controller:
             return
 
-        # Filter out None values from losses_dict for Q-controller
         finite_losses_for_q_state: Dict[str, float] = {
             k: v for k, v in avg_losses_dict.items() if v is not None and np.isfinite(v)
         }
 
         is_gen_q = (self.optimizer_type == "generator")
-        # Define required keys based on the Q-controller's needs (from HAKMEMQController_VAEGan_v2)
         if is_gen_q:
             required_keys = ['loss_g_total', 'loss_g_recon', 'loss_g_kl', 'loss_g_adv', 'loss_d_total']
         else: # Discriminator
-            required_keys = ['loss_d_total', 'loss_g_total', 'loss_g_adv']
+            required_keys = ['loss_d_total', 'loss_g_total', 'loss_g_adv', 'loss_d_real', 'loss_d_fake']
+
 
         if not all(key in finite_losses_for_q_state for key in required_keys):
-            self.logger.debug(f"QCtrl ({self.optimizer_type}): Insufficient finite losses. Skipping Q-update. "
+            self.logger.debug(f"QCtrl ({self.optimizer_type}): Insufficient finite losses for LR/Mom state. Skipping Q-update. "
                               f"Need: {required_keys}, Got: {list(finite_losses_for_q_state.keys())}")
-            return # Cannot form a valid state
+            return
 
         if hasattr(self.q_controller, 'set_current_lambda_kl') and current_lambda_kl_value is not None:
             self.q_controller.set_current_lambda_kl(current_lambda_kl_value)
 
-        # Use 'initial_lr' and 'initial_momentum' from group as the true base for Q-scaling
-        # This ensures that if an external scheduler changes 'lr', Q-controller still scales from the original.
-        # However, most Q-controllers assume they *are* the scheduler.
-        # So, let's use the current group['lr'] and group['momentum'] as the base for *this iteration's calculation*
-        # but the scaling applies to group['initial_lr'] / group['initial_momentum'].
-
         current_lr_for_q_state = self.param_groups[0]['lr']
         current_mom_for_q_state = self.param_groups[0]['momentum']
         
-        q_state_current = self.q_controller.get_state(
+        q_state_current = self.q_controller.get_lr_mom_state(
             finite_losses_for_q_state, current_lr_for_q_state, current_mom_for_q_state,
             is_generator_q=is_gen_q
         )
 
-        if self.q_controller.prev_state is not None and \
-           self.q_controller.prev_action is not None and \
+        if self.q_controller.prev_lr_mom_state is not None and \
+           self.q_controller.prev_lr_mom_action is not None and \
            q_state_current is not None:
-            reward = self.q_controller.compute_reward(finite_losses_for_q_state, is_generator_q=is_gen_q)
+            reward = self.q_controller.compute_lr_mom_reward(finite_losses_for_q_state, is_generator_q=is_gen_q)
             if np.isfinite(reward):
-                self.q_controller.update(self.q_controller.prev_state, self.q_controller.prev_action, reward, q_state_current)
+                self.q_controller.update_q_values(
+                    self.q_controller.prev_lr_mom_state,
+                    self.q_controller.prev_lr_mom_action,
+                    reward,
+                    q_state_current,
+                    mode='lr_mom' # Specify mode for Q-value update
+                )
         elif q_state_current is not None and hasattr(self.q_controller, 'set_initial_losses'):
             self.q_controller.set_initial_losses(finite_losses_for_q_state, is_generator_q=is_gen_q)
 
-        self.q_controller.prev_state = q_state_current
-        action_for_upcoming_step = self.q_controller.choose_action(q_state_current)
-        self.q_controller.prev_action = action_for_upcoming_step # This action will be used for the step
+        self.q_controller.prev_lr_mom_state = q_state_current
+        action_for_upcoming_step = self.q_controller.choose_action(q_state_current, mode='lr_mom')
+        # self.q_controller.prev_lr_mom_action is set internally by choose_action
 
         if action_for_upcoming_step:
             for group in self.param_groups:
-                base_lr = group['initial_lr'] # The LR set at optimizer construction
-                base_mom = group['initial_momentum'] # The momentum set at optimizer construction
+                base_lr = group['initial_lr']
+                base_mom = group['initial_momentum']
 
                 group['lr'] = float(np.clip(base_lr * action_for_upcoming_step.get('lr_scale', 1.0), 1e-8, 1.0))
-                group['momentum'] = float(np.clip(base_mom * action_for_upcoming_step.get('momentum_scale', 1.0), 0.0, 0.999)) # Allow 0 momentum
+                group['momentum'] = float(np.clip(base_mom * action_for_upcoming_step.get('momentum_scale', 1.0), 0.0, 0.999))
+
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -1421,7 +1419,16 @@ class RiemannianEnhancedSGD(torch.optim.Optimizer):
     # if record_param_grad was called before step().
     # The trainer should aggregate GradientStats across micro-batches.
     def get_gradient_stats_summary_optimizer_view(self) -> Dict:
-        return self.grad_stats.get_step_summary_for_logging()     
+        return self.grad_stats.get_step_summary_for_logging()
+
+
+
+
+ 
+ 
+ 
+ 
+ 
  
 # =====================================================================
 # GAAD Components (Unchanged)
@@ -2650,11 +2657,13 @@ class HybridTrainer:
         self.am_main_process = (rank == 0)
         self.logger = logging.getLogger("WuBuGAADHybridGenV01.Trainer")
 
-        self.video_config = model.video_config # type: ignore
-        self.gaad_appearance_config = model.gaad_appearance_config # type: ignore
+        # Ensure model has these attributes if accessed directly
+        self.video_config = getattr(model, 'video_config', {})
+        self.gaad_appearance_config = getattr(model, 'gaad_appearance_config', {})
+
 
         self.lambda_recon = args.lambda_recon
-        self.lambda_kl = args.lambda_kl # Current effective lambda_kl for the VAE loss
+        self.lambda_kl = args.lambda_kl
         self.lambda_gan = args.lambda_gan
 
         self.scaler_enc_gen = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda')
@@ -2699,6 +2708,19 @@ class HybridTrainer:
 
         self.fixed_noise_for_sampling: Optional[torch.Tensor] = None
 
+        # --- For scheduled Lambda_KL Q-Controller ---
+        self.lambda_kl_update_interval = getattr(args, 'lambda_kl_update_interval', 0)
+        if self.args.q_controller_enabled and self.lambda_kl_update_interval > 0 and self.am_main_process:
+            self.logger.info(f"Scheduled Lambda_KL Q-Control ENABLED. Update interval: {self.lambda_kl_update_interval} global steps.")
+        
+        self.interval_metrics_accum = defaultdict(float)
+        self.interval_steps_count = 0
+        self.prev_interval_metrics_for_lambda_kl_reward: Optional[Dict[str, Union[float, None]]] = None # Python 3.10+: float | None
+        
+        self.min_lambda_kl_q_control = getattr(args, 'min_lambda_kl_q_control', 1e-6)
+        self.max_lambda_kl_q_control = getattr(args, 'max_lambda_kl_q_control', 1.0)
+
+
     def _compute_kl_loss(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
         return kl_div.mean()
@@ -2709,7 +2731,7 @@ class HybridTrainer:
     @torch.no_grad()
     def _log_samples_to_wandb(self,
                               tag_prefix: str,
-                              frames_to_log: Optional[torch.Tensor], # Made Optional
+                              frames_to_log: Optional[torch.Tensor],
                               num_frames_per_sequence_to_log: int = 1,
                               num_sequences_to_log_max: int = 2):
         if not (self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb.run): # type: ignore
@@ -2726,16 +2748,15 @@ class HybridTrainer:
             for frame_idx_in_seq in range(num_frames_to_log_this_seq):
                 frame_tensor = frames_to_log[b_idx, frame_idx_in_seq, ...].cpu().float()
                 img_0_1 = (frame_tensor.clamp(-1,1) + 1) / 2.0
-                caption = f"{tag_prefix} Sample {b_idx} Frame {frame_idx_in_seq} Ep{self.current_epoch+1} GStep{self.global_step}"
+                caption = f"{tag_prefix} S{b_idx} F{frame_idx_in_seq} Ep{self.current_epoch+1} GStep{self.global_step}"
                 wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption)) # type: ignore
         if wandb_images_for_log:
             wandb.log({f"samples/{tag_prefix}": wandb_images_for_log}, step=self.global_step) # type: ignore
-            self.logger.debug(f"Logged {len(wandb_images_for_log)} image frames to WandB with prefix samples/{tag_prefix}")
+
 
     def _train_discriminator_step(self, real_frames_full: torch.Tensor, m_ref: "WuBuGAADHybridGenNet", d_ref: "RegionalDiscriminator") -> Dict[str, torch.Tensor]:
-        B = real_frames_full.shape[0]
-        device = real_frames_full.device
-        dtype_model = next(m_ref.parameters()).dtype # Assuming m_ref has params
+        B = real_frames_full.shape[0]; device = real_frames_full.device
+        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype
 
         frames_for_d_processing = real_frames_full[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
 
@@ -2743,31 +2764,28 @@ class HybridTrainer:
         fake_labels = torch.zeros(B, 1, device=device, dtype=dtype_model)
         losses_d_micro: Dict[str, torch.Tensor] = {}
 
-        # Set requires_grad appropriately for D training phase
         for p in d_ref.parameters(): p.requires_grad = True
         for p in m_ref.parameters(): p.requires_grad = False
 
         gaad_bboxes_for_d_real_cond = None
-        if d_ref.use_gaad_film_condition: # Check D's config if it uses FiLM
+        if d_ref.use_gaad_film_condition:
             with torch.no_grad():
-                # Encoder part of m_ref is used to get bboxes for real frames
                 _, _, gaad_bboxes_from_encoder_full, _ = m_ref.encode(real_frames_full.to(device, dtype_model))
             if gaad_bboxes_from_encoder_full is not None:
                 gaad_bboxes_for_d_real_cond = gaad_bboxes_from_encoder_full[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
 
-        with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp and self.device.type == 'cuda'):
+        with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
             real_logits = d_ref(frames_for_d_processing, gaad_bboxes_for_d_real_cond)
             loss_d_real = self.adversarial_loss(real_logits, real_labels)
 
-            with torch.no_grad(): # Generator pass for fake samples
-                fake_frames_full_sequence, _, _, bboxes_used_for_fake_gen = m_ref(real_frames_full) # G generates based on real_frames input
+            with torch.no_grad():
+                fake_frames_full_sequence, _, _, bboxes_used_for_fake_gen = m_ref(real_frames_full)
                 fake_frames_for_d_processing = fake_frames_full_sequence[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
-                
                 gaad_bboxes_for_d_fake_cond = None
                 if d_ref.use_gaad_film_condition and bboxes_used_for_fake_gen is not None:
                     gaad_bboxes_for_d_fake_cond = bboxes_used_for_fake_gen[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
 
-            fake_logits = d_ref(fake_frames_for_d_processing.detach(), gaad_bboxes_for_d_fake_cond) # Detach fake frames
+            fake_logits = d_ref(fake_frames_for_d_processing.detach(), gaad_bboxes_for_d_fake_cond)
             loss_d_fake = self.adversarial_loss(fake_logits, fake_labels)
             
             loss_d_total_micro = (loss_d_real + loss_d_fake) * 0.5
@@ -2782,34 +2800,33 @@ class HybridTrainer:
 
     def _train_generator_step(self, real_frames_full: torch.Tensor, m_ref: "WuBuGAADHybridGenNet", d_ref: "RegionalDiscriminator") \
                               -> Tuple[Dict[str, torch.Tensor], Optional[torch.Tensor]]:
-        B = real_frames_full.shape[0]
-        device = real_frames_full.device
-        dtype_model = next(m_ref.parameters()).dtype
+        B = real_frames_full.shape[0]; device = real_frames_full.device
+        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype
         real_labels = torch.ones(B, 1, device=device, dtype=dtype_model)
         losses_g_micro: Dict[str, torch.Tensor] = {}
         recon_frames_for_log: Optional[torch.Tensor] = None
 
-        # Set requires_grad appropriately for G training phase
         for p in d_ref.parameters(): p.requires_grad = False
         for p in m_ref.parameters(): p.requires_grad = True
 
-        with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp and self.device.type == 'cuda'):
+        with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
             recon_frames_pred_sequence, mu, logvar, bboxes_used_by_decoder = m_ref(real_frames_full.to(device, dtype_model))
 
-            # Store for logging if interval matches (global_step increments AFTER this full macro-batch)
             if self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and \
                ((self.global_step + 1) % self.args.wandb_log_train_recon_interval == 0 or self.global_step == 0) :
                 recon_frames_for_log = recon_frames_pred_sequence.detach().clone()
 
-            start_idx_target = self.video_config["num_input_frames"]
+            start_idx_target = self.video_config.get("num_input_frames", 0)
+            num_predict_cfg = self.video_config.get("num_predict_frames", 1)
             actual_pred_len_for_loss = min(
                 recon_frames_pred_sequence.shape[1],
                 real_frames_full.shape[1] - start_idx_target,
-                self.video_config["num_predict_frames"]
+                num_predict_cfg
             )
             if actual_pred_len_for_loss <= 0:
-                self.logger.error(f"G_Step: Cannot compute recon loss (actual_pred_len_for_loss={actual_pred_len_for_loss}). PredShape1:{recon_frames_pred_sequence.shape[1]}, RealAvailForTarget:{real_frames_full.shape[1] - start_idx_target}, ConfigPredFrames:{self.video_config['num_predict_frames']}")
-                loss_recon = torch.tensor(1000.0, device=device, dtype=dtype_model) # High placeholder if error
+                self.logger.error(f"G_Step: Cannot compute recon loss (actual_pred_len={actual_pred_len_for_loss}).")
+                # Ensure loss_recon is defined with correct dtype and device for consistency, even in error case
+                loss_recon = torch.tensor(1000.0, device=device, dtype=dtype_model) 
             else:
                 target_frames_for_recon = real_frames_full[:, start_idx_target : start_idx_target + actual_pred_len_for_loss, ...].to(device, dtype_model)
                 recon_frames_for_loss_calc = recon_frames_pred_sequence[:, :actual_pred_len_for_loss, ...]
@@ -2819,14 +2836,14 @@ class HybridTrainer:
 
             fake_frames_for_g_adv = recon_frames_pred_sequence[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
             gaad_bboxes_for_g_adv_cond = None
-            if d_ref.use_gaad_film_condition and bboxes_used_by_decoder is not None: # Check D's config
+            if d_ref.use_gaad_film_condition and bboxes_used_by_decoder is not None:
                 gaad_bboxes_for_g_adv_cond = bboxes_used_by_decoder[:, :d_ref.num_frames_to_discriminate, ...].to(device, dtype_model)
             
             fake_logits_gen = d_ref(fake_frames_for_g_adv, gaad_bboxes_for_g_adv_cond)
             loss_g_adv = self.adversarial_loss(fake_logits_gen, real_labels)
             
             loss_g_total_micro = (self.lambda_recon * loss_recon + 
-                                  self.lambda_kl * loss_kl + 
+                                  self.lambda_kl * loss_kl +
                                   self.lambda_gan * loss_g_adv)
             loss_g_total_scaled_for_accum_micro = loss_g_total_micro / self.grad_accum_steps
 
@@ -2844,78 +2861,78 @@ class HybridTrainer:
 
         if self.am_main_process:
             self.logger.info(f"Starting training. Epochs: {self.args.epochs}, StartEpoch: {start_epoch}, InitialGStep: {initial_global_step}")
-            self.logger.info(f"Grad Accum: {self.grad_accum_steps}, Lambda_KL: {self.lambda_kl:.2e}, Lambda_Recon: {self.lambda_recon}, Lambda_GAN: {self.lambda_gan}")
+            self.logger.info(f"Grad Accum: {self.grad_accum_steps}, Initial Lambda_KL: {self.lambda_kl:.3e}, Lambda_Recon: {self.lambda_recon}, Lambda_GAN: {self.lambda_gan}")
             if self.args.wandb_log_fixed_noise_samples_interval > 0 and self.args.num_val_samples_to_log > 0:
-                m_ref_temp = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model
-                self.fixed_noise_for_sampling = torch.randn(
-                    self.args.num_val_samples_to_log, self.args.latent_dim,
-                    device=self.device, dtype=next(m_ref_temp.parameters()).dtype
-                )
+                m_ref_temp = self.model.module if self.ddp_active else self.model
+                default_dtype = next(iter(m_ref_temp.parameters()), torch.tensor(0.0, device=self.device)).dtype
+                self.fixed_noise_for_sampling = torch.randn(self.args.num_val_samples_to_log, self.args.latent_dim, device=self.device, dtype=default_dtype)
                 self.logger.info(f"Created fixed noise tensor for sampling: {self.fixed_noise_for_sampling.shape}")
 
-        # Accumulators for Q-Controller (average over grad_accum_steps)
         accum_g_total_q, accum_g_recon_q, accum_g_kl_q, accum_g_adv_q = 0.0, 0.0, 0.0, 0.0
         accum_d_total_q, accum_d_real_q, accum_d_fake_q = 0.0, 0.0, 0.0
-        
-        # Accumulators for logging interval (sum over log_interval * grad_accum_steps micro-batches)
         log_interval_accum_losses = defaultdict(float)
-        log_interval_items_processed = 0 # Counts individual samples
+        log_interval_items_processed = 0
 
-        m_ref = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model
-        d_ref = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator
+        m_ref = self.model.module if self.ddp_active else self.model
+        d_ref = self.discriminator.module if self.ddp_active else self.discriminator
+
+        opt_gen_q_controller = getattr(self.optimizer_enc_gen, 'q_controller', None)
+        opt_disc_q_controller = getattr(self.optimizer_disc, 'q_controller', None)
+        lambda_kl_q_ctrl_ref = opt_gen_q_controller
+
+        if opt_gen_q_controller and hasattr(opt_gen_q_controller, 'set_current_lambda_kl'):
+             opt_gen_q_controller.set_current_lambda_kl(self.lambda_kl)
+        if opt_disc_q_controller and hasattr(opt_disc_q_controller, 'set_current_lambda_kl'):
+             opt_disc_q_controller.set_current_lambda_kl(self.lambda_kl)
 
         for epoch in range(start_epoch, self.args.epochs):
             self.current_epoch = epoch
-            if self.am_main_process: self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting...")
-            if self.ddp_active and hasattr(self.train_loader.sampler, 'set_epoch'):
-                self.train_loader.sampler.set_epoch(epoch) # type: ignore
+            if self.am_main_process: self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting (current lambda_kl: {self.lambda_kl:.3e})...")
+            if self.ddp_active and hasattr(self.train_loader.sampler, 'set_epoch'): self.train_loader.sampler.set_epoch(epoch) # type: ignore
 
             m_ref.train(); d_ref.train()
-            
-            # Zero gradients at the beginning of each new epoch / accumulation cycle start
             self.optimizer_disc.zero_grad(set_to_none=True)
             self.optimizer_enc_gen.zero_grad(set_to_none=True)
             
-            dataset_len_approx = len(self.train_loader.dataset) // self.world_size if hasattr(self.train_loader.dataset, '__len__') else None # type: ignore
-            num_micro_batches_epoch = dataset_len_approx // self.train_loader.batch_size if dataset_len_approx and self.train_loader.batch_size else None # type: ignore
+            num_batches_epoch = len(self.train_loader)
+            prog_bar_disabled = not self.am_main_process or os.getenv('CI') == 'true'
+            prog_bar = tqdm(self.train_loader, desc=f"E{epoch+1}", disable=prog_bar_disabled, dynamic_ncols=True, total=num_batches_epoch)
 
-            prog_bar = tqdm(self.train_loader, desc=f"E{epoch+1}", disable=not self.am_main_process or os.getenv('CI')=='true', dynamic_ncols=True, total=num_micro_batches_epoch)
 
             for batch_idx, batch_frames_raw in enumerate(prog_bar):
                 batch_frames = batch_frames_raw.to(self.device)
                 batch_size_micro = batch_frames.size(0)
 
-                # --- D Step ---
-                # (requires_grad set inside the function)
                 losses_d_micro = self._train_discriminator_step(batch_frames, m_ref, d_ref)
-                if torch.isfinite(losses_d_micro['loss_d_total_micro']): accum_d_total_q += losses_d_micro['loss_d_total_micro'].item()
+                if torch.isfinite(losses_d_micro['loss_d_total_micro']): 
+                    d_total_val = losses_d_micro['loss_d_total_micro'].item()
+                    accum_d_total_q += d_total_val; self.interval_metrics_accum['d_total'] += d_total_val
                 if torch.isfinite(losses_d_micro['loss_d_real_micro']): accum_d_real_q += losses_d_micro['loss_d_real_micro'].item()
                 if torch.isfinite(losses_d_micro['loss_d_fake_micro']): accum_d_fake_q += losses_d_micro['loss_d_fake_micro'].item()
-                for k, v_d in losses_d_micro.items():
-                    if torch.isfinite(v_d): log_interval_accum_losses[k.replace('_micro','_agg')] += v_d.item() * batch_size_micro
+                for k,v_tensor in losses_d_micro.items(): 
+                    if torch.isfinite(v_tensor): log_interval_accum_losses[k.replace('_micro','_agg')] += v_tensor.item() * batch_size_micro
 
-                # --- G Step ---
-                # (requires_grad set inside the function)
                 losses_g_micro, recon_frames_for_logging = self._train_generator_step(batch_frames, m_ref, d_ref)
                 if torch.isfinite(losses_g_micro['loss_g_total_micro']): accum_g_total_q += losses_g_micro['loss_g_total_micro'].item()
-                if torch.isfinite(losses_g_micro['loss_recon_micro']): accum_g_recon_q += losses_g_micro['loss_recon_micro'].item()
-                if torch.isfinite(losses_g_micro['loss_kl_micro']): accum_g_kl_q += losses_g_micro['loss_kl_micro'].item()
+                if torch.isfinite(losses_g_micro['loss_recon_micro']): 
+                    recon_val = losses_g_micro['loss_recon_micro'].item()
+                    accum_g_recon_q += recon_val; self.interval_metrics_accum['recon'] += recon_val
+                if torch.isfinite(losses_g_micro['loss_kl_micro']): 
+                    kl_val = losses_g_micro['loss_kl_micro'].item()
+                    accum_g_kl_q += kl_val; self.interval_metrics_accum['kl_div'] += kl_val
                 if torch.isfinite(losses_g_micro['loss_g_adv_micro']): accum_g_adv_q += losses_g_micro['loss_g_adv_micro'].item()
-                for k, v_g in losses_g_micro.items():
-                    if torch.isfinite(v_g): log_interval_accum_losses[k.replace('_micro','_agg')] += v_g.item() * batch_size_micro
+                for k,v_tensor in losses_g_micro.items(): 
+                    if torch.isfinite(v_tensor): log_interval_accum_losses[k.replace('_micro','_agg')] += v_tensor.item() * batch_size_micro
                 
                 log_interval_items_processed += batch_size_micro
+                self.interval_steps_count += 1
 
                 if (batch_idx + 1) % self.grad_accum_steps == 0:
-                    # Finalize grad stats from accumulated micro-batches
-                    if hasattr(self.optimizer_disc, 'grad_stats'):
-                        num_params_d_total = sum(p.numel() for group in self.optimizer_disc.param_groups for p in group['params'] if p.requires_grad) # Check current requires_grad
-                        self.optimizer_disc.grad_stats.finalize_step_stats(num_params_d_total) # type: ignore
-                    if hasattr(self.optimizer_enc_gen, 'grad_stats'):
-                        num_params_g_total = sum(p.numel() for group in self.optimizer_enc_gen.param_groups for p in group['params'] if p.requires_grad)
-                        self.optimizer_enc_gen.grad_stats.finalize_step_stats(num_params_g_total) # type: ignore
+                    if hasattr(self.optimizer_disc, 'grad_stats') and hasattr(self.optimizer_disc.grad_stats, 'finalize_step_stats'): # type: ignore
+                        self.optimizer_disc.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_disc.param_groups for p in grp['params'] if p.requires_grad)) # type: ignore
+                    if hasattr(self.optimizer_enc_gen, 'grad_stats') and hasattr(self.optimizer_enc_gen.grad_stats, 'finalize_step_stats'): # type: ignore
+                        self.optimizer_enc_gen.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_enc_gen.param_groups for p in grp['params'] if p.requires_grad)) # type: ignore
 
-                    # Prepare MACRO-batch average losses for Q-Controllers
                     avg_g_total_macro = accum_g_total_q / self.grad_accum_steps
                     avg_g_recon_macro = accum_g_recon_q / self.grad_accum_steps
                     avg_g_kl_macro = accum_g_kl_q / self.grad_accum_steps
@@ -2924,299 +2941,447 @@ class HybridTrainer:
                     avg_d_real_macro = accum_d_real_q / self.grad_accum_steps
                     avg_d_fake_macro = accum_d_fake_q / self.grad_accum_steps
                     
-                    # Q-Controller for Discriminator
-                    # Set D grads true, G grads false FOR THIS OPTIMIZER'S Q-update and step
+                    # Discriminator Update
                     for p in d_ref.parameters(): p.requires_grad = True
                     for p in m_ref.parameters(): p.requires_grad = False
-                    if hasattr(self.optimizer_disc, 'q_controller_update_and_set_hyperparams'):
-                        self.optimizer_disc.q_controller_update_and_set_hyperparams( # type: ignore
-                            avg_losses_dict={'loss_g_total': avg_g_total_macro, 'loss_g_adv': avg_g_adv_macro,
-                                             'loss_d_total': avg_d_total_macro, 'loss_d_real': avg_d_real_macro, 'loss_d_fake': avg_d_fake_macro},
-                            current_lambda_kl_value=self.lambda_kl)
+                    if opt_disc_q_controller and hasattr(self.optimizer_disc, 'q_controller_update_and_set_hyperparams'):
+                        losses_d_q_lr_mom = {'loss_g_total': avg_g_total_macro, 'loss_g_adv': avg_g_adv_macro,
+                                             'loss_d_total': avg_d_total_macro, 'loss_d_real': avg_d_real_macro, 
+                                             'loss_d_fake': avg_d_fake_macro}
+                        self.optimizer_disc.q_controller_update_and_set_hyperparams(losses_d_q_lr_mom, self.lambda_kl) # type: ignore
                     if self.args.global_max_grad_norm > 0: self.scaler_disc.unscale_(self.optimizer_disc); torch.nn.utils.clip_grad_norm_(d_ref.parameters(), self.args.global_max_grad_norm)
                     self.scaler_disc.step(self.optimizer_disc); self.scaler_disc.update()
                     
-                    # Q-Controller for Generator
-                    # Set G grads true, D grads false FOR THIS OPTIMIZER'S Q-update and step
+                    # Generator Update
                     for p in d_ref.parameters(): p.requires_grad = False
                     for p in m_ref.parameters(): p.requires_grad = True
-                    if hasattr(self.optimizer_enc_gen, 'q_controller_update_and_set_hyperparams'):
-                        self.optimizer_enc_gen.q_controller_update_and_set_hyperparams( # type: ignore
-                            avg_losses_dict={'loss_g_total': avg_g_total_macro, 'loss_g_recon': avg_g_recon_macro, 'loss_g_kl': avg_g_kl_macro,
-                                             'loss_g_adv': avg_g_adv_macro, 'loss_d_total': avg_d_total_macro},
-                            current_lambda_kl_value=self.lambda_kl)
+                    if opt_gen_q_controller and hasattr(self.optimizer_enc_gen, 'q_controller_update_and_set_hyperparams'):
+                        losses_g_q_lr_mom = {'loss_g_total': avg_g_total_macro, 'loss_g_recon': avg_g_recon_macro, 
+                                             'loss_g_kl': avg_g_kl_macro, 'loss_g_adv': avg_g_adv_macro, 'loss_d_total': avg_d_total_macro}
+                        self.optimizer_enc_gen.q_controller_update_and_set_hyperparams(losses_g_q_lr_mom, self.lambda_kl) # type: ignore
                     if self.args.global_max_grad_norm > 0: self.scaler_enc_gen.unscale_(self.optimizer_enc_gen); torch.nn.utils.clip_grad_norm_(m_ref.parameters(), self.args.global_max_grad_norm)
                     self.scaler_enc_gen.step(self.optimizer_enc_gen); self.scaler_enc_gen.update()
                     
-                    # Zero grads for the next accumulation cycle
                     self.optimizer_disc.zero_grad(set_to_none=True)
                     self.optimizer_enc_gen.zero_grad(set_to_none=True)
-
                     self.global_step += 1
 
-                    # Reset Q-accumulators
                     accum_g_total_q, accum_g_recon_q, accum_g_kl_q, accum_g_adv_q = 0.0, 0.0, 0.0, 0.0
                     accum_d_total_q, accum_d_real_q, accum_d_fake_q = 0.0, 0.0, 0.0
                     
-                    # Logging logic (same as before, using log_interval_accum_losses)
-                    if self.global_step % self.args.log_interval == 0 and log_interval_items_processed > 0 and self.am_main_process:
-                        log_metrics = {f"train/{k.replace('_agg','')}": v / log_interval_items_processed for k, v in log_interval_accum_losses.items()}
-                        lr_g = self.optimizer_enc_gen.param_groups[0]['lr']; lr_d = self.optimizer_disc.param_groups[0]['lr']
-                        log_metrics.update({"train/lr_gen": lr_g, "train/lr_disc": lr_d, "epoch_frac": epoch + ((batch_idx + 1) / (num_micro_batches_epoch or 1)), "global_step": self.global_step, "train/lambda_kl_eff": self.lambda_kl})
-                        q_ctrl_gen_info = getattr(self.optimizer_enc_gen, 'get_q_controller_info', lambda: None)(); q_ctrl_disc_info = getattr(self.optimizer_disc, 'get_q_controller_info', lambda: None)()
-                        if q_ctrl_gen_info: log_metrics.update({f"q_ctrl_gen/{k.replace('_', '')}":v for k,v in q_ctrl_gen_info.items()})
-                        if q_ctrl_disc_info: log_metrics.update({f"q_ctrl_disc/{k.replace('_', '')}":v for k,v in q_ctrl_disc_info.items()})
+                    # --- Scheduled Lambda_KL Q-Controller Update ---
+                    if self.args.q_controller_enabled and self.lambda_kl_update_interval > 0 and \
+                       self.global_step > 0 and self.global_step % self.lambda_kl_update_interval == 0 and \
+                       self.interval_steps_count > 0 and lambda_kl_q_ctrl_ref is not None:
                         
-                        gt, dt = log_metrics.get('train/loss_g_total', -1), log_metrics.get('train/loss_d_total', -1)
-                        gr, gk, ga = log_metrics.get('train/loss_recon', -1), log_metrics.get('train/loss_kl',-1), log_metrics.get('train/loss_g_adv',-1)
-                        dr, df = log_metrics.get('train/loss_d_real',-1), log_metrics.get('train/loss_d_fake',-1)
-                        qeg, qed = log_metrics.get('q_ctrl_gen/epsilon',-1), log_metrics.get('q_ctrl_disc/epsilon',-1)
-                        qag, qad = log_metrics.get('q_ctrl_gen/lastchosenaction',{}), log_metrics.get('q_ctrl_disc/lastchosenaction',{})
-                        qslg, qsld = (qag.get('lr_scale',1.0) if isinstance(qag,dict) else 1.0), (qad.get('lr_scale',1.0) if isinstance(qad,dict) else 1.0)
+                        current_interval_metrics: Dict[str, Union[float, None]] = { # Python 3.10+: float | None
+                            'avg_recon': self.interval_metrics_accum['recon'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
+                            'avg_kl_div': self.interval_metrics_accum['kl_div'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
+                            'avg_d_total': self.interval_metrics_accum['d_total'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
+                            'val_metric': self.last_val_metrics.get(self.args.val_primary_metric),
+                            'current_lambda_kl_val': self.lambda_kl
+                        }
+                        
+                        q_state_lambda_kl = lambda_kl_q_ctrl_ref.get_lambda_kl_state(current_interval_metrics)
 
-                        log_str = (f"E{epoch+1} S{self.global_step} | G_tot:{gt:.3f}(Rec:{gr:.3f} KL:{gk:.3f} Adv:{ga:.3f}) | "
-                                   f"D_tot:{dt:.3f}(Real:{dr:.3f} Fake:{df:.3f}) | LR(G/D):{lr_g:.1e}/{lr_d:.1e} | "
-                                   f"Q_Eps(G/D):{qeg:.2f}/{qed:.2f} Q_Scl(G/D):{qslg:.2f}/{qsld:.2f}")
-                        prog_bar.set_postfix_str(f"G:{gt:.2f} D:{dt:.2f} Rec:{gr:.3f}", refresh=True)
+                        if lambda_kl_q_ctrl_ref.prev_lambda_kl_state is not None and \
+                           lambda_kl_q_ctrl_ref.prev_lambda_kl_action is not None and \
+                           q_state_lambda_kl is not None and \
+                           self.prev_interval_metrics_for_lambda_kl_reward is not None:
+                            
+                            reward_for_lambda_kl = lambda_kl_q_ctrl_ref.compute_lambda_kl_reward(
+                                current_interval_metrics,
+                                self.prev_interval_metrics_for_lambda_kl_reward
+                            )
+                            lambda_kl_q_ctrl_ref.update_q_values(
+                                lambda_kl_q_ctrl_ref.prev_lambda_kl_state,
+                                lambda_kl_q_ctrl_ref.prev_lambda_kl_action,
+                                reward_for_lambda_kl,
+                                q_state_lambda_kl,
+                                mode='lambda_kl'
+                            )
+                        elif q_state_lambda_kl is not None and hasattr(lambda_kl_q_ctrl_ref, 'set_initial_lambda_kl_metrics'):
+                             lambda_kl_q_ctrl_ref.set_initial_lambda_kl_metrics(current_interval_metrics)
+
+                        if q_state_lambda_kl is not None: # Ensure state is valid before choosing action
+                            lambda_kl_action_dict = lambda_kl_q_ctrl_ref.choose_action(q_state_lambda_kl, mode='lambda_kl')
+                            chosen_scale = lambda_kl_action_dict.get('lambda_kl_scale', 1.0)
+                            
+                            self.prev_interval_metrics_for_lambda_kl_reward = current_interval_metrics.copy()
+                            
+                            new_lambda_kl_val = self.lambda_kl * chosen_scale
+                            self.lambda_kl = float(np.clip(new_lambda_kl_val, self.min_lambda_kl_q_control, self.max_lambda_kl_q_control))
+                            
+                            if self.am_main_process:
+                                self.logger.info(f"GStep {self.global_step}: Lambda_KL Q-Ctrl updated lambda_kl to {self.lambda_kl:.3e} (scale: {chosen_scale:.2f})")
+                            
+                            lambda_kl_q_ctrl_ref.prev_lambda_kl_state = q_state_lambda_kl
+                            lambda_kl_q_ctrl_ref.prev_lambda_kl_action = lambda_kl_action_dict
+                        
+                        if opt_gen_q_controller and hasattr(opt_gen_q_controller, 'set_current_lambda_kl'):
+                            opt_gen_q_controller.set_current_lambda_kl(self.lambda_kl)
+                        if opt_disc_q_controller and hasattr(opt_disc_q_controller, 'set_current_lambda_kl'):
+                            opt_disc_q_controller.set_current_lambda_kl(self.lambda_kl)
+
+                        self.interval_metrics_accum = defaultdict(float)
+                        self.interval_steps_count = 0
+                    
+                    # Logging
+                    if self.global_step > 0 and self.global_step % self.args.log_interval == 0 and \
+                       log_interval_items_processed > 0 and self.am_main_process:
+                        log_metrics={f"train/{k.replace('_agg','')}":v/log_interval_items_processed for k,v in log_interval_accum_losses.items()}
+                        lr_g=self.optimizer_enc_gen.param_groups[0]['lr']; lr_d=self.optimizer_disc.param_groups[0]['lr']
+                        log_metrics.update({"train/lr_gen":lr_g,"train/lr_disc":lr_d,"epoch_frac":epoch+((batch_idx+1)/(num_batches_epoch or 1)),"global_step":self.global_step,"train/lambda_kl_eff":self.lambda_kl})
+                        if opt_gen_q_controller and hasattr(opt_gen_q_controller, 'get_info'): log_metrics.update({f"q_ctrl_gen/{k.replace('_','')}":v for k,v in opt_gen_q_controller.get_info().items()})
+                        if opt_disc_q_controller and hasattr(opt_disc_q_controller, 'get_info'): log_metrics.update({f"q_ctrl_disc/{k.replace('_','')}":v for k,v in opt_disc_q_controller.get_info().items()})
+                        
+                        gt = log_metrics.get('train/loss_g_total',-1.0); dt = log_metrics.get('train/loss_d_total',-1.0)
+                        gr = log_metrics.get('train/loss_recon',-1.0); gk = log_metrics.get('train/loss_kl',-1.0); ga = log_metrics.get('train/loss_g_adv',-1.0)
+                        dr = log_metrics.get('train/loss_d_real',-1.0); df = log_metrics.get('train/loss_d_fake',-1.0)
+                        qeg = log_metrics.get('q_ctrl_gen/epsilon',-1.0); qed = log_metrics.get('q_ctrl_disc/epsilon',-1.0)
+                        
+                        qag_lrmom = log_metrics.get('q_ctrl_gen/lastlrmomaction',{})
+                        qad_lrmom = log_metrics.get('q_ctrl_disc/lastlrmomaction',{})
+                        qag_lkl = log_metrics.get('q_ctrl_gen/lastlambdaklaction',{}) # Assuming G's Q-Ctrl handles lambda_kl
+                        
+                        qslg = qag_lrmom.get('lr_scale',1.0) if isinstance(qag_lrmom,dict) else 1.0
+                        qsld = qad_lrmom.get('lr_scale',1.0) if isinstance(qad_lrmom,dict) else 1.0
+                        qslkl = qag_lkl.get('lambda_kl_scale',1.0) if isinstance(qag_lkl,dict) else 1.0
+
+                        log_str=(f"E{epoch+1} S{self.global_step} | G_tot:{gt:.3f}(Rec:{gr:.3f} KL:{gk:.3f} Adv:{ga:.3f}) | "
+                                   f"D_tot:{dt:.3f}(R:{dr:.3f} F:{df:.3f}) | LR(G/D):{lr_g:.1e}/{lr_d:.1e} | "
+                                   f"Q_Eps:{qeg:.2f}/{qed:.2f} Q_Scl(G/D):{qslg:.2f}/{qsld:.2f} Q_LKL_Scl:{qslkl:.2f} LKL_eff:{self.lambda_kl:.2e}")
+                        prog_bar.set_postfix_str(f"G:{gt:.2f} D:{dt:.2f} Rec:{gr:.3f} LKL:{self.lambda_kl:.1e}",refresh=True)
                         self.logger.info(log_str)
                         if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log(log_metrics, step=self.global_step) # type: ignore
-                        log_interval_accum_losses = defaultdict(float); log_interval_items_processed = 0
-
-                    # Log training reconstruction samples (same logic)
-                    if self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and \
-                       self.global_step % self.args.wandb_log_train_recon_interval == 0 and recon_frames_for_logging is not None:
-                        self._log_samples_to_wandb("train_recon", recon_frames_for_logging, recon_frames_for_logging.shape[1], self.args.num_val_samples_to_log)
-                        self._log_samples_to_wandb("train_context", batch_frames[:, :self.video_config["num_input_frames"], ...], self.video_config["num_input_frames"], self.args.num_val_samples_to_log)
-                        s_idx_target_log = self.video_config["num_input_frames"]; gt_len_log = min(self.video_config["num_predict_frames"], batch_frames.shape[1] - s_idx_target_log)
-                        if gt_len_log > 0: self._log_samples_to_wandb("train_ground_truth", batch_frames[:, s_idx_target_log : s_idx_target_log + gt_len_log, ...], gt_len_log, self.args.num_val_samples_to_log)
+                        
+                        log_interval_accum_losses = defaultdict(float)
+                        log_interval_items_processed = 0
                     
-                    # Log fixed noise samples (same logic)
+                    if self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and \
+                       self.global_step > 0 and self.global_step % self.args.wandb_log_train_recon_interval == 0 and \
+                       recon_frames_for_logging is not None:
+                        self._log_samples_to_wandb("train_recon", recon_frames_for_logging, recon_frames_for_logging.shape[1], self.args.num_val_samples_to_log)
+                        num_input_frames = self.video_config.get("num_input_frames", 0)
+                        self._log_samples_to_wandb("train_context", batch_frames[:, :num_input_frames, ...], num_input_frames, self.args.num_val_samples_to_log)
+                        s_idx_target_log = num_input_frames
+                        gt_len_log = min(self.video_config.get("num_predict_frames", 1), batch_frames.shape[1] - s_idx_target_log)
+                        if gt_len_log > 0:
+                            self._log_samples_to_wandb("train_ground_truth", batch_frames[:, s_idx_target_log : s_idx_target_log + gt_len_log, ...], gt_len_log, self.args.num_val_samples_to_log)
+
                     if self.am_main_process and self.args.wandb_log_fixed_noise_samples_interval > 0 and \
-                       self.global_step % self.args.wandb_log_fixed_noise_samples_interval == 0 and self.fixed_noise_for_sampling is not None:
+                       self.global_step > 0 and self.global_step % self.args.wandb_log_fixed_noise_samples_interval == 0 and \
+                       self.fixed_noise_for_sampling is not None:
                         m_ref.eval()
                         with torch.no_grad():
-                            # ... (fixed noise sampling logic remains the same) ...
-                            num_fs = self.fixed_noise_for_sampling.shape[0]; npf_cfg = self.video_config["num_predict_frames"]
-                            nra_cfg = self.gaad_appearance_config["num_regions"]; fd_cfg = (self.args.image_w, self.args.image_h)
+                            num_fs = self.fixed_noise_for_sampling.shape[0]
+                            npf_cfg = self.video_config.get("num_predict_frames",1)
+                            nra_cfg = self.gaad_appearance_config.get("num_regions",0)
+                            fd_cfg = (self.args.image_w, self.args.image_h)
                             dbb_list_fixed = []
                             if nra_cfg > 0:
                                 for _ in range(num_fs):
-                                    cs_bbox_1f = golden_subdivide_rect_fixed_n(fd_cfg, nra_cfg, device=self.device, dtype=self.fixed_noise_for_sampling.dtype, min_size_px=self.gaad_appearance_config['min_size_px']) # type: ignore
-                                    bss_all_f_rep = cs_bbox_1f.unsqueeze(0).repeat(npf_cfg, 1, 1)
+                                    cs_bbox_1f = golden_subdivide_rect_fixed_n( # type: ignore
+                                        fd_cfg, nra_cfg, device=self.device,
+                                        dtype=self.fixed_noise_for_sampling.dtype,
+                                        min_size_px=self.gaad_appearance_config.get('min_size_px',5)
+                                    )
+                                    bss_all_f_rep = cs_bbox_1f.unsqueeze(0).repeat(npf_cfg,1,1)
                                     dbb_list_fixed.append(bss_all_f_rep)
                                 dbb_batch_fixed = torch.stack(dbb_list_fixed) if dbb_list_fixed else None
-                            else: dbb_batch_fixed = None
+                            else:
+                                dbb_batch_fixed = None
                             
-                            if dbb_batch_fixed is not None or nra_cfg == 0 : # Proceed if bboxes generated or not needed
+                            if dbb_batch_fixed is not None or nra_cfg == 0:
                                 fixed_noise_samples_gen = m_ref.decode(self.fixed_noise_for_sampling, dbb_batch_fixed)
                                 self._log_samples_to_wandb("fixed_noise_generated", fixed_noise_samples_gen, fixed_noise_samples_gen.shape[1], num_fs)
                         m_ref.train()
 
-                    if self.args.save_interval > 0 and self.global_step > 0 and (self.global_step % self.args.save_interval == 0) and self.am_main_process:
-                        # Use the macro-batch averages for intermediate checkpoint metrics
-                        chkpt_metrics = {'train_loss_g_total_macro': avg_g_total_macro, 'train_loss_d_total_macro': avg_d_total_macro}
-                        self._save_checkpoint(is_intermediate=True, metrics=chkpt_metrics)
-
-            # End of micro-batch loop for epoch
-            # Handle any remaining gradients if epoch ends mid-accumulation cycle (grad_accum_steps > 1)
-            # This part is mostly for completeness if an epoch doesn't divide evenly by grad_accum_steps.
-            # However, with drop_last=True in DataLoader, this might be less common unless dataset size itself is not a multiple.
-            # For simplicity, we assume the main loop handles accumulation correctly. If an epoch ends, the partial grads
-            # would be stepped or zeroed at the start of the next epoch's accumulation.
-            # The provided structure already zeroes grads after the accumulation step, which is fine.
+                    if self.args.save_interval > 0 and self.global_step > 0 and \
+                       self.global_step % self.args.save_interval == 0 and self.am_main_process:
+                        chkpt_metrics={'train_loss_g_total_macro':avg_g_total_macro,'train_loss_d_total_macro':avg_d_total_macro}
+                        self._save_checkpoint(is_intermediate=True,metrics=chkpt_metrics)
 
             # --- End of Epoch Actions ---
             if self.am_main_process:
-                 final_avg_g_loss = log_metrics.get('train/loss_g_total', float('nan')) if 'log_metrics' in locals() and log_interval_items_processed == 0 else \
-                                  (log_interval_accum_losses['loss_g_total_agg'] / log_interval_items_processed if log_interval_items_processed > 0 else float('nan'))
-                 final_avg_d_loss = log_metrics.get('train/loss_d_total', float('nan')) if 'log_metrics' in locals() and log_interval_items_processed == 0 else \
-                                  (log_interval_accum_losses['loss_d_total_agg'] / log_interval_items_processed if log_interval_items_processed > 0 else float('nan'))
+                final_avg_g_loss = float('nan')
+                final_avg_d_loss = float('nan')
+                if log_interval_items_processed > 0: # If items were processed since last log interval reset
+                    final_avg_g_loss = log_interval_accum_losses['loss_g_total_agg'] / log_interval_items_processed
+                    final_avg_d_loss = log_interval_accum_losses['loss_d_total_agg'] / log_interval_items_processed
+                elif 'log_metrics' in locals() and 'train/loss_g_total' in log_metrics : # Fallback to last logged averages if any
+                     final_avg_g_loss = log_metrics.get('train/loss_g_total', float('nan'))
+                     final_avg_d_loss = log_metrics.get('train/loss_d_total', float('nan'))
 
-                 self.logger.info(f"Epoch {epoch+1} finished. Approx Avg Loss (last interval or partial): G:{final_avg_g_loss:.4f}, D:{final_avg_d_loss:.4f}")
-                 if self.args.wandb and WANDB_AVAILABLE and wandb.run: # type: ignore
-                     wandb.log({"epoch": epoch+1, 
-                                "epoch_avg_train_loss_g_approx": final_avg_g_loss if np.isfinite(final_avg_g_loss) else -1.0, 
-                                "epoch_avg_train_loss_d_approx": final_avg_d_loss if np.isfinite(final_avg_d_loss) else -1.0}, 
-                               step=self.global_step)
+                self.logger.info(f"Epoch {epoch+1} finished. Approx Avg Loss (last interval or batch): G:{final_avg_g_loss:.4f}, D:{final_avg_d_loss:.4f}, LambdaKL_eff:{self.lambda_kl:.3e}")
+                if self.args.wandb and WANDB_AVAILABLE and wandb.run: # type: ignore
+                    wandb.log({"epoch":epoch+1, # type: ignore
+                               "epoch_avg_train_loss_g_approx":final_avg_g_loss if np.isfinite(final_avg_g_loss) else -1.0, 
+                               "epoch_avg_train_loss_d_approx":final_avg_d_loss if np.isfinite(final_avg_d_loss) else -1.0, 
+                               "epoch_lambda_kl": self.lambda_kl}, step=self.global_step)
 
-            if self.val_loader and self.am_main_process: # Validation only on main process
+            if self.val_loader and self.am_main_process:
                 val_metrics = self.validate(num_val_samples_to_log=self.args.num_val_samples_to_log)
-                if val_metrics: # val_metrics can be None if val_loader is None
+                if val_metrics:
                     if self.args.wandb and WANDB_AVAILABLE and wandb.run: # type: ignore
-                        wandb.log({f"val/{k}":v for k,v in val_metrics.items()}, step=self.global_step)
+                        wandb.log({f"val/{k}":v for k,v in val_metrics.items()}, step=self.global_step) # type: ignore
                     
-                    # Check for best model based on primary metric
                     metric_to_check = self.args.val_primary_metric
-                    current_val_for_best = val_metrics.get(metric_to_check, 
-                                                           float('inf') if metric_to_check not in ["avg_val_psnr", "avg_val_ssim"] else -float('inf'))
-                    is_better = False
-                    if metric_to_check in ["avg_val_psnr", "avg_val_ssim"]: # Higher is better
-                        is_better = current_val_for_best > self.best_val_metric_val
-                    else: # Lower is better (MSE, LPIPS)
-                        is_better = current_val_for_best < self.best_val_metric_val
+                    default_val = float('inf') if metric_to_check not in ["avg_val_psnr","avg_val_ssim"] else -float('inf')
+                    current_val_for_best = val_metrics.get(metric_to_check, default_val)
                     
-                    if is_better:
-                        self.logger.info(f"New best val metric ({metric_to_check}): {current_val_for_best:.4f} (prev: {self.best_val_metric_val:.4f}). Saving best model.")
+                    is_better = (current_val_for_best > self.best_val_metric_val) if metric_to_check in ["avg_val_psnr","avg_val_ssim"] \
+                                else (current_val_for_best < self.best_val_metric_val)
+                    
+                    if is_better and np.isfinite(current_val_for_best): # Ensure we don't save for nan/inf bests unless it's the first valid one
+                        self.logger.info(f"New best val metric ({metric_to_check}): {current_val_for_best:.4f} (prev: {self.best_val_metric_val:.4f}). Save best.")
                         self.best_val_metric_val = current_val_for_best
                         self._save_checkpoint(is_best=True, metrics=val_metrics)
-            
-            if self.am_main_process: # Save regular end-of-epoch checkpoint
-                epoch_end_metrics = self.last_val_metrics.copy() if self.last_val_metrics else {}
-                # Add training losses if available and finite
-                if 'final_avg_g_loss' in locals() and np.isfinite(final_avg_g_loss): epoch_end_metrics["epoch_end_train_loss_g_avg_approx"] = final_avg_g_loss
-                if 'final_avg_d_loss' in locals() and np.isfinite(final_avg_d_loss): epoch_end_metrics["epoch_end_train_loss_d_avg_approx"] = final_avg_d_loss
-                self._save_checkpoint(metrics=epoch_end_metrics) # Saves as epX_stepY.pt
 
-    # --- Validation, Checkpointing, Sampling methods remain largely the same ---
-    # (Copied from previous correct version for completeness)
+            if self.am_main_process:
+                epoch_end_metrics = self.last_val_metrics.copy() if self.last_val_metrics else {}
+                # Use 'final_avg_g_loss' as defined above for epoch end metrics
+                if 'final_avg_g_loss' in locals() and np.isfinite(final_avg_g_loss): 
+                    epoch_end_metrics["epoch_end_train_loss_g_avg_approx"] = final_avg_g_loss
+                if 'final_avg_d_loss' in locals() and np.isfinite(final_avg_d_loss): 
+                    epoch_end_metrics["epoch_end_train_loss_d_avg_approx"] = final_avg_d_loss
+                self._save_checkpoint(metrics=epoch_end_metrics)
+
+
     @torch.no_grad()
     def validate(self, num_val_samples_to_log: int = 1) -> Optional[Dict[str, float]]:
         if not self.val_loader or not self.am_main_process: return None
-        m_ref = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model
-        d_ref = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator # Not used in val, but good practice
-        m_ref.eval(); # d_ref.eval() # Not strictly needed for VAE validation
+        m_ref = self.model.module if self.ddp_active else self.model
+        m_ref.eval()
 
-        total_recon_loss_mse_sum = 0.0; total_psnr_sum = 0.0; total_ssim_sum = 0.0; total_lpips_sum = 0.0
-        total_compared_frames_flat_count = 0
-        wandb_val_samples_log_payload: Dict[str, List] = defaultdict(list) # type: ignore
-        num_sequences_actually_logged_wandb = 0
-        dtype_model = next(m_ref.parameters()).dtype
+        total_recon_mse_sum = 0.0
+        total_psnr_sum = 0.0
+        total_ssim_sum = 0.0
+        total_lpips_sum = 0.0
+        total_comp_frames = 0
+        wb_val_samples: Dict[str, List[Any]] = defaultdict(list) # List[wandb.Image] typically
+        # logged_seq_count = 0 # Initialized but not used in the provided snippet; might be used in elided WandB logging.
+        dtype_m = next(iter(m_ref.parameters()), torch.tensor(0.0, device=self.device)).dtype
+        
+        prog_bar_disabled = not self.am_main_process or os.getenv('CI') == 'true'
+        for _, batch_frames_raw in enumerate(tqdm(self.val_loader, desc="Validating", disable=prog_bar_disabled, dynamic_ncols=True)):
+            real_full = batch_frames_raw.to(self.device, dtype_m)
+            B,N,C,H,W = real_full.shape
+            recon_pred, _, _, _ = m_ref(real_full)
+            
+            n_cond = self.video_config.get("num_input_frames",0)
+            n_pred_cfg = self.video_config.get("num_predict_frames",1)
+            avail_pred_g = recon_pred.shape[1]
+            avail_gt = N - n_cond
+            comp_len = min(avail_pred_g, avail_gt, n_pred_cfg)
 
-        for batch_idx, batch_frames_raw in enumerate(tqdm(self.val_loader, desc="Validating", dynamic_ncols=True, disable=os.getenv('CI')=='true' or not self.am_main_process)):
-            batch_frames = batch_frames_raw.to(self.device)
-            real_frames_full = batch_frames.to(self.device, dtype=dtype_model)
-            B_val, N_total_val, C_val, H_val, W_val = real_frames_full.shape
+            if comp_len <= 0: continue
 
-            recon_frames_pred_sequence, _, _, _ = m_ref(real_frames_full)
+            pred_metrics = recon_pred[:,:comp_len,...]
+            gt_metrics = real_full[:,n_cond:n_cond+comp_len,...]
+            
+            pred_01 = (pred_metrics.clamp(-1,1)+1)/2.0
+            gt_01 = (gt_metrics.clamp(-1,1)+1)/2.0
+            
+            pred_flat = pred_01.reshape(-1,C,H,W)
+            gt_flat = gt_01.reshape(-1,C,H,W)
+            curr_batch_flat_frames = pred_flat.shape[0]
 
-            num_cond = self.video_config["num_input_frames"]; num_pred_config = self.video_config["num_predict_frames"]
-            available_pred_len_from_g = recon_frames_pred_sequence.shape[1]
-            available_gt_len = N_total_val - num_cond
-            compare_len = min(available_pred_len_from_g, available_gt_len, num_pred_config)
-            if compare_len <=0: continue
-
-            pred_for_metrics = recon_frames_pred_sequence[:, :compare_len, ...]
-            gt_for_metrics = real_frames_full[:, num_cond : num_cond + compare_len, ...]
-            pred_norm_01 = (pred_for_metrics.clamp(-1, 1) + 1) / 2.0
-            gt_norm_01 = (gt_for_metrics.clamp(-1, 1) + 1) / 2.0
-            pred_norm_flat = pred_norm_01.reshape(-1, C_val, H_val, W_val)
-            gt_norm_flat = gt_norm_01.reshape(-1, C_val, H_val, W_val)
-            current_batch_num_flat_frames_processed = pred_norm_flat.shape[0]
-
-            mse_loss_val_batch = F.mse_loss(pred_norm_flat, gt_norm_flat, reduction='mean')
-            if torch.isfinite(mse_loss_val_batch):
-                total_recon_loss_mse_sum += mse_loss_val_batch.item() * current_batch_num_flat_frames_processed
-                psnr_val_batch_avg = 10 * math.log10(1.0 / (mse_loss_val_batch.item() + EPS)) if mse_loss_val_batch.item() > EPS else 100.0
-                total_psnr_sum += psnr_val_batch_avg * current_batch_num_flat_frames_processed
+            mse_batch = F.mse_loss(pred_flat, gt_flat, reduction='mean')
+            if torch.isfinite(mse_batch):
+                total_recon_mse_sum += mse_batch.item() * curr_batch_flat_frames
+                # Use a globally defined EPS (e.g., EPS=1e-8)
+                psnr_batch_avg = 10 * math.log10(1.0 / (mse_batch.item() + EPS)) if mse_batch.item() > EPS else 100.0
+                total_psnr_sum += psnr_batch_avg * curr_batch_flat_frames
             
             if self.ssim_metric:
-                try: ssim_val_batch_avg = self.ssim_metric(pred_norm_flat, gt_norm_flat); total_ssim_sum += ssim_val_batch_avg.item() * current_batch_num_flat_frames_processed
-                except Exception: pass # Ignore SSIM errors for a batch
+                try:
+                    ssim_batch_avg = self.ssim_metric(pred_flat, gt_flat)
+                    if torch.isfinite(ssim_batch_avg):
+                         total_ssim_sum += ssim_batch_avg.item() * curr_batch_flat_frames
+                except Exception as e_ssim:
+                    self.logger.debug(f"SSIM calculation failed during validation: {e_ssim}") # Log instead of silent pass
             
             if self.lpips_loss_fn:
-                try: lpips_val_batch_frames = self.lpips_loss_fn(pred_norm_flat*2.0-1.0, gt_norm_flat*2.0-1.0); total_lpips_sum += lpips_val_batch_frames.sum().item()
-                except Exception: pass # Ignore LPIPS errors
+                try:
+                    # LPIPS expects images in [-1, 1] range
+                    lpips_batch_frames = self.lpips_loss_fn(pred_flat * 2.0 - 1.0, gt_flat * 2.0 - 1.0)
+                    if torch.isfinite(lpips_batch_frames.sum()):
+                         total_lpips_sum += lpips_batch_frames.sum().item()
+                except Exception as e_lpips:
+                    self.logger.debug(f"LPIPS calculation failed during validation: {e_lpips}") # Log instead of silent pass
 
-            total_compared_frames_flat_count += current_batch_num_flat_frames_processed
+            total_comp_frames += curr_batch_flat_frames
+            # ... (WandB val sample logging code, potentially using logged_seq_count, was indicated as elided here)
+            # Example:
+            # if logged_seq_count < num_val_samples_to_log and WANDB_AVAILABLE and wandb.run:
+            #     # ... logic to prepare and log samples to wb_val_samples ...
+            #     logged_seq_count += B # or actual number of sequences logged from this batch
 
-            if self.args.wandb and WANDB_AVAILABLE and wandb.run and num_sequences_actually_logged_wandb < num_val_samples_to_log: # type: ignore
-                num_to_log_this_val_batch = min(B_val, num_val_samples_to_log - num_sequences_actually_logged_wandb)
-                for k_idx in range(num_to_log_this_val_batch):
-                    # ... (WandB image logging logic for val - same as before) ...
-                    csio = num_sequences_actually_logged_wandb + k_idx # current_sample_idx_overall
-                    for fci in range(min(num_cond, N_total_val)): wandb_val_samples_log_payload["val_context_samples"].append(wandb.Image(((real_frames_full[k_idx, fci].cpu().float().clamp(-1,1)+1)/2.0), caption=f"ValCond_S{csio}_F{fci}_Ep{self.current_epoch+1}"))
-                    for fpi in range(compare_len):
-                        wandb_val_samples_log_payload["val_ground_truth_samples"].append(wandb.Image(gt_norm_01[k_idx, fpi].cpu().float(), caption=f"ValGT_S{csio}_F{fpi}_Ep{self.current_epoch+1}"))
-                        wandb_val_samples_log_payload["val_reconstruction_samples"].append(wandb.Image(pred_norm_01[k_idx, fpi].cpu().float(), caption=f"ValRecon_S{csio}_F{fpi}_Ep{self.current_epoch+1}"))
-                num_sequences_actually_logged_wandb += num_to_log_this_val_batch
+        m_ref.train()
+        avg_mse = total_recon_mse_sum / total_comp_frames if total_comp_frames > 0 else float('inf')
+        avg_psnr = total_psnr_sum / total_comp_frames if total_comp_frames > 0 else 0.0
+        avg_ssim = total_ssim_sum / total_comp_frames if total_comp_frames > 0 and self.ssim_metric else 0.0
+        avg_lpips = total_lpips_sum / total_comp_frames if total_comp_frames > 0 and self.lpips_loss_fn else float('inf')
         
-        m_ref.train() # Set model back to train mode
-
-        avg_val_recon_mse = total_recon_loss_mse_sum / total_compared_frames_flat_count if total_compared_frames_flat_count > 0 else float('inf')
-        avg_val_psnr = total_psnr_sum / total_compared_frames_flat_count if total_compared_frames_flat_count > 0 else 0.0
-        avg_val_ssim = total_ssim_sum / total_compared_frames_flat_count if total_compared_frames_flat_count > 0 and self.ssim_metric else 0.0
-        avg_val_lpips = total_lpips_sum / total_compared_frames_flat_count if total_compared_frames_flat_count > 0 and self.lpips_loss_fn else float('inf')
-
-        metrics = {"avg_val_recon_mse": avg_val_recon_mse, "avg_val_psnr": avg_val_psnr, "avg_val_ssim": avg_val_ssim, "avg_val_lpips": avg_val_lpips}
+        metrics={"avg_val_recon_mse":avg_mse,"avg_val_psnr":avg_psnr,"avg_val_ssim":avg_ssim,"avg_val_lpips":avg_lpips}
         self.last_val_metrics = metrics
-        self.logger.info(f"Validation Metrics (Ep {self.current_epoch+1}, GStep {self.global_step}): ReconMSE:{avg_val_recon_mse:.4f}, PSNR:{avg_val_psnr:.2f}, SSIM:{avg_val_ssim:.4f}, LPIPS:{avg_val_lpips:.4f}")
-        if wandb_val_samples_log_payload and self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log(dict(wandb_val_samples_log_payload), step=self.global_step) # type: ignore
+        self.logger.info(f"Validation Metrics (Ep {self.current_epoch+1}, GStep {self.global_step}): ReconMSE:{avg_mse:.4f}, PSNR:{avg_psnr:.2f}, SSIM:{avg_ssim:.4f}, LPIPS:{avg_lpips:.4f}")
+        
+        if wb_val_samples and self.args.wandb and WANDB_AVAILABLE and wandb.run: # type: ignore
+             wandb.log(dict(wb_val_samples), step=self.global_step) # type: ignore
         return metrics
 
-    def _save_checkpoint(self, is_intermediate: bool=False, metrics:Optional[Dict]=None, is_best:bool=False):
-        # ... (Save checkpoint method remains identical to your V2 logic) ...
+    def _save_checkpoint(self, is_intermediate: bool=False, metrics:Optional[Dict[str, Any]]=None, is_best:bool=False):
         if not self.am_main_process: return
-        m_save = self.model.module if self.ddp_active and isinstance(self.model, DDP) else self.model
-        d_save = self.discriminator.module if self.ddp_active and isinstance(self.discriminator, DDP) else self.discriminator
-        data = {'global_step': self.global_step, 'epoch': self.current_epoch, 'model_state_dict': m_save.state_dict(),'discriminator_state_dict': d_save.state_dict(),'optimizer_enc_gen_state_dict': self.optimizer_enc_gen.state_dict(),'optimizer_disc_state_dict': self.optimizer_disc.state_dict(),'scaler_enc_gen_state_dict': self.scaler_enc_gen.state_dict() if self.args.use_amp else None,'scaler_disc_state_dict': self.scaler_disc.state_dict() if self.args.use_amp else None,'args': vars(self.args),'metrics': metrics if metrics else self.last_val_metrics,'video_config': self.video_config,'best_val_metric_val': self.best_val_metric_val,'current_lambda_kl': self.lambda_kl}
-        q_ctrl_gen_obj = getattr(self.optimizer_enc_gen, 'q_controller', None); q_ctrl_disc_obj = getattr(self.optimizer_disc, 'q_controller', None)
-        if q_ctrl_gen_obj and hasattr(q_ctrl_gen_obj, '__dict__'): data['q_controller_enc_gen_state'] = q_ctrl_gen_obj.__dict__
-        if q_ctrl_disc_obj and hasattr(q_ctrl_disc_obj, '__dict__'): data['q_controller_disc_state'] = q_ctrl_disc_obj.__dict__
-        fname_prefix="wubugaad_hybridgen_ckpt_v01"; fpath=""
-        if is_best: fpath=os.path.join(self.args.checkpoint_dir, f"{fname_prefix}_best.pt")
-        elif is_intermediate: fpath=os.path.join(self.args.checkpoint_dir, f"{fname_prefix}_step{self.global_step}.pt")
-        else: fpath=os.path.join(self.args.checkpoint_dir, f"{fname_prefix}_ep{self.current_epoch+1}_step{self.global_step}.pt")
-        try: torch.save(data, fpath); self.logger.info(f"Checkpoint saved: {os.path.basename(fpath)}")
-        except Exception as e: self.logger.error(f"Save checkpoint error {fpath}: {e}", exc_info=True)
+        
+        m_s = self.model.module if self.ddp_active else self.model
+        d_s = self.discriminator.module if self.ddp_active else self.discriminator
+        
+        data = {
+            'global_step': self.global_step,
+            'epoch': self.current_epoch,
+            'model_state_dict': m_s.state_dict(),
+            'discriminator_state_dict': d_s.state_dict(),
+            'optimizer_enc_gen_state_dict': self.optimizer_enc_gen.state_dict(),
+            'optimizer_disc_state_dict': self.optimizer_disc.state_dict(),
+            'scaler_enc_gen_state_dict': self.scaler_enc_gen.state_dict() if self.args.use_amp and self.device.type == 'cuda' else None,
+            'scaler_disc_state_dict': self.scaler_disc.state_dict() if self.args.use_amp and self.device.type == 'cuda' else None,
+            'args': vars(self.args),
+            'metrics': metrics if metrics else self.last_val_metrics,
+            'video_config': self.video_config,
+            'best_val_metric_val': self.best_val_metric_val,
+            'current_lambda_kl': self.lambda_kl
+        }
+        
+        qg_obj = getattr(self.optimizer_enc_gen,'q_controller',None)
+        qd_obj = getattr(self.optimizer_disc,'q_controller',None)
+        if qg_obj and hasattr(qg_obj,'state_dict'): data['q_controller_enc_gen_state'] = qg_obj.state_dict()
+        elif qg_obj and hasattr(qg_obj,'__dict__'): data['q_controller_enc_gen_state'] = qg_obj.__dict__ # Fallback
+        
+        if qd_obj and hasattr(qd_obj,'state_dict'): data['q_controller_disc_state'] = qd_obj.state_dict()
+        elif qd_obj and hasattr(qd_obj,'__dict__'): data['q_controller_disc_state'] = qd_obj.__dict__ # Fallback
 
+        fprefix = "wubugaad_hybridgen_ckpt_v01"
+        fp = ""
+        if is_best:
+            fp = os.path.join(self.args.checkpoint_dir, f"{fprefix}_best.pt")
+        elif is_intermediate:
+            fp = os.path.join(self.args.checkpoint_dir, f"{fprefix}_step{self.global_step}.pt")
+        else: # End of epoch
+            fp = os.path.join(self.args.checkpoint_dir, f"{fprefix}_ep{self.current_epoch+1}_step{self.global_step}.pt")
+        
+        try:
+            torch.save(data, fp)
+            self.logger.info(f"Checkpoint saved: {os.path.basename(fp)}")
+        except Exception as e:
+            self.logger.error(f"Save CKPT error {fp}: {e}", exc_info=True)
 
     def load_checkpoint(self, checkpoint_path:str) -> Tuple[int,int]:
-        # ... (Load checkpoint method remains identical to your V2 logic) ...
-        if not os.path.exists(checkpoint_path): self.logger.warning(f"CKPT {checkpoint_path} not found."); return 0,0
-        try: ckpt = torch.load(checkpoint_path, map_location=self.device); self.logger.info(f"Loaded CKPT: {checkpoint_path}")
-        except Exception as e: self.logger.error(f"Failed load CKPT {checkpoint_path}: {e}"); return 0,0
-        m_load = self.model.module if self.ddp_active else self.model; d_load = self.discriminator.module if self.ddp_active else self.discriminator
+        if not os.path.exists(checkpoint_path):
+            self.logger.warning(f"CKPT {checkpoint_path} not found. Starting from scratch.")
+            return 0,0
+        try:
+            ckpt = torch.load(checkpoint_path, map_location=self.device)
+            self.logger.info(f"Loaded CKPT: {checkpoint_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to load CKPT {checkpoint_path}: {e}. Starting from scratch.")
+            return 0,0
+
+        m_load = self.model.module if self.ddp_active else self.model
+        d_load = self.discriminator.module if self.ddp_active else self.discriminator
+        
         try: m_load.load_state_dict(ckpt['model_state_dict'], strict=self.args.load_strict); self.logger.info("Model state_dict loaded.")
-        except Exception as e: self.logger.error(f"Err loading model state_dict: {e}", exc_info=False)
-        try: d_load.load_state_dict(ckpt['discriminator_state_dict'], strict=self.args.load_strict); self.logger.info("Disc state_dict loaded.")
-        except Exception as e: self.logger.error(f"Err loading disc state_dict: {e}", exc_info=False)
+        except Exception as e: self.logger.error(f"Error loading model state_dict: {e}", exc_info=not self.args.load_strict)
+        try: d_load.load_state_dict(ckpt['discriminator_state_dict'], strict=self.args.load_strict); self.logger.info("Discriminator state_dict loaded.")
+        except Exception as e: self.logger.error(f"Error loading discriminator state_dict: {e}", exc_info=not self.args.load_strict)
+
         if 'optimizer_enc_gen_state_dict' in ckpt and self.optimizer_enc_gen:
-            try: self.optimizer_enc_gen.load_state_dict(ckpt['optimizer_enc_gen_state_dict']); self.logger.info("Opt G state loaded.")
-            except Exception as e: self.logger.warning(f"Could not load Opt G state: {e}")
+            try: self.optimizer_enc_gen.load_state_dict(ckpt['optimizer_enc_gen_state_dict']); self.logger.info("Optimizer Enc/Gen state loaded.")
+            except Exception as e: self.logger.warning(f"Could not load Optimizer Enc/Gen state: {e}")
         if 'optimizer_disc_state_dict' in ckpt and self.optimizer_disc:
-            try: self.optimizer_disc.load_state_dict(ckpt['optimizer_disc_state_dict']); self.logger.info("Opt D state loaded.")
-            except Exception as e: self.logger.warning(f"Could not load Opt D state: {e}")
-        if self.args.use_amp:
-            if 'scaler_enc_gen_state_dict' in ckpt and self.scaler_enc_gen and ckpt['scaler_enc_gen_state_dict']: self.scaler_enc_gen.load_state_dict(ckpt['scaler_enc_gen_state_dict'])
-            if 'scaler_disc_state_dict' in ckpt and self.scaler_disc and ckpt['scaler_disc_state_dict']: self.scaler_disc.load_state_dict(ckpt['scaler_disc_state_dict'])
-        q_g = getattr(self.optimizer_enc_gen, 'q_controller', None); q_d = getattr(self.optimizer_disc, 'q_controller', None)
+            try: self.optimizer_disc.load_state_dict(ckpt['optimizer_disc_state_dict']); self.logger.info("Optimizer Disc state loaded.")
+            except Exception as e: self.logger.warning(f"Could not load Optimizer Disc state: {e}")
+
+        if self.args.use_amp and self.device.type == 'cuda':
+            if 'scaler_enc_gen_state_dict' in ckpt and self.scaler_enc_gen and ckpt['scaler_enc_gen_state_dict'] is not None:
+                self.scaler_enc_gen.load_state_dict(ckpt['scaler_enc_gen_state_dict'])
+            if 'scaler_disc_state_dict' in ckpt and self.scaler_disc and ckpt['scaler_disc_state_dict'] is not None:
+                self.scaler_disc.load_state_dict(ckpt['scaler_disc_state_dict'])
+        
+        q_g = getattr(self.optimizer_enc_gen, 'q_controller', None)
+        q_d = getattr(self.optimizer_disc, 'q_controller', None)
         if q_g and 'q_controller_enc_gen_state' in ckpt and ckpt['q_controller_enc_gen_state']:
-            try: q_g.__dict__.update(ckpt['q_controller_enc_gen_state']); self.logger.info("Q-Ctrl G state loaded.")
-            except Exception as e: self.logger.warning(f"Could not load Q-Ctrl G state: {e}")
+            try:
+                if hasattr(q_g, 'load_state_dict'): q_g.load_state_dict(ckpt['q_controller_enc_gen_state'])
+                elif hasattr(q_g, '__dict__'): q_g.__dict__.update(ckpt['q_controller_enc_gen_state']) # Fallback
+                self.logger.info("Q-Controller Enc/Gen state loaded.")
+            except Exception as e: self.logger.warning(f"Could not load Q-Controller Enc/Gen state: {e}")
         if q_d and 'q_controller_disc_state' in ckpt and ckpt['q_controller_disc_state']:
-            try: q_d.__dict__.update(ckpt['q_controller_disc_state']); self.logger.info("Q-Ctrl D state loaded.")
-            except Exception as e: self.logger.warning(f"Could not load Q-Ctrl D state: {e}")
-        loaded_gs = ckpt.get('global_step', 0); loaded_ep = ckpt.get('epoch', 0)
-        next_epoch_to_start = loaded_ep + 1 if loaded_gs > 0 and not self.args.load_strict else loaded_ep # If strict, assume it's start of loaded_ep
+            try:
+                if hasattr(q_d, 'load_state_dict'): q_d.load_state_dict(ckpt['q_controller_disc_state'])
+                elif hasattr(q_d, '__dict__'): q_d.__dict__.update(ckpt['q_controller_disc_state']) # Fallback
+                self.logger.info("Q-Controller Disc state loaded.")
+            except Exception as e: self.logger.warning(f"Could not load Q-Controller Disc state: {e}")
+
+        loaded_gs = ckpt.get('global_step', 0)
+        loaded_ep = ckpt.get('epoch', 0)
+        
+        # If not strict loading and checkpoint has progress, start next epoch. Otherwise, resume current epoch.
+        next_ep_start = loaded_ep + 1 if (loaded_gs > 0 and not self.args.load_strict) else loaded_ep
+        
         default_best_val = -float('inf') if self.args.val_primary_metric in ["avg_val_psnr", "avg_val_ssim"] else float('inf')
         self.best_val_metric_val = ckpt.get('best_val_metric_val', default_best_val)
-        self.lambda_kl = float(ckpt.get('current_lambda_kl', self.args.lambda_kl)) # Ensure float
-        self.logger.info(f"Resuming. GlobalStep:{loaded_gs}, NextEpoch:{next_epoch_to_start}. BestVal({self.args.val_primary_metric}):{self.best_val_metric_val:.4f}. LambdaKL:{self.lambda_kl:.2e}")
-        return loaded_gs, next_epoch_to_start
+        
+        loaded_lambda_kl_from_ckpt = float(ckpt.get('current_lambda_kl', self.args.lambda_kl))
+        self.lambda_kl = self.args.lambda_kl # Prioritize current run's args for lambda_kl, Q-controller will be updated
+        
+        self.logger.info(f"Resuming training. GlobalStep: {loaded_gs}, NextEpochStart: {next_ep_start}. BestVal({self.args.val_primary_metric}): {self.best_val_metric_val:.4f}. CkptLambdaKL: {loaded_lambda_kl_from_ckpt:.3e}. CurrentRunLambdaKL (will be used): {self.lambda_kl:.3e}")
+        return loaded_gs, next_ep_start
 
     @torch.no_grad()
-    def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]: # Return Optional
-        # ... (Sample method remains identical to your V2 logic) ...
-        m_ref = self.model.module if self.ddp_active else self.model; m_ref.eval()
-        device = self.device; dtype_model = next(m_ref.parameters()).dtype; latent_dim = self.args.latent_dim
-        if noise is None: z = torch.randn(num_samples, latent_dim, device=device, dtype=dtype_model)
-        else: z = noise.to(device=device, dtype=dtype_model)
-        if z.shape[0] != num_samples: num_samples = z.shape[0]
-        npf_cfg = self.video_config["num_predict_frames"]; nra_cfg = self.gaad_appearance_config["num_regions"]
-        fd_cfg = (self.args.image_w, self.args.image_h); dbb_list = []
+    def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]:
+        m_ref = self.model.module if self.ddp_active else self.model
+        m_ref.eval()
+        dev = self.device
+        dtype_m = next(iter(m_ref.parameters()), torch.tensor(0.0, device=self.device)).dtype
+        lat_dim = self.args.latent_dim
+
+        if noise is None:
+            z = torch.randn(num_samples, lat_dim, device=dev, dtype=dtype_m)
+        else:
+            z = noise.to(device=dev, dtype=dtype_m)
+        
+        if z.shape[0] != num_samples: # Adjust num_samples if noise shape is different
+            num_samples = z.shape[0]
+            self.logger.warning(f"Number of samples adjusted to noise shape: {num_samples}")
+
+        npf_cfg = self.video_config.get("num_predict_frames",1)
+        nra_cfg = self.gaad_appearance_config.get("num_regions",0)
+        fd_cfg = (self.args.image_w, self.args.image_h)
+        dbb_list = []
+
         if nra_cfg > 0:
             for _ in range(num_samples):
-                cs_bbox_1f = golden_subdivide_rect_fixed_n(fd_cfg, nra_cfg, device=device, dtype=dtype_model, min_size_px=self.gaad_appearance_config.get('min_size_px', 5)) # type: ignore
-                bss_all_f_rep = cs_bbox_1f.unsqueeze(0).repeat(npf_cfg, 1, 1)
+                cs_bbox_1f = golden_subdivide_rect_fixed_n( # type: ignore
+                    fd_cfg, nra_cfg, device=dev, dtype=dtype_m,
+                    min_size_px=self.gaad_appearance_config.get('min_size_px',5)
+                )
+                bss_all_f_rep = cs_bbox_1f.unsqueeze(0).repeat(npf_cfg,1,1)
                 dbb_list.append(bss_all_f_rep)
             dbb_batch = torch.stack(dbb_list) if dbb_list else None
-        else: dbb_batch = None
-        self.logger.info(f"Sampling {num_samples} sequences...")
-        if dbb_batch is not None or nra_cfg == 0: # Proceed if bboxes generated or not needed
-            generated_frames = m_ref.decode(z, dbb_batch)
-            self.logger.info("Sampling finished."); return generated_frames
         else:
-            self.logger.warning("Sampling skipped: Bounding boxes required but not generated."); return None
+            dbb_batch = None
+        
+        self.logger.info(f"Sampling {num_samples} sequences...")
+        if dbb_batch is not None or nra_cfg == 0:
+            gen_frames = m_ref.decode(z, dbb_batch)
+            self.logger.info("Sampling finished.")
+            return gen_frames
+        else:
+            self.logger.warning("Sampling skipped: Bounding boxes required by GAAD config but could not be generated.")
+            return None
+
 
 
 
@@ -3258,6 +3423,7 @@ def _configure_wubu_stack(args: argparse.Namespace, prefix: str) -> Optional[Dic
 def parse_arguments():
     parser = argparse.ArgumentParser(description="WuBu-GAAD Regional VAE-GAN w/ Optical Flow (v0.1)")
     # --- Data and DDP ---
+
     parser.add_argument('--video_data_path', type=str, default="demo_video_data_dir", help="Path to video file or directory containing it.")
     parser.add_argument('--local_rank', type=int, default=-1, help="DDP local rank.")
     parser.add_argument('--epochs', type=int, default=100, help="Total training epochs.")
@@ -3339,7 +3505,12 @@ def parse_arguments():
     parser.add_argument('--use_amp', action='store_true', help="Use Automatic Mixed Precision (AMP).");
     parser.add_argument('--detect_anomaly',action='store_true', help="Enable autograd.detect_anomaly (for debugging).")
     parser.add_argument('--log_grad_norm', action='store_true', help="Log optimizer gradient norms (can slow training).")
-
+    parser.add_argument('--lambda_kl_update_interval', type=int, default=25, 
+                        help="Global steps between lambda_kl Q-controller updates (0 to disable Q-learned lambda_kl).")
+    parser.add_argument('--min_lambda_kl_q_control', type=float, default=1e-6, 
+                        help="Min value for lambda_kl when Q-controlled.")
+    parser.add_argument('--max_lambda_kl_q_control', type=float, default=0.5, 
+                        help="Max value for lambda_kl when Q-controlled.")
     # --- Validation & Sampling ---
     parser.add_argument('--wandb_log_train_recon_interval', type=int, default=0, help="Log training batch reconstructions to WandB every N global steps (0 to disable).")
     parser.add_argument('--wandb_log_fixed_noise_samples_interval', type=int, default=0, help="Log samples from fixed noise to WandB every N global steps (0 to disable).")
