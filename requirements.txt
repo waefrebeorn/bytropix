@@ -10,13 +10,8 @@ tensorboard
 psutil
 scikit-learn
 wandb
-geoopt
-biopython
-h5py
-viennarna
-gffutils
-av
-torchmetrics
-imageio-ffmpeg
 imageio
+imageio[pyav]
+imageio[ffmpeg]
 lpips
+torchmetrics
