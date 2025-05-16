@@ -3029,12 +3029,14 @@ class HybridTrainer:
         unnorm_dcts_for_assembly = AudioSpecGenerator._unnormalize_dct(generated_norm_dcts, self.args)
         
         spec_dims_canonical = (self.audio_config.get("num_time_frames_for_1s_segment", 86), self.args.n_mels)
-        canonical_gaad_bboxes_list = []
+        
+        canonical_bboxes_list = [] # <----------------------- ADD THIS LINE
+
         for _ in range(num_samples):
             bboxes_one_sample = golden_subdivide_rect_fixed_n(
                 spec_dims_canonical, self.gaad_config['num_regions'], dev, dtype_m, self.gaad_config['min_size_px']
             )
-            canonical_gaad_bboxes_list.append(bboxes_one_sample)
+            canonical_bboxes_list.append(bboxes_one_sample)
         canonical_gaad_bboxes_batch = torch.stack(canonical_bboxes_list)
 
         target_mel_shape_for_sample = (
@@ -3046,7 +3048,6 @@ class HybridTrainer:
         self.logger.info("Sampling finished. Returning Mel spectrograms.")
         m_ref.train() 
         return generated_mel_spectrograms
-
 
 # =====================================================================
 # Arg Parsing and Main Execution Logic
