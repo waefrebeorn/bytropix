@@ -2280,62 +2280,55 @@ class HybridTrainer:
             self.logger.debug(f"Skipping WandB image log for {tag_prefix} due to None or empty data.")
             return
 
-        B_log, _, H_log, W_log = mel_spectrograms_to_log.shape # H_log=Freq, W_log=Time
+        B_log, _, H_log, W_log = mel_spectrograms_to_log.shape
         num_to_actually_log = min(B_log, num_sequences_to_log_max)
         wandb_images_for_log = []
         
-        fig_created = False
-        if MATPLOTLIB_AVAILABLE and plt is not None and librosa is not None:
-            # Adjust figsize dynamically based on aspect ratio, ensure reasonable min size
-            aspect_ratio = W_log / H_log if H_log > 0 and W_log > 0 else 1.0
-            fig_width = max(5, min(15, 5 * aspect_ratio))
-            fig_height = max(4, min(10, fig_width / aspect_ratio if aspect_ratio > 0 else fig_width))
-            try:
-                fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
-                fig_created = True
-            except Exception as e_plt_create:
-                self.logger.warning(f"Failed to create matplotlib figure for WandB: {e_plt_create}")
-                fig, ax = None, None # Fallback
-
         for b_idx in range(num_to_actually_log):
-            mel_tensor = mel_spectrograms_to_log[b_idx, 0, ...].cpu().float() # Remove channel dim
+            mel_tensor = mel_spectrograms_to_log[b_idx, 0, ...].cpu().float()
             
-            if fig_created and fig is not None and ax is not None:
-                ax.clear()
+            # fig_iter, ax_iter declared here to ensure they are in scope for finally if needed
+            fig_iter, ax_iter = None, None 
+            
+            if MATPLOTLIB_AVAILABLE and plt is not None and librosa is not None:
+                aspect_ratio = W_log / H_log if H_log > 0 and W_log > 0 else 1.0
+                fig_width = max(5, min(15, 5 * aspect_ratio))
+                fig_height = max(4, min(10, fig_width / aspect_ratio if aspect_ratio > 0 else fig_width))
                 try:
-                    # The mel_tensor is already normalized to [-1,1]. Librosa display works with this.
-                    # Colorbar should reflect that it's a normalized scale, not absolute dB.
-                    img = librosa.display.specshow(mel_tensor.numpy(), ax=ax,
+                    fig_iter, ax_iter = plt.subplots(1, 1, figsize=(fig_width, fig_height)) # Fresh fig/ax
+                    img = librosa.display.specshow(mel_tensor.numpy(), ax=ax_iter,
                                              sr=self.args.sample_rate, hop_length=self.args.hop_length,
                                              x_axis='time', y_axis='mel',
                                              fmin=self.args.fmin, fmax=self.args.fmax if self.args.fmax else self.args.sample_rate/2.0)
-                    if hasattr(fig, 'colorbar') and not ax.images[-1].colorbar: # Check if colorbar exists for the image
-                         fig.colorbar(img, ax=ax, format='%+.2f (norm)')
-                    ax.set_title(f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step}")
-                    wandb_images_for_log.append(wandb.Image(fig))
+                    # Add colorbar directly to the new fig_iter and ax_iter
+                    fig_iter.colorbar(img, ax=ax_iter, format='%+.2f (norm)') 
+                    ax_iter.set_title(f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step}")
+                    wandb_images_for_log.append(wandb.Image(fig_iter)) # Log the figure
                 except Exception as e_disp:
                     self.logger.warning(f"Librosa display failed for {tag_prefix} S{b_idx}: {e_disp}. Falling back.")
-                    img_0_1 = (mel_tensor.clamp(-1,1) + 1) / 2.0 # Fallback
+                    # Fallback image creation
+                    img_0_1 = (mel_tensor.clamp(-1,1) + 1) / 2.0
                     caption = f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step} (raw_fallback)"
                     wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption))
-            else: # Fallback to simple image
+                finally:
+                    if fig_iter is not None and plt is not None: # Ensure plt is also checked
+                        plt.close(fig_iter) # Close the figure for this iteration
+            else: # Fallback to simple image if no matplotlib/librosa
                 img_0_1 = (mel_tensor.clamp(-1,1) + 1) / 2.0
                 caption = f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step} (raw)"
                 wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption))
 
-        if fig_created and fig is not None and plt is not None: plt.close(fig)
-
         if wandb_images_for_log:
             try:
-                wandb.log({f"samples_mel/{tag_prefix}": wandb_images_for_log}, step=self.global_step)
+                wandb.log({f"samples_mel/{tag_prefix}": wandb_images_for_log}, step=self.global_step) # type: ignore
             except Exception as e_wandb_log:
                 self.logger.error(f"Failed to log images to WandB for {tag_prefix}: {e_wandb_log}")
-
 
     def _train_discriminator_step(self, real_mel_spectrograms: torch.Tensor,
                                   m_ref: "WuBuSpecTransNet", d_ref: "AudioSpecDiscriminator"
                                   ) -> Dict[str, torch.Tensor]:
         B = real_mel_spectrograms.shape[0]; device = real_mel_spectrograms.device
+        # Get dtype from the model reference (m_ref), not from a non-existent 'model' variable
         dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype
         
         real_labels = torch.ones(B, 1, device=device, dtype=dtype_model)
@@ -2348,12 +2341,13 @@ class HybridTrainer:
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
             # --- REAL DISCRIMINATION ---
             if d_ref.input_type == "mel":
-                real_input_for_d = real_mel_spectrograms.to(device, dtype=model)
+                # CORRECTED LINE:
+                real_input_for_d = real_mel_spectrograms.to(device, dtype=dtype_model)
                 real_logits = d_ref(real_input_for_d)
             elif d_ref.input_type == "dct":
                 with torch.no_grad(): # Encoder part is not part of D's training
-                    _, _, real_norm_dcts_target, _ = m_ref.encode(real_mel_spectrograms.to(device, dtype_model))
-                real_input_for_d = real_norm_dcts_target.to(device, dtype_model)
+                    _, _, real_norm_dcts_target, _ = m_ref.encode(real_mel_spectrograms.to(device, dtype=dtype_model))
+                real_input_for_d = real_norm_dcts_target.to(device, dtype=dtype_model)
                 real_logits = d_ref(real_input_for_d)
             else:
                 raise ValueError(f"Unsupported D input type for training: {d_ref.input_type}")
@@ -2361,15 +2355,9 @@ class HybridTrainer:
 
             # --- FAKE DISCRIMINATION ---
             with torch.no_grad(): # Generator part is not part of D's training
-                # Get generated (normalized) DCTs and bboxes
-                # m_ref.forward returns (recon_norm_dct_coeffs, mu, logvar, gaad_bboxes, target_norm_dcts)
-                fake_norm_dct_coeffs, _, _, gaad_bboxes_for_assembly, _ = m_ref(real_mel_spectrograms.to(device, dtype_model))
+                fake_norm_dct_coeffs, _, _, gaad_bboxes_for_assembly, _ = m_ref(real_mel_spectrograms.to(device, dtype=dtype_model))
 
             if d_ref.input_type == "mel":
-                # D needs assembled Mel. fake_norm_dct_coeffs are from G(E(x))
-                # These are already in the "normalized" domain if generator's Tanh is used.
-                # _assemble_mel_from_dct_regions expects *unnormalized* DCTs if it's to match original signal stats.
-                # So, we unnormalize the generator's output.
                 unnorm_fake_dcts = AudioSpecGenerator._unnormalize_dct(
                     fake_norm_dct_coeffs.detach(), self.args
                 )
@@ -2379,8 +2367,8 @@ class HybridTrainer:
                 )
                 fake_logits = d_ref(fake_mel_input_for_d.detach())
             elif d_ref.input_type == "dct":
-                # D operates directly on normalized DCTs from the generator
-                fake_input_for_d = fake_norm_dct_coeffs.to(device, dtype_model).detach()
+                # CORRECTED LINE (consistency, though original was likely okay due to dtype propagation):
+                fake_input_for_d = fake_norm_dct_coeffs.to(device, dtype=dtype_model).detach()
                 fake_logits = d_ref(fake_input_for_d)
             else:
                 raise ValueError(f"Unsupported D input type for training (fake): {d_ref.input_type}")
@@ -2395,6 +2383,9 @@ class HybridTrainer:
         losses_d_micro['loss_d_fake_micro'] = loss_d_fake.detach()
         losses_d_micro['loss_d_total_micro'] = loss_d_total_micro.detach()
         return losses_d_micro
+
+
+
 
     def _train_generator_step(self, real_mel_spectrograms: torch.Tensor,
                               m_ref: "WuBuSpecTransNet", d_ref: "AudioSpecDiscriminator"
@@ -3497,13 +3488,16 @@ def main():
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=args.seed) if ddp_active else None # type: ignore
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
                               num_workers=args.num_workers, sampler=train_sampler,
-                              pin_memory=(device.type == 'cuda'), worker_init_fn=worker_init_fn_seeded, drop_last=True)
+                              pin_memory=(device.type == 'cuda'), worker_init_fn=worker_init_fn_seeded,
+                              drop_last=False) # <<<<<<< MODIFIED HERE
     val_loader = None
     if val_dataset and len(val_dataset) > 0: # type: ignore
         val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False) if ddp_active else None # type: ignore
         val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, # type: ignore
                                 num_workers=args.num_workers, sampler=val_sampler,
-                                pin_memory=(device.type == 'cuda'), drop_last=False, worker_init_fn=worker_init_fn_seeded)
+                                pin_memory=(device.type == 'cuda'),
+                                drop_last=False, # <<<<<<< Also good practice for val_loader
+                                worker_init_fn=worker_init_fn_seeded)
 
     trainer = HybridTrainer(model, discriminator, optimizer_enc_gen, optimizer_disc, device,
                             train_loader, val_loader, args, rank, world_size, ddp_active)
