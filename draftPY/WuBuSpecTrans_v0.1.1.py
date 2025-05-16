@@ -57,9 +57,18 @@ except ImportError:
     IMAGEIO_AVAILABLE = False
     print("Warn: imageio unavailable (used for dummy audio generation).")
 
-
+import json
 from torchvision.utils import save_image # Can save Mel spectrograms as images
-
+MATPLOTLIB_AVAILABLE = True
+if MATPLOTLIB_AVAILABLE:
+    try:
+        import matplotlib.pyplot as plt
+        import librosa 
+        import librosa.display
+    except ImportError:
+        plt = None # type: ignore
+        librosa = None # type: ignore
+        MATPLOTLIB_AVAILABLE = False
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -2187,13 +2196,13 @@ class HybridTrainer:
         self.world_size = world_size
         self.ddp_active = ddp_active
         self.am_main_process = (rank == 0)
-        self.logger = logging.getLogger("WuBuSpecTransV01.Trainer")
+        self.logger = logging.getLogger("WuBuSpecTransV01.Trainer") # Make sure logger name matches project
 
         self.audio_config = getattr(model, 'audio_config', {})
         self.gaad_config = getattr(model, 'gaad_config', {})
 
         self.lambda_recon = args.lambda_recon
-        self.lambda_kl = args.lambda_kl # This can be dynamically updated by Q-controller
+        self.lambda_kl = args.lambda_kl
         self.lambda_gan = args.lambda_gan
 
         self.scaler_enc_gen = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda')
@@ -2205,8 +2214,8 @@ class HybridTrainer:
 
         if self.am_main_process: os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-        self.lpips_loss_fn: Optional[lpips.LPIPS] = None
-        self.ssim_metric: Optional[StructuralSimilarityIndexMeasure] = None
+        self.lpips_loss_fn: Optional[lpips.LPIPS] = None # type: ignore
+        self.ssim_metric: Optional[StructuralSimilarityIndexMeasure] = None # type: ignore
 
         if self.am_main_process and self.args.use_lpips_for_mel_verification:
              if LPIPS_AVAILABLE and lpips is not None:
@@ -2220,23 +2229,13 @@ class HybridTrainer:
 
         if self.am_main_process and TORCHMETRICS_SSIM_AVAILABLE and StructuralSimilarityIndexMeasure is not None:
              try:
-                 self.ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device) # data_range for [0,1] Mels
+                 self.ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
                  self.logger.info("SSIM metric (for Mel) enabled.")
              except Exception as e:
                  self.logger.warning(f"SSIM init failed: {e}. Skip SSIM.")
                  self.ssim_metric = None
         elif self.am_main_process: self.logger.warning("torchmetrics SSIM unavailable. Skip SSIM.")
         
-        global MATPLOTLIB_AVAILABLE, plt
-        try:
-            import matplotlib.pyplot as plt
-            MATPLOTLIB_AVAILABLE = True
-        except ImportError:
-            plt = None
-            MATPLOTLIB_AVAILABLE = False
-            if self.am_main_process:
-                self.logger.warning("Matplotlib not available. Mel spectrogram WandB viz will be basic.")
-
         self.adversarial_loss = nn.BCEWithLogitsLoss()
         self.grad_accum_steps = getattr(args, 'grad_accum_steps', 1)
         if self.grad_accum_steps > 1 and self.am_main_process:
@@ -2244,12 +2243,11 @@ class HybridTrainer:
         self.fixed_noise_for_sampling: Optional[torch.Tensor] = None
 
         self.lambda_kl_update_interval = getattr(args, 'lambda_kl_update_interval', 0)
-        self.lambda_kl_q_controller: Optional[HAKMEMQController] = None
+        self.lambda_kl_q_controller: Optional[HAKMEMQController] = None # type: ignore
         if self.args.q_controller_enabled and self.lambda_kl_update_interval > 0:
-            q_cfg_lambda_kl = DEFAULT_CONFIG_QLEARN_HYBRID.copy()
-            # Adjust lambda_kl_scale_options if needed, or use default
-            q_cfg_lambda_kl["lambda_kl_scale_options"] = [0.90, 0.95, 1.0, 1.05, 1.10] # Example adjustment
-            self.lambda_kl_q_controller = HAKMEMQController(**q_cfg_lambda_kl)
+            q_cfg_lambda_kl = DEFAULT_CONFIG_QLEARN_HYBRID.copy() # type: ignore
+            q_cfg_lambda_kl["lambda_kl_scale_options"] = [0.90, 0.95, 1.0, 1.05, 1.10]
+            self.lambda_kl_q_controller = HAKMEMQController(**q_cfg_lambda_kl) # type: ignore
             if self.am_main_process:
                 self.logger.info(f"Separate Lambda_KL Q-Control ENABLED. Update interval: {self.lambda_kl_update_interval} global steps.")
             if hasattr(self.lambda_kl_q_controller, 'set_current_lambda_kl'):
@@ -2269,13 +2267,13 @@ class HybridTrainer:
         return kl_div.mean()
 
     def _compute_recon_loss(self, recon_norm_dcts: torch.Tensor, target_norm_dcts: torch.Tensor) -> torch.Tensor:
-        # Both inputs are (B, NumRegions, F_proc, T_proc) - normalized DCT coefficients
         return F.mse_loss(recon_norm_dcts, target_norm_dcts)
 
     @torch.no_grad()
     def _log_samples_to_wandb(self, tag_prefix: str, mel_spectrograms_to_log: Optional[torch.Tensor],
                               num_sequences_to_log_max: int = 2):
-        if not (self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb.run): return
+        if not (self.am_main_process and self.args.wandb and WANDB_AVAILABLE and wandb is not None and wandb.run):
+            return
         if mel_spectrograms_to_log is None or mel_spectrograms_to_log.numel() == 0:
             self.logger.debug(f"Skipping WandB image log for {tag_prefix} due to None or empty data.")
             return
@@ -2287,48 +2285,48 @@ class HybridTrainer:
         for b_idx in range(num_to_actually_log):
             mel_tensor = mel_spectrograms_to_log[b_idx, 0, ...].cpu().float()
             
-            # fig_iter, ax_iter declared here to ensure they are in scope for finally if needed
             fig_iter, ax_iter = None, None 
             
-            if MATPLOTLIB_AVAILABLE and plt is not None and librosa is not None:
+            if MATPLOTLIB_AVAILABLE and plt is not None and librosa is not None and librosa.display is not None:
                 aspect_ratio = W_log / H_log if H_log > 0 and W_log > 0 else 1.0
-                fig_width = max(5, min(15, 5 * aspect_ratio))
-                fig_height = max(4, min(10, fig_width / aspect_ratio if aspect_ratio > 0 else fig_width))
+                fig_width = max(5, min(15, 5 * aspect_ratio)) 
+                fig_height = max(4, min(10, fig_width / aspect_ratio if aspect_ratio > 0 else fig_width)) 
                 try:
-                    fig_iter, ax_iter = plt.subplots(1, 1, figsize=(fig_width, fig_height)) # Fresh fig/ax
+                    fig_iter, ax_iter = plt.subplots(1, 1, figsize=(fig_width, fig_height)) 
+                    
+                    fmax_val = self.args.fmax if self.args.fmax is not None and self.args.fmax > self.args.fmin else self.args.sample_rate / 2.0
+                    
                     img = librosa.display.specshow(mel_tensor.numpy(), ax=ax_iter,
                                              sr=self.args.sample_rate, hop_length=self.args.hop_length,
                                              x_axis='time', y_axis='mel',
-                                             fmin=self.args.fmin, fmax=self.args.fmax if self.args.fmax else self.args.sample_rate/2.0)
-                    # Add colorbar directly to the new fig_iter and ax_iter
+                                             fmin=self.args.fmin, fmax=fmax_val)
+                                             
                     fig_iter.colorbar(img, ax=ax_iter, format='%+.2f (norm)') 
                     ax_iter.set_title(f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step}")
-                    wandb_images_for_log.append(wandb.Image(fig_iter)) # Log the figure
+                    wandb_images_for_log.append(wandb.Image(fig_iter)) 
                 except Exception as e_disp:
-                    self.logger.warning(f"Librosa display failed for {tag_prefix} S{b_idx}: {e_disp}. Falling back.")
-                    # Fallback image creation
-                    img_0_1 = (mel_tensor.clamp(-1,1) + 1) / 2.0
+                    self.logger.warning(f"Librosa display failed for {tag_prefix} S{b_idx}: {e_disp}. Falling back to raw image.")
+                    img_0_1 = (mel_tensor.clamp(-1,1) + 1) / 2.0 
                     caption = f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step} (raw_fallback)"
                     wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption))
                 finally:
-                    if fig_iter is not None and plt is not None: # Ensure plt is also checked
-                        plt.close(fig_iter) # Close the figure for this iteration
-            else: # Fallback to simple image if no matplotlib/librosa
+                    if fig_iter is not None and plt is not None: 
+                        plt.close(fig_iter) 
+            else: 
                 img_0_1 = (mel_tensor.clamp(-1,1) + 1) / 2.0
                 caption = f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step} (raw)"
                 wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption))
 
         if wandb_images_for_log:
             try:
-                wandb.log({f"samples_mel/{tag_prefix}": wandb_images_for_log}, step=self.global_step) # type: ignore
+                wandb.log({f"samples_mel/{tag_prefix}": wandb_images_for_log}, step=self.global_step)
             except Exception as e_wandb_log:
-                self.logger.error(f"Failed to log images to WandB for {tag_prefix}: {e_wandb_log}")
+                self.logger.error(f"Failed to log images to WandB for {tag_prefix}: {e_wandb_log}", exc_info=True)
 
     def _train_discriminator_step(self, real_mel_spectrograms: torch.Tensor,
                                   m_ref: "WuBuSpecTransNet", d_ref: "AudioSpecDiscriminator"
                                   ) -> Dict[str, torch.Tensor]:
         B = real_mel_spectrograms.shape[0]; device = real_mel_spectrograms.device
-        # Get dtype from the model reference (m_ref), not from a non-existent 'model' variable
         dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype
         
         real_labels = torch.ones(B, 1, device=device, dtype=dtype_model)
@@ -2339,13 +2337,11 @@ class HybridTrainer:
         for p in m_ref.parameters(): p.requires_grad = False
         
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
-            # --- REAL DISCRIMINATION ---
             if d_ref.input_type == "mel":
-                # CORRECTED LINE:
                 real_input_for_d = real_mel_spectrograms.to(device, dtype=dtype_model)
                 real_logits = d_ref(real_input_for_d)
             elif d_ref.input_type == "dct":
-                with torch.no_grad(): # Encoder part is not part of D's training
+                with torch.no_grad(): 
                     _, _, real_norm_dcts_target, _ = m_ref.encode(real_mel_spectrograms.to(device, dtype=dtype_model))
                 real_input_for_d = real_norm_dcts_target.to(device, dtype=dtype_model)
                 real_logits = d_ref(real_input_for_d)
@@ -2353,8 +2349,7 @@ class HybridTrainer:
                 raise ValueError(f"Unsupported D input type for training: {d_ref.input_type}")
             loss_d_real = self.adversarial_loss(real_logits, real_labels)
 
-            # --- FAKE DISCRIMINATION ---
-            with torch.no_grad(): # Generator part is not part of D's training
+            with torch.no_grad(): 
                 fake_norm_dct_coeffs, _, _, gaad_bboxes_for_assembly, _ = m_ref(real_mel_spectrograms.to(device, dtype=dtype_model))
 
             if d_ref.input_type == "mel":
@@ -2367,7 +2362,6 @@ class HybridTrainer:
                 )
                 fake_logits = d_ref(fake_mel_input_for_d.detach())
             elif d_ref.input_type == "dct":
-                # CORRECTED LINE (consistency, though original was likely okay due to dtype propagation):
                 fake_input_for_d = fake_norm_dct_coeffs.to(device, dtype=dtype_model).detach()
                 fake_logits = d_ref(fake_input_for_d)
             else:
@@ -2384,9 +2378,6 @@ class HybridTrainer:
         losses_d_micro['loss_d_total_micro'] = loss_d_total_micro.detach()
         return losses_d_micro
 
-
-
-
     def _train_generator_step(self, real_mel_spectrograms: torch.Tensor,
                               m_ref: "WuBuSpecTransNet", d_ref: "AudioSpecDiscriminator"
                               ) -> Tuple[Dict[str, torch.Tensor], Optional[torch.Tensor]]:
@@ -2400,19 +2391,13 @@ class HybridTrainer:
         for p in m_ref.parameters(): p.requires_grad = True
 
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
-            # Full VAE-GAN forward pass for G
-            # recon_norm_dct_coeffs is G(E(X))
-            # target_norm_dct_coeffs is E(X)
-            # gaad_bboxes_from_enc are bboxes from E(X)
             recon_norm_dct_coeffs, mu, logvar, gaad_bboxes_from_enc, target_norm_dct_coeffs = \
-                m_ref(real_mel_spectrograms.to(device,dtype_model))
+                m_ref(real_mel_spectrograms.to(device,dtype=dtype_model))
 
             loss_recon = self._compute_recon_loss(recon_norm_dct_coeffs, target_norm_dct_coeffs)
             loss_kl = self._compute_kl_loss(mu, logvar)
             
-            # Adversarial loss for generator
             if d_ref.input_type == "mel":
-                # Unnormalize the generator's output (normalized DCTs) for assembly
                 unnorm_recon_dcts_for_adv = AudioSpecGenerator._unnormalize_dct(
                     recon_norm_dct_coeffs, self.args
                 )
@@ -2427,9 +2412,8 @@ class HybridTrainer:
                 )
                 if log_condition_met :
                     recon_mel_for_log = recon_mel_for_adv.detach().clone()
-                fake_logits_gen = d_ref(recon_mel_for_adv) # Feed assembled Mel to D
+                fake_logits_gen = d_ref(recon_mel_for_adv) 
             elif d_ref.input_type == "dct":
-                # D operates directly on generator's output (normalized DCTs)
                 fake_logits_gen = d_ref(recon_norm_dct_coeffs)
             else:
                 raise ValueError(f"Unsupported D input type for G training: {d_ref.input_type}")
@@ -2457,7 +2441,7 @@ class HybridTrainer:
             self.logger.info(f"Grad Accum: {self.grad_accum_steps}, Initial Lambda_KL: {self.lambda_kl:.3e}, Lambda_Recon: {self.lambda_recon}, Lambda_GAN: {self.lambda_gan}")
         
         if self.am_main_process and self.args.wandb_log_fixed_noise_samples_interval > 0 and self.args.num_val_samples_to_log > 0:
-            m_ref_temp = self.model.module if self.ddp_active else self.model
+            m_ref_temp: WuBuSpecTransNet = self.model.module if self.ddp_active else self.model # type: ignore
             default_dtype = next(iter(m_ref_temp.parameters()), torch.tensor(0.0, device=self.device)).dtype
             self.fixed_noise_for_sampling = torch.randn(
                 self.args.num_val_samples_to_log, self.args.latent_dim, device=self.device, dtype=default_dtype
@@ -2469,22 +2453,24 @@ class HybridTrainer:
         log_interval_accum_losses: Dict[str, float] = defaultdict(float)
         log_interval_items_processed = 0
         
-        m_ref = self.model.module if self.ddp_active else self.model
-        d_ref = self.discriminator.module if self.ddp_active else self.discriminator
+        m_ref: WuBuSpecTransNet = self.model.module if self.ddp_active else self.model # type: ignore
+        d_ref: AudioSpecDiscriminator = self.discriminator.module if self.ddp_active else self.discriminator # type: ignore
         
-        opt_gen_q_controller = getattr(self.optimizer_enc_gen, 'q_controller', None)
-        opt_disc_q_controller = getattr(self.optimizer_disc, 'q_controller', None)
+        opt_gen_q_controller: Optional[HAKMEMQController] = getattr(self.optimizer_enc_gen, 'q_controller', None) # type: ignore
+        opt_disc_q_controller: Optional[HAKMEMQController] = getattr(self.optimizer_disc, 'q_controller', None) # type: ignore
         
         if opt_gen_q_controller and hasattr(opt_gen_q_controller, 'set_current_lambda_kl'):
             opt_gen_q_controller.set_current_lambda_kl(self.lambda_kl)
         if opt_disc_q_controller and hasattr(opt_disc_q_controller, 'set_current_lambda_kl'):
             opt_disc_q_controller.set_current_lambda_kl(self.lambda_kl)
 
+        log_metrics: Dict[str, Any] = {} # Initialize log_metrics here
+
         for epoch in range(start_epoch, self.args.epochs):
             self.current_epoch = epoch
             if self.am_main_process:
                 self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting (current lambda_kl: {self.lambda_kl:.3e})...")
-            if self.ddp_active and hasattr(self.train_loader.sampler, 'set_epoch'):
+            if self.ddp_active and isinstance(self.train_loader.sampler, DistributedSampler): # type: ignore
                 self.train_loader.sampler.set_epoch(epoch) # type: ignore
             
             m_ref.train()
@@ -2500,7 +2486,6 @@ class HybridTrainer:
                 batch_mel_segments = batch_mel_segments.to(self.device)
                 batch_size_micro = batch_mel_segments.size(0)
 
-                # --- Train Discriminator ---
                 losses_d_micro = self._train_discriminator_step(batch_mel_segments, m_ref, d_ref)
                 if torch.isfinite(losses_d_micro['loss_d_total_micro']):
                     d_total_val = losses_d_micro['loss_d_total_micro'].item()
@@ -2514,7 +2499,6 @@ class HybridTrainer:
                     if torch.isfinite(v_tensor):
                         log_interval_accum_losses[k.replace('_micro','_agg')] += v_tensor.item() * batch_size_micro
 
-                # --- Train Generator (Encoder + Decoder) ---
                 losses_g_micro, recon_mel_for_logging = self._train_generator_step(batch_mel_segments, m_ref, d_ref)
                 if torch.isfinite(losses_g_micro['loss_g_total_micro']):
                     accum_g_total_q += losses_g_micro['loss_g_total_micro'].item()
@@ -2535,11 +2519,10 @@ class HybridTrainer:
                 log_interval_items_processed += batch_size_micro
                 self.interval_steps_count += 1
 
-                # --- Gradient Accumulation Step ---
                 if (batch_idx + 1) % self.grad_accum_steps == 0:
-                    if hasattr(self.optimizer_disc, 'grad_stats') and hasattr(self.optimizer_disc.grad_stats, 'finalize_step_stats'):
+                    if hasattr(self.optimizer_disc, 'grad_stats') and hasattr(self.optimizer_disc.grad_stats, 'finalize_step_stats'): # type: ignore
                         self.optimizer_disc.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_disc.param_groups for p in grp['params'] if p.requires_grad)) # type: ignore
-                    if hasattr(self.optimizer_enc_gen, 'grad_stats') and hasattr(self.optimizer_enc_gen.grad_stats, 'finalize_step_stats'):
+                    if hasattr(self.optimizer_enc_gen, 'grad_stats') and hasattr(self.optimizer_enc_gen.grad_stats, 'finalize_step_stats'): # type: ignore
                         self.optimizer_enc_gen.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_enc_gen.param_groups for p in grp['params'] if p.requires_grad)) # type: ignore
                     
                     avg_g_total_macro = accum_g_total_q / self.grad_accum_steps
@@ -2550,9 +2533,8 @@ class HybridTrainer:
                     avg_d_real_macro = accum_d_real_q / self.grad_accum_steps
                     avg_d_fake_macro = accum_d_fake_q / self.grad_accum_steps
 
-                    # Discriminator optimizer step
-                    for p in d_ref.parameters(): p.requires_grad = True # Ensure D grads are on
-                    for p in m_ref.parameters(): p.requires_grad = False # G grads off for D step
+                    for p in d_ref.parameters(): p.requires_grad = True 
+                    for p in m_ref.parameters(): p.requires_grad = False 
                     if opt_disc_q_controller and hasattr(self.optimizer_disc, 'q_controller_update_and_set_hyperparams'):
                         losses_d_q_lr_mom = {'loss_g_total': avg_g_total_macro, 'loss_g_adv': avg_g_adv_macro,
                                              'loss_d_total': avg_d_total_macro, 'loss_d_real': avg_d_real_macro,
@@ -2564,9 +2546,8 @@ class HybridTrainer:
                     self.scaler_disc.step(self.optimizer_disc)
                     self.scaler_disc.update()
 
-                    # Generator optimizer step
-                    for p in d_ref.parameters(): p.requires_grad = False # D grads off for G step
-                    for p in m_ref.parameters(): p.requires_grad = True  # G grads on
+                    for p in d_ref.parameters(): p.requires_grad = False 
+                    for p in m_ref.parameters(): p.requires_grad = True  
                     if opt_gen_q_controller and hasattr(self.optimizer_enc_gen, 'q_controller_update_and_set_hyperparams'):
                         losses_g_q_lr_mom = {'loss_g_total': avg_g_total_macro, 'loss_g_recon': avg_g_recon_macro,
                                              'loss_g_kl': avg_g_kl_macro, 'loss_g_adv': avg_g_adv_macro,
@@ -2585,21 +2566,20 @@ class HybridTrainer:
                     accum_g_total_q, accum_g_recon_q, accum_g_kl_q, accum_g_adv_q = 0.0, 0.0, 0.0, 0.0
                     accum_d_total_q, accum_d_real_q, accum_d_fake_q = 0.0, 0.0, 0.0
 
-                    # --- Lambda_KL Q-Controller Update (if enabled) ---
                     if self.lambda_kl_q_controller is not None and self.lambda_kl_update_interval > 0 and \
                        self.global_step > 0 and self.global_step % self.lambda_kl_update_interval == 0 and \
                        self.interval_steps_count > 0:
                         
                         current_interval_metrics: Dict[str, Union[float, None]] = {
-                            'avg_recon': self.interval_metrics_accum['recon_dct'] / self.interval_steps_count,
-                            'avg_kl_div': self.interval_metrics_accum['kl_div'] / self.interval_steps_count,
-                            'avg_d_total': self.interval_metrics_accum['d_total'] / self.interval_steps_count,
+                            'avg_recon': self.interval_metrics_accum['recon_dct'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
+                            'avg_kl_div': self.interval_metrics_accum['kl_div'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
+                            'avg_d_total': self.interval_metrics_accum['d_total'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
                             'val_metric': self.last_val_metrics.get(self.args.val_primary_metric),
                             'current_lambda_kl_val': self.lambda_kl
                         }
                         if self.am_main_process:
                             self.logger.info(f"GStep {self.global_step}: Lambda_KL Q-Ctrl block. Current lambda_kl: {self.lambda_kl:.4e}")
-                            log_metrics_str = {k: (f'{v:.4f}' if isinstance(v, float) else str(v)) for k,v in current_interval_metrics.items()}
+                            log_metrics_str = {k: (f'{v:.4f}' if isinstance(v, float) and v is not None else str(v)) for k,v in current_interval_metrics.items()}
                             self.logger.info(f"  Interval Metrics for Q-State: {log_metrics_str}")
                             self.logger.info(f"  Previous Lambda_KL Q-State: {self.lambda_kl_q_controller.prev_lambda_kl_state}")
                             self.logger.info(f"  Previous Lambda_KL Action: {self.lambda_kl_q_controller.prev_lambda_kl_action}")
@@ -2638,7 +2618,6 @@ class HybridTrainer:
                             self.lambda_kl_q_controller.prev_lambda_kl_state = q_state_lambda_kl
                             self.lambda_kl_q_controller.prev_lambda_kl_action = lambda_kl_action_dict
                         
-                        # Update lambda_kl in optimizer Q-controllers
                         for q_ctrl_opt in [opt_gen_q_controller, opt_disc_q_controller, self.lambda_kl_q_controller]:
                             if q_ctrl_opt and hasattr(q_ctrl_opt, 'set_current_lambda_kl'):
                                 q_ctrl_opt.set_current_lambda_kl(self.lambda_kl)
@@ -2646,118 +2625,141 @@ class HybridTrainer:
                         self.interval_metrics_accum = defaultdict(float)
                         self.interval_steps_count = 0
 
-                    # --- Logging ---
                     if self.global_step > 0 and self.global_step % self.args.log_interval == 0 and \
                        log_interval_items_processed > 0 and self.am_main_process:
-                        log_metrics = {f"train/{k.replace('_agg','')}": v / log_interval_items_processed
-                                       for k, v in log_interval_accum_losses.items()}
+                        
+                        # Initialize log_metrics for this scope
+                        current_log_metrics: Dict[str, Any] = {f"train/{k.replace('_agg','')}": v / log_interval_items_processed
+                                                               for k, v in log_interval_accum_losses.items()}
                         lr_g = self.optimizer_enc_gen.param_groups[0]['lr']
                         lr_d = self.optimizer_disc.param_groups[0]['lr']
-                        log_metrics.update({
+                        current_log_metrics.update({
                             "train/lr_gen": lr_g, "train/lr_disc": lr_d,
                             "epoch_frac": epoch + ((batch_idx + 1) / (num_batches_epoch or 1)),
                             "global_step": self.global_step, "train/lambda_kl_eff": self.lambda_kl
                         })
-                        if opt_gen_q_controller and hasattr(opt_gen_q_controller, 'get_info'):
-                            log_metrics.update({f"q_ctrl_gen/{k.replace('_','')}": v for k,v in opt_gen_q_controller.get_info().items()})
-                        if opt_disc_q_controller and hasattr(opt_disc_q_controller, 'get_info'):
-                            log_metrics.update({f"q_ctrl_disc/{k.replace('_','')}": v for k,v in opt_disc_q_controller.get_info().items()})
-                        if self.lambda_kl_q_controller and hasattr(self.lambda_kl_q_controller, 'get_info'):
-                             log_metrics.update({f"q_ctrl_lkl/{k.replace('_','')}":v for k,v in self.lambda_kl_q_controller.get_info().items()})
+                        
+                        q_controller_info_map = {
+                            "q_ctrl_gen": opt_gen_q_controller,
+                            "q_ctrl_disc": opt_disc_q_controller,
+                            "q_ctrl_lkl": self.lambda_kl_q_controller
+                        }
+                        for prefix, controller_obj in q_controller_info_map.items():
+                            if controller_obj and hasattr(controller_obj, 'get_info'):
+                                info_dict = controller_obj.get_info()
+                                for k_info, v_info in info_dict.items():
+                                    log_key_suffix = k_info.replace('_','') 
+                                    log_key = f"{prefix}/{log_key_suffix}"
+                                    # Log dictionaries directly, or "None" string
+                                    current_log_metrics[log_key] = v_info
+                        
+                        gt = current_log_metrics.get('train/loss_g_total',-1.0); dt = current_log_metrics.get('train/loss_d_total',-1.0)
+                        gr = current_log_metrics.get('train/loss_recon',-1.0); gk = current_log_metrics.get('train/loss_kl',-1.0)
+                        ga = current_log_metrics.get('train/loss_g_adv',-1.0)
+                        dr = current_log_metrics.get('train/loss_d_real',-1.0); df = current_log_metrics.get('train/loss_d_fake',-1.0)
+                        
+                        qeg_eps = current_log_metrics.get('q_ctrl_gen/epsilon',-1.0)
+                        qed_eps = current_log_metrics.get('q_ctrl_disc/epsilon',-1.0)
+                        qelkl_eps = current_log_metrics.get('q_ctrl_lkl/epsilon', -1.0)
 
-                        gt, dt = log_metrics.get('train/loss_g_total',-1.0), log_metrics.get('train/loss_d_total',-1.0)
-                        gr, gk, ga = log_metrics.get('train/loss_recon',-1.0), log_metrics.get('train/loss_kl',-1.0), log_metrics.get('train/loss_g_adv',-1.0)
-                        dr, df = log_metrics.get('train/loss_d_real',-1.0), log_metrics.get('train/loss_d_fake',-1.0)
-                        qeg_eps, qed_eps = log_metrics.get('q_ctrl_gen/epsilon',-1.0), log_metrics.get('q_ctrl_disc/epsilon',-1.0)
-                        qelkl_eps = log_metrics.get('q_ctrl_lkl/epsilon', -1.0)
-                        qag_act, qad_act = log_metrics.get('q_ctrl_gen/lastlrmomaction',{}), log_metrics.get('q_ctrl_disc/lastlrmomaction',{})
-                        qal_act = log_metrics.get('q_ctrl_lkl/lastlambdaklaction',{})
-                        qslg = qag_act.get('lr_scale',1.0) if isinstance(qag_act,dict) else 1.0
-                        qsld = qad_act.get('lr_scale',1.0) if isinstance(qad_act,dict) else 1.0
-                        qslkl = qal_act.get('lambda_kl_scale',1.0) if isinstance(qal_act,dict) else 1.0
+                        def get_scale_from_action_value(action_val: Union[Dict, str, None], scale_key: str, default: float = 1.0) -> float:
+                            if isinstance(action_val, dict):
+                                return action_val.get(scale_key, default)
+                            return default
 
+                        qslg = get_scale_from_action_value(current_log_metrics.get('q_ctrl_gen/lastlrmomaction'), 'lr_scale')
+                        qsld = get_scale_from_action_value(current_log_metrics.get('q_ctrl_disc/lastlrmomaction'), 'lr_scale')
+                        qslkl = get_scale_from_action_value(current_log_metrics.get('q_ctrl_lkl/lastlambdaklaction'), 'lambda_kl_scale')
+                        
                         log_str=(f"E{epoch+1} S{self.global_step} | G_tot:{gt:.3f}(RecDCT:{gr:.3f} KL:{gk:.3f} Adv:{ga:.3f}) | "
                                  f"D_tot:{dt:.3f}(R:{dr:.3f} F:{df:.3f}) | LR(G/D):{lr_g:.1e}/{lr_d:.1e} | "
                                  f"Q_Eps(LRM G/D):{qeg_eps:.2f}/{qed_eps:.2f} Q_Scl(LRM G/D):{qslg:.2f}/{qsld:.2f} | "
                                  f"Q_Eps(LKL):{qelkl_eps:.2f} Q_Scl(LKL):{qslkl:.2f} LKL_eff:{self.lambda_kl:.2e}")
                         prog_bar.set_postfix_str(f"G:{gt:.2f} D:{dt:.2f} RecDCT:{gr:.3f} LKL:{self.lambda_kl:.1e}",refresh=True)
                         self.logger.info(log_str)
-                        if self.args.wandb and WANDB_AVAILABLE and wandb.run:
-                            wandb.log(log_metrics, step=self.global_step)
+                        if self.args.wandb and WANDB_AVAILABLE and wandb is not None and wandb.run:
+                            wandb.log(current_log_metrics, step=self.global_step)
                         log_interval_accum_losses = defaultdict(float)
                         log_interval_items_processed = 0
 
-                    # --- Log Training Samples to WandB ---
-                    if recon_mel_for_logging is not None: # This is already guarded by am_main_process and interval
+                    if recon_mel_for_logging is not None and \
+                       self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and \
+                       self.global_step > 0 and self.global_step % self.args.wandb_log_train_recon_interval == 0:
                         self._log_samples_to_wandb("train_recon_mel", recon_mel_for_logging, self.args.num_val_samples_to_log)
                         self._log_samples_to_wandb("train_target_mel", batch_mel_segments, self.args.num_val_samples_to_log)
 
-                    # --- Log Fixed Noise Samples to WandB ---
                     log_fixed_noise = (
                         self.am_main_process and self.args.wandb_log_fixed_noise_samples_interval > 0 and
                         self.global_step > 0 and self.global_step % self.args.wandb_log_fixed_noise_samples_interval == 0 and
                         self.fixed_noise_for_sampling is not None
                     )
                     if log_fixed_noise:
-                        m_ref.eval() # Set to eval for sampling
+                        m_ref.eval() 
                         with torch.no_grad():
-                            generated_norm_dcts_fixed = m_ref.decode(self.fixed_noise_for_sampling) # type: ignore
+                            generated_norm_dcts_fixed = m_ref.decode(self.fixed_noise_for_sampling) 
                             unnorm_dcts_fixed = AudioSpecGenerator._unnormalize_dct(generated_norm_dcts_fixed, self.args)
                             
                             spec_dims_canon = (self.audio_config.get("num_time_frames_for_1s_segment", 86), self.args.n_mels)
                             canonical_bboxes_list = []
-                            for _ in range(self.fixed_noise_for_sampling.shape[0]): # type: ignore
+                            for _ in range(self.fixed_noise_for_sampling.shape[0]): 
                                 bboxes_one = golden_subdivide_rect_fixed_n(
                                     spec_dims_canon, self.gaad_config['num_regions'], self.device,
-                                    self.fixed_noise_for_sampling.dtype, self.gaad_config['min_size_px'] # type: ignore
+                                    self.fixed_noise_for_sampling.dtype, self.gaad_config['min_size_px'] 
                                 )
                                 canonical_bboxes_list.append(bboxes_one)
                             canonical_bboxes_batch = torch.stack(canonical_bboxes_list)
                             target_mel_shape_fixed = (
-                                self.fixed_noise_for_sampling.shape[0], 1, self.args.n_mels, # type: ignore
+                                self.fixed_noise_for_sampling.shape[0], 1, self.args.n_mels, 
                                 self.audio_config.get("num_time_frames_for_1s_segment", 86)
                             )
                             fixed_noise_mels_gen = d_ref._assemble_mel_from_dct_regions(
                                 unnorm_dcts_fixed, canonical_bboxes_batch, target_mel_shape_fixed
                             )
                             self._log_samples_to_wandb("fixed_noise_generated_mel", fixed_noise_mels_gen,
-                                                       self.fixed_noise_for_sampling.shape[0]) # type: ignore
-                        m_ref.train() # Set back to train
+                                                       self.fixed_noise_for_sampling.shape[0]) 
+                        m_ref.train() 
 
-                    # --- Save Intermediate Checkpoint ---
                     if self.args.save_interval > 0 and self.global_step > 0 and \
                        self.global_step % self.args.save_interval == 0 and self.am_main_process:
                         chkpt_metrics={'train_loss_g_total_macro':avg_g_total_macro,
                                        'train_loss_d_total_macro':avg_d_total_macro}
                         self._save_checkpoint(is_intermediate=True,metrics=chkpt_metrics)
             
-            # --- End of Epoch ---
             if self.am_main_process:
-                final_avg_g = log_interval_accum_losses['loss_g_total_agg'] / log_interval_items_processed \
-                              if log_interval_items_processed > 0 else (log_metrics.get('train/loss_g_total', float('nan')) if 'log_metrics' in locals() else float('nan'))
-                final_avg_d = log_interval_accum_losses['loss_d_total_agg'] / log_interval_items_processed \
-                              if log_interval_items_processed > 0 else (log_metrics.get('train/loss_d_total', float('nan')) if 'log_metrics' in locals() else float('nan'))
+                final_avg_g_approx: float = float('nan')
+                final_avg_d_approx: float = float('nan')
+                
+                # Check if log_metrics was defined in the last iteration of the inner loop
+                # This would only be the case if log_interval condition was met
+                # Otherwise, use the accumulated values for the epoch's final log.
+                if 'current_log_metrics' in locals() and current_log_metrics is not None and self.global_step % self.args.log_interval == 0 :
+                    final_avg_g_approx = current_log_metrics.get('train/loss_g_total', float('nan'))
+                    final_avg_d_approx = current_log_metrics.get('train/loss_d_total', float('nan'))
+                elif log_interval_items_processed > 0: # If epoch ended before log_interval, use accumulated
+                    final_avg_g_approx = log_interval_accum_losses['loss_g_total_agg'] / log_interval_items_processed
+                    final_avg_d_approx = log_interval_accum_losses['loss_d_total_agg'] / log_interval_items_processed
+                
                 self.logger.info(f"Epoch {epoch+1} finished. Approx Avg Loss (last interval or batch): "
-                                 f"G:{final_avg_g:.4f}, D:{final_avg_d:.4f}, LambdaKL_eff:{self.lambda_kl:.3e}")
-                if self.args.wandb and WANDB_AVAILABLE and wandb.run:
-                    wandb.log({"epoch":epoch+1,
-                               "epoch_avg_train_loss_g_approx":final_avg_g if np.isfinite(final_avg_g) else -1.0,
-                               "epoch_avg_train_loss_d_approx":final_avg_d if np.isfinite(final_avg_d) else -1.0,
+                                 f"G:{final_avg_g_approx:.4f}, D:{final_avg_d_approx:.4f}, LambdaKL_eff:{self.lambda_kl:.3e}")
+                if self.args.wandb and WANDB_AVAILABLE and wandb is not None and wandb.run:
+                    wandb.log({"epoch":epoch+1, 
+                               "epoch_avg_train_loss_g_approx":final_avg_g_approx if np.isfinite(final_avg_g_approx) else -1.0,
+                               "epoch_avg_train_loss_d_approx":final_avg_d_approx if np.isfinite(final_avg_d_approx) else -1.0,
                                "epoch_lambda_kl": self.lambda_kl}, step=self.global_step)
             
-            # --- Validation ---
             if self.val_loader and self.am_main_process:
                 val_metrics = self.validate(num_val_samples_to_log=self.args.num_val_samples_to_log)
                 if val_metrics:
-                    if self.args.wandb and WANDB_AVAILABLE and wandb.run:
+                    if self.args.wandb and WANDB_AVAILABLE and wandb is not None and wandb.run:
                         wandb.log({f"val/{k}":v for k,v in val_metrics.items()}, step=self.global_step)
                     
                     metric_to_check = self.args.val_primary_metric
-                    default_val = -float('inf') if metric_to_check in ["avg_val_ssim_mel", "avg_val_psnr_mel"] else float('inf')
-                    current_val_for_best = val_metrics.get(metric_to_check, default_val)
+                    higher_is_better_metrics = ["avg_val_ssim_mel", "avg_val_psnr_mel"]
+                    default_val = -float('inf') if metric_to_check in higher_is_better_metrics else float('inf')
+                    current_val_for_best: float = val_metrics.get(metric_to_check, default_val) # type: ignore
                     
                     is_better = (current_val_for_best > self.best_val_metric_val) \
-                                if metric_to_check in ["avg_val_ssim_mel", "avg_val_psnr_mel"] \
+                                if metric_to_check in higher_is_better_metrics \
                                 else (current_val_for_best < self.best_val_metric_val)
                     
                     if is_better and np.isfinite(current_val_for_best):
@@ -2766,18 +2768,20 @@ class HybridTrainer:
                         self.best_val_metric_val = current_val_for_best
                         self._save_checkpoint(is_best=True, metrics=val_metrics)
             
-            # --- Save Epoch End Checkpoint (always, if main process) ---
             if self.am_main_process:
                 epoch_end_metrics = self.last_val_metrics.copy() if self.last_val_metrics else {}
-                epoch_end_metrics["epoch_end_train_loss_g_avg_approx"] = final_avg_g if 'final_avg_g' in locals() and np.isfinite(final_avg_g) else -1.0
-                epoch_end_metrics["epoch_end_train_loss_d_avg_approx"] = final_avg_d if 'final_avg_d' in locals() and np.isfinite(final_avg_d) else -1.0
+                # Ensure final_avg_g_approx and final_avg_d_approx are defined from above block
+                final_g = final_avg_g_approx if 'final_avg_g_approx' in locals() and np.isfinite(final_avg_g_approx) else -1.0 # type: ignore
+                final_d = final_avg_d_approx if 'final_avg_d_approx' in locals() and np.isfinite(final_avg_d_approx) else -1.0 # type: ignore
+                epoch_end_metrics["epoch_end_train_loss_g_avg_approx"] = final_g
+                epoch_end_metrics["epoch_end_train_loss_d_avg_approx"] = final_d
                 self._save_checkpoint(metrics=epoch_end_metrics)
 
     @torch.no_grad()
     def validate(self, num_val_samples_to_log: int = 1) -> Optional[Dict[str, float]]:
         if not self.val_loader or not self.am_main_process: return None
-        m_ref = self.model.module if self.ddp_active else self.model
-        d_ref_val = self.discriminator.module if self.ddp_active else self.discriminator
+        m_ref: WuBuSpecTransNet = self.model.module if self.ddp_active else self.model # type: ignore
+        d_ref_val: AudioSpecDiscriminator = self.discriminator.module if self.ddp_active else self.discriminator # type: ignore
         m_ref.eval()
 
         total_recon_dct_mse_sum = 0.0; total_mel_mse_sum = 0.0; total_psnr_mel_sum = 0.0
@@ -2792,15 +2796,12 @@ class HybridTrainer:
             real_mel_segments = batch_real_mel_segments.to(self.device, dtype=dtype_m)
             B, _, H_mel, W_mel = real_mel_segments.shape
 
-            # VAE Forward pass
             recon_norm_dcts, mu, logvar, gaad_bboxes_from_enc, target_norm_dcts_for_loss = m_ref(real_mel_segments)
 
-            # 1. DCT Reconstruction Loss
             loss_recon_dct_batch = self._compute_recon_loss(recon_norm_dcts, target_norm_dcts_for_loss)
             if torch.isfinite(loss_recon_dct_batch):
                 total_recon_dct_mse_sum += loss_recon_dct_batch.item() * B
             
-            # 2. Mel Spectrogram Metrics (requires assembly)
             unnorm_recon_dcts = AudioSpecGenerator._unnormalize_dct(recon_norm_dcts, self.args)
             recon_mel_assembled = d_ref_val._assemble_mel_from_dct_regions(
                 unnorm_recon_dcts, gaad_bboxes_from_enc, real_mel_segments.shape
@@ -2834,7 +2835,7 @@ class HybridTrainer:
             total_items_evaluated += B
 
             if logged_samples_count_this_val < num_val_samples_to_log and \
-               self.args.wandb and WANDB_AVAILABLE and wandb.run:
+               self.args.wandb and WANDB_AVAILABLE and wandb is not None and wandb.run:
                 num_to_log_now = min(B, num_val_samples_to_log - logged_samples_count_this_val)
                 if num_to_log_now > 0:
                     self._log_samples_to_wandb("val_recon_mel", recon_mel_assembled[:num_to_log_now], num_to_log_now)
@@ -2883,9 +2884,9 @@ class HybridTrainer:
                      'q_table_access_count': dict(q_obj.q_table_access_count),
                      'q_table_creation_time': q_obj.q_table_creation_time,
                      'q_table_last_access_time': q_obj.q_table_last_access_time}
-            if hasattr(q_obj, 'loss_g_total_hist'): # LRM Q-Controller
+            if hasattr(q_obj, 'loss_g_total_hist'): 
                 state['loss_histories'] = {hname: list(getattr(q_obj, f"loss_{hname}_hist")) for hname in q_hist_names}
-            if hasattr(q_obj, 'interval_avg_recon_hist'): # LKL Q-Controller
+            if hasattr(q_obj, 'interval_avg_recon_hist'): 
                 state['interval_histories'] = {hname: list(getattr(q_obj, f"interval_{hname}_hist")) for hname in q_lkl_hist_names}
             return state
 
@@ -2939,7 +2940,7 @@ class HybridTrainer:
         q_hist_names = ['g_total', 'g_recon', 'g_kl', 'g_adv', 'd_total', 'd_real', 'd_fake']
         q_lkl_hist_names = ['avg_recon', 'avg_kl_div', 'avg_d_total', 'val_metric']
 
-        def _load_q_state(q_ctrl_obj, q_state_data):
+        def _load_q_state_helper(q_ctrl_obj, q_state_data):
             if not q_ctrl_obj or not q_state_data: return
             try:
                 q_ctrl_obj.q_table = q_state_data.get('q_table', {})
@@ -2948,7 +2949,10 @@ class HybridTrainer:
                 q_ctrl_obj.prev_lr_mom_action = q_state_data.get('prev_lr_mom_action')
                 q_ctrl_obj.prev_lambda_kl_state = q_state_data.get('prev_lambda_kl_state')
                 q_ctrl_obj.prev_lambda_kl_action = q_state_data.get('prev_lambda_kl_action')
-                q_ctrl_obj.reward_hist = deque(q_state_data.get('reward_hist',[]), maxlen=q_ctrl_obj.reward_hist.maxlen if q_ctrl_obj.reward_hist else 100)
+                
+                reward_hist_maxlen = q_ctrl_obj.reward_hist.maxlen if hasattr(q_ctrl_obj, 'reward_hist') and q_ctrl_obj.reward_hist is not None else 100
+                q_ctrl_obj.reward_hist = deque(q_state_data.get('reward_hist',[]), maxlen=reward_hist_maxlen)
+                
                 q_ctrl_obj.q_table_access_count = defaultdict(int, q_state_data.get('q_table_access_count', {}))
                 q_ctrl_obj.q_table_creation_time = q_state_data.get('q_table_creation_time', {})
                 q_ctrl_obj.q_table_last_access_time = q_state_data.get('q_table_last_access_time', {})
@@ -2961,17 +2965,26 @@ class HybridTrainer:
                     ih = q_state_data['interval_histories']
                     for hname in q_lkl_hist_names:
                          setattr(q_ctrl_obj, f"interval_{hname}_hist", deque(ih.get(hname, []), maxlen=q_ctrl_obj.lambda_kl_state_history_len))
-                self.logger.info(f"Q-Controller state for loaded from checkpoint.")
+                self.logger.info(f"Q-Controller state for one controller loaded from checkpoint.")
             except Exception as e_qc_load: self.logger.warning(f"Could not fully load Q-Controller state: {e_qc_load}", exc_info=True)
 
-        _load_q_state(getattr(self.optimizer_enc_gen, 'q_controller', None), ckpt.get('q_controller_enc_gen_state'))
-        _load_q_state(getattr(self.optimizer_disc, 'q_controller', None), ckpt.get('q_controller_disc_state'))
-        _load_q_state(self.lambda_kl_q_controller, ckpt.get('q_controller_lambda_kl_state'))
+        _load_q_state_helper(getattr(self.optimizer_enc_gen, 'q_controller', None), ckpt.get('q_controller_enc_gen_state'))
+        _load_q_state_helper(getattr(self.optimizer_disc, 'q_controller', None), ckpt.get('q_controller_disc_state'))
+        _load_q_state_helper(self.lambda_kl_q_controller, ckpt.get('q_controller_lambda_kl_state'))
         
         loaded_gs = ckpt.get('global_step', 0)
         loaded_ep = ckpt.get('epoch', 0)
-        next_ep_start = loaded_ep + 1 if (loaded_gs > 0 and not self.args.load_strict and batch_idx == num_batches_epoch -1) else loaded_ep # If not strict and was mid-epoch, restart that epoch. If end of epoch, next.
         
+        # A common strategy for resuming: if not strict, restart the epoch. If strict, continue from next.
+        # This depends on whether batch_idx was saved, which it isn't here for simplicity.
+        # For now, if loading a checkpoint, we assume it was saved at an epoch boundary or we restart the epoch.
+        next_ep_start = loaded_ep
+        if self.args.load_strict and loaded_gs > 0: # If strict and not from scratch, start next epoch
+             num_batches_epoch_at_save = ckpt.get('metrics', {}).get('num_batches_epoch_at_save', len(self.train_loader) if self.train_loader else 1)
+             if loaded_gs % num_batches_epoch_at_save == 0 : # Check if it was end of an epoch
+                next_ep_start = loaded_ep + 1
+
+
         default_best_val = -float('inf') if self.args.val_primary_metric in ["avg_val_ssim_mel","avg_val_psnr_mel"] else float('inf')
         self.best_val_metric_val = ckpt.get('best_val_metric_val', default_best_val)
         
@@ -2980,7 +2993,7 @@ class HybridTrainer:
             self.lambda_kl = loaded_lambda_kl_from_ckpt
             self.logger.info(f"Loaded self.lambda_kl from checkpoint: {self.lambda_kl:.4e}")
         else:
-            self.lambda_kl = self.args.lambda_kl # Use arg if not in ckpt or not loading
+            self.lambda_kl = self.args.lambda_kl 
             self.logger.info(f"Using initial self.lambda_kl from args: {self.lambda_kl:.4e}")
 
         for q_ctrl in [getattr(self.optimizer_enc_gen, 'q_controller', None),
@@ -2995,8 +3008,8 @@ class HybridTrainer:
 
     @torch.no_grad()
     def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]:
-        m_ref = self.model.module if self.ddp_active else self.model
-        d_ref_sample = self.discriminator.module if self.ddp_active else self.discriminator
+        m_ref: WuBuSpecTransNet = self.model.module if self.ddp_active else self.model # type: ignore
+        d_ref_sample: AudioSpecDiscriminator = self.discriminator.module if self.ddp_active else self.discriminator # type: ignore
         m_ref.eval()
         dev = self.device
         dtype_m = next(iter(m_ref.parameters()), torch.tensor(0.0, device=self.device)).dtype
@@ -3022,7 +3035,7 @@ class HybridTrainer:
                 spec_dims_canonical, self.gaad_config['num_regions'], dev, dtype_m, self.gaad_config['min_size_px']
             )
             canonical_gaad_bboxes_list.append(bboxes_one_sample)
-        canonical_gaad_bboxes_batch = torch.stack(canonical_gaad_bboxes_list)
+        canonical_gaad_bboxes_batch = torch.stack(canonical_bboxes_list)
 
         target_mel_shape_for_sample = (
             num_samples, 1, self.args.n_mels, self.audio_config.get("num_time_frames_for_1s_segment", 86)
@@ -3031,7 +3044,9 @@ class HybridTrainer:
             unnorm_dcts_for_assembly, canonical_gaad_bboxes_batch, target_mel_shape_for_sample
         )
         self.logger.info("Sampling finished. Returning Mel spectrograms.")
+        m_ref.train() 
         return generated_mel_spectrograms
+
 
 # =====================================================================
 # Arg Parsing and Main Execution Logic
