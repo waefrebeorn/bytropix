@@ -15,3 +15,6 @@ imageio[pyav]
 imageio[ffmpeg]
 lpips
 torchmetrics
+torch-dct
+librosa
+soundfile
