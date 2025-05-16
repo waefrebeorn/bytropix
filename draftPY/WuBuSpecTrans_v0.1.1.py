@@ -882,7 +882,7 @@ EPS = 1e-5
 
 class HAKMEMQController:
     # Class attribute for manual flush. Set this to True in code before a resume to flush all Q-tables. MANUAL BLAST MODE
-    MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = True # Default to False, user can set to True before resume
+    MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = True # Default to False, but I leave it on, user can set to True before resume to blast q learning, better on if you're active dev
 
     def __init__(self, q_learning_rate: float = 0.01, discount_factor: float = 0.90,
                  epsilon_start: float = 0.5, epsilon_min: float = 0.05, epsilon_decay: float = 0.9995,
