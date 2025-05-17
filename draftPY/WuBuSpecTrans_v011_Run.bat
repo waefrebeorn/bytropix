@@ -1,7 +1,17 @@
 @echo OFF
 SETLOCAL ENABLEDELAYEDEXPANSION
 
+REM --- Core Paths (Modify if your project structure is different) ---
 SET "PROJECT_ROOT=%~dp0.."
+SET "SCRIPT_DIR=%~dp0"
+SET "SCRIPT_NAME=WuBuSpecTrans_v0.1.1.py"
+SET "FULL_SCRIPT_PATH=%SCRIPT_DIR%%SCRIPT_NAME%"
+SET "DATA_DIR_BASE=%PROJECT_ROOT%\data"
+SET "CHECKPOINT_OUTPUT_DIR_BASE=%PROJECT_ROOT%\checkpoints"
+SET "RUN_NAME_SUFFIX=Run_Latest"
+SET "CHECKPOINT_OUTPUT_DIR=%CHECKPOINT_OUTPUT_DIR_BASE%\WuBuSpecTrans_v011_%RUN_NAME_SUFFIX%"
+
+REM --- Find Python Executable ---
 IF EXIST "%PROJECT_ROOT%\venv\Scripts\python.exe" (
     SET "PYTHON_EXE=%PROJECT_ROOT%\venv\Scripts\python.exe"
 ) ELSE IF EXIST "%PROJECT_ROOT%\.venv\Scripts\python.exe" (
@@ -9,19 +19,38 @@ IF EXIST "%PROJECT_ROOT%\venv\Scripts\python.exe" (
 ) ELSE (
     SET "PYTHON_EXE=python"
 )
-SET "SCRIPT_DIR=%~dp0"
-SET "SCRIPT_NAME=WuBuSpecTrans_v0.1.1.py"
-SET "FULL_SCRIPT_PATH=%SCRIPT_DIR%%SCRIPT_NAME%"
 
+REM --- DDP Configuration ---
 SET "NPROC_PER_NODE=1"
 SET "MASTER_ADDR=localhost"
 SET "MASTER_PORT=29515"
 
-SET "DATA_DIR_BASE=%PROJECT_ROOT%\data"
-SET "CHECKPOINT_OUTPUT_DIR=%PROJECT_ROOT%\checkpoints\WuBuSpecTrans_v011_Run_Latest"
+REM --- Automatically Find Checkpoint to Load (for resuming) ---
+SET "LOAD_CHECKPOINT="
+SET "BEST_CKPT_NAME=wubuspectrans_ckpt_v011_best.pt"
+SET "LATEST_EPOCH_CKPT_NAME="
+
+IF EXIST "%CHECKPOINT_OUTPUT_DIR%\%BEST_CKPT_NAME%" (
+    SET "LOAD_CHECKPOINT=%CHECKPOINT_OUTPUT_DIR%\%BEST_CKPT_NAME%"
+    ECHO Found best checkpoint to potentially resume from: !LOAD_CHECKPOINT!
+) ELSE (
+    ECHO Best checkpoint not found. Searching for latest epoch/step checkpoint...
+    FOR /F "delims=" %%F IN ('dir /b /o-d /a-d "%CHECKPOINT_OUTPUT_DIR%\wubuspectrans_ckpt_v011_ep*_step*.pt"') DO (
+        SET "LATEST_EPOCH_CKPT_NAME=%%F"
+        GOTO FoundLatestEpochCkpt
+    )
+    :FoundLatestEpochCkpt
+    IF DEFINED LATEST_EPOCH_CKPT_NAME (
+        SET "LOAD_CHECKPOINT=%CHECKPOINT_OUTPUT_DIR%\!LATEST_EPOCH_CKPT_NAME!"
+        ECHO Found latest epoch checkpoint to potentially resume from: !LOAD_CHECKPOINT!
+    ) ELSE (
+        ECHO No suitable checkpoint found in %CHECKPOINT_OUTPUT_DIR% to resume from. Will start a new run.
+    )
+)
+
+REM --- Training Configuration ---
 SET "AUDIO_DATA_PATH=%DATA_DIR_BASE%\demo_audio_data_dir"
 SET "VALIDATION_AUDIO_PATH="
-SET "LOAD_CHECKPOINT="
 
 SET "LATENT_DIM=512"
 SET "ENCODER_INITIAL_TANGENT_DIM=256"
@@ -36,7 +65,10 @@ SET "DCT_NORM_TYPE=global_scale"
 SET "DCT_NORM_GLOBAL_SCALE=100.0"
 SET "DCT_NORM_TANH_SCALE=50.0"
 
-SET "DISCRIMINATOR_INPUT_TYPE=dct"
+REM ## Set the primary discriminator type for a new run, or if not switching ##
+SET "DISCRIMINATOR_INPUT_TYPE=dct" 
+REM SET "DISCRIMINATOR_INPUT_TYPE=mel" 
+
 SET "DISC_APPLY_SPECTRAL_NORM=true"
 SET "DISC_BASE_DISC_CHANNELS=64"
 SET "DISC_MAX_DISC_CHANNELS=512"
@@ -58,6 +90,8 @@ SET "WUBU_G_USE_ROTATION=false"
 SET "WUBU_G_PHI_CURVATURE=true"
 SET "WUBU_G_PHI_ROT_INIT=false"
 
+REM ## These WuBu-D params configure the *primary* DCT-based D if DISCRIMINATOR_INPUT_TYPE=dct ##
+REM ## If DISCRIMINATOR_INPUT_TYPE=mel, these are still passed but might not be used by the primary D ##
 SET "WUBU_D_NUM_LEVELS=2"
 SET "WUBU_D_HYPERBOLIC_DIMS=128 64"
 SET "WUBU_D_INITIAL_CURVATURES=0.9 0.7"
@@ -79,7 +113,7 @@ SET "LEARNING_RATE_DISC=1e-4"
 SET "RISGD_MAX_GRAD_NORM=1.0"
 SET "GLOBAL_MAX_GRAD_NORM=5.0"
 SET "TRAIN_LOG_INTERVAL=1"
-SET "TRAIN_SAVE_INTERVAL=10000000"
+SET "TRAIN_SAVE_INTERVAL=2000" 
 SET "TRAIN_SEED=42"
 SET "TRAIN_NUM_WORKERS=2"
 SET "USE_AMP=true"
@@ -90,7 +124,7 @@ SET "LAMBDA_RECON=10.0"
 SET "LAMBDA_KL=0.01"
 SET "LAMBDA_KL_UPDATE_INTERVAL=20"
 SET "MIN_LAMBDA_KL_Q_CONTROL=1e-3"
-SET "MAX_LAMBDA_KL_Q_CONTROL=2"
+SET "MAX_LAMBDA_KL_Q_CONTROL=2.0"
 SET "LAMBDA_GAN=1.0"
 
 SET "SAMPLE_RATE=44100"
@@ -118,9 +152,17 @@ SET "WANDB_RUN_NAME="
 SET "WANDB_LOG_TRAIN_RECON_INTERVAL=50"
 SET "WANDB_LOG_FIXED_NOISE_INTERVAL=100"
 
+SET "RESET_Q_CONTROLLERS_ON_LOAD=false"
+REM SET "RESET_Q_CONTROLLERS_ON_LOAD=true" 
+
+SET "ENABLE_HEURISTIC_DISC_SWITCHING=true"
+SET "INITIAL_DISC_TYPE=%DISCRIMINATOR_INPUT_TYPE%" 
+SET "DISC_SWITCH_CHECK_INTERVAL=40"
+SET "DISC_SWITCH_MIN_STEPS_BETWEEN=200"
+SET "DISC_SWITCH_PROBLEM_STATE_COUNT_THRESH=3"
+
 
 SET "SCRIPT_ARGS="
-
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --audio_dir_path "%AUDIO_DATA_PATH%""
 IF DEFINED VALIDATION_AUDIO_PATH (
     IF NOT "%VALIDATION_AUDIO_PATH%"=="" SET "SCRIPT_ARGS=%SCRIPT_ARGS% --validation_audio_dir_path "%VALIDATION_AUDIO_PATH%""
@@ -135,23 +177,18 @@ SET "SCRIPT_ARGS=%SCRIPT_ARGS% --n_fft %N_FFT%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --hop_length %HOP_LENGTH%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --n_mels %N_MELS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --fmin %FMIN%"
-IF DEFINED FMAX (
-    IF NOT "%FMAX%"=="" SET "SCRIPT_ARGS=%SCRIPT_ARGS% --fmax %FMAX%"
-)
+IF DEFINED FMAX ( IF NOT "%FMAX%"=="" SET "SCRIPT_ARGS=%SCRIPT_ARGS% --fmax %FMAX%" )
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --segment_duration_sec %SEGMENT_DURATION_SEC%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --segment_overlap_sec %SEGMENT_OVERLAP_SEC%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --db_norm_min %DB_NORM_MIN%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --db_norm_max %DB_NORM_MAX%"
 IF /I "%PRELOAD_AUDIO_DATASET_TO_RAM%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --preload_audio_dataset_to_ram"
 
-
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --latent_dim %LATENT_DIM%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --encoder_initial_tangent_dim %ENCODER_INITIAL_TANGENT_DIM%"
-
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --gaad_num_regions %GAAD_NUM_REGIONS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --gaad_decomposition_type %GAAD_DECOMP_TYPE%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --gaad_min_size_px %GAAD_MIN_SIZE_PX%"
-
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --region_proc_size_t %REGION_PROC_SIZE_T%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --region_proc_size_f %REGION_PROC_SIZE_F%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --dct_norm_type %DCT_NORM_TYPE%"
@@ -163,9 +200,7 @@ IF /I "%DISC_APPLY_SPECTRAL_NORM%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --disc
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --disc_base_disc_channels %DISC_BASE_DISC_CHANNELS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --disc_max_disc_channels %DISC_MAX_DISC_CHANNELS%"
 
-
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_dropout %WUBU_DROPOUT%"
-
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_s_num_levels %WUBU_S_NUM_LEVELS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_s_hyperbolic_dims %WUBU_S_HYPERBOLIC_DIMS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_s_initial_curvatures %WUBU_S_INITIAL_CURVATURES%"
@@ -173,14 +208,12 @@ IF /I "%WUBU_S_USE_ROTATION%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_s_us
 IF /I "%WUBU_S_PHI_CURVATURE%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_s_phi_influence_curvature"
 IF /I "%WUBU_S_PHI_ROT_INIT%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_s_phi_influence_rotation_init"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_s_output_dim_encoder %WUBU_S_OUTPUT_DIM_ENCODER%"
-
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_g_num_levels %WUBU_G_NUM_LEVELS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_g_hyperbolic_dims %WUBU_G_HYPERBOLIC_DIMS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_g_initial_curvatures %WUBU_G_INITIAL_CURVATURES%"
 IF /I "%WUBU_G_USE_ROTATION%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_g_use_rotation"
 IF /I "%WUBU_G_PHI_CURVATURE%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_g_phi_influence_curvature"
 IF /I "%WUBU_G_PHI_ROT_INIT%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_g_phi_influence_rotation_init"
-
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_d_num_levels %WUBU_D_NUM_LEVELS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_d_hyperbolic_dims %WUBU_D_HYPERBOLIC_DIMS%"
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --wubu_d_initial_curvatures %WUBU_D_INITIAL_CURVATURES%"
@@ -218,6 +251,16 @@ SET "SCRIPT_ARGS=%SCRIPT_ARGS% --num_val_samples_to_log %NUM_VAL_SAMPLES_TO_LOG%
 SET "SCRIPT_ARGS=%SCRIPT_ARGS% --demo_num_samples %DEMO_NUM_SAMPLES%"
 
 IF /I "%Q_CONTROLLER_ENABLED%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --q_controller_enabled"
+IF /I "%RESET_Q_CONTROLLERS_ON_LOAD%"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --reset_q_controllers_on_load"
+
+IF /I "%ENABLE_HEURISTIC_DISC_SWITCHING%"=="true" (
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --enable_heuristic_disc_switching"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --initial_disc_type %INITIAL_DISC_TYPE%"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --disc_switch_check_interval %DISC_SWITCH_CHECK_INTERVAL%"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --disc_switch_min_steps_between %DISC_SWITCH_MIN_STEPS_BETWEEN%"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --disc_switch_problem_state_count_thresh %DISC_SWITCH_PROBLEM_STATE_COUNT_THRESH%"
+)
+
 IF /I "%WANDB_ENABLED%"=="true" (
     SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb --wandb_project %WANDB_PROJECT%"
     IF DEFINED WANDB_RUN_NAME (
@@ -232,12 +275,16 @@ ECHO WuBuSpecTrans VAE-GAN - Audio Run
 ECHO Python: %PYTHON_EXE%
 ECHO Script Name: %SCRIPT_NAME%
 ECHO Checkpoints: %CHECKPOINT_OUTPUT_DIR%
+IF DEFINED LOAD_CHECKPOINT (
+    IF NOT "%LOAD_CHECKPOINT%"=="" ECHO Loading Checkpoint: %LOAD_CHECKPOINT%
+)
 ECHO Audio Data: %AUDIO_DATA_PATH%
-ECHO Discriminator Input Type: %DISCRIMINATOR_INPUT_TYPE%
-ECHO Discriminator Spectral Norm: %DISC_APPLY_SPECTRAL_NORM%
+ECHO Primary Discriminator Config Type: %DISCRIMINATOR_INPUT_TYPE%
+ECHO Heuristic D Switching Enabled: %ENABLE_HEURISTIC_DISC_SWITCHING%
+IF /I "%ENABLE_HEURISTIC_DISC_SWITCHING%"=="true" ECHO Initial Active D Type for Switching: %INITIAL_DISC_TYPE%
 ECHO AMP: %USE_AMP%
 ECHO Q-Controller: %Q_CONTROLLER_ENABLED%
-ECHO WANDB: %WANDB_ENABLED% (Project: %WANDB_PROJECT%)
+ECHO Reset Q-Controllers on Load: %RESET_Q_CONTROLLERS_ON_LOAD%
 ECHO Learning Rate (Gen/Disc): %LEARNING_RATE_GEN% / %LEARNING_RATE_DISC%
 ECHO Batch Size (Global/PerGPU): %GLOBAL_BATCH_SIZE% / %BATCH_SIZE_PER_GPU%
 ECHO Grad Accum Steps: %GRAD_ACCUM_STEPS%
