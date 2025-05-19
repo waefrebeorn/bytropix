@@ -45,29 +45,29 @@ REM ############################################################################
 REM # SECTION: Core Training & Model Hyperparameters (Max Detail & Params)
 REM ############################################################################
 SET "EPOCHS=2500"
-SET "GLOBAL_BATCH_SIZE=32" 
+SET "GLOBAL_BATCH_SIZE=32"
 SET "NPROC_PER_NODE=1"
 SET "BATCH_SIZE_PER_GPU=%GLOBAL_BATCH_SIZE%"
 IF %NPROC_PER_NODE% GTR 1 (
     SET /A BATCH_SIZE_PER_GPU = GLOBAL_BATCH_SIZE / NPROC_PER_NODE
     IF !BATCH_SIZE_PER_GPU! LSS 1 SET "BATCH_SIZE_PER_GPU=1"
 )
-SET "GRAD_ACCUM_STEPS=1" 
-SET "LEARNING_RATE_GEN=5e-5" 
-SET "LEARNING_RATE_DISC=3e-5" 
-SET "LEARNING_RATE_DISC_ALT=3e-5" 
-SET "RISGD_MAX_GRAD_NORM=2.5" 
-SET "GLOBAL_MAX_GRAD_NORM=3.5" 
+SET "GRAD_ACCUM_STEPS=1"
+SET "LEARNING_RATE_GEN=5e-5"
+SET "LEARNING_RATE_DISC=3e-5"
+SET "LEARNING_RATE_DISC_ALT=3e-5"
+SET "RISGD_MAX_GRAD_NORM=2.5"
+SET "GLOBAL_MAX_GRAD_NORM=3.5"
 
-SET "LATENT_DIM=768" 
-SET "ENCODER_INITIAL_TANGENT_DIM=256" 
+SET "LATENT_DIM=768"
+SET "ENCODER_INITIAL_TANGENT_DIM=256"
 
 REM ############################################################################
 REM # SECTION: Loss Weights (Still Focusing Mel Reconstruction Initially)
 REM ############################################################################
-SET "LAMBDA_RECON=25.0" 
-SET "LAMBDA_KL=5e-6"    
-SET "LAMBDA_GAN=0.3"    
+SET "LAMBDA_RECON=25.0"
+SET "LAMBDA_KL=1e-4"
+SET "LAMBDA_GAN=0.3"
 
 REM ############################################################################
 REM # SECTION: Audio Processing & Dataset (Pushing Detail)
@@ -75,14 +75,14 @@ REM ############################################################################
 SET "AUDIO_DATA_PATH=%DATA_DIR_BASE%\demo_audio_data_dir"
 SET "VALIDATION_AUDIO_PATH="
 SET "SAMPLE_RATE=44100"
-SET "N_FFT=2048" 
-SET "HOP_LENGTH=256" 
-SET "N_MELS=256"     
-SET "FMIN=20.0"      
+SET "N_FFT=2048"
+SET "HOP_LENGTH=256"
+SET "N_MELS=256"
+SET "FMIN=20.0"
 SET "FMAX="
 SET "SEGMENT_DURATION_SEC=1.0"
 SET "SEGMENT_OVERLAP_SEC=0.0"
-SET "DB_NORM_MIN=-90.0" 
+SET "DB_NORM_MIN=-90.0"
 SET "DB_NORM_MAX=0.0"
 SET "PRELOAD_AUDIO_DATASET_TO_RAM=true"
 SET "VALIDATION_SPLIT_FRACTION=0.1"
@@ -90,65 +90,65 @@ SET "VALIDATION_SPLIT_FRACTION=0.1"
 REM ############################################################################
 REM # SECTION: GAAD & DCT Processing (Max Detail Configuration)
 REM ############################################################################
-SET "GAAD_NUM_REGIONS=192"       
+SET "GAAD_NUM_REGIONS=192"
 SET "GAAD_DECOMP_TYPE=hybrid"
-SET "GAAD_MIN_SIZE_PX=3"         
-SET "REGION_PROC_SIZE_T=32"      
-SET "REGION_PROC_SIZE_F=32"      
+SET "GAAD_MIN_SIZE_PX=3"
+SET "REGION_PROC_SIZE_T=32"
+SET "REGION_PROC_SIZE_F=32"
 SET "DCT_NORM_TYPE=tanh"
-SET "DCT_NORM_GLOBAL_SCALE=150.0" 
-SET "DCT_NORM_TANH_SCALE=50.0"    
+SET "DCT_NORM_GLOBAL_SCALE=150.0"
+SET "DCT_NORM_TANH_SCALE=50.0"
 
 REM ############################################################################
 REM # SECTION: Discriminator Configuration (Primary Mel D might need more capacity)
 REM ############################################################################
 SET "DISCRIMINATOR_INPUT_TYPE=mel"
 SET "DISC_APPLY_SPECTRAL_NORM=true"
-SET "DISC_BASE_DISC_CHANNELS=96"  
-SET "DISC_MAX_DISC_CHANNELS=768"  
-SET "DISC_TARGET_FINAL_FEATURE_DIM=4" 
+SET "DISC_BASE_DISC_CHANNELS=96"
+SET "DISC_MAX_DISC_CHANNELS=768"
+SET "DISC_TARGET_FINAL_FEATURE_DIM=4"
 
 REM ############################################################################
 REM # SECTION: WuBu Stack Configurations (Increased Capacity for Max Detail)
 REM ############################################################################
-SET "WUBU_DROPOUT=0.05" 
+SET "WUBU_DROPOUT=0.05"
 
-SET "WUBU_S_NUM_LEVELS=4"                   
-SET "WUBU_S_HYPERBOLIC_DIMS=256 192 128 96" 
-SET "WUBU_S_INITIAL_CURVATURES=0.9 0.7 0.6 0.5" 
+SET "WUBU_S_NUM_LEVELS=4"
+SET "WUBU_S_HYPERBOLIC_DIMS=256 192 128 96"
+SET "WUBU_S_INITIAL_CURVATURES=0.9 0.7 0.6 0.5"
 SET "WUBU_S_USE_ROTATION=false"
 SET "WUBU_S_PHI_CURVATURE=true"
 SET "WUBU_S_PHI_ROT_INIT=false"
-SET "WUBU_S_OUTPUT_DIM_ENCODER=512" 
+SET "WUBU_S_OUTPUT_DIM_ENCODER=512"
 
-SET "WUBU_G_NUM_LEVELS=4"                                    
-SET "WUBU_G_HYPERBOLIC_DIMS=256 384 512 1024"               
-SET "WUBU_G_INITIAL_CURVATURES=0.5 0.6 0.7 0.9"            
+SET "WUBU_G_NUM_LEVELS=4"
+SET "WUBU_G_HYPERBOLIC_DIMS=256 384 512 1024"
+SET "WUBU_G_INITIAL_CURVATURES=0.5 0.6 0.7 0.9"
 SET "WUBU_G_USE_ROTATION=false"
 SET "WUBU_G_PHI_CURVATURE=true"
 SET "WUBU_G_PHI_ROT_INIT=false"
-REM WuBu-G output_tangent_dim in Python is num_dct_coeffs_flat (32*32=1024 here)
 
-SET "WUBU_D_NUM_LEVELS=3"                   
-SET "WUBU_D_HYPERBOLIC_DIMS=256 192 128"     
-SET "WUBU_D_INITIAL_CURVATURES=0.8 0.6 0.5" 
+SET "WUBU_D_NUM_LEVELS=3"
+SET "WUBU_D_HYPERBOLIC_DIMS=256 192 128"
+SET "WUBU_D_INITIAL_CURVATURES=0.8 0.6 0.5"
 SET "WUBU_D_USE_ROTATION=false"
 SET "WUBU_D_PHI_CURVATURE=true"
 SET "WUBU_D_PHI_ROT_INIT=false"
-SET "WUBU_D_OUTPUT_DIM=128"                
+SET "WUBU_D_OUTPUT_DIM=128"
 
 REM ############################################################################
 REM # SECTION: Q-Learning & Heuristics (Initially Subdued for VAE Lambdas)
 REM ############################################################################
 SET "Q_CONTROLLER_ENABLED=true"
 SET "RESET_Q_CONTROLLERS_ON_LOAD=false"
+SET "RESET_LKL_Q_CONTROLLER_ON_LOAD=true"
 
-SET "LAMBDA_KL_UPDATE_INTERVAL=100"
+SET "LAMBDA_KL_UPDATE_INTERVAL=5"
 SET "MIN_LAMBDA_KL_Q_CONTROL=1e-6"
 SET "MAX_LAMBDA_KL_Q_CONTROL=0.05"
 SET "Q_LKL_SCALE_OPTIONS=0.90 0.95 1.0 1.05 1.10"
-SET "Q_LKL_LR_MOM_PROBATION_STEPS="
-SET "Q_LKL_ACTION_PROBATION_STEPS="
+SET "Q_LKL_LR_MOM_PROBATION_STEPS=1"
+SET "Q_LKL_ACTION_PROBATION_STEPS=1"
 
 SET "ENABLE_HEURISTIC_INTERVENTIONS=true"
 SET "ENABLE_HEURISTIC_DISC_SWITCHING=true"
@@ -292,6 +292,7 @@ SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_d_output_dim %WUBU_D_OUTPUT_DIM%"
 
 IF /I "!Q_CONTROLLER_ENABLED!"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --q_controller_enabled"
 IF /I "!RESET_Q_CONTROLLERS_ON_LOAD!"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --reset_q_controllers_on_load"
+IF /I "!RESET_LKL_Q_CONTROLLER_ON_LOAD!"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --reset_lkl_q_controller_on_load"
 SET "SCRIPT_ARGS=!SCRIPT_ARGS! --lambda_kl_update_interval %LAMBDA_KL_UPDATE_INTERVAL%"
 SET "SCRIPT_ARGS=!SCRIPT_ARGS! --min_lambda_kl_q_control %MIN_LAMBDA_KL_Q_CONTROL%"
 SET "SCRIPT_ARGS=!SCRIPT_ARGS! --max_lambda_kl_q_control %MAX_LAMBDA_KL_Q_CONTROL%"
@@ -364,6 +365,7 @@ IF /I "%ENABLE_HEURISTIC_DISC_SWITCHING%"=="true" ECHO Initial Active D Type for
 ECHO AMP Enabled: %USE_AMP%
 ECHO Q-Controller Enabled: %Q_CONTROLLER_ENABLED%
 ECHO Reset Q-Controllers on Load: %RESET_Q_CONTROLLERS_ON_LOAD%
+ECHO Reset LKL Q-Controller on Load: %RESET_LKL_Q_CONTROLLER_ON_LOAD%
 ECHO Advanced Heuristics Enabled: %ENABLE_HEURISTIC_INTERVENTIONS%
 ECHO Batch Size per GPU: %BATCH_SIZE_PER_GPU% (Global: %GLOBAL_BATCH_SIZE% / NPROC: %NPROC_PER_NODE%)
 ECHO ======================================================
@@ -401,7 +403,6 @@ IF %NPROC_PER_NODE% EQU 1 (
     "%PYTHON_EXE%" "%FULL_SCRIPT_PATH%" !SCRIPT_ARGS!
 ) ELSE (
     ECHO Launching with torch.distributed.run for %NPROC_PER_NODE% processes.
-    REM Using a different port for DDP just in case, can revert to %MASTER_PORT% if not needed
     "%PYTHON_EXE%" -m torch.distributed.run --nproc_per_node=%NPROC_PER_NODE% --master_port=29522 "%FULL_SCRIPT_PATH%" !SCRIPT_ARGS!
 )
 
