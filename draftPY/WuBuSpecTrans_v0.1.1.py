@@ -3793,10 +3793,24 @@ class HybridTrainer:
         # --- 1. Handle Checkpoint File Existence and Loading Errors ---
         if not checkpoint_path.exists():
             self.logger.warning(f"CKPT {checkpoint_path} not found. Starting fresh.")
+            # If checkpoint not found, and reset_lkl_q_controller_on_load is True, it implies we want to use args.lambda_kl from the start
+            if self.args.reset_lkl_q_controller_on_load:
+                self.lambda_kl = float(self.args.lambda_kl)
+                self.logger.info(f"CKPT not found, but --reset_lkl_q_controller_on_load is True. Setting self.lambda_kl to args.lambda_kl: {self.lambda_kl:.2e}")
+
             for qc_obj in all_q_controllers:
+                # If it's the LKL controller and reset_lkl_q_controller_on_load is true, it will be reset anyway.
+                # For other Q controllers, they are reset if effective_reset_request_for_q is true.
+                is_lkl_and_reset_lkl_arg = (qc_obj == q_ctrl_lkl and self.args.reset_lkl_q_controller_on_load)
+                perform_reset_for_this_specific_controller = effective_reset_request_for_q or is_lkl_and_reset_lkl_arg
+
                 self._load_q_state_helper_inner(qc_obj, None,
-                                                perform_manual_flush_for_this_controller=effective_reset_request_for_q,
+                                                perform_manual_flush_for_this_controller=perform_reset_for_this_specific_controller,
                                                 is_associated_optimizer_state_loaded=False)
+                if is_lkl_and_reset_lkl_arg and qc_obj is not None: # Ensure LKL Q-controller knows about the new base lambda_kl
+                    qc_obj.set_current_lambda_kl(self.lambda_kl)
+
+
             if global_manual_flush_requested and not self.args.reset_q_controllers_on_load:
                 HAKMEMQController.MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = False
             return 0, 0
@@ -3806,10 +3820,20 @@ class HybridTrainer:
             self.logger.info(f"Loaded CKPT: {checkpoint_path}")
         except Exception as e:
             self.logger.error(f"Failed to load CKPT {checkpoint_path}: {e}. Starting fresh.", exc_info=True)
+            if self.args.reset_lkl_q_controller_on_load:
+                self.lambda_kl = float(self.args.lambda_kl)
+                self.logger.info(f"CKPT load failed, but --reset_lkl_q_controller_on_load is True. Setting self.lambda_kl to args.lambda_kl: {self.lambda_kl:.2e}")
+
             for qc_obj in all_q_controllers:
+                is_lkl_and_reset_lkl_arg = (qc_obj == q_ctrl_lkl and self.args.reset_lkl_q_controller_on_load)
+                perform_reset_for_this_specific_controller = effective_reset_request_for_q or is_lkl_and_reset_lkl_arg
                 self._load_q_state_helper_inner(qc_obj, None,
-                                                perform_manual_flush_for_this_controller=effective_reset_request_for_q,
+                                                perform_manual_flush_for_this_controller=perform_reset_for_this_specific_controller,
                                                 is_associated_optimizer_state_loaded=False)
+                if is_lkl_and_reset_lkl_arg and qc_obj is not None:
+                     qc_obj.set_current_lambda_kl(self.lambda_kl)
+
+
             if global_manual_flush_requested and not self.args.reset_q_controllers_on_load:
                 HAKMEMQController.MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = False
             return 0, 0
@@ -3820,21 +3844,24 @@ class HybridTrainer:
         self.best_val_metric_val = ckpt.get('best_val_metric_val', default_best_val)
         self.last_val_metrics = ckpt.get('metrics', {}).copy() if ckpt.get('metrics') is not None else {}
         self.prev_interval_metrics_for_lambda_kl_reward = ckpt.get('prev_interval_metrics_for_lambda_kl_reward')
-        self.lambda_kl = float(ckpt.get('current_lambda_kl', self.args.lambda_kl)) # Base lambda_kl
+        
+        # self.lambda_kl is loaded here. THIS IS WHERE THE OVERRIDE FOR --reset_lkl_q_controller_on_load needs to happen AFTER this line,
+        # but BEFORE Q-controller states are fully processed if we want args.lambda_kl to be the new base.
+        # However, if LKL Q-controller is reset, its `prev_lambda_kl_state` etc. might be irrelevant anyway.
+        # The critical part is that the *trainer's* self.lambda_kl starts correctly for the *new* LKL Q-controller state.
+        self.lambda_kl = float(ckpt.get('current_lambda_kl', self.args.lambda_kl)) # Load from CKPT first
 
         loaded_gs = ckpt.get('global_step', 0)
         loaded_ep = ckpt.get('epoch', 0)
         
-        # Determine next_ep_start, potentially overridden by args
         next_ep_start = loaded_ep + 1 if self.args.load_strict and loaded_gs > 0 and loaded_ep < self.args.epochs else loaded_ep
         if getattr(self.args, 'force_start_epoch_on_load', None) is not None:
             next_ep_start = self.args.force_start_epoch_on_load
-            # If forcing epoch, typically reset global_step unless also forced
             loaded_gs = getattr(self.args, 'force_start_gstep_on_load', 0 if self.args.force_start_epoch_on_load is not None else loaded_gs)
             if self.am_main_process: self.logger.info(f"CKPT Load: Overriding start epoch to {next_ep_start} and GStep to {loaded_gs} due to force_start args.")
 
-
-        # --- 3. Load Model State Dicts (VAE, Primary D, Alt D) ---
+        # --- 3. Load Model State Dicts ---
+        # ... (model loading code remains the same) ...
         m_load = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
         d_primary_load = self.discriminator_primary_obj.module if self.ddp_active and hasattr(self.discriminator_primary_obj, 'module') else self.discriminator_primary_obj
         d_alt_load = self.discriminator_alternative_obj.module if self.ddp_active and hasattr(self.discriminator_alternative_obj, 'module') else self.discriminator_alternative_obj
@@ -3858,48 +3885,33 @@ class HybridTrainer:
         else: self.logger.warning("discriminator_alternative_state_dict not found in checkpoint.")
 
 
-        # --- 4. Determine and Set Active Discriminator (with Override Logic) ---
+        # --- 4. Determine and Set Active Discriminator ---
+        # ... (active D logic remains the same) ...
         saved_active_disc_key = ckpt.get('active_discriminator_key', 'primary')
         saved_active_disc_actual_type = ckpt.get('active_disc_actual_type', 'unknown_type_in_ckpt')
-        
-        target_active_key_for_this_resume = saved_active_disc_key # Default to what's in the checkpoint
+        target_active_key_for_this_resume = saved_active_disc_key 
         forced_switch_on_resume = False
-
-        # self.initial_disc_type_arg is set in __init__ based on args.initial_disc_type or args.disc_input_type
         if self.args.enable_heuristic_disc_switching and self.initial_disc_type_arg is not None:
             current_args_implied_active_key = None
-            if self.initial_disc_type_arg == self.primary_disc_actual_type:
-                current_args_implied_active_key = 'primary'
-            elif self.initial_disc_type_arg == self.alternative_disc_actual_type:
-                current_args_implied_active_key = 'alternative'
-            
+            if self.initial_disc_type_arg == self.primary_disc_actual_type: current_args_implied_active_key = 'primary'
+            elif self.initial_disc_type_arg == self.alternative_disc_actual_type: current_args_implied_active_key = 'alternative'
             if current_args_implied_active_key is not None and current_args_implied_active_key != saved_active_disc_key:
-                if self.am_main_process:
-                    self.logger.warning(
-                        f"LOAD_CKPT_OVERRIDE: Checkpoint active D was '{saved_active_disc_key}' (type: '{saved_active_disc_actual_type}'). "
-                        f"Current args.initial_disc_type ('{self.initial_disc_type_arg}') implies '{current_args_implied_active_key}'. "
-                        f"FORCING active D to '{current_args_implied_active_key}' for this resume."
-                    )
+                if self.am_main_process: self.logger.warning(f"LOAD_CKPT_OVERRIDE: Checkpoint active D was '{saved_active_disc_key}' (type: '{saved_active_disc_actual_type}'). Current args.initial_disc_type ('{self.initial_disc_type_arg}') implies '{current_args_implied_active_key}'. FORCING active D to '{current_args_implied_active_key}' for this resume.")
                 target_active_key_for_this_resume = current_args_implied_active_key
                 forced_switch_on_resume = True
-            elif current_args_implied_active_key is None:
-                 if self.am_main_process: self.logger.warning(
-                     f"LOAD_CKPT_WARNING: args.initial_disc_type ('{self.initial_disc_type_arg}') did not match actual types of "
-                     f"primary ('{self.primary_disc_actual_type}') or alternative ('{self.alternative_disc_actual_type}'). "
-                     f"Using active D key from checkpoint: '{saved_active_disc_key}'."
-                 )
-        
+            elif current_args_implied_active_key is None and self.am_main_process: self.logger.warning(f"LOAD_CKPT_WARNING: args.initial_disc_type ('{self.initial_disc_type_arg}') did not match actual types of primary ('{self.primary_disc_actual_type}') or alternative ('{self.alternative_disc_actual_type}'). Using active D key from checkpoint: '{saved_active_disc_key}'.")
         self.active_discriminator_key = target_active_key_for_this_resume
-        self._update_active_discriminator_pointers() # Uses the now determined active_discriminator_key
+        self._update_active_discriminator_pointers()
 
         # --- 5. Load Optimizer States ---
+        # ... (optimizer loading remains the same) ...
         opt_g_loaded_ok, opt_d_primary_loaded_ok, opt_d_alt_loaded_ok = False, False, False
         if self.optimizer_enc_gen and 'optimizer_enc_gen_state_dict' in ckpt and ckpt['optimizer_enc_gen_state_dict'] is not None:
             if model_loaded_ok:
                 try: self.optimizer_enc_gen.load_state_dict(ckpt['optimizer_enc_gen_state_dict']); opt_g_loaded_ok = True
                 except Exception as e: self.logger.warning(f"Could not load Opt_Gen state: {e}. It will start fresh.")
             else: self.logger.warning("Main model failed to load, Opt_Gen will start fresh.")
-        if self.optimizer_enc_gen: # Ensure initial_lr/momentum are set for Q-Ctrl base regardless of load success
+        if self.optimizer_enc_gen: 
             for group in self.optimizer_enc_gen.param_groups:
                 group['initial_lr'] = self.args.learning_rate_gen 
                 group['initial_momentum'] = self.optimizer_enc_gen.defaults.get('momentum', 0.9)
@@ -3925,19 +3937,37 @@ class HybridTrainer:
                 group['initial_lr'] = lr_disc_alt_load
                 group['initial_momentum'] = self.optimizer_disc_alternative.defaults.get('momentum', 0.9)
 
-        # --- 6. Load Q-Controller States ---
+
+        # --- 6. Load Q-Controller States (with potential LKL reset) ---
+        # Standard loading for G, D_primary, D_alt Q-controllers
         self._load_q_state_helper_inner(q_ctrl_gen, ckpt.get('q_controller_enc_gen_state'), effective_reset_request_for_q, opt_g_loaded_ok)
         self._load_q_state_helper_inner(q_ctrl_d_pri, ckpt.get('q_controller_disc_primary_state'), effective_reset_request_for_q, opt_d_primary_loaded_ok)
         self._load_q_state_helper_inner(q_ctrl_d_alt, ckpt.get('q_controller_disc_alternative_state'), effective_reset_request_for_q, opt_d_alt_loaded_ok)
-        self._load_q_state_helper_inner(q_ctrl_lkl, ckpt.get('q_controller_lambda_kl_state'), effective_reset_request_for_q, True)
+
+        # Special handling for LKL Q-controller
+        if self.args.reset_lkl_q_controller_on_load and q_ctrl_lkl is not None:
+            self.logger.info(f"FORCE RESETTING Lambda_KL Q-Controller due to --reset_lkl_q_controller_on_load.")
+            q_ctrl_lkl.reset_q_learning_state(
+                reset_q_table=True, reset_epsilon=True,
+                context_msg="LKL Q-Ctrl Force Reset on Load by Arg",
+                start_probation=True
+            )
+            # Crucially, update the trainer's self.lambda_kl to the command-line argument
+            self.lambda_kl = float(self.args.lambda_kl)
+            self.logger.info(f"Trainer's self.lambda_kl RESET to args.lambda_kl: {self.lambda_kl:.2e} after LKL Q-Ctrl reset.")
+            q_ctrl_lkl.set_current_lambda_kl(self.lambda_kl) # Sync Q-controller's internal knowledge
+            self.prev_interval_metrics_for_lambda_kl_reward = None # Reset this as Q-LKL is starting fresh
+            self.logger.info("prev_interval_metrics_for_lambda_kl_reward also reset due to LKL Q-Ctrl reset.")
+        else:
+            # Normal load for LKL Q-controller if not resetting it specifically
+            self._load_q_state_helper_inner(q_ctrl_lkl, ckpt.get('q_controller_lambda_kl_state'), effective_reset_request_for_q, True)
+            # If NOT resetting LKL Q-Ctrl, self.lambda_kl (loaded from ckpt) is already correct.
 
         if forced_switch_on_resume:
             active_d_q_to_reset = getattr(self.optimizer_disc_active, 'q_controller', None)
             if active_d_q_to_reset:
-                if self.am_main_process:
-                    self.logger.warning(f"Due to resume override, resetting Q-controller for newly FORCED active D: '{self.active_discriminator_key}' (Type: {self.active_disc_actual_type}).")
+                if self.am_main_process: self.logger.warning(f"Due to resume override, resetting Q-controller for newly FORCED active D: '{self.active_discriminator_key}' (Type: {self.active_disc_actual_type}).")
                 active_d_q_to_reset.reset_q_learning_state(True, True, f"Forced D switch to {self.active_discriminator_key} on Resume Override", True)
-            # Reset heuristic counters and D switch cooldown as the D context has changed abruptly
             self.steps_since_last_d_switch = 0
             self.consecutive_trigger_primary_to_alt_count = 0; self.consecutive_trigger_alt_to_primary_count = 0
             self.consecutive_heuristic_trigger_counts = defaultdict(int)
@@ -3951,6 +3981,7 @@ class HybridTrainer:
              self.logger.info("Global Q-controller reset triggered by --reset_q_controllers_on_load argument for all applicable Q-controllers.")
 
         # --- 7. Load Scalers and Heuristic States ---
+        # ... (scaler loading remains the same) ...
         if self.args.use_amp and self.device.type == 'cuda':
             if 'scaler_enc_gen_state_dict' in ckpt and self.scaler_enc_gen and ckpt['scaler_enc_gen_state_dict'] is not None:
                 try: self.scaler_enc_gen.load_state_dict(ckpt['scaler_enc_gen_state_dict'])
@@ -3958,20 +3989,20 @@ class HybridTrainer:
             if 'scaler_disc_state_dict' in ckpt and self.scaler_disc and ckpt['scaler_disc_state_dict'] is not None:
                 try: self.scaler_disc.load_state_dict(ckpt['scaler_disc_state_dict'])
                 except Exception as e_sc_d: self.logger.warning(f"Could not load scaler_disc state: {e_sc_d}")
-        
-        # Sync lambda_kl to all Q-controllers that might use it (after loading base self.lambda_kl)
+
+        # Sync lambda_kl to all Q-controllers that might use it.
+        # This is important AFTER self.lambda_kl has been definitively set (either from ckpt or by override)
         all_q_controllers_to_sync_lambda = [q_ctrl_gen, q_ctrl_d_pri, q_ctrl_d_alt, q_ctrl_lkl]
         for q_ctrl_sync in all_q_controllers_to_sync_lambda:
             if q_ctrl_sync and hasattr(q_ctrl_sync, 'set_current_lambda_kl'):
                 q_ctrl_sync.set_current_lambda_kl(self.lambda_kl)
 
-        # Load heuristic states *unless* a forced D switch on resume already reset them
+        # ... (heuristic state loading remains the same) ...
         if not forced_switch_on_resume:
             self.steps_since_last_d_switch = ckpt.get('steps_since_last_d_switch', 0)
             self.consecutive_trigger_primary_to_alt_count = ckpt.get('consecutive_trigger_primary_to_alt_count', 0)
             self.consecutive_trigger_alt_to_primary_count = ckpt.get('consecutive_trigger_alt_to_primary_count', 0)
             self.consecutive_heuristic_trigger_counts = defaultdict(int, ckpt.get('consecutive_heuristic_trigger_counts', {}))
-            # Safely load deques
             if 'q_data_derived_g_recon_hist' in ckpt and ckpt['q_data_derived_g_recon_hist'] is not None:
                 try:
                     self.q_data_derived_g_recon_hist.clear()
@@ -3981,17 +4012,21 @@ class HybridTrainer:
         self.heuristic_vae_feature_match_active = ckpt.get('heuristic_vae_feature_match_active', False)
         self.heuristic_penalize_g_easy_win_active = ckpt.get('heuristic_penalize_g_easy_win_active', False)
         self.heuristic_boost_active_d_lr_active = ckpt.get('heuristic_boost_active_d_lr_active', False)
-        self.heuristic_force_d_q_explore_active = ckpt.get('heuristic_force_d_q_explore_active', False) # Load this state too
+        self.heuristic_force_d_q_explore_active = ckpt.get('heuristic_force_d_q_explore_active', False) 
         self.heuristic_override_lambda_recon_factor = ckpt.get('heuristic_override_lambda_recon_factor', 1.0)
         self.heuristic_override_lambda_kl_factor = ckpt.get('heuristic_override_lambda_kl_factor', 1.0)
+
 
         self.logger.info(
             f"Resuming training. GlobalStep: {loaded_gs}, NextEpochStart: {next_ep_start}. "
             f"ActiveD upon resume: '{self.active_discriminator_key}' (Type: '{self.active_disc_actual_type}'). "
-            f"Effective Lambda_KL (base): {self.lambda_kl:.4e}"
+            f"Effective Lambda_KL (base): {self.lambda_kl:.4e}" # This will now reflect args.lambda_kl if reset_lkl_q_controller_on_load was true
         )
         return loaded_gs, next_ep_start
         
+
+
+
     @staticmethod
     def get_scale_from_action_value(action_val: Union[Dict, str, None], scale_key: str, default: float = 1.0) -> float:
         if isinstance(action_val, dict): return action_val.get(scale_key, default)
@@ -4254,7 +4289,7 @@ def parse_arguments():
     parser.add_argument('--q_lkl_scale_options', nargs='+', type=float, default=[0.80, 0.90, 1.0, 1.10, 1.20], help="Scale options for LKL Q-ctrl.")
     parser.add_argument('--q_lkl_lr_mom_probation_steps', type=int, default=None, help="Probation steps for LKL Q-Ctrl's (hypothetical) LR/Mom policy.")
     parser.add_argument('--q_lkl_action_probation_steps', type=int, default=None, help="Probation steps for LKL Q-Ctrl's lambda_kl scaling action.")
-
+    parser.add_argument('--reset_lkl_q_controller_on_load', action='store_true', help="Force reset only the Lambda_KL Q-controller on load, allowing args.lambda_kl to take effect immediately.")
     # --- Group: Heuristic Interventions & Discriminator Switching ---
     parser.add_argument('--enable_heuristic_interventions', action='store_true', help="Globally enable/disable advanced heuristic interventions.")
     parser.add_argument('--enable_heuristic_disc_switching', action='store_true', help="Enable heuristic D switching.")
