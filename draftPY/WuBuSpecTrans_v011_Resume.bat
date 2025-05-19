@@ -65,8 +65,8 @@ SET "ENCODER_INITIAL_TANGENT_DIM=256"
 REM ############################################################################
 REM # SECTION: Loss Weights (Still Focusing Mel Reconstruction Initially)
 REM ############################################################################
-SET "LAMBDA_RECON=25.0"
-SET "LAMBDA_KL=1e-4"
+SET "LAMBDA_RECON=1.5"
+SET "LAMBDA_KL=9e-3"
 SET "LAMBDA_GAN=0.3"
 
 REM ############################################################################
@@ -197,7 +197,7 @@ SET "SAVE_INTERVAL=5000"
 SET "SAVE_EPOCH_INTERVAL=1"
 SET "VALIDATION_INTERVAL_EPOCHS=1"
 SET "USE_LPIPS_FOR_MEL_VERIFICATION=true"
-SET "VAL_PRIMARY_METRIC=avg_val_recon_dct_mse"
+SET "VAL_PRIMARY_METRIC=avg_val_lpips_mel"
 SET "NUM_VAL_SAMPLES_TO_LOG=4"
 SET "DEMO_NUM_SAMPLES=5"
 
