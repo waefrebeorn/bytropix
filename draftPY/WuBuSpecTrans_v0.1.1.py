@@ -1991,7 +1991,7 @@ class AudioSpecGenerator(nn.Module):
         self.region_proc_size = (args.region_proc_size_t, args.region_proc_size_f) # (T_proc, F_proc)
         self.num_dct_coeffs_flat = self.region_proc_size[0] * self.region_proc_size[1]
 
-        self.initial_gen_wubu_dim = args.encoder_initial_tangent_dim
+        self.initial_gen_wubu_dim = args.encoder_initial_tangent_dim # Match encoder's embed dim for symmetry
         self.fc_expand_latent = nn.Linear(
             self.latent_dim,
             self.num_gaad_regions * self.initial_gen_wubu_dim
@@ -2000,6 +2000,7 @@ class AudioSpecGenerator(nn.Module):
         wubu_g_config = _configure_wubu_stack(args, "wubu_g")
         if wubu_g_config is None or wubu_g_config["num_levels"] == 0:
              self.logger.warning("WuBu-G config is None or num_levels is 0. Generator using MLP fallback.")
+             # Fallback MLP needs to map from initial_gen_wubu_dim to num_dct_coeffs_flat per region
              self.wubu_generator = nn.Sequential(
                  nn.Linear(self.initial_gen_wubu_dim, self.initial_gen_wubu_dim * 2),
                  nn.GELU(),
@@ -2009,7 +2010,7 @@ class AudioSpecGenerator(nn.Module):
         else:
             self.wubu_generator = FullyHyperbolicWuBuNestingModel(
                 input_tangent_dim=self.initial_gen_wubu_dim,
-                output_tangent_dim=self.num_dct_coeffs_flat,
+                output_tangent_dim=self.num_dct_coeffs_flat, # WuBu outputs DCTs for one region at a time
                 config=wubu_g_config
             )
 
@@ -2033,7 +2034,7 @@ class AudioSpecGenerator(nn.Module):
             scaled_output = norm_dct_coeffs * args_ref.dct_norm_global_scale
             if not torch.isfinite(scaled_output).all():
                 finfo = torch.finfo(scaled_output.dtype)
-                safe_max_val = min(finfo.max / 2 if finfo.max < float('inf') else TAN_VEC_CLAMP_VAL * 100, TAN_VEC_CLAMP_VAL * 10) # Adjusted safe_max_val
+                safe_max_val = min(finfo.max / 2 if finfo.max < float('inf') else TAN_VEC_CLAMP_VAL * 100, TAN_VEC_CLAMP_VAL * 10) 
                 scaled_output = torch.clamp(
                     torch.nan_to_num(scaled_output, nan=0.0, posinf=safe_max_val, neginf=-safe_max_val),
                     min=-safe_max_val, max=safe_max_val
@@ -2046,60 +2047,38 @@ class AudioSpecGenerator(nn.Module):
                 return norm_dct_coeffs
 
             if not torch.isfinite(norm_dct_coeffs).all():
-                # logging.warning(f"_unnormalize_dct (tanh): Input norm_dct_coeffs contains non-finite. nan_to_num with +/-0.999.")
                 norm_dct_coeffs = torch.nan_to_num(norm_dct_coeffs, nan=0.0, posinf=0.999, neginf=-0.999)
             
             input_dtype = norm_dct_coeffs.dtype
             device = norm_dct_coeffs.device
-
-            # --- ADAPTIVE CLAMPING FOR ATANH INPUT ---
-            strict_upper_bound: torch.Tensor
-            strict_lower_bound: torch.Tensor
-            
-            # Create 1.0 tensor with the correct dtype and device
             one_tensor = torch.tensor(1.0, dtype=input_dtype, device=device)
-
-            if input_dtype == torch.float16 and device.type == 'cuda':
-                # nextafter_cuda not implemented for Half. Use a small epsilon specific to float16.
-                # torch.finfo(torch.float16).eps is 0.0009765625
-                # We need a value slightly larger than eps if 1.0 - eps still results in 1.0 due to precision.
-                # A common practice for float16 clamp for atanh is a value like 0.999 or 0.9995
-                # Or, use a multiple of its epsilon.
-                # Let's use a slightly more aggressive epsilon than the global EPS constant for this specific clamp.
-                eps_f16_atanh_clamp = torch.finfo(torch.float16).eps * 4 # e.g. ~0.004
-                strict_upper_bound = one_tensor - eps_f16_atanh_clamp
-                strict_lower_bound = -one_tensor + eps_f16_atanh_clamp
-                # Ensure these bounds themselves are representable and distinct from +/-1.0
-                if strict_upper_bound >= one_tensor: # If 1.0 - eps_f16 is still 1.0
-                    strict_upper_bound = torch.tensor(0.999, dtype=input_dtype, device=device) # Fallback to a known safe value
-                if strict_lower_bound <= -one_tensor:
-                    strict_lower_bound = torch.tensor(-0.999, dtype=input_dtype, device=device)
-            elif input_dtype == torch.bfloat16 and device.type == 'cuda': # Similar issue for bfloat16 might exist
-                eps_bf16_atanh_clamp = torch.finfo(torch.bfloat16).eps * 4
-                strict_upper_bound = one_tensor - eps_bf16_atanh_clamp
-                strict_lower_bound = -one_tensor + eps_bf16_atanh_clamp
-                if strict_upper_bound >= one_tensor: strict_upper_bound = torch.tensor(0.99, dtype=input_dtype, device=device)
-                if strict_lower_bound <= -one_tensor: strict_lower_bound = torch.tensor(-0.99, dtype=input_dtype, device=device)
-            else:
-                # For float32 or CPU, torch.nextafter should be available and is preferred.
-                try:
-                    strict_upper_bound = torch.nextafter(one_tensor, torch.tensor(0.0, dtype=input_dtype, device=device))
-                    strict_lower_bound = torch.nextafter(-one_tensor, torch.tensor(0.0, dtype=input_dtype, device=device))
-                except RuntimeError: # Fallback if nextafter still fails for some other combo
-                    # logging.warning(f"_unnormalize_dct (tanh): nextafter failed for {input_dtype} on {device}. Using epsilon fallback.")
-                    eps_fallback_atanh_clamp = torch.finfo(input_dtype).eps * 10
-                    strict_upper_bound = one_tensor - eps_fallback_atanh_clamp
-                    strict_lower_bound = -one_tensor + eps_fallback_atanh_clamp
-
-            clamped_for_atanh = torch.clamp(norm_dct_coeffs, min=strict_lower_bound, max=strict_upper_bound)
             
-            # Perform atanh, preferably in float32 for stability if original was lower precision
+            # Determine clamping bounds for atanh
+            # Using a fixed epsilon for float16/bfloat16 as nextafter can be problematic.
+            # For float32, nextafter is preferred.
+            if input_dtype in [torch.float16, torch.bfloat16]:
+                eps_clamp = torch.finfo(input_dtype).eps * 4 
+                # Ensure the epsilon makes a difference; if 1.0 - eps is still 1.0, use a hardcoded value.
+                upper_b = one_tensor - eps_clamp
+                lower_b = -one_tensor + eps_clamp
+                if upper_b >= one_tensor: upper_b = torch.tensor(0.999 if input_dtype == torch.float16 else 0.99, dtype=input_dtype, device=device)
+                if lower_b <= -one_tensor: lower_b = torch.tensor(-0.999 if input_dtype == torch.float16 else -0.99, dtype=input_dtype, device=device)
+            else: # float32 or other
+                try:
+                    upper_b = torch.nextafter(one_tensor, torch.tensor(0.0, dtype=input_dtype, device=device))
+                    lower_b = torch.nextafter(-one_tensor, torch.tensor(0.0, dtype=input_dtype, device=device))
+                except RuntimeError: # Fallback if nextafter fails for some other combo
+                    eps_fallback = torch.finfo(input_dtype).eps * 10
+                    upper_b = one_tensor - eps_fallback
+                    lower_b = -one_tensor + eps_fallback
+
+            clamped_for_atanh = torch.clamp(norm_dct_coeffs, min=lower_b, max=upper_b)
+            
             compute_dtype_for_atanh = torch.float32 if input_dtype in [torch.float16, torch.bfloat16] else input_dtype
             atanh_output = torch.atanh(clamped_for_atanh.to(compute_dtype_for_atanh))
             unscaled_dct_intermediate = atanh_output * args_ref.dct_norm_tanh_scale
 
             if not torch.isfinite(unscaled_dct_intermediate).all():
-                # logging.error(f"_unnormalize_dct (tanh): Output of atanh * scale is non-finite. Clamping. Input to atanh was min/max: {clamped_for_atanh.min().item()}/{clamped_for_atanh.max().item()}")
                 final_output_clamp_val = TAN_VEC_CLAMP_VAL 
                 unscaled_dct_intermediate = torch.nan_to_num(
                     unscaled_dct_intermediate, nan=0.0, 
@@ -2114,9 +2093,6 @@ class AudioSpecGenerator(nn.Module):
             logging.error(f"_unnormalize_dct: CRITICAL! Unknown DCT norm type '{args_ref.dct_norm_type}'. Returning input scaled by global_scale.")
             return norm_dct_coeffs * args_ref.dct_norm_global_scale
             
-
-
-
     def forward(self, latent_code: torch.Tensor) -> torch.Tensor:
         B = latent_code.shape[0]
 
@@ -2133,14 +2109,156 @@ class AudioSpecGenerator(nn.Module):
         return generated_dct_structured
 
 
+# Helper Self-Attention Module (simplified from SAGAN / ViT for 2D features)
+# For a production model, you might use a more established implementation or nn.MultiheadAttention carefully adapted.
+class SelfAttention2D(nn.Module):
+    def __init__(self, in_channels, k_reduction_factor=8, use_spectral_norm=False):
+        super().__init__()
+        self.in_channels = in_channels
+        self.inter_channels = max(1, in_channels // k_reduction_factor) # At least 1 channel
+
+        conv_fn = functools.partial(nn.Conv2d, kernel_size=1, padding=0, bias=False)
+        
+        self.query_conv = conv_fn(self.in_channels, self.inter_channels)
+        self.key_conv = conv_fn(self.in_channels, self.inter_channels)
+        self.value_conv = conv_fn(self.in_channels, self.in_channels) # No reduction for value often
+        self.out_conv = conv_fn(self.in_channels, self.in_channels)
+
+        if use_spectral_norm:
+            self.query_conv = spectral_norm(self.query_conv)
+            self.key_conv = spectral_norm(self.key_conv)
+            self.value_conv = spectral_norm(self.value_conv)
+            self.out_conv = spectral_norm(self.out_conv) # SN on output conv can also be beneficial
+
+        self.gamma = nn.Parameter(torch.zeros(1)) # Learnable scaling factor for attention output
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, H, W = x.size()
+
+        proj_query = self.query_conv(x).view(B, self.inter_channels, -1).permute(0, 2, 1)  # B x (H*W) x C_inter
+        proj_key = self.key_conv(x).view(B, self.inter_channels, -1)  # B x C_inter x (H*W)
+        energy = torch.bmm(proj_query, proj_key)  # B x (H*W) x (H*W)
+        attention = self.softmax(energy)
+
+        proj_value = self.value_conv(x).view(B, C, -1)  # B x C_in x (H*W)
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1)) # B x C_in x (H*W)
+        out = out.view(B, C, H, W)
+
+        out = self.out_conv(out)
+        return self.gamma * out + x # Residual connection
+
+# --- Now the updated Discriminator class ---
+
+class _SingleScaleMelDiscriminator(nn.Module):
+    def __init__(self, args: argparse.Namespace, audio_config: Dict, disc_config: Dict, scale_index: int = 0):
+        super().__init__()
+        self.args = args
+        self.scale_index = scale_index
+        self.apply_spectral_norm = disc_config.get(f"mel_d_scale{scale_index}_apply_sn", disc_config.get("apply_spectral_norm", False))
+        self.logger = logging.getLogger(f"WuBuSpecTransV01.SingleMelD.Scale{scale_index}.{id(self)}")
+
+        n_mels_effective = args.n_mels // (2**scale_index) 
+        n_time_effective = audio_config.get("num_time_frames_for_1s_segment", 87) // (2**scale_index)
+
+        base_ch = disc_config.get(f"mel_d_scale{scale_index}_base_ch", disc_config.get("base_disc_channels", 64))
+        max_ch = disc_config.get(f"mel_d_scale{scale_index}_max_ch", disc_config.get("max_disc_channels", 512))
+        
+        target_final_dim_config = disc_config.get(f"mel_d_scale{scale_index}_target_final_dim", disc_config.get("target_mel_disc_final_feature_dim", [4,4]))
+        # Ensure target_final_dim_config is a list/tuple of 2 elements
+        if isinstance(target_final_dim_config, int): target_final_dim_h = target_final_dim_w = target_final_dim_config
+        elif isinstance(target_final_dim_config, (list, tuple)) and len(target_final_dim_config) == 2: target_final_dim_h, target_final_dim_w = target_final_dim_config
+        elif isinstance(target_final_dim_config, (list, tuple)) and len(target_final_dim_config) == 1: target_final_dim_h = target_final_dim_w = target_final_dim_config[0]
+        else: target_final_dim_h = target_final_dim_w = 4 # Default fallback
+
+        max_downs_limit = disc_config.get(f"mel_d_scale{scale_index}_max_downs", disc_config.get("max_mel_disc_downsample_layers", 5))
+        self.use_attention_in_mel_scale = getattr(args, f"mel_d_scale{scale_index}_use_attention", getattr(args, 'use_mel_d_attention', False)) # New arg
+        self.attention_after_layer_idx = getattr(args, f"mel_d_scale{scale_index}_attention_idx", 2) # New arg: after which conv block
+
+        cnn_layers_list = []
+        in_c = 1 
+        curr_h, curr_w = n_mels_effective, n_time_effective
+        
+        if curr_h <= target_final_dim_h and curr_w <= target_final_dim_w and curr_h > 0 and curr_w > 0: # check > 0
+            num_downsamples = 0
+            self.logger.info(f"  SingleMelD Scale {scale_index}: Input ({curr_h}x{curr_w}) small. No CNN downsampling. Using direct conv.")
+        else:
+            num_downsamples = 0
+            temp_h, temp_w = curr_h, curr_w
+            while (temp_h > target_final_dim_h or temp_w > target_final_dim_w) and num_downsamples < max_downs_limit and temp_h > 1 and temp_w > 1:
+                next_h = (temp_h - 4 + 2*1) // 2 + 1 
+                next_w = (temp_w - 4 + 2*1) // 2 + 1
+                if (next_h < target_final_dim_h and next_w < target_final_dim_w and num_downsamples > 0) or next_h < 1 or next_w < 1:
+                    if (temp_h <= target_final_dim_h or temp_w <= target_final_dim_w) and num_downsamples > 0: break
+                if next_h < 1 or next_w < 1 : break
+                temp_h, temp_w = next_h, next_w
+                num_downsamples +=1
+            num_downsamples = max(0, num_downsamples)
+
+        self.logger.info(f"  SingleMelD Scale {scale_index}: Input Mel (H,W): ({n_mels_effective},{n_time_effective}). Target ~({target_final_dim_h}x{target_final_dim_w}). CNN Downs: {num_downsamples}.")
+
+        for i in range(num_downsamples):
+            out_c = min(base_ch * (2**i), max_ch)
+            conv_l = nn.Conv2d(in_c, out_c, kernel_size=4, stride=2, padding=1, bias=False) 
+            if self.apply_spectral_norm: cnn_layers_list.append(spectral_norm(conv_l))
+            else: cnn_layers_list.append(conv_l)
+            cnn_layers_list.append(nn.InstanceNorm2d(out_c, affine=True)) 
+            cnn_layers_list.append(nn.LeakyReLU(0.2, inplace=True))
+            in_c = out_c 
+            curr_h = (curr_h - 4 + 2*1) // 2 + 1 if curr_h > 1 else 1
+            curr_w = (curr_w - 4 + 2*1) // 2 + 1 if curr_w > 1 else 1
+            if self.use_attention_in_mel_scale and i == self.attention_after_layer_idx and in_c > 0:
+                self.logger.debug(f"  SingleMelD Scale {scale_index} Layer {i+1}: Adding SelfAttention2D with {in_c} channels.")
+                cnn_layers_list.append(SelfAttention2D(in_c, use_spectral_norm=self.apply_spectral_norm))
+        
+        self.feature_extractor = nn.Sequential(*cnn_layers_list) if cnn_layers_list else nn.Identity()
+        self.final_conv_in_channels = in_c # Channels going into the final conv
+        
+        # Final decision layer for this scale
+        final_kernel_h = curr_h if curr_h > 0 else 1 # Ensure kernel dim > 0
+        final_kernel_w = curr_w if curr_w > 0 else 1
+        final_padding_h = 0 # No padding if kernel spans full feature map
+        final_padding_w = 0
+        
+        # If feature map is still larger than 1x1, use a patch-style conv
+        if curr_h > 1 or curr_w > 1:
+             final_kernel_h = min(3, curr_h if curr_h > 0 else 1)
+             final_kernel_w = min(3, curr_w if curr_w > 0 else 1)
+             final_padding_h = final_kernel_h // 2
+             final_padding_w = final_kernel_w // 2
+
+        self.final_conv = nn.Conv2d(self.final_conv_in_channels, 1, 
+                                    kernel_size=(final_kernel_h, final_kernel_w), 
+                                    stride=1, 
+                                    padding=(final_padding_h, final_padding_w), bias=True)
+        if self.apply_spectral_norm:
+            self.final_conv = spectral_norm(self.final_conv)
+        
+        self.logger.debug(f"  SingleMelD Scale {scale_index}: Feature Extractor Output C={self.final_conv_in_channels}, H={curr_h}, W={curr_w}. Final Conv Kernel=({final_kernel_h},{final_kernel_w})")
+
+    def forward(self, x: torch.Tensor, return_features: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        features = self.feature_extractor(x) # (B, C_final, H_feat, W_feat)
+        patch_logits_map = self.final_conv(features) # (B, 1, H_patch_out, W_patch_out)
+        
+        if patch_logits_map.shape[2] > 1 or patch_logits_map.shape[3] > 1:
+            logits = torch.mean(patch_logits_map, dim=[2,3], keepdim=False) # (B, 1) -> squeeze later
+        else:
+            logits = patch_logits_map # (B, 1, 1, 1) -> squeeze later
+
+        if return_features:
+            # For feature matching, typically use features before the final logit projection
+            return logits, features 
+        return logits
+
+
 class AudioSpecDiscriminator(nn.Module):
     def __init__(self, args: argparse.Namespace, audio_config: Dict, gaad_config: Dict, disc_config: Dict):
         super().__init__()
         self.args = args
         self.audio_config = audio_config
         self.gaad_config = gaad_config
-        self.disc_config = disc_config # This dict now comes from HybridTrainer._get_discriminator_configs
-        self.logger = logging.getLogger(f"WuBuSpecTransV01.Discriminator.{id(self)}") # Unique logger
+        self.disc_config = disc_config 
+        self.logger = logging.getLogger(f"WuBuSpecTransV01.Discriminator.{id(self)}") 
 
         self.num_gaad_regions = gaad_config['num_regions']
         self.region_proc_size_t = args.region_proc_size_t
@@ -2148,96 +2266,217 @@ class AudioSpecDiscriminator(nn.Module):
         self.num_dct_coeffs_flat = self.region_proc_size_t * self.region_proc_size_f
 
         self.input_type = self.disc_config.get("input_type", "mel")
-        self.apply_spectral_norm = self.disc_config.get("apply_spectral_norm", True)
-        self.logger.info(f"Initializing. Input type: '{self.input_type}', SpectralNorm: {self.apply_spectral_norm}")
+        self.apply_spectral_norm = self.disc_config.get("apply_spectral_norm", False)
+        self.use_global_stats_aux_input = getattr(args, 'disc_use_global_stats_aux', False)
+        self.logger.info(f"Initializing Discriminator ({self.input_type} type). SpectralNorm: {self.apply_spectral_norm}, GlobalStatsAux: {self.use_global_stats_aux_input}")
 
-        self.feature_extractor_module: nn.Module
-        self.final_decision_layer: nn.Module
+        self.feature_extractor_module: nn.Module 
+        self.final_decision_layer: Optional[nn.Module] = None # Can be None if MSD handles it
+
+        if self.use_global_stats_aux_input:
+            self.num_global_stats = 2 
+            self.global_stats_mlp_hidden_dim = getattr(args, 'disc_global_stats_mlp_hidden_dim', 32) 
+            self.global_stats_mlp = nn.Sequential(
+                nn.Linear(self.num_global_stats, self.global_stats_mlp_hidden_dim),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Linear(self.global_stats_mlp_hidden_dim, self.global_stats_mlp_hidden_dim)
+            )
+            if self.apply_spectral_norm:
+                self.global_stats_mlp[0] = spectral_norm(self.global_stats_mlp[0])
+                self.global_stats_mlp[2] = spectral_norm(self.global_stats_mlp[2])
 
         if self.input_type == "dct":
-            wubu_d_input_dim = args.encoder_initial_tangent_dim
+            self.dct_coeff_embed_dim = getattr(args, 'disc_dct_embed_dim', args.encoder_initial_tangent_dim) 
             self.dct_coeff_embed_disc = DCTCoeffEmbed(
                 num_dct_coeffs_per_region=self.num_dct_coeffs_flat,
-                embed_dim=wubu_d_input_dim
+                embed_dim=self.dct_coeff_embed_dim
+            )
+            self.wubu_d_region_num_levels = getattr(args, 'wubu_d_region_num_levels', 1) 
+            self.wubu_d_region_feature_dim = getattr(args, 'wubu_d_region_feature_dim', 128) 
+            
+            wubu_d_region_config = None
+            if self.wubu_d_region_num_levels > 0:
+                wubu_d_region_config = _configure_wubu_stack(args, "wubu_d_region") 
+                if wubu_d_region_config.get("num_levels", 0) == 0: 
+                    wubu_d_region_config = DEFAULT_CONFIG_WUBU.copy() 
+                    wubu_d_region_config["num_levels"] = self.wubu_d_region_num_levels
+                    wubu_d_region_config["hyperbolic_dims"] = [self.wubu_d_region_feature_dim] * self.wubu_d_region_num_levels
+                    wubu_d_region_config["initial_curvatures"] = [0.5] * self.wubu_d_region_num_levels
+                    for key_to_size in ["initial_scales", "initial_spread_values", "boundary_points_per_level"]:
+                        if isinstance(wubu_d_region_config[key_to_size], list) and wubu_d_region_config[key_to_size]:
+                            wubu_d_region_config[key_to_size] = [wubu_d_region_config[key_to_size][0]] * self.wubu_d_region_num_levels
+                    num_transforms = max(0, self.wubu_d_region_num_levels - 1)
+                    wubu_d_region_config["transform_types"] = [DEFAULT_CONFIG_WUBU["transform_types"][0]] * num_transforms if num_transforms > 0 and DEFAULT_CONFIG_WUBU["transform_types"] else []
+                    wubu_d_region_config["transform_hidden_dims"] = [DEFAULT_CONFIG_WUBU["transform_hidden_dims"][0]] * num_transforms if num_transforms > 0 and DEFAULT_CONFIG_WUBU["transform_hidden_dims"] else []
+                    self.logger.info(f"D-DCT: Using simplified default WuBu config for regional processor ({self.wubu_d_region_num_levels} levels).")
+
+            if self.wubu_d_region_num_levels > 0 and wubu_d_region_config is not None and wubu_d_region_config.get("num_levels") > 0:
+                self.logger.info(f"D-DCT: Regional Processor is WuBuNestingModel (In: {self.dct_coeff_embed_dim}, Out: {self.wubu_d_region_feature_dim}, Levels: {wubu_d_region_config.get('num_levels')}).")
+                self.feature_extractor_module = FullyHyperbolicWuBuNestingModel(
+                    input_tangent_dim=self.dct_coeff_embed_dim,
+                    output_tangent_dim=self.wubu_d_region_feature_dim,
+                    config=wubu_d_region_config
+                )
+            else: 
+                self.logger.info(f"D-DCT: Regional Processor is MLP (In: {self.dct_coeff_embed_dim}, Out: {self.wubu_d_region_feature_dim}).")
+                self.feature_extractor_module = nn.Sequential( 
+                    nn.Linear(self.dct_coeff_embed_dim, self.wubu_d_region_feature_dim * 2),
+                    nn.LeakyReLU(0.2, inplace=True),
+                    nn.Linear(self.wubu_d_region_feature_dim * 2, self.wubu_d_region_feature_dim),
+                    nn.LayerNorm(self.wubu_d_region_feature_dim) 
+                )
+
+            self.use_region_pos_embed = getattr(args, 'disc_dct_use_pos_embed', True) 
+            if self.use_region_pos_embed:
+                self.region_pos_embed = nn.Parameter(torch.randn(1, self.num_gaad_regions, self.wubu_d_region_feature_dim))
+            
+            # [CLS] token for Transformer
+            self.use_cls_token_dct_d = getattr(args, 'disc_dct_use_cls_token', True) # New arg
+            if self.use_cls_token_dct_d:
+                self.cls_token = nn.Parameter(torch.zeros(1, 1, self.wubu_d_region_feature_dim))
+                if self.use_region_pos_embed: # Adjust pos embedding if CLS token is used
+                    self.region_pos_embed_eff = nn.Parameter(torch.randn(1, self.num_gaad_regions + 1, self.wubu_d_region_feature_dim))
+            elif self.use_region_pos_embed:
+                self.region_pos_embed_eff = self.region_pos_embed # Use original if no CLS
+
+            self.disc_transformer_nhead = getattr(args, 'disc_transformer_nhead', 4) 
+            self.disc_transformer_dim_feedforward = getattr(args, 'disc_transformer_dim_feedforward', self.wubu_d_region_feature_dim * 4) 
+            self.disc_transformer_dropout = getattr(args, 'disc_transformer_dropout', 0.1) 
+            self.disc_transformer_num_layers = getattr(args, 'disc_transformer_num_layers', 2) 
+
+            transformer_encoder_layer = nn.TransformerEncoderLayer(
+                d_model=self.wubu_d_region_feature_dim,
+                nhead=self.disc_transformer_nhead,
+                dim_feedforward=self.disc_transformer_dim_feedforward,
+                dropout=self.disc_transformer_dropout,
+                batch_first=True, 
+                norm_first=getattr(args, 'disc_transformer_norm_first', True) 
+            )
+            self.context_transformer = nn.TransformerEncoder(
+                transformer_encoder_layer, 
+                num_layers=self.disc_transformer_num_layers
             )
             
-            wubu_d_config = self.disc_config.get("wubu_stack_config")
-            if wubu_d_config is None: 
-                 self.logger.warning("WuBu-D config not found in disc_config for DCT D, attempting to build from args.wubu_d_*")
-                 wubu_d_config = _configure_wubu_stack(args, "wubu_d") # Fallback
+            final_decision_input_dim = self.wubu_d_region_feature_dim
+            if self.use_global_stats_aux_input:
+                final_decision_input_dim += self.global_stats_mlp_hidden_dim
 
-            wubu_d_actual_output_dim = args.wubu_d_output_dim
-
-            if wubu_d_config is None or wubu_d_config.get("num_levels", 0) == 0:
-                self.logger.warning(f"D-DCT: WuBu-D config indicates 0 levels or is None. Using MLP fallback (In: {wubu_d_input_dim}, Out: {wubu_d_actual_output_dim}).")
-                self.feature_extractor_module = nn.Sequential(
-                    nn.Linear(wubu_d_input_dim, wubu_d_input_dim * 2), nn.LeakyReLU(0.2, True), 
-                    nn.LayerNorm(wubu_d_input_dim * 2),
-                    nn.Linear(wubu_d_input_dim * 2, wubu_d_actual_output_dim)
-                )
-            else:
-                self.logger.info(f"D-DCT: Initializing WuBuNestingModel (In: {wubu_d_input_dim}, Out: {wubu_d_actual_output_dim}) with {wubu_d_config.get('num_levels',0)} levels.")
-                self.feature_extractor_module = FullyHyperbolicWuBuNestingModel(
-                    input_tangent_dim=wubu_d_input_dim,
-                    output_tangent_dim=wubu_d_actual_output_dim,
-                    config=wubu_d_config
-                )
-            self.final_decision_layer = nn.Linear(wubu_d_actual_output_dim, 1)
+            self.final_decision_layer = nn.Linear(final_decision_input_dim, 1)
+            if self.apply_spectral_norm:
+                self.final_decision_layer = spectral_norm(self.final_decision_layer)
+            
+            self.logger.info(f"D-DCT: Using Transformer for aggregation (CLS token: {self.use_cls_token_dct_d}). Region feat: {self.wubu_d_region_feature_dim}, "
+                             f"Transformer Layers: {self.disc_transformer_num_layers}, Heads: {self.disc_transformer_nhead}. "
+                             f"Global stats aux input: {self.use_global_stats_aux_input}.")
 
         elif self.input_type == "mel":
-            n_mels = args.n_mels
-            n_time = audio_config.get("num_time_frames_for_1s_segment", 87) # Using value from your log
-            
-            base_ch = self.disc_config.get("base_disc_channels", 64)
-            max_ch = self.disc_config.get("max_disc_channels", 512)
-            target_final_dim = self.disc_config.get("target_mel_disc_final_feature_dim", 4)
+            self.msd_num_scales = getattr(args, 'mel_d_msd_num_scales', 1) 
+            self.msd_share_weights = getattr(args, 'mel_d_msd_share_weights', False) # New arg
 
-            cnn_layers = []
-            in_c = 1 
-            curr_h, curr_w = n_mels, n_time
-            
-            num_downsamples = 0
-            temp_h, temp_w = curr_h, curr_w
-            # Calculate num_downsamples to approach target_final_dim, with a max limit
-            max_downs_limit = 5 
-            while temp_h > target_final_dim and temp_w > target_final_dim and num_downsamples < max_downs_limit :
-                # Calculate next size if a 4,2,1 conv is applied
-                next_h = (temp_h - 4 + 2*1) // 2 + 1
-                next_w = (temp_w - 4 + 2*1) // 2 + 1
-                if next_h < 1 or next_w < 1: break # Stop if next dim would be too small
-                temp_h, temp_w = next_h, next_w
-                num_downsamples +=1
-            num_downsamples = max(1, num_downsamples) # Ensure at least one downsampling layer
+            if self.msd_num_scales > 1:
+                self.logger.info(f"D-Mel: Initializing Multi-Scale Discriminator with {self.msd_num_scales} scales. Share weights: {self.msd_share_weights}")
+                if self.msd_share_weights:
+                    # Create one _SingleScaleMelDiscriminator and reuse it
+                    shared_single_scale_d = _SingleScaleMelDiscriminator(args, audio_config, self.disc_config, scale_index=0)
+                    self.feature_extractor_module = nn.ModuleList([shared_single_scale_d] * self.msd_num_scales)
+                else:
+                    self.feature_extractor_module = nn.ModuleList()
+                    for i in range(self.msd_num_scales):
+                        self.feature_extractor_module.append(
+                            _SingleScaleMelDiscriminator(args, audio_config, self.disc_config, scale_index=i)
+                        )
+                
+                # For MSD, final decision typically involves combining outputs from scales.
+                # If global_stats_aux is used, this combination needs a final linear layer.
+                if self.use_global_stats_aux_input:
+                    # We average the logits from each scale (each is 1 dim from sub-D) -> 1 scalar
+                    # Then concatenate with projected_global_stats
+                    self.final_decision_layer = nn.Linear(1 + self.global_stats_mlp_hidden_dim, 1)
+                    if self.apply_spectral_norm:
+                        self.final_decision_layer = spectral_norm(self.final_decision_layer)
+                    self.logger.info(f"D-Mel (MSD, Aux): Outputs from {self.msd_num_scales} scales will be averaged. "
+                                     f"Resulting scalar + GlobalStats({self.global_stats_mlp_hidden_dim}) -> Linear({1 + self.global_stats_mlp_hidden_dim}, 1).")
+                else:
+                    self.final_decision_layer = None # Logits are averaged directly from sub-discriminators
+                    self.logger.info(f"D-Mel (MSD): Outputs from {self.msd_num_scales} scales will be averaged directly.")
 
-            self.logger.info(f"D-Mel: Initial Mel (H,W): ({n_mels},{n_time}). Aiming for ~{target_final_dim}x{target_final_dim} features. Calculated num_downsamples: {num_downsamples}")
+            else: # Single-scale Mel Discriminator
+                self.logger.info("D-Mel: Initializing Single-Scale Discriminator.")
+                # Build the CNN backbone (self.feature_extractor_module) and final_decision_layer
+                # (Copied and adapted from your previous version)
+                n_mels = args.n_mels
+                n_time = audio_config.get("num_time_frames_for_1s_segment", 87) 
+                base_ch = self.disc_config.get("base_disc_channels", 64)
+                max_ch = self.disc_config.get("max_disc_channels", 512)
+                target_final_dim_config = self.disc_config.get("target_mel_disc_final_feature_dim", [4,4]) 
+                target_final_dim_h, target_final_dim_w = target_final_dim_config[0], target_final_dim_config[1]
+                max_downs_limit = self.disc_config.get("max_mel_disc_downsample_layers", 6) 
+                use_attention_in_mel_single = getattr(args, 'use_mel_d_attention', False)
+                attention_after_layer_idx_single = getattr(args, 'mel_d_attention_idx', 2)
 
-            for i in range(num_downsamples):
-                out_c = min(base_ch * (2**i), max_ch)
-                conv_l = nn.Conv2d(in_c, out_c, kernel_size=4, stride=2, padding=1, bias=False)
-                if self.apply_spectral_norm: cnn_layers.append(spectral_norm(conv_l))
-                else: cnn_layers.append(conv_l)
-                cnn_layers.append(nn.InstanceNorm2d(out_c, affine=True))
-                cnn_layers.append(nn.LeakyReLU(0.2, inplace=True))
-                in_c = out_c
-                # Recalculate curr_h, curr_w accurately after each layer
-                curr_h = (curr_h - 4 + 2*1) // 2 + 1 
-                curr_w = (curr_w - 4 + 2*1) // 2 + 1
-                self.logger.debug(f"  D-Mel CNN layer {i+1}: out_c={out_c}, new feature map (H,W)=({curr_h},{curr_w})")
-            
-            self.feature_extractor_module = nn.Sequential(*cnn_layers)
-            
-            # Final conv layer for patch-wise logits. Kernel 3, Stride 1, Padding 1 preserves dimensions.
-            final_conv_patch = nn.Conv2d(in_c, 1, kernel_size=3, stride=1, padding=1, bias=False)
-            if self.apply_spectral_norm: self.final_decision_layer = spectral_norm(final_conv_patch)
-            else: self.final_decision_layer = final_conv_patch
-            self.logger.info(f"D-Mel: CNN feature extractor output HxW before final decision: ({curr_h}x{curr_w}), Channels: {in_c}. Final decision layer produces 1 channel map.")
 
+                cnn_layers_list_single = []
+                in_c_cnn = 1 
+                curr_h, curr_w = n_mels, n_time
+                num_downsamples = 0
+                temp_h, temp_w = curr_h, curr_w
+                while (temp_h > target_final_dim_h or temp_w > target_final_dim_w) and num_downsamples < max_downs_limit and temp_h > 1 and temp_w > 1 :
+                    next_h = (temp_h - 4 + 2*1) // 2 + 1 
+                    next_w = (temp_w - 4 + 2*1) // 2 + 1 
+                    if (next_h < target_final_dim_h and next_w < target_final_dim_w and num_downsamples > 0) or next_h < 1 or next_w < 1:
+                        if (temp_h <= target_final_dim_h or temp_w <= target_final_dim_w) and num_downsamples > 0: break
+                    if next_h < 1 or next_w < 1 : break
+                    temp_h, temp_w = next_h, next_w
+                    num_downsamples +=1
+                num_downsamples = max(1, num_downsamples) if (curr_h > target_final_dim_h or curr_w > target_final_dim_w) else 0
+
+
+                for i in range(num_downsamples):
+                    out_c = min(base_ch * (2**i), max_ch)
+                    conv_l = nn.Conv2d(in_c_cnn, out_c, kernel_size=4, stride=2, padding=1, bias=False) 
+                    if self.apply_spectral_norm: cnn_layers_list_single.append(spectral_norm(conv_l))
+                    else: cnn_layers_list_single.append(conv_l)
+                    cnn_layers_list_single.append(nn.InstanceNorm2d(out_c, affine=True)) 
+                    cnn_layers_list_single.append(nn.LeakyReLU(0.2, inplace=True))
+                    in_c_cnn = out_c 
+                    curr_h = (curr_h - 4 + 2*1) // 2 + 1 if curr_h > 1 else 1
+                    curr_w = (curr_w - 4 + 2*1) // 2 + 1 if curr_w > 1 else 1
+                    if use_attention_in_mel_single and i == attention_after_layer_idx_single and in_c_cnn >0:
+                        self.logger.debug(f"D-Mel (Single-Scale) Layer {i+1}: Adding SelfAttention2D with {in_c_cnn} channels.")
+                        cnn_layers_list_single.append(SelfAttention2D(in_c_cnn, use_spectral_norm=self.apply_spectral_norm))
+                
+                self.feature_extractor_module = nn.Sequential(*cnn_layers_list_single) if cnn_layers_list_single else nn.Identity()
+                
+                # Final decision layer logic for single-scale Mel D
+                final_decision_input_channels_single = in_c_cnn
+                if self.use_global_stats_aux_input:
+                    # CNN features are pooled, then concatenated with global stats for a Linear layer
+                    self.global_pool_for_mel_d = nn.AdaptiveAvgPool2d(1) # Pools cnn_feature_map to (B, C_final, 1, 1)
+                    self.final_decision_layer = nn.Linear(final_decision_input_channels_single + self.global_stats_mlp_hidden_dim, 1)
+                    if self.apply_spectral_norm: self.final_decision_layer = spectral_norm(self.final_decision_layer)
+                    self.logger.info(f"D-Mel (Single-Scale, Aux): CNN backbone C_out={final_decision_input_channels_single}. Pooled features + GlobalStats({self.global_stats_mlp_hidden_dim}) -> Linear.")
+                else:
+                    # Standard PatchGAN final conv
+                    final_kernel_h_s = curr_h if curr_h > 0 else 1
+                    final_kernel_w_s = curr_w if curr_w > 0 else 1
+                    final_padding_h_s = 0; final_padding_w_s = 0
+                    if curr_h > 1 or curr_w > 1: # If feature map not 1x1, use 3x3 patch conv
+                         final_kernel_h_s = min(3, curr_h if curr_h > 0 else 1)
+                         final_kernel_w_s = min(3, curr_w if curr_w > 0 else 1)
+                         final_padding_h_s = final_kernel_h_s // 2
+                         final_padding_w_s = final_kernel_w_s // 2
+                    self.final_decision_layer = nn.Conv2d(final_decision_input_channels_single, 1, 
+                                                          kernel_size=(final_kernel_h_s, final_kernel_w_s), 
+                                                          stride=1, 
+                                                          padding=(final_padding_h_s, final_padding_w_s), bias=True) 
+                    if self.apply_spectral_norm: 
+                        self.final_decision_layer = spectral_norm(self.final_decision_layer)
+                    self.logger.info(f"D-Mel (Single-Scale): CNN C_out={final_decision_input_channels_single}. Final Conv HxW ({curr_h}x{curr_w}) -> 1ch patch map.")
         else:
             raise ValueError(f"Unsupported discriminator input_type: {self.input_type}")
 
         self.apply(init_weights_general)
         self.logger.info(f"AudioSpecDiscriminator ({id(self)}) fully initialized. Total Params: {sum(p.numel() for p in self.parameters()):,}")
-
 
     def _assemble_mel_from_dct_regions(self, dct_regions: torch.Tensor, gaad_bboxes: torch.Tensor,
                                        target_mel_shape: Tuple[int, int, int, int]) -> torch.Tensor:
@@ -2250,31 +2489,41 @@ class AudioSpecDiscriminator(nn.Module):
             return torch.zeros(target_mel_shape, device=device, dtype=dtype)
 
         dct_regions_flat = dct_regions.reshape(-1, F_p, T_p)
-        spatial_regions_flat = idct_2d(dct_regions_flat)
+        compute_dtype_for_idct = torch.float32 if dct_regions_flat.dtype in [torch.float16, torch.bfloat16] else dct_regions_flat.dtype
+        spatial_regions_flat = idct_2d(dct_regions_flat.to(compute_dtype_for_idct)).to(dtype)
         spatial_regions = spatial_regions_flat.reshape(B, N_Reg, F_p, T_p)
 
         assembled_mel_canvas = torch.zeros(target_mel_shape, device=device, dtype=dtype)
-        counts_canvas = torch.zeros(target_mel_shape, device=device, dtype=dtype) + EPS
+        counts_canvas = torch.zeros(target_mel_shape, device=device, dtype=dtype) + EPS 
 
         for b in range(B):
             for r in range(N_Reg):
-                t1, f1, t2, f2 = gaad_bboxes[b, r].round().int().tolist()
-                t1_c, f1_c = max(0, t1), max(0, f1)
-                t2_c, f2_c = min(W_target, t2), min(H_target, f2)
-                if t1_c >= t2_c or f1_c >= f2_c: continue
+                t1_abs, f1_abs, t2_abs, f2_abs = gaad_bboxes[b, r].round().int().tolist()
+                f1_clip = max(0, f1_abs); f2_clip = min(H_target, f2_abs)
+                t1_clip = max(0, t1_abs); t2_clip = min(W_target, t2_abs)
+                if t1_clip >= t2_clip or f1_clip >= f2_clip: continue
 
-                current_spatial_region = spatial_regions[b, r, :, :].unsqueeze(0).unsqueeze(0)
-                target_h_bbox, target_w_bbox = f2_c - f1_c, t2_c - t1_c
-                if target_h_bbox <= 0 or target_w_bbox <= 0: continue
+                current_spatial_region_patch = spatial_regions[b, r, :, :].unsqueeze(0).unsqueeze(0) 
+                target_h_bbox_on_canvas = f2_clip - f1_clip
+                target_w_bbox_on_canvas = t2_clip - t1_clip
+                if target_h_bbox_on_canvas <= 0 or target_w_bbox_on_canvas <= 0: continue
                 
-                resized_region = TF.resize(current_spatial_region, (target_h_bbox, target_w_bbox),
-                                           interpolation=T.InterpolationMode.BILINEAR, antialias=True)
+                resized_region_patch = TF.resize(current_spatial_region_patch, 
+                                                 (target_h_bbox_on_canvas, target_w_bbox_on_canvas),
+                                                 interpolation=T.InterpolationMode.BILINEAR, antialias=True)
                 
-                assembled_mel_canvas[b, 0, f1_c:f2_c, t1_c:t2_c] += resized_region.squeeze(0).squeeze(0)
-                counts_canvas[b, 0, f1_c:f2_c, t1_c:t2_c] += 1.0
+                assembled_mel_canvas[b, 0, f1_clip:f2_clip, t1_clip:t2_clip] += resized_region_patch.squeeze(0).squeeze(0)
+                counts_canvas[b, 0, f1_clip:f2_clip, t1_clip:t2_clip] += 1.0
         
         assembled_mel_canvas = assembled_mel_canvas / counts_canvas
         return assembled_mel_canvas
+
+    def _calculate_global_stats(self, data_for_stats: torch.Tensor) -> torch.Tensor:
+        dims_to_reduce = tuple(range(1, data_for_stats.ndim))
+        mean_stat = torch.mean(data_for_stats, dim=dims_to_reduce, keepdim=False)
+        std_stat = torch.std(data_for_stats, dim=dims_to_reduce, keepdim=False)
+        std_stat = torch.max(std_stat, torch.tensor(EPS, device=std_stat.device, dtype=std_stat.dtype))
+        return torch.stack([mean_stat, std_stat], dim=-1) 
 
     def forward(self, input_data: torch.Tensor,
                 gaad_bboxes_for_assembly: Optional[torch.Tensor] = None,
@@ -2282,52 +2531,127 @@ class AudioSpecDiscriminator(nn.Module):
                 return_features: bool = False
                ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         B = input_data.shape[0]
-        features_intermediate: Optional[torch.Tensor] = None
+        device = input_data.device
+        dtype = input_data.dtype
+        main_features: Optional[torch.Tensor] = None # Features from the main path of D
+        logits: torch.Tensor
+        projected_global_stats: Optional[torch.Tensor] = None
         
+        input_data_for_stats_calc: Optional[torch.Tensor] = None
+
         if self.input_type == "dct":
-            flat_dct_coeffs = input_data.reshape(B, self.num_gaad_regions, -1)
-            embedded_coeffs = self.dct_coeff_embed_disc(flat_dct_coeffs)
-            wubu_d_input = embedded_coeffs.reshape(B * self.num_gaad_regions, -1)
+            if input_data.ndim == 4: flat_dct_coeffs = input_data.reshape(B, self.num_gaad_regions, -1)
+            elif input_data.ndim == 3 and input_data.shape[-1] == self.num_dct_coeffs_flat: flat_dct_coeffs = input_data
+            else: raise ValueError(f"D-DCT: Unsupported input_data shape {input_data.shape}.")
+            input_data_for_stats_calc = flat_dct_coeffs 
+
+            embedded_coeffs = self.dct_coeff_embed_disc(flat_dct_coeffs) 
+            regional_input_flat = embedded_coeffs.reshape(B * self.num_gaad_regions, self.dct_coeff_embed_dim)
+            regional_features_flat = self.feature_extractor_module(regional_input_flat) 
+            regional_features_seq = regional_features_flat.reshape(B, self.num_gaad_regions, self.wubu_d_region_feature_dim)
+
+            transformer_input_seq = regional_features_seq
+            if self.use_region_pos_embed and hasattr(self, 'region_pos_embed_eff'):
+                 if self.use_cls_token_dct_d and hasattr(self, 'cls_token'):
+                    cls_tokens = self.cls_token.expand(B, -1, -1)
+                    transformer_input_seq = torch.cat((cls_tokens, regional_features_seq), dim=1)
+                    transformer_input_seq = transformer_input_seq + self.region_pos_embed_eff[:, :(self.num_gaad_regions + 1), :]
+                 else: # No CLS token, but pos_embed is used for regions
+                    transformer_input_seq = regional_features_seq + self.region_pos_embed_eff[:, :self.num_gaad_regions, :]
             
-            extracted_features_flat = self.feature_extractor_module(wubu_d_input) 
-            features_aggregated = extracted_features_flat.reshape(B, self.num_gaad_regions, -1).mean(dim=1)
-            features_intermediate = features_aggregated
-            logits = self.final_decision_layer(features_aggregated)
+            transformer_output = self.context_transformer(transformer_input_seq) 
+            
+            if self.use_cls_token_dct_d and hasattr(self, 'cls_token'):
+                main_features = transformer_output[:, 0] # Take the CLS token output
+            else:
+                main_features = transformer_output.mean(dim=1) 
+            
+            if self.use_global_stats_aux_input and input_data_for_stats_calc is not None:
+                global_stats_raw = self._calculate_global_stats(input_data_for_stats_calc)
+                projected_global_stats = self.global_stats_mlp(global_stats_raw)
+                combined_features_for_decision = torch.cat([main_features, projected_global_stats], dim=-1)
+                logits = self.final_decision_layer(combined_features_for_decision)
+            else:
+                logits = self.final_decision_layer(main_features) 
 
         elif self.input_type == "mel":
             mel_input_for_d: torch.Tensor
-            if input_data.ndim == 4 and input_data.shape[1] == self.num_gaad_regions: # DCTs provided
+            if input_data.ndim == 4 and input_data.shape[1] == self.num_gaad_regions : # DCTs provided
                 if gaad_bboxes_for_assembly is None or target_mel_shape_for_assembly is None:
-                    raise ValueError("GAAD bboxes and target_mel_shape needed for D (mel type) with DCT input.")
-                
-                unnorm_dct_coeffs = AudioSpecGenerator._unnormalize_dct(input_data, self.args) # Device handled by caller or _unnormalize_dct
+                    raise ValueError("GAAD bboxes and target_mel_shape needed for D (mel type) with DCT region input.")
+                unnorm_dct_coeffs = AudioSpecGenerator._unnormalize_dct(input_data, self.args)
                 mel_input_for_d = self._assemble_mel_from_dct_regions(
                     unnorm_dct_coeffs, gaad_bboxes_for_assembly, target_mel_shape_for_assembly
                 )
-            elif input_data.ndim == 4 and input_data.shape[1] == 1: # Mel provided
+                input_data_for_stats_calc = mel_input_for_d 
+            elif input_data.ndim == 4 and input_data.shape[1] == 1: 
                 mel_input_for_d = input_data
+                input_data_for_stats_calc = mel_input_for_d 
             else:
-                raise ValueError(f"Unsupported input_data shape {input_data.shape} for D (mel type)")
+                raise ValueError(f"D-Mel: Unsupported input_data shape {input_data.shape}.")
 
-            cnn_feature_map = self.feature_extractor_module(mel_input_for_d) 
-            features_intermediate = cnn_feature_map 
-            patch_logits_map = self.final_decision_layer(cnn_feature_map) 
-            logits = torch.mean(patch_logits_map, dim=[2,3], keepdim=False)
+            if self.msd_num_scales > 1 and isinstance(self.feature_extractor_module, nn.ModuleList): 
+                all_scale_logits = []
+                all_scale_features_for_matching = [] 
+                current_mel_scale = mel_input_for_d
+                for i, sub_d_module in enumerate(self.feature_extractor_module):
+                    # Pass return_features=True to get both logits and backbone features from sub-discriminator
+                    sub_logits_raw, sub_backbone_features = sub_d_module(current_mel_scale, return_features=True)
+                    all_scale_logits.append(sub_logits_raw.squeeze()) # Ensure (B)
+                    if i == 0: # Use features from the highest-resolution scale for feature matching
+                        main_features = sub_backbone_features 
+                    if i < self.msd_num_scales - 1:
+                        current_mel_scale = F.avg_pool2d(current_mel_scale, kernel_size=3, stride=2, padding=1, count_include_pad=False)
+                
+                averaged_msd_logits = torch.stack(all_scale_logits, dim=0).mean(dim=0) # (B)
+                
+                if self.use_global_stats_aux_input and input_data_for_stats_calc is not None:
+                    global_stats_raw = self._calculate_global_stats(input_data_for_stats_calc)
+                    projected_global_stats = self.global_stats_mlp(global_stats_raw) # (B, global_stats_mlp_hidden_dim)
+                    # Concatenate the averaged MSD logit (scalar per batch item) with global stats
+                    combined_input_for_decision = torch.cat([averaged_msd_logits.unsqueeze(1), projected_global_stats], dim=-1) # (B, 1 + global_stats_mlp_hidden_dim)
+                    logits = self.final_decision_layer(combined_input_for_decision) # final_decision_layer is Linear
+                else:
+                    logits = averaged_msd_logits # (B)
+            
+            else: # Single-Scale Mel D
+                cnn_feature_map = self.feature_extractor_module(mel_input_for_d) 
+                main_features = cnn_feature_map 
+                
+                if self.use_global_stats_aux_input and input_data_for_stats_calc is not None:
+                    # Here, final_decision_layer is Linear, patch_head_conv gets patch logits first
+                    patch_logits_map = self.patch_head_conv(cnn_feature_map) 
+                    averaged_patch_logit = torch.mean(patch_logits_map, dim=[2,3], keepdim=False) 
+                    
+                    global_stats_raw = self._calculate_global_stats(input_data_for_stats_calc)
+                    projected_global_stats = self.global_stats_mlp(global_stats_raw) 
+                    combined_input_for_decision = torch.cat([averaged_patch_logit, projected_global_stats], dim=-1) 
+                    logits = self.final_decision_layer(combined_input_for_decision)
+                else: # Standard Single-Scale PatchGAN
+                    patch_logits_map = self.final_decision_layer(cnn_feature_map) 
+                    if patch_logits_map.shape[2] > 1 or patch_logits_map.shape[3] > 1:
+                        logits = torch.mean(patch_logits_map, dim=[2,3], keepdim=False) 
+                    else:
+                        logits = patch_logits_map # Will be squeezed later
         else:
             raise NotImplementedError(f"Discriminator forward not implemented for type {self.input_type}")
         
-        if logits.ndim > 1 and logits.shape[1] == 1 and logits.numel() == B : # Ensure (B) if it became (B,1)
-            logits = logits.squeeze(1)
-        elif logits.ndim == 0 and B == 1: # If single item batch and mean reduced to scalar
-            logits = logits.unsqueeze(0)
-
-
+        # --- Final Logit Shaping ---
+        if logits.ndim > 1 and logits.shape[-1] == 1: 
+            logits = logits.squeeze(-1) 
+        elif logits.ndim == 0 and B == 1: 
+            logits = logits.unsqueeze(0) 
+        
+        if logits.ndim > 1:
+            self.logger.warning(f"Discriminator final output logits have unexpected shape {logits.shape} after squeeze attempts. Averaging over the last dimension.")
+            logits = torch.mean(logits, dim=-1)
+        
         if return_features:
-            if features_intermediate is None:
-                self.logger.warning("return_features=True but intermediate features are None.")
-                # Fallback: use logits as features if nothing else, though not ideal
-                return logits, logits.detach().clone() if logits is not None else torch.empty(0) 
-            return logits, features_intermediate
+            if main_features is None: 
+                self.logger.warning("return_features=True but main_features (intermediate features) are None. Using logits as fallback.")
+                fallback_features = logits.detach().clone().unsqueeze(-1) if logits.ndim ==1 else logits.detach().clone()
+                return logits, fallback_features
+            return logits, main_features
         return logits
 
 
@@ -2528,7 +2852,7 @@ class HybridTrainer:
         self.device = device
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.args = args
+        self.args = args # args from parse_arguments is stored here
         self.rank = rank
         self.world_size = world_size
         self.ddp_active = ddp_active
@@ -2550,7 +2874,7 @@ class HybridTrainer:
             optimizer_type="generator"
         )
         if self.am_main_process: self.logger.info("Optimizer_Enc_Gen initialized.")
-        self.q_controller_gen = getattr(self.optimizer_enc_gen, 'q_controller', None) # Get G's Q-Ctrl ref
+        self.q_controller_gen = getattr(self.optimizer_enc_gen, 'q_controller', None) 
 
         # --- 2. Discriminator Setup ---
         if self.am_main_process: self.logger.info("Initializing Discriminators and their Optimizers...")
@@ -2560,15 +2884,16 @@ class HybridTrainer:
             self.logger.info(f"Intended Initial Active D type (from args): '{self.initial_disc_type_arg}'")
             self.logger.info(f"Intended Alternative D type: '{self.alternative_disc_type_arg}'")
 
-        primary_disc_config_dict, primary_wubu_d_config = self._get_discriminator_configs(args, self.initial_disc_type_arg, is_primary=True)
-        alt_disc_config_dict, alt_wubu_d_config = self._get_discriminator_configs(args, self.alternative_disc_type_arg, is_primary=False)
+        # _get_discriminator_configs will now use self.args which contains all parsed arguments
+        primary_disc_config_dict, primary_wubu_d_config = self._get_discriminator_configs(self.args, self.initial_disc_type_arg, is_primary=True)
+        alt_disc_config_dict, alt_wubu_d_config = self._get_discriminator_configs(self.args, self.alternative_disc_type_arg, is_primary=False)
         
-        # Pass the specific wubu_config to each discriminator
         primary_disc_config_dict["wubu_stack_config"] = primary_wubu_d_config
         alt_disc_config_dict["wubu_stack_config"] = alt_wubu_d_config
 
-        self.discriminator_primary_obj = AudioSpecDiscriminator(args, self._get_audio_config_ref(), self._get_gaad_config_ref(), primary_disc_config_dict).to(device)
-        self.discriminator_alternative_obj = AudioSpecDiscriminator(args, self._get_audio_config_ref(), self._get_gaad_config_ref(), alt_disc_config_dict).to(device)
+        # Pass self.args to AudioSpecDiscriminator so it can access all arguments
+        self.discriminator_primary_obj = AudioSpecDiscriminator(self.args, self._get_audio_config_ref(), self._get_gaad_config_ref(), primary_disc_config_dict).to(device)
+        self.discriminator_alternative_obj = AudioSpecDiscriminator(self.args, self._get_audio_config_ref(), self._get_gaad_config_ref(), alt_disc_config_dict).to(device)
 
         self.primary_disc_actual_type = primary_disc_config_dict.get("input_type", "unknown_primary_type")
         self.alternative_disc_actual_type = alt_disc_config_dict.get("input_type", "unknown_alt_type")
@@ -2602,8 +2927,6 @@ class HybridTrainer:
         )
         if self.am_main_process: self.logger.info("Discriminator optimizers initialized.")
 
-        # --- 3. Q-Controller References & Active D Setup ---
-        # Define q_controller_d_primary and q_controller_d_alt BEFORE calling _update_active_discriminator_pointers
         self.q_controller_d_primary = getattr(self.optimizer_disc_primary, 'q_controller', None)
         self.q_controller_d_alt = getattr(self.optimizer_disc_alternative, 'q_controller', None)
         
@@ -2619,15 +2942,13 @@ class HybridTrainer:
                      f"initial_disc_type_arg ('{self.initial_disc_type_arg}'). Defaulting to 'primary'."
                  )
         
-        self.q_controller_d_active = None # Will be set by _update_active_discriminator_pointers
-        self._update_active_discriminator_pointers() # Now this call is safe
+        self.q_controller_d_active = None 
+        self._update_active_discriminator_pointers() 
         
-        # --- Training parameters ---
         self.lambda_recon = args.lambda_recon
         self.lambda_kl = args.lambda_kl 
         self.lambda_gan = args.lambda_gan
 
-        # ... (rest of __init__ as in your last correct version for HybridTrainer: scalers, state vars, perceptual metrics, LKL Q-Ctrl, Heuristics setup) ...
         self.scaler_enc_gen = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda')
         self.scaler_disc = amp.GradScaler(enabled=args.use_amp and device.type == 'cuda')
 
@@ -2641,10 +2962,10 @@ class HybridTrainer:
         self.lpips_loss_fn = None; self.ssim_metric = None
         if self.am_main_process:
             if self.args.use_lpips_for_mel_verification and LPIPS_AVAILABLE and lpips is not None:
-                try: self.lpips_loss_fn = lpips.LPIPS(net='alex', verbose=False).to(self.device) # type: ignore
+                try: self.lpips_loss_fn = lpips.LPIPS(net='alex', verbose=False).to(self.device) 
                 except Exception as e: self.logger.warning(f"LPIPS init failed: {e}")
             if TORCHMETRICS_SSIM_AVAILABLE and StructuralSimilarityIndexMeasure is not None:
-                try: self.ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device) # type: ignore
+                try: self.ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
                 except Exception as e: self.logger.warning(f"SSIM init failed: {e}")
         
         self.adversarial_loss = nn.BCEWithLogitsLoss()
@@ -2667,8 +2988,16 @@ class HybridTrainer:
         self.min_lambda_kl_q_control = getattr(args, 'min_lambda_kl_q_control', 1e-7)
         self.max_lambda_kl_q_control = getattr(args, 'max_lambda_kl_q_control', 0.5)
 
-        self.enable_heuristic_interventions = getattr(args, 'enable_heuristic_interventions', True)
-        self.enable_heuristic_disc_switching = args.enable_heuristic_disc_switching
+        # --- Heuristic Setup ---
+        self.enable_heuristic_interventions = getattr(args, 'enable_heuristic_interventions', False) 
+        self.enable_heuristic_disc_switching = getattr(args, 'enable_heuristic_disc_switching', False)
+
+        if self.am_main_process:
+            self.logger.info(f"HybridTrainer Init: args.enable_heuristic_interventions = {args.enable_heuristic_interventions}")
+            self.logger.info(f"HybridTrainer Init: self.enable_heuristic_interventions (instance var) = {self.enable_heuristic_interventions}")
+            self.logger.info(f"HybridTrainer Init: args.enable_heuristic_disc_switching = {args.enable_heuristic_disc_switching}")
+            self.logger.info(f"HybridTrainer Init: self.enable_heuristic_disc_switching (instance var) = {self.enable_heuristic_disc_switching}")
+            
         self.heuristic_check_interval = args.heuristic_check_interval if args.heuristic_check_interval is not None else \
                                         (args.disc_switch_check_interval if self.enable_heuristic_disc_switching else args.log_interval)
         
@@ -2680,6 +3009,7 @@ class HybridTrainer:
         self.consecutive_heuristic_trigger_counts: Dict[str, int] = defaultdict(int)
 
         self.SHORT_TERM_LOSS_HISTORY_LEN_FOR_HEURISTICS = getattr(args, 'heuristic_short_term_history_len', 7)
+        self.avg_g_recon_hist_for_stagnation = deque(maxlen=self.SHORT_TERM_LOSS_HISTORY_LEN_FOR_HEURISTICS)
         self.q_data_derived_g_recon_hist = deque(maxlen=self.SHORT_TERM_LOSS_HISTORY_LEN_FOR_HEURISTICS)
         self.rec_dct_stagnant = False
 
@@ -2702,6 +3032,7 @@ class HybridTrainer:
 
         self.heuristic_override_lambda_recon_factor = 1.0
         self.heuristic_override_lambda_kl_factor = 1.0 
+        self.heuristic_override_lambda_gan_factor = 1.0 
         self.lambda_feat_match_heuristic = getattr(args, 'lambda_feat_match_heuristic', 0.75)
         self.lambda_g_easy_win_penalty_heuristic = getattr(args, 'lambda_g_easy_win_penalty_heuristic', 1.5)
         self.heuristic_active_d_lr_boost_factor = getattr(args, 'heuristic_active_d_lr_boost_factor', 1.8)
@@ -2712,7 +3043,6 @@ class HybridTrainer:
         if self.am_main_process:
              self.logger.info(f"HybridTrainer initialized. Initial Active D: '{self.active_discriminator_key}' (Type: '{self.active_disc_actual_type}'). Heuristics {'ENABLED' if self.enable_heuristic_interventions else 'DISABLED'}.")
 
-
     def _get_audio_config_ref(self) -> Dict:
         m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
         return getattr(m_ref, 'audio_config', {})
@@ -2722,40 +3052,57 @@ class HybridTrainer:
         return getattr(m_ref, 'gaad_config', {})
 
     def _get_discriminator_configs(self, current_args: argparse.Namespace, disc_type_to_config: str, is_primary: bool) -> Tuple[Dict, Optional[Dict]]:
+        # This method now correctly uses `current_args` which is `self.args` passed from `__init__`
         disc_config = {
             "input_type": disc_type_to_config,
-            "apply_spectral_norm": current_args.disc_apply_spectral_norm,
+            "apply_spectral_norm": current_args.disc_apply_spectral_norm, 
             "base_disc_channels": current_args.disc_base_disc_channels,
             "max_disc_channels": current_args.disc_max_disc_channels,
-            "target_mel_disc_final_feature_dim": getattr(current_args, 'disc_target_final_feature_dim', 4) # Add from args
+            # Use getattr for disc_target_final_feature_dim as it's a list in current_args
+            "target_mel_disc_final_feature_dim": getattr(current_args, 'disc_target_final_feature_dim', [4,4]), # Default to [4,4] if not found
+            "max_mel_disc_downsample_layers": getattr(current_args, 'max_mel_disc_downsample_layers', 6), # Default from args
+            "disc_use_global_stats_aux": getattr(current_args, 'disc_use_global_stats_aux', False), # For both D types
+            "disc_global_stats_mlp_hidden_dim": getattr(current_args, 'disc_global_stats_mlp_hidden_dim', 32) # For both D types
         }
-        wubu_d_config_for_this_d = None # For WuBu stack if DCT D
+        
+        wubu_d_config_for_this_d = None 
         if disc_type_to_config == 'dct':
-            # Use "wubu_d_primary_" or "wubu_d_alt_" prefixes if you want separate WuBu stacks for them via args
-            # For now, primary uses "wubu_d", alternative uses a hardcoded simpler default
-            wubu_prefix = "wubu_d" if is_primary else "wubu_d_alt" # Example: you'd need args.wubu_d_alt_num_levels etc.
-            
+            # Determine which set of wubu_d_* args to use based on whether it's primary or alternative
+            # And if specific "alt" args are even defined by the user.
+            wubu_prefix_to_try: Optional[str] = None
             if is_primary:
-                 wubu_d_config_for_this_d = _configure_wubu_stack(current_args, "wubu_d") # Main "wubu_d" args
-            elif hasattr(current_args, f"{wubu_prefix}_num_levels"): # Check if alt-specific WuBu args exist
-                 wubu_d_config_for_this_d = _configure_wubu_stack(current_args, wubu_prefix)
-            else: # Fallback for alternative D to a simpler default
-                if self.am_main_process: self.logger.info(f"Configuring Alternative DCT Discriminator ('{wubu_prefix}') with a simpler default WuBu stack as specific args not found.")
-                wubu_d_config_for_this_d = DEFAULT_CONFIG_WUBU.copy()
-                wubu_d_config_for_this_d["num_levels"] = 1
-                wubu_d_config_for_this_d["hyperbolic_dims"] = [max(16, current_args.encoder_initial_tangent_dim // 2)] # Simpler dim
-                wubu_d_config_for_this_d["initial_curvatures"] = [0.5] # Lower curvature
-                # Ensure other lists are correctly sized for 1 level
-                for key_chk_alt in ["initial_scales", "initial_spread_values", "boundary_points_per_level", "tangent_input_combination_dims"]:
-                    if key_chk_alt in wubu_d_config_for_this_d and isinstance(wubu_d_config_for_this_d[key_chk_alt], list) and wubu_d_config_for_this_d[key_chk_alt]:
-                        wubu_d_config_for_this_d[key_chk_alt] = [wubu_d_config_for_this_d[key_chk_alt][0]]
-                    elif key_chk_alt == "boundary_points_per_level": wubu_d_config_for_this_d[key_chk_alt] = [0]
-                    elif key_chk_alt == "tangent_input_combination_dims": wubu_d_config_for_this_d[key_chk_alt] = [max(16, wubu_d_config_for_this_d["hyperbolic_dims"][0] // 2)]
+                wubu_prefix_to_try = "wubu_d" # For primary D, always try "wubu_d" first
+            else: # For alternative D
+                if hasattr(current_args, "wubu_d_alt_num_levels") and current_args.wubu_d_alt_num_levels is not None and current_args.wubu_d_alt_num_levels > 0 :
+                    wubu_prefix_to_try = "wubu_d_alt"
+                    self.logger.info(f"Configuring Alternative DCT D using specific '{wubu_prefix_to_try}_*' args.")
+                else: # No specific alt config, or it's 0 levels. Try primary D's WuBu config for alt D.
+                    wubu_prefix_to_try = "wubu_d" 
+                    self.logger.info(f"Alternative DCT D: No specific/valid 'wubu_d_alt_*' args. Trying primary 'wubu_d_*' args for its WuBu stack.")
 
+            if wubu_prefix_to_try:
+                 wubu_d_config_for_this_d = _configure_wubu_stack(current_args, wubu_prefix_to_try)
+
+            # If, after trying, the config is still None or 0 levels (e.g., primary wubu_d had 0 levels)
+            # and this is for the *alternative* D, then create a very simple default for it.
+            if not is_primary and (wubu_d_config_for_this_d is None or wubu_d_config_for_this_d.get("num_levels", 0) == 0):
+                self.logger.warning(f"Alternative DCT D: Config from '{wubu_prefix_to_try}_*' resulted in 0 levels or was None. Using simplified default for alt DCT D.")
+                wubu_d_config_for_this_d = DEFAULT_CONFIG_WUBU.copy()
+                wubu_d_config_for_this_d["num_levels"] = 1 # Minimal
+                default_hyp_dim = max(16, getattr(current_args, 'disc_dct_embed_dim', 128) // 4)
+                wubu_d_config_for_this_d["hyperbolic_dims"] = [default_hyp_dim]
+                wubu_d_config_for_this_d["initial_curvatures"] = [0.25]
+                wubu_d_config_for_this_d["initial_scales"] = [0.5]
+                wubu_d_config_for_this_d["boundary_points_per_level"] = [0]
+                wubu_d_config_for_this_d["tangent_input_combination_dims"] = [max(16, default_hyp_dim // 2)]
                 wubu_d_config_for_this_d["transform_types"] = []
                 wubu_d_config_for_this_d["transform_hidden_dims"] = []
-                wubu_d_config_for_this_d["use_tangent_flow"] = False # Simpler
+                wubu_d_config_for_this_d["use_tangent_flow"] = False
+                wubu_d_config_for_this_d["use_rotation_in_transform"] = False
+                wubu_d_config_for_this_d["dropout"] = 0.0
+        
         return disc_config, wubu_d_config_for_this_d
+
 
     def _update_active_discriminator_pointers(self):
         if self.active_discriminator_key == 'primary':
@@ -2770,7 +3117,7 @@ class HybridTrainer:
             self.q_controller_d_active = self.q_controller_d_alt
         else:
             self.logger.error(f"Invalid active_discriminator_key: {self.active_discriminator_key}. Defaulting to primary.")
-            self.active_discriminator_key = 'primary' # Fallback
+            self.active_discriminator_key = 'primary' 
             self.active_discriminator = self.discriminator_primary_obj
             self.optimizer_disc_active = self.optimizer_disc_primary
             self.active_disc_actual_type = self.primary_disc_actual_type
@@ -2796,7 +3143,7 @@ class HybridTrainer:
             return
 
         B_log, C_log, H_log, W_log = mel_spectrograms_to_log.shape
-        if C_log != 1: # Ensure single channel for Mel display
+        if C_log != 1: 
             self.logger.warning(f"Mel spectrograms for logging have {C_log} channels, expected 1. Taking first channel.")
             mel_spectrograms_to_log = mel_spectrograms_to_log[:,0:1,:,:]
 
@@ -2820,11 +3167,11 @@ class HybridTrainer:
                     fig_iter.colorbar(img, ax=ax_iter, format='%+.2f (norm val)')
                     ax_iter.set_title(f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step}")
                     wandb_images_for_log.append(wandb.Image(fig_iter))
-                else: # Fallback to raw image if matplotlib/librosa display fails
-                    raise RuntimeError("Matplotlib/Librosa display unavailable for logging.") # Force fallback
+                else: 
+                    raise RuntimeError("Matplotlib/Librosa display unavailable for logging.") 
             except Exception as e_disp:
                 self.logger.debug(f"Librosa display failed for {tag_prefix} S{b_idx}: {e_disp}. Falling back to raw image.")
-                img_0_1 = (mel_tensor.clamp(-1,1) + 1) / 2.0 # Convert [-1,1] to [0,1] for image
+                img_0_1 = (mel_tensor.clamp(-1,1) + 1) / 2.0 
                 caption = f"{tag_prefix} S{b_idx} Ep{self.current_epoch+1} GStep{self.global_step} (raw_fallback)"
                 wandb_images_for_log.append(wandb.Image(img_0_1, caption=caption))
             finally:
@@ -2842,7 +3189,7 @@ class HybridTrainer:
         B = real_mel_spectrograms.shape[0]; device = real_mel_spectrograms.device
         dtype_model = next(iter(m_ref.parameters())).dtype
 
-        real_labels = torch.ones(B, 1, device=device, dtype=dtype_model).squeeze(-1) # BCEWithLogitsLoss expects (N) if logits are (N)
+        real_labels = torch.ones(B, 1, device=device, dtype=dtype_model).squeeze(-1) 
         fake_labels = torch.zeros(B, 1, device=device, dtype=dtype_model).squeeze(-1)
         losses_d_micro: Dict[str, torch.Tensor] = {}
 
@@ -2851,7 +3198,6 @@ class HybridTrainer:
         if self.optimizer_disc_active: self.optimizer_disc_active.zero_grad(set_to_none=True)
 
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
-            # Real data pass
             if d_ref_active.input_type == "mel":
                 real_input_for_d = real_mel_spectrograms.to(device, dtype=dtype_model)
                 real_logits = d_ref_active(real_input_for_d)
@@ -2863,7 +3209,6 @@ class HybridTrainer:
             else: raise ValueError(f"Unsupported D input type: {d_ref_active.input_type}")
             loss_d_real = self.adversarial_loss(real_logits.squeeze(), real_labels)
 
-            # Fake data pass (using VAE reconstruction G(E(X)))
             with torch.no_grad():
                 fake_norm_dct_coeffs, _, _, gaad_bboxes_for_assembly, _ = m_ref(real_mel_spectrograms.to(device, dtype=dtype_model))
 
@@ -2906,6 +3251,7 @@ class HybridTrainer:
 
             loss_recon_raw = self._compute_recon_loss(recon_norm_dct_coeffs, target_norm_dct_coeffs)
             loss_kl_raw = self._compute_kl_loss(mu, logvar)
+            
             loss_recon_eff = self.lambda_recon * self.heuristic_override_lambda_recon_factor * loss_recon_raw
             loss_kl_eff = self.lambda_kl * self.heuristic_override_lambda_kl_factor * loss_kl_raw
             
@@ -2920,9 +3266,11 @@ class HybridTrainer:
                     fake_logits_for_g, features_for_g_feat_match = output_d if isinstance(output_d, tuple) else (output_d, None)
                 else:
                     fake_logits_for_g = d_ref_active(recon_mel_for_adv, return_features=False)
-                if self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and \
-                   ((self.global_step + 1) % self.args.wandb_log_train_recon_interval == 0 or self.global_step == 0):
+                
+                if self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and self.global_step > 0 and \
+                   ((self.global_step + 1) % self.args.wandb_log_train_recon_interval == 0): 
                     recon_mel_for_log = recon_mel_for_adv.detach().clone()
+
             elif d_ref_active.input_type == "dct":
                 if self.heuristic_vae_feature_match_active:
                     output_d = d_ref_active(recon_norm_dct_coeffs, return_features=True)
@@ -2932,7 +3280,8 @@ class HybridTrainer:
             else: raise ValueError(f"Unsupported D input type for G: {d_ref_active.input_type}")
 
             loss_g_adv_raw = self.adversarial_loss(fake_logits_for_g.squeeze(), real_labels_for_g)
-            loss_g_adv_eff = self.lambda_gan * loss_g_adv_raw
+            loss_g_adv_eff = self.lambda_gan * self.heuristic_override_lambda_gan_factor * loss_g_adv_raw
+            
             loss_g_total_micro = loss_recon_eff + loss_kl_eff + loss_g_adv_eff
 
             if self.heuristic_vae_feature_match_active and features_for_g_feat_match is not None:
@@ -2940,27 +3289,45 @@ class HybridTrainer:
                     target_d_output_for_feat_match: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
                     if d_ref_active.input_type == "mel":
                         target_d_output_for_feat_match = d_ref_active(real_mel_spectrograms.to(device, dtype=dtype_model), return_features=True)
-                    else:
+                    else: 
                         target_d_output_for_feat_match = d_ref_active(target_norm_dct_coeffs.to(device, dtype=dtype_model).detach(), return_features=True)
+                    
                     target_features_d = target_d_output_for_feat_match[1] if isinstance(target_d_output_for_feat_match, tuple) else None
                 
                 if target_features_d is not None:
-                    if features_for_g_feat_match.ndim > 2 and target_features_d.ndim > 2 : # Assuming feature maps from CNN
-                        features_for_g_feat_match = torch.mean(features_for_g_feat_match, dim=list(range(2, features_for_g_feat_match.ndim)))
-                        target_features_d = torch.mean(target_features_d, dim=list(range(2, target_features_d.ndim)))
+                    if features_for_g_feat_match.ndim > 2 and target_features_d.ndim > 2 : 
+                        features_for_g_feat_match_flat = torch.mean(features_for_g_feat_match, dim=list(range(2, features_for_g_feat_match.ndim)))
+                        target_features_d_flat = torch.mean(target_features_d, dim=list(range(2, target_features_d.ndim)))
+                    else: 
+                        features_for_g_feat_match_flat = features_for_g_feat_match
+                        target_features_d_flat = target_features_d
                     
-                    if features_for_g_feat_match.shape == target_features_d.shape:
-                        loss_g_feat_match = F.mse_loss(features_for_g_feat_match, target_features_d.detach())
+                    if features_for_g_feat_match_flat.shape == target_features_d_flat.shape:
+                        loss_g_feat_match = F.mse_loss(features_for_g_feat_match_flat, target_features_d_flat.detach())
                         loss_g_total_micro += self.lambda_feat_match_heuristic * loss_g_feat_match
                         losses_g_micro['loss_g_feat_match_micro'] = loss_g_feat_match.detach()
-                    else: self.logger.warning(f"Feat Match shapes mismatch: G_feat {features_for_g_feat_match.shape}, D_feat {target_features_d.shape}")
+                    else: self.logger.warning(f"Feat Match shapes mismatch: G_feat_flat {features_for_g_feat_match_flat.shape}, D_feat_flat {target_features_d_flat.shape}")
 
             if self.heuristic_penalize_g_easy_win_active:
                 if loss_g_adv_raw.item() < self.G_WINNING_THRESH and loss_recon_raw.item() > self.TARGET_GOOD_RECON_THRESH_HEURISTIC:
-                    penalty_factor = (loss_recon_raw.item() - self.TARGET_GOOD_RECON_THRESH_HEURISTIC) / (loss_g_adv_raw.item() + EPS)
-                    penalty_g_easy_win = penalty_factor * self.lambda_g_easy_win_penalty_heuristic
-                    loss_g_total_micro += penalty_g_easy_win
-                    losses_g_micro['loss_g_easy_win_penalty_micro'] = torch.tensor(penalty_g_easy_win, device=device, dtype=dtype_model)
+                    denominator_penalty = loss_g_adv_raw.item() + getattr(self.args, 'g_easy_win_penalty_eps_denom', 1e-4)
+                    penalty_g_easy_win_val: float
+                    if denominator_penalty < EPS : 
+                        penalty_g_easy_win_val = self.lambda_g_easy_win_penalty_heuristic * 10.0 
+                        if self.am_main_process and self.global_step > 0 and self.global_step % (self.args.log_interval * 20) == 0: # Log less often for this specific warning
+                            self.logger.warning(f"G_Easy_Win_Penalty: Denom for penalty factor was < EPS. Capping penalty value to {penalty_g_easy_win_val:.2f}")
+                    else:
+                        penalty_factor = (loss_recon_raw.item() - self.TARGET_GOOD_RECON_THRESH_HEURISTIC) / denominator_penalty
+                        penalty_g_easy_win_val = penalty_factor * self.lambda_g_easy_win_penalty_heuristic
+                    
+                    max_penalty_val_abs = getattr(self.args, 'max_g_easy_win_penalty_abs', 20.0)
+                    penalty_g_easy_win_clamped = torch.clamp(torch.tensor(penalty_g_easy_win_val, device=device, dtype=dtype_model), 
+                                                             0, max_penalty_val_abs) 
+
+                    loss_g_total_micro += penalty_g_easy_win_clamped
+                    losses_g_micro['loss_g_easy_win_penalty_micro'] = penalty_g_easy_win_clamped.detach()
+                    if self.am_main_process and self.global_step > 0 and self.global_step % (self.args.log_interval * 5) == 0: 
+                         self.logger.info(f"HEURISTIC APPLIED: G_Easy_Win_Penalty={penalty_g_easy_win_clamped.item():.2f} (RawAdv={loss_g_adv_raw.item():.3f}, RawRec={loss_recon_raw.item():.3f})")
 
             loss_g_total_scaled_for_accum_micro = loss_g_total_micro / self.grad_accum_steps
 
@@ -2969,7 +3336,7 @@ class HybridTrainer:
         losses_g_micro['loss_recon_micro'] = loss_recon_raw.detach()
         losses_g_micro['loss_kl_micro'] = loss_kl_raw.detach()
         losses_g_micro['loss_g_adv_micro'] = loss_g_adv_raw.detach()
-        losses_g_micro['loss_g_total_micro'] = loss_g_total_micro.detach()
+        losses_g_micro['loss_g_total_micro'] = loss_g_total_micro.detach() 
         return losses_g_micro, recon_mel_for_log
 
     def _get_q_controller_data_for_heuristics(self) -> Dict[str, Any]:
@@ -3007,36 +3374,66 @@ class HybridTrainer:
         
         if q_data['gen']['is_valid'] and q_data['gen'].get('g_recon_median_short_term') is not None:
             self.q_data_derived_g_recon_hist.append(q_data['gen']['g_recon_median_short_term'])
-            if len(self.q_data_derived_g_recon_hist) >= max(2, self.SHORT_TERM_LOSS_HISTORY_LEN_FOR_HEURISTICS // 2): # Need at least 2 points for trend
-                current_recon = self.q_data_derived_g_recon_hist[-1]
-                past_recon_avg = np.mean(list(self.q_data_derived_g_recon_hist)[:-1]) if len(self.q_data_derived_g_recon_hist) > 1 else current_recon
-                self.rec_dct_stagnant = (past_recon_avg - current_recon) < (past_recon_avg * self.RECON_STAGNATION_IMPROVEMENT_THRESH_REL)
+            self.avg_g_recon_hist_for_stagnation.append(q_data['gen']['g_recon_median_short_term']) 
+
+            if len(self.avg_g_recon_hist_for_stagnation) >= max(2, self.SHORT_TERM_LOSS_HISTORY_LEN_FOR_HEURISTICS // 2): 
+                current_recon_median = self.avg_g_recon_hist_for_stagnation[-1]
+                past_relevant_history = list(self.avg_g_recon_hist_for_stagnation)[:-1]
+                if len(past_relevant_history) > 1:
+                     past_recon_avg = np.mean(past_relevant_history)
+                elif past_relevant_history: 
+                     past_recon_avg = past_relevant_history[0]
+                else: 
+                     past_recon_avg = current_recon_median 
+                
+                self.rec_dct_stagnant = (past_recon_avg - current_recon_median) < (past_recon_avg * self.RECON_STAGNATION_IMPROVEMENT_THRESH_REL)
             else: self.rec_dct_stagnant = False
         return q_data
 
     def _evaluate_training_state_and_apply_heuristics(self):
-        if not self.am_main_process or not self.enable_heuristic_interventions:
+        if not self.am_main_process:
+            return
+
+        if not self.enable_heuristic_interventions:
+            if hasattr(self, 'global_step') and hasattr(self, 'heuristic_check_interval') and \
+               self.heuristic_check_interval > 0 and self.global_step > 0 and \
+               self.global_step % (self.heuristic_check_interval * 10) == 0:
+                 self.logger.info(f"GStep {self.global_step}: Heuristic interventions are globally DISABLED (self.enable_heuristic_interventions is False). Skipping evaluation.")
+            
             self.heuristic_vae_feature_match_active = False
             self.heuristic_penalize_g_easy_win_active = False
             self.heuristic_boost_active_d_lr_active = False
             self.heuristic_force_d_q_explore_active = False
             self.heuristic_override_lambda_recon_factor = 1.0
             self.heuristic_override_lambda_kl_factor = 1.0
+            self.heuristic_override_lambda_gan_factor = 1.0
             return
+        
+        gstep_log_val = self.global_step if hasattr(self, 'global_step') else "N/A"
+        if self.global_step == 0 or (self.heuristic_check_interval > 0 and self.global_step % (self.heuristic_check_interval * 5) == 0):
+            self.logger.info(f"GStep {gstep_log_val}: Evaluating training state for heuristics (self.enable_heuristic_interventions is True).")
+            # Add extended debug logging less frequently
+            q_data_dbg = self._get_q_controller_data_for_heuristics()
+            gen_q_dbg, active_d_q_dbg = q_data_dbg.get('gen', {}), q_data_dbg.get('active_d', {})
+            g_adv_median_dbg = gen_q_dbg.get('g_adv_median_short_term', float('nan'))
+            d_total_median_dbg = active_d_q_dbg.get('d_total_median_short_term', float('nan'))
+            # ... (add other dbg logs as in previous suggestion)
+            self.logger.info(f"  DBG Heuristic Inputs - G_Adv_Med: {g_adv_median_dbg:.3f}, D_Total_Med: {d_total_median_dbg:.3f}, ReconStagnant: {self.rec_dct_stagnant}")
 
-        q_data = self._get_q_controller_data_for_heuristics()
+
+        q_data = self._get_q_controller_data_for_heuristics() # Call again to ensure freshest data for actual logic
         gen_q, active_d_q = q_data.get('gen', {}), q_data.get('active_d', {})
         log_msgs = []
 
-        # Reset transient heuristic states that should not persist unless re-triggered
-        current_lambda_recon_factor = 1.0
+        current_lambda_recon_factor = 1.0 
         current_lambda_kl_factor = 1.0
-        current_boost_active_d_lr = False
-        current_force_d_q_explore = False # This is a trigger, not a persistent state for this func
-        current_penalize_g_easy_win = self.heuristic_penalize_g_easy_win_active # Persist if set true until condition changes
-        current_vae_feature_match = self.heuristic_vae_feature_match_active # Persist
+        current_lambda_gan_factor = self.heuristic_override_lambda_gan_factor 
 
-        # Extract conditions from q_data (with defaults for safety)
+        current_boost_active_d_lr = False
+        current_force_d_q_explore = False
+        current_penalize_g_easy_win = False 
+        current_vae_feature_match = False 
+
         g_adv_median = gen_q.get('g_adv_median_short_term', 0.7)
         d_total_median = active_d_q.get('d_total_median_short_term', 0.7)
         d_q_reward_median = active_d_q.get('reward_median_short_term', 0.0)
@@ -3047,7 +3444,6 @@ class HybridTrainer:
         is_d_strong = d_total_median < self.D_STRONG_THRESH
         is_g_stalled_adv = g_adv_median > self.G_STALLED_THRESH
 
-        # --- 1. Discriminator Switch (Highest Priority) ---
         switched_d_this_cycle = False
         if self.enable_heuristic_disc_switching:
             switched_d_this_cycle = self._check_and_perform_disc_switch(
@@ -3059,54 +3455,55 @@ class HybridTrainer:
             )
         
         if switched_d_this_cycle:
-            self.consecutive_heuristic_trigger_counts = defaultdict(int) # Reset all other heuristic counts
-            # Factors are already reset at start of this func for this cycle if they weren't persistent
-        else:
-            # --- 2. If No D-Switch, Evaluate Other Heuristics ---
-            
-            # A. GAN Rebalancing
+            self.consecutive_heuristic_trigger_counts = defaultdict(int) 
+            current_lambda_gan_factor = 1.0 
+        else: 
             condition_gan_rebalance = is_g_dominating_very_much and (is_d_very_weak or is_d_q_learner_stagnant) and self.rec_dct_stagnant
             if condition_gan_rebalance:
                 self.consecutive_heuristic_trigger_counts['gan_rebalance'] += 1
                 if self.consecutive_heuristic_trigger_counts['gan_rebalance'] >= self.HEURISTIC_TRIGGER_COUNT_THRESH:
                     current_penalize_g_easy_win = True
                     current_lambda_recon_factor = self.args.heuristic_recon_boost_factor
+                    current_lambda_gan_factor = min(current_lambda_gan_factor * 1.05, getattr(self.args, 'heuristic_max_lambda_gan_factor', 1.3))
                     if is_d_q_learner_stagnant:
                         current_boost_active_d_lr = True
                         current_force_d_q_explore = True
-                    log_msgs.append(f"HEURISTIC: GAN REBALANCE ACTIVE. PenalizeG:{current_penalize_g_easy_win}, ReconFactor:{current_lambda_recon_factor:.2f}, D_LR_Boost:{current_boost_active_d_lr}, D_Q_Explore:{current_force_d_q_explore}")
-            else: self.consecutive_heuristic_trigger_counts['gan_rebalance'] = 0
+                    log_msgs.append(f"HEURISTIC: GAN REBALANCE ACTIVE. PenalizeG:{current_penalize_g_easy_win}, LRecF:{current_lambda_recon_factor:.2f}, LGanF:{current_lambda_gan_factor:.2f}, D_LR_Boost:{current_boost_active_d_lr}, D_Q_Explore:{current_force_d_q_explore}")
+            else: 
+                self.consecutive_heuristic_trigger_counts['gan_rebalance'] = 0
+                if current_lambda_gan_factor > 1.0: # If it was boosted, decay it
+                     current_lambda_gan_factor = max(current_lambda_gan_factor * 0.98, 1.0) 
 
-            # B. VAE Feature Matching Boost
             condition_vae_feat_match = (not is_g_dominating_very_much and not is_d_very_weak and 
                                         (is_d_strong or not is_d_q_learner_stagnant) and self.rec_dct_stagnant)
             if condition_vae_feat_match:
                 self.consecutive_heuristic_trigger_counts['vae_feat_match'] += 1
                 if self.consecutive_heuristic_trigger_counts['vae_feat_match'] >= self.HEURISTIC_TRIGGER_COUNT_THRESH:
                     current_vae_feature_match = True
-                    if self.lambda_kl * self.heuristic_override_lambda_kl_factor < 1e-4 : current_lambda_kl_factor = 1.5 # If effective KL is tiny
-                    log_msgs.append(f"HEURISTIC: VAE FEATURE MATCH ACTIVE. LKL_Factor:{current_lambda_kl_factor:.2f}")
-            else: self.consecutive_heuristic_trigger_counts['vae_feat_match'] = 0
+                    if self.lambda_kl * self.heuristic_override_lambda_kl_factor < 1e-4 : current_lambda_kl_factor = 1.5 # Using old factor for this check
+                    current_lambda_gan_factor = max(current_lambda_gan_factor * 0.95, getattr(self.args, 'heuristic_min_lambda_gan_factor', 0.7))
+                    log_msgs.append(f"HEURISTIC: VAE FEATURE MATCH ACTIVE. LKLF:{current_lambda_kl_factor:.2f}, LGanF:{current_lambda_gan_factor:.2f}")
+            else: 
+                self.consecutive_heuristic_trigger_counts['vae_feat_match'] = 0
+                if current_lambda_gan_factor < 1.0: # If it was reduced, decay it back towards 1.0
+                     current_lambda_gan_factor = min(current_lambda_gan_factor * 1.02, 1.0) 
 
-
-        # --- Update Global Heuristic State Flags and Factors based on decisions this cycle ---
+        # Update persistent heuristic states based on this evaluation
         self.heuristic_penalize_g_easy_win_active = current_penalize_g_easy_win
         self.heuristic_override_lambda_recon_factor = current_lambda_recon_factor
         self.heuristic_boost_active_d_lr_active = current_boost_active_d_lr
-        # self.heuristic_force_d_q_explore_active is a trigger, action taken below
         self.heuristic_vae_feature_match_active = current_vae_feature_match
-        self.heuristic_override_lambda_kl_factor = current_lambda_kl_factor # Update KL factor based on VAE feat match logic
+        self.heuristic_override_lambda_kl_factor = current_lambda_kl_factor
+        self.heuristic_override_lambda_gan_factor = current_lambda_gan_factor 
         
-        if current_force_d_q_explore and self.q_controller_d_active: # Check if Q-controller exists
+        if current_force_d_q_explore and self.q_controller_d_active: 
             self.q_controller_d_active.force_exploration_boost(
                 duration_steps=self.heuristic_d_q_explore_duration,
                 boost_epsilon_to=self.heuristic_d_q_explore_boost_epsilon
             )
             log_msgs.append(f"HEURISTIC: Active D Q-Controller exploration boosted for {self.heuristic_d_q_explore_duration} steps.")
-            # This flag does not need to persist beyond triggering the boost.
-            # self.heuristic_force_d_q_explore_active = False 
 
-        if log_msgs and self.am_main_process:
+        if log_msgs and self.am_main_process: 
             for msg in log_msgs: self.logger.info(msg)
 
     def _check_and_perform_disc_switch(self, 
@@ -3119,28 +3516,29 @@ class HybridTrainer:
 
         switched_this_check = False
         
+        effective_kl_val = current_g_kl_median * self.lambda_kl * self.heuristic_override_lambda_kl_factor 
         condition_A = (is_d_strong_overall and is_g_stalled_adv and 
-                       (current_g_kl_median * self.lambda_kl > self.KL_HIGH_THRESH * 0.1 or self.rec_dct_stagnant)) # Weighted KL or recon stagnant
+                       (effective_kl_val > self.KL_HIGH_THRESH * 0.1 or self.rec_dct_stagnant))
 
         if condition_A:
             self.consecutive_trigger_primary_to_alt_count += 1
             if self.consecutive_trigger_primary_to_alt_count >= self.disc_switch_problem_state_count_thresh:
                 if self.active_discriminator_key == 'primary':
                     target_key = 'alternative'
-                    log_msgs_ref.append(f"DISC_SWITCH: Trigger A! D_strong & G_stalled & (HighScaledKL or ReconStagnant). Switching Primary -> Alternative.")
+                    log_msgs_ref.append(f"DISC_SWITCH: Trigger A! D_strong & G_stalled & (HighEffKL or ReconStagnant). Switching Primary -> Alternative.")
                     self.active_discriminator_key = target_key
                     self._update_active_discriminator_pointers()
-                    if self.q_controller_d_active: self.q_controller_d_active.reset_q_learning_state(True, True, f"DSwitch P->A", True)
+                    if self.q_controller_d_active: self.q_controller_d_active.reset_q_learning_state(True, True, f"DSwitch P->A by Heuristic A", True)
                     self.steps_since_last_d_switch = 0; self.consecutive_trigger_primary_to_alt_count = 0; self.consecutive_trigger_alt_to_primary_count = 0
                     switched_this_check = True
-                else: self.consecutive_trigger_primary_to_alt_count = 0 # Prevent stuck state if already alt
+                else: # Already alternative, reset count for this condition but don't switch back
+                    self.consecutive_trigger_primary_to_alt_count = 0 
         else: self.consecutive_trigger_primary_to_alt_count = 0
 
-        # Problem State B (Current D weak, G winning)
         condition_B = (is_g_dominating_adv and is_d_weak_overall and
-                       (not self.rec_dct_stagnant or is_d_struggling_q) ) # Switch if D Q-learner is also bad, even if recon is stagnant
+                       (not self.rec_dct_stagnant or is_d_struggling_q) ) 
 
-        if not switched_this_check and condition_B:
+        if not switched_this_check and condition_B: # Only consider if not already switched by A
             self.consecutive_trigger_alt_to_primary_count += 1
             if self.consecutive_trigger_alt_to_primary_count >= self.disc_switch_problem_state_count_thresh:
                 if self.active_discriminator_key == 'alternative':
@@ -3148,19 +3546,20 @@ class HybridTrainer:
                     log_msgs_ref.append(f"DISC_SWITCH: Trigger B! G_dominating & D_weak & (NotReconStagnant or D_Q_Struggling). Switching Alternative -> Primary.")
                     self.active_discriminator_key = target_key
                     self._update_active_discriminator_pointers()
-                    if self.q_controller_d_active: self.q_controller_d_active.reset_q_learning_state(True, True, f"DSwitch A->P", True)
+                    if self.q_controller_d_active: self.q_controller_d_active.reset_q_learning_state(True, True, f"DSwitch A->P by Heuristic B", True)
                     self.steps_since_last_d_switch = 0; self.consecutive_trigger_alt_to_primary_count = 0; self.consecutive_trigger_primary_to_alt_count = 0
                     switched_this_check = True
-                else: self.consecutive_trigger_alt_to_primary_count = 0 # Prevent stuck state if already primary
-        elif not switched_this_check: self.consecutive_trigger_alt_to_primary_count = 0
+                else: # Already primary, reset count for this condition
+                    self.consecutive_trigger_alt_to_primary_count = 0 
+        elif not switched_this_check: # If not switched by A, and B not met, reset B's counter
+             self.consecutive_trigger_alt_to_primary_count = 0
         
         if switched_this_check:
-            self.rec_dct_stagnant = False # Reset stagnation flags as D changed
-            self.avg_g_recon_hist_for_stagnation.clear() # Clear history
+            self.rec_dct_stagnant = False 
+            self.avg_g_recon_hist_for_stagnation.clear() 
+            self.q_data_derived_g_recon_hist.clear() # Clear this too
             log_msgs_ref.append(f"  --> Post D-Switch: Heuristic flags reset. New active D: '{self.active_discriminator_key}' (type: {self.active_disc_actual_type}).")
         return switched_this_check
-
-
 
     def train(self, start_epoch: int = 0, initial_global_step: int = 0):
         self.global_step = initial_global_step
@@ -3193,9 +3592,9 @@ class HybridTrainer:
         for epoch in range(start_epoch, self.args.epochs):
             self.current_epoch = epoch
             if self.am_main_process:
-                self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting (L_KL: {self.lambda_kl:.3e}, LRecF: {self.heuristic_override_lambda_recon_factor:.2f}, ActD: {self.active_discriminator_key} [{self.active_disc_actual_type}]).")
+                self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting (L_KL: {self.lambda_kl:.3e}*KLF:{self.heuristic_override_lambda_kl_factor:.2f}, LRecF: {self.heuristic_override_lambda_recon_factor:.2f}, LGanF: {self.heuristic_override_lambda_gan_factor:.2f}, ActD: {self.active_discriminator_key} [{self.active_disc_actual_type}]).")
             if self.ddp_active and isinstance(self.train_loader.sampler, DistributedSampler):
-                self.train_loader.sampler.set_epoch(epoch) # type: ignore
+                self.train_loader.sampler.set_epoch(epoch) 
 
             m_ref.train(); self.active_discriminator.train()
             
@@ -3212,9 +3611,9 @@ class HybridTrainer:
 
                 losses_d_micro = self._train_discriminator_step(batch_mel_segments, m_ref)
                 for k, v_tensor in losses_d_micro.items():
-                    if torch.isfinite(v_tensor): # Check if tensor itself is finite
+                    if torch.isfinite(v_tensor): 
                         val = v_tensor.item()
-                        if np.isfinite(val): # Double check item() is finite
+                        if np.isfinite(val): 
                             accum_key = k.replace('_micro', '_agg') 
                             log_interval_accum_losses[accum_key] += val * batch_size_micro
                             if k == 'loss_d_total_micro': accum_d_total_q += val; self.interval_metrics_accum['d_total'] += val
@@ -3223,15 +3622,18 @@ class HybridTrainer:
                 
                 losses_g_micro, recon_mel_for_logging = self._train_generator_step(batch_mel_segments, m_ref)
                 for k, v_tensor in losses_g_micro.items():
-                    if torch.isfinite(v_tensor): # Check if tensor itself is finite
+                    if torch.isfinite(v_tensor): 
                         val = v_tensor.item()
-                        if np.isfinite(val): # Double check item() is finite
+                        if np.isfinite(val): 
                             accum_key = k.replace('_micro', '_agg')
                             log_interval_accum_losses[accum_key] += val * batch_size_micro
                             if k == 'loss_g_total_micro': accum_g_total_q += val
                             elif k == 'loss_recon_micro': accum_g_recon_q += val; self.interval_metrics_accum['recon_dct'] += val
                             elif k == 'loss_kl_micro': accum_g_kl_q += val; self.interval_metrics_accum['kl_div'] += val
                             elif k == 'loss_g_adv_micro': accum_g_adv_q += val
+                            # Log heuristic penalty contributions if they exist
+                            elif k == 'loss_g_feat_match_micro': log_interval_accum_losses['loss_g_feat_match_eff_contrib_agg'] += (self.lambda_feat_match_heuristic * val * batch_size_micro)
+                            elif k == 'loss_g_easy_win_penalty_micro': log_interval_accum_losses['loss_g_easy_win_penalty_eff_contrib_agg'] += (val * batch_size_micro) # Value is already the scaled penalty
 
                 log_interval_items_processed += batch_size_micro
                 self.interval_steps_count += 1
@@ -3325,7 +3727,7 @@ class HybridTrainer:
                         elif q_state_lambda_kl is not None and hasattr(self.lambda_kl_q_controller, 'set_initial_lambda_kl_metrics'):
                             self.lambda_kl_q_controller.set_initial_lambda_kl_metrics(current_interval_metrics)
                         
-                        if q_state_lambda_kl is not None:
+                        if q_state_lambda_kl is not None: 
                             lambda_kl_action_dict = self.lambda_kl_q_controller.choose_action(q_state_lambda_kl, mode='lambda_kl')
                             chosen_scale = lambda_kl_action_dict.get('lambda_kl_scale', 1.0)
                             if self.am_main_process:
@@ -3338,6 +3740,7 @@ class HybridTrainer:
                                 prog_bar.write(f"  GStep {self.global_step}: LKL_Q-Ctrl updated trainer's self.lambda_kl to {self.lambda_kl:.4e}")
                             
                             self.lambda_kl_q_controller.prev_lambda_kl_state = q_state_lambda_kl
+                            self.lambda_kl_q_controller.prev_lambda_kl_action = lambda_kl_action_dict 
                         
                         self.prev_interval_metrics_for_lambda_kl_reward = current_interval_metrics.copy()
                         for q_ctrl_opt in all_q_controllers_to_sync_lkl: 
@@ -3348,17 +3751,34 @@ class HybridTrainer:
                        (self.global_step % self.args.log_interval == 0) and \
                        log_interval_items_processed > 0 and self.am_main_process:
                         
-                        current_log_metrics_wandb: Dict[str, Any] = {
-                            f"train/{k.replace('_agg', '')}": v / log_interval_items_processed
-                            for k, v in log_interval_accum_losses.items()
-                        }
+                        current_log_metrics_wandb: Dict[str, Any] = {}
+                        for k, v_sum in log_interval_accum_losses.items():
+                            if "_eff_contrib_agg" in k: 
+                                current_log_metrics_wandb[f"train/{k.replace('_eff_contrib_agg', '_eff_contrib')}"] = v_sum / log_interval_items_processed
+                            elif "_agg" in k: 
+                                current_log_metrics_wandb[f"train/{k.replace('_agg', '')}"] = v_sum / log_interval_items_processed
+                        
+                        avg_raw_recon = current_log_metrics_wandb.get('train/loss_recon', 0.0)
+                        avg_raw_kl = current_log_metrics_wandb.get('train/loss_kl', 0.0)
+                        avg_raw_g_adv = current_log_metrics_wandb.get('train/loss_g_adv', 0.0)
 
-                        effective_lambda_kl_for_log = self.lambda_kl * self.heuristic_override_lambda_kl_factor
-                        effective_lambda_recon_for_log = self.lambda_recon * self.heuristic_override_lambda_recon_factor
+                        effective_lambda_recon_component = avg_raw_recon * self.lambda_recon * self.heuristic_override_lambda_recon_factor
+                        effective_lambda_kl_component = avg_raw_kl * self.lambda_kl * self.heuristic_override_lambda_kl_factor
+                        effective_lambda_gan_component = avg_raw_g_adv * self.lambda_gan * self.heuristic_override_lambda_gan_factor
+                        
+                        current_log_metrics_wandb["train/lambda_recon_eff_contrib"] = effective_lambda_recon_component
+                        current_log_metrics_wandb["train/lambda_kl_eff_contrib"] = effective_lambda_kl_component
+                        current_log_metrics_wandb["train/lambda_gan_eff_contrib"] = effective_lambda_gan_component
+                        current_log_metrics_wandb["train/lambda_kl_base_from_q_lkl"] = self.lambda_kl
 
-                        current_log_metrics_wandb["train/lambda_recon_eff"] = effective_lambda_recon_for_log
-                        current_log_metrics_wandb["train/lambda_kl_eff"] = effective_lambda_kl_for_log
-                        current_log_metrics_wandb["train/lambda_kl_base_from_q_lkl"] = self.lambda_kl 
+                        loss_g_feat_match_contrib = current_log_metrics_wandb.get('train/loss_g_feat_match_eff_contrib', 0.0)
+                        loss_g_easy_win_penalty_contrib = current_log_metrics_wandb.get('train/loss_g_easy_win_penalty_eff_contrib', 0.0)
+                        
+                        calculated_g_total_for_log = effective_lambda_recon_component + effective_lambda_kl_component + \
+                                                     effective_lambda_gan_component + loss_g_feat_match_contrib + \
+                                                     loss_g_easy_win_penalty_contrib
+                        current_log_metrics_wandb["train/loss_g_total_calculated_from_components"] = calculated_g_total_for_log
+
 
                         lr_g = self.optimizer_enc_gen.param_groups[0]['lr'] if self.optimizer_enc_gen else -1.0
                         lr_d_active = self.optimizer_disc_active.param_groups[0]['lr'] if self.optimizer_disc_active else -1.0
@@ -3381,9 +3801,8 @@ class HybridTrainer:
                             if controller_obj_log and hasattr(controller_obj_log, 'get_info'):
                                 info_dict_log = controller_obj_log.get_info()
                                 for k_info_log, v_info_log in info_dict_log.items():
-                                    # Ensure WandB keys are valid
                                     clean_k_info_log = ''.join(c if c.isalnum() or c in ['_', '/'] else '_' for c in str(k_info_log)).lower()
-                                    clean_k_info_log = clean_k_info_log.replace('lrmom','').replace('lambdakl','') # further shorten common terms
+                                    clean_k_info_log = clean_k_info_log.replace('lrmom','').replace('lambdakl','') 
                                     wandb_log_key = f"q_info/{prefix_log}/{clean_k_info_log}"
                                     current_log_metrics_wandb[wandb_log_key] = v_info_log
                         
@@ -3392,38 +3811,37 @@ class HybridTrainer:
                         current_log_metrics_wandb["heuristic/d_lr_boost_active_val"] = 1 if self.heuristic_boost_active_d_lr_active else 0
                         current_log_metrics_wandb["heuristic/lrec_factor_val"] = self.heuristic_override_lambda_recon_factor
                         current_log_metrics_wandb["heuristic/lkl_factor_val"] = self.heuristic_override_lambda_kl_factor
+                        current_log_metrics_wandb["heuristic/lgan_factor_val"] = self.heuristic_override_lambda_gan_factor 
                         
-                        gt_log = current_log_metrics_wandb.get('train/loss_g_total',-1.0); dt_log = current_log_metrics_wandb.get('train/loss_d_total',-1.0)
-                        gr_raw_log = current_log_metrics_wandb.get('train/loss_recon',-1.0) 
-                        gk_raw_log = current_log_metrics_wandb.get('train/loss_kl',-1.0) 
-                        ga_raw_log = current_log_metrics_wandb.get('train/loss_g_adv',-1.0)
-                        dr_log = current_log_metrics_wandb.get('train/loss_d_real',-1.0); df_log = current_log_metrics_wandb.get('train/loss_d_fake',-1.0)
+                        dt_log_val = current_log_metrics_wandb.get('train/loss_d_total',-1.0) # Renamed to avoid conflict
+                        dr_log_val = current_log_metrics_wandb.get('train/loss_d_real',-1.0)
+                        df_log_val = current_log_metrics_wandb.get('train/loss_d_fake',-1.0)
                         
-                        # Use the cleaned keys for Q-info retrieval for console log if they were also intended for it
                         qeg_eps_log = current_log_metrics_wandb.get(f'q_info/q_gen/epsilon',-1.0)
                         qad_eps_log = current_log_metrics_wandb.get(f'q_info/q_d_{self.active_discriminator_key}/epsilon',-1.0)
                         qelkl_eps_log = current_log_metrics_wandb.get(f'q_info/q_lkl/epsilon', -1.0)
 
-                        # Correctly retrieve last actions from Q-controller info dict if they are simple dicts or specific keys
-                        qslg_log = HybridTrainer.get_scale_from_action_value(current_log_metrics_wandb.get(f'q_info/q_gen/last_action'), 'lr_scale')
-                        qsld_log = HybridTrainer.get_scale_from_action_value(current_log_metrics_wandb.get(f'q_info/q_d_{self.active_discriminator_key}/last_action'), 'lr_scale')
-                        qslkl_log = HybridTrainer.get_scale_from_action_value(current_log_metrics_wandb.get(f'q_info/q_lkl/last_action'), 'lambda_kl_scale')
+                        qslg_log = HybridTrainer.get_scale_from_action_value(current_log_metrics_wandb.get(f'q_info/q_gen/last_lr_mom_action'), 'lr_scale') 
+                        qsld_log = HybridTrainer.get_scale_from_action_value(current_log_metrics_wandb.get(f'q_info/q_d_{self.active_discriminator_key}/last_lr_mom_action'), 'lr_scale') 
+                        qslkl_log = HybridTrainer.get_scale_from_action_value(current_log_metrics_wandb.get(f'q_info/q_lkl/last_lambda_kl_action'), 'lambda_kl_scale') 
 
                         active_d_short_name_log = f"{self.active_discriminator_key[0].upper()}:{self.active_disc_actual_type}"
+                        
                         log_str_console_final = (
                             f"E{epoch+1} S{self.global_step} ActD:{active_d_short_name_log} | "
-                            f"G_tot:{gt_log:.2f}(Rec:{gr_raw_log:.3f}*{self.heuristic_override_lambda_recon_factor:.1f}="
-                            f"{gr_raw_log*self.heuristic_override_lambda_recon_factor:.2f} "
-                            f"KL:{gk_raw_log:.2f}*{self.heuristic_override_lambda_kl_factor:.1f}="
-                            f"{gk_raw_log*self.heuristic_override_lambda_kl_factor:.2f} "
-                            f"Adv:{ga_raw_log:.2f}) | D_tot:{dt_log:.2f}(R:{dr_log:.3f} F:{df_log:.3f}) | "
+                            f"G_tot:{calculated_g_total_for_log:.2f}(Rec:{effective_lambda_recon_component:.2f} " 
+                            f"KL:{effective_lambda_kl_component:.2f} "
+                            f"Adv:{effective_lambda_gan_component:.2f}"
+                            + (f" FeatM:{loss_g_feat_match_contrib:.2f}" if loss_g_feat_match_contrib != 0 else "") 
+                            + (f" GPen:{loss_g_easy_win_penalty_contrib:.2f}" if loss_g_easy_win_penalty_contrib != 0 else "") 
+                            + f") | D_tot:{dt_log_val:.2f}(R:{dr_log_val:.3f} F:{df_log_val:.3f}) | " # Used renamed vars
                             f"LR(G/D):{lr_g:.1e}/{lr_d_active:.1e} | "
                             f"Q_Eps(G/D/LKL):{qeg_eps_log:.2f}/{qad_eps_log:.2f}/{qelkl_eps_log:.2f} | "
                             f"Q_Scl(G/D/LKL):{qslg_log:.2f}/{qsld_log:.2f}/{qslkl_log:.2f} | "
-                            f"LKL_eff:{effective_lambda_kl_for_log:.2e}"
+                            f"BaseLKL:{self.lambda_kl:.2e}(x{self.heuristic_override_lambda_kl_factor:.1f})" 
                         )
                         
-                        prog_bar.set_postfix_str(f"ActD:{active_d_short_name_log} G:{gt_log:.2f} D:{dt_log:.2f} RecRaw:{gr_raw_log:.3f} LKL_eff:{effective_lambda_kl_for_log:.1e}", refresh=True)
+                        prog_bar.set_postfix_str(f"ActD:{active_d_short_name_log} G:{calculated_g_total_for_log:.2f} D:{dt_log_val:.2f} RecRaw:{avg_raw_recon:.3f} EffKL_Cont:{effective_lambda_kl_component:.1e}", refresh=True)
                         prog_bar.write(log_str_console_final)
                         
                         if self.args.wandb and WANDB_AVAILABLE and wandb.run:
@@ -3434,7 +3852,7 @@ class HybridTrainer:
 
                     if recon_mel_for_logging is not None and self.am_main_process and \
                        self.args.wandb_log_train_recon_interval > 0 and self.global_step > 0 and \
-                       (self.global_step % self.args.wandb_log_train_recon_interval == 0):
+                       (self.global_step % self.args.wandb_log_train_recon_interval == 0): 
                         self._log_samples_to_wandb("train_recon_mel", recon_mel_for_logging, self.args.num_val_samples_to_log)
                         if self.global_step % (self.args.wandb_log_train_recon_interval * getattr(self.args, 'train_target_log_freq_multiplier', 5)) == 0 :
                            self._log_samples_to_wandb("train_target_mel", batch_mel_segments, self.args.num_val_samples_to_log)
@@ -3454,7 +3872,6 @@ class HybridTrainer:
                             
                             current_audio_config_ref = self._get_audio_config_ref()
                             current_gaad_config_ref = self._get_gaad_config_ref()
-                            # Ensure spec_dims_canon uses correct H, W order for golden_subdivide_rect_fixed_n (W, H) -> (Time, Freq)
                             spec_dims_canon = (current_audio_config_ref.get("num_time_frames_for_1s_segment", 86), self.args.n_mels) 
                             
                             num_fixed_samples = self.fixed_noise_for_sampling.shape[0]
@@ -3470,7 +3887,6 @@ class HybridTrainer:
                                 canonical_bboxes_list_fixed.append(bboxes_one_fixed)
                             canonical_bboxes_batch_fixed_final = torch.stack(canonical_bboxes_list_fixed) 
                             
-                            # target_mel_shape for _assemble_mel_from_dct_regions is (B, C, H_target, W_target) -> (B, C, Freq, Time)
                             target_mel_shape_fixed_final = ( 
                                 num_fixed_samples, 1, self.args.n_mels,
                                 current_audio_config_ref.get("num_time_frames_for_1s_segment", 86)
@@ -3484,8 +3900,8 @@ class HybridTrainer:
 
                     if self.args.save_interval > 0 and self.global_step > 0 and \
                        (self.global_step % self.args.save_interval == 0) and self.am_main_process:
-                        avg_g_total_current = avg_losses_for_q['loss_g_total'] if 'avg_losses_for_q' in locals() and avg_losses_for_q else -1.0
-                        avg_d_total_current = avg_losses_for_q['loss_d_total'] if 'avg_losses_for_q' in locals() and avg_losses_for_q else -1.0
+                        avg_g_total_current = avg_losses_for_q.get('loss_g_total', -1.0) 
+                        avg_d_total_current = avg_losses_for_q.get('loss_d_total', -1.0) 
                         chkpt_metrics_current = {
                             'train_loss_g_total_macro': avg_g_total_current if np.isfinite(avg_g_total_current) else -1.0,
                             'train_loss_d_total_macro': avg_d_total_current if np.isfinite(avg_d_total_current) else -1.0
@@ -3515,114 +3931,28 @@ class HybridTrainer:
                         self.best_val_metric_val = current_val_for_best_eoe
                         self._save_checkpoint(is_best=True, metrics=val_metrics_eoe)
             
-            save_epoch_interval_epochs = getattr(self.args, 'save_epoch_interval_epochs', 1)
+            save_epoch_interval_epochs = getattr(self.args, 'save_epoch_interval', 1)
             if self.am_main_process and save_epoch_interval_epochs > 0 and (epoch + 1) % save_epoch_interval_epochs == 0:
-                # Check if already saved as 'best' or coincidentally as 'intermediate'
-                # Ensure 'is_better_eoe' is defined if val block ran
-                already_saved_as_best = 'is_better_eoe' in locals() and locals().get('is_better_eoe', False) and \
+                already_saved_as_best_this_epoch = 'is_better_eoe' in locals() and locals().get('is_better_eoe', False) and \
                                         np.isfinite(locals().get('current_val_for_best_eoe', float('inf')))
                 
-                # Check if last batch of epoch was also a save_interval step
-                is_last_batch = batch_idx == num_batches_epoch -1 if num_batches_epoch > 0 else False
-                already_saved_as_intermediate = self.args.save_interval > 0 and \
+                # Check if an intermediate save happened at the very end of the epoch
+                is_last_grad_accum_step_of_epoch = (batch_idx +1) == num_batches_epoch and \
+                                                    (batch_idx +1) % self.grad_accum_steps == 0 
+                
+                already_saved_as_intermediate_this_step = self.args.save_interval > 0 and \
+                                                self.global_step > 0 and \
                                                 self.global_step % self.args.save_interval == 0 and \
-                                                is_last_batch
+                                                is_last_grad_accum_step_of_epoch
 
-                if not (already_saved_as_best or already_saved_as_intermediate):
+
+                if not (already_saved_as_best_this_epoch or already_saved_as_intermediate_this_step):
                     eoe_metrics_for_save = self.last_val_metrics.copy() if self.last_val_metrics else {}
-                    if 'avg_losses_for_q' in locals() and avg_losses_for_q :
-                        eoe_metrics_for_save["epoch_end_train_g_total_approx"] = avg_losses_for_q.get('loss_g_total', -1.0)
-                        eoe_metrics_for_save["epoch_end_train_d_total_approx"] = avg_losses_for_q.get('loss_d_total', -1.0)
+                    # Use the most recent avg_losses_for_q if available for train loss approximation
+                    if 'avg_losses_for_q' in locals() and isinstance(locals()['avg_losses_for_q'], dict):
+                        eoe_metrics_for_save["epoch_end_train_g_total_approx"] = locals()['avg_losses_for_q'].get('loss_g_total', -1.0)
+                        eoe_metrics_for_save["epoch_end_train_d_total_approx"] = locals()['avg_losses_for_q'].get('loss_d_total', -1.0)
                     self._save_checkpoint(metrics=eoe_metrics_for_save)
-
-
-
-
-    def _load_q_state_helper_inner(self, q_controller_instance: Optional[HAKMEMQController],
-                                   q_state_from_ckpt: Optional[Dict],
-                                   perform_manual_flush_for_this_controller: bool,
-                                   is_associated_optimizer_state_loaded: bool):
-        """
-        Helper to load state into a Q-controller instance or reset it.
-        """
-        if q_controller_instance is None:
-            return
-
-        # Determine if a full reset is needed for this specific controller
-        # This happens if:
-        # 1. Global manual flush is requested (perform_manual_flush_for_this_controller=True)
-        # 2. The associated optimizer did NOT load its state (and we're not forcing a flush anyway)
-        #    This prevents loading Q-state that might be mismatched with a fresh optimizer.
-        # 3. The checkpoint explicitly lacks state for this Q-controller.
-        reset_this_q_controller = perform_manual_flush_for_this_controller or \
-                                  (not is_associated_optimizer_state_loaded and not perform_manual_flush_for_this_controller) or \
-                                  (q_state_from_ckpt is None)
-
-        context_msg = f"Q-Ctrl Load Helper for {q_controller_instance.logger.name if hasattr(q_controller_instance, 'logger') else 'UnknownQCtrl'}"
-
-        if reset_this_q_controller:
-            reset_reason = "global flush request" if perform_manual_flush_for_this_controller else \
-                           ("associated optimizer not loaded" if not is_associated_optimizer_state_loaded else "no Q-state in checkpoint")
-            if self.am_main_process:
-                self.logger.info(f"{context_msg}: Resetting Q-controller state (Reason: {reset_reason}). It will start fresh, possibly on probation.")
-            # Reset Q-table, epsilon, and history. Start probation is often default.
-            q_controller_instance.reset_q_learning_state(
-                reset_q_table=True,
-                reset_epsilon=True,
-                context_msg=f"{context_msg} (Full Reset due to {reset_reason})",
-                start_probation=True # Typically start probation on a full reset
-            )
-            return
-
-        # If we are here, we are attempting to load from q_state_from_ckpt
-        try:
-            q_controller_instance.q_table = q_state_from_ckpt.get('q_table', {})
-            q_controller_instance.epsilon = q_state_from_ckpt.get('epsilon', q_controller_instance.epsilon_start)
-            q_controller_instance.prev_lr_mom_state = q_state_from_ckpt.get('prev_lr_mom_state')
-            q_controller_instance.prev_lr_mom_action = q_state_from_ckpt.get('prev_lr_mom_action')
-            q_controller_instance.prev_lambda_kl_state = q_state_from_ckpt.get('prev_lambda_kl_state')
-            q_controller_instance.prev_lambda_kl_action = q_state_from_ckpt.get('prev_lambda_kl_action')
-
-            # Load deques safely
-            reward_hist_list = q_state_from_ckpt.get('reward_hist', [])
-            q_controller_instance.reward_hist.clear()
-            q_controller_instance.reward_hist.extend(reward_hist_list)
-
-            if 'loss_histories' in q_state_from_ckpt:
-                for hname, hlist in q_state_from_ckpt['loss_histories'].items():
-                    hist_attr_deque = getattr(q_controller_instance, f"loss_{hname}_hist", None)
-                    if hist_attr_deque is not None and isinstance(hist_attr_deque, deque):
-                        hist_attr_deque.clear()
-                        hist_attr_deque.extend(hlist)
-
-            if 'interval_histories' in q_state_from_ckpt:
-                 for hname, hlist in q_state_from_ckpt['interval_histories'].items():
-                    hist_attr_deque = getattr(q_controller_instance, f"interval_{hname}_hist", None)
-                    if hist_attr_deque is not None and isinstance(hist_attr_deque, deque):
-                        hist_attr_deque.clear()
-                        hist_attr_deque.extend(hlist)
-
-
-            q_controller_instance.q_table_access_count = defaultdict(int, q_state_from_ckpt.get('q_table_access_count', {}))
-            q_controller_instance.q_table_creation_time = q_state_from_ckpt.get('q_table_creation_time', {})
-            q_controller_instance.q_table_last_access_time = q_state_from_ckpt.get('q_table_last_access_time', {})
-
-            # Probation states
-            q_controller_instance.on_probation = q_state_from_ckpt.get('on_probation', False)
-            q_controller_instance.current_probation_step = q_state_from_ckpt.get('current_probation_step', 0)
-            q_controller_instance.lkl_on_probation = q_state_from_ckpt.get('lkl_on_probation', False)
-            q_controller_instance.lkl_current_probation_step = q_state_from_ckpt.get('lkl_current_probation_step', 0)
-
-            if self.am_main_process:
-                self.logger.info(f"{context_msg}: Successfully loaded Q-state from checkpoint.")
-        except Exception as e_load_q:
-            if self.am_main_process:
-                self.logger.warning(f"{context_msg}: Error loading Q-state from checkpoint: {e_load_q}. Resetting this Q-controller.", exc_info=True)
-            q_controller_instance.reset_q_learning_state(
-                reset_q_table=True, reset_epsilon=True,
-                context_msg=f"{context_msg} (Reset due to load error)",
-                start_probation=True
-            )
 
     @torch.no_grad()
     def validate(self, num_val_samples_to_log: int = 1) -> Optional[Dict[str, float]]:
@@ -3636,7 +3966,7 @@ class HybridTrainer:
 
         total_recon_dct_mse_sum = 0.0; total_mel_mse_sum = 0.0; total_psnr_mel_sum = 0.0
         total_ssim_mel_sum = 0.0; total_lpips_mel_sum = 0.0; total_items_evaluated = 0
-        dtype_m = next(iter(m_ref.parameters()), torch.tensor(0.0, device=self.device)).dtype # Safe default
+        dtype_m = next(iter(m_ref.parameters()), torch.tensor(0.0, device=self.device)).dtype 
         
         prog_bar_disabled = not self.am_main_process or os.getenv('CI') == 'true' or getattr(self.args, 'disable_val_tqdm', False)
         logged_samples_count_this_val = 0
@@ -3670,14 +4000,14 @@ class HybridTrainer:
                     except Exception as e_ssim: self.logger.debug(f"Val SSIM failed: {e_ssim}")
                 if self.lpips_loss_fn:
                     try:
-                        rec_lpips = recon_mel_assembled.repeat(1,3,1,1) if recon_mel_assembled.shape[1]==1 else recon_mel_assembled
-                        real_lpips = real_mel_segments.repeat(1,3,1,1) if real_mel_segments.shape[1]==1 else real_mel_segments
-                        lpips_val = self.lpips_loss_fn(rec_lpips, real_lpips); total_lpips_mel_sum += lpips_val.sum().item()
+                        rec_lpips_in = recon_mel_assembled.repeat(1,3,1,1) if recon_mel_assembled.shape[1]==1 else recon_mel_assembled
+                        real_lpips_in = real_mel_segments.repeat(1,3,1,1) if real_mel_segments.shape[1]==1 else real_mel_segments
+                        lpips_val = self.lpips_loss_fn(rec_lpips_in, real_lpips_in); total_lpips_mel_sum += lpips_val.sum().item() 
                     except Exception as e_lpips: self.logger.debug(f"Val LPIPS failed: {e_lpips}")
             
             total_items_evaluated += B
             if logged_samples_count_this_val < num_val_samples_to_log and \
-               self.args.wandb and WANDB_AVAILABLE and wandb.run: # type: ignore
+               self.args.wandb and WANDB_AVAILABLE and wandb.run: 
                 num_to_log_now = min(B, num_val_samples_to_log - logged_samples_count_this_val)
                 if num_to_log_now > 0:
                     self._log_samples_to_wandb("val_recon_mel", recon_mel_assembled[:num_to_log_now], num_to_log_now)
@@ -3706,9 +4036,7 @@ class HybridTrainer:
         d_primary_s = self.discriminator_primary_obj.module if self.ddp_active and hasattr(self.discriminator_primary_obj, 'module') else self.discriminator_primary_obj
         d_alt_s = self.discriminator_alternative_obj.module if self.ddp_active and hasattr(self.discriminator_alternative_obj, 'module') else self.discriminator_alternative_obj
 
-        # Helper to get Q-state (same as previous full update)
         def get_q_state_from_controller_or_optimizer(obj_with_q_controller):
-            # ... (implementation from previous full update) ...
             if obj_with_q_controller is None: return None
             q_ctrl_to_save: Optional[HAKMEMQController] = None
             if isinstance(obj_with_q_controller, HAKMEMQController): q_ctrl_to_save = obj_with_q_controller
@@ -3737,7 +4065,7 @@ class HybridTrainer:
             'discriminator_primary_state_dict': d_primary_s.state_dict(),
             'discriminator_alternative_state_dict': d_alt_s.state_dict(),
             'active_discriminator_key': self.active_discriminator_key,
-            'active_disc_actual_type': self.active_disc_actual_type, # Save this too
+            'active_disc_actual_type': self.active_disc_actual_type, 
             'optimizer_enc_gen_state_dict': self.optimizer_enc_gen.state_dict() if self.optimizer_enc_gen else None,
             'optimizer_disc_primary_state_dict': self.optimizer_disc_primary.state_dict(),
             'optimizer_disc_alternative_state_dict': self.optimizer_disc_alternative.state_dict(),
@@ -3752,13 +4080,15 @@ class HybridTrainer:
             'consecutive_trigger_alt_to_primary_count': self.consecutive_trigger_alt_to_primary_count,
             'consecutive_heuristic_trigger_counts': dict(self.consecutive_heuristic_trigger_counts),
             'q_data_derived_g_recon_hist': list(self.q_data_derived_g_recon_hist),
+            'avg_g_recon_hist_for_stagnation': list(self.avg_g_recon_hist_for_stagnation),
             
             'heuristic_vae_feature_match_active': self.heuristic_vae_feature_match_active,
             'heuristic_penalize_g_easy_win_active': self.heuristic_penalize_g_easy_win_active,
             'heuristic_boost_active_d_lr_active': self.heuristic_boost_active_d_lr_active,
-            'heuristic_force_d_q_explore_active': self.heuristic_force_d_q_explore_active, # Save this state
+            'heuristic_force_d_q_explore_active': self.heuristic_force_d_q_explore_active, 
             'heuristic_override_lambda_recon_factor': self.heuristic_override_lambda_recon_factor,
             'heuristic_override_lambda_kl_factor': self.heuristic_override_lambda_kl_factor,
+            'heuristic_override_lambda_gan_factor': self.heuristic_override_lambda_gan_factor,
         }
         
         data['q_controller_enc_gen_state'] = get_q_state_from_controller_or_optimizer(self.q_controller_gen)
@@ -3767,21 +4097,93 @@ class HybridTrainer:
         data['q_controller_lambda_kl_state'] = get_q_state_from_controller_or_optimizer(self.lambda_kl_q_controller)
 
         fprefix = "wubuspectrans_ckpt_v011"
-        if is_best: fp_str = f"{fprefix}_best_ep{self.current_epoch + 1}_step{self.global_step}.pt" # Add epoch/step to best
+        if is_best: fp_str = f"{fprefix}_best_ep{self.current_epoch + 1}_step{self.global_step}.pt" 
         elif is_intermediate: fp_str = f"{fprefix}_step{self.global_step}.pt"
         else: fp_str = f"{fprefix}_ep{self.current_epoch + 1}_step{self.global_step}.pt"
         fp = Path(self.args.checkpoint_dir) / fp_str
         try: torch.save(data, fp); self.logger.info(f"Checkpoint saved: {fp.name}")
         except Exception as e: self.logger.error(f"Save CKPT error {fp}: {e}", exc_info=True)
 
+    def _load_q_state_helper_inner(self, q_controller_instance: Optional[HAKMEMQController],
+                                   q_state_from_ckpt: Optional[Dict],
+                                   perform_manual_flush_for_this_controller: bool,
+                                   is_associated_optimizer_state_loaded: bool):
+        if q_controller_instance is None:
+            return
+
+        reset_this_q_controller = perform_manual_flush_for_this_controller or \
+                                  (not is_associated_optimizer_state_loaded and not perform_manual_flush_for_this_controller) or \
+                                  (q_state_from_ckpt is None)
+
+        context_msg = f"Q-Ctrl Load Helper for {q_controller_instance.logger.name if hasattr(q_controller_instance, 'logger') else 'UnknownQCtrl'}"
+
+        if reset_this_q_controller:
+            reset_reason = "global flush request" if perform_manual_flush_for_this_controller else \
+                           ("associated optimizer not loaded" if not is_associated_optimizer_state_loaded else "no Q-state in checkpoint")
+            if self.am_main_process:
+                self.logger.info(f"{context_msg}: Resetting Q-controller state (Reason: {reset_reason}). It will start fresh, possibly on probation.")
+            q_controller_instance.reset_q_learning_state(
+                reset_q_table=True,
+                reset_epsilon=True,
+                context_msg=f"{context_msg} (Full Reset due to {reset_reason})",
+                start_probation=True 
+            )
+            return
+
+        try:
+            q_controller_instance.q_table = q_state_from_ckpt.get('q_table', {})
+            q_controller_instance.epsilon = q_state_from_ckpt.get('epsilon', q_controller_instance.epsilon_start)
+            q_controller_instance.prev_lr_mom_state = q_state_from_ckpt.get('prev_lr_mom_state')
+            q_controller_instance.prev_lr_mom_action = q_state_from_ckpt.get('prev_lr_mom_action')
+            q_controller_instance.prev_lambda_kl_state = q_state_from_ckpt.get('prev_lambda_kl_state')
+            q_controller_instance.prev_lambda_kl_action = q_state_from_ckpt.get('prev_lambda_kl_action')
+
+            reward_hist_list = q_state_from_ckpt.get('reward_hist', [])
+            q_controller_instance.reward_hist.clear()
+            q_controller_instance.reward_hist.extend(reward_hist_list)
+
+            if 'loss_histories' in q_state_from_ckpt:
+                for hname, hlist in q_state_from_ckpt['loss_histories'].items():
+                    hist_attr_deque = getattr(q_controller_instance, f"loss_{hname}_hist", None)
+                    if hist_attr_deque is not None and isinstance(hist_attr_deque, deque):
+                        hist_attr_deque.clear()
+                        hist_attr_deque.extend(hlist)
+
+            if 'interval_histories' in q_state_from_ckpt:
+                 for hname, hlist in q_state_from_ckpt['interval_histories'].items():
+                    hist_attr_deque = getattr(q_controller_instance, f"interval_{hname}_hist", None)
+                    if hist_attr_deque is not None and isinstance(hist_attr_deque, deque):
+                        hist_attr_deque.clear()
+                        hist_attr_deque.extend(hlist)
+
+
+            q_controller_instance.q_table_access_count = defaultdict(int, q_state_from_ckpt.get('q_table_access_count', {}))
+            q_controller_instance.q_table_creation_time = q_state_from_ckpt.get('q_table_creation_time', {})
+            q_controller_instance.q_table_last_access_time = q_state_from_ckpt.get('q_table_last_access_time', {})
+
+            q_controller_instance.on_probation = q_state_from_ckpt.get('on_probation', False)
+            q_controller_instance.current_probation_step = q_state_from_ckpt.get('current_probation_step', 0)
+            q_controller_instance.lkl_on_probation = q_state_from_ckpt.get('lkl_on_probation', False)
+            q_controller_instance.lkl_current_probation_step = q_state_from_ckpt.get('lkl_current_probation_step', 0)
+
+            if self.am_main_process:
+                self.logger.info(f"{context_msg}: Successfully loaded Q-state from checkpoint.")
+        except Exception as e_load_q:
+            if self.am_main_process:
+                self.logger.warning(f"{context_msg}: Error loading Q-state from checkpoint: {e_load_q}. Resetting this Q-controller.", exc_info=True)
+            q_controller_instance.reset_q_learning_state(
+                reset_q_table=True, reset_epsilon=True,
+                context_msg=f"{context_msg} (Reset due to load error)",
+                start_probation=True
+            )
+
     def load_checkpoint(self, checkpoint_path_str: str) -> Tuple[int, int]:
         checkpoint_path = Path(checkpoint_path_str)
 
-        # --- 0. Get references to Q-Controllers ---
         q_ctrl_gen = getattr(self.optimizer_enc_gen, 'q_controller', None)
-        q_ctrl_d_pri = self.q_controller_d_primary # Already an attribute
-        q_ctrl_d_alt = self.q_controller_d_alt   # Already an attribute
-        q_ctrl_lkl = self.lambda_kl_q_controller # Already an attribute
+        q_ctrl_d_pri = self.q_controller_d_primary 
+        q_ctrl_d_alt = self.q_controller_d_alt   
+        q_ctrl_lkl = self.lambda_kl_q_controller 
 
         all_q_controllers = [
             qc for qc in [q_ctrl_gen, q_ctrl_d_pri, q_ctrl_d_alt, q_ctrl_lkl] if qc is not None
@@ -3790,29 +4192,24 @@ class HybridTrainer:
         global_manual_flush_requested = getattr(HAKMEMQController, 'MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD', False)
         effective_reset_request_for_q = global_manual_flush_requested or self.args.reset_q_controllers_on_load
 
-        # --- 1. Handle Checkpoint File Existence and Loading Errors ---
         if not checkpoint_path.exists():
             self.logger.warning(f"CKPT {checkpoint_path} not found. Starting fresh.")
-            # If checkpoint not found, and reset_lkl_q_controller_on_load is True, it implies we want to use args.lambda_kl from the start
             if self.args.reset_lkl_q_controller_on_load:
-                self.lambda_kl = float(self.args.lambda_kl)
+                self.lambda_kl = float(self.args.lambda_kl) # Reset to arg value
                 self.logger.info(f"CKPT not found, but --reset_lkl_q_controller_on_load is True. Setting self.lambda_kl to args.lambda_kl: {self.lambda_kl:.2e}")
 
             for qc_obj in all_q_controllers:
-                # If it's the LKL controller and reset_lkl_q_controller_on_load is true, it will be reset anyway.
-                # For other Q controllers, they are reset if effective_reset_request_for_q is true.
                 is_lkl_and_reset_lkl_arg = (qc_obj == q_ctrl_lkl and self.args.reset_lkl_q_controller_on_load)
                 perform_reset_for_this_specific_controller = effective_reset_request_for_q or is_lkl_and_reset_lkl_arg
 
                 self._load_q_state_helper_inner(qc_obj, None,
                                                 perform_manual_flush_for_this_controller=perform_reset_for_this_specific_controller,
                                                 is_associated_optimizer_state_loaded=False)
-                if is_lkl_and_reset_lkl_arg and qc_obj is not None: # Ensure LKL Q-controller knows about the new base lambda_kl
-                    qc_obj.set_current_lambda_kl(self.lambda_kl)
+                if is_lkl_and_reset_lkl_arg and qc_obj is not None: 
+                    qc_obj.set_current_lambda_kl(self.lambda_kl) # Ensure LKL Q-Ctrl has the reset lambda_kl
 
-
-            if global_manual_flush_requested and not self.args.reset_q_controllers_on_load:
-                HAKMEMQController.MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = False
+            if global_manual_flush_requested and not self.args.reset_q_controllers_on_load: # If only manual flush was on
+                HAKMEMQController.MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = False # Reset the global flag
             return 0, 0
 
         try:
@@ -3821,7 +4218,7 @@ class HybridTrainer:
         except Exception as e:
             self.logger.error(f"Failed to load CKPT {checkpoint_path}: {e}. Starting fresh.", exc_info=True)
             if self.args.reset_lkl_q_controller_on_load:
-                self.lambda_kl = float(self.args.lambda_kl)
+                self.lambda_kl = float(self.args.lambda_kl) # Reset to arg value
                 self.logger.info(f"CKPT load failed, but --reset_lkl_q_controller_on_load is True. Setting self.lambda_kl to args.lambda_kl: {self.lambda_kl:.2e}")
 
             for qc_obj in all_q_controllers:
@@ -3831,62 +4228,92 @@ class HybridTrainer:
                                                 perform_manual_flush_for_this_controller=perform_reset_for_this_specific_controller,
                                                 is_associated_optimizer_state_loaded=False)
                 if is_lkl_and_reset_lkl_arg and qc_obj is not None:
-                     qc_obj.set_current_lambda_kl(self.lambda_kl)
+                     qc_obj.set_current_lambda_kl(self.lambda_kl) # Ensure LKL Q-Ctrl has the reset lambda_kl
 
-
-            if global_manual_flush_requested and not self.args.reset_q_controllers_on_load:
-                HAKMEMQController.MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = False
+            if global_manual_flush_requested and not self.args.reset_q_controllers_on_load: # If only manual flush was on
+                HAKMEMQController.MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = False # Reset the global flag
             return 0, 0
 
-        # --- 2. Load Metrics and Basic Training Progress Variables ---
+        # --- State Dict Loading for Models ---
+        ckpt_args_dict = ckpt.get('args', vars(self.args))
+        
+        # Determine architecture flags from the checkpoint for more robust loading
+        ckpt_disc_apply_spectral_norm = ckpt_args_dict.get('disc_apply_spectral_norm', self.args.disc_apply_spectral_norm)
+        
+        # We need to know if the *current args* for this run specify SN for the D that will be built
+        # The D objects are built using current_args.disc_apply_spectral_norm in _get_discriminator_configs
+        current_run_disc_apply_spectral_norm = self.args.disc_apply_spectral_norm
+
+        m_load = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
+        d_primary_load = self.discriminator_primary_obj.module if self.ddp_active and hasattr(self.discriminator_primary_obj, 'module') else self.discriminator_primary_obj
+        d_alt_load = self.discriminator_alternative_obj.module if self.ddp_active and hasattr(self.discriminator_alternative_obj, 'module') else self.discriminator_alternative_obj
+        
+        model_loaded_ok, disc_primary_model_loaded_ok, disc_alt_model_loaded_ok = False, False, False
+
+        try:
+            if 'model_state_dict' in ckpt:
+                 # For VAE, strict=False is generally safer due to potential WuBu config changes
+                m_load.load_state_dict(ckpt['model_state_dict'], strict=False) 
+                model_loaded_ok = True
+                self.logger.info("Main model state_dict loaded (strict=False).")
+            else: self.logger.warning("Main model_state_dict not found in checkpoint.")
+        except Exception as e: self.logger.error(f"Error loading main model state_dict: {e}", exc_info=True) # Show full error
+
+        # Handle primary discriminator
+        if 'discriminator_primary_state_dict' in ckpt and d_primary_load:
+            try:
+                if ckpt_disc_apply_spectral_norm != current_run_disc_apply_spectral_norm:
+                    self.logger.warning(f"Primary D spectral_norm mismatch! Ckpt SN: {ckpt_disc_apply_spectral_norm}, Current Run SN: {current_run_disc_apply_spectral_norm}. "
+                                        "Loading with strict=False. THIS CAN LEAD TO UNEXPECTED BEHAVIOR OR ERRORS if parameter names changed.")
+                d_primary_load.load_state_dict(ckpt['discriminator_primary_state_dict'], strict=False) 
+                disc_primary_model_loaded_ok = True
+                self.logger.info(f"Primary D ({self.primary_disc_actual_type}) state_dict loaded (strict=False).")
+            except Exception as e: self.logger.error(f"Error loading D_primary state_dict: {e}", exc_info=True)
+        elif not d_primary_load: self.logger.warning("discriminator_primary_obj is None, cannot load its state.")
+        else: self.logger.warning("discriminator_primary_state_dict not found in checkpoint.")
+        
+        # Handle alternative discriminator
+        if 'discriminator_alternative_state_dict' in ckpt and d_alt_load:
+            try:
+                if ckpt_disc_apply_spectral_norm != current_run_disc_apply_spectral_norm: # Assuming alt D uses same SN flag from args
+                    self.logger.warning(f"Alternative D spectral_norm mismatch! Ckpt SN: {ckpt_disc_apply_spectral_norm}, Current Run SN: {current_run_disc_apply_spectral_norm}. "
+                                        "Loading with strict=False.")
+                d_alt_load.load_state_dict(ckpt['discriminator_alternative_state_dict'], strict=False)
+                disc_alt_model_loaded_ok = True
+                self.logger.info(f"Alternative D ({self.alternative_disc_actual_type}) state_dict loaded (strict=False).")
+            except Exception as e: self.logger.error(f"Error loading D_alternative state_dict: {e}", exc_info=True)
+        elif not d_alt_load: self.logger.warning("discriminator_alternative_obj is None, cannot load its state.")
+        else: self.logger.warning("discriminator_alternative_state_dict not found in checkpoint.")
+
+
+        # --- Resume other trainer states ---
         self.is_val_metric_higher_better = self.args.val_primary_metric in ["avg_val_ssim_mel", "avg_val_psnr_mel"]
         default_best_val = -float('inf') if self.is_val_metric_higher_better else float('inf')
         self.best_val_metric_val = ckpt.get('best_val_metric_val', default_best_val)
         self.last_val_metrics = ckpt.get('metrics', {}).copy() if ckpt.get('metrics') is not None else {}
-        self.prev_interval_metrics_for_lambda_kl_reward = ckpt.get('prev_interval_metrics_for_lambda_kl_reward')
         
-        # self.lambda_kl is loaded here. THIS IS WHERE THE OVERRIDE FOR --reset_lkl_q_controller_on_load needs to happen AFTER this line,
-        # but BEFORE Q-controller states are fully processed if we want args.lambda_kl to be the new base.
-        # However, if LKL Q-controller is reset, its `prev_lambda_kl_state` etc. might be irrelevant anyway.
-        # The critical part is that the *trainer's* self.lambda_kl starts correctly for the *new* LKL Q-controller state.
-        self.lambda_kl = float(ckpt.get('current_lambda_kl', self.args.lambda_kl)) # Load from CKPT first
+        if not self.args.reset_lkl_q_controller_on_load:
+            self.lambda_kl = float(ckpt.get('current_lambda_kl', self.args.lambda_kl))
+        # If reset_lkl_q_controller_on_load is True, self.lambda_kl should be set to args.lambda_kl
+        # This happens before LKL Q-Ctrl reset.
+        elif self.args.reset_lkl_q_controller_on_load:
+             self.lambda_kl = float(self.args.lambda_kl) # Ensure it's from current args if LKL Q is reset
+             self.logger.info(f"Trainer's self.lambda_kl set to args.lambda_kl: {self.lambda_kl:.2e} due to --reset_lkl_q_controller_on_load.")
+
+
+        self.prev_interval_metrics_for_lambda_kl_reward = ckpt.get('prev_interval_metrics_for_lambda_kl_reward')
+
 
         loaded_gs = ckpt.get('global_step', 0)
         loaded_ep = ckpt.get('epoch', 0)
         
-        next_ep_start = loaded_ep + 1 if self.args.load_strict and loaded_gs > 0 and loaded_ep < self.args.epochs else loaded_ep
+        next_ep_start = loaded_ep + 1 if model_loaded_ok and loaded_gs > 0 and loaded_ep < self.args.epochs else loaded_ep 
         if getattr(self.args, 'force_start_epoch_on_load', None) is not None:
             next_ep_start = self.args.force_start_epoch_on_load
             loaded_gs = getattr(self.args, 'force_start_gstep_on_load', 0 if self.args.force_start_epoch_on_load is not None else loaded_gs)
             if self.am_main_process: self.logger.info(f"CKPT Load: Overriding start epoch to {next_ep_start} and GStep to {loaded_gs} due to force_start args.")
 
-        # --- 3. Load Model State Dicts ---
-        # ... (model loading code remains the same) ...
-        m_load = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
-        d_primary_load = self.discriminator_primary_obj.module if self.ddp_active and hasattr(self.discriminator_primary_obj, 'module') else self.discriminator_primary_obj
-        d_alt_load = self.discriminator_alternative_obj.module if self.ddp_active and hasattr(self.discriminator_alternative_obj, 'module') else self.discriminator_alternative_obj
-        model_loaded_ok, disc_primary_model_loaded_ok, disc_alt_model_loaded_ok = False, False, False
-
-        try:
-            if 'model_state_dict' in ckpt: m_load.load_state_dict(ckpt['model_state_dict'], strict=self.args.load_strict); model_loaded_ok = True
-            else: self.logger.warning("Main model_state_dict not found in checkpoint.")
-        except Exception as e: self.logger.error(f"Error loading main model state_dict: {e}", exc_info=not self.args.load_strict)
-
-        if 'discriminator_primary_state_dict' in ckpt and d_primary_load:
-            try: d_primary_load.load_state_dict(ckpt['discriminator_primary_state_dict'], strict=self.args.load_strict); disc_primary_model_loaded_ok = True
-            except Exception as e: self.logger.error(f"Error loading D_primary state_dict: {e}", exc_info=not self.args.load_strict)
-        elif not d_primary_load: self.logger.warning("discriminator_primary_obj is None, cannot load its state.")
-        else: self.logger.warning("discriminator_primary_state_dict not found in checkpoint.")
-
-        if 'discriminator_alternative_state_dict' in ckpt and d_alt_load:
-            try: d_alt_load.load_state_dict(ckpt['discriminator_alternative_state_dict'], strict=self.args.load_strict); disc_alt_model_loaded_ok = True
-            except Exception as e: self.logger.error(f"Error loading D_alternative state_dict: {e}", exc_info=not self.args.load_strict)
-        elif not d_alt_load: self.logger.warning("discriminator_alternative_obj is None, cannot load its state.")
-        else: self.logger.warning("discriminator_alternative_state_dict not found in checkpoint.")
-
-
-        # --- 4. Determine and Set Active Discriminator ---
-        # ... (active D logic remains the same) ...
+        # --- Discriminator switching state ---
         saved_active_disc_key = ckpt.get('active_discriminator_key', 'primary')
         saved_active_disc_actual_type = ckpt.get('active_disc_actual_type', 'unknown_type_in_ckpt')
         target_active_key_for_this_resume = saved_active_disc_key 
@@ -3895,24 +4322,26 @@ class HybridTrainer:
             current_args_implied_active_key = None
             if self.initial_disc_type_arg == self.primary_disc_actual_type: current_args_implied_active_key = 'primary'
             elif self.initial_disc_type_arg == self.alternative_disc_actual_type: current_args_implied_active_key = 'alternative'
+            
             if current_args_implied_active_key is not None and current_args_implied_active_key != saved_active_disc_key:
                 if self.am_main_process: self.logger.warning(f"LOAD_CKPT_OVERRIDE: Checkpoint active D was '{saved_active_disc_key}' (type: '{saved_active_disc_actual_type}'). Current args.initial_disc_type ('{self.initial_disc_type_arg}') implies '{current_args_implied_active_key}'. FORCING active D to '{current_args_implied_active_key}' for this resume.")
                 target_active_key_for_this_resume = current_args_implied_active_key
                 forced_switch_on_resume = True
-            elif current_args_implied_active_key is None and self.am_main_process: self.logger.warning(f"LOAD_CKPT_WARNING: args.initial_disc_type ('{self.initial_disc_type_arg}') did not match actual types of primary ('{self.primary_disc_actual_type}') or alternative ('{self.alternative_disc_actual_type}'). Using active D key from checkpoint: '{saved_active_disc_key}'.")
+            elif current_args_implied_active_key is None and self.am_main_process: 
+                self.logger.warning(f"LOAD_CKPT_WARNING: args.initial_disc_type ('{self.initial_disc_type_arg}') did not match actual types of primary ('{self.primary_disc_actual_type}') or alternative ('{self.alternative_disc_actual_type}'). Using active D key from checkpoint: '{saved_active_disc_key}'.")
+        
         self.active_discriminator_key = target_active_key_for_this_resume
         self._update_active_discriminator_pointers()
 
-        # --- 5. Load Optimizer States ---
-        # ... (optimizer loading remains the same) ...
+        # --- Optimizer and Q-Controller states ---
         opt_g_loaded_ok, opt_d_primary_loaded_ok, opt_d_alt_loaded_ok = False, False, False
         if self.optimizer_enc_gen and 'optimizer_enc_gen_state_dict' in ckpt and ckpt['optimizer_enc_gen_state_dict'] is not None:
-            if model_loaded_ok:
+            if model_loaded_ok: 
                 try: self.optimizer_enc_gen.load_state_dict(ckpt['optimizer_enc_gen_state_dict']); opt_g_loaded_ok = True
                 except Exception as e: self.logger.warning(f"Could not load Opt_Gen state: {e}. It will start fresh.")
             else: self.logger.warning("Main model failed to load, Opt_Gen will start fresh.")
         if self.optimizer_enc_gen: 
-            for group in self.optimizer_enc_gen.param_groups:
+            for group in self.optimizer_enc_gen.param_groups: 
                 group['initial_lr'] = self.args.learning_rate_gen 
                 group['initial_momentum'] = self.optimizer_enc_gen.defaults.get('momentum', 0.9)
 
@@ -3937,68 +4366,38 @@ class HybridTrainer:
                 group['initial_lr'] = lr_disc_alt_load
                 group['initial_momentum'] = self.optimizer_disc_alternative.defaults.get('momentum', 0.9)
 
-
-        # --- 6. Load Q-Controller States (with potential LKL reset) ---
-        # Standard loading for G, D_primary, D_alt Q-controllers
         self._load_q_state_helper_inner(q_ctrl_gen, ckpt.get('q_controller_enc_gen_state'), effective_reset_request_for_q, opt_g_loaded_ok)
         self._load_q_state_helper_inner(q_ctrl_d_pri, ckpt.get('q_controller_disc_primary_state'), effective_reset_request_for_q, opt_d_primary_loaded_ok)
         self._load_q_state_helper_inner(q_ctrl_d_alt, ckpt.get('q_controller_disc_alternative_state'), effective_reset_request_for_q, opt_d_alt_loaded_ok)
 
-        # Special handling for LKL Q-controller
         if self.args.reset_lkl_q_controller_on_load and q_ctrl_lkl is not None:
             self.logger.info(f"FORCE RESETTING Lambda_KL Q-Controller due to --reset_lkl_q_controller_on_load.")
-            q_ctrl_lkl.reset_q_learning_state(
-                reset_q_table=True, reset_epsilon=True,
-                context_msg="LKL Q-Ctrl Force Reset on Load by Arg",
-                start_probation=True
-            )
-            # Crucially, update the trainer's self.lambda_kl to the command-line argument
+            # self.lambda_kl is already set from args if this flag is true and ckpt didn't exist,
+            # or from ckpt then potentially overridden by args if force_start_epoch.
+            # Here, explicitly ensure it's from current args if this flag is active.
             self.lambda_kl = float(self.args.lambda_kl)
-            self.logger.info(f"Trainer's self.lambda_kl RESET to args.lambda_kl: {self.lambda_kl:.2e} after LKL Q-Ctrl reset.")
-            q_ctrl_lkl.set_current_lambda_kl(self.lambda_kl) # Sync Q-controller's internal knowledge
-            self.prev_interval_metrics_for_lambda_kl_reward = None # Reset this as Q-LKL is starting fresh
+            q_ctrl_lkl.reset_q_learning_state(reset_q_table=True, reset_epsilon=True, context_msg="LKL Q-Ctrl Force Reset on Load by Arg", start_probation=True)
+            self.logger.info(f"Trainer's self.lambda_kl (set to args value): {self.lambda_kl:.2e} after LKL Q-Ctrl reset.")
+            q_ctrl_lkl.set_current_lambda_kl(self.lambda_kl) 
+            self.prev_interval_metrics_for_lambda_kl_reward = None 
             self.logger.info("prev_interval_metrics_for_lambda_kl_reward also reset due to LKL Q-Ctrl reset.")
-        else:
-            # Normal load for LKL Q-controller if not resetting it specifically
-            self._load_q_state_helper_inner(q_ctrl_lkl, ckpt.get('q_controller_lambda_kl_state'), effective_reset_request_for_q, True)
-            # If NOT resetting LKL Q-Ctrl, self.lambda_kl (loaded from ckpt) is already correct.
+        else: # Not resetting LKL Q-Ctrl due to the specific arg, so load its state
+             # effective_reset_request_for_q still applies if --reset_q_controllers_on_load (general) was true
+            self._load_q_state_helper_inner(q_ctrl_lkl, ckpt.get('q_controller_lambda_kl_state'), effective_reset_request_for_q, True) 
 
         if forced_switch_on_resume:
             active_d_q_to_reset = getattr(self.optimizer_disc_active, 'q_controller', None)
             if active_d_q_to_reset:
                 if self.am_main_process: self.logger.warning(f"Due to resume override, resetting Q-controller for newly FORCED active D: '{self.active_discriminator_key}' (Type: {self.active_disc_actual_type}).")
                 active_d_q_to_reset.reset_q_learning_state(True, True, f"Forced D switch to {self.active_discriminator_key} on Resume Override", True)
+            
             self.steps_since_last_d_switch = 0
             self.consecutive_trigger_primary_to_alt_count = 0; self.consecutive_trigger_alt_to_primary_count = 0
             self.consecutive_heuristic_trigger_counts = defaultdict(int)
             self.q_data_derived_g_recon_hist.clear(); self.rec_dct_stagnant = False
+            self.avg_g_recon_hist_for_stagnation.clear() 
             if self.am_main_process: self.logger.info("Heuristic switching counters and short-term recon history reset due to forced D switch on resume.")
-
-        if global_manual_flush_requested and not self.args.reset_q_controllers_on_load:
-            HAKMEMQController.MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = False
-            if self.am_main_process: self.logger.info("Global MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD applied and reset.")
-        elif self.args.reset_q_controllers_on_load and self.am_main_process:
-             self.logger.info("Global Q-controller reset triggered by --reset_q_controllers_on_load argument for all applicable Q-controllers.")
-
-        # --- 7. Load Scalers and Heuristic States ---
-        # ... (scaler loading remains the same) ...
-        if self.args.use_amp and self.device.type == 'cuda':
-            if 'scaler_enc_gen_state_dict' in ckpt and self.scaler_enc_gen and ckpt['scaler_enc_gen_state_dict'] is not None:
-                try: self.scaler_enc_gen.load_state_dict(ckpt['scaler_enc_gen_state_dict'])
-                except Exception as e_sc_g: self.logger.warning(f"Could not load scaler_enc_gen state: {e_sc_g}")
-            if 'scaler_disc_state_dict' in ckpt and self.scaler_disc and ckpt['scaler_disc_state_dict'] is not None:
-                try: self.scaler_disc.load_state_dict(ckpt['scaler_disc_state_dict'])
-                except Exception as e_sc_d: self.logger.warning(f"Could not load scaler_disc state: {e_sc_d}")
-
-        # Sync lambda_kl to all Q-controllers that might use it.
-        # This is important AFTER self.lambda_kl has been definitively set (either from ckpt or by override)
-        all_q_controllers_to_sync_lambda = [q_ctrl_gen, q_ctrl_d_pri, q_ctrl_d_alt, q_ctrl_lkl]
-        for q_ctrl_sync in all_q_controllers_to_sync_lambda:
-            if q_ctrl_sync and hasattr(q_ctrl_sync, 'set_current_lambda_kl'):
-                q_ctrl_sync.set_current_lambda_kl(self.lambda_kl)
-
-        # ... (heuristic state loading remains the same) ...
-        if not forced_switch_on_resume:
+        else: # Load heuristic counters if no forced switch
             self.steps_since_last_d_switch = ckpt.get('steps_since_last_d_switch', 0)
             self.consecutive_trigger_primary_to_alt_count = ckpt.get('consecutive_trigger_primary_to_alt_count', 0)
             self.consecutive_trigger_alt_to_primary_count = ckpt.get('consecutive_trigger_alt_to_primary_count', 0)
@@ -4008,38 +4407,63 @@ class HybridTrainer:
                     self.q_data_derived_g_recon_hist.clear()
                     self.q_data_derived_g_recon_hist.extend(list(ckpt['q_data_derived_g_recon_hist']))
                 except TypeError: self.logger.warning(f"Could not extend deque q_data_derived_g_recon_hist from checkpoint.")
-        
+            if 'avg_g_recon_hist_for_stagnation' in ckpt and ckpt['avg_g_recon_hist_for_stagnation'] is not None:
+                try:
+                    self.avg_g_recon_hist_for_stagnation.clear()
+                    self.avg_g_recon_hist_for_stagnation.extend(list(ckpt['avg_g_recon_hist_for_stagnation']))
+                except TypeError: self.logger.warning(f"Could not extend deque avg_g_recon_hist_for_stagnation from checkpoint.")
+
+        # Load heuristic active states and factors
         self.heuristic_vae_feature_match_active = ckpt.get('heuristic_vae_feature_match_active', False)
         self.heuristic_penalize_g_easy_win_active = ckpt.get('heuristic_penalize_g_easy_win_active', False)
         self.heuristic_boost_active_d_lr_active = ckpt.get('heuristic_boost_active_d_lr_active', False)
         self.heuristic_force_d_q_explore_active = ckpt.get('heuristic_force_d_q_explore_active', False) 
         self.heuristic_override_lambda_recon_factor = ckpt.get('heuristic_override_lambda_recon_factor', 1.0)
         self.heuristic_override_lambda_kl_factor = ckpt.get('heuristic_override_lambda_kl_factor', 1.0)
+        self.heuristic_override_lambda_gan_factor = ckpt.get('heuristic_override_lambda_gan_factor', 1.0) 
 
+        if global_manual_flush_requested and not self.args.reset_q_controllers_on_load:
+            HAKMEMQController.MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD = False
+            if self.am_main_process: self.logger.info("Global MANUALLY_FLUSH_Q_TABLES_ON_NEXT_LOAD applied and reset.")
+        elif self.args.reset_q_controllers_on_load and self.am_main_process:
+             self.logger.info("Global Q-controller reset triggered by --reset_q_controllers_on_load argument for all applicable Q-controllers.")
+
+        if self.args.use_amp and self.device.type == 'cuda':
+            if 'scaler_enc_gen_state_dict' in ckpt and self.scaler_enc_gen and ckpt['scaler_enc_gen_state_dict'] is not None:
+                try: self.scaler_enc_gen.load_state_dict(ckpt['scaler_enc_gen_state_dict'])
+                except Exception as e_sc_g: self.logger.warning(f"Could not load scaler_enc_gen state: {e_sc_g}")
+            if 'scaler_disc_state_dict' in ckpt and self.scaler_disc and ckpt['scaler_disc_state_dict'] is not None:
+                try: self.scaler_disc.load_state_dict(ckpt['scaler_disc_state_dict'])
+                except Exception as e_sc_d: self.logger.warning(f"Could not load scaler_disc state: {e_sc_d}")
+
+        for q_ctrl_sync in all_q_controllers:
+            if q_ctrl_sync and hasattr(q_ctrl_sync, 'set_current_lambda_kl'):
+                q_ctrl_sync.set_current_lambda_kl(self.lambda_kl)
 
         self.logger.info(
             f"Resuming training. GlobalStep: {loaded_gs}, NextEpochStart: {next_ep_start}. "
             f"ActiveD upon resume: '{self.active_discriminator_key}' (Type: '{self.active_disc_actual_type}'). "
-            f"Effective Lambda_KL (base): {self.lambda_kl:.4e}" # This will now reflect args.lambda_kl if reset_lkl_q_controller_on_load was true
+            f"Effective Lambda_KL (base): {self.lambda_kl:.4e}" 
         )
         return loaded_gs, next_ep_start
         
-
-
-
     @staticmethod
     def get_scale_from_action_value(action_val: Union[Dict, str, None], scale_key: str, default: float = 1.0) -> float:
-        if isinstance(action_val, dict): return action_val.get(scale_key, default)
+        if isinstance(action_val, dict): 
+            val = action_val.get(scale_key)
+            if val is not None:
+                try: return float(val)
+                except (ValueError, TypeError): return default
+            return default
         return default
 
-    # sample method remains the same
     @torch.no_grad()
     def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]:
         m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
         d_ref_sample = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
         
         original_mode_m = m_ref.training
-        original_mode_d = d_ref_sample.training
+        original_mode_d = d_ref_sample.training 
         m_ref.eval(); d_ref_sample.eval()
 
         dev = self.device
@@ -4049,19 +4473,19 @@ class HybridTrainer:
         if noise is None: z = torch.randn(num_samples, lat_dim, device=dev, dtype=dtype_m)
         else: z = noise.to(device=dev, dtype=dtype_m); num_samples = z.shape[0]
 
-        generated_norm_dcts = m_ref.decode(z)
+        generated_norm_dcts = m_ref.decode(z) 
         unnorm_dcts_for_assembly = AudioSpecGenerator._unnormalize_dct(generated_norm_dcts, self.args)
         
         current_audio_config = self._get_audio_config_ref()
         current_gaad_config = self._get_gaad_config_ref()
         spec_time_frames = current_audio_config.get("num_time_frames_for_1s_segment", 86)
         spec_mels = self.args.n_mels
-        spec_dims_canonical = (spec_time_frames, spec_mels) # (Time, Freq) for GAAD
+        spec_dims_canonical_for_gaad = (spec_time_frames, spec_mels) 
         
         canonical_bboxes_list = [] 
         for _ in range(num_samples):
             bboxes_one_sample = golden_subdivide_rect_fixed_n(
-                spec_dims_canonical, 
+                spec_dims_canonical_for_gaad, 
                 current_gaad_config['num_regions'], 
                 dev, dtype_m, 
                 current_gaad_config.get('min_size_px', 5)
@@ -4076,7 +4500,7 @@ class HybridTrainer:
         )
         
         m_ref.train(original_mode_m)
-        d_ref_sample.train(original_mode_d)
+        d_ref_sample.train(original_mode_d) 
         return generated_mel_spectrograms
 
 
@@ -4110,45 +4534,57 @@ def _configure_wubu_stack(args: argparse.Namespace, prefix: str) -> Dict:
                     "initial_spread_values", "boundary_points_per_level",
                     "transform_types", "transform_hidden_dims"]:
             config[key] = []
-        # tangent_input_combination_dims needs a default if layers are created
         config["tangent_input_combination_dims"] = [DEFAULT_CONFIG_WUBU["tangent_input_combination_dims"][0]]
         return config
 
     config["hyperbolic_dims"] = getattr(args, f"{prefix}_hyperbolic_dims", DEFAULT_CONFIG_WUBU["hyperbolic_dims"])
     config["initial_curvatures"] = getattr(args, f"{prefix}_initial_curvatures", DEFAULT_CONFIG_WUBU["initial_curvatures"])
+    
+    # Use the full argument name now since 'dest' was removed in parse_arguments
     config["use_rotation_in_transform"] = getattr(args, f"{prefix}_use_rotation", DEFAULT_CONFIG_WUBU["use_rotation_in_transform"])
-    config["phi_influence_curvature"] = getattr(args, f"{prefix}_phi_influence_curvature", DEFAULT_CONFIG_WUBU["phi_influence_curvature"])
-    config["phi_influence_rotation_init"] = getattr(args, f"{prefix}_phi_influence_rotation_init", DEFAULT_CONFIG_WUBU["phi_influence_rotation_init"])
+    config["phi_influence_curvature"] = getattr(args, f"{prefix}_phi_influence_curvature", DEFAULT_CONFIG_WUBU["phi_influence_curvature"]) 
+    config["phi_influence_rotation_init"] = getattr(args, f"{prefix}_phi_influence_rotation_init", DEFAULT_CONFIG_WUBU["phi_influence_rotation_init"]) 
     config["dropout"] = args.wubu_dropout
 
-    def _ensure_list_len(cfg_dict, key, target_len, default_fill_list_from_defaults):
-        current_val = cfg_dict.get(key, [])
+    def _ensure_list_len(cfg_dict, key, target_len, default_fill_list_from_defaults_ref):
+        default_config_value_for_key = DEFAULT_CONFIG_WUBU.get(key, [])
+        
+        # Construct the full argument name based on prefix and key
+        arg_name_for_key = f"{prefix}_{key}"
+        current_val_from_args = getattr(args, arg_name_for_key, None)
+
+        if current_val_from_args is None: 
+             current_val = default_config_value_for_key
+        else: 
+             current_val = current_val_from_args
+        
         is_list_orig = isinstance(current_val, list)
         current_list_val = current_val if is_list_orig else [current_val]
+
+        if isinstance(default_config_value_for_key, list) and default_config_value_for_key:
+            base_default_for_fill = default_config_value_for_key[0]
+        elif not isinstance(default_config_value_for_key, list): 
+             base_default_for_fill = default_config_value_for_key
+        else: 
+            base_default_for_fill = 1.0 if "scales" in key or "curvatures" in key else \
+                                    0.1 if "spread" in key else ("linear" if "types" in key else 32)
         
-        base_default = default_fill_list_from_defaults[0] if default_fill_list_from_defaults else \
-                       (1.0 if "scales" in key or "curvatures" in key else \
-                       (0.1 if "spread" in key else ("linear" if "types" in key else 32)))
-        fill_val = current_list_val[-1] if current_list_val else base_default
+        fill_val = current_list_val[-1] if current_list_val else base_default_for_fill
         
         if len(current_list_val) < target_len:
             cfg_dict[key] = (current_list_val + [fill_val]*(target_len-len(current_list_val)))[:target_len]
         elif len(current_list_val) > target_len:
             cfg_dict[key] = current_list_val[:target_len]
+        else: 
+            cfg_dict[key] = current_list_val
+
+    for key_chk in ["hyperbolic_dims", "initial_curvatures",
+                    "initial_scales", "initial_spread_values",
+                    "boundary_points_per_level"]:
+        _ensure_list_len(config, key_chk, num_levels_val, DEFAULT_CONFIG_WUBU.get(key_chk, []))
         
-        # If original was not list, but target_len is 1, ensure it's not a list of one item
-        if not is_list_orig and target_len == 1 and isinstance(cfg_dict[key], list):
-            cfg_dict[key] = cfg_dict[key][0]
-
-    for key_chk, default_key_in_wubu_defaults in [
-        ("hyperbolic_dims", "hyperbolic_dims"), ("initial_curvatures", "initial_curvatures"),
-        ("initial_scales", "initial_scales"), ("initial_spread_values", "initial_spread_values"),
-        ("boundary_points_per_level", "boundary_points_per_level")]:
-        _ensure_list_len(config, key_chk, num_levels_val, DEFAULT_CONFIG_WUBU[default_key_in_wubu_defaults])
-
-    # Explicitly set boundary_points_per_level to 0 for all levels if not specified for audio context
     if "boundary_points_per_level" in config and num_levels_val > 0:
-        if not hasattr(args, f"{prefix}_boundary_points_per_level"): # If user did not provide this arg
+        if not hasattr(args, f"{prefix}_boundary_points_per_level"): 
             config["boundary_points_per_level"] = [0] * num_levels_val
             
     if not isinstance(config.get("tangent_input_combination_dims"), list):
@@ -4162,7 +4598,6 @@ def _configure_wubu_stack(args: argparse.Namespace, prefix: str) -> Dict:
         config["transform_types"]=[]
         config["transform_hidden_dims"]=[]
     return config
-
 def validate_wubu_config_for_argparse(args_obj, prefix_str, parser_ref):
     num_levels = getattr(args_obj, f"{prefix_str}_num_levels", 0)
     if num_levels > 0:
@@ -4194,168 +4629,245 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="WuBuSpecTrans_v0.1.1: 1-Second Audio Segment VAE-GAN")
 
     # --- Group: Core Paths and DDP/General Setup ---
-    parser.add_argument('--audio_dir_path', type=str, default="demo_audio_data_dir", help="Path to directory containing audio files or a single audio file.")
-    parser.add_argument('--checkpoint_dir',type=str, default='wubuspectrans_checkpoints_v011', help="Directory for checkpoints.")
-    parser.add_argument('--load_checkpoint', type=str, default=None, help="Path to checkpoint to load.")
-    parser.add_argument('--load_strict', action='store_true', help="Use strict=True when loading model state_dict.")
-    parser.add_argument('--local_rank', type=int, default=-1, help="DDP local rank (set by launch utility).")
-    parser.add_argument('--seed',type=int, default=42, help="Random seed for reproducibility.")
-    parser.add_argument('--num_workers',type=int, default=2, help="Number of DataLoader workers.")
-    parser.add_argument('--use_amp', action='store_true', help="Enable Automatic Mixed Precision training.")
-    parser.add_argument('--detect_anomaly',action='store_true', help="Enable PyTorch autograd anomaly detection (for debugging).")
-    parser.add_argument('--ddp_find_unused_params_d', action='store_true', help="Set find_unused_parameters=True for DDP wrapped Discriminators.")
+    core_group = parser.add_argument_group('Core Paths and DDP/General Setup')
+    core_group.add_argument('--audio_dir_path', type=str, default="demo_audio_data_dir", help="Path to directory containing audio files or a single audio file.")
+    core_group.add_argument('--checkpoint_dir',type=str, default='wubuspectrans_checkpoints_v011', help="Directory for checkpoints.")
+    core_group.add_argument('--load_checkpoint', type=str, default=None, help="Path to checkpoint to load.")
+    core_group.add_argument('--load_strict', action='store_true', help="Use strict=True when loading model state_dict.")
+    core_group.add_argument('--local_rank', type=int, default=-1, help="DDP local rank (set by launch utility).")
+    core_group.add_argument('--seed',type=int, default=42, help="Random seed for reproducibility.")
+    core_group.add_argument('--num_workers',type=int, default=2, help="Number of DataLoader workers.")
+    core_group.add_argument('--use_amp', action='store_true', help="Enable Automatic Mixed Precision training.")
+    core_group.add_argument('--detect_anomaly',action='store_true', help="Enable PyTorch autograd anomaly detection (for debugging).")
+    core_group.add_argument('--ddp_find_unused_params_d', action='store_true', help="Set find_unused_parameters=True for DDP wrapped Discriminators.")
 
     # --- Group: Training Hyperparameters ---
-    parser.add_argument('--epochs', type=int, default=1500, help="Total training epochs.")
-    parser.add_argument('--batch_size', type=int, default=16, help="Batch size per GPU.")
-    parser.add_argument('--grad_accum_steps',type=int, default=1, help="Number of steps to accumulate gradients.")
-    parser.add_argument('--learning_rate_gen',type=float,default=1e-4, help="Learning rate for Generator/VAE.")
-    parser.add_argument('--learning_rate_disc',type=float,default=1e-4, help="Learning rate for the primary Discriminator.")
-    parser.add_argument('--learning_rate_disc_alt',type=float,default=None, help="Specific LR for alt Discriminator (defaults to learning_rate_disc).")
-    parser.add_argument('--risgd_max_grad_norm',type=float,default=1.0, help="Max grad norm for Riemannian SGD per-parameter clipping.")
-    parser.add_argument('--global_max_grad_norm',type=float,default=5.0, help="Global gradient clipping norm for optimizers (0 to disable).")
+    train_hp_group = parser.add_argument_group('Training Hyperparameters')
+    train_hp_group.add_argument('--epochs', type=int, default=1500, help="Total training epochs.")
+    train_hp_group.add_argument('--batch_size', type=int, default=16, help="Batch size per GPU.")
+    train_hp_group.add_argument('--grad_accum_steps',type=int, default=1, help="Number of steps to accumulate gradients.")
+    train_hp_group.add_argument('--learning_rate_gen',type=float,default=1e-4, help="Learning rate for Generator/VAE.")
+    train_hp_group.add_argument('--learning_rate_disc',type=float,default=1e-4, help="Learning rate for the primary Discriminator.")
+    train_hp_group.add_argument('--learning_rate_disc_alt',type=float,default=None, help="Specific LR for alt Discriminator (defaults to learning_rate_disc).")
+    train_hp_group.add_argument('--risgd_max_grad_norm',type=float,default=1.0, help="Max grad norm for Riemannian SGD per-parameter clipping.")
+    train_hp_group.add_argument('--global_max_grad_norm',type=float,default=5.0, help="Global gradient clipping norm for optimizers (0 to disable).")
 
     # --- Group: Loss Weights ---
-    parser.add_argument('--lambda_recon', type=float, default=10.0, help="Weight for VAE reconstruction loss.")
-    parser.add_argument('--lambda_kl', type=float, default=0.01, help="Initial base weight for VAE KL divergence loss.")
-    parser.add_argument('--lambda_gan', type=float, default=1.0, help="Weight for GAN adversarial loss (Generator part).")
+    loss_group = parser.add_argument_group('Loss Weights')
+    loss_group.add_argument('--lambda_recon', type=float, default=10.0, help="Weight for VAE reconstruction loss.")
+    loss_group.add_argument('--lambda_kl', type=float, default=0.01, help="Initial base weight for VAE KL divergence loss.")
+    loss_group.add_argument('--lambda_gan', type=float, default=1.0, help="Weight for GAN adversarial loss (Generator part).")
 
     # --- Group: Audio Processing & Dataset ---
-    parser.add_argument('--sample_rate', type=int, default=22050, help="Target sample rate.")
-    parser.add_argument('--n_fft', type=int, default=1024, help="FFT window size.")
-    parser.add_argument('--hop_length', type=int, default=256, help="Hop length for STFT.")
-    parser.add_argument('--n_mels', type=int, default=128, help="Number of Mel bands.")
-    parser.add_argument('--fmin', type=float, default=30.0, help="Minimum frequency for Mel bands.")
-    parser.add_argument('--fmax', type=float, default=None, help="Maximum frequency for Mel bands (None for sr/2).")
-    parser.add_argument('--segment_duration_sec', type=float, default=1.0, help="Duration of audio segments.")
-    parser.add_argument('--segment_overlap_sec', type=float, default=0.0, help="Overlap between audio segments.")
-    parser.add_argument('--db_norm_min', type=float, default=-80.0, help="Min dB for Mel spectrogram normalization.")
-    parser.add_argument('--db_norm_max', type=float, default=0.0, help="Max dB for Mel spectrogram normalization.")
-    parser.add_argument('--preload_audio_dataset_to_ram', action='store_true', help="Preload audio dataset (as Mels) into RAM.")
-    parser.add_argument('--validation_audio_dir_path', type=str, default=None, help="Path to separate validation audio files.")
-    parser.add_argument('--validation_split_fraction', type=float, default=0.1, help="Fraction of main dataset for validation.")
+    audio_group = parser.add_argument_group('Audio Processing & Dataset')
+    audio_group.add_argument('--sample_rate', type=int, default=22050)
+    audio_group.add_argument('--n_fft', type=int, default=1024)
+    audio_group.add_argument('--hop_length', type=int, default=256)
+    audio_group.add_argument('--n_mels', type=int, default=128)
+    audio_group.add_argument('--fmin', type=float, default=30.0)
+    audio_group.add_argument('--fmax', type=float, default=None)
+    audio_group.add_argument('--segment_duration_sec', type=float, default=1.0)
+    audio_group.add_argument('--segment_overlap_sec', type=float, default=0.0)
+    audio_group.add_argument('--db_norm_min', type=float, default=-80.0)
+    audio_group.add_argument('--db_norm_max', type=float, default=0.0)
+    audio_group.add_argument('--preload_audio_dataset_to_ram', action='store_true')
+    audio_group.add_argument('--validation_audio_dir_path', type=str, default=None)
+    audio_group.add_argument('--validation_split_fraction', type=float, default=0.1)
 
     # --- Group: GAAD (Spectrogram Regions) & DCT Processing ---
-    parser.add_argument('--gaad_num_regions', type=int, default=10, help="Number of GAAD regions.")
-    parser.add_argument('--gaad_decomposition_type', type=str, default="hybrid", choices=["spiral", "subdivide", "hybrid"], help="GAAD type.")
-    parser.add_argument('--gaad_min_size_px', type=int, default=4, help="Min GAAD region size.")
-    parser.add_argument('--region_proc_size_t', type=int, default=16, help="Time dim of processed GAAD region (DCT block).")
-    parser.add_argument('--region_proc_size_f', type=int, default=16, help="Frequency dim of processed GAAD region (DCT block).")
-    parser.add_argument('--dct_norm_type', type=str, default="tanh", choices=["none", "global_scale", "tanh"], help="DCT normalization.")
-    parser.add_argument('--dct_norm_global_scale', type=float, default=100.0, help="Global scaling for DCT if global_scale.")
-    parser.add_argument('--dct_norm_tanh_scale', type=float, default=30.0, help="Scaling before tanh for DCT if tanh.")
+    gaad_dct_group = parser.add_argument_group('GAAD & DCT Processing')
+    gaad_dct_group.add_argument('--gaad_num_regions', type=int, default=10)
+    gaad_dct_group.add_argument('--gaad_decomposition_type', type=str, default="hybrid", choices=["spiral", "subdivide", "hybrid"])
+    gaad_dct_group.add_argument('--gaad_min_size_px', type=int, default=4)
+    gaad_dct_group.add_argument('--region_proc_size_t', type=int, default=16)
+    gaad_dct_group.add_argument('--region_proc_size_f', type=int, default=16)
+    gaad_dct_group.add_argument('--dct_norm_type', type=str, default="tanh", choices=["none", "global_scale", "tanh"])
+    gaad_dct_group.add_argument('--dct_norm_global_scale', type=float, default=100.0)
+    gaad_dct_group.add_argument('--dct_norm_tanh_scale', type=float, default=30.0)
 
     # --- Group: Model Architecture (VAE & Discriminator Base) ---
-    parser.add_argument('--latent_dim', type=int, default=256, help="VAE latent space dimensionality.")
-    parser.add_argument('--encoder_initial_tangent_dim', type=int, default=128, help="Input tangent dim to WuBu-S in Encoder.")
-    parser.add_argument('--disc_input_type', type=str, default="mel", choices=["mel", "dct"], help="Default D input type if not overridden.")
-    parser.add_argument('--disc_apply_spectral_norm', action='store_true', help="Apply spectral norm to D's conv/linear layers.")
-    parser.add_argument('--disc_base_disc_channels', type=int, default=64, help="Base channels for D's CNN (Mel input).")
-    parser.add_argument('--disc_max_disc_channels', type=int, default=512, help="Max channels for D's CNN (Mel input).")
-    parser.add_argument('--disc_target_final_feature_dim', type=int, default=4, help="Target spatial dim of D's CNN feature map (Mel input).")
+    model_arch_group = parser.add_argument_group('Model Architecture (VAE & Discriminator Base)')
+    model_arch_group.add_argument('--latent_dim', type=int, default=256)
+    model_arch_group.add_argument('--encoder_initial_tangent_dim', type=int, default=128)
+    model_arch_group.add_argument('--disc_input_type', type=str, default="mel", choices=["mel", "dct"])
+    model_arch_group.add_argument('--disc_apply_spectral_norm', action='store_true')
+    # Mel D CNN specific
+    model_arch_group.add_argument('--disc_base_disc_channels', type=int, default=64)
+    model_arch_group.add_argument('--disc_max_disc_channels', type=int, default=512)
+    model_arch_group.add_argument('--disc_target_final_feature_dim', nargs='+', type=int, default=[4,4], help="Target HxW dim(s) of Mel D CNN feature map. Single int for square, two for H W.")
+    model_arch_group.add_argument('--max_mel_disc_downsample_layers', type=int, default=6, help="Max downsampling layers in Mel D CNN.")
+    model_arch_group.add_argument('--use_mel_d_attention', action='store_true', help="Use Self-Attention layer in Mel D CNN backbone(s).")
+    model_arch_group.add_argument('--mel_d_attention_idx', type=int, default=2, help="Insert Self-Attention after this conv block index in Mel D (0-indexed).")
+    model_arch_group.add_argument('--mel_d_msd_num_scales', type=int, default=1, help="Number of scales for Multi-Scale Mel Discriminator (1 means single D).")
+    model_arch_group.add_argument('--mel_d_msd_share_weights', action='store_true', help="Share weights across scales in Mel MSD.")
+    # DCT D specific (Transformer path)
+    model_arch_group.add_argument('--disc_dct_embed_dim', type=int, default=None, help="Embedding dim for DCT coefficients in DCT D (default: encoder_initial_tangent_dim).")
+    model_arch_group.add_argument('--disc_dct_use_pos_embed', action='store_true', help="Use positional embedding for regional features in DCT Transformer D.")
+    model_arch_group.add_argument('--disc_dct_use_cls_token', action='store_true', help="Use a [CLS] token for aggregation in Transformer DCT D instead of mean pooling.")
+    model_arch_group.add_argument('--disc_transformer_nhead', type=int, default=4)
+    model_arch_group.add_argument('--disc_transformer_dim_feedforward', type=int, default=None)
+    model_arch_group.add_argument('--disc_transformer_dropout', type=float, default=0.1)
+    model_arch_group.add_argument('--disc_transformer_num_layers', type=int, default=2)
+    model_arch_group.add_argument('--disc_transformer_norm_first', action='store_true', help="Use Pre-LN in TransformerEncoderLayer for DCT D.")
+    # Auxiliary global stats input for Discriminator
+    model_arch_group.add_argument('--disc_use_global_stats_aux', action='store_true', help="Add global mean/std of input as auxiliary features to D's final decision.")
+    model_arch_group.add_argument('--disc_global_stats_mlp_hidden_dim', type=int, default=32)
+
 
     # --- Group: WuBu Stack Configurations ---
-    parser.add_argument('--wubu_dropout', type=float, default=0.1, help="Dropout for WuBu layers.")
-    # WuBu-S (Encoder VAE)
-    parser.add_argument('--wubu_s_num_levels', type=int, default=2)
-    parser.add_argument('--wubu_s_hyperbolic_dims', nargs='+', type=int, default=[64,32])
-    parser.add_argument('--wubu_s_initial_curvatures', nargs='+', type=float, default=[1.0,0.8])
-    parser.add_argument('--wubu_s_use_rotation', action='store_true')
-    parser.add_argument('--wubu_s_phi_influence_curvature', action='store_true', dest='wubu_s_phi_curvature') # Match bat
-    parser.add_argument('--wubu_s_phi_influence_rotation_init', action='store_true', dest='wubu_s_phi_rot_init') # Match bat
-    parser.add_argument('--wubu_s_output_dim_encoder', type=int, default=128)
-    # WuBu-G (Generator VAE)
-    parser.add_argument('--wubu_g_num_levels', type=int, default=2)
-    parser.add_argument('--wubu_g_hyperbolic_dims', nargs='+', type=int, default=[128,256])
-    parser.add_argument('--wubu_g_initial_curvatures', nargs='+', type=float, default=[0.8,1.0])
-    parser.add_argument('--wubu_g_use_rotation', action='store_true')
-    parser.add_argument('--wubu_g_phi_influence_curvature', action='store_true', dest='wubu_g_phi_curvature') # Match bat
-    parser.add_argument('--wubu_g_phi_influence_rotation_init', action='store_true', dest='wubu_g_phi_rot_init') # Match bat
-    # WuBu-D (Discriminator, if type='dct')
-    parser.add_argument('--wubu_d_num_levels', type=int, default=1)
-    parser.add_argument('--wubu_d_hyperbolic_dims', nargs='+', type=int, default=[64])
-    parser.add_argument('--wubu_d_initial_curvatures', nargs='+', type=float, default=[0.7])
-    parser.add_argument('--wubu_d_use_rotation', action='store_true')
-    parser.add_argument('--wubu_d_phi_influence_curvature', action='store_true', dest='wubu_d_phi_curvature') # Match bat
-    parser.add_argument('--wubu_d_phi_influence_rotation_init', action='store_true', dest='wubu_d_phi_rot_init') # Match bat
-    parser.add_argument('--wubu_d_output_dim', type=int, default=64)
+    parser.add_argument('--wubu_dropout', type=float, default=0.1, help="General dropout for WuBu layers.")
+    
+    wubu_s_group = parser.add_argument_group('WuBu-S (Encoder)')
+    wubu_s_group.add_argument('--wubu_s_num_levels', type=int, default=2)
+    wubu_s_group.add_argument('--wubu_s_hyperbolic_dims', nargs='+', type=int, default=[64,32])
+    wubu_s_group.add_argument('--wubu_s_initial_curvatures', nargs='+', type=float, default=[1.0,0.8])
+    wubu_s_group.add_argument('--wubu_s_use_rotation', action='store_true')
+    wubu_s_group.add_argument('--wubu_s_phi_influence_curvature', action='store_true') 
+    wubu_s_group.add_argument('--wubu_s_phi_influence_rotation_init', action='store_true') 
+    wubu_s_group.add_argument('--wubu_s_output_dim_encoder', type=int, default=128)
+
+    wubu_g_group = parser.add_argument_group('WuBu-G (Generator)')
+    wubu_g_group.add_argument('--wubu_g_num_levels', type=int, default=2)
+    wubu_g_group.add_argument('--wubu_g_hyperbolic_dims', nargs='+', type=int, default=[128,256])
+    wubu_g_group.add_argument('--wubu_g_initial_curvatures', nargs='+', type=float, default=[0.8,1.0])
+    wubu_g_group.add_argument('--wubu_g_use_rotation', action='store_true')
+    wubu_g_group.add_argument('--wubu_g_phi_influence_curvature', action='store_true') 
+    wubu_g_group.add_argument('--wubu_g_phi_influence_rotation_init', action='store_true') 
+    
+    wubu_d_group = parser.add_argument_group('WuBu-D (Primary DCT D - if not using Transformer / fallback)')
+    wubu_d_group.add_argument('--wubu_d_num_levels', type=int, default=1)
+    wubu_d_group.add_argument('--wubu_d_hyperbolic_dims', nargs='+', type=int, default=[64])
+    wubu_d_group.add_argument('--wubu_d_initial_curvatures', nargs='+', type=float, default=[0.7])
+    wubu_d_group.add_argument('--wubu_d_use_rotation', action='store_true')
+    wubu_d_group.add_argument('--wubu_d_phi_influence_curvature', action='store_true') 
+    wubu_d_group.add_argument('--wubu_d_phi_influence_rotation_init', action='store_true') 
+    wubu_d_group.add_argument('--wubu_d_output_dim', type=int, default=64)
+    
+    wubu_d_region_group = parser.add_argument_group('WuBu-D-Region (DCT D Regional Processor for Transformer)')
+    wubu_d_region_group.add_argument('--wubu_d_region_num_levels', type=int, default=1)
+    wubu_d_region_group.add_argument('--wubu_d_region_feature_dim', type=int, default=128)
+    wubu_d_region_group.add_argument('--wubu_d_region_hyperbolic_dims', nargs='+', type=int, default=None)
+    wubu_d_region_group.add_argument('--wubu_d_region_initial_curvatures', nargs='+', type=float, default=None)
+    wubu_d_region_group.add_argument('--wubu_d_region_use_rotation', action='store_true')
+    wubu_d_region_group.add_argument('--wubu_d_region_phi_influence_curvature', action='store_true')
+    wubu_d_region_group.add_argument('--wubu_d_region_phi_influence_rotation_init', action='store_true')
+
+    wubu_d_alt_group = parser.add_argument_group('WuBu-D-Alt (Alternative DCT Discriminator Components)')
+    wubu_d_alt_group.add_argument('--wubu_d_alt_num_levels', type=int, default=None)
+    wubu_d_alt_group.add_argument('--wubu_d_alt_hyperbolic_dims', nargs='+', type=int, default=None)
+    wubu_d_alt_group.add_argument('--wubu_d_alt_initial_curvatures', nargs='+', type=float, default=None)
+    wubu_d_alt_group.add_argument('--wubu_d_alt_use_rotation', action='store_true')
+    wubu_d_alt_group.add_argument('--wubu_d_alt_phi_influence_curvature', action='store_true')
+    wubu_d_alt_group.add_argument('--wubu_d_alt_phi_influence_rotation_init', action='store_true')
+    wubu_d_alt_group.add_argument('--wubu_d_alt_output_dim', type=int, default=None)
+
 
     # --- Group: Q-Learning Controller (General & Lambda_KL) ---
-    parser.add_argument('--q_controller_enabled',action='store_true', help="Enable HAKMEMQController.")
-    parser.add_argument('--reset_q_controllers_on_load', action='store_true', help="Force reset Q-controllers on load.")
-    parser.add_argument('--lambda_kl_update_interval', type=int, default=100, help="Global steps between Lambda_KL Q-controller updates.")
-    parser.add_argument('--min_lambda_kl_q_control', type=float, default=1e-7, help="Min value for base lambda_kl by Q-ctrl.")
-    parser.add_argument('--max_lambda_kl_q_control', type=float, default=0.2, help="Max value for base lambda_kl by Q-ctrl.")
-    parser.add_argument('--q_lkl_scale_options', nargs='+', type=float, default=[0.80, 0.90, 1.0, 1.10, 1.20], help="Scale options for LKL Q-ctrl.")
-    parser.add_argument('--q_lkl_lr_mom_probation_steps', type=int, default=None, help="Probation steps for LKL Q-Ctrl's (hypothetical) LR/Mom policy.")
-    parser.add_argument('--q_lkl_action_probation_steps', type=int, default=None, help="Probation steps for LKL Q-Ctrl's lambda_kl scaling action.")
-    parser.add_argument('--reset_lkl_q_controller_on_load', action='store_true', help="Force reset only the Lambda_KL Q-controller on load, allowing args.lambda_kl to take effect immediately.")
+    q_learn_group = parser.add_argument_group('Q-Learning Controller')
+    q_learn_group.add_argument('--q_controller_enabled',action='store_true')
+    q_learn_group.add_argument('--reset_q_controllers_on_load', action='store_true')
+    q_learn_group.add_argument('--lambda_kl_update_interval', type=int, default=100)
+    q_learn_group.add_argument('--min_lambda_kl_q_control', type=float, default=1e-7)
+    q_learn_group.add_argument('--max_lambda_kl_q_control', type=float, default=0.2)
+    q_learn_group.add_argument('--q_lkl_scale_options', nargs='+', type=float, default=[0.80, 0.90, 1.0, 1.10, 1.20])
+    q_learn_group.add_argument('--q_lkl_lr_mom_probation_steps', type=int, default=None)
+    q_learn_group.add_argument('--q_lkl_action_probation_steps', type=int, default=None)
+    q_learn_group.add_argument('--reset_lkl_q_controller_on_load', action='store_true')
+    
     # --- Group: Heuristic Interventions & Discriminator Switching ---
-    parser.add_argument('--enable_heuristic_interventions', action='store_true', help="Globally enable/disable advanced heuristic interventions.")
-    parser.add_argument('--enable_heuristic_disc_switching', action='store_true', help="Enable heuristic D switching.")
-    parser.add_argument('--initial_disc_type', type=str, default=None, choices=['mel', 'dct'], help="Force initial active D type (overrides disc_input_type if switching on).")
-    parser.add_argument('--heuristic_check_interval', type=int, default=None, help="Global steps between heuristic checks (default: log_interval).")
-    parser.add_argument('--heuristic_short_term_history_len', type=int, default=7, help="Loss history length for heuristic trends.")
-    parser.add_argument('--heuristic_trigger_count_thresh', type=int, default=2, help="Consecutive checks for heuristic trigger.")
-    # D-Switch specific thresholds
-    parser.add_argument('--disc_switch_check_interval', type=int, default=50, help="Steps between D-switching condition checks.")
-    parser.add_argument('--disc_switch_min_steps_between', type=int, default=250, help="Min steps before another D-switch.")
-    parser.add_argument('--disc_switch_problem_state_count_thresh', type=int, default=2, help="Checks D-switch problem state must persist.")
-    # Heuristic thresholds
-    parser.add_argument('--heuristic_d_strong_thresh', type=float, default=0.25, help="D_total for D 'strong'.")
-    parser.add_argument('--heuristic_d_weak_thresh', type=float, default=1.0, help="D_total for D 'weak'.")
-    parser.add_argument('--heuristic_d_very_weak_thresh', type=float, default=1.8, help="D_total for D 'very weak'.")
-    parser.add_argument('--heuristic_g_stalled_thresh', type=float, default=1.5, help="G_adv for G 'stalled'.")
-    parser.add_argument('--heuristic_g_winning_thresh', type=float, default=0.2, help="G_adv for G 'winning'.")
-    parser.add_argument('--heuristic_g_very_much_winning_thresh', type=float, default=0.05, help="G_adv for G 'dominating'.")
-    parser.add_argument('--heuristic_kl_high_thresh', type=float, default=25.0, help="Raw KL for 'high KL'.")
-    parser.add_argument('--heuristic_recon_stagnation_improvement_thresh_rel', type=float, default=0.001, help="Relative recon improvement to avoid stagnation.")
-    parser.add_argument('--target_good_recon_thresh_heuristic', type=float, default=0.03, help="Raw recon MSE target for G easy-win penalty.")
-    parser.add_argument('--heuristic_q_reward_stagnation_thresh', type=float, default=-0.25, help="Q-learner avg reward for stagnation.")
-    # Heuristic action parameters
-    parser.add_argument('--heuristic_recon_boost_factor', type=float, default=1.8, help="Factor to boost lambda_recon by heuristic.")
-    parser.add_argument('--lambda_feat_match_heuristic', type=float, default=0.75, help="Weight for feature matching loss by heuristic.")
-    parser.add_argument('--lambda_g_easy_win_penalty_heuristic', type=float, default=1.5, help="Weight for G easy-win penalty by heuristic.")
-    parser.add_argument('--heuristic_active_d_lr_boost_factor', type=float, default=1.8, help="Factor to boost active D's LR by heuristic.")
-    parser.add_argument('--heuristic_d_q_explore_boost_epsilon', type=float, default=0.7, help="Epsilon for D Q-Ctrl forced exploration.")
-    parser.add_argument('--heuristic_d_q_explore_duration', type=int, default=10, help="Duration (steps) for D Q-Ctrl forced exploration.")
+    heuristic_group = parser.add_argument_group('Heuristic Interventions')
+    heuristic_group.add_argument('--enable_heuristic_interventions', action='store_true')
+    heuristic_group.add_argument('--enable_heuristic_disc_switching', action='store_true')
+    heuristic_group.add_argument('--initial_disc_type', type=str, default=None, choices=['mel', 'dct'])
+    heuristic_group.add_argument('--heuristic_check_interval', type=int, default=None)
+    heuristic_group.add_argument('--heuristic_short_term_history_len', type=int, default=7)
+    heuristic_group.add_argument('--heuristic_trigger_count_thresh', type=int, default=2)
+    
+    heuristic_group.add_argument('--disc_switch_check_interval', type=int, default=50) 
+    heuristic_group.add_argument('--disc_switch_min_steps_between', type=int, default=250)
+    heuristic_group.add_argument('--disc_switch_problem_state_count_thresh', type=int, default=2)
+    
+    heuristic_group.add_argument('--heuristic_d_strong_thresh', type=float, default=0.25)
+    heuristic_group.add_argument('--heuristic_d_weak_thresh', type=float, default=1.0)
+    heuristic_group.add_argument('--heuristic_d_very_weak_thresh', type=float, default=1.8)
+    heuristic_group.add_argument('--heuristic_g_stalled_thresh', type=float, default=1.5)
+    heuristic_group.add_argument('--heuristic_g_winning_thresh', type=float, default=0.2)
+    heuristic_group.add_argument('--heuristic_g_very_much_winning_thresh', type=float, default=0.05)
+    heuristic_group.add_argument('--heuristic_kl_high_thresh', type=float, default=25.0)
+    heuristic_group.add_argument('--heuristic_recon_stagnation_improvement_thresh_rel', type=float, default=0.001)
+    heuristic_group.add_argument('--target_good_recon_thresh_heuristic', type=float, default=0.03)
+    heuristic_group.add_argument('--heuristic_q_reward_stagnation_thresh', type=float, default=-0.25)
+    
+    heuristic_group.add_argument('--heuristic_recon_boost_factor', type=float, default=1.8)
+    heuristic_group.add_argument('--lambda_feat_match_heuristic', type=float, default=0.75)
+    heuristic_group.add_argument('--lambda_g_easy_win_penalty_heuristic', type=float, default=1.5)
+    heuristic_group.add_argument('--g_easy_win_penalty_eps_denom', type=float, default=1e-4) 
+    heuristic_group.add_argument('--max_g_easy_win_penalty_abs', type=float, default=20.0) 
+    heuristic_group.add_argument('--heuristic_active_d_lr_boost_factor', type=float, default=1.8)
+    heuristic_group.add_argument('--heuristic_d_q_explore_boost_epsilon', type=float, default=0.7)
+    heuristic_group.add_argument('--heuristic_d_q_explore_duration', type=int, default=10)
+    heuristic_group.add_argument('--heuristic_min_lambda_gan_factor', type=float, default=0.7) 
+    heuristic_group.add_argument('--heuristic_max_lambda_gan_factor', type=float, default=1.3) 
     parser.add_argument('--force_start_epoch_on_load', type=int, default=None, help="Force start epoch on load.")
     parser.add_argument('--force_start_gstep_on_load', type=int, default=None, help="Force start GStep on load (use with force_start_epoch).")
 
     # --- Group: Logging, Sampling, Validation & Checkpointing ---
-    parser.add_argument('--log_interval',type=int, default=20, help="Log training stats every N global steps.")
-    parser.add_argument('--save_interval',type=int, default=500, help="Save intermediate checkpoint every N global steps (0 to disable).")
-    parser.add_argument('--save_epoch_interval', type=int, default=1, help="Save checkpoint every N epochs (0 to disable this type of save).")
-    parser.add_argument('--validation_interval_epochs', type=int, default=1, help="Run validation every N epochs (0 to disable).") # Renamed
-    parser.add_argument('--disable_val_tqdm', action='store_true', help="Disable tqdm progress bar during validation.")
-    parser.add_argument('--wandb',action='store_true', help="Enable WandB logging.")
-    parser.add_argument('--wandb_project',type=str,default='WuBuSpecTransV011_Robust', help="WandB project name.") # Updated name
-    parser.add_argument('--wandb_run_name',type=str,default=None, help="WandB run name (auto-generated if None).")
-    parser.add_argument('--wandb_log_train_recon_interval', type=int, default=100, help="Log train recon Mel to WandB every N global steps.")
-    parser.add_argument('--train_target_log_freq_multiplier', type=int, default=5, help="Log train target mels N times less frequently than train recon mels.")
-    parser.add_argument('--wandb_log_fixed_noise_samples_interval', type=int, default=250, help="Log fixed noise generated Mel to WandB every N global steps.")
-    parser.add_argument('--use_lpips_for_mel_verification', action='store_true', help="Use LPIPS for Mel quality during validation.")
-    parser.add_argument('--val_primary_metric', type=str, default="avg_val_lpips_mel",
-                        choices=["avg_val_recon_dct_mse", "avg_val_mel_mse", "avg_val_psnr_mel", "avg_val_ssim_mel", "avg_val_lpips_mel"],
-                        help="Primary metric for choosing best checkpoint.")
-    parser.add_argument('--num_val_samples_to_log', type=int, default=3, help="Number of validation samples to log to WandB.")
-    parser.add_argument('--demo_num_samples', type=int, default=5, help="Number of demo Mel spectrograms to generate at end.")
+    log_group = parser.add_argument_group('Logging and Saving')
+    log_group.add_argument('--log_interval',type=int, default=20)
+    log_group.add_argument('--save_interval',type=int, default=500)
+    log_group.add_argument('--save_epoch_interval', type=int, default=1)
+    log_group.add_argument('--validation_interval_epochs', type=int, default=1) 
+    log_group.add_argument('--disable_val_tqdm', action='store_true')
+    log_group.add_argument('--wandb',action='store_true')
+    log_group.add_argument('--wandb_project',type=str,default='WuBuSpecTransV011_Robust') 
+    log_group.add_argument('--wandb_run_name',type=str,default=None)
+    log_group.add_argument('--wandb_log_train_recon_interval', type=int, default=100)
+    log_group.add_argument('--train_target_log_freq_multiplier', type=int, default=5)
+    log_group.add_argument('--wandb_log_fixed_noise_samples_interval', type=int, default=250)
+    log_group.add_argument('--use_lpips_for_mel_verification', action='store_true')
+    log_group.add_argument('--val_primary_metric', type=str, default="avg_val_lpips_mel",
+                        choices=["avg_val_recon_dct_mse", "avg_val_mel_mse", "avg_val_psnr_mel", "avg_val_ssim_mel", "avg_val_lpips_mel"])
+    log_group.add_argument('--num_val_samples_to_log', type=int, default=3)
+    log_group.add_argument('--demo_num_samples', type=int, default=5)
     
-    # Old Heuristic D-Switch thresholds (can be removed if new ones cover all aspects, or kept for backward compatibility if needed)
-    # For clarity, I'm keeping the new specific heuristic thresholds and assuming the old ones map to them or are superseded.
-    # If your bat script uses the old names, you'll need to map them or update the bat script.
-    # Example: --d_strong_thresh (new) vs existing --d_strong_thresh (old) - they are the same.
-    # --g_stalled_thresh, --kl_high_thresh, --d_weak_thresh, --g_winning_thresh are consistent.
-    # --min_recon_qual_thresh, --recon_stagnation_improve_thresh, --stagnation_hist_len, --psnr_target_for_switch are new/more specific.
-    # I've added them under the "Heuristic Switching Thresholds" group.
-
-
     parsed_args = parser.parse_args()
 
     if not TORCH_DCT_AVAILABLE:
         parser.error("torch-dct library is required but not found. Please install it: 'pip install torch-dct'")
 
-    # Default heuristic_check_interval if not set
+    # --- Post-parsing argument validation and defaults ---
+    if isinstance(parsed_args.disc_target_final_feature_dim, list):
+        if len(parsed_args.disc_target_final_feature_dim) == 1:
+            # If one int provided, use it for both H and W target
+            parsed_args.disc_target_final_feature_dim = [parsed_args.disc_target_final_feature_dim[0], parsed_args.disc_target_final_feature_dim[0]]
+        elif len(parsed_args.disc_target_final_feature_dim) > 2: 
+            parser.error("--disc_target_final_feature_dim must be 1 or 2 integers.")
+    elif isinstance(parsed_args.disc_target_final_feature_dim, int):
+         # This case should ideally be handled by nargs='+' making it a list, but as a fallback
+         parsed_args.disc_target_final_feature_dim = [parsed_args.disc_target_final_feature_dim, parsed_args.disc_target_final_feature_dim]
+    # Ensure it's a list of two, even if default [4,4] was used (nargs='+' makes it a list)
+    if not (isinstance(parsed_args.disc_target_final_feature_dim, list) and len(parsed_args.disc_target_final_feature_dim) == 2):
+        # This case should be rare if nargs='+' and default=[4,4] are set correctly
+        # If it was a single default int not caught by above, make it a list of two
+        if isinstance(parsed_args.disc_target_final_feature_dim, int):
+             parsed_args.disc_target_final_feature_dim = [parsed_args.disc_target_final_feature_dim, parsed_args.disc_target_final_feature_dim]
+        else: # Fallback if something else went wrong
+            print(f"Warning: disc_target_final_feature_dim had unexpected value {parsed_args.disc_target_final_feature_dim}. Defaulting to [4,4].")
+            parsed_args.disc_target_final_feature_dim = [4,4]
+
+
+    if parsed_args.disc_dct_embed_dim is None:
+        parsed_args.disc_dct_embed_dim = parsed_args.encoder_initial_tangent_dim
+    
+    if parsed_args.disc_transformer_dim_feedforward is None : 
+        # Default for disc_transformer_dim_feedforward depends on wubu_d_region_feature_dim
+        # It's best to set this after wubu_d_region_feature_dim is confirmed.
+        # For now, we can use a placeholder or the default wubu_d_region_feature_dim.
+        # This will be correctly resolved in _get_discriminator_configs or D init.
+        # No action here, as wubu_d_region_feature_dim is defined.
+        pass
+
+
     if parsed_args.heuristic_check_interval is None:
         if parsed_args.enable_heuristic_disc_switching and parsed_args.disc_switch_check_interval is not None:
             parsed_args.heuristic_check_interval = parsed_args.disc_switch_check_interval
@@ -4364,18 +4876,23 @@ def parse_arguments():
     
     if parsed_args.enable_heuristic_disc_switching and parsed_args.initial_disc_type is None:
         parsed_args.initial_disc_type = parsed_args.disc_input_type
-        # Logging of this decision will happen in main() after logger is fully set up.
 
     # Validate WuBu stack configurations
-    validate_wubu_config_for_argparse(parsed_args, "wubu_s", parser)
-    validate_wubu_config_for_argparse(parsed_args, "wubu_g", parser)
-    if hasattr(parsed_args, "wubu_d_num_levels") and getattr(parsed_args, "wubu_d_num_levels", 0) > 0 :
-         validate_wubu_config_for_argparse(parsed_args, "wubu_d", parser)
+    # These prefixes will be used by _configure_wubu_stack
+    wubu_prefixes_to_validate = ["wubu_s", "wubu_g", "wubu_d", "wubu_d_region", "wubu_d_alt"]
+    for prefix in wubu_prefixes_to_validate:
+        num_levels_attr = f"{prefix}_num_levels"
+        # Check if num_levels attribute exists and is > 0 before validating its list args
+        if hasattr(parsed_args, num_levels_attr):
+            num_levels_val = getattr(parsed_args, num_levels_attr)
+            # For alt, num_levels can be None, in which case it defaults later or isn't built.
+            if num_levels_val is not None and num_levels_val > 0:
+                validate_wubu_config_for_argparse(parsed_args, prefix, parser)
+            elif num_levels_val is None and "alt" in prefix: # Specifically for wubu_d_alt_num_levels if None
+                # It will default later if not specified. No validation needed if explicitly None.
+                pass
     
     return parsed_args
-
-
-
 
 
 
