@@ -3760,12 +3760,12 @@ class HybridTrainer:
         dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0)).dtype
         real_labels_for_g = torch.ones(B, device=device, dtype=dtype_model)
         losses_g_micro: Dict[str, torch.Tensor] = {}
-        recon_mel_for_log: Optional[torch.Tensor] = None
+        recon_mel_for_log: Optional[torch.Tensor] = None # This will be the range-normalized version for display
 
         for p in d_ref_active.parameters(): p.requires_grad = False
         for p in m_ref.parameters(): p.requires_grad = True
         if self.optimizer_enc_gen: self.optimizer_enc_gen.zero_grad(set_to_none=True)
-        
+
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
             recon_regional_features, mu, logvar, gaad_bboxes_from_enc, target_regional_features = \
                 m_ref(batch_real_mel_spectrograms.to(device,dtype=dtype_model))
@@ -3774,15 +3774,15 @@ class HybridTrainer:
             loss_kl_raw = self._compute_kl_loss(mu, logvar)
             loss_recon_eff = self.lambda_recon * self.heuristic_override_lambda_recon_factor * loss_recon_raw
             loss_kl_eff = self.lambda_kl * self.heuristic_override_lambda_kl_factor * loss_kl_raw
-            
+
             adv_input_for_d_main: torch.Tensor
             adv_stats_for_d_aux: Optional[torch.Tensor] = None
             d_output_for_adv: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
-            assembled_mel_for_adv_if_needed: Optional[torch.Tensor] = None
+            assembled_mel_spatial_domain: Optional[torch.Tensor] = None # Raw output from assembly
 
             if active_d_trainer_input_type == "assembled_mel" or \
                active_d_trainer_input_type == "assembled_mel_and_raw_audio_stats":
-                
+
                 unnormalized_coeffs_for_assembly: torch.Tensor
                 if self.vae_transform_type == 'complex_dft_ri':
                     unnormalized_coeffs_for_assembly = AudioSpecGenerator._unnormalize_and_reconstruct_coeffs_to_complex_dft(
@@ -3795,20 +3795,20 @@ class HybridTrainer:
                 else: raise ValueError(f"G adv assembly: Unknown VAE transform type {self.vae_transform_type}")
 
                 adv_input_for_d_main = HybridTrainer._assemble_mel_from_transformed_coeffs_regions(
-                    unnormalized_coeffs_for_assembly, gaad_bboxes_from_enc, 
+                    unnormalized_coeffs_for_assembly, gaad_bboxes_from_enc,
                     batch_real_mel_spectrograms.shape, self.args, self.region_proc_size_tuple
                 )
-                assembled_mel_for_adv_if_needed = adv_input_for_d_main
+                assembled_mel_spatial_domain = adv_input_for_d_main # Store the raw assembled output
                 if active_d_trainer_input_type == "assembled_mel_and_raw_audio_stats":
                     adv_stats_for_d_aux = self._prepare_raw_audio_stats(adv_input_for_d_main, None, is_real_sample=False)
-            
+
             elif active_d_trainer_input_type == "dft_features_regional" or active_d_trainer_input_type == "dct_features_regional":
                 adv_input_for_d_main = recon_regional_features
             else:
                 raise ValueError(f"G training (adv): Unsupported D input type {active_d_trainer_input_type}")
-            
+
             d_output_for_adv = d_ref_active(adv_input_for_d_main, raw_audio_stats_input=adv_stats_for_d_aux, return_features=self.heuristic_vae_feature_match_active)
-            
+
             fake_logits_for_g: torch.Tensor
             features_from_d_for_g_feat_match: Optional[torch.Tensor] = None
             if isinstance(d_output_for_adv, tuple):
@@ -3819,10 +3819,29 @@ class HybridTrainer:
             loss_g_adv_eff = self.lambda_gan * self.heuristic_override_lambda_gan_factor * loss_g_adv_raw
             loss_g_total_micro = loss_recon_eff + loss_kl_eff + loss_g_adv_eff
 
-            if assembled_mel_for_adv_if_needed is not None and \
+            # --- NORMALIZATION FOR VISUAL LOGGING ---
+            if assembled_mel_spatial_domain is not None and \
                self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and self.global_step > 0 and \
-               ((self.global_step + 1) % self.args.wandb_log_train_recon_interval == 0): 
-                recon_mel_for_log = assembled_mel_for_adv_if_needed.detach().clone()
+               ((self.global_step + 1) % self.args.wandb_log_train_recon_interval == 0):
+                
+                temp_recon_for_norm = assembled_mel_spatial_domain.detach().clone()
+                # Normalize each image in the batch independently to [-1, 1] for consistent visual scaling
+                b_vis, c_vis, h_vis, w_vis = temp_recon_for_norm.shape
+                if b_vis > 0 and temp_recon_for_norm.numel() > 0 : # Check if there's actual data
+                    temp_recon_flat_per_img = temp_recon_for_norm.view(b_vis, -1)
+                    min_vals = temp_recon_flat_per_img.min(dim=1, keepdim=True)[0]
+                    max_vals = temp_recon_flat_per_img.max(dim=1, keepdim=True)[0]
+                    range_vals = max_vals - min_vals
+                    # Prevent division by zero if an image is flat (all same values)
+                    range_vals[range_vals < EPS] = EPS 
+                    
+                    normalized_to_01_vis = (temp_recon_flat_per_img - min_vals) / range_vals
+                    normalized_to_pm1_vis = (normalized_to_01_vis * 2.0) - 1.0
+                    recon_mel_for_log = normalized_to_pm1_vis.view(b_vis, c_vis, h_vis, w_vis)
+                else:
+                    recon_mel_for_log = temp_recon_for_norm # Pass as is if empty or problematic
+            # --- END NORMALIZATION FOR VISUAL LOGGING ---
+
 
             if self.heuristic_vae_feature_match_active and features_from_d_for_g_feat_match is not None and self.lambda_feat_match_heuristic > 0:
                 with torch.no_grad():
@@ -3836,12 +3855,12 @@ class HybridTrainer:
                     elif active_d_trainer_input_type == "dft_features_regional" or active_d_trainer_input_type == "dct_features_regional":
                         real_input_for_d_fm_main = target_regional_features.to(device, dtype=dtype_model).detach()
                     else: real_input_for_d_fm_main = torch.empty(0, device=device, dtype=dtype_model)
-                    
+
                     target_features_d: Optional[torch.Tensor] = None
                     if real_input_for_d_fm_main.numel() > 0:
                         target_d_output_fm = d_ref_active(real_input_for_d_fm_main, raw_audio_stats_input=real_stats_for_d_fm_aux, return_features=True)
                         target_features_d = target_d_output_fm[1] if isinstance(target_d_output_fm, tuple) else None
-                
+
                 if target_features_d is not None and features_from_d_for_g_feat_match.shape == target_features_d.shape:
                     loss_g_feat_match = F.mse_loss(features_from_d_for_g_feat_match, target_features_d.detach())
                     loss_g_total_micro += self.lambda_feat_match_heuristic * loss_g_feat_match
@@ -3856,7 +3875,7 @@ class HybridTrainer:
                     penalty_clamped = torch.clamp(torch.tensor(penalty_val, device=device, dtype=dtype_model), 0, getattr(self.args, 'max_g_easy_win_penalty_abs', 20.0))
                     loss_g_total_micro += penalty_clamped
                     losses_g_micro['loss_g_easy_win_penalty_micro'] = penalty_clamped.detach()
-            
+
             loss_g_total_scaled_for_accum_micro = loss_g_total_micro / self.grad_accum_steps
         self.scaler_enc_gen.scale(loss_g_total_scaled_for_accum_micro).backward()
         losses_g_micro['loss_recon_micro'] = loss_recon_raw.detach()
