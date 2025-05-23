@@ -38,24 +38,24 @@ REM =====================================================================
 SET "IMAGE_H=256"
 SET "IMAGE_W=256"
 SET "NUM_CHANNELS=3"
-SET "NUM_INPUT_FRAMES=12"
-SET "NUM_PREDICT_FRAMES=3"
+SET "NUM_INPUT_FRAMES=15"
+SET "NUM_PREDICT_FRAMES=5"
 SET "FRAME_SKIP=1"
 SET "LATENT_DIM=1024"
 
 REM =====================================================================
 REM GAAD Configuration
 REM =====================================================================
-SET "GAAD_NUM_REGIONS=64"
+SET "GAAD_NUM_REGIONS=32"
 SET "GAAD_DECOMP_TYPE=hybrid"
-SET "GAAD_MIN_SIZE_PX=8"
+SET "GAAD_MIN_SIZE_PX=16"
 
 REM =====================================================================
 REM DFT Configuration (NEW for v0.2)
 REM =====================================================================
 SET "USE_DFT_FEATURES_APPEARANCE=true"
-SET "DFT_PATCH_SIZE_H=32"
-SET "DFT_PATCH_SIZE_W=32"
+SET "DFT_PATCH_SIZE_H=20"
+SET "DFT_PATCH_SIZE_W=20"
 SET "DFT_NORM_SCALE_VIDEO=25.0"
 
 REM =====================================================================
@@ -71,8 +71,8 @@ SET "ENCODER_INITIAL_TANGENT_DIM=256"
 REM =====================================================================
 REM Generator Architecture Configuration
 REM =====================================================================
-SET "GEN_TEMPORAL_KERNEL_SIZE=3"
-SET "GEN_FINAL_CONV_KERNEL_SPATIAL=3"
+SET "GEN_TEMPORAL_KERNEL_SIZE=5"
+SET "GEN_FINAL_CONV_KERNEL_SPATIAL=5"
 SET "GEN_USE_GAAD_FILM_CONDITION=true"
 
 REM =====================================================================
@@ -81,14 +81,14 @@ REM =====================================================================
 SET "DISCRIMINATOR_TYPE=spatio_temporal_cnn"
 SET "DISC_APPLY_SPECTRAL_NORM=true"
 SET "DISC_BASE_DISC_CHANNELS=64"
-SET "DISC_MAX_DISC_CHANNELS=512"
-SET "DISC_TEMPORAL_KERNEL_SIZE=3"
+SET "DISC_MAX_DISC_CHANNELS=1024"
+SET "DISC_TEMPORAL_KERNEL_SIZE=5"
 SET "DISC_MIN_HIDDEN_FC_DIM=256"
-SET "DISC_MAX_HIDDEN_FC_DIM=512"
+SET "DISC_MAX_HIDDEN_FC_DIM=1024"
 SET "DISC_USE_GAAD_FILM_CONDITION=true"
 SET "DISC_GAAD_CONDITION_DIM_DISC=128"
 SET "DISC_PATCH_SIZE=32"
-SET "DISC_CNN_CHANNELS_2D=64 256 512"
+SET "DISC_CNN_CHANNELS_2D=64 128 256 512"
 
 REM =====================================================================
 REM WuBu Configuration (Common)
@@ -121,9 +121,9 @@ REM =====================================================================
 SET "USE_WUBU_MOTION_BRANCH=true"
 SET "GAAD_MOTION_NUM_REGIONS=24"
 SET "GAAD_MOTION_DECOMP_TYPE=hybrid"
-SET "WUBU_M_NUM_LEVELS=2"
-SET "WUBU_M_HYPERBOLIC_DIMS=128 64"
-SET "WUBU_M_INITIAL_CURVATURES=1.0 0.8"
+SET "WUBU_M_NUM_LEVELS=3"
+SET "WUBU_M_HYPERBOLIC_DIMS=256 128 64"
+SET "WUBU_M_INITIAL_CURVATURES=1.0 0.8 0.7"
 SET "WUBU_M_USE_ROTATION=true"
 SET "WUBU_M_PHI_CURVATURE=true"
 SET "WUBU_M_PHI_ROT_INIT=true"
@@ -142,15 +142,15 @@ IF %NPROC_PER_NODE% GTR 1 (
     IF !BATCH_SIZE_PER_GPU! LSS 1 SET "BATCH_SIZE_PER_GPU=1"
 )
 SET "GRAD_ACCUM_STEPS=1"
-SET "LEARNING_RATE_GEN=1e-4"
+SET "LEARNING_RATE_GEN=8.0e-05"
 SET "LEARNING_RATE_DISC=5e-5"
 SET "RISGD_MAX_GRAD_NORM=2.0"
 SET "GLOBAL_MAX_GRAD_NORM=2.0"
 SET "TRAIN_LOG_INTERVAL=1"
 SET "TRAIN_SAVE_INTERVAL=1000000"
-SET "TRAIN_SEED=42"
+SET "TRAIN_SEED=1337"
 SET "TRAIN_NUM_WORKERS=4"
-SET "USE_AMP=false"
+SET "USE_AMP=true"
 SET "DETECT_ANOMALY=false"
 SET "LOG_GRAD_NORM=false"
 SET "LOAD_STRICT=true"
