@@ -45,7 +45,7 @@ REM ############################################################################
 REM # SECTION: Core Training & Model Hyperparameters
 REM ############################################################################
 SET "EPOCHS=3000"
-SET "GLOBAL_BATCH_SIZE=8"
+SET "GLOBAL_BATCH_SIZE=12"
 SET "NPROC_PER_NODE=1"
 SET "BATCH_SIZE_PER_GPU=%GLOBAL_BATCH_SIZE%"
 IF %NPROC_PER_NODE% GTR 1 (
