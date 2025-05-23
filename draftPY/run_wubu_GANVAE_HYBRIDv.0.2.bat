@@ -134,7 +134,7 @@ SET "FLOW_STATS_COMPONENTS=mag_mean angle_mean"
 REM =====================================================================
 REM Training Hyperparameters
 REM =====================================================================
-SET "EPOCHS=100"
+SET "EPOCHS=2500"
 SET "GLOBAL_BATCH_SIZE=1"
 SET "BATCH_SIZE_PER_GPU=%GLOBAL_BATCH_SIZE%"
 IF %NPROC_PER_NODE% GTR 1 (
@@ -405,5 +405,5 @@ IF %EXIT_CODE% NEQ 0 (
 )
 
 :End
-IF DEFINED PROMPT_AFTER_RUN ( PAUSE ) ELSE ( TIMEOUT /T 5 /NOBREAK >nul )
+IF DEFINED PROMPT_AFTER_RUN ( PAUSE ) ELSE ( TIMEOUT /T 25 /NOBREAK >nul )
 ENDLOCAL
