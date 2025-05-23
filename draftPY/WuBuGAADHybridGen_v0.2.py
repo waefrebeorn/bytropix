@@ -1,5 +1,5 @@
 
-# WuBuGAADHybridGen_v0.1.py
+# WuBuGAADHybridGen_v0.2.py
 # VAE-GAN Hybrid Model with GAAD-WuBu Regional Hyperbolic Latent Space
 # Incorporates Optical Flow for Motion Encoding Branch.
 # Operating directly on GAAD-defined regions with WuBu nesting.
