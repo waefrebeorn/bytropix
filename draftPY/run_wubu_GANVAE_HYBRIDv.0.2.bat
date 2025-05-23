@@ -38,15 +38,15 @@ REM =====================================================================
 SET "IMAGE_H=256"
 SET "IMAGE_W=256"
 SET "NUM_CHANNELS=3"
-SET "NUM_INPUT_FRAMES=10"
+SET "NUM_INPUT_FRAMES=12"
 SET "NUM_PREDICT_FRAMES=3"
 SET "FRAME_SKIP=1"
-SET "LATENT_DIM=512"
+SET "LATENT_DIM=1024"
 
 REM =====================================================================
 REM GAAD Configuration
 REM =====================================================================
-SET "GAAD_NUM_REGIONS=24"
+SET "GAAD_NUM_REGIONS=64"
 SET "GAAD_DECOMP_TYPE=hybrid"
 SET "GAAD_MIN_SIZE_PX=8"
 
@@ -54,19 +54,19 @@ REM =====================================================================
 REM DFT Configuration (NEW for v0.2)
 REM =====================================================================
 SET "USE_DFT_FEATURES_APPEARANCE=true"
-SET "DFT_PATCH_SIZE_H=16"
-SET "DFT_PATCH_SIZE_W=16"
-SET "DFT_NORM_SCALE_VIDEO=20.0"
+SET "DFT_PATCH_SIZE_H=32"
+SET "DFT_PATCH_SIZE_W=32"
+SET "DFT_NORM_SCALE_VIDEO=25.0"
 
 REM =====================================================================
 REM Encoder Architecture Configuration
 REM =====================================================================
 SET "ENCODER_USE_ROI_ALIGN=true"
-SET "ENCODER_PIXEL_PATCH_SIZE=16"
-SET "ENCODER_SHALLOW_CNN_CHANNELS=32"
-SET "ENCODER_ROI_ALIGN_OUTPUT_H=4"
-SET "ENCODER_ROI_ALIGN_OUTPUT_W=4"
-SET "ENCODER_INITIAL_TANGENT_DIM=192"
+SET "ENCODER_PIXEL_PATCH_SIZE=32"
+SET "ENCODER_SHALLOW_CNN_CHANNELS=64"
+SET "ENCODER_ROI_ALIGN_OUTPUT_H=7"
+SET "ENCODER_ROI_ALIGN_OUTPUT_W=7"
+SET "ENCODER_INITIAL_TANGENT_DIM=256"
 
 REM =====================================================================
 REM Generator Architecture Configuration
@@ -83,43 +83,43 @@ SET "DISC_APPLY_SPECTRAL_NORM=true"
 SET "DISC_BASE_DISC_CHANNELS=64"
 SET "DISC_MAX_DISC_CHANNELS=512"
 SET "DISC_TEMPORAL_KERNEL_SIZE=3"
-SET "DISC_MIN_HIDDEN_FC_DIM=128"
+SET "DISC_MIN_HIDDEN_FC_DIM=256"
 SET "DISC_MAX_HIDDEN_FC_DIM=512"
 SET "DISC_USE_GAAD_FILM_CONDITION=true"
-SET "DISC_GAAD_CONDITION_DIM_DISC=64"
-SET "DISC_PATCH_SIZE=16"
-SET "DISC_CNN_CHANNELS_2D=64 128 256"
+SET "DISC_GAAD_CONDITION_DIM_DISC=128"
+SET "DISC_PATCH_SIZE=32"
+SET "DISC_CNN_CHANNELS_2D=64 256 512"
 
 REM =====================================================================
 REM WuBu Configuration (Common)
 REM =====================================================================
-SET "WUBU_DROPOUT=0.1"
+SET "WUBU_DROPOUT=0.05"
 
 REM =====================================================================
 REM WuBu-S (Appearance) Configuration
 REM =====================================================================
-SET "WUBU_S_NUM_LEVELS=2"
-SET "WUBU_S_HYPERBOLIC_DIMS=128 64"
-SET "WUBU_S_INITIAL_CURVATURES=1.0 0.7"
-SET "WUBU_S_USE_ROTATION=false"
+SET "WUBU_S_NUM_LEVELS=3"
+SET "WUBU_S_HYPERBOLIC_DIMS=512 256 128"
+SET "WUBU_S_INITIAL_CURVATURES=1.0 0.8 0.6"
+SET "WUBU_S_USE_ROTATION=true"
 SET "WUBU_S_PHI_CURVATURE=true"
-SET "WUBU_S_PHI_ROT_INIT=false"
+SET "WUBU_S_PHI_ROT_INIT=true"
 
 REM =====================================================================
 REM WuBu-T (Temporal Aggregation) Configuration
 REM =====================================================================
-SET "WUBU_T_NUM_LEVELS=2"
-SET "WUBU_T_HYPERBOLIC_DIMS=256 128"
-SET "WUBU_T_INITIAL_CURVATURES=1.0 0.7"
-SET "WUBU_T_USE_ROTATION=false"
+SET "WUBU_T_NUM_LEVELS=3"
+SET "WUBU_T_HYPERBOLIC_DIMS=512 256 128"
+SET "WUBU_T_INITIAL_CURVATURES=1.0 0.8 0.6"
+SET "WUBU_T_USE_ROTATION=true"
 SET "WUBU_T_PHI_CURVATURE=true"
-SET "WUBU_T_PHI_ROT_INIT=false"
+SET "WUBU_T_PHI_ROT_INIT=true"
 
 REM =====================================================================
 REM WuBu-M (Motion) Configuration
 REM =====================================================================
 SET "USE_WUBU_MOTION_BRANCH=true"
-SET "GAAD_MOTION_NUM_REGIONS=16"
+SET "GAAD_MOTION_NUM_REGIONS=24"
 SET "GAAD_MOTION_DECOMP_TYPE=hybrid"
 SET "WUBU_M_NUM_LEVELS=2"
 SET "WUBU_M_HYPERBOLIC_DIMS=128 64"
@@ -127,14 +127,14 @@ SET "WUBU_M_INITIAL_CURVATURES=1.0 0.8"
 SET "WUBU_M_USE_ROTATION=true"
 SET "WUBU_M_PHI_CURVATURE=true"
 SET "WUBU_M_PHI_ROT_INIT=true"
-SET "OPTICAL_FLOW_NET_TYPE=raft_small"
+SET "OPTICAL_FLOW_NET_TYPE=raft_large"
 SET "FREEZE_FLOW_NET=true"
-SET "FLOW_STATS_COMPONENTS=mag_mean angle_mean"
+SET "FLOW_STATS_COMPONENTS=mag_mean angle_mean mag_std angle_std"
 
 REM =====================================================================
 REM Training Hyperparameters
 REM =====================================================================
-SET "EPOCHS=2500"
+SET "EPOCHS=5000"
 SET "GLOBAL_BATCH_SIZE=1"
 SET "BATCH_SIZE_PER_GPU=%GLOBAL_BATCH_SIZE%"
 IF %NPROC_PER_NODE% GTR 1 (
@@ -142,11 +142,11 @@ IF %NPROC_PER_NODE% GTR 1 (
     IF !BATCH_SIZE_PER_GPU! LSS 1 SET "BATCH_SIZE_PER_GPU=1"
 )
 SET "GRAD_ACCUM_STEPS=1"
-SET "LEARNING_RATE_GEN=2e-4"
-SET "LEARNING_RATE_DISC=1e-4"
+SET "LEARNING_RATE_GEN=1e-4"
+SET "LEARNING_RATE_DISC=5e-5"
 SET "RISGD_MAX_GRAD_NORM=2.0"
 SET "GLOBAL_MAX_GRAD_NORM=2.0"
-SET "TRAIN_LOG_INTERVAL=2"
+SET "TRAIN_LOG_INTERVAL=1"
 SET "TRAIN_SAVE_INTERVAL=1000000"
 SET "TRAIN_SEED=42"
 SET "TRAIN_NUM_WORKERS=4"
