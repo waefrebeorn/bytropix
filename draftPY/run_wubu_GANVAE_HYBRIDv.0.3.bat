@@ -31,7 +31,21 @@ SET "CHECKPOINT_OUTPUT_DIR=%PROJECT_ROOT%\checkpoints\WuBuGAADHybridGen_v03_Run_
 SET "VIDEO_DATA_PATH=%DATA_DIR_BASE%\demo_video_data_dir_dft_dct"
 SET "VALIDATION_VIDEO_PATH="
 SET "LOAD_CHECKPOINT="
+SET "BEST_CKPT_NAME=wubugaad_hybridgen_v03_dft_dct_best.pt"
+SET "LATEST_EPOCH_CKPT_NAME="
 
+IF EXIST "%CHECKPOINT_OUTPUT_DIR%\%BEST_CKPT_NAME%" (
+    SET "LOAD_CHECKPOINT=%CHECKPOINT_OUTPUT_DIR%\%BEST_CKPT_NAME%"
+) ELSE (
+    FOR /F "delims=" %%F IN ('dir /b /o-d /a-d "%CHECKPOINT_OUTPUT_DIR%\wubugaad_hybridgen_v03_dft_dct_ep*_step*.pt"') DO (
+        SET "LATEST_EPOCH_CKPT_NAME=%%F"
+        GOTO FoundLatestEpochCkpt_AllInDFTv2
+    )
+    :FoundLatestEpochCkpt_AllInDFTv2
+    IF DEFINED LATEST_EPOCH_CKPT_NAME (
+        SET "LOAD_CHECKPOINT=%CHECKPOINT_OUTPUT_DIR%\!LATEST_EPOCH_CKPT_NAME!"
+    )
+)
 REM =====================================================================
 REM Data and Model Core Configuration
 REM =====================================================================
@@ -201,7 +215,7 @@ REM =====================================================================
 SET "LAMBDA_RECON=10.0"
 SET "LAMBDA_RECON_DFT=7.0"
 SET "LAMBDA_RECON_DCT=7.0"
-SET "LAMBDA_KL=0.0001"
+SET "LAMBDA_KL=0.01"
 SET "LAMBDA_GAN=1.0"
 
 REM =====================================================================
@@ -209,7 +223,7 @@ REM Q-Controller for Lambda_KL (Scheduled) & Heuristics
 REM =====================================================================
 SET "Q_CONTROLLER_ENABLED=true"
 SET "RESET_Q_CONTROLLERS_ON_LOAD=false"
-SET "RESET_LKL_Q_CONTROLLER_ON_LOAD=false"
+SET "RESET_LKL_Q_CONTROLLER_ON_LOAD=true"
 SET "LAMBDA_KL_UPDATE_INTERVAL=25"
 SET "MIN_LAMBDA_KL_Q_CONTROL=1e-7"
 SET "MAX_LAMBDA_KL_Q_CONTROL=0.1"
