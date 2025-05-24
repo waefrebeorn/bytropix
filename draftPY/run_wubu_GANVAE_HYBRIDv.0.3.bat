@@ -108,10 +108,12 @@ SET "DISC_MAX_HIDDEN_FC_DIM=1024"
 REM =====================================================================
 REM Discriminator Architecture Variants & Switching Configuration
 REM =====================================================================
-SET "PRIMARY_DISC_ARCHITECTURE_VARIANT=default_pixel_cnn"
-SET "ALT_DISC_ARCHITECTURE_VARIANT=global_wubu_video_feature"
+SET "PRIMARY_DISC_ARCHITECTURE_VARIANT=global_wubu_video_feature"
+SET "ALT_DISC_ARCHITECTURE_VARIANT=default_pixel_cnn"
+REM global_wubu_video_feature or default_pixel_cnn
 SET "ENABLE_HEURISTIC_DISC_SWITCHING=true"
-SET "INITIAL_DISC_TYPE=pixel"
+SET "INITIAL_DISC_TYPE=feature"
+REM pixel or feature
 SET "DISC_SWITCH_CHECK_INTERVAL=25"
 SET "DISC_SWITCH_MIN_STEPS_BETWEEN=50"
 SET "DISC_SWITCH_PROBLEM_STATE_COUNT_THRESH=2"
@@ -222,7 +224,7 @@ REM =====================================================================
 REM Q-Controller for Lambda_KL (Scheduled) & Heuristics
 REM =====================================================================
 SET "Q_CONTROLLER_ENABLED=true"
-SET "RESET_Q_CONTROLLERS_ON_LOAD=false"
+SET "RESET_Q_CONTROLLERS_ON_LOAD=true"
 SET "RESET_LKL_Q_CONTROLLER_ON_LOAD=true"
 SET "LAMBDA_KL_UPDATE_INTERVAL=25"
 SET "MIN_LAMBDA_KL_Q_CONTROL=1e-7"

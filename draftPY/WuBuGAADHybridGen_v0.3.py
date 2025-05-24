@@ -2572,24 +2572,42 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
         self.patch_w_spectral = args.spectral_patch_size_w
         self.num_img_channels = video_config['num_channels']
 
-        # Calculate input dimension per region based on what VAE encoder outputs
-        # The encoder concatenates DFT and DCT features if both are enabled.
-        features_per_region_from_g_dft = 0
+        # Define how many frames of features this specific discriminator variant processes.
+        # This attribute will be used by the HybridTrainer to determine how many frames of features to pass.
+        self.num_frames_to_discriminate = disc_config.get(
+            "num_frames_input_for_global_wubu_d", # Check specific disc_config first
+            getattr(args, 'video_global_wubu_d_num_frames_input', args.num_predict_frames) 
+        )
+        self.logger.info(f"GlobalWuBuVideoFeatureD configured to process features from {self.num_frames_to_discriminate} frame(s).")
+
+
+        # Calculate input dimension per region PER FRAME based on what VAE encoder outputs
+        features_per_region_from_g_dft_per_frame = 0
         if args.use_dft_features_appearance:
             dft_w_coeffs_one_sided = self.patch_w_spectral // 2 + 1
-            features_per_region_from_g_dft = self.num_img_channels * 2 * self.patch_h_spectral * dft_w_coeffs_one_sided
+            features_per_region_from_g_dft_per_frame = self.num_img_channels * 2 * self.patch_h_spectral * dft_w_coeffs_one_sided
         
-        features_per_region_from_g_dct = 0
+        features_per_region_from_g_dct_per_frame = 0
         if args.use_dct_features_appearance:
-            features_per_region_from_g_dct = self.num_img_channels * self.patch_h_spectral * self.patch_w_spectral
+            features_per_region_from_g_dct_per_frame = self.num_img_channels * self.patch_h_spectral * self.patch_w_spectral
         
-        self.num_features_per_region_input = features_per_region_from_g_dft + features_per_region_from_g_dct
-        if self.num_features_per_region_input == 0:
-             self.logger.error("GlobalWuBuVideoFeatureD: num_features_per_region_input is 0. This D will not work.")
-             # Set a dummy value to allow layer creation, but it's a fatal config error.
-             self.num_features_per_region_input = 1 
+        # This is the dimension of combined (DFT+DCT) features for ONE region for ONE frame
+        self.num_features_per_region_per_frame_input = features_per_region_from_g_dft_per_frame + features_per_region_from_g_dct_per_frame
+        if self.num_features_per_region_per_frame_input == 0:
+             self.logger.error("GlobalWuBuVideoFeatureD: num_features_per_region_per_frame_input is 0. This D will not work.")
+             self.num_features_per_region_per_frame_input = 1 # Dummy value
         
-        self.total_input_feature_dim = self.num_gaad_regions * self.num_features_per_region_input
+        # The total input dimension expected by the initial_projection layer.
+        # It's (NumRegions * FeaturesPerRegionPerFrame * NumFramesThisDProcesses)
+        self.total_input_feature_dim_for_projection = (
+            self.num_gaad_regions * 
+            self.num_features_per_region_per_frame_input * 
+            self.num_frames_to_discriminate
+        )
+        # self.total_input_feature_dim was the old name, let's keep it for compatibility if needed by logs,
+        # but total_input_feature_dim_for_projection is more descriptive for the Linear layer.
+        self.total_input_feature_dim = self.total_input_feature_dim_for_projection
+
 
         self.apply_spectral_norm = disc_config.get("apply_spectral_norm", getattr(args, 'disc_apply_spectral_norm', True))
         
@@ -2597,15 +2615,13 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
         self.use_global_stats_aux = disc_config.get("disc_use_global_stats_aux_video_global_wubu", 
                                                     getattr(args, 'disc_use_global_stats_aux_video_global_wubu', False))
         self.global_stats_mlp: Optional[nn.Module] = None
-        current_projection_input_dim = self.total_input_feature_dim
+        current_projection_input_dim = self.total_input_feature_dim_for_projection # Use the correctly calculated dim for the Linear layer
+
         if self.use_global_stats_aux:
-            self.num_global_stats_outputs = 2 # Mean, Std of the input regional feature vectors (after averaging regions)
+            self.num_global_stats_outputs = 2 # Mean, Std
             stats_mlp_hidden_dim_key = "disc_global_stats_mlp_hidden_dim_video_global_wubu"
             self.global_stats_mlp_hidden_dim = disc_config.get(stats_mlp_hidden_dim_key, getattr(args, stats_mlp_hidden_dim_key, 64))
             if self.num_global_stats_outputs > 0 and self.global_stats_mlp_hidden_dim > 0:
-                # The input to this MLP will be the mean and std of the *averaged-over-regions* feature vector
-                # So, input dim for stats_mlp will be features_per_region * 2 (mean_vec, std_vec) if we did it that way
-                # OR, if we average the regional features first, then take mean/std of that single vector -> num_global_stats_outputs
                 self.global_stats_mlp = nn.Sequential(
                     nn.Linear(self.num_global_stats_outputs, self.global_stats_mlp_hidden_dim), nn.LeakyReLU(0.2, True),
                     nn.Linear(self.global_stats_mlp_hidden_dim, self.global_stats_mlp_hidden_dim)
@@ -2613,7 +2629,7 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
                 if self.apply_spectral_norm:
                     self.global_stats_mlp[0] = spectral_norm(self.global_stats_mlp[0]) # type: ignore
                     self.global_stats_mlp[2] = spectral_norm(self.global_stats_mlp[2]) # type: ignore
-                current_projection_input_dim += self.global_stats_mlp_hidden_dim
+                current_projection_input_dim += self.global_stats_mlp_hidden_dim # Add to the input of the main projection
             else: self.use_global_stats_aux = False
         
         # Input tangent dim for the WuBu stack
@@ -2623,7 +2639,7 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
             self.initial_projection = nn.Linear(current_projection_input_dim, self.global_wubu_input_tangent_dim)
             self.initial_layernorm = nn.LayerNorm(self.global_wubu_input_tangent_dim)
         else:
-            self.logger.warning("GlobalWuBuVideoFeatureD: Initial projection has zero input/output dim. Using Identity.")
+            self.logger.warning(f"GlobalWuBuVideoFeatureD: Initial projection has zero input ({current_projection_input_dim}) or output ({self.global_wubu_input_tangent_dim}) dim. Using Identity.")
             self.initial_projection = nn.Identity(); self.initial_layernorm = nn.Identity()
 
         # WuBu stack configuration
@@ -2657,38 +2673,67 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
             self.final_decision_layer = nn.Identity()
         
         self.apply(init_weights_general)
-        self.logger.info(f"GlobalWuBuVideoFeatureD initialized. Expects combined regional spectral features. Total input features (before global stats projection): {self.total_input_feature_dim}")
+        self.logger.info(f"GlobalWuBuVideoFeatureD initialized. Expects features from {self.num_frames_to_discriminate} frames. Total input dim for projection: {self.total_input_feature_dim_for_projection}. Features per region per frame: {self.num_features_per_region_per_frame_input}")
 
-    def _calculate_global_feature_stats_for_video_features(self, regional_features: torch.Tensor) -> torch.Tensor:
-        # regional_features: (B, NumRegions, FeaturesPerRegion_Combined)
-        if regional_features.numel() == 0: return torch.zeros(regional_features.shape[0], 2, device=regional_features.device, dtype=regional_features.dtype)
+    def _calculate_global_feature_stats_for_video_features(self, regional_features_input_to_stats: torch.Tensor) -> torch.Tensor:
+        # regional_features_input_to_stats: (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
+        # This input is already flattened over frames for each region.
+        # We need to calculate stats over the entire feature vector *per region*, then average those stats.
+        # OR average regions first, then stats. Let's average regions first.
+
+        if regional_features_input_to_stats.numel() == 0: 
+            return torch.zeros(regional_features_input_to_stats.shape[0], 2, device=regional_features_input_to_stats.device, dtype=regional_features_input_to_stats.dtype)
         
-        # Average features across regions first
-        mean_features_across_regions = torch.mean(regional_features, dim=1) # (B, FeaturesPerRegion_Combined)
+        # Reshape to (B, NumRegions, NumFrames, FeaturesPerRegionPerFrame) to average over regions & frames correctly if desired.
+        # Current input is (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
+        # For simplicity, the audio version averaged over the already combined feature vector.
+        # Let's average across regions first, resulting in (B, NumFrames * FeaturesPerRegionPerFrame)
+        mean_features_across_regions = torch.mean(regional_features_input_to_stats, dim=1) # (B, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
         
-        # Then calculate mean and std of this single averaged feature vector
+        # Then calculate mean and std of this single averaged (over regions) feature vector.
         mean_stat = torch.mean(mean_features_across_regions, dim=1) # (B,)
         std_stat = torch.std(mean_features_across_regions, dim=1)   # (B,)
-        std_stat = torch.max(std_stat, torch.tensor(EPS, device=std_stat.device, dtype=std_stat.dtype))
+        std_stat = torch.max(std_stat, torch.tensor(EPS, device=std_stat.device, dtype=std_stat.dtype)) # Avoid NaN/Inf
         return torch.stack([mean_stat, std_stat], dim=-1) # (B, 2)
 
-    def forward(self, regional_spectral_features_input: torch.Tensor, # (B, NumRegions, D_spectral_combined)
+    def forward(self, regional_spectral_features_input: torch.Tensor, # (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
                 return_features: bool = False
                ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         B = regional_spectral_features_input.shape[0]
-        if regional_spectral_features_input.numel() == 0 or self.num_features_per_region_input == 0:
-            self.logger.warning_once("GlobalWuBuVideoFeatureD: Forward called with empty input or zero feature dim. Returning zeros.")
+        # The input regional_spectral_features_input is expected to be:
+        # (Batch, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
+        # as prepared by the HybridTrainer.
+
+        if regional_spectral_features_input.numel() == 0 or self.num_features_per_region_per_frame_input == 0:
+            self.logger.warning_once("GlobalWuBuVideoFeatureD: Forward called with empty input or zero feature_per_region_per_frame dim. Returning zeros.")
             dummy_logits = torch.zeros(B, device=regional_spectral_features_input.device, dtype=regional_spectral_features_input.dtype)
             dummy_feat_ret_dim = self.wubu_output_dim if self.wubu_output_dim > 0 else 1
             dummy_features_ret = torch.zeros(B, dummy_feat_ret_dim, device=regional_spectral_features_input.device,dtype=regional_spectral_features_input.dtype)
             return (dummy_logits, dummy_features_ret) if return_features else dummy_logits
 
-        # Ensure input shape is (B, NumRegions * FeaturesPerRegion) for initial_projection
-        flat_all_batch_features = regional_spectral_features_input.reshape(B, -1)
+        # Flatten all regional and frame features for the initial_projection layer
+        # Input is (B, NumRegions, NumFrames * FeatPerRegPerFrame)
+        # Reshape to (B, NumRegions * NumFrames * FeatPerRegPerFrame)
+        flat_all_batch_features = regional_spectral_features_input.reshape(B, -1) 
+        
+        # Check if the flattened dimension matches what the initial_projection layer expects (excluding aux stats for now)
+        if flat_all_batch_features.shape[1] != self.total_input_feature_dim_for_projection:
+             self.logger.error_once(f"GlobalWuBuVideoFeatureD forward: Shape mismatch for initial_projection. "
+                               f"Input flat features dim: {flat_all_batch_features.shape[1]}, "
+                               f"Expected (NumReg * FeatPerRegPerFrame * NumFramesD): {self.total_input_feature_dim_for_projection}. "
+                               f"Input regional_spectral_features_input shape: {regional_spectral_features_input.shape}. "
+                               f"D Config: NumReg={self.num_gaad_regions}, FeatPerRegPerFrame={self.num_features_per_region_per_frame_input}, NumFramesD={self.num_frames_to_discriminate}")
+             # This is a critical error if it occurs.
+             # Fallback to returning zeros if shapes don't match.
+             dummy_logits = torch.zeros(B, device=regional_spectral_features_input.device, dtype=regional_spectral_features_input.dtype)
+             dummy_feat_ret_dim = self.wubu_output_dim if self.wubu_output_dim > 0 else 1
+             dummy_features_ret = torch.zeros(B, dummy_feat_ret_dim, device=regional_spectral_features_input.device,dtype=regional_spectral_features_input.dtype)
+             return (dummy_logits, dummy_features_ret) if return_features else dummy_logits
         
         current_input_to_projection = flat_all_batch_features
         if self.use_global_stats_aux and self.global_stats_mlp is not None:
             # Calculate stats based on the input regional_spectral_features_input
+            # The input to _calculate_global_feature_stats_for_video_features is (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
             stats = self._calculate_global_feature_stats_for_video_features(regional_spectral_features_input.detach())
             projected_stats = self.global_stats_mlp(stats)
             current_input_to_projection = torch.cat([flat_all_batch_features, projected_stats], dim=-1)
@@ -2704,7 +2749,6 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
             logits = self.final_decision_layer(wubu_out_features).squeeze(-1) # (B,)
 
         return (logits, wubu_out_features) if return_features else logits
-
 
 # --- RegionalDiscriminator (original from v0.2, now one of the options in VideoDiscriminatorWrapper) ---
 # This is effectively the "default_pixel_cnn" variant.
@@ -3145,7 +3189,7 @@ class RegionalHyperbolicMotionEncoder(nn.Module):
 # =====================================================================
 # Dataset (Unchanged from v0.2)
 # =====================================================================
-class VideoFrameDataset(Dataset): # Unchanged from v0.2
+class VideoFrameDataset(Dataset): 
     def __init__(self, video_path: str, num_frames_total: int, image_size: Tuple[int, int], frame_skip: int = 1, data_fraction: float = 1.0):
         super().__init__(); self.video_path = video_path; self.num_frames_total = num_frames_total; self.image_size = image_size; self.frame_skip = frame_skip; current_logger=logging.getLogger("WuBuGAADHybridGenV03.Dataset")
         if not os.path.isfile(self.video_path): current_logger.error(f"Video file not found: {self.video_path}"); raise FileNotFoundError(f"Video file not found: {self.video_path}")
@@ -3873,17 +3917,26 @@ class HybridTrainer:
             elif active_d_trainer_input_type == "regional_spectral_features_combined":
                 with torch.no_grad(): _, _, _, target_dft_real, target_dct_real = m_ref.encode(real_frames_full_sequence)
                 real_features_list = []
-                if self.args.use_dft_features_appearance and target_dft_real is not None: real_features_list.append(target_dft_real.reshape(B, N_frames_total_sample, -1)) # (B,N,R*D)
-                if self.args.use_dct_features_appearance and target_dct_real is not None: real_features_list.append(target_dct_real.reshape(B, N_frames_total_sample, -1)) # (B,N,R*D)
+                
+                N_frames_total_sample = real_frames_full_sequence.shape[1] 
+
+                if self.args.use_dft_features_appearance and target_dft_real is not None: 
+                    # target_dft_real is (B, N_total_sample, N_reg, D_flat_dft)
+                    real_features_list.append(target_dft_real) 
+                if self.args.use_dct_features_appearance and target_dct_real is not None: 
+                    # target_dct_real is (B, N_total_sample, N_reg, D_flat_dct)
+                    real_features_list.append(target_dct_real) 
+                
                 if not real_features_list: raise ValueError("D training (real): No target spectral features available for feature-based D.")
-                concatenated_features_flat = torch.cat(real_features_list, dim=-1) # (B, N_frames_total, R*D_combined)
-                # For feature D, usually take features of the *predicted* window
-                real_input_for_d_main = concatenated_features_flat[:, self.args.num_input_frames : self.args.num_input_frames + num_frames_for_active_d, ... ] # (B, N_active_D, R*D_combined)
-                # GlobalWuBuVideoFeatureD expects (B, N_reg, D_spectral_per_reg * N_frames) or (B, N_reg * D_spectral_per_reg * N_frames)
-                # Assuming D processes features per frame independently then aggregates, or takes flattened sequence
-                # If GlobalWuBuVideoFeatureD expects (B, Features), then:
-                real_input_for_d_main = real_input_for_d_main.reshape(B, num_frames_for_active_d, self.args.gaad_num_regions, -1) # (B, N_active_D, N_reg, D_per_reg_spectral)
-                real_input_for_d_main = real_input_for_d_main.permute(0,2,1,3).reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_per_reg_spectral) - Input to GlobalWuBuD
+                # All tensors in real_features_list are 4D (B, N_total, N_reg, D_flat_spectral)
+                concatenated_target_features = torch.cat(real_features_list, dim=-1) # (B, N_total, N_reg, D_combined_flat)
+                
+                # Slice for the frames the D processes, from the predicted window of the original sequence
+                real_input_for_d_main_sliced_frames = concatenated_target_features[:, self.args.num_input_frames : self.args.num_input_frames + num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_flat)
+                
+                # Permute and reshape for GlobalWuBuVideoFeatureD
+                real_input_for_d_main_permuted = real_input_for_d_main_sliced_frames.permute(0,2,1,3) # (B, N_reg, N_active_D, D_combined_flat)
+                real_input_for_d_main = real_input_for_d_main_permuted.reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_combined_flat)
             else: raise ValueError(f"D training (real): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
 
             real_logits = d_ref_active(real_input_for_d_main, gaad_bboxes_cond=gaad_bboxes_for_d_real_cond)
@@ -3900,6 +3953,8 @@ class HybridTrainer:
                 if fake_pixel_output_gen is not None: # G generated pixels directly
                     assembled_fake_pixels = fake_pixel_output_gen
                 else: # G generated spectral, need to assemble
+                    if bboxes_used_by_decoder_for_fake is None: # Check added
+                        raise RuntimeError("D training (fake, pixel-D): bboxes_used_by_decoder_for_fake is None, cannot assemble pixels.")
                     assembled_fake_pixels = self._assemble_pixels_from_spectral(
                         fake_dft_output_gen, fake_dct_output_gen, bboxes_used_by_decoder_for_fake,
                         (B, self.args.num_predict_frames, self.video_config['num_channels'], self.args.image_h, self.args.image_w)
@@ -3913,14 +3968,27 @@ class HybridTrainer:
             
             elif active_d_trainer_input_type == "regional_spectral_features_combined":
                 fake_features_list = []
-                if self.args.use_dft_features_appearance and fake_dft_output_gen is not None: fake_features_list.append(fake_dft_output_gen)
-                if self.args.use_dct_features_appearance and fake_dct_output_gen is not None: fake_features_list.append(fake_dct_output_gen)
+                if self.args.use_dft_features_appearance and fake_dft_output_gen is not None:
+                    # fake_dft_output_gen is (B, N_pred_G, N_reg, C, 2, H_p, W_p_coeff) - 7D
+                    B_fk_dft, N_fk_dft, R_fk_dft, _, _, _, _ = fake_dft_output_gen.shape
+                    reshaped_fk_dft = fake_dft_output_gen.reshape(B_fk_dft, N_fk_dft, R_fk_dft, -1) # Now 4D
+                    fake_features_list.append(reshaped_fk_dft)
+                if self.args.use_dct_features_appearance and fake_dct_output_gen is not None:
+                    # fake_dct_output_gen is (B, N_pred_G, N_reg, C, H_p, W_p) - 6D
+                    B_fk_dct, N_fk_dct, R_fk_dct, _, _, _ = fake_dct_output_gen.shape
+                    reshaped_fk_dct = fake_dct_output_gen.reshape(B_fk_dct, N_fk_dct, R_fk_dct, -1) # Now 4D
+                    fake_features_list.append(reshaped_fk_dct)
+
                 if not fake_features_list: raise ValueError("D training (fake): No spectral features from G for feature-based D.")
-                fake_input_for_d_main = torch.cat(fake_features_list, dim=-1) # (B, N_pred_G, N_reg, D_combined_per_reg)
-                # GlobalWuBuVideoFeatureD expects (B, N_reg, N_frames * D_combined_per_reg_flat)
-                # Ensure we only pass the frames D expects, and reshape correctly
-                fake_input_for_d_main = fake_input_for_d_main[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg)
-                fake_input_for_d_main = fake_input_for_d_main.permute(0,2,1,3).reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_per_reg_spectral)
+                
+                # All tensors in fake_features_list are now 4D: (B, N_pred_G, N_reg, D_flat_per_reg)
+                concatenated_fake_features = torch.cat(fake_features_list, dim=-1) # (B, N_pred_G, N_reg, D_combined_per_reg_flat)
+                
+                # Prepare for GlobalWuBuVideoFeatureD
+                # Slice for the number of frames the D processes
+                fake_input_for_d_main_sliced_frames = concatenated_fake_features[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg_flat)
+                fake_input_for_d_main_permuted = fake_input_for_d_main_sliced_frames.permute(0,2,1,3) # (B, N_reg, N_active_D, D_combined_per_reg_flat)
+                fake_input_for_d_main = fake_input_for_d_main_permuted.reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_combined_per_reg_flat)
             else: raise ValueError(f"D training (fake): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
             
             fake_logits = d_ref_active(fake_input_for_d_main.detach(), gaad_bboxes_cond=fake_gaad_bboxes_for_d_cond)
@@ -3936,12 +4004,15 @@ class HybridTrainer:
         losses_d_micro['loss_d_total_micro'] = loss_d_total_micro.detach()
         return losses_d_micro
 
+
+
+
     def _train_generator_step(self, real_frames_full_sequence: torch.Tensor, m_ref: "WuBuGAADHybridGenNet") -> Tuple[Dict[str, torch.Tensor], Optional[torch.Tensor]]:
         d_ref_active = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
         active_d_trainer_input_type = self.active_disc_effective_trainer_input_type
 
         B = real_frames_full_sequence.shape[0]; device = real_frames_full_sequence.device
-        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0)).dtype
+        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype # Added device to tensor
         real_labels_for_g = torch.ones(B, device=device, dtype=dtype_model) # Target for G is for D to classify fakes as real
         losses_g_micro: Dict[str, torch.Tensor] = {}
         assembled_pixels_for_log_and_d: Optional[torch.Tensor] = None
@@ -3965,8 +4036,26 @@ class HybridTrainer:
                 recon_pixel_frames_gen, target_pixels_for_loss
             )
             loss_kl_raw = self._compute_kl_loss(mu, logvar)
+            # Note: self.args.lambda_recon might be a global factor, specific DFT/DCT lambdas are inside _compute_recon_loss
+            # Effective recon loss uses args.lambda_recon_dft and args.lambda_recon_dct directly.
+            # So, self.args.lambda_recon here is likely for pixel-only fallback or a global scale on top.
+            # If the intention is for lambda_recon to globally scale the spectral recon loss, it should be applied in _compute_recon_loss
+            # or the component-wise lambdas should be considered base weights scaled by a global lambda_recon.
+            # For now, assuming _compute_recon_loss already applies the correct DFT/DCT lambdas.
+            # The self.args.lambda_recon factor is usually for pixel-based recon or an additional global scaling.
+            # If pixel output is not active, self.args.lambda_recon might be misapplied if _compute_recon_loss doesn't use it
+            # when spectral losses are present.
+            # Let's assume _compute_recon_loss has already applied the specific DFT/DCT lambdas.
+            # If there's a global self.args.lambda_recon meant to scale the *entire* recon component (spectral or pixel),
+            # then it should be applied here. The current _compute_recon_loss applies lambda_recon_dft/dct internally.
+            # So, loss_recon_eff should just be `self.heuristic_override_lambda_recon_factor * loss_recon_raw`
+            # if self.args.lambda_recon_dft/dct are the primary weights for spectral.
+            # Or, if self.args.lambda_recon is a global scaler:
+            # loss_recon_eff = self.args.lambda_recon * self.heuristic_override_lambda_recon_factor * loss_recon_raw
+            # Let's stick to the original logic for now, assuming self.args.lambda_recon is a global scaler.
             loss_recon_eff = self.args.lambda_recon * self.heuristic_override_lambda_recon_factor * loss_recon_raw 
-            loss_kl_eff = self.lambda_kl * self.heuristic_override_lambda_kl_factor * loss_kl_raw
+            
+            loss_kl_eff = self.lambda_kl * self.heuristic_override_lambda_kl_factor * loss_kl_raw # self.lambda_kl is already base * factor
 
             adv_input_for_d_main: torch.Tensor
             adv_gaad_bboxes_for_d_cond: Optional[torch.Tensor] = None
@@ -3986,15 +4075,30 @@ class HybridTrainer:
                 if assembled_pixels_for_log_and_d is None: raise RuntimeError("Failed to get/assemble pixels for pixel-based D in G step.")
                 adv_input_for_d_main = assembled_pixels_for_log_and_d[:, :num_frames_for_active_d, ...]
                 if hasattr(d_module_for_check, 'use_gaad_film_condition') and d_module_for_check.use_gaad_film_condition: # type: ignore
-                    adv_gaad_bboxes_for_d_cond = bboxes_used_by_decoder[:, :num_frames_for_active_d, ...]
+                    if bboxes_used_by_decoder is not None: # Ensure bboxes are available
+                        adv_gaad_bboxes_for_d_cond = bboxes_used_by_decoder[:, :num_frames_for_active_d, ...]
             elif active_d_trainer_input_type == "regional_spectral_features_combined":
                 adv_features_list = []
-                if self.args.use_dft_features_appearance and recon_dft_coeffs_gen is not None: adv_features_list.append(recon_dft_coeffs_gen)
-                if self.args.use_dct_features_appearance and recon_dct_coeffs_gen is not None: adv_features_list.append(recon_dct_coeffs_gen)
+                if self.args.use_dft_features_appearance and recon_dft_coeffs_gen is not None:
+                    # recon_dft_coeffs_gen is (B, N_pred, N_reg, C, 2, H_p, W_p_coeff) - 7D
+                    B_adv_dft, N_adv_dft, R_adv_dft, _, _, _, _ = recon_dft_coeffs_gen.shape
+                    reshaped_adv_dft = recon_dft_coeffs_gen.reshape(B_adv_dft, N_adv_dft, R_adv_dft, -1) # Now 4D
+                    adv_features_list.append(reshaped_adv_dft)
+                if self.args.use_dct_features_appearance and recon_dct_coeffs_gen is not None:
+                    # recon_dct_coeffs_gen is (B, N_pred, N_reg, C, H_p, W_p) - 6D
+                    B_adv_dct, N_adv_dct, R_adv_dct, _, _, _ = recon_dct_coeffs_gen.shape
+                    reshaped_adv_dct = recon_dct_coeffs_gen.reshape(B_adv_dct, N_adv_dct, R_adv_dct, -1) # Now 4D
+                    adv_features_list.append(reshaped_adv_dct)
+                
                 if not adv_features_list: raise ValueError("G training (adv): No spectral features from G for feature-based D.")
-                adv_input_for_d_main = torch.cat(adv_features_list, dim=-1) # (B, N_pred_G, N_reg, D_combined_per_reg)
-                adv_input_for_d_main = adv_input_for_d_main[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg)
-                adv_input_for_d_main = adv_input_for_d_main.permute(0,2,1,3).reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_per_reg_spectral)
+                
+                # All tensors in adv_features_list are now 4D: (B, N_pred_G, N_reg, D_flat_per_reg)
+                concatenated_adv_features = torch.cat(adv_features_list, dim=-1) # (B, N_pred_G, N_reg, D_combined_per_reg_flat)
+                
+                # Prepare for GlobalWuBuVideoFeatureD which expects (B, N_reg, N_frames_D_processes * D_combined_per_reg_flat)
+                adv_input_for_d_main_sliced_frames = concatenated_adv_features[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg_flat)
+                adv_input_for_d_main_permuted = adv_input_for_d_main_sliced_frames.permute(0,2,1,3) # (B, N_reg, N_active_D, D_combined_per_reg_flat)
+                adv_input_for_d_main = adv_input_for_d_main_permuted.reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_combined_per_reg_flat)
             else: raise ValueError(f"G training (adv): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
 
             d_output_for_adv = d_ref_active(adv_input_for_d_main, gaad_bboxes_cond=adv_gaad_bboxes_for_d_cond, return_features=self.heuristic_vae_feature_match_active)
@@ -4017,24 +4121,36 @@ class HybridTrainer:
                              if gaad_bboxes_real_enc_fm is not None: real_gaad_bboxes_for_d_fm_cond = gaad_bboxes_real_enc_fm[:, :num_frames_for_active_d, ...]
                     elif active_d_trainer_input_type == "regional_spectral_features_combined":
                         target_features_list_fm = []
-                        if self.args.use_dft_features_appearance and target_dft_features_for_loss is not None: target_features_list_fm.append(target_dft_features_for_loss)
-                        if self.args.use_dct_features_appearance and target_dct_features_for_loss is not None: target_features_list_fm.append(target_dct_features_for_loss)
+                        # target_dft/dct_features_for_loss are already (B, N_pred_G, N_reg, D_flat_per_reg)
+                        if self.args.use_dft_features_appearance and target_dft_features_for_loss is not None: 
+                            target_features_list_fm.append(target_dft_features_for_loss)
+                        if self.args.use_dct_features_appearance and target_dct_features_for_loss is not None: 
+                            target_features_list_fm.append(target_dct_features_for_loss)
+                        
                         if not target_features_list_fm: raise ValueError("G FM: No target spectral features for D feature matching.")
-                        real_input_for_d_fm_main = torch.cat(target_features_list_fm, dim=-1).detach() # (B, N_pred_G, N_reg, D_combined_per_reg)
-                        real_input_for_d_fm_main = real_input_for_d_fm_main[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg)
-                        real_input_for_d_fm_main = real_input_for_d_fm_main.permute(0,2,1,3).reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_per_reg_spectral)
-                    else: real_input_for_d_fm_main = torch.empty(0, device=device, dtype=dtype_model)
+                        
+                        concatenated_target_features_fm = torch.cat(target_features_list_fm, dim=-1).detach() # (B, N_pred_G, N_reg, D_combined_per_reg_flat)
+                        
+                        real_input_for_d_fm_main_sliced_frames = concatenated_target_features_fm[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg_flat)
+                        real_input_for_d_fm_main_permuted = real_input_for_d_fm_main_sliced_frames.permute(0,2,1,3) # (B, N_reg, N_active_D, D_combined_per_reg_flat)
+                        real_input_for_d_fm_main = real_input_for_d_fm_main_permuted.reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_combined_per_reg_flat)
+                    else: 
+                        real_input_for_d_fm_main = torch.empty(0, device=device, dtype=dtype_model) # Should not happen
                     
                     target_features_d: Optional[torch.Tensor] = None
                     if real_input_for_d_fm_main.numel() > 0:
                         target_d_output_fm = d_ref_active(real_input_for_d_fm_main, gaad_bboxes_cond=real_gaad_bboxes_for_d_fm_cond, return_features=True)
-                        target_features_d = target_d_output_fm[1] if isinstance(target_d_output_fm, tuple) else None
+                        if isinstance(target_d_output_fm, tuple) and len(target_d_output_fm) > 1:
+                            target_features_d = target_d_output_fm[1]
+                        else:
+                            self.logger.warning_once("Feature matching active, but D did not return features for real data.")
                 
                 if target_features_d is not None and features_from_d_for_g_feat_match.shape == target_features_d.shape:
                     loss_g_feat_match = F.mse_loss(features_from_d_for_g_feat_match, target_features_d.detach())
                     loss_g_total_micro += self.lambda_feat_match_heuristic * loss_g_feat_match
                     losses_g_micro['loss_g_feat_match_micro'] = loss_g_feat_match.detach()
-                elif target_features_d is not None: self.logger.warning_once(f"FM shapes mismatch: G_feat {features_from_d_for_g_feat_match.shape}, D_feat_real {target_features_d.shape}")
+                elif target_features_d is not None: 
+                    self.logger.warning_once(f"FM shapes mismatch: G_feat {features_from_d_for_g_feat_match.shape}, D_feat_real {target_features_d.shape}")
 
             # --- Heuristic G Easy Win Penalty ---
             if self.heuristic_penalize_g_easy_win_active:
@@ -4058,13 +4174,20 @@ class HybridTrainer:
         if log_pixels_to_return is None and \
            self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and self.global_step > 0 and \
            ((self.global_step + 1) % self.args.wandb_log_train_recon_interval == 0):
-            log_pixels_to_return = self._assemble_pixels_from_spectral(
-                recon_dft_coeffs_gen.detach() if recon_dft_coeffs_gen is not None else None,
-                recon_dct_coeffs_gen.detach() if recon_dct_coeffs_gen is not None else None,
-                bboxes_used_by_decoder.detach(),
-                (B, num_predict_f, self.video_config['num_channels'], self.args.image_h, self.args.image_w)
-            )
+            if bboxes_used_by_decoder is not None: # Ensure bboxes are available for assembly
+                log_pixels_to_return = self._assemble_pixels_from_spectral(
+                    recon_dft_coeffs_gen.detach() if recon_dft_coeffs_gen is not None else None,
+                    recon_dct_coeffs_gen.detach() if recon_dct_coeffs_gen is not None else None,
+                    bboxes_used_by_decoder.detach(),
+                    (B, num_predict_f, self.video_config['num_channels'], self.args.image_h, self.args.image_w)
+                )
+            else:
+                 self.logger.warning_once("Cannot assemble pixels for logging in G-step as bboxes_used_by_decoder is None.")
+
         return losses_g_micro, log_pixels_to_return.detach() if log_pixels_to_return is not None else None
+
+
+
 
     @staticmethod # Make it static as it's a utility
     def get_scale_from_action_value(action_dict: Optional[Dict[str, float]], key: str, default_value: float = 1.0) -> float:
