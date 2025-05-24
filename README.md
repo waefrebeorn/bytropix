@@ -70,7 +70,7 @@ This repository is a collection of my explorations and implementations:
 
 1.  **Clone the Repository:**
     ```bash
-    git clone https://github.com/waefrebeorn/bytropix.git # Replace with actual repo URL if public
+    git clone https://github.com/waefrebeorn/bytropix.git 
     cd bytropix
     ```
 
@@ -96,7 +96,7 @@ This repository is a collection of my explorations and implementations:
 This is where the "playground" comes alive! We'll focus on the current `v0.3` VAE-GAN model.
 
 1.  **The Master `.bat` File:**
-    *   You have a comprehensive `.bat` script for `v0.3` (like the one you've been iterating on). This is your primary tool.
+    *   You have a comprehensive `.bat` script for `v0.3`. This is your primary tool.
     *   It sets environment variables for all hyperparameters and then constructs the command to run `WuBuGAADHybridGen_v0.3.py`.
 
 2.  **Phased Training (See `WuBuGAADHybridGen_v0.3_TRAINING_GUIDE.md` for details):**
