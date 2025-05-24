@@ -37,8 +37,8 @@ This repository is a collection of my explorations and implementations:
         *   [`./WuBuNestingFindings5.19.25.md`](./WuBuNestingFindings5.19.25.md) (Advanced conceptual insights for WuBu)
         *   [`./GAAD-WuBu-ST1.md`](./GAAD-WuBu-ST1.md) & [`./GAAD-WuBu-ST2.md`](./GAAD-WuBu-ST2.md) (GAAD and Spatio-Temporal WuBu, foundational for video applications)
         *   [`./WuBu Spatio-Temporal Nesting.md`](./WuBu%20Spatio-Temporal%20Nesting.md) (Focus on the temporal aspect of WuBu)
-        *   [`./draftPY/WuBuNestDiffusion (v0.05.2).md`](./draftPY/WuBuNestDiffusion%20(v0.05.2).md) & [`./DFT-WuBu.md`](./DFT-WuBu.md) & [`./DCT-WuBu.md`](./DCT-WuBu.md) (Specifics for diffusion and spectral transform variants)
-        *   [`./WuBuGAADHybridGen_v0.1_TRAINING_GUIDE.md`](./WuBuGAADHybridGen_v0.1_TRAINING_GUIDE.md) & [`./WuBuGAADHybridGen_v0.3_TRAINING_GUIDE.md`](./WuBuGAADHybridGen_v0.3_TRAINING_GUIDE.md) (Practical guides for training the VAE-GAN models)
+        *   [`./draftPY/WuBuNestDiffusion (v0.05.2).md`](./draftPY/WuBuNestDiffusion%20(v0.05.2).md) & [`./draftPY/DFT-WuBu.md`](./draftPY/DFT-WuBu.md) & [`./draftPY/DCT-WuBu.md`](./draftPY/DCT-WuBu.md) (Specifics for diffusion and spectral transform variants)
+        *   [`./draftPY/WuBuGAADHybridGen_v0.1_TRAINING_GUIDE.md`](./draftPY/WuBuGAADHybridGen_v0.1_TRAINING_GUIDE.md) & [`./draftPY/WuBuGAADHybridGen_v0.3_TRAINING_GUIDE.md`](./draftPY/WuBuGAADHybridGen_v0.3_TRAINING_GUIDE.md) (Practical guides for training the VAE-GAN models)
 
 ## Navigating the Codebase
 
