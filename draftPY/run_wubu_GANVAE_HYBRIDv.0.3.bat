@@ -55,8 +55,8 @@ REM Spectral Transforms Configuration (DFT + DCT for v0.3)
 REM =====================================================================
 SET "USE_DFT_FEATURES_APPEARANCE=true"
 SET "USE_DCT_FEATURES_APPEARANCE=true"
-SET "SPECTRAL_PATCH_SIZE_H=20"
-SET "SPECTRAL_PATCH_SIZE_W=20"
+SET "SPECTRAL_PATCH_SIZE_H=16"
+SET "SPECTRAL_PATCH_SIZE_W=16"
 SET "DFT_NORM_SCALE_VIDEO=25.0"
 SET "DFT_FFT_NORM=ortho"
 SET "DCT_NORM_TYPE=tanh"
