@@ -2,6 +2,7 @@
 
 [![Status: Research Playground - Experimental](https://img.shields.io/badge/status-research%20playground%20(experimental)-orange)](https://shields.io/)
 [![Discord](https://img.shields.io/discord/1303046473985818654?label=Discord&logo=discord&style=for-the-badge)](http://wubu.waefrebeorn.com) 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Welcome to **Bytropix**! This repository is an open, experimental playground dedicated to exploring the theoretical frameworks of **WuBu Nesting (層疊嵌套)** and **Golden Aspect Adaptive Decomposition (GAAD)**. If you're interested in pushing the boundaries of how we can model complex data, especially video, with deep geometric and compositional priors, you're in the right place.
 
@@ -158,7 +159,7 @@ This is a personal exploration ground, but insights and discussions are welcome!
 
 ## License
 
-MIT License (Assumed, please verify if a specific license file is present)
+This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
 
 ## Acknowledgments
 
