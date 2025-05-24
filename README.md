@@ -175,7 +175,7 @@ If you find the theories (WuBu Nesting, GAAD), the codebase, or the papers usefu
   title        = {Bytropix: An Experimental Playground for WuBu Nesting & Golden Aspect Adaptive Decomposition},
   year         = {2025},
   howpublished = {GitHub Repository},
-  note         = {URL: https://github.com/waefrebeorn/bytropix (Replace with actual URL)}
+  note         = {URL: https://github.com/waefrebeorn/bytropix}
 }
 
 @techreport{WaefreBeornWuBuNestingFramework,
