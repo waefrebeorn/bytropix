@@ -12,7 +12,7 @@
 import sys, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, DistributedSampler, SubsetRandomSampler
 import numpy as np
-
+import heapq
 # Custom np.load to handle memmap and allow_pickle gracefully
 orig_np_load = np.load
 def custom_np_load(*args, **kwargs):
@@ -401,11 +401,8 @@ class ImageAssemblyUtils:
 # =====================================================================
 # Geometric, Optimizer, WuBu Core Components (Largely Unchanged from audio script)
 # =====================================================================
-# ... HyperbolicUtils, Manifold, PoincareBall, init_weights_general, get_constrained_param_val ...
-# ... BoundaryManifoldHyperbolic, quaternion utils, HyperbolicInterLevelTransform ...
-# ... HyperbolicWuBuNestingLevel, FullyHyperbolicWuBuNestingModel ...
-# ... GradientStats, HAKMEMQController, RiemannianEnhancedSGD ...
-# (These are assumed to be copied verbatim from the audio script, as they are general utilities)
+
+
 class HyperbolicUtils: # Copied from audio script
     @staticmethod
     def poincare_clip(x: torch.Tensor, c_scalar: float, radius: float = 1.0, eps: float = EPS) -> torch.Tensor:
@@ -565,7 +562,13 @@ class HyperbolicWuBuNestingLevel(nn.Module): # Copied from audio script
         super().__init__(); self.level_idx, self.dim, self.config = level_idx, dim, config; self.logger = logging.getLogger(f"WuBuGAADHybridGenV03.Level{self.level_idx}")
         current_logger = self.logger
         self.phi_influence_curvature = config.get("phi_influence_curvature", False)
-        self.initial_curvature_val = initial_curvature_val_base * (PHI**(level_idx % 4 - 1.5) if self.phi_influence_curvature else 1.0)
+
+        # Effective exponent for PHI scaling, e.g., for level_idx=0 -> -1.5, level_idx=1 -> -0.5, level_idx=2 -> 0.5, level_idx=3 -> 1.5, level_idx=4 -> -1.5 ...
+        # This creates a cycle of 4 scaling factors relative to PHI.
+        # An exemplary calculation of this formula has been formally verified.
+        phi_scaling_exponent = (level_idx % 4) - 1.5 
+        self.initial_curvature_val = initial_curvature_val_base * (PHI**phi_scaling_exponent if self.phi_influence_curvature else 1.0)
+        
         phi_base_str = f" (PhiBase {initial_curvature_val_base:.2f})" if self.phi_influence_curvature else ""; current_logger.info(f"InitialC={self.initial_curvature_val:.2f}{phi_base_str}")
         self.use_ld = config.get("use_level_descriptors", True); self.use_spread = config.get("use_level_spread", True)
         self.dropout_rate = config.get("dropout", 0.1); self.ld_init_scale = config.get("level_descriptor_init_scale", 1e-5)
@@ -1188,8 +1191,10 @@ class RiemannianEnhancedSGD(torch.optim.Optimizer):
 
     def get_gradient_stats_summary_optimizer_view(self) -> Dict:
         return self.grad_stats.get_step_summary_for_logging()
+
+
 # =====================================================================
-# GAAD Components (Largely Unchanged)
+# GAAD Components 
 # =====================================================================
 def golden_subdivide_rect_fixed_n(frame_dims:Tuple[int,int], num_regions_target:int, device='cpu', dtype=torch.float, min_size_px=5) -> torch.Tensor: # Copied from audio script
     W, H = frame_dims; all_rects = [[0,0,W,H]]; rect_queue = deque([(0,0,W,H,0)])
@@ -1221,291 +1226,265 @@ def phi_spiral_patch_centers_fixed_n(frame_dims:Tuple[int,int], num_centers:int,
     if len(centers_xy) < num_centers: num_to_pad = num_centers - len(centers_xy); last_xy = centers_xy[-1] if centers_xy else [cx,cy]; last_scale = scale_factors[-1] if scale_factors else 0.1; centers_xy.extend([last_xy] * num_to_pad); scale_factors.extend([last_scale] * num_to_pad)
     return torch.tensor(centers_xy[:num_centers], dtype=dtype, device=device), torch.tensor(scale_factors[:num_centers], dtype=dtype, device=device).unsqueeze(-1)
 
-# =====================================================================
-# Architectural Components (v0.3 - VAE-GAN Refactor + DFT + DCT)
-# =====================================================================
 
-class RegionalPatchExtractor(nn.Module): # Unchanged from v0.2
-    def __init__(self, patch_output_size: Optional[Tuple[int, int]] = None, feature_extractor: Optional[nn.Module] = None, feature_map_spatial_scale: float = 1.0, roi_align_output_size: Optional[Tuple[int, int]] = None, use_roi_align: bool = False):
-        super().__init__(); self.patch_output_size = patch_output_size; self.feature_extractor = feature_extractor; self.feature_map_spatial_scale = feature_map_spatial_scale; self.roi_align_output_size = roi_align_output_size; self.use_roi_align = use_roi_align; current_logger=logging.getLogger("WuBuGAADHybridGenV03.PatchExtract"); self.resize_transform=None
-        if self.use_roi_align:
-            if self.feature_extractor is None or self.roi_align_output_size is None: raise ValueError("feature_extractor and roi_align_output_size needed for use_roi_align=True")
-            current_logger.info(f"Using RoIAlign. Output: {roi_align_output_size}, FeatMapScale: {feature_map_spatial_scale:.2f}")
-        else:
-            if self.patch_output_size is None: raise ValueError("patch_output_size needed for use_roi_align=False")
-            current_logger.info(f"Using Pixel Patches. Resizing to: {patch_output_size}")
-            self.resize_transform = T.Resize(patch_output_size, interpolation=T.InterpolationMode.BILINEAR, antialias=True)
-    def forward(self, images: torch.Tensor, bboxes_batch: torch.Tensor) -> torch.Tensor:
-        B_img_orig, NumCh_img, H_img_orig, W_img_orig = images.shape
-        B_bboxes, NumRegions_bboxes, _ = bboxes_batch.shape
-        if B_img_orig != B_bboxes: raise ValueError(f"Batch size mismatch images ({B_img_orig}) vs bboxes ({B_bboxes})")
-        device = images.device; original_images_dtype = images.dtype; compute_dtype = torch.float32 if images.dtype == torch.uint8 else images.dtype; images_for_processing = images.to(compute_dtype)
-        if self.use_roi_align and self.feature_extractor is not None and self.roi_align_output_size is not None:
-            feature_maps = self.feature_extractor(images_for_processing); h_feat, w_feat = feature_maps.shape[2:]; max_w_feat_scalar=float(w_feat); max_h_feat_scalar=float(h_feat);
-            all_rois_list = []
-            for i in range(B_img_orig):
-                current_bboxes_scaled = bboxes_batch[i].to(torch.float32) * self.feature_map_spatial_scale
-                current_bboxes_scaled[:,0]=torch.clamp(current_bboxes_scaled[:,0],min=0.0,max=max_w_feat_scalar-EPS); current_bboxes_scaled[:,1]=torch.clamp(current_bboxes_scaled[:,1],min=0.0,max=max_h_feat_scalar-EPS); min_for_x2=current_bboxes_scaled[:,0]; current_bboxes_scaled[:,2]=torch.clamp(current_bboxes_scaled[:,2],max=max_w_feat_scalar); current_bboxes_scaled[:,2]=torch.maximum(current_bboxes_scaled[:,2],min_for_x2); min_for_y2=current_bboxes_scaled[:,1]; current_bboxes_scaled[:,3]=torch.clamp(current_bboxes_scaled[:,3],max=max_h_feat_scalar); current_bboxes_scaled[:,3]=torch.maximum(current_bboxes_scaled[:,3],min_for_y2);
-                batch_indices_for_this_image_in_flat_batch = torch.full((NumRegions_bboxes, 1), float(i), device=device, dtype=current_bboxes_scaled.dtype)
-                all_rois_list.append(torch.cat([batch_indices_for_this_image_in_flat_batch, current_bboxes_scaled], dim=1))
-            all_rois_for_align = torch.cat(all_rois_list, dim=0)
-            try: aligned_features_flat = roi_align(feature_maps, all_rois_for_align, output_size=self.roi_align_output_size, spatial_scale=1.0, aligned=True)
-            except Exception as e_roi: logging.getLogger("WuBuGAADHybridGenV03.PatchExtract").error(f"RoIAlign failed: {e_roi}. FeatMap:{feature_maps.shape}, RoIs:{all_rois_for_align.shape}, Output:{self.roi_align_output_size}"); raise e_roi
-            C_feat=feature_maps.shape[1]; H_roi, W_roi = self.roi_align_output_size
-            aligned_features_reshaped = aligned_features_flat.view(B_img_orig, NumRegions_bboxes, C_feat, H_roi, W_roi)
-            return aligned_features_reshaped.to(original_images_dtype)
-        else:
-            all_patches_collected = []; patch_h_out, patch_w_out = self.patch_output_size # type: ignore
-            for i in range(B_img_orig):
-                single_image_from_flat_batch = images_for_processing[i]; single_image_bboxes = bboxes_batch[i]
-                current_image_patches = []
-                for r in range(NumRegions_bboxes):
-                    x1,y1,x2,y2 = single_image_bboxes[r].round().int().tolist(); x1_c,y1_c=max(0,x1),max(0,y1); x2_c,y2_c=min(W_img_orig,x2),min(H_img_orig,y2)
-                    if x1_c >= x2_c or y1_c >= y2_c: patch = torch.zeros((images.shape[1], patch_h_out, patch_w_out), device=device, dtype=compute_dtype)
-                    else: patch = single_image_from_flat_batch[:, y1_c:y2_c, x1_c:x2_c]; patch = self.resize_transform(patch) if self.resize_transform else patch
-                    current_image_patches.append(patch)
-                all_patches_collected.append(torch.stack(current_image_patches))
-            final_patches_tensor = torch.stack(all_patches_collected)
-            return final_patches_tensor.to(original_images_dtype)
+def get_rect_energy(analysis_map_slice: torch.Tensor, rect_coords: List[float], min_size_px_energy: int = 1) -> float:
+    """Calculates average energy in a rectangle of an analysis map."""
+    x1, y1, x2, y2 = [int(round(c)) for c in rect_coords]
+    H_map, W_map = analysis_map_slice.shape
 
-class PatchEmbed(nn.Module): # Unchanged from v0.2
-    def __init__(self, patch_feature_dim: int, embed_dim: int):
-        super().__init__(); self.proj = nn.Linear(patch_feature_dim, embed_dim)
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.dim() == 3: B_frames, N_reg, D_feat = x.shape; x = x.view(B_frames * N_reg, D_feat); out = self.proj(x); return out.view(B_frames, N_reg, -1)
-        elif x.dim() == 2: return self.proj(x)
-        else: raise ValueError(f"PatchEmbed input x has unsupported dimension: {x.dim()}")
+    # Clamp coordinates to be within map boundaries
+    x1_c, y1_c = max(0, x1), max(0, y1)
+    x2_c, y2_c = min(W_map, x2), min(H_map, y2)
 
+    if x1_c >= x2_c or y1_c >= y2_c or (x2_c - x1_c) < min_size_px_energy or (y2_c - y1_c) < min_size_px_energy:
+        return 0.0 # Or a very small epsilon to avoid division by zero if area is used
 
-class RegionalVAEEncoder(nn.Module):
-    def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_config: Dict, wubu_s_config: Dict, latent_dim: int):
-        super().__init__()
-        self.args = args
-        self.video_config = video_config
-        self.gaad_config = gaad_config
-        # self.wubu_s_config = wubu_s_config # Not stored if only used for sub-module
-        self.latent_dim = latent_dim
-        self.image_size = args.image_h_w_tuple
-        self.num_appearance_regions = gaad_config['num_regions']
-        self.decomposition_type = gaad_config['decomposition_type']
-        self.gaad_min_size_px = gaad_config.get('min_size_px', 5)
-        current_logger=logging.getLogger("WuBuGAADHybridGenV03.EncoderVAE")
-        self.feature_extractor: Optional[nn.Module] = None # For RoIAlign path
+    region = analysis_map_slice[y1_c:y2_c, x1_c:x2_c]
+    if region.numel() == 0:
+        return 0.0
+    return torch.mean(region).item() # Using mean energy
 
-        self.channels_for_target_spectral = self.video_config['num_channels']
+def golden_subdivide_rect_fixed_n_motion_aware(
+    frame_dims: Tuple[int, int],
+    analysis_map_slice: torch.Tensor, # (H, W) tensor for the current frame/item
+    num_regions_target: int,
+    device: torch.device, # Changed to torch.device type
+    dtype: torch.dtype,   # Changed to torch.dtype type
+    min_size_px: int = 5,
+    max_depth: int = 6,
+    energy_threshold_factor: float = 0.1, # Factor of max energy to consider subdividing
+    prioritize_high_energy: bool = True # If true, subdivide high energy regions more
+) -> torch.Tensor:
+    W, H = frame_dims
+    
+    # Priority queue stores (-energy, depth, x_off, y_off, w_curr, h_curr)
+    # Negative energy because heapq is a min-heap, we want to pop highest energy first
+    # Add a unique counter to break ties in priority for stable sorting
+    tie_breaker_counter = 0
+    initial_energy = get_rect_energy(analysis_map_slice, [0,0,W,H])
+    
+    # Max energy on the map for relative thresholding
+    max_map_energy = torch.max(analysis_map_slice).item() if analysis_map_slice.numel() > 0 else 1.0
+    min_energy_to_consider_subdivision = max_map_energy * energy_threshold_factor
+
+    pq_item = (-initial_energy if prioritize_high_energy else initial_energy, 0, tie_breaker_counter, 0.0, 0.0, float(W), float(H))
+    rect_priority_queue = [pq_item]
+    heapq.heapify(rect_priority_queue)
+    
+    all_generated_rects_with_energy = [] # Store (energy, [coords])
+
+    while rect_priority_queue and len(all_generated_rects_with_energy) < num_regions_target * 3: # Generate more to select from
+        if not rect_priority_queue: break
         
-        # Patch extractors for DFT and DCT (pixel-based for target, potentially feature-based for WuBu input)
-        self.enc_patch_h_spectral = args.spectral_patch_size_h
-        self.enc_patch_w_spectral = args.spectral_patch_size_w
-        spectral_patch_output_size = (args.spectral_patch_size_h, args.spectral_patch_size_w)
+        neg_energy_or_energy, depth, _, x_off, y_off, w_curr, h_curr = heapq.heappop(rect_priority_queue)
+        current_energy = -neg_energy_or_energy if prioritize_high_energy else neg_energy_or_energy
         
-        # Patch extractor for TARGET DFT and DCT features (always from pixels)
-        self.target_spectral_patch_extractor = RegionalPatchExtractor(
-            patch_output_size=spectral_patch_output_size, use_roi_align=False
-        )
-        current_logger.info(f"Encoder: Target Spectral Extractor (Pixel Patches -> Resize {spectral_patch_output_size}).")
+        # Add the current rect itself to the list of candidates
+        # We add it *before* checking subdivision conditions if it's valid sized
+        if w_curr >= min_size_px and h_curr >= min_size_px:
+            all_generated_rects_with_energy.append((current_energy, [x_off, y_off, x_off + w_curr, y_off + h_curr]))
 
-        patch_channels_for_wubus_input: int
-        if args.encoder_use_roi_align:
-            self.feature_extractor = nn.Sequential( # Shallow CNN before RoIAlign
-                nn.Conv2d(self.video_config['num_channels'], args.encoder_shallow_cnn_channels, kernel_size=3, stride=1, padding=1),
-                nn.GroupNorm(8, args.encoder_shallow_cnn_channels), nn.GELU()
-            )
-            patch_channels_for_wubus_input = args.encoder_shallow_cnn_channels
-            self.wubus_input_patch_extractor = RegionalPatchExtractor(
-                feature_extractor=self.feature_extractor,
-                roi_align_output_size=spectral_patch_output_size, # RoIAlign output matches spectral patch size
-                use_roi_align=True
-            )
-            current_logger.info(f"Encoder (WuBu-S Input): RoIAlign ON. ShallowCNN (Ch:{args.encoder_shallow_cnn_channels}) -> RoIAlign (Size:{spectral_patch_output_size}) -> Spectral Transforms.")
-        else:
-            patch_channels_for_wubus_input = self.video_config['num_channels']
-            self.wubus_input_patch_extractor = RegionalPatchExtractor(
-                patch_output_size=spectral_patch_output_size, use_roi_align=False
-            )
-            current_logger.info(f"Encoder (WuBu-S Input): RoIAlign OFF. Pixel Patches -> Resize (Size:{spectral_patch_output_size}) -> Spectral Transforms.")
+        if min(w_curr, h_curr) < min_size_px or depth >= max_depth:
+            continue
+        # Only subdivide if energy is significant or depth is low
+        if prioritize_high_energy and current_energy < min_energy_to_consider_subdivision and depth > 1 : # Don't stop too early for low depth
+            continue
 
-        # Calculate feature dimension after spectral transforms
-        dft_w_coeffs_one_sided = self.enc_patch_w_spectral // 2 + 1
-        single_dft_feature_dim = patch_channels_for_wubus_input * 2 * self.enc_patch_h_spectral * dft_w_coeffs_one_sided
-        single_dct_feature_dim = patch_channels_for_wubus_input * self.enc_patch_h_spectral * self.enc_patch_w_spectral
+
+        is_landscape = w_curr > h_curr + EPS
+        is_portrait = h_curr > w_curr + EPS
+        children_rects_coords = []
+
+        if is_landscape:
+            cut_w = w_curr / PHI
+            r1_w, r2_w = cut_w, w_curr - cut_w
+            if r1_w >= min_size_px: children_rects_coords.append({'x':x_off, 'y':y_off, 'w':r1_w, 'h':h_curr})
+            if r2_w >= min_size_px: children_rects_coords.append({'x':x_off + r1_w, 'y':y_off, 'w':r2_w, 'h':h_curr})
+        elif is_portrait:
+            cut_h = h_curr / PHI
+            r1_h, r2_h = cut_h, h_curr - cut_h
+            if r1_h >= min_size_px: children_rects_coords.append({'x':x_off, 'y':y_off, 'w':w_curr, 'h':r1_h})
+            if r2_h >= min_size_px: children_rects_coords.append({'x':x_off, 'y':y_off + r1_h, 'w':w_curr, 'h':r2_h})
+        elif abs(w_curr - h_curr) < EPS and w_curr > min_size_px * PHI : # Approx square, subdivide like landscape
+            cut_w = w_curr / PHI
+            r1_w, r2_w = cut_w, w_curr - cut_w
+            if r1_w >= min_size_px: children_rects_coords.append({'x':x_off, 'y':y_off, 'w':r1_w, 'h':h_curr})
+            if r2_w >= min_size_px: children_rects_coords.append({'x':x_off + r1_w, 'y':y_off, 'w':r2_w, 'h':h_curr})
         
-        # Combined feature dimension for PatchEmbed
-        patch_feature_dim_for_embed = 0
-        if args.use_dft_features_appearance: patch_feature_dim_for_embed += single_dft_feature_dim
-        if args.use_dct_features_appearance: patch_feature_dim_for_embed += single_dct_feature_dim
+        for child_r_dict in children_rects_coords:
+            ch_x, ch_y, ch_w, ch_h = child_r_dict['x'], child_r_dict['y'], child_r_dict['w'], child_r_dict['h']
+            if ch_w >= min_size_px and ch_h >= min_size_px :
+                 child_energy = get_rect_energy(analysis_map_slice, [ch_x, ch_y, ch_x + ch_w, ch_y + ch_h])
+                 tie_breaker_counter += 1
+                 heapq.heappush(rect_priority_queue, (-child_energy if prioritize_high_energy else child_energy, depth + 1, tie_breaker_counter, ch_x, ch_y, ch_w, ch_h))
+
+    # Selection strategy: prioritize high energy, then smaller area for detail
+    # We stored (energy, [coords]). Higher raw energy is better.
+    # Sort by energy (descending), then by area (ascending for smaller boxes in high energy)
+    unique_valid_rects_tensors = []
+    seen_hashes = set()
+    # Sort existing generated rects before selection
+    all_generated_rects_with_energy.sort(key=lambda item: (-item[0], (item[1][2]-item[1][0])*(item[1][3]-item[1][1]))) # -energy for descending, area for ascending
+
+    for energy, r_coords in all_generated_rects_with_energy:
+        if len(unique_valid_rects_tensors) >= num_regions_target: break
+        # Ensure coords are valid floats for tensor conversion
+        r_coords_float = [float(c) for c in r_coords]
+        if r_coords_float[0] >= r_coords_float[2] - EPS or r_coords_float[1] >= r_coords_float[3] - EPS: continue
         
-        if patch_feature_dim_for_embed == 0:
-            current_logger.error("Encoder: No spectral features (DFT or DCT) selected for appearance. This will likely fail.")
-            # Fallback to pixel features if NO spectral features selected (original v0.1 path)
-            # This scenario should ideally be prevented by argument validation
-            if args.encoder_use_roi_align:
-                 patch_feature_dim_for_embed = patch_channels_for_wubus_input * spectral_patch_output_size[0] * spectral_patch_output_size[1]
-            else: # Pixel patches without RoIAlign
-                 patch_feature_dim_for_embed = self.video_config['num_channels'] * spectral_patch_output_size[0] * spectral_patch_output_size[1]
-            current_logger.warning(f"Encoder: Falling back to pixel-based features (dim: {patch_feature_dim_for_embed}) as no spectral features selected.")
+        r_tensor = torch.tensor(r_coords_float, dtype=dtype, device=device)
+        # Use more robust hashing based on rounded float coordinates
+        r_hashable = tuple(round(c, 2) for c in r_coords_float) # Round to 2 decimal places for hashing
+        if r_hashable not in seen_hashes:
+            unique_valid_rects_tensors.append(r_tensor)
+            seen_hashes.add(r_hashable)
+            
+    selected_rects = unique_valid_rects_tensors[:num_regions_target]
 
-        current_logger.info(f"PatchEmbed input dim: {patch_feature_dim_for_embed}")
-        self.patch_embed = PatchEmbed(patch_feature_dim_for_embed, args.encoder_initial_tangent_dim)
+    if not selected_rects and num_regions_target > 0: # If no rects were selected at all
+        initial_rect_coords = [0.0, 0.0, float(W), float(H)]
+        selected_rects = [torch.tensor(initial_rect_coords, dtype=dtype, device=device)]
 
-        self.wubu_s = FullyHyperbolicWuBuNestingModel(input_tangent_dim=args.encoder_initial_tangent_dim, output_tangent_dim=video_config['wubu_s_output_dim'], config=wubu_s_config)
+
+    if len(selected_rects) < num_regions_target:
+        padding_box = selected_rects[-1].clone() if selected_rects else torch.tensor([0.0,0.0,float(W),float(H)],dtype=dtype,device=device)
+        selected_rects.extend([padding_box.clone() for _ in range(num_regions_target - len(selected_rects))])
+    
+    return torch.stack(selected_rects)
+    
+
+def find_motion_hotspots(analysis_map_slice: torch.Tensor, num_hotspots: int = 1, min_distance: float = 10.0, blur_sigma: float = 1.5) -> List[Tuple[float, float]]:
+    """Finds N distinct motion hotspots (peaks) in an analysis map."""
+    if analysis_map_slice.numel() == 0: return [(analysis_map_slice.shape[1]/2, analysis_map_slice.shape[0]/2)] * num_hotspots
+    
+    # Optional: Blur the map to find smoother peaks
+    if blur_sigma > 0:
+        blurred_map = TF.gaussian_blur(analysis_map_slice.unsqueeze(0).unsqueeze(0), kernel_size=5, sigma=blur_sigma).squeeze()
+    else:
+        blurred_map = analysis_map_slice
+
+    hotspots = []
+    temp_map = blurred_map.clone()
+    H, W = temp_map.shape
+
+    for _ in range(num_hotspots):
+        if temp_map.numel() == 0 or torch.all(temp_map <= 0): break # Stop if no more positive energy
         
-        self.wubu_t_input_dim = video_config['wubu_s_output_dim']
-        self.wubu_m_output_dim = video_config.get('wubu_m_output_dim', 0) # Get current, possibly 0 if motion disabled
-        if args.use_wubu_motion_branch and self.wubu_m_output_dim > 0:
-            self.wubu_t_input_dim += self.wubu_m_output_dim
-            current_logger.info(f"VAE Enc: Including WuBu-M features (dim {self.wubu_m_output_dim}) for WuBu-T input.")
-        elif args.use_wubu_motion_branch:
-            current_logger.warning("VAE Enc: Motion branch enabled but wubu_m_output_dim is 0. Not included in WuBu-T.")
+        max_val, max_idx_flat = torch.max(temp_map.flatten(), 0)
+        if max_val.item() <= EPS: break # Stop if max energy is too low
 
-        self.wubu_t_config = _configure_wubu_stack(args, "wubu_t")
-        self.wubu_t: Optional[FullyHyperbolicWuBuNestingModel] = None
-        fc_input_dim_for_latent: int
-        if self.wubu_t_config and self.wubu_t_config['num_levels'] > 0 and self.wubu_t_input_dim > 0:
-             wubu_t_output_dim_config = self.wubu_t_config['hyperbolic_dims'][-1] if self.wubu_t_config['hyperbolic_dims'] else 0
-             if wubu_t_output_dim_config == 0: wubu_t_output_dim_config = self.wubu_t_input_dim
-             self.wubu_t = FullyHyperbolicWuBuNestingModel(input_tangent_dim=self.wubu_t_input_dim, output_tangent_dim=wubu_t_output_dim_config, config=self.wubu_t_config)
-             fc_input_dim_for_latent = wubu_t_output_dim_config
-             current_logger.info(f"VAE Enc WuBu-T Enabled: InputDim {self.wubu_t_input_dim}, OutputDim {fc_input_dim_for_latent}")
-        else:
-             current_logger.warning("VAE Enc WuBu-T disabled. Latent space from direct projection of aggregated features.")
-             fc_input_dim_for_latent = self.wubu_t_input_dim
+        peak_y = (max_idx_flat // W).item()
+        peak_x = (max_idx_flat % W).item()
+        hotspots.append((float(peak_x), float(peak_y)))
+
+        # Suppress this peak and its surroundings to find the next distinct peak
+        y_min = max(0, int(peak_y - min_distance))
+        y_max = min(H, int(peak_y + min_distance + 1))
+        x_min = max(0, int(peak_x - min_distance))
+        x_max = min(W, int(peak_x + min_distance + 1))
+        temp_map[y_min:y_max, x_min:x_max] = 0 # Suppress region
         
-        if fc_input_dim_for_latent <=0:
-            current_logger.error(f"FC input dim for latent space is {fc_input_dim_for_latent}. This is invalid. Check WuBu configurations or input dimensions.")
-            # Fallback to ensure FC layers can be created, though model might not train.
-            fc_input_dim_for_latent = self.latent_dim 
+    # If not enough hotspots found, fill with map center
+    if not hotspots: hotspots = [(W/2, H/2)] # Default to center if no hotspots
+    while len(hotspots) < num_hotspots:
+        hotspots.append(hotspots[-1]) # Pad with the last found hotspot or center
         
-        self.fc_mu = nn.Linear(fc_input_dim_for_latent, self.latent_dim)
-        self.fc_logvar = nn.Linear(fc_input_dim_for_latent, self.latent_dim)
+    return hotspots[:num_hotspots]
 
-        self.apply(init_weights_general)
 
-    def forward(self, frames_pixels: torch.Tensor, motion_features: Optional[torch.Tensor]
-               ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        # Output: mu, logvar, gaad_bboxes_all_frames, target_dft_features, target_dct_features
-        B, N_frames_total_sample, C_img, H_img, W_img = frames_pixels.shape
-        device = frames_pixels.device
-        dtype_model = next(self.parameters()).dtype
+def phi_spiral_patch_centers_fixed_n_motion_aware(
+    frame_dims: Tuple[int, int],
+    analysis_map_slice: Optional[torch.Tensor], # (H, W) tensor for current frame/item, CAN BE NONE
+    num_centers: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    num_spiral_arms_per_hotspot: int = 3, # e.g. 3-5 arms per hotspot
+    points_per_arm: int = 5,      # e.g. 5-8 points per arm
+    base_patch_scale_factor: float = 0.25, # Overall scale for patches
+    motion_scale_influence: float = 0.5, # How much motion energy affects patch size (0 to 1)
+                                         # 0: no effect, 1: fully inverse proportional
+    hotspot_blur_sigma: float = 2.0,
+    min_spiral_patch_scale: float = 0.03,
+    max_spiral_patch_scale: float = 0.30
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    W, H = frame_dims
+    all_centers_xy_list = []
+    all_scale_factors_list = []
 
-        frames_pixels_flat = frames_pixels.reshape(B * N_frames_total_sample, C_img, H_img, W_img)
-        # GAAD Bbox Generation (copied from v0.2)
-        gaad_bboxes_list = []
-        for b_idx in range(B):
-            frame_bboxes_for_sequence = []
-            for f_idx in range(N_frames_total_sample):
-                frame_dims = (W_img, H_img); max_w_scalar=float(W_img); max_h_scalar=float(H_img)
-                if self.decomposition_type == "hybrid":
-                    num_subdivide=self.num_appearance_regions//2; num_spiral=self.num_appearance_regions-num_subdivide; bboxes_for_item=[]
-                    if num_subdivide > 0: bboxes_for_item.append(golden_subdivide_rect_fixed_n(frame_dims,num_subdivide,device,dtype_model,self.gaad_min_size_px))
-                    if num_spiral > 0:
-                         spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, num_spiral, device, dtype_model); patch_base_size = min(frame_dims); spiral_bboxes_current = torch.zeros(num_spiral, 4, device=device, dtype=dtype_model); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs; val_x1=spiral_centers[:,0]-patch_ws; val_y1=spiral_centers[:,1]-patch_hs; val_x2=spiral_centers[:,0]+patch_ws; val_y2=spiral_centers[:,1]+patch_hs; spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS); spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS); min_for_x2=spiral_bboxes_current[:,0]+EPS; spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],min_for_x2); min_for_y2=spiral_bboxes_current[:,1]+EPS; spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],min_for_y2); bboxes_for_item.append(spiral_bboxes_current)
-                    single_frame_bboxes = torch.cat(bboxes_for_item, dim=0) if bboxes_for_item else torch.tensor([[0,0,max_w_scalar,max_h_scalar]]*self.num_appearance_regions, dtype=dtype_model, device=device)
-                elif self.decomposition_type == "spiral":
-                     spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, self.num_appearance_regions, device, dtype_model); patch_base_size = min(frame_dims); spiral_bboxes_current = torch.zeros(self.num_appearance_regions, 4, device=device, dtype=dtype_model); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs; val_x1=spiral_centers[:,0]-patch_ws; val_y1=spiral_centers[:,1]-patch_hs; val_x2=spiral_centers[:,0]+patch_ws; val_y2=spiral_centers[:,1]+patch_hs; spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS); spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS); min_for_x2=spiral_bboxes_current[:,0]+EPS; spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],min_for_x2); min_for_y2=spiral_bboxes_current[:,1]+EPS; spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],min_for_y2); single_frame_bboxes = spiral_bboxes_current
-                else: single_frame_bboxes = golden_subdivide_rect_fixed_n(frame_dims,self.num_appearance_regions,device,dtype_model,self.gaad_min_size_px)
-                if single_frame_bboxes.shape[0] < self.num_appearance_regions: num_to_pad=self.num_appearance_regions-single_frame_bboxes.shape[0]; padding_box=single_frame_bboxes[-1:].clone() if single_frame_bboxes.shape[0]>0 else torch.tensor([[0,0,max_w_scalar,max_h_scalar]],dtype=dtype_model,device=device); padding=padding_box.repeat(num_to_pad,1); single_frame_bboxes=torch.cat([single_frame_bboxes, padding], dim=0)
-                elif single_frame_bboxes.shape[0] > self.num_appearance_regions: single_frame_bboxes=single_frame_bboxes[:self.num_appearance_regions]
-                frame_bboxes_for_sequence.append(single_frame_bboxes)
-            gaad_bboxes_list.append(torch.stack(frame_bboxes_for_sequence))
-        gaad_bboxes_full_batch_sequences = torch.stack(gaad_bboxes_list)
-        gaad_bboxes_flat_for_patch_extractor = gaad_bboxes_full_batch_sequences.reshape(B * N_frames_total_sample, self.num_appearance_regions, 4)
+    if num_centers <= 0:
+        return torch.empty(0, 2, device=device, dtype=dtype), torch.empty(0, 1, device=device, dtype=dtype)
 
-        # --- Extract TARGET spectral features (from original pixels) ---
-        target_pixel_patches = self.target_spectral_patch_extractor(frames_pixels_flat, gaad_bboxes_flat_for_patch_extractor)
-        # target_pixel_patches: (B*N_frames, NumReg, C_target, H_spectral, W_spectral)
-        B_flat_target, NReg_target, C_target_spectral, H_spec_target, W_spec_target = target_pixel_patches.shape
+    # Determine hotspots for spiral origins
+    if analysis_map_slice is not None and analysis_map_slice.numel() > 0 :
+        # Estimate number of distinct hotspots needed based on num_centers and arms
+        num_hotspots_to_find = max(1, math.ceil(num_centers / (num_spiral_arms_per_hotspot * points_per_arm if num_spiral_arms_per_hotspot * points_per_arm > 0 else 1) ))
+        num_hotspots_to_find = min(num_hotspots_to_find, num_centers, 5) # Cap max hotspots
         
-        target_dft_features_flat: Optional[torch.Tensor] = None
-        target_dct_features_flat: Optional[torch.Tensor] = None
+        hotspot_coords_list = find_motion_hotspots(analysis_map_slice, num_hotspots=num_hotspots_to_find, blur_sigma=hotspot_blur_sigma)
+    else: # Fallback to geometric center if no analysis map
+        hotspot_coords_list = [(W / 2.0, H / 2.0)]
 
-        if self.args.use_dft_features_appearance:
-            target_dft_features_flat = SpectralTransformUtils.compute_2d_dft_features(
-                target_pixel_patches.reshape(B_flat_target * NReg_target, C_target_spectral, H_spec_target, W_spec_target),
-                norm_scale=self.args.dft_norm_scale_video,
-                fft_norm_type=self.args.dft_fft_norm
-            ) # ( (B*N_frames)*NumReg, D_dft )
+    points_generated_so_far = 0
+    for hotspot_idx, (cx, cy) in enumerate(hotspot_coords_list):
+        if points_generated_so_far >= num_centers: break
+
+        # Add hotspot itself as a center if it's the first one and we need a central point
+        if hotspot_idx == 0 and points_generated_so_far < num_centers:
+             all_centers_xy_list.append([cx, cy])
+             # Scale for central point can be larger or fixed
+             local_energy_at_hotspot = analysis_map_slice[int(cy), int(cx)].item() if analysis_map_slice is not None and 0<=int(cy)<H and 0<=int(cx)<W else 0.1
+             max_map_energy = torch.max(analysis_map_slice).item() if analysis_map_slice is not None and analysis_map_slice.numel()>0 else 1.0
+             norm_energy = min(1.0, local_energy_at_hotspot / (max_map_energy + EPS) ) if max_map_energy > EPS else 0.1
+             
+             scale_val = base_patch_scale_factor * (1.0 - motion_scale_influence * norm_energy) # Smaller if high energy
+             scale_val = max(min_spiral_patch_scale, min(max_spiral_patch_scale, scale_val))
+             all_scale_factors_list.append(scale_val)
+             points_generated_so_far += 1
         
-        if self.args.use_dct_features_appearance:
-            target_dct_features_flat = SpectralTransformUtils.compute_2d_dct_features(
-                target_pixel_patches.reshape(B_flat_target * NReg_target, C_target_spectral, H_spec_target, W_spec_target),
-                norm_type=self.args.dct_norm_type,
-                norm_global_scale=self.args.dct_norm_global_scale,
-                norm_tanh_scale=self.args.dct_norm_tanh_scale
-            ) # ( (B*N_frames)*NumReg, D_dct )
-
-        # --- Extract INPUT spectral features for WuBu-S (potentially from RoIAlign) ---
-        patches_for_wubus_input_path = self.wubus_input_patch_extractor(frames_pixels_flat, gaad_bboxes_flat_for_patch_extractor)
-        B_flat_wubus, NReg_wubus, C_wubus_in, H_spec_wubus, W_spec_wubus = patches_for_wubus_input_path.shape
+        a = 0.03 * min(W, H) # Initial radius for spiral from this hotspot
+        b = math.log(PHI) / (math.pi / 2) # Growth rate
         
-        wubus_dft_input_flat: Optional[torch.Tensor] = None
-        wubus_dct_input_flat: Optional[torch.Tensor] = None
-        
-        if self.args.use_dft_features_appearance:
-            wubus_dft_input_flat = SpectralTransformUtils.compute_2d_dft_features(
-                patches_for_wubus_input_path.reshape(B_flat_wubus * NReg_wubus, C_wubus_in, H_spec_wubus, W_spec_wubus),
-                norm_scale=self.args.dft_norm_scale_video,
-                fft_norm_type=self.args.dft_fft_norm
-            )
-        if self.args.use_dct_features_appearance:
-            wubus_dct_input_flat = SpectralTransformUtils.compute_2d_dct_features(
-                patches_for_wubus_input_path.reshape(B_flat_wubus * NReg_wubus, C_wubus_in, H_spec_wubus, W_spec_wubus),
-                norm_type=self.args.dct_norm_type,
-                norm_global_scale=self.args.dct_norm_global_scale,
-                norm_tanh_scale=self.args.dct_norm_tanh_scale
-            )
+        for arm_idx in range(num_spiral_arms_per_hotspot):
+            if points_generated_so_far >= num_centers: break
+            angle_offset = (2 * math.pi / num_spiral_arms_per_hotspot) * arm_idx
+            
+            for pt_idx_on_arm in range(points_per_arm):
+                if points_generated_so_far >= num_centers: break
+                
+                # More points closer to center of spiral by varying angle step or using logspace for theta
+                theta_local = (pt_idx_on_arm + 1) * (PHI * math.pi / (2*points_per_arm)) # Spread points out on arm
+                
+                r = min(a * math.exp(b * theta_local), max(W, H) * 0.4) # Cap radius
+                actual_angle = angle_offset + theta_local
+                
+                x = max(0.0, min(cx + r * math.cos(actual_angle), float(W - 1)))
+                y = max(0.0, min(cy + r * math.sin(actual_angle), float(H - 1)))
+                all_centers_xy_list.append([x, y])
 
-        # Concatenate DFT and DCT features for PatchEmbed if both are used
-        combined_spectral_features_for_embed_list = []
-        if wubus_dft_input_flat is not None: combined_spectral_features_for_embed_list.append(wubus_dft_input_flat)
-        if wubus_dct_input_flat is not None: combined_spectral_features_for_embed_list.append(wubus_dct_input_flat)
-        
-        if not combined_spectral_features_for_embed_list: # Fallback if no spectral features
-            current_logger.warning("Encoder: No spectral features generated for WuBu-S input. Using raw reshaped patches.")
-            # This fallback might need adjustment if spectral_patch_output_size is different from a pixel patch size
-            combined_spectral_features_flat = patches_for_wubus_input_path.reshape(B_flat_wubus * NReg_wubus, -1)
-        else:
-            combined_spectral_features_flat = torch.cat(combined_spectral_features_for_embed_list, dim=-1)
+                # Scale factor based on distance from this spiral's origin (cx,cy) and local motion energy
+                local_energy_at_xy = analysis_map_slice[int(y), int(x)].item() if analysis_map_slice is not None else 0.1
+                norm_energy_xy = min(1.0, local_energy_at_xy / (max_map_energy + EPS) ) if analysis_map_slice is not None and max_map_energy > EPS else 0.1
 
-        initial_tangent_vectors_flat_regions = self.patch_embed(combined_spectral_features_flat)
-        wubu_s_output_tangent_flat = self.wubu_s(initial_tangent_vectors_flat_regions)
-        D_out_s = wubu_s_output_tangent_flat.shape[-1]
-        
-        regional_app_features_tangent = wubu_s_output_tangent_flat.reshape(
-            B, N_frames_total_sample, self.num_appearance_regions, D_out_s
-        )
-        agg_app_features = torch.mean(regional_app_features_tangent, dim=2) # (B, N_frames, D_out_s)
+                # Foveated + motion-influenced scaling
+                # Smaller patches further out (foveation) AND smaller patches in high motion
+                foveation_decay = math.exp(-0.8 * r / (min(W,H)*0.1)) # Stronger decay for foveation
+                scale_val_xy = base_patch_scale_factor * foveation_decay * (1.0 - motion_scale_influence * norm_energy_xy)
+                scale_val_xy = max(min_spiral_patch_scale, min(max_spiral_patch_scale, scale_val_xy))
+                all_scale_factors_list.append(scale_val_xy)
+                points_generated_so_far += 1
+    
+    # Pad if not enough centers generated
+    if len(all_centers_xy_list) < num_centers:
+        num_to_pad = num_centers - len(all_centers_xy_list)
+        last_xy = all_centers_xy_list[-1] if all_centers_xy_list else [W / 2.0, H / 2.0]
+        last_scale = all_scale_factors_list[-1] if all_scale_factors_list else base_patch_scale_factor
+        all_centers_xy_list.extend([last_xy] * num_to_pad)
+        all_scale_factors_list.extend([last_scale] * num_to_pad)
 
-        wubu_t_input_features = agg_app_features
-        if motion_features is not None and self.args.use_wubu_motion_branch:
-             motion_features_tangent = motion_features.to(dtype_model) # (B, N_pairs, N_motion_reg, D_motion)
-             N_pairs_motion = motion_features_tangent.shape[1]
-             agg_motion_features_per_pair = torch.mean(motion_features_tangent, dim=2) # (B, N_pairs, D_motion)
-             aligned_motion_for_wubut = torch.zeros(B, N_frames_total_sample, agg_motion_features_per_pair.shape[-1], device=device, dtype=dtype_model)
-             if N_pairs_motion > 0:
-                 len_to_copy = min(N_pairs_motion, N_frames_total_sample -1)
-                 aligned_motion_for_wubut[:, 1 : 1 + len_to_copy, :] = agg_motion_features_per_pair[:, :len_to_copy, :]
-                 if N_pairs_motion < N_frames_total_sample -1 and N_pairs_motion > 0: # Pad if motion seq shorter
-                      last_valid_motion = agg_motion_features_per_pair[:, -1, :].unsqueeze(1)
-                      if N_frames_total_sample - (1+N_pairs_motion) > 0:
-                        aligned_motion_for_wubut[:, 1 + N_pairs_motion :, :] = last_valid_motion.expand(-1, N_frames_total_sample - (1+N_pairs_motion), -1)
-             wubu_t_input_features = torch.cat([agg_app_features, aligned_motion_for_wubut], dim=-1)
-
-        if self.wubu_t:
-            temporal_features_sequence = self.wubu_t(wubu_t_input_features) # (B, N_frames, D_out_t)
-            final_temporal_feature = temporal_features_sequence[:, -1, :] # Use last frame's temporal feature
-        else:
-            final_temporal_feature = torch.mean(wubu_t_input_features, dim=1) # Avg over time if no WuBu-T
-
-        mu = self.fc_mu(final_temporal_feature)
-        logvar = self.fc_logvar(final_temporal_feature)
-
-        # Reshape target features for trainer: (B, N_frames, NumReg, D_spectral_target)
-        final_target_dft = target_dft_features_flat.view(B, N_frames_total_sample, self.num_appearance_regions, -1) if target_dft_features_flat is not None else None
-        final_target_dct = target_dct_features_flat.view(B, N_frames_total_sample, self.num_appearance_regions, -1) if target_dct_features_flat is not None else None
-        
-        return mu, logvar, gaad_bboxes_full_batch_sequences, final_target_dft, final_target_dct
-
+    final_centers = torch.tensor(all_centers_xy_list[:num_centers], dtype=dtype, device=device)
+    final_scales = torch.tensor(all_scale_factors_list[:num_centers], dtype=dtype, device=device).unsqueeze(-1)
+    
+    return final_centers, final_scales
 
 # =====================================================================
 # Architectural Components (v0.3 - VAE-GAN Refactor + DFT + DCT)
@@ -1797,10 +1776,6 @@ class RegionalGeneratorDecoder(nn.Module):
 
         return output_pixel_frames, output_dft_coeffs, output_dct_coeffs
 
-# ... (RegionalDiscriminator, RegionalHyperbolicMotionEncoder, WuBuGAADHybridGenNet, VideoFrameDataset) ...
-# These would need significant updates, especially WuBuGAADHybridGenNet to handle DFT+DCT,
-# and the trainer to manage two discriminators and the new loss components.
-
 # --- Helper Self-Attention Module for Discriminators (from audio script) ---
 class SelfAttention2D(nn.Module):
     def __init__(self, in_channels, k_reduction_factor=8, use_spectral_norm=False):
@@ -1840,131 +1815,200 @@ class SelfAttention2D(nn.Module):
         return self.gamma * out + x # Add residual connection scaled by gamma
 
 
-# --- _SingleScaleVideoDiscriminator (New, adapted from audio's _SingleScaleMelDiscriminator) ---
+
+# --- Helper for Convolution Output Dimension Calculation ---
+def _calculate_conv_output_dim(input_dim: int, kernel_size: int, padding: int, stride: int, dilation: int = 1) -> int:
+    if input_dim <= 0: return 0
+    return (input_dim + 2 * padding - dilation * (kernel_size - 1) - 1) // stride + 1
+
+# --- 3D Self-Attention Module ---
+class SelfAttention3D(nn.Module):
+    """ Self attention Layer for 3D Tensors (B, C, D, H, W) """
+    def __init__(self, in_dim: int, k_reduction_factor: int = 8, use_spectral_norm: bool = False):
+        super().__init__()
+        self.chanel_in = in_dim
+        self.inter_channels = max(1, in_dim // k_reduction_factor)
+
+        conv_fn_3d = functools.partial(nn.Conv3d, kernel_size=1, padding=0, bias=False)
+
+        self.query_conv = conv_fn_3d(self.chanel_in, self.inter_channels)
+        self.key_conv = conv_fn_3d(self.chanel_in, self.inter_channels)
+        self.value_conv = conv_fn_3d(self.chanel_in, self.chanel_in) # Value projects to full channels
+        self.out_conv = conv_fn_3d(self.chanel_in, self.chanel_in)   # Final 1x1x1 conv
+
+        if use_spectral_norm:
+            self.query_conv = spectral_norm(self.query_conv)
+            self.key_conv = spectral_norm(self.key_conv)
+            self.value_conv = spectral_norm(self.value_conv)
+            self.out_conv = spectral_norm(self.out_conv)
+
+        self.gamma = nn.Parameter(torch.zeros(1)) # Learnable scale factor for residual connection
+        self.softmax  = nn.Softmax(dim=-1) # Apply softmax on the last dimension of energy
+
+    def forward(self,x: torch.Tensor) -> torch.Tensor:
+        """
+            inputs :
+                x : input feature maps (B, C, D, H, W)
+            returns :
+                out : self attention value + input feature
+                attention: (B, N, N) (N = D*H*W)
+        """
+        B, C, D_in, H_in, W_in = x.size()
+        N_spatial_temporal = D_in * H_in * W_in
+
+        proj_query = self.query_conv(x).view(B, self.inter_channels, N_spatial_temporal).permute(0, 2, 1) # B, N, C_inter
+        proj_key = self.key_conv(x).view(B, self.inter_channels, N_spatial_temporal) # B, C_inter, N
+        
+        energy = torch.bmm(proj_query, proj_key) # B, N, N (transpose check: (N, C_inter) * (C_inter, N) = (N,N))
+        attention = self.softmax(energy) # B, N, N
+        
+        proj_value = self.value_conv(x).view(B, C, N_spatial_temporal) # B, C, N
+        
+        out_att = torch.bmm(proj_value, attention.permute(0, 2, 1)) # B, C, N ( (C,N) * (N,N) = (C,N) )
+        out_att = out_att.view(B, C, D_in, H_in, W_in) # Reshape back
+        
+        out_final_conv = self.out_conv(out_att)
+        out = self.gamma * out_final_conv + x # Add residual scaled by gamma
+        return out #, attention # Usually only return out, attention map is for debugging
+
 class _SingleScaleVideoDiscriminator(nn.Module):
     def __init__(self, args: argparse.Namespace, video_config: Dict, disc_config: Dict, scale_index: int = 0):
         super().__init__()
         self.args = args
         self.scale_index = scale_index
-        # Get SN setting from disc_config first, then general args.disc_apply_spectral_norm
-        self.apply_spectral_norm = disc_config.get(f"video_d_scale{scale_index}_apply_sn", 
-                                                   disc_config.get("apply_spectral_norm", 
+        self.apply_spectral_norm = disc_config.get(f"video_d_scale{scale_index}_apply_sn",
+                                                   disc_config.get("apply_spectral_norm",
                                                                    getattr(args, 'disc_apply_spectral_norm', True)))
         self.logger = logging.getLogger(f"WuBuGAADHybridGenV03.SingleVideoD.Scale{scale_index}.{id(self)}")
 
-        # Effective spatial dimensions at this scale
-        img_h_eff = args.image_h // (2**scale_index)
-        img_w_eff = args.image_w // (2**scale_index)
-        num_frames_eff = video_config.get("num_predict_frames", 1) # For video, we usually use fixed number of frames
+        img_h_initial = args.image_h
+        img_w_initial = args.image_w
+        
+        img_h_eff = img_h_initial // (2**scale_index)
+        img_w_eff = img_w_initial // (2**scale_index)
+        num_frames_eff = disc_config.get(f"video_d_scale{scale_index}_num_frames",
+                                        video_config.get("num_predict_frames", 1))
 
         base_ch = disc_config.get("base_disc_channels", getattr(args, 'disc_base_disc_channels', 64))
         max_ch = disc_config.get("max_disc_channels", getattr(args, 'disc_max_disc_channels', 512))
+        
         target_final_dim_config = disc_config.get("target_video_disc_final_feature_dim", getattr(args, 'disc_target_final_feature_dim', [4,4]))
         if isinstance(target_final_dim_config, int): target_final_dim_h = target_final_dim_w = target_final_dim_config
         elif isinstance(target_final_dim_config, (list, tuple)) and len(target_final_dim_config) == 2: target_final_dim_h, target_final_dim_w = target_final_dim_config
-        else: target_final_dim_h = target_final_dim_w = 4 # Default fallback
+        else: target_final_dim_h = target_final_dim_w = 4
 
         max_downs_limit = disc_config.get("max_video_disc_downsample_layers", getattr(args, 'max_video_disc_downsample_layers', 5))
         
         parent_prefix = disc_config.get("parent_discriminator_arg_prefix", "video_d")
         self.use_attention_in_video_scale = getattr(args, f"{parent_prefix}_scale{scale_index}_use_attention",
-                                            getattr(args, f"{parent_prefix}_use_attention", False))
+                                            getattr(args, f"{parent_prefix}_use_attention", False)) # Read general arg if scale-specific is missing
         self.attention_after_layer_idx = getattr(args, f"{parent_prefix}_scale{scale_index}_attention_idx",
-                                            getattr(args, f"{parent_prefix}_attention_idx", 2))
+                                            getattr(args, f"{parent_prefix}_attention_idx", 2)) # e.g. after 2nd conv block (0-indexed)
+        self.attention_k_reduction_factor = getattr(args, f"{parent_prefix}_attention_k_reduction", 8)
+
+
         cnn_layers_list = []
-        in_c = video_config.get("num_channels", 3) # Input channels for video
+        in_c = video_config.get("num_channels", 3)
         curr_h, curr_w, curr_d = img_h_eff, img_w_eff, num_frames_eff
 
         if curr_h <= 0 or curr_w <= 0 or curr_d <= 0:
-            self.logger.warning(f" SingleVideoD Scale {scale_index}: Effective input dims ({curr_d}x{curr_h}x{curr_w}) non-positive. Using Identity.")
+            self.logger.warning(f"SingleVideoD Scale {scale_index}: Effective input dims ({curr_d}x{curr_h}x{curr_w}) non-positive. Using Identity layers.")
             self.feature_extractor = nn.Identity()
-            self.final_conv_in_channels = in_c # Will be num_img_channels
+            self.final_conv_in_channels = in_c
             self.final_conv = nn.Identity()
             return
 
-        num_spatial_downsamples = 0; temp_h, temp_w = curr_h, curr_w
-        while (temp_h > target_final_dim_h or temp_w > target_final_dim_w) and num_spatial_downsamples < max_downs_limit and temp_h > 1 and temp_w > 1:
-            next_h = (temp_h - 4 + 2*1)//2 + 1; next_w = (temp_w - 4 + 2*1)//2 + 1 # For K=4, S=2, P=1
-            if (next_h<target_final_dim_h and next_w<target_final_dim_w and num_spatial_downsamples>0) or next_h<1 or next_w<1: break
-            temp_h, temp_w = next_h, next_w; num_spatial_downsamples +=1
-        num_spatial_downsamples = max(0, num_spatial_downsamples)
-
-        temporal_kernel_size = disc_config.get("temporal_kernel_size", getattr(args, 'disc_temporal_kernel_size', 3))
+        num_actual_conv_layers = 0
+        K_SPATIAL, P_SPATIAL, DIL_SPATIAL = 4, 1, 1 # Kernel, Padding, Dilation for spatial
         
-        for i in range(num_spatial_downsamples): # Number of layers determined by spatial downsampling
-            out_c = min(base_ch * (2**i), max_ch)
-            
-            # For video, use 3D convolutions
-            # Stride temporally only in early layers if temporal dim allows
-            spatial_stride_val = 2 if (curr_h > target_final_dim_h or curr_w > target_final_dim_w) else 1
-            temporal_stride_val = 2 if curr_d > temporal_kernel_size and i < 1 else 1 # Stride temporally once if possible
-            
-            eff_temporal_kernel = min(temporal_kernel_size, curr_d) if curr_d > 1 else 1
-            eff_temporal_padding = eff_temporal_kernel // 2 if eff_temporal_kernel > 1 else 0
+        temporal_kernel_size_config = disc_config.get("temporal_kernel_size", getattr(args, 'disc_temporal_kernel_size', 3))
+        
+        for i_loop_idx in range(max_downs_limit):
+            if num_actual_conv_layers >= max_downs_limit: break
+            # Stop if target spatial dims are met AND temporal is 1 (or non-stridable)
+            spatial_target_met = (curr_h <= target_final_dim_h and curr_w <= target_final_dim_w)
+            temporal_target_met = (curr_d == 1) # or if further temporal striding isn't planned/possible
+            if spatial_target_met and temporal_target_met: break
+            if curr_h <= 1 and curr_w <= 1 and curr_d == 1: break # Already 1x1x1
 
-            conv_l = nn.Conv3d(in_c, out_c, 
-                               kernel_size=(eff_temporal_kernel, 4, 4), 
-                               stride=(temporal_stride_val, spatial_stride_val, spatial_stride_val), 
-                               padding=(eff_temporal_padding, 1, 1), 
+            out_c = min(base_ch * (2**num_actual_conv_layers), max_ch)
+            
+            spatial_stride_val = 2 if (curr_h > target_final_dim_h or curr_w > target_final_dim_w) and (curr_h > 1 or curr_w > 1) else 1
+            temporal_stride_val = 2 if curr_d > 1 and num_actual_conv_layers < disc_config.get("num_temporal_stride_layers_disc", 1) else 1
+            
+            eff_temporal_kernel = min(temporal_kernel_size_config, curr_d) if curr_d > 1 else 1
+            eff_temporal_padding = eff_temporal_kernel // 2 if eff_temporal_kernel > 1 else 0
+            if eff_temporal_kernel > curr_d and curr_d > 0: eff_temporal_kernel = curr_d; eff_temporal_padding = 0
+
+            conv_l = nn.Conv3d(in_c, out_c,
+                               kernel_size=(eff_temporal_kernel, K_SPATIAL, K_SPATIAL),
+                               stride=(temporal_stride_val, spatial_stride_val, spatial_stride_val),
+                               padding=(eff_temporal_padding, P_SPATIAL, P_SPATIAL),
                                bias=False)
+            
             if self.apply_spectral_norm: cnn_layers_list.append(spectral_norm(conv_l))
             else: cnn_layers_list.append(conv_l)
+            
             cnn_layers_list.append(nn.InstanceNorm3d(out_c, affine=True))
             cnn_layers_list.append(nn.LeakyReLU(0.2, inplace=True))
-            in_c = out_c
             
-            prev_curr_d, prev_curr_h, prev_curr_w = curr_d, curr_h, curr_w
-            curr_d = (curr_d + 2*eff_temporal_padding - (eff_temporal_kernel-1) -1)//temporal_stride_val + 1 if curr_d > 1 else 1
-            curr_h = (curr_h + 2*1 - (4-1) -1)//spatial_stride_val + 1 if curr_h > 1 else 1
-            curr_w = (curr_w + 2*1 - (4-1) -1)//spatial_stride_val + 1 if curr_w > 1 else 1
+            in_c = out_c # Update in_c for the next layer (or attention/final_conv)
+            
+            # Update current dimensions using the _calculate_conv_output_dim helper
+            next_d = _calculate_conv_output_dim(curr_d, eff_temporal_kernel, eff_temporal_padding, temporal_stride_val)
+            next_h = _calculate_conv_output_dim(curr_h, K_SPATIAL, P_SPATIAL, spatial_stride_val, DIL_SPATIAL)
+            next_w = _calculate_conv_output_dim(curr_w, K_SPATIAL, P_SPATIAL, spatial_stride_val, DIL_SPATIAL)
 
-            if curr_h <= 0 or curr_w <=0 or curr_d <=0 :
-                curr_d, curr_h, curr_w = prev_curr_d, prev_curr_h, prev_curr_w
-                self.logger.warning(f"  SingleVideoD Scale {scale_index} Layer {i}: Dims non-positive ({curr_d}x{curr_h}x{curr_w}). Stopping downsampling."); break
+            if next_d == 0 or next_h == 0 or next_w == 0:
+                self.logger.warning(f"SingleVideoD Scale {scale_index} Layer {num_actual_conv_layers}: Calculated next dims zero ({next_d}x{next_h}x{next_w}) from ({curr_d}x{curr_h}x{curr_w}). Stopping downsampling.")
+                break
+            curr_d, curr_h, curr_w = next_d, next_h, next_w
             
-            # Note: SelfAttention2D is for 2D. For 3D, need SelfAttention3D or apply per-frame.
-            # For simplicity, skipping attention here. If needed, a 3D attention or per-frame 2D attention would be complex.
-            # if self.use_attention_in_video_scale and i == self.attention_after_layer_idx and in_c > 0:
-            #     # This would need a 3D attention module or careful application of 2D attention
-            #     self.logger.warning("3D Attention in SingleScaleVideoDiscriminator not yet implemented. Skipping.")
+            # Add Self-Attention block if configured
+            if self.use_attention_in_video_scale and num_actual_conv_layers == self.attention_after_layer_idx and in_c > 0:
+                self.logger.info(f"  SingleVideoD Scale {scale_index} Layer {num_actual_conv_layers}: Adding 3D Self-Attention. InChannels: {in_c}, K_reduction: {self.attention_k_reduction_factor}")
+                # `in_c` here is the `out_c` of the preceding conv layer
+                attention_block = SelfAttention3D(in_dim=in_c, k_reduction_factor=self.attention_k_reduction_factor, use_spectral_norm=self.apply_spectral_norm)
+                cnn_layers_list.append(attention_block)
+                # Note: Attention block does not change channel count or spatial/temporal dimensions.
+
+            num_actual_conv_layers += 1 # Count actual conv blocks added (attention is separate)
+
 
         self.feature_extractor = nn.Sequential(*cnn_layers_list) if cnn_layers_list else nn.Identity()
-        self.final_conv_in_channels = in_c
+        self.final_conv_in_channels = in_c # Channels after last conv/attention
         
-        # Final conv to produce a single logit per patch/location
-        # For 3D features, this should also be 3D, or pool temporally first
-        final_kernel_d = curr_d if curr_d > 0 else 1
-        final_kernel_h = curr_h if curr_h > 0 else 1
-        final_kernel_w = curr_w if curr_w > 0 else 1
+        final_kernel_d_eff = curr_d if curr_d > 0 else 1
+        final_kernel_h_eff = curr_h if curr_h > 0 else 1
+        final_kernel_w_eff = curr_w if curr_w > 0 else 1
         
-        self.final_conv = nn.Conv3d(self.final_conv_in_channels, 1, 
-                                    kernel_size=(final_kernel_d, final_kernel_h, final_kernel_w), 
+        self.final_conv = nn.Conv3d(self.final_conv_in_channels, 1,
+                                    kernel_size=(final_kernel_d_eff, final_kernel_h_eff, final_kernel_w_eff),
                                     stride=1, padding=0, bias=True)
         if self.apply_spectral_norm: self.final_conv = spectral_norm(self.final_conv)
 
+        self.logger.info(f"SingleVideoD Scale {scale_index} constructed. Input Eff: {num_frames_eff}x{img_h_eff}x{img_w_eff}. Actual Conv Layers: {num_actual_conv_layers}. Final FeatMap Dims (before final_conv): {curr_d}x{curr_h}x{curr_w}. Final Conv InChannels: {self.final_conv_in_channels}.")
+
     def forward(self, x: torch.Tensor, return_features: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        # x is (B, C_in, D_frames, H, W)
         if isinstance(self.feature_extractor, nn.Identity) and isinstance(self.final_conv, nn.Identity):
-            # This path for when input dims were non-positive
+            self.logger.debug_once(f"SingleVideoD Scale {self.scale_index}: Forward pass through Identity layers.")
             dummy_logits = torch.zeros(x.size(0), device=x.device, dtype=x.dtype)
-            dummy_features = torch.zeros(x.size(0),1,1,1,1,device=x.device,dtype=x.dtype) if x.ndim==5 else torch.zeros(x.size(0),1,device=x.device,dtype=x.dtype)
+            # Return input x as "features" but ensure C matches what final_conv_in_channels would have been if active
+            dummy_features_channels = self.final_conv_in_channels if self.final_conv_in_channels > 0 else x.size(1)
+            dummy_features_shape = (x.size(0), dummy_features_channels) + x.shape[2:]
+            dummy_features = torch.zeros(dummy_features_shape, device=x.device, dtype=x.dtype) if return_features else torch.empty(0, device=x.device, dtype=x.dtype)
+            if return_features and dummy_features_channels != x.size(1) : # If input channels don't match expected out_channels
+                self.logger.warning_once(f"SingleVideoD Scale {self.scale_index} (Identity Path): Mismatch in feature channels. Input C={x.size(1)}, Expected D.final_conv_in_channels={dummy_features_channels}. Returning features based on expected.")
+            elif return_features: dummy_features = x
+
             return (dummy_logits, dummy_features) if return_features else dummy_logits
 
-        features = self.feature_extractor(x) # (B, C_feat, D_feat, H_feat, W_feat)
-        patch_logits_map = self.final_conv(features) # (B, 1, 1, 1, 1) if kernels match feature map size
-        
-        # Average over all remaining spatial/temporal dimensions of the logit map
-        logits = torch.mean(patch_logits_map, dim=[2,3,4], keepdim=False) if (patch_logits_map.ndim > 2 and any(s > 1 for s in patch_logits_map.shape[2:])) else patch_logits_map.squeeze()
-        
+        features = self.feature_extractor(x)
+        patch_logits_map = self.final_conv(features)
+        logits = patch_logits_map.squeeze()
+        if logits.ndim == 0: logits = logits.unsqueeze(0)
+
         return (logits, features) if return_features else logits
-
-
-# ... (Previous imports and utility classes like SpectralTransformUtils, ImageAssemblyUtils, HyperbolicUtils, Manifold, PoincareBall, init_weights_general, etc. remain the same) ...
-
-# =====================================================================
-# GAAD Components (Unchanged from v0.2)
-# =====================================================================
-# ... (golden_subdivide_rect_fixed_n, phi_spiral_patch_centers_fixed_n copied from v0.2) ...
 
 # =====================================================================
 # Architectural Components (v0.3 - VAE-GAN Refactor + DFT + DCT)
@@ -2427,19 +2471,6 @@ class RegionalGeneratorDecoder(nn.Module):
             else: self.logger.error("Generator: Fallback pixel path missing final_conv_pixel or final_activation_pixel.")
         return output_pixel_frames, output_dft_coeffs, output_dct_coeffs
 
-# ... (RegionalHyperbolicMotionEncoder remains the same from v0.2) ...
-# ... (WuBuGAADHybridGenNet to be updated to return (pixels, dft, dct) from forward) ...
-# ... (VideoFrameDataset remains the same) ...
-# ... (HybridTrainer to be majorly updated for dual discriminators, new losses, heuristics) ...
-# ... (parse_arguments to include new args for DCT, DFT, discriminators, heuristics) ...
-# ... (main function to instantiate new components) ... 
-# ... (RegionalPatchExtractor, PatchEmbed remain as in v0.2) ...
-# ... (RegionalVAEEncoder updated for DFT+DCT features) ...
-# ... (FiLMLayer as in v0.2) ...
-# ... (RegionalGeneratorDecoder updated for DFT+DCT output heads) ...
-
-# RegionalDiscriminator now becomes VideoDiscriminatorWrapper
-# And we introduce GlobalWuBuVideoFeatureDiscriminator
 
 class VideoDiscriminatorWrapper(nn.Module):
     """
@@ -2869,161 +2900,235 @@ class RegionalDiscriminator(nn.Module): # Unchanged from v0.2, but now used as a
         return logits.to(dtype_in)
 
 
-# ... (RegionalHyperbolicMotionEncoder remains the same from v0.2) ...
-
 # =====================================================================
 # VAE-GAN Model (WuBuGAADHybridGenNet) - Updated
 # =====================================================================
+
 class WuBuGAADHybridGenNet(nn.Module):
-    """Combines Encoder and Generator for VAE-GAN. Supports DFT+DCT features for appearance."""
-    def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_appearance_config: Dict, 
-                 gaad_motion_config: Optional[Dict], wubu_s_config: Dict, wubu_t_config: Optional[Dict], 
+    """
+    Combines Encoder and Generator for VAE-GAN. Supports DFT+DCT features for appearance.
+    Refined for clarity in bbox and feature flow.
+    """
+    def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_appearance_config: Dict,
+                 gaad_motion_config: Optional[Dict], wubu_s_config: Dict, wubu_t_config: Optional[Dict],
                  wubu_m_config: Optional[Dict]):
         super().__init__()
         self.args = args
         self.video_config = video_config
         self.gaad_appearance_config = gaad_appearance_config
-        # self.gaad_motion_config = gaad_motion_config # Not stored if only for sub-module
-        # self.wubu_s_config = wubu_s_config
-        # self.wubu_t_config = wubu_t_config
-        # self.wubu_m_config = wubu_m_config
-        self.logger = logging.getLogger("WuBuGAADHybridGenV03.MainNet")
+        self.logger = logging.getLogger("WuBuGAADHybridGenV03.MainNet") # Consistent logger name
 
         self.latent_dim = args.latent_dim
         self.use_dft_features_appearance = args.use_dft_features_appearance
         self.use_dct_features_appearance = args.use_dct_features_appearance
 
+        # --- Initialize Components ---
         self.encoder = RegionalVAEEncoder(args, video_config, gaad_appearance_config, wubu_s_config, self.latent_dim)
+        
         self.motion_encoder: Optional[RegionalHyperbolicMotionEncoder] = None
         if args.use_wubu_motion_branch:
-             temp_motion_encoder = RegionalHyperbolicMotionEncoder(args, video_config, gaad_motion_config, wubu_m_config)
-             if temp_motion_encoder.enabled: self.motion_encoder = temp_motion_encoder; self.logger.info("Motion Encoder Branch Activated.")
-             else: self.logger.warning("Motion branch requested but disabled in sub-module."); args.use_wubu_motion_branch = False; # video_config['wubu_m_output_dim'] = 0 # Already handled in encoder
+            # Assuming RegionalHyperbolicMotionEncoder is defined and has an 'enabled' attribute
+            temp_motion_encoder = RegionalHyperbolicMotionEncoder(args, video_config, gaad_motion_config, wubu_m_config)
+            if temp_motion_encoder.enabled:
+                self.motion_encoder = temp_motion_encoder
+                self.logger.info("Motion Encoder Branch Activated.")
+            else:
+                self.logger.warning("Motion branch requested but disabled in sub-module or due to missing dependencies. Forcing args.use_wubu_motion_branch to False for this run.")
+                # Update args to reflect that motion branch is effectively off if sub-module is disabled
+                # This is important because other parts of the model (like RegionalVAEEncoder)
+                # might adjust their input dimensions based on args.use_wubu_motion_branch.
+                # This needs careful handling: either the encoder itself checks motion_encoder.enabled,
+                # or we ensure args reflects the true state.
+                # For now, let's assume RegionalVAEEncoder will handle a None motion_features input correctly.
+                # A more robust way is for the encoder to take self.motion_encoder as an argument.
+                # Or, as done in your original code, args.use_wubu_motion_branch can be set to False.
+                # However, modifying args post-init can be tricky if other components already read it.
+                # It's cleaner if components can handle a disabled sub-component gracefully.
+                # Let's assume the encoder's forward method handles motion_features being None.
 
         self.generator = RegionalGeneratorDecoder(args, video_config, gaad_appearance_config, self.latent_dim)
 
-        self.apply(init_weights_general)
+        self.apply(init_weights_general) # Assuming init_weights_general is defined
         param_count = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        self.logger.info(f"WuBuGAADHybridGenNet Initialized (DFT:{args.use_dft_features_appearance}, DCT:{args.use_dct_features_appearance}): {param_count:,} params.")
+        self.logger.info(f"WuBuGAADHybridGenNet Initialized (DFT:{args.use_dft_features_appearance}, DCT:{args.use_dct_features_appearance}, Motion:{args.use_wubu_motion_branch and self.motion_encoder is not None}): {param_count:,} params.")
 
     def encode(self, frames_pixels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        # Output: mu, logvar, gaad_bboxes_all_frames, target_dft_features, target_dct_features
-        motion_features = None
+        # Output: mu, logvar, gaad_bboxes_for_all_input_frames, target_dft_features_all_input, target_dct_features_all_input
+        # The bboxes and target features returned by encode should correspond to *all* frames_pixels passed in.
+        
+        motion_features_for_encoder: Optional[torch.Tensor] = None
+        # motion_bboxes_from_encoder: Optional[torch.Tensor] = None # Not directly used by this class's forward
+
         if self.motion_encoder is not None and self.motion_encoder.enabled:
+            # frames_pixels is (B, N_total_sample_frames, C, H, W)
             motion_output_tuple = self.motion_encoder(frames_pixels)
             if motion_output_tuple is not None:
-                motion_features, _ = motion_output_tuple # Second item is motion_bboxes, not used here
-
-        mu, logvar, gaad_bboxes_all_frames, target_dft_feats, target_dct_feats = self.encoder(frames_pixels, motion_features)
-        return mu, logvar, gaad_bboxes_all_frames, target_dft_feats, target_dct_feats
+                motion_features_for_encoder, _ = motion_output_tuple # Second item is motion_bboxes
+                # Ensure motion_features_for_encoder is correctly shaped for the encoder if needed
+                # E.g., (B, N_pairs, N_motion_reg, D_motion)
+        
+        # The encoder's forward should handle if motion_features_for_encoder is None
+        mu, logvar, gaad_bboxes_all_input_f, target_dft_all_input_f, target_dct_all_input_f = self.encoder(frames_pixels, motion_features_for_encoder)
+        
+        return mu, logvar, gaad_bboxes_all_input_f, target_dft_all_input_f, target_dct_all_input_f
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
+        eps = torch.randn_like(std) # Ensure eps is on the same device and dtype as std
         return mu + eps * std
 
     def decode(self, z: torch.Tensor, gaad_bboxes_for_decode: torch.Tensor
               ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         # Output: recon_pixel_frames (Optional), recon_dft_coeffs (Optional), recon_dct_coeffs (Optional)
+        # gaad_bboxes_for_decode should be (B, num_predict_frames, num_regions, 4)
         return self.generator(z, gaad_bboxes_for_decode)
 
-    def forward(self, frames_pixels: torch.Tensor
-               ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        # Output:
-        #   recon_pixel_frames, recon_dft_coeffs, recon_dct_coeffs,
-        #   mu, logvar, bboxes_used_by_decoder,
-        #   target_dft_features, target_dct_features
+    def forward(self, frames_pixels: torch.Tensor # Expected shape (B, N_total_sample_frames, C, H, W)
+               ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], # Reconstructions
+                          torch.Tensor, torch.Tensor, # mu, logvar
+                          torch.Tensor, # bboxes_used_for_decoding
+                          Optional[torch.Tensor], Optional[torch.Tensor]]: # Target spectral features for loss
+        """
+        Full forward pass for training.
+        Output Tuple:
+            - recon_pixel_frames_gen (Optional[Tensor]): (B, N_pred, C, H, W) or None
+            - recon_dft_coeffs_gen (Optional[Tensor]): (B, N_pred, N_reg, D_dft_flat_per_reg) or similar, or None
+            - recon_dct_coeffs_gen (Optional[Tensor]): (B, N_pred, N_reg, D_dct_flat_per_reg) or similar, or None
+            - mu (Tensor): (B, latent_dim)
+            - logvar (Tensor): (B, latent_dim)
+            - bboxes_used_for_decoding (Tensor): (B, N_pred, N_reg, 4) - BBoxes corresponding to the frames the decoder generated.
+            - target_dft_features_for_loss (Optional[Tensor]): (B, N_pred, N_reg, D_dft_flat_per_reg) or None
+            - target_dct_features_for_loss (Optional[Tensor]): (B, N_pred, N_reg, D_dct_flat_per_reg) or None
+        """
+        B, N_total_sample_frames, _, _, _ = frames_pixels.shape
+        device = frames_pixels.device
+        dtype_model = next(self.parameters()).dtype if hasattr(self, 'parameters') and next(self.parameters(), None) is not None else frames_pixels.dtype
 
-        mu, logvar, gaad_bboxes_all_input, target_dft_features, target_dct_features = self.encode(frames_pixels)
+
+        # 1. Encode the entire input sequence to get latent parameters and TARGET spectral features
+        #    gaad_bboxes_all_input_frames is (B, N_total_sample_frames, num_app_regions, 4)
+        #    target_dft_all_input is (B, N_total_sample_frames, num_app_regions, D_dft_flat)
+        mu, logvar, gaad_bboxes_all_input_frames, target_dft_all_input, target_dct_all_input = self.encode(frames_pixels)
+        
+        # 2. Sample from the latent space
         z = self.reparameterize(mu, logvar)
 
-        num_input_f = self.video_config.get("num_input_frames", 0) # Default to 0 if not in config
-        num_predict_f = self.video_config.get("num_predict_frames", 1)
-        expected_total_bbox_frames = frames_pixels.shape[1]
+        # 3. Determine which GAAD bounding boxes to pass to the decoder/generator
+        #    The generator predicts `num_predict_frames`.
+        #    These frames are typically those *after* `num_input_frames` from the input sequence.
+        num_input_frames_conditioning = self.video_config.get("num_input_frames", 0)
+        num_frames_to_predict_by_gen = self.video_config.get("num_predict_frames", 1)
 
-        if gaad_bboxes_all_input.shape[1] != expected_total_bbox_frames :
-             self.logger.warning(f"MainNet Fwd: Encoder bbox sets ({gaad_bboxes_all_input.shape[1]}) != input frames ({expected_total_bbox_frames}). This might be an issue if bboxes are frame-specific.")
-
-        # Select bboxes for frames that are to be *predicted* by the decoder
-        # If num_input_frames=0, it predicts all frames. If >0, it predicts frames *after* input_frames.
-        if gaad_bboxes_all_input.shape[1] < num_input_f + num_predict_f:
-            self.logger.error(f"MainNet Fwd: Not enough bbox sets from encoder ({gaad_bboxes_all_input.shape[1]}) for target input ({num_input_f}) + pred ({num_predict_f}) span.")
-            # Fallback: if we have at least num_predict_f bboxes, take the last ones.
-            # Otherwise, if any bboxes, use them and hope generator handles length mismatch (it should).
-            if gaad_bboxes_all_input.shape[1] >= num_predict_f:
-                 decoder_bboxes_selected = gaad_bboxes_all_input[:, -num_predict_f:, ...]
-            elif gaad_bboxes_all_input.shape[1] > 0: # Less than num_predict_f but some available
-                 decoder_bboxes_selected = gaad_bboxes_all_input # Pass all available
-                 self.logger.warning(f"  Using all {decoder_bboxes_selected.shape[1]} available bboxes for decoder (expected {num_predict_f}).")
-            else: # No bboxes at all from encoder
-                raise ValueError("MainNet Fwd: Encoder returned no GAAD bboxes. Cannot proceed with decoding.")
+        # Ensure we have enough frames in the input sequence for the desired operation
+        if N_total_sample_frames < num_input_frames_conditioning + num_frames_to_predict_by_gen:
+            self.logger.error(f"MainNet Fwd: Input sequence length ({N_total_sample_frames}) is less than "
+                              f"num_input_frames ({num_input_frames_conditioning}) + num_predict_frames ({num_frames_to_predict_by_gen}). "
+                              f"Cannot select appropriate bboxes/targets for decoder/loss.")
+            # Handle error: maybe return Nones or raise exception
+            # For now, let's try to proceed with what we have, but this is a config issue.
+            # This indicates a mismatch between dataset sampling and model config.
+            # If num_input_frames_conditioning is 0, we predict all N_total_sample_frames.
+            actual_predict_start_idx = num_input_frames_conditioning if N_total_sample_frames > num_input_frames_conditioning else 0
+            actual_num_frames_for_decoder = min(num_frames_to_predict_by_gen, N_total_sample_frames - actual_predict_start_idx)
+            if actual_num_frames_for_decoder <= 0:
+                raise ValueError(f"MainNet Fwd: Misconfiguration or insufficient input frames. Effective frames for decoder is {actual_num_frames_for_decoder}.")
+            self.logger.warning(f"  Adjusting to decode {actual_num_frames_for_decoder} frames starting from index {actual_predict_start_idx} of input bboxes/targets.")
         else:
-            # Standard case: select bboxes for the prediction window
-            decoder_bboxes_selected = gaad_bboxes_all_input[:, num_input_f : num_input_f + num_predict_f, ...]
+            actual_predict_start_idx = num_input_frames_conditioning
+            actual_num_frames_for_decoder = num_frames_to_predict_by_gen
+            
+        # Slice the GAAD bboxes from the *encoder's output* that correspond to the frames
+        # the *decoder* will generate.
+        # gaad_bboxes_all_input_frames shape: (B, N_total_sample_frames, num_app_regions, 4)
+        bboxes_for_decoding_input = gaad_bboxes_all_input_frames[
+            :,
+            actual_predict_start_idx : actual_predict_start_idx + actual_num_frames_for_decoder,
+            ...
+        ]
 
-        # Ensure the number of bbox sets matches num_predict_frames for the generator
-        # The generator expects bboxes for exactly the number of frames it will predict.
-        if decoder_bboxes_selected.shape[1] != num_predict_f:
-            self.logger.warning(f"MainNet Fwd: Sliced decoder_bboxes has {decoder_bboxes_selected.shape[1]} frames, generator expects {num_predict_f}. Adjusting.")
-            if decoder_bboxes_selected.shape[1] < num_predict_f:
-                if decoder_bboxes_selected.shape[1] == 0:
-                    # This means after slicing, no bboxes were left for the prediction window.
-                    # Create dummy full-frame bboxes if absolutely necessary (highly undesirable)
-                    self.logger.error("  No bboxes selected for decoder. Creating dummy full-frame bboxes. This is likely an error in bbox slicing or num_input_frames config.")
-                    dummy_bbox = torch.tensor([0, 0, self.args.image_w, self.args.image_h], device=z.device, dtype=z.dtype)
-                    decoder_bboxes_selected = dummy_bbox.view(1,1,1,4).expand(B, num_predict_f, self.gaad_appearance_config['num_regions'], 4)
-                else: # Pad by repeating the last available bbox set
-                    num_to_pad = num_predict_f - decoder_bboxes_selected.shape[1]
-                    padding_slice = decoder_bboxes_selected[:, -1:, ...].repeat(1, num_to_pad, 1, 1)
-                    decoder_bboxes_selected = torch.cat([decoder_bboxes_selected, padding_slice], dim=1)
-            else: # decoder_bboxes_selected.shape[1] > num_predict_f (should not happen with correct slicing)
-                decoder_bboxes_selected = decoder_bboxes_selected[:, :num_predict_f, ...]
-        
-        recon_pixel_frames, recon_dft_coeffs, recon_dct_coeffs = self.decode(z, decoder_bboxes_selected)
-        
-        # Select target DFT/DCT features corresponding to the predicted frames
-        final_target_dft_for_loss = target_dft_features[:, num_input_f : num_input_f + num_predict_f, ...] if target_dft_features is not None else None
-        final_target_dct_for_loss = target_dct_features[:, num_input_f : num_input_f + num_predict_f, ...] if target_dct_features is not None else None
+        # Ensure the selected bboxes match the number of frames the generator is configured to predict.
+        # The generator itself is built expecting to produce `self.num_predict_frames`.
+        # If actual_num_frames_for_decoder is less, we need to give the generator bboxes for its full prediction window,
+        # potentially by padding or by ensuring the config is consistent.
+        # For now, assume RegionalGeneratorDecoder is robust to `gaad_bboxes_for_decode` having fewer frames
+        # than its internal `self.num_predict_frames` if it uses that for its ConvTranspose3d output shape.
+        # However, it's better if `bboxes_for_decoding_input` always matches `generator.num_predict_frames`.
+        # The generator's `self.num_predict_frames` *should* be `actual_num_frames_for_decoder`.
+        # If `self.video_config["num_predict_frames"]` is the single source of truth for generator output length,
+        # then `actual_num_frames_for_decoder` must match it.
+        if bboxes_for_decoding_input.shape[1] != self.generator.num_predict_frames:
+            self.logger.warning_once(f"MainNet Fwd: Shape mismatch for decoder bboxes. "
+                                f"Selected {bboxes_for_decoding_input.shape[1]} frames of bboxes, "
+                                f"but generator.num_predict_frames is {self.generator.num_predict_frames}. "
+                                f"This might occur if N_total_sample_frames was too short. "
+                                f"Attempting to use available bboxes; decoder might misbehave if temporal dim of bboxes doesn't match its output.")
+            # If fewer bboxes than generator expects, could pad. If more, could truncate.
+            # This situation ideally indicates a dataset/config mismatch.
+            # For now, pass what we sliced. Generator needs to be robust or this is an error.
+            if bboxes_for_decoding_input.shape[1] < self.generator.num_predict_frames and bboxes_for_decoding_input.shape[1] > 0:
+                num_to_pad_bbox = self.generator.num_predict_frames - bboxes_for_decoding_input.shape[1]
+                padding_slice_bbox = bboxes_for_decoding_input[:, -1:, ...].repeat(1, num_to_pad_bbox, 1, 1)
+                bboxes_for_decoding_input = torch.cat([bboxes_for_decoding_input, padding_slice_bbox], dim=1)
+                self.logger.warning_once(f"  Padded decoder bboxes to {bboxes_for_decoding_input.shape[1]} frames.")
+            elif bboxes_for_decoding_input.shape[1] > self.generator.num_predict_frames:
+                bboxes_for_decoding_input = bboxes_for_decoding_input[:, :self.generator.num_predict_frames, ...]
+                self.logger.warning_once(f"  Truncated decoder bboxes to {bboxes_for_decoding_input.shape[1]} frames.")
 
-        return recon_pixel_frames, recon_dft_coeffs, recon_dct_coeffs, mu, logvar, decoder_bboxes_selected, final_target_dft_for_loss, final_target_dct_for_loss
+
+        # 4. Decode the latent sample `z` using the selected bboxes
+        #    The decoder should generate `self.generator.num_predict_frames` worth of content.
+        recon_pixel_frames_gen, recon_dft_coeffs_gen, recon_dct_coeffs_gen = self.decode(z, bboxes_for_decoding_input)
+
+        # 5. Select the corresponding TARGET spectral features for the reconstruction loss.
+        #    These targets must align with the frames the generator *attempted* to reconstruct.
+        #    And their number of frames must match the generator's output frames.
+        target_dft_for_loss: Optional[torch.Tensor] = None
+        if target_dft_all_input is not None:
+            target_dft_for_loss = target_dft_all_input[
+                :,
+                actual_predict_start_idx : actual_predict_start_idx + actual_num_frames_for_decoder,
+                ...
+            ]
+            # If generator output frame count differs from actual_num_frames_for_decoder (due to fixed generator.num_predict_frames)
+            # and we padded/truncated bboxes_for_decoding_input, we need to adjust target_dft_for_loss similarly
+            # to match recon_dft_coeffs_gen.shape[1]
+            if recon_dft_coeffs_gen is not None and target_dft_for_loss.shape[1] != recon_dft_coeffs_gen.shape[1]:
+                self.logger.warning_once(f"MainNet Fwd: Target DFT frames ({target_dft_for_loss.shape[1]}) "
+                                     f"!= Recon DFT frames ({recon_dft_coeffs_gen.shape[1]}). Adjusting target for loss.")
+                if target_dft_for_loss.shape[1] < recon_dft_coeffs_gen.shape[1] and target_dft_for_loss.shape[1] > 0: # Pad target
+                    num_pad_target_dft = recon_dft_coeffs_gen.shape[1] - target_dft_for_loss.shape[1]
+                    pad_slice_target_dft = target_dft_for_loss[:, -1:, ...].repeat(1, num_pad_target_dft, 1, 1)
+                    target_dft_for_loss = torch.cat([target_dft_for_loss, pad_slice_target_dft], dim=1)
+                elif target_dft_for_loss.shape[1] > recon_dft_coeffs_gen.shape[1]: # Truncate target
+                    target_dft_for_loss = target_dft_for_loss[:, :recon_dft_coeffs_gen.shape[1], ...]
 
 
-# WuBuGAADHybridGen_v0.3.py
-# ... (previous code from your last snippet) ...
+        target_dct_for_loss: Optional[torch.Tensor] = None
+        if target_dct_all_input is not None:
+            target_dct_for_loss = target_dct_all_input[
+                :,
+                actual_predict_start_idx : actual_predict_start_idx + actual_num_frames_for_decoder,
+                ...
+            ]
+            if recon_dct_coeffs_gen is not None and target_dct_for_loss.shape[1] != recon_dct_coeffs_gen.shape[1]:
+                self.logger.warning_once(f"MainNet Fwd: Target DCT frames ({target_dct_for_loss.shape[1]}) "
+                                     f"!= Recon DCT frames ({recon_dct_coeffs_gen.shape[1]}). Adjusting target for loss.")
+                if target_dct_for_loss.shape[1] < recon_dct_coeffs_gen.shape[1] and target_dct_for_loss.shape[1] > 0: # Pad target
+                    num_pad_target_dct = recon_dct_coeffs_gen.shape[1] - target_dct_for_loss.shape[1]
+                    pad_slice_target_dct = target_dct_for_loss[:, -1:, ...].repeat(1, num_pad_target_dct, 1, 1)
+                    target_dct_for_loss = torch.cat([target_dct_for_loss, pad_slice_target_dct], dim=1)
+                elif target_dct_for_loss.shape[1] > recon_dct_coeffs_gen.shape[1]: # Truncate target
+                    target_dct_for_loss = target_dct_for_loss[:, :recon_dct_coeffs_gen.shape[1], ...]
 
-# =====================================================================
-# GAAD Components (Unchanged from v0.2)
-# =====================================================================
-# Copied from v0.2 / audio script
-def golden_subdivide_rect_fixed_n(frame_dims:Tuple[int,int], num_regions_target:int, device='cpu', dtype=torch.float, min_size_px=5) -> torch.Tensor:
-    W, H = frame_dims; all_rects = [[0,0,W,H]]; rect_queue = deque([(0,0,W,H,0)])
-    while rect_queue and len(all_rects) < num_regions_target * 3:
-        x_off, y_off, w_curr, h_curr, depth = rect_queue.popleft()
-        if min(w_curr, h_curr) < min_size_px or depth > 6 : continue
-        is_landscape = w_curr > h_curr + EPS; is_portrait = h_curr > w_curr + EPS
-        if is_landscape: cut_w = w_curr / PHI; r1_w, r2_w = cut_w, w_curr - cut_w; all_rects.append([x_off, y_off, x_off + r1_w, y_off + h_curr]) if r1_w >= min_size_px and h_curr >= min_size_px else None; rect_queue.append((x_off, y_off, r1_w, h_curr, depth + 1)) if r1_w >= min_size_px and h_curr >= min_size_px else None; all_rects.append([x_off + r1_w, y_off, x_off + r1_w + r2_w, y_off + h_curr]) if r2_w >= min_size_px and h_curr >= min_size_px else None; rect_queue.append((x_off + r1_w, y_off, r2_w, h_curr, depth + 1)) if r2_w >= min_size_px and h_curr >= min_size_px else None
-        elif is_portrait: cut_h = h_curr / PHI; r1_h, r2_h = cut_h, h_curr - cut_h; all_rects.append([x_off, y_off, x_off + w_curr, y_off + r1_h]) if w_curr >= min_size_px and r1_h >= min_size_px else None; rect_queue.append((x_off, y_off, w_curr, r1_h, depth + 1)) if w_curr >= min_size_px and r1_h >= min_size_px else None; all_rects.append([x_off, y_off + r1_h, x_off + w_curr, y_off + r1_h + r2_h]) if w_curr >= min_size_px and r2_h >= min_size_px else None; rect_queue.append((x_off, y_off + r1_h, w_curr, r2_h, depth + 1)) if w_curr >= min_size_px and r2_h >= min_size_px else None
-        elif abs(w_curr - h_curr) < EPS and w_curr > min_size_px * PHI : cut_w = w_curr / PHI; r1_w, r2_w = cut_w, w_curr - cut_w; all_rects.append([x_off, y_off, x_off + r1_w, y_off + h_curr]) if r1_w >= min_size_px and h_curr >= min_size_px else None; rect_queue.append((x_off, y_off, r1_w, h_curr, depth + 1)) if r1_w >= min_size_px and h_curr >= min_size_px else None; all_rects.append([x_off + r1_w, y_off, x_off + r1_w + r2_w, y_off + h_curr]) if r2_w >= min_size_px and h_curr >= min_size_px else None; rect_queue.append((x_off + r1_w, y_off, r2_w, h_curr, depth + 1)) if r2_w >= min_size_px and h_curr >= min_size_px else None
-    unique_valid_rects_tensors = []; seen_hashes = set()
-    for r_coords in all_rects:
-        if r_coords[0] >= r_coords[2] - EPS or r_coords[1] >= r_coords[3] - EPS: continue
-        r_tensor = torch.tensor(r_coords, dtype=dtype, device=device); r_hashable = tuple(round(c, 3) for c in r_coords)
-        if r_hashable not in seen_hashes: unique_valid_rects_tensors.append(r_tensor); seen_hashes.add(r_hashable)
-    unique_valid_rects_tensors.sort(key=lambda r: (r[2]-r[0])*(r[3]-r[1]), reverse=True); selected_rects = unique_valid_rects_tensors[:num_regions_target]
-    if len(selected_rects) < num_regions_target: padding_box = selected_rects[-1] if selected_rects else torch.tensor([0,0,float(W),float(H)],dtype=dtype,device=device); selected_rects.extend([padding_box.clone() for _ in range(num_regions_target - len(selected_rects))])
-    return torch.stack(selected_rects)
 
-def phi_spiral_patch_centers_fixed_n(frame_dims:Tuple[int,int], num_centers:int, device='cpu', dtype=torch.float) -> Tuple[torch.Tensor, torch.Tensor]: # Copied from audio script
-    W, H = frame_dims; centers_xy = []; scale_factors = []; cx, cy = W / 2.0, H / 2.0
-    if num_centers <= 0: return torch.empty(0,2,device=device,dtype=dtype), torch.empty(0,1,device=device,dtype=dtype)
-    centers_xy.append([cx, cy]); scale_factors.append(0.25); num_spiral_points_to_generate = num_centers - 1
-    if num_spiral_points_to_generate <= 0: return (torch.tensor(centers_xy, dtype=dtype, device=device), torch.tensor(scale_factors, dtype=dtype, device=device).unsqueeze(-1)) if num_centers == 1 else (torch.empty(0,2,device=device,dtype=dtype), torch.empty(0,1,device=device,dtype=dtype))
-    a = 0.05 * min(W, H); b = math.log(PHI) / (math.pi / 2); angle_step = PHI * 2 * math.pi / num_spiral_points_to_generate if num_spiral_points_to_generate > 0 else 0; current_angle = 0.0
-    for i in range(num_spiral_points_to_generate):
-        r = min(a * math.exp(b * current_angle), max(W,H) * 0.6); x = max(0.0, min(cx + r * math.cos(current_angle), float(W))); y = max(0.0, min(cy + r * math.sin(current_angle), float(H)))
-        centers_xy.append([x, y]); scale_factors.append(max(0.05, 0.20 * math.exp(-0.5 * r / (min(W,H)*0.1)))); current_angle += angle_step
-    if len(centers_xy) < num_centers: num_to_pad = num_centers - len(centers_xy); last_xy = centers_xy[-1] if centers_xy else [cx,cy]; last_scale = scale_factors[-1] if scale_factors else 0.1; centers_xy.extend([last_xy] * num_to_pad); scale_factors.extend([last_scale] * num_to_pad)
-    return torch.tensor(centers_xy[:num_centers], dtype=dtype, device=device), torch.tensor(scale_factors[:num_centers], dtype=dtype, device=device).unsqueeze(-1)
+        # bboxes_used_by_decoder refers to the bboxes that align with the *generator's output length*
+        # which is `self.generator.num_predict_frames`. This is `bboxes_for_decoding_input` after any padding/truncation.
+        return (
+            recon_pixel_frames_gen, recon_dft_coeffs_gen, recon_dct_coeffs_gen,
+            mu, logvar,
+            bboxes_for_decoding_input, # These are the bboxes corresponding to G's output
+            target_dft_for_loss, target_dct_for_loss
+        )
 
 # =====================================================================
 
@@ -3114,31 +3219,116 @@ class RegionalHyperbolicMotionEncoder(nn.Module):
         self.apply(init_weights_general)
 
     def _get_motion_gaad_bboxes(self, analysis_map: torch.Tensor, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        # analysis_map is expected to be (B_eff, 1, H, W) e.g., flow_magnitude
         B_eff, _, H, W = analysis_map.shape
-        all_batch_bboxes = []
-        for i in range(B_eff):
-            frame_dims = (W, H); max_w_scalar = float(W); max_h_scalar = float(H); frame_bboxes = None 
-            if self.motion_decomposition_type == "hybrid":
-                num_subdivide = self.num_motion_regions // 2; num_spiral = self.num_motion_regions - num_subdivide; bboxes_for_item = []
-                if num_subdivide > 0: bboxes_for_item.append(golden_subdivide_rect_fixed_n(frame_dims, num_subdivide, device, dtype, self.gaad_min_size_px))
-                if num_spiral > 0:
-                    spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, num_spiral, device, dtype); patch_base_size = min(frame_dims); spiral_bboxes_current = torch.zeros(num_spiral, 4, device=device, dtype=dtype); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs
-                    val_x1 = spiral_centers[:,0] - patch_ws; val_y1 = spiral_centers[:,1] - patch_hs; val_x2 = spiral_centers[:,0] + patch_ws; val_y2 = spiral_centers[:,1] + patch_hs
-                    spiral_bboxes_current[:,0] = torch.clamp(val_x1, min=0.0, max=max_w_scalar - EPS); spiral_bboxes_current[:,1] = torch.clamp(val_y1, min=0.0, max=max_h_scalar - EPS); min_for_x2 = spiral_bboxes_current[:,0] + EPS; spiral_bboxes_current[:,2] = torch.clamp(val_x2, max=max_w_scalar); spiral_bboxes_current[:,2] = torch.maximum(spiral_bboxes_current[:,2], min_for_x2); min_for_y2 = spiral_bboxes_current[:,1] + EPS; spiral_bboxes_current[:,3] = torch.clamp(val_y2, max=max_h_scalar); spiral_bboxes_current[:,3] = torch.maximum(spiral_bboxes_current[:,3], min_for_y2); bboxes_for_item.append(spiral_bboxes_current)
-                if bboxes_for_item: frame_bboxes = torch.cat(bboxes_for_item, dim=0)
-                elif self.num_motion_regions > 0: frame_bboxes = torch.tensor([[0,0,max_w_scalar,max_h_scalar]]*self.num_motion_regions, dtype=dtype, device=device)
-                else: frame_bboxes = torch.empty(0,4,dtype=dtype, device=device)
-            elif self.motion_decomposition_type == "spiral":
-                spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, self.num_motion_regions, device, dtype); patch_base_size = min(frame_dims); spiral_bboxes_current = torch.zeros(self.num_motion_regions, 4, device=device, dtype=dtype); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs
-                val_x1 = spiral_centers[:,0] - patch_ws; val_y1 = spiral_centers[:,1] - patch_hs; val_x2 = spiral_centers[:,0] + patch_ws; val_y2 = spiral_centers[:,1] + patch_hs
-                spiral_bboxes_current[:,0] = torch.clamp(val_x1, min=0.0, max=max_w_scalar - EPS); spiral_bboxes_current[:,1] = torch.clamp(val_y1, min=0.0, max=max_h_scalar - EPS); min_for_x2 = spiral_bboxes_current[:,0] + EPS; spiral_bboxes_current[:,2] = torch.clamp(val_x2, max=max_w_scalar); spiral_bboxes_current[:,2] = torch.maximum(spiral_bboxes_current[:,2], min_for_x2); min_for_y2 = spiral_bboxes_current[:,1] + EPS; spiral_bboxes_current[:,3] = torch.clamp(val_y2, max=max_h_scalar); spiral_bboxes_current[:,3] = torch.maximum(spiral_bboxes_current[:,3], min_for_y2); frame_bboxes = spiral_bboxes_current
-            else: frame_bboxes = golden_subdivide_rect_fixed_n(frame_dims, self.num_motion_regions, device, dtype, self.gaad_min_size_px)
-            if frame_bboxes.shape[0] < self.num_motion_regions:
-                num_to_pad = self.num_motion_regions - frame_bboxes.shape[0]; padding_box = frame_bboxes[-1:].clone() if frame_bboxes.shape[0] > 0 else torch.tensor([[0,0,max_w_scalar,max_h_scalar]], dtype=dtype, device=device); padding = padding_box.repeat(num_to_pad, 1); frame_bboxes = torch.cat([frame_bboxes, padding], dim=0)
-            elif frame_bboxes.shape[0] > self.num_motion_regions: frame_bboxes = frame_bboxes[:self.num_motion_regions]
-            all_batch_bboxes.append(frame_bboxes)
-        return torch.stack(all_batch_bboxes)
+        all_batch_bboxes_list = [] # Use a list to collect tensors for each batch item
 
+        for i in range(B_eff):
+            # Get the single channel (H, W) slice for the current batch item
+            current_analysis_map_slice = analysis_map[i, 0, :, :] # Shape (H, W)
+            
+            frame_dims_tuple = (W, H) # Consistent (Width, Height) for GAAD functions
+            max_w_scalar, max_h_scalar = float(W), float(H)
+            frame_bboxes_for_item_list = [] # Bboxes for current item in batch
+
+            if self.motion_decomposition_type == "hybrid":
+                num_subdivide = self.num_motion_regions // 2
+                num_spiral = self.num_motion_regions - num_subdivide
+                
+                if num_subdivide > 0:
+                    subdivide_bboxes = golden_subdivide_rect_fixed_n_motion_aware(
+                        frame_dims_tuple, current_analysis_map_slice, num_subdivide,
+                        device, dtype, self.gaad_min_size_px,
+                        prioritize_high_energy=self.args.motion_gaad_gas_prioritize_high_energy # New arg
+                    )
+                    frame_bboxes_for_item_list.append(subdivide_bboxes)
+                
+                if num_spiral > 0:
+                    spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n_motion_aware(
+                        frame_dims_tuple, current_analysis_map_slice, num_spiral, device, dtype,
+                        num_spiral_arms_per_hotspot=self.args.motion_gaad_psp_arms_per_hotspot, # New arg
+                        points_per_arm=self.args.motion_gaad_psp_pts_per_arm,                   # New arg
+                        motion_scale_influence=self.args.motion_gaad_psp_motion_scale_influence # New arg
+                    )
+                    # Convert centers and scales to [x1, y1, x2, y2] bboxes
+                    patch_base_size_for_spiral = min(frame_dims_tuple) # Or some other reference
+                    patch_hs = float(patch_base_size_for_spiral) * spiral_scales[:,0] / 2.0 # Half-height
+                    patch_ws = patch_hs # Assume square patches from spiral centers for simplicity
+                    
+                    val_x1 = spiral_centers[:,0] - patch_ws
+                    val_y1 = spiral_centers[:,1] - patch_hs
+                    val_x2 = spiral_centers[:,0] + patch_ws
+                    val_y2 = spiral_centers[:,1] + patch_hs
+                    
+                    spiral_bboxes_current = torch.zeros(num_spiral, 4, device=device, dtype=dtype)
+                    spiral_bboxes_current[:,0] = torch.clamp(val_x1, min=0.0, max=max_w_scalar - EPS)
+                    spiral_bboxes_current[:,1] = torch.clamp(val_y1, min=0.0, max=max_h_scalar - EPS)
+                    min_for_x2 = spiral_bboxes_current[:,0] + EPS # Ensure x2 > x1
+                    spiral_bboxes_current[:,2] = torch.clamp(val_x2, max=max_w_scalar)
+                    spiral_bboxes_current[:,2] = torch.maximum(spiral_bboxes_current[:,2], min_for_x2)
+                    min_for_y2 = spiral_bboxes_current[:,1] + EPS # Ensure y2 > y1
+                    spiral_bboxes_current[:,3] = torch.clamp(val_y2, max=max_h_scalar)
+                    spiral_bboxes_current[:,3] = torch.maximum(spiral_bboxes_current[:,3], min_for_y2)
+                    frame_bboxes_for_item_list.append(spiral_bboxes_current)
+
+            elif self.motion_decomposition_type == "spiral":
+                spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n_motion_aware(
+                    frame_dims_tuple, current_analysis_map_slice, self.num_motion_regions, device, dtype,
+                    num_spiral_arms_per_hotspot=self.args.motion_gaad_psp_arms_per_hotspot,
+                    points_per_arm=self.args.motion_gaad_psp_pts_per_arm,
+                    motion_scale_influence=self.args.motion_gaad_psp_motion_scale_influence
+                )
+                patch_base_size_for_spiral = min(frame_dims_tuple)
+                patch_hs = float(patch_base_size_for_spiral) * spiral_scales[:,0] / 2.0
+                patch_ws = patch_hs
+                val_x1 = spiral_centers[:,0] - patch_ws; val_y1 = spiral_centers[:,1] - patch_hs
+                val_x2 = spiral_centers[:,0] + patch_ws; val_y2 = spiral_centers[:,1] + patch_hs
+                spiral_bboxes_final = torch.zeros(self.num_motion_regions, 4, device=device, dtype=dtype)
+                spiral_bboxes_final[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS); spiral_bboxes_final[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS)
+                min_for_x2=spiral_bboxes_final[:,0]+EPS; spiral_bboxes_final[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_final[:,2]=torch.maximum(spiral_bboxes_final[:,2],min_for_x2)
+                min_for_y2=spiral_bboxes_final[:,1]+EPS; spiral_bboxes_final[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_final[:,3]=torch.maximum(spiral_bboxes_final[:,3],min_for_y2)
+                frame_bboxes_for_item_list.append(spiral_bboxes_final)
+                
+            else: # "subdivide"
+                subdivide_bboxes = golden_subdivide_rect_fixed_n_motion_aware(
+                    frame_dims_tuple, current_analysis_map_slice, self.num_motion_regions,
+                    device, dtype, self.gaad_min_size_px,
+                    prioritize_high_energy=self.args.motion_gaad_gas_prioritize_high_energy
+                )
+                frame_bboxes_for_item_list.append(subdivide_bboxes)
+
+            # Concatenate bboxes if hybrid produced multiple sets
+            if frame_bboxes_for_item_list:
+                single_item_bboxes_concatenated = torch.cat(frame_bboxes_for_item_list, dim=0)
+            elif self.num_motion_regions > 0 : # Fallback if list is empty but regions expected
+                 self.logger.warning_once(f"Motion GAAD for item {i} produced no bboxes. Defaulting to full frame region(s).")
+                 single_item_bboxes_concatenated = torch.tensor([[0.0, 0.0, max_w_scalar, max_h_scalar]] * self.num_motion_regions, dtype=dtype, device=device)
+            else: # No regions expected, empty tensor
+                 single_item_bboxes_concatenated = torch.empty((0,4), dtype=dtype, device=device)
+
+
+            # Ensure correct number of regions for this item (padding/truncating)
+            if single_item_bboxes_concatenated.shape[0] < self.num_motion_regions:
+                num_to_pad = self.num_motion_regions - single_item_bboxes_concatenated.shape[0]
+                padding_box_coords = single_item_bboxes_concatenated[-1:].clone() if single_item_bboxes_concatenated.shape[0] > 0 else torch.tensor([[0.0,0.0,max_w_scalar,max_h_scalar]], dtype=dtype, device=device)
+                padding_tensor = padding_box_coords.repeat(num_to_pad, 1)
+                final_item_bboxes = torch.cat([single_item_bboxes_concatenated, padding_tensor], dim=0)
+            elif single_item_bboxes_concatenated.shape[0] > self.num_motion_regions:
+                # If hybrid produced too many, select based on some criteria (e.g. smallest area first, or random)
+                # For now, just truncate. A more sophisticated selection could be added.
+                # Example: if from GAS and PSP, maybe interleave or take best from each.
+                # Current cat just appends. Sorting by area/energy before truncate would be better.
+                final_item_bboxes = single_item_bboxes_concatenated[:self.num_motion_regions]
+            else:
+                final_item_bboxes = single_item_bboxes_concatenated
+            
+            all_batch_bboxes_list.append(final_item_bboxes)
+
+        if not all_batch_bboxes_list: # Should not happen if B_eff > 0
+             return torch.empty((B_eff, self.num_motion_regions if self.num_motion_regions > 0 else 0, 4), device=device, dtype=dtype)
+             
+        return torch.stack(all_batch_bboxes_list) # Shape (B_eff, num_motion_regions, 4)
+        
     def _extract_flow_statistics(self, flow_field: torch.Tensor, bboxes: torch.Tensor) -> torch.Tensor:
         B, _, H, W = flow_field.shape; N_reg = bboxes.shape[1]; device = flow_field.device; dtype = flow_field.dtype
         all_stats = torch.zeros(B, N_reg, self.flow_stats_dim, device=device, dtype=dtype)
@@ -3498,116 +3688,157 @@ class HybridTrainer:
 
 
     @torch.no_grad()
-    def _assemble_pixels_from_spectral(self, 
-                                       predicted_dft_coeffs: Optional[torch.Tensor], 
-                                       predicted_dct_coeffs: Optional[torch.Tensor], 
-                                       gaad_bboxes: torch.Tensor, 
-                                       target_pixel_shape: Tuple[int, int, int, int, int], 
+
+
+    def _assemble_pixels_from_spectral(self,
+                                       predicted_dft_coeffs: Optional[torch.Tensor], # Expected (B, N_gen_frames, N_reg, C, 2, H_p_spectral, W_p_coeff_spectral) OR (B, N_gen_frames, N_reg, D_dft_flat)
+                                       predicted_dct_coeffs: Optional[torch.Tensor], # Expected (B, N_gen_frames, N_reg, C, H_p_spectral, W_p_spectral) OR (B, N_gen_frames, N_reg, D_dct_flat)
+                                       gaad_bboxes: torch.Tensor, # Expected (B, N_gen_frames, N_reg, 4) - These bboxes MUST align with N_gen_frames of spectral coeffs
+                                       target_image_height: int,
+                                       target_image_width: int,
+                                       num_image_channels_target: int, # C_img_target
                                        output_range: Tuple[float, float] = (-1.0, 1.0)
                                       ) -> Optional[torch.Tensor]:
-        B_target, N_pred_target, C_img_target, H_img_target, W_img_target = target_pixel_shape
+        # This function now takes target H, W, C instead of full target_pixel_shape
+        # to avoid ambiguity if N_pred_target from target_pixel_shape doesn't match N_gen_frames.
+        # The number of frames in the output will be determined by N_gen_frames from spectral_coeffs.
+
+        # Ensure self.model and self.args are accessible if needed for parameters
+        m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
+        
+        # Get generator's configured spectral patch size and number of channels
+        # These are used by SpectralTransformUtils.reconstruct_...
+        # Assuming these are attributes of the generator or accessible via m_ref.generator
+        gen_num_img_channels = getattr(m_ref.generator, 'num_img_channels', num_image_channels_target)
+        gen_patch_h_spectral = getattr(m_ref.generator, 'gen_patch_h_spectral', self.args.spectral_patch_size_h)
+        gen_patch_w_spectral = getattr(m_ref.generator, 'gen_patch_w_spectral', self.args.spectral_patch_size_w)
+
         assembled_pixels_from_dft: Optional[torch.Tensor] = None
         assembled_pixels_from_dct: Optional[torch.Tensor] = None
-        
-        m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
 
+        # --- DFT Path ---
         if predicted_dft_coeffs is not None and self.args.use_dft_features_appearance:
-            # Expected input: (B, N_frames, N_regions, C, 2, H_p, W_p_coeff)
+            # Current generator output for DFT is 7D: (B, N_gen_frames, N_reg, C, 2, H_p, W_p_coeff)
             if predicted_dft_coeffs.ndim == 7:
-                B_dft, N_frames_dft, N_reg_dft, C_dft, two_dft, H_p_dft, W_p_c_dft = predicted_dft_coeffs.shape
+                B_dft, N_frames_dft, N_reg_dft, C_dft_in, two_dft, H_p_dft, W_p_c_dft = predicted_dft_coeffs.shape
+                # Reshape for SpectralTransformUtils: (TotalPatches, FlatSpectralDim)
                 dft_flat_for_recon = predicted_dft_coeffs.reshape(
-                    B_dft * N_frames_dft * N_reg_dft, 
-                    C_dft * two_dft * H_p_dft * W_p_c_dft
+                    B_dft * N_frames_dft * N_reg_dft,
+                    C_dft_in * two_dft * H_p_dft * W_p_c_dft # This is D_dft_flat_per_region
                 )
-            elif predicted_dft_coeffs.ndim == 4: # (B, N_frames, N_regions, D_dft_flat_per_region) - Old expected format
-                B_dft, N_frames_dft, N_reg_dft, D_dft_flat_pr = predicted_dft_coeffs.shape
-                dft_flat_for_recon = predicted_dft_coeffs.reshape(B_dft * N_frames_dft * N_reg_dft, D_dft_flat_pr)
+            elif predicted_dft_coeffs.ndim == 4: # Handle older flat format if necessary
+                B_dft, N_frames_dft, N_reg_dft, _ = predicted_dft_coeffs.shape # D_dft_flat already last dim
+                dft_flat_for_recon = predicted_dft_coeffs.reshape(B_dft * N_frames_dft * N_reg_dft, -1)
             else:
                 self.logger.error(f"_assemble_pixels: DFT coeffs have unexpected ndim: {predicted_dft_coeffs.ndim}. Shape: {predicted_dft_coeffs.shape}")
-                return None
+                return None # Critical error
+
+            # Ensure gaad_bboxes temporal dimension matches N_frames_dft
+            bboxes_for_dft_assembly = gaad_bboxes
+            if N_frames_dft != gaad_bboxes.shape[1]:
+                 self.logger.warning_once(f"Assemble DFT: N_frames in DFT coeffs ({N_frames_dft}) != N_frames in bboxes ({gaad_bboxes.shape[1]}). Adjusting bboxes to match DFT coeffs frame count.")
+                 if N_frames_dft < gaad_bboxes.shape[1]: # DFT has fewer frames than bboxes
+                     bboxes_for_dft_assembly = gaad_bboxes[:, :N_frames_dft, ...]
+                 elif N_frames_dft > gaad_bboxes.shape[1] and gaad_bboxes.shape[1] > 0: # DFT has more frames, pad bboxes
+                     num_pad_bbox_dft = N_frames_dft - gaad_bboxes.shape[1]
+                     pad_slice_bbox_dft = gaad_bboxes[:, -1:, ...].repeat(1, num_pad_bbox_dft, 1, 1)
+                     bboxes_for_dft_assembly = torch.cat([gaad_bboxes, pad_slice_bbox_dft], dim=1)
+                 # If gaad_bboxes.shape[1] == 0 and N_frames_dft > 0, this is an issue handled by caller or ImageAssemblyUtils
 
             try:
                 patches_from_dft_flat = SpectralTransformUtils.reconstruct_patches_from_2d_dft(
                     dft_flat_for_recon, self.args.dft_norm_scale_video,
-                    m_ref.generator.num_img_channels, 
-                    m_ref.generator.gen_patch_h_spectral, 
-                    m_ref.generator.gen_patch_w_spectral,
+                    gen_num_img_channels, # Use generator's config for channels
+                    gen_patch_h_spectral, gen_patch_w_spectral,
                     fft_norm_type=self.args.dft_fft_norm
-                ) 
+                ) # Output: (TotalPatches, C_gen, H_gen_p, W_gen_p)
+
                 patches_from_dft_structured = patches_from_dft_flat.view(
-                    B_dft, N_frames_dft, N_reg_dft, m_ref.generator.num_img_channels, 
-                    m_ref.generator.gen_patch_h_spectral, 
-                    m_ref.generator.gen_patch_w_spectral
+                    B_dft, N_frames_dft, N_reg_dft, gen_num_img_channels,
+                    gen_patch_h_spectral, gen_patch_w_spectral
                 )
-                # Adjust bboxes if N_frames_dft doesn't match N_pred_target (e.g. from decoder)
-                bboxes_for_dft_assembly = gaad_bboxes
-                if N_frames_dft != gaad_bboxes.shape[1]:
-                     self.logger.warning_once(f"Assemble DFT: N_frames in DFT coeffs ({N_frames_dft}) != N_frames in bboxes ({gaad_bboxes.shape[1]}). Using first {N_frames_dft} bbox sets.")
-                     bboxes_for_dft_assembly = gaad_bboxes[:, :N_frames_dft, ...]
 
                 assembled_pixels_from_dft = ImageAssemblyUtils.assemble_frames_from_patches(
-                    patches_from_dft_structured, bboxes_for_dft_assembly, (H_img_target, W_img_target), output_range=output_range
-                )
-            except ValueError as e_dft_recon:
-                 self.logger.error(f"Error during DFT patch reconstruction: {e_dft_recon}. DFT_flat_shape: {dft_flat_for_recon.shape}")
-                 return None
+                    patches_from_dft_structured, bboxes_for_dft_assembly,
+                    (target_image_height, target_image_width), output_range=output_range
+                ) # Output: (B_dft, N_frames_dft, C_gen, H_img_target, W_img_target)
+            except Exception as e_dft_recon: # Catching general Exception as ValueError might be too specific
+                 self.logger.error(f"Error during DFT patch reconstruction/assembly: {e_dft_recon}. DFT_flat_shape: {dft_flat_for_recon.shape}", exc_info=True)
+                 assembled_pixels_from_dft = None # Ensure it's None on failure
 
-
+        # --- DCT Path ---
         if predicted_dct_coeffs is not None and self.args.use_dct_features_appearance:
-            # Expected input: (B, N_frames, N_regions, C, H_p, W_p)
+            # Current generator output for DCT is 6D: (B, N_gen_frames, N_reg, C, H_p, W_p)
             if predicted_dct_coeffs.ndim == 6:
-                B_dct, N_frames_dct, N_reg_dct, C_dct, H_p_dct, W_p_dct = predicted_dct_coeffs.shape
+                B_dct, N_frames_dct, N_reg_dct, C_dct_in, H_p_dct, W_p_dct = predicted_dct_coeffs.shape
                 dct_flat_for_recon = predicted_dct_coeffs.reshape(
                     B_dct * N_frames_dct * N_reg_dct,
-                    C_dct * H_p_dct * W_p_dct
+                    C_dct_in * H_p_dct * W_p_dct # This is D_dct_flat_per_region
                 )
-            elif predicted_dct_coeffs.ndim == 4: # (B, N_frames, N_regions, D_dct_flat_per_region)
-                B_dct, N_frames_dct, N_reg_dct, D_dct_flat_pr = predicted_dct_coeffs.shape
-                dct_flat_for_recon = predicted_dct_coeffs.reshape(B_dct * N_frames_dct * N_reg_dct, D_dct_flat_pr)
+            elif predicted_dct_coeffs.ndim == 4: # Handle older flat format
+                B_dct, N_frames_dct, N_reg_dct, _ = predicted_dct_coeffs.shape
+                dct_flat_for_recon = predicted_dct_coeffs.reshape(B_dct * N_frames_dct * N_reg_dct, -1)
             else:
                 self.logger.error(f"_assemble_pixels: DCT coeffs have unexpected ndim: {predicted_dct_coeffs.ndim}. Shape: {predicted_dct_coeffs.shape}")
                 return None
-            
+
+            bboxes_for_dct_assembly = gaad_bboxes
+            if N_frames_dct != gaad_bboxes.shape[1]:
+                 self.logger.warning_once(f"Assemble DCT: N_frames in DCT coeffs ({N_frames_dct}) != N_frames in bboxes ({gaad_bboxes.shape[1]}). Adjusting bboxes to match DCT coeffs frame count.")
+                 if N_frames_dct < gaad_bboxes.shape[1]:
+                     bboxes_for_dct_assembly = gaad_bboxes[:, :N_frames_dct, ...]
+                 elif N_frames_dct > gaad_bboxes.shape[1] and gaad_bboxes.shape[1] > 0:
+                     num_pad_bbox_dct = N_frames_dct - gaad_bboxes.shape[1]
+                     pad_slice_bbox_dct = gaad_bboxes[:, -1:, ...].repeat(1, num_pad_bbox_dct, 1, 1)
+                     bboxes_for_dct_assembly = torch.cat([gaad_bboxes, pad_slice_bbox_dct], dim=1)
+
             try:
                 patches_from_dct_flat = SpectralTransformUtils.reconstruct_patches_from_2d_dct(
                     dct_flat_for_recon,
-                    m_ref.generator.num_img_channels, 
-                    m_ref.generator.gen_patch_h_spectral, 
-                    m_ref.generator.gen_patch_w_spectral,
+                    gen_num_img_channels,
+                    gen_patch_h_spectral, gen_patch_w_spectral,
                     norm_type=self.args.dct_norm_type,
                     norm_global_scale=self.args.dct_norm_global_scale,
                     norm_tanh_scale=self.args.dct_norm_tanh_scale
-                )
+                ) # Output: (TotalPatches, C_gen, H_gen_p, W_gen_p)
+
                 patches_from_dct_structured = patches_from_dct_flat.view(
-                    B_dct, N_frames_dct, N_reg_dct, m_ref.generator.num_img_channels,
-                    m_ref.generator.gen_patch_h_spectral,
-                    m_ref.generator.gen_patch_w_spectral
+                    B_dct, N_frames_dct, N_reg_dct, gen_num_img_channels,
+                    gen_patch_h_spectral, gen_patch_w_spectral
                 )
-                bboxes_for_dct_assembly = gaad_bboxes
-                if N_frames_dct != gaad_bboxes.shape[1]:
-                     self.logger.warning_once(f"Assemble DCT: N_frames in DCT coeffs ({N_frames_dct}) != N_frames in bboxes ({gaad_bboxes.shape[1]}). Using first {N_frames_dct} bbox sets.")
-                     bboxes_for_dct_assembly = gaad_bboxes[:, :N_frames_dct, ...]
-
                 assembled_pixels_from_dct = ImageAssemblyUtils.assemble_frames_from_patches(
-                    patches_from_dct_structured, bboxes_for_dct_assembly, (H_img_target, W_img_target), output_range=output_range
-                )
-            except ValueError as e_dct_recon:
-                 self.logger.error(f"Error during DCT patch reconstruction: {e_dct_recon}. DCT_flat_shape: {dct_flat_for_recon.shape}")
-                 return None
+                    patches_from_dct_structured, bboxes_for_dct_assembly,
+                    (target_image_height, target_image_width), output_range=output_range
+                ) # Output: (B_dct, N_frames_dct, C_gen, H_img_target, W_img_target)
+            except Exception as e_dct_recon:
+                 self.logger.error(f"Error during DCT patch reconstruction/assembly: {e_dct_recon}. DCT_flat_shape: {dct_flat_for_recon.shape}", exc_info=True)
+                 assembled_pixels_from_dct = None
 
 
+        # --- Combine DFT and DCT (if both available) ---
         if assembled_pixels_from_dft is not None and assembled_pixels_from_dct is not None:
             # Ensure they have the same number of frames before averaging
-            min_frames = min(assembled_pixels_from_dft.shape[1], assembled_pixels_from_dct.shape[1])
+            # This should be guaranteed if N_frames_dft and N_frames_dct are derived from generator's single N_pred
             if assembled_pixels_from_dft.shape[1] != assembled_pixels_from_dct.shape[1]:
-                self.logger.warning_once(f"DFT ({assembled_pixels_from_dft.shape[1]}f) and DCT ({assembled_pixels_from_dct.shape[1]}f) assembled pixels have different frame counts. Averaging over {min_frames} frames.")
-            return (assembled_pixels_from_dft[:,:min_frames,...] + assembled_pixels_from_dct[:,:min_frames,...]) / 2.0
+                self.logger.warning_once(f"DFT ({assembled_pixels_from_dft.shape[1]}f) and DCT ({assembled_pixels_from_dct.shape[1]}f) "
+                                     f"assembled pixels have different frame counts after processing. This is unexpected. "
+                                     f"Will attempt to average over min_frames or return only one.")
+                min_frames_avg = min(assembled_pixels_from_dft.shape[1], assembled_pixels_from_dct.shape[1])
+                if min_frames_avg > 0:
+                    return (assembled_pixels_from_dft[:, :min_frames_avg, ...] + assembled_pixels_from_dct[:, :min_frames_avg, ...]) / 2.0
+                else: # If one became zero-frame, return the other if valid
+                    return assembled_pixels_from_dft if assembled_pixels_from_dft.shape[1] > 0 else assembled_pixels_from_dct
+            else: # Frame counts match
+                return (assembled_pixels_from_dft + assembled_pixels_from_dct) / 2.0
         elif assembled_pixels_from_dft is not None:
             return assembled_pixels_from_dft
         elif assembled_pixels_from_dct is not None:
             return assembled_pixels_from_dct
         else:
+            self.logger.warning_once("_assemble_pixels_from_spectral: Neither DFT nor DCT path yielded assembled pixels.")
             return None
+
+
 
     @torch.no_grad()
     def _log_samples_to_wandb(self, tag_prefix: str, frames_to_log: Optional[torch.Tensor], num_frames_per_sequence_to_log: int = 1, num_sequences_to_log_max: int = 2):
@@ -3875,70 +4106,84 @@ class HybridTrainer:
 
 
 
-
-
-
     def _train_discriminator_step(self, real_frames_full_sequence: torch.Tensor, m_ref: "WuBuGAADHybridGenNet") -> Dict[str, torch.Tensor]:
         d_ref_active = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
-        active_d_trainer_input_type = self.active_disc_effective_trainer_input_type
+        active_d_trainer_input_type = self.active_disc_effective_trainer_input_type # From _update_active_discriminator_pointers
         
-        B = real_frames_full_sequence.shape[0]; device = real_frames_full_sequence.device
-        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype # Get dtype from model
+        B = real_frames_full_sequence.shape[0]
+        device = real_frames_full_sequence.device
+        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype
 
+        # Determine how many frames the active D processes
         num_frames_for_active_d = getattr(d_ref_active, 'num_frames_to_discriminate', self.args.num_predict_frames)
-        frames_for_d_processing_real = real_frames_full_sequence[:, :num_frames_for_active_d, ...].to(device, dtype_model)
-        
-        real_labels = torch.ones(B, device=device, dtype=dtype_model) # For BCEWithLogitsLoss expects (N,)
+        num_input_frames_conditioning = self.video_config.get("num_input_frames", 0)
+
+        real_labels = torch.ones(B, device=device, dtype=dtype_model)
         fake_labels = torch.zeros(B, device=device, dtype=dtype_model)
         losses_d_micro: Dict[str, torch.Tensor] = {}
 
-        # Set requires_grad for discriminator and generator/encoder
-        for p in d_ref_active.parameters():
-            p.requires_grad = True
-        for p in m_ref.parameters():
-            p.requires_grad = False
-        # Optimizer zero_grad is handled before this call, per accumulation cycle in train()
-            
-        gaad_bboxes_for_d_real_cond: Optional[torch.Tensor] = None
-        # Check if the active discriminator (not the wrapper) uses GAAD FiLM
-        d_module_for_check = d_ref_active.actual_discriminator_module if isinstance(d_ref_active, VideoDiscriminatorWrapper) else d_ref_active
-        if hasattr(d_module_for_check, 'use_gaad_film_condition') and d_module_for_check.use_gaad_film_condition:
-            with torch.no_grad(): # Encoder pass should not update model params here
-                _, _, gaad_bboxes_from_encoder_full, _, _ = m_ref.encode(real_frames_full_sequence.to(device, dtype_model))
-            if gaad_bboxes_from_encoder_full is not None:
-                gaad_bboxes_for_d_real_cond = gaad_bboxes_from_encoder_full[:, :num_frames_for_active_d, ...].to(device, dtype_model)
+        for p in d_ref_active.parameters(): p.requires_grad = True
+        for p in m_ref.parameters(): p.requires_grad = False
         
-        with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
-            # --- Real Path ---
-            real_input_for_d_main: torch.Tensor
+        # --- Prepare Real Data for Discriminator ---
+        real_input_for_d_main: torch.Tensor
+        gaad_bboxes_for_d_real_cond: Optional[torch.Tensor] = None
+        
+        # Real data always starts as pixels. If D needs features, we encode.
+        # We need target spectral features (from encoder) if D is feature-based.
+        # We need GAAD bboxes from encoder if D is pixel-based AND uses FiLM.
+        # The GAAD bboxes should correspond to the *frames the D will see*.
+        # If D sees predicted frames, these are from index num_input_frames_conditioning onwards.
+        
+        with torch.no_grad(): # Encoder pass for targets and bboxes for D conditioning
+            _, _, gaad_bboxes_all_input_enc, target_dft_all_input_enc, target_dct_all_input_enc = m_ref.encode(real_frames_full_sequence.to(device, dtype_model))
+
+        # Select the slice of real data (pixels or features) that the D will process.
+        # This typically corresponds to the "prediction window" of the original sequence.
+        start_idx_for_d_real_data = num_input_frames_conditioning
+        end_idx_for_d_real_data = num_input_frames_conditioning + num_frames_for_active_d
+        
+        if end_idx_for_d_real_data > real_frames_full_sequence.shape[1]:
+            self.logger.warning_once(f"D Real Path: Not enough frames in input sequence ({real_frames_full_sequence.shape[1]}) "
+                                f"to cover D's window ({num_frames_for_active_d} frames after {num_input_frames_conditioning} context frames). "
+                                f"Slicing available frames. This might cause issues if D expects fixed length.")
+            end_idx_for_d_real_data = real_frames_full_sequence.shape[1]
+            # num_frames_for_active_d might need to be temporarily adjusted for this batch if D is flexible,
+            # or padding applied if D requires fixed length. For now, we slice what's available.
+            # The D itself might pad if it receives fewer frames than its `num_frames_to_discriminate` config.
+
+        if active_d_trainer_input_type == "assembled_pixels":
+            real_input_for_d_main = real_frames_full_sequence[:, start_idx_for_d_real_data:end_idx_for_d_real_data, ...].to(device, dtype_model)
+            # Check if the D module uses GAAD FiLM
+            d_module_for_check = d_ref_active.actual_discriminator_module if isinstance(d_ref_active, VideoDiscriminatorWrapper) else d_ref_active
+            if hasattr(d_module_for_check, 'use_gaad_film_condition') and d_module_for_check.use_gaad_film_condition:
+                if gaad_bboxes_all_input_enc is not None:
+                    gaad_bboxes_for_d_real_cond = gaad_bboxes_all_input_enc[:, start_idx_for_d_real_data:end_idx_for_d_real_data, ...].to(device, dtype_model)
+                else:
+                    self.logger.warning_once("D Real Path (Pixel D with FiLM): Encoder did not return GAAD bboxes. FiLM condition will be None.")
+        
+        elif active_d_trainer_input_type == "regional_spectral_features_combined":
+            real_features_list_for_d = []
+            if self.args.use_dft_features_appearance and target_dft_all_input_enc is not None:
+                real_features_list_for_d.append(target_dft_all_input_enc[:, start_idx_for_d_real_data:end_idx_for_d_real_data, ...])
+            if self.args.use_dct_features_appearance and target_dct_all_input_enc is not None:
+                real_features_list_for_d.append(target_dct_all_input_enc[:, start_idx_for_d_real_data:end_idx_for_d_real_data, ...])
             
-            if active_d_trainer_input_type == "assembled_pixels":
-                real_input_for_d_main = frames_for_d_processing_real
-            elif active_d_trainer_input_type == "regional_spectral_features_combined":
-                with torch.no_grad(): _, _, _, target_dft_real, target_dct_real = m_ref.encode(real_frames_full_sequence)
-                real_features_list = []
-                
-                N_frames_total_sample = real_frames_full_sequence.shape[1] 
+            if not real_features_list_for_d:
+                raise ValueError("D training (real, feature-D): No target spectral features from encoder for feature-based D.")
+            
+            concatenated_real_features_for_d = torch.cat(real_features_list_for_d, dim=-1) # (B, N_active_D, N_reg, D_combined_flat)
+            
+            # Reshape for GlobalWuBuVideoFeatureDiscriminator: (B, N_reg, N_active_D * D_combined_flat)
+            B_real_feat, N_active_D_real, N_reg_real, _ = concatenated_real_features_for_d.shape
+            real_input_for_d_main_permuted = concatenated_real_features_for_d.permute(0, 2, 1, 3) # (B, N_reg, N_active_D, D_combined_flat)
+            real_input_for_d_main = real_input_for_d_main_permuted.reshape(B_real_feat, N_reg_real, -1)
+        else:
+            raise ValueError(f"D training (real): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
 
-                if self.args.use_dft_features_appearance and target_dft_real is not None: 
-                    # target_dft_real is (B, N_total_sample, N_reg, D_flat_dft)
-                    real_features_list.append(target_dft_real) 
-                if self.args.use_dct_features_appearance and target_dct_real is not None: 
-                    # target_dct_real is (B, N_total_sample, N_reg, D_flat_dct)
-                    real_features_list.append(target_dct_real) 
-                
-                if not real_features_list: raise ValueError("D training (real): No target spectral features available for feature-based D.")
-                # All tensors in real_features_list are 4D (B, N_total, N_reg, D_flat_spectral)
-                concatenated_target_features = torch.cat(real_features_list, dim=-1) # (B, N_total, N_reg, D_combined_flat)
-                
-                # Slice for the frames the D processes, from the predicted window of the original sequence
-                real_input_for_d_main_sliced_frames = concatenated_target_features[:, self.args.num_input_frames : self.args.num_input_frames + num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_flat)
-                
-                # Permute and reshape for GlobalWuBuVideoFeatureD
-                real_input_for_d_main_permuted = real_input_for_d_main_sliced_frames.permute(0,2,1,3) # (B, N_reg, N_active_D, D_combined_flat)
-                real_input_for_d_main = real_input_for_d_main_permuted.reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_combined_flat)
-            else: raise ValueError(f"D training (real): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
-
+        with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
+            # --- Real Path Forward ---
+            # The active discriminator d_ref_active should handle if num_frames received is less than its configured num_frames_to_discriminate (e.g. by padding)
             real_logits = d_ref_active(real_input_for_d_main, gaad_bboxes_cond=gaad_bboxes_for_d_real_cond)
             loss_d_real = self.adversarial_loss(real_logits.squeeze(-1) if real_logits.ndim > 1 and real_logits.shape[-1] == 1 else real_logits, real_labels)
 
@@ -3947,50 +4192,83 @@ class HybridTrainer:
             fake_gaad_bboxes_for_d_cond: Optional[torch.Tensor] = None
             
             with torch.no_grad(): # Generate fake samples
-                fake_pixel_output_gen, fake_dft_output_gen, fake_dct_output_gen, _, _, bboxes_used_by_decoder_for_fake, _, _ = m_ref(real_frames_full_sequence)
+                # m_ref.forward() returns reconstructions aligned with the *prediction window*
+                # and bboxes_used_by_decoder corresponding to that prediction window.
+                fake_pixel_output_gen, fake_dft_output_gen, fake_dct_output_gen, \
+                _, _, bboxes_used_by_decoder_for_fake, _, _ = m_ref(real_frames_full_sequence)
+                # bboxes_used_by_decoder_for_fake is (B, N_gen_predict_frames, N_reg, 4)
 
+            # Now, prepare these generated fakes for the active discriminator
             if active_d_trainer_input_type == "assembled_pixels":
                 if fake_pixel_output_gen is not None: # G generated pixels directly
                     assembled_fake_pixels = fake_pixel_output_gen
                 else: # G generated spectral, need to assemble
-                    if bboxes_used_by_decoder_for_fake is None: # Check added
-                        raise RuntimeError("D training (fake, pixel-D): bboxes_used_by_decoder_for_fake is None, cannot assemble pixels.")
+                    if bboxes_used_by_decoder_for_fake is None:
+                        raise RuntimeError("D training (fake, pixel-D): bboxes_used_by_decoder_for_fake is None from G, cannot assemble pixels.")
+                    
+                    # Target shape for assembly should match the number of frames G generated
+                    # and the image H, W from args.
+                    N_gen_predict_frames = fake_dft_output_gen.shape[1] if fake_dft_output_gen is not None else \
+                                          (fake_dct_output_gen.shape[1] if fake_dct_output_gen is not None else 0)
+                    if N_gen_predict_frames == 0:
+                        raise RuntimeError("D training (fake, pixel-D): G generated no spectral frames to assemble.")
+
                     assembled_fake_pixels = self._assemble_pixels_from_spectral(
                         fake_dft_output_gen, fake_dct_output_gen, bboxes_used_by_decoder_for_fake,
-                        (B, self.args.num_predict_frames, self.video_config['num_channels'], self.args.image_h, self.args.image_w)
+                        target_image_height=self.args.image_h, target_image_width=self.args.image_w,
+                        num_image_channels_target=self.video_config['num_channels']
                     )
-                    if assembled_fake_pixels is None: raise RuntimeError("Failed to assemble pixels from G's spectral output for D (pixel-based).")
+                    if assembled_fake_pixels is None:
+                        raise RuntimeError("Failed to assemble pixels from G's spectral output for D (pixel-based).")
                 
+                # Slice the assembled fake pixels for the number of frames D processes
                 fake_input_for_d_main = assembled_fake_pixels[:, :num_frames_for_active_d, ...]
-                if hasattr(d_module_for_check, 'use_gaad_film_condition') and d_module_for_check.use_gaad_film_condition:
+                
+                # Prepare GAAD bboxes for FiLM if D uses it
+                d_module_for_check_fake = d_ref_active.actual_discriminator_module if isinstance(d_ref_active, VideoDiscriminatorWrapper) else d_ref_active
+                if hasattr(d_module_for_check_fake, 'use_gaad_film_condition') and d_module_for_check_fake.use_gaad_film_condition:
                     if bboxes_used_by_decoder_for_fake is not None:
                         fake_gaad_bboxes_for_d_cond = bboxes_used_by_decoder_for_fake[:, :num_frames_for_active_d, ...]
+                    else:
+                        self.logger.warning_once("D Fake Path (Pixel D with FiLM): G did not return bboxes_used_by_decoder. FiLM condition will be None.")
             
             elif active_d_trainer_input_type == "regional_spectral_features_combined":
-                fake_features_list = []
+                fake_features_list_for_d = []
                 if self.args.use_dft_features_appearance and fake_dft_output_gen is not None:
-                    # fake_dft_output_gen is (B, N_pred_G, N_reg, C, 2, H_p, W_p_coeff) - 7D
-                    B_fk_dft, N_fk_dft, R_fk_dft, _, _, _, _ = fake_dft_output_gen.shape
-                    reshaped_fk_dft = fake_dft_output_gen.reshape(B_fk_dft, N_fk_dft, R_fk_dft, -1) # Now 4D
-                    fake_features_list.append(reshaped_fk_dft)
-                if self.args.use_dct_features_appearance and fake_dct_output_gen is not None:
-                    # fake_dct_output_gen is (B, N_pred_G, N_reg, C, H_p, W_p) - 6D
-                    B_fk_dct, N_fk_dct, R_fk_dct, _, _, _ = fake_dct_output_gen.shape
-                    reshaped_fk_dct = fake_dct_output_gen.reshape(B_fk_dct, N_fk_dct, R_fk_dct, -1) # Now 4D
-                    fake_features_list.append(reshaped_fk_dct)
+                    # fake_dft_output_gen is (B, N_gen_pred, N_reg, C, 2, H_p, W_p_coeff) or (B, N_gen_pred, N_reg, D_flat)
+                    # Reshape to (B, N_gen_pred, N_reg, D_flat_dft_per_reg)
+                    if fake_dft_output_gen.ndim == 7:
+                        B_fk_dft, N_fk_dft, R_fk_dft, C_fk, two_fk, Hp_fk, Wpc_fk = fake_dft_output_gen.shape
+                        reshaped_fk_dft = fake_dft_output_gen.reshape(B_fk_dft, N_fk_dft, R_fk_dft, -1)
+                    elif fake_dft_output_gen.ndim == 4: reshaped_fk_dft = fake_dft_output_gen
+                    else: raise ValueError(f"Unexpected ndim {fake_dft_output_gen.ndim} for fake_dft_output_gen")
+                    fake_features_list_for_d.append(reshaped_fk_dft)
 
-                if not fake_features_list: raise ValueError("D training (fake): No spectral features from G for feature-based D.")
+                if self.args.use_dct_features_appearance and fake_dct_output_gen is not None:
+                    # fake_dct_output_gen is (B, N_gen_pred, N_reg, C, H_p, W_p) or (B, N_gen_pred, N_reg, D_flat)
+                    if fake_dct_output_gen.ndim == 6:
+                        B_fk_dct, N_fk_dct, R_fk_dct, C_fk_d, Hp_fk_d, Wp_fk_d = fake_dct_output_gen.shape
+                        reshaped_fk_dct = fake_dct_output_gen.reshape(B_fk_dct, N_fk_dct, R_fk_dct, -1)
+                    elif fake_dct_output_gen.ndim == 4: reshaped_fk_dct = fake_dct_output_gen
+                    else: raise ValueError(f"Unexpected ndim {fake_dct_output_gen.ndim} for fake_dct_output_gen")
+                    fake_features_list_for_d.append(reshaped_fk_dct)
+
+                if not fake_features_list_for_d:
+                    raise ValueError("D training (fake, feature-D): No spectral features from G for feature-based D.")
                 
-                # All tensors in fake_features_list are now 4D: (B, N_pred_G, N_reg, D_flat_per_reg)
-                concatenated_fake_features = torch.cat(fake_features_list, dim=-1) # (B, N_pred_G, N_reg, D_combined_per_reg_flat)
+                concatenated_fake_features_for_d = torch.cat(fake_features_list_for_d, dim=-1) # (B, N_gen_pred, N_reg, D_combined_flat)
                 
-                # Prepare for GlobalWuBuVideoFeatureD
-                # Slice for the number of frames the D processes
-                fake_input_for_d_main_sliced_frames = concatenated_fake_features[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg_flat)
-                fake_input_for_d_main_permuted = fake_input_for_d_main_sliced_frames.permute(0,2,1,3) # (B, N_reg, N_active_D, D_combined_per_reg_flat)
-                fake_input_for_d_main = fake_input_for_d_main_permuted.reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_combined_per_reg_flat)
-            else: raise ValueError(f"D training (fake): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
+                # Slice for the frames D processes
+                fake_input_for_d_main_sliced_frames = concatenated_fake_features_for_d[:, :num_frames_for_active_d, ...]
+                
+                # Reshape for GlobalWuBuVideoFeatureDiscriminator: (B, N_reg, N_active_D_fakes * D_combined_flat)
+                B_fake_feat, N_active_D_fakes, N_reg_fakes, _ = fake_input_for_d_main_sliced_frames.shape
+                fake_input_for_d_main_permuted = fake_input_for_d_main_sliced_frames.permute(0, 2, 1, 3)
+                fake_input_for_d_main = fake_input_for_d_main_permuted.reshape(B_fake_feat, N_reg_fakes, -1)
+            else:
+                raise ValueError(f"D training (fake): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
             
+            # --- Fake Path Forward ---
             fake_logits = d_ref_active(fake_input_for_d_main.detach(), gaad_bboxes_cond=fake_gaad_bboxes_for_d_cond)
             loss_d_fake = self.adversarial_loss(fake_logits.squeeze(-1) if fake_logits.ndim > 1 and fake_logits.shape[-1] == 1 else fake_logits, fake_labels)
             
@@ -4005,106 +4283,120 @@ class HybridTrainer:
         return losses_d_micro
 
 
-
-
     def _train_generator_step(self, real_frames_full_sequence: torch.Tensor, m_ref: "WuBuGAADHybridGenNet") -> Tuple[Dict[str, torch.Tensor], Optional[torch.Tensor]]:
         d_ref_active = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
         active_d_trainer_input_type = self.active_disc_effective_trainer_input_type
 
-        B = real_frames_full_sequence.shape[0]; device = real_frames_full_sequence.device
-        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype # Added device to tensor
-        real_labels_for_g = torch.ones(B, device=device, dtype=dtype_model) # Target for G is for D to classify fakes as real
+        B = real_frames_full_sequence.shape[0]
+        device = real_frames_full_sequence.device
+        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype
+        real_labels_for_g = torch.ones(B, device=device, dtype=dtype_model)
         losses_g_micro: Dict[str, torch.Tensor] = {}
-        assembled_pixels_for_log_and_d: Optional[torch.Tensor] = None
+        assembled_pixels_for_log: Optional[torch.Tensor] = None # For logging generated samples
 
         for p in d_ref_active.parameters(): p.requires_grad = False
         for p in m_ref.parameters(): p.requires_grad = True
-        # Optimizer zero_grad is handled before this call, per accumulation cycle in train()
 
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
+            # m_ref.forward() returns reconstructions and targets aligned with the *prediction window*
+            # bboxes_used_by_decoder is (B, N_gen_predict_frames, N_reg, 4)
+            # target_dft/dct_for_loss are (B, N_gen_predict_frames, N_reg, D_flat_spectral)
             recon_pixel_frames_gen, recon_dft_coeffs_gen, recon_dct_coeffs_gen, \
             mu, logvar, bboxes_used_by_decoder, \
-            target_dft_features_for_loss, target_dct_features_for_loss = m_ref(real_frames_full_sequence.to(device,dtype_model))
+            target_dft_features_for_loss, target_dct_features_for_loss = m_ref(real_frames_full_sequence.to(device, dtype_model))
 
-            num_input_f = self.video_config.get("num_input_frames", 0)
-            num_predict_f = self.video_config.get("num_predict_frames", 1)
-            target_pixels_for_loss = real_frames_full_sequence[:, num_input_f : num_input_f + num_predict_f, ...].to(device, dtype_model) if recon_pixel_frames_gen is not None else None
+            num_gen_predict_frames = self.video_config.get("num_predict_frames", 1) # How many frames G generates
             
+            # target_pixels_for_loss should also correspond to the generator's output window
+            num_input_f_cond = self.video_config.get("num_input_frames", 0)
+            target_pixels_for_loss = real_frames_full_sequence[
+                :, num_input_f_cond : num_input_f_cond + num_gen_predict_frames, ...
+            ].to(device, dtype_model) if recon_pixel_frames_gen is not None else None
+
             loss_recon_raw = self._compute_recon_loss(
                 recon_dft_coeffs_gen, target_dft_features_for_loss,
                 recon_dct_coeffs_gen, target_dct_features_for_loss,
                 recon_pixel_frames_gen, target_pixels_for_loss
             )
             loss_kl_raw = self._compute_kl_loss(mu, logvar)
-            # Note: self.args.lambda_recon might be a global factor, specific DFT/DCT lambdas are inside _compute_recon_loss
-            # Effective recon loss uses args.lambda_recon_dft and args.lambda_recon_dct directly.
-            # So, self.args.lambda_recon here is likely for pixel-only fallback or a global scale on top.
-            # If the intention is for lambda_recon to globally scale the spectral recon loss, it should be applied in _compute_recon_loss
-            # or the component-wise lambdas should be considered base weights scaled by a global lambda_recon.
-            # For now, assuming _compute_recon_loss already applies the correct DFT/DCT lambdas.
-            # The self.args.lambda_recon factor is usually for pixel-based recon or an additional global scaling.
-            # If pixel output is not active, self.args.lambda_recon might be misapplied if _compute_recon_loss doesn't use it
-            # when spectral losses are present.
-            # Let's assume _compute_recon_loss has already applied the specific DFT/DCT lambdas.
-            # If there's a global self.args.lambda_recon meant to scale the *entire* recon component (spectral or pixel),
-            # then it should be applied here. The current _compute_recon_loss applies lambda_recon_dft/dct internally.
-            # So, loss_recon_eff should just be `self.heuristic_override_lambda_recon_factor * loss_recon_raw`
-            # if self.args.lambda_recon_dft/dct are the primary weights for spectral.
-            # Or, if self.args.lambda_recon is a global scaler:
-            # loss_recon_eff = self.args.lambda_recon * self.heuristic_override_lambda_recon_factor * loss_recon_raw
-            # Let's stick to the original logic for now, assuming self.args.lambda_recon is a global scaler.
-            loss_recon_eff = self.args.lambda_recon * self.heuristic_override_lambda_recon_factor * loss_recon_raw 
             
-            loss_kl_eff = self.lambda_kl * self.heuristic_override_lambda_kl_factor * loss_kl_raw # self.lambda_kl is already base * factor
+            loss_recon_eff = self.args.lambda_recon * self.heuristic_override_lambda_recon_factor * loss_recon_raw
+            loss_kl_eff = self.lambda_kl * self.heuristic_override_lambda_kl_factor * loss_kl_raw
 
+            # --- Adversarial Loss for Generator ---
             adv_input_for_d_main: torch.Tensor
             adv_gaad_bboxes_for_d_cond: Optional[torch.Tensor] = None
-            d_output_for_adv: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
             
-            num_frames_for_active_d = getattr(d_ref_active, 'num_frames_to_discriminate', num_predict_f)
+            # Determine how many frames the active D will process from G's output
+            num_frames_for_active_d_from_gen = getattr(d_ref_active, 'num_frames_to_discriminate', num_gen_predict_frames)
+            
             d_module_for_check = d_ref_active.actual_discriminator_module if isinstance(d_ref_active, VideoDiscriminatorWrapper) else d_ref_active
 
 
             if active_d_trainer_input_type == "assembled_pixels":
-                if recon_pixel_frames_gen is not None: assembled_pixels_for_log_and_d = recon_pixel_frames_gen
-                else:
-                    assembled_pixels_for_log_and_d = self._assemble_pixels_from_spectral(
+                if recon_pixel_frames_gen is not None: # G generated pixels directly
+                    assembled_pixels_for_log = recon_pixel_frames_gen # For logging
+                    adv_input_for_d_main = recon_pixel_frames_gen[:, :num_frames_for_active_d_from_gen, ...]
+                else: # G generated spectral, need to assemble
+                    if bboxes_used_by_decoder is None:
+                        raise RuntimeError("G training (adv, pixel-D): bboxes_used_by_decoder is None from G's forward, cannot assemble pixels.")
+                    
+                    assembled_pixels_for_log = self._assemble_pixels_from_spectral(
                         recon_dft_coeffs_gen, recon_dct_coeffs_gen, bboxes_used_by_decoder,
-                        (B, num_predict_f, self.video_config['num_channels'], self.args.image_h, self.args.image_w)
+                        target_image_height=self.args.image_h, target_image_width=self.args.image_w,
+                        num_image_channels_target=self.video_config['num_channels']
                     )
-                if assembled_pixels_for_log_and_d is None: raise RuntimeError("Failed to get/assemble pixels for pixel-based D in G step.")
-                adv_input_for_d_main = assembled_pixels_for_log_and_d[:, :num_frames_for_active_d, ...]
+                    if assembled_pixels_for_log is None:
+                        raise RuntimeError("Failed to get/assemble pixels for pixel-based D in G step.")
+                    adv_input_for_d_main = assembled_pixels_for_log[:, :num_frames_for_active_d_from_gen, ...]
+                
                 if hasattr(d_module_for_check, 'use_gaad_film_condition') and d_module_for_check.use_gaad_film_condition: # type: ignore
-                    if bboxes_used_by_decoder is not None: # Ensure bboxes are available
-                        adv_gaad_bboxes_for_d_cond = bboxes_used_by_decoder[:, :num_frames_for_active_d, ...]
+                    if bboxes_used_by_decoder is not None:
+                        adv_gaad_bboxes_for_d_cond = bboxes_used_by_decoder[:, :num_frames_for_active_d_from_gen, ...]
+            
             elif active_d_trainer_input_type == "regional_spectral_features_combined":
-                adv_features_list = []
+                adv_features_list_g = []
                 if self.args.use_dft_features_appearance and recon_dft_coeffs_gen is not None:
-                    # recon_dft_coeffs_gen is (B, N_pred, N_reg, C, 2, H_p, W_p_coeff) - 7D
-                    B_adv_dft, N_adv_dft, R_adv_dft, _, _, _, _ = recon_dft_coeffs_gen.shape
-                    reshaped_adv_dft = recon_dft_coeffs_gen.reshape(B_adv_dft, N_adv_dft, R_adv_dft, -1) # Now 4D
-                    adv_features_list.append(reshaped_adv_dft)
+                    if recon_dft_coeffs_gen.ndim == 7: B_g_dft, N_g_dft, R_g_dft, C_g, _, _, _ = recon_dft_coeffs_gen.shape; reshaped_g_dft = recon_dft_coeffs_gen.reshape(B_g_dft, N_g_dft, R_g_dft, -1)
+                    elif recon_dft_coeffs_gen.ndim == 4: reshaped_g_dft = recon_dft_coeffs_gen
+                    else: raise ValueError(f"Unexpected ndim {recon_dft_coeffs_gen.ndim} for recon_dft_coeffs_gen in G step")
+                    adv_features_list_g.append(reshaped_g_dft)
                 if self.args.use_dct_features_appearance and recon_dct_coeffs_gen is not None:
-                    # recon_dct_coeffs_gen is (B, N_pred, N_reg, C, H_p, W_p) - 6D
-                    B_adv_dct, N_adv_dct, R_adv_dct, _, _, _ = recon_dct_coeffs_gen.shape
-                    reshaped_adv_dct = recon_dct_coeffs_gen.reshape(B_adv_dct, N_adv_dct, R_adv_dct, -1) # Now 4D
-                    adv_features_list.append(reshaped_adv_dct)
+                    if recon_dct_coeffs_gen.ndim == 6: B_g_dct, N_g_dct, R_g_dct, C_g_d, _, _ = recon_dct_coeffs_gen.shape; reshaped_g_dct = recon_dct_coeffs_gen.reshape(B_g_dct, N_g_dct, R_g_dct, -1)
+                    elif recon_dct_coeffs_gen.ndim == 4: reshaped_g_dct = recon_dct_coeffs_gen
+                    else: raise ValueError(f"Unexpected ndim {recon_dct_coeffs_gen.ndim} for recon_dct_coeffs_gen in G step")
+                    adv_features_list_g.append(reshaped_g_dct)
                 
-                if not adv_features_list: raise ValueError("G training (adv): No spectral features from G for feature-based D.")
+                if not adv_features_list_g: raise ValueError("G training (adv, feature-D): No spectral features from G for D.")
                 
-                # All tensors in adv_features_list are now 4D: (B, N_pred_G, N_reg, D_flat_per_reg)
-                concatenated_adv_features = torch.cat(adv_features_list, dim=-1) # (B, N_pred_G, N_reg, D_combined_per_reg_flat)
+                concatenated_adv_features_g = torch.cat(adv_features_list_g, dim=-1) # (B, N_gen_pred, N_reg, D_combined_flat)
                 
-                # Prepare for GlobalWuBuVideoFeatureD which expects (B, N_reg, N_frames_D_processes * D_combined_per_reg_flat)
-                adv_input_for_d_main_sliced_frames = concatenated_adv_features[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg_flat)
-                adv_input_for_d_main_permuted = adv_input_for_d_main_sliced_frames.permute(0,2,1,3) # (B, N_reg, N_active_D, D_combined_per_reg_flat)
-                adv_input_for_d_main = adv_input_for_d_main_permuted.reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_combined_per_reg_flat)
-            else: raise ValueError(f"G training (adv): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
+                adv_input_for_d_main_sliced_frames = concatenated_adv_features_g[:, :num_frames_for_active_d_from_gen, ...]
+                B_g_feat, N_active_D_g, N_reg_g, _ = adv_input_for_d_main_sliced_frames.shape
+                adv_input_for_d_main_permuted = adv_input_for_d_main_sliced_frames.permute(0, 2, 1, 3)
+                adv_input_for_d_main = adv_input_for_d_main_permuted.reshape(B_g_feat, N_reg_g, -1)
+                
+                # Also assemble pixels if needed for logging, even if D is feature-based
+                if self.am_main_process and self.args.wandb_log_train_recon_interval > 0: # Check if logging needed
+                     if bboxes_used_by_decoder is not None:
+                        assembled_pixels_for_log = self._assemble_pixels_from_spectral(
+                            recon_dft_coeffs_gen, recon_dct_coeffs_gen, bboxes_used_by_decoder,
+                            target_image_height=self.args.image_h, target_image_width=self.args.image_w,
+                            num_image_channels_target=self.video_config['num_channels']
+                        )
+            else:
+                raise ValueError(f"G training (adv): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
 
+            # --- Adversarial Forward and Loss ---
             d_output_for_adv = d_ref_active(adv_input_for_d_main, gaad_bboxes_cond=adv_gaad_bboxes_for_d_cond, return_features=self.heuristic_vae_feature_match_active)
-            fake_logits_for_g: torch.Tensor; features_from_d_for_g_feat_match: Optional[torch.Tensor] = None
-            if isinstance(d_output_for_adv, tuple): fake_logits_for_g, features_from_d_for_g_feat_match = d_output_for_adv
-            else: fake_logits_for_g = d_output_for_adv
+            fake_logits_for_g: torch.Tensor
+            features_from_d_for_g_feat_match: Optional[torch.Tensor] = None
+            if isinstance(d_output_for_adv, tuple) and len(d_output_for_adv) > 1 and isinstance(d_output_for_adv[0], torch.Tensor) and isinstance(d_output_for_adv[1], torch.Tensor):
+                fake_logits_for_g, features_from_d_for_g_feat_match = d_output_for_adv
+            elif isinstance(d_output_for_adv, torch.Tensor):
+                fake_logits_for_g = d_output_for_adv
+            else: raise TypeError(f"Unexpected output type from discriminator: {type(d_output_for_adv)}")
+
 
             loss_g_adv_raw = self.adversarial_loss(fake_logits_for_g.squeeze(-1) if fake_logits_for_g.ndim > 1 and fake_logits_for_g.shape[-1] == 1 else fake_logits_for_g, real_labels_for_g)
             loss_g_adv_eff = self.lambda_gan * self.heuristic_override_lambda_gan_factor * loss_g_adv_raw
@@ -4112,48 +4404,64 @@ class HybridTrainer:
 
             # --- Heuristic Feature Matching Loss ---
             if self.heuristic_vae_feature_match_active and features_from_d_for_g_feat_match is not None and self.lambda_feat_match_heuristic > 0:
-                with torch.no_grad():
-                    real_input_for_d_fm_main: torch.Tensor; real_gaad_bboxes_for_d_fm_cond: Optional[torch.Tensor] = None
+                with torch.no_grad(): # Get features from D for REAL data
+                    real_input_for_d_fm_main: torch.Tensor
+                    real_gaad_bboxes_for_d_fm_cond: Optional[torch.Tensor] = None
+                    
+                    # Slicing real data for D's input window (feature matching part)
+                    start_idx_fm_real = num_input_f_cond
+                    end_idx_fm_real = num_input_f_cond + num_frames_for_active_d_from_gen # Match G's output window length
+                    if end_idx_fm_real > real_frames_full_sequence.shape[1]: # Adjust if input too short
+                        end_idx_fm_real = real_frames_full_sequence.shape[1]
+
                     if active_d_trainer_input_type == "assembled_pixels":
-                        real_input_for_d_fm_main = real_frames_full_sequence[:, :num_frames_for_active_d, ...]
+                        real_input_for_d_fm_main = real_frames_full_sequence[:, start_idx_fm_real:end_idx_fm_real, ...]
                         if hasattr(d_module_for_check, 'use_gaad_film_condition') and d_module_for_check.use_gaad_film_condition: # type: ignore
-                             _, _, gaad_bboxes_real_enc_fm, _, _ = m_ref.encode(real_frames_full_sequence) 
-                             if gaad_bboxes_real_enc_fm is not None: real_gaad_bboxes_for_d_fm_cond = gaad_bboxes_real_enc_fm[:, :num_frames_for_active_d, ...]
+                             _, _, gaad_bboxes_real_enc_fm_all, _, _ = m_ref.encode(real_frames_full_sequence)
+                             if gaad_bboxes_real_enc_fm_all is not None:
+                                 real_gaad_bboxes_for_d_fm_cond = gaad_bboxes_real_enc_fm_all[:, start_idx_fm_real:end_idx_fm_real, ...]
                     elif active_d_trainer_input_type == "regional_spectral_features_combined":
+                        # Use target_dft/dct_features_for_loss which are already aligned with G's output window
                         target_features_list_fm = []
-                        # target_dft/dct_features_for_loss are already (B, N_pred_G, N_reg, D_flat_per_reg)
-                        if self.args.use_dft_features_appearance and target_dft_features_for_loss is not None: 
-                            target_features_list_fm.append(target_dft_features_for_loss)
-                        if self.args.use_dct_features_appearance and target_dct_features_for_loss is not None: 
-                            target_features_list_fm.append(target_dct_features_for_loss)
+                        if self.args.use_dft_features_appearance and target_dft_features_for_loss is not None:
+                            target_features_list_fm.append(target_dft_features_for_loss[:, :num_frames_for_active_d_from_gen, ...]) # Slice to D's input length
+                        if self.args.use_dct_features_appearance and target_dct_features_for_loss is not None:
+                            target_features_list_fm.append(target_dct_features_for_loss[:, :num_frames_for_active_d_from_gen, ...])
                         
-                        if not target_features_list_fm: raise ValueError("G FM: No target spectral features for D feature matching.")
+                        if not target_features_list_fm: raise ValueError("G FM: No target spectral features for D feature matching (real path).")
                         
-                        concatenated_target_features_fm = torch.cat(target_features_list_fm, dim=-1).detach() # (B, N_pred_G, N_reg, D_combined_per_reg_flat)
-                        
-                        real_input_for_d_fm_main_sliced_frames = concatenated_target_features_fm[:, :num_frames_for_active_d, ...] # (B, N_active_D, N_reg, D_combined_per_reg_flat)
-                        real_input_for_d_fm_main_permuted = real_input_for_d_fm_main_sliced_frames.permute(0,2,1,3) # (B, N_reg, N_active_D, D_combined_per_reg_flat)
-                        real_input_for_d_fm_main = real_input_for_d_fm_main_permuted.reshape(B, self.args.gaad_num_regions, -1) # (B, N_reg, N_active_D * D_combined_per_reg_flat)
-                    else: 
-                        real_input_for_d_fm_main = torch.empty(0, device=device, dtype=dtype_model) # Should not happen
+                        concatenated_target_features_fm = torch.cat(target_features_list_fm, dim=-1)
+                        B_fm_real, N_active_D_fm, N_reg_fm, _ = concatenated_target_features_fm.shape
+                        real_input_for_d_fm_main_permuted = concatenated_target_features_fm.permute(0, 2, 1, 3)
+                        real_input_for_d_fm_main = real_input_for_d_fm_main_permuted.reshape(B_fm_real, N_reg_fm, -1)
+                    else:
+                        # This case should be caught by earlier checks on active_d_trainer_input_type
+                        real_input_for_d_fm_main = torch.empty(0, device=device, dtype=dtype_model)
                     
                     target_features_d: Optional[torch.Tensor] = None
-                    if real_input_for_d_fm_main.numel() > 0:
+                    if real_input_for_d_fm_main.numel() > 0 and real_input_for_d_fm_main.shape[0] > 0:
+                        # Ensure real_input_for_d_fm_main has correct number of frames for D
+                        # If D processes fewer frames than G generates, slice input for D.
+                        # The `num_frames_for_active_d_from_gen` should match what D expects.
+                        # If `real_input_for_d_fm_main` was prepared based on G's output length, and D takes less,
+                        # then D itself must handle the slicing or we slice here.
+                        # Assuming D handles it or `num_frames_for_active_d_from_gen` matches what D needs.
                         target_d_output_fm = d_ref_active(real_input_for_d_fm_main, gaad_bboxes_cond=real_gaad_bboxes_for_d_fm_cond, return_features=True)
-                        if isinstance(target_d_output_fm, tuple) and len(target_d_output_fm) > 1:
+                        if isinstance(target_d_output_fm, tuple) and len(target_d_output_fm) > 1 and isinstance(target_d_output_fm[1], torch.Tensor):
                             target_features_d = target_d_output_fm[1]
                         else:
-                            self.logger.warning_once("Feature matching active, but D did not return features for real data.")
+                            self.logger.warning_once("G FM: D did not return features for real data during feature matching.")
                 
                 if target_features_d is not None and features_from_d_for_g_feat_match.shape == target_features_d.shape:
                     loss_g_feat_match = F.mse_loss(features_from_d_for_g_feat_match, target_features_d.detach())
                     loss_g_total_micro += self.lambda_feat_match_heuristic * loss_g_feat_match
                     losses_g_micro['loss_g_feat_match_micro'] = loss_g_feat_match.detach()
-                elif target_features_d is not None: 
-                    self.logger.warning_once(f"FM shapes mismatch: G_feat {features_from_d_for_g_feat_match.shape}, D_feat_real {target_features_d.shape}")
+                elif target_features_d is not None:
+                    self.logger.warning_once(f"G FM shapes mismatch: Fake_D_feat {features_from_d_for_g_feat_match.shape}, Real_D_feat {target_features_d.shape}")
 
             # --- Heuristic G Easy Win Penalty ---
             if self.heuristic_penalize_g_easy_win_active:
+                # Use raw recon loss for this check, not the scaled one
                 if loss_g_adv_raw.item() < self.G_WINNING_THRESH and loss_recon_raw.item() > self.TARGET_GOOD_RECON_THRESH_HEURISTIC:
                     denominator_penalty = loss_g_adv_raw.item() + getattr(self.args, 'g_easy_win_penalty_eps_denom', 1e-4)
                     penalty_val = (loss_recon_raw.item() - self.TARGET_GOOD_RECON_THRESH_HEURISTIC) / max(EPS, denominator_penalty) * self.lambda_g_easy_win_penalty_heuristic
@@ -4168,24 +4476,25 @@ class HybridTrainer:
         losses_g_micro['loss_recon_micro'] = loss_recon_raw.detach()
         losses_g_micro['loss_kl_micro'] = loss_kl_raw.detach()
         losses_g_micro['loss_g_adv_micro'] = loss_g_adv_raw.detach()
-        losses_g_micro['loss_g_total_micro'] = loss_g_total_micro.detach() 
+        losses_g_micro['loss_g_total_micro'] = loss_g_total_micro.detach()
 
-        log_pixels_to_return = assembled_pixels_for_log_and_d
-        if log_pixels_to_return is None and \
+        # Prepare pixels for logging if needed (even if D is feature-based)
+        final_pixels_for_logging = assembled_pixels_for_log # This was already prepared
+        if final_pixels_for_logging is None and \
            self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and self.global_step > 0 and \
            ((self.global_step + 1) % self.args.wandb_log_train_recon_interval == 0):
-            if bboxes_used_by_decoder is not None: # Ensure bboxes are available for assembly
-                log_pixels_to_return = self._assemble_pixels_from_spectral(
+            if bboxes_used_by_decoder is not None:
+                final_pixels_for_logging = self._assemble_pixels_from_spectral(
                     recon_dft_coeffs_gen.detach() if recon_dft_coeffs_gen is not None else None,
                     recon_dct_coeffs_gen.detach() if recon_dct_coeffs_gen is not None else None,
-                    bboxes_used_by_decoder.detach(),
-                    (B, num_predict_f, self.video_config['num_channels'], self.args.image_h, self.args.image_w)
+                    bboxes_used_by_decoder.detach(), # bboxes_used_by_decoder corresponds to G's output frames
+                    target_image_height=self.args.image_h, target_image_width=self.args.image_w,
+                    num_image_channels_target=self.video_config['num_channels']
                 )
             else:
-                 self.logger.warning_once("Cannot assemble pixels for logging in G-step as bboxes_used_by_decoder is None.")
+                 self.logger.warning_once("Cannot assemble pixels for logging in G-step (D is feature-based path) as bboxes_used_by_decoder is None.")
 
-        return losses_g_micro, log_pixels_to_return.detach() if log_pixels_to_return is not None else None
-
+        return losses_g_micro, final_pixels_for_logging.detach() if final_pixels_for_logging is not None else None
 
 
 
@@ -4574,44 +4883,139 @@ class HybridTrainer:
     @torch.no_grad()
     def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]:
         m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
-        original_mode_m = m_ref.training; m_ref.eval()
+        original_mode_m = m_ref.training; m_ref.eval() # Set to eval mode
         dev = self.device
-        dtype_m = next(iter(m_ref.parameters()), torch.tensor(0.0)).dtype if hasattr(m_ref, 'parameters') and next(m_ref.parameters(), None) is not None else torch.float32
         
-        if noise is None: z = torch.randn(num_samples, self.args.latent_dim, device=dev, dtype=dtype_m)
-        else: z = noise.to(device=dev, dtype=dtype_m); num_samples = z.shape[0]
+        # Determine model's expected dtype
+        # Use a more robust way to get dtype if model has no parameters yet (e.g. for an empty shell before loading ckpt)
+        model_param_iter = iter(m_ref.parameters())
+        first_param = next(model_param_iter, None)
+        dtype_m = first_param.dtype if first_param is not None else torch.float32 # Default to float32 if no params
 
-        num_predict_f_sample = self.video_config.get("num_predict_frames",1)
-        num_regions_sample = self.gaad_appearance_config.get("num_regions",0)
-        img_dims_sample = self.args.image_h_w_tuple
-        
-        sample_bboxes_list = []
-        if num_regions_sample > 0: 
+        if self.args.latent_dim <= 0:
+            self.logger.error("Sample: Latent dim is 0 or negative, cannot generate noise for sampling.")
+            m_ref.train(original_mode_m) # Restore training mode
+            return None
+
+        if noise is None:
+            z = torch.randn(num_samples, self.args.latent_dim, device=dev, dtype=dtype_m)
+        else:
+            z = noise.to(device=dev, dtype=dtype_m)
+            num_samples = z.shape[0] # Update num_samples if noise is provided
+
+        num_predict_f_sample = self.video_config.get("num_predict_frames", 1)
+        num_regions_sample = self.gaad_appearance_config.get("num_regions", 0)
+        # Ensure image_h_w_tuple is correctly sourced (e.g., from args)
+        img_dims_sample = self.args.image_h_w_tuple # Expected (H, W)
+
+        sample_gaad_bboxes_batch: Optional[torch.Tensor] = None
+        if num_regions_sample > 0:
+            sample_bboxes_list_for_batch = []
+            gaad_app_decomp_type = self.gaad_appearance_config.get("decomposition_type", "hybrid")
+            gaad_app_min_px = self.gaad_appearance_config.get("min_size_px", 5)
+            
+            # For sampling, use static GAAD (not motion-aware as there's no input flow_magnitude map)
             for _ in range(num_samples):
-                single_sample_bboxes = golden_subdivide_rect_fixed_n(
-                    img_dims_sample, num_regions_sample, device=dev, dtype=dtype_m, 
-                    min_size_px=self.gaad_appearance_config.get('min_size_px',5)
-                ).unsqueeze(0).repeat(num_predict_f_sample,1,1) 
-                sample_bboxes_list.append(single_sample_bboxes)
-        sample_gaad_bboxes_batch = torch.stack(sample_bboxes_list) if sample_bboxes_list else None 
+                single_sample_bboxes_for_item_list = []
+                current_frame_dims_for_gaad = (img_dims_sample[1], img_dims_sample[0]) # (W, H) for GAAD funcs
+
+                if gaad_app_decomp_type == "hybrid":
+                    num_sub = num_regions_sample // 2
+                    num_spi = num_regions_sample - num_sub
+                    if num_sub > 0:
+                        single_sample_bboxes_for_item_list.append(
+                            golden_subdivide_rect_fixed_n(current_frame_dims_for_gaad, num_sub, 
+                                                          device=dev, dtype=dtype_m, min_size_px=gaad_app_min_px)
+                        )
+                    if num_spi > 0:
+                        centers, scales = phi_spiral_patch_centers_fixed_n(current_frame_dims_for_gaad, num_spi, 
+                                                                           device=dev, dtype=dtype_m)
+                        # Convert centers/scales to bboxes [x1,y1,x2,y2]
+                        patch_base_size_s = min(current_frame_dims_for_gaad)
+                        sb_curr = torch.zeros(num_spi, 4, device=dev, dtype=dtype_m)
+                        patch_hs_half = float(patch_base_size_s) * scales[:,0] / 2.0
+                        patch_ws_half = patch_hs_half # Assuming square patches from spiral centers
+
+                        val_x1_s = centers[:,0] - patch_ws_half
+                        val_y1_s = centers[:,1] - patch_hs_half
+                        val_x2_s = centers[:,0] + patch_ws_half
+                        val_y2_s = centers[:,1] + patch_hs_half
+                        
+                        sb_curr[:,0]=torch.clamp(val_x1_s,min=0.0,max=float(current_frame_dims_for_gaad[0])-EPS)
+                        sb_curr[:,1]=torch.clamp(val_y1_s,min=0.0,max=float(current_frame_dims_for_gaad[1])-EPS)
+                        sb_curr[:,2]=torch.clamp(val_x2_s,max=float(current_frame_dims_for_gaad[0]))
+                        sb_curr[:,2]=torch.maximum(sb_curr[:,2], sb_curr[:,0]+EPS) # Ensure x2 > x1
+                        sb_curr[:,3]=torch.clamp(val_y2_s,max=float(current_frame_dims_for_gaad[1]))
+                        sb_curr[:,3]=torch.maximum(sb_curr[:,3], sb_curr[:,1]+EPS) # Ensure y2 > y1
+                        single_sample_bboxes_for_item_list.append(sb_curr)
+                    
+                    single_item_bboxes_for_frame = torch.cat(single_sample_bboxes_for_item_list, dim=0) if single_sample_bboxes_for_item_list else \
+                                                   torch.tensor([[0,0,float(current_frame_dims_for_gaad[0]), float(current_frame_dims_for_gaad[1])]]*num_regions_sample, dtype=dtype_m, device=dev)
+
+                elif gaad_app_decomp_type == "spiral":
+                    centers, scales = phi_spiral_patch_centers_fixed_n(current_frame_dims_for_gaad, num_regions_sample, device=dev, dtype=dtype_m)
+                    patch_base_size_s=min(current_frame_dims_for_gaad); sb_curr=torch.zeros(num_regions_sample,4,device=dev,dtype=dtype_m)
+                    patch_hs_half=float(patch_base_size_s)*scales[:,0]/2.0; patch_ws_half=patch_hs_half
+                    val_x1_s=centers[:,0]-patch_ws_half; val_y1_s=centers[:,1]-patch_hs_half; val_x2_s=centers[:,0]+patch_ws_half; val_y2_s=centers[:,1]+patch_hs_half
+                    sb_curr[:,0]=torch.clamp(val_x1_s,min=0.0,max=float(current_frame_dims_for_gaad[0])-EPS); sb_curr[:,1]=torch.clamp(val_y1_s,min=0.0,max=float(current_frame_dims_for_gaad[1])-EPS)
+                    sb_curr[:,2]=torch.clamp(val_x2_s,max=float(current_frame_dims_for_gaad[0])); sb_curr[:,2]=torch.maximum(sb_curr[:,2], sb_curr[:,0]+EPS)
+                    sb_curr[:,3]=torch.clamp(val_y2_s,max=float(current_frame_dims_for_gaad[1])); sb_curr[:,3]=torch.maximum(sb_curr[:,3], sb_curr[:,1]+EPS)
+                    single_item_bboxes_for_frame = sb_curr
+                else: # "subdivide"
+                    single_item_bboxes_for_frame = golden_subdivide_rect_fixed_n(current_frame_dims_for_gaad, num_regions_sample, 
+                                                                                device=dev, dtype=dtype_m, min_size_px=gaad_app_min_px)
+                
+                # Ensure correct number of regions for this item after generation
+                if single_item_bboxes_for_frame.shape[0] < num_regions_sample:
+                    num_pad_s = num_regions_sample - single_item_bboxes_for_frame.shape[0]
+                    pad_box_s = single_item_bboxes_for_frame[-1:].clone() if single_item_bboxes_for_frame.shape[0]>0 else \
+                                torch.tensor([[0,0,float(current_frame_dims_for_gaad[0]),float(current_frame_dims_for_gaad[1])]], dtype=dtype_m,device=dev)
+                    single_item_bboxes_for_frame = torch.cat([single_item_bboxes_for_frame, pad_box_s.repeat(num_pad_s,1)], dim=0)
+                elif single_item_bboxes_for_frame.shape[0] > num_regions_sample:
+                    single_item_bboxes_for_frame = single_item_bboxes_for_frame[:num_regions_sample]
+                
+                # Repeat these bboxes for each predicted frame
+                sample_bboxes_list_for_batch.append(single_item_bboxes_for_frame.unsqueeze(0).repeat(num_predict_f_sample, 1, 1))
+            
+            if sample_bboxes_list_for_batch:
+                sample_gaad_bboxes_batch = torch.stack(sample_bboxes_list_for_batch) # (B, N_pred_frames, N_reg, 4)
+            elif num_samples > 0 : # Fallback if list is empty but samples expected
+                 self.logger.warning("Sample: GAAD bbox list empty for sampling. Creating dummy full-frame bboxes.")
+                 dummy_bbox_s = torch.tensor([0,0,float(img_dims_sample[1]),float(img_dims_sample[0])], dtype=dtype_m, device=dev) # W, H
+                 sample_gaad_bboxes_batch = dummy_bbox_s.view(1,1,1,4).expand(num_samples, num_predict_f_sample, num_regions_sample, 4)
         
-        self.logger.info(f"Sampling {num_samples} sequences (DFT:{self.args.use_dft_features_appearance}, DCT:{self.args.use_dct_features_appearance})...")
+        self.logger.info(f"Sampling {num_samples} sequences (DFT:{self.args.use_dft_features_appearance}, DCT:{self.args.use_dct_features_appearance}). Z-shape: {z.shape}. Bboxes shape: {sample_gaad_bboxes_batch.shape if sample_gaad_bboxes_batch is not None else 'None'}")
+        
+        # The decoder expects bboxes to match the number of frames it internally generates (m_ref.generator.num_predict_frames)
+        # sample_gaad_bboxes_batch should already be (B, N_gen_predict_frames, N_reg, 4) due to repeat(num_predict_f_sample,...)
         gen_pixels, gen_dft, gen_dct = m_ref.decode(z, sample_gaad_bboxes_batch) # type: ignore
         
         final_pixel_samples: Optional[torch.Tensor] = None
-        if gen_pixels is not None: final_pixel_samples = gen_pixels
+        if gen_pixels is not None:
+            final_pixel_samples = gen_pixels
         elif self.args.use_dft_features_appearance or self.args.use_dct_features_appearance:
-            target_shape_for_assembly = (num_samples, num_predict_f_sample, self.video_config['num_channels'], self.args.image_h, self.args.image_w)
+            if sample_gaad_bboxes_batch is None:
+                self.logger.error("Sample: Cannot assemble spectral to pixels because sample_gaad_bboxes_batch is None.")
+                m_ref.train(original_mode_m)
+                return None
+
             final_pixel_samples = self._assemble_pixels_from_spectral(
-                gen_dft, gen_dct, sample_gaad_bboxes_batch, target_shape_for_assembly # type: ignore
+                gen_dft, gen_dct, sample_gaad_bboxes_batch, # sample_gaad_bboxes_batch has N_pred_frames temporal dim
+                target_image_height=self.args.image_h,
+                target_image_width=self.args.image_w,
+                num_image_channels_target=self.video_config['num_channels']
+                # output_range is defaulted in _assemble_pixels_from_spectral
             )
         
-        if final_pixel_samples is not None: self.logger.info("Sampling finished.")
-        else: self.logger.warning("Sampling resulted in no pixel output.")
+        if final_pixel_samples is not None:
+            self.logger.info(f"Sampling finished. Output pixel shape: {final_pixel_samples.shape}")
+        else:
+            self.logger.warning("Sampling resulted in no pixel output (final_pixel_samples is None).")
             
-        m_ref.train(original_mode_m)
+        m_ref.train(original_mode_m) # Restore training mode
         return final_pixel_samples
-    
+
+
     def _save_checkpoint(self, is_intermediate: bool = False, metrics: Optional[Dict[str, Any]] = None, is_best: bool = False):
         if not self.am_main_process: return
         m_s = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
@@ -5053,6 +5457,8 @@ def validate_wubu_config_for_argparse(args_obj, prefix_str, parser_ref): # From 
                         parser_ref.error(f"{attr_name} empty and no clear default for {num_levels} levels.")
                 else:
                     parser_ref.error(f"{attr_name} length {len(val_list)} != num_levels {num_levels}")
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description="WuBu-GAAD Regional VAE-GAN w/ OptFlow & DFT+DCT (v0.3)")
     
@@ -5122,7 +5528,20 @@ def parse_arguments():
     motion_group.add_argument('--optical_flow_net_type', type=str, default='raft_small', choices=list(FLOW_MODELS.keys()) if OPTICAL_FLOW_AVAILABLE else [], help="Type of optical flow network.")
     motion_group.add_argument('--freeze_flow_net', action='store_true', default=True, help="Freeze weights of the optical flow network.")
     motion_group.add_argument('--flow_stats_components', nargs='+', type=str, default=['mag_mean', 'angle_mean', 'mag_std'], help="Which optical flow statistics to compute per region.")
-
+    motion_group.add_argument('--motion_gaad_gas_prioritize_high_energy', action='store_true', default=True,
+                              help="For GAS motion regions, prioritize subdividing areas with high motion energy.")
+    motion_group.add_argument('--motion_gaad_gas_energy_thresh_factor', type=float, default=0.05,
+                              help="Factor of max motion energy; regions below this (and deep enough) won't be subdivided by GAS.")
+    motion_group.add_argument('--motion_gaad_psp_arms_per_hotspot', type=int, default=3,
+                              help="Number of spiral arms to generate from each motion hotspot for PSP.")
+    motion_group.add_argument('--motion_gaad_psp_pts_per_arm', type=int, default=4,
+                              help="Number of points (patch centers) per spiral arm for PSP.")
+    motion_group.add_argument('--motion_gaad_psp_motion_scale_influence', type=float, default=0.6,
+                              help="Influence of local motion energy on PSP patch size (0=none, 1=fully inverse).")
+    motion_group.add_argument('--motion_gaad_psp_hotspot_blur_sigma', type=float, default=2.5,
+                              help="Gaussian blur sigma for `analysis_map` before finding PSP hotspots.")
+    motion_group.add_argument('--motion_gaad_psp_min_scale', type=float, default=0.02)
+    motion_group.add_argument('--motion_gaad_psp_max_scale', type=float, default=0.35)
     # --- Group: Encoder Architecture ---
     enc_arch_group = parser.add_argument_group('Encoder Architecture')
     enc_arch_group.add_argument('--encoder_use_roi_align', action='store_true', default=False, help="Use RoIAlign for patch extraction in encoder instead of direct pixel cropping.")
@@ -5439,6 +5858,8 @@ def main():
         if am_main_process and args.wandb and WANDB_AVAILABLE and wandb.run: wandb.finish()
         if ddp_active and is_initialized(): destroy_process_group()
         current_logger_main.info(f"Rank {rank}: {base_logger_name} (v0.3) script finished.")
+
+
 if __name__ == "__main__":
     use_motion_branch_requested = '--use_wubu_motion_branch' in sys.argv
     if use_motion_branch_requested and not OPTICAL_FLOW_AVAILABLE:
