@@ -129,7 +129,7 @@ SET "DISC_GLOBAL_STATS_MLP_HIDDEN_DIM_VIDEO_GLOBAL_WUBU=64"
 REM =====================================================================
 REM WuBu Configuration (Common)
 REM =====================================================================
-SET "WUBU_DROPOUT=0.05"
+SET "WUBU_DROPOUT=0.1"
 
 REM =====================================================================
 REM WuBu-S (Appearance) Configuration
@@ -214,11 +214,11 @@ SET "LOAD_STRICT=true"
 REM =====================================================================
 REM Loss Weights
 REM =====================================================================
-SET "LAMBDA_RECON=10.0"
+SET "LAMBDA_RECON=25.0"
 SET "LAMBDA_RECON_DFT=7.0"
 SET "LAMBDA_RECON_DCT=7.0"
-SET "LAMBDA_KL=0.01"
-SET "LAMBDA_GAN=1.0"
+SET "LAMBDA_KL=0.15"
+SET "LAMBDA_GAN=2.0"
 
 REM =====================================================================
 REM Q-Controller for Lambda_KL (Scheduled) & Heuristics
