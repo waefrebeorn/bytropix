@@ -36,7 +36,7 @@ from torch.nn.utils import spectral_norm
 from torch.distributed import init_process_group, destroy_process_group, is_initialized, get_rank, get_world_size
 from torch import amp
 from tqdm import tqdm
-
+import inspect
 import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from PIL import Image
@@ -4504,382 +4504,583 @@ class HybridTrainer:
         val = action_dict.get(key)
         return float(val) if val is not None and np.isfinite(val) else default_value
 
-    def train(self, start_epoch:int=0, initial_global_step:int=0):
+
+
+    def train(self, start_epoch: int = 0, initial_global_step: int = 0):
         self.global_step = initial_global_step
         self.current_epoch = start_epoch
         
+        m_ref_dtype_check = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
+        model_param_list_for_dtype = list(m_ref_dtype_check.parameters())
+        first_param_dtype = model_param_list_for_dtype[0] if model_param_list_for_dtype else None
+        dtype_model = first_param_dtype.dtype if first_param_dtype is not None else torch.float32
+        if self.am_main_process: self.logger.info(f"Trainer determined model dtype: {dtype_model}")
+
         if self.am_main_process:
             d_ref_active_log = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
             active_d_arch_variant_log = getattr(d_ref_active_log, 'architecture_variant', 'unknown_variant')
-            self.logger.info(f"Starting training. DFT:{self.args.use_dft_features_appearance}, DCT:{self.args.use_dct_features_appearance}. Epochs: {self.args.epochs}, StartEpoch: {start_epoch}, GStep: {initial_global_step}, L_KL_base: {self.lambda_kl_base:.3e}. Initial Active D: {self.active_discriminator_key} (Arch: {active_d_arch_variant_log}, EffIn: {self.active_disc_effective_trainer_input_type})")
+            self.logger.info(f"Starting training. DFT:{self.args.use_dft_features_appearance}, DCT:{self.args.use_dct_features_appearance}. "
+                             f"Epochs: {self.args.epochs}, StartEpoch: {start_epoch}, GStep: {initial_global_step}, "
+                             f"L_KL_base: {self.lambda_kl_base:.3e}. "
+                             f"Initial Active D: {self.active_discriminator_key} (Arch: {active_d_arch_variant_log}, EffIn: {self.active_disc_effective_trainer_input_type})")
         
-        if self.am_main_process and self.args.wandb_log_fixed_noise_samples_interval > 0 and self.args.num_val_samples_to_log > 0 and self.fixed_noise_for_sampling is None:
-            default_dtype = next(iter(self.m_ref.parameters()), torch.tensor(0.0)).dtype if hasattr(self.m_ref, 'parameters') and next(self.m_ref.parameters(), None) is not None else torch.float32
-            if self.args.latent_dim > 0: self.fixed_noise_for_sampling = torch.randn(self.args.num_val_samples_to_log, self.args.latent_dim, device=self.device, dtype=default_dtype)
+        if self.am_main_process and self.args.wandb_log_fixed_noise_samples_interval > 0 and \
+           self.args.num_val_samples_to_log > 0 and self.fixed_noise_for_sampling is None:
+            if self.args.latent_dim > 0:
+                self.fixed_noise_for_sampling = torch.randn(
+                    self.args.num_val_samples_to_log, self.args.latent_dim, device=self.device, dtype=dtype_model
+                )
+            else:
+                self.logger.warning("Cannot create fixed_noise_for_sampling as latent_dim is 0 or negative.")
             
-        log_interval_accum_losses = defaultdict(float)
-        log_interval_items_processed = 0
+        # Accumulators for logging over self.args.log_interval GLOBAL steps
+        log_interval_global_steps_accum_losses = defaultdict(float)
+        log_interval_global_steps_items_processed = 0 # Counts items over multiple global steps for averaging
         
         all_q_controllers_to_sync_lkl = [self.q_controller_gen, self.q_controller_d_primary, self.q_controller_d_alt, self.lambda_kl_q_controller]
+        current_effective_lambda_kl = self.lambda_kl_base * self.heuristic_override_lambda_kl_factor
         for q_ctrl in all_q_controllers_to_sync_lkl:
-            if q_ctrl and hasattr(q_ctrl, 'set_current_lambda_kl'): q_ctrl.set_current_lambda_kl(self.lambda_kl)
+            if q_ctrl and hasattr(q_ctrl, 'set_current_lambda_kl'):
+                q_ctrl.set_current_lambda_kl(current_effective_lambda_kl)
 
         for epoch in range(start_epoch, self.args.epochs):
             self.current_epoch = epoch
             if self.am_main_process:
                  d_ref_active_ep_log = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
                  active_d_arch_variant_ep_log = getattr(d_ref_active_ep_log, 'architecture_variant', 'unknown_variant')
-                 self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting (L_KL_eff: {self.lambda_kl * self.heuristic_override_lambda_kl_factor:.3e}, LRecF: {self.heuristic_override_lambda_recon_factor:.2f}, LGanF: {self.heuristic_override_lambda_gan_factor:.2f}, ActD: {self.active_discriminator_key} [Arch:{active_d_arch_variant_ep_log}, EffIn:{self.active_disc_effective_trainer_input_type}]).")
-            if self.ddp_active and isinstance(self.train_loader.sampler, DistributedSampler): self.train_loader.sampler.set_epoch(epoch)
+                 self.logger.info(f"Epoch {epoch+1}/{self.args.epochs} starting "
+                                  f"(L_KL_eff: {self.lambda_kl_base * self.heuristic_override_lambda_kl_factor:.3e}, "
+                                  f"LRecF: {self.heuristic_override_lambda_recon_factor:.2f}, "
+                                  f"LGanF: {self.heuristic_override_lambda_gan_factor:.2f}, "
+                                  f"ActD: {self.active_discriminator_key} "
+                                  f"[Arch:{active_d_arch_variant_ep_log}, EffIn:{self.active_disc_effective_trainer_input_type}]).")
+            
+            if self.ddp_active and isinstance(self.train_loader.sampler, DistributedSampler):
+                self.train_loader.sampler.set_epoch(epoch)
                 
-            self.m_ref.train(); self.active_discriminator.train()
+            self.m_ref.train()
+            if self.active_discriminator_key == 'primary':
+                self.discriminator_primary_obj.train()
+                if self.discriminator_alternative_obj is not None: self.discriminator_alternative_obj.eval()
+            else: # 'alternative'
+                self.discriminator_alternative_obj.train()
+                if self.discriminator_primary_obj is not None: self.discriminator_primary_obj.eval()
+
             num_batches_epoch = len(self.train_loader)
-            prog_bar = tqdm(self.train_loader, desc=f"E{epoch+1}", disable=not self.am_main_process or os.getenv('CI') == 'true', dynamic_ncols=True, total=num_batches_epoch)
+            prog_bar_desc = f"E{epoch+1} ActD:{self.active_discriminator_key[0]}"
+            prog_bar = tqdm(self.train_loader, desc=prog_bar_desc, 
+                            disable=not self.am_main_process or os.getenv('CI') == 'true' or getattr(self.args, 'disable_train_tqdm', False),
+                            dynamic_ncols=True, total=num_batches_epoch)
             
-            accum_g_total_q, accum_g_recon_q, accum_g_kl_q, accum_g_adv_q = 0.0, 0.0, 0.0, 0.0
-            accum_d_total_q, accum_d_real_q, accum_d_fake_q = 0.0, 0.0, 0.0
-            num_accum_steps_for_q = 0
+            accum_g_total_q_cycle, accum_g_recon_q_cycle, accum_g_kl_q_cycle, accum_g_adv_q_cycle = 0.0, 0.0, 0.0, 0.0
+            accum_d_total_q_cycle, accum_d_real_q_cycle, accum_d_fake_q_cycle = 0.0, 0.0, 0.0
+            num_micro_steps_in_accum_cycle = 0
             
-            # Zero grads at the beginning of an accumulation cycle
+            # Zero grads at the beginning of each accumulation cycle
             if self.optimizer_disc_active: self.optimizer_disc_active.zero_grad(set_to_none=True)
             if self.optimizer_enc_gen: self.optimizer_enc_gen.zero_grad(set_to_none=True)
 
             for batch_idx, batch_frames_raw in enumerate(prog_bar):
-                batch_frames_full_sequence = batch_frames_raw.to(self.device) 
+                batch_frames_full_sequence = batch_frames_raw.to(device=self.device, dtype=dtype_model, non_blocking=True)
                 batch_size_micro = batch_frames_full_sequence.size(0)
-                self.steps_since_last_d_switch +=1
+                self.steps_since_last_d_switch += 1
 
+                # --- Discriminator Training Micro-Step ---
+                for p in self.active_discriminator.parameters(): p.requires_grad = True
+                for p in self.m_ref.parameters(): p.requires_grad = False
                 losses_d_micro = self._train_discriminator_step(batch_frames_full_sequence, self.m_ref)
+                
                 for k, v_tensor in losses_d_micro.items():
                     if torch.isfinite(v_tensor): 
-                        val = v_tensor.item(); accum_key = k.replace('_micro', '_agg'); log_interval_accum_losses[accum_key] += val * batch_size_micro
-                        if k == 'loss_d_total_micro': self.interval_metrics_accum['d_total'] += val; accum_d_total_q += val
-                        elif k == 'loss_d_real_micro': accum_d_real_q += val
-                        elif k == 'loss_d_fake_micro': accum_d_fake_q += val
+                        val = v_tensor.item(); accum_key = k.replace('_micro', '_agg')
+                        log_interval_global_steps_accum_losses[accum_key] += val * batch_size_micro
+                        if k == 'loss_d_total_micro': self.interval_metrics_accum['d_total'] += val; accum_d_total_q_cycle += val
+                        elif k == 'loss_d_real_micro': accum_d_real_q_cycle += val
+                        elif k == 'loss_d_fake_micro': accum_d_fake_q_cycle += val
                 
+                # --- Generator/Encoder Training Micro-Step ---
+                for p in self.m_ref.parameters(): p.requires_grad = True
+                for p in self.active_discriminator.parameters(): p.requires_grad = False
                 losses_g_micro, assembled_pixels_for_logging = self._train_generator_step(batch_frames_full_sequence, self.m_ref)
+                
                 for k, v_tensor in losses_g_micro.items():
                     if torch.isfinite(v_tensor): 
-                        val = v_tensor.item(); accum_key = k.replace('_micro', '_agg'); log_interval_accum_losses[accum_key] += val * batch_size_micro
-                        if k == 'loss_recon_micro': self.interval_metrics_accum['recon_spectral'] += val; accum_g_recon_q += val
-                        elif k == 'loss_kl_micro':  self.interval_metrics_accum['kl_div'] += val; accum_g_kl_q += val
-                        elif k == 'loss_g_adv_micro': accum_g_adv_q += val
-                        elif k == 'loss_g_total_micro': accum_g_total_q += val
-                        elif k == 'loss_g_feat_match_micro': log_interval_accum_losses['loss_g_feat_match_eff_contrib_agg'] += (self.lambda_feat_match_heuristic * val * batch_size_micro)
-                        elif k == 'loss_g_easy_win_penalty_micro': log_interval_accum_losses['loss_g_easy_win_penalty_eff_contrib_agg'] += (val * batch_size_micro)
+                        val = v_tensor.item(); accum_key = k.replace('_micro', '_agg')
+                        log_interval_global_steps_accum_losses[accum_key] += val * batch_size_micro
+                        if k == 'loss_recon_micro': self.interval_metrics_accum['recon_spectral'] += val; accum_g_recon_q_cycle += val
+                        elif k == 'loss_kl_micro':  self.interval_metrics_accum['kl_div'] += val; accum_g_kl_q_cycle += val
+                        elif k == 'loss_g_adv_micro': accum_g_adv_q_cycle += val
+                        elif k == 'loss_g_total_micro': accum_g_total_q_cycle += val
+                        elif k == 'loss_g_feat_match_micro' and self.heuristic_vae_feature_match_active:
+                            log_interval_global_steps_accum_losses['loss_g_feat_match_eff_contrib_agg'] += (self.lambda_feat_match_heuristic * val * batch_size_micro)
+                        elif k == 'loss_g_easy_win_penalty_micro' and self.heuristic_penalize_g_easy_win_active:
+                            log_interval_global_steps_accum_losses['loss_g_easy_win_penalty_eff_contrib_agg'] += (val * batch_size_micro)
                 
-                log_interval_items_processed += batch_size_micro
+                log_interval_global_steps_items_processed += batch_size_micro
                 self.interval_steps_count += 1
-                num_accum_steps_for_q +=1
+                num_micro_steps_in_accum_cycle +=1
                 
                 if (batch_idx + 1) % self.grad_accum_steps == 0:
-                    if hasattr(self.optimizer_disc_active, 'grad_stats'): self.optimizer_disc_active.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_disc_active.param_groups for p in grp['params'] if p.requires_grad))
-                    if hasattr(self.optimizer_enc_gen, 'grad_stats'): self.optimizer_enc_gen.grad_stats.finalize_step_stats(sum(p.numel() for grp in self.optimizer_enc_gen.param_groups for p in grp['params'] if p.requires_grad))
+                    d_active_ref_for_opt_step = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
+                    
+                    if hasattr(self.optimizer_disc_active, 'grad_stats') and hasattr(self.optimizer_disc_active.grad_stats, 'finalize_step_stats'): # type: ignore
+                         self.optimizer_disc_active.grad_stats.finalize_step_stats(sum(p.numel() for p in d_active_ref_for_opt_step.parameters() if p.requires_grad and p.grad is not None)) # type: ignore
+                    if hasattr(self.optimizer_enc_gen, 'grad_stats') and hasattr(self.optimizer_enc_gen.grad_stats, 'finalize_step_stats'): # type: ignore
+                         self.optimizer_enc_gen.grad_stats.finalize_step_stats(sum(p.numel() for p in self.m_ref.parameters() if p.requires_grad and p.grad is not None)) # type: ignore
 
                     avg_losses_for_q_cycle: Dict[str, Optional[float]] = {
-                        'loss_g_total': accum_g_total_q / num_accum_steps_for_q if num_accum_steps_for_q > 0 else None,
-                        'loss_g_recon': accum_g_recon_q / num_accum_steps_for_q if num_accum_steps_for_q > 0 else None,
-                        'loss_g_kl': accum_g_kl_q / num_accum_steps_for_q if num_accum_steps_for_q > 0 else None,
-                        'loss_g_adv': accum_g_adv_q / num_accum_steps_for_q if num_accum_steps_for_q > 0 else None,
-                        'loss_d_total': accum_d_total_q / num_accum_steps_for_q if num_accum_steps_for_q > 0 else None,
-                        'loss_d_real': accum_d_real_q / num_accum_steps_for_q if num_accum_steps_for_q > 0 else None,
-                        'loss_d_fake': accum_d_fake_q / num_accum_steps_for_q if num_accum_steps_for_q > 0 else None,
+                        'loss_g_total': accum_g_total_q_cycle / num_micro_steps_in_accum_cycle if num_micro_steps_in_accum_cycle > 0 else None,
+                        'loss_g_recon': accum_g_recon_q_cycle / num_micro_steps_in_accum_cycle if num_micro_steps_in_accum_cycle > 0 else None,
+                        'loss_g_kl': accum_g_kl_q_cycle / num_micro_steps_in_accum_cycle if num_micro_steps_in_accum_cycle > 0 else None,
+                        'loss_g_adv': accum_g_adv_q_cycle / num_micro_steps_in_accum_cycle if num_micro_steps_in_accum_cycle > 0 else None,
+                        'loss_d_total': accum_d_total_q_cycle / num_micro_steps_in_accum_cycle if num_micro_steps_in_accum_cycle > 0 else None,
+                        'loss_d_real': accum_d_real_q_cycle / num_micro_steps_in_accum_cycle if num_micro_steps_in_accum_cycle > 0 else None,
+                        'loss_d_fake': accum_d_fake_q_cycle / num_micro_steps_in_accum_cycle if num_micro_steps_in_accum_cycle > 0 else None,
                     }
                     
-                    d_active_ref = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
-                    for p_d_act_grad in d_active_ref.parameters(): p_d_act_grad.requires_grad = True # Ensure D grads are on for D step
-                    
+                    # --- Update Discriminator ---
+                    for p_opt_d in d_active_ref_for_opt_step.parameters(): p_opt_d.requires_grad = True
+                    for p_opt_g_frozen_for_d_step in self.m_ref.parameters(): p_opt_g_frozen_for_d_step.requires_grad = False
+
                     if self.q_controller_d_active and hasattr(self.optimizer_disc_active, 'q_controller_update_and_set_hyperparams'):
-                        self.optimizer_disc_active.q_controller_update_and_set_hyperparams(avg_losses_for_q_cycle, self.lambda_kl * self.heuristic_override_lambda_kl_factor)
+                        self.optimizer_disc_active.q_controller_update_and_set_hyperparams(avg_losses_for_q_cycle, self.lambda_kl) # type: ignore
                         if self.heuristic_boost_active_d_lr_active: 
                             for group in self.optimizer_disc_active.param_groups: group['lr'] = float(np.clip(group['lr'] * self.heuristic_active_d_lr_boost_factor, 1e-8, 1.0))
-                    if self.args.global_max_grad_norm > 0: self.scaler_disc_active.unscale_(self.optimizer_disc_active); torch.nn.utils.clip_grad_norm_(d_active_ref.parameters(), self.args.global_max_grad_norm)
-                    self.scaler_disc_active.step(self.optimizer_disc_active); self.scaler_disc_active.update()
                     
-                    for p_d_act_grad_off in d_active_ref.parameters(): p_d_act_grad_off.requires_grad = False # Turn off D grads for G step
-                    for p_m_grad_on in self.m_ref.parameters(): p_m_grad_on.requires_grad = True # Ensure G grads are on
+                    if self.args.global_max_grad_norm > 0:
+                        self.scaler_disc_active.unscale_(self.optimizer_disc_active)
+                        torch.nn.utils.clip_grad_norm_(d_active_ref_for_opt_step.parameters(), self.args.global_max_grad_norm)
                     
+                    self.scaler_disc_active.step(self.optimizer_disc_active)
+                    self.scaler_disc_active.update()
+                    
+                    # --- Update Generator/Encoder ---
+                    for p_opt_g in self.m_ref.parameters(): p_opt_g.requires_grad = True
+                    for p_opt_d_frozen_for_g_step in d_active_ref_for_opt_step.parameters(): p_opt_d_frozen_for_g_step.requires_grad = False
+                        
                     if self.q_controller_gen and hasattr(self.optimizer_enc_gen, 'q_controller_update_and_set_hyperparams'):
-                        self.optimizer_enc_gen.q_controller_update_and_set_hyperparams(avg_losses_for_q_cycle, self.lambda_kl * self.heuristic_override_lambda_kl_factor)
-                    if self.args.global_max_grad_norm > 0: self.scaler_enc_gen.unscale_(self.optimizer_enc_gen); torch.nn.utils.clip_grad_norm_(self.m_ref.parameters(), self.args.global_max_grad_norm)
-                    self.scaler_enc_gen.step(self.optimizer_enc_gen); self.scaler_enc_gen.update()
+                        self.optimizer_enc_gen.q_controller_update_and_set_hyperparams(avg_losses_for_q_cycle, self.lambda_kl) # type: ignore
+
+                    if self.args.global_max_grad_norm > 0:
+                        self.scaler_enc_gen.unscale_(self.optimizer_enc_gen)
+                        torch.nn.utils.clip_grad_norm_(self.m_ref.parameters(), self.args.global_max_grad_norm)
                     
-                    # Zero grads for next accumulation cycle AFTER both optimizers have stepped
-                    self.optimizer_disc_active.zero_grad(set_to_none=True)
-                    self.optimizer_enc_gen.zero_grad(set_to_none=True)
+                    self.scaler_enc_gen.step(self.optimizer_enc_gen)
+                    self.scaler_enc_gen.update()
+                    
+                    # Zero grads for the START of the NEXT accumulation cycle
+                    if self.optimizer_disc_active: self.optimizer_disc_active.zero_grad(set_to_none=True)
+                    if self.optimizer_enc_gen: self.optimizer_enc_gen.zero_grad(set_to_none=True)
                     
                     self.global_step += 1
-                    accum_g_total_q, accum_g_recon_q, accum_g_kl_q, accum_g_adv_q = 0.0, 0.0, 0.0, 0.0
-                    accum_d_total_q, accum_d_real_q, accum_d_fake_q = 0.0, 0.0, 0.0; num_accum_steps_for_q = 0
                     
-                    if self.global_step > 0 and self.heuristic_check_interval > 0 and self.global_step % self.heuristic_check_interval == 0:
-                        self._evaluate_training_state_and_apply_heuristics()
+                    accum_g_total_q_cycle, accum_g_recon_q_cycle, accum_g_kl_q_cycle, accum_g_adv_q_cycle = 0.0, 0.0, 0.0, 0.0
+                    accum_d_total_q_cycle, accum_d_real_q_cycle, accum_d_fake_q_cycle = 0.0, 0.0, 0.0
+                    num_micro_steps_in_accum_cycle = 0
                     
-                    if self.lambda_kl_q_controller is not None and self.lambda_kl_update_interval > 0 and self.global_step > 0 and self.global_step % self.lambda_kl_update_interval == 0 and self.interval_steps_count > 0:
-                        current_interval_metrics: Dict[str, Union[float, None]] = {
-                            'avg_recon': self.interval_metrics_accum['recon_spectral'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
-                            'avg_kl_div': self.interval_metrics_accum['kl_div'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
-                            'avg_d_total': self.interval_metrics_accum['d_total'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
-                            'val_metric': self.last_val_metrics.get(self.args.val_primary_metric), 'current_lambda_kl_val': self.lambda_kl_base } 
-                        if self.am_main_process: prog_bar.write(f"GStep {self.global_step}: LKL Q-Ctrl. LKL_Base: {self.lambda_kl_base:.4e}. Metrics: { {k: f'{v:.3f}' if isinstance(v,float) else v for k,v in current_interval_metrics.items()} }")
-                        q_state_lambda_kl = self.lambda_kl_q_controller.get_lambda_kl_state(current_interval_metrics)
-                        if self.lambda_kl_q_controller.prev_lambda_kl_state is not None and self.lambda_kl_q_controller.prev_lambda_kl_action is not None and q_state_lambda_kl is not None and self.prev_interval_metrics_for_lambda_kl_reward is not None:
-                            reward_for_lambda_kl = self.lambda_kl_q_controller.compute_lambda_kl_reward(current_interval_metrics, self.prev_interval_metrics_for_lambda_kl_reward)
-                            if self.am_main_process: prog_bar.write(f"  LKL Q-Ctrl reward: {reward_for_lambda_kl:.3f}")
-                            self.lambda_kl_q_controller.update_q_values(self.lambda_kl_q_controller.prev_lambda_kl_state, self.lambda_kl_q_controller.prev_lambda_kl_action, reward_for_lambda_kl, q_state_lambda_kl, mode='lambda_kl')
-                        elif q_state_lambda_kl is not None and hasattr(self.lambda_kl_q_controller, 'set_initial_lambda_kl_metrics'): self.lambda_kl_q_controller.set_initial_lambda_kl_metrics(current_interval_metrics)
-                        if q_state_lambda_kl is not None:
-                            lambda_kl_action_dict = self.lambda_kl_q_controller.choose_action(q_state_lambda_kl, mode='lambda_kl')
-                            chosen_scale = HybridTrainer.get_scale_from_action_value(lambda_kl_action_dict, 'lambda_kl_scale', 1.0)
-                            self.lambda_kl_base = float(np.clip(self.lambda_kl_base * chosen_scale, self.min_lambda_kl_q_control, self.max_lambda_kl_q_control)) 
-                            if self.am_main_process: prog_bar.write(f"  LKL_Q-Ctrl CHOSE scale: {chosen_scale:.3f}. New LKL_Base: {self.lambda_kl_base:.4e}")
-                            self.lambda_kl_q_controller.prev_lambda_kl_state = q_state_lambda_kl; self.lambda_kl_q_controller.prev_lambda_kl_action = lambda_kl_action_dict
-                        self.prev_interval_metrics_for_lambda_kl_reward = current_interval_metrics.copy()
-                        self.lambda_kl = self.lambda_kl_base * self.heuristic_override_lambda_kl_factor 
-                        for q_ctrl_opt in all_q_controllers_to_sync_lkl: 
-                            if q_ctrl_opt and hasattr(q_ctrl_opt, 'set_current_lambda_kl'): q_ctrl_opt.set_current_lambda_kl(self.lambda_kl)
-                        self.interval_metrics_accum = defaultdict(float); self.interval_steps_count = 0
-                    
-                    if self.global_step > 0 and self.args.log_interval > 0 and (self.global_step % self.args.log_interval == 0) and log_interval_items_processed > 0 and self.am_main_process:
-                        current_log_metrics_wandb: Dict[str, Any] = {}
-                        for k_log, v_sum_log in log_interval_accum_losses.items(): key_suffix = "_eff_contrib" if "_eff_contrib_agg" in k_log else ""; wandb_key = f"train/{k_log.replace('_eff_contrib_agg', key_suffix).replace('_agg', '')}"; current_log_metrics_wandb[wandb_key] = v_sum_log / log_interval_items_processed
-                        avg_raw_recon_feat_log = current_log_metrics_wandb.get('train/loss_recon', 0.0); avg_raw_kl_log = current_log_metrics_wandb.get('train/loss_kl', 0.0); avg_raw_g_adv_log = current_log_metrics_wandb.get('train/loss_g_adv', 0.0); avg_raw_d_real_log = current_log_metrics_wandb.get('train/loss_d_real', 0.0); avg_raw_d_fake_log = current_log_metrics_wandb.get('train/loss_d_fake', 0.0); avg_raw_d_total_log = current_log_metrics_wandb.get('train/loss_d_total', 0.0)
-                        eff_recon_log = avg_raw_recon_feat_log * self.args.lambda_recon * self.heuristic_override_lambda_recon_factor; eff_kl_log = avg_raw_kl_log * self.lambda_kl; eff_gan_log = avg_raw_g_adv_log * self.lambda_gan_base * self.heuristic_override_lambda_gan_factor
-                        current_log_metrics_wandb.update({"train/lambda_recon_eff_contrib": eff_recon_log, "train/lambda_kl_eff_contrib": eff_kl_log, "train/lambda_gan_eff_contrib": eff_gan_log, "train/lambda_kl_eff_actual": self.lambda_kl, "train/lambda_kl_base_val": self.lambda_kl_base})
-                        loss_g_feat_match_contrib_log = current_log_metrics_wandb.get('train/loss_g_feat_match_eff_contrib', 0.0); loss_g_easy_win_penalty_contrib_log = current_log_metrics_wandb.get('train/loss_g_easy_win_penalty_eff_contrib', 0.0); calculated_g_total_for_log = eff_recon_log + eff_kl_log + eff_gan_log + loss_g_feat_match_contrib_log + loss_g_easy_win_penalty_contrib_log
-                        current_log_metrics_wandb["train/loss_g_total_calculated_from_components"] = calculated_g_total_for_log
-                        lr_g_log = self.optimizer_enc_gen.param_groups[0]['lr'] if self.optimizer_enc_gen else -1.0; lr_d_active_log = self.optimizer_disc_active.param_groups[0]['lr'] if self.optimizer_disc_active else -1.0
-                        d_ref_log_console = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator; active_d_arch_variant_console_log = getattr(d_ref_log_console, 'architecture_variant', 'unk')[:7]; active_d_eff_in_console_log = self.active_disc_effective_trainer_input_type.split('_')[0][:4]
-                        current_log_metrics_wandb.update({"train/lr_gen": lr_g_log, f"train/lr_disc_{self.active_discriminator_key}_{active_d_arch_variant_console_log[:3]}_{active_d_eff_in_console_log[:3]}": lr_d_active_log, "epoch_frac": epoch + ((batch_idx + 1) / max(1, num_batches_epoch)), "global_step": self.global_step, f"active_disc_is_primary_val": 1 if self.active_discriminator_key == 'primary' else 0})
-                        
-                        q_controller_info_map_log = { # Define this map for logging
-                            "gen": self.q_controller_gen, 
-                            f"d_{self.active_discriminator_key}": self.q_controller_d_active, # Log only active D
-                            "lkl": self.lambda_kl_q_controller
-                        }
-                        for prefix_log, controller_obj_log in q_controller_info_map_log.items(): 
-                            if controller_obj_log and hasattr(controller_obj_log, 'get_info'):
-                                for k_info_log, v_info_log in controller_obj_log.get_info().items(): clean_k_info_log = ''.join(c if c.isalnum() or c in ['_', '/'] else '_' for c in str(k_info_log)).lower().replace('lrmom','').replace('lambdakl',''); current_log_metrics_wandb[f"q_info/{prefix_log}/{clean_k_info_log}"] = v_info_log
-                                if hasattr(controller_obj_log, 'prev_lr_mom_action') and controller_obj_log.prev_lr_mom_action: current_log_metrics_wandb[f"q_actions/{prefix_log}/lr_scale"] = HybridTrainer.get_scale_from_action_value(controller_obj_log.prev_lr_mom_action, 'lr_scale'); current_log_metrics_wandb[f"q_actions/{prefix_log}/mom_scale"] = HybridTrainer.get_scale_from_action_value(controller_obj_log.prev_lr_mom_action, 'momentum_scale')
-                                if hasattr(controller_obj_log, 'prev_lambda_kl_action') and controller_obj_log.prev_lambda_kl_action: current_log_metrics_wandb[f"q_actions/{prefix_log}/lkl_scale"] = HybridTrainer.get_scale_from_action_value(controller_obj_log.prev_lambda_kl_action, 'lambda_kl_scale')
-                        
-                        current_log_metrics_wandb.update({"heuristic/vae_fm_active_val": 1 if self.heuristic_vae_feature_match_active else 0, "heuristic/pen_g_ez_win_val": 1 if self.heuristic_penalize_g_easy_win_active else 0, "heuristic/d_lr_boost_active_val": 1 if self.heuristic_boost_active_d_lr_active else 0, "heuristic/lrec_factor_val": self.heuristic_override_lambda_recon_factor, "heuristic/lkl_factor_val": self.heuristic_override_lambda_kl_factor, "heuristic/lgan_factor_val": self.heuristic_override_lambda_gan_factor, "heuristic/lambda_feat_match_heuristic_val": self.lambda_feat_match_heuristic if self.heuristic_vae_feature_match_active else 0.0, "heuristic/lambda_g_easy_win_penalty_heuristic_val": self.lambda_g_easy_win_penalty_heuristic if self.heuristic_penalize_g_easy_win_active else 0.0, "heuristic/active_d_lr_boost_factor_applied": self.heuristic_active_d_lr_boost_factor if self.heuristic_boost_active_d_lr_active else 1.0, "heuristic/d_q_explore_active_val": 1 if (self.q_controller_d_active and hasattr(self.q_controller_d_active, 'epsilon_boost_active_steps') and self.q_controller_d_active.epsilon_boost_active_steps > 0) else 0, "heuristic/rec_features_stagnant_val": 1 if self.rec_features_stagnant else 0, "disc_switch/steps_since_last_switch": self.steps_since_last_d_switch, "disc_switch/p_to_a_trigger_count": self.consecutive_trigger_primary_to_alt_count, "disc_switch/a_to_p_trigger_count": self.consecutive_trigger_alt_to_primary_count })
-                        for k_heur_trig, v_heur_trig in self.consecutive_heuristic_trigger_counts.items(): current_log_metrics_wandb[f"heuristic/trigger_count/{k_heur_trig}"] = v_heur_trig
-                        if self.global_step % (self.args.log_interval * 5) == 0:
-                            if self.optimizer_enc_gen and hasattr(self.optimizer_enc_gen, 'get_gradient_stats_summary_optimizer_view'): current_log_metrics_wandb.update({f"grad_stats/gen/{k}": v for k, v in self.optimizer_enc_gen.get_gradient_stats_summary_optimizer_view().items()})
-                            if self.optimizer_disc_active and hasattr(self.optimizer_disc_active, 'get_gradient_stats_summary_optimizer_view'): current_log_metrics_wandb.update({f"grad_stats/d_active_{self.active_discriminator_key}/{k}": v for k, v in self.optimizer_disc_active.get_gradient_stats_summary_optimizer_view().items()})
-                        
-                        gen_q_eps_str = f"{self.q_controller_gen.epsilon:.2f}" if self.q_controller_gen else "N/A"; d_act_q_eps_str = f"{self.q_controller_d_active.epsilon:.2f}" if self.q_controller_d_active else "N/A"; lkl_q_eps_str = f"{self.lambda_kl_q_controller.epsilon:.2f}" if self.lambda_kl_q_controller else "N/A"
-                        gen_q_last_lr_scale = HybridTrainer.get_scale_from_action_value(getattr(self.q_controller_gen, 'prev_lr_mom_action', None), 'lr_scale', -1.0); d_q_last_lr_scale = HybridTrainer.get_scale_from_action_value(getattr(self.q_controller_d_active, 'prev_lr_mom_action', None), 'lr_scale', -1.0); lkl_q_last_lkl_scale = HybridTrainer.get_scale_from_action_value(getattr(self.lambda_kl_q_controller, 'prev_lambda_kl_action', None), 'lambda_kl_scale', -1.0)
-                        q_scales_str = f"QSc(G:{gen_q_last_lr_scale:.1f}|D:{d_q_last_lr_scale:.1f}|LKL:{lkl_q_last_lkl_scale:.1f})"
-                        
-                        heuristic_flags_short = []
-                        if self.heuristic_vae_feature_match_active: heuristic_flags_short.append(f"FM(x{self.lambda_feat_match_heuristic:.1f})")
-                        if self.heuristic_penalize_g_easy_win_active: heuristic_flags_short.append(f"GPEW(x{self.lambda_g_easy_win_penalty_heuristic:.1f})")
-                        if self.heuristic_boost_active_d_lr_active: heuristic_flags_short.append(f"DLRB(x{self.heuristic_active_d_lr_boost_factor:.1f})")
-                        if self.q_controller_d_active and hasattr(self.q_controller_d_active, 'epsilon_boost_active_steps') and self.q_controller_d_active.epsilon_boost_active_steps > 0: heuristic_flags_short.append(f"DQE({self.q_controller_d_active.epsilon_boost_active_steps})")
-                        if self.rec_features_stagnant: heuristic_flags_short.append("RecStag")
-                        heur_flags_console_str = f"H:[{','.join(heuristic_flags_short)}]" if heuristic_flags_short else ""
+                    if self.global_step > 0:
+                        if self.am_main_process:
+                            if self.heuristic_check_interval > 0 and self.global_step % self.heuristic_check_interval == 0:
+                                self._evaluate_training_state_and_apply_heuristics()
+                            
+                            if self.lambda_kl_q_controller is not None and self.lambda_kl_update_interval > 0 and \
+                               self.global_step % self.lambda_kl_update_interval == 0 and self.interval_steps_count > 0:
+                                current_interval_metrics: Dict[str, Union[float, None]] = {
+                                    'avg_recon': self.interval_metrics_accum['recon_spectral'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
+                                    'avg_kl_div': self.interval_metrics_accum['kl_div'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
+                                    'avg_d_total': self.interval_metrics_accum['d_total'] / self.interval_steps_count if self.interval_steps_count > 0 else None,
+                                    'val_metric': self.last_val_metrics.get(self.args.val_primary_metric), 
+                                    'current_lambda_kl_val': self.lambda_kl_base
+                                }
+                                prog_bar.write(f"GStep {self.global_step}: LKL Q-Ctrl. LKL_Base: {self.lambda_kl_base:.4e}. Metrics: {{ {', '.join([f'{k}: {v:.3f}' if isinstance(v,float) and np.isfinite(v) else f'{k}: {str(v)}' for k,v in current_interval_metrics.items()])} }}")
+                                q_state_lambda_kl = self.lambda_kl_q_controller.get_lambda_kl_state(current_interval_metrics)
+                                if self.lambda_kl_q_controller.prev_lambda_kl_state is not None and \
+                                   self.lambda_kl_q_controller.prev_lambda_kl_action is not None and \
+                                   q_state_lambda_kl is not None and \
+                                   self.prev_interval_metrics_for_lambda_kl_reward is not None:
+                                    reward_for_lambda_kl = self.lambda_kl_q_controller.compute_lambda_kl_reward(current_interval_metrics, self.prev_interval_metrics_for_lambda_kl_reward)
+                                    prog_bar.write(f"  LKL Q-Ctrl reward: {reward_for_lambda_kl:.3f}")
+                                    self.lambda_kl_q_controller.update_q_values(self.lambda_kl_q_controller.prev_lambda_kl_state, self.lambda_kl_q_controller.prev_lambda_kl_action, reward_for_lambda_kl, q_state_lambda_kl, mode='lambda_kl')
+                                elif q_state_lambda_kl is not None and hasattr(self.lambda_kl_q_controller, 'set_initial_lambda_kl_metrics'):
+                                     self.lambda_kl_q_controller.set_initial_lambda_kl_metrics(current_interval_metrics)
+                                
+                                if q_state_lambda_kl is not None:
+                                    lambda_kl_action_dict = self.lambda_kl_q_controller.choose_action(q_state_lambda_kl, mode='lambda_kl')
+                                    chosen_scale = HybridTrainer.get_scale_from_action_value(lambda_kl_action_dict, 'lambda_kl_scale', 1.0)
+                                    self.lambda_kl_base = float(np.clip(self.lambda_kl_base * chosen_scale, self.min_lambda_kl_q_control, self.max_lambda_kl_q_control)) 
+                                    prog_bar.write(f"  LKL_Q-Ctrl CHOSE scale: {chosen_scale:.3f}. New LKL_Base: {self.lambda_kl_base:.4e}")
+                                    self.lambda_kl_q_controller.prev_lambda_kl_state = q_state_lambda_kl
+                                    self.lambda_kl_q_controller.prev_lambda_kl_action = lambda_kl_action_dict
+                                
+                                self.prev_interval_metrics_for_lambda_kl_reward = current_interval_metrics.copy()
+                                self.lambda_kl = self.lambda_kl_base * self.heuristic_override_lambda_kl_factor
+                                for q_ctrl_opt_sync in all_q_controllers_to_sync_lkl: 
+                                    if q_ctrl_opt_sync and hasattr(q_ctrl_opt_sync, 'set_current_lambda_kl'):
+                                        q_ctrl_opt_sync.set_current_lambda_kl(self.lambda_kl)
+                                self.interval_metrics_accum = defaultdict(float); self.interval_steps_count = 0
 
-                        lambda_factors_str = f"LF(R:{self.heuristic_override_lambda_recon_factor:.1f}|K:{self.heuristic_override_lambda_kl_factor:.1f}|A:{self.heuristic_override_lambda_gan_factor:.1f})"
-                        log_str_console = (f"E{epoch+1} S{self.global_step} ActD:{self.active_discriminator_key[0]}:{active_d_arch_variant_console_log}:{active_d_eff_in_console_log} "
-                            f"| G_Tot:{calculated_g_total_for_log:.2f}(R:{eff_recon_log:.2f}[{avg_raw_recon_feat_log:.2f}] K:{eff_kl_log:.2f}[{avg_raw_kl_log:.2f}] A:{eff_gan_log:.2f}[{avg_raw_g_adv_log:.2f}]"
-                            + (f" FM:{loss_g_feat_match_contrib_log:.2f}" if self.heuristic_vae_feature_match_active and loss_g_feat_match_contrib_log!=0 else "")
-                            + (f" GPen:{loss_g_easy_win_penalty_contrib_log:.2f}" if self.heuristic_penalize_g_easy_win_active and loss_g_easy_win_penalty_contrib_log!=0 else "")
-                            + f") | D_Tot:{avg_raw_d_total_log:.2f}(Rl:{avg_raw_d_real_log:.2f} Fk:{avg_raw_d_fake_log:.2f})"
-                            f" | LR(G/D):{lr_g_log:.1e}/{lr_d_active_log:.1e} | LKL_eff:{self.lambda_kl:.2e} "
-                            f"Qε(G:{gen_q_eps_str} D:{d_act_q_eps_str} L:{lkl_q_eps_str}) {q_scales_str} "
-                            f"DSw(P>A:{self.consecutive_trigger_primary_to_alt_count},A>P:{self.consecutive_trigger_alt_to_primary_count}|Steps:{self.steps_since_last_d_switch}) "
-                            f"{lambda_factors_str} {heur_flags_console_str}")
-                        prog_bar.set_postfix_str(f"ActD:{self.active_discriminator_key[0]} G:{calculated_g_total_for_log:.2f} D:{avg_raw_d_total_log:.2f} RecFRaw:{avg_raw_recon_feat_log:.3f}", refresh=True)
-                        prog_bar.write(log_str_console)
-                        if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log(current_log_metrics_wandb, step=self.global_step)
-                        log_interval_accum_losses = defaultdict(float); log_interval_items_processed = 0
-                    
-                    if assembled_pixels_for_logging is not None and self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and self.global_step > 0 and ((self.global_step) % self.args.wandb_log_train_recon_interval == 0):
-                        self._log_samples_to_wandb("train_recon_pixels", assembled_pixels_for_logging, assembled_pixels_for_logging.shape[1], self.args.num_val_samples_to_log)
-                        num_input_frames_log = self.video_config.get("num_input_frames", 0)
-                        if num_input_frames_log > 0: self._log_samples_to_wandb("train_context_pixels", batch_frames_full_sequence[:, :num_input_frames_log, ...], min(num_input_frames_log,3), self.args.num_val_samples_to_log)
-                        s_idx_target_log = num_input_frames_log; gt_len_log = min(self.video_config.get("num_predict_frames", 1), batch_frames_full_sequence.shape[1] - s_idx_target_log)
-                        if gt_len_log > 0: self._log_samples_to_wandb("train_ground_truth_pixels", batch_frames_full_sequence[:, s_idx_target_log : s_idx_target_log + gt_len_log, ...], gt_len_log, self.args.num_val_samples_to_log)
-                    if self.fixed_noise_for_sampling is not None and self.am_main_process and self.args.wandb_log_fixed_noise_samples_interval > 0 and self.global_step > 0 and (self.global_step % self.args.wandb_log_fixed_noise_samples_interval == 0):
-                        fixed_noise_pixels = self.sample(self.args.num_val_samples_to_log, noise=self.fixed_noise_for_sampling)
-                        if fixed_noise_pixels is not None: self._log_samples_to_wandb("fixed_noise_generated_pixels", fixed_noise_pixels, fixed_noise_pixels.shape[1], self.args.num_val_samples_to_log)
-                    if self.args.save_interval > 0 and self.global_step > 0 and (self.global_step % self.args.save_interval == 0) and self.am_main_process:
-                        self._save_checkpoint(is_intermediate=True, metrics=avg_losses_for_q_cycle)
+                            if self.args.log_interval > 0 and self.global_step % self.args.log_interval == 0 and \
+                               log_interval_global_steps_items_processed > 0 :
+                                current_log_metrics_wandb: Dict[str, Any] = {}
+                                for k_log, v_sum_log in log_interval_global_steps_accum_losses.items(): 
+                                    wandb_key_base = k_log.replace('_eff_contrib_agg', '_eff_contrib').replace('_agg', '')
+                                    current_log_metrics_wandb[f"train/{wandb_key_base}"] = v_sum_log / log_interval_global_steps_items_processed
+                                
+                                avg_raw_recon_feat_log = current_log_metrics_wandb.get('train/loss_recon', float('nan'))
+                                avg_raw_kl_log = current_log_metrics_wandb.get('train/loss_kl', float('nan'))
+                                avg_raw_g_adv_log = current_log_metrics_wandb.get('train/loss_g_adv', float('nan'))
+                                avg_raw_d_total_log = current_log_metrics_wandb.get('train/loss_d_total', float('nan'))
+                                avg_raw_d_real_log = current_log_metrics_wandb.get('train/loss_d_real', float('nan'))
+                                avg_raw_d_fake_log = current_log_metrics_wandb.get('train/loss_d_fake', float('nan'))
+
+                                eff_recon_log = avg_raw_recon_feat_log * self.args.lambda_recon * self.heuristic_override_lambda_recon_factor
+                                eff_kl_log = avg_raw_kl_log * self.lambda_kl
+                                eff_gan_log = avg_raw_g_adv_log * self.lambda_gan_base * self.heuristic_override_lambda_gan_factor
+                                current_log_metrics_wandb.update({ "train/lambda_recon_eff_contrib_calc": eff_recon_log, "train/lambda_kl_eff_contrib_calc": eff_kl_log, "train/lambda_gan_eff_contrib_calc": eff_gan_log, "train/lambda_kl_eff_actual_val": self.lambda_kl, "train/lambda_kl_base_val_actual": self.lambda_kl_base, "train/lambda_recon_factor_heur": self.heuristic_override_lambda_recon_factor, "train/lambda_kl_factor_heur": self.heuristic_override_lambda_kl_factor, "train/lambda_gan_factor_heur": self.heuristic_override_lambda_gan_factor,})
+                                loss_g_feat_match_contrib_log = current_log_metrics_wandb.get('train/loss_g_feat_match_eff_contrib', 0.0)
+                                loss_g_easy_win_penalty_contrib_log = current_log_metrics_wandb.get('train/loss_g_easy_win_penalty_eff_contrib', 0.0)
+                                calculated_g_total_for_log = eff_recon_log + eff_kl_log + eff_gan_log + loss_g_feat_match_contrib_log + loss_g_easy_win_penalty_contrib_log
+                                current_log_metrics_wandb["train/loss_g_total_calculated_log"] = calculated_g_total_for_log
+                                lr_g_log = self.optimizer_enc_gen.param_groups[0]['lr'] if self.optimizer_enc_gen else -1.0
+                                lr_d_active_log = self.optimizer_disc_active.param_groups[0]['lr'] if self.optimizer_disc_active else -1.0
+                                
+                                d_ref_log_console = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
+                                active_d_arch_variant_console_log = getattr(d_ref_log_console, 'architecture_variant', 'unk')[:7]
+                                active_d_eff_in_console_log = self.active_disc_effective_trainer_input_type.split('_')[0][:4]
+                                current_log_metrics_wandb.update({"train/lr_gen": lr_g_log, f"train/lr_disc_{self.active_discriminator_key}_{active_d_arch_variant_console_log[:3]}_{active_d_eff_in_console_log[:3]}": lr_d_active_log, "epoch_frac": epoch + ((batch_idx + 1) / max(1, num_batches_epoch)), "global_step": self.global_step, f"active_disc_is_primary_val": 1 if self.active_discriminator_key == 'primary' else 0})
+                                q_controller_info_map_log = {"gen": self.q_controller_gen, f"d_{self.active_discriminator_key}": self.q_controller_d_active, "lkl": self.lambda_kl_q_controller }
+                                for prefix_log, controller_obj_log in q_controller_info_map_log.items(): 
+                                    if controller_obj_log and hasattr(controller_obj_log, 'get_info'):
+                                        for k_info_log, v_info_log in controller_obj_log.get_info().items(): clean_k_info_log = ''.join(c if c.isalnum() or c in ['_', '/'] else '_' for c in str(k_info_log)).lower().replace('lrmom','').replace('lambdakl',''); current_log_metrics_wandb[f"q_info/{prefix_log}/{clean_k_info_log}"] = v_info_log
+                                        if hasattr(controller_obj_log, 'prev_lr_mom_action') and controller_obj_log.prev_lr_mom_action: current_log_metrics_wandb[f"q_actions/{prefix_log}/lr_scale"] = HybridTrainer.get_scale_from_action_value(controller_obj_log.prev_lr_mom_action, 'lr_scale'); current_log_metrics_wandb[f"q_actions/{prefix_log}/mom_scale"] = HybridTrainer.get_scale_from_action_value(controller_obj_log.prev_lr_mom_action, 'momentum_scale')
+                                        if hasattr(controller_obj_log, 'prev_lambda_kl_action') and controller_obj_log.prev_lambda_kl_action: current_log_metrics_wandb[f"q_actions/{prefix_log}/lkl_scale"] = HybridTrainer.get_scale_from_action_value(controller_obj_log.prev_lambda_kl_action, 'lambda_kl_scale')
+                                current_log_metrics_wandb.update({"heuristic/vae_fm_active_val": 1 if self.heuristic_vae_feature_match_active else 0, "heuristic/pen_g_ez_win_val": 1 if self.heuristic_penalize_g_easy_win_active else 0, "heuristic/d_lr_boost_active_val": 1 if self.heuristic_boost_active_d_lr_active else 0, "heuristic/lrec_factor_val": self.heuristic_override_lambda_recon_factor, "heuristic/lkl_factor_val": self.heuristic_override_lambda_kl_factor, "heuristic/lgan_factor_val": self.heuristic_override_lambda_gan_factor, "heuristic/lambda_feat_match_heuristic_val": self.lambda_feat_match_heuristic if self.heuristic_vae_feature_match_active else 0.0, "heuristic/lambda_g_easy_win_penalty_heuristic_val": self.lambda_g_easy_win_penalty_heuristic if self.heuristic_penalize_g_easy_win_active else 0.0, "heuristic/active_d_lr_boost_factor_applied": self.heuristic_active_d_lr_boost_factor if self.heuristic_boost_active_d_lr_active else 1.0, "heuristic/d_q_explore_active_val": 1 if (self.q_controller_d_active and hasattr(self.q_controller_d_active, 'epsilon_boost_active_steps') and self.q_controller_d_active.epsilon_boost_active_steps > 0) else 0, "heuristic/rec_features_stagnant_val": 1 if self.rec_features_stagnant else 0, "disc_switch/steps_since_last_switch": self.steps_since_last_d_switch, "disc_switch/p_to_a_trigger_count": self.consecutive_trigger_primary_to_alt_count, "disc_switch/a_to_p_trigger_count": self.consecutive_trigger_alt_to_primary_count })
+                                for k_heur_trig, v_heur_trig in self.consecutive_heuristic_trigger_counts.items(): current_log_metrics_wandb[f"heuristic/trigger_count/{k_heur_trig}"] = v_heur_trig
+                                if self.global_step % (self.args.log_interval * 5) == 0:
+                                    if self.optimizer_enc_gen and hasattr(self.optimizer_enc_gen, 'get_gradient_stats_summary_optimizer_view'): current_log_metrics_wandb.update({f"grad_stats/gen/{k}": v for k,v in self.optimizer_enc_gen.get_gradient_stats_summary_optimizer_view().items()}) # type: ignore
+                                    if self.optimizer_disc_active and hasattr(self.optimizer_disc_active, 'get_gradient_stats_summary_optimizer_view'): current_log_metrics_wandb.update({f"grad_stats/d_active_{self.active_discriminator_key}/{k}": v for k,v in self.optimizer_disc_active.get_gradient_stats_summary_optimizer_view().items()}) # type: ignore
+                                
+                                gen_q_eps_str = f"{self.q_controller_gen.epsilon:.2f}" if self.q_controller_gen else "N/A"
+                                d_act_q_eps_str = f"{self.q_controller_d_active.epsilon:.2f}" if self.q_controller_d_active else "N/A"
+                                lkl_q_eps_str = f"{self.lambda_kl_q_controller.epsilon:.2f}" if self.lambda_kl_q_controller else "N/A"
+                                gen_q_last_lr_s = HybridTrainer.get_scale_from_action_value(getattr(self.q_controller_gen, 'prev_lr_mom_action', None), 'lr_scale', -1.0)
+                                d_q_last_lr_s = HybridTrainer.get_scale_from_action_value(getattr(self.q_controller_d_active, 'prev_lr_mom_action', None), 'lr_scale', -1.0)
+                                lkl_q_last_lkl_s = HybridTrainer.get_scale_from_action_value(getattr(self.lambda_kl_q_controller, 'prev_lambda_kl_action', None), 'lambda_kl_scale', -1.0)
+                                q_scales_str = f"QSc(G:{gen_q_last_lr_s:.1f}|D:{d_q_last_lr_s:.1f}|LKL:{lkl_q_last_lkl_s:.1f})"
+                                heur_flags_short = [ f"FM(x{self.lambda_feat_match_heuristic:.1f})" if self.heuristic_vae_feature_match_active else "", f"GPEW(x{self.lambda_g_easy_win_penalty_heuristic:.1f})" if self.heuristic_penalize_g_easy_win_active else "", f"DLRB(x{self.heuristic_active_d_lr_boost_factor:.1f})" if self.heuristic_boost_active_d_lr_active else "", f"DQE({self.q_controller_d_active.epsilon_boost_active_steps})" if self.q_controller_d_active and hasattr(self.q_controller_d_active, 'epsilon_boost_active_steps') and self.q_controller_d_active.epsilon_boost_active_steps > 0 else "", "RecStag" if self.rec_features_stagnant else "" ]
+                                heur_flags_console_str = f"H:[{','.join(filter(None, heur_flags_short))}]" if any(filter(None, heur_flags_short)) else ""
+                                lambda_factors_str = f"LF(R:{self.heuristic_override_lambda_recon_factor:.1f}|K:{self.heuristic_override_lambda_kl_factor:.1f}|A:{self.heuristic_override_lambda_gan_factor:.1f})"
+                                log_str_console = (f"E{epoch+1} S{self.global_step} ActD:{self.active_discriminator_key[0]}:{active_d_arch_variant_console_log[:3]}:{active_d_eff_in_console_log[:3]} "
+                                    f"| G_Tot:{calculated_g_total_for_log:.2f}(R:{eff_recon_log:.2f}[{avg_raw_recon_feat_log:.2f}] K:{eff_kl_log:.2f}[{avg_raw_kl_log:.2f}] A:{eff_gan_log:.2f}[{avg_raw_g_adv_log:.2f}]"
+                                    + (f" FM:{loss_g_feat_match_contrib_log:.2f}" if self.heuristic_vae_feature_match_active and loss_g_feat_match_contrib_log!=0 else "")
+                                    + (f" GPen:{loss_g_easy_win_penalty_contrib_log:.2f}" if self.heuristic_penalize_g_easy_win_active and loss_g_easy_win_penalty_contrib_log!=0 else "")
+                                    + f") | D_Tot:{avg_raw_d_total_log:.2f}(Rl:{avg_raw_d_real_log:.2f} Fk:{avg_raw_d_fake_log:.2f})"
+                                    f" | LR(G/D):{lr_g_log:.1e}/{lr_d_active_log:.1e} | LKL_eff:{self.lambda_kl:.2e} "
+                                    f"Qε(G:{gen_q_eps_str} D:{d_act_q_eps_str} L:{lkl_q_eps_str}) {q_scales_str} "
+                                    f"DSw(P>A:{self.consecutive_trigger_primary_to_alt_count},A>P:{self.consecutive_trigger_alt_to_primary_count}|St:{self.steps_since_last_d_switch}) " # Shortened DSw
+                                    f"{lambda_factors_str} {heur_flags_console_str}")
+                                
+                                prog_bar.set_postfix_str(f"ActD:{self.active_discriminator_key[0]} G:{calculated_g_total_for_log:.2f} D:{avg_raw_d_total_log:.2f} RecFRaw:{avg_raw_recon_feat_log:.3f}", refresh=True)
+                                prog_bar.write(log_str_console)
+                                if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log(current_log_metrics_wandb, step=self.global_step)
+                                
+                                log_interval_global_steps_accum_losses = defaultdict(float)
+                                log_interval_global_steps_items_processed = 0
+                            
+                            if assembled_pixels_for_logging is not None and self.args.wandb_log_train_recon_interval > 0 and \
+                               self.global_step % self.args.wandb_log_train_recon_interval == 0:
+                                self._log_samples_to_wandb("train_recon_pixels", assembled_pixels_for_logging,
+                                   num_frames_per_sequence_to_log=min(assembled_pixels_for_logging.shape[1], getattr(self.args, 'wandb_log_num_frames_train', 3)),
+                                   num_sequences_to_log_max=self.args.num_val_samples_to_log)
+                                num_input_frames_log = self.video_config.get("num_input_frames", 0)
+                                if num_input_frames_log > 0:
+                                    self._log_samples_to_wandb("train_context_pixels", batch_frames_full_sequence[:, :num_input_frames_log, ...],
+                                       num_frames_per_sequence_to_log=min(num_input_frames_log, getattr(self.args, 'wandb_log_num_frames_context',3)),
+                                       num_sequences_to_log_max=self.args.num_val_samples_to_log)
+                                s_idx_target_log = num_input_frames_log
+                                gt_len_log = min(self.video_config.get("num_predict_frames", 1), batch_frames_full_sequence.shape[1] - s_idx_target_log)
+                                if gt_len_log > 0:
+                                    self._log_samples_to_wandb("train_ground_truth_pixels", batch_frames_full_sequence[:, s_idx_target_log : s_idx_target_log + gt_len_log, ...],
+                                       num_frames_per_sequence_to_log=gt_len_log, # Log all predicted GT frames for this sequence
+                                       num_sequences_to_log_max=self.args.num_val_samples_to_log)
+
+                            if self.fixed_noise_for_sampling is not None and self.args.wandb_log_fixed_noise_samples_interval > 0 and \
+                               self.global_step % self.args.wandb_log_fixed_noise_samples_interval == 0:
+                                fixed_noise_pixels = self.sample(self.args.num_val_samples_to_log, noise=self.fixed_noise_for_sampling)
+                                if fixed_noise_pixels is not None:
+                                    self._log_samples_to_wandb("fixed_noise_generated_pixels", fixed_noise_pixels,
+                                       num_frames_per_sequence_to_log=min(fixed_noise_pixels.shape[1], getattr(self.args, 'wandb_log_num_frames_fixed', 3)),
+                                       num_sequences_to_log_max=self.args.num_val_samples_to_log)
+                            
+                            if self.args.save_interval > 0 and self.global_step % self.args.save_interval == 0:
+                                self._save_checkpoint(is_intermediate=True, metrics=avg_losses_for_q_cycle if 'avg_losses_for_q_cycle' in locals() else None) # type: ignore
             
-            # End of Epoch
+            # --- End of Epoch Actions ---
             if self.am_main_process:
-                final_avg_g_loss_eoe = log_interval_accum_losses['loss_g_total_agg'] / log_interval_items_processed if log_interval_items_processed > 0 else (current_log_metrics_wandb.get('train/loss_g_total_calculated_from_components', float('nan')) if 'current_log_metrics_wandb' in locals() and log_interval_items_processed == 0 else float('nan'))
-                final_avg_d_loss_eoe = log_interval_accum_losses['loss_d_total_agg'] / log_interval_items_processed if log_interval_items_processed > 0 else (current_log_metrics_wandb.get('train/loss_d_total', float('nan')) if 'current_log_metrics_wandb' in locals() and log_interval_items_processed == 0 else float('nan'))
-                self.logger.info(f"Epoch {epoch+1} finished. Approx Avg Loss (G/D): {final_avg_g_loss_eoe:.4f}/{final_avg_d_loss_eoe:.4f}, LKL_Eff:{self.lambda_kl:.3e}")
+                final_avg_g_loss_eoe = log_interval_global_steps_accum_losses['loss_g_total_agg'] / log_interval_global_steps_items_processed if log_interval_global_steps_items_processed > 0 else \
+                                     (avg_losses_for_q_cycle.get('loss_g_total', float('nan')) if 'avg_losses_for_q_cycle' in locals() and avg_losses_for_q_cycle is not None else float('nan')) # type: ignore
+                final_avg_d_loss_eoe = log_interval_global_steps_accum_losses['loss_d_total_agg'] / log_interval_global_steps_items_processed if log_interval_global_steps_items_processed > 0 else \
+                                     (avg_losses_for_q_cycle.get('loss_d_total', float('nan')) if 'avg_losses_for_q_cycle' in locals() and avg_losses_for_q_cycle is not None else float('nan')) # type: ignore
+                
+                self.logger.info(f"Epoch {epoch+1} finished. Approx Avg Loss (G/D): {final_avg_g_loss_eoe:.4f}/{final_avg_d_loss_eoe:.4f}, LKL_Eff:{self.lambda_kl_base * self.heuristic_override_lambda_kl_factor:.3e}")
                 if self.args.wandb and WANDB_AVAILABLE and wandb.run:
-                    wandb.log({"epoch":epoch+1, "epoch_avg_train_loss_g_approx":final_avg_g_loss_eoe if np.isfinite(final_avg_g_loss_eoe) else -1.0, 
-                               "epoch_avg_train_loss_d_approx":final_avg_d_loss_eoe if np.isfinite(final_avg_d_loss_eoe) else -1.0, 
-                               "epoch_lambda_kl_eff": self.lambda_kl, "epoch_lambda_kl_base": self.lambda_kl_base}, 
+                    wandb.log({"epoch": epoch + 1, 
+                               "epoch_avg_train_loss_g_approx": final_avg_g_loss_eoe if np.isfinite(final_avg_g_loss_eoe) else -1.0, 
+                               "epoch_avg_train_loss_d_approx": final_avg_d_loss_eoe if np.isfinite(final_avg_d_loss_eoe) else -1.0, 
+                               "epoch_lambda_kl_eff_eoe": self.lambda_kl_base * self.heuristic_override_lambda_kl_factor,
+                               "epoch_lambda_kl_base_eoe": self.lambda_kl_base}, 
                               step=self.global_step)
                               
             validation_interval_epochs = getattr(self.args, 'validation_interval_epochs', 1)
             if self.val_loader and self.am_main_process and validation_interval_epochs > 0 and (epoch + 1) % validation_interval_epochs == 0:
                 val_metrics_eoe = self.validate(num_val_samples_to_log=self.args.num_val_samples_to_log)
                 if val_metrics_eoe:
-                    if self.args.wandb and WANDB_AVAILABLE and wandb.run: wandb.log({f"val/{k_val}":v_val for k_val,v_val in val_metrics_eoe.items()}, step=self.global_step)
+                    finite_val_metrics_eoe = {f"val/{k_val}": v_val for k_val, v_val in val_metrics_eoe.items() if v_val is not None and np.isfinite(v_val)}
+                    if self.args.wandb and WANDB_AVAILABLE and wandb.run:
+                        wandb.log(finite_val_metrics_eoe, step=self.global_step)
+                    
                     metric_to_check_eoe = self.args.val_primary_metric
-                    current_val_for_best_eoe: float = val_metrics_eoe.get(metric_to_check_eoe, self.best_val_metric_val)
-                    is_better_eoe = (current_val_for_best_eoe > self.best_val_metric_val) if self.is_val_metric_higher_better else (current_val_for_best_eoe < self.best_val_metric_val)
-                    if is_better_eoe and np.isfinite(current_val_for_best_eoe):
-                        prog_bar.write(f"New best val metric ({metric_to_check_eoe}): {current_val_for_best_eoe:.4f} (prev: {self.best_val_metric_val:.4f}). Saving.")
-                        self.best_val_metric_val = current_val_for_best_eoe
-                        self._save_checkpoint(is_best=True, metrics=val_metrics_eoe)
+                    current_val_for_best_eoe: Optional[float] = val_metrics_eoe.get(metric_to_check_eoe)
+
+                    if current_val_for_best_eoe is not None and np.isfinite(current_val_for_best_eoe):
+                        is_better_eoe_flag = False # Default to False
+                        if not np.isfinite(self.best_val_metric_val): is_better_eoe_flag = True # First valid metric is always best
+                        elif self.is_val_metric_higher_better: is_better_eoe_flag = (current_val_for_best_eoe > self.best_val_metric_val)
+                        else: is_better_eoe_flag = (current_val_for_best_eoe < self.best_val_metric_val)
+                        
+                        if is_better_eoe_flag:
+                            prog_bar.write(f"New best val metric ({metric_to_check_eoe}): {current_val_for_best_eoe:.4f} (prev: {self.best_val_metric_val:.4f}). Saving best checkpoint.")
+                            self.best_val_metric_val = current_val_for_best_eoe
+                            self._save_checkpoint(is_best=True, metrics=val_metrics_eoe)
             
             save_epoch_interval_epochs = getattr(self.args, 'save_epoch_interval', 1)
             if self.am_main_process and save_epoch_interval_epochs > 0 and (epoch + 1) % save_epoch_interval_epochs == 0:
-                already_saved_as_best_this_epoch = 'is_better_eoe' in locals() and locals().get('is_better_eoe', False) and np.isfinite(locals().get('current_val_for_best_eoe', float('inf')))
-                is_last_grad_accum_step_of_epoch = (batch_idx +1) == num_batches_epoch and (batch_idx +1) % self.grad_accum_steps == 0
-                already_saved_as_intermediate_this_step = self.args.save_interval > 0 and self.global_step > 0 and self.global_step % self.args.save_interval == 0 and is_last_grad_accum_step_of_epoch
+                already_saved_as_best_this_epoch = 'is_better_eoe_flag' in locals() and locals().get('is_better_eoe_flag', False)
+                is_last_micro_batch_of_epoch = (batch_idx + 1) == num_batches_epoch
+                was_optimizer_step_this_micro_batch = (batch_idx + 1) % self.grad_accum_steps == 0
+                already_saved_as_intermediate_this_step = self.args.save_interval > 0 and self.global_step > 0 and \
+                                                        self.global_step % self.args.save_interval == 0 and \
+                                                        is_last_micro_batch_of_epoch and was_optimizer_step_this_micro_batch
+                
                 if not (already_saved_as_best_this_epoch or already_saved_as_intermediate_this_step):
                     eoe_metrics_for_save = self.last_val_metrics.copy() if self.last_val_metrics else {}
-                    if 'avg_losses_for_q_cycle' in locals() and isinstance(locals()['avg_losses_for_q_cycle'], dict): 
-                        eoe_metrics_for_save["epoch_end_train_g_total_approx"] = locals()['avg_losses_for_q_cycle'].get('loss_g_total', -1.0)
-                        eoe_metrics_for_save["epoch_end_train_d_total_approx"] = locals()['avg_losses_for_q_cycle'].get('loss_d_total', -1.0)
-                    elif 'current_log_metrics_wandb' in locals() and isinstance(locals()['current_log_metrics_wandb'], dict): 
-                        eoe_metrics_for_save["epoch_end_train_g_total_approx"] = locals()['current_log_metrics_wandb'].get('train/loss_g_total_calculated_from_components', -1.0)
-                        eoe_metrics_for_save["epoch_end_train_d_total_approx"] = locals()['current_log_metrics_wandb'].get('train/loss_d_total', -1.0)
+                    g_loss_save = final_avg_g_loss_eoe if 'final_avg_g_loss_eoe' in locals() and np.isfinite(final_avg_g_loss_eoe) else -1.0 # type: ignore
+                    d_loss_save = final_avg_d_loss_eoe if 'final_avg_d_loss_eoe' in locals() and np.isfinite(final_avg_d_loss_eoe) else -1.0 # type: ignore
+                    eoe_metrics_for_save["epoch_end_train_g_total_approx"] = g_loss_save
+                    eoe_metrics_for_save["epoch_end_train_d_total_approx"] = d_loss_save
+                    
+                    self.logger.info(f"Saving end-of-epoch checkpoint for epoch {epoch+1} at GStep {self.global_step}.")
                     self._save_checkpoint(metrics=eoe_metrics_for_save)
+
+
+
 
     @torch.no_grad()
     def validate(self, num_val_samples_to_log: int = 1) -> Optional[Dict[str, float]]:
-        if not self.val_loader or not self.am_main_process: return None
+        if not self.val_loader or not self.am_main_process:
+            return None
+        
         m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
-        original_training_mode_m = m_ref.training; m_ref.eval()
+        original_training_mode_m = m_ref.training
+        m_ref.eval() # Set model to evaluation mode
 
-        total_recon_dft_mse_sum = 0.0; total_recon_dct_mse_sum = 0.0; total_pixel_mse_sum = 0.0
+        # Initialize accumulators for metrics
+        total_recon_dft_mse_sum = 0.0; num_dft_loss_batches = 0
+        total_recon_dct_mse_sum = 0.0; num_dct_loss_batches = 0
+        total_pixel_mse_sum = 0.0; num_pixel_recon_loss_batches = 0 # For pixel-based recon loss (if G outputs pixels)
+        
         total_psnr_sum = 0.0; total_ssim_sum = 0.0; total_lpips_sum = 0.0
-        num_dft_loss_batches = 0; num_dct_loss_batches = 0; num_pixel_recon_loss_batches = 0
-        num_pixel_metric_eval_frames = 0 # Count individual frames for pixel metrics
+        num_pixel_metric_eval_frames_count = 0 # Counts individual frames evaluated for pixel metrics
 
-        dtype_m = next(iter(m_ref.parameters()), torch.tensor(0.0, device=self.device)).dtype if hasattr(m_ref, 'parameters') and next(m_ref.parameters(), None) is not None else torch.float32 # Added device to tensor
+        # Determine model's expected dtype more robustly
+        model_param_iter = iter(m_ref.parameters())
+        first_param = next(model_param_iter, None)
+        dtype_m = first_param.dtype if first_param is not None else torch.float32
+        
         logged_samples_count_this_val = 0
 
         for batch_idx_val, batch_frames_raw in enumerate(
-            tqdm(self.val_loader, desc="Validating", disable=(not self.am_main_process or os.getenv('CI') == 'true' or getattr(self.args, 'disable_val_tqdm', False)), dynamic_ncols=True)
+            tqdm(self.val_loader, desc="Validating", 
+                 disable=(not self.am_main_process or os.getenv('CI') == 'true' or getattr(self.args, 'disable_val_tqdm', False)), 
+                 dynamic_ncols=True)
         ):
             real_full_pixel_sequence = batch_frames_raw.to(self.device, dtype=dtype_m)
-            B, N_total_sample, C_img, H_img, W_img = real_full_pixel_sequence.shape
+            B, N_total_sample, C_img, H_img_actual, W_img_actual = real_full_pixel_sequence.shape # Actual H, W from data
             
-            # Model forward pass to get reconstructions and targets
+            # Model forward pass:
+            # recon_pixel_gen, recon_dft_gen, recon_dct_gen are (B, N_gen_pred, ...)
+            # bboxes_used_by_decoder is (B, N_gen_pred, N_reg, 4)
+            # target_dft/dct_for_loss are (B, N_gen_pred, N_reg, D_spectral_flat)
             recon_pixel_gen, recon_dft_gen, recon_dct_gen, \
-            _, _, bboxes_used_by_decoder, \
+            _mu_val, _logvar_val, bboxes_used_by_decoder, \
             target_dft_for_loss, target_dct_for_loss = m_ref(real_full_pixel_sequence)
             
-            num_input_f = self.video_config.get("num_input_frames", 0)
-            num_predict_f = self.video_config.get("num_predict_frames", 1)
+            # Number of frames G is configured to predict, should match recon_...gen.shape[1]
+            num_gen_predict_frames = self.video_config.get("num_predict_frames", 1) 
+            num_input_f_conditioning = self.video_config.get("num_input_frames", 0)
 
-            # --- Spectral Recon Loss (if applicable) ---
+            # --- Spectral Reconstruction Loss Calculation (if applicable) ---
             if self.args.use_dft_features_appearance and recon_dft_gen is not None and target_dft_for_loss is not None:
                 if recon_dft_gen.shape == target_dft_for_loss.shape:
                     loss_dft_batch = F.mse_loss(recon_dft_gen.float(), target_dft_for_loss.float())
                     if torch.isfinite(loss_dft_batch): 
-                        total_recon_dft_mse_sum += loss_dft_batch.item() * B # Sum of MSEs per batch item
-                        num_dft_loss_batches +=1
+                        total_recon_dft_mse_sum += loss_dft_batch.item() * B # Accumulate sum of losses
+                        num_dft_loss_batches += B # Count items
                 else:
-                    # Use standard logger, assuming _once methods are not yet implemented
-                    if not hasattr(self.logger, '_logged_val_dft_shape_mismatch'):
-                        self.logger.warning(f"Val DFT shape mismatch: Recon {recon_dft_gen.shape}, Target {target_dft_for_loss.shape}")
-                        self.logger._logged_val_dft_shape_mismatch = True # type: ignore
+                    self.logger.warning_once(f"Val DFT shape mismatch: Recon {recon_dft_gen.shape}, Target {target_dft_for_loss.shape}")
             
-            if self.args.use_dct_features_appearance and recon_dct_gen is not None and target_dct_for_loss is not None: # Corrected typo target_dct_loss to target_dct_for_loss
+            if self.args.use_dct_features_appearance and recon_dct_gen is not None and target_dct_for_loss is not None:
                 if recon_dct_gen.shape == target_dct_for_loss.shape:
                     loss_dct_batch = F.mse_loss(recon_dct_gen.float(), target_dct_for_loss.float())
                     if torch.isfinite(loss_dct_batch): 
                         total_recon_dct_mse_sum += loss_dct_batch.item() * B
-                        num_dct_loss_batches +=1
+                        num_dct_loss_batches += B
                 else:
-                    if not hasattr(self.logger, '_logged_val_dct_shape_mismatch'):
-                        self.logger.warning(f"Val DCT shape mismatch: Recon {recon_dct_gen.shape}, Target {target_dct_for_loss.shape}")
-                        self.logger._logged_val_dct_shape_mismatch = True # type: ignore
+                    self.logger.warning_once(f"Val DCT shape mismatch: Recon {recon_dct_gen.shape}, Target {target_dct_for_loss.shape}")
             
-            # --- Pixel-space Metrics ---
-            gt_pixels_for_metrics = real_full_pixel_sequence[:, num_input_f : num_input_f + num_predict_f, ...]
+            # --- Pixel-space Metrics Calculation ---
+            # Ground truth pixels for the prediction window
+            gt_pixels_for_metrics = real_full_pixel_sequence[
+                :, num_input_f_conditioning : num_input_f_conditioning + num_gen_predict_frames, ...
+            ] # (B, N_gen_pred, C, H_actual, W_actual)
             
             predicted_pixels_for_metrics: Optional[torch.Tensor] = None
-            if recon_pixel_gen is not None: # G outputted pixels directly
+            if recon_pixel_gen is not None: # Generator outputted pixels directly
                 predicted_pixels_for_metrics = recon_pixel_gen
             elif self.args.use_dft_features_appearance or self.args.use_dct_features_appearance: # Assemble from spectral
-                predicted_pixels_for_metrics = self._assemble_pixels_from_spectral(
-                    recon_dft_gen, recon_dct_gen, bboxes_used_by_decoder,
-                    gt_pixels_for_metrics.shape # Target shape for assembly
-                )
+                if bboxes_used_by_decoder is None:
+                    self.logger.error_once("Validate: bboxes_used_by_decoder is None from model.forward(), cannot assemble pixels for validation metrics.")
+                else:
+                    predicted_pixels_for_metrics = self._assemble_pixels_from_spectral(
+                        recon_dft_gen, recon_dct_gen, bboxes_used_by_decoder,
+                        target_image_height=self.args.image_h,         # Use configured target H
+                        target_image_width=self.args.image_w,          # Use configured target W
+                        num_image_channels_target=self.video_config['num_channels']
+                        # output_range is defaulted in _assemble_pixels_from_spectral
+                    )
             
             if predicted_pixels_for_metrics is not None:
-                # Ensure predicted frames match number of ground truth frames for metrics
-                num_pred_frames_actual = predicted_pixels_for_metrics.shape[1]
-                gt_pixels_for_metrics_eff = gt_pixels_for_metrics[:, :num_pred_frames_actual, ...]
+                # Ensure predicted frames and ground truth frames for metrics have the same temporal length
+                # This should be num_gen_predict_frames
+                N_frames_eval_metrics = predicted_pixels_for_metrics.shape[1]
+                gt_pixels_for_metrics_eff = gt_pixels_for_metrics[:, :N_frames_eval_metrics, ...]
 
                 if predicted_pixels_for_metrics.shape == gt_pixels_for_metrics_eff.shape:
-                    # Pixel MSE (if spectral is primary, this is for eval; if pixel is primary, this is the recon loss)
+                    # Pixel MSE Loss (only if this is the primary reconstruction target, i.e., not using spectral)
                     if not (self.args.use_dft_features_appearance or self.args.use_dct_features_appearance):
                         pixel_mse_batch = F.mse_loss(predicted_pixels_for_metrics.float(), gt_pixels_for_metrics_eff.float())
                         if torch.isfinite(pixel_mse_batch): 
                             total_pixel_mse_sum += pixel_mse_batch.item() * B
-                            num_pixel_recon_loss_batches += 1
+                            num_pixel_recon_loss_batches += B
                     
-                    pred_01 = (predicted_pixels_for_metrics.clamp(-1,1)+1)/2.0
-                    gt_01 = (gt_pixels_for_metrics_eff.clamp(-1,1)+1)/2.0
+                    # --- Standard Pixel-Space Quality Metrics (PSNR, SSIM, LPIPS) ---
+                    # Reshape to (B*N_frames_eval, C, H, W) for metric functions
+                    pred_for_metrics_flat = predicted_pixels_for_metrics.reshape(-1, C_img, H_img_actual, W_img_actual)
+                    gt_for_metrics_flat = gt_pixels_for_metrics_eff.reshape(-1, C_img, H_img_actual, W_img_actual)
                     
-                    current_batch_num_frames_for_pixel_metric = B * num_pred_frames_actual
+                    # Normalize to [0,1] for PSNR/SSIM if they are in [-1,1]
+                    pred_01 = (pred_for_metrics_flat.clamp(-1,1) + 1) / 2.0
+                    gt_01 = (gt_for_metrics_flat.clamp(-1,1) + 1) / 2.0
+                    
+                    current_batch_num_indiv_frames_for_metric = pred_for_metrics_flat.shape[0] # B * N_frames_eval_metrics
 
-                    mse_for_psnr_batch_frames = F.mse_loss(pred_01.reshape(-1, C_img, H_img, W_img), gt_01.reshape(-1, C_img, H_img, W_img), reduction='none').mean(dim=[1,2,3]) # MSE per frame
-                    psnr_frames = 10 * torch.log10(1.0 / (mse_for_psnr_batch_frames + EPS))
-                    psnr_frames = torch.clamp(psnr_frames, 0, 100) # Clip PSNR
-                    if torch.isfinite(psnr_frames.sum()): total_psnr_sum += psnr_frames.sum().item()
+                    # PSNR (per frame, then sum)
+                    mse_for_psnr_per_frame = F.mse_loss(pred_01, gt_01, reduction='none').mean(dim=[1,2,3]) # MSE per frame
+                    psnr_per_frame = 10 * torch.log10(1.0 / (mse_for_psnr_per_frame + EPS))
+                    psnr_per_frame_clamped = torch.clamp(psnr_per_frame, 0, 100) # Clip PSNR to a reasonable range
+                    if torch.isfinite(psnr_per_frame_clamped.sum()):
+                        total_psnr_sum += psnr_per_frame_clamped.sum().item()
                     
+                    # SSIM (per frame, then sum)
                     if self.ssim_metric:
-                        try: total_ssim_sum += self.ssim_metric(pred_01.reshape(-1, C_img, H_img, W_img), gt_01.reshape(-1, C_img, H_img, W_img)).sum().item() # Sum SSIM over frames
-                        except Exception as e_ssim_val: self.logger.debug(f"Val SSIM failed: {e_ssim_val}")
+                        try:
+                            # ssim_metric expects (N, C, H, W) and data_range (default 1.0 if input is [0,1])
+                            ssim_val_batch = self.ssim_metric(pred_01, gt_01) # Returns (N,)
+                            if torch.isfinite(ssim_val_batch.sum()):
+                                total_ssim_sum += ssim_val_batch.sum().item()
+                        except Exception as e_ssim_val:
+                            self.logger.debug(f"Val SSIM calculation failed: {e_ssim_val}")
+                    
+                    # LPIPS (per frame, then sum)
                     if self.lpips_loss_fn:
-                        try: 
-                            # Ensure LPIPS input is 3 channels, float, [-1, 1] range
-                            # Models expect normalized input in [-1,1] range. LPIPS was trained on [0,1] then normalized internally.
-                            # The official LPIPS code does: (img*2-1) so if input is [-1,1] it's fine.
-                            # If input is [0,1], it becomes [-1,1]. If input is [-1,1] it becomes effectively [-3,1] then clamped.
-                            # Best to pass images in [-1,1] for LPIPS.
-                            lpips_pred_in = predicted_pixels_for_metrics.reshape(-1, C_img, H_img, W_img)
-                            lpips_gt_in = gt_pixels_for_metrics_eff.reshape(-1, C_img, H_img, W_img)
+                        try:
+                            # LPIPS expects (N, C, H, W) in range [-1, 1] typically
+                            lpips_pred_input = pred_for_metrics_flat # Already in [-1,1] before 0-1 normalization for PSNR/SSIM
+                            lpips_gt_input = gt_for_metrics_flat
 
-                            if C_img == 1: # Repeat grayscale to 3 channels if LPIPS expects 3
-                                lpips_pred_in = lpips_pred_in.repeat(1,3,1,1)
-                                lpips_gt_in = lpips_gt_in.repeat(1,3,1,1)
+                            if C_img == 1 and self.video_config['num_channels'] == 1: # Ensure LPIPS gets 3 channels if it expects it (common for AlexNet based)
+                                lpips_pred_input = lpips_pred_input.repeat(1,3,1,1)
+                                lpips_gt_input = lpips_gt_input.repeat(1,3,1,1)
+                            
+                            lpips_val_batch = self.lpips_loss_fn(lpips_pred_input, lpips_gt_input) # Returns (N,1,1,1), squeeze
+                            if torch.isfinite(lpips_val_batch.sum()):
+                                total_lpips_sum += lpips_val_batch.sum().item()
+                        except Exception as e_lpips_val:
+                            self.logger.debug(f"Val LPIPS calculation failed: {e_lpips_val}")
+                    
+                    num_pixel_metric_eval_frames_count += current_batch_num_indiv_frames_for_metric
 
-                            total_lpips_sum += self.lpips_loss_fn(lpips_pred_in, lpips_gt_in).sum().item() # LPIPS expects (N,3,H,W) in [-1,1]
-                        except Exception as e_lpips_val: self.logger.debug(f"Val LPIPS failed: {e_lpips_val}")
-                    num_pixel_metric_eval_frames += current_batch_num_frames_for_pixel_metric
+                else: # Shape mismatch between predicted and GT pixels for metrics
+                    self.logger.warning_once(f"Val Pixel Metric shape mismatch: Pred {predicted_pixels_for_metrics.shape}, GT_eff {gt_pixels_for_metrics_eff.shape}")
 
-                if logged_samples_count_this_val < num_val_samples_to_log and self.args.wandb and WANDB_AVAILABLE and wandb.run:
-                    num_seq_log_batch = min(B, num_val_samples_to_log - logged_samples_count_this_val)
-                    num_f_log_seq = min(predicted_pixels_for_metrics.shape[1], 3) # Log up to 3 predicted frames
-                    if num_seq_log_batch > 0 and num_f_log_seq > 0:
-                        self._log_samples_to_wandb("val_context_frames", real_full_pixel_sequence[:num_seq_log_batch, :num_input_f, ...], min(num_input_f, 3), num_seq_log_batch)
-                        self._log_samples_to_wandb("val_predicted_frames", predicted_pixels_for_metrics[:num_seq_log_batch, :num_f_log_seq, ...], num_f_log_seq, num_seq_log_batch)
-                        self._log_samples_to_wandb("val_ground_truth_frames", gt_pixels_for_metrics_eff[:num_seq_log_batch, :num_f_log_seq, ...], num_f_log_seq, num_seq_log_batch)
-                    logged_samples_count_this_val += num_seq_log_batch
+                # Log predicted and GT samples to WandB
+                if logged_samples_count_this_val < num_val_samples_to_log and self.args.wandb and WANDB_AVAILABLE and wandb.run is not None:
+                    num_sequences_to_log_this_batch = min(B, num_val_samples_to_log - logged_samples_count_this_val)
+                    num_frames_to_log_per_seq = min(predicted_pixels_for_metrics.shape[1], 3) # Log up to 3 predicted frames
+
+                    if num_sequences_to_log_this_batch > 0 and num_frames_to_log_per_seq > 0:
+                        # Context frames from input
+                        num_context_to_log = min(num_input_f_conditioning, 3)
+                        if num_input_f_conditioning > 0 and num_context_to_log > 0:
+                             self._log_samples_to_wandb("val_context_frames",
+                                                       real_full_pixel_sequence[:num_sequences_to_log_this_batch, :num_context_to_log, ...],
+                                                       num_frames_per_sequence_to_log=num_context_to_log, # Pass correct arg name
+                                                       num_sequences_to_log_max=num_sequences_to_log_this_batch)
+                        
+                        # Predicted frames
+                        self._log_samples_to_wandb("val_predicted_frames",
+                                                   predicted_pixels_for_metrics[:num_sequences_to_log_this_batch, :num_frames_to_log_per_seq, ...],
+                                                   num_frames_per_sequence_to_log=num_frames_to_log_per_seq,
+                                                   num_sequences_to_log_max=num_sequences_to_log_this_batch)
+                        
+                        # Ground truth frames corresponding to prediction
+                        self._log_samples_to_wandb("val_ground_truth_frames",
+                                                   gt_pixels_for_metrics_eff[:num_sequences_to_log_this_batch, :num_frames_to_log_per_seq, ...],
+                                                   num_frames_per_sequence_to_log=num_frames_to_log_per_seq,
+                                                   num_sequences_to_log_max=num_sequences_to_log_this_batch)
+                    logged_samples_count_this_val += num_sequences_to_log_this_batch
         
-        m_ref.train(original_training_mode_m) 
+        m_ref.train(original_training_mode_m) # Restore model's original training mode
+        
         metrics = {}
         if num_dft_loss_batches > 0: metrics["avg_val_recon_mse_dft"] = total_recon_dft_mse_sum / num_dft_loss_batches
+        else: metrics["avg_val_recon_mse_dft"] = float('nan') # Report NaN if no batches
+            
         if num_dct_loss_batches > 0: metrics["avg_val_recon_mse_dct"] = total_recon_dct_mse_sum / num_dct_loss_batches
-        if num_pixel_recon_loss_batches > 0: metrics["avg_val_recon_mse_pixel"] = total_pixel_mse_sum / num_pixel_recon_loss_batches
-        if num_pixel_metric_eval_frames > 0:
-            metrics["avg_val_psnr"] = total_psnr_sum / num_pixel_metric_eval_frames
-            if self.ssim_metric: metrics["avg_val_ssim"] = total_ssim_sum / num_pixel_metric_eval_frames
-            if self.lpips_loss_fn: metrics["avg_val_lpips"] = total_lpips_sum / num_pixel_metric_eval_frames
-        
-        self.last_val_metrics = metrics
-        log_str_val = f"Validation Metrics (Ep {self.current_epoch+1}, GStep {self.global_step}, ActiveD: {self.active_discriminator_key}): "
-        log_str_val += ", ".join([f"{k}:{v:.4f}" for k,v in metrics.items() if v is not None])
-        self.logger.info(log_str_val)
-        return metrics
+        else: metrics["avg_val_recon_mse_dct"] = float('nan')
 
+        if num_pixel_recon_loss_batches > 0: metrics["avg_val_recon_mse_pixel"] = total_pixel_mse_sum / num_pixel_recon_loss_batches
+        else: metrics["avg_val_recon_mse_pixel"] = float('nan')
+            
+        if num_pixel_metric_eval_frames_count > 0:
+            metrics["avg_val_psnr"] = total_psnr_sum / num_pixel_metric_eval_frames_count
+            if self.ssim_metric: metrics["avg_val_ssim"] = total_ssim_sum / num_pixel_metric_eval_frames_count
+            else: metrics["avg_val_ssim"] = float('nan')
+            if self.lpips_loss_fn: metrics["avg_val_lpips"] = total_lpips_sum / num_pixel_metric_eval_frames_count
+            else: metrics["avg_val_lpips"] = float('nan')
+        else: # No frames evaluated for pixel metrics
+            metrics["avg_val_psnr"] = float('nan')
+            metrics["avg_val_ssim"] = float('nan')
+            metrics["avg_val_lpips"] = float('nan')
+        
+        self.last_val_metrics = {k: v for k, v in metrics.items() if v is not None and np.isfinite(v)} # Store only valid metrics
+        
+        log_str_val = f"Validation Metrics (Ep {self.current_epoch+1}, GStep {self.global_step}, ActiveD: {self.active_discriminator_key}): "
+        log_str_val += ", ".join([f"{k}:{v:.4f}" for k,v in self.last_val_metrics.items()])
+        self.logger.info(log_str_val)
+        
+        return self.last_val_metrics # Return only valid metrics
+    
     @torch.no_grad()
     def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]:
         m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
