@@ -18,3 +18,4 @@ torchmetrics
 torch-dct
 librosa
 soundfile
+mteb

@@ -5,11 +5,11 @@ import os
 import random
 import sys
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
 import torch
-from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase, PreTrainedModel
+from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase, PreTrainedModel, AutoConfig
 
 # --- Global H5PY_AVAILABLE flag (set based on import success) ---
 try:
@@ -60,6 +60,7 @@ DIVERSE_SENTENCE_POOL = [
     "Conservation efforts are vital for protecting endangered species.",
 ]
 
+
 def load_dummy_texts(
     num_texts: int = 100,
     corpus_label: str = "A",
@@ -100,7 +101,12 @@ def load_dummy_texts(
 def get_device(device_str: str = "auto") -> torch.device:
     """Determines the appropriate torch device."""
     if device_str == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available(): # For Apple Silicon
+            return torch.device("mps")
+        else:
+            return torch.device("cpu")
     return torch.device(device_str)
 
 def get_sentence_embedding(
@@ -150,6 +156,7 @@ def get_sentence_embedding(
     else:
         raise ValueError(f"Unsupported pooling strategy: {strategy}. Choose from {POOLING_STRATEGIES}")
 
+
 def extract_embeddings(
     texts: List[str],
     model_name_or_path: str,
@@ -168,41 +175,150 @@ def extract_embeddings(
         "batch_size": batch_size, "max_length": max_length,
         "pooling_strategy": pooling_strategy,
         "extraction_timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-        "num_texts_input": len(texts)
+        "num_texts_input": len(texts),
+        "python_version": sys.version,
+        "torch_version": torch.__version__,
+        "numpy_version": np.__version__,
     }
     try:
-        tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
-        model: PreTrainedModel = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
-        model.to(device); model.eval()
+        import transformers
+        extraction_metadata["transformers_version"] = transformers.__version__
+        model_transformers_version_from_lib = transformers.__version__ 
+    except ImportError:
+        extraction_metadata["transformers_version"] = "Not available"
+        model_transformers_version_from_lib = "N/A"
+
+    model = None # Initialize model to None
+    try:
+        tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=trust_remote_code
+        )
+        
+        model_load_kwargs = {
+            "trust_remote_code": trust_remote_code,
+        }
+
+        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+        model_preferred_dtype_str_config = getattr(config, "torch_dtype", "float32") 
+        if model_preferred_dtype_str_config is None: model_preferred_dtype_str_config = "float32" 
+        
+        model_transformers_version_config = getattr(config, "transformers_version", "N/A")
+        
+        logger.info(f"Model config suggests torch_dtype='{model_preferred_dtype_str_config}' and was saved with transformers_version='{model_transformers_version_config}'.")
+        logger.info(f"Currently using transformers version: '{model_transformers_version_from_lib}'.")
+
+        target_torch_dtype_for_load = None
+        target_attn_implementation = "auto" 
+
+        is_deepseek_or_qwen_model = "deepseek" in model_name_or_path.lower() or "qwen" in model_name_or_path.lower()
+
+        if is_deepseek_or_qwen_model and device.type == 'cuda':
+            logger.info(f"Model is DeepSeek/Qwen on CUDA. Will prioritize bfloat16/float16 with Flash Attention 2.")
+            target_attn_implementation = "flash_attention_2"
+            if torch.cuda.is_bf16_supported(): # RTX 4050 supports bf16
+                logger.info("Device supports bfloat16. Setting torch_dtype=torch.bfloat16 for Flash Attention 2.")
+                target_torch_dtype_for_load = torch.bfloat16
+            else: # Fallback for Flash Attention 2 if bf16 not supported on the specific CUDA setup
+                logger.info("Device does not report bfloat16 support, or model config didn't specify. Using torch.float16 for Flash Attention 2.")
+                target_torch_dtype_for_load = torch.float16
+        else: # Not a DeepSeek/Qwen model on CUDA, or on CPU/MPS
+            logger.info(f"Not a DeepSeek/Qwen model on CUDA, or device is {device.type}. Determining dtype based on config preference and 'auto' attention.")
+            if model_preferred_dtype_str_config == "bfloat16":
+                if (device.type == 'cuda' and torch.cuda.is_bf16_supported()) or \
+                   (device.type == 'cpu' and hasattr(torch, 'bfloat16')):
+                    target_torch_dtype_for_load = torch.bfloat16
+                else: target_torch_dtype_for_load = torch.float32
+            elif model_preferred_dtype_str_config == "float16":
+                if device.type == 'cuda': target_torch_dtype_for_load = torch.float16
+                else: target_torch_dtype_for_load = torch.float32
+            else:
+                target_torch_dtype_for_load = torch.float32
+        
+        if target_torch_dtype_for_load:
+            model_load_kwargs["torch_dtype"] = target_torch_dtype_for_load
+        if target_attn_implementation != "auto":
+            model_load_kwargs["attn_implementation"] = target_attn_implementation
+        
+        logger.info(f"Attempting model load with primary kwargs: {model_load_kwargs}")
+        
+        try:
+            model = AutoModel.from_pretrained( # Assign to model directly
+                model_name_or_path,
+                **model_load_kwargs
+            )
+        except Exception as e_load_primary:
+            logger.warning(f"Primary loading attempt with kwargs {model_load_kwargs} FAILED: {e_load_primary}", exc_info=False)
+            
+            # Fallback 1: Try "eager" attention with the determined target_torch_dtype_for_load
+            # This is especially if flash_attention_2 was attempted and failed.
+            if model_load_kwargs.get("attn_implementation") == "flash_attention_2":
+                logger.info("Fallback 1: Flash Attention 2 failed. Retrying with attn_implementation='eager'.")
+                model_load_kwargs_fallback1 = model_load_kwargs.copy() # Start with previous kwargs
+                model_load_kwargs_fallback1["attn_implementation"] = "eager"
+                # Keep the same torch_dtype as the primary attempt for eager
+                logger.info(f"Fallback 1 (eager) kwargs: {model_load_kwargs_fallback1}")
+                try:
+                    model = AutoModel.from_pretrained(model_name_or_path, **model_load_kwargs_fallback1)
+                except Exception as e_fallback1:
+                    logger.warning(f"Fallback 1 (eager attention) FAILED: {e_fallback1}", exc_info=False)
+                    # If eager also fails, proceed to minimal as a last resort
+            
+            # Fallback 2 (Minimal): If model is still None (primary and specific fallbacks failed)
+            if model is None:
+                logger.info("Fallback 2: Attempting load with minimal arguments (trust_remote_code, default dtype float32, auto attention).")
+                minimal_kwargs = {"trust_remote_code": trust_remote_code, "torch_dtype": torch.float32}
+                logger.info(f"Minimal fallback kwargs: {minimal_kwargs}")
+                try:
+                    model = AutoModel.from_pretrained(model_name_or_path, **minimal_kwargs)
+                except Exception as e_fallback2:
+                    logger.error(f"All loading attempts FAILED. Last error (minimal fallback): {e_fallback2}", exc_info=True)
+                    raise e_fallback2 
+
+        model.to(device)
+        model.eval()
+        
         extraction_metadata["model_config_class"] = model.config.__class__.__name__
         extraction_metadata["tokenizer_class"] = tokenizer.__class__.__name__
-        # Attempt to get some specific config values if they exist
         extraction_metadata["model_hidden_size"] = getattr(model.config, 'hidden_size', 'N/A')
         extraction_metadata["model_num_layers"] = getattr(model.config, 'num_hidden_layers', 'N/A')
+        extraction_metadata["vocab_size"] = getattr(model.config,'vocab_size', getattr(tokenizer, 'vocab_size', 'N/A'))
+        extraction_metadata["actual_attn_implementation"] = getattr(model.config, '_attn_implementation', 'N/A')
+        extraction_metadata["actual_torch_dtype"] = str(model.dtype)
+        logger.info(f"Model loaded. Actual attention implementation: {extraction_metadata['actual_attn_implementation']}, "
+                    f"Actual dtype: {extraction_metadata['actual_torch_dtype']}")
 
     except Exception as e:
-        logger.error(f"Error loading model or tokenizer '{model_name_or_path}': {e}")
-        if "RateLimiter" in str(e) or "Connection error" in str(e):
-             logger.error("This might be a Hugging Face Hub connection issue. Ensure you are online and not rate-limited.")
+        logger.error(f"FATAL: Error loading model or tokenizer '{model_name_or_path}': {e}", exc_info=True)
+        # ... (rest of your specific error logging)
+        if isinstance(e, TypeError) and "argument of type 'NoneType' is not iterable" in str(e) and "ALL_PARALLEL_STYLES" in str(e):
+             logger.error("The persistent TypeError related to 'ALL_PARALLEL_STYLES' suggests a core incompatibility. "
+                          "Final recommendation: try using transformers version "
+                          f"{model_transformers_version_config if model_transformers_version_config != 'N/A' else '4.44.0 (as per model config)'} "
+                          "or investigate model-specific loading on Hugging Face discussions for this transformers version.")
         raise
-
+        
     cls_token_id_for_pooling = getattr(tokenizer, 'cls_token_id', None)
     eos_token_id_for_pooling = getattr(tokenizer, 'eos_token_id', None)
     if pooling_strategy == "cls" and cls_token_id_for_pooling is None:
-        logger.warning(f"CLS pooling requested but tokenizer ({tokenizer.__class__.__name__}) has no cls_token_id. Will use first token.")
+        logger.warning(f"CLS pooling requested but tokenizer ({tokenizer.__class__.__name__}) has no defined 'cls_token_id'. Will use first token of sequence.")
     if pooling_strategy == "last_token" and eos_token_id_for_pooling is None:
-        logger.warning(f"Last_token pooling requested but tokenizer ({tokenizer.__class__.__name__}) has no eos_token_id. Will use last non-padding token via attention_mask.")
+        logger.warning(f"Last_token pooling requested but tokenizer ({tokenizer.__class__.__name__}) has no defined 'eos_token_id'. Will use last non-padding token via attention_mask.")
 
     all_embeddings_list: List[np.ndarray] = []
     logger.info(f"Processing {len(texts)} texts in batches of {batch_size} on {device}.")
 
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i:i + batch_size]
-        logger.debug(f"Processing batch {i // batch_size + 1}/{(len(texts) + batch_size - 1) // batch_size}")
+        current_batch_num = i // batch_size + 1
+        total_batches = (len(texts) + batch_size - 1) // batch_size
+        logger.debug(f"Processing batch {current_batch_num}/{total_batches}")
         try:
-            inputs = tokenizer(batch_texts, return_tensors="pt",
-                               padding="max_length" if max_length > 0 else True,
-                               truncation=True, max_length=max_length if max_length > 0 else None)
+            inputs = tokenizer(
+                batch_texts, return_tensors="pt",
+                padding="max_length" if max_length > 0 else True,
+                truncation=True, max_length=max_length if max_length > 0 else None
+            )
             inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
                 outputs = model(**inputs, output_hidden_states=False)
@@ -210,64 +326,110 @@ def extract_embeddings(
                 batch_sentence_embeddings = get_sentence_embedding(
                     last_hidden_state, inputs['attention_mask'], strategy=pooling_strategy,
                     cls_token_id=cls_token_id_for_pooling, eos_token_id=eos_token_id_for_pooling,
-                    input_ids=inputs.get('input_ids'))
+                    input_ids=inputs.get('input_ids')
+                )
             all_embeddings_list.extend([emb.cpu().numpy().astype(np.float32) for emb in batch_sentence_embeddings])
         except Exception as e:
-            logger.error(f"Error processing batch {i // batch_size + 1}: {e}", exc_info=True)
-            logger.warning(f"Skipping batch {i // batch_size + 1} due to error.")
+            logger.error(f"Error processing batch {current_batch_num}: {e}", exc_info=True)
+            logger.warning(f"Skipping batch {current_batch_num} due to error. Check logs for details.")
             continue
+            
     extraction_metadata["num_embeddings_extracted"] = len(all_embeddings_list)
-    if all_embeddings_list: extraction_metadata["embedding_dimension"] = all_embeddings_list[0].shape[-1]
-    logger.info(f"Successfully extracted embeddings for {len(all_embeddings_list)} sentences from model {model_name_or_path}.")
+    if all_embeddings_list:
+        extraction_metadata["embedding_dimension"] = all_embeddings_list[0].shape[-1]
+    else:
+        extraction_metadata["embedding_dimension"] = "N/A (no embeddings extracted)"
+
+    if len(all_embeddings_list) != len(texts):
+        logger.warning(f"Number of extracted embeddings ({len(all_embeddings_list)}) does not match number of input texts ({len(texts)}). "
+                       "This may be due to errors during batch processing.")
+
+    logger.info(f"Successfully extracted embeddings for {len(all_embeddings_list)} out of {len(texts)} input sentences from model {model_name_or_path}.")
     return all_embeddings_list, extraction_metadata
 
+# --- save_embeddings_with_metadata function (use the last robust version you had) ---
 def save_embeddings_with_metadata(
     embeddings: List[np.ndarray], metadata: Dict[str, Any],
     output_path: str, output_format: str = "npz"):
     logger.info(f"Saving {len(embeddings)} embeddings and metadata to {output_path} in {output_format} format.")
     output_dir = os.path.dirname(output_path)
     if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir); logger.info(f"Created directory: {output_dir}")
+        try:
+            os.makedirs(output_dir)
+            logger.info(f"Created directory: {output_dir}")
+        except OSError as e:
+            logger.error(f"Failed to create directory {output_dir}: {e}")
+            pass
 
-    if not embeddings:
-        logger.warning(f"No embeddings to save for {output_path}.")
+    if not embeddings: # If list is empty (e.g. all batches failed)
+        # Still save metadata to indicate an attempt was made and what params were used
+        logger.warning(f"No embeddings were extracted to save for {output_path}. Saving metadata only.")
+        metadata["num_embeddings_extracted"] = 0 # Ensure this is explicitly 0
+        metadata["embedding_dimension"] = "N/A (no embeddings extracted)"
         if output_format == "npz":
-            metadata_str = json.dumps(metadata, indent=4)
-            np.savez_compressed(output_path, metadata=np.array([metadata_str], dtype=object))
-            logger.info(f"Saved metadata (only) to {output_path}.")
+            try:
+                metadata_serializable = {}
+                for k, v_item in metadata.items():
+                    if isinstance(v_item, (dict, list, tuple)):
+                        try: metadata_serializable[k] = json.dumps(v_item)
+                        except TypeError: metadata_serializable[k] = str(v_item)
+                    elif v_item is None: metadata_serializable[k] = "None"
+                    else: metadata_serializable[k] = v_item
+                
+                metadata_str_array = np.array(json.dumps(metadata_serializable, indent=4), dtype=object)
+                np.savez_compressed(output_path, metadata=metadata_str_array)
+                logger.info(f"Saved metadata (only) to {output_path} (NPZ).")
+            except Exception as e: logger.error(f"Error saving metadata-only NPZ to {output_path}: {e}")
         elif output_format == "hdf5" and H5PY_AVAILABLE:
-             with h5py.File(output_path, 'w') as hf:
-                for key, value in metadata.items():
-                    try: hf.attrs[key] = json.dumps(value) if isinstance(value, (dict,list)) else value
-                    except TypeError: hf.attrs[key] = str(value)
+             try:
+                with h5py.File(output_path, 'w') as hf:
+                    for key, value in metadata.items():
+                        try:
+                            if isinstance(value, (dict, list, tuple)): hf.attrs[key] = json.dumps(value)
+                            elif value is None: hf.attrs[key] = "None"
+                            else: hf.attrs[key] = value
+                        except TypeError: hf.attrs[key] = str(value)
                 logger.info(f"Saved metadata (only) as HDF5 attributes to {output_path}.")
+             except Exception as e: logger.error(f"Error saving metadata-only HDF5 to {output_path}: {e}")
         return
 
+    # If embeddings exist, proceed to save them along with metadata
     if output_format == "npz":
         try:
             embeddings_dict_to_save = {f'arr_{i}': emb for i, emb in enumerate(embeddings)}
-            metadata_str = json.dumps(metadata, indent=4)
-            embeddings_dict_to_save['metadata'] = np.array([metadata_str], dtype=object)
+            metadata_str_array = np.array(json.dumps(metadata, indent=4), dtype=object)
+            embeddings_dict_to_save['metadata'] = metadata_str_array
             np.savez_compressed(output_path, **embeddings_dict_to_save)
             logger.info(f"Embeddings and metadata successfully saved to {output_path} (NPZ).")
-        except Exception as e: logger.error(f"Error saving NPZ: {e}"); raise
+        except Exception as e:
+            logger.error(f"Error saving NPZ file to {output_path}: {e}")
+            raise
     elif output_format == "hdf5":
         if not H5PY_AVAILABLE:
-            logger.error("h5py not installed for HDF5 save."); raise ImportError("h5py required.")
+            logger.error("h5py library is not installed, but HDF5 output format was selected. Please install h5py or choose 'npz' format.")
+            raise ImportError("h5py is required for HDF5 output format.")
         try:
             with h5py.File(output_path, 'w') as hf:
-                for i, emb in enumerate(embeddings): hf.create_dataset(f"embedding_{i}", data=emb)
+                for i, emb in enumerate(embeddings):
+                    hf.create_dataset(f"embedding_{i}", data=emb, compression="gzip")
                 for key, value in metadata.items():
                     try:
-                        if isinstance(value, (dict, list)): hf.attrs[key] = json.dumps(value)
+                        if isinstance(value, (dict, list, tuple)): hf.attrs[key] = json.dumps(value)
+                        elif value is None: hf.attrs[key] = "None" 
                         else: hf.attrs[key] = value
-                    except TypeError: hf.attrs[key] = str(value)
+                    except TypeError as te:
+                        logger.warning(f"Could not serialize metadata key '{key}' (value: {value}, type: {type(value)}) for HDF5. Storing as string. Error: {te}")
+                        hf.attrs[key] = str(value) 
             logger.info(f"Embeddings and metadata successfully saved to {output_path} (HDF5).")
-        except Exception as e: logger.error(f"Error saving HDF5: {e}"); raise
+        except Exception as e:
+            logger.error(f"Error saving HDF5 file to {output_path}: {e}")
+            raise
     else:
-        logger.error(f"Unsupported output format: {output_format}. Choose 'npz' or 'hdf5'.")
+        logger.error(f"Unsupported output format: {output_format}. Please choose 'npz' or 'hdf5'.")
         raise ValueError(f"Unsupported output format: {output_format}")
 
+
+# --- if __name__ == '__main__': block (use the last robust version you had) ---
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Enhanced ETP Embedding Extractor")
     parser.add_argument("--model_name_or_path", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", help="Hugging Face model name or path.")
@@ -278,60 +440,100 @@ if __name__ == '__main__':
     parser.add_argument("--dummy_text_use_diverse_pool", type=lambda x: (str(x).lower() == 'true'), default=True, help="Use the diverse sentence pool for dummy texts.")
     parser.add_argument("--dummy_text_min_words", type=int, default=5, help="Min words for sentences from diverse pool.")
     parser.add_argument("--dummy_text_max_words", type=int, default=30, help="Max words for sentences from diverse pool.")
-    parser.add_argument("--output_path_A", type=str, default="draftPY/etp_corpus_A_deepseek_embeddings.npz", help="Output path for Corpus A embeddings (.npz or .h5).")
-    parser.add_argument("--output_path_B", type=str, default=None, help="Optional output path for Corpus B embeddings.")
+    parser.add_argument("--output_path_A", type=str, default="etp_corpus_A_embeddings.npz", help="Output path for Corpus A embeddings (.npz or .h5). Default relative to script execution dir.")
+    parser.add_argument("--output_path_B", type=str, default=None, help="Optional output path for Corpus B embeddings. Default relative if only filename given.")
     parser.add_argument("--output_format", type=str, default="npz", choices=["npz", "hdf5"], help="Output file format.")
-    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"], help="Device to use ('auto', 'cuda', 'cpu').")
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu", "mps"], help="Device to use ('auto', 'cuda', 'cpu', 'mps').")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size for inference.")
-    parser.add_argument("--max_length", type=int, default=512, help="Max sequence length for tokenizer. 0 for model's default.")
+    parser.add_argument("--max_length", type=int, default=512, help="Max sequence length for tokenizer. 0 for model's default / dynamic padding to batch max.")
     parser.add_argument("--pooling_strategy", type=str, default="mean", choices=POOLING_STRATEGIES, help="Pooling strategy.")
     parser.add_argument("--trust_remote_code", type=lambda x: (str(x).lower() == 'true'), default=True, help="Trust remote code for AutoModel/Tokenizer.")
     parser.add_argument("--use_bert_tiny_for_test", action="store_true", help="Use prajjwal1/bert-tiny for quick testing.")
     args = parser.parse_args()
 
     if args.use_bert_tiny_for_test:
-        args.model_name_or_path = "prajjwal1/bert-tiny"; logger.info("Overriding model to 'prajjwal1/bert-tiny' for testing.")
-        if args.max_length > 128 : args.max_length = 128
+        logger.info("Overriding model to 'prajjwal1/bert-tiny' for quick testing.")
+        args.model_name_or_path = "prajjwal1/bert-tiny"
+        if args.max_length > 128 or args.max_length == 0 : 
+             logger.info(f"Adjusting max_length from {args.max_length} to 128 for bert-tiny test.")
+             args.max_length = 128
 
-    selected_device = get_device(args.device); logger.info(f"Using device: {selected_device}")
+    selected_device = get_device(args.device)
+    logger.info(f"Using device: {selected_device}")
+
     if not H5PY_AVAILABLE and args.output_format == "hdf5":
-        logger.error("HDF5 selected, but h5py unavailable. Install or use 'npz'."); sys.exit(1)
+        logger.error("HDF5 output format selected, but the 'h5py' library is not available. "
+                     "Please install it (e.g., 'pip install h5py') or choose 'npz' format.")
+        sys.exit(1)
 
-    corpora_to_process = [("A", args.texts_file_A, args.num_dummy_texts_A, args.output_path_A)]
-    if args.output_path_B:
+    corpora_to_process = []
+    if args.output_path_A:
+        corpora_to_process.append(("A", args.texts_file_A, args.num_dummy_texts_A, args.output_path_A))
+    else:
+        logger.error("--output_path_A is required. Please specify an output path for Corpus A.")
+        sys.exit(1) 
+
+    if args.output_path_B: 
         corpora_to_process.append(("B", args.texts_file_B, args.num_dummy_texts_B, args.output_path_B))
 
+    model_transformers_version_config_for_error_msg = "N/A"
+    try:
+        temp_config = AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=args.trust_remote_code)
+        model_transformers_version_config_for_error_msg = getattr(temp_config, "transformers_version", "N/A")
+    except Exception:
+        logger.warning(f"Could not pre-fetch model config for {args.model_name_or_path} to get transformers_version.")
+
+
     for corpus_label, texts_file, num_dummy, output_path_val in corpora_to_process:
-        if not output_path_val: continue # Skip if output path is not defined (e.g. B is optional)
-        
         texts_current_corpus: List[str]
         if texts_file:
+            if not os.path.exists(texts_file):
+                logger.error(f"Texts file not found for Corpus {corpus_label}: {texts_file}. Skipping this corpus.")
+                continue
             logger.info(f"Loading texts for Corpus {corpus_label} from: {texts_file}")
             try:
                 with open(texts_file, 'r', encoding='utf-8') as f:
-                    texts_current_corpus = [line.strip() for line in f if line.strip()]
+                    texts_current_corpus = [line.strip() for line in f if line.strip()] 
                 if not texts_current_corpus:
-                    logger.error(f"Text file {texts_file} is empty or invalid for Corpus {corpus_label}. Skipping.")
+                    logger.warning(f"Text file {texts_file} for Corpus {corpus_label} is empty or contains only whitespace. Skipping this corpus.")
                     continue
-            except FileNotFoundError:
-                logger.error(f"Texts file not found for Corpus {corpus_label}: {texts_file}. Skipping.")
+            except Exception as e:
+                logger.error(f"Error reading text file {texts_file} for Corpus {corpus_label}: {e}. Skipping this corpus.")
                 continue
         else:
-            logger.info(f"Using {num_dummy} dummy texts for Corpus {corpus_label}.")
+            logger.info(f"No text file provided for Corpus {corpus_label}. Using {num_dummy} dummy texts.")
             texts_current_corpus = load_dummy_texts(
-                num_dummy, corpus_label,
+                num_texts=num_dummy, corpus_label=corpus_label,
                 use_diverse_pool=args.dummy_text_use_diverse_pool,
-                min_words=args.dummy_text_min_words,
-                max_words=args.dummy_text_max_words
+                min_words=args.dummy_text_min_words, max_words=args.dummy_text_max_words
             )
+        
+        if not texts_current_corpus: 
+            logger.warning(f"No texts available for Corpus {corpus_label}. Skipping this corpus.")
+            continue
+
         logger.info(f"Extracting embeddings for Corpus {corpus_label} ({len(texts_current_corpus)} texts)...")
-        embeddings_corpus, metadata_corpus = extract_embeddings(
-            texts_current_corpus, args.model_name_or_path, selected_device, args.batch_size,
-            args.max_length, args.pooling_strategy, args.trust_remote_code
-        )
-        if embeddings_corpus:
-            save_embeddings_with_metadata(embeddings_corpus, metadata_corpus, output_path_val, args.output_format)
-            logger.info(f"Corpus {corpus_label} embeddings and metadata saved to {output_path_val}")
-        else:
-            logger.warning(f"No embeddings extracted for Corpus {corpus_label}. Nothing saved to {output_path_val} (except maybe metadata).")
-    logger.info("Embedding extraction process finished.")
+        try:
+            embeddings_corpus, metadata_corpus = extract_embeddings(
+                texts_current_corpus, args.model_name_or_path, selected_device, args.batch_size,
+                args.max_length, args.pooling_strategy, args.trust_remote_code
+            )
+            if "transformers_version_config" not in metadata_corpus:
+                 metadata_corpus["transformers_version_config"] = model_transformers_version_config_for_error_msg
+            
+            if embeddings_corpus or metadata_corpus.get("num_embeddings_extracted", 0) == 0 : 
+                save_embeddings_with_metadata(embeddings_corpus, metadata_corpus, output_path_val, args.output_format)
+                logger.info(f"Corpus {corpus_label} processing finished. Data saved to {output_path_val}")
+            else: 
+                logger.warning(f"No embeddings were extracted for Corpus {corpus_label}. Nothing saved to {output_path_val}.")
+        except Exception as e:
+            error_log_transformers_version = model_transformers_version_config_for_error_msg \
+                if model_transformers_version_config_for_error_msg != "N/A" else "like 4.44.0"
+            
+            logger.error(f"An unhandled error occurred during processing or saving for Corpus {corpus_label}: {e}", exc_info=True)
+            if isinstance(e, TypeError) and "argument of type 'NoneType' is not iterable" in str(e) and "ALL_PARALLEL_STYLES" in str(e):
+                 logger.error("This specific TypeError often suggests an incompatibility with the model's configuration or current transformers version. "
+                              f"Model was saved with transformers: {error_log_transformers_version}. Consider aligning versions or checking model's Hugging Face page for loading issues.")
+            logger.warning(f"Processing for Corpus {corpus_label} failed. Check logs.")
+
+    logger.info("All specified embedding extraction tasks finished.")

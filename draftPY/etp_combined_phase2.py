@@ -1,3 +1,4 @@
+
 # Combined ETP Script (Focus: Phase 2 - Adversarial Latent Alignment)
 # This script integrates components from etp_common, trainer_phase2.py, and run_phase2.py.
 # Original if __name__ == '__main__': blocks from component files have been removed or commented out.
@@ -22,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.cuda.amp import GradScaler
+from torch.cuda.amp import GradScaler # Will be updated to torch.amp.GradScaler
 from torch.nn.init import _calculate_fan_in_and_fan_out
 from torch.nn.utils import spectral_norm
 from torch.utils.data import DataLoader, Dataset
@@ -328,12 +329,26 @@ class HyperbolicInterLevelTransform(nn.Module):
             parent_origin_l = self.hyp_utils.poincare_to_lorentz(parent_origin_p, parent_curvature)
             parent_tangent_l = self.hyp_utils.poincare_tangent_to_lorentz_tangent(parent_tangent_p, parent_origin_p, parent_curvature)
             transformed_tangent_l = self.mlp_transform(parent_tangent_l)
+            
             batch_size = transformed_tangent_l.size(0)
-            _child_curv_sqrt = child_curvature.sqrt().unsqueeze(-1)
-            child_origin_l_canonical_time = 1.0 / (_child_curv_sqrt + self.eps)
-            child_origin_l_canonical_space = torch.zeros(batch_size, self.output_dim_poincare, dtype=transformed_tangent_l.dtype, device=transformed_tangent_l.device)
+            
+            # child_curvature is a 0-dim scalar tensor.
+            sqrt_child_c = child_curvature.sqrt() # 0-dim scalar
+            time_component_val = 1.0 / (sqrt_child_c + self.eps) # 0-dim scalar
+            
+            # Expand the scalar time component value to shape (batch_size, 1).
+            child_origin_l_canonical_time = time_component_val.expand(batch_size, 1)
+            
+            child_origin_l_canonical_space = torch.zeros(
+                batch_size, self.output_dim_poincare, 
+                dtype=transformed_tangent_l.dtype, 
+                device=transformed_tangent_l.device
+            )
+            
             child_origin_l_canonical = torch.cat([child_origin_l_canonical_time, child_origin_l_canonical_space], dim=-1)
-            projected_tangent_l = transformed_tangent_l
+            
+            projected_tangent_l = transformed_tangent_l # Assuming mlp_transform outputs correctly dimensioned Lorentz tangent vectors.
+            
             child_tangent_p_at_origin = self.hyp_utils.lorentz_tangent_to_poincare_tangent(projected_tangent_l, child_origin_l_canonical, child_curvature)
             return child_tangent_p_at_origin
         else:
@@ -346,6 +361,7 @@ class HyperbolicWuBuNestingLevel(nn.Module):
         BallClass: Type[PoincareBall] = config.get("ball_class", PoincareBall)
         self.ball = BallClass(eps=config.get("eps", 1e-7))
         self.hyperbolic_dim_level = config["hyperbolic_dims"][level_idx]
+        # feature_transform maps from the dimension of the input_tangent_p to this level's hyperbolic_dim
         self.feature_transform = nn.Linear(input_dim, self.hyperbolic_dim_level)
         self.activation = getattr(nn, config.get("activation_fn", "GELU").upper())()
         self.norm = nn.LayerNorm(self.hyperbolic_dim_level) if config.get("use_layer_norm", True) else nn.Identity()
@@ -354,9 +370,36 @@ class HyperbolicWuBuNestingLevel(nn.Module):
         else: self.register_buffer('curvature', torch.tensor(float(curv_val)))
         self.apply(lambda m: init_weights_general(m, gain_factor=config.get("init_std_factor", 0.02)))
 
-    def forward(self, input_tangent_p: torch.Tensor, input_origin_p: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        level_features_tangent = self.norm(self.activation(self.feature_transform(input_tangent_p)))
-        return input_origin_p, level_features_tangent, self.curvature
+    def forward(self, input_tangent_p: torch.Tensor, 
+                input_origin_p_of_input_tangent: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # input_tangent_p is a tangent vector (dim: self.input_dim)
+        # input_origin_p_of_input_tangent is the point where input_tangent_p is located (dim: self.input_dim)
+        # This method will transform input_tangent_p to a new tangent vector
+        # in this level's hyperbolic dimension, located at the origin of this level's Poincare ball.
+
+        # 1. Transform the input tangent vector to the current level's dimension.
+        #    The input_tangent_p is assumed to be compatible with self.input_dim.
+        level_features_tangent_at_input_origin = self.feature_transform(input_tangent_p)
+        level_features_tangent_at_input_origin = self.norm(self.activation(level_features_tangent_at_input_origin))
+        # Now level_features_tangent_at_input_origin has dimension self.hyperbolic_dim_level.
+        # However, it's still "conceptually" at input_origin_p_of_input_tangent, but that point
+        # is in a different dimensional space if self.input_dim != self.hyperbolic_dim_level.
+        # This is where the logic needs to be clear: features are typically processed *at the origin*
+        # of the new space. The nesting type "tangent_proj" often implies mapping to T_0 M.
+
+        # For fully hyperbolic nesting where each level is its own Poincare ball,
+        # the processed features (level_features_tangent) are considered tangent vectors
+        # at the origin of *this level's* Poincare ball.
+        
+        # So, level_features_tangent is the result of processing input_tangent_p,
+        # and it's defined in the tangent space at the origin of *this* level's manifold.
+        level_features_tangent = level_features_tangent_at_input_origin # Renaming for clarity that this is the output
+
+        # The origin where this level_features_tangent is defined is the origin of this level's manifold.
+        origin_of_this_level_manifold = torch.zeros_like(level_features_tangent) 
+        # Shape: (batch_size, self.hyperbolic_dim_level)
+
+        return origin_of_this_level_manifold, level_features_tangent, self.curvature
 
 
 class FullyHyperbolicWuBuNestingModel(nn.Module):
@@ -366,39 +409,78 @@ class FullyHyperbolicWuBuNestingModel(nn.Module):
         BallClass: Type[PoincareBall] = self.config.get("ball_class", PoincareBall)
         self.ball = BallClass(eps=self.config.get("eps", 1e-7))
         self.levels = nn.ModuleList(); self.inter_level_transforms = nn.ModuleList()
-        current_input_dim = input_tangent_dim
+        
+        current_level_input_dim = input_tangent_dim # Dimension of the tangent vector input to the *current* level's HyperbolicWuBuNestingLevel
+
         for i in range(self.num_levels):
-            level_poincare_dim = self.config["hyperbolic_dims"][i]
-            self.levels.append(HyperbolicWuBuNestingLevel(i, current_input_dim, self.config))
+            level_hyperbolic_dim = self.config["hyperbolic_dims"][i] # Output dim of this level's tangent features
+            
+            self.levels.append(HyperbolicWuBuNestingLevel(i, current_level_input_dim, self.config))
+            
             if i < self.num_levels - 1:
-                next_level_poincare_dim = self.config["hyperbolic_dims"][i+1]
-                self.inter_level_transforms.append(HyperbolicInterLevelTransform(level_poincare_dim, next_level_poincare_dim, self.config, i))
-                current_input_dim = next_level_poincare_dim
+                # Inter-level transform takes tangent from level i (dim: level_hyperbolic_dim, at origin of level i)
+                # and maps it to a tangent for level i+1 (dim: next_level_hyperbolic_dim, at origin of level i+1)
+                next_level_hyperbolic_dim = self.config["hyperbolic_dims"][i+1]
+                self.inter_level_transforms.append(
+                    HyperbolicInterLevelTransform(
+                        input_dim=level_hyperbolic_dim,         # Input to transform is output of level i
+                        output_dim=next_level_hyperbolic_dim,   # Output of transform is input dim for level i+1 features
+                        config=self.config, 
+                        level_idx=i
+                    )
+                )
+                # The input dimension for the *next* HyperbolicWuBuNestingLevel module
+                # is the output dimension of the inter-level transform's Poincare tangent vector.
+                current_level_input_dim = next_level_hyperbolic_dim
+            # If it's the last level, current_level_input_dim is not used further for defining new levels.
+
         self._determine_output_dim()
         self.apply(lambda m: init_weights_general(m, gain_factor=self.config.get("init_std_factor", 0.02)))
 
     def _determine_output_dim(self):
         agg_levels_cfg = self.config.get("final_aggregation_levels", "all")
-        agg_indices = list(range(self.num_levels)) if agg_levels_cfg=="all" else [i for i in agg_levels_cfg if 0<=i<self.num_levels] # type: ignore
-        if not agg_indices: agg_indices = list(range(self.num_levels))
+        # Ensure agg_indices is a list of integers
+        if isinstance(agg_levels_cfg, str) and agg_levels_cfg.lower() == "all":
+            agg_indices = list(range(self.num_levels))
+        elif isinstance(agg_levels_cfg, Iterable) and not isinstance(agg_levels_cfg, str):
+            agg_indices = [i for i in agg_levels_cfg if isinstance(i, int) and 0 <= i < self.num_levels]
+        else:
+            logger_wubu_arch.warning(f"Invalid final_aggregation_levels: {agg_levels_cfg}. Defaulting to all levels.")
+            agg_indices = list(range(self.num_levels))
+
+        if not agg_indices and self.num_levels > 0: 
+            agg_indices = list(range(self.num_levels)) # Default to all if parsing fails or empty list
+        elif not agg_indices and self.num_levels == 0: # Handle no levels case
+            self.aggregated_output_dim = 1; self.output_tangent_dim = 1;
+            self.output_tangent_projection = nn.Identity() # type: ignore[assignment]
+            logger_wubu_arch.warning("No levels in WuBu model, output dim set to 1.")
+            return
+
         dims_to_agg = [self.config["hyperbolic_dims"][i] for i in agg_indices if i < len(self.config["hyperbolic_dims"])]
 
         if not dims_to_agg and self.num_levels > 0 :
-            dims_to_agg = [self.config["hyperbolic_dims"][-1]] if self.config["hyperbolic_dims"] else [1]
-            logger_wubu_arch.warning(f"Aggregation indices resulted in empty list. Defaulting to last known dim: {dims_to_agg}")
-        elif not dims_to_agg and self.num_levels == 0:
+            # This case should ideally be rare if agg_indices is handled correctly
+            default_dim = self.config["hyperbolic_dims"][-1] if self.config["hyperbolic_dims"] else 1
+            dims_to_agg = [default_dim]
+            logger_wubu_arch.warning(f"Aggregation indices resulted in empty list of dims. Defaulting to last known dim: {dims_to_agg}")
+        elif not dims_to_agg and self.num_levels == 0: # Should be caught by above, but defensive
              self.aggregated_output_dim = 1; self.output_tangent_dim = 1;
              self.output_tangent_projection = nn.Identity() # type: ignore[assignment]
-             logger_wubu_arch.warning("No levels in WuBu model, output dim set to 1.")
              return
 
         agg_type = self.config.get("final_aggregation_type", "last_level")
         if agg_type == "last_level": self.aggregated_output_dim = dims_to_agg[-1]
         elif agg_type == "concat": self.aggregated_output_dim = sum(dims_to_agg)
-        else: self.aggregated_output_dim = dims_to_agg[0] # sum, mean, etc. assume same dim or take first.
+        else: # sum, mean, etc.
+             # Assuming all aggregated tangent vectors have the same dimension if not concatenating
+             # (or sum/mean is applied after projection to a common dim, which is not the case here)
+             self.aggregated_output_dim = dims_to_agg[0] 
+             if not all(d == self.aggregated_output_dim for d in dims_to_agg) and agg_type in ["sum", "mean"]:
+                 logger_wubu_arch.warning(f"Aggregation type '{agg_type}' used with varying dimensions {dims_to_agg}. This might be unintended. Using first dim: {self.aggregated_output_dim}.")
+
 
         proj_dim_cfg = self.config.get("output_tangent_projection_dim")
-        if proj_dim_cfg is not None and proj_dim_cfg > 0:
+        if proj_dim_cfg is not None and isinstance(proj_dim_cfg, int) and proj_dim_cfg > 0:
             self.output_tangent_projection = nn.Linear(self.aggregated_output_dim, proj_dim_cfg)
             self.output_tangent_dim = proj_dim_cfg
         else:
@@ -406,32 +488,83 @@ class FullyHyperbolicWuBuNestingModel(nn.Module):
             self.output_tangent_dim = self.aggregated_output_dim
         if self.output_tangent_dim <=0: self.output_tangent_dim = 1 # Safety
 
-    def forward(self, initial_tangent_p: torch.Tensor, initial_origin_p: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, initial_tangent_p: torch.Tensor, initial_origin_p_of_initial_tangent: Optional[torch.Tensor] = None) -> torch.Tensor:
         batch_size = initial_tangent_p.size(0)
-        if initial_origin_p is None: initial_origin_p = torch.zeros_like(initial_tangent_p)
-        current_o_p, current_t_p = initial_origin_p, initial_tangent_p
-        level_outputs = []
-        for i in range(self.num_levels):
-            level_out_o, level_feat_t, level_curv = self.levels[i](current_t_p, current_o_p)
-            level_outputs.append(level_feat_t)
-            if i < self.num_levels - 1:
-                current_t_p = self.inter_level_transforms[i](level_feat_t, level_out_o, level_curv, self.levels[i+1].curvature)
-                current_o_p = level_out_o
         
+        # `current_tangent_p_for_level_input` is the tangent vector that will be fed into the *next* HyperbolicWuBuNestingLevel.
+        # `origin_of_current_tangent_p` is the point where `current_tangent_p_for_level_input` is located.
+        
+        current_tangent_p_for_level_input = initial_tangent_p 
+        if initial_origin_p_of_initial_tangent is None: 
+            origin_of_current_tangent_p = torch.zeros_like(initial_tangent_p)
+        else:
+            origin_of_current_tangent_p = initial_origin_p_of_initial_tangent
+        
+        level_feature_tangents_at_their_origins = [] # Stores tangent vectors, each at the origin of its respective level's manifold
+
+        for i in range(self.num_levels):
+            # Pass the current tangent vector and its location to the level.
+            # The level will process it and return a new feature tangent vector 
+            # located at the origin of *its own* manifold space.
+            origin_where_level_feature_is_defined, level_feature_tangent, level_curvature = \
+                self.levels[i](current_tangent_p_for_level_input, origin_of_current_tangent_p)
+            
+            # origin_where_level_feature_is_defined should be zeros of shape (batch_size, self.config["hyperbolic_dims"][i])
+            # level_feature_tangent has shape (batch_size, self.config["hyperbolic_dims"][i])
+            level_feature_tangents_at_their_origins.append(level_feature_tangent)
+
+            if i < self.num_levels - 1:
+                # Now, transform level_feature_tangent (which is at origin_where_level_feature_is_defined on manifold i)
+                # to a new tangent vector that will be the input for level i+1.
+                # This new tangent vector will be located at the origin of manifold i+1.
+                
+                # The parent_tangent_p for the inter-level transform is level_feature_tangent.
+                # The parent_origin_p for the inter-level transform is origin_where_level_feature_is_defined.
+                # (These both have dimension self.config["hyperbolic_dims"][i])
+                next_tangent_p_input_for_next_level = self.inter_level_transforms[i](
+                    parent_tangent_p=level_feature_tangent,         
+                    parent_origin_p=origin_where_level_feature_is_defined, 
+                    parent_curvature=level_curvature,                  
+                    child_curvature=self.levels[i+1].curvature      
+                )
+                # next_tangent_p_input_for_next_level is now a tangent vector at the origin of level (i+1)'s manifold.
+                # Its dimension is self.config["hyperbolic_dims"][i+1].
+                
+                current_tangent_p_for_level_input = next_tangent_p_input_for_next_level
+                origin_of_current_tangent_p = torch.zeros_like(next_tangent_p_input_for_next_level)
+        
+        # Aggregation logic
         agg_levels_cfg = self.config.get("final_aggregation_levels", "all")
-        agg_indices = list(range(self.num_levels)) if agg_levels_cfg=="all" else [i for i in agg_levels_cfg if 0<=i<len(level_outputs)] # type: ignore
-        if not agg_indices: agg_indices = list(range(len(level_outputs)))
-        to_agg = [level_outputs[i] for i in agg_indices]
-        if not to_agg: return torch.zeros(batch_size, self.output_tangent_dim, device=initial_tangent_p.device)
+        if isinstance(agg_levels_cfg, str) and agg_levels_cfg.lower() == "all":
+            agg_indices = list(range(self.num_levels))
+        elif isinstance(agg_levels_cfg, Iterable) and not isinstance(agg_levels_cfg, str):
+            agg_indices = [idx for idx in agg_levels_cfg if isinstance(idx, int) and 0 <= idx < len(level_feature_tangents_at_their_origins)]
+        else:
+            agg_indices = list(range(len(level_feature_tangents_at_their_origins))) # Fallback
+
+        if not agg_indices and self.num_levels > 0: 
+            agg_indices = list(range(len(level_feature_tangents_at_their_origins)))
+        
+        to_agg = [level_feature_tangents_at_their_origins[idx] for idx in agg_indices]
+        if not to_agg: 
+            return torch.zeros(batch_size, self.output_tangent_dim, 
+                               dtype=initial_tangent_p.dtype, device=initial_tangent_p.device)
 
         agg_type = self.config.get("final_aggregation_type", "last_level")
-        if agg_type == "last_level": agg_t = to_agg[-1]
-        elif agg_type == "concat": agg_t = torch.cat(to_agg, dim=-1)
-        else: 
-            stacked_t = torch.stack(to_agg, dim=0)
-            agg_t = stacked_t.sum(dim=0) if agg_type == "sum" else stacked_t.mean(dim=0)
-        return self.output_tangent_projection(agg_t)
+        if agg_type == "last_level": 
+            agg_t = to_agg[-1]
+        elif agg_type == "concat": 
+            agg_t = torch.cat(to_agg, dim=-1)
+        else: # Default to sum or mean if not "last_level" or "concat"
+            try:
+                stacked_t = torch.stack(to_agg, dim=0)
+                agg_t = stacked_t.sum(dim=0) if agg_type == "sum" else stacked_t.mean(dim=0)
+            except RuntimeError as e:
+                # This can happen if dims in to_agg are different and agg_type is sum/mean
+                logger_wubu_arch.error(f"Error during aggregation type '{agg_type}' with varying dimensions. Tensors: {[t.shape for t in to_agg]}. Error: {e}. Defaulting to last level.")
+                agg_t = to_agg[-1] # Fallback to last level if stacking fails
 
+        return self.output_tangent_projection(agg_t)
 
 class AbstractETPTransfusionHead(nn.Module):
     def __init__(self, source_embedding_dim: int, wubu_tangent_dim: int): super().__init__(); self.source_embedding_dim=source_embedding_dim; self.wubu_tangent_dim=wubu_tangent_dim
@@ -552,8 +685,12 @@ class LatentDiscriminatorMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-1] != self.input_dim:
-            raise ValueError(f"Input tensor last dimension ({x.shape[-1]}) "
-                             f"does not match discriminator input_dim ({self.input_dim})")
+            # Allow for (N, S, D) or (N, D) inputs, as long as last dim matches.
+            if x.ndim > 1 and x.shape[-1] == self.input_dim:
+                pass
+            else:
+                raise ValueError(f"Input tensor last dimension ({x.shape[-1]}) "
+                                 f"does not match discriminator input_dim ({self.input_dim}). Full shape: {x.shape}")
         return self.mlp(x)
 
 # End of etp_discriminators.py content
@@ -577,10 +714,13 @@ def calculate_reconstruction_loss(
     if loss_type == "mse":
         return F.mse_loss(reconstructed_embeddings, original_embeddings)
     elif loss_type == "cosine":
-        if reconstructed_embeddings.ndim == 1:
+        if reconstructed_embeddings.ndim == 1: # Handle 1D case, e.g. single vector comparison
              cosine_sim = F.cosine_similarity(reconstructed_embeddings.unsqueeze(0), original_embeddings.unsqueeze(0), dim=1)
-        else:
-             cosine_sim = F.cosine_similarity(reconstructed_embeddings, original_embeddings, dim=1)
+        elif reconstructed_embeddings.ndim > 1 : # Ensure at least 2D for dim=1
+             cosine_sim = F.cosine_similarity(reconstructed_embeddings, original_embeddings, dim=-1) # Use last dim for similarity
+        else: # Fallback or error for unexpected shapes
+            logger_losses.error(f"Unsupported tensor ndim for cosine similarity: {reconstructed_embeddings.ndim}. Using MSE.")
+            return F.mse_loss(reconstructed_embeddings, original_embeddings)
         return (1 - cosine_sim).mean()
     else:
         logger_losses.error(f"Unsupported reconstruction loss type: {loss_type}. Defaulting to MSE.")
@@ -598,9 +738,9 @@ def _pairwise_similarity(batch: torch.Tensor, metric: str = "cosine") -> torch.T
 
 def _normalize_matrix(matrix: torch.Tensor) -> torch.Tensor:
     if matrix.numel() == 0 : return matrix
-    if matrix.numel() == 1: return matrix - matrix.mean()
+    if matrix.numel() == 1: return matrix - matrix.mean() # Avoid std of 0 for single element
     mean = matrix.mean(); std = matrix.std()
-    if std < 1e-8: return matrix - mean
+    if std < 1e-8: return matrix - mean # Avoid division by zero or very small std
     return (matrix - mean) / std
 
 def calculate_vector_space_preservation_loss(
@@ -622,12 +762,15 @@ def calculate_vector_space_preservation_loss(
 def calculate_adversarial_latent_alignment_loss_discriminator(
     d_output_source_A: torch.Tensor,
     d_output_source_B_detached: torch.Tensor,
-    gan_loss_type: str = "bce"
+    gan_loss_type: str = "bce" # Other types could be "wasserstein", "lsgan" etc.
 ) -> torch.Tensor:
     if gan_loss_type == "bce":
         loss_real = F.binary_cross_entropy_with_logits(d_output_source_A, torch.ones_like(d_output_source_A))
         loss_fake = F.binary_cross_entropy_with_logits(d_output_source_B_detached, torch.zeros_like(d_output_source_B_detached))
         return (loss_real + loss_fake) / 2
+    # Example for Wasserstein (no sigmoid in discriminator output, target is not 0/1)
+    # elif gan_loss_type == "wasserstein":
+    #     return -(torch.mean(d_output_source_A) - torch.mean(d_output_source_B_detached))
     else:
         logger_losses.error(f"Unsupported GAN loss type for discriminator: {gan_loss_type}. Defaulting to BCE.")
         loss_real = F.binary_cross_entropy_with_logits(d_output_source_A, torch.ones_like(d_output_source_A))
@@ -635,14 +778,36 @@ def calculate_adversarial_latent_alignment_loss_discriminator(
         return (loss_real + loss_fake) / 2
 
 def calculate_adversarial_latent_alignment_loss_generator(
-    d_output_source_A_for_generator: torch.Tensor,
-    d_output_source_B_for_generator: torch.Tensor,
+    d_output_source_A_for_generator: torch.Tensor, # Discriminator output for latents from source A (which G wants to be seen as "real-like" for its domain)
+    d_output_source_B_for_generator: torch.Tensor, # Discriminator output for latents from source B (which G wants to be seen as "real-like" for its domain)
     gan_loss_type: str = "bce"
 ) -> torch.Tensor:
+    # Generator wants discriminator to classify its transformed outputs as real (label 1)
     if gan_loss_type == "bce":
+        # The generator aims to fool the discriminator for both A and B latents.
+        # This means it wants the discriminator to output "1" (real) for both.
         loss_A = F.binary_cross_entropy_with_logits(d_output_source_A_for_generator, torch.ones_like(d_output_source_A_for_generator))
         loss_B = F.binary_cross_entropy_with_logits(d_output_source_B_for_generator, torch.ones_like(d_output_source_B_for_generator))
+        # The interpretation here is that the generator (ETP Sphere model) is trying to make *both* A and B latents
+        # indistinguishable, ideally aligning them to a common distribution that the discriminator sees as "real"
+        # (or rather, it cannot distinguish them from each other).
+        # So, the generator is penalized if the discriminator can tell that A's latents are "A-like" (target 0 for D)
+        # or B's latents are "B-like" (target 1 for D).
+        # If D outputs a high value for A (thinks A is B), G is happy.
+        # If D outputs a low value for B (thinks B is A), G is happy.
+        # This requires a specific setup of D's targets.
+        # Standard GAN: G wants D(G(z)) -> 1. Here, G(x_A) and G(x_B) are latents.
+        # D is trained: D(latent_A) -> real_A_label, D(latent_B) -> real_B_label.
+        # If D is trained so D(A_latents) -> 1 (real A) and D(B_latents) -> 0 (fake, or real B), then
+        # G wants D(A_latents_from_G) -> 0 (to look like B) and D(B_latents_from_G) -> 1 (to look like A).
+        # The current loss formulation implies D is trained: D(A) -> 1, D(B_detached) -> 0.
+        # Then G wants: D(G(A)) -> 0 (make A look like B) and D(G(B)) -> 1 (make B look like A, or just also 0 if the goal is one-sided label smoothing).
+        # If the goal is to make both A and B latents indistinguishable from some "target" domain (implicitly the one D is trained to recognize as "1"),
+        # then both terms should push towards 1. This is the current setup.
         return (loss_A + loss_B) / 2
+    # Example for Wasserstein
+    # elif gan_loss_type == "wasserstein":
+    #    return -(torch.mean(d_output_source_A_for_generator) + torch.mean(d_output_source_B_for_generator)) / 2 # Or just one if one-sided
     else:
         logger_losses.error(f"Unsupported GAN loss type for generator: {gan_loss_type}. Defaulting to BCE.")
         loss_A = F.binary_cross_entropy_with_logits(d_output_source_A_for_generator, torch.ones_like(d_output_source_A_for_generator))
@@ -666,13 +831,14 @@ def extract_ds_r1_sentence_embeddings(
 ) -> List[np.ndarray]:
     logger_embedding_extractor.info(f"Loading model and tokenizer: {model_name}")
     try:
-        if "prajjwal1/bert-tiny" in model_name and device == "cpu": pass
+        # For local testing with smaller models if DeepSeek is unavailable
+        # if "prajjwal1/bert-tiny" in model_name and device == "cpu": pass 
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
         model.to(device); model.eval()
     except Exception as e:
         logger_embedding_extractor.error(f"Error loading model or tokenizer '{model_name}': {e}")
-        if "prajjwal1/bert-tiny" in model_name and isinstance(e, OSError):
+        if "prajjwal1/bert-tiny" in model_name and isinstance(e, OSError): # Example of specific error handling
             logger_embedding_extractor.error("This might be due to 'prajjwal1/bert-tiny' not being cached or accessible.")
         raise
 
@@ -681,34 +847,35 @@ def extract_ds_r1_sentence_embeddings(
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i:i + batch_size]
         try:
-            inputs = tokenizer(batch_texts, return_tensors="pt", padding=True, truncation=True, max_length=128)
+            inputs = tokenizer(batch_texts, return_tensors="pt", padding=True, truncation=True, max_length=128) # max_length can be a param
             inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
                 outputs = model(**inputs)
                 last_hidden_states = outputs.last_hidden_state
                 attention_mask = inputs['attention_mask']
+                # Mean pooling (common strategy)
                 expanded_mask = attention_mask.unsqueeze(-1).expand(last_hidden_states.size()).float()
                 sum_embeddings = torch.sum(last_hidden_states * expanded_mask, 1)
-                sum_mask = torch.clamp(expanded_mask.sum(1), min=1e-9)
+                sum_mask = torch.clamp(expanded_mask.sum(1), min=1e-9) # Clamp to avoid div by zero
                 mean_pooled_embeddings = sum_embeddings / sum_mask
             all_embeddings.extend([emb.cpu().numpy() for emb in mean_pooled_embeddings])
         except Exception as e:
             logger_embedding_extractor.error(f"Error processing batch {i // batch_size + 1}: {e}")
-            raise
+            raise # Re-raise to halt if critical
     logger_embedding_extractor.info(f"Successfully extracted embeddings for {len(all_embeddings)} sentences from model {model_name}.")
     return all_embeddings
 
 def save_embeddings(
     embeddings: List[np.ndarray],
     output_path: str,
-    output_format: str = "numpy_list"
+    output_format: str = "numpy_list" # Default format
 ):
     logger_embedding_extractor.info(f"Saving {len(embeddings)} embeddings to {output_path} in {output_format} format.")
     if output_format == "numpy_list":
         try:
             output_dir = os.path.dirname(output_path)
             if output_dir and not os.path.exists(output_dir): os.makedirs(output_dir); logger_embedding_extractor.info(f"Created directory: {output_dir}")
-            np.savez_compressed(output_path, *embeddings)
+            np.savez_compressed(output_path, *embeddings) # Save as individual arrays in a .npz archive
             logger_embedding_extractor.info(f"Embeddings successfully saved to {output_path}.")
         except Exception as e: logger_embedding_extractor.error(f"Error saving embeddings with np.savez_compressed: {e}"); raise
     elif output_format == "hdf5":
@@ -736,10 +903,35 @@ def save_embeddings(
 # Content from: /draftPY/etp_common/etp_datasets.py
 # =====================================================================
 logger_datasets = logging.getLogger("etp_datasets")
-# H5PY_AVAILABLE is already defined at the top.
+
+def _safe_to_float32_numpy_array_local(
+    item: Any, 
+    filepath_for_log: str, 
+    item_name_for_log: str,
+    logger_to_use: logging.Logger
+) -> Optional[np.ndarray]:
+    if item is None:
+        return None
+    try:
+        if isinstance(item, np.ndarray) and np.issubdtype(item.dtype, np.number):
+            return item.astype(np.float32)
+        arr = np.asarray(item, dtype=np.float32)
+        if arr.dtype == np.object_: # Should not happen if np.asarray(dtype=float32) works
+            logger_to_use.warning(
+                f"Skipping item '{item_name_for_log}' from file {filepath_for_log} "
+                f"as it resulted in an object array even after float32 cast attempt. Preview: '{str(item)[:100]}...'"
+            )
+            return None
+        return arr
+    except (ValueError, TypeError): # Catch both common conversion errors
+        logger_to_use.warning(
+            f"Skipping item '{item_name_for_log}' from file {filepath_for_log} "
+            f"as it could not be converted to a float32 numpy array. Preview: '{str(item)[:100]}...'"
+        )
+        return None
 
 def load_embeddings_from_file(filepath: str) -> List[np.ndarray]:
-    if not os.path.exists(filepath) and not os.path.isdir(filepath): # Check for dir here too
+    if not os.path.exists(filepath) and not os.path.isdir(filepath):
         logger_datasets.error(f"File or directory not found: {filepath}")
         raise FileNotFoundError(f"File or directory not found: {filepath}")
 
@@ -750,45 +942,59 @@ def load_embeddings_from_file(filepath: str) -> List[np.ndarray]:
     if file_extension == ".npz":
         try:
             with np.load(filepath, allow_pickle=True) as data:
-                if len(data.files) == 1 and isinstance(data[data.files[0]], (list, np.ndarray)) and data[data.files[0]].dtype == 'object':
-                    loaded_obj = data[data.files[0]]
-                    if isinstance(loaded_obj, list): embeddings = [np.asarray(emb) for emb in loaded_obj]
-                    elif loaded_obj.ndim > 0 and isinstance(loaded_obj[0], np.ndarray): embeddings = [np.asarray(emb) for emb in loaded_obj]
-                    else: embeddings = [np.asarray(loaded_obj)]
-                elif len(data.files) > 0 and all(f.startswith('arr_') for f in data.files):
-                    embeddings = [data[f] for f in sorted(data.files, key=lambda x: int(x.split('_')[1]))]
-                elif len(data.files) > 0 : embeddings = [data[f] for f in data.files]
-                else: logger_datasets.warning(f"NPZ file {filepath} is empty or has an unexpected structure."); return []
-                embeddings = [np.asarray(emb) for emb in embeddings if emb is not None]
-                logger_datasets.info(f"Successfully loaded {len(embeddings)} embeddings from NPZ file {filepath}.")
+                if not data.files:
+                    logger_datasets.warning(f"NPZ file {filepath} is empty.")
+                    return []
+                keys_to_process = list(data.files)
+                if all(f.startswith('arr_') and f[4:].isdigit() for f in keys_to_process):
+                    keys_to_process = sorted(keys_to_process, key=lambda x: int(x.split('_')[1]))
+                else:
+                    keys_to_process = sorted(keys_to_process) # Fallback to alphabetical
+
+                for key in keys_to_process:
+                    item_from_npz = data[key]
+                    is_container = (isinstance(item_from_npz, np.ndarray) and item_from_npz.dtype == np.object_ and item_from_npz.ndim > 0 and len(item_from_npz) > 0) or \
+                                   isinstance(item_from_npz, list)
+                    if is_container:
+                        logger_datasets.debug(f"NPZ key '{key}' in {filepath} is a container. Processing elements.")
+                        for i, sub_item in enumerate(item_from_npz):
+                            processed_emb = _safe_to_float32_numpy_array_local(sub_item, filepath, f"{key}[{i}]", logger_datasets)
+                            if processed_emb is not None: embeddings.append(processed_emb)
+                    else:
+                        processed_emb = _safe_to_float32_numpy_array_local(item_from_npz, filepath, key, logger_datasets)
+                        if processed_emb is not None: embeddings.append(processed_emb)
+                
+                if embeddings: logger_datasets.info(f"Loaded {len(embeddings)} valid embeddings from NPZ {filepath}.")
+                else: logger_datasets.warning(f"No valid embeddings found in NPZ {filepath} after processing {len(data.files)} item(s).")
         except Exception as e:
-            logger_datasets.error(f"Error loading NPZ file {filepath}: {e}")
-            raise ValueError(f"Could not load embeddings from NPZ file {filepath}: {e}")
+            logger_datasets.error(f"Error loading NPZ {filepath}: {e}"); raise ValueError(f"Could not load NPZ {filepath}: {e}") from e
     elif file_extension in [".hdf5", ".h5"]:
-        if not H5PY_AVAILABLE:
-            logger_datasets.error("h5py library is required to load HDF5 files, but it's not installed.")
-            raise ImportError("h5py library is required for HDF5 support.")
+        if not H5PY_AVAILABLE: logger_datasets.error("h5py required for HDF5."); raise ImportError("h5py required.")
         try:
             with h5py.File(filepath, 'r') as hf:
                 dataset_keys = sorted(list(hf.keys()), key=lambda x: int(x.split('_')[1]) if x.startswith('embedding_') and x.split('_')[1].isdigit() else 0)
-                for key in dataset_keys: embeddings.append(hf[key][:])
-            logger_datasets.info(f"Successfully loaded {len(embeddings)} embeddings from HDF5 file {filepath}.")
-        except Exception as e:
-            logger_datasets.error(f"Error loading HDF5 file {filepath}: {e}")
-            raise ValueError(f"Could not load embeddings from HDF5 file {filepath}: {e}")
-    elif os.path.isdir(filepath): # Check if it's a directory for .npy files
-        logger_datasets.info(f"{filepath} is a directory. Attempting to load .npy files from it.")
+                for key in dataset_keys:
+                    item = hf[key][:]
+                    processed_emb = _safe_to_float32_numpy_array_local(item, filepath, key, logger_datasets)
+                    if processed_emb is not None: embeddings.append(processed_emb)
+            if embeddings: logger_datasets.info(f"Loaded {len(embeddings)} valid embeddings from HDF5 {filepath}.")
+            else: logger_datasets.warning(f"No valid embeddings found in HDF5 {filepath}.")
+        except Exception as e: logger_datasets.error(f"Error loading HDF5 {filepath}: {e}"); raise ValueError(f"Could not load HDF5 {filepath}: {e}") from e
+    elif os.path.isdir(filepath):
+        logger_datasets.info(f"{filepath} is a directory. Loading .npy files.")
         try:
             npy_files = sorted([f for f in os.listdir(filepath) if f.endswith(".npy")])
-            if not npy_files: logger_datasets.warning(f"No .npy files found in directory {filepath}."); return []
-            for f_name in npy_files: embeddings.append(np.load(os.path.join(filepath, f_name), allow_pickle=True))
-            logger_datasets.info(f"Successfully loaded {len(embeddings)} embeddings from .npy files in {filepath}.")
-        except Exception as e:
-            logger_datasets.error(f"Error loading .npy files from directory {filepath}: {e}")
-            raise ValueError(f"Could not load embeddings from directory {filepath}: {e}")
+            if not npy_files: logger_datasets.warning(f"No .npy files in {filepath}."); return []
+            for f_name in npy_files:
+                item = np.load(os.path.join(filepath, f_name), allow_pickle=True)
+                processed_emb = _safe_to_float32_numpy_array_local(item, os.path.join(filepath, f_name), f_name, logger_datasets)
+                if processed_emb is not None: embeddings.append(processed_emb)
+            if embeddings: logger_datasets.info(f"Loaded {len(embeddings)} valid embeddings from .npy files in {filepath}.")
+            else: logger_datasets.warning(f"No valid embeddings found in .npy files in {filepath}.")
+        except Exception as e: logger_datasets.error(f"Error loading .npy from {filepath}: {e}"); raise ValueError(f"Could not load .npy from {filepath}: {e}") from e
     else:
-        logger_datasets.error(f"Unsupported file type: {file_extension} for file {filepath}")
-        raise ValueError(f"Unsupported file type: {file_extension}. Please use .npz, .hdf5, .h5, or a directory of .npy files.")
+        logger_datasets.error(f"Unsupported file type: {file_extension} for {filepath}")
+        raise ValueError(f"Unsupported file type: {file_extension}.")
     return embeddings
 
 class DeepSeekR1EmbeddingDataset(Dataset):
@@ -799,27 +1005,35 @@ class DeepSeekR1EmbeddingDataset(Dataset):
             self.embeddings_B = load_embeddings_from_file(embeddings_file_B)
         except Exception as e:
             logger_datasets.error(f"Failed to load embeddings during dataset initialization: {e}"); raise
-        if not self.embeddings_A: logger_datasets.warning(f"Embeddings file A ({embeddings_file_A}) resulted in an empty list.")
-        if not self.embeddings_B: logger_datasets.warning(f"Embeddings file B ({embeddings_file_B}) resulted in an empty list.")
-        if not self.embeddings_A and not self.embeddings_B: logger_datasets.error("Both embedding sources are empty. Dataset will be empty.")
-        elif not self.embeddings_A or not self.embeddings_B: logger_datasets.warning("One embedding source is empty.")
+
+        if not self.embeddings_A: logger_datasets.warning(f"Embeddings file A ({embeddings_file_A}) resulted in no valid embeddings.")
+        if not self.embeddings_B: logger_datasets.warning(f"Embeddings file B ({embeddings_file_B}) resulted in no valid embeddings.")
+        
+        if not self.embeddings_A and not self.embeddings_B: 
+            logger_datasets.error("Both embedding sources are empty or invalid. Dataset will be empty.")
+        elif not self.embeddings_A or not self.embeddings_B: 
+            logger_datasets.warning("One embedding source is empty or invalid.")
 
     def __len__(self) -> int:
         len_A = len(self.embeddings_A) if self.embeddings_A else 0
         len_B = len(self.embeddings_B) if self.embeddings_B else 0
-        if len_A == 0 and len_B == 0: return 0
-        return max(len_A, len_B)
+        # For Phase 2 (adversarial alignment), we typically need pairs.
+        # If lengths are mismatched, it's safer to use the minimum length to ensure pairs exist.
+        # Or, if one is empty, length should be 0.
+        if len_A == 0 or len_B == 0: # If either is empty, we can't form pairs for alignment.
+            return 0
+        return min(len_A, len_B) # Use min for paired data requirement
 
-    def __getitem__(self, idx: int) -> Dict[str, Union[np.ndarray, None]]:
-        len_A = len(self.embeddings_A) if self.embeddings_A else 0
-        len_B = len(self.embeddings_B) if self.embeddings_B else 0
-        if len_A == 0 and len_B == 0:
-            logger_datasets.warning("Attempting to get item from an empty dataset (both sources empty).")
-            return {'source_A': None, 'source_B': None}
-        embedding_A = self.embeddings_A[idx % len_A] if len_A > 0 else None
-        embedding_B = self.embeddings_B[idx % len_B] if len_B > 0 else None
-        if embedding_A is not None: embedding_A = np.asarray(embedding_A, dtype=np.float32)
-        if embedding_B is not None: embedding_B = np.asarray(embedding_B, dtype=np.float32)
+    def __getitem__(self, idx: int) -> Dict[str, np.ndarray]: # Return np.ndarray, None is problematic for collate
+        # __len__ should prevent idx out of bounds for paired data.
+        if not self.embeddings_A or not self.embeddings_B:
+            # This should not be reached if __len__ is correctly 0 when one is empty.
+            raise IndexError(f"Attempting to get item from a dataset where one or both embedding lists are empty. Index: {idx}")
+
+        embedding_A = self.embeddings_A[idx] # No modulo needed if using min length
+        embedding_B = self.embeddings_B[idx] # No modulo needed
+        
+        # Embeddings are already np.float32 from load_embeddings_from_file
         return {'source_A': embedding_A, 'source_B': embedding_B}
 
 # End of etp_datasets.py content
@@ -904,12 +1118,12 @@ class HAKMEMQController:
         if value<=min_val: return 0
         if value>=max_val: return num_bins-1
         bin_size=(max_val-min_val)/num_bins
-        if bin_size<=0: return num_bins//2
+        if bin_size<=0: return num_bins//2 # Should not happen with valid min/max/num_bins
         return min(int((value-min_val)/bin_size),num_bins-1)
 
     def _get_current_state_idx(self,current_loss_val:Optional[float])->int:
         if current_loss_val is not None: return self._discretize_value(current_loss_val,self.loss_min,self.loss_max,self.q_table_size)
-        return self.q_table_size//2
+        return self.q_table_size//2 # Default state if no loss provided
 
     def choose_action(self,current_loss_val:Optional[float]=None,params_with_grad:Optional[List[torch.nn.Parameter]]=None)->float:
         if params_with_grad: self.grad_stats.update(params_with_grad,self.current_lr)
@@ -947,7 +1161,7 @@ class HAKMEMQController:
 class RiemannianEnhancedSGD(optim.Optimizer):
     def __init__(self, params: Any, lr: float = 1e-3, q_learning_config: Optional[Dict[str,Any]] = None, q_logger_suffix: str = "", **kwargs: Any):
         param_list = list(params) if not isinstance(params, list) else params
-        if not param_list: param_list = [torch.nn.Parameter(torch.zeros(1))]
+        if not param_list: param_list = [torch.nn.Parameter(torch.zeros(1))] # Handle empty param list
         defaults = dict(lr=lr, **kwargs)
         super().__init__(param_list, defaults)
         self.q_controller: Optional[HAKMEMQController] = None
@@ -959,38 +1173,51 @@ class RiemannianEnhancedSGD(optim.Optimizer):
         loss: Optional[torch.Tensor] = None
         if closure is not None:
             with torch.enable_grad(): loss = closure()
+        
         params_with_grad_for_q = [p for group in self.param_groups for p in group['params'] if p.grad is not None]
         if self.q_controller:
             current_loss_val = loss.item() if loss is not None else None
             new_lr = self.q_controller.choose_action(current_loss_val=current_loss_val, params_with_grad=params_with_grad_for_q)
-            if abs(new_lr - self.param_groups[0]['lr']) > 1e-9 :
+            if abs(new_lr - self.param_groups[0]['lr']) > 1e-9 : # Check if LR actually changed
                  logger_optimizer_utils.info(f"RESGD ({self.q_controller.logger_suffix}) LR updated by Q-Ctrl to: {new_lr:.2e}")
                  for group in self.param_groups: group['lr'] = new_lr
+        
         for group in self.param_groups:
             lr_group = group['lr']
             for p in group['params']:
                 if p.grad is None: continue
                 grad = p.grad.data
                 if grad.is_sparse: raise RuntimeError('RiemannianSGD does not support sparse gradients for now.')
+                
                 if hasattr(p, 'manifold') and p.manifold is not None:
-                    manifold = p.manifold # type: Manifold (assuming this is a Manifold instance)
-                    p_on_manifold = p.data
-                    if hasattr(manifold, 'proj') and callable(manifold.proj): p_on_manifold = manifold.proj(p_on_manifold, group.get('c', getattr(manifold,'c_val',1.0))) # Pass curvature
+                    manifold: Manifold = p.manifold # type: ignore
+                    p_on_manifold = p.data # Current point on manifold
+                    # Project point p itself onto the manifold before further calculations
+                    if hasattr(manifold, 'proj') and callable(manifold.proj): 
+                        p_on_manifold = manifold.proj(p_on_manifold, group.get('c', getattr(manifold,'c_val',1.0))) # type: ignore
+                    
                     riemannian_grad: torch.Tensor
                     if hasattr(manifold, 'egrad2rgrad') and callable(manifold.egrad2rgrad):
                         curvature_val = group.get('c', getattr(manifold,'c_val',1.0)) # type: ignore
                         riemannian_grad = manifold.egrad2rgrad(p_on_manifold, grad, curvature_val)
                     else:
                         logger_optimizer_utils.warning(f"Param (shape: {p.shape}) has manifold but no 'egrad2rgrad'. Using Euclidean grad."); riemannian_grad = grad
-                    update_vec = -lr_group * riemannian_grad; new_p_val: torch.Tensor
+                    
+                    update_vec = -lr_group * riemannian_grad
+                    new_p_val: torch.Tensor
                     if hasattr(manifold, 'expmap') and callable(manifold.expmap):
                         curvature_val = group.get('c', getattr(manifold,'c_val',1.0)) # type: ignore
-                        new_p_val = manifold.expmap(p_on_manifold, update_vec, curvature_val) # Corrected from u,p to p,u for PoincareBall
+                        new_p_val = manifold.expmap(p_on_manifold, update_vec, curvature_val)
                     else:
                         logger_optimizer_utils.warning(f"Param (shape: {p.shape}) manifold no 'expmap'. Euclidean update."); new_p_val = p_on_manifold + update_vec
-                    if hasattr(manifold, 'proj') and callable(manifold.proj): p.data.copy_(manifold.proj(new_p_val, group.get('c', getattr(manifold,'c_val',1.0))))
-                    else: p.data.copy_(new_p_val)
-                else: p.data.add_(grad, alpha=-lr_group)
+                    
+                    # Project result of expmap back to ensure it's on manifold (numerical stability)
+                    if hasattr(manifold, 'proj') and callable(manifold.proj):
+                        p.data.copy_(manifold.proj(new_p_val, group.get('c', getattr(manifold,'c_val',1.0)))) # type: ignore
+                    else:
+                        p.data.copy_(new_p_val)
+                else: # Standard Euclidean update
+                    p.data.add_(grad, alpha=-lr_group)
         return loss
 
     def get_q_controller(self) -> Optional[HAKMEMQController]: return self.q_controller
@@ -1010,8 +1237,6 @@ class RiemannianEnhancedSGD(optim.Optimizer):
 # Content from: /draftPY/etp_phase2_ala/trainer_phase2.py
 # =====================================================================
 logger_trainer_phase2 = logging.getLogger("etp_trainer_phase2")
-# Imports from etp_common are now direct class usages since they are defined above.
-# _dqch_utils from optimizer_utils is now DEFAULT_CONFIG_QLEARN_HYBRID
 
 class ETPTrainerPhase2:
     def __init__(self,
@@ -1034,8 +1259,12 @@ class ETPTrainerPhase2:
                  q_config_discriminator: Optional[Dict[str, Any]] = None,
                  checkpoint_dir: str = "checkpoints_etp_phase2",
                  log_interval: int = 50, save_interval: int = 500, val_interval_epochs: int = 1,
-                 wandb_project: Optional[str] = None, wandb_run_name: Optional[str] = None,
-                 best_val_metric_name: str = "val_combined_loss", best_val_metric_higher_is_better: bool = False):
+                 wandb_project: Optional[str] = None, 
+                 wandb_run_name: Optional[str] = None,
+                 wandb_config_override: Optional[Dict[str, Any]] = None, # For passing full config from main
+                 wandb_run_id_to_resume: Optional[str] = None, # For resuming specific W&B run
+                 best_val_metric_name: str = "val_combined_loss", 
+                 best_val_metric_higher_is_better: bool = False):
 
         self.etp_sphere_model = etp_sphere_model.to(device)
         self.discriminator_model = discriminator_model.to(device)
@@ -1045,7 +1274,7 @@ class ETPTrainerPhase2:
         self.lambda_ala = lambda_ala; self.lambda_rec = lambda_rec; self.lambda_vsp = lambda_vsp
         self.device = device; self.epochs = epochs
         self.grad_accum_steps = grad_accum_steps if grad_accum_steps > 0 else 1
-        self.use_amp = use_amp if self.device.type == 'cuda' else False
+        self.use_amp = use_amp if self.device.type == 'cuda' else False 
         self.global_max_grad_norm = global_max_grad_norm if global_max_grad_norm > 0 else -1.0
         self.q_controller_enabled = q_controller_enabled
         _default_q_config_local = DEFAULT_CONFIG_QLEARN_HYBRID.copy()
@@ -1054,23 +1283,56 @@ class ETPTrainerPhase2:
         self.q_config_discriminator = q_config_discriminator if q_config_discriminator is not None else _default_q_config_local.copy()
         self.checkpoint_dir = Path(checkpoint_dir); self.log_interval = log_interval
         self.save_interval = save_interval; self.val_interval_epochs = val_interval_epochs
-        self.current_epoch = 0; self.global_step = 0
-        self.best_val_metric = float('-inf') if best_val_metric_higher_is_better else float('inf')
+        
+        self.best_val_metric_initial_value = float('-inf') if best_val_metric_higher_is_better else float('inf')
+        self.best_val_metric = self.best_val_metric_initial_value
         self.best_val_metric_name = best_val_metric_name; self.best_val_metric_higher_is_better = best_val_metric_higher_is_better
+        
+        self.current_epoch = 0 
+        self.global_step = 0   
+
         self.wandb_run = None
-        if wandb_project and WANDB_AVAILABLE and wandb is not None: # Check WANDB_AVAILABLE
+        self.wandb_project_name = wandb_project # Store for potential resume
+        self.wandb_run_name_to_use = wandb_run_name # Store for potential resume
+
+        if self.wandb_project_name and WANDB_AVAILABLE and wandb is not None:
+            wandb_init_kwargs = {
+                "project": self.wandb_project_name,
+                "name": self.wandb_run_name_to_use,
+                "config": wandb_config_override if wandb_config_override else self._get_config_dict(),
+                "reinit": True, 
+            }
+            if wandb_run_id_to_resume:
+                logger_trainer_phase2.info(f"Attempting to resume W&B run with ID: {wandb_run_id_to_resume}")
+                wandb_init_kwargs["id"] = wandb_run_id_to_resume
+                wandb_init_kwargs["resume"] = "allow" 
+            
             try:
-                self.wandb_run = wandb.init(project=wandb_project, name=wandb_run_name, config=self._get_config_dict()) # type: ignore
+                self.wandb_run = wandb.init(**wandb_init_kwargs) # type: ignore
                 if self.wandb_run:
-                    wandb.watch(self.etp_sphere_model, log="all", log_freq=max(1,log_interval*5)) # type: ignore
-                    wandb.watch(self.discriminator_model, log="all", log_freq=max(1,log_interval*5)) # type: ignore
-            except Exception as e_wandb_ph2: logger_trainer_phase2.error(f"WandB init failed for P2 Trainer: {e_wandb_ph2}. Disabling WandB.") ; self.wandb_run = None
+                    logger_trainer_phase2.info(f"W&B run successfully initialized/resumed. Run ID: {self.wandb_run.id}, Name: {self.wandb_run.name}. View at: {self.wandb_run.url}")
+                    wandb.watch(self.etp_sphere_model, log="all", log_freq=max(1,self.log_interval*5)) # type: ignore
+                    wandb.watch(self.discriminator_model, log="all", log_freq=max(1,self.log_interval*5)) # type: ignore
+                else: 
+                    logger_trainer_phase2.error("W&B init returned None without raising an exception. W&B logging will be disabled.")
+            except Exception as e_wandb_ph2: 
+                logger_trainer_phase2.error(f"W&B critical initialization failed: {e_wandb_ph2}. W&B logging will be disabled.", exc_info=True) 
+                self.wandb_run = None 
+        elif not self.wandb_project_name:
+            logger_trainer_phase2.info("W&B project not specified. W&B logging will be disabled.")
+        elif not WANDB_AVAILABLE:
+             logger_trainer_phase2.info("W&B library not available. W&B logging will be disabled.")
+        
         self._setup_optimizers_and_q_controllers()
-        self.scaler_sphere = GradScaler(enabled=self.use_amp); self.scaler_discriminator = GradScaler(enabled=self.use_amp)
+        
+        self.scaler_sphere = torch.amp.GradScaler(enabled=self.use_amp)
+        self.scaler_discriminator = torch.amp.GradScaler(enabled=self.use_amp)
+        
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         logger_trainer_phase2.info(f"ETPTrainerPhase2 initialized. Device: {self.device}, AMP: {self.use_amp}")
 
     def _get_config_dict(self) -> Dict[str, Any]:
+        # This is a minimal config used if a more comprehensive one isn't passed from main
         return {"phase": 2, "lr_sphere_wubu_core": self.lr_sphere_wubu_core, "lr_sphere_mlps": self.lr_sphere_mlps,
                 "lr_discriminator": self.lr_discriminator, "lambda_ala": self.lambda_ala, "lambda_rec": self.lambda_rec,
                 "lambda_vsp": self.lambda_vsp, "epochs": self.epochs, "grad_accum_steps": self.grad_accum_steps,
@@ -1082,18 +1344,34 @@ class ETPTrainerPhase2:
         wubu_core_params_ids = set(id(p) for p in self.etp_sphere_model.wubu_core.parameters())
         wubu_core_params_list = [p for p in self.etp_sphere_model.wubu_core.parameters() if p.requires_grad]
         mlp_params_list = [p for n, p in self.etp_sphere_model.named_parameters() if p.requires_grad and id(p) not in wubu_core_params_ids]
+        
         self.q_controllers: Dict[str, Optional[HAKMEMQController]] = {"sphere_wubu_core": None, "sphere_mlps": None, "discriminator": None}
+        
+        dummy_param_wubu = nn.Parameter(torch.zeros(1, device=self.device)) if not wubu_core_params_list else None
         self.optimizer_sphere_wubu_core = RiemannianEnhancedSGD(
-            wubu_core_params_list if wubu_core_params_list else [nn.Parameter(torch.zeros(1))], lr=self.lr_sphere_wubu_core,
+            wubu_core_params_list if wubu_core_params_list else [dummy_param_wubu], 
+            lr=self.lr_sphere_wubu_core,
             q_learning_config=self.q_config_sphere_wubu_core if self.q_controller_enabled else None,
-            optimizer_type="generator_wubu_core_phase2", q_logger_suffix="SphereWuBuCoreP2", **self.optimizer_kwargs_wubu_core) # type: ignore
+            q_logger_suffix="SphereWuBuCoreP2", **self.optimizer_kwargs_wubu_core) 
+        
         if self.q_controller_enabled and hasattr(self.optimizer_sphere_wubu_core, 'get_q_controller'):
             self.q_controllers["sphere_wubu_core"] = self.optimizer_sphere_wubu_core.get_q_controller()
-        self.optimizer_sphere_mlps = optim.AdamW(mlp_params_list if mlp_params_list else [nn.Parameter(torch.zeros(1))], lr=self.lr_sphere_mlps, **self.optimizer_kwargs_mlps)
-        if self.q_controller_enabled: self.q_controllers["sphere_mlps"] = HAKMEMQController(initial_lr=self.lr_sphere_mlps, config=self.q_config_sphere_mlps, logger_suffix="SphereMLPsP2")
+        
+        dummy_param_mlp = nn.Parameter(torch.zeros(1, device=self.device)) if not mlp_params_list else None
+        self.optimizer_sphere_mlps = optim.AdamW(
+            mlp_params_list if mlp_params_list else [dummy_param_mlp], 
+            lr=self.lr_sphere_mlps, **self.optimizer_kwargs_mlps)
+        if self.q_controller_enabled: 
+            self.q_controllers["sphere_mlps"] = HAKMEMQController(initial_lr=self.lr_sphere_mlps, config=self.q_config_sphere_mlps, logger_suffix="SphereMLPsP2")
+        
         disc_params_list = list(self.discriminator_model.parameters())
-        self.optimizer_discriminator = optim.AdamW(disc_params_list if disc_params_list else [nn.Parameter(torch.zeros(1))], lr=self.lr_discriminator, **self.optimizer_kwargs_discriminator)
-        if self.q_controller_enabled: self.q_controllers["discriminator"] = HAKMEMQController(initial_lr=self.lr_discriminator, config=self.q_config_discriminator, logger_suffix="DiscriminatorP2")
+        dummy_param_disc = nn.Parameter(torch.zeros(1, device=self.device)) if not disc_params_list else None
+        self.optimizer_discriminator = optim.AdamW(
+            disc_params_list if disc_params_list else [dummy_param_disc], 
+            lr=self.lr_discriminator, **self.optimizer_kwargs_discriminator)
+        if self.q_controller_enabled: 
+            self.q_controllers["discriminator"] = HAKMEMQController(initial_lr=self.lr_discriminator, config=self.q_config_discriminator, logger_suffix="DiscriminatorP2")
+        
         logger_trainer_phase2.info("Phase 2 Optimizers and Q-Controllers (if specified) set up.")
 
     def _get_q_controller_for_optimizer(self, optimizer_name: str) -> Optional[HAKMEMQController]: return self.q_controllers.get(optimizer_name)
@@ -1103,144 +1381,367 @@ class ETPTrainerPhase2:
         embeddings_B = batch['source_B'].to(self.device, non_blocking=True)
         raw_losses_dict: Dict[str, float] = {}; loss_d_tensor: Optional[torch.Tensor] = None; loss_g_total_tensor: Optional[torch.Tensor] = None
 
+        # Train Discriminator
         self.etp_sphere_model.eval(); self.discriminator_model.train()
         for param in self.etp_sphere_model.parameters(): param.requires_grad = False
         for param in self.discriminator_model.parameters(): param.requires_grad = True
-        with torch.cuda.amp.autocast(enabled=self.use_amp):
+        
+        autocast_dtype = torch.bfloat16 if self.device.type == 'cuda' and torch.cuda.is_bf16_supported() else torch.float16
+        with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp, dtype=autocast_dtype):
             latents_A_d = self.etp_sphere_model.get_latent(embeddings_A).detach()
             latents_B_d = self.etp_sphere_model.get_latent(embeddings_B).detach()
-            d_output_A = self.discriminator_model(latents_A_d); d_output_B = self.discriminator_model(latents_B_d)
+            d_output_A = self.discriminator_model(latents_A_d)
+            d_output_B = self.discriminator_model(latents_B_d)
             loss_d_tensor = calculate_adversarial_latent_alignment_loss_discriminator(d_output_A, d_output_B)
         if loss_d_tensor is not None: raw_losses_dict['loss_d_phase2'] = loss_d_tensor.item()
 
+        # Train Generator (ETP Sphere Model)
         self.etp_sphere_model.train(); self.discriminator_model.eval()
         for param in self.etp_sphere_model.parameters(): param.requires_grad = True
         for param in self.discriminator_model.parameters(): param.requires_grad = False
-        with torch.cuda.amp.autocast(enabled=self.use_amp):
-            latents_A_for_g = self.etp_sphere_model.get_latent(embeddings_A); latents_B_for_g = self.etp_sphere_model.get_latent(embeddings_B)
-            d_output_A_for_g = self.discriminator_model(latents_A_for_g); d_output_B_for_g = self.discriminator_model(latents_B_for_g)
+        
+        with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp, dtype=autocast_dtype):
+            latents_A_for_g = self.etp_sphere_model.get_latent(embeddings_A)
+            latents_B_for_g = self.etp_sphere_model.get_latent(embeddings_B)
+            d_output_A_for_g = self.discriminator_model(latents_A_for_g)
+            d_output_B_for_g = self.discriminator_model(latents_B_for_g)
+            
             loss_g_ala_tensor = calculate_adversarial_latent_alignment_loss_generator(d_output_A_for_g, d_output_B_for_g)
-            reconstructed_A = self.etp_sphere_model(embeddings_A); loss_rec_tensor = calculate_reconstruction_loss(reconstructed_A, embeddings_A)
+            
+            reconstructed_A = self.etp_sphere_model(embeddings_A)
+            loss_rec_tensor = calculate_reconstruction_loss(reconstructed_A, embeddings_A)
+            
             loss_vsp_tensor = calculate_vector_space_preservation_loss(embeddings_A, latents_A_for_g)
-            loss_g_total_tensor = (self.lambda_ala * loss_g_ala_tensor) + (self.lambda_rec * loss_rec_tensor) + (self.lambda_vsp * loss_vsp_tensor)
+            
+            loss_g_total_tensor = (self.lambda_ala * loss_g_ala_tensor) + \
+                                  (self.lambda_rec * loss_rec_tensor) + \
+                                  (self.lambda_vsp * loss_vsp_tensor)
+                                  
         if loss_g_ala_tensor is not None: raw_losses_dict['loss_g_ala_phase2'] = loss_g_ala_tensor.item()
         if loss_rec_tensor is not None: raw_losses_dict['loss_rec_phase2'] = loss_rec_tensor.item()
         if loss_vsp_tensor is not None: raw_losses_dict['loss_vsp_phase2'] = loss_vsp_tensor.item()
         if loss_g_total_tensor is not None: raw_losses_dict['loss_g_total_phase2'] = loss_g_total_tensor.item()
+        
         for param in self.etp_sphere_model.parameters(): param.requires_grad = True
         for param in self.discriminator_model.parameters(): param.requires_grad = True
+        
         return raw_losses_dict, loss_d_tensor, loss_g_total_tensor
 
     def train_epoch(self) -> Dict[str,float]:
         epoch_losses_sum = defaultdict(float); num_batches_this_epoch = 0; batch_times: List[float] = []
-        self.optimizer_discriminator.zero_grad(set_to_none=True); self.optimizer_sphere_wubu_core.zero_grad(set_to_none=True); self.optimizer_sphere_mlps.zero_grad(set_to_none=True)
-        for batch_idx, batch_data in enumerate(self.train_loader): # type: ignore
+        logger_trainer_phase2.info(f"--- Starting train_epoch {self.current_epoch + 1} ---")
+        self.optimizer_discriminator.zero_grad(set_to_none=True)
+        self.optimizer_sphere_wubu_core.zero_grad(set_to_none=True)
+        self.optimizer_sphere_mlps.zero_grad(set_to_none=True)
+        
+        for batch_idx, batch_data in enumerate(self.train_loader): 
             start_time = time.time()
-            step_raw_losses, loss_d_tensor, loss_g_total_tensor = self._train_step(batch_data) # type: ignore
-            if loss_d_tensor is not None: self.scaler_discriminator.scale(loss_d_tensor / self.grad_accum_steps).backward() # type: ignore
-            if loss_g_total_tensor is not None: self.scaler_sphere.scale(loss_g_total_tensor / self.grad_accum_steps).backward() # type: ignore
+            
+            valid_batch_data = {k: v for k, v in batch_data.items() if v is not None}
+            if 'source_A' not in valid_batch_data or 'source_B' not in valid_batch_data :
+                logger_trainer_phase2.warning(f"Epoch {self.current_epoch+1}, Batch {batch_idx+1}: Skipping due to missing source_A or source_B data.")
+                continue
+            
+            logger_trainer_phase2.debug(f"Epoch {self.current_epoch+1}, Batch {batch_idx+1}/{len(self.train_loader)}: Processing batch.")
+
+            step_raw_losses, loss_d_tensor, loss_g_total_tensor = self._train_step(valid_batch_data) 
+            
+            if loss_d_tensor is not None: 
+                self.scaler_discriminator.scale(loss_d_tensor / self.grad_accum_steps).backward()
+            if loss_g_total_tensor is not None: 
+                self.scaler_sphere.scale(loss_g_total_tensor / self.grad_accum_steps).backward()
+            
             for k, v in step_raw_losses.items(): epoch_losses_sum[k] += v
             num_batches_this_epoch +=1; batch_times.append(time.time() - start_time)
+            
             if (batch_idx + 1) % self.grad_accum_steps == 0:
                 if self.q_controller_enabled:
                     for opt_name, current_opt in [("sphere_mlps",self.optimizer_sphere_mlps), ("discriminator",self.optimizer_discriminator)]:
                         qc = self._get_q_controller_for_optimizer(opt_name)
                         if qc:
                             loss_key = 'loss_g_total_phase2' if "sphere" in opt_name else 'loss_d_phase2'
-                            new_lr = qc.choose_action(current_loss_val=step_raw_losses.get(loss_key))
-                            if new_lr != current_opt.param_groups[0]['lr']: # type: ignore
+                            current_opt_params = [p for group in current_opt.param_groups for p in group['params'] if p.grad is not None]
+                            new_lr = qc.choose_action(current_loss_val=step_raw_losses.get(loss_key), params_with_grad=current_opt_params)
+                            if new_lr != current_opt.param_groups[0]['lr']: 
                                 logger_trainer_phase2.info(f"QController ({qc.logger_suffix}): Updating LR for {opt_name} to {new_lr:.2e}")
-                                for pg in current_opt.param_groups: pg['lr'] = new_lr # type: ignore
+                                for pg in current_opt.param_groups: pg['lr'] = new_lr
+                
                 if self.global_max_grad_norm > 0:
-                    self.scaler_discriminator.unscale_(self.optimizer_discriminator); self.scaler_sphere.unscale_(self.optimizer_sphere_wubu_core); self.scaler_sphere.unscale_(self.optimizer_sphere_mlps)
+                    self.scaler_discriminator.unscale_(self.optimizer_discriminator)
+                    self.scaler_sphere.unscale_(self.optimizer_sphere_wubu_core)
+                    self.scaler_sphere.unscale_(self.optimizer_sphere_mlps)
                     torch.nn.utils.clip_grad_norm_(self.discriminator_model.parameters(), self.global_max_grad_norm)
                     torch.nn.utils.clip_grad_norm_(self.etp_sphere_model.parameters(), self.global_max_grad_norm)
-                self.scaler_discriminator.step(self.optimizer_discriminator); self.scaler_sphere.step(self.optimizer_sphere_wubu_core); self.scaler_sphere.step(self.optimizer_sphere_mlps)
+                
+                self.scaler_discriminator.step(self.optimizer_discriminator)
+                self.scaler_sphere.step(self.optimizer_sphere_wubu_core)
+                self.scaler_sphere.step(self.optimizer_sphere_mlps)
+                
                 self.scaler_discriminator.update(); self.scaler_sphere.update()
-                self.optimizer_discriminator.zero_grad(set_to_none=True); self.optimizer_sphere_wubu_core.zero_grad(set_to_none=True); self.optimizer_sphere_mlps.zero_grad(set_to_none=True)
+                
+                self.optimizer_discriminator.zero_grad(set_to_none=True)
+                self.optimizer_sphere_wubu_core.zero_grad(set_to_none=True)
+                self.optimizer_sphere_mlps.zero_grad(set_to_none=True)
+                
                 self.global_step += 1
+                logger_trainer_phase2.debug(f"Epoch {self.current_epoch+1}, Global Step {self.global_step}: Optimizer step done.")
+
                 if self.log_interval > 0 and self.global_step % self.log_interval == 0:
                     avg_bt = sum(batch_times)/len(batch_times) if batch_times else 0; batch_times=[]
-                    avg_losses = {f"train_p2/{k}": v_sum/num_batches_this_epoch for k,v_sum in epoch_losses_sum.items()}
-                    log_metrics = {**avg_losses, "train_p2/lr_wubu_core": self.optimizer_sphere_wubu_core.param_groups[0]['lr'], "train_p2/lr_mlps": self.optimizer_sphere_mlps.param_groups[0]['lr'], "train_p2/lr_disc": self.optimizer_discriminator.param_groups[0]['lr'], "train_p2/avg_batch_time_ms": avg_bt*1000, "progress/global_step": self.global_step, "progress/epoch": self.current_epoch+1}
-                    logger_trainer_phase2.info(f"Epoch {self.current_epoch+1} | Step {self.global_step} | " + " | ".join([f"{k.split('/')[-1]}:{v:.4f}" for k,v in avg_losses.items() if v is not None]))
-                    if self.wandb_run: self.wandb_run.log(log_metrics, step=self.global_step) # type: ignore
-                if self.save_interval > 0 and self.global_step % self.save_interval == 0: self._save_checkpoint(is_best=False, reason="interval_step_p2")
-        self.current_epoch += 1
-        return {k: v / num_batches_this_epoch if num_batches_this_epoch > 0 else 0.0 for k,v in epoch_losses_sum.items()}
+                    current_avg_batches = num_batches_this_epoch if num_batches_this_epoch > 0 else 1 
+                    avg_losses_for_log = {f"train_p2/{k}": v_sum/current_avg_batches for k,v_sum in epoch_losses_sum.items()}
+                    
+                    console_log_str = f"Epoch {self.current_epoch+1} | Step {self.global_step}/{len(self.train_loader)} | " + \
+                                      " | ".join([f"{k.split('/')[-1]}:{v:.4f}" for k,v in avg_losses_for_log.items() if v is not None]) + \
+                                      f" | LR G_core:{self.optimizer_sphere_wubu_core.param_groups[0]['lr']:.2e}" + \
+                                      f" | LR G_mlp:{self.optimizer_sphere_mlps.param_groups[0]['lr']:.2e}" + \
+                                      f" | LR D:{self.optimizer_discriminator.param_groups[0]['lr']:.2e}"
+                    logger_trainer_phase2.info(console_log_str)
+
+                    if self.wandb_run:
+                        log_metrics_wandb = {**avg_losses_for_log, 
+                                       "train_p2/lr_wubu_core": self.optimizer_sphere_wubu_core.param_groups[0]['lr'], 
+                                       "train_p2/lr_mlps": self.optimizer_sphere_mlps.param_groups[0]['lr'], 
+                                       "train_p2/lr_disc": self.optimizer_discriminator.param_groups[0]['lr'], 
+                                       "train_p2/avg_batch_time_ms": avg_bt*1000, 
+                                       "progress/global_step": self.global_step, 
+                                       "progress/epoch": self.current_epoch+1}
+                        logger_trainer_phase2.info(f"W&B LOGGING (train) @ Global Step {self.global_step}: Attempting to log metrics.")
+                        self.wandb_run.log(log_metrics_wandb, step=self.global_step)
+                    else:
+                        logger_trainer_phase2.info(f"W&B run not active @ Global Step {self.global_step}, skipping W&B train log.")
+                
+                if self.save_interval > 0 and self.global_step % self.save_interval == 0: 
+                    self._save_checkpoint(is_best=False, reason="interval_step_p2")
+        
+        final_avg_losses = {k: v / num_batches_this_epoch if num_batches_this_epoch > 0 else 0.0 for k,v in epoch_losses_sum.items()}
+        logger_trainer_phase2.info(f"--- Finished train_epoch {self.current_epoch + 1}. Avg epoch losses: { {k: f'{v:.4f}' for k,v in final_avg_losses.items()} } ---")
+        self.current_epoch += 1 
+        return final_avg_losses
 
     def validate_epoch(self) -> Dict[str, float]:
-        if not self.val_loader: return {"val_p2_no_loader": 0.0}
+        if not self.val_loader: 
+            logger_trainer_phase2.info("Validation: No val_loader provided.")
+            return {"val_p2_no_loader": 0.0}
+        
+        logger_trainer_phase2.info(f"--- Starting validate_epoch for Epoch {self.current_epoch} (after training epoch {self.current_epoch}) ---")
         self.etp_sphere_model.eval(); self.discriminator_model.eval()
         val_losses = defaultdict(float); num_val_batches = 0
-        val_losses.update({'val_p2_mmd_latent':0.0, 'val_p2_semantic_coherence':0.0, 'val_p2_latent_viz':0.0, 'val_p2_wubu_geom':0.0})
+        val_losses.update({'val_p2_loss_rec': 0.0, 'val_p2_loss_vsp': 0.0, 'val_p2_disc_accuracy': 0.0})
+        
+        autocast_dtype = torch.bfloat16 if self.device.type == 'cuda' and torch.cuda.is_bf16_supported() else torch.float16
         with torch.no_grad():
-            for batch_data in self.val_loader: # type: ignore
-                emb_A=batch_data['source_A'].to(self.device,non_blocking=True); emb_B=batch_data['source_B'].to(self.device,non_blocking=True) # type: ignore
-                with torch.cuda.amp.autocast(enabled=self.use_amp):
-                    recon_A=self.etp_sphere_model(emb_A); lat_A=self.etp_sphere_model.get_latent(emb_A)
+            for batch_idx, batch_data in enumerate(self.val_loader): 
+                valid_batch_data = {k: v for k, v in batch_data.items() if v is not None}
+                if 'source_A' not in valid_batch_data or 'source_B' not in valid_batch_data:
+                    logger_trainer_phase2.warning(f"Validation Epoch {self.current_epoch}, Batch {batch_idx+1}: Skipping due to missing source_A or source_B data.")
+                    continue
+
+                emb_A=valid_batch_data['source_A'].to(self.device,non_blocking=True)
+                emb_B=valid_batch_data['source_B'].to(self.device,non_blocking=True)
+                
+                with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp, dtype=autocast_dtype):
+                    recon_A=self.etp_sphere_model(emb_A)
+                    lat_A=self.etp_sphere_model.get_latent(emb_A)
                     val_losses['val_p2_loss_rec'] += calculate_reconstruction_loss(recon_A, emb_A).item()
                     val_losses['val_p2_loss_vsp'] += calculate_vector_space_preservation_loss(emb_A, lat_A).item()
-                    lat_B=self.etp_sphere_model.get_latent(emb_B); d_out_A=self.discriminator_model(lat_A); d_out_B=self.discriminator_model(lat_B)
-                    preds_A=(torch.sigmoid(d_out_A)>0.5).float(); preds_B=(torch.sigmoid(d_out_B)<0.5).float()
-                    val_losses['val_p2_disc_accuracy'] += (preds_A.sum()+preds_B.sum())/(len(preds_A)+len(preds_B)+1e-8) # .item() removed for tensor ops
+                    
+                    lat_B=self.etp_sphere_model.get_latent(emb_B)
+                    d_out_A=self.discriminator_model(lat_A)
+                    d_out_B=self.discriminator_model(lat_B)
+                    
+                    preds_A_correct = (torch.sigmoid(d_out_A) > 0.5).float() 
+                    preds_B_correct = (torch.sigmoid(d_out_B) < 0.5).float() 
+                    val_losses['val_p2_disc_accuracy'] += (preds_A_correct.sum() + preds_B_correct.sum()).item() / (len(preds_A_correct) + len(preds_B_correct) + EPS)
                 num_val_batches+=1
+        
         avg_val = {k:v/num_val_batches if num_val_batches>0 else 0.0 for k,v in val_losses.items()}
-        avg_val['val_p2_combined_loss'] = avg_val.get('val_p2_loss_rec',0.0) + avg_val.get('val_p2_loss_vsp',0.0) - avg_val.get('val_p2_disc_accuracy',0.0)
-        if self.best_val_metric_name not in avg_val: avg_val[self.best_val_metric_name] = avg_val.get('val_p2_loss_rec', float('inf') if not self.best_val_metric_higher_is_better else float('-inf'))
-        logger_trainer_phase2.info(f"Validation P2 Epoch {self.current_epoch}: " + " | ".join([f"{k}:{v:.4f}" for k,v in avg_val.items()]))
+        avg_val['val_p2_combined_loss'] = avg_val.get('val_p2_loss_rec',0.0) + \
+                                          avg_val.get('val_p2_loss_vsp',0.0) - \
+                                          avg_val.get('val_p2_disc_accuracy',0.0) 
+
+        if self.best_val_metric_name not in avg_val: 
+            avg_val[self.best_val_metric_name] = avg_val.get('val_p2_combined_loss', float('inf') if not self.best_val_metric_higher_is_better else float('-inf'))
+        
+        logger_trainer_phase2.info(f"Validation P2 Results Epoch {self.current_epoch}: " + " | ".join([f"{k}:{v:.4f}" for k,v in avg_val.items()]))
         if self.wandb_run:
-            wandb_log = {f"val_p2/{k.replace('val_p2_','')}":v for k,v in avg_val.items()}; wandb_log["progress/epoch"] = self.current_epoch
-            self.wandb_run.log(wandb_log, step=self.global_step) # type: ignore
+            wandb_log_val = {f"val_p2/{k.replace('val_p2_','')}":v for k,v in avg_val.items()}
+            wandb_log_val["progress/epoch"] = self.current_epoch 
+            logger_trainer_phase2.info(f"W&B LOGGING (val) @ Global Step {self.global_step}: Attempting to log metrics.")
+            self.wandb_run.log(wandb_log_val, step=self.global_step)
+        else:
+            logger_trainer_phase2.info(f"W&B run not active @ Global Step {self.global_step}, skipping W&B val log.")
         return avg_val
 
     def _save_checkpoint(self, is_best: bool = False, reason: str = "") -> None:
-        name = ["ckpt_p2", reason] if reason else ["ckpt_p2"];
-        if is_best: name.append("best")
-        name.extend([f"ep{self.current_epoch}",f"gs{self.global_step}"]); fn="_".join(filter(None,name))+".pth.tar"; fp=self.checkpoint_dir/fn
-        state = {'phase':2, 'epoch':self.current_epoch, 'global_step':self.global_step, 'model_state':self.etp_sphere_model.state_dict(),
-                 'disc_state':self.discriminator_model.state_dict(), 'opt_wubu_state':self.optimizer_sphere_wubu_core.state_dict(),
-                 'opt_mlp_state':self.optimizer_sphere_mlps.state_dict(), 'opt_disc_state':self.optimizer_discriminator.state_dict(),
-                 'scaler_sphere_state':self.scaler_sphere.state_dict(), 'scaler_disc_state':self.scaler_discriminator.state_dict(),
-                 'best_val_metric':self.best_val_metric, 'best_val_metric_name':self.best_val_metric_name,
-                 'best_val_metric_higher_is_better':self.best_val_metric_higher_is_better}
-        for qc_n, qc_i in self.q_controllers.items():
-            if qc_i: state[f'q_ctrl_{qc_n}_state'] = qc_i.state_dict()
-        logger_trainer_phase2.info(f"Saving Phase 2 checkpoint to {fp} (CODING-ONLY: Actual save commented out).")
-        # torch.save(state, fp) # Actual save
+        name_parts = ["checkpoint_p2", reason] if reason else ["checkpoint_p2"]
+        if is_best: name_parts.append("best")
+        name_parts.extend([f"epoch{self.current_epoch}", f"step{self.global_step}"])
+        filename = "_".join(filter(None, name_parts)) + ".pth.tar"
+        filepath = self.checkpoint_dir / filename
+        
+        checkpoint_data: Dict[str, Any] = {
+            'phase': 2, 'epoch': self.current_epoch, 'global_step': self.global_step,
+            'etp_sphere_model_state_dict': self.etp_sphere_model.state_dict(),
+            'discriminator_model_state_dict': self.discriminator_model.state_dict(),
+            'optimizer_sphere_wubu_core_state_dict': self.optimizer_sphere_wubu_core.state_dict(),
+            'optimizer_sphere_mlps_state_dict': self.optimizer_sphere_mlps.state_dict(),
+            'optimizer_discriminator_state_dict': self.optimizer_discriminator.state_dict(),
+            'scaler_sphere_state_dict': self.scaler_sphere.state_dict(),
+            'scaler_discriminator_state_dict': self.scaler_discriminator.state_dict(),
+            'best_val_metric': self.best_val_metric,
+            'best_val_metric_name': self.best_val_metric_name,
+            'best_val_metric_higher_is_better': self.best_val_metric_higher_is_better,
+            'wandb_run_id': self.wandb_run.id if self.wandb_run and hasattr(self.wandb_run, 'id') else None
+        }
+        for qc_name, qc_instance in self.q_controllers.items():
+            if qc_instance: checkpoint_data[f'q_controller_{qc_name}_state_dict'] = qc_instance.state_dict()
+        
+        try:
+            torch.save(checkpoint_data, filepath)
+            logger_trainer_phase2.info(f"Saving Phase 2 checkpoint to {filepath}")
+            if self.wandb_run and WANDB_AVAILABLE and wandb is not None:
+                aliases = ["latest", f"ep{self.current_epoch}"]
+                if is_best: aliases.append("best")
+                if reason: aliases.append(reason.replace(" ", "_").lower())
+                
+                ckpt_artifact_name = f"ckpt_p2_ep{self.current_epoch}_gs{self.global_step}"
+                try:
+                    artifact = wandb.Artifact(ckpt_artifact_name, type="model_checkpoint", metadata=self._get_config_dict()) # type: ignore
+                    artifact.add_file(str(filepath))
+                    self.wandb_run.log_artifact(artifact, aliases=aliases) # type: ignore
+                    logger_trainer_phase2.info(f"Logged checkpoint artifact to W&B: {ckpt_artifact_name} with aliases: {aliases}")
+                except Exception as e_art:
+                    logger_trainer_phase2.error(f"Failed to log checkpoint artifact to W&B: {e_art}")
 
-    def load_checkpoint(self, path: str, load_optimizers: bool=True, load_q_controllers: bool=True) -> None:
-        fp=Path(path); logger_trainer_phase2.info(f"Attempting to load Phase 2 checkpoint from {fp} (CODING-ONLY: No actual file read).")
-        # Dummy checkpoint structure for CODING-ONLY execution
-        ckpt: Dict[str,Any] = {'phase':1, 'epoch':0, 'global_step':0, 'best_val_metric':float('inf')}
-        # self.etp_sphere_model.load_state_dict(ckpt.get('model_state', {}))
-        # self.discriminator_model.load_state_dict(ckpt.get('disc_state', {}))
-        # ... (conceptual load of other states)
-        self.current_epoch=ckpt.get('epoch',0); self.global_step=ckpt.get('global_step',0)
-        self.best_val_metric=ckpt.get('best_val_metric', self.best_val_metric)
-        if load_q_controllers:
-            for qc_n, qc_i in self.q_controllers.items():
-                if qc_i and f'q_ctrl_{qc_n}_state' in ckpt: pass # Conceptual: qc_i.load_state_dict(...)
-        logger_trainer_phase2.info(f"Phase 2 Checkpoint conceptually loaded. Resuming from epoch {self.current_epoch+1}, global_step {self.global_step}.")
+        except Exception as e:
+            logger_trainer_phase2.error(f"Failed to save Phase 2 checkpoint: {e}")
+
+    def load_checkpoint(self, path: str, load_optimizers: bool=True, load_q_controllers: bool=True, load_scalers: bool=True) -> None:
+        filepath = Path(path)
+        if not filepath.exists():
+            logger_trainer_phase2.warning(f"Checkpoint file not found: {filepath}. Will proceed without loading.")
+            return
+
+        logger_trainer_phase2.info(f"Attempting to load checkpoint from {filepath}")
+        try:
+            # Consider weights_only=True if loading from untrusted source. For own checkpoints, False is fine.
+            ckpt: Dict[str, Any] = torch.load(filepath, map_location=self.device, weights_only=False) 
+        except Exception as e:
+            logger_trainer_phase2.error(f"Error loading checkpoint file {filepath}: {e}", exc_info=True); return
+
+        loaded_phase = ckpt.get('phase', None) 
+
+        if loaded_phase == 1:
+            logger_trainer_phase2.info("Loading ETP Sphere Model from a Phase 1 checkpoint for Phase 2 training.")
+            if 'etp_sphere_model_state_dict' in ckpt:
+                try:
+                    self.etp_sphere_model.load_state_dict(ckpt['etp_sphere_model_state_dict'])
+                    logger_trainer_phase2.info("Successfully loaded ETP Sphere Model weights from Phase 1 checkpoint.")
+                except RuntimeError as e_load:
+                    logger_trainer_phase2.error(f"RuntimeError loading ETP Sphere Model from Phase 1 ckpt (likely model structure mismatch): {e_load}", exc_info=True)
+            else:
+                logger_trainer_phase2.warning("Phase 1 checkpoint does not contain 'etp_sphere_model_state_dict'. Sphere model not loaded.")
+            
+            logger_trainer_phase2.info("Resetting epoch, global step, best validation metric. Optimizers, scalers, and Q-controllers will be fresh for Phase 2.")
+            self.current_epoch = 0
+            self.global_step = 0
+            self.best_val_metric = self.best_val_metric_initial_value
+
+        elif loaded_phase == 2:
+            logger_trainer_phase2.info("Loading from a Phase 2 checkpoint.")
+            if 'etp_sphere_model_state_dict' in ckpt: self.etp_sphere_model.load_state_dict(ckpt['etp_sphere_model_state_dict']); logger_trainer_phase2.info("Loaded ETP Sphere Model state.")
+            if 'discriminator_model_state_dict' in ckpt: self.discriminator_model.load_state_dict(ckpt['discriminator_model_state_dict']); logger_trainer_phase2.info("Loaded Discriminator Model state.")
+
+            if load_optimizers:
+                if 'optimizer_sphere_wubu_core_state_dict' in ckpt: self.optimizer_sphere_wubu_core.load_state_dict(ckpt['optimizer_sphere_wubu_core_state_dict']); logger_trainer_phase2.info("Loaded Sphere WuBu Core optimizer state.")
+                if 'optimizer_sphere_mlps_state_dict' in ckpt: self.optimizer_sphere_mlps.load_state_dict(ckpt['optimizer_sphere_mlps_state_dict']); logger_trainer_phase2.info("Loaded Sphere MLPs optimizer state.")
+                if 'optimizer_discriminator_state_dict' in ckpt: self.optimizer_discriminator.load_state_dict(ckpt['optimizer_discriminator_state_dict']); logger_trainer_phase2.info("Loaded Discriminator optimizer state.")
+            
+            if load_scalers:
+                if 'scaler_sphere_state_dict' in ckpt: self.scaler_sphere.load_state_dict(ckpt['scaler_sphere_state_dict']); logger_trainer_phase2.info("Loaded Sphere GradScaler state.")
+                if 'scaler_discriminator_state_dict' in ckpt: self.scaler_discriminator.load_state_dict(ckpt['scaler_discriminator_state_dict']); logger_trainer_phase2.info("Loaded Discriminator GradScaler state.")
+
+            if load_q_controllers:
+                for qc_name, qc_instance in self.q_controllers.items():
+                    key = f'q_controller_{qc_name}_state_dict'
+                    if qc_instance and key in ckpt: qc_instance.load_state_dict(ckpt[key]); logger_trainer_phase2.info(f"Loaded Q-Controller state for {qc_name}.")
+            
+            self.current_epoch = ckpt.get('epoch', self.current_epoch) 
+            self.global_step = ckpt.get('global_step', self.global_step) 
+            self.best_val_metric = ckpt.get('best_val_metric', self.best_val_metric) 
+            self.best_val_metric_name = ckpt.get('best_val_metric_name', self.best_val_metric_name)
+            self.best_val_metric_higher_is_better = ckpt.get('best_val_metric_higher_is_better', self.best_val_metric_higher_is_better)
+            
+            # Resume W&B Run if ID is present and no active run
+            ckpt_wandb_id = ckpt.get('wandb_run_id')
+            if ckpt_wandb_id and self.wandb_run is None and self.wandb_project_name and WANDB_AVAILABLE and wandb is not None:
+                logger_trainer_phase2.info(f"Checkpoint contains W&B run ID: {ckpt_wandb_id}. Attempting to resume.")
+                try:
+                    self.wandb_run = wandb.init(project=self.wandb_project_name, id=ckpt_wandb_id, resume="must") # type: ignore
+                    if self.wandb_run:
+                         logger_trainer_phase2.info(f"Successfully resumed W&B run {self.wandb_run.id} ({self.wandb_run.name}). View at: {self.wandb_run.url}")
+                except Exception as e_resume:
+                    logger_trainer_phase2.error(f"Failed to resume W&B run {ckpt_wandb_id}: {e_resume}. A new run might be created if wandb_project is set.", exc_info=True)
+            
+            logger_trainer_phase2.info(f"Resuming Phase 2 training from epoch {self.current_epoch + 1}, global step {self.global_step}.")
+        else:
+            logger_trainer_phase2.warning(f"Checkpoint at {path} does not have a recognized 'phase' key or its value ({loaded_phase}) is not 1 or 2. Attempting generic load of ETP Sphere Model only.")
+            model_key_to_try = 'etp_sphere_model_state_dict' 
+            if model_key_to_try in ckpt:
+                try:
+                    self.etp_sphere_model.load_state_dict(ckpt[model_key_to_try])
+                    logger_trainer_phase2.info(f"Loaded ETP Sphere Model state from checkpoint of unrecognized type (key: {model_key_to_try}).")
+                except RuntimeError as e:
+                     logger_trainer_phase2.error(f"Failed to load ETP Sphere Model from unrecognized checkpoint type due to RuntimeError: {e}", exc_info=True)
+            else:
+                 logger_trainer_phase2.warning(f"Could not find a recognizable ETP Sphere Model state_dict key in this checkpoint.")
+            self.current_epoch = 0
+            self.global_step = 0
+            self.best_val_metric = self.best_val_metric_initial_value
+            logger_trainer_phase2.info("Epoch, global step, and best validation metric reset due to unrecognized checkpoint type.")
 
     def train(self, resume_from_checkpoint: Optional[str] = None) -> None:
         if resume_from_checkpoint: self.load_checkpoint(resume_from_checkpoint)
-        init_epochs=self.current_epoch; logger_trainer_phase2.info(f"Starting Phase 2 training. Target epochs: {self.epochs}. Current completed: {init_epochs}.")
-        for _ in range(init_epochs, self.epochs):
-            logger_trainer_phase2.info(f"Commencing Phase 2 Epoch {self.current_epoch+1}/{self.epochs}")
-            epoch_losses = self.train_epoch()
+        
+        initial_completed_epochs = self.current_epoch 
+        logger_trainer_phase2.info(f"Starting Phase 2 training. Target epochs: {self.epochs}. Current completed: {initial_completed_epochs}.")
+        
+        for epoch_iter in range(initial_completed_epochs, self.epochs):
+            # current_epoch is already correct due to load_checkpoint or init
+            logger_trainer_phase2.info(f"Commencing Phase 2 Epoch {self.current_epoch + 1}/{self.epochs}")
+            epoch_train_losses = self.train_epoch() # current_epoch is incremented *inside* train_epoch
+            
             if self.q_controller_enabled:
-                for opt_n, _ in self.q_controllers.items(): # Iterate through configured Q-controllers
-                    qc = self.q_controllers.get(opt_n)
-                    if qc: qc.log_reward(-epoch_losses.get('loss_g_total_phase2' if "sphere" in opt_n else 'loss_d_phase2', float('inf')))
-            if self.val_loader and (self.current_epoch % self.val_interval_epochs == 0 or self.current_epoch == self.epochs):
+                qc_wubu = self._get_q_controller_for_optimizer("sphere_wubu_core")
+                if qc_wubu: qc_wubu.log_reward(-epoch_train_losses.get('loss_g_total_phase2', float('inf')), current_loss_val=epoch_train_losses.get('loss_g_total_phase2'))
+                
+                qc_mlps = self._get_q_controller_for_optimizer("sphere_mlps")
+                if qc_mlps: qc_mlps.log_reward(-epoch_train_losses.get('loss_g_total_phase2', float('inf')), current_loss_val=epoch_train_losses.get('loss_g_total_phase2'))
+                
+                qc_disc = self._get_q_controller_for_optimizer("discriminator")
+                if qc_disc: qc_disc.log_reward(-epoch_train_losses.get('loss_d_phase2', float('inf')), current_loss_val=epoch_train_losses.get('loss_d_phase2'))
+
+            if self.val_loader and (self.current_epoch % self.val_interval_epochs == 0 or self.current_epoch == self.epochs): # Use self.current_epoch (already incremented)
                 val_metrics = self.validate_epoch()
-                curr_val_met = val_metrics.get(self.best_val_metric_name, float('-inf') if self.best_val_metric_higher_is_better else float('inf'))
-                is_better = (curr_val_met > self.best_val_metric) if self.best_val_metric_higher_is_better else (curr_val_met < self.best_val_metric)
-                if is_better: self.best_val_metric=curr_val_met; logger_trainer_phase2.info(f"New best P2 val metric ({self.best_val_metric_name}): {self.best_val_metric:.4f}."); self._save_checkpoint(is_best=True, reason=f"best_val_p2_{self.best_val_metric_name.replace('val_p2_','')}")
-            if self.save_interval == 0: self._save_checkpoint(is_best=False, reason="end_of_epoch_p2")
+                current_val_metric_val = val_metrics.get(self.best_val_metric_name,
+                                                     float('-inf') if self.best_val_metric_higher_is_better else float('inf'))
+                is_better = ((current_val_metric_val > self.best_val_metric) if self.best_val_metric_higher_is_better
+                             else (current_val_metric_val < self.best_val_metric))
+                if is_better: 
+                    self.best_val_metric = current_val_metric_val
+                    logger_trainer_phase2.info(f"New best P2 val metric ({self.best_val_metric_name}): {self.best_val_metric:.4f}.")
+                    self._save_checkpoint(is_best=True, reason=f"best_val_p2_{self.best_val_metric_name.replace('val_p2_','')}")
+            
+            if self.save_interval == 0 and self.epochs > 0: # Save at the end of every epoch if save_interval is 0 (and training occurs)
+                 self._save_checkpoint(is_best=False, reason="end_of_epoch_p2")
+        
         logger_trainer_phase2.info(f"Phase 2 Training completed after {self.current_epoch} epochs.")
-        if self.wandb_run and hasattr(self.wandb_run, 'finish'): self.wandb_run.finish() # type: ignore
+        if self.wandb_run and hasattr(self.wandb_run, 'finish'): 
+            logger_trainer_phase2.info("Finishing W&B run.")
+            self.wandb_run.finish()
+
+
 
 # End of trainer_phase2.py content
 # =====================================================================
@@ -1275,7 +1776,9 @@ def parse_arguments_phase2() -> argparse.Namespace:
     parser.add_argument("--q_config_sphere_wubu_core_json", type=str, default=None); parser.add_argument("--q_config_sphere_mlps_json", type=str, default=None); parser.add_argument("--q_config_discriminator_json", type=str, default=None)
     parser.add_argument("--checkpoint_dir", type=str, default="etp_phase2_ala/checkpoints_phase2_ala"); parser.add_argument("--load_checkpoint", type=str, default=None)
     parser.add_argument("--log_interval", type=int, default=50); parser.add_argument("--save_interval", type=int, default=1000); parser.add_argument("--val_interval_epochs", type=int, default=1)
-    parser.add_argument("--wandb_project", type=str, default="ETP_Phase2_ALA"); parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--wandb_project", type=str, default="ETP_Phase2_ALA"); 
+    parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--wandb_enabled", type=lambda x: (str(x).lower() == 'true'), default=True, help="Enable W&B logging")
     args = parser.parse_args()
     for json_arg_name_suffix in ['disc_hidden_dims', 'optimizer_kwargs_wubu_core', 'optimizer_kwargs_mlps', 'optimizer_kwargs_discriminator']:
         json_arg_name_full = f"{json_arg_name_suffix}_json"; json_str_val = getattr(args, json_arg_name_full)
@@ -1285,10 +1788,10 @@ def parse_arguments_phase2() -> argparse.Namespace:
             setattr(args, json_arg_name_suffix, {} if 'kwargs' in json_arg_name_suffix else [])
     return args
 
-def main(): # Renamed from main_phase2
+def main():
     args = parse_arguments_phase2()
     logger_run_phase2.info("Starting ETP WuBuText DS-R1 - Phase 2 Runner (Combined Script)")
-    logger_run_phase2.info(f"Phase 2 Parsed Arguments (sample): epochs={args.epochs}, lambda_ala={args.lambda_ala}")
+    logger_run_phase2.info(f"Phase 2 Parsed Arguments (sample): epochs={args.epochs}, lambda_ala={args.lambda_ala}, device={args.device}, wandb_enabled={args.wandb_enabled}")
     run_device = torch.device(args.device); logger_run_phase2.info(f"Device for Phase 2: {run_device}")
 
     effective_wubu_core_config = DEFAULT_WUBU_TEXT_CONFIG.copy()
@@ -1310,28 +1813,47 @@ def main(): # Renamed from main_phase2
 
     logger_run_phase2.info("Instantiating Dataset and DataLoader for Phase 2...")
     dataset_instance = DeepSeekR1EmbeddingDataset(args.embeddings_file_A, args.embeddings_file_B)
+    if len(dataset_instance) == 0:
+        logger_run_phase2.error("Dataset is empty. This usually means one or both embedding files could not be loaded, were empty, or had mismatched lengths for paired data. Exiting.")
+        sys.exit(1)
+        
     safe_batch_size = max(1, args.batch_size)
-    train_loader_instance = DataLoader(dataset_instance, batch_size=safe_batch_size, shuffle=True, num_workers=0, pin_memory=False, drop_last=True)
-    val_loader_instance = None # Configure validation split if needed/available
-    logger_run_phase2.info("Dataset and DataLoader for Phase 2 instantiated.")
+    train_loader_instance = DataLoader(dataset_instance, batch_size=safe_batch_size, shuffle=True, num_workers=0, pin_memory=(run_device.type == 'cuda'), drop_last=True)
+    val_loader_instance = None 
+    logger_run_phase2.info(f"Dataset and DataLoader for Phase 2 instantiated. Train Dataloader effective length: {len(train_loader_instance)} batches.")
 
     etp_sphere_model_instance = ETP_WuBuText_DS_R1_Sphere(
         ds_r1_embedding_dim=args.ds_r1_embedding_dim, wubu_initial_tangent_dim=args.wubu_initial_tangent_dim,
         wubu_core_config=effective_wubu_core_config, head_mlp_layers=args.head_mlp_layers, decoder_mlp_layers=args.decoder_mlp_layers)
     logger_run_phase2.info("ETP_WuBuText_DS_R1_Sphere for Phase 2 instantiated.")
 
-    disc_input_dim = args.wubu_initial_tangent_dim # Fallback
+    disc_input_dim = args.wubu_initial_tangent_dim 
     if hasattr(etp_sphere_model_instance.wubu_core, 'output_tangent_dim'):
         retrieved_dim = etp_sphere_model_instance.wubu_core.output_tangent_dim
         if isinstance(retrieved_dim, int) and retrieved_dim > 0: disc_input_dim = retrieved_dim
-        else: logger_run_phase2.warning(f"Sphere's wubu_core.output_tangent_dim invalid ({retrieved_dim}). Defaulting D input.")
-    else: logger_run_phase2.warning("Sphere's wubu_core lacks 'output_tangent_dim'. Defaulting D input.")
+        else: logger_run_phase2.warning(f"Sphere's wubu_core.output_tangent_dim invalid ({retrieved_dim}). Defaulting D input to {disc_input_dim}.")
+    else: logger_run_phase2.warning(f"Sphere's wubu_core lacks 'output_tangent_dim'. Defaulting D input to {disc_input_dim}.")
     logger_run_phase2.info(f"Discriminator input dimension for Phase 2 resolved to: {disc_input_dim}")
 
     discriminator_model_instance = LatentDiscriminatorMLP(
         input_dim=disc_input_dim, hidden_dims=args.disc_hidden_dims,
         activation_fn=args.disc_activation_fn, use_spectral_norm=args.disc_use_spectral_norm)
     logger_run_phase2.info("LatentDiscriminatorMLP for Phase 2 instantiated.")
+
+    # --- W&B Setup for main ---
+    wandb_config_for_run = vars(args).copy() 
+    wandb_config_for_run["effective_wubu_core_config"] = effective_wubu_core_config
+    
+    wandb_run_id_to_resume_from_ckpt = None
+    if args.load_checkpoint and args.wandb_enabled: # Only peek if loading checkpoint and W&B is on
+        try:
+            ckpt_peek = torch.load(args.load_checkpoint, map_location='cpu', weights_only=False) # Adjust weights_only as needed
+            wandb_run_id_to_resume_from_ckpt = ckpt_peek.get('wandb_run_id')
+            if wandb_run_id_to_resume_from_ckpt:
+                logger_run_phase2.info(f"Found W&B run ID {wandb_run_id_to_resume_from_ckpt} in checkpoint for potential resume.")
+        except Exception as e:
+            logger_run_phase2.warning(f"Could not peek into checkpoint {args.load_checkpoint} for W&B run ID: {e}")
+
 
     trainer_instance = ETPTrainerPhase2(
         etp_sphere_model=etp_sphere_model_instance, discriminator_model=discriminator_model_instance,
@@ -1347,14 +1869,19 @@ def main(): # Renamed from main_phase2
         q_config_discriminator=q_controller_configs["discriminator"],
         checkpoint_dir=args.checkpoint_dir, log_interval=args.log_interval,
         save_interval=args.save_interval, val_interval_epochs=args.val_interval_epochs,
-        wandb_project=args.wandb_project, wandb_run_name=args.wandb_run_name)
+        wandb_project=args.wandb_project if args.wandb_enabled else None, 
+        wandb_run_name=args.wandb_run_name,
+        wandb_config_override=wandb_config_for_run if args.wandb_enabled else None,
+        wandb_run_id_to_resume=wandb_run_id_to_resume_from_ckpt if args.wandb_enabled else None
+        )
     logger_run_phase2.info("ETPTrainerPhase2 instantiated.")
 
     logger_run_phase2.info("Calling ETPTrainerPhase2.train()...")
     trainer_instance.train(resume_from_checkpoint=args.load_checkpoint)
     logger_run_phase2.info("Phase 2 training process finished.")
 
+
 if __name__ == '__main__':
-    script_logger.info("Starting combined ETP script (Phase 2 focused).")
+    script_logger.info("Starting combined ETP script (Phase 2 focused).") # Use the global script_logger
     main()
-    script_logger.info("Combined ETP script execution completed.")
+    script_logger.info("Combined ETP script (Phase 2) execution completed.")
