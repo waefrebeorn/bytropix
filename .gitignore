@@ -273,3 +273,9 @@ dummy.py
 data_h5/
 checkpoints_v2/
 live_checkpoints_v1/
+etp_phase1_reconstruction/
+etp_phase2_ala/
+etp_corpus_A_deepseek_r1_embeddings.npz
+etp_corpus_B_deepseek_r1_embeddings.npz
+mteb_corpus_B.txt
+mteb_corpus_A.txt
