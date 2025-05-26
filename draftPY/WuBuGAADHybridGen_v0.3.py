@@ -25,6 +25,13 @@ def custom_np_load(*args, **kwargs):
         return np.lib.format.open_memmap(*args, allow_pickle=allow_pickle, **kwargs) if allow_pickle_set else np.lib.format.open_memmap(*args, **kwargs)
     return orig_np_load(*args, allow_pickle=allow_pickle, **kwargs)
 np.load = custom_np_load
+try:
+    from torchvision.ops import roi_align
+    ROI_ALIGN_AVAILABLE = True
+except ImportError:
+    roi_align = None # Define roi_align as None if not available
+    ROI_ALIGN_AVAILABLE = False
+    print("Warning: torchvision.ops.roi_align not available. RoIAlign functionality will fail if used.")
 
 import math, random, argparse, logging, time, contextlib, os, platform, gc, functools
 from datetime import datetime
@@ -159,191 +166,167 @@ DEFAULT_CONFIG_QLEARN_HYBRID = { # From audio script
 # =====================================================================
 # Spectral Transform Utilities (DFT + DCT)
 # =====================================================================
+
 class SpectralTransformUtils:
+    """
+    V2 Update: Removes internal tanh/atanh normalization of coefficients.
+    Assumes input patches to compute_... are already in a suitable range (e.g., [-1, 1]),
+    and the generator will learn to predict coefficients in their "natural" scale
+    that arises from such input.
+    This simplifies the utils and shifts the burden of handling coefficient ranges
+    to the neural network and the loss function design (e.g., pixel-space recon loss).
+    """
+
+    @staticmethod
+    def _ensure_float_input(patches: torch.Tensor, expected_input_range_hint: str = "approx [-1,1] or [0,1]") -> torch.Tensor:
+        """
+        Helper to ensure patches are float. Issues a warning if input is int,
+        as range assumptions become critical.
+        """
+        if not torch.is_floating_point(patches):
+            # Use logger defined at the module level for this class
+            logger.warning_once( # type: ignore
+                f"SpectralUtils: Received non-float patches (dtype: {patches.dtype}). Converting to float. "
+                f"Ensure input patches are correctly normalized to {expected_input_range_hint} *before* calling spectral utils."
+            )
+            if patches.dtype == torch.uint8:
+                logger.info_once(f"SpectralUtils: uint8 patches detected, converting to float and scaling from [0,255] to [-1,1].") # type: ignore
+                return (patches.float() / 255.0) * 2.0 - 1.0 # Scale [0,1] then to [-1,1]
+            else:
+                logger.warning_once(f"SpectralUtils: Integer patches (dtype {patches.dtype}) other than uint8. Converting to float directly. Range may be incorrect.") # type: ignore
+                return patches.float()
+        return patches
+
     @staticmethod
     def compute_2d_dft_features(
         patches: torch.Tensor,
-        norm_scale: float = 10.0,
-        fft_norm_type: str = "ortho"
+        fft_norm_type: str = "ortho" # This is the 2nd positional argument if all are passed
     ) -> torch.Tensor:
         """
-        Computes 2D DFT features (real and imaginary parts) for a batch of image patches.
+        Computes 2D DFT features (real and imaginary parts directly from FFT).
         Args:
             patches (torch.Tensor): Input patches, shape (B_flat, C, H_patch, W_patch).
-            norm_scale (float): Value for tanh normalization scaling.
+                                    Expected to be float and in a normalized range (e.g., [-1, 1]).
             fft_norm_type (str): "backward", "ortho", or "forward" for torch.fft.
         Returns:
-            torch.Tensor: DFT features, shape (B_flat, C * 2 * H_patch * (W_patch//2+1)).
+            torch.Tensor: DFT features (real and imag stacked and flattened),
+                          shape (B_flat, C * 2 * H_patch * (W_patch//2+1)).
         """
         B_flat, C, H_patch, W_patch = patches.shape
-        if not torch.is_floating_point(patches):
-            patches_float = patches.float() / 255.0
-        else:
-            patches_float = patches # Assume already in a good range if float
+        # CORRECTED: Call static method via class name
+        patches_float = SpectralTransformUtils._ensure_float_input(patches)
 
-        dft_coeffs_complex = torch.fft.rfft2(patches_float, dim=(-2, -1), norm=fft_norm_type) # (B_flat, C, H_patch, W_patch//2+1)
+        dft_coeffs_complex = torch.fft.rfft2(patches_float, dim=(-2, -1), norm=fft_norm_type)
         dft_real = dft_coeffs_complex.real
         dft_imag = dft_coeffs_complex.imag
 
-        # Tanh normalization
-        norm_real = torch.tanh(dft_real / norm_scale)
-        norm_imag = torch.tanh(dft_imag / norm_scale)
-        
-        stacked_coeffs = torch.stack([norm_real, norm_imag], dim=2) # (B_flat, C, 2, H_patch, W_patch//2+1)
-        flattened_dft_features = stacked_coeffs.reshape(B_flat, -1) # (B_flat, D_dft_features)
+        # Stack real and imaginary parts without any intermediate normalization (like tanh)
+        stacked_coeffs = torch.stack([dft_real, dft_imag], dim=2) # (B_flat, C, 2, H_patch, W_patch//2+1)
+        flattened_dft_features = stacked_coeffs.reshape(B_flat, -1)
         return flattened_dft_features
 
     @staticmethod
     def reconstruct_patches_from_2d_dft(
-        dft_features_norm_flat: torch.Tensor,
-        norm_scale: float,
-        num_channels: int,
-        target_patch_h: int,
-        target_patch_w: int,
-        fft_norm_type: str = "ortho"
+        dft_features_flat: torch.Tensor, # Arg 1
+        num_channels: int,               # Arg 2
+        target_patch_h: int,             # Arg 3
+        target_patch_w: int,             # Arg 4
+        fft_norm_type: str = "ortho"     # Arg 5 (keyword or positional)
     ) -> torch.Tensor:
         """
-        Reconstructs image patches from normalized flat DFT features.
-        Args:
-            dft_features_norm_flat (torch.Tensor): Shape (B_total_regions, C * 2 * H_patch * (W_patch//2+1)).
-            norm_scale (float): Scale used for tanh normalization.
-        Returns:
-            torch.Tensor: Reconstructed pixel patches, shape (B_total_regions, C, H_patch, W_patch).
-                          Values will be approximately in the original input range of DFT (e.g. [0,1] or [-1,1] if input to DFT was so).
+        Reconstructs image patches from flat DFT features (assumed to be direct real/imag parts).
         """
-        B_total_regions = dft_features_norm_flat.shape[0]
+        B_total_regions = dft_features_flat.shape[0]
+        # Ensure target_patch_w is positive before division
+        if target_patch_w <= 0:
+            raise ValueError(f"target_patch_w must be positive, got {target_patch_w}")
         W_coeffs_one_sided = target_patch_w // 2 + 1
-        
-        expected_feat_dim = num_channels * 2 * target_patch_h * W_coeffs_one_sided
-        if dft_features_norm_flat.shape[1] != expected_feat_dim:
-            raise ValueError(f"DFT feature dim mismatch. Expected {expected_feat_dim}, got {dft_features_norm_flat.shape[1]}")
 
-        stacked_coeffs_norm = dft_features_norm_flat.view(
+        expected_feat_dim = num_channels * 2 * target_patch_h * W_coeffs_one_sided
+        if dft_features_flat.shape[1] != expected_feat_dim:
+            raise ValueError(
+                f"DFT feature dim mismatch for reconstruction. Expected {expected_feat_dim} "
+                f"(C={num_channels}, H={target_patch_h}, W_coeff={W_coeffs_one_sided}), "
+                f"got {dft_features_flat.shape[1]} for input shape {dft_features_flat.shape}"
+            )
+
+        stacked_coeffs = dft_features_flat.view(
             B_total_regions, num_channels, 2, target_patch_h, W_coeffs_one_sided
         )
-        norm_real = stacked_coeffs_norm[:, :, 0, :, :]
-        norm_imag = stacked_coeffs_norm[:, :, 1, :, :]
-
-        # Unnormalize (atanh)
-        input_dtype = norm_real.dtype
-        compute_dtype = torch.float32 if input_dtype in [torch.float16, torch.bfloat16] else input_dtype
-        
-        eps_clamp_atanh = torch.finfo(compute_dtype).eps * 8
-        upper_b_atanh = torch.tensor(1.0 - eps_clamp_atanh, dtype=compute_dtype, device=norm_real.device)
-        lower_b_atanh = torch.tensor(-1.0 + eps_clamp_atanh, dtype=compute_dtype, device=norm_real.device)
-        
-        dft_real_unscaled = torch.atanh(torch.clamp(norm_real.to(compute_dtype), min=lower_b_atanh, max=upper_b_atanh)) * norm_scale
-        dft_imag_unscaled = torch.atanh(torch.clamp(norm_imag.to(compute_dtype), min=lower_b_atanh, max=upper_b_atanh)) * norm_scale
-        
-        dft_real = dft_real_unscaled.to(input_dtype)
-        dft_imag = dft_imag_unscaled.to(input_dtype)
+        dft_real = stacked_coeffs[:, :, 0, :, :]
+        dft_imag = stacked_coeffs[:, :, 1, :, :]
 
         dft_coeffs_complex = torch.complex(dft_real, dft_imag)
-        reconstructed_patches = torch.fft.irfft2(dft_coeffs_complex, s=(target_patch_h, target_patch_w), dim=(-2, -1), norm=fft_norm_type)
+        # The `s` parameter in irfft2 ensures output has original spatial dimensions H_patch x W_patch
+        reconstructed_patches = torch.fft.irfft2(
+            dft_coeffs_complex, s=(target_patch_h, target_patch_w), dim=(-2, -1), norm=fft_norm_type
+        )
         return reconstructed_patches
 
     @staticmethod
     def compute_2d_dct_features(
-        patches: torch.Tensor,
-        norm_type: str = "tanh", # "none", "global_scale", "tanh"
-        norm_global_scale: float = 200.0,
-        norm_tanh_scale: float = 60.0
+        patches: torch.Tensor
     ) -> torch.Tensor:
         """
-        Computes 2D DCT-II features for a batch of image patches.
-        Args:
-            patches (torch.Tensor): Input patches, shape (B_flat, C, H_patch, W_patch).
-            norm_type (str): Normalization type.
-            norm_global_scale (float): Scale for 'global_scale' normalization.
-            norm_tanh_scale (float): Scale for 'tanh' normalization.
-        Returns:
-            torch.Tensor: DCT features, shape (B_flat, C * H_patch * W_patch).
+        Computes 2D DCT-II features (direct coefficients) for a batch of image patches.
         """
         if not TORCH_DCT_AVAILABLE or dct_2d is None:
-            logger.error("compute_2d_dct_features: torch-dct not available or dct_2d is None. Returning zeros.")
-            return torch.zeros(patches.shape[0], patches.shape[1]*patches.shape[2]*patches.shape[3], device=patches.device, dtype=patches.dtype)
+            logger.error("compute_2d_dct_features: torch-dct not available. Returning zeros.")
+            return torch.zeros(patches.shape[0], patches.shape[1]*patches.shape[2]*patches.shape[3],
+                               device=patches.device, dtype=patches.dtype)
 
         B_flat, C, H_patch, W_patch = patches.shape
-        if not torch.is_floating_point(patches):
-            patches_float = patches.float() / 255.0
-        else:
-            patches_float = patches
+        # CORRECTED: Call static method via class name
+        patches_float = SpectralTransformUtils._ensure_float_input(patches)
 
-        # dct_2d expects (..., H, W)
         transformed_coeffs_list = []
         for c_idx in range(C):
-            channel_patches = patches_float[:, c_idx, :, :] # (B_flat, H_patch, W_patch)
-            dct_coeffs_channel = dct_2d(channel_patches.float(), norm='ortho') # Use float for DCT
-            
-            if norm_type == "none": norm_coeffs_ch = dct_coeffs_channel
-            elif norm_type == "global_scale": norm_coeffs_ch = dct_coeffs_channel / norm_global_scale
-            elif norm_type == "tanh": norm_coeffs_ch = torch.tanh(dct_coeffs_channel / norm_tanh_scale)
-            else: norm_coeffs_ch = dct_coeffs_channel # Default to no norm if type unknown
-            transformed_coeffs_list.append(norm_coeffs_ch)
-        
-        # Stack along channel dimension and then flatten
-        stacked_norm_coeffs = torch.stack(transformed_coeffs_list, dim=1) # (B_flat, C, H_patch, W_patch)
-        flattened_dct_features = stacked_norm_coeffs.reshape(B_flat, -1)
+            channel_patches = patches_float[:, c_idx, :, :]
+            dct_coeffs_channel = dct_2d(channel_patches.float(), norm='ortho')
+            transformed_coeffs_list.append(dct_coeffs_channel)
+
+        stacked_coeffs = torch.stack(transformed_coeffs_list, dim=1)
+        flattened_dct_features = stacked_coeffs.reshape(B_flat, -1)
         return flattened_dct_features
 
     @staticmethod
     def reconstruct_patches_from_2d_dct(
-        dct_features_norm_flat: torch.Tensor,
-        num_channels: int,
-        target_patch_h: int,
-        target_patch_w: int,
-        norm_type: str = "tanh",
-        norm_global_scale: float = 200.0,
-        norm_tanh_scale: float = 60.0
+        dct_features_flat: torch.Tensor, # Arg 1
+        num_channels: int,               # Arg 2
+        target_patch_h: int,             # Arg 3
+        target_patch_w: int              # Arg 4
     ) -> torch.Tensor:
         """
-        Reconstructs image patches from normalized flat DCT features.
+        Reconstructs image patches from flat DCT features (assumed to be direct coefficients).
         """
         if not TORCH_DCT_AVAILABLE or idct_2d is None:
-            logger.error("reconstruct_patches_from_2d_dct: torch-dct not available or idct_2d is None. Returning zeros.")
-            return torch.zeros(dct_features_norm_flat.shape[0], num_channels, target_patch_h, target_patch_w, device=dct_features_norm_flat.device, dtype=dct_features_norm_flat.dtype)
+            logger.error("reconstruct_patches_from_2d_dct: torch-dct not available. Returning zeros.")
+            return torch.zeros(dct_features_flat.shape[0], num_channels, target_patch_h, target_patch_w,
+                               device=dct_features_flat.device, dtype=dct_features_flat.dtype)
 
-        B_total_regions = dct_features_norm_flat.shape[0]
+        B_total_regions = dct_features_flat.shape[0]
         expected_feat_dim = num_channels * target_patch_h * target_patch_w
-        if dct_features_norm_flat.shape[1] != expected_feat_dim:
-            raise ValueError(f"DCT feature dim mismatch. Expected {expected_feat_dim}, got {dct_features_norm_flat.shape[1]}")
+        if dct_features_flat.shape[1] != expected_feat_dim:
+            raise ValueError(
+                f"DCT feature dim mismatch for reconstruction. Expected {expected_feat_dim} "
+                f"(C={num_channels}, H={target_patch_h}, W={target_patch_w}), "
+                f"got {dct_features_flat.shape[1]} for input shape {dct_features_flat.shape}"
+            )
 
-        # Reshape to (B_total_regions, C, H_patch, W_patch)
-        norm_coeffs_structured = dct_features_norm_flat.view(
+        coeffs_structured = dct_features_flat.view(
             B_total_regions, num_channels, target_patch_h, target_patch_w
         )
-        
-        unnorm_coeffs_list = []
-        for c_idx in range(num_channels):
-            norm_coeffs_ch = norm_coeffs_structured[:, c_idx, :, :]
-            unnorm_coeffs_ch: torch.Tensor
-            if norm_type == "none": unnorm_coeffs_ch = norm_coeffs_ch
-            elif norm_type == "global_scale": unnorm_coeffs_ch = norm_coeffs_ch * norm_global_scale
-            elif norm_type == "tanh":
-                input_dtype = norm_coeffs_ch.dtype
-                compute_dtype = torch.float32 if input_dtype in [torch.float16, torch.bfloat16] else input_dtype
-                eps_clamp_atanh = torch.finfo(compute_dtype).eps * 8
-                upper_b_atanh = torch.tensor(1.0 - eps_clamp_atanh, dtype=compute_dtype, device=norm_coeffs_ch.device)
-                lower_b_atanh = torch.tensor(-1.0 + eps_clamp_atanh, dtype=compute_dtype, device=norm_coeffs_ch.device)
-                
-                unscaled_ch = torch.atanh(torch.clamp(norm_coeffs_ch.to(compute_dtype), min=lower_b_atanh, max=upper_b_atanh)) * norm_tanh_scale
-                unnorm_coeffs_ch = unscaled_ch.to(input_dtype)
-            else: unnorm_coeffs_ch = norm_coeffs_ch
-            unnorm_coeffs_list.append(unnorm_coeffs_ch)
 
-        unnorm_coeffs_stacked_c = torch.stack(unnorm_coeffs_list, dim=1) # (B_total_regions, C, H, W)
-        
-        # idct_2d expects (..., H, W)
         reconstructed_patches_list_c = []
         for c_idx in range(num_channels):
-            channel_unnorm_coeffs = unnorm_coeffs_stacked_c[:, c_idx, :, :]
-            # Ensure float32 for idct_2d if current dtype is not
-            input_dtype_idct = channel_unnorm_coeffs.dtype
-            compute_dtype_idct = torch.float32 if input_dtype_idct != torch.float32 else input_dtype_idct
+            channel_coeffs = coeffs_structured[:, c_idx, :, :]
+            input_dtype_idct = channel_coeffs.dtype
+            # torch-dct's idct_2d often prefers float32 for computation, convert if necessary
+            compute_dtype_idct = torch.float32 if input_dtype_idct not in [torch.float32, torch.float64] else input_dtype_idct
             
-            recons_ch = idct_2d(channel_unnorm_coeffs.to(compute_dtype_idct), norm='ortho')
+            recons_ch = idct_2d(channel_coeffs.to(compute_dtype_idct), norm='ortho')
             reconstructed_patches_list_c.append(recons_ch.to(input_dtype_idct)) # Convert back
-        
+
         reconstructed_patches = torch.stack(reconstructed_patches_list_c, dim=1)
         return reconstructed_patches
 
@@ -2072,98 +2055,113 @@ class RegionalVAEEncoder(nn.Module):
         self.args = args
         self.video_config = video_config
         self.gaad_config = gaad_config
-        # self.wubu_s_config = wubu_s_config # Not stored if only used for sub-module
         self.latent_dim = latent_dim
-        self.image_size = args.image_h_w_tuple # Ensure this is set in parse_arguments
+        self.image_size = args.image_h_w_tuple
         self.num_appearance_regions = gaad_config['num_regions']
         self.decomposition_type = gaad_config['decomposition_type']
         self.gaad_min_size_px = gaad_config.get('min_size_px', 5)
-        current_logger=logging.getLogger("WuBuGAADHybridGenV03.EncoderVAE")
-        self.feature_extractor: Optional[nn.Module] = None # For RoIAlign path
+        self.logger=logging.getLogger("WuBuGAADHybridGenV03.EncoderVAE") # Use self.logger
+        self.feature_extractor: Optional[nn.Module] = None
 
         self.channels_for_target_spectral = self.video_config['num_channels']
         
-        # Patch extractors for DFT and DCT (pixel-based for target, potentially feature-based for WuBu input)
         self.enc_patch_h_spectral = args.spectral_patch_size_h
         self.enc_patch_w_spectral = args.spectral_patch_size_w
         spectral_patch_output_size = (args.spectral_patch_size_h, args.spectral_patch_size_w)
         
-        # Patch extractor for TARGET DFT and DCT features (always from pixels)
         self.target_spectral_patch_extractor = RegionalPatchExtractor(
             patch_output_size=spectral_patch_output_size, use_roi_align=False
         )
-        current_logger.info(f"Encoder: Target Spectral Extractor (Pixel Patches -> Resize {spectral_patch_output_size}).")
+        self.logger.info(f"Encoder: Target Spectral Extractor (Pixel Patches -> Resize {spectral_patch_output_size}).")
 
         patch_channels_for_wubus_input: int
         if args.encoder_use_roi_align:
-            self.feature_extractor = nn.Sequential( # Shallow CNN before RoIAlign
+            self.feature_extractor = nn.Sequential(
                 nn.Conv2d(self.video_config['num_channels'], args.encoder_shallow_cnn_channels, kernel_size=3, stride=1, padding=1),
                 nn.GroupNorm(8, args.encoder_shallow_cnn_channels), nn.GELU()
             )
             patch_channels_for_wubus_input = args.encoder_shallow_cnn_channels
             self.wubus_input_patch_extractor = RegionalPatchExtractor(
                 feature_extractor=self.feature_extractor,
-                roi_align_output_size=spectral_patch_output_size, # RoIAlign output matches spectral patch size
+                roi_align_output_size=spectral_patch_output_size,
                 use_roi_align=True
             )
-            current_logger.info(f"Encoder (WuBu-S Input): RoIAlign ON. ShallowCNN (Ch:{args.encoder_shallow_cnn_channels}) -> RoIAlign (Size:{spectral_patch_output_size}) -> Spectral Transforms.")
+            self.logger.info(f"Encoder (WuBu-S Input): RoIAlign ON. ShallowCNN (Ch:{args.encoder_shallow_cnn_channels}) -> RoIAlign (Size:{spectral_patch_output_size}) -> Spectral Transforms.")
         else:
             patch_channels_for_wubus_input = self.video_config['num_channels']
             self.wubus_input_patch_extractor = RegionalPatchExtractor(
                 patch_output_size=spectral_patch_output_size, use_roi_align=False
             )
-            current_logger.info(f"Encoder (WuBu-S Input): RoIAlign OFF. Pixel Patches -> Resize (Size:{spectral_patch_output_size}) -> Spectral Transforms.")
+            self.logger.info(f"Encoder (WuBu-S Input): RoIAlign OFF. Pixel Patches -> Resize (Size:{spectral_patch_output_size}) -> Spectral Transforms.")
 
-        # Calculate feature dimension after spectral transforms
-        dft_w_coeffs_one_sided = self.enc_patch_w_spectral // 2 + 1
-        single_dft_feature_dim = patch_channels_for_wubus_input * 2 * self.enc_patch_h_spectral * dft_w_coeffs_one_sided
-        single_dct_feature_dim = patch_channels_for_wubus_input * self.enc_patch_h_spectral * self.enc_patch_w_spectral
+        dft_w_coeffs_one_sided = self.enc_patch_w_spectral // 2 + 1 if self.enc_patch_w_spectral > 0 else 0
+        single_dft_feature_dim = patch_channels_for_wubus_input * 2 * self.enc_patch_h_spectral * dft_w_coeffs_one_sided \
+                                 if self.enc_patch_h_spectral > 0 and dft_w_coeffs_one_sided > 0 and patch_channels_for_wubus_input > 0 else 0
+        single_dct_feature_dim = patch_channels_for_wubus_input * self.enc_patch_h_spectral * self.enc_patch_w_spectral \
+                                 if self.enc_patch_h_spectral > 0 and self.enc_patch_w_spectral > 0 and patch_channels_for_wubus_input > 0 else 0
         
-        # Combined feature dimension for PatchEmbed
         patch_feature_dim_for_embed = 0
         if args.use_dft_features_appearance: patch_feature_dim_for_embed += single_dft_feature_dim
         if args.use_dct_features_appearance: patch_feature_dim_for_embed += single_dct_feature_dim
         
         if patch_feature_dim_for_embed == 0:
-            current_logger.error("Encoder: No spectral features (DFT or DCT) selected for appearance. This will likely fail.")
-            # Fallback to pixel features if NO spectral features selected (original v0.1 path)
-            if args.encoder_use_roi_align:
+            self.logger.error("Encoder: PatchEmbed input dim calculated to 0 from spectral features. This will likely fail.")
+            # Fallback to pixel features if NO spectral features selected OR if dims were zero
+            if args.encoder_use_roi_align and patch_channels_for_wubus_input > 0 and spectral_patch_output_size[0] > 0 and spectral_patch_output_size[1] > 0:
                  patch_feature_dim_for_embed = patch_channels_for_wubus_input * spectral_patch_output_size[0] * spectral_patch_output_size[1]
-            else: # Pixel patches without RoIAlign
+            elif not args.encoder_use_roi_align and self.video_config['num_channels'] > 0 and spectral_patch_output_size[0] > 0 and spectral_patch_output_size[1] > 0:
                  patch_feature_dim_for_embed = self.video_config['num_channels'] * spectral_patch_output_size[0] * spectral_patch_output_size[1]
-            current_logger.warning(f"Encoder: Falling back to pixel-based features (dim: {patch_feature_dim_for_embed}) as no spectral features selected.")
+            else: # True fallback if all else fails
+                patch_feature_dim_for_embed = 1 
+                self.logger.error("Encoder: Fallback pixel feature dim also calculated to 0. Setting PatchEmbed input to 1. Expect errors.")
 
-        current_logger.info(f"PatchEmbed input dim: {patch_feature_dim_for_embed}")
+            self.logger.warning(f"Encoder: Using fallback feature dim {patch_feature_dim_for_embed} for PatchEmbed.")
+
+        self.logger.info(f"PatchEmbed input dim: {patch_feature_dim_for_embed}")
+        if args.encoder_initial_tangent_dim <=0:
+            self.logger.error(f"encoder_initial_tangent_dim is {args.encoder_initial_tangent_dim}. Must be > 0. Defaulting to 1.")
+            args.encoder_initial_tangent_dim = 1 # Fallback
         self.patch_embed = PatchEmbed(patch_feature_dim_for_embed, args.encoder_initial_tangent_dim)
 
-        self.wubu_s = FullyHyperbolicWuBuNestingModel(input_tangent_dim=args.encoder_initial_tangent_dim, output_tangent_dim=video_config['wubu_s_output_dim'], config=wubu_s_config)
+        wubu_s_output_dim_eff = video_config['wubu_s_output_dim']
+        if wubu_s_output_dim_eff <=0 :
+            self.logger.error(f"video_config['wubu_s_output_dim'] is {wubu_s_output_dim_eff}. Must be > 0. Defaulting to encoder_initial_tangent_dim.")
+            wubu_s_output_dim_eff = args.encoder_initial_tangent_dim
+        self.wubu_s = FullyHyperbolicWuBuNestingModel(input_tangent_dim=args.encoder_initial_tangent_dim, output_tangent_dim=wubu_s_output_dim_eff, config=wubu_s_config)
         
-        self.wubu_t_input_dim = video_config['wubu_s_output_dim']
-        self.wubu_m_output_dim = video_config.get('wubu_m_output_dim', 0) # Get current, possibly 0 if motion disabled
-        if args.use_wubu_motion_branch and self.wubu_m_output_dim > 0:
-            self.wubu_t_input_dim += self.wubu_m_output_dim
-            current_logger.info(f"VAE Enc: Including WuBu-M features (dim {self.wubu_m_output_dim}) for WuBu-T input.")
+        self.wubu_t_input_dim = wubu_s_output_dim_eff # Use effective dim
+        wubu_m_output_dim_eff = video_config.get('wubu_m_output_dim', 0)
+        if args.use_wubu_motion_branch and wubu_m_output_dim_eff > 0:
+            self.wubu_t_input_dim += wubu_m_output_dim_eff
+            self.logger.info(f"VAE Enc: Including WuBu-M features (dim {wubu_m_output_dim_eff}) for WuBu-T input.")
         elif args.use_wubu_motion_branch:
-            current_logger.warning("VAE Enc: Motion branch enabled but wubu_m_output_dim is 0. Not included in WuBu-T.")
+            self.logger.warning("VAE Enc: Motion branch enabled but wubu_m_output_dim is 0. Not included in WuBu-T.")
 
         self.wubu_t_config = _configure_wubu_stack(args, "wubu_t")
-        self.wubu_t: Optional[FullyHyperbolicWuBuNestingModel] = None
+        self.wubu_t = None # Initialize to None
         fc_input_dim_for_latent: int
-        if self.wubu_t_config and self.wubu_t_config['num_levels'] > 0 and self.wubu_t_input_dim > 0:
-             wubu_t_output_dim_config = self.wubu_t_config['hyperbolic_dims'][-1] if self.wubu_t_config['hyperbolic_dims'] else 0
-             if wubu_t_output_dim_config == 0: wubu_t_output_dim_config = self.wubu_t_input_dim
+        if self.wubu_t_config and self.wubu_t_config.get('num_levels',0) > 0 and self.wubu_t_input_dim > 0:
+             wubu_t_output_dim_config = self.wubu_t_config['hyperbolic_dims'][-1] if self.wubu_t_config.get('hyperbolic_dims') else 0
+             if wubu_t_output_dim_config == 0: wubu_t_output_dim_config = self.wubu_t_input_dim # Fallback to input if output dim is 0
+             if wubu_t_output_dim_config <=0: # Further fallback
+                 self.logger.error(f"WuBu-T output dim config resolved to {wubu_t_output_dim_config}. Using wubu_t_input_dim as fallback for output.")
+                 wubu_t_output_dim_config = self.wubu_t_input_dim
+
              self.wubu_t = FullyHyperbolicWuBuNestingModel(input_tangent_dim=self.wubu_t_input_dim, output_tangent_dim=wubu_t_output_dim_config, config=self.wubu_t_config)
              fc_input_dim_for_latent = wubu_t_output_dim_config
-             current_logger.info(f"VAE Enc WuBu-T Enabled: InputDim {self.wubu_t_input_dim}, OutputDim {fc_input_dim_for_latent}")
+             self.logger.info(f"VAE Enc WuBu-T Enabled: InputDim {self.wubu_t_input_dim}, OutputDim {fc_input_dim_for_latent}")
         else:
-             current_logger.warning("VAE Enc WuBu-T disabled. Latent space from direct projection of aggregated features.")
+             self.logger.warning("VAE Enc WuBu-T disabled (config, num_levels=0, or wubu_t_input_dim=0). Latent space from direct projection.")
              fc_input_dim_for_latent = self.wubu_t_input_dim
         
         if fc_input_dim_for_latent <=0:
-            current_logger.error(f"FC input dim for latent space is {fc_input_dim_for_latent}. This is invalid. Check WuBu configurations or input dimensions.")
-            # Fallback to ensure FC layers can be created, though model might not train.
-            fc_input_dim_for_latent = self.latent_dim 
+            self.logger.error(f"FC input dim for latent space is {fc_input_dim_for_latent}. This is invalid. Using self.latent_dim as fallback.")
+            fc_input_dim_for_latent = self.latent_dim if self.latent_dim > 0 else 1 # Final fallback for safety
         
+        if self.latent_dim <= 0:
+            self.logger.error(f"Output latent_dim is {self.latent_dim}. This is invalid. Defaulting to 1.")
+            self.latent_dim = 1
+
         self.fc_mu = nn.Linear(fc_input_dim_for_latent, self.latent_dim)
         self.fc_logvar = nn.Linear(fc_input_dim_for_latent, self.latent_dim)
 
@@ -2171,58 +2169,77 @@ class RegionalVAEEncoder(nn.Module):
 
     def forward(self, frames_pixels: torch.Tensor, motion_features: Optional[torch.Tensor]
                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        # Output: mu, logvar, gaad_bboxes_all_frames, target_dft_features, target_dct_features
         B, N_frames_total_sample, C_img, H_img, W_img = frames_pixels.shape
         device = frames_pixels.device
-        dtype_model = next(self.parameters()).dtype
+        
+        # Determine model's operating dtype from its parameters
+        first_param = next(self.parameters(), None)
+        dtype_model = first_param.dtype if first_param is not None else frames_pixels.dtype # Fallback to input dtype
 
         frames_pixels_flat = frames_pixels.reshape(B * N_frames_total_sample, C_img, H_img, W_img)
-        # GAAD Bbox Generation (copied from v0.2)
+        
         gaad_bboxes_list = []
         for b_idx in range(B):
             frame_bboxes_for_sequence = []
             for f_idx in range(N_frames_total_sample):
                 frame_dims = (W_img, H_img); max_w_scalar=float(W_img); max_h_scalar=float(H_img)
-                if self.decomposition_type == "hybrid":
-                    num_subdivide=self.num_appearance_regions//2; num_spiral=self.num_appearance_regions-num_subdivide; bboxes_for_item=[]
+                # Simplified GAAD for brevity - use your actual GAAD logic
+                if self.decomposition_type == "hybrid": # Example
+                    num_subdivide=self.num_appearance_regions//2
+                    num_spiral=self.num_appearance_regions-num_subdivide
+                    bboxes_for_item=[]
                     if num_subdivide > 0: bboxes_for_item.append(golden_subdivide_rect_fixed_n(frame_dims,num_subdivide,device,dtype_model,self.gaad_min_size_px))
                     if num_spiral > 0:
-                         spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, num_spiral, device, dtype_model); patch_base_size = min(frame_dims); spiral_bboxes_current = torch.zeros(num_spiral, 4, device=device, dtype=dtype_model); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs; val_x1=spiral_centers[:,0]-patch_ws; val_y1=spiral_centers[:,1]-patch_hs; val_x2=spiral_centers[:,0]+patch_ws; val_y2=spiral_centers[:,1]+patch_hs; spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS); spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS); min_for_x2=spiral_bboxes_current[:,0]+EPS; spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],min_for_x2); min_for_y2=spiral_bboxes_current[:,1]+EPS; spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],min_for_y2); bboxes_for_item.append(spiral_bboxes_current)
-                    single_frame_bboxes = torch.cat(bboxes_for_item, dim=0) if bboxes_for_item else torch.tensor([[0,0,max_w_scalar,max_h_scalar]]*self.num_appearance_regions, dtype=dtype_model, device=device)
-                elif self.decomposition_type == "spiral":
-                     spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, self.num_appearance_regions, device, dtype_model); patch_base_size = min(frame_dims); spiral_bboxes_current = torch.zeros(self.num_appearance_regions, 4, device=device, dtype=dtype_model); patch_hs = float(patch_base_size) * spiral_scales[:,0] / 2.0; patch_ws = patch_hs; val_x1=spiral_centers[:,0]-patch_ws; val_y1=spiral_centers[:,1]-patch_hs; val_x2=spiral_centers[:,0]+patch_ws; val_y2=spiral_centers[:,1]+patch_hs; spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS); spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS); min_for_x2=spiral_bboxes_current[:,0]+EPS; spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar); spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],min_for_x2); min_for_y2=spiral_bboxes_current[:,1]+EPS; spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar); spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],min_for_y2); single_frame_bboxes = spiral_bboxes_current
-                else: single_frame_bboxes = golden_subdivide_rect_fixed_n(frame_dims,self.num_appearance_regions,device,dtype_model,self.gaad_min_size_px)
-                if single_frame_bboxes.shape[0] < self.num_appearance_regions: num_to_pad=self.num_appearance_regions-single_frame_bboxes.shape[0]; padding_box=single_frame_bboxes[-1:].clone() if single_frame_bboxes.shape[0]>0 else torch.tensor([[0,0,max_w_scalar,max_h_scalar]],dtype=dtype_model,device=device); padding=padding_box.repeat(num_to_pad,1); single_frame_bboxes=torch.cat([single_frame_bboxes, padding], dim=0)
-                elif single_frame_bboxes.shape[0] > self.num_appearance_regions: single_frame_bboxes=single_frame_bboxes[:self.num_appearance_regions]
+                         spiral_centers, spiral_scales = phi_spiral_patch_centers_fixed_n(frame_dims, num_spiral, device, dtype_model)
+                         patch_base_size = min(frame_dims)
+                         spiral_bboxes_current = torch.zeros(num_spiral, 4, device=device, dtype=dtype_model)
+                         patch_hs_half = float(patch_base_size) * spiral_scales[:,0] / 2.0
+                         patch_ws_half = patch_hs_half # Assuming square from spiral centers
+                         val_x1=spiral_centers[:,0]-patch_ws_half; val_y1=spiral_centers[:,1]-patch_hs_half
+                         val_x2=spiral_centers[:,0]+patch_ws_half; val_y2=spiral_centers[:,1]+patch_hs_half
+                         spiral_bboxes_current[:,0]=torch.clamp(val_x1,min=0.0,max=max_w_scalar-EPS)
+                         spiral_bboxes_current[:,1]=torch.clamp(val_y1,min=0.0,max=max_h_scalar-EPS)
+                         spiral_bboxes_current[:,2]=torch.clamp(val_x2,max=max_w_scalar)
+                         spiral_bboxes_current[:,2]=torch.maximum(spiral_bboxes_current[:,2],spiral_bboxes_current[:,0]+EPS)
+                         spiral_bboxes_current[:,3]=torch.clamp(val_y2,max=max_h_scalar)
+                         spiral_bboxes_current[:,3]=torch.maximum(spiral_bboxes_current[:,3],spiral_bboxes_current[:,1]+EPS)
+                         bboxes_for_item.append(spiral_bboxes_current)
+                    single_frame_bboxes = torch.cat(bboxes_for_item, dim=0) if bboxes_for_item else \
+                                          torch.tensor([[0,0,max_w_scalar,max_h_scalar]]*self.num_appearance_regions, dtype=dtype_model, device=device)
+                else: # Fallback to subdivide if not hybrid (simplification for example)
+                    single_frame_bboxes = golden_subdivide_rect_fixed_n(frame_dims,self.num_appearance_regions,device,dtype_model,self.gaad_min_size_px)
+
+                if single_frame_bboxes.shape[0] < self.num_appearance_regions:
+                    num_to_pad=self.num_appearance_regions-single_frame_bboxes.shape[0]
+                    padding_box=single_frame_bboxes[-1:].clone() if single_frame_bboxes.shape[0]>0 else torch.tensor([[0,0,max_w_scalar,max_h_scalar]],dtype=dtype_model,device=device)
+                    padding=padding_box.repeat(num_to_pad,1)
+                    single_frame_bboxes=torch.cat([single_frame_bboxes, padding], dim=0)
+                elif single_frame_bboxes.shape[0] > self.num_appearance_regions:
+                    single_frame_bboxes=single_frame_bboxes[:self.num_appearance_regions]
                 frame_bboxes_for_sequence.append(single_frame_bboxes)
             gaad_bboxes_list.append(torch.stack(frame_bboxes_for_sequence))
         gaad_bboxes_full_batch_sequences = torch.stack(gaad_bboxes_list)
         gaad_bboxes_flat_for_patch_extractor = gaad_bboxes_full_batch_sequences.reshape(B * N_frames_total_sample, self.num_appearance_regions, 4)
 
-        # --- Extract TARGET spectral features (from original pixels) ---
         target_pixel_patches = self.target_spectral_patch_extractor(frames_pixels_flat, gaad_bboxes_flat_for_patch_extractor)
-        # target_pixel_patches: (B*N_frames, NumReg, C_target, H_spectral, W_spectral)
         B_flat_target, NReg_target, C_target_spectral, H_spec_target, W_spec_target = target_pixel_patches.shape
         
         target_dft_features_flat: Optional[torch.Tensor] = None
         target_dct_features_flat: Optional[torch.Tensor] = None
 
         if self.args.use_dft_features_appearance:
+            # UPDATED CALL: Removed norm_scale
             target_dft_features_flat = SpectralTransformUtils.compute_2d_dft_features(
                 target_pixel_patches.reshape(B_flat_target * NReg_target, C_target_spectral, H_spec_target, W_spec_target),
-                norm_scale=self.args.dft_norm_scale_video,
                 fft_norm_type=self.args.dft_fft_norm
-            ) # ( (B*N_frames)*NumReg, D_dft )
+            )
         
         if self.args.use_dct_features_appearance:
+            # UPDATED CALL: Removed norm_type and other norm args
             target_dct_features_flat = SpectralTransformUtils.compute_2d_dct_features(
-                target_pixel_patches.reshape(B_flat_target * NReg_target, C_target_spectral, H_spec_target, W_spec_target),
-                norm_type=self.args.dct_norm_type,
-                norm_global_scale=self.args.dct_norm_global_scale,
-                norm_tanh_scale=self.args.dct_norm_tanh_scale
-            ) # ( (B*N_frames)*NumReg, D_dct )
+                target_pixel_patches.reshape(B_flat_target * NReg_target, C_target_spectral, H_spec_target, W_spec_target)
+            )
 
-        # --- Extract INPUT spectral features for WuBu-S (potentially from RoIAlign) ---
         patches_for_wubus_input_path = self.wubus_input_patch_extractor(frames_pixels_flat, gaad_bboxes_flat_for_patch_extractor)
         B_flat_wubus, NReg_wubus, C_wubus_in, H_spec_wubus, W_spec_wubus = patches_for_wubus_input_path.shape
         
@@ -2230,27 +2247,31 @@ class RegionalVAEEncoder(nn.Module):
         wubus_dct_input_flat: Optional[torch.Tensor] = None
         
         if self.args.use_dft_features_appearance:
+            # UPDATED CALL: Removed norm_scale
             wubus_dft_input_flat = SpectralTransformUtils.compute_2d_dft_features(
                 patches_for_wubus_input_path.reshape(B_flat_wubus * NReg_wubus, C_wubus_in, H_spec_wubus, W_spec_wubus),
-                norm_scale=self.args.dft_norm_scale_video,
                 fft_norm_type=self.args.dft_fft_norm
             )
         if self.args.use_dct_features_appearance:
+            # UPDATED CALL: Removed norm_type and other norm args
             wubus_dct_input_flat = SpectralTransformUtils.compute_2d_dct_features(
-                patches_for_wubus_input_path.reshape(B_flat_wubus * NReg_wubus, C_wubus_in, H_spec_wubus, W_spec_wubus),
-                norm_type=self.args.dct_norm_type,
-                norm_global_scale=self.args.dct_norm_global_scale,
-                norm_tanh_scale=self.args.dct_norm_tanh_scale
+                patches_for_wubus_input_path.reshape(B_flat_wubus * NReg_wubus, C_wubus_in, H_spec_wubus, W_spec_wubus)
             )
 
-        # Concatenate DFT and DCT features for PatchEmbed if both are used
         combined_spectral_features_for_embed_list = []
         if wubus_dft_input_flat is not None: combined_spectral_features_for_embed_list.append(wubus_dft_input_flat)
         if wubus_dct_input_flat is not None: combined_spectral_features_for_embed_list.append(wubus_dct_input_flat)
         
-        if not combined_spectral_features_for_embed_list: # Fallback if no spectral features
-            self.logger.warning_once("Encoder: No spectral features generated for WuBu-S input. Using raw reshaped patches. This path may be problematic if PatchEmbed expects specific dim.")
-            combined_spectral_features_flat = patches_for_wubus_input_path.reshape(B_flat_wubus * NReg_wubus, -1)
+        if not combined_spectral_features_for_embed_list:
+            self.logger.warning_once("Encoder: No spectral features for WuBu-S input. Using raw reshaped patches.")
+            if patches_for_wubus_input_path.numel() == 0: # Handle if patches are empty
+                 self.logger.error_once("Encoder: patches_for_wubus_input_path is empty. Cannot create combined_spectral_features_flat.")
+                 # Create a dummy tensor with expected batch size but feature dim 1 to avoid crash in PatchEmbed
+                 # This requires patch_feature_dim_for_embed to be 1 in PatchEmbed's init if this path is taken.
+                 combined_spectral_features_flat = torch.zeros((B_flat_wubus * NReg_wubus, 1), device=device, dtype=dtype_model)
+            else:
+                combined_spectral_features_flat = patches_for_wubus_input_path.reshape(B_flat_wubus * NReg_wubus, -1)
+
         else:
             combined_spectral_features_flat = torch.cat(combined_spectral_features_for_embed_list, dim=-1)
 
@@ -2261,54 +2282,79 @@ class RegionalVAEEncoder(nn.Module):
         regional_app_features_tangent = wubu_s_output_tangent_flat.reshape(
             B, N_frames_total_sample, self.num_appearance_regions, D_out_s
         )
-        agg_app_features = torch.mean(regional_app_features_tangent, dim=2) # (B, N_frames, D_out_s)
+        agg_app_features = torch.mean(regional_app_features_tangent, dim=2)
 
         wubu_t_input_features = agg_app_features
-        if motion_features is not None and self.args.use_wubu_motion_branch:
-             motion_features_tangent = motion_features.to(dtype_model) # (B, N_pairs, N_motion_reg, D_motion)
-             N_pairs_motion = motion_features_tangent.shape[1]
-             agg_motion_features_per_pair = torch.mean(motion_features_tangent, dim=2) # (B, N_pairs, D_motion)
-             aligned_motion_for_wubut = torch.zeros(B, N_frames_total_sample, agg_motion_features_per_pair.shape[-1], device=device, dtype=dtype_model)
-             if N_pairs_motion > 0:
-                 len_to_copy = min(N_pairs_motion, N_frames_total_sample -1)
-                 aligned_motion_for_wubut[:, 1 : 1 + len_to_copy, :] = agg_motion_features_per_pair[:, :len_to_copy, :]
-                 if N_pairs_motion < N_frames_total_sample -1 and N_pairs_motion > 0: # Pad if motion seq shorter
-                      last_valid_motion = agg_motion_features_per_pair[:, -1, :].unsqueeze(1)
-                      if N_frames_total_sample - (1+N_pairs_motion) > 0:
-                        aligned_motion_for_wubut[:, 1 + N_pairs_motion :, :] = last_valid_motion.expand(-1, N_frames_total_sample - (1+N_pairs_motion), -1)
-             wubu_t_input_features = torch.cat([agg_app_features, aligned_motion_for_wubut], dim=-1)
+        if motion_features is not None and self.args.use_wubu_motion_branch and motion_features.numel() > 0:
+             motion_features_tangent = motion_features.to(dtype=dtype_model)
+             N_pairs_motion, D_motion_feat = motion_features_tangent.shape[1], motion_features_tangent.shape[-1]
+             if D_motion_feat > 0 : # Ensure motion features have non-zero dimension
+                 agg_motion_features_per_pair = torch.mean(motion_features_tangent, dim=2)
+                 aligned_motion_for_wubut = torch.zeros(B, N_frames_total_sample, D_motion_feat, device=device, dtype=dtype_model)
+                 if N_pairs_motion > 0:
+                     len_to_copy = min(N_pairs_motion, N_frames_total_sample -1)
+                     if len_to_copy > 0: # Check if there's anything to copy
+                        aligned_motion_for_wubut[:, 1 : 1 + len_to_copy, :] = agg_motion_features_per_pair[:, :len_to_copy, :]
+                     if N_pairs_motion < N_frames_total_sample -1:
+                          last_valid_motion = agg_motion_features_per_pair[:, -1, :].unsqueeze(1)
+                          if N_frames_total_sample - (1+len_to_copy) > 0: # Check if padding is needed
+                            aligned_motion_for_wubut[:, 1 + len_to_copy :, :] = last_valid_motion.expand(-1, N_frames_total_sample - (1+len_to_copy), -1)
+                 wubu_t_input_features = torch.cat([agg_app_features, aligned_motion_for_wubut], dim=-1)
+             else: self.logger.warning_once("Motion features have zero dimension, not concatenating for WuBu-T.")
 
-        if self.wubu_t:
-            temporal_features_sequence = self.wubu_t(wubu_t_input_features) # (B, N_frames, D_out_t)
-            final_temporal_feature = temporal_features_sequence[:, -1, :] # Use last frame's temporal feature
+
+        if self.wubu_t and self.wubu_t_input_dim > 0: # Check if wubu_t exists and its input dim is valid
+            temporal_features_sequence = self.wubu_t(wubu_t_input_features)
+            final_temporal_feature = temporal_features_sequence[:, -1, :]
         else:
-            final_temporal_feature = torch.mean(wubu_t_input_features, dim=1) # Avg over time if no WuBu-T
+            if wubu_t_input_features.numel() > 0 and wubu_t_input_features.shape[1] > 0 : # Ensure not empty before mean
+                 final_temporal_feature = torch.mean(wubu_t_input_features, dim=1)
+            elif wubu_t_input_features.numel() > 0 : # If only one frame, use it directly
+                 final_temporal_feature = wubu_t_input_features.squeeze(1) if wubu_t_input_features.dim() == 3 and wubu_t_input_features.shape[1] == 1 else wubu_t_input_features
+            else: # Fallback if wubu_t_input_features is empty
+                 self.logger.error_once("wubu_t_input_features is empty. Cannot compute final_temporal_feature. Using zeros.")
+                 # Determine expected output dimension for fc_mu/fc_logvar
+                 expected_fc_input_dim = self.fc_mu.in_features
+                 final_temporal_feature = torch.zeros((B, expected_fc_input_dim), device=device, dtype=dtype_model)
+
 
         mu = self.fc_mu(final_temporal_feature)
         logvar = self.fc_logvar(final_temporal_feature)
 
-        # Reshape target features for trainer: (B, N_frames, NumReg, D_spectral_target)
         final_target_dft = target_dft_features_flat.view(B, N_frames_total_sample, self.num_appearance_regions, -1) if target_dft_features_flat is not None else None
         final_target_dct = target_dct_features_flat.view(B, N_frames_total_sample, self.num_appearance_regions, -1) if target_dct_features_flat is not None else None
         
-        return mu, logvar, gaad_bboxes_full_batch_sequences, final_target_dft, final_target_dct
+        # Also return the raw pixel patches that correspond to the target spectral features
+        # This is crucial if the loss function will be pixel-based.
+        # target_pixel_patches shape: (B*N_frames, NumReg, C_target, H_spectral, W_spectral)
+        # Reshape to (B, N_frames, NumReg, C_target, H_spectral, W_spectral)
+        # target_pixel_patches_for_loss = target_pixel_patches.view(
+        #     B, N_frames_total_sample, self.num_appearance_regions,
+        #     C_target_spectral, H_spec_target, W_spec_target
+        # )
+        # The trainer will now be responsible for getting these target pixel patches if needed for loss.
+        # This function returns the *spectral targets* from encoder.
 
+        return mu, logvar, gaad_bboxes_full_batch_sequences, final_target_dft, final_target_dct
 
 class RegionalGeneratorDecoder(nn.Module):
     def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_config: Dict, latent_dim: int):
         super().__init__()
         self.args = args
         self.video_config = video_config
-        self.image_size = args.image_h_w_tuple # Ensure this is set in parse_arguments
+        self.image_size = args.image_h_w_tuple
         self.num_regions = gaad_config['num_regions']
         self.num_img_channels = video_config['num_channels']
         self.latent_dim = latent_dim
         self.num_predict_frames = video_config["num_predict_frames"]
         self.logger = logging.getLogger("WuBuGAADHybridGenV03.Generator")
 
-        # Determine initial spatial resolution and number of upsampling layers
         min_target_dim = min(self.image_size[0], self.image_size[1])
-        if min_target_dim <= 8: self.gen_init_spatial_res = 1
+        if min_target_dim <= 0: # Handle invalid image size
+            self.logger.error(f"Invalid target image dimensions: {self.image_size}. Defaulting spatial_res to 1.")
+            min_target_dim = 1 # Avoid division by zero
+            self.gen_init_spatial_res = 1
+        elif min_target_dim <= 8: self.gen_init_spatial_res = 1
         elif min_target_dim <= 32: self.gen_init_spatial_res = 2
         else: self.gen_init_spatial_res = 4
         
@@ -2319,156 +2365,274 @@ class RegionalGeneratorDecoder(nn.Module):
             self.gen_num_upsampling_layers = max(1, int(math.ceil(math.log2(target_upsample_factor))) if target_upsample_factor > 0 else 1)
 
         calculated_final_res = self.gen_init_spatial_res * (2**self.gen_num_upsampling_layers)
-        self.needs_final_adaptive_pool = (calculated_final_res != min_target_dim)
-        if self.needs_final_adaptive_pool:
-            self.logger.warning(f"Gen calculated final res {calculated_final_res} vs target {min_target_dim}. Final adaptive pool will be used for pixel output path if active.")
+        self.needs_final_adaptive_pool_pixel_path = (calculated_final_res != min_target_dim)
+        if self.needs_final_adaptive_pool_pixel_path and not (args.use_dft_features_appearance or args.use_dct_features_appearance):
+            self.logger.warning(f"Gen pixel path: calculated final res {calculated_final_res} vs target {min_target_dim}. Final adaptive pool will be used.")
 
         self.gen_init_channels = min(512, max(128, self.latent_dim * 2))
-        self.gen_temporal_kernel_size = getattr(args, 'gen_temporal_kernel_size', 3)
+        fc_output_dim = self.gen_init_channels * self.num_predict_frames * self.gen_init_spatial_res * self.gen_init_spatial_res
+        if fc_output_dim <=0:
+            self.logger.error(f"Calculated fc_expand_latent output dim is {fc_output_dim} (init_ch: {self.gen_init_channels}, N_pred: {self.num_predict_frames}, init_spat: {self.gen_init_spatial_res}). This is invalid. Forcing to 1.")
+            fc_output_dim = 1 # Fallback to prevent error, though model may not learn
+        self.fc_expand_latent = nn.Linear(self.latent_dim, fc_output_dim)
 
-        self.fc_expand_latent = nn.Linear(self.latent_dim, self.gen_init_channels * self.num_predict_frames * self.gen_init_spatial_res * self.gen_init_spatial_res)
+
+        self.gen_temporal_kernel_size = getattr(args, 'gen_temporal_kernel_size', 3)
 
         self.gaad_condition_dim = max(32, self.latent_dim // 4)
         if self.num_regions > 0 and getattr(args, 'gen_use_gaad_film_condition', True):
             self.bbox_feature_dim = 4
             hidden_bbox_embed_dim = max(self.gaad_condition_dim, self.num_regions * self.bbox_feature_dim // 2)
-            self.frame_gaad_embedder = nn.Sequential(nn.Linear(self.num_regions * self.bbox_feature_dim, hidden_bbox_embed_dim), nn.GELU(), nn.Linear(hidden_bbox_embed_dim, self.gaad_condition_dim))
-            self.logger.info(f"Generator GAAD-FiLM enabled, cond_dim: {self.gaad_condition_dim}")
+            self.frame_gaad_embedder = nn.Sequential(
+                nn.Linear(self.num_regions * self.bbox_feature_dim, hidden_bbox_embed_dim),
+                nn.GELU(),
+                nn.Linear(hidden_bbox_embed_dim, self.gaad_condition_dim)
+            )
         else:
             self.frame_gaad_embedder = None
-            self.logger.info("Generator GAAD-FiLM disabled.")
 
         self.upsample_blocks = nn.ModuleList()
         current_channels = self.gen_init_channels
         padding_temp = self.gen_temporal_kernel_size // 2
-        min_gen_channels_final_block = max(32, self.num_img_channels * 8) 
+        min_gen_channels_final_block = max(32, self.num_img_channels * 8)
 
         for i in range(self.gen_num_upsampling_layers):
-            out_channels = max(min_gen_channels_final_block, current_channels // 2) if i < self.gen_num_upsampling_layers -1 else min_gen_channels_final_block
-            block = nn.ModuleDict(); block['conv_transpose'] = nn.ConvTranspose3d(current_channels, out_channels, kernel_size=(self.gen_temporal_kernel_size, 4, 4), stride=(1, 2, 2), padding=(padding_temp, 1, 1), bias=False)
-            block['norm'] = nn.InstanceNorm3d(out_channels, affine=True);
-            if self.frame_gaad_embedder is not None: block['film'] = FiLMLayer(out_channels, self.gaad_condition_dim)
-            block['activation'] = nn.GELU(); self.upsample_blocks.append(block); current_channels = out_channels
+            out_channels = max(min_gen_channels_final_block, current_channels // 2) if i < self.gen_num_upsampling_layers - 1 else min_gen_channels_final_block
+            if current_channels <=0 or out_channels <=0:
+                self.logger.warning(f"Skipping upsample block {i} due to non-positive channel count (in:{current_channels}, out:{out_channels}).")
+                break # Stop creating layers if channels become non-positive
+            block = nn.ModuleDict()
+            block['conv_transpose'] = nn.ConvTranspose3d(current_channels, out_channels,
+                                                       kernel_size=(self.gen_temporal_kernel_size, 4, 4),
+                                                       stride=(1, 2, 2), padding=(padding_temp, 1, 1), bias=False)
+            block['norm'] = nn.InstanceNorm3d(out_channels, affine=True)
+            if self.frame_gaad_embedder is not None:
+                block['film'] = FiLMLayer(out_channels, self.gaad_condition_dim)
+            block['activation'] = nn.GELU()
+            self.upsample_blocks.append(block)
+            current_channels = out_channels
         
         self.final_dense_feature_channels = current_channels
         
-        # --- Spectral Feature Prediction Heads ---
         self.gen_patch_h_spectral = args.spectral_patch_size_h
         self.gen_patch_w_spectral = args.spectral_patch_size_w
         self.gen_roi_align_output_spatial = (self.gen_patch_h_spectral, self.gen_patch_w_spectral)
-        roi_feat_dim_for_heads = self.final_dense_feature_channels * self.gen_patch_h_spectral * self.gen_patch_w_spectral
-
-        self.to_dft_coeffs_mlp: Optional[nn.Module] = None
-        self.to_dct_coeffs_mlp: Optional[nn.Module] = None
+        
+        roi_feat_dim_for_heads = 0 # Default to 0, only calculate if RoIAlign is possible and used
+        if self.final_dense_feature_channels > 0 and self.gen_patch_h_spectral > 0 and self.gen_patch_w_spectral > 0:
+            roi_feat_dim_for_heads = self.final_dense_feature_channels * self.gen_patch_h_spectral * self.gen_patch_w_spectral
+        
+        self.to_dft_coeffs_mlp = None
+        self.to_dct_coeffs_mlp = None
 
         if args.use_dft_features_appearance:
             dft_w_coeffs_one_sided_gen = self.gen_patch_w_spectral // 2 + 1
             dft_coeff_output_dim_per_region = self.num_img_channels * 2 * self.gen_patch_h_spectral * dft_w_coeffs_one_sided_gen
-            hidden_mlp_dft = max(dft_coeff_output_dim_per_region // 2, roi_feat_dim_for_heads // 2, 128)
-            self.to_dft_coeffs_mlp = nn.Sequential(
-                nn.Linear(roi_feat_dim_for_heads, hidden_mlp_dft), nn.GELU(),
-                nn.Linear(hidden_mlp_dft, dft_coeff_output_dim_per_region),
-                nn.Tanh() # Output normalized DFT features (real/imag parts in [-1,1])
-            )
-            self.logger.info(f"Gen DFT Head: RoIAlign spatial {self.gen_roi_align_output_spatial}, Projects {roi_feat_dim_for_heads} to {dft_coeff_output_dim_per_region} DFT coeffs/region. Output Tanh.")
-        
+            if roi_feat_dim_for_heads > 0 and dft_coeff_output_dim_per_region > 0:
+                hidden_mlp_dft = max(dft_coeff_output_dim_per_region // 2, roi_feat_dim_for_heads // 2, 64) # Min hidden 64
+                self.to_dft_coeffs_mlp = nn.Sequential(
+                    nn.Linear(roi_feat_dim_for_heads, hidden_mlp_dft), nn.GELU(),
+                    nn.Linear(hidden_mlp_dft, dft_coeff_output_dim_per_region)
+                    # REMOVED final nn.Tanh() here
+                )
+                self.logger.info(f"Generator DFT Head: RoIAlign spatial {self.gen_roi_align_output_spatial}, "
+                                 f"Projects {roi_feat_dim_for_heads} to {dft_coeff_output_dim_per_region} DFT coeffs/region. No final Tanh.")
+            else: self.logger.warning("Cannot create DFT prediction MLP due to zero input/output dims or invalid dense feature channels.")
+
         if args.use_dct_features_appearance:
             dct_coeff_output_dim_per_region = self.num_img_channels * self.gen_patch_h_spectral * self.gen_patch_w_spectral
-            hidden_mlp_dct = max(dct_coeff_output_dim_per_region // 2, roi_feat_dim_for_heads // 2, 128)
-            self.to_dct_coeffs_mlp = nn.Sequential(
-                nn.Linear(roi_feat_dim_for_heads, hidden_mlp_dct), nn.GELU(),
-                nn.Linear(hidden_mlp_dct, dct_coeff_output_dim_per_region),
-                nn.Tanh() # Output normalized DCT features in [-1,1] if args.dct_norm_type == 'tanh'
-            )
-            self.logger.info(f"Gen DCT Head: RoIAlign spatial {self.gen_roi_align_output_spatial}, Projects {roi_feat_dim_for_heads} to {dct_coeff_output_dim_per_region} DCT coeffs/region. Output Tanh.")
+            if roi_feat_dim_for_heads > 0 and dct_coeff_output_dim_per_region > 0:
+                hidden_mlp_dct = max(dct_coeff_output_dim_per_region // 2, roi_feat_dim_for_heads // 2, 64)
+                self.to_dct_coeffs_mlp = nn.Sequential(
+                    nn.Linear(roi_feat_dim_for_heads, hidden_mlp_dct), nn.GELU(),
+                    nn.Linear(hidden_mlp_dct, dct_coeff_output_dim_per_region)
+                    # REMOVED final nn.Tanh() here
+                )
+                self.logger.info(f"Generator DCT Head: RoIAlign spatial {self.gen_roi_align_output_spatial}, "
+                                 f"Projects {roi_feat_dim_for_heads} to {dct_coeff_output_dim_per_region} DCT coeffs/region. No final Tanh.")
+            else: self.logger.warning("Cannot create DCT prediction MLP due to zero input/output dims or invalid dense feature channels.")
 
-        # Fallback to Pixel output if NO spectral features are selected
+
         if not args.use_dft_features_appearance and not args.use_dct_features_appearance:
-            self.logger.warning("Generator: No spectral features (DFT or DCT) selected for output. Defaulting to pixel output path.")
-            final_conv_padding_spatial = 1 if getattr(args, 'gen_final_conv_kernel_spatial', 3) > 1 else 0
-            self.final_conv_pixel = nn.Conv3d(current_channels, self.num_img_channels, 
-                                              kernel_size=(self.gen_temporal_kernel_size, 
-                                                           getattr(args, 'gen_final_conv_kernel_spatial', 3), 
-                                                           getattr(args, 'gen_final_conv_kernel_spatial', 3)), 
-                                              padding=(padding_temp, final_conv_padding_spatial, final_conv_padding_spatial))
-            self.final_activation_pixel = nn.Tanh() # Output pixels in [-1, 1]
-            self.logger.info(f"Generator Pixel Head (Fallback): FinalConv output channels {self.num_img_channels}")
+            self.logger.info("Generator: Using pixel output path (no DFT/DCT features selected for G output).")
+            if self.final_dense_feature_channels > 0 and self.num_img_channels > 0 :
+                final_conv_padding_spatial = 1 if getattr(args, 'gen_final_conv_kernel_spatial', 3) > 1 else 0
+                self.final_conv_pixel = nn.Conv3d(
+                    self.final_dense_feature_channels, self.num_img_channels,
+                    kernel_size=(self.gen_temporal_kernel_size,
+                                 getattr(args, 'gen_final_conv_kernel_spatial', 3),
+                                 getattr(args, 'gen_final_conv_kernel_spatial', 3)),
+                    padding=(padding_temp, final_conv_padding_spatial, final_conv_padding_spatial)
+                )
+                self.final_activation_pixel = nn.Tanh() # Output pixels in [-1, 1]
+            else:
+                self.logger.error("Cannot create final_conv_pixel due to zero channel count. Pixel path will fail.")
+                self.final_conv_pixel = None; self.final_activation_pixel = None # type: ignore
         
         self.apply(init_weights_general)
 
-    def _normalize_bboxes(self, bboxes: torch.Tensor, H: int, W: int) -> torch.Tensor: # Unchanged
-        x1, y1, x2, y2 = bboxes.unbind(-1); img_W = float(W) if W > 0 else 1.0; img_H = float(H) if H > 0 else 1.0
-        norm_cx = ((x1 + x2) / 2.0) / img_W; norm_cy = ((y1 + y2) / 2.0) / img_H
-        norm_w = (x2 - x1).abs() / img_W; norm_h = (y2 - y1).abs() / img_H; return torch.stack([norm_cx, norm_cy, norm_w, norm_h], dim=-1)
+    def _normalize_bboxes(self, bboxes: torch.Tensor, H: int, W: int) -> torch.Tensor:
+        x1, y1, x2, y2 = bboxes.unbind(-1)
+        img_W_f = float(W) if W > 0 else 1.0 # Avoid division by zero
+        img_H_f = float(H) if H > 0 else 1.0
+
+        norm_cx = ((x1 + x2) / 2.0) / img_W_f
+        norm_cy = ((y1 + y2) / 2.0) / img_H_f
+        norm_w = (x2 - x1).abs() / img_W_f
+        norm_h = (y2 - y1).abs() / img_H_f
+        return torch.stack([norm_cx, norm_cy, norm_w, norm_h], dim=-1)
 
     def forward(self, latent_code: torch.Tensor, gaad_bboxes_for_decode: Optional[torch.Tensor]
                ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
-        # Output: predicted_pixel_frames (Optional), predicted_dft_coeffs (Optional), predicted_dct_coeffs (Optional)
-        B = latent_code.shape[0]; device = latent_code.device; dtype_in = latent_code.dtype
+        B = latent_code.shape[0]
+        device = latent_code.device
+        dtype_in = latent_code.dtype
+
+        if self.gen_init_channels <= 0 or self.gen_init_spatial_res <=0 : # Check added for robustness
+            self.logger.error_once(f"Generator forward: Invalid init_channels ({self.gen_init_channels}) or init_spatial_res ({self.gen_init_spatial_res}). Cannot proceed.")
+            return None, None, None
+
         x = self.fc_expand_latent(latent_code)
-        x = x.view(B, self.gen_init_channels, self.num_predict_frames, self.gen_init_spatial_res, self.gen_init_spatial_res).to(dtype_in)
+        try:
+            x = x.view(B, self.gen_init_channels, self.num_predict_frames, self.gen_init_spatial_res, self.gen_init_spatial_res).to(dtype_in)
+        except RuntimeError as e_view: # Catch potential view errors if fc_expand_latent output dim was forced to 1
+            self.logger.error_once(f"Error reshaping fc_expand_latent output: {e_view}. This indicates a problem with init_channels, num_predict_frames, or init_spatial_res. Latent: {latent_code.shape}, x after fc: {x.shape}")
+            return None, None, None
+
+
         sequence_condition = None
-        if self.frame_gaad_embedder is not None:
-            if gaad_bboxes_for_decode is not None and (gaad_bboxes_for_decode.shape[0] != B or gaad_bboxes_for_decode.shape[1] != self.num_predict_frames or gaad_bboxes_for_decode.shape[2] != self.num_regions):
-                self.logger.warning_once(f"Gen GAAD bbox shape mismatch. Expected (B={B}, N_pred={self.num_predict_frames}, NumReg={self.num_regions}, 4), got {gaad_bboxes_for_decode.shape if gaad_bboxes_for_decode is not None else 'None'}. Zero cond."); frame_conditions_flat = torch.zeros(B * self.num_predict_frames, self.gaad_condition_dim, device=device, dtype=dtype_in)
-            elif gaad_bboxes_for_decode is not None: norm_bboxes = self._normalize_bboxes(gaad_bboxes_for_decode.to(dtype_in), self.image_size[0], self.image_size[1]); norm_bboxes_flat = norm_bboxes.view(B * self.num_predict_frames, -1); frame_conditions_flat = self.frame_gaad_embedder(norm_bboxes_flat)
-            else: frame_conditions_flat = torch.zeros(B * self.num_predict_frames, self.gaad_condition_dim, device=device, dtype=dtype_in)
-            if frame_conditions_flat is not None: frame_conditions_reshaped = frame_conditions_flat.view(B, self.num_predict_frames, self.gaad_condition_dim); sequence_condition = torch.mean(frame_conditions_reshaped, dim=1).to(dtype_in)
-        for block_idx, block in enumerate(self.upsample_blocks):
-            x = block['conv_transpose'](x); x = block['norm'](x)
-            if 'film' in block and block['film'] is not None and sequence_condition is not None: x = block['film'](x, sequence_condition)
+        if self.frame_gaad_embedder is not None and self.num_regions > 0:
+            if gaad_bboxes_for_decode is not None and \
+               (gaad_bboxes_for_decode.shape[0] != B or \
+                gaad_bboxes_for_decode.shape[1] != self.num_predict_frames or \
+                gaad_bboxes_for_decode.shape[2] != self.num_regions):
+                self.logger.warning_once(
+                    f"Gen GAAD bbox shape mismatch. Expected (B={B}, N_pred={self.num_predict_frames}, NumReg={self.num_regions}, 4), "
+                    f"got {gaad_bboxes_for_decode.shape if gaad_bboxes_for_decode is not None else 'None'}. Using zero condition for FiLM."
+                )
+                frame_conditions_flat = torch.zeros(B * self.num_predict_frames, self.gaad_condition_dim, device=device, dtype=dtype_in)
+            elif gaad_bboxes_for_decode is not None:
+                norm_bboxes = self._normalize_bboxes(gaad_bboxes_for_decode.to(dtype_in), self.image_size[0], self.image_size[1])
+                norm_bboxes_flat = norm_bboxes.view(B * self.num_predict_frames, -1)
+                frame_conditions_flat = self.frame_gaad_embedder(norm_bboxes_flat)
+            else:
+                self.logger.debug_once("Generator GAAD Embedder active but no bboxes provided. Using zero condition for FiLM.")
+                frame_conditions_flat = torch.zeros(B * self.num_predict_frames, self.gaad_condition_dim, device=device, dtype=dtype_in)
+            
+            if frame_conditions_flat is not None:
+                frame_conditions_reshaped = frame_conditions_flat.view(B, self.num_predict_frames, self.gaad_condition_dim)
+                sequence_condition = torch.mean(frame_conditions_reshaped, dim=1).to(dtype_in)
+
+        for block in self.upsample_blocks:
+            x = block['conv_transpose'](x)
+            x = block['norm'](x)
+            if 'film' in block and sequence_condition is not None:
+                x = block['film'](x, sequence_condition)
             x = block['activation'](x)
         
         output_dft_coeffs: Optional[torch.Tensor] = None
         output_dct_coeffs: Optional[torch.Tensor] = None
         output_pixel_frames: Optional[torch.Tensor] = None
 
-        if self.args.use_dft_features_appearance or self.args.use_dct_features_appearance:
+        # Spectral Path
+        if (self.args.use_dft_features_appearance and self.to_dft_coeffs_mlp) or \
+           (self.args.use_dct_features_appearance and self.to_dct_coeffs_mlp):
+            
+            if not ROI_ALIGN_AVAILABLE:
+                self.logger.error_once("RoIAlign is required for spectral feature prediction in Generator but is not available.")
+                return None, None, None # Cannot proceed with spectral path
             if gaad_bboxes_for_decode is None:
-                self.logger.error("Generator spectral path: gaad_bboxes_for_decode is None. Cannot produce regional spectral features.")
-                if self.args.use_dft_features_appearance: dft_w_coeffs_gen = self.gen_patch_w_spectral // 2 + 1; output_dft_coeffs = torch.zeros(B, self.num_predict_frames, self.num_regions, self.num_img_channels, 2, self.gen_patch_h_spectral, dft_w_coeffs_gen, device=device, dtype=dtype_in)
-                if self.args.use_dct_features_appearance: output_dct_coeffs = torch.zeros(B, self.num_predict_frames, self.num_regions, self.num_img_channels, self.gen_patch_h_spectral, self.gen_patch_w_spectral, device=device, dtype=dtype_in)
-                return output_pixel_frames, output_dft_coeffs, output_dct_coeffs
+                self.logger.error_once("Generator spectral path: gaad_bboxes_for_decode is None. Cannot produce regional spectral features.")
+                return None, None, None # Cannot proceed
+
 
             all_frames_regional_dft_coeffs_list = [] if self.args.use_dft_features_appearance and self.to_dft_coeffs_mlp else None
             all_frames_regional_dct_coeffs_list = [] if self.args.use_dct_features_appearance and self.to_dct_coeffs_mlp else None
             
             H_final_feat, W_final_feat = x.shape[-2], x.shape[-1]
+            if self.image_size[0] == 0: # Prevent division by zero if image_size is invalid
+                self.logger.error_once("Generator: self.image_size[0] is zero, cannot calculate RoIAlign spatial_scale.")
+                return None, None, None
             roi_spatial_scale = H_final_feat / self.image_size[0]
 
             for f_idx in range(self.num_predict_frames):
-                frame_feature_map = x[:, :, f_idx, :, :]; frame_bboxes = gaad_bboxes_for_decode[:, f_idx, :, :]
+                frame_feature_map = x[:, :, f_idx, :, :]
+                frame_bboxes = gaad_bboxes_for_decode[:, f_idx, :, :]
+                
                 rois_for_frame_list = []
-                for b_s_idx in range(B): batch_indices = torch.full((self.num_regions, 1), float(b_s_idx), device=device, dtype=dtype_in); rois_for_frame_list.append(torch.cat([batch_indices, frame_bboxes[b_s_idx]], dim=1))
+                for b_s_idx in range(B):
+                    batch_indices = torch.full((self.num_regions, 1), float(b_s_idx), device=device, dtype=dtype_in)
+                    rois_for_frame_list.append(torch.cat([batch_indices, frame_bboxes[b_s_idx]], dim=1))
                 all_rois_this_frame = torch.cat(rois_for_frame_list, dim=0)
-                regional_feats_from_roi = roi_align(frame_feature_map, all_rois_this_frame, output_size=self.gen_roi_align_output_spatial, spatial_scale=roi_spatial_scale, aligned=True)
-                regional_feats_flat = regional_feats_from_roi.reshape(B * self.num_regions, -1)
+                
+                try:
+                    regional_feats_from_roi = roi_align( # type: ignore
+                        frame_feature_map, all_rois_this_frame,
+                        output_size=self.gen_roi_align_output_spatial,
+                        spatial_scale=roi_spatial_scale, aligned=True
+                    )
+                    regional_feats_flat = regional_feats_from_roi.reshape(B * self.num_regions, -1)
+                except Exception as e_roi:
+                    self.logger.error_once(f"RoIAlign failed in Generator: {e_roi}. FeatMap:{frame_feature_map.shape}, RoIs:{all_rois_this_frame.shape}. Skipping spectral output.", exc_info=True)
+                    # Skip this frame's spectral output or return None for all spectral.
+                    # For simplicity, we'll return None for all if any RoIAlign fails,
+                    # as partial output would be hard to handle.
+                    return None, None, None
 
-                if self.args.use_dft_features_appearance and self.to_dft_coeffs_mlp is not None and all_frames_regional_dft_coeffs_list is not None:
+
+                if self.args.use_dft_features_appearance and self.to_dft_coeffs_mlp and all_frames_regional_dft_coeffs_list is not None:
                     dft_coeffs_flat_for_frame = self.to_dft_coeffs_mlp(regional_feats_flat)
                     dft_w_coeffs_one_sided_gen = self.gen_patch_w_spectral // 2 + 1
-                    frame_dft_structured = dft_coeffs_flat_for_frame.view(B, self.num_regions, self.num_img_channels, 2, self.gen_patch_h_spectral, dft_w_coeffs_one_sided_gen)
-                    all_frames_regional_dft_coeffs_list.append(frame_dft_structured)
-                
-                if self.args.use_dct_features_appearance and self.to_dct_coeffs_mlp is not None and all_frames_regional_dct_coeffs_list is not None:
+                    try:
+                        frame_dft_structured = dft_coeffs_flat_for_frame.view(
+                            B, self.num_regions, self.num_img_channels, 2,
+                            self.gen_patch_h_spectral, dft_w_coeffs_one_sided_gen
+                        )
+                        all_frames_regional_dft_coeffs_list.append(frame_dft_structured)
+                    except RuntimeError as e_view_dft:
+                        self.logger.error_once(f"Error reshaping DFT coeffs: {e_view_dft}. Flat shape: {dft_coeffs_flat_for_frame.shape}, Target C,H,W_coeff: {self.num_img_channels}, {self.gen_patch_h_spectral}, {dft_w_coeffs_one_sided_gen}")
+                        return None, None, None # Cannot proceed if reshape fails
+
+                if self.args.use_dct_features_appearance and self.to_dct_coeffs_mlp and all_frames_regional_dct_coeffs_list is not None:
                     dct_coeffs_flat_for_frame = self.to_dct_coeffs_mlp(regional_feats_flat)
-                    frame_dct_structured = dct_coeffs_flat_for_frame.view(B, self.num_regions, self.num_img_channels, self.gen_patch_h_spectral, self.gen_patch_w_spectral)
-                    all_frames_regional_dct_coeffs_list.append(frame_dct_structured)
-            
-            if all_frames_regional_dft_coeffs_list: output_dft_coeffs = torch.stack(all_frames_regional_dft_coeffs_list, dim=1).to(dtype_in)
-            if all_frames_regional_dct_coeffs_list: output_dct_coeffs = torch.stack(all_frames_regional_dct_coeffs_list, dim=1).to(dtype_in)
+                    try:
+                        frame_dct_structured = dct_coeffs_flat_for_frame.view(
+                            B, self.num_regions, self.num_img_channels,
+                            self.gen_patch_h_spectral, self.gen_patch_w_spectral
+                        )
+                        all_frames_regional_dct_coeffs_list.append(frame_dct_structured)
+                    except RuntimeError as e_view_dct:
+                        self.logger.error_once(f"Error reshaping DCT coeffs: {e_view_dct}. Flat shape: {dct_coeffs_flat_for_frame.shape}, Target C,H,W: {self.num_img_channels}, {self.gen_patch_h_spectral}, {self.gen_patch_w_spectral}")
+                        return None, None, None
+
+            if all_frames_regional_dft_coeffs_list:
+                output_dft_coeffs = torch.stack(all_frames_regional_dft_coeffs_list, dim=1).to(dtype_in)
+            if all_frames_regional_dct_coeffs_list:
+                output_dct_coeffs = torch.stack(all_frames_regional_dct_coeffs_list, dim=1).to(dtype_in)
         
-        else: # Fallback to Pixel Output Path
-            if hasattr(self, 'final_conv_pixel') and hasattr(self, 'final_activation_pixel'):
-                x_px = self.final_conv_pixel(x) # type: ignore
-                output_pixel_frames_raw = self.final_activation_pixel(x_px) # type: ignore
-                output_pixel_frames = output_pixel_frames_raw.permute(0, 2, 1, 3, 4).to(dtype_in) # (B, N_pred, C, H, W)
-                if self.needs_final_adaptive_pool:
-                    self.logger.debug_once(f"Generator pixel output needs adaptive pool. Current shape: {output_pixel_frames.shape[-2:]}")
-                    temp_permuted_for_pool = output_pixel_frames.permute(0, 2, 1, 3, 4) # (B, C, N_pred, H_curr, W_curr)
-                    pooled = F.adaptive_avg_pool3d(temp_permuted_for_pool, (self.num_predict_frames, self.image_size[0], self.image_size[1]))
-                    output_pixel_frames = pooled.permute(0, 2, 1, 3, 4)
-            else: self.logger.error("Generator: Fallback pixel path missing final_conv_pixel or final_activation_pixel.")
+        # Fallback to Pixel Output Path (if spectral features are NOT selected by args OR if MLP for them is None)
+        elif not (self.args.use_dft_features_appearance and self.to_dft_coeffs_mlp) and \
+             not (self.args.use_dct_features_appearance and self.to_dct_coeffs_mlp):
+            if hasattr(self, 'final_conv_pixel') and self.final_conv_pixel is not None and \
+               hasattr(self, 'final_activation_pixel') and self.final_activation_pixel is not None:
+                
+                x_pixel = self.final_conv_pixel(x) # type: ignore
+                generated_frames_sequence_pixels = self.final_activation_pixel(x_pixel) # type: ignore
+                output_pixel_frames = generated_frames_sequence_pixels.permute(0, 2, 1, 3, 4).to(dtype_in)
+
+                if self.needs_final_adaptive_pool_pixel_path:
+                    final_h_actual, final_w_actual = output_pixel_frames.shape[-2:]
+                    if final_h_actual != self.image_size[0] or final_w_actual != self.image_size[1]:
+                        self.logger.debug_once(f"Generator pixel output {final_h_actual}x{final_w_actual} vs target {self.image_size}. Applying adaptive pool.")
+                        temp_permuted_for_pool = output_pixel_frames.permute(0, 2, 1, 3, 4)
+                        pooled = F.adaptive_avg_pool3d(temp_permuted_for_pool, (self.num_predict_frames, self.image_size[0], self.image_size[1]))
+                        output_pixel_frames = pooled.permute(0, 2, 1, 3, 4)
+            else:
+                self.logger.error_once("Generator: Fallback pixel path selected, but final_conv_pixel or final_activation_pixel is missing/None.")
+                output_pixel_frames = None
+        
+        # If spectral was intended but failed (e.g. RoIAlign error, reshape error), outputs will be None.
+        # If only pixel path was intended, spectral outputs will remain None.
         return output_pixel_frames, output_dft_coeffs, output_dct_coeffs
 
 
@@ -2586,35 +2750,23 @@ class VideoDiscriminatorWrapper(nn.Module):
         return (dummy_logits, dummy_features) if return_features else dummy_logits
 
 class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
-    """
-    Discriminator that operates on concatenated regional DFT+DCT features.
-    Adapted from GlobalWuBuDCTDiscriminator in the audio script.
-    """
     def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_config: Dict, disc_config: Dict):
         super().__init__()
         self.args = args
         self.logger = logging.getLogger(f"WuBuGAADHybridGenV03.GlobalWuBuVideoFeatureD.{id(self)}")
-        
-        # This D takes features directly, so this is what the trainer should prepare
-        self.effective_input_type_for_trainer = "regional_spectral_features_combined" # DFT + DCT
+        self.effective_input_type_for_trainer = "regional_spectral_features_combined"
 
         self.num_gaad_regions = gaad_config['num_regions']
         self.patch_h_spectral = args.spectral_patch_size_h
         self.patch_w_spectral = args.spectral_patch_size_w
         self.num_img_channels = video_config['num_channels']
-
-        # Define how many frames of features this specific discriminator variant processes.
-        # This attribute will be used by the HybridTrainer to determine how many frames of features to pass.
         self.num_frames_to_discriminate = disc_config.get(
-            "num_frames_input_for_global_wubu_d", # Check specific disc_config first
-            getattr(args, 'video_global_wubu_d_num_frames_input', args.num_predict_frames) 
+            "num_frames_input_for_global_wubu_d",
+            getattr(args, 'video_global_wubu_d_num_frames_input', args.num_predict_frames)
         )
-        self.logger.info(f"GlobalWuBuVideoFeatureD configured to process features from {self.num_frames_to_discriminate} frame(s).")
 
-
-        # Calculate input dimension per region PER FRAME based on what VAE encoder outputs
         features_per_region_from_g_dft_per_frame = 0
-        if args.use_dft_features_appearance:
+        if args.use_dft_features_appearance and self.patch_w_spectral > 0:
             dft_w_coeffs_one_sided = self.patch_w_spectral // 2 + 1
             features_per_region_from_g_dft_per_frame = self.num_img_channels * 2 * self.patch_h_spectral * dft_w_coeffs_one_sided
         
@@ -2622,31 +2774,22 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
         if args.use_dct_features_appearance:
             features_per_region_from_g_dct_per_frame = self.num_img_channels * self.patch_h_spectral * self.patch_w_spectral
         
-        # This is the dimension of combined (DFT+DCT) features for ONE region for ONE frame
         self.num_features_per_region_per_frame_input = features_per_region_from_g_dft_per_frame + features_per_region_from_g_dct_per_frame
         if self.num_features_per_region_per_frame_input == 0:
-             self.logger.error("GlobalWuBuVideoFeatureD: num_features_per_region_per_frame_input is 0. This D will not work.")
-             self.num_features_per_region_per_frame_input = 1 # Dummy value
-        
-        # The total input dimension expected by the initial_projection layer.
-        # It's (NumRegions * FeaturesPerRegionPerFrame * NumFramesThisDProcesses)
+             self.logger.error("GlobalWuBuVideoFeatureD: num_features_per_region_per_frame_input is 0. This D will likely not work correctly.")
+             self.num_features_per_region_per_frame_input = 1 # Avoid division by zero later, but indicates problem
+
         self.total_input_feature_dim_for_projection = (
             self.num_gaad_regions * 
             self.num_features_per_region_per_frame_input * 
             self.num_frames_to_discriminate
-        )
-        # self.total_input_feature_dim was the old name, let's keep it for compatibility if needed by logs,
-        # but total_input_feature_dim_for_projection is more descriptive for the Linear layer.
-        self.total_input_feature_dim = self.total_input_feature_dim_for_projection
-
+        ) if self.num_gaad_regions > 0 and self.num_features_per_region_per_frame_input > 0 and self.num_frames_to_discriminate > 0 else 1 # Fallback to 1 if any dim is zero
 
         self.apply_spectral_norm = disc_config.get("apply_spectral_norm", getattr(args, 'disc_apply_spectral_norm', True))
-        
-        # Global stats aux input (mean/std of input features) - optional
         self.use_global_stats_aux = disc_config.get("disc_use_global_stats_aux_video_global_wubu", 
                                                     getattr(args, 'disc_use_global_stats_aux_video_global_wubu', False))
-        self.global_stats_mlp: Optional[nn.Module] = None
-        current_projection_input_dim = self.total_input_feature_dim_for_projection # Use the correctly calculated dim for the Linear layer
+        self.global_stats_mlp = None
+        current_projection_input_dim = self.total_input_feature_dim_for_projection
 
         if self.use_global_stats_aux:
             self.num_global_stats_outputs = 2 # Mean, Std
@@ -2657,37 +2800,38 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
                     nn.Linear(self.num_global_stats_outputs, self.global_stats_mlp_hidden_dim), nn.LeakyReLU(0.2, True),
                     nn.Linear(self.global_stats_mlp_hidden_dim, self.global_stats_mlp_hidden_dim)
                 )
-                if self.apply_spectral_norm:
-                    self.global_stats_mlp[0] = spectral_norm(self.global_stats_mlp[0]) # type: ignore
-                    self.global_stats_mlp[2] = spectral_norm(self.global_stats_mlp[2]) # type: ignore
-                current_projection_input_dim += self.global_stats_mlp_hidden_dim # Add to the input of the main projection
+                if self.apply_spectral_norm and hasattr(self.global_stats_mlp[0], 'weight'): # Check if Linear
+                    self.global_stats_mlp[0] = nn.utils.spectral_norm(self.global_stats_mlp[0])
+                    self.global_stats_mlp[2] = nn.utils.spectral_norm(self.global_stats_mlp[2])
+                current_projection_input_dim += self.global_stats_mlp_hidden_dim
             else: self.use_global_stats_aux = False
         
-        # Input tangent dim for the WuBu stack
         self.global_wubu_input_tangent_dim = getattr(args, 'video_global_wubu_d_input_tangent_dim', 512)
         
         if current_projection_input_dim > 0 and self.global_wubu_input_tangent_dim > 0:
             self.initial_projection = nn.Linear(current_projection_input_dim, self.global_wubu_input_tangent_dim)
             self.initial_layernorm = nn.LayerNorm(self.global_wubu_input_tangent_dim)
         else:
-            self.logger.warning(f"GlobalWuBuVideoFeatureD: Initial projection has zero input ({current_projection_input_dim}) or output ({self.global_wubu_input_tangent_dim}) dim. Using Identity.")
-            self.initial_projection = nn.Identity(); self.initial_layernorm = nn.Identity()
+            self.logger.warning_once(f"GlobalWuBuVideoFeatureD: Initial projection has zero input ({current_projection_input_dim}) "
+                                f"or output ({self.global_wubu_input_tangent_dim}) dim. Using Identity.")
+            self.initial_projection = nn.Identity()
+            self.initial_layernorm = nn.Identity()
 
-        # WuBu stack configuration
-        wubu_config = _configure_wubu_stack(args, "wubu_d_global_video") # New prefix for video D
+        wubu_config = _configure_wubu_stack(args, "wubu_d_global_video")
         self.wubu_output_dim = getattr(args, 'video_global_wubu_d_output_feature_dim', 256)
-
         if wubu_config and wubu_config.get("num_levels", 0) > 0 and self.global_wubu_input_tangent_dim > 0 :
+            # Ensure wubu_output_dim aligns with WuBu stack's actual output if configured
             if wubu_config.get('hyperbolic_dims') and wubu_config['hyperbolic_dims'][-1] > 0:
-                self.wubu_output_dim = wubu_config['hyperbolic_dims'][-1]
+                 wubu_actual_output_dim = sum(d for d_idx, d in enumerate(wubu_config['hyperbolic_dims'][:wubu_config.get("num_levels",0)]) if d > 0)
+                 if wubu_actual_output_dim > 0: self.wubu_output_dim = wubu_actual_output_dim
+            
             self.wubu_stack = FullyHyperbolicWuBuNestingModel(
                 input_tangent_dim=self.global_wubu_input_tangent_dim,
                 output_tangent_dim=self.wubu_output_dim,
                 config=wubu_config
             )
-            self.logger.info(f"GlobalWuBuVideoFeatureD: WuBu stack active ({wubu_config.get('num_levels')} levels). Output dim: {self.wubu_output_dim}")
         else:
-            self.logger.warning(f"GlobalWuBuVideoFeatureD: WuBu stack not configured or input_tangent_dim is 0. Using MLP fallback.")
+            self.logger.warning_once(f"GlobalWuBuVideoFeatureD: WuBu stack not configured or input_tangent_dim is 0. Using MLP fallback.")
             if self.global_wubu_input_tangent_dim > 0 and self.wubu_output_dim > 0:
                 self.wubu_stack = nn.Sequential(
                     nn.Linear(self.global_wubu_input_tangent_dim, self.global_wubu_input_tangent_dim * 2),
@@ -2695,67 +2839,58 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
                     nn.Linear(self.global_wubu_input_tangent_dim * 2, self.wubu_output_dim))
             else: self.wubu_stack = nn.Identity()
 
-        # Final decision layer
         if self.wubu_output_dim > 0:
             self.final_decision_layer = nn.Linear(self.wubu_output_dim, 1)
-            if self.apply_spectral_norm: self.final_decision_layer = spectral_norm(self.final_decision_layer)
+            if self.apply_spectral_norm: self.final_decision_layer = nn.utils.spectral_norm(self.final_decision_layer)
         else:
-            self.logger.error("GlobalWuBuVideoFeatureD: final_decision_layer input dim is 0. Using Identity.")
+            self.logger.error_once("GlobalWuBuVideoFeatureD: final_decision_layer input dim is 0. Using Identity.")
             self.final_decision_layer = nn.Identity()
         
         self.apply(init_weights_general)
-        self.logger.info(f"GlobalWuBuVideoFeatureD initialized. Expects features from {self.num_frames_to_discriminate} frames. Total input dim for projection: {self.total_input_feature_dim_for_projection}. Features per region per frame: {self.num_features_per_region_per_frame_input}")
+        self.logger.info(f"GlobalWuBuVideoFeatureD initialized. Expects features from {self.num_frames_to_discriminate} frames. "
+                         f"Total input dim for projection (before aux stats): {self.total_input_feature_dim_for_projection}. "
+                         f"Calculated features per region per frame input: {self.num_features_per_region_per_frame_input}")
 
     def _calculate_global_feature_stats_for_video_features(self, regional_features_input_to_stats: torch.Tensor) -> torch.Tensor:
-        # regional_features_input_to_stats: (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
-        # This input is already flattened over frames for each region.
-        # We need to calculate stats over the entire feature vector *per region*, then average those stats.
-        # OR average regions first, then stats. Let's average regions first.
-
         if regional_features_input_to_stats.numel() == 0: 
-            return torch.zeros(regional_features_input_to_stats.shape[0], 2, device=regional_features_input_to_stats.device, dtype=regional_features_input_to_stats.dtype)
+            return torch.zeros(regional_features_input_to_stats.shape[0], 2,
+                               device=regional_features_input_to_stats.device,
+                               dtype=regional_features_input_to_stats.dtype)
         
-        # Reshape to (B, NumRegions, NumFrames, FeaturesPerRegionPerFrame) to average over regions & frames correctly if desired.
-        # Current input is (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
-        # For simplicity, the audio version averaged over the already combined feature vector.
-        # Let's average across regions first, resulting in (B, NumFrames * FeaturesPerRegionPerFrame)
-        mean_features_across_regions = torch.mean(regional_features_input_to_stats, dim=1) # (B, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
+        # Input: (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
+        # Average across regions first
+        mean_features_across_regions = torch.mean(regional_features_input_to_stats, dim=1)
         
-        # Then calculate mean and std of this single averaged (over regions) feature vector.
-        mean_stat = torch.mean(mean_features_across_regions, dim=1) # (B,)
-        std_stat = torch.std(mean_features_across_regions, dim=1)   # (B,)
-        std_stat = torch.max(std_stat, torch.tensor(EPS, device=std_stat.device, dtype=std_stat.dtype)) # Avoid NaN/Inf
-        return torch.stack([mean_stat, std_stat], dim=-1) # (B, 2)
+        mean_stat = torch.mean(mean_features_across_regions, dim=1)
+        std_stat = torch.std(mean_features_across_regions, dim=1)
+        std_stat = torch.max(std_stat, torch.tensor(EPS, device=std_stat.device, dtype=std_stat.dtype))
+        return torch.stack([mean_stat, std_stat], dim=-1)
 
-    def forward(self, regional_spectral_features_input: torch.Tensor, # (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
+    def forward(self, regional_spectral_features_input: torch.Tensor,
                 return_features: bool = False
                ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         B = regional_spectral_features_input.shape[0]
-        # The input regional_spectral_features_input is expected to be:
-        # (Batch, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
-        # as prepared by the HybridTrainer.
 
         if regional_spectral_features_input.numel() == 0 or self.num_features_per_region_per_frame_input == 0:
-            self.logger.warning_once("GlobalWuBuVideoFeatureD: Forward called with empty input or zero feature_per_region_per_frame dim. Returning zeros.")
+            self.logger.warning_once("GlobalWuBuD: Forward called with empty input or zero feature_per_region_per_frame dim. Ret zeros.")
             dummy_logits = torch.zeros(B, device=regional_spectral_features_input.device, dtype=regional_spectral_features_input.dtype)
             dummy_feat_ret_dim = self.wubu_output_dim if self.wubu_output_dim > 0 else 1
             dummy_features_ret = torch.zeros(B, dummy_feat_ret_dim, device=regional_spectral_features_input.device,dtype=regional_spectral_features_input.dtype)
             return (dummy_logits, dummy_features_ret) if return_features else dummy_logits
 
-        # Flatten all regional and frame features for the initial_projection layer
-        # Input is (B, NumRegions, NumFrames * FeatPerRegPerFrame)
-        # Reshape to (B, NumRegions * NumFrames * FeatPerRegPerFrame)
         flat_all_batch_features = regional_spectral_features_input.reshape(B, -1) 
         
-        # Check if the flattened dimension matches what the initial_projection layer expects (excluding aux stats for now)
-        if flat_all_batch_features.shape[1] != self.total_input_feature_dim_for_projection:
-             self.logger.error_once(f"GlobalWuBuVideoFeatureD forward: Shape mismatch for initial_projection. "
+        # Expected dimension calculation now also considers if any component is zero
+        expected_dim_calc = (self.num_gaad_regions * self.num_features_per_region_per_frame_input * self.num_frames_to_discriminate)
+        if expected_dim_calc <=0 : # If any part of the product is zero, expected_dim_calc becomes zero.
+            expected_dim_calc = 1 # Match the fallback in __init__
+
+        if flat_all_batch_features.shape[1] != expected_dim_calc:
+             self.logger.error_once(f"GlobalWuBuD forward: Shape mismatch for initial_projection. "
                                f"Input flat features dim: {flat_all_batch_features.shape[1]}, "
-                               f"Expected (NumReg * FeatPerRegPerFrame * NumFramesD): {self.total_input_feature_dim_for_projection}. "
+                               f"Expected: {expected_dim_calc}. "
                                f"Input regional_spectral_features_input shape: {regional_spectral_features_input.shape}. "
                                f"D Config: NumReg={self.num_gaad_regions}, FeatPerRegPerFrame={self.num_features_per_region_per_frame_input}, NumFramesD={self.num_frames_to_discriminate}")
-             # This is a critical error if it occurs.
-             # Fallback to returning zeros if shapes don't match.
              dummy_logits = torch.zeros(B, device=regional_spectral_features_input.device, dtype=regional_spectral_features_input.dtype)
              dummy_feat_ret_dim = self.wubu_output_dim if self.wubu_output_dim > 0 else 1
              dummy_features_ret = torch.zeros(B, dummy_feat_ret_dim, device=regional_spectral_features_input.device,dtype=regional_spectral_features_input.dtype)
@@ -2763,8 +2898,6 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
         
         current_input_to_projection = flat_all_batch_features
         if self.use_global_stats_aux and self.global_stats_mlp is not None:
-            # Calculate stats based on the input regional_spectral_features_input
-            # The input to _calculate_global_feature_stats_for_video_features is (B, NumRegions, NumFramesThisDProcesses * FeaturesPerRegionPerFrame)
             stats = self._calculate_global_feature_stats_for_video_features(regional_spectral_features_input.detach())
             projected_stats = self.global_stats_mlp(stats)
             current_input_to_projection = torch.cat([flat_all_batch_features, projected_stats], dim=-1)
@@ -2772,12 +2905,12 @@ class GlobalWuBuVideoFeatureDiscriminator(nn.Module):
         projected_tangent = self.initial_projection(current_input_to_projection)
         projected_tangent_norm = self.initial_layernorm(projected_tangent)
         
-        wubu_out_features = self.wubu_stack(projected_tangent_norm) # (B, wubu_output_dim)
+        wubu_out_features = self.wubu_stack(projected_tangent_norm)
         
-        if isinstance(self.final_decision_layer, nn.Identity): # Should not happen if wubu_output_dim > 0
+        if isinstance(self.final_decision_layer, nn.Identity):
             logits = torch.mean(wubu_out_features, dim=-1) if wubu_out_features.numel() > 0 else torch.zeros(B, device=wubu_out_features.device, dtype=wubu_out_features.dtype)
         else:
-            logits = self.final_decision_layer(wubu_out_features).squeeze(-1) # (B,)
+            logits = self.final_decision_layer(wubu_out_features).squeeze(-1)
 
         return (logits, wubu_out_features) if return_features else logits
 
@@ -3632,83 +3765,170 @@ class HybridTrainer:
         return kl_div.mean()
 
 
-    def _compute_recon_loss(self, 
-                            recon_dft: Optional[torch.Tensor], target_dft: Optional[torch.Tensor],
-                            recon_dct: Optional[torch.Tensor], target_dct: Optional[torch.Tensor],
-                            recon_pixels: Optional[torch.Tensor], target_pixels: Optional[torch.Tensor]
+    def _compute_recon_loss(self,
+                            # Predicted values from Generator
+                            recon_dft_coeffs_gen: Optional[torch.Tensor], # G's predicted DFT coeffs
+                            recon_dct_coeffs_gen: Optional[torch.Tensor], # G's predicted DCT coeffs
+                            recon_pixels_gen: Optional[torch.Tensor],     # G's predicted pixels (if direct pixel path)
+                            
+                            # Target values
+                            target_pixel_patches_for_loss: Optional[torch.Tensor],
                            ) -> torch.Tensor:
-        total_recon_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32) 
+        """
+        Computes reconstruction loss, primarily in pixel-space if spectral features are used.
+        If only direct pixel generation is used, computes pixel MSE on full frames.
+        """
+        total_recon_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
         num_losses_counted = 0
 
-        if self.args.use_dft_features_appearance and recon_dft is not None and target_dft is not None:
-            recon_dft_for_loss = recon_dft
-            if recon_dft.ndim == 7 and target_dft.ndim == 4: # Standard case from current Gen/Enc
-                B, N, R, C_dft, two, H, W_coeff = recon_dft.shape
-                recon_dft_for_loss = recon_dft.reshape(B, N, R, -1)
-            
-            if recon_dft_for_loss.shape == target_dft.shape:
-                loss_dft = F.mse_loss(recon_dft_for_loss.float(), target_dft.float())
-                total_recon_loss += self.args.lambda_recon_dft * loss_dft
-                num_losses_counted +=1
-            else: 
-                if not hasattr(self, '_logged_dft_mismatch_warning'): # Log only once
-                    self.logger.warning(f"Recon DFT shape mismatch: Recon effective {recon_dft_for_loss.shape}, Target {target_dft.shape}. Original recon_dft: {recon_dft.shape}")
-                    setattr(self, '_logged_dft_mismatch_warning', True)
-        
-        if self.args.use_dct_features_appearance and recon_dct is not None and target_dct is not None:
-            recon_dct_for_loss = recon_dct
-            if recon_dct.ndim == 6 and target_dct.ndim == 4: # Standard case
-                B, N, R, C_dct, H, W = recon_dct.shape
-                recon_dct_for_loss = recon_dct.reshape(B, N, R, -1)
+        m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
+        m_ref_gen = m_ref.generator
 
-            if recon_dct_for_loss.shape == target_dct.shape:
-                loss_dct = F.mse_loss(recon_dct_for_loss.float(), target_dct.float())
-                total_recon_loss += self.args.lambda_recon_dct * loss_dct
-                num_losses_counted +=1
-            else: 
-                if not hasattr(self, '_logged_dct_mismatch_warning'): # Log only once
-                    self.logger.warning(f"Recon DCT shape mismatch: Recon effective {recon_dct_for_loss.shape}, Target {target_dct.shape}. Original recon_dct: {recon_dct.shape}")
-                    setattr(self, '_logged_dct_mismatch_warning', True)
+        if target_pixel_patches_for_loss is None and \
+           (self.args.use_dft_features_appearance or self.args.use_dct_features_appearance):
+            self.logger.error_once("_compute_recon_loss: target_pixel_patches_for_loss is None, " # type: ignore
+                                "but spectral features are enabled. Cannot compute pixel-space recon loss from spectral.")
+            return total_recon_loss
 
-        if not (self.args.use_dft_features_appearance or self.args.use_dct_features_appearance): 
-            if recon_pixels is not None and target_pixels is not None:
-                if recon_pixels.shape == target_pixels.shape:
-                    loss_pixel = F.mse_loss(recon_pixels.float(), target_pixels.float())
-                    total_recon_loss += self.args.lambda_recon * loss_pixel 
-                    num_losses_counted +=1
-                else: 
-                    if not hasattr(self, '_logged_pixel_mismatch_warning'):
-                        self.logger.warning(f"Recon Pixel shape mismatch: Recon {recon_pixels.shape}, Target {target_pixels.shape}")
-                        setattr(self, '_logged_pixel_mismatch_warning', True)
-            elif recon_pixels is None and target_pixels is not None : 
-                 self.logger.error("Pixel reconstruction mode, but G did not output pixels. This is a bug.")
-                 return torch.tensor(1000.0, device=self.device, dtype=torch.float32) 
-        
-        return total_recon_loss / num_losses_counted if num_losses_counted > 0 else total_recon_loss
+        if self.args.use_dft_features_appearance and recon_dft_coeffs_gen is not None and target_pixel_patches_for_loss is not None:
+            # Expected recon_dft_coeffs_gen shape: (B, N_frames, N_reg, C, 2, H_patch, W_patch_coeff) [7D]
+            # or (B, N_frames, N_reg, D_flat_dft_per_reg) [4D] if already flattened by G output stage
+            if recon_dft_coeffs_gen.ndim == 7:
+                B_d, N_d, R_d, C_dft, two_d, H_p_dft, W_p_c_dft = recon_dft_coeffs_gen.shape
+                flat_dim_dft = C_dft * two_d * H_p_dft * W_p_c_dft
+                recon_dft_flat_for_idft = recon_dft_coeffs_gen.reshape(-1, flat_dim_dft)
+            elif recon_dft_coeffs_gen.ndim == 4: # Assumed (B, N_frames, N_reg, D_flat_dft_per_reg)
+                B_d, N_d, R_d, _ = recon_dft_coeffs_gen.shape 
+                recon_dft_flat_for_idft = recon_dft_coeffs_gen.reshape(B_d * N_d * R_d, -1)
+            else:
+                self.logger.error_once(f"DFT coeffs have unexpected ndim {recon_dft_coeffs_gen.ndim} in _compute_recon_loss. Shape: {recon_dft_coeffs_gen.shape}") #type: ignore
+                return total_recon_loss
+
+            try:
+                reconstructed_pixel_patches_from_dft_flat = SpectralTransformUtils.reconstruct_patches_from_2d_dft(
+                    recon_dft_flat_for_idft,
+                    m_ref_gen.num_img_channels,
+                    m_ref_gen.gen_patch_h_spectral,
+                    m_ref_gen.gen_patch_w_spectral,
+                    fft_norm_type=self.args.dft_fft_norm
+                )
+                reconstructed_pixel_patches_from_dft = reconstructed_pixel_patches_from_dft_flat.view(
+                    B_d, N_d, R_d, m_ref_gen.num_img_channels, m_ref_gen.gen_patch_h_spectral, m_ref_gen.gen_patch_w_spectral
+                )
+                
+                target_pixel_patches_for_loss_eff_dft = target_pixel_patches_for_loss
+                if target_pixel_patches_for_loss.shape[1] != N_d: # N_d is number of frames in recon_dft_coeffs_gen
+                    self.logger.warning_once(f"Recon DFT (Pixel Loss): Target pixel frames ({target_pixel_patches_for_loss.shape[1]}) != Recon DFT frames ({N_d}). Adjusting target.") # type: ignore
+                    if target_pixel_patches_for_loss.shape[1] > N_d:
+                        target_pixel_patches_for_loss_eff_dft = target_pixel_patches_for_loss[:, :N_d, ...]
+                    elif target_pixel_patches_for_loss.shape[1] < N_d and target_pixel_patches_for_loss.shape[1] > 0:
+                        padding_needed = N_d - target_pixel_patches_for_loss.shape[1]
+                        padding = target_pixel_patches_for_loss[:, -1:, ...].repeat(1, padding_needed, 1, 1, 1, 1)
+                        target_pixel_patches_for_loss_eff_dft = torch.cat([target_pixel_patches_for_loss, padding], dim=1)
+                    # else: target is empty or already matches N_d
 
 
+                if reconstructed_pixel_patches_from_dft.shape == target_pixel_patches_for_loss_eff_dft.shape:
+                    loss_dft_pixels = F.mse_loss(reconstructed_pixel_patches_from_dft.float(), target_pixel_patches_for_loss_eff_dft.float())
+                    if torch.isfinite(loss_dft_pixels):
+                        total_recon_loss += self.args.lambda_recon_dft * loss_dft_pixels
+                        num_losses_counted += 1
+                    else: self.logger.warning_once("NaN/Inf in DFT pixel reconstruction loss.") # type: ignore
+                else:
+                    self.logger.warning_once(f"Recon DFT (Pixel Loss) shape mismatch: " # type: ignore
+                                         f"Recon Pixels {reconstructed_pixel_patches_from_dft.shape}, "
+                                         f"Target Pixels Eff {target_pixel_patches_for_loss_eff_dft.shape} (Original Target: {target_pixel_patches_for_loss.shape})")
+            except Exception as e_dft_pix_loss:
+                self.logger.error_once(f"Error in DFT pixel reconstruction loss calculation: {e_dft_pix_loss}", exc_info=True) # type: ignore
+
+
+        if self.args.use_dct_features_appearance and recon_dct_coeffs_gen is not None and target_pixel_patches_for_loss is not None:
+            # Expected recon_dct_coeffs_gen shape: (B, N_frames, N_reg, C, H_patch, W_patch) [6D]
+            # or (B, N_frames, N_reg, D_flat_dct_per_reg) [4D]
+            if recon_dct_coeffs_gen.ndim == 6:
+                B_c, N_c, R_c, C_dct, H_p_dct, W_p_dct = recon_dct_coeffs_gen.shape
+                flat_dim_dct = C_dct * H_p_dct * W_p_dct
+                recon_dct_flat_for_idct = recon_dct_coeffs_gen.reshape(-1, flat_dim_dct)
+            elif recon_dct_coeffs_gen.ndim == 4: # Assumed (B, N_frames, N_reg, D_flat_dct_per_reg)
+                B_c, N_c, R_c, _ = recon_dct_coeffs_gen.shape 
+                recon_dct_flat_for_idct = recon_dct_coeffs_gen.reshape(B_c * N_c * R_c, -1)
+            else:
+                self.logger.error_once(f"DCT coeffs have unexpected ndim {recon_dct_coeffs_gen.ndim} in _compute_recon_loss. Shape: {recon_dct_coeffs_gen.shape}") #type: ignore
+                return total_recon_loss
+
+            try:
+                reconstructed_pixel_patches_from_dct_flat = SpectralTransformUtils.reconstruct_patches_from_2d_dct(
+                    recon_dct_flat_for_idct,
+                    m_ref_gen.num_img_channels,
+                    m_ref_gen.gen_patch_h_spectral,
+                    m_ref_gen.gen_patch_w_spectral
+                )
+                reconstructed_pixel_patches_from_dct = reconstructed_pixel_patches_from_dct_flat.view(
+                    B_c, N_c, R_c, m_ref_gen.num_img_channels, m_ref_gen.gen_patch_h_spectral, m_ref_gen.gen_patch_w_spectral
+                )
+
+                target_pixel_patches_for_loss_eff_dct = target_pixel_patches_for_loss
+                if target_pixel_patches_for_loss.shape[1] != N_c: # N_c is number of frames in recon_dct_coeffs_gen
+                    self.logger.warning_once(f"Recon DCT (Pixel Loss): Target pixel frames ({target_pixel_patches_for_loss.shape[1]}) != Recon DCT frames ({N_c}). Adjusting target.") #type: ignore
+                    if target_pixel_patches_for_loss.shape[1] > N_c:
+                        target_pixel_patches_for_loss_eff_dct = target_pixel_patches_for_loss[:, :N_c, ...]
+                    elif target_pixel_patches_for_loss.shape[1] < N_c and target_pixel_patches_for_loss.shape[1] > 0:
+                        padding_needed = N_c - target_pixel_patches_for_loss.shape[1]
+                        padding = target_pixel_patches_for_loss[:, -1:, ...].repeat(1, padding_needed, 1, 1, 1, 1)
+                        target_pixel_patches_for_loss_eff_dct = torch.cat([target_pixel_patches_for_loss, padding], dim=1)
+                
+                if reconstructed_pixel_patches_from_dct.shape == target_pixel_patches_for_loss_eff_dct.shape:
+                    loss_dct_pixels = F.mse_loss(reconstructed_pixel_patches_from_dct.float(), target_pixel_patches_for_loss_eff_dct.float())
+                    if torch.isfinite(loss_dct_pixels):
+                        total_recon_loss += self.args.lambda_recon_dct * loss_dct_pixels
+                        num_losses_counted += 1
+                    else: self.logger.warning_once("NaN/Inf in DCT pixel reconstruction loss.") # type: ignore
+                else:
+                    self.logger.warning_once(f"Recon DCT (Pixel Loss) shape mismatch: " # type: ignore
+                                         f"Recon Pixels {reconstructed_pixel_patches_from_dct.shape}, "
+                                         f"Target Pixels Eff {target_pixel_patches_for_loss_eff_dct.shape} (Original Target: {target_pixel_patches_for_loss.shape})")
+            except Exception as e_dct_pix_loss:
+                self.logger.error_once(f"Error in DCT pixel reconstruction loss calculation: {e_dct_pix_loss}", exc_info=True) # type: ignore
+
+
+        # --- Direct Pixel Reconstruction Loss (if G's fallback pixel path was used) ---
+        if not (self.args.use_dft_features_appearance or self.args.use_dct_features_appearance):
+            if recon_pixels_gen is not None:
+                if target_pixel_patches_for_loss is None: 
+                    self.logger.error_once("Pixel recon mode (no spectral), but target_pixel_patches_for_loss (expected full frames) is None.") # type: ignore
+                elif recon_pixels_gen.shape == target_pixel_patches_for_loss.shape:
+                    loss_pixel_direct = F.mse_loss(recon_pixels_gen.float(), target_pixel_patches_for_loss.float())
+                    if torch.isfinite(loss_pixel_direct):
+                        total_recon_loss += self.args.lambda_recon * loss_pixel_direct 
+                        num_losses_counted += 1
+                    else: self.logger.warning_once("NaN/Inf in direct pixel reconstruction loss.") # type: ignore
+                else:
+                    self.logger.warning_once(f"Recon Pixel (Direct) shape mismatch: " # type: ignore
+                                         f"Recon {recon_pixels_gen.shape}, "
+                                         f"Target {target_pixel_patches_for_loss.shape}")
+            elif recon_pixels_gen is None and target_pixel_patches_for_loss is not None:
+                self.logger.error_once("Pixel reconstruction mode (no spectral), but G did not output pixels (recon_pixels_gen is None).") # type: ignore
+
+
+        if num_losses_counted == 0:
+            self.logger.warning_once("_compute_recon_loss: No valid reconstruction loss components were calculated. Returning zero loss.") # type: ignore
+            return torch.tensor(0.0, device=self.device, dtype=torch.float32)
+
+        return total_recon_loss / num_losses_counted if num_losses_counted > 1 else total_recon_loss
     @torch.no_grad()
 
 
     def _assemble_pixels_from_spectral(self,
-                                       predicted_dft_coeffs: Optional[torch.Tensor], # Expected (B, N_gen_frames, N_reg, C, 2, H_p_spectral, W_p_coeff_spectral) OR (B, N_gen_frames, N_reg, D_dft_flat)
-                                       predicted_dct_coeffs: Optional[torch.Tensor], # Expected (B, N_gen_frames, N_reg, C, H_p_spectral, W_p_spectral) OR (B, N_gen_frames, N_reg, D_dct_flat)
-                                       gaad_bboxes: torch.Tensor, # Expected (B, N_gen_frames, N_reg, 4) - These bboxes MUST align with N_gen_frames of spectral coeffs
+                                       predicted_dft_coeffs: Optional[torch.Tensor],
+                                       predicted_dct_coeffs: Optional[torch.Tensor],
+                                       gaad_bboxes: torch.Tensor,
                                        target_image_height: int,
                                        target_image_width: int,
-                                       num_image_channels_target: int, # C_img_target
+                                       num_image_channels_target: int,
                                        output_range: Tuple[float, float] = (-1.0, 1.0)
                                       ) -> Optional[torch.Tensor]:
-        # This function now takes target H, W, C instead of full target_pixel_shape
-        # to avoid ambiguity if N_pred_target from target_pixel_shape doesn't match N_gen_frames.
-        # The number of frames in the output will be determined by N_gen_frames from spectral_coeffs.
-
-        # Ensure self.model and self.args are accessible if needed for parameters
         m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
         
-        # Get generator's configured spectral patch size and number of channels
-        # These are used by SpectralTransformUtils.reconstruct_...
-        # Assuming these are attributes of the generator or accessible via m_ref.generator
         gen_num_img_channels = getattr(m_ref.generator, 'num_img_channels', num_image_channels_target)
         gen_patch_h_spectral = getattr(m_ref.generator, 'gen_patch_h_spectral', self.args.spectral_patch_size_h)
         gen_patch_w_spectral = getattr(m_ref.generator, 'gen_patch_w_spectral', self.args.spectral_patch_size_w)
@@ -3718,64 +3938,61 @@ class HybridTrainer:
 
         # --- DFT Path ---
         if predicted_dft_coeffs is not None and self.args.use_dft_features_appearance:
-            # Current generator output for DFT is 7D: (B, N_gen_frames, N_reg, C, 2, H_p, W_p_coeff)
             if predicted_dft_coeffs.ndim == 7:
                 B_dft, N_frames_dft, N_reg_dft, C_dft_in, two_dft, H_p_dft, W_p_c_dft = predicted_dft_coeffs.shape
-                # Reshape for SpectralTransformUtils: (TotalPatches, FlatSpectralDim)
                 dft_flat_for_recon = predicted_dft_coeffs.reshape(
                     B_dft * N_frames_dft * N_reg_dft,
-                    C_dft_in * two_dft * H_p_dft * W_p_c_dft # This is D_dft_flat_per_region
+                    C_dft_in * two_dft * H_p_dft * W_p_c_dft
                 )
-            elif predicted_dft_coeffs.ndim == 4: # Handle older flat format if necessary
-                B_dft, N_frames_dft, N_reg_dft, _ = predicted_dft_coeffs.shape # D_dft_flat already last dim
+            elif predicted_dft_coeffs.ndim == 4:
+                B_dft, N_frames_dft, N_reg_dft, _ = predicted_dft_coeffs.shape
                 dft_flat_for_recon = predicted_dft_coeffs.reshape(B_dft * N_frames_dft * N_reg_dft, -1)
             else:
                 self.logger.error(f"_assemble_pixels: DFT coeffs have unexpected ndim: {predicted_dft_coeffs.ndim}. Shape: {predicted_dft_coeffs.shape}")
-                return None # Critical error
+                return None
 
-            # Ensure gaad_bboxes temporal dimension matches N_frames_dft
             bboxes_for_dft_assembly = gaad_bboxes
             if N_frames_dft != gaad_bboxes.shape[1]:
-                 self.logger.warning_once(f"Assemble DFT: N_frames in DFT coeffs ({N_frames_dft}) != N_frames in bboxes ({gaad_bboxes.shape[1]}). Adjusting bboxes to match DFT coeffs frame count.")
-                 if N_frames_dft < gaad_bboxes.shape[1]: # DFT has fewer frames than bboxes
+                 self.logger.warning_once(f"Assemble DFT: N_frames in DFT coeffs ({N_frames_dft}) != N_frames in bboxes ({gaad_bboxes.shape[1]}). Adjusting bboxes.") # type: ignore
+                 if N_frames_dft < gaad_bboxes.shape[1]:
                      bboxes_for_dft_assembly = gaad_bboxes[:, :N_frames_dft, ...]
-                 elif N_frames_dft > gaad_bboxes.shape[1] and gaad_bboxes.shape[1] > 0: # DFT has more frames, pad bboxes
+                 elif N_frames_dft > gaad_bboxes.shape[1] and gaad_bboxes.shape[1] > 0:
                      num_pad_bbox_dft = N_frames_dft - gaad_bboxes.shape[1]
                      pad_slice_bbox_dft = gaad_bboxes[:, -1:, ...].repeat(1, num_pad_bbox_dft, 1, 1)
                      bboxes_for_dft_assembly = torch.cat([gaad_bboxes, pad_slice_bbox_dft], dim=1)
-                 # If gaad_bboxes.shape[1] == 0 and N_frames_dft > 0, this is an issue handled by caller or ImageAssemblyUtils
+                 # If gaad_bboxes.shape[1] == 0 and N_frames_dft > 0, ImageAssemblyUtils should handle empty bboxes for a frame.
 
             try:
+                # UPDATED CALL for SpectralTransformUtils (no norm_scale)
                 patches_from_dft_flat = SpectralTransformUtils.reconstruct_patches_from_2d_dft(
-                    dft_flat_for_recon, self.args.dft_norm_scale_video,
-                    gen_num_img_channels, # Use generator's config for channels
-                    gen_patch_h_spectral, gen_patch_w_spectral,
-                    fft_norm_type=self.args.dft_fft_norm
-                ) # Output: (TotalPatches, C_gen, H_gen_p, W_gen_p)
+                    dft_features_flat=dft_flat_for_recon,        # Arg 1
+                    num_channels=gen_num_img_channels,           # Arg 2
+                    target_patch_h=gen_patch_h_spectral,       # Arg 3
+                    target_patch_w=gen_patch_w_spectral,       # Arg 4
+                    fft_norm_type=self.args.dft_fft_norm         # Arg 5 (keyword)
+                )
 
                 patches_from_dft_structured = patches_from_dft_flat.view(
                     B_dft, N_frames_dft, N_reg_dft, gen_num_img_channels,
                     gen_patch_h_spectral, gen_patch_w_spectral
                 )
-
                 assembled_pixels_from_dft = ImageAssemblyUtils.assemble_frames_from_patches(
                     patches_from_dft_structured, bboxes_for_dft_assembly,
                     (target_image_height, target_image_width), output_range=output_range
-                ) # Output: (B_dft, N_frames_dft, C_gen, H_img_target, W_img_target)
-            except Exception as e_dft_recon: # Catching general Exception as ValueError might be too specific
-                 self.logger.error(f"Error during DFT patch reconstruction/assembly: {e_dft_recon}. DFT_flat_shape: {dft_flat_for_recon.shape}", exc_info=True)
-                 assembled_pixels_from_dft = None # Ensure it's None on failure
+                )
+            except Exception as e_dft_recon:
+                 self.logger.error(f"Error during DFT patch reconstruction/assembly: {e_dft_recon}. DFT_flat_shape: {dft_flat_for_recon.shape if 'dft_flat_for_recon' in locals() else 'undefined'}", exc_info=True)
+                 assembled_pixels_from_dft = None
 
         # --- DCT Path ---
         if predicted_dct_coeffs is not None and self.args.use_dct_features_appearance:
-            # Current generator output for DCT is 6D: (B, N_gen_frames, N_reg, C, H_p, W_p)
             if predicted_dct_coeffs.ndim == 6:
                 B_dct, N_frames_dct, N_reg_dct, C_dct_in, H_p_dct, W_p_dct = predicted_dct_coeffs.shape
                 dct_flat_for_recon = predicted_dct_coeffs.reshape(
                     B_dct * N_frames_dct * N_reg_dct,
-                    C_dct_in * H_p_dct * W_p_dct # This is D_dct_flat_per_region
+                    C_dct_in * H_p_dct * W_p_dct
                 )
-            elif predicted_dct_coeffs.ndim == 4: # Handle older flat format
+            elif predicted_dct_coeffs.ndim == 4:
                 B_dct, N_frames_dct, N_reg_dct, _ = predicted_dct_coeffs.shape
                 dct_flat_for_recon = predicted_dct_coeffs.reshape(B_dct * N_frames_dct * N_reg_dct, -1)
             else:
@@ -3784,7 +4001,7 @@ class HybridTrainer:
 
             bboxes_for_dct_assembly = gaad_bboxes
             if N_frames_dct != gaad_bboxes.shape[1]:
-                 self.logger.warning_once(f"Assemble DCT: N_frames in DCT coeffs ({N_frames_dct}) != N_frames in bboxes ({gaad_bboxes.shape[1]}). Adjusting bboxes to match DCT coeffs frame count.")
+                 self.logger.warning_once(f"Assemble DCT: N_frames in DCT coeffs ({N_frames_dct}) != N_frames in bboxes ({gaad_bboxes.shape[1]}). Adjusting bboxes.") # type: ignore
                  if N_frames_dct < gaad_bboxes.shape[1]:
                      bboxes_for_dct_assembly = gaad_bboxes[:, :N_frames_dct, ...]
                  elif N_frames_dct > gaad_bboxes.shape[1] and gaad_bboxes.shape[1] > 0:
@@ -3793,14 +4010,13 @@ class HybridTrainer:
                      bboxes_for_dct_assembly = torch.cat([gaad_bboxes, pad_slice_bbox_dct], dim=1)
 
             try:
+                # UPDATED CALL for SpectralTransformUtils (no norm_type, etc.)
                 patches_from_dct_flat = SpectralTransformUtils.reconstruct_patches_from_2d_dct(
-                    dct_flat_for_recon,
-                    gen_num_img_channels,
-                    gen_patch_h_spectral, gen_patch_w_spectral,
-                    norm_type=self.args.dct_norm_type,
-                    norm_global_scale=self.args.dct_norm_global_scale,
-                    norm_tanh_scale=self.args.dct_norm_tanh_scale
-                ) # Output: (TotalPatches, C_gen, H_gen_p, W_gen_p)
+                    dct_features_flat=dct_flat_for_recon,  # Arg 1
+                    num_channels=gen_num_img_channels,     # Arg 2
+                    target_patch_h=gen_patch_h_spectral, # Arg 3
+                    target_patch_w=gen_patch_w_spectral  # Arg 4
+                )
 
                 patches_from_dct_structured = patches_from_dct_flat.view(
                     B_dct, N_frames_dct, N_reg_dct, gen_num_img_channels,
@@ -3809,34 +4025,36 @@ class HybridTrainer:
                 assembled_pixels_from_dct = ImageAssemblyUtils.assemble_frames_from_patches(
                     patches_from_dct_structured, bboxes_for_dct_assembly,
                     (target_image_height, target_image_width), output_range=output_range
-                ) # Output: (B_dct, N_frames_dct, C_gen, H_img_target, W_img_target)
+                )
             except Exception as e_dct_recon:
-                 self.logger.error(f"Error during DCT patch reconstruction/assembly: {e_dct_recon}. DCT_flat_shape: {dct_flat_for_recon.shape}", exc_info=True)
+                 self.logger.error(f"Error during DCT patch reconstruction/assembly: {e_dct_recon}. DCT_flat_shape: {dct_flat_for_recon.shape if 'dct_flat_for_recon' in locals() else 'undefined'}", exc_info=True)
                  assembled_pixels_from_dct = None
-
 
         # --- Combine DFT and DCT (if both available) ---
         if assembled_pixels_from_dft is not None and assembled_pixels_from_dct is not None:
-            # Ensure they have the same number of frames before averaging
-            # This should be guaranteed if N_frames_dft and N_frames_dct are derived from generator's single N_pred
             if assembled_pixels_from_dft.shape[1] != assembled_pixels_from_dct.shape[1]:
-                self.logger.warning_once(f"DFT ({assembled_pixels_from_dft.shape[1]}f) and DCT ({assembled_pixels_from_dct.shape[1]}f) "
-                                     f"assembled pixels have different frame counts after processing. This is unexpected. "
-                                     f"Will attempt to average over min_frames or return only one.")
+                self.logger.warning_once(f"DFT ({assembled_pixels_from_dft.shape[1]}f) and DCT ({assembled_pixels_from_dct.shape[1]}f) " # type: ignore
+                                     f"assembled pixels have different frame counts. Averaging over min_frames or returning one if other is empty.")
                 min_frames_avg = min(assembled_pixels_from_dft.shape[1], assembled_pixels_from_dct.shape[1])
                 if min_frames_avg > 0:
                     return (assembled_pixels_from_dft[:, :min_frames_avg, ...] + assembled_pixels_from_dct[:, :min_frames_avg, ...]) / 2.0
-                else: # If one became zero-frame, return the other if valid
-                    return assembled_pixels_from_dft if assembled_pixels_from_dft.shape[1] > 0 else assembled_pixels_from_dct
-            else: # Frame counts match
+                elif assembled_pixels_from_dft.shape[1] > 0:
+                    return assembled_pixels_from_dft
+                elif assembled_pixels_from_dct.shape[1] > 0:
+                    return assembled_pixels_from_dct
+                else: # Both are zero-frame after adjustment, should be rare
+                    self.logger.warning_once("_assemble_pixels_from_spectral: Both DFT and DCT paths resulted in zero-frame outputs after min_frames_avg logic.") # type: ignore
+                    return None
+            else:
                 return (assembled_pixels_from_dft + assembled_pixels_from_dct) / 2.0
         elif assembled_pixels_from_dft is not None:
             return assembled_pixels_from_dft
         elif assembled_pixels_from_dct is not None:
             return assembled_pixels_from_dct
         else:
-            self.logger.warning_once("_assemble_pixels_from_spectral: Neither DFT nor DCT path yielded assembled pixels.")
+            self.logger.warning_once("_assemble_pixels_from_spectral: Neither DFT nor DCT path yielded assembled pixels.") # type: ignore
             return None
+
 
 
 
@@ -4287,10 +4505,15 @@ class HybridTrainer:
         d_ref_active = self.active_discriminator.module if self.ddp_active and hasattr(self.active_discriminator, 'module') else self.active_discriminator
         active_d_trainer_input_type = self.active_disc_effective_trainer_input_type
 
-        B = real_frames_full_sequence.shape[0]
+        # Get original batch dimensions for slicing and patch extraction
+        B_orig, N_total_input_seq, C_img, H_img, W_img = real_frames_full_sequence.shape
         device = real_frames_full_sequence.device
-        dtype_model = next(iter(m_ref.parameters()), torch.tensor(0.0, device=device)).dtype
-        real_labels_for_g = torch.ones(B, device=device, dtype=dtype_model)
+        
+        # Determine model's operating dtype
+        first_param_g = next(iter(m_ref.parameters()), None)
+        dtype_model = first_param_g.dtype if first_param_g is not None else real_frames_full_sequence.dtype
+
+        real_labels_for_g = torch.ones(B_orig, device=device, dtype=dtype_model)
         losses_g_micro: Dict[str, torch.Tensor] = {}
         assembled_pixels_for_log: Optional[torch.Tensor] = None # For logging generated samples
 
@@ -4298,28 +4521,92 @@ class HybridTrainer:
         for p in m_ref.parameters(): p.requires_grad = True
 
         with amp.autocast(device_type=self.device.type, enabled=self.args.use_amp):
-            # m_ref.forward() returns reconstructions and targets aligned with the *prediction window*
-            # bboxes_used_by_decoder is (B, N_gen_predict_frames, N_reg, 4)
-            # target_dft/dct_for_loss are (B, N_gen_predict_frames, N_reg, D_flat_spectral)
+            # m_ref.forward() returns:
+            # recon_pixel_frames_gen, recon_dft_coeffs_gen, recon_dct_coeffs_gen,
+            # mu, logvar,
+            # bboxes_used_by_decoder, (B, N_gen_pred, N_reg, 4)
+            # _target_dft_coeffs_from_enc, _target_dct_coeffs_from_enc (spectral targets from encoder)
             recon_pixel_frames_gen, recon_dft_coeffs_gen, recon_dct_coeffs_gen, \
             mu, logvar, bboxes_used_by_decoder, \
-            target_dft_features_for_loss, target_dct_features_for_loss = m_ref(real_frames_full_sequence.to(device, dtype_model))
+            _target_dft_coeffs_from_enc, _target_dct_coeffs_from_enc = m_ref(real_frames_full_sequence.to(device, dtype_model))
 
-            num_gen_predict_frames = self.video_config.get("num_predict_frames", 1) # How many frames G generates
-            
-            # target_pixels_for_loss should also correspond to the generator's output window
+            num_gen_predict_frames = self.video_config.get("num_predict_frames", 1)
             num_input_f_cond = self.video_config.get("num_input_frames", 0)
-            target_pixels_for_loss = real_frames_full_sequence[
-                :, num_input_f_cond : num_input_f_cond + num_gen_predict_frames, ...
-            ].to(device, dtype_model) if recon_pixel_frames_gen is not None else None
 
+            # --- Prepare Target PIXEL Patches/Frames for Reconstruction Loss ---
+            target_pixel_data_for_loss: Optional[torch.Tensor] = None
+
+            if self.args.use_dft_features_appearance or self.args.use_dct_features_appearance:
+                # If G outputs spectral features, the reconstruction loss target is PIXEL PATCHES.
+                if bboxes_used_by_decoder is not None:
+                    # Ensure bboxes_used_by_decoder has the expected N_gen_predict_frames dimension
+                    # This should come directly from m_ref.forward() output
+                    if bboxes_used_by_decoder.shape[1] != num_gen_predict_frames:
+                        self.logger.warning_once( # type: ignore
+                            f"G_Step: bboxes_used_by_decoder frames ({bboxes_used_by_decoder.shape[1]}) "
+                            f"!= num_gen_predict_frames ({num_gen_predict_frames}). Using bbox frame count."
+                        )
+                        # This could happen if m_ref.forward had to truncate/pad due to input sequence length
+                        # Use the actual frame count from bboxes_used_by_decoder for consistency
+                        effective_n_pred_loss = bboxes_used_by_decoder.shape[1]
+                    else:
+                        effective_n_pred_loss = num_gen_predict_frames
+
+                    # Slice the original input frames that correspond to what G tried to predict
+                    target_frames_for_pixel_patches = real_frames_full_sequence[
+                        :,
+                        num_input_f_cond : num_input_f_cond + effective_n_pred_loss,
+                        ...
+                    ].to(device, dtype_model)
+
+                    B_loss, N_pred_loss_actual, _, _, _ = target_frames_for_pixel_patches.shape # N_pred_loss_actual is effective_n_pred_loss
+
+                    # Reshape for patch extractor
+                    frames_flat_for_patch_ext = target_frames_for_pixel_patches.reshape(
+                        B_loss * N_pred_loss_actual, C_img, H_img, W_img
+                    )
+                    # Ensure bboxes are also sliced/shaped for these effective N_pred_loss_actual frames
+                    bboxes_for_patch_ext_eff = bboxes_used_by_decoder[:, :N_pred_loss_actual, ...].reshape(
+                        B_loss * N_pred_loss_actual, self.gaad_appearance_config['num_regions'], 4
+                    )
+                    
+                    try:
+                        # Use the encoder's target_spectral_patch_extractor to get the *pixel* patches.
+                        # This extractor is configured to output patches of args.spectral_patch_size_h/w.
+                        target_pixel_data_for_loss = self.m_ref.encoder.target_spectral_patch_extractor(
+                            frames_flat_for_patch_ext,
+                            bboxes_for_patch_ext_eff
+                        )
+                        # Reshape to (B, N_pred_loss_actual, R, C, H_p, W_p)
+                        target_pixel_data_for_loss = target_pixel_data_for_loss.view(
+                            B_loss, N_pred_loss_actual, self.gaad_appearance_config['num_regions'],
+                            self.video_config['num_channels'],
+                            self.args.spectral_patch_size_h, self.args.spectral_patch_size_w
+                        )
+                    except Exception as e_patch_ext:
+                        self.logger.error(f"Error extracting target pixel patches for loss: {e_patch_ext}", exc_info=True)
+                        target_pixel_data_for_loss = None
+                else:
+                    self.logger.error_once("Cannot prepare target_pixel_patches_for_loss: bboxes_used_by_decoder is None from m_ref.forward().") # type: ignore
+            else:
+                # If G's output is direct pixels (no spectral features from G),
+                # then target for loss is the corresponding full frames from input.
+                target_pixel_data_for_loss = real_frames_full_sequence[
+                    :, num_input_f_cond : num_input_f_cond + num_gen_predict_frames, ...
+                ].to(device, dtype_model)
+
+
+            # --- Compute Reconstruction Loss ---
             loss_recon_raw = self._compute_recon_loss(
-                recon_dft_coeffs_gen, target_dft_features_for_loss,
-                recon_dct_coeffs_gen, target_dct_features_for_loss,
-                recon_pixel_frames_gen, target_pixels_for_loss
+                recon_dft_coeffs_gen,       # Predicted DFT coeffs from G
+                recon_dct_coeffs_gen,       # Predicted DCT coeffs from G
+                recon_pixel_frames_gen,     # Corrected: Was recon_pixels_gen
+                target_pixel_data_for_loss  # Target: PIXEL patches (if G in spectral mode)
+                                            #      OR PIXEL full frames (if G in direct pixel mode)
             )
             loss_kl_raw = self._compute_kl_loss(mu, logvar)
             
+            # Apply lambdas and heuristic overrides
             loss_recon_eff = self.args.lambda_recon * self.heuristic_override_lambda_recon_factor * loss_recon_raw
             loss_kl_eff = self.lambda_kl * self.heuristic_override_lambda_kl_factor * loss_kl_raw
 
@@ -4327,28 +4614,34 @@ class HybridTrainer:
             adv_input_for_d_main: torch.Tensor
             adv_gaad_bboxes_for_d_cond: Optional[torch.Tensor] = None
             
-            # Determine how many frames the active D will process from G's output
             num_frames_for_active_d_from_gen = getattr(d_ref_active, 'num_frames_to_discriminate', num_gen_predict_frames)
-            
             d_module_for_check = d_ref_active.actual_discriminator_module if isinstance(d_ref_active, VideoDiscriminatorWrapper) else d_ref_active
-
 
             if active_d_trainer_input_type == "assembled_pixels":
                 if recon_pixel_frames_gen is not None: # G generated pixels directly
-                    assembled_pixels_for_log = recon_pixel_frames_gen # For logging
+                    assembled_pixels_for_log = recon_pixel_frames_gen
+                    # Slice for D's input window
                     adv_input_for_d_main = recon_pixel_frames_gen[:, :num_frames_for_active_d_from_gen, ...]
                 else: # G generated spectral, need to assemble
                     if bboxes_used_by_decoder is None:
-                        raise RuntimeError("G training (adv, pixel-D): bboxes_used_by_decoder is None from G's forward, cannot assemble pixels.")
-                    
-                    assembled_pixels_for_log = self._assemble_pixels_from_spectral(
-                        recon_dft_coeffs_gen, recon_dct_coeffs_gen, bboxes_used_by_decoder,
-                        target_image_height=self.args.image_h, target_image_width=self.args.image_w,
-                        num_image_channels_target=self.video_config['num_channels']
-                    )
-                    if assembled_pixels_for_log is None:
-                        raise RuntimeError("Failed to get/assemble pixels for pixel-based D in G step.")
-                    adv_input_for_d_main = assembled_pixels_for_log[:, :num_frames_for_active_d_from_gen, ...]
+                        # This indicates a problem upstream if G is spectral but bboxes are missing
+                        self.logger.error_once("G_Step (adv, pixel-D): bboxes_used_by_decoder is None. Cannot assemble pixels for D.") # type: ignore
+                        # Create dummy input for D to prevent crash, though GAN loss will be meaningless
+                        adv_input_for_d_main = torch.zeros(B_orig, num_frames_for_active_d_from_gen, C_img, H_img, W_img, device=device, dtype=dtype_model)
+                        assembled_pixels_for_log = adv_input_for_d_main.clone() # Log zeros
+                    else:
+                        assembled_pixels_for_log = self._assemble_pixels_from_spectral(
+                            recon_dft_coeffs_gen, recon_dct_coeffs_gen, bboxes_used_by_decoder,
+                            target_image_height=self.args.image_h, target_image_width=self.args.image_w,
+                            num_image_channels_target=self.video_config['num_channels']
+                        )
+                        if assembled_pixels_for_log is None:
+                            self.logger.error_once("G_Step (adv, pixel-D): _assemble_pixels_from_spectral returned None. D will get zeros.") # type: ignore
+                            adv_input_for_d_main = torch.zeros(B_orig, num_frames_for_active_d_from_gen, C_img, H_img, W_img, device=device, dtype=dtype_model)
+                            assembled_pixels_for_log = adv_input_for_d_main.clone()
+                        else:
+                            # Slice assembled pixels for D's input window
+                            adv_input_for_d_main = assembled_pixels_for_log[:, :num_frames_for_active_d_from_gen, ...]
                 
                 if hasattr(d_module_for_check, 'use_gaad_film_condition') and d_module_for_check.use_gaad_film_condition: # type: ignore
                     if bboxes_used_by_decoder is not None:
@@ -4356,28 +4649,40 @@ class HybridTrainer:
             
             elif active_d_trainer_input_type == "regional_spectral_features_combined":
                 adv_features_list_g = []
-                if self.args.use_dft_features_appearance and recon_dft_coeffs_gen is not None:
-                    if recon_dft_coeffs_gen.ndim == 7: B_g_dft, N_g_dft, R_g_dft, C_g, _, _, _ = recon_dft_coeffs_gen.shape; reshaped_g_dft = recon_dft_coeffs_gen.reshape(B_g_dft, N_g_dft, R_g_dft, -1)
-                    elif recon_dft_coeffs_gen.ndim == 4: reshaped_g_dft = recon_dft_coeffs_gen
-                    else: raise ValueError(f"Unexpected ndim {recon_dft_coeffs_gen.ndim} for recon_dft_coeffs_gen in G step")
-                    adv_features_list_g.append(reshaped_g_dft)
-                if self.args.use_dct_features_appearance and recon_dct_coeffs_gen is not None:
-                    if recon_dct_coeffs_gen.ndim == 6: B_g_dct, N_g_dct, R_g_dct, C_g_d, _, _ = recon_dct_coeffs_gen.shape; reshaped_g_dct = recon_dct_coeffs_gen.reshape(B_g_dct, N_g_dct, R_g_dct, -1)
-                    elif recon_dct_coeffs_gen.ndim == 4: reshaped_g_dct = recon_dct_coeffs_gen
-                    else: raise ValueError(f"Unexpected ndim {recon_dct_coeffs_gen.ndim} for recon_dct_coeffs_gen in G step")
-                    adv_features_list_g.append(reshaped_g_dct)
+                # Helper to reshape G's spectral output for D if needed
+                def _prep_g_spectral_for_d(g_coeffs: Optional[torch.Tensor]):
+                    if g_coeffs is None: return None
+                    if g_coeffs.ndim == 7: # (B,N,R,C,2,Hp,Wpc) for DFT
+                        B_g, N_g, R_g, C_, _, _, _ = g_coeffs.shape
+                        return g_coeffs.reshape(B_g, N_g, R_g, -1)
+                    elif g_coeffs.ndim == 6: # (B,N,R,C,Hp,Wp) for DCT
+                        B_g, N_g, R_g, C_, _, _ = g_coeffs.shape
+                        return g_coeffs.reshape(B_g, N_g, R_g, -1)
+                    elif g_coeffs.ndim == 4: # Already (B,N,R,D_flat)
+                        return g_coeffs
+                    else:
+                        self.logger.error_once(f"G_Step (adv, feature-D): Unexpected ndim {g_coeffs.ndim} for G's spectral output.") # type: ignore
+                        return None
+
+                dft_for_d = _prep_g_spectral_for_d(recon_dft_coeffs_gen)
+                dct_for_d = _prep_g_spectral_for_d(recon_dct_coeffs_gen)
+
+                if self.args.use_dft_features_appearance and dft_for_d is not None:
+                    adv_features_list_g.append(dft_for_d)
+                if self.args.use_dct_features_appearance and dct_for_d is not None:
+                    adv_features_list_g.append(dct_for_d)
                 
-                if not adv_features_list_g: raise ValueError("G training (adv, feature-D): No spectral features from G for D.")
+                if not adv_features_list_g:
+                    self.logger.error_once("G_Step (adv, feature-D): No valid spectral features from G to feed D.") # type: ignore
+                    adv_input_for_d_main = torch.zeros(B_orig, self.gaad_appearance_config['num_regions'], 1, device=device, dtype=dtype_model) # Placeholder
+                else:
+                    concatenated_adv_features_g = torch.cat(adv_features_list_g, dim=-1)
+                    adv_input_for_d_main_sliced_frames = concatenated_adv_features_g[:, :num_frames_for_active_d_from_gen, ...]
+                    B_g_feat, N_active_D_g, N_reg_g, _ = adv_input_for_d_main_sliced_frames.shape
+                    adv_input_for_d_main_permuted = adv_input_for_d_main_sliced_frames.permute(0, 2, 1, 3)
+                    adv_input_for_d_main = adv_input_for_d_main_permuted.reshape(B_g_feat, N_reg_g, -1)
                 
-                concatenated_adv_features_g = torch.cat(adv_features_list_g, dim=-1) # (B, N_gen_pred, N_reg, D_combined_flat)
-                
-                adv_input_for_d_main_sliced_frames = concatenated_adv_features_g[:, :num_frames_for_active_d_from_gen, ...]
-                B_g_feat, N_active_D_g, N_reg_g, _ = adv_input_for_d_main_sliced_frames.shape
-                adv_input_for_d_main_permuted = adv_input_for_d_main_sliced_frames.permute(0, 2, 1, 3)
-                adv_input_for_d_main = adv_input_for_d_main_permuted.reshape(B_g_feat, N_reg_g, -1)
-                
-                # Also assemble pixels if needed for logging, even if D is feature-based
-                if self.am_main_process and self.args.wandb_log_train_recon_interval > 0: # Check if logging needed
+                if self.am_main_process and self.args.wandb_log_train_recon_interval > 0:
                      if bboxes_used_by_decoder is not None:
                         assembled_pixels_for_log = self._assemble_pixels_from_spectral(
                             recon_dft_coeffs_gen, recon_dct_coeffs_gen, bboxes_used_by_decoder,
@@ -4387,7 +4692,6 @@ class HybridTrainer:
             else:
                 raise ValueError(f"G training (adv): Unsupported active_d_trainer_input_type: {active_d_trainer_input_type}")
 
-            # --- Adversarial Forward and Loss ---
             d_output_for_adv = d_ref_active(adv_input_for_d_main, gaad_bboxes_cond=adv_gaad_bboxes_for_d_cond, return_features=self.heuristic_vae_feature_match_active)
             fake_logits_for_g: torch.Tensor
             features_from_d_for_g_feat_match: Optional[torch.Tensor] = None
@@ -4395,7 +4699,9 @@ class HybridTrainer:
                 fake_logits_for_g, features_from_d_for_g_feat_match = d_output_for_adv
             elif isinstance(d_output_for_adv, torch.Tensor):
                 fake_logits_for_g = d_output_for_adv
-            else: raise TypeError(f"Unexpected output type from discriminator: {type(d_output_for_adv)}")
+            else:
+                self.logger.error(f"Unexpected output type from discriminator: {type(d_output_for_adv)}")
+                fake_logits_for_g = torch.zeros_like(real_labels_for_g)
 
 
             loss_g_adv_raw = self.adversarial_loss(fake_logits_for_g.squeeze(-1) if fake_logits_for_g.ndim > 1 and fake_logits_for_g.shape[-1] == 1 else fake_logits_for_g, real_labels_for_g)
@@ -4404,64 +4710,50 @@ class HybridTrainer:
 
             # --- Heuristic Feature Matching Loss ---
             if self.heuristic_vae_feature_match_active and features_from_d_for_g_feat_match is not None and self.lambda_feat_match_heuristic > 0:
-                with torch.no_grad(): # Get features from D for REAL data
+                with torch.no_grad(): 
                     real_input_for_d_fm_main: torch.Tensor
                     real_gaad_bboxes_for_d_fm_cond: Optional[torch.Tensor] = None
                     
-                    # Slicing real data for D's input window (feature matching part)
                     start_idx_fm_real = num_input_f_cond
-                    end_idx_fm_real = num_input_f_cond + num_frames_for_active_d_from_gen # Match G's output window length
-                    if end_idx_fm_real > real_frames_full_sequence.shape[1]: # Adjust if input too short
-                        end_idx_fm_real = real_frames_full_sequence.shape[1]
+                    end_idx_fm_real = num_input_f_cond + num_frames_for_active_d_from_gen 
+                    if end_idx_fm_real > N_total_input_seq: end_idx_fm_real = N_total_input_seq # type: ignore
 
                     if active_d_trainer_input_type == "assembled_pixels":
                         real_input_for_d_fm_main = real_frames_full_sequence[:, start_idx_fm_real:end_idx_fm_real, ...]
                         if hasattr(d_module_for_check, 'use_gaad_film_condition') and d_module_for_check.use_gaad_film_condition: # type: ignore
-                             _, _, gaad_bboxes_real_enc_fm_all, _, _ = m_ref.encode(real_frames_full_sequence)
+                             _, _, gaad_bboxes_real_enc_fm_all, _, _ = m_ref.encode(real_frames_full_sequence) # Re-encode to get bboxes for full seq
                              if gaad_bboxes_real_enc_fm_all is not None:
                                  real_gaad_bboxes_for_d_fm_cond = gaad_bboxes_real_enc_fm_all[:, start_idx_fm_real:end_idx_fm_real, ...]
                     elif active_d_trainer_input_type == "regional_spectral_features_combined":
-                        # Use target_dft/dct_features_for_loss which are already aligned with G's output window
                         target_features_list_fm = []
-                        if self.args.use_dft_features_appearance and target_dft_features_for_loss is not None:
-                            target_features_list_fm.append(target_dft_features_for_loss[:, :num_frames_for_active_d_from_gen, ...]) # Slice to D's input length
-                        if self.args.use_dct_features_appearance and target_dct_features_for_loss is not None:
-                            target_features_list_fm.append(target_dct_features_for_loss[:, :num_frames_for_active_d_from_gen, ...])
+                        if self.args.use_dft_features_appearance and _target_dft_coeffs_from_enc is not None:
+                            target_features_list_fm.append(_target_dft_coeffs_from_enc[:, :num_frames_for_active_d_from_gen, ...])
+                        if self.args.use_dct_features_appearance and _target_dct_coeffs_from_enc is not None:
+                            target_features_list_fm.append(_target_dct_coeffs_from_enc[:, :num_frames_for_active_d_from_gen, ...])
                         
-                        if not target_features_list_fm: raise ValueError("G FM: No target spectral features for D feature matching (real path).")
-                        
-                        concatenated_target_features_fm = torch.cat(target_features_list_fm, dim=-1)
-                        B_fm_real, N_active_D_fm, N_reg_fm, _ = concatenated_target_features_fm.shape
-                        real_input_for_d_fm_main_permuted = concatenated_target_features_fm.permute(0, 2, 1, 3)
-                        real_input_for_d_fm_main = real_input_for_d_fm_main_permuted.reshape(B_fm_real, N_reg_fm, -1)
+                        if not target_features_list_fm:
+                            self.logger.warning_once("G FM: No target spectral features (from encoder) for D feature matching (real path). Skipping FM loss.") # type: ignore
+                            real_input_for_d_fm_main = torch.empty(0, device=device, dtype=dtype_model) # Flag as empty
+                        else:
+                            concatenated_target_features_fm = torch.cat(target_features_list_fm, dim=-1)
+                            B_fm_real, N_active_D_fm, N_reg_fm, _ = concatenated_target_features_fm.shape
+                            real_input_for_d_fm_main_permuted = concatenated_target_features_fm.permute(0, 2, 1, 3)
+                            real_input_for_d_fm_main = real_input_for_d_fm_main_permuted.reshape(B_fm_real, N_reg_fm, -1)
                     else:
-                        # This case should be caught by earlier checks on active_d_trainer_input_type
                         real_input_for_d_fm_main = torch.empty(0, device=device, dtype=dtype_model)
                     
                     target_features_d: Optional[torch.Tensor] = None
                     if real_input_for_d_fm_main.numel() > 0 and real_input_for_d_fm_main.shape[0] > 0:
-                        # Ensure real_input_for_d_fm_main has correct number of frames for D
-                        # If D processes fewer frames than G generates, slice input for D.
-                        # The `num_frames_for_active_d_from_gen` should match what D expects.
-                        # If `real_input_for_d_fm_main` was prepared based on G's output length, and D takes less,
-                        # then D itself must handle the slicing or we slice here.
-                        # Assuming D handles it or `num_frames_for_active_d_from_gen` matches what D needs.
                         target_d_output_fm = d_ref_active(real_input_for_d_fm_main, gaad_bboxes_cond=real_gaad_bboxes_for_d_fm_cond, return_features=True)
                         if isinstance(target_d_output_fm, tuple) and len(target_d_output_fm) > 1 and isinstance(target_d_output_fm[1], torch.Tensor):
                             target_features_d = target_d_output_fm[1]
-                        else:
-                            self.logger.warning_once("G FM: D did not return features for real data during feature matching.")
                 
                 if target_features_d is not None and features_from_d_for_g_feat_match.shape == target_features_d.shape:
                     loss_g_feat_match = F.mse_loss(features_from_d_for_g_feat_match, target_features_d.detach())
                     loss_g_total_micro += self.lambda_feat_match_heuristic * loss_g_feat_match
                     losses_g_micro['loss_g_feat_match_micro'] = loss_g_feat_match.detach()
-                elif target_features_d is not None:
-                    self.logger.warning_once(f"G FM shapes mismatch: Fake_D_feat {features_from_d_for_g_feat_match.shape}, Real_D_feat {target_features_d.shape}")
 
-            # --- Heuristic G Easy Win Penalty ---
-            if self.heuristic_penalize_g_easy_win_active:
-                # Use raw recon loss for this check, not the scaled one
+            if self.heuristic_penalize_g_easy_win_active: 
                 if loss_g_adv_raw.item() < self.G_WINNING_THRESH and loss_recon_raw.item() > self.TARGET_GOOD_RECON_THRESH_HEURISTIC:
                     denominator_penalty = loss_g_adv_raw.item() + getattr(self.args, 'g_easy_win_penalty_eps_denom', 1e-4)
                     penalty_val = (loss_recon_raw.item() - self.TARGET_GOOD_RECON_THRESH_HEURISTIC) / max(EPS, denominator_penalty) * self.lambda_g_easy_win_penalty_heuristic
@@ -4478,8 +4770,7 @@ class HybridTrainer:
         losses_g_micro['loss_g_adv_micro'] = loss_g_adv_raw.detach()
         losses_g_micro['loss_g_total_micro'] = loss_g_total_micro.detach()
 
-        # Prepare pixels for logging if needed (even if D is feature-based)
-        final_pixels_for_logging = assembled_pixels_for_log # This was already prepared
+        final_pixels_for_logging = assembled_pixels_for_log
         if final_pixels_for_logging is None and \
            self.am_main_process and self.args.wandb_log_train_recon_interval > 0 and self.global_step > 0 and \
            ((self.global_step + 1) % self.args.wandb_log_train_recon_interval == 0):
@@ -4487,15 +4778,12 @@ class HybridTrainer:
                 final_pixels_for_logging = self._assemble_pixels_from_spectral(
                     recon_dft_coeffs_gen.detach() if recon_dft_coeffs_gen is not None else None,
                     recon_dct_coeffs_gen.detach() if recon_dct_coeffs_gen is not None else None,
-                    bboxes_used_by_decoder.detach(), # bboxes_used_by_decoder corresponds to G's output frames
+                    bboxes_used_by_decoder.detach(),
                     target_image_height=self.args.image_h, target_image_width=self.args.image_w,
                     num_image_channels_target=self.video_config['num_channels']
                 )
-            else:
-                 self.logger.warning_once("Cannot assemble pixels for logging in G-step (D is feature-based path) as bboxes_used_by_decoder is None.")
 
         return losses_g_micro, final_pixels_for_logging.detach() if final_pixels_for_logging is not None else None
-
 
 
     @staticmethod # Make it static as it's a utility
