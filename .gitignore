@@ -29,7 +29,7 @@ __pycache__/
 
 # C extensions
 *.so
-
+*.npz
 # Distribution / packaging
 .Python
 build/
