@@ -147,7 +147,7 @@ DEFAULT_CONFIG_WUBU = {
     "transformer_feedforward_dim_ratio": 2.0,
 }
 DEFAULT_CONFIG_QLEARN_HYBRID = { # From audio script
-    "q_learning_rate": 0.01,
+    "q_learning_rate": 0.05,
     "discount_factor": 0.90,
     "epsilon_start": 0.6, # Higher start from audio
     "epsilon_min": 0.05,
@@ -155,8 +155,8 @@ DEFAULT_CONFIG_QLEARN_HYBRID = { # From audio script
     "lr_scale_options": [0.7, 0.85, 1.0, 1.15, 1.3], # From audio
     "momentum_scale_options": [0.9, 0.95, 0.99, 1.0, 1.01], # From audio
     "max_q_table_size": 15000, # From audio
-    "state_history_len": 7, # From audio
-    "lambda_kl_state_history_len": 7, # From audio
+    "state_history_len": 10, # From audio
+    "lambda_kl_state_history_len": 100, # From audio
     "reward_clipping": (-2.5, 2.5), # From audio
     "q_value_clipping": (-35.0, 35.0), # From audio
     "num_probation_steps": None, # To be set dynamically if desired
@@ -4156,11 +4156,13 @@ class HybridTrainer:
                                      is_d_q_stagnant:bool, is_d_strong: bool, is_g_stalled_adv: bool,
                                      current_g_kl_median: float, log_msgs_list: List[str]) -> bool:
         if not self.enable_heuristic_disc_switching: return False
+        # Ensure we don't switch too frequently
         if self.steps_since_last_d_switch < self.disc_switch_min_steps_between: return False
 
         switched_this_cycle = False
         current_active_is_primary = (self.active_discriminator_key == 'primary')
         
+        # Determine characteristics of primary and alternative discriminators
         primary_is_pixel_like = "pixels" in getattr(self.discriminator_primary_obj, 'effective_input_type_for_trainer', "unknown").lower()
         primary_is_feature_like = "features" in getattr(self.discriminator_primary_obj, 'effective_input_type_for_trainer', "unknown").lower() or \
                                   "spectral" in getattr(self.discriminator_primary_obj, 'effective_input_type_for_trainer', "unknown").lower()
@@ -4168,47 +4170,74 @@ class HybridTrainer:
         alt_is_feature_like = "features" in getattr(self.discriminator_alternative_obj, 'effective_input_type_for_trainer', "unknown").lower() or \
                               "spectral" in getattr(self.discriminator_alternative_obj, 'effective_input_type_for_trainer', "unknown").lower()
 
+        # Condition to switch from Primary (e.g., pixel D) to Alternative (e.g., feature D)
+        # Example: If G is winning hard against pixel D, pixel D is weak/stagnant, and recon features are stagnant
         trigger_primary_to_alt = (current_active_is_primary and
-                                  (primary_is_pixel_like and alt_is_feature_like) and 
+                                  (primary_is_pixel_like and alt_is_feature_like) and # Ensure we are switching between different types if intended
                                   is_g_winning_hard and
                                   (is_d_very_weak or is_d_q_stagnant) and
-                                  self.rec_features_stagnant)
+                                  self.rec_features_stagnant) # Reconstruction features (not GAN loss) are also not improving
+
         if trigger_primary_to_alt:
             self.consecutive_trigger_primary_to_alt_count += 1
             log_msgs_list.append(f"HEURISTIC D-SWITCH trigger (P->A): Count {self.consecutive_trigger_primary_to_alt_count}/{self.disc_switch_problem_state_count_thresh}. GWinHard:{is_g_winning_hard}, DWeak:{is_d_very_weak}, DQStag:{is_d_q_stagnant}, RecStag:{self.rec_features_stagnant}")
-        else: self.consecutive_trigger_primary_to_alt_count = 0
+        else:
+            self.consecutive_trigger_primary_to_alt_count = 0
 
+        # Condition to switch from Alternative (e.g., feature D) to Primary (e.g., pixel D)
+        # Example: If feature D is too strong, G is stalled against it, and KL is not excessively high (meaning VAE part is somewhat stable)
         trigger_alt_to_primary = (not current_active_is_primary and 
-                                  (alt_is_feature_like and primary_is_pixel_like) and 
+                                  (alt_is_feature_like and primary_is_pixel_like) and # Ensure we are switching between different types
                                   is_d_strong and
                                   is_g_stalled_adv and
-                                  (current_g_kl_median < self.KL_HIGH_THRESH * 1.5)) 
+                                  (current_g_kl_median < self.KL_HIGH_THRESH * 1.5)) # Avoid switching if VAE is unstable
+
         if trigger_alt_to_primary:
             self.consecutive_trigger_alt_to_primary_count += 1
             log_msgs_list.append(f"HEURISTIC D-SWITCH trigger (A->P): Count {self.consecutive_trigger_alt_to_primary_count}/{self.disc_switch_problem_state_count_thresh}. DStrong:{is_d_strong}, GStallAdv:{is_g_stalled_adv}, KLMed:{current_g_kl_median:.2f}")
-        else: self.consecutive_trigger_alt_to_primary_count = 0
+        else:
+            self.consecutive_trigger_alt_to_primary_count = 0
 
+        # Perform switch if threshold met
         if self.consecutive_trigger_primary_to_alt_count >= self.disc_switch_problem_state_count_thresh:
-            if self.active_discriminator_key == 'primary': 
+            if self.active_discriminator_key == 'primary': # Double check to prevent redundant switches
                 self.active_discriminator_key = 'alternative'
-                self._update_active_discriminator_pointers(); switched_this_cycle = True
+                self._update_active_discriminator_pointers() # This updates self.active_discriminator, optimizer_disc_active, q_controller_d_active
+                switched_this_cycle = True
                 log_msgs_list.append(f"HEURISTIC: SWITCHED Discriminator from Primary to Alternative.")
-                if self.q_controller_d_active and hasattr(self.q_controller_d_active, 'reset_q_learning_state'): self.q_controller_d_active.reset_q_learning_state(True, True, "Switched to Alt D by Heuristic", True)
-            self.consecutive_trigger_primary_to_alt_count = 0 
+                # Reset Q-controller for the newly active D and put it on probation
+                if self.q_controller_d_active and hasattr(self.q_controller_d_active, 'reset_q_learning_state'):
+                    self.q_controller_d_active.reset_q_learning_state(reset_q_table=True, reset_epsilon=True, context_msg="Switched to Alt D by Heuristic", start_probation=True)
+            self.consecutive_trigger_primary_to_alt_count = 0 # Reset counter after switch
         
         elif self.consecutive_trigger_alt_to_primary_count >= self.disc_switch_problem_state_count_thresh:
-            if self.active_discriminator_key == 'alternative': 
+            if self.active_discriminator_key == 'alternative': # Double check
                 self.active_discriminator_key = 'primary'
-                self._update_active_discriminator_pointers(); switched_this_cycle = True
+                self._update_active_discriminator_pointers()
+                switched_this_cycle = True
                 log_msgs_list.append(f"HEURISTIC: SWITCHED Discriminator from Alternative to Primary.")
-                if self.q_controller_d_active and hasattr(self.q_controller_d_active, 'reset_q_learning_state'): self.q_controller_d_active.reset_q_learning_state(True, True, "Switched to Pri D by Heuristic", True)
+                if self.q_controller_d_active and hasattr(self.q_controller_d_active, 'reset_q_learning_state'):
+                    self.q_controller_d_active.reset_q_learning_state(reset_q_table=True, reset_epsilon=True, context_msg="Switched to Pri D by Heuristic", start_probation=True)
             self.consecutive_trigger_alt_to_primary_count = 0
 
         if switched_this_cycle:
-            self.steps_since_last_d_switch = 0; self.consecutive_heuristic_trigger_counts = defaultdict(int) 
-            self.q_data_derived_g_recon_hist.clear(); self.avg_g_recon_hist_for_stagnation.clear()
+            self.steps_since_last_d_switch = 0
+            self.consecutive_heuristic_trigger_counts = defaultdict(int) # Reset all other heuristic trigger counts too
+            # Reset short-term history for recon stagnation as D change might alter G's behavior
+            self.q_data_derived_g_recon_hist.clear()
+            self.avg_g_recon_hist_for_stagnation.clear()
             self.rec_features_stagnant = False 
             log_msgs_list.append("HEURISTIC: D switched, general heuristic counters & recon history reset.")
+            
+            # *** ADDED: Reset GradScaler for the active discriminator ***
+            if self.args.use_amp and self.device.type == 'cuda':
+                self.scaler_disc_active = amp.GradScaler(enabled=True)
+                log_msgs_list.append("HEURISTIC: Active Discriminator GradScaler reset due to switch.")
+            elif self.args.use_amp: # e.g. CPU AMP (less common but for completeness)
+                self.scaler_disc_active = amp.GradScaler(enabled=True, device_type=self.device.type) # type: ignore
+                log_msgs_list.append(f"HEURISTIC: Active Discriminator GradScaler (type: {self.device.type}) reset due to switch.")
+
+
         return switched_this_cycle
 
     def _evaluate_training_state_and_apply_heuristics(self):
