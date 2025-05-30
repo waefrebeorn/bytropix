@@ -5238,22 +5238,40 @@ class HybridTrainer:
 
             # --- Spectral Reconstruction Loss Calculation (if applicable) ---
             if self.args.use_dft_features_appearance and recon_dft_gen is not None and target_dft_for_loss is not None:
-                if recon_dft_gen.shape == target_dft_for_loss.shape:
-                    loss_dft_batch = F.mse_loss(recon_dft_gen.float(), target_dft_for_loss.float())
-                    if torch.isfinite(loss_dft_batch): 
-                        total_recon_dft_mse_sum += loss_dft_batch.item() * B # Accumulate sum of losses
-                        num_dft_loss_batches += B # Count items
+                recon_dft_gen_reshaped: Optional[torch.Tensor] = None
+                if recon_dft_gen.ndim == 7: # (B, N, R, C, 2, Hp, Wpc)
+                    B_d, N_d, R_d, _, _, _, _ = recon_dft_gen.shape
+                    recon_dft_gen_reshaped = recon_dft_gen.reshape(B_d, N_d, R_d, -1)
+                elif recon_dft_gen.ndim == 4: # Already (B, N, R, D_flat)
+                    recon_dft_gen_reshaped = recon_dft_gen
                 else:
-                    self.logger.warning_once(f"Val DFT shape mismatch: Recon {recon_dft_gen.shape}, Target {target_dft_for_loss.shape}")
+                    self.logger.error_once(f"Val DFT: recon_dft_gen has unexpected shape {recon_dft_gen.shape}. Expected 7D or 4D.") # type: ignore
+
+                if recon_dft_gen_reshaped is not None and recon_dft_gen_reshaped.shape == target_dft_for_loss.shape:
+                    loss_dft_batch = F.mse_loss(recon_dft_gen_reshaped.float(), target_dft_for_loss.float())
+                    if torch.isfinite(loss_dft_batch): 
+                        total_recon_dft_mse_sum += loss_dft_batch.item() * B # Use original B for consistency
+                        num_dft_loss_batches += B
+                elif recon_dft_gen_reshaped is not None: # Shape mismatch after trying to reshape
+                    self.logger.warning_once(f"Val DFT shape mismatch (post-reshape attempt): Recon {recon_dft_gen_reshaped.shape}, Target {target_dft_for_loss.shape}. Original Recon: {recon_dft_gen.shape}") # type: ignore
             
             if self.args.use_dct_features_appearance and recon_dct_gen is not None and target_dct_for_loss is not None:
-                if recon_dct_gen.shape == target_dct_for_loss.shape:
-                    loss_dct_batch = F.mse_loss(recon_dct_gen.float(), target_dct_for_loss.float())
-                    if torch.isfinite(loss_dct_batch): 
-                        total_recon_dct_mse_sum += loss_dct_batch.item() * B
-                        num_dct_loss_batches += B
+                recon_dct_gen_reshaped: Optional[torch.Tensor] = None
+                if recon_dct_gen.ndim == 6: # (B, N, R, C, Hp, Wp)
+                    B_c, N_c, R_c, _, _, _ = recon_dct_gen.shape
+                    recon_dct_gen_reshaped = recon_dct_gen.reshape(B_c, N_c, R_c, -1)
+                elif recon_dct_gen.ndim == 4: # Already (B, N, R, D_flat)
+                    recon_dct_gen_reshaped = recon_dct_gen
                 else:
-                    self.logger.warning_once(f"Val DCT shape mismatch: Recon {recon_dct_gen.shape}, Target {target_dct_for_loss.shape}")
+                    self.logger.error_once(f"Val DCT: recon_dct_gen has unexpected shape {recon_dct_gen.shape}. Expected 6D or 4D.") # type: ignore
+
+                if recon_dct_gen_reshaped is not None and recon_dct_gen_reshaped.shape == target_dct_for_loss.shape:
+                    loss_dct_batch = F.mse_loss(recon_dct_gen_reshaped.float(), target_dct_for_loss.float())
+                    if torch.isfinite(loss_dct_batch): 
+                        total_recon_dct_mse_sum += loss_dct_batch.item() * B # Use original B
+                        num_dct_loss_batches += B
+                elif recon_dct_gen_reshaped is not None:
+                    self.logger.warning_once(f"Val DCT shape mismatch (post-reshape attempt): Recon {recon_dct_gen_reshaped.shape}, Target {target_dct_for_loss.shape}. Original Recon: {recon_dct_gen.shape}") # type: ignore
             
             # --- Pixel-space Metrics Calculation ---
             # Ground truth pixels for the prediction window
@@ -5266,7 +5284,7 @@ class HybridTrainer:
                 predicted_pixels_for_metrics = recon_pixel_gen
             elif self.args.use_dft_features_appearance or self.args.use_dct_features_appearance: # Assemble from spectral
                 if bboxes_used_by_decoder is None:
-                    self.logger.error_once("Validate: bboxes_used_by_decoder is None from model.forward(), cannot assemble pixels for validation metrics.")
+                    self.logger.error_once("Validate: bboxes_used_by_decoder is None from model.forward(), cannot assemble pixels for validation metrics.") # type: ignore
                 else:
                     predicted_pixels_for_metrics = self._assemble_pixels_from_spectral(
                         recon_dft_gen, recon_dct_gen, bboxes_used_by_decoder,
@@ -5316,7 +5334,7 @@ class HybridTrainer:
                             if torch.isfinite(ssim_val_batch.sum()):
                                 total_ssim_sum += ssim_val_batch.sum().item()
                         except Exception as e_ssim_val:
-                            self.logger.debug(f"Val SSIM calculation failed: {e_ssim_val}")
+                            self.logger.debug(f"Val SSIM calculation failed: {e_ssim_val}") # type: ignore
                     
                     # LPIPS (per frame, then sum)
                     if self.lpips_loss_fn:
@@ -5333,12 +5351,12 @@ class HybridTrainer:
                             if torch.isfinite(lpips_val_batch.sum()):
                                 total_lpips_sum += lpips_val_batch.sum().item()
                         except Exception as e_lpips_val:
-                            self.logger.debug(f"Val LPIPS calculation failed: {e_lpips_val}")
+                            self.logger.debug(f"Val LPIPS calculation failed: {e_lpips_val}") # type: ignore
                     
                     num_pixel_metric_eval_frames_count += current_batch_num_indiv_frames_for_metric
 
                 else: # Shape mismatch between predicted and GT pixels for metrics
-                    self.logger.warning_once(f"Val Pixel Metric shape mismatch: Pred {predicted_pixels_for_metrics.shape}, GT_eff {gt_pixels_for_metrics_eff.shape}")
+                    self.logger.warning_once(f"Val Pixel Metric shape mismatch: Pred {predicted_pixels_for_metrics.shape}, GT_eff {gt_pixels_for_metrics_eff.shape}") # type: ignore
 
                 # Log predicted and GT samples to WandB
                 if logged_samples_count_this_val < num_val_samples_to_log and self.args.wandb and WANDB_AVAILABLE and wandb.run is not None:
@@ -5397,7 +5415,6 @@ class HybridTrainer:
         self.logger.info(log_str_val)
         
         return self.last_val_metrics # Return only valid metrics
-    
     @torch.no_grad()
     def sample(self, num_samples: int, noise: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]:
         m_ref = self.model.module if self.ddp_active and hasattr(self.model, 'module') else self.model
