@@ -1,3 +1,4 @@
+
 # WuBuCPUOnlyGen_v1.py
 # VAE-GAN like structure using ADVANCED FractalDepthQuaternionWuBuRungs.
 # CPU-only, NO CNNs, NO explicit DFT/DCT for features (WuBu processes patch pixels).
@@ -800,20 +801,29 @@ class WuBuCPUEncoder(nn.Module):
         self.apply(init_weights_general)
         logger_wubu_cpu_gen.info(f"WuBuCPUEncoder: In {enc_in_dim}D -> WuBu -> {max(1, self.latent_dim*2)}D.")
 
-    def forward(self, frames_pixels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, frames_pixels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, float]]:
+        timings = {}
         B, N_total, C_img, H_img, W_img = frames_pixels.shape
         device, dtype = frames_pixels.device, frames_pixels.dtype
+
+        t_bbox_start = time.time()
         all_bboxes_list = [[golden_subdivide_rect_fixed_n_cpu((W_img,H_img),self.num_regions,dtype,self.args.gaad_min_size_px) for _ in range(N_total)] for _ in range(B)]
         all_bboxes = torch.stack([torch.stack(seq_bboxes) for seq_bboxes in all_bboxes_list])
+        t_bbox_end = time.time()
+        timings["time_bbox_gen"] = t_bbox_end - t_bbox_start
         
+        t_patch_ext_start = time.time()
         patches = self.patch_extractor(frames_pixels.reshape(B*N_total,C_img,H_img,W_img), all_bboxes.reshape(B*N_total,self.num_regions,4))
+        t_patch_ext_end = time.time()
+        timings["time_patch_extract"] = t_patch_ext_end - t_patch_ext_start
+
         wubu_in = patches.reshape(B, N_total * self.num_regions * self.num_channels * self.patch_h * self.patch_w)
         if wubu_in.shape[1] == 0 and isinstance(self.wubu_encoder_stack.input_projection, nn.Linear) and self.wubu_encoder_stack.input_projection.in_features == 1:
              wubu_in = torch.ones(B, 1, device=device, dtype=dtype)
 
         mu_logvar = self.wubu_encoder_stack(wubu_in, show_progress=getattr(self.args, 'show_train_progress_bar', False))
         eff_lat_dim = max(1,self.latent_dim)
-        return mu_logvar[:,:eff_lat_dim], mu_logvar[:,eff_lat_dim:], all_bboxes
+        return mu_logvar[:,:eff_lat_dim], mu_logvar[:,eff_lat_dim:], all_bboxes, timings
 
 class WuBuCPUGenerator(nn.Module):
     def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_config: Dict):
@@ -847,7 +857,8 @@ class WuBuCPUGenerator(nn.Module):
         self.apply(init_weights_general)
         logger_wubu_cpu_gen.info(f"WuBuCPUGenerator: In z({lat_in_dim}D) -> WuBu -> {gen_out_dim}D (patches).")
 
-    def forward(self, z: torch.Tensor, gaad_bboxes_for_decode: torch.Tensor) -> torch.Tensor:
+    def forward(self, z: torch.Tensor, gaad_bboxes_for_decode: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, float]]:
+        timings = {}
         if z.shape[1] == 0 and isinstance(self.wubu_generator_stack.input_projection, nn.Linear) and self.wubu_generator_stack.input_projection.in_features == 1:
              z = torch.ones(z.shape[0], 1, device=z.device, dtype=z.dtype)
         
@@ -855,24 +866,31 @@ class WuBuCPUGenerator(nn.Module):
         
         # Handle cases where any of these dimensions are zero, which could lead to zero expected elements
         if self.num_predict_frames == 0 or self.num_regions == 0 or self.num_channels == 0 or self.patch_h == 0 or self.patch_w == 0:
-            # If output is expected to be zero-dimensional, but flat_patches has content, it's an issue
-            # Or if flat_patches is also zero-dim as expected, return empty matching the expected final frame shape
+            timings["time_patch_assembly"] = 0.0 
+            empty_frames = torch.empty((z.shape[0], self.num_predict_frames, self.num_channels, self.image_size[0], self.image_size[1]), device=z.device, dtype=z.dtype)
             if flat_patches.shape[1] == 0: # WuBu output dim was 0 or 1 and resulted in empty
-                 return torch.empty((z.shape[0], self.num_predict_frames, self.num_channels, self.image_size[0], self.image_size[1]), device=z.device, dtype=z.dtype)
+                 return empty_frames, timings
             else: # Mismatch, output dim was >0 but some config dim was 0.
                 logger_wubu_cpu_gen.error_once(f"Gen: Mismatch due to zero-dim in patch structure (F/R/C/H/W all must be >0 if output_dim>0). "
                                           f"F:{self.num_predict_frames},R:{self.num_regions},C:{self.num_channels},H:{self.patch_h},W:{self.patch_w}. Output dim: {flat_patches.shape[1]}")
-                return torch.empty((z.shape[0], self.num_predict_frames, self.num_channels, self.image_size[0], self.image_size[1]), device=z.device, dtype=z.dtype)
+                return empty_frames, timings
 
         target_shape = (z.shape[0], self.num_predict_frames, self.num_regions, self.num_channels, self.patch_h, self.patch_w)
         expected_elems = np.prod(target_shape[1:])
         if flat_patches.shape[1] != expected_elems :
+            timings["time_patch_assembly"] = 0.0
             logger_wubu_cpu_gen.error_once(f"Gen: Output dim {flat_patches.shape[1]} != expected {expected_elems} for reshape. Target: {target_shape}")
-            return torch.empty((z.shape[0], self.num_predict_frames, self.num_channels, self.image_size[0], self.image_size[1]), device=z.device, dtype=z.dtype)
+            return torch.empty((z.shape[0], self.num_predict_frames, self.num_channels, self.image_size[0], self.image_size[1]), device=z.device, dtype=z.dtype), timings
 
         pred_patches = flat_patches.reshape(target_shape)
         pred_patches = self.final_patch_activation(pred_patches)
-        return ImageAssemblyUtilsCPU.assemble_frames_from_patches(pred_patches, gaad_bboxes_for_decode, self.image_size)
+        
+        t_patch_asm_start = time.time()
+        assembled_frames = ImageAssemblyUtilsCPU.assemble_frames_from_patches(pred_patches, gaad_bboxes_for_decode, self.image_size)
+        t_patch_asm_end = time.time()
+        timings["time_patch_assembly"] = t_patch_asm_end - t_patch_asm_start
+        
+        return assembled_frames, timings
 
 class WuBuCPUNet(nn.Module):
     def __init__(self, args: argparse.Namespace, video_config: Dict, gaad_config: Dict):
@@ -890,39 +908,37 @@ class WuBuCPUNet(nn.Module):
         return mu + eps_val * std
 
     def forward(self, frames_pixels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, float]]:
-        # Returns: reconstructed_frames, mu, logvar, bboxes_for_generator, timings_dict
         timings = {}
 
         t_enc_start = time.time()
-        mu, logvar, all_bboxes = self.encoder(frames_pixels)
+        mu, logvar, all_bboxes, enc_timings = self.encoder(frames_pixels)
         t_enc_end = time.time()
         timings["time_encoder_fwd"] = t_enc_end - t_enc_start
+        timings.update(enc_timings)
         
         z = self.reparameterize(mu, logvar)
         
         n_in, n_pred = self.args.num_input_frames, self.args.num_predict_frames
         
-        # Ensure bboxes_for_gen has the correct number of frames for the generator
         if all_bboxes.shape[1] < n_in + n_pred:
-            # logger_wubu_cpu_gen.warning_once(f"Net: Not enough bboxes ({all_bboxes.shape[1]}) for pred window (needs {n_in+n_pred}). Padding.") # Can be noisy
             available_for_pred = max(0, all_bboxes.shape[1] - n_in)
             actual_pred_bboxes = min(available_for_pred, n_pred)
             
             if actual_pred_bboxes > 0:
                 bboxes_for_gen_partial = all_bboxes[:, n_in : n_in + actual_pred_bboxes, ...]
-            else: # No bboxes from input sequence can be used for prediction period
+            else: 
                 bboxes_for_gen_partial = torch.empty((all_bboxes.shape[0], 0, all_bboxes.shape[2], all_bboxes.shape[3]), 
                                                      device=all_bboxes.device, dtype=all_bboxes.dtype)
 
-            if actual_pred_bboxes < n_pred: # Need padding
+            if actual_pred_bboxes < n_pred: 
                 padding_needed = n_pred - actual_pred_bboxes
-                if actual_pred_bboxes > 0 and bboxes_for_gen_partial.numel() > 0 : # Pad with last available from partial
+                if actual_pred_bboxes > 0 and bboxes_for_gen_partial.numel() > 0 : 
                     padding = bboxes_for_gen_partial[:, -1:, ...].repeat(1, padding_needed, 1, 1)
-                elif all_bboxes.numel() > 0 and all_bboxes.shape[1] > 0: # Pad with last from original all_bboxes if partial was empty
+                elif all_bboxes.numel() > 0 and all_bboxes.shape[1] > 0: 
                     padding = all_bboxes[:, -1:, ...].repeat(1, padding_needed, 1, 1)
-                else: # No bboxes available at all, create dummy full-frame
+                else: 
                     B,_,R,_ = all_bboxes.shape if all_bboxes.numel() > 0 else (frames_pixels.shape[0], 0, self.args.gaad_num_regions, 0)
-                    dev,dt=frames_pixels.device,frames_pixels.dtype # Use frames_pixels for device/dtype if all_bboxes is empty
+                    dev,dt=frames_pixels.device,frames_pixels.dtype 
                     W_img_eff = frames_pixels.shape[-1] if frames_pixels.numel() > 0 else self.args.image_w
                     H_img_eff = frames_pixels.shape[-2] if frames_pixels.numel() > 0 else self.args.image_h
                     dummy_ff = torch.tensor([0,0,W_img_eff,H_img_eff],device=dev,dtype=dt)
@@ -932,15 +948,16 @@ class WuBuCPUNet(nn.Module):
                     bboxes_for_gen = torch.cat([bboxes_for_gen_partial, padding], dim=1)
                 else:
                     bboxes_for_gen = padding
-            else: # actual_pred_bboxes == n_pred
+            else: 
                 bboxes_for_gen = bboxes_for_gen_partial
-        else: # Sufficient bboxes in all_bboxes
+        else: 
             bboxes_for_gen = all_bboxes[:, n_in : n_in + n_pred, ...]
             
         t_gen_start = time.time()
-        reconstructed_frames = self.generator(z, bboxes_for_gen)
+        reconstructed_frames, gen_timings = self.generator(z, bboxes_for_gen)
         t_gen_end = time.time()
         timings["time_generator_fwd"] = t_gen_end - t_gen_start
+        timings.update(gen_timings)
         
         return reconstructed_frames, mu, logvar, bboxes_for_gen, timings
 
@@ -997,14 +1014,22 @@ class VideoFrameDatasetCPU(Dataset):
                  frame_skip: int = 1, data_fraction: float = 1.0,
                  val_fraction: float = 0.0,
                  mode: str = 'train',
-                 seed: int = 42):
+                 seed: int = 42,
+                 args: argparse.Namespace = None): # Added args for logging control
         super().__init__()
         self.video_path = video_path
         self.num_frames_total_sequence = num_frames_total
         self.image_size = image_size
         self.frame_skip = frame_skip
         self.mode = mode.lower()
-        self.logger = logger_wubu_cpu_gen.getChild(f"Dataset_{self.mode.upper()}")
+        self.logger = logger_wubu_cpu_gen.getChild(f"Dataset_{self.mode.upper()}_{os.getpid()}") # Per-worker logger name
+        self.args_ref = args # Store args reference for logging params
+
+        # For __getitem__ logging
+        self.pid_counters = {} # Key: pid, Value: call_count for that pid
+        self.getitem_log_interval = getattr(self.args_ref, 'getitem_log_interval', 100) if self.args_ref else 100
+        self.getitem_slow_threshold = getattr(self.args_ref, 'getitem_slow_threshold', 1.0) if self.args_ref else 1.0
+
 
         if not os.path.isfile(self.video_path):
             self.logger.error(f"Video file not found: {self.video_path}")
@@ -1089,8 +1114,14 @@ class VideoFrameDatasetCPU(Dataset):
     def __len__(self) -> int: return len(self.samples_start_indices)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
+        t_start_getitem = time.time()
+
         if not self.samples_start_indices or idx >= len(self.samples_start_indices):
             self.logger.error(f"Index {idx} out of bounds for {self.mode} dataset with {len(self.samples_start_indices)} samples. Returning zeros.")
+            # Log timing even for error case
+            t_end_getitem = time.time()
+            duration = t_end_getitem - t_start_getitem
+            self.logger.error(f"__getitem__ (idx {idx}, worker {os.getpid()}, ERROR_OOB) from '{Path(self.video_path).name}' took {duration:.4f}s.")
             return torch.zeros((self.num_frames_total_sequence, 3, self.image_size[0], self.image_size[1]), dtype=torch.float32)
 
         start_frame_idx_in_ram = self.samples_start_indices[idx]; frames_for_sample = []
@@ -1112,11 +1143,39 @@ class VideoFrameDatasetCPU(Dataset):
             else:
                 self.logger.error(f"Frame index {actual_frame_idx_in_ram} out of bounds for disk_frames {self.num_disk_frames} (sample {idx}). Padding with zeros.")
                 frames_for_sample.append(torch.zeros((3, self.image_size[0], self.image_size[1]), dtype=torch.float32))
-        if len(frames_for_sample) != self.num_frames_total_sequence:
-            self.logger.error(f"Loaded {len(frames_for_sample)} frames, expected {self.num_frames_total_sequence} for sample {idx}. Padding.")
-            while len(frames_for_sample) < self.num_frames_total_sequence:
-                frames_for_sample.append(frames_for_sample[-1].clone() if frames_for_sample else torch.zeros((3, self.image_size[0], self.image_size[1]), dtype=torch.float32))
-        return torch.stack(frames_for_sample)
+        
+        result_frames = torch.stack(frames_for_sample)
+        if len(frames_for_sample) != self.num_frames_total_sequence: # Should be caught by result_frames.shape check
+            self.logger.error(f"Loaded {len(frames_for_sample)} frames, expected {self.num_frames_total_sequence} for sample {idx}. Padded. Result shape: {result_frames.shape}")
+            # Ensure result_frames has correct first dimension if padding happened incorrectly
+            if result_frames.shape[0] != self.num_frames_total_sequence:
+                 # Fallback: create zeros if dimensions are totally off
+                 result_frames = torch.zeros((self.num_frames_total_sequence, 3, self.image_size[0], self.image_size[1]), dtype=torch.float32)
+
+
+        t_end_getitem = time.time()
+        duration = t_end_getitem - t_start_getitem
+        
+        if self.args_ref: # Only log if args_ref is available
+            pid = os.getpid()
+            if pid not in self.pid_counters:
+                self.pid_counters[pid] = 0
+            self.pid_counters[pid] += 1
+            current_worker_call_count = self.pid_counters[pid]
+
+            log_this_call = False
+            log_reason = ""
+            if self.getitem_slow_threshold > 0 and duration > self.getitem_slow_threshold:
+                log_this_call = True
+                log_reason = f"SLOW ({duration:.4f}s > {self.getitem_slow_threshold:.2f}s)"
+            elif self.getitem_log_interval > 0 and current_worker_call_count % self.getitem_log_interval == 0:
+                log_this_call = True
+                log_reason = f"periodic (call #{current_worker_call_count})"
+
+            if log_this_call:
+                self.logger.info(f"__getitem__ (idx {idx}, worker {pid}, {log_reason}) from '{Path(self.video_path).name}' took {duration:.4f}s.")
+        
+        return result_frames
 
 
 def load_state_dict_robust(module: nn.Module, state_dict: Optional[dict], module_name: str):
@@ -1182,7 +1241,8 @@ class CPUTrainer:
             data_fraction=args.data_fraction,
             val_fraction=args.val_fraction,
             mode='train',
-            seed=args.seed
+            seed=args.seed,
+            args=self.args # Pass args for logging control
         )
         self.train_loader = DataLoader( self.train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=False )
 
@@ -1196,7 +1256,8 @@ class CPUTrainer:
                 data_fraction=1.0,  # Use all of the validation split
                 val_fraction=args.val_fraction,
                 mode='val',
-                seed=args.seed
+                seed=args.seed,
+                args=self.args # Pass args for logging control
             )
             if len(self.val_dataset) > 0:
                 self.val_loader = DataLoader(
@@ -1228,9 +1289,8 @@ class CPUTrainer:
         if not (self.args.wandb and WANDB_AVAILABLE and wandb.run and frames_to_log is not None and frames_to_log.numel() > 0): return
 
         current_frames_dim = frames_to_log.ndim
-        # B, N_seq, C, H, W (expected) or B, C, H, W (if single frame sequence from sample or single frame from batch)
-        if current_frames_dim == 4: # B, C, H, W -> treat as B sequences of 1 frame each
-            frames_to_log = frames_to_log.unsqueeze(1) # B, 1, C, H, W
+        if current_frames_dim == 4: 
+            frames_to_log = frames_to_log.unsqueeze(1) 
 
         if frames_to_log.ndim != 5:
             self.logger.warning(f"WandB log samples: unexpected shape {frames_to_log.shape} (original: {current_frames_dim}D). Expected 5D. Skip."); return
@@ -1243,8 +1303,8 @@ class CPUTrainer:
         for b in range(num_to_log_seqs):
             for f_idx in range(num_frames_log_this):
                 frame = frames_to_log[b,f_idx,...].cpu().float()
-                if C_log == 1: frame = frame.repeat(3,1,1) # Handle grayscale
-                img_0_1 = (frame.clamp(-1,1)+1)/2.0 # Normalize to [0,1] for wandb.Image
+                if C_log == 1: frame = frame.repeat(3,1,1) 
+                img_0_1 = (frame.clamp(-1,1)+1)/2.0 
                 wandb_imgs.append(wandb.Image(img_0_1, caption=f"{tag_prefix} S{b} F{f_idx} Ep{self.current_epoch+1} GStep{self.global_step}"))
         if wandb_imgs:
             try: wandb.log({f"samples_video_cpu/{tag_prefix}": wandb_imgs}, step=self.global_step)
@@ -1270,14 +1330,18 @@ class CPUTrainer:
         if hasattr(self.val_loader.dataset, 'video_path') and self.val_loader.dataset.video_path:
             val_prog_bar_desc += f" ({Path(self.val_loader.dataset.video_path).name})"
 
-        val_prog_bar = tqdm(self.val_loader, desc=val_prog_bar_desc,
+        
+        iter_val_loader = iter(self.val_loader)
+        val_prog_bar = tqdm(range(len(self.val_loader)), desc=val_prog_bar_desc,
                             disable=(os.getenv('CI')=='true' or not self.args.show_train_progress_bar),
                             dynamic_ncols=True, leave=False)
+
 
         first_batch_recon_frames_val = None
         first_batch_target_frames_val = None
 
-        for batch_idx, val_frames_seq_raw in enumerate(val_prog_bar):
+        for batch_idx in val_prog_bar:
+            val_frames_seq_raw = next(iter_val_loader) # Not timing val loader for now
             val_frames_seq = val_frames_seq_raw.to(self.device)
 
             recon_frames_val, mu_val, logvar_val, bboxes_for_gen_val, _ = self.model(val_frames_seq)
@@ -1286,16 +1350,14 @@ class CPUTrainer:
             loss_recon_val = self._compute_recon_loss(recon_frames_val, target_frames_val)
             loss_kl_val = self._compute_kl_loss(mu_val, logvar_val)
 
-            # Discriminator losses on val set (optional, but can be informative)
-            # Note: WuBuCPUDiscriminator.forward does not take bboxes_cond
             real_logits_val = self.discriminator(target_frames_val)
             loss_d_real_val = self.adversarial_loss(real_logits_val, torch.ones_like(real_logits_val))
 
-            fake_logits_val = self.discriminator(recon_frames_val.detach()) # D sees detached recon
+            fake_logits_val = self.discriminator(recon_frames_val.detach()) 
             loss_d_fake_val = self.adversarial_loss(fake_logits_val, torch.zeros_like(fake_logits_val))
             loss_d_val = (loss_d_real_val + loss_d_fake_val) * 0.5
 
-            fake_logits_g_val = self.discriminator(recon_frames_val) # G tries to fool D with non-detached recon
+            fake_logits_g_val = self.discriminator(recon_frames_val) 
             loss_g_adv_val = self.adversarial_loss(fake_logits_g_val, torch.ones_like(fake_logits_g_val))
 
             total_val_loss_recon += loss_recon_val.item()
@@ -1363,13 +1425,23 @@ class CPUTrainer:
             prog_bar_desc = f"Epoch {epoch+1}"
             if hasattr(self.train_loader.dataset, 'video_path') and self.train_loader.dataset.video_path:
                 prog_bar_desc += f" ({Path(self.train_loader.dataset.video_path).name})"
-
-            prog_bar = tqdm(self.train_loader, desc=prog_bar_desc,
+            
+            iter_train_loader = iter(self.train_loader)
+            prog_bar = tqdm(range(len(self.train_loader)), desc=prog_bar_desc,
                             disable=(os.getenv('CI')=='true' or not self.args.show_train_progress_bar),
                             dynamic_ncols=True)
 
-            for batch_idx, real_frames_seq_raw in enumerate(prog_bar):
+            for batch_idx in prog_bar:
+                t_dataload_start = time.time()
+                real_frames_seq_raw = next(iter_train_loader)
+                t_dataload_end = time.time()
+                time_dataload = t_dataload_end - t_dataload_start
+
+                t_todevice_start = time.time()
                 real_frames_seq = real_frames_seq_raw.to(self.device)
+                t_todevice_end = time.time()
+                time_todevice = t_todevice_end - t_todevice_start
+
 
                 # --- Discriminator Training ---
                 t_disc_cycle_start = time.time()
@@ -1378,7 +1450,7 @@ class CPUTrainer:
                 target_real_for_d = real_frames_seq[:, self.args.num_input_frames : self.args.num_input_frames + self.args.num_predict_frames, ...]
 
                 t_disc_real_fwd_start = time.time()
-                real_logits = self.discriminator(target_real_for_d) # Assuming D does not use bboxes
+                real_logits = self.discriminator(target_real_for_d) 
                 t_disc_real_fwd_end = time.time()
                 time_disc_real_fwd = t_disc_real_fwd_end - t_disc_real_fwd_start
 
@@ -1388,7 +1460,7 @@ class CPUTrainer:
                     recon_frames_no_grad, _, _, _, _ = self.model(real_frames_seq)
 
                 t_disc_fake_fwd_start = time.time()
-                fake_logits = self.discriminator(recon_frames_no_grad.detach()) # Assuming D does not use bboxes
+                fake_logits = self.discriminator(recon_frames_no_grad.detach()) 
                 t_disc_fake_fwd_end = time.time()
                 time_disc_fake_fwd = t_disc_fake_fwd_end - t_disc_fake_fwd_start
 
@@ -1404,14 +1476,14 @@ class CPUTrainer:
                 t_gen_cycle_start = time.time()
                 self.optimizer_enc_gen.zero_grad()
 
-                recon_frames_g, mu_g, logvar_g, _, model_timings = self.model(real_frames_seq) # bboxes_for_gen_g ignored if D doesn't use them
+                recon_frames_g, mu_g, logvar_g, _, model_timings = self.model(real_frames_seq) 
 
                 target_for_recon = real_frames_seq[:, self.args.num_input_frames : self.args.num_input_frames + self.args.num_predict_frames, ...]
                 loss_recon = self._compute_recon_loss(recon_frames_g, target_for_recon)
                 loss_kl = self._compute_kl_loss(mu_g, logvar_g)
 
                 t_gen_adv_fwd_start = time.time()
-                fake_logits_g = self.discriminator(recon_frames_g) # Assuming D does not use bboxes
+                fake_logits_g = self.discriminator(recon_frames_g) 
                 t_gen_adv_fwd_end = time.time()
                 time_gen_adv_fwd = t_gen_adv_fwd_end - t_gen_adv_fwd_start
 
@@ -1429,8 +1501,12 @@ class CPUTrainer:
                     log_items = {
                         "L_D": loss_d.item(), "L_G": loss_g.item(),
                         "Rec": loss_recon.item(), "KL": loss_kl.item(), "AdvG": loss_g_adv.item(),
+                        "T_DataLoad": time_dataload, "T_ToDevice": time_todevice,
                         "T_Enc": model_timings.get("time_encoder_fwd",0),
+                        "T_BBoxGen": model_timings.get("time_bbox_gen", 0),
+                        "T_PatchExt": model_timings.get("time_patch_extract", 0),
                         "T_Gen": model_timings.get("time_generator_fwd",0),
+                        "T_PatchAsm": model_timings.get("time_patch_assembly", 0),
                         "T_D_Real": time_disc_real_fwd, "T_D_Fake": time_disc_fake_fwd,
                         "T_D_Cycle": time_disc_cycle,
                         "T_G_Adv": time_gen_adv_fwd, "T_G_Cycle": time_gen_cycle
@@ -1440,7 +1516,7 @@ class CPUTrainer:
                         if k_l.startswith("T_"): formatted_log_items[k_l] = f"{v_l:.3f}s"
                         else: formatted_log_items[k_l] = f"{v_l:.3f}"
                     log_str_parts = [f"{k_l}:{v_l}" for k_l,v_l in formatted_log_items.items()]
-                    postfix_str = f"L_D:{loss_d.item():.2f} L_G:{loss_g.item():.2f}"
+                    postfix_str = f"L_D:{loss_d.item():.2f} L_G:{loss_g.item():.2f} Data:{time_dataload:.2f}s"
                     full_log_msg = f"E:{epoch+1} S:{self.global_step} | " + " | ".join(log_str_parts)
                     prog_bar.set_postfix_str(postfix_str)
                     self.logger.info(full_log_msg)
@@ -1450,8 +1526,12 @@ class CPUTrainer:
                             "train/loss_d": loss_d.item(), "train/loss_g": loss_g.item(),
                             "train/loss_recon": loss_recon.item(), "train/loss_kl": loss_kl.item(),
                             "train/loss_g_adv": loss_g_adv.item(),
+                            "time/data_load": time_dataload, "time/to_device": time_todevice,
                             "time/encoder_fwd": model_timings.get("time_encoder_fwd",0),
+                            "time/bbox_gen": model_timings.get("time_bbox_gen", 0),
+                            "time/patch_extract": model_timings.get("time_patch_extract", 0),
                             "time/generator_fwd": model_timings.get("time_generator_fwd",0),
+                            "time/patch_assembly": model_timings.get("time_patch_assembly",0),
                             "time/disc_real_fwd": time_disc_real_fwd, "time/disc_fake_fwd": time_disc_fake_fwd,
                             "time/disc_cycle": time_disc_cycle,
                             "time/gen_adv_fwd": time_gen_adv_fwd, "time/gen_cycle": time_gen_cycle,
@@ -1490,27 +1570,25 @@ class CPUTrainer:
         for _ in range(num_samples_eff):
             item_bboxes_single_sample = [golden_subdivide_rect_fixed_n_cpu(frame_dims_s, gaad_num_regions_eff, z.dtype, self.args.gaad_min_size_px)
                                          for _ in range(effective_num_predict_frames)]
-            if not item_bboxes_single_sample and effective_num_predict_frames > 0 : # Should not happen
+            if not item_bboxes_single_sample and effective_num_predict_frames > 0 : 
                  self.logger.warning(f"Sample: item_bboxes_single_sample empty despite num_predict_frames={effective_num_predict_frames}.")
-                 # Fallback for this unexpected case - create dummy full frames
                  ff_bbox_single_region = torch.tensor([0,0,self.args.image_w,self.args.image_h],device=self.device,dtype=z.dtype)
                  item_bboxes_single_sample = [ff_bbox_single_region.unsqueeze(0).expand(gaad_num_regions_eff,4) for _ in range(effective_num_predict_frames)]
 
 
-            if not item_bboxes_single_sample: # This means effective_num_predict_frames is 0
+            if not item_bboxes_single_sample: 
                  dummy_bboxes_list.append(torch.empty(0, gaad_num_regions_eff, 4, device=self.device, dtype=z.dtype))
             else:
                  dummy_bboxes_list.append(torch.stack(item_bboxes_single_sample))
 
         if not dummy_bboxes_list and num_samples_eff > 0:
-            # This implies num_samples_eff > 0 AND effective_num_predict_frames is 0 for all
             dummy_bboxes_decode = torch.empty(num_samples_eff, 0, gaad_num_regions_eff, 4, device=self.device, dtype=z.dtype)
         elif not dummy_bboxes_list and num_samples_eff == 0:
             dummy_bboxes_decode = torch.empty(0, effective_num_predict_frames, gaad_num_regions_eff, 4, device=self.device, dtype=z.dtype)
         else:
             try:
                 dummy_bboxes_decode = torch.stack(dummy_bboxes_list)
-            except RuntimeError as e: # Fallback if stacking fails (e.g. inconsistent shapes)
+            except RuntimeError as e: 
                 self.logger.error(f"Error stacking bboxes in sample: {e}. Shapes: {[b.shape for b in dummy_bboxes_list]}. Using fallback.")
                 ff_bbox = torch.tensor([0,0,self.args.image_w,self.args.image_h],device=self.device,dtype=z.dtype)
                 dummy_bboxes_decode = ff_bbox.view(1,1,1,4).expand(num_samples_eff, effective_num_predict_frames, gaad_num_regions_eff,4)
@@ -1518,11 +1596,8 @@ class CPUTrainer:
 
         if dummy_bboxes_decode.shape[0] != num_samples_eff and num_samples_eff > 0:
              self.logger.warning(f"Sample: Generated bboxes batch size ({dummy_bboxes_decode.shape[0]}) != num_samples ({num_samples_eff}). This might indicate an issue.")
-             # Potential fallback if shape is critical for generator
-             # ff_bbox = torch.tensor([0,0,self.args.image_w,self.args.image_h],device=self.device,dtype=z.dtype)
-             # dummy_bboxes_decode = ff_bbox.view(1,1,1,4).expand(num_samples_eff,effective_num_predict_frames,gaad_num_regions_eff,4)
 
-        generated_frames = self.model.generator(z, dummy_bboxes_decode)
+        generated_frames, _ = self.model.generator(z, dummy_bboxes_decode) # Ignore timings from generator here
         self.model.train()
         return generated_frames
 
@@ -1549,16 +1624,12 @@ class CPUTrainer:
         if 'args' in ckpt and ckpt['args'] is not None:
             self.logger.info("Attempting to load args from checkpoint.")
             loaded_ckpt_args = ckpt['args']
-            # Merge args: current args take precedence for args that exist in both
-            # Add args from ckpt if not in current args
-            # This way, command-line args for the current run can override saved ones
-            # while still loading missing ones (e.g., if script version changed)
             current_args_dict = vars(self.args)
             for k_ckpt, v_ckpt in loaded_ckpt_args.items():
                 if k_ckpt not in current_args_dict:
                     setattr(self.args, k_ckpt, v_ckpt)
                     self.logger.info(f"  Arg '{k_ckpt}' loaded from ckpt: '{v_ckpt}' (added)")
-                elif current_args_dict[k_ckpt] != v_ckpt and k_ckpt not in ['load_checkpoint', 'epochs', 'wandb_run_name']:
+                elif current_args_dict[k_ckpt] != v_ckpt and k_ckpt not in ['load_checkpoint', 'epochs', 'wandb_run_name', 'video_data_path', 'checkpoint_dir']: # Don't override critical paths/control args
                      self.logger.info(f"  Arg '{k_ckpt}': Ckpt='{v_ckpt}', Current='{current_args_dict[k_ckpt]}'. Using current value.")
 
 
@@ -1570,13 +1641,11 @@ class CPUTrainer:
         gs = ckpt.get('global_step',0)
         ep_saved = ckpt.get('epoch',0)
 
-        # Determine start_epoch based on args.load_checkpoint_reset_epoch
         if self.args.load_checkpoint_reset_epoch:
-            start_ep = ep_saved # Resume from the exact saved epoch
+            start_ep = ep_saved 
         else:
-            start_ep = ep_saved + 1 # Standard: resume from next epoch
+            start_ep = ep_saved + 1 
         
-        # If checkpoint was saved at step 0 / epoch 0 (e.g. initial save), and not resetting, start from 0
         if gs == 0 and ep_saved == 0 and not self.args.load_checkpoint_reset_epoch:
             start_ep = 0
             
@@ -1584,28 +1653,9 @@ class CPUTrainer:
         return gs, start_ep
 
 
-def load_state_dict_robust(module: nn.Module, state_dict: Optional[dict], module_name: str):
-    if state_dict is None:
-        logger_wubu_cpu_gen.warning(f"No state_dict provided for {module_name}. It will remain initialized randomly/default.")
-        return
-    try:
-        module.load_state_dict(state_dict)
-        logger_wubu_cpu_gen.info(f"Successfully loaded state_dict for {module_name}.")
-    except RuntimeError as e:
-        logger_wubu_cpu_gen.error(f"RuntimeError loading state_dict for {module_name}: {e}. Trying with strict=False.")
-        try:
-            module.load_state_dict(state_dict, strict=False)
-            logger_wubu_cpu_gen.info(f"Successfully loaded state_dict for {module_name} with strict=False.")
-        except Exception as e2:
-            logger_wubu_cpu_gen.error(f"Failed to load state_dict for {module_name} even with strict=False: {e2}", exc_info=True)
-    except Exception as e_other:
-        logger_wubu_cpu_gen.error(f"General error loading state_dict for {module_name}: {e_other}", exc_info=True)
-
-
 def parse_cpu_arguments():
-    # Define bool_type at the beginning of the function
     def bool_type(s):
-        s_lower = str(s).lower() # Ensure s is string and lowercased
+        s_lower = str(s).lower()
         if s_lower in ('yes', 'true', 't', 'y', '1'): return True
         elif s_lower in ('no', 'false', 'f', 'n', '0'): return False
         else: raise argparse.ArgumentTypeError(f"Boolean value expected, got '{s}'")
@@ -1628,7 +1678,7 @@ def parse_cpu_arguments():
     parser.add_argument('--gaad_num_regions', type=int, default=16); parser.add_argument('--gaad_min_size_px', type=int, default=4)
     parser.add_argument('--patch_size_h', type=int, default=8); parser.add_argument('--patch_size_w', type=int, default=8)
 
-    # WuBu Core Common Params - now using type=bool_type
+    # WuBu Core Common Params
     parser.add_argument('--wubu_initial_s', type=float, default=1.0); parser.add_argument('--wubu_s_decay', type=float, default=0.9999)
     parser.add_argument('--wubu_initial_c', type=float, default=0.1);
     parser.add_argument('--wubu_c_phi_influence', type=bool_type, default=True)
@@ -1663,6 +1713,9 @@ def parse_cpu_arguments():
     parser.add_argument('--num_val_samples_to_log', type=int, default=2)
     parser.add_argument('--data_fraction', type=float, default=0.1);
     parser.add_argument('--show_train_progress_bar', type=bool_type, default=True)
+    parser.add_argument('--getitem_log_interval', type=int, default=100, help="Log VideoFrameDataset __getitem__ time every N calls per worker (0 to disable).")
+    parser.add_argument('--getitem_slow_threshold', type=float, default=1.0, help="Log __getitem__ time if it exceeds this threshold in seconds (0 to disable).")
+
 
     # Checkpoint loading behavior
     parser.add_argument('--load_checkpoint_reset_epoch', type=bool_type, default=False, help="If True, use saved epoch as start; otherwise, resume from epoch+1.")
@@ -1680,22 +1733,22 @@ def parse_cpu_arguments():
 
 def main_cpu():
     args = parse_cpu_arguments()
-    if args.show_train_progress_bar == False: # Disable tqdm globally if arg is False
+    if args.show_train_progress_bar == False: 
         global tqdm
-        def tqdm_disabled_wrapper(*args, **kwargs):
-            if len(args) > 0 and hasattr(args[0], '__iter__'): return args[0] # Return iterable directly
-            return None # Or some other dummy
+        def tqdm_disabled_wrapper(*args_tqdm, **kwargs_tqdm):
+            if len(args_tqdm) > 0 and hasattr(args_tqdm[0], '__iter__'): return args_tqdm[0] 
+            return None 
         tqdm = tqdm_disabled_wrapper
 
 
     device = torch.device("cpu")
-    # Set logger level based on whether we are debugging micro-transforms
     global DEBUG_MICRO_TRANSFORM_INTERNALS
-    if hasattr(args, 'debug_micro_transforms') and args.debug_micro_transforms: # Add this arg if needed
-        DEBUG_MICRO_TRANSFORM_INTERNALS = True
-        logger_wubu_cpu_gen.setLevel(logging.DEBUG)
-    else:
-        logger_wubu_cpu_gen.setLevel(logging.INFO)
+    # Assuming 'debug_micro_transforms' is not an arg, keep default behavior for now
+    # if hasattr(args, 'debug_micro_transforms') and args.debug_micro_transforms: 
+    #     DEBUG_MICRO_TRANSFORM_INTERNALS = True
+    #     logger_wubu_cpu_gen.setLevel(logging.DEBUG)
+    # else:
+    logger_wubu_cpu_gen.setLevel(logging.INFO)
 
     logging.basicConfig(level=logger_wubu_cpu_gen.level, format='%(asctime)s %(name)s:%(lineno)d %(levelname)s %(message)s', force=True)
     logger_wubu_cpu_gen.info(f"--- WuBuCPUOnlyGenV1 (Advanced FDQWR) ---")
@@ -1716,9 +1769,10 @@ def main_cpu():
     model = WuBuCPUNet(args, video_config, gaad_config).to(device)
     discriminator = WuBuCPUDiscriminator(args, video_config, gaad_config).to(device)
 
-    if args.wandb and WANDB_AVAILABLE and wandb.run: # Check wandb.run
-        wandb.watch(model, log="all", log_freq=args.log_interval * 10, log_graph=False)
-        wandb.watch(discriminator, log="all", log_freq=args.log_interval * 10, log_graph=False)
+    if args.wandb and WANDB_AVAILABLE and wandb.run: 
+        # Changed log="all" to log="gradients" to reduce data volume from parameter histograms
+        wandb.watch(model, log="gradients", log_freq=args.log_interval * 10, log_graph=False)
+        wandb.watch(discriminator, log="gradients", log_freq=args.log_interval * 10, log_graph=False)
 
     trainer = CPUTrainer(model, discriminator, args)
     start_global_step, start_epoch = trainer.load_checkpoint(args.load_checkpoint) if args.load_checkpoint else (0,0)
@@ -1729,7 +1783,7 @@ def main_cpu():
     except Exception as e: logger_wubu_cpu_gen.error(f"Training loop crashed: {e}", exc_info=True)
     finally:
         logger_wubu_cpu_gen.info("Finalizing run...")
-        if hasattr(trainer, 'current_epoch'): # Ensure epoch is available
+        if hasattr(trainer, 'current_epoch'): 
              trainer._save_checkpoint(epoch=trainer.current_epoch, is_final=True)
         if args.wandb and WANDB_AVAILABLE and wandb.run: wandb.finish()
         logger_wubu_cpu_gen.info("WuBuCPUOnlyGenV1 (Advanced FDQWR) script finished.")
