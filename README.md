@@ -7,7 +7,8 @@
 Welcome to **Bytropix**! This repository is an open, experimental playground dedicated to exploring the theoretical frameworks of **WuBu Nesting (層疊嵌套)** and **Golden Aspect Adaptive Decomposition (GAAD)**. If you're interested in pushing the boundaries of how we can model complex data, especially video, with deep geometric and compositional priors, you're in the right place.
 
 Think of this as a collection of **experimental scaffolds and starting beds**. The Python scripts and batch files here are my attempts to implement these advanced mathematical theories. They are functional, but more importantly, they are designed to be pulled apart, improved, and used as inspiration. The goal isn't a polished, final product, but a space to collectively figure out what works, what doesn't, and how to make these powerful ideas better. This is for those who like to get their hands dirty with "theory math" that might be a tough sell to the "tech head goobers" without seeing it in action (or at least, in attempted action!).
-
+## NEW VISUALIZER ONLINE FOR CLASSROOM USE
+https://wubu-sphere-visual.replit.app/
 ## Core Theories Under Exploration
 
 At the heart of Bytropix are two main theoretical constructs:
