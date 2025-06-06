@@ -1,0 +1,4 @@
+python etp_embedding_extractor_enhanced.py --model_name_or_path "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" --texts_file_A "C:\Projects\bytropix\draftPY\mteb_corpus_A.txt" --output_path_A "C:\Projects\bytropix\draftPY\deepseek_r1_dissected_corpus_A.npz" --texts_file_B "C:\Projects\bytropix\draftPY\mteb_corpus_B.txt" --output_path_B "C:\Projects\bytropix\draftPY\deepseek_r1_dissected_corpus_B.npz" --output_format npz --batch_size 8 --extract_all_hidden_states True --extract_attentions True --skip_if_output_exists True
+
+
+this command will create 65tb of data btw, I expect you to use a smaller corpus of like 100-1000 sentences for attention and hidden layers, but for embeddings you get about 900mb worth
