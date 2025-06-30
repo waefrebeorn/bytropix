@@ -1,338 +1,204 @@
 @echo OFF
 SETLOCAL ENABLEDELAYEDEXPANSION
 
-REM === Configuration ===
-SET "PROJECT_ROOT=%~dp0.."
-IF EXIST "%PROJECT_ROOT%\venv\Scripts\python.exe" (
-    SET "PYTHON_EXE=%PROJECT_ROOT%\venv\Scripts\python.exe"
-) ELSE IF EXIST "%PROJECT_ROOT%\.venv\Scripts\python.exe" (
-    SET "PYTHON_EXE=%PROJECT_ROOT%\.venv\Scripts\python.exe"
-) ELSE (
-    SET "PYTHON_EXE=python"
-)
-SET "SCRIPT_DIR=%~dp0"
-SET "SCRIPT_NAME=wubu_diffusion.py"
-SET "FULL_SCRIPT_PATH=%SCRIPT_DIR%%SCRIPT_NAME%"
+REM ============================================================================
+REM == Batch Runner for WuBuDiffusion v4 (HGA-UNet)
+REM ==
+REM == This script is designed accordingto the "Batch File Design Document".
+REM == It uses subroutines for modularity, validates paths, and provides
+REM == clear configuration for the new HGA-UNet architecture.
+REM ============================================================================
 
-SET "DATA_DIR_BASE=%PROJECT_ROOT%\data"
-SET "CHECKPOINT_OUTPUT_DIR=%PROJECT_ROOT%\checkpoints\WuBuDiffusion_v1_Run_Latent_Adv_Robust"
-SET "VIDEO_DATA_PATH=%DATA_DIR_BASE%\demo_video_data_cpu_diffusion"
-SET "LOAD_CHECKPOINT="
-SET "LATEST_EPOCH_CKPT_NAME="
+REM --- Main Execution Flow ---
+CALL :Configure
+CALL :FindLatestCheckpoint
+CALL :AssembleArguments
+CALL :PreRunChecks
 
-REM --- Checkpoint Loading Logic ---
-IF EXIST "%CHECKPOINT_OUTPUT_DIR%" (
-    FOR /F "delims=" %%F IN ('dir /b /o-d /a-d "%CHECKPOINT_OUTPUT_DIR%\wubudiffusion_v1_ep*_step*.pt"') DO (
-        SET "LATEST_EPOCH_CKPT_NAME=%%F"
-        GOTO FoundLatestEpochCkpt_Diffusion
+REM --- Execute the Python Script ---
+ECHO Starting HGA-UNet training script: !SCRIPT_NAME!
+ECHO.
+"!PYTHON_EXE!" "!FULL_SCRIPT_PATH!" !SCRIPT_ARGS!
+
+CALL :PostRunChecks
+GOTO :EOF
+
+REM ============================================================================
+REM == SUBROUTINES
+REM ============================================================================
+
+:Configure
+    REM --- Core Paths and Script Configuration ---
+    SET "PROJECT_ROOT=%~dp0.."
+    IF EXIST "%PROJECT_ROOT%\venv\Scripts\python.exe" (
+        SET "PYTHON_EXE=%PROJECT_ROOT%\venv\Scripts\python.exe"
+    ) ELSE IF EXIST "%PROJECT_ROOT%\.venv\Scripts\python.exe" (
+        SET "PYTHON_EXE=%PROJECT_ROOT%\.venv\Scripts\python.exe"
+    ) ELSE (
+        SET "PYTHON_EXE=python"
     )
-    :FoundLatestEpochCkpt_Diffusion
-    IF DEFINED LATEST_EPOCH_CKPT_NAME (
-        IF NOT "!LATEST_EPOCH_CKPT_NAME!"=="" SET "LOAD_CHECKPOINT=%CHECKPOINT_OUTPUT_DIR%\!LATEST_EPOCH_CKPT_NAME!"
+    SET "SCRIPT_DIR=%~dp0"
+    SET "SCRIPT_NAME=wubu_diffusion.py"
+    SET "FULL_SCRIPT_PATH=%SCRIPT_DIR%%SCRIPT_NAME%"
+    SET "CHECKPOINT_OUTPUT_DIR=%PROJECT_ROOT%\checkpoints\WuBuDiffusion_HGA_v4"
+    SET "VIDEO_DATA_PATH=%PROJECT_ROOT%\data\vid_data"
+    SET "LOAD_CHECKPOINT="
+
+    REM --- Model and Data Parameters ---
+    SET "IMAGE_W=256"
+    SET "IMAGE_H=256"
+    SET "NUM_CHANNELS=3"
+    SET "NUM_WORKERS=0"
+
+    REM --- HGA-UNet Architecture Parameters ---
+    SET "HGA_PATCH_SIZE=8"
+    SET "HGA_DIM=256"
+    SET "HGA_POS_DIM=2"
+    SET "HGA_POINCARE_C=1.0"
+    SET "HGA_N_HEADS=8"
+    SET "HGA_UNET_DEPTH=2"
+    SET "HGA_NUM_LAYERS_PER_BLOCK=2"
+    SET "HGA_KNN_K=16"
+    SET "HGA_LEARNABLE_GEOMETRY=false"
+    SET "HGA_LEARNABLE_CURVATURE=false"
+
+    REM --- Diffusion Process Parameters ---
+    SET "DIFFUSION_TIMESTEPS=1000"
+    SET "DIFFUSION_BETA_SCHEDULE=cosine"
+
+    REM --- Training and Optimizer Parameters ---
+    SET "EPOCHS=200"
+    SET "BATCH_SIZE=16"
+    SET "LEARNING_RATE=2e-4"
+    SET "OPTIMIZER=adamw_qcontrolled" REM Options: adamw, adamw_qcontrolled
+    
+    REM --- Q-Controller Specific Parameters (only used if OPTIMIZER is adamw_qcontrolled) ---
+    SET "Q_LR=0.02"
+    SET "Q_EPSILON=0.15"
+
+    REM --- Logging and Saving Parameters ---
+    SET "LOG_INTERVAL=50"
+    SET "SAVE_INTERVAL=10"
+    SET "WANDB_ENABLED=true"
+    SET "WANDB_PROJECT=HGA-Diffusion-v4"
+    
+    REM --- Validation Parameters ---
+    SET "VAL_FRACTION=0.1"
+    SET "VAL_BATCH_SIZE=16"
+EXIT /B 0
+
+
+:FindLatestCheckpoint
+    SET "LATEST_CKPT="
+    IF NOT EXIST "!CHECKPOINT_OUTPUT_DIR!" GOTO :EOF
+
+    REM Prioritize the highest epoch number
+    FOR /F "tokens=1,2 delims=ep.pt" %%A IN ('dir /b /o-n "!CHECKPOINT_OUTPUT_DIR!\hga_ep*.pt"') DO (
+        SET "LATEST_CKPT=!CHECKPOINT_OUTPUT_DIR!\hga_ep%%B.pt"
     )
-)
-REM If no epoch checkpoint, try to load a final one if it exists and LATEST_EPOCH_CKPT_NAME is still empty
-IF NOT DEFINED LATEST_EPOCH_CKPT_NAME (
-    IF EXIST "%CHECKPOINT_OUTPUT_DIR%\wubudiffusion_v1_final.pt" (
-        SET "LOAD_CHECKPOINT=%CHECKPOINT_OUTPUT_DIR%\wubudiffusion_v1_final.pt"
+
+    IF DEFINED LATEST_CKPT (
+        SET "LOAD_CHECKPOINT=!LATEST_CKPT!"
     )
-)
+EXIT /B 0
 
 
-REM === Model and Data Parameters ===
-SET "IMAGE_W=320"
-SET "IMAGE_H=176"
-SET "NUM_CHANNELS=3"
-SET "NUM_INPUT_FRAMES=1"
-SET "NUM_PREDICT_FRAMES=0"
-SET "FRAME_SKIP=0"
-
-REM --- New Image Encoder Parameters ---
-SET "IMG_ENCODER_GRID_REGION_W=16"
-SET "IMG_ENCODER_GRID_REGION_H=16"
-SET "IMG_ENCODER_PATCH_EMBEDDING_DIM=64"
-SET "IMG_ENCODER_MLP_HIDDEN_FACTOR=1.0"
-
-REM --- Diffusion Specific Parameters ---
-SET "DIFFUSION_TIMESTEPS=64"
-SET "DIFFUSION_BETA_SCHEDULE=linear"
-SET "DIFFUSION_BETA_START=0.0001"
-SET "DIFFUSION_BETA_END=0.02"
-SET "DIFFUSION_TIME_EMBED_DIM=512"
-
-REM --- WuBu Core Common Parameters ---
-SET "WUBU_INITIAL_S=1.0"
-SET "WUBU_S_DECAY=0.9999"
-SET "WUBU_INITIAL_C=0.1"
-SET "WUBU_C_PHI_INFLUENCE=true"
-SET "WUBU_NUM_PHI_SCAFFOLD_POINTS=16"
-SET "WUBU_PHI_SCAFFOLD_INIT_SCALE=0.001"
-SET "WUBU_USE_GAUSSIAN_RUNGS=false"
-SET "WUBU_BASE_GAUSSIAN_STD_DEV=0.005"
-SET "WUBU_GAUSSIAN_STD_DEV_DECAY=0.999995"
-SET "WUBU_RUNG_AFFINITY_TEMP=0.01"
-SET "WUBU_RUNG_MODULATION_STRENGTH=0.001"
-SET "WUBU_T_TILDE_SCALE=1.0"
-SET "WUBU_MICRO_TRANSFORM_TYPE=mlp"
-SET "WUBU_MICRO_TRANSFORM_HIDDEN_FACTOR=0.5"
-SET "WUBU_USE_QUATERNION_SO4=false"
-SET "WUBU_SCAFFOLD_CO_ROTATION_MODE=none"
-SET "WUBU_ENABLE_ISP=true"
-SET "WUBU_ENABLE_STATEFUL=true"
-SET "WUBU_ENABLE_HYPERNET=true"
-SET "WUBU_INTERNAL_STATE_FACTOR=0.09"
-SET "WUBU_HYPERNET_STRENGTH=0.50"
-SET "WUBU_USE_RESIDUAL_IN_MICRO=true"
-SET "WUBU_LEARNABLE_AFFINITY_PARAMS=true"
-
-REM --- WuBu Stack Specifics (for the single noise predictor model operating on latents) ---
-SET "MODEL_WUBU_NUM_VIRTUAL_LEVELS=32"
-SET "MODEL_WUBU_BASE_MICRO_DIM=128"
-SET "MODEL_WUBU_NUM_PHYSICAL_STAGES=16"
-
-REM --- ManifoldUncrumpleTransform (MUT) Specific Params for FDQWR ---
-SET "USE_MANIFOLD_UNCRUMPLE_TRANSFORM=true"
-SET "UNCRUMPLE_HYPERNET_HIDDEN_FACTOR=1.0"
-SET "UNCRUMPLE_LEARN_ROTATION=true"
-SET "UNCRUMPLE_LEARN_SCALE=true"
-SET "UNCRUMPLE_SCALE_ACTIVATION=sigmoid"
-SET "UNCRUMPLE_SCALE_MIN=0.5"
-SET "UNCRUMPLE_SCALE_MAX=2.0"
-SET "UNCRUMPLE_LEARN_TRANSLATION=true"
-
-REM --- BSP Gate Parameters ===
-SET "USE_BSP_GATE=true"
-SET "BSP_GATE_HIDDEN_DIM=256"
-SET "BSP_NUM_PATHS=8"
-SET "BSP_INTERMEDIATE_DIM=128"
-SET "BSP_GATE_ACTIVATION=softmax"
-SET "BSP_LOG_GATE_INTERVAL_MULT=1"
-
-REM --- New WuBu Contextual Conditioning and Stability Parameters ---
-SET "WUBU_COND_EMBED_DIM=32"
-SET "WUBU_CONDITION_ON_S=true"
-SET "WUBU_CONDITION_ON_C=false"
-SET "WUBU_CONDITION_ON_MICRO_IDX=true"
-SET "WUBU_CONDITION_ON_STAGE_IDX=true"
-SET "WUBU_MAX_MICRO_IDX_EMBED=256"
-SET "WUBU_MAX_STAGE_IDX_EMBED=64"
-SET "WUBU_INTER_MICRO_NORM_INTERVAL=0"
-
-REM === Training Parameters ===
-SET "EPOCHS=50000"
-SET "BATCH_SIZE=60"
-SET "LEARNING_RATE=1e-5"
-SET "TRAIN_SEED=69"
-SET "TRAIN_NUM_WORKERS=0"
-
-REM === Logging and Saving Parameters ===
-SET "LOG_INTERVAL=1"
-SET "TRAIN_PROGRESS_UPDATE_INTERVAL_STEPS=1"
-SET "SAVE_INTERVAL=500"
-SET "SHOW_TRAIN_PROGRESS_BAR=true"
-SET "WANDB_LOG_TRAIN_SAMPLES_INTERVAL=500"
-SET "TRAIN_SAMPLING_LOG_STEPS=64"
-SET "SHOW_TRAIN_SAMPLE_PROGRESS=true"
-SET "WANDB_LOG_FIXED_NOISE_SAMPLES_INTERVAL=500"
-SET "FIXED_NOISE_SAMPLING_LOG_STEPS=64"
-SET "SHOW_FIXED_NOISE_SAMPLE_PROGRESS=true"
-SET "NUM_VAL_SAMPLES_TO_LOG=2"
-SET "NUM_TRAIN_SAMPLES_TO_LOG=2"
-SET "DATA_FRACTION=1.0"
-SET "LOAD_CHECKPOINT_RESET_EPOCH=false"
-SET "DEBUG_INITIAL_N_STEPS=0"
-SET "DEBUG_MICRO_TRANSFORM_INTERNALS_GLOBAL=false"
-
-SET "VAL_FRACTION=0.1"
-SET "VAL_BATCH_SIZE=60"
-SET "VALIDATE_EVERY_N_EPOCHS=25"
-SET "WANDB_LOG_VAL_RECON_INTERVAL_EPOCHS=25"
-SET "VAL_SAMPLING_LOG_STEPS=64"
-SET "SHOW_VAL_SAMPLE_PROGRESS=true"
-
-SET "GETITEM_LOG_INTERVAL=1000"
-SET "GETITEM_SLOW_THRESHOLD=1.5"
-
-SET "WANDB_ENABLED=true"
-SET "WANDB_PROJECT=WuBuDiffusionV1Latent"
-SET "WANDB_RUN_NAME="
-SET "DROP_LAST_TRAIN=true"
-SET "DROP_LAST_VAL=false"
-
-REM === Argument Assembly ===
-SET "SCRIPT_ARGS="
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --video_data_path "!VIDEO_DATA_PATH!""
-IF DEFINED LOAD_CHECKPOINT (
-    IF NOT "!LOAD_CHECKPOINT!"=="" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --load_checkpoint "!LOAD_CHECKPOINT!""
-)
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --checkpoint_dir "!CHECKPOINT_OUTPUT_DIR!""
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --image_h %IMAGE_H%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --image_w %IMAGE_W%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --num_channels %NUM_CHANNELS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --num_input_frames %NUM_INPUT_FRAMES%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --num_predict_frames %NUM_PREDICT_FRAMES%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --frame_skip %FRAME_SKIP%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --img_encoder_grid_region_w %IMG_ENCODER_GRID_REGION_W%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --img_encoder_grid_region_h %IMG_ENCODER_GRID_REGION_H%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --img_encoder_patch_embedding_dim %IMG_ENCODER_PATCH_EMBEDDING_DIM%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --img_encoder_mlp_hidden_factor %IMG_ENCODER_MLP_HIDDEN_FACTOR%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --diffusion_timesteps %DIFFUSION_TIMESTEPS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --diffusion_beta_schedule %DIFFUSION_BETA_SCHEDULE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --diffusion_beta_start %DIFFUSION_BETA_START%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --diffusion_beta_end %DIFFUSION_BETA_END%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --diffusion_time_embed_dim %DIFFUSION_TIME_EMBED_DIM%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_initial_s %WUBU_INITIAL_S%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_s_decay %WUBU_S_DECAY%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_initial_c %WUBU_INITIAL_C%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_c_phi_influence %WUBU_C_PHI_INFLUENCE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_num_phi_scaffold_points %WUBU_NUM_PHI_SCAFFOLD_POINTS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_phi_scaffold_init_scale %WUBU_PHI_SCAFFOLD_INIT_SCALE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_use_gaussian_rungs %WUBU_USE_GAUSSIAN_RUNGS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_base_gaussian_std_dev %WUBU_BASE_GAUSSIAN_STD_DEV%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_gaussian_std_dev_decay %WUBU_GAUSSIAN_STD_DEV_DECAY%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_rung_affinity_temp %WUBU_RUNG_AFFINITY_TEMP%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_rung_modulation_strength %WUBU_RUNG_MODULATION_STRENGTH%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_t_tilde_scale %WUBU_T_TILDE_SCALE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_micro_transform_type %WUBU_MICRO_TRANSFORM_TYPE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_micro_transform_hidden_factor %WUBU_MICRO_TRANSFORM_HIDDEN_FACTOR%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_use_quaternion_so4 %WUBU_USE_QUATERNION_SO4%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_scaffold_co_rotation_mode %WUBU_SCAFFOLD_CO_ROTATION_MODE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_enable_isp %WUBU_ENABLE_ISP%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_enable_stateful %WUBU_ENABLE_STATEFUL%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_enable_hypernet %WUBU_ENABLE_HYPERNET%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_internal_state_factor %WUBU_INTERNAL_STATE_FACTOR%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_hypernet_strength %WUBU_HYPERNET_STRENGTH%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_use_residual_in_micro %WUBU_USE_RESIDUAL_IN_MICRO%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_learnable_affinity_params %WUBU_LEARNABLE_AFFINITY_PARAMS%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --model_wubu_num_virtual_levels %MODEL_WUBU_NUM_VIRTUAL_LEVELS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --model_wubu_base_micro_dim %MODEL_WUBU_BASE_MICRO_DIM%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --model_wubu_num_physical_stages %MODEL_WUBU_NUM_PHYSICAL_STAGES%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --use_manifold_uncrumple_transform %USE_MANIFOLD_UNCRUMPLE_TRANSFORM%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --uncrumple_hypernet_hidden_factor %UNCRUMPLE_HYPERNET_HIDDEN_FACTOR%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --uncrumple_learn_rotation %UNCRUMPLE_LEARN_ROTATION%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --uncrumple_learn_scale %UNCRUMPLE_LEARN_SCALE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --uncrumple_scale_activation %UNCRUMPLE_SCALE_ACTIVATION%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --uncrumple_scale_min %UNCRUMPLE_SCALE_MIN%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --uncrumple_scale_max %UNCRUMPLE_SCALE_MAX%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --uncrumple_learn_translation %UNCRUMPLE_LEARN_TRANSLATION%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --use_bsp_gate %USE_BSP_GATE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --bsp_gate_hidden_dim %BSP_GATE_HIDDEN_DIM%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --bsp_num_paths %BSP_NUM_PATHS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --bsp_intermediate_dim %BSP_INTERMEDIATE_DIM%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --bsp_gate_activation %BSP_GATE_ACTIVATION%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --bsp_log_gate_interval_mult %BSP_LOG_GATE_INTERVAL_MULT%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_cond_embed_dim %WUBU_COND_EMBED_DIM%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_condition_on_s %WUBU_CONDITION_ON_S%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_condition_on_c %WUBU_CONDITION_ON_C%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_condition_on_micro_idx %WUBU_CONDITION_ON_MICRO_IDX%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_condition_on_stage_idx %WUBU_CONDITION_ON_STAGE_IDX%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_max_micro_idx_embed %WUBU_MAX_MICRO_IDX_EMBED%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_max_stage_idx_embed %WUBU_MAX_STAGE_IDX_EMBED%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wubu_inter_micro_norm_interval %WUBU_INTER_MICRO_NORM_INTERVAL%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --epochs %EPOCHS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --batch_size %BATCH_SIZE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --learning_rate %LEARNING_RATE%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --seed %TRAIN_SEED%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --num_workers %TRAIN_NUM_WORKERS%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --log_interval %LOG_INTERVAL%"
-IF DEFINED TRAIN_PROGRESS_UPDATE_INTERVAL_STEPS (
-    IF NOT "!TRAIN_PROGRESS_UPDATE_INTERVAL_STEPS!"=="" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --train_progress_update_interval_steps %TRAIN_PROGRESS_UPDATE_INTERVAL_STEPS%"
-)
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --save_interval %SAVE_INTERVAL%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --show_train_progress_bar %SHOW_TRAIN_PROGRESS_BAR%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb_log_train_samples_interval %WANDB_LOG_TRAIN_SAMPLES_INTERVAL%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --train_sampling_log_steps %TRAIN_SAMPLING_LOG_STEPS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --show_train_sample_progress %SHOW_TRAIN_SAMPLE_PROGRESS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb_log_fixed_noise_samples_interval %WANDB_LOG_FIXED_NOISE_SAMPLES_INTERVAL%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --fixed_noise_sampling_log_steps %FIXED_NOISE_SAMPLING_LOG_STEPS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --show_fixed_noise_sample_progress %SHOW_FIXED_NOISE_SAMPLE_PROGRESS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --num_val_samples_to_log %NUM_VAL_SAMPLES_TO_LOG%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --num_train_samples_to_log %NUM_TRAIN_SAMPLES_TO_LOG%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --data_fraction %DATA_FRACTION%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --load_checkpoint_reset_epoch %LOAD_CHECKPOINT_RESET_EPOCH%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --debug_initial_n_steps %DEBUG_INITIAL_N_STEPS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --debug_micro_transform_internals_global %DEBUG_MICRO_TRANSFORM_INTERNALS_GLOBAL%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --val_fraction %VAL_FRACTION%"
-IF DEFINED VAL_BATCH_SIZE (
-    IF NOT "!VAL_BATCH_SIZE!"=="" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --val_batch_size %VAL_BATCH_SIZE%"
-)
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --validate_every_n_epochs %VALIDATE_EVERY_N_EPOCHS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb_log_val_recon_interval_epochs %WANDB_LOG_VAL_RECON_INTERVAL_EPOCHS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --val_sampling_log_steps %VAL_SAMPLING_LOG_STEPS%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --show_val_sample_progress %SHOW_VAL_SAMPLE_PROGRESS%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --getitem_log_interval %GETITEM_LOG_INTERVAL%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --getitem_slow_threshold %GETITEM_SLOW_THRESHOLD%"
-
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb %WANDB_ENABLED%"
-IF /I "%WANDB_ENABLED%"=="true" (
-    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb_project %WANDB_PROJECT%"
-    IF DEFINED WANDB_RUN_NAME (
-        IF NOT "!WANDB_RUN_NAME!"=="" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb_run_name "!WANDB_RUN_NAME!""
+:AssembleArguments
+    SET "SCRIPT_ARGS="
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --video_data_path "!VIDEO_DATA_PATH!""
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --checkpoint_dir "!CHECKPOINT_OUTPUT_DIR!""
+    IF DEFINED LOAD_CHECKPOINT (
+        IF NOT "!LOAD_CHECKPOINT!"=="" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --load_checkpoint "!LOAD_CHECKPOINT!""
     )
-)
 
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --drop_last_train %DROP_LAST_TRAIN%"
-SET "SCRIPT_ARGS=!SCRIPT_ARGS! --drop_last_val %DROP_LAST_VAL%"
+    REM --- Model and Data ---
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --image_h !IMAGE_H!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --image_w !IMAGE_W!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --num_channels !NUM_CHANNELS!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --num_workers !NUM_WORKERS!"
 
-REM === Pre-run Checks and Echo ===
-ECHO ======================================================
-ECHO WuBuDiffusion V1 - CPU Execution (Latent Diffusion with Encoder/Decoder & Adv FDQWR)
-ECHO Python: %PYTHON_EXE%
-ECHO Script Name: %SCRIPT_NAME%
-ECHO Checkpoints: %CHECKPOINT_OUTPUT_DIR%
-ECHO Video Data: %VIDEO_DATA_PATH%
-ECHO Image Size: %IMAGE_H%x%IMAGE_W%
-ECHO Image Encoder Grid Region: %IMG_ENCODER_GRID_REGION_H%x%IMG_ENCODER_GRID_REGION_W% (pixels from original image)
-ECHO Image Encoder Patch Embedding Dim: %IMG_ENCODER_PATCH_EMBEDDING_DIM%
-ECHO Diffusion Timesteps: %DIFFUSION_TIMESTEPS%
-ECHO WANDB: %WANDB_ENABLED%
-ECHO ManifoldUncrumpleTransform (MUT) Active: %USE_MANIFOLD_UNCRUMPLE_TRANSFORM%
-ECHO BSP Gate Active: %USE_BSP_GATE% (Paths: %BSP_NUM_PATHS%)
-ECHO OriginalFMT Adv Feats: ISP=%WUBU_ENABLE_ISP%, Stateful=%WUBU_ENABLE_STATEFUL%, HyperNet=%WUBU_ENABLE_HYPERNET%
-ECHO OriginalFMT Contextual Cond: S=%WUBU_CONDITION_ON_S%, C=%WUBU_CONDITION_ON_C%, M_IDX=%WUBU_CONDITION_ON_MICRO_IDX%, S_IDX=%WUBU_CONDITION_ON_STAGE_IDX% (EmbedDim: %WUBU_COND_EMBED_DIM%)
-ECHO OriginalFMT Inter-Micro LN Interval: %WUBU_INTER_MICRO_NORM_INTERVAL%
-ECHO Reset Epoch on Load: %LOAD_CHECKPOINT_RESET_EPOCH%
-ECHO Validation Fraction: %VAL_FRACTION%
-ECHO Debug Initial N Steps: %DEBUG_INITIAL_N_STEPS%
-ECHO Debug Micro-Transform Internals Globally: %DEBUG_MICRO_TRANSFORM_INTERNALS_GLOBAL%
-ECHO ======================================================
-ECHO.
+    REM --- HGA-UNet Architecture ---
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_patch_size !HGA_PATCH_SIZE!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_dim !HGA_DIM!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_pos_dim !HGA_POS_DIM!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_poincare_c !HGA_POINCARE_C!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_n_heads !HGA_N_HEADS!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_unet_depth !HGA_UNET_DEPTH!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_num_layers_per_block !HGA_NUM_LAYERS_PER_BLOCK!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_knn_k !HGA_KNN_K!"
+    IF /I "!HGA_LEARNABLE_GEOMETRY!"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_learnable_geometry"
+    IF /I "!HGA_LEARNABLE_CURVATURE!"=="true" SET "SCRIPT_ARGS=!SCRIPT_ARGS! --hga_learnable_curvature"
+    
+    REM --- Diffusion ---
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --diffusion_timesteps !DIFFUSION_TIMESTEPS!"
 
-IF NOT EXIST "%PYTHON_EXE%" (
-    ECHO ERROR: Python executable not found at %PYTHON_EXE%
-    GOTO :End
-)
-ECHO.
-IF NOT EXIST "%CHECKPOINT_OUTPUT_DIR%" MKDIR "%CHECKPOINT_OUTPUT_DIR%"
-IF NOT EXIST "%DATA_DIR_BASE%" MKDIR "%DATA_DIR_BASE%"
-IF NOT EXIST "%VIDEO_DATA_PATH%" MKDIR "%VIDEO_DATA_PATH%"
-ECHO.
+    REM --- Training and Optimizer ---
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --epochs !EPOCHS!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --batch_size !BATCH_SIZE!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --learning_rate !LEARNING_RATE!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --optimizer !OPTIMIZER!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --q_lr !Q_LR!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --q_epsilon !Q_EPSILON!"
 
-REM === Execution ===
-ECHO Starting CPU Diffusion training script: %SCRIPT_NAME%
-ECHO.
-"%PYTHON_EXE%" "%FULL_SCRIPT_PATH%" !SCRIPT_ARGS!
+    REM --- Logging and Saving ---
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --log_interval !LOG_INTERVAL!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --save_interval !SAVE_INTERVAL!"
+    IF /I "!WANDB_ENABLED!"=="true" (
+        SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb"
+        SET "SCRIPT_ARGS=!SCRIPT_ARGS! --wandb_project !WANDB_PROJECT!"
+    )
 
-REM === Post-run ===
-SET "EXIT_CODE=%ERRORLEVEL%"
-ECHO.
-IF %EXIT_CODE% NEQ 0 (
-    ECHO * SCRIPT FAILED with exit code %EXIT_CODE% *
-) ELSE (
-    ECHO * SCRIPT FINISHED successfully *
-)
+    REM --- Validation ---
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --val_fraction !VAL_FRACTION!"
+    SET "SCRIPT_ARGS=!SCRIPT_ARGS! --val_batch_size !VAL_BATCH_SIZE!"
+EXIT /B 0
 
-:End
-TIMEOUT /T 25 /NOBREAK >nul
-ENDLOCAL
+
+:PreRunChecks
+    ECHO ======================================================
+    ECHO WuBuDiffusion V4 - HGA-UNet Execution
+    ECHO ======================================================
+    ECHO Python: !PYTHON_EXE!
+    ECHO Script: !SCRIPT_NAME!
+    ECHO Checkpoints: !CHECKPOINT_OUTPUT_DIR!
+    ECHO Video Data: !VIDEO_DATA_PATH!
+    ECHO Image Size: !IMAGE_H!x!IMAGE_W!
+    ECHO HGA Patch Size: !HGA_PATCH_SIZE!
+    ECHO HGA Dimension: !HGA_DIM!
+    ECHO HGA U-Net Depth: !HGA_UNET_DEPTH!
+    ECHO Optimizer: !OPTIMIZER!
+    IF /I "!OPTIMIZER!"=="adamw_qcontrolled" (
+        ECHO   Q-Controller LR: !Q_LR!
+        ECHO   Q-Controller Epsilon: !Q_EPSILON!
+    )
+    ECHO WANDB Logging: !WANDB_ENABLED!
+    IF DEFINED LOAD_CHECKPOINT (
+        IF NOT "!LOAD_CHECKPOINT!"=="" ECHO Resuming from: !LOAD_CHECKPOINT!
+    ) ELSE (
+        ECHO Starting a new run.
+    )
+    ECHO ======================================================
+    ECHO.
+
+    IF NOT EXIST "!PYTHON_EXE%" (
+        ECHO ERROR: Python executable not found at "!PYTHON_EXE!"
+        EXIT /B 1
+    )
+    IF NOT EXIST "!CHECKPOINT_OUTPUT_DIR!" MKDIR "!CHECKPOINT_OUTPUT_DIR!"
+    IF NOT EXIST "!VIDEO_DATA_PATH!" MKDIR "!VIDEO_DATA_PATH!"
+EXIT /B 0
+
+
+:PostRunChecks
+    SET "EXIT_CODE=%ERRORLEVEL%"
+    ECHO.
+    ECHO ======================================================
+    IF %EXIT_CODE% NEQ 0 (
+        ECHO SCRIPT FAILED with exit code %EXIT_CODE%
+    ) ELSE (
+        ECHO SCRIPT FINISHED successfully
+    )
+    ECHO ======================================================
+    REM Pause at the end to see output
+    TIMEOUT /T 10 /NOBREAK >nul
+EXIT /B %EXIT_CODE%
