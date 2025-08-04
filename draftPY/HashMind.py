@@ -199,14 +199,75 @@ if __name__ == "__main__":
     hasher = RollingHasher(window_size=HASH_WINDOW)
     model = HashMind(CONTEXT_LENGTH, ascii_converter.vocab_size, d_model=D_MODEL, n_heads=N_HEADS, n_layers=N_LAYERS, learning_rate=5e-4)
 
-    corpus_text = ("The quick brown fox jumps over the lazy dog. A stitch in time saves nine. "
-                   "A model that can learn is a useful model. We are teaching it to predict the next character. "
-                   "This is a test of the HashMind architecture. Learning from patterns is the goal of this network. "
-                   "The rain in Spain stays mainly in the plain. How much wood would a woodchuck chuck? "
-                   "She sells seashells by the seashore. Peter Piper picked a peck of pickled peppers. "
-                   "To be or not to be, that is the question. The early bird catches the worm. "
-                   "Where there is a will, there is a way. All that glitters is not gold. "
-                   "An apple a day keeps the doctor away. A journey of a thousand miles begins with a single step.")
+
+    corpus_text = """
+    # --- Section 1: Python Code Snippets ---
+    # Goal: Force the model to learn rigid structural n-grams like 'def ', 'self.', ' for', ' in ', '):', ' = '.
+    
+    def calculate_loss(self, y_true, y_pred):
+        # This is a standard loss function.
+        return np.mean(np.square(y_true - y_pred))
+    
+    class SimpleNetwork:
+        def __init__(self, input_size, output_size):
+            self.weights = np.random.randn(input_size, output_size)
+            self.bias = np.zeros(output_size)
+    
+        def forward(self, x):
+            # A simple forward pass calculation.
+            return np.dot(x, self.weights) + self.bias
+    
+    for i in range(100):
+        if i % 10 == 0:
+            print(f"Processing item number {i}")
+    
+    # --- Section 2: Technical and Encyclopedic Definitions ---
+    # Goal: Learn common definitional phrases and subject-specific n-grams.
+    
+    A neural network is a network or circuit of biological neurons, or, in a modern sense, an artificial neural network, composed of artificial neurons or nodes.
+    A recurrent neural network (RNN) is a class of artificial neural networks where connections between nodes form a directed graph along a temporal sequence. This allows it to exhibit temporal dynamic behavior.
+    The Hypertext Transfer Protocol (HTTP) is an application protocol for distributed, collaborative, hypermedia information systems.
+    An algorithm is a finite sequence of well-defined instructions, typically used to solve a class of specific problems or to perform a computation.
+    
+    # --- Section 3: Structured Data (Markdown-like) ---
+    # Goal: Learn formatting patterns and key-value relationships.
+    
+    - Project Name: HashMind V11
+    - Author: User
+    - Language: Python
+    - Key Features:
+        - Dual-Source Embedding (Character + Hash)
+        - Transformer Architecture
+        - Adam Optimizer
+    
+    - Task: Predict the next character.
+    - Objective: Learn from sequential patterns.
+    
+    # --- Section 4: Literary Prose and Famous Quotes ---
+    # Goal: Learn grammar, punctuation, and common English word n-grams.
+    
+    To be or not to be, that is the question:
+    Whether 'tis nobler in the mind to suffer
+    The slings and arrows of outrageous fortune,
+    Or to take arms against a sea of troubles
+    And by opposing end them.
+    
+    It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness.
+    All the world's a stage, and all the men and women merely players. They have their exits and their entrances.
+    The quick brown fox jumps over the lazy dog. A stitch in time saves nine. The early bird catches the worm.
+    She sells seashells by the seashore. The shells she sells are surely seashells.
+    Where there is a will, there is a way. All that glitters is not gold. A journey of a thousand miles begins with a single step.
+    
+    # --- Section 5: Repetitive Sentences ---
+    # Goal: Test the model's ability to count and replicate simple, long-range patterns.
+    
+    The first rule of the club is you do not talk about the club.
+    The second rule of the club is you do not talk about the club.
+    The model that can learn is a useful model. We are teaching it to predict the next character.
+    This is a test of the architecture. Learning patterns is the goal of this network.
+    """
+
+
     
     values = ascii_converter.convert(corpus_text)
     hashes = hasher.hash_sequence(values)
