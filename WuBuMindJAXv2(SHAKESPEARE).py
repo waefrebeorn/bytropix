@@ -3,6 +3,10 @@
 # and finally to a subtle indexing error, has led to this. The architecture is
 # numerically sound, the training strategy respects physical memory, and the
 # logic is now correct. The model will train.
+#
+# EVOLUTION: The philosophy has evolved. The static architecture has been unlocked
+# by the three keys: Dynamic Curvature, principled Geometric Transport, and a
+# true Nested (層疊嵌套) structure. The code now reflects this deeper understanding.
 
 import jax
 import jax.numpy as jnp
@@ -17,11 +21,11 @@ import requests
 import time
 from tqdm import tqdm
 import pickle
-from typing import Any
+from typing import Any, Sequence
 
-jax.config.update("jax_debug_nans", False) 
+jax.config.update("jax_debug_nans", False)
 
-# --- Part 1: HashMind's Input Engine ---
+# --- Part 1: HashMind's Input Engine (Unchanged) ---
 class SimplifiedASCIIConverter:
     def __init__(self, corpus=""):
         chars = sorted(list(set(corpus))); self.vocab_size = len(chars)
@@ -44,7 +48,7 @@ class RollingHasher:
             hashes.append(current_hash)
         return hashes
 
-# --- Part 2: WuBu's Geometric Core (Definitive, Stable Implementation) ---
+# --- Part 2: WuBu's Geometric Core (Unchanged) ---
 class PoincareBall:
     EPS = 1e-7
     @staticmethod
@@ -86,12 +90,11 @@ class PoincareBall:
         sqrt_c = jnp.sqrt(c).clip(PoincareBall.EPS)
         diff = PoincareBall.mobius_add(x, -y, c)
         diff_norm = jnp.linalg.norm(diff, axis=-1)
-        # Added extra clip for numerical stability as per your insight
         arg_atanh = jnp.minimum(sqrt_c * diff_norm.clip(PoincareBall.EPS, 1-PoincareBall.EPS), 1.0 - PoincareBall.EPS)
         return 2. * jnp.arctanh(arg_atanh) / sqrt_c
 
-# --- Part 3: Final Architecture with Mixed Precision ---
-class GeometricallyAlignedVmapAttention(nn.Module):
+# --- Part 3: Evolved Architecture - The Nested WuBu Block (with Definitive Fix) ---
+class WubuBlock(nn.Module):
     dim: int; n_heads: int; k: int
     dtype: Any = jnp.bfloat16
     param_dtype: Any = jnp.float32
@@ -102,7 +105,7 @@ class GeometricallyAlignedVmapAttention(nn.Module):
         self.geo_proj = nn.Dense(self.dim, dtype=self.dtype, param_dtype=self.param_dtype, name="geo_proj")
         self.out_proj = nn.Dense(self.dim, dtype=self.dtype, param_dtype=self.param_dtype, name="out_proj")
         self.ffn = nn.Sequential([
-            nn.Dense(self.dim * 4, dtype=self.dtype, param_dtype=self.param_dtype), nn.gelu, 
+            nn.Dense(self.dim * 4, dtype=self.dtype, param_dtype=self.param_dtype), nn.gelu,
             nn.Dense(self.dim, dtype=self.dtype, param_dtype=self.param_dtype)
         ])
         self.norm1 = nn.LayerNorm(dtype=jnp.float32); self.norm2 = nn.LayerNorm(dtype=jnp.float32)
@@ -110,52 +113,71 @@ class GeometricallyAlignedVmapAttention(nn.Module):
         self.feature_scale = self.param('feature_scale', nn.initializers.ones, (self.n_heads,), self.param_dtype)
 
     @staticmethod
-    def single_head_attention(q_h, k_h, v_h, geo_vecs_h, top_k_indices, alignment_scale_head, feature_scale_head):
-        B, N, h_dim = q_h.shape
-        B_indices = jnp.arange(B)[:, None, None]
-        k_gathered = k_h[B_indices, top_k_indices]
-        v_gathered = v_h[B_indices, top_k_indices]
-        
-        alignment_score = jnp.einsum('bnd,bnkd->bnk', q_h, geo_vecs_h)
-        feature_score = jnp.einsum('bnd,bnkd->bnk', q_h, k_gathered) / math.sqrt(h_dim)
+    def single_head_attention(q_h, k_gathered_h, v_gathered_h, geo_vecs_h, alignment_scale_head, feature_scale_head):
+        h_dim = q_h.shape[-1]
+        alignment_score = jnp.einsum('nd,nkd->nk', q_h, geo_vecs_h)
+        feature_score = jnp.einsum('nd,nkd->nk', q_h, k_gathered_h) / math.sqrt(h_dim)
         total_scores = (feature_scale_head * feature_score) + (alignment_scale_head * alignment_score)
         attn_weights = nn.softmax(total_scores.astype(jnp.float32), axis=-1).astype(q_h.dtype)
-        attn_output = jnp.einsum('bnk,bnkd->bnd', attn_weights, v_gathered)
+        attn_output = jnp.einsum('nk,nkd->nd', attn_weights, v_gathered_h)
         return attn_output
 
+    # --- THE FINAL REFACTOR ---
+    # The logic for a single example is encapsulated in a static function.
+    # This presents a clean, simple computation to `jax.vmap` and `jax.grad`.
+    @staticmethod
+    def single_example_forward(module, x_item, positions_item, c_item):
+        N, _ = x_item.shape
+        x_res = x_item
+        x_norm = module.norm1(x_item).astype(module.dtype)
+
+        q_full = module.q_proj(x_norm)
+        k_full = module.k_proj(x_norm)
+        v_full = module.v_proj(x_norm)
+
+        x_exp_f32 = positions_item.astype(jnp.float32)[None, :, :]
+        y_exp_f32 = positions_item.astype(jnp.float32)[:, None, :]
+        dist_matrix = PoincareBall.dist(x_exp_f32, y_exp_f32, c_item)
+        top_k_indices = jax.lax.top_k(-dist_matrix, module.k)[1]
+
+        k_gathered_full = k_full[top_k_indices]
+        v_gathered_full = v_full[top_k_indices]
+        key_pos = positions_item.astype(module.dtype)[top_k_indices]
+
+        q = q_full.reshape(N, module.n_heads, module.h_dim)
+        k_gathered = k_gathered_full.reshape(N, module.k, module.n_heads, module.h_dim)
+        v_gathered = v_gathered_full.reshape(N, module.k, module.n_heads, module.h_dim)
+        
+        query_pos = positions_item.astype(module.dtype)[:, None, :]
+        logmap_x_y = PoincareBall.logmap0(PoincareBall.mobius_add(-query_pos, key_pos, c_item), c_item)
+        projected_geo_vecs = module.geo_proj(logmap_x_y).reshape(N, module.k, module.n_heads, module.h_dim)
+
+        q = q.transpose(1, 0, 2)
+        k_gathered = k_gathered.transpose(2, 0, 1, 3)
+        v_gathered = v_gathered.transpose(2, 0, 1, 3)
+        projected_geo_vecs = projected_geo_vecs.transpose(2, 0, 1, 3)
+
+        vmap_attention = jax.vmap(WubuBlock.single_head_attention, in_axes=(0, 0, 0, 0, 0, 0), out_axes=0)
+        attn_output_vmapped = vmap_attention(q, k_gathered, v_gathered, projected_geo_vecs, module.alignment_scale, module.feature_scale)
+        
+        attn_output = attn_output_vmapped.transpose(1, 0, 2).reshape(N, module.dim)
+        x_out = x_res + module.out_proj(attn_output).astype(x_res.dtype)
+        x_out = x_out + module.ffn(module.norm2(x_out).astype(module.dtype)).astype(x_out.dtype)
+        return x_out
+
     def __call__(self, x, positions, c):
-        B, N, _ = x.shape
-        x_res = x; x_norm = self.norm1(x).astype(self.dtype)
-        q, k, v = (p(x_norm).reshape(B, N, self.n_heads, self.h_dim) for p in [self.q_proj, self.k_proj, self.v_proj])
-        
-        # --- DEFINITIVE FIX AS PER YOUR INSIGHT ---
-        # Perform the sensitive distance calculation in full float32 precision
-        x_exp_f32 = positions.astype(jnp.float32)[:, :, None, :]
-        y_exp_f32 = positions.astype(jnp.float32)[:, None, :, :]
-        dist_matrix = PoincareBall.dist(x_exp_f32, y_exp_f32, c)
-        
-        top_k_indices = jax.lax.top_k(-dist_matrix, self.k)[1]
-        
-        query_pos = positions.astype(self.dtype)[:, :, None, :]
-        key_pos = jax.vmap(lambda p, i: p[i])(positions, top_k_indices).astype(self.dtype)
-        # --- END FIX ---
-        
-        logmap_x_y = PoincareBall.logmap0(PoincareBall.mobius_add(-query_pos, key_pos, c), c)
-        projected_geo_vecs = self.geo_proj(logmap_x_y).reshape(B, N, self.k, self.n_heads, self.h_dim)
-        
-        q, k, v = (t.transpose(2, 0, 1, 3) for t in (q, k, v))
-        projected_geo_vecs = projected_geo_vecs.transpose(3, 0, 1, 2, 4)
-        
-        vmap_attention = jax.vmap( self.single_head_attention, in_axes=(0, 0, 0, 0, None, 0, 0), out_axes=0)
-        attn_output_vmapped = vmap_attention( q, k, v, projected_geo_vecs, top_k_indices, self.alignment_scale, self.feature_scale)
-        
-        attn_output = attn_output_vmapped.transpose(1, 2, 0, 3).reshape(B, N, self.dim)
-        x = x_res + self.out_proj(attn_output).astype(x_res.dtype)
-        x = x + self.ffn(self.norm2(x).astype(self.dtype)).astype(x.dtype)
-        return x
+        # The __call__ function is now just a clean vmap over the static logic.
+        vmap_forward = jax.vmap(
+            WubuBlock.single_example_forward,
+            in_axes=(None, 0, 0, 0),
+            out_axes=0
+        )
+        return vmap_forward(self, x, positions, c)
+
 
 class WubuMind(nn.Module):
-    context_length: int; vocab_size: int; d_model: int; n_heads: int; n_layers: int; k_neighbors: int; modulus: int; poincare_c: float = 1.0; rule_embed_dim: int = 64
+    context_length: int; vocab_size: int; d_model: int; n_heads: int; k_neighbors: int; modulus: int;
+    layers_per_stage: Sequence[int]; downsample_rate: int; rule_embed_dim: int = 64
     dtype: Any = jnp.bfloat16
     param_dtype: Any = jnp.float32
 
@@ -170,18 +192,31 @@ class WubuMind(nn.Module):
         combined_inputs = jnp.concatenate([learned_embed, hash_embed, rule_embed], axis=-1)
         x = nn.Dense(self.d_model, dtype=self.dtype, param_dtype=self.param_dtype, name="bridge_proj")(combined_inputs)
         
-        log_c = self.param('log_c', nn.initializers.constant(jnp.log(self.poincare_c)), (1,), jnp.float32)
-        c = jnp.exp(log_c)
+        curvature_predictor = nn.Sequential([
+            nn.Dense(self.d_model // 4, dtype=jnp.float32, param_dtype=jnp.float32), nn.relu,
+            nn.Dense(1, dtype=jnp.float32, param_dtype=jnp.float32)
+        ], name="curvature_predictor")
+        sequence_context = jnp.mean(x.astype(jnp.float32), axis=1)
+        predicted_log_c = curvature_predictor(sequence_context)
+        c = jnp.exp(predicted_log_c)
+
         pos_tangent = self.param('pos_tangent', nn.initializers.normal(0.02), (1, self.context_length, self.d_model), self.param_dtype)
-        positions = PoincareBall.expmap0(pos_tangent.astype(self.dtype), c).repeat(B, axis=0)
+        positions = PoincareBall.expmap0(pos_tangent.astype(self.dtype), c[:, None])
         
-        for i in range(self.n_layers): 
-            x = GeometricallyAlignedVmapAttention(self.d_model, self.n_heads, self.k_neighbors, dtype=self.dtype, param_dtype=self.param_dtype, name=f"hga_{i}")(x, positions, c)
-        
-        final_logits = nn.Dense(self.vocab_size, dtype=jnp.float32, param_dtype=jnp.float32, name="output_proj")(x.astype(jnp.float32))
+        num_stages = len(self.layers_per_stage)
+        for i, num_layers in enumerate(self.layers_per_stage):
+            for j in range(num_layers):
+                x = WubuBlock(self.d_model, self.n_heads, self.k_neighbors, dtype=self.dtype, param_dtype=self.param_dtype, name=f"stage_{i}_block_{j}")(x, positions, c)
+            
+            if i < num_stages - 1:
+                x = x[:, ::self.downsample_rate, :]
+                positions = positions[:, ::self.downsample_rate, :]
+
+        final_x = x.astype(jnp.float32)
+        final_logits = nn.Dense(self.vocab_size, dtype=jnp.float32, param_dtype=jnp.float32, name="output_proj")(final_x)
         return final_logits[:, -1, :]
 
-# --- Part 4: Data Pipeline and Generation Logic ---
+# --- Part 4: Data Pipeline and Generation Logic (Unchanged) ---
 def data_generator(corpus_text, ascii_converter, hasher, key, batch_size, context_length, hash_window):
     values = ascii_converter.convert(corpus_text); print("--> Pre-calculating hashes...", flush=True)
     hashes = hasher.hash_sequence(values); print("    > Hashes... Done.", flush=True); indices = ascii_converter.get_indices(corpus_text)
@@ -221,7 +256,7 @@ def generate(state, model, ascii_converter, hasher, key, prompt, steps, temperat
         values.append(next_val); indices.append(next_idx_item); generated_chars.append(next_char)
     return prompt + "".join(generated_chars)
 
-# --- Part 5: Training Strategy ---
+# --- Part 5: Training Strategy (Unchanged) ---
 @jax.jit
 def grad_fn(params, state, batch):
     hashes, indices, targets, values = batch
@@ -237,18 +272,20 @@ def apply_grads_fn(state, grads):
 
 # --- Part 6: The Main Entrypoint ---
 def main():
-    CONTEXT_LENGTH, HASH_WINDOW = 128, 5
-    D_MODEL, N_HEADS, N_LAYERS, K_NEIGHBORS = 256, 4, 4, 16
-    #GOOGLE COLLAB USERS SHOULD SELECT 256 BATCH and 256 DEVICE BATCH TO HIT COLLAB LIMITS FOR 3 EPOCHS
-    #MY BEST ATTEMPT AT FREE VALIDATION
+    CONTEXT_LENGTH = 128
+    HASH_WINDOW = 5
+    D_MODEL, N_HEADS, K_NEIGHBORS = 256, 4, 16
+    LAYERS_PER_STAGE = [2, 2, 2]
+    DOWNSAMPLE_RATE = 2
+    
     EFFECTIVE_BATCH_SIZE = 32; PER_DEVICE_BATCH_SIZE = 8
     GRAD_ACCUM_STEPS = EFFECTIVE_BATCH_SIZE // PER_DEVICE_BATCH_SIZE
     PEAK_LEARNING_RATE, EPOCHS = 1e-4, 10; WARMUP_STEPS = 500
-    MODULUS, MODEL_FILE = 10**9 + 7, "wubumind_final_philosophy.pkl"
+    MODULUS, MODEL_FILE = 10**9 + 7, "wubumind_enlightened.pkl"
     DATA_URL, DATA_FILE = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt", "tinyshakespeare.txt"
     FORCE_RETRAIN = True
     
-    device_name = jax.default_backend(); print(f"--- WubuMind JAX Grand Finale ---"); print(f"--- Using device: {device_name} ({jax.devices()[0].platform.upper()}) ---")
+    device_name = jax.default_backend(); print(f"--- WubuMind JAX Grand Finale (Evolved) ---"); print(f"--- Using device: {device_name} ({jax.devices()[0].platform.upper()}) ---")
     key = jax.random.PRNGKey(42)
 
     if not os.path.exists(DATA_FILE):
@@ -257,7 +294,7 @@ def main():
     with open(DATA_FILE,'r',encoding='utf-8') as f: corpus_text=f.read()
 
     ascii_converter = SimplifiedASCIIConverter(corpus_text); hasher = RollingHasher(HASH_WINDOW, modulus=MODULUS)
-    model = WubuMind(CONTEXT_LENGTH,ascii_converter.vocab_size,D_MODEL,N_HEADS,N_LAYERS,K_NEIGHBORS,MODULUS)
+    model = WubuMind(CONTEXT_LENGTH, ascii_converter.vocab_size, D_MODEL, N_HEADS, K_NEIGHBORS, MODULUS, LAYERS_PER_STAGE, DOWNSAMPLE_RATE)
     
     num_examples = len(corpus_text) - CONTEXT_LENGTH - HASH_WINDOW
     
@@ -268,7 +305,8 @@ def main():
         print(f"--- Preparing to train WubuMind on '{DATA_FILE}' ({len(corpus_text):,} chars)... ---")
         init_generator = data_generator(corpus_text, ascii_converter, hasher, key, 1, CONTEXT_LENGTH, HASH_WINDOW)
         _ = next(init_generator); init_batch = next(init_generator); del init_generator
-        key, init_key = jax.random.split(key); params = model.init(init_key, init_batch[0], init_batch[1], init_batch[3])['params']
+        key, init_key = jax.random.split(key)
+        params = model.init(init_key, init_batch[0], init_batch[1], init_batch[3])['params']
         param_count = sum(x.size for x in jax.tree_util.tree_leaves(params)); print(f'--- Model initialized with {param_count:,} parameters. ---')
 
     num_batches_per_epoch = num_examples // EFFECTIVE_BATCH_SIZE
@@ -303,7 +341,7 @@ def main():
         with open(MODEL_FILE, 'wb') as f: pickle.dump(state.params, f)
         print(f"--- WubuMind weights saved to {MODEL_FILE} ---")
 
-    print(f"\n--- Generating from the Grand Finale: WubuMind ---")
+    print(f"\n--- Generating from the Enlightened WubuMind ---")
     prompts = ["Shall I compare thee to a summer's day?", "To be, or not to be, that is the question:"]
     for p in prompts:
         key, gen_key = jax.random.split(key)
