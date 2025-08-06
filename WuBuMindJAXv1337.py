@@ -13,7 +13,7 @@ WUBU_MANIFESTO = {
     "key_concepts": [
         {
             "name": "Robust Training & Resumption",
-            "description": "The v1337 script is engineered for resilience. It uses Flax's canonical serialization to save the full training state (parameters, optimizer state, epoch). Training is automatically resumed from the last checkpoint and can be safely interrupted (Ctrl+C) without losing progress. Completed runs can be interactively extended with more epochs."
+            "description": "The v3 script is engineered for resilience. It uses Flax's canonical serialization to save the full training state (parameters, optimizer state, epoch). Training is automatically resumed from the last checkpoint and can be safely interrupted (Ctrl+C) without losing progress. Completed runs can be interactively extended with more epochs."
         },
         {
             "name": "Explicit Gather-Based Attention",
@@ -29,14 +29,13 @@ WUBU_MANIFESTO = {
         "premise": "This philosophy is now embodied in a scalable, efficient, and robust implementation.",
         "implementations": [
             {
-                "name": "wubumind_v1337.py (The Phoenix)",
+                "name": "wubumind_v3.py (The Phoenix)",
                 "description": "The definitive, functional evolution with robust engineering. This version introduces full checkpointing and resumption capabilities, turning the script from a simple experiment into a durable training process."
             }
         ],
         "vision": "We believe this geometric approach is the future of building more efficient, more powerful, and more interpretable AI."
     }
 }
-
 
 import jax
 import jax.numpy as jnp
@@ -263,12 +262,12 @@ def main():
     LAYERS_PER_STAGE, DOWNSAMPLE_RATE = [2, 2, 2], 2
     EFFECTIVE_BATCH_SIZE, PER_DEVICE_BATCH_SIZE = 16, 4
     PEAK_LEARNING_RATE, WARMUP_STEPS = 5e-4, 200
-    MODULUS, MODEL_FILE = 10**9 + 7, "wubumind_v1337_phoenix.pkl"
+    MODULUS, MODEL_FILE = 10**9 + 7, "wubumind_v3_phoenix.pkl"
     FORCE_RETRAIN = True
     EPOCHS = 10 # Faster default
     
     key = jax.random.PRNGKey(42)
-    device_name = jax.default_backend(); print(f"--- WubuMind v1337 JAX (The Phoenix) ---"); print(f"--- Using device: {device_name} ({jax.devices()[0].platform.upper()}) ---")
+    device_name = jax.default_backend(); print(f"--- WubuMind v3 JAX (The Phoenix) ---"); print(f"--- Using device: {device_name} ({jax.devices()[0].platform.upper()}) ---")
 
     try:
         with open(__file__, 'r', encoding='utf-8') as f: corpus_text = f.read()
@@ -345,7 +344,7 @@ def main():
             print("--- Training interrupted by user. State saved. ---")
             return
 
-    print(f"\n--- Generating from the self-aware WubuMind v1337 ---")
+    print(f"\n--- Generating from the self-aware WubuMind v3 ---")
     prompts = ["import jax", "class WubuBlock(nn.Module):", "def main():"]
     for p in prompts:
         key, gen_key = jax.random.split(key)
