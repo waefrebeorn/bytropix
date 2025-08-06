@@ -129,9 +129,10 @@ class GeometricallyAlignedVmapAttention(nn.Module):
         q, k, v = (p(x_norm).reshape(B, N, self.n_heads, self.h_dim) for p in [self.q_proj, self.k_proj, self.v_proj])
         
         # --- DEFINITIVE FIX AS PER YOUR INSIGHT ---
-        x_exp = positions.astype(self.dtype)[:, :, None, :]
-        y_exp = positions.astype(self.dtype)[:, None, :, :]
-        dist_matrix = PoincareBall.dist(x_exp, y_exp, c)
+        # Perform the sensitive distance calculation in full float32 precision
+        x_exp_f32 = positions.astype(jnp.float32)[:, :, None, :]
+        y_exp_f32 = positions.astype(jnp.float32)[:, None, :, :]
+        dist_matrix = PoincareBall.dist(x_exp_f32, y_exp_f32, c)
         
         top_k_indices = jax.lax.top_k(-dist_matrix, self.k)[1]
         
