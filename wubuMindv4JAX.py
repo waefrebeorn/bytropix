@@ -19,6 +19,7 @@ from collections import Counter
 import unicodedata
 import sys
 import dataclasses
+import signal # Import the signal module
 
 # Ensure full GPU memory is available for JAX.
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
@@ -195,11 +196,23 @@ class WubuBlock(nn.Module):
     @nn.compact
     def __call__(self, x, freqs_cis, c_global, cache, start_pos):
         B, N, _ = x.shape
-        assert N % self.block_size == 0, f"Sequence length {N} must be divisible by block_size {self.block_size}"
-        num_blocks = N // self.block_size
+        
+        current_block_size = self.block_size
+        if N < self.block_size : current_block_size = N
+        
+        pad_len = 0
+        if N > 0 and N % current_block_size != 0:
+            pad_len = current_block_size - (N % current_block_size)
+            x = jnp.pad(x, ((0,0), (0,pad_len), (0,0)))
+            N = x.shape[1]
+        
+        num_blocks = N // current_block_size if current_block_size > 0 else 0
         B_eff = B * num_blocks
 
-        x_blocks = x.reshape(B_eff, self.block_size, self.dim)
+        if B_eff == 0:
+             return x[:,:N-pad_len,:] if pad_len > 0 else x, None
+
+        x_blocks = x.reshape(B_eff, current_block_size, self.dim)
         
         x_res1 = x_blocks
         c_bcast = jnp.repeat(c_global, num_blocks, axis=0).reshape(B_eff, 1, 1)
@@ -207,11 +220,11 @@ class WubuBlock(nn.Module):
         x_tangent = PoincareBall.logmap0(x_norm, c_bcast)
 
         qkv = self.qkv_proj(x_tangent)
-        qkv = qkv.reshape(B_eff, self.block_size, 3, self.n_heads, self.h_dim)
+        qkv = qkv.reshape(B_eff, current_block_size, 3, self.n_heads, self.h_dim)
         qkv = qkv.transpose(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        freqs_cis_h = WubuMind.precompute_freqs_cis(self.h_dim, self.block_size)
+        freqs_cis_h = WubuMind.precompute_freqs_cis(self.h_dim, current_block_size)
         q_rot = self.apply_rotary_emb(q, freqs_cis_h)
         k_rot = self.apply_rotary_emb(k, freqs_cis_h)
         
@@ -219,14 +232,13 @@ class WubuBlock(nn.Module):
         
         q_hyp = PoincareBall.expmap0(q_rot, c_per_head)
         k_hyp = PoincareBall.expmap0(k_rot, c_per_head)
-
-        # Reshape c_per_head to be 5D for the dist calculation, matching the 5D intermediate tensors
+        
         c_for_dist = c_per_head[:, :, None, :, :]
         
         dist = PoincareBall.dist(q_hyp[:, :, :, None, :], k_hyp[:, :, None, :, :], c_for_dist)
         attn_weights = nn.softmax(-self.geo_scale * dist.astype(jnp.float32), axis=-1).astype(self.dtype)
         
-        attn_out = jnp.einsum('bhqk,bhkd->bhqd', attn_weights, v).transpose(0,2,1,3).reshape(B_eff, self.block_size, self.dim)
+        attn_out = jnp.einsum('bhqk,bhkd->bhqd', attn_weights, v).transpose(0,2,1,3).reshape(B_eff, current_block_size, self.dim)
         
         attn_out_proj = self.out_proj(attn_out)
         attn_out_hyp = PoincareBall.expmap0(attn_out_proj, c_bcast)
@@ -238,7 +250,11 @@ class WubuBlock(nn.Module):
         
         x_final_blocks = PoincareBall.mobius_add(x_res2, x_ffn, c_bcast)
         
-        return x_final_blocks.reshape(B, N, self.dim), None
+        x_final = x_final_blocks.reshape(B, N, self.dim)
+        if pad_len > 0:
+            x_final = x_final[:, :-pad_len, :]
+
+        return x_final, None
 
 @dataclasses.dataclass
 class WubuMind(nn.Module):
@@ -253,7 +269,8 @@ class WubuMind(nn.Module):
 
     @nn.compact
     def __call__(self, hashes, values, cache, start_pos):
-        B, N, _ = values.shape
+        B, N_in = hashes.shape
+        
         hash_proj = self.param('hash_projector', nn.initializers.normal(0.02), (1, self.d_model - self.rule_embed_dim), self.param_dtype)
         hash_embed = (hashes[...,None].astype(self.dtype) / self.modulus) @ hash_proj
         rule_embed = nn.Dense(self.rule_embed_dim, name="rule_proj")(values.astype(self.dtype))
@@ -267,6 +284,8 @@ class WubuMind(nn.Module):
         freqs_cis_full = self.precompute_freqs_cis(self.d_model, self.max_len)
         
         current_pos_in_stage = start_pos
+        current_block_size = self.block_size
+        
         for i, num_layers in enumerate(self.layers_per_stage):
             stage_context=PoincareBall.logmap0(x, current_c.reshape(B,1,1))
             c_logits=nn.Dense(1,name=f"c_pred_{i}")(jnp.mean(stage_context,axis=1))
@@ -276,63 +295,106 @@ class WubuMind(nn.Module):
             
             for l_idx in range(num_layers):
                 rematted_block_class = remat(WubuBlock, static_argnums=(3,4))
-                block_instance = rematted_block_class(self.d_model, self.n_heads, self.block_size, name=f"stage_{i}_block_{l_idx}")
+                block_instance = rematted_block_class(self.d_model, self.n_heads, current_block_size, name=f"stage_{i}_block_{l_idx}")
                 x, _ = block_instance(x, stage_freqs_cis, c_global_stage, None, current_pos_in_stage)
 
             current_c = c_global_stage
             
             if i < len(self.layers_per_stage)-1:
                 if x.shape[1] > 1:
+                    assert current_block_size % self.downsample_rate == 0, f"Block size {current_block_size} must be divisible by downsample rate {self.downsample_rate}"
+                    
                     x_tangent_down=PoincareBall.logmap0(x,current_c.reshape(B,1,1))
                     x_tangent_down=LearnedDownsampler(self.d_model,self.downsample_rate,name=f"downsampler_{i}")(x_tangent_down)
                     c_logits_down=nn.Dense(1,name=f"c_pred_down_{i}")(jnp.mean(x_tangent_down,axis=1))
                     current_c=nn.softplus(jnp.clip(c_logits_down,-5,5))
                     x=PoincareBall.expmap0(x_tangent_down,current_c.reshape(B,1,1))
                     current_pos_in_stage = 0
+                    current_block_size //= self.downsample_rate
                     
         final_tangent=PoincareBall.logmap0(x,current_c.reshape(B,1,1))
         logits=nn.Dense(self.vocab_size,dtype=jnp.float32,name="output_proj")(final_tangent)
         
         return logits, None
         
-def prepare_training_data_on_device(text_corpus, converter, hasher, context_length, hash_window, batch_size):
+def prepare_training_data_on_device(text_corpus, converter, hasher, config):
     print("--- Beginning high-performance data pipeline... ---")
     lookup_table = converter.precompute_lookup_table()
     print("--- Converting corpus to indices... ---")
     indices = np.array(converter.get_indices_from_text(text_corpus), dtype=np.int32)
-    print("--- Pre-computing all hashes... ---")
-    hashes = hasher.hash_sequence(indices)
+    
+    context_length = config['context_length']
+    hash_window = config['hash_window']
+    block_size = config['block_size']
+    batch_size = config['batch_size']
+    
+    model_context_len = context_length - hash_window + 1
+    
+    if model_context_len % block_size != 0:
+        model_context_len = (model_context_len // block_size) * block_size
+        print(f"[INFO] Adjusting model context length to {model_context_len} to be divisible by block_size {block_size}.")
+
+    if model_context_len == 0:
+        print(f"[FATAL] Calculated model context length is 0. Check your context_length and block_size.")
+        sys.exit(1)
+    
+    full_slice_len = model_context_len + hash_window - 1
+    
     print("--- Assembling sequences with sliding windows... ---")
-    num_samples = len(hashes) - context_length + 1
+    num_samples = len(indices) - full_slice_len + 1
+
+    hashes = hasher.hash_sequence(indices)
+    
+    num_samples_hashes = len(hashes) - model_context_len + 1
+    num_samples = min(num_samples, num_samples_hashes)
+
     strides = hashes.strides
-    all_hashes = np.lib.stride_tricks.as_strided(hashes, shape=(num_samples, context_length), strides=(strides[0], strides[0]))
+    all_hashes = np.lib.stride_tricks.as_strided(hashes, shape=(num_samples, model_context_len), strides=(strides[0], strides[0]))
+
     strides = indices.strides
-    all_targets = np.lib.stride_tricks.as_strided(indices[hash_window:], shape=(num_samples, context_length), strides=(strides[0], strides[0]))
-    all_values_indices = np.lib.stride_tricks.as_strided(indices[hash_window-1:-1], shape=(num_samples, context_length), strides=(strides[0], strides[0]))
+    all_values_indices = np.lib.stride_tricks.as_strided(indices[hash_window-1:], shape=(num_samples, model_context_len), strides=(strides[0], strides[0]))
+    all_targets = np.lib.stride_tricks.as_strided(indices[hash_window:], shape=(num_samples, model_context_len), strides=(strides[0], strides[0]))
+    
     num_batches = num_samples // batch_size
     num_to_trim = num_samples % batch_size
     if num_to_trim > 0: all_hashes, all_targets, all_values_indices = [arr[:-num_to_trim] for arr in (all_hashes, all_targets, all_values_indices)]
-    all_hashes_batched = all_hashes.reshape(num_batches, batch_size, context_length)
-    all_targets_batched = all_targets.reshape(num_batches, batch_size, context_length)
+    
+    all_hashes_batched = all_hashes.reshape(num_batches, batch_size, model_context_len)
+    all_targets_batched = all_targets.reshape(num_batches, batch_size, model_context_len)
+    
     print("--- Performing vectorized value lookup... ---")
-    all_values_batched = lookup_table[all_values_indices].reshape(num_batches, batch_size, context_length, -1)
+    all_values_batched = lookup_table[all_values_indices].reshape(num_batches, batch_size, model_context_len, -1)
+    
     print(f"--- Data preparation complete. {num_batches} batches created. ---")
     print("--- Transferring all batches to device... ---")
     device_batches = jax.device_put((all_hashes_batched, all_values_batched.astype(jnp.bfloat16), all_targets_batched))
     print("--- Data pipeline complete. All data is now on-device. ---")
-    return device_batches, num_batches
+    return device_batches, num_batches, model_context_len
 
-@partial(jax.jit, static_argnames=['static_apply_fn'])
-def train_step(state, batch, static_apply_fn):
+@partial(jax.jit, static_argnames=['static_apply_fn', 'force_nan'])
+def train_step(state, batch, static_apply_fn, force_nan: bool):
     hashes, values, targets = batch
+    
+    if force_nan:
+        values = values.at[0, 0, 0].set(jnp.nan)
+
     def loss_fn(p):
         logits, _ = static_apply_fn({'params': p}, hashes, values, None, 0)
         target_len = logits.shape[1]
         aligned_targets = targets[:, -target_len:]
         return optax.softmax_cross_entropy_with_integer_labels(logits, aligned_targets).mean()
+    
     loss, grads = jax.value_and_grad(loss_fn)(state.params)
-    state = state.apply_gradients(grads=grads)
-    return state, loss
+    is_nan = jnp.isnan(loss)
+    
+    new_state = jax.lax.cond(
+        is_nan,
+        lambda: state,
+        lambda: state.apply_gradients(grads=grads)
+    )
+    reported_loss = jnp.where(is_nan, 4.0, loss)
+    
+    return new_state, reported_loss, is_nan
 
 def save_checkpoint(state, epoch, basename):
     with open(f"{basename}.pkl", 'wb') as f: pickle.dump({'state': serialization.to_state_dict(state), 'epoch': epoch}, f)
@@ -344,11 +406,6 @@ def load_checkpoint(state, basename):
     with open(filename, 'rb') as f: save_obj = pickle.load(f)
     try:
         print(f"--- Checkpoint found. Restoring parameters from epoch {save_obj['epoch']}... ---")
-        if 'params' not in save_obj['state']: save_obj['state'] = {'params': save_obj['state']}
-        restored_params = serialization.from_state_dict(state.params, save_obj['state']['params'])
-        if 'opt_state' not in save_obj['state']:
-            print("--- Optimizer state not found in checkpoint. Resetting optimizer. ---")
-            return state.replace(params=restored_params), save_obj['epoch']
         restored_state = serialization.from_state_dict(state, save_obj['state'])
         print("--- Full training state restored successfully. ---")
         return restored_state, save_obj['epoch']
@@ -362,11 +419,90 @@ def save_config(config, char_to_idx, basename):
     with open(f"{basename}_vocab.json", 'w', encoding='utf-8') as f: json.dump(char_to_idx, f, indent=4)
     print(f"--- Model config and vocab saved to {basename}.json / _vocab.json ---")
 
+class TrainingManager:
+    def __init__(self, model, config, data):
+        self.model = model
+        self.config = config
+        self.data = data
+        self.basename = "wubumind_v11_absolute_vocab"
+        self.state = None
+        self.epoch = 0
+        self._is_shutting_down = False
+
+    def _handle_sigint(self, signum, frame):
+        if self._is_shutting_down:
+            print("\n--- Force exiting immediately. ---")
+            sys.exit(1)
+        print("\n--- SIGINT received. Saving checkpoint and exiting gracefully. ---")
+        self._is_shutting_down = True
+        # Don't raise an exception, just set the flag. The loop will handle it.
+
+    def run(self):
+        signal.signal(signal.SIGINT, self._handle_sigint)
+
+        (h_all, v_all, t_all), steps_per_epoch, model_ctx_len = self.data
+        self.config['model_context_len'] = model_ctx_len
+
+        key = jax.random.PRNGKey(42)
+        key, init_key = jax.random.split(key)
+        init_batch = (h_all[0], v_all[0])
+        params = self.model.init(init_key, *init_batch, None, 0)['params']
+        print(f'--- Model initialized with {sum(x.size for x in jax.tree_util.tree_leaves(params)):,} parameters. ---')
+
+        total_steps = self.config['epochs'] * steps_per_epoch
+        lr_schedule = optax.warmup_cosine_decay_schedule(0.0, self.config['peak_learning_rate'], self.config['warmup_steps'], total_steps)
+        tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(lr_schedule, weight_decay=0.01))
+        
+        self.state = train_state.TrainState.create(apply_fn=self.model.apply, params=params, tx=tx)
+        
+        save_config(self.config, self.config['char_to_idx'], self.basename)
+        
+        self.state, start_epoch = load_checkpoint(self.state, self.basename)
+        if start_epoch >= self.config['epochs'] and not self.config['force_retrain']:
+            print("Training previously completed.")
+            return
+
+        self.epoch = start_epoch
+        
+        try:
+            for epoch in range(start_epoch, self.config['epochs']):
+                self.epoch = epoch
+                key, shuffle_key = jax.random.split(key)
+                shuffled_indices = jax.random.permutation(shuffle_key, steps_per_epoch)
+                with tqdm(range(steps_per_epoch), desc=f"Epoch {epoch+1}/{self.config['epochs']}") as pbar:
+                    for step_idx in pbar:
+                        if self._is_shutting_down:
+                            break
+                        batch_idx = shuffled_indices[step_idx]
+                        batch = (h_all[batch_idx], v_all[batch_idx], t_all[batch_idx])
+                        
+                        force_nan = self.config['TEST_NAN_HANDLING'] and epoch == start_epoch and step_idx == self.config['TEST_NAN_HANDLING_STEP']
+                        
+                        self.state, loss, is_nan = train_step(self.state, batch, self.state.apply_fn, force_nan=force_nan)
+                        
+                        if is_nan:
+                            tqdm.write(f"\n[!] WARNING: NaN loss detected at epoch {epoch+1}, step {step_idx+1}. Skipping gradient update. Loss set to 4.0.")
+                        pbar.set_postfix(loss=f"{loss:.4f}")
+                
+                if self._is_shutting_down:
+                    print("\n--- Shutdown signal detected. Finishing epoch early. ---")
+                    break
+
+                # Save at the end of a successful epoch
+                save_checkpoint(self.state, self.epoch + 1, self.basename)
+                self.epoch += 1 # Increment epoch for the next loop
+
+        finally:
+            print("\n--- Training loop finished or interrupted. Finalizing... ---")
+            if self.state is not None:
+                save_checkpoint(self.state, self.epoch, self.basename)
+                print("\n--- Graceful shutdown complete. Final checkpoint saved. ---")
+
 def training_main():
     MODEL_BASENAME = "wubumind_v11_absolute_vocab"
-    MODEL_CONFIG_BASE = {'hash_window':8, 'd_model':256, 'n_heads':4, 'block_size':64, 'layers_per_stage':[4,4,4], 'downsample_rate':2, 'modulus':10**9+7, 'max_len': 4096}
-    TRAINING_CONFIG = {'epochs':20, 'batch_size':16, 'peak_learning_rate':5e-4, 'warmup_steps':500, 'force_retrain':False, 'context_length': 256}
-    key = jax.random.PRNGKey(42)
+    MODEL_CONFIG_BASE = {'hash_window':8, 'd_model':384, 'n_heads':6, 'block_size':64, 'layers_per_stage':[6,6,6], 'downsample_rate':2, 'modulus':10**9+7, 'max_len': 4096}
+    TRAINING_CONFIG = {'epochs':20, 'batch_size':12, 'peak_learning_rate':5e-4, 'warmup_steps':500, 'force_retrain':False, 'context_length': 256, 'TEST_NAN_HANDLING': False, 'TEST_NAN_HANDLING_STEP': 5}
+    
     print(f"--- WubuMind v11 Foundry (Absolute Vocab Edition) ---\n--- Using device: {jax.devices()[0].platform.upper()} ---")
 
     try:
@@ -393,44 +529,19 @@ def training_main():
     ARCH_CONFIG = {**MODEL_CONFIG_BASE, 'vocab_size':len(char_to_idx), 'rule_embed_dim':converter.feature_dim}
     if 'attention_window' in ARCH_CONFIG: del ARCH_CONFIG['attention_window']
 
-    FULL_CONFIG = {**ARCH_CONFIG, 'context_length':TRAINING_CONFIG['context_length']}
+    FULL_CONFIG = {**ARCH_CONFIG, **TRAINING_CONFIG, 'char_to_idx': char_to_idx} # Add vocab for saving
     hasher = RollingHasher(ARCH_CONFIG['hash_window'])
+    
+    data_bundle = prepare_training_data_on_device(corpus_text, converter, hasher, FULL_CONFIG)
+    
     model = WubuMind(**ARCH_CONFIG)
     
-    (h_all, v_all, t_all), steps_per_epoch = prepare_training_data_on_device(corpus_text, converter, hasher, TRAINING_CONFIG['context_length'], ARCH_CONFIG['hash_window'], TRAINING_CONFIG['batch_size'])
-    
-    key, init_key = jax.random.split(key)
-    init_batch = (h_all[0], v_all[0])
-    params = model.init(init_key, *init_batch, None, 0)['params']
-    print(f'--- Model initialized with {sum(x.size for x in jax.tree_util.tree_leaves(params)):,} parameters. ---')
-
-    total_steps = TRAINING_CONFIG['epochs'] * steps_per_epoch
-    lr_schedule = optax.warmup_cosine_decay_schedule(0.0, TRAINING_CONFIG['peak_learning_rate'], TRAINING_CONFIG['warmup_steps'], total_steps)
-    tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(lr_schedule, weight_decay=0.01))
-    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
-    save_config(FULL_CONFIG, char_to_idx, MODEL_BASENAME)
-    state, start_epoch = load_checkpoint(state, MODEL_BASENAME)
-    if start_epoch >= TRAINING_CONFIG['epochs'] and not TRAINING_CONFIG['force_retrain']: print("Training previously completed."); return
-    epoch = start_epoch
-    try:
-        for epoch in range(start_epoch, TRAINING_CONFIG['epochs']):
-            key, shuffle_key = jax.random.split(key)
-            shuffled_indices = jax.random.permutation(shuffle_key, steps_per_epoch)
-            with tqdm(range(steps_per_epoch), desc=f"Epoch {epoch+1}/{TRAINING_CONFIG['epochs']}") as pbar:
-                for step_idx in pbar:
-                    batch_idx = shuffled_indices[step_idx]
-                    batch = (h_all[batch_idx], v_all[batch_idx], t_all[batch_idx])
-                    state, loss = train_step(state, batch, state.apply_fn)
-                    if jnp.isnan(loss): print("\nFATAL: Loss is NaN."); return
-                    pbar.set_postfix(loss=f"{loss:.4f}")
-            save_checkpoint(state, epoch+1, MODEL_BASENAME)
-    except KeyboardInterrupt:
-        save_checkpoint(state, epoch, MODEL_BASENAME)
-        print("\n--- Training interrupted by user. Checkpoint saved. ---")
+    manager = TrainingManager(model, FULL_CONFIG, data_bundle)
+    manager.run()
 
 @partial(jax.jit, static_argnames=['model_apply_fn', 'temp', 'top_p'])
-def predict_step_fn(model_apply_fn, params, hashes, values, cache, start_pos, key, temp, top_p):
-    logits, _ = model_apply_fn({'params': params}, hashes, values, cache, start_pos)
+def predict_step_fn(model_apply_fn, params, hashes, values, key, temp, top_p):
+    logits, _ = model_apply_fn({'params': params}, hashes, values, None, 0)
     scaled = logits[:,-1,:] / jnp.maximum(temp, 1e-6)
     sorted_indices = jnp.argsort(scaled, axis=-1)[..., ::-1]
     sorted_logits = jnp.take_along_axis(scaled, sorted_indices, axis=-1)
@@ -460,49 +571,57 @@ class WubuOracle:
         with open(f"{self.basename}.pkl", 'rb') as f: save_obj = pickle.load(f)
         
         key = jax.random.PRNGKey(0)
-        init_len = self.config['context_length']
-        dummy_h = jnp.zeros((1, init_len), dtype=np.int32)
-        dummy_v = jnp.zeros((1, init_len, self.config['rule_embed_dim']), dtype=np.float32)
+        
+        model_context_len = self.config['model_context_len']
+            
+        dummy_h = jnp.zeros((1, model_context_len), dtype=np.int32)
+        dummy_v = jnp.zeros((1, model_context_len, self.config['rule_embed_dim']), dtype=np.float32)
         target_params = self.model.init(key, dummy_h, dummy_v, None, 0)['params']
         self.params = serialization.from_state_dict(target=target_params, state=save_obj['state']['params'])
+        self.predict_step = partial(predict_step_fn, self.model.apply)
         print(f"--- Oracle has assimilated knowledge from epoch {save_obj['epoch']}. Ready to Speak. ---")
 
     def generate(self, prompt: str, max_new: int = 500, temp: float = 0.7, top_p: float = 0.95):
-        print("\n[INFO] Oracle generation starting...")
         key = jax.random.PRNGKey(int(time.time()))
         indices = self.converter.get_indices_from_text(prompt)
         
-        for i in tqdm(range(max_new), desc="Generating"):
-            context_len = self.config['context_length']
-            
-            # Prepare context for this step, padding if necessary
-            current_sequence = indices[-context_len:]
-            pad_len_seq = context_len - len(current_sequence)
-            if pad_len_seq > 0:
-                current_sequence = [self.converter.pad_idx] * pad_len_seq + current_sequence
-            
-            sub_indices = np.array(current_sequence, dtype=np.int32)
-            
-            hashes = self.hasher.hash_sequence(sub_indices)
-            values = self.feature_table[sub_indices]
-            
-            h_step_b = jnp.array([hashes])
-            v_step_b = jnp.array([values])
-            
-            key, subkey = jax.random.split(key)
-            
-            # Use the predict_step_fn for sampling
-            next_idx_array, _ = predict_step_fn(self.model.apply, {'params': self.params}, h_step_b, v_step_b, None, 0, subkey, temp, top_p)
-            
-            new_idx = int(next_idx_array.item())
-            if new_idx == self.converter.pad_idx and not indices:
-                continue
-            if new_idx == self.converter.pad_idx:
-                print("[INFO] Pad token generated, stopping.")
-                break
+        model_context_len = self.config['model_context_len']
+        full_slice_len = model_context_len + self.config['hash_window'] - 1
+        
+        pbar = tqdm(total=max_new, desc="Generating", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]')
+        
+        try:
+            for i in range(max_new):
+                current_sequence = indices[-full_slice_len:]
+                pad_len_seq = full_slice_len - len(current_sequence)
+                if pad_len_seq > 0:
+                    current_sequence = [self.converter.pad_idx] * pad_len_seq + current_sequence
                 
-            indices.append(new_idx)
-            yield self.converter.idx_to_char.get(new_idx, '�')
+                sub_indices = np.array(current_sequence, dtype=np.int32)
+                
+                hashes = self.hasher.hash_sequence(sub_indices)
+                values = self.feature_table[sub_indices[self.config['hash_window']-1:]]
+                
+                h_step_b = jnp.array([hashes])
+                v_step_b = jnp.array([values])
+                
+                key, subkey = jax.random.split(key)
+                
+                next_idx_array, _ = self.predict_step(self.params, h_step_b, v_step_b, subkey, temp, top_p)
+                
+                new_idx = int(next_idx_array.item())
+                if new_idx == self.converter.pad_idx:
+                    pbar.set_description_str("[INFO] Pad token generated, stopping.")
+                    break
+                    
+                new_char = self.converter.idx_to_char.get(new_idx, '�')
+                indices.append(new_idx)
+                
+                tqdm.write(new_char, end="")
+                pbar.update(1)
+        finally:
+            pbar.close()
+            print()
 
 def interactive_mode(model_basename):
     try:
@@ -520,10 +639,8 @@ def interactive_mode(model_basename):
         try:
             prompt = input("\nYour Prompt> ")
             if prompt.lower() in ["exit", "quit"]: break
-            print("WubuOracle> ", end="")
-            for char in oracle.generate(prompt): 
-                print(char, end="", flush=True)
-            print()
+            tqdm.write(f"WubuOracle> {prompt}", end="")
+            oracle.generate(prompt)
         except KeyboardInterrupt:
             print("\n-- Generation Interrupted. Exiting. --")
             break
