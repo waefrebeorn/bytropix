@@ -225,11 +225,6 @@ class WubuMind(nn.Module):
         logits = nn.Dense(self.vocab_size, dtype=jnp.float32, name="output_proj")(final_x_euc)
         return logits
 
-# --- DATA PREPARATION, CHECKPOINTING, TRAINING MANAGER, and INFERENCE sections ---
-# These sections are identical to the previous correct version and are omitted here for brevity.
-# The code for prepare_training_data_on_device, grad_computation_step, save_checkpoint,
-# load_checkpoint, save_config, TrainingManager, predict_step_fn, WubuOracle,
-# interactive_mode, and main are assumed to be present and correct.
 def prepare_training_data_on_device(text_corpus, converter, hasher, config):
     print("--- Beginning high-performance data pipeline... ---")
     indices = np.array(converter.get_indices_from_text(text_corpus), dtype=np.int32)
