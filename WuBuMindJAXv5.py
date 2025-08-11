@@ -1,8 +1,9 @@
 # %% PYTHON FILE: wubumind_galactic_core_v2.py
-# The Oracle's Guidance. Version 2.
+# The Oracle's Guidance. Version 2.1
 # This version replaces the character-level tokenizer and rolling hasher
 # with a modern, robust Byte-Pair Encoding (BPE) subword tokenizer.
 # This makes the model more efficient and semantically powerful.
+# FIX: Centralized basename definition to resolve path mismatch between training and inference.
 
 import os
 import jax
@@ -302,9 +303,10 @@ def save_config(config, basename):
 
 # --- THE PHOENIX: ROBUST TRAINING MANAGER (Mostly Unchanged) ---
 class TrainingManager:
-    def __init__(self, model, config, data):
+    # MODIFIED: Accept basename to avoid hardcoding
+    def __init__(self, model, config, data, basename: str):
         self.model, self.config, self.data = model, config, data
-        self.basename = "wubumind_galactic_core_v2" # MODIFIED: New basename
+        self.basename = basename
         self.state, self.should_shutdown = None, False
         signal.signal(signal.SIGINT, self._handle_sigint)
 
@@ -369,11 +371,12 @@ class TrainingManager:
         save_checkpoint(self.state, self.basename)
 
 # --- MODIFIED: TRAINING MAIN ---
-def training_main():
+def training_main(basename: str):
     # MODIFIED: Model config no longer needs hash-related params
     MODEL_CONFIG_BASE = {'d_model': 384, 'n_heads': 6, 'n_layers': 8, 'max_len': 4096}
     TRAINING_CONFIG = {'epochs': 20, 'batch_size': 2, 'gradient_accumulation_steps': 8, 'peak_learning_rate': 5e-4, 'warmup_steps': 500, 'context_length': 256}
-    TOKENIZER_CONFIG = {'vocab_size': 32000, 'tokenizer_path': 'wubumind_bpe.json'}
+    # MODIFIED: Use basename for tokenizer path
+    TOKENIZER_CONFIG = {'vocab_size': 32000, 'tokenizer_path': f"{basename}_bpe.json"}
 
     print(f"--- WubuMind Galactic Core Foundry V2 ---\n--- Using device: {jax.devices()[0].platform.upper()} ---")
 
@@ -401,7 +404,8 @@ def training_main():
 
     data_bundle = prepare_training_data_on_device(corpus_text, tokenizer, FULL_CONFIG)
     model = WubuMind(**arch_config)
-    TrainingManager(model, FULL_CONFIG, data_bundle).run()
+    # MODIFIED: Pass basename to TrainingManager
+    TrainingManager(model, FULL_CONFIG, data_bundle, basename).run()
 
 # --- MODIFIED: INFERENCE AND MAIN ---
 @partial(jax.jit, static_argnames=['model_apply_fn', 'temp', 'top_p'])
@@ -428,7 +432,7 @@ class WubuOracle:
         # --- MODIFIED: Load the BPE tokenizer ---
         self.tokenizer = WubuTokenizer(f"{self.basename}_bpe.json")
         if not self.tokenizer.tokenizer:
-            raise FileNotFoundError("Tokenizer file not found. Ensure it's named correctly (e.g., wubumind_galactic_core_v2_bpe.json).")
+            raise FileNotFoundError(f"Tokenizer file not found. Ensure it's named correctly (e.g., {self.basename}_bpe.json).")
 
         model_fields = [f.name for f in dataclasses.fields(WubuMind)]
         arch_config = {k: v for k, v in self.config.items() if k in model_fields}
@@ -489,13 +493,14 @@ class WubuOracle:
             new_text = self.tokenizer.decode(indices)
             
             # To stream just the new part, we find what's been added
-            sys.stdout.write(f"\r\033[1;32m{prompt}\033[0m{new_text[len(prompt):]}")
+            current_output = new_text[len(prompt):]
+            sys.stdout.write(f"\r\033[1;32m{prompt}\033[0m{current_output}")
             sys.stdout.flush()
         print()
 
 def interactive_mode(model_basename):
     try: oracle = WubuOracle(model_basename)
-    except FileNotFoundError: print(f"\n[ERROR] Model file not found. Train first: python {sys.argv[0]} train"); return
+    except FileNotFoundError as e: print(f"\n[ERROR] {e}. Train first: python {sys.argv[0]} train"); return
     except Exception: traceback.print_exc(); return
     while True:
         try:
@@ -505,13 +510,16 @@ def interactive_mode(model_basename):
         except KeyboardInterrupt: print("\n-- Exiting. --"); break
         except Exception as e: print(f"\nAn error occurred: {e}")
 
+# MODIFIED: Centralize the definition of the model's base name
 def main():
+    BASENAME = "wubumind_galactic_core_v2"
     if len(sys.argv) < 2 or sys.argv[1] not in ["train", "infer"]:
         print(f"Usage: python {sys.argv[0]} [train|infer]"); sys.exit(1)
+    
     if sys.argv[1] == "train":
-        training_main()
+        training_main(BASENAME)
     elif sys.argv[1] == "infer":
-        interactive_mode("wubumind_galactic_core_v2")
+        interactive_mode(BASENAME)
 
 if __name__ == "__main__":
     main()
