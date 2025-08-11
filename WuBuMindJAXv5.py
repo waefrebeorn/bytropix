@@ -1,5 +1,8 @@
-# %% PYTHON FILE: wubumind_galactic_core_v1.py
-# The Phoenix. Final, robust version with live streaming inference and corrected training init.
+# %% PYTHON FILE: wubumind_galactic_core_v2.py
+# The Oracle's Guidance. Version 2.
+# This version replaces the character-level tokenizer and rolling hasher
+# with a modern, robust Byte-Pair Encoding (BPE) subword tokenizer.
+# This makes the model more efficient and semantically powerful.
 
 import os
 import jax
@@ -21,6 +24,19 @@ import dataclasses
 import signal
 import traceback
 
+# --- NEW TOKENIZER IMPORT ---
+# We now use the 'tokenizers' library from Hugging Face.
+# You will need to install it: pip install tokenizers
+try:
+    from tokenizers import Tokenizer
+    from tokenizers.models import BPE
+    from tokenizers.trainers import BpeTrainer
+    from tokenizers.pre_tokenizers import Whitespace
+except ImportError:
+    print("[FATAL ERROR] `tokenizers` library not found. Please run `pip install tokenizers`.")
+    sys.exit(1)
+
+
 # --- CORPUS IMPORT ---
 try:
     import CORPUS
@@ -32,47 +48,55 @@ except ImportError:
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 jax.config.update("jax_debug_nans", False)
 
-# --- Helper Functions & Converters (Unchanged) ---
+# --- Helper Function (Unchanged) ---
 def distill_text_from_corpus(data: Any) -> str:
     if isinstance(data, str): return data + "\n"
     elif isinstance(data, dict): return "".join(distill_text_from_corpus(v) for v in data.values())
     elif isinstance(data, list): return "".join(distill_text_from_corpus(item) for item in data)
     return ""
 
-def create_corpus_vocab(text: str) -> Tuple[Dict[str, int], Dict[int, str]]:
-    print(f"--- Discovering absolute vocabulary from CORPUS... ---")
-    unique_chars = sorted(list(set(text)))
-    idx_to_char = {0: '<PAD>', 1: '<UNK>'}
-    char_to_idx = {'<PAD>': 0, '<UNK>': 1}
-    for i, char in enumerate(unique_chars):
-        idx = i + 2
-        idx_to_char[idx] = char
-        char_to_idx[char] = idx
-    print(f"--- Absolute vocabulary created. Size: {len(idx_to_char)} ---")
-    return char_to_idx, idx_to_char
+# --- NEW: WubuTokenizer ---
+# This class encapsulates our new BPE subword tokenizer.
+# It replaces UnicodeGeometrodynamicConverter and RollingHasher.
+class WubuTokenizer:
+    def __init__(self, tokenizer_path: str = "wubumind_bpe.json"):
+        self.tokenizer_path = tokenizer_path
+        if os.path.exists(tokenizer_path):
+            print(f"--- Loading tokenizer from {tokenizer_path}... ---")
+            self.tokenizer = Tokenizer.from_file(tokenizer_path)
+        else:
+            print(f"--- Tokenizer file not found at {tokenizer_path}. You must train one first. ---")
+            self.tokenizer = None
 
-class UnicodeGeometrodynamicConverter:
-    def __init__(self, char_to_idx: Dict[str, int], idx_to_char: Dict[int, str]):
-        self.char_to_idx, self.idx_to_char = char_to_idx, idx_to_char
-        self.vocab_size, self.unk_idx, self.pad_idx = len(char_to_idx), char_to_idx.get('<UNK>', 1), char_to_idx.get('<PAD>', 0)
-    def get_indices_from_text(self, text:str) -> list[int]:
-        return [self.char_to_idx.get(c, self.unk_idx) for c in text]
+    def train(self, text_corpus: str, vocab_size: int = 32000):
+        print("--- Training a new BPE tokenizer... ---")
+        # Start with a BPE model. <UNK> is the token for unknown words.
+        self.tokenizer = Tokenizer(BPE(unk_token="<UNK>"))
+        # Use simple whitespace to split words before merging.
+        self.tokenizer.pre_tokenizer = Whitespace()
+        # Define the trainer
+        trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=["<PAD>", "<UNK>"])
+        # Train from the corpus iterator
+        self.tokenizer.train_from_iterator([text_corpus], trainer)
+        # Save the trained tokenizer
+        self.tokenizer.save(self.tokenizer_path)
+        print(f"--- Tokenizer training complete. Vocabulary size: {self.get_vocab_size()}. Saved to {self.tokenizer_path} ---")
 
-class RollingHasher:
-    def __init__(self, window_size, base=313, modulus=10**9 + 7):
-        self.window_size, self.base, self.modulus, self.precomputed_base = window_size, base, modulus, pow(base, window_size - 1, modulus)
-    def hash_sequence(self, values: np.ndarray):
-        num_values = len(values)
-        if num_values < self.window_size: return np.array([], dtype=np.int32)
-        hashes = np.zeros(num_values - self.window_size + 1, dtype=np.int32)
-        current_hash = 0
-        for i in range(self.window_size): current_hash = (current_hash * self.base + int(values[i])) % self.modulus
-        hashes[0] = current_hash
-        for i in range(1, num_values - self.window_size + 1):
-            current_hash = ((current_hash - int(values[i-1]) * self.precomputed_base) * self.base + int(values[i+self.window_size-1])) % self.modulus
-            if current_hash < 0: current_hash += self.modulus
-            hashes[i] = current_hash
-        return hashes
+    def get_vocab_size(self) -> int:
+        return self.tokenizer.get_vocab_size() if self.tokenizer else 0
+
+    def encode(self, text: str) -> list[int]:
+        if not self.tokenizer: return []
+        return self.tokenizer.encode(text).ids
+
+    def decode(self, ids: list[int]) -> str:
+        if not self.tokenizer: return ""
+        return self.tokenizer.decode(ids)
+
+    @property
+    def pad_id(self) -> int:
+        return self.tokenizer.token_to_id("<PAD>")
+
 
 # --- Geometric Primitives (Unchanged) ---
 class PoincareBall:
@@ -179,21 +203,30 @@ class GalacticBlock(nn.Module):
         x_euc_final = x_euc_post_attn + chassis_ffn_update * nn.sigmoid(gate)
         return {'euc': x_euc_final, 'syn': x_syn_final, 'sem': x_sem_final, 'exe': x_exe_final}
 
+# --- MODIFIED: WubuMind Model ---
+# The model no longer needs hash_window or modulus.
+# It now takes a single 'indices' input.
 @dataclasses.dataclass
 class WubuMind(nn.Module):
-    vocab_size: int; d_model: int; n_heads: int; n_layers: int; modulus: int
-    hash_window: int; max_len: int; dtype: Any = jnp.bfloat16; param_dtype: Any = jnp.float32
+    vocab_size: int; d_model: int; n_heads: int; n_layers: int
+    max_len: int; dtype: Any = jnp.bfloat16; param_dtype: Any = jnp.float32
+
     @staticmethod
     def precompute_freqs_cis(dim: int, end: int, theta: float=10000.0):
         freqs = 1.0/(theta**(jnp.arange(0, dim, 2, dtype=jnp.float32) / dim))
         return jnp.exp(1j * jnp.outer(jnp.arange(end), freqs))
+
     @nn.compact
-    def __call__(self, indices, hashes):
+    def __call__(self, indices): # MODIFIED: Removed 'hashes' argument
         B, N = indices.shape
         h_dim = self.d_model // self.n_heads
-        token_embed = nn.Embed(self.vocab_size, self.d_model // 2, dtype=self.dtype, param_dtype=self.param_dtype, name="token_embed")(indices)
-        hash_embed = nn.Dense(self.d_model // 2, dtype=self.dtype, param_dtype=self.param_dtype, name="hash_proj")((hashes[...,None] / self.modulus).astype(self.dtype))
-        base_euc = nn.Dense(self.d_model, name="bridge_proj", dtype=self.dtype, param_dtype=self.param_dtype)(jnp.concatenate([token_embed, hash_embed], axis=-1))
+
+        # MODIFIED: Simplified embedding.
+        # The token embedding now takes up the full model dimension.
+        # The hash embedding has been removed.
+        base_euc = nn.Embed(self.vocab_size, self.d_model, dtype=self.dtype, param_dtype=self.param_dtype, name="token_embed")(indices)
+
+        # The rest of the model's forward pass is the same, starting from the projections.
         c_syn, c_sem, c_exe = nn.softplus(self.param('c_syntactic', nn.initializers.constant(5.0),(1,))), nn.softplus(self.param('c_semantic', nn.initializers.constant(1.0),(1,))), nn.softplus(self.param('c_executive', nn.initializers.constant(0.1),(1,)))
         x_syn = PoincareBall.expmap0(nn.Dense(self.d_model, name="proj_syntactic",dtype=self.dtype,param_dtype=self.param_dtype)(base_euc), c_syn)
         x_sem = PoincareBall.expmap0(nn.Dense(self.d_model, name="proj_semantic",dtype=self.dtype,param_dtype=self.param_dtype)(base_euc), c_sem)
@@ -207,32 +240,40 @@ class WubuMind(nn.Module):
         final_x_euc = nn.LayerNorm(dtype=jnp.float32, name="final_norm")(states['euc'])
         return nn.Dense(self.vocab_size, dtype=jnp.float32, name="output_proj")(final_x_euc)
 
-# --- DATA PREPARATION, GRADIENT STEP, AND CHECKPOINTING (Unchanged) ---
-def prepare_training_data_on_device(text_corpus, converter, hasher, config):
-    print("--- Beginning high-performance data pipeline... ---")
-    indices = np.array(converter.get_indices_from_text(text_corpus), dtype=np.int32)
+# --- MODIFIED: Data Preparation ---
+# This function is now much simpler. It tokenizes the corpus and creates batches
+# without needing to handle the separate hash stream.
+def prepare_training_data_on_device(text_corpus, tokenizer, config):
+    print("--- Beginning high-performance data pipeline with BPE tokenizer... ---")
+    indices = np.array(tokenizer.encode(text_corpus), dtype=np.int32)
     context_length, batch_size = config['context_length'], config['batch_size']
-    hashes = hasher.hash_sequence(indices)
-    num_samples = min(len(indices) - context_length - 1, len(hashes) - context_length)
-    strides_i, strides_h = indices.strides[0], hashes.strides[0]
-    all_indices = np.lib.stride_tricks.as_strided(indices, shape=(num_samples, context_length), strides=(strides_i, strides_i))
-    all_targets = np.lib.stride_tricks.as_strided(indices[1:], shape=(num_samples, context_length), strides=(strides_i, strides_i))
-    all_hashes = np.lib.stride_tricks.as_strided(hashes, shape=(num_samples, context_length), strides=(strides_h, strides_h))
+
+    num_samples = len(indices) - context_length - 1
+    strides = indices.strides[0]
+    all_indices = np.lib.stride_tricks.as_strided(indices, shape=(num_samples, context_length), strides=(strides, strides))
+    all_targets = np.lib.stride_tricks.as_strided(indices[1:], shape=(num_samples, context_length), strides=(strides, strides))
+
     num_batches = num_samples // batch_size
     if num_to_trim := num_samples % batch_size:
-        all_indices, all_hashes, all_targets = [arr[:-num_to_trim] for arr in (all_indices, all_hashes, all_targets)]
-    all_indices_batched, all_hashes_batched, all_targets_batched = [arr.reshape(num_batches, batch_size, context_length) for arr in (all_indices, all_hashes, all_targets)]
+        all_indices, all_targets = [arr[:-num_to_trim] for arr in (all_indices, all_targets)]
+
+    all_indices_batched, all_targets_batched = [arr.reshape(num_batches, batch_size, context_length) for arr in (all_indices, all_targets)]
+
     print(f"--- Data preparation complete. {num_batches} micro-batches created. ---")
     print("--- Transferring all batches to device... ---")
-    device_batches = jax.device_put((all_indices_batched, all_hashes_batched, all_targets_batched))
+    # MODIFIED: The data bundle no longer contains hashes.
+    device_batches = jax.device_put((all_indices_batched, all_targets_batched))
     print("--- Data pipeline complete. All data is now on-device. ---")
     return device_batches, num_batches
 
+# --- MODIFIED: Gradient Step ---
 @partial(jax.jit, static_argnames=['apply_fn'])
 def grad_computation_step(params, apply_fn, batch):
-    indices, hashes, targets = batch
+    # MODIFIED: Batch no longer contains hashes.
+    indices, targets = batch
     def loss_fn(p):
-        logits = apply_fn({'params': p}, indices, hashes)
+        # MODIFIED: Call to apply_fn is simpler.
+        logits = apply_fn({'params': p}, indices)
         return optax.softmax_cross_entropy_with_integer_labels(logits, targets).mean()
     loss, grads = jax.value_and_grad(loss_fn)(params)
     return loss, grads
@@ -253,17 +294,17 @@ def load_checkpoint(state, basename):
     print(f"--- Full training state restored. JIT Compilation Will Mean Delay on first run. Resuming from step: {restored_state.step} ---")
     return restored_state
 
-def save_config(config, char_to_idx, basename):
-    serializable_config = {k: v for k, v in config.items() if k != 'char_to_idx'}
-    with open(f"{basename}.json", 'w') as f: json.dump(serializable_config, f, indent=4)
-    with open(f"{basename}_vocab.json", 'w', encoding='utf-8') as f: json.dump(char_to_idx, f, indent=4)
-    print(f"--- Model config and vocab saved to {basename}.json / _vocab.json ---")
+# MODIFIED: save_config no longer needs to save the char_to_idx vocab.
+# The tokenizer file itself now serves as the vocabulary.
+def save_config(config, basename):
+    with open(f"{basename}.json", 'w') as f: json.dump(config, f, indent=4)
+    print(f"--- Model config saved to {basename}.json ---")
 
-# --- THE PHOENIX: ROBUST TRAINING MANAGER (Unchanged) ---
+# --- THE PHOENIX: ROBUST TRAINING MANAGER (Mostly Unchanged) ---
 class TrainingManager:
     def __init__(self, model, config, data):
         self.model, self.config, self.data = model, config, data
-        self.basename = "wubumind_galactic_core_v1"
+        self.basename = "wubumind_galactic_core_v2" # MODIFIED: New basename
         self.state, self.should_shutdown = None, False
         signal.signal(signal.SIGINT, self._handle_sigint)
 
@@ -273,7 +314,8 @@ class TrainingManager:
             self.should_shutdown = True
 
     def run(self):
-        (i_all, h_all, t_all), micro_batches_total = self.data
+        # MODIFIED: Unpacking the simpler data bundle
+        (i_all, t_all), micro_batches_total = self.data
         ga_steps = self.config['gradient_accumulation_steps']
         micro_batches_per_epoch = micro_batches_total // self.config['epochs']
         if micro_batches_per_epoch == 0:
@@ -281,16 +323,17 @@ class TrainingManager:
             return
 
         key = jax.random.PRNGKey(42)
-        params = self.model.init(jax.random.split(key)[1], i_all[0][:1], h_all[0][:1])['params']
+        # MODIFIED: Model initialization is simpler
+        params = self.model.init(jax.random.split(key)[1], i_all[0][:1])['params']
         param_count = sum(x.size for x in jax.tree_util.tree_leaves(params))
         print(f'--- Model initialized with {param_count:,} parameters. ---')
-        
+
         total_steps = self.config['epochs'] * (micro_batches_per_epoch // ga_steps)
         lr_schedule = optax.warmup_cosine_decay_schedule(0.0, self.config['peak_learning_rate'], self.config['warmup_steps'], total_steps, end_value=self.config['peak_learning_rate']/10)
         tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(lr_schedule, weight_decay=0.01))
-        
+
         self.state = train_state.TrainState.create(apply_fn=self.model.apply, params=params, tx=tx)
-        save_config(self.config, self.config['char_to_idx'], self.basename)
+        save_config(self.config, self.basename)
         self.state = load_checkpoint(self.state, self.basename)
 
         start_step = self.state.step
@@ -305,12 +348,13 @@ class TrainingManager:
                 pbar.set_description(f"Epoch {(step // (micro_batches_per_epoch // ga_steps)) + 1}/{self.config['epochs']}")
                 for micro_step in range(ga_steps):
                     batch_idx = (step * ga_steps + micro_step) % micro_batches_total
-                    batch = (i_all[batch_idx], h_all[batch_idx], t_all[batch_idx])
+                    # MODIFIED: Simpler batch creation
+                    batch = (i_all[batch_idx], t_all[batch_idx])
                     loss, grads = grad_computation_step(self.state.params, self.state.apply_fn, batch)
                     if not jnp.isnan(loss):
                         grad_accumulator = jax.tree_util.tree_map(lambda acc, g: acc + g, grad_accumulator, grads)
                         loss_accumulator += loss
-                
+
                 self.state = self.state.apply_gradients(grads=jax.tree_util.tree_map(lambda g: g / ga_steps, grad_accumulator))
                 pbar.set_postfix(loss=f"{(loss_accumulator / ga_steps):.4f}", lr=f"{lr_schedule(self.state.step):.2e}")
                 pbar.update(1)
@@ -320,17 +364,19 @@ class TrainingManager:
                     print("\n--- Interrupt signal honored. Saving final state. ---")
                     save_checkpoint(self.state, self.basename)
                     return
-        
+
         print("\n--- Training loop finished normally. ---")
         save_checkpoint(self.state, self.basename)
 
-# --- TRAINING MAIN ---
+# --- MODIFIED: TRAINING MAIN ---
 def training_main():
-    MODEL_CONFIG_BASE = {'hash_window': 16, 'd_model': 384, 'n_heads': 6, 'n_layers': 8, 'modulus': 10**9 + 7, 'max_len': 4096}
+    # MODIFIED: Model config no longer needs hash-related params
+    MODEL_CONFIG_BASE = {'d_model': 384, 'n_heads': 6, 'n_layers': 8, 'max_len': 4096}
     TRAINING_CONFIG = {'epochs': 20, 'batch_size': 2, 'gradient_accumulation_steps': 8, 'peak_learning_rate': 5e-4, 'warmup_steps': 500, 'context_length': 256}
-    
-    print(f"--- WubuMind Galactic Core Foundry ---\n--- Using device: {jax.devices()[0].platform.upper()} ---")
-    
+    TOKENIZER_CONFIG = {'vocab_size': 32000, 'tokenizer_path': 'wubumind_bpe.json'}
+
+    print(f"--- WubuMind Galactic Core Foundry V2 ---\n--- Using device: {jax.devices()[0].platform.upper()} ---")
+
     print("--- Automatically discovering CORPUS data from CORPUS.py... ---")
     discovered_corpora = [getattr(CORPUS, name) for name in dir(CORPUS) if not name.startswith('_') and name.isupper()]
     if not discovered_corpora: print("[FATAL ERROR] No CORPUS variables in CORPUS.py."), sys.exit(1)
@@ -338,26 +384,30 @@ def training_main():
     corpus_text = distill_text_from_corpus(discovered_corpora)
     try: corpus_text += open(__file__, 'r', encoding='utf-8').read()
     except Exception: print("Could not self-read.")
-    
+
     print(f"--- Total characters in CORPUS: {len(corpus_text):,} ---")
 
-    char_to_idx, idx_to_char = create_corpus_vocab(corpus_text)
-    converter = UnicodeGeometrodynamicConverter(char_to_idx, idx_to_char)
-    
-    # --- THIS IS THE CORRECTED LINE ---
-    arch_config = {**MODEL_CONFIG_BASE, 'vocab_size': len(char_to_idx)}
-    # ------------------------------------
+    # --- NEW: Tokenizer Initialization and Training ---
+    tokenizer = WubuTokenizer(TOKENIZER_CONFIG['tokenizer_path'])
+    if not tokenizer.tokenizer:
+        tokenizer.train(corpus_text, TOKENIZER_CONFIG['vocab_size'])
+        # Exit after training tokenizer so user can inspect it before full model training
+        print("\n--- Tokenizer has been trained. Please run the script again to start model training. ---")
+        sys.exit(0)
 
-    FULL_CONFIG = {**arch_config, **TRAINING_CONFIG, 'char_to_idx': char_to_idx}
-    hasher = RollingHasher(arch_config['hash_window'])
-    data_bundle = prepare_training_data_on_device(corpus_text, converter, hasher, FULL_CONFIG)
+    # --- MODIFIED: Configuration Setup ---
+    arch_config = {**MODEL_CONFIG_BASE, 'vocab_size': tokenizer.get_vocab_size()}
+    FULL_CONFIG = {**arch_config, **TRAINING_CONFIG}
+
+    data_bundle = prepare_training_data_on_device(corpus_text, tokenizer, FULL_CONFIG)
     model = WubuMind(**arch_config)
     TrainingManager(model, FULL_CONFIG, data_bundle).run()
 
-# --- INFERENCE AND MAIN ---
+# --- MODIFIED: INFERENCE AND MAIN ---
 @partial(jax.jit, static_argnames=['model_apply_fn', 'temp', 'top_p'])
-def predict_step_fn(model_apply_fn, params, indices, hashes, key, temp, top_p):
-    logits = model_apply_fn({'params': params}, indices, hashes)
+def predict_step_fn(model_apply_fn, params, indices, key, temp, top_p):
+    # MODIFIED: Simpler call, no hashes
+    logits = model_apply_fn({'params': params}, indices)
     scaled = logits[:, -1, :] / jnp.maximum(temp, 1e-6)
     if top_p < 1.0:
         sorted_indices = jnp.argsort(scaled, axis=-1)[..., ::-1]
@@ -374,25 +424,28 @@ class WubuOracle:
         print("--- The Oracle is Awakening ---")
         self.basename = model_basename
         with open(f"{self.basename}.json", 'r') as f: self.config = json.load(f)
-        with open(f"{self.basename}_vocab.json", 'r', encoding='utf-8') as f: char_to_idx = json.load(f)
-        idx_to_char = {int(v): k for k, v in char_to_idx.items()}
-        self.converter = UnicodeGeometrodynamicConverter(char_to_idx, idx_to_char)
-        self.hasher = RollingHasher(self.config['hash_window'])
+
+        # --- MODIFIED: Load the BPE tokenizer ---
+        self.tokenizer = WubuTokenizer(f"{self.basename}_bpe.json")
+        if not self.tokenizer.tokenizer:
+            raise FileNotFoundError("Tokenizer file not found. Ensure it's named correctly (e.g., wubumind_galactic_core_v2_bpe.json).")
+
         model_fields = [f.name for f in dataclasses.fields(WubuMind)]
         arch_config = {k: v for k, v in self.config.items() if k in model_fields}
         self.model = WubuMind(**arch_config)
         self.jit_compiled = False
         print("--- Assimilating knowledge from checkpoint... ---")
-        
+
         dummy_lr_schedule = optax.warmup_cosine_decay_schedule(0.0, 1.0, 1, 2)
         dummy_tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(dummy_lr_schedule, weight_decay=0.01))
-        
+
         dummy_state = train_state.TrainState.create(
             apply_fn=self.model.apply,
-            params=self.model.init(jax.random.PRNGKey(0), jnp.ones((1,1),dtype=jnp.int32), jnp.ones((1,1),dtype=jnp.int32))['params'],
+            # MODIFIED: Simpler init for dummy state
+            params=self.model.init(jax.random.PRNGKey(0), jnp.ones((1,1),dtype=jnp.int32))['params'],
             tx=dummy_tx
         )
-        
+
         with open(f"{self.basename}.pkl", 'rb') as f: saved_state_dict = pickle.load(f)
         state = serialization.from_state_dict(dummy_state, saved_state_dict)
         self.params = state.params
@@ -404,39 +457,39 @@ class WubuOracle:
             print("--- JIT compiling model for first use... (this may take a moment) ---", flush=True)
 
         key = jax.random.PRNGKey(int(time.time()))
-        indices = self.converter.get_indices_from_text(prompt)
-        
+        # MODIFIED: Use the new tokenizer to encode the prompt
+        indices = self.tokenizer.encode(prompt)
+
         sys.stdout.write(f"\n\033[1;32m{prompt}\033[0m")
         sys.stdout.flush()
-        
+
         for _ in range(max_new):
             current_indices_list = indices[-self.config['context_length']:]
             pad_len = self.config['context_length'] - len(current_indices_list)
             if pad_len > 0:
-                current_indices_list = [self.converter.pad_idx] * pad_len + current_indices_list
-            
+                current_indices_list = [self.tokenizer.pad_id] * pad_len + current_indices_list
+
             context_array = np.array(current_indices_list, dtype=np.int32)
             i_batch = context_array[None, :]
-            
-            h_batch = self.hasher.hash_sequence(context_array)
-            pad_len_h = self.config['context_length'] - len(h_batch)
-            if pad_len_h > 0:
-                h_batch = np.pad(h_batch, (pad_len_h, 0), 'constant', constant_values=0)
-            h_batch = h_batch[None, :]
-            
+
             key, subkey = jax.random.split(key)
-            next_idx_array = self.predict_step(self.params, i_batch, h_batch, subkey, temp, top_p)
-            
+            # MODIFIED: Simpler call to predict_step
+            next_idx_array = self.predict_step(self.params, i_batch, subkey, temp, top_p)
+
             if not self.jit_compiled:
                 next_idx_array.block_until_ready()
                 self.jit_compiled = True
-            
+
             new_idx = int(next_idx_array.item())
-            if new_idx == self.converter.pad_idx: break
-            
-            new_char = self.converter.idx_to_char.get(new_idx, '�')
+            if new_idx == self.tokenizer.pad_id: break
+
             indices.append(new_idx)
-            sys.stdout.write(new_char)
+            # MODIFIED: Use the new tokenizer to decode the full sequence for streaming output
+            # This handles subword tokens correctly.
+            new_text = self.tokenizer.decode(indices)
+            
+            # To stream just the new part, we find what's been added
+            sys.stdout.write(f"\r\033[1;32m{prompt}\033[0m{new_text[len(prompt):]}")
             sys.stdout.flush()
         print()
 
@@ -458,7 +511,7 @@ def main():
     if sys.argv[1] == "train":
         training_main()
     elif sys.argv[1] == "infer":
-        interactive_mode("wubumind_galactic_core_v1")
+        interactive_mode("wubumind_galactic_core_v2")
 
 if __name__ == "__main__":
     main()
