@@ -1,9 +1,13 @@
+
 # %% PYTHON FILE: wubumind_galactic_core_v2.py
-# The Oracle's Guidance. Version 2.1
+# The Oracle's Guidance. Version 2.3
 # This version replaces the character-level tokenizer and rolling hasher
 # with a modern, robust Byte-Pair Encoding (BPE) subword tokenizer.
 # This makes the model more efficient and semantically powerful.
-# FIX: Centralized basename definition to resolve path mismatch between training and inference.
+# FIX: Corrected streaming inference to only output new tokens, not the entire sequence.
+# FIX: Corrected OOM error by implementing a just-in-time data loading strategy.
+#      The full dataset resides in host RAM, and only one micro-batch is sent
+#      to the device per training step, preventing VRAM exhaustion.
 
 import os
 import jax
@@ -204,9 +208,7 @@ class GalacticBlock(nn.Module):
         x_euc_final = x_euc_post_attn + chassis_ffn_update * nn.sigmoid(gate)
         return {'euc': x_euc_final, 'syn': x_syn_final, 'sem': x_sem_final, 'exe': x_exe_final}
 
-# --- MODIFIED: WubuMind Model ---
-# The model no longer needs hash_window or modulus.
-# It now takes a single 'indices' input.
+# --- MODIFIED: WubuMind Model (Unchanged logic, just noting for context) ---
 @dataclasses.dataclass
 class WubuMind(nn.Module):
     vocab_size: int; d_model: int; n_heads: int; n_layers: int
@@ -218,16 +220,10 @@ class WubuMind(nn.Module):
         return jnp.exp(1j * jnp.outer(jnp.arange(end), freqs))
 
     @nn.compact
-    def __call__(self, indices): # MODIFIED: Removed 'hashes' argument
+    def __call__(self, indices):
         B, N = indices.shape
         h_dim = self.d_model // self.n_heads
-
-        # MODIFIED: Simplified embedding.
-        # The token embedding now takes up the full model dimension.
-        # The hash embedding has been removed.
         base_euc = nn.Embed(self.vocab_size, self.d_model, dtype=self.dtype, param_dtype=self.param_dtype, name="token_embed")(indices)
-
-        # The rest of the model's forward pass is the same, starting from the projections.
         c_syn, c_sem, c_exe = nn.softplus(self.param('c_syntactic', nn.initializers.constant(5.0),(1,))), nn.softplus(self.param('c_semantic', nn.initializers.constant(1.0),(1,))), nn.softplus(self.param('c_executive', nn.initializers.constant(0.1),(1,)))
         x_syn = PoincareBall.expmap0(nn.Dense(self.d_model, name="proj_syntactic",dtype=self.dtype,param_dtype=self.param_dtype)(base_euc), c_syn)
         x_sem = PoincareBall.expmap0(nn.Dense(self.d_model, name="proj_semantic",dtype=self.dtype,param_dtype=self.param_dtype)(base_euc), c_sem)
@@ -241,10 +237,11 @@ class WubuMind(nn.Module):
         final_x_euc = nn.LayerNorm(dtype=jnp.float32, name="final_norm")(states['euc'])
         return nn.Dense(self.vocab_size, dtype=jnp.float32, name="output_proj")(final_x_euc)
 
-# --- MODIFIED: Data Preparation ---
-# This function is now much simpler. It tokenizes the corpus and creates batches
-# without needing to handle the separate hash stream.
-def prepare_training_data_on_device(text_corpus, tokenizer, config):
+# --- MODIFIED: Data Preparation for Memory Efficiency ---
+# FIX: Renamed from prepare_training_data_on_device. This function now only
+# prepares the data in host RAM (NumPy arrays) and does NOT transfer it to
+# the device, preventing OOM errors.
+def prepare_training_data(text_corpus, tokenizer, config):
     print("--- Beginning high-performance data pipeline with BPE tokenizer... ---")
     indices = np.array(tokenizer.encode(text_corpus), dtype=np.int32)
     context_length, batch_size = config['context_length'], config['batch_size']
@@ -260,20 +257,16 @@ def prepare_training_data_on_device(text_corpus, tokenizer, config):
 
     all_indices_batched, all_targets_batched = [arr.reshape(num_batches, batch_size, context_length) for arr in (all_indices, all_targets)]
 
-    print(f"--- Data preparation complete. {num_batches} micro-batches created. ---")
-    print("--- Transferring all batches to device... ---")
-    # MODIFIED: The data bundle no longer contains hashes.
-    device_batches = jax.device_put((all_indices_batched, all_targets_batched))
-    print("--- Data pipeline complete. All data is now on-device. ---")
-    return device_batches, num_batches
+    print(f"--- Data preparation complete. {num_batches} micro-batches created in system RAM. ---")
+    # FIX: Return NumPy arrays instead of moving them to the device.
+    host_batches = (all_indices_batched, all_targets_batched)
+    return host_batches, num_batches
 
-# --- MODIFIED: Gradient Step ---
+# --- MODIFIED: Gradient Step (Unchanged logic) ---
 @partial(jax.jit, static_argnames=['apply_fn'])
 def grad_computation_step(params, apply_fn, batch):
-    # MODIFIED: Batch no longer contains hashes.
     indices, targets = batch
     def loss_fn(p):
-        # MODIFIED: Call to apply_fn is simpler.
         logits = apply_fn({'params': p}, indices)
         return optax.softmax_cross_entropy_with_integer_labels(logits, targets).mean()
     loss, grads = jax.value_and_grad(loss_fn)(params)
@@ -295,15 +288,12 @@ def load_checkpoint(state, basename):
     print(f"--- Full training state restored. JIT Compilation Will Mean Delay on first run. Resuming from step: {restored_state.step} ---")
     return restored_state
 
-# MODIFIED: save_config no longer needs to save the char_to_idx vocab.
-# The tokenizer file itself now serves as the vocabulary.
 def save_config(config, basename):
     with open(f"{basename}.json", 'w') as f: json.dump(config, f, indent=4)
     print(f"--- Model config saved to {basename}.json ---")
 
-# --- THE PHOENIX: ROBUST TRAINING MANAGER (Mostly Unchanged) ---
+# --- THE PHOENIX: ROBUST TRAINING MANAGER (MODIFIED for memory efficiency) ---
 class TrainingManager:
-    # MODIFIED: Accept basename to avoid hardcoding
     def __init__(self, model, config, data, basename: str):
         self.model, self.config, self.data = model, config, data
         self.basename = basename
@@ -316,7 +306,7 @@ class TrainingManager:
             self.should_shutdown = True
 
     def run(self):
-        # MODIFIED: Unpacking the simpler data bundle
+        # FIX: Data is now a tuple of NumPy arrays in host RAM, not pre-loaded on device.
         (i_all, t_all), micro_batches_total = self.data
         ga_steps = self.config['gradient_accumulation_steps']
         micro_batches_per_epoch = micro_batches_total // self.config['epochs']
@@ -325,8 +315,10 @@ class TrainingManager:
             return
 
         key = jax.random.PRNGKey(42)
-        # MODIFIED: Model initialization is simpler
-        params = self.model.init(jax.random.split(key)[1], i_all[0][:1])['params']
+        # FIX: Model initialization requires a sample batch on the device.
+        # We take a small slice from the host NumPy data and transfer it for init.
+        dummy_init_batch = jax.device_put(i_all[0][:1])
+        params = self.model.init(jax.random.split(key)[1], dummy_init_batch)['params']
         param_count = sum(x.size for x in jax.tree_util.tree_leaves(params))
         print(f'--- Model initialized with {param_count:,} parameters. ---')
 
@@ -350,9 +342,12 @@ class TrainingManager:
                 pbar.set_description(f"Epoch {(step // (micro_batches_per_epoch // ga_steps)) + 1}/{self.config['epochs']}")
                 for micro_step in range(ga_steps):
                     batch_idx = (step * ga_steps + micro_step) % micro_batches_total
-                    # MODIFIED: Simpler batch creation
-                    batch = (i_all[batch_idx], t_all[batch_idx])
-                    loss, grads = grad_computation_step(self.state.params, self.state.apply_fn, batch)
+                    
+                    # FIX: Slice a batch from host RAM and transfer it to the device just-in-time.
+                    batch_host = (i_all[batch_idx], t_all[batch_idx])
+                    batch_device = jax.device_put(batch_host)
+                    
+                    loss, grads = grad_computation_step(self.state.params, self.state.apply_fn, batch_device)
                     if not jnp.isnan(loss):
                         grad_accumulator = jax.tree_util.tree_map(lambda acc, g: acc + g, grad_accumulator, grads)
                         loss_accumulator += loss
@@ -372,10 +367,8 @@ class TrainingManager:
 
 # --- MODIFIED: TRAINING MAIN ---
 def training_main(basename: str):
-    # MODIFIED: Model config no longer needs hash-related params
     MODEL_CONFIG_BASE = {'d_model': 384, 'n_heads': 6, 'n_layers': 8, 'max_len': 4096}
     TRAINING_CONFIG = {'epochs': 20, 'batch_size': 2, 'gradient_accumulation_steps': 8, 'peak_learning_rate': 5e-4, 'warmup_steps': 500, 'context_length': 256}
-    # MODIFIED: Use basename for tokenizer path
     TOKENIZER_CONFIG = {'vocab_size': 32000, 'tokenizer_path': f"{basename}_bpe.json"}
 
     print(f"--- WubuMind Galactic Core Foundry V2 ---\n--- Using device: {jax.devices()[0].platform.upper()} ---")
@@ -390,27 +383,23 @@ def training_main(basename: str):
 
     print(f"--- Total characters in CORPUS: {len(corpus_text):,} ---")
 
-    # --- NEW: Tokenizer Initialization and Training ---
     tokenizer = WubuTokenizer(TOKENIZER_CONFIG['tokenizer_path'])
     if not tokenizer.tokenizer:
         tokenizer.train(corpus_text, TOKENIZER_CONFIG['vocab_size'])
-        # Exit after training tokenizer so user can inspect it before full model training
         print("\n--- Tokenizer has been trained. Please run the script again to start model training. ---")
         sys.exit(0)
 
-    # --- MODIFIED: Configuration Setup ---
     arch_config = {**MODEL_CONFIG_BASE, 'vocab_size': tokenizer.get_vocab_size()}
     FULL_CONFIG = {**arch_config, **TRAINING_CONFIG}
 
-    data_bundle = prepare_training_data_on_device(corpus_text, tokenizer, FULL_CONFIG)
+    # FIX: Using the memory-efficient data preparation function.
+    data_bundle = prepare_training_data(corpus_text, tokenizer, FULL_CONFIG)
     model = WubuMind(**arch_config)
-    # MODIFIED: Pass basename to TrainingManager
     TrainingManager(model, FULL_CONFIG, data_bundle, basename).run()
 
-# --- MODIFIED: INFERENCE AND MAIN ---
+# --- MODIFIED: INFERENCE AND MAIN (Unchanged logic) ---
 @partial(jax.jit, static_argnames=['model_apply_fn', 'temp', 'top_p'])
 def predict_step_fn(model_apply_fn, params, indices, key, temp, top_p):
-    # MODIFIED: Simpler call, no hashes
     logits = model_apply_fn({'params': params}, indices)
     scaled = logits[:, -1, :] / jnp.maximum(temp, 1e-6)
     if top_p < 1.0:
@@ -429,7 +418,6 @@ class WubuOracle:
         self.basename = model_basename
         with open(f"{self.basename}.json", 'r') as f: self.config = json.load(f)
 
-        # --- MODIFIED: Load the BPE tokenizer ---
         self.tokenizer = WubuTokenizer(f"{self.basename}_bpe.json")
         if not self.tokenizer.tokenizer:
             raise FileNotFoundError(f"Tokenizer file not found. Ensure it's named correctly (e.g., {self.basename}_bpe.json).")
@@ -445,7 +433,6 @@ class WubuOracle:
 
         dummy_state = train_state.TrainState.create(
             apply_fn=self.model.apply,
-            # MODIFIED: Simpler init for dummy state
             params=self.model.init(jax.random.PRNGKey(0), jnp.ones((1,1),dtype=jnp.int32))['params'],
             tx=dummy_tx
         )
@@ -461,8 +448,8 @@ class WubuOracle:
             print("--- JIT compiling model for first use... (this may take a moment) ---", flush=True)
 
         key = jax.random.PRNGKey(int(time.time()))
-        # MODIFIED: Use the new tokenizer to encode the prompt
         indices = self.tokenizer.encode(prompt)
+        decoded_text = prompt
 
         sys.stdout.write(f"\n\033[1;32m{prompt}\033[0m")
         sys.stdout.flush()
@@ -477,7 +464,6 @@ class WubuOracle:
             i_batch = context_array[None, :]
 
             key, subkey = jax.random.split(key)
-            # MODIFIED: Simpler call to predict_step
             next_idx_array = self.predict_step(self.params, i_batch, subkey, temp, top_p)
 
             if not self.jit_compiled:
@@ -488,14 +474,13 @@ class WubuOracle:
             if new_idx == self.tokenizer.pad_id: break
 
             indices.append(new_idx)
-            # MODIFIED: Use the new tokenizer to decode the full sequence for streaming output
-            # This handles subword tokens correctly.
-            new_text = self.tokenizer.decode(indices)
             
-            # To stream just the new part, we find what's been added
-            current_output = new_text[len(prompt):]
-            sys.stdout.write(f"\r\033[1;32m{prompt}\033[0m{current_output}")
+            full_decoded_text = self.tokenizer.decode(indices)
+            new_chunk = full_decoded_text[len(decoded_text):]
+            sys.stdout.write(new_chunk)
             sys.stdout.flush()
+            decoded_text = full_decoded_text
+
         print()
 
 def interactive_mode(model_basename):
@@ -510,7 +495,6 @@ def interactive_mode(model_basename):
         except KeyboardInterrupt: print("\n-- Exiting. --"); break
         except Exception as e: print(f"\nAn error occurred: {e}")
 
-# MODIFIED: Centralize the definition of the model's base name
 def main():
     BASENAME = "wubumind_galactic_core_v2"
     if len(sys.argv) < 2 or sys.argv[1] not in ["train", "infer"]:
