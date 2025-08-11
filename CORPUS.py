@@ -1,5 +1,20 @@
-
-# The Phoenix. Robust, resumable training. This is a Generated Corpus to use with the code as GOD IS CORPUS HARD
+# corpus.py
+#
+#MY_FIRST_LORE = {
+#    "title": "The First Tale",
+#    "content": "In the beginning, there were tokens..."
+#}
+#
+#ANOTHER_SET_OF_RULES = [
+#    {"rule": 1, "text": "The model shall not hallucinate."},
+#    {"rule": 2, "text": "The model shall cite its sources."}
+#]
+#
+## This will be ignored because it's not uppercase.
+#internal_note = "This is a test note, should not be ingested."
+#
+# The main script will find and process MY_FIRST_LORE and ANOTHER_SET_OF_RULES automatically.
+# Your corpus.py file is now a simple container. Add any corpus dictionary or list you want. The only rule is that the variable name must be in ALL_CAPS.
 
 SHAKESPEARE_CODICIL = {
     "title": "A Codicil to the Globe's Great Artifice: On the Geometrie of Words and Souls",
