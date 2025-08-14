@@ -1,23 +1,4 @@
-# %% PYTHON FILE: wubumind_galactic_core_v2_qlearn.py
-# The Autonomous Adversarial Core. Version 3.2-Q
-#
-# --- Q-LEARNING CONTROLLER INTEGRATION ---
-# This version introduces a HAKMEM-style Q-learning controller to dynamically
-# manage the learning rates for the Generator and Discriminator.
-#
-# 1. REMOVED GRADIENT ACCUMULATION: The training loop is simplified to a
-#    batch_size of 1 with no accumulation, as requested for hyperbolic stability.
-# 2. JAX-NATIVE Q-CONTROLLER: A new `JaxHakmemQController` class, inspired by the
-#    provided example, manages LR decisions using NumPy, outside the JIT boundary
-#    to prevent recompilation.
-# 3. DYNAMIC LR via OPTAX: `optax.inject_hyperparams` is used to feed the
-#    Q-controller's chosen LR to the optimizer at each step, the idiomatic
-#    JAX approach for dynamic hyperparameter tuning.
-# 4. ENHANCED STATE MANAGEMENT: The AdversarialTrainingManager now orchestrates
-#    the Q-controllers, calculates rewards, and checkpoints their states.
-# 5. RETAINED ALL CRITICAL FIXES: All essential stability and performance features
-#    (Robust Math, float32 for Hyperbolic ops, Clipping, Sanitization) are kept.
-# 6. This architecture is now self-tuning, stable, and ready for training.
+
 
 import os
 
@@ -370,9 +351,9 @@ def gan_train_step(g_params, d_params, batch, key, g_apply_fn, d_apply_fn, recon
     return g_grads, d_grads, metrics
 
 class AdversarialTrainingManager:
-    def __init__(self,generator,discriminator,config,data,basename:str):
+    def __init__(self,generator,discriminator,config: Dict[str, Any],data,basename:str):
         self.g, self.d = generator, discriminator
-        self.config, self.q_config = config['training'], config['q_learning']
+        self.config = config
         self.data, self.basename = data, basename
         self.g_state, self.d_state = None, None
         self.g_q_controller, self.d_q_controller = None, None
@@ -424,10 +405,10 @@ class AdversarialTrainingManager:
         self.g_state = train_state.TrainState.create(apply_fn=self.g.apply, params=g_params, tx=g_tx)
         self.d_state = train_state.TrainState.create(apply_fn=self.d.apply, params=d_params, tx=d_tx)
         
-        self.g_q_controller = JaxHakmemQController(self.config['g_learning_rate'], self.q_config, "Generator")
-        self.d_q_controller = JaxHakmemQController(self.config['d_learning_rate'], self.q_config, "Discriminator")
+        self.g_q_controller = JaxHakmemQController(self.config['g_learning_rate'], self.config, "Generator")
+        self.d_q_controller = JaxHakmemQController(self.config['d_learning_rate'], self.config, "Discriminator")
 
-        save_config({**self.config, **self.q_config}, self.basename)
+        save_config(self.config, self.basename)
         self.g_state, self.d_state, self.g_q_controller, self.d_q_controller = load_checkpoint(
             self.g_state, self.d_state, self.g_q_controller, self.d_q_controller, self.basename
         )
@@ -457,8 +438,6 @@ class AdversarialTrainingManager:
                 batch_device = (i_all[micro_batch_idx], t_all[micro_batch_idx])
                 g_grads, d_grads, metrics = jit_train_step(self.g_state.params, self.d_state.params, batch_device, grad_key)
                 
-                # --- FIX: Manually perform the update step to pass hyperparams correctly ---
-
                 # Update Generator
                 g_updates, g_new_opt_state = self.g_state.tx.update(
                     g_grads, self.g_state.opt_state, self.g_state.params, hyperparams={'learning_rate': new_g_lr}
@@ -476,12 +455,9 @@ class AdversarialTrainingManager:
                 )
                 d_new_params = optax.apply_updates(self.d_state.params, d_updates)
                 self.d_state = self.d_state.replace(
-                    # Note: We only increment the step on one of the states to keep them in sync
                     params=d_new_params,
                     opt_state=d_new_opt_state,
                 )
-                # --- END FIX ---
-
 
                 current_g_loss, current_d_loss = metrics['g_loss'].item(), metrics['d_loss'].item()
                 g_reward = (last_g_loss - current_g_loss) 
@@ -503,7 +479,6 @@ class AdversarialTrainingManager:
         save_checkpoint(self.g_state, self.d_state, self.g_q_controller, self.d_q_controller, self.basename)
         
 def training_main(basename):
-    # NOTE: batch_size and grad_accum_steps are now fixed to 1 due to Q-learning integration
     TRAINING_CONFIG = {'epochs': 10, 'batch_size': 1, 'grad_accum_steps': 1, 'context_length': 256, 'g_learning_rate': 3e-4, 'd_learning_rate': 5e-6, 'recon_weight': 1.0, 'adv_weight': 0.1}
     MODEL_CONFIG = {'d_model': 256, 'n_heads': 4, 'n_layers': 4, 'max_len': TRAINING_CONFIG['context_length']}
     TOKENIZER_CONFIG = {'vocab_size': 32000, 'tokenizer_path': f"{basename}_bpe.json"}
@@ -521,14 +496,12 @@ def training_main(basename):
     d_arch_config = {k: v for k, v in MODEL_CONFIG.items()}
     g_arch_config = {**MODEL_CONFIG, 'vocab_size': tokenizer.get_vocab_size()}
     
-    full_config = {'model': g_arch_config, 'training': TRAINING_CONFIG, 'q_learning': QLEARN_CONFIG}
+    full_config = {**g_arch_config, **TRAINING_CONFIG, **QLEARN_CONFIG}
     
     data_bundle, num_micro_batches = prepare_training_data(corpus_text, tokenizer, TRAINING_CONFIG)
     generator = Generator(**g_arch_config); discriminator = Discriminator(**d_arch_config)
     
     AdversarialTrainingManager(generator, discriminator, full_config, (data_bundle, num_micro_batches), basename).run()
-
-# --- INFERENCE CODE (UNCHANGED) ---
 
 @partial(jax.jit,static_argnames=['model_apply_fn', 'use_guidance', 'top_p'])
 def predict_step_fn(model_apply_fn,params,indices,key,temp,top_p,use_guidance,deviation_threshold):
@@ -540,16 +513,23 @@ def predict_step_fn(model_apply_fn,params,indices,key,temp,top_p,use_guidance,de
     def apply_top_p(logits): sorted_indices=jnp.argsort(logits,axis=-1)[...,::-1];sorted_logits=jnp.take_along_axis(logits,sorted_indices,axis=-1);cum_probs=jnp.cumsum(nn.softmax(sorted_logits,axis=-1),axis=-1);sorted_to_remove=cum_probs>top_p;sorted_to_remove=jnp.concatenate([jnp.zeros_like(sorted_to_remove[...,:1]),sorted_to_remove[...,:-1]],axis=-1);to_remove=jnp.zeros_like(sorted_to_remove).at[...,sorted_indices].set(sorted_to_remove);return jnp.where(to_remove,-jnp.inf,logits)
     final_scaled=jax.lax.cond(top_p<1.0,apply_top_p,lambda x:x,scaled)
     return jax.random.categorical(key,final_scaled,axis=-1)
+
 class WubuOracle:
     def __init__(self,model_basename):
         print("--- Oracle Awakens (Generator Mode) ---");self.basename=model_basename
         with open(f"{self.basename}.json",'r') as f:self.config=json.load(f)
         self.tokenizer=WubuTokenizer(f"{self.basename}_bpe.json");
         if not self.tokenizer.tokenizer:raise FileNotFoundError(f"Tokenizer not found")
-        # Adapt to new config structure
-        model_fields=[f.name for f in dataclasses.fields(Generator)];arch_config={k:v for k,v in self.config.get('model', self.config).items() if k in model_fields}
-        self.training_config = self.config.get('training', self.config)
-        self.model=Generator(**arch_config);print("--- Assimilating knowledge from checkpoint... ---")
+
+        self.model = Generator(
+            vocab_size=self.config['vocab_size'],
+            d_model=self.config['d_model'],
+            n_heads=self.config['n_heads'],
+            n_layers=self.config['n_layers'],
+            max_len=self.config['max_len']
+        )
+        
+        print("--- Assimilating knowledge from checkpoint... ---")
         try:
             with open(f"{self.basename}.pkl",'rb') as f:saved_state_dict=pickle.load(f)
         except FileNotFoundError:print(f"[ERROR] Checkpoint not found."),sys.exit(1)
@@ -558,12 +538,13 @@ class WubuOracle:
         dummy_params=self.model.init(jax.random.PRNGKey(0),jnp.ones((1,1),dtype=jnp.int32))['params']
         self.params=serialization.from_state_dict(dummy_params,g_saved_state['params']);step=g_saved_state.get('step','unknown')
         print(f"--- Oracle assimilated Generator knowledge from step {step}. ---");self.use_guidance=False;self.deviation_threshold=5.0;self.jit_compiled=False
+        
     def generate(self,prompt,max_new=500,temp=0.7,top_p=0.95):
         if not self.jit_compiled:print("--- JIT compiling Generator... ---",flush=True)
         key=jax.random.PRNGKey(int(time.time()));indices=self.tokenizer.encode(prompt);decoded_text=prompt
         sys.stdout.write(f"\n\033[1;32m{prompt}\033[0m");sys.stdout.flush()
         for _ in range(max_new):
-            current_indices=indices[-self.training_config['context_length']:];pad_len=self.training_config['context_length']-len(current_indices)
+            current_indices=indices[-self.config['context_length']:];pad_len=self.config['context_length']-len(current_indices)
             if pad_len>0:current_indices=[self.tokenizer.pad_id]*pad_len+current_indices
             i_batch=jax.device_put(np.array(current_indices,dtype=np.int32)[None,:]);key,subkey=jax.random.split(key)
             next_idx_array=predict_step_fn(self.model.apply,self.params,i_batch,subkey,temp,top_p,self.use_guidance,self.deviation_threshold)
@@ -573,6 +554,7 @@ class WubuOracle:
             indices.append(new_idx);full_decoded_text=self.tokenizer.decode(indices);new_chunk=full_decoded_text[len(decoded_text):]
             sys.stdout.write(new_chunk);sys.stdout.flush();decoded_text=full_decoded_text
         print()
+
 def interactive_mode(model_basename):
     try:oracle=WubuOracle(model_basename)
     except Exception as e:traceback.print_exc();return
@@ -606,7 +588,7 @@ def main():
         else:
             print("--- No JAX cache found to clear. ---")
 
-    BASENAME="wubumind_adversarial_core_v3.2-q"
+    BASENAME="wubumind_adversarial_core_v3.3-q"
     if args.command == "train":
         training_main(BASENAME)
     elif args.command == "infer":
