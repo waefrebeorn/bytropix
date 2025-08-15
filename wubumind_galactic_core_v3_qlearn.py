@@ -1,8 +1,7 @@
-
-
 import os
 
-# Set robust, universally compatible environment variables
+# --- Environment Setup for JAX/Flax on any hardware ---
+# Set robust, universally compatible environment variables for memory management.
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'
 
@@ -35,6 +34,7 @@ from collections import deque
 
 jax.config.update("jax_debug_nans", False)
 jax.config.update('jax_disable_jit', False)
+# --- OPTIMIZATION: Use TensorFloat-32 for matrix multiplications on compatible hardware ---
 jax.config.update('jax_default_matmul_precision', 'tensorfloat32')
 jax.config.update('jax_threefry_partitionable', True)
 
@@ -101,16 +101,21 @@ class PoincareBall:
         direction = v / safe_v_norm
         magnitude = jnp.tanh(sqrt_c * safe_v_norm) / sqrt_c
         return PoincareBall.project(jnp.where(v_norm < PoincareBall.EPS, jnp.zeros_like(v), magnitude * direction))
+    # --- OPTIMIZATION: Updated dist function to handle explicitly broadcasted inputs ---
     @staticmethod
     def dist(x, y, c):
         sqrt_c = jnp.sqrt(c).clip(PoincareBall.EPS)
         add_xy = PoincareBall.mobius_add(-x, y, c)
         add_norm = jnp.linalg.norm(add_xy, axis=-1)
-        arg = jnp.clip(sqrt_c * add_norm, max=1.0 - PoincareBall.EPS)
-        return 2. * jnp.arctanh(arg) / sqrt_c
+        # Ensure curvature `c` can be broadcast against the norm tensor
+        c_squeezed = jnp.squeeze(sqrt_c)
+        c_broadcastable = jnp.reshape(c_squeezed, (1, -1, 1, 1))
+        arg = jnp.clip(c_broadcastable * add_norm, max=1.0 - PoincareBall.EPS)
+        return 2. * jnp.arctanh(arg) / c_broadcastable
 
 class HyperbolicAttention(nn.Module):
-    dim:int;n_heads:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.float32
+    # --- OPTIMIZATION: Default to bfloat16 for speed and memory efficiency ---
+    dim:int;n_heads:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.bfloat16
     @staticmethod
     def apply_rotary_emb(x,freqs_cis):
         x_f32=x.astype(jnp.float32);x_r,x_i=jnp.split(x_f32,2,-1);x_c=jax.lax.complex(x_r,x_i)
@@ -119,21 +124,30 @@ class HyperbolicAttention(nn.Module):
     @nn.compact
     def __call__(self,x_hyp,freqs_cis,c_sphere):
         B,N,_=x_hyp.shape;h_dim=self.dim//self.n_heads
+        # --- PRECISION CONTROL: Perform hyperbolic math in float32 for stability ---
         x_hyp_f32=x_hyp.astype(jnp.float32);c_sphere_f32=c_sphere.astype(jnp.float32)
         qkv_proj=nn.Dense(self.dim*3,name="qkv_proj",dtype=self.dtype,param_dtype=self.param_dtype);out_proj=nn.Dense(self.dim,name="out_proj",dtype=self.dtype,param_dtype=self.param_dtype)
-        c_per_head_logits=self.param('c_per_head_logits',nn.initializers.zeros,(self.n_heads,),self.param_dtype);geo_scale=self.param('geo_scale',nn.initializers.ones,(1,self.n_heads,1,1),self.param_dtype)
+        c_per_head_logits=self.param('c_per_head_logits',nn.initializers.zeros,(self.n_heads,),jnp.float32);geo_scale=self.param('geo_scale',nn.initializers.ones,(1,self.n_heads,1,1),jnp.float32)
         x_tangent=PoincareBall.logmap0(x_hyp_f32, c_sphere_f32)
         qkv=qkv_proj(x_tangent.astype(self.dtype)).reshape(B,N,3,self.n_heads,h_dim).transpose((2,0,3,1,4));q,k,v_euc=qkv[0],qkv[1],qkv[2]
         q_rot,k_rot=self.apply_rotary_emb(q,freqs_cis),self.apply_rotary_emb(k,freqs_cis);c_per_head=nn.softplus(c_per_head_logits.astype(jnp.float32))
-        q_hyp=PoincareBall.expmap0(q_rot,c_per_head[:,None,None]);k_hyp=PoincareBall.expmap0(k_rot,c_per_head[:,None,None])
-        def compute_dist_matrix(q_seq, k_seq, c_val): return vmap(lambda q_vec: vmap(lambda k_vec: PoincareBall.dist(q_vec, k_vec, c_val))(k_seq))(q_seq)
-        dist=vmap(lambda q_b, k_b: vmap(compute_dist_matrix, in_axes=(0, 0, 0))(q_b, k_b, c_per_head))(q_hyp, k_hyp)
+        
+        # Correctly broadcast per-head curvature for expmap
+        c_per_head_broadcast = c_per_head[None, :, None, None]
+        q_hyp=PoincareBall.expmap0(q_rot,c_per_head_broadcast);k_hyp=PoincareBall.expmap0(k_rot,c_per_head_broadcast)
+
+        # --- OPTIMIZATION: Replaced nested vmaps with more efficient explicit broadcasting ---
+        q_broadcast = q_hyp[:, :, :, None, :]         # Shape: (B, n_heads, N, 1, h_dim)
+        k_broadcast = k_hyp[:, :, None, :, :]         # Shape: (B, n_heads, 1, N, h_dim)
+        c_broadcast = c_per_head[None, :, None, None, None] # Shape: (1, n_heads, 1, 1, 1) for dist
+        dist = PoincareBall.dist(q_broadcast, k_broadcast, c_broadcast) # Result shape: (B, n_heads, N, N)
+
         mask=nn.make_causal_mask(jnp.ones((B,N),dtype=bool));attn_scores=jnp.where(mask,-geo_scale.astype(jnp.float32)*dist,-jnp.inf)
         attn_weights=nn.softmax(attn_scores,axis=-1);attn_out_euc=(attn_weights.astype(self.dtype)@v_euc).transpose((0,2,1,3)).reshape(B,N,self.dim)
         return out_proj(attn_out_euc)
 
 class HyperbolicFFN(nn.Module):
-    dim:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.float32
+    dim:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.bfloat16
     @nn.compact
     def __call__(self,x_hyp,c_sphere):
         x_hyp_f32=x_hyp.astype(jnp.float32);c_sphere_f32=c_sphere.astype(jnp.float32);x_tangent=PoincareBall.logmap0(x_hyp_f32,c_sphere_f32)
@@ -141,7 +155,8 @@ class HyperbolicFFN(nn.Module):
         return ffn_output
 
 class GalacticBlock(nn.Module):
-    dim:int;n_heads:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.float32
+    dim:int;n_heads:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.bfloat16
+    # --- OPTIMIZATION: Use gradient checkpointing to save VRAM ---
     @remat
     @nn.compact
     def __call__(self,states,curvatures,freqs_cis): 
@@ -162,13 +177,16 @@ class GalacticBlock(nn.Module):
 
 @dataclasses.dataclass
 class WubuMindCore(nn.Module):
-    d_model:int;n_heads:int;n_layers:int;max_len:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.float32
+    d_model:int;n_heads:int;n_layers:int;max_len:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.bfloat16
     @staticmethod
     def precompute_freqs_cis(dim,end,theta=10000.0): freqs=1.0/(theta**(jnp.arange(0,dim,2,dtype=jnp.float32)/dim)); return jnp.exp(1j*jnp.outer(jnp.arange(end),freqs))
     @nn.compact
     def __call__(self,base_euc):
         B,N,_=base_euc.shape;h_dim=self.d_model//self.n_heads
-        c_syn=nn.softplus(self.param('c_syntactic',nn.initializers.constant(5.0),(1,))).astype(jnp.float32);c_sem=nn.softplus(self.param('c_semantic',nn.initializers.constant(1.0),(1,))).astype(jnp.float32);c_exe=nn.softplus(self.param('c_executive',nn.initializers.constant(0.1),(1,))).astype(jnp.float32)
+        # --- OPTIMIZATION: Replaced learnable curvatures with fixed constants for stability ---
+        c_syn = jnp.array([5.0], dtype=jnp.float32)
+        c_sem = jnp.array([1.0], dtype=jnp.float32)
+        c_exe = jnp.array([0.1], dtype=jnp.float32)
         proj_syn=nn.Dense(self.d_model,name="proj_syntactic",dtype=self.dtype,param_dtype=self.param_dtype)(base_euc);proj_sem=nn.Dense(self.d_model,name="proj_semantic",dtype=self.dtype,param_dtype=self.param_dtype)(base_euc);proj_exe=nn.Dense(self.d_model,name="proj_executive",dtype=self.dtype,param_dtype=self.param_dtype)(base_euc)
         x_syn=PoincareBall.expmap0(proj_syn.astype(jnp.float32),c_syn);x_sem=PoincareBall.expmap0(proj_sem.astype(jnp.float32),c_sem);x_exe=PoincareBall.expmap0(proj_exe.astype(jnp.float32),c_exe)
         x_euc_chassis=nn.LayerNorm(dtype=self.dtype,name="proj_chassis_norm")(base_euc)
@@ -178,7 +196,7 @@ class WubuMindCore(nn.Module):
         return states,curvatures
 @dataclasses.dataclass
 class Generator(nn.Module):
-    vocab_size:int;d_model:int;n_heads:int;n_layers:int;max_len:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.float32
+    vocab_size:int;d_model:int;n_heads:int;n_layers:int;max_len:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.bfloat16
     @nn.compact
     def __call__(self,indices):
         token_embed_layer=nn.Embed(self.vocab_size,self.d_model,dtype=self.dtype,param_dtype=self.param_dtype,name="token_embed");base_euc=token_embed_layer(indices)
@@ -189,7 +207,7 @@ class Generator(nn.Module):
         return {'final_logits':final_logits,'embedding_matrix':token_embed_layer.embedding,'embeddings':base_euc,'drive_logits':drive_logits}
 @dataclasses.dataclass
 class Discriminator(nn.Module):
-    d_model:int;n_heads:int;n_layers:int;max_len:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.float32
+    d_model:int;n_heads:int;n_layers:int;max_len:int;dtype:Any=jnp.bfloat16;param_dtype:Any=jnp.bfloat16
     @nn.compact
     def __call__(self,embeddings):
         core=WubuMindCore(self.d_model,self.n_heads,self.n_layers,self.max_len,self.dtype,self.param_dtype,name="core");states,_=core(embeddings)
@@ -204,35 +222,33 @@ def prepare_training_data(text_corpus, tokenizer, config):
     all_indices_b=all_indices.reshape(num_micro_batches,micro_bs,cl);all_targets_b=all_targets.reshape(num_micro_batches,micro_bs,cl)
     print(f"--- Data prep complete: {num_micro_batches} micro-batches. ---");return (all_indices_b,all_targets_b),num_micro_batches
 
-# --- START: Q-LEARNING CONTROLLER AND NEW TRAINING MANAGER ---
-
+# --- START: GRAFTED Q-LEARNING CONTROLLER AND TRAINING MANAGER ---
 class JaxHakmemQController:
-    """A JAX-compatible Q-learning controller for hyperparameter tuning, managed in Python runtime."""
+    """
+    An improved Q-learning controller that uses a "trend-aware" reward system
+    to avoid getting stuck at low learning rates.
+    """
     def __init__(self, initial_lr: float, config: Dict[str, Any], logger_suffix: str = ""):
         self.config = config
         self.current_lr = initial_lr
         self.logger_suffix = logger_suffix
-        
         self.q_table_size = int(self.config["q_table_size"])
         self.num_actions = int(self.config["num_lr_actions"])
         self.lr_change_factors = self.config["lr_change_factors"]
-        
         self.q_table = np.zeros((self.q_table_size, self.num_actions), dtype=np.float32)
-        
         self.learning_rate_q = float(self.config["learning_rate_q"])
         self.discount_factor_q = float(self.config["discount_factor_q"])
         self.exploration_rate_q = float(self.config["exploration_rate_q"])
-        
         self.lr_min = float(self.config["lr_min"])
         self.lr_max = float(self.config["lr_max"])
-        
         self.loss_history = deque(maxlen=int(self.config["metric_history_len"]))
         self.loss_min = float(self.config["loss_min"])
         self.loss_max = float(self.config["loss_max"])
-
         self.last_action_idx: Optional[int] = None
         self.last_state_idx: Optional[int] = None
-        print(f"--- HAKMEM Q-Controller ({self.logger_suffix}) initialized. LR: {self.current_lr:.2e}, Q-Table: {self.q_table.shape} ---")
+        # --- FIX: Window for short-term loss average for trend calculation ---
+        self.short_term_window = 5
+        print(f"--- HAKMEM Q-Controller ({self.logger_suffix}) initialized (Trend-Aware). LR: {self.current_lr:.2e}, Q-Table: {self.q_table.shape} ---")
 
     def _discretize_value(self, value: float) -> int:
         if value <= self.loss_min: return 0
@@ -240,44 +256,46 @@ class JaxHakmemQController:
         bin_size = (self.loss_max - self.loss_min) / self.q_table_size
         return min(int((value - self.loss_min) / bin_size), self.q_table_size - 1)
 
-    def _get_current_state_idx(self, current_loss: Optional[float]) -> int:
-        if current_loss is not None:
-            return self._discretize_value(current_loss)
-        return self.q_table_size // 2 # Default state if no loss is available
+    def _get_current_state_idx(self) -> int:
+        # --- FIX: State is based on recent average loss for stability, not a single point ---
+        if not self.loss_history:
+            return self.q_table_size // 2
+        avg_loss = np.mean(list(self.loss_history)[-self.short_term_window:])
+        return self._discretize_value(avg_loss)
 
-    def choose_action(self, current_loss: Optional[float]) -> float:
-        self.last_state_idx = self._get_current_state_idx(current_loss)
+    def choose_action(self) -> float:
+        # --- FIX: Action choice no longer depends on an external `current_loss` argument ---
+        self.last_state_idx = self._get_current_state_idx()
         if random.random() < self.exploration_rate_q:
             self.last_action_idx = random.randint(0, self.num_actions - 1)
         else:
             self.last_action_idx = np.argmax(self.q_table[self.last_state_idx]).item()
-        
         change_factor = self.lr_change_factors[self.last_action_idx]
         self.current_lr = np.clip(self.current_lr * change_factor, self.lr_min, self.lr_max)
         return self.current_lr
 
-    def log_reward(self, reward: float, current_loss: Optional[float]):
-        if self.last_state_idx is None or self.last_action_idx is None:
-            return
+    def update_q_value(self, current_loss: float):
+        """Calculates trend-based reward and updates the Q-table."""
+        self.loss_history.append(current_loss)
+        if self.last_state_idx is None or self.last_action_idx is None or len(self.loss_history) < self.loss_history.maxlen:
+            return # Don't update until history is full for stable trend calculation
+
+        # --- FIX: "Trend-Aware" Reward Calculation ---
+        # The agent is rewarded for making recent performance better than the long-term average.
+        history_arr = np.array(self.loss_history)
+        long_term_avg = np.mean(history_arr)
+        short_term_avg = np.mean(history_arr[-self.short_term_window:])
+        reward = long_term_avg - short_term_avg
+        # --- END FIX ---
 
         current_q = self.q_table[self.last_state_idx, self.last_action_idx]
-        next_state_idx = self._get_current_state_idx(current_loss)
+        next_state_idx = self._get_current_state_idx()
         max_next_q = np.max(self.q_table[next_state_idx])
-        
         new_q = current_q + self.learning_rate_q * (reward + self.discount_factor_q * max_next_q - current_q)
         self.q_table[self.last_state_idx, self.last_action_idx] = new_q
-        
-        if current_loss is not None:
-            self.loss_history.append(current_loss)
 
     def state_dict(self) -> Dict[str, Any]:
-        return {
-            "current_lr": self.current_lr,
-            "q_table": self.q_table.tolist(), # for serialization
-            "loss_history": list(self.loss_history),
-            "last_action_idx": self.last_action_idx,
-            "last_state_idx": self.last_state_idx
-        }
+        return {"current_lr": self.current_lr, "q_table": self.q_table.tolist(), "loss_history": list(self.loss_history), "last_action_idx": self.last_action_idx, "last_state_idx": self.last_state_idx}
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         self.current_lr = state_dict.get("current_lr", self.current_lr)
@@ -287,30 +305,18 @@ class JaxHakmemQController:
         self.last_state_idx = state_dict.get("last_state_idx")
 
 def save_checkpoint(g_state, d_state, g_q_controller, d_q_controller, basename):
-    state_dict = {
-        'g': jax.device_get(serialization.to_state_dict(g_state)),
-        'd': jax.device_get(serialization.to_state_dict(d_state)),
-        'g_q_ctrl': g_q_controller.state_dict(),
-        'd_q_ctrl': d_q_controller.state_dict(),
-    }
-    with open(f"{basename}.pkl", 'wb') as f:
-        pickle.dump(state_dict, f)
+    state_dict = {'g': jax.device_get(serialization.to_state_dict(g_state)), 'd': jax.device_get(serialization.to_state_dict(d_state)), 'g_q_ctrl': g_q_controller.state_dict(), 'd_q_ctrl': d_q_controller.state_dict()}
+    with open(f"{basename}.pkl", 'wb') as f: pickle.dump(state_dict, f)
     print(f"\n--- Checkpoint saved. Step: {g_state.step} ---")
 
 def load_checkpoint(g_state, d_state, g_q_controller, d_q_controller, basename):
     filename = f"{basename}.pkl"
-    if not os.path.exists(filename):
-        print("--- No checkpoint found. ---")
-        return g_state, d_state, g_q_controller, d_q_controller
-    with open(filename, 'rb') as f:
-        saved_state_dict = pickle.load(f)
+    if not os.path.exists(filename): print("--- No checkpoint found. ---"); return g_state, d_state, g_q_controller, d_q_controller
+    with open(filename, 'rb') as f: saved_state_dict = pickle.load(f)
     print(f"--- Checkpoint found. Restoring... ---")
-    g_state = serialization.from_state_dict(g_state, saved_state_dict['g'])
-    d_state = serialization.from_state_dict(d_state, saved_state_dict['d'])
-    g_q_controller.load_state_dict(saved_state_dict['g_q_ctrl'])
-    d_q_controller.load_state_dict(saved_state_dict['d_q_ctrl'])
-    print(f"--- States and Q-Controllers restored. Resuming from step: {g_state.step} ---")
-    return g_state, d_state, g_q_controller, d_q_controller
+    g_state = serialization.from_state_dict(g_state, saved_state_dict['g']); d_state = serialization.from_state_dict(d_state, saved_state_dict['d'])
+    g_q_controller.load_state_dict(saved_state_dict['g_q_ctrl']); d_q_controller.load_state_dict(saved_state_dict['d_q_ctrl'])
+    print(f"--- States and Q-Controllers restored. Resuming from step: {g_state.step} ---"); return g_state, d_state, g_q_controller, d_q_controller
 
 def save_config(config,basename):
     with open(f"{basename}.json",'w') as f:json.dump(config,f,indent=4)
@@ -321,11 +327,9 @@ def gan_train_step(g_params, d_params, batch, key, g_apply_fn, d_apply_fn, recon
     real_indices, real_targets = batch
     g_output = g_apply_fn({'params': g_params}, real_indices)
     real_embeds, g_logits, g_embedding_matrix = g_output['embeddings'], g_output['final_logits'], g_output['embedding_matrix']
-    
     gumbel_noise = jax.random.gumbel(key, g_logits.shape, dtype=jnp.float32)
     fake_probs = nn.softmax((g_logits + gumbel_noise) / 0.5)
     fake_embeds = fake_probs @ g_embedding_matrix.astype(jnp.float32)
-
     def d_loss_fn(d_params_inner):
         real_logits_d = d_apply_fn({'params': d_params_inner}, real_embeds)
         fake_logits_d = d_apply_fn({'params': d_params_inner}, jax.lax.stop_gradient(fake_embeds))
@@ -333,7 +337,6 @@ def gan_train_step(g_params, d_params, batch, key, g_apply_fn, d_apply_fn, recon
         fake_loss = optax.sigmoid_binary_cross_entropy(fake_logits_d, jnp.zeros_like(fake_logits_d)).mean()
         return (real_loss + fake_loss) / 2.0
     d_loss, d_grads = jax.value_and_grad(d_loss_fn)(d_params)
-
     def g_loss_fn(g_params_inner):
         g_output_inner = g_apply_fn({'params': g_params_inner}, real_indices)
         g_logits_inner, g_embedding_matrix_inner = g_output_inner['final_logits'], g_output_inner['embedding_matrix']
@@ -344,7 +347,6 @@ def gan_train_step(g_params, d_params, batch, key, g_apply_fn, d_apply_fn, recon
         adv_loss = optax.sigmoid_binary_cross_entropy(fake_d_logits, jnp.ones_like(fake_d_logits)).mean()
         return recon_weight * recon_loss + adv_weight * adv_loss
     g_loss, g_grads = jax.value_and_grad(g_loss_fn)(g_params)
-    
     g_grads = tree.map(lambda x: jnp.nan_to_num(x, nan=0.0, posinf=1e4, neginf=-1e4), g_grads)
     d_grads = tree.map(lambda x: jnp.nan_to_num(x, nan=0.0, posinf=1e4, neginf=-1e4), d_grads)
     metrics = {'g_loss': g_loss, 'd_loss': d_loss}
@@ -352,119 +354,70 @@ def gan_train_step(g_params, d_params, batch, key, g_apply_fn, d_apply_fn, recon
 
 class AdversarialTrainingManager:
     def __init__(self,generator,discriminator,config: Dict[str, Any],data,basename:str):
-        self.g, self.d = generator, discriminator
-        self.config = config
-        self.data, self.basename = data, basename
-        self.g_state, self.d_state = None, None
-        self.g_q_controller, self.d_q_controller = None, None
-        self.should_shutdown = False
-        signal.signal(signal.SIGINT, self._handle_sigint)
-
+        self.g, self.d = generator, discriminator; self.config = config; self.data, self.basename = data, basename
+        self.g_state, self.d_state = None, None; self.g_q_controller, self.d_q_controller = None, None
+        self.should_shutdown = False; signal.signal(signal.SIGINT, self._handle_sigint)
     def _handle_sigint(self,s,f):
-        if not self.should_shutdown:
-            print("\n--- SIGINT received. Saving state... ---")
-            self.should_shutdown=True
-
+        if not self.should_shutdown: print("\n--- SIGINT received. Saving state... ---"); self.should_shutdown=True
     def run(self):
-        (i_all, t_all), num_micro_batches = self.data
-        key = jax.random.PRNGKey(42)
-        key, g_key, d_key = jax.random.split(key, 3)
+        (i_all, t_all), num_micro_batches = self.data; key = jax.random.PRNGKey(42); key, g_key, d_key = jax.random.split(key, 3)
         num_devices = jax.device_count()
-
         if num_devices > 1:
              print(f"--- Sharding data across {num_devices} devices... ---")
              device_mesh = mesh_utils.create_device_mesh((num_devices,)); mesh = Mesh(device_mesh, axis_names=('batch',))
              data_sharding = PositionalSharding(device_mesh).reshape(num_devices, 1, 1)
              i_all, t_all = jax.device_put(i_all, data_sharding), jax.device_put(t_all, data_sharding)
-        else:
-            print("--- Single device detected. Running without sharding. ---")
-            i_all, t_all = jax.device_put(i_all), jax.device_put(t_all)
-
-        dummy_indices = i_all[0,:1]
-        g_params = self.g.init(g_key, dummy_indices)['params']
+        else: print("--- Single device detected. Running without sharding. ---"); i_all, t_all = jax.device_put(i_all), jax.device_put(t_all)
+        dummy_indices = i_all[0,:1]; g_params = self.g.init(g_key, dummy_indices)['params']
         dummy_embeds = self.g.apply({'params': g_params}, dummy_indices)['embeddings']
         print(f'--- Generator Initialized: {sum(x.size for x in tree.leaves(g_params)):,} params. ---')
         d_params = self.d.init(d_key, dummy_embeds)['params']
         print(f'--- Discriminator Initialized: {sum(x.size for x in tree.leaves(d_params)):,} params. ---')
-        
-        def g_tx_factory(learning_rate):
-            return optax.chain(
-                optax.clip_by_global_norm(1.0),
-                optax.adamw(learning_rate=learning_rate, weight_decay=0.01)
-            )
-
-        def d_tx_factory(learning_rate):
-            return optax.chain(
-                optax.clip_by_global_norm(1.0),
-                optax.adamw(learning_rate=learning_rate, weight_decay=0.01)
-            )
-
-        g_tx = optax.inject_hyperparams(g_tx_factory)(learning_rate=self.config['g_learning_rate'])
-        d_tx = optax.inject_hyperparams(d_tx_factory)(learning_rate=self.config['d_learning_rate'])
-        
+        def tx_factory(learning_rate): return optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(learning_rate=learning_rate, weight_decay=0.01))
+        g_tx = optax.inject_hyperparams(tx_factory)(learning_rate=self.config['g_learning_rate'])
+        d_tx = optax.inject_hyperparams(tx_factory)(learning_rate=self.config['d_learning_rate'])
         self.g_state = train_state.TrainState.create(apply_fn=self.g.apply, params=g_params, tx=g_tx)
         self.d_state = train_state.TrainState.create(apply_fn=self.d.apply, params=d_params, tx=d_tx)
-        
         self.g_q_controller = JaxHakmemQController(self.config['g_learning_rate'], self.config, "Generator")
         self.d_q_controller = JaxHakmemQController(self.config['d_learning_rate'], self.config, "Discriminator")
-
         save_config(self.config, self.basename)
-        self.g_state, self.d_state, self.g_q_controller, self.d_q_controller = load_checkpoint(
-            self.g_state, self.d_state, self.g_q_controller, self.d_q_controller, self.basename
-        )
-        
-        num_global_steps = self.config['epochs'] * num_micro_batches
-        start_step = self.g_state.step
-        if start_step >= num_global_steps:
-            print(f"--- Training already completed. ---")
-            return
-
+        self.g_state, self.d_state, self.g_q_controller, self.d_q_controller = load_checkpoint(self.g_state, self.d_state, self.g_q_controller, self.d_q_controller, self.basename)
+        num_global_steps = self.config['epochs'] * num_micro_batches; start_step = self.g_state.step
+        if start_step >= num_global_steps: print(f"--- Training already completed. ---"); return
         print("--- Compiling and warming up training functions... ---")
         jit_train_step = partial(gan_train_step, g_apply_fn=self.g.apply, d_apply_fn=self.d.apply, recon_weight=self.config['recon_weight'], adv_weight=self.config['adv_weight'])
         warmup_key, key = jax.random.split(key)
         g_grads_warmup, d_grads_warmup, _ = jit_train_step(self.g_state.params, self.d_state.params, (dummy_indices, t_all[0,:1]), warmup_key)
-        jax.block_until_ready((g_grads_warmup, d_grads_warmup))
-        print("--- Compilation complete. Starting training. ---")
+        jax.block_until_ready((g_grads_warmup, d_grads_warmup)); print("--- Compilation complete. Starting training. ---")
         
-        last_g_loss, last_d_loss = 20.0, 20.0 
-
+        # --- START: Updated Training Loop Logic ---
         with tqdm(total=num_global_steps, initial=start_step, desc="GAN Training") as pbar:
             for step in range(start_step, num_global_steps):
-                new_g_lr = self.g_q_controller.choose_action(last_g_loss)
-                new_d_lr = self.d_q_controller.choose_action(last_d_loss)
+                # The controller now manages its own state and doesn't need the last loss passed to it.
+                new_g_lr = self.g_q_controller.choose_action()
+                new_d_lr = self.d_q_controller.choose_action()
 
-                grad_key, key = jax.random.split(key)
-                micro_batch_idx = step % num_micro_batches
+                grad_key, key = jax.random.split(key); micro_batch_idx = step % num_micro_batches
                 batch_device = (i_all[micro_batch_idx], t_all[micro_batch_idx])
                 g_grads, d_grads, metrics = jit_train_step(self.g_state.params, self.d_state.params, batch_device, grad_key)
                 
                 # Update Generator
-                g_updates, g_new_opt_state = self.g_state.tx.update(
-                    g_grads, self.g_state.opt_state, self.g_state.params, hyperparams={'learning_rate': new_g_lr}
-                )
+                g_updates, g_new_opt_state = self.g_state.tx.update(g_grads, self.g_state.opt_state, self.g_state.params, hyperparams={'learning_rate': new_g_lr})
                 g_new_params = optax.apply_updates(self.g_state.params, g_updates)
-                self.g_state = self.g_state.replace(
-                    step=self.g_state.step + 1,
-                    params=g_new_params,
-                    opt_state=g_new_opt_state,
-                )
+                self.g_state = self.g_state.replace(step=self.g_state.step + 1, params=g_new_params, opt_state=g_new_opt_state)
 
-                # Update Discriminator
-                d_updates, d_new_opt_state = self.d_state.tx.update(
-                    d_grads, self.d_state.opt_state, self.d_state.params, hyperparams={'learning_rate': new_d_lr}
-                )
-                d_new_params = optax.apply_updates(self.d_state.params, d_updates)
-                self.d_state = self.d_state.replace(
-                    params=d_new_params,
-                    opt_state=d_new_opt_state,
-                )
+                # --- OPTIMIZATION: Update discriminator less frequently to save compute & improve stability ---
+                if self.g_state.step % 2 == 0:
+                    d_updates, d_new_opt_state = self.d_state.tx.update(d_grads, self.d_state.opt_state, self.d_state.params, hyperparams={'learning_rate': new_d_lr})
+                    d_new_params = optax.apply_updates(self.d_state.params, d_updates)
+                    self.d_state = self.d_state.replace(params=d_new_params, opt_state=d_new_opt_state)
 
                 current_g_loss, current_d_loss = metrics['g_loss'].item(), metrics['d_loss'].item()
-                g_reward = (last_g_loss - current_g_loss) 
-                d_reward = (last_d_loss - current_d_loss) 
-                self.g_q_controller.log_reward(g_reward, current_g_loss)
-                self.d_q_controller.log_reward(d_reward, current_d_loss)
-                last_g_loss, last_d_loss = current_g_loss, current_d_loss
+                
+                # Instead of calculating a "myopic" reward here, we feed the loss to the controller.
+                # It calculates its own trend-based reward and updates its Q-table internally.
+                self.g_q_controller.update_q_value(current_g_loss)
+                self.d_q_controller.update_q_value(current_d_loss)
                 
                 pbar.set_description(f"Epoch {int(step/num_micro_batches)+1}/{self.config['epochs']}")
                 pbar.set_postfix(G_loss=f"{current_g_loss:.3f}",D_loss=f"{current_d_loss:.3f}",G_lr=f"{new_g_lr:.1e}",D_lr=f"{new_d_lr:.1e}")
@@ -474,17 +427,17 @@ class AdversarialTrainingManager:
                     save_checkpoint(self.g_state, self.d_state, self.g_q_controller, self.d_q_controller, self.basename)
                     print("\n--- Interrupt honored. Training halted. ---")
                     return
+        # --- END: Updated Training Loop Logic ---
         
-        print("\n--- Adversarial training complete. ---")
-        save_checkpoint(self.g_state, self.d_state, self.g_q_controller, self.d_q_controller, self.basename)
+        print("\n--- Adversarial training complete. ---"); save_checkpoint(self.g_state, self.d_state, self.g_q_controller, self.d_q_controller, self.basename)
         
 def training_main(basename):
-    TRAINING_CONFIG = {'epochs': 10, 'batch_size': 1, 'grad_accum_steps': 1, 'context_length': 256, 'g_learning_rate': 3e-4, 'd_learning_rate': 5e-6, 'recon_weight': 1.0, 'adv_weight': 0.1}
-    MODEL_CONFIG = {'d_model': 256, 'n_heads': 4, 'n_layers': 4, 'max_len': TRAINING_CONFIG['context_length']}
-    TOKENIZER_CONFIG = {'vocab_size': 32000, 'tokenizer_path': f"{basename}_bpe.json"}
-    QLEARN_CONFIG = {"q_table_size": 10, "num_lr_actions": 5, "lr_change_factors": [0.5, 0.9, 1.0, 1.1, 1.5], "learning_rate_q": 0.1, "discount_factor_q": 0.9, "exploration_rate_q": 0.1, "lr_min": 1e-7, "lr_max": 1e-2, "metric_history_len": 10, "loss_min": 0.0, "loss_max": 20.0}
+    TRAINING_CONFIG = {'epochs': 10, 'batch_size': 512, 'grad_accum_steps': 1, 'context_length': 64, 'g_learning_rate': 3e-4, 'd_learning_rate': 5e-6, 'recon_weight': 1.0, 'adv_weight': 0.1}
+    MODEL_CONFIG = {'d_model': 48, 'n_heads': 3, 'n_layers': 2, 'max_len': TRAINING_CONFIG['context_length']}
+    TOKENIZER_CONFIG = {'vocab_size': 1024, 'tokenizer_path': f"{basename}_bpe.json"}
+    QLEARN_CONFIG = {"q_table_size": 10, "num_lr_actions": 5, "lr_change_factors": [0.5, 0.9, 1.0, 1.1, 1.5], "learning_rate_q": 0.1, "discount_factor_q": 0.9, "exploration_rate_q": 0.1, "lr_min": 1e-7, "lr_max": 1e-2, "metric_history_len": 25, "loss_min": 0.0, "loss_max": 20.0}
     
-    print(f"--- WubuMind Galactic Core Foundry v2 (Q-Learn) ---"); print(f"--- Device: {jax.devices()[0].platform.upper()} ({jax.device_count()} devices) ---")
+    print(f"--- WubuMind Galactic Core Foundry v3 (Optimized Q-Learn) ---"); print(f"--- Device: {jax.devices()[0].platform.upper()} ({jax.device_count()} devices) ---")
     corpora=[getattr(CORPUS,n) for n in dir(CORPUS) if not n.startswith('_') and n.isupper()]
     if not corpora: print("[FATAL] No CORPUS vars."), sys.exit(1)
     corpus_text=distill_text_from_corpus(corpora); print(f"--- CORPUS Chars: {len(corpus_text):,} ---")
@@ -520,15 +473,7 @@ class WubuOracle:
         with open(f"{self.basename}.json",'r') as f:self.config=json.load(f)
         self.tokenizer=WubuTokenizer(f"{self.basename}_bpe.json");
         if not self.tokenizer.tokenizer:raise FileNotFoundError(f"Tokenizer not found")
-
-        self.model = Generator(
-            vocab_size=self.config['vocab_size'],
-            d_model=self.config['d_model'],
-            n_heads=self.config['n_heads'],
-            n_layers=self.config['n_layers'],
-            max_len=self.config['max_len']
-        )
-        
+        self.model=Generator(vocab_size=self.config['vocab_size'],d_model=self.config['d_model'],n_heads=self.config['n_heads'],n_layers=self.config['n_layers'],max_len=self.config['max_len'])
         print("--- Assimilating knowledge from checkpoint... ---")
         try:
             with open(f"{self.basename}.pkl",'rb') as f:saved_state_dict=pickle.load(f)
@@ -538,7 +483,6 @@ class WubuOracle:
         dummy_params=self.model.init(jax.random.PRNGKey(0),jnp.ones((1,1),dtype=jnp.int32))['params']
         self.params=serialization.from_state_dict(dummy_params,g_saved_state['params']);step=g_saved_state.get('step','unknown')
         print(f"--- Oracle assimilated Generator knowledge from step {step}. ---");self.use_guidance=False;self.deviation_threshold=5.0;self.jit_compiled=False
-        
     def generate(self,prompt,max_new=500,temp=0.7,top_p=0.95):
         if not self.jit_compiled:print("--- JIT compiling Generator... ---",flush=True)
         key=jax.random.PRNGKey(int(time.time()));indices=self.tokenizer.encode(prompt);decoded_text=prompt
@@ -578,21 +522,13 @@ def main():
     parser.add_argument('command', choices=['train', 'infer'], help="The command to execute: 'train' or 'infer'.")
     parser.add_argument('--clear-cache', action='store_true', help='Clear the JAX compilation cache before running.')
     args = parser.parse_args()
-
     cache_path = os.path.join(os.path.expanduser('~'), '.cache', 'jax')
     if args.clear_cache:
-        if os.path.exists(cache_path):
-            print(f"--- Clearing JAX cache at {cache_path}... ---")
-            shutil.rmtree(cache_path)
-            print("--- JAX cache cleared. ---")
-        else:
-            print("--- No JAX cache found to clear. ---")
-
-    BASENAME="wubumind_adversarial_core_v3.3-q"
-    if args.command == "train":
-        training_main(BASENAME)
-    elif args.command == "infer":
-        interactive_mode(BASENAME)
+        if os.path.exists(cache_path): print(f"--- Clearing JAX cache at {cache_path}... ---"); shutil.rmtree(cache_path); print("--- JAX cache cleared. ---")
+        else: print("--- No JAX cache found to clear. ---")
+    BASENAME="wubumind_adversarial_core_v3.4-q-opt"
+    if args.command == "train": training_main(BASENAME)
+    elif args.command == "infer": interactive_mode(BASENAME)
 
 if __name__ == "__main__":
     main()
