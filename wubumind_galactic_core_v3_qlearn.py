@@ -322,34 +322,71 @@ def save_config(config,basename):
     with open(f"{basename}.json",'w') as f:json.dump(config,f,indent=4)
     print(f"--- Model config saved to {basename}.json ---")
 
-@partial(jax.jit, static_argnames=['g_apply_fn', 'd_apply_fn', 'recon_weight', 'adv_weight'], inline=False)
+# --- Replacement for the original gan_train_step function ---
+
+@partial(jax.jit, static_argnames=['g_apply_fn', 'd_apply_fn', 'recon_weight', 'adv_weight'])
 def gan_train_step(g_params, d_params, batch, key, g_apply_fn, d_apply_fn, recon_weight, adv_weight):
+    """
+    Optimized GAN training step that performs the generator forward pass only ONCE.
+    It uses has_aux=True to pass intermediate activations from the generator's
+    gradient calculation to the discriminator's gradient calculation, eliminating
+    redundant computation and drastically reducing VRAM usage.
+    """
     real_indices, real_targets = batch
-    g_output = g_apply_fn({'params': g_params}, real_indices)
-    real_embeds, g_logits, g_embedding_matrix = g_output['embeddings'], g_output['final_logits'], g_output['embedding_matrix']
-    gumbel_noise = jax.random.gumbel(key, g_logits.shape, dtype=jnp.float32)
-    fake_probs = nn.softmax((g_logits + gumbel_noise) / 0.5)
-    fake_embeds = fake_probs @ g_embedding_matrix.astype(jnp.float32)
+    gumbel_noise = jax.random.gumbel(key, (real_indices.shape[0], real_indices.shape[1], g_apply_fn.__self__.vocab_size), dtype=jnp.float32)
+
+    # --- 1. Generator Loss and Gradient Calculation (with the single forward pass) ---
+    def g_loss_fn(g_params_inner):
+        # The one and only generator forward pass happens inside the function being differentiated.
+        g_output = g_apply_fn({'params': g_params_inner}, real_indices)
+        g_logits, g_embedding_matrix, real_embeds = g_output['final_logits'], g_output['embedding_matrix'], g_output['embeddings']
+        
+        # Create fake embeddings for both G and D loss calculations
+        fake_probs = nn.softmax((g_logits + gumbel_noise) / 0.5)
+        fake_embeds = fake_probs @ g_embedding_matrix.astype(jnp.float32)
+
+        # G Loss Part 1: Reconstruction
+        recon_loss = optax.softmax_cross_entropy_with_integer_labels(g_logits, real_targets).mean()
+        
+        # G Loss Part 2: Adversarial
+        # Grads must flow from D back to G, so we use fake_embeds directly.
+        # d_params are treated as frozen constants here.
+        fake_d_logits = d_apply_fn({'params': d_params}, fake_embeds)
+        adv_loss = optax.sigmoid_binary_cross_entropy(fake_d_logits, jnp.ones_like(fake_d_logits)).mean()
+        
+        total_g_loss = recon_weight * recon_loss + adv_weight * adv_loss
+        
+        # Return intermediates needed for the D loss as auxiliary data.
+        # This avoids re-calculating them.
+        return total_g_loss, (real_embeds, fake_embeds)
+
+    # Differentiate g_loss_fn. We get the loss, grads, AND the auxiliary data (embeds).
+    g_grad_fn = jax.value_and_grad(g_loss_fn, has_aux=True)
+    (g_loss, (real_embeds, fake_embeds)), g_grads = g_grad_fn(g_params)
+
+
+    # --- 2. Discriminator Loss and Gradient Calculation ---
     def d_loss_fn(d_params_inner):
+        # We re-use the embeddings computed during the G loss calculation.
+        # No new forward pass through the generator is needed.
         real_logits_d = d_apply_fn({'params': d_params_inner}, real_embeds)
+        
+        # IMPORTANT: Stop gradients from flowing back to G from the D update.
         fake_logits_d = d_apply_fn({'params': d_params_inner}, jax.lax.stop_gradient(fake_embeds))
+        
         real_loss = optax.sigmoid_binary_cross_entropy(real_logits_d, jnp.ones_like(real_logits_d)).mean()
         fake_loss = optax.sigmoid_binary_cross_entropy(fake_logits_d, jnp.zeros_like(fake_logits_d)).mean()
+        
         return (real_loss + fake_loss) / 2.0
+
+    # Differentiate d_loss_fn.
     d_loss, d_grads = jax.value_and_grad(d_loss_fn)(d_params)
-    def g_loss_fn(g_params_inner):
-        g_output_inner = g_apply_fn({'params': g_params_inner}, real_indices)
-        g_logits_inner, g_embedding_matrix_inner = g_output_inner['final_logits'], g_output_inner['embedding_matrix']
-        fake_probs_inner = nn.softmax((g_logits_inner + gumbel_noise) / 0.5)
-        fake_embeds_inner = fake_probs_inner @ g_embedding_matrix_inner.astype(jnp.float32)
-        recon_loss = optax.softmax_cross_entropy_with_integer_labels(g_logits_inner, real_targets).mean()
-        fake_d_logits = d_apply_fn({'params': d_params}, fake_embeds_inner)
-        adv_loss = optax.sigmoid_binary_cross_entropy(fake_d_logits, jnp.ones_like(fake_d_logits)).mean()
-        return recon_weight * recon_loss + adv_weight * adv_loss
-    g_loss, g_grads = jax.value_and_grad(g_loss_fn)(g_params)
+
+    # --- 3. Clean up and return ---
     g_grads = tree.map(lambda x: jnp.nan_to_num(x, nan=0.0, posinf=1e4, neginf=-1e4), g_grads)
     d_grads = tree.map(lambda x: jnp.nan_to_num(x, nan=0.0, posinf=1e4, neginf=-1e4), d_grads)
     metrics = {'g_loss': g_loss, 'd_loss': d_loss}
+    
     return g_grads, d_grads, metrics
 
 class AdversarialTrainingManager:
@@ -362,13 +399,17 @@ class AdversarialTrainingManager:
     def run(self):
         (i_all, t_all), num_micro_batches = self.data; key = jax.random.PRNGKey(42); key, g_key, d_key = jax.random.split(key, 3)
         num_devices = jax.device_count()
+
+        # --- FIX: REMOVE a priori data transfer. Data stays in CPU RAM. ---
         if num_devices > 1:
-             print(f"--- Sharding data across {num_devices} devices... ---")
-             device_mesh = mesh_utils.create_device_mesh((num_devices,)); mesh = Mesh(device_mesh, axis_names=('batch',))
-             data_sharding = PositionalSharding(device_mesh).reshape(num_devices, 1, 1)
-             i_all, t_all = jax.device_put(i_all, data_sharding), jax.device_put(t_all, data_sharding)
-        else: print("--- Single device detected. Running without sharding. ---"); i_all, t_all = jax.device_put(i_all), jax.device_put(t_all)
-        dummy_indices = i_all[0,:1]; g_params = self.g.init(g_key, dummy_indices)['params']
+            print(f"--- Multi-device setup detected ({num_devices}). Data will be transferred per-step. ---")
+        else:
+            print("--- Single device detected. Data will be transferred per-step. ---")
+        # The giant i_all and t_all arrays now remain as NumPy arrays in host RAM, saving VRAM.
+        
+        # --- FIX: Ensure dummy data for init is a JAX array ---
+        dummy_indices = jnp.asarray(i_all[0,:1])
+        g_params = self.g.init(g_key, dummy_indices)['params']
         dummy_embeds = self.g.apply({'params': g_params}, dummy_indices)['embeddings']
         print(f'--- Generator Initialized: {sum(x.size for x in tree.leaves(g_params)):,} params. ---')
         d_params = self.d.init(d_key, dummy_embeds)['params']
@@ -387,7 +428,11 @@ class AdversarialTrainingManager:
         print("--- Compiling and warming up training functions... ---")
         jit_train_step = partial(gan_train_step, g_apply_fn=self.g.apply, d_apply_fn=self.d.apply, recon_weight=self.config['recon_weight'], adv_weight=self.config['adv_weight'])
         warmup_key, key = jax.random.split(key)
-        g_grads_warmup, d_grads_warmup, _ = jit_train_step(self.g_state.params, self.d_state.params, (dummy_indices, t_all[0,:1]), warmup_key)
+        
+        # --- FIX: Explicitly move a single small batch to device for warmup ---
+        warmup_batch = jax.device_put((i_all[0,:1], t_all[0,:1]))
+        g_grads_warmup, d_grads_warmup, _ = jit_train_step(self.g_state.params, self.d_state.params, warmup_batch, warmup_key)
+        
         jax.block_until_ready((g_grads_warmup, d_grads_warmup)); print("--- Compilation complete. Starting training. ---")
         
         # --- START: Updated Training Loop Logic ---
@@ -398,7 +443,11 @@ class AdversarialTrainingManager:
                 new_d_lr = self.d_q_controller.choose_action()
 
                 grad_key, key = jax.random.split(key); micro_batch_idx = step % num_micro_batches
-                batch_device = (i_all[micro_batch_idx], t_all[micro_batch_idx])
+                
+                # --- FIX: Fetch from CPU RAM and transfer only this batch to the GPU/TPU ---
+                batch_cpu = (i_all[micro_batch_idx], t_all[micro_batch_idx])
+                batch_device = jax.device_put(batch_cpu)
+                
                 g_grads, d_grads, metrics = jit_train_step(self.g_state.params, self.d_state.params, batch_device, grad_key)
                 
                 # Update Generator
@@ -432,9 +481,9 @@ class AdversarialTrainingManager:
         print("\n--- Adversarial training complete. ---"); save_checkpoint(self.g_state, self.d_state, self.g_q_controller, self.d_q_controller, self.basename)
         
 def training_main(basename):
-    TRAINING_CONFIG = {'epochs': 10, 'batch_size': 512, 'grad_accum_steps': 1, 'context_length': 64, 'g_learning_rate': 3e-4, 'd_learning_rate': 5e-6, 'recon_weight': 1.0, 'adv_weight': 0.1}
+    TRAINING_CONFIG = {'epochs': 100, 'batch_size': 256, 'grad_accum_steps': 1, 'context_length': 128, 'g_learning_rate': 3e-4, 'd_learning_rate': 5e-6, 'recon_weight': 1.0, 'adv_weight': 0.1}
     MODEL_CONFIG = {'d_model': 48, 'n_heads': 3, 'n_layers': 2, 'max_len': TRAINING_CONFIG['context_length']}
-    TOKENIZER_CONFIG = {'vocab_size': 1024, 'tokenizer_path': f"{basename}_bpe.json"}
+    TOKENIZER_CONFIG = {'vocab_size': 2048, 'tokenizer_path': f"{basename}_bpe.json"}
     QLEARN_CONFIG = {"q_table_size": 10, "num_lr_actions": 5, "lr_change_factors": [0.5, 0.9, 1.0, 1.1, 1.5], "learning_rate_q": 0.1, "discount_factor_q": 0.9, "exploration_rate_q": 0.1, "lr_min": 1e-7, "lr_max": 1e-2, "metric_history_len": 25, "loss_min": 0.0, "loss_max": 20.0}
     
     print(f"--- WubuMind Galactic Core Foundry v3 (Optimized Q-Learn) ---"); print(f"--- Device: {jax.devices()[0].platform.upper()} ({jax.device_count()} devices) ---")
