@@ -56,7 +56,7 @@ class WubuTokenizer:
     def encode(self, text): return self.tokenizer.encode(text).ids if self.tokenizer else []
     def decode(self, ids):
         if not self.tokenizer: return ""
-        return self.tokenizer.decode(ids, clean_up_tokenization_spaces=True)
+        return self.tokenizer.decode(ids)
 
 
 class PoincareBall:
@@ -559,7 +559,9 @@ class FunnelCakeConstructor:
             self.key, subkey = jax.random.split(self.key)
             next_token_id = jax.random.categorical(subkey, jnp.log(probs.clip(1e-9)))
 
-            print(self.tokenizer.decode([next_token_id.item()]), end=''); sys.stdout.flush()
+
+            decoded_token = self.tokenizer.decode([next_token_id.item()])
+            print(decoded_token.replace('Ġ', ' '), end=''); sys.stdout.flush()
             
             # Update the complex hidden state with the generated token
             hidden_state_complex, _ = get_logits_and_state(self.drip_head_params, jnp.array([next_token_id]), hidden_state_complex)
