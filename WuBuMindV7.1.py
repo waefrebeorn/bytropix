@@ -8,13 +8,12 @@ import numpy as np
 import time
 from tqdm import tqdm
 import pickle
-from typing import Any, Generator, List, Tuple, Optional
+from typing import Any, Generator, Tuple
 import sys
 import argparse
 from collections import deque
 import faiss
 import signal
-import re
 
 # --- Environment Setup ---
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
@@ -82,7 +81,7 @@ class PoincareBall:
         safe_norm = jnp.clip(y_norm, PoincareBall.EPS, 1.0 - PoincareBall.EPS)
         arctanh_val = jnp.arctanh(safe_norm)
         result_f32 = jnp.where(safe_norm > 0, arctanh_val * y_f32 / (sqrt_c * safe_norm), jnp.zeros_like(y_f32))
-        return result_f32
+        return result_f32.astype(y.dtype)
     @staticmethod
     def expmap0(v, c=1.0):
         v_f32 = v.astype(jnp.float32)
@@ -127,22 +126,23 @@ class WaveFunctionCollapseHead(nn.Module):
         return real_logits**2 + imag_logits**2
 
 # --- Main Model Architecture ---
-
-# The GRUCell module from the last fix remains correct and unchanged.
 class GRUCell(nn.Module):
+    """A standard, real-valued GRU cell implementation."""
     d_model_total: int
     dtype: Any
 
-    def setup(self):
-        self.reset_gate = nn.Dense(self.d_model_total, name="reset_gate", dtype=self.dtype)
-        self.update_gate = nn.Dense(self.d_model_total, name="update_gate", dtype=self.dtype)
-        self.candidate_gate = nn.Dense(self.d_model_total, name="candidate_gate", dtype=self.dtype)
-
+    @nn.compact
     def __call__(self, carry, x):
-        r = nn.sigmoid(self.reset_gate(jnp.concatenate([x, carry], axis=-1)))
-        u = nn.sigmoid(self.update_gate(jnp.concatenate([x, carry], axis=-1)))
-        c = nn.tanh(self.candidate_gate(jnp.concatenate([x, r * carry], axis=-1)))
-        new_carry = u * carry + (1 - u) * c
+        # This is a more explicit GRU implementation than using nn.Dense with concatenated inputs,
+        # which can be clearer and sometimes more stable.
+        xh = jnp.concatenate([x, carry], axis=-1)
+        r = nn.sigmoid(nn.Dense(self.d_model_total, name="reset_gate_d", dtype=self.dtype)(xh))
+        u = nn.sigmoid(nn.Dense(self.d_model_total, name="update_gate_d", dtype=self.dtype)(xh))
+        
+        c_in = jnp.concatenate([x, r * carry], axis=-1)
+        c = nn.tanh(nn.Dense(self.d_model_total, name="candidate_gate_d", dtype=self.dtype)(c_in))
+        
+        new_carry = (1 - u) * carry + u * c
         return new_carry, new_carry
 
 class DripHead(nn.Module):
@@ -151,39 +151,49 @@ class DripHead(nn.Module):
     dtype: Any = jnp.bfloat16
 
     def setup(self):
-        # Non-recurrent layers are defined here as usual.
+        """
+        Define non-recurrent layers here. The recurrent part will be defined
+        dynamically in __call__ using the @nn.compact pattern.
+        """
         self.d_model_comp = self.d_model_total // 2
         self.token_embed = ComplexEmbedding(self.vocab_size, self.d_model_comp, name="token_embed", dtype=self.dtype)
         self.layer_norm = ComplexLayerNorm(dtype=self.dtype, name="layer_norm")
         self.collapse_head = WaveFunctionCollapseHead(vocab_size=self.vocab_size, name="collapse_head")
 
-    # *** CORE FIX: Add the @nn.compact decorator to __call__ ***
     @nn.compact
     def __call__(self, token_ids):
-        # Now that the method is @compact, we can define the scanner submodule inside it.
+        """
+        The @nn.compact decorator allows defining submodules inline. This is a robust
+        pattern that can avoid certain JAX JIT compiler bugs. The model is now
+        "stateless" from an external PoV, managing its own initial hidden state.
+        """
+        # Define the scanner for the GRU cell here. Flax handles parameter creation correctly.
         gru_scanner = nn.scan(
             GRUCell,
             variable_broadcast='params',
             split_rngs={'params': False},
-            in_axes=1,
+            in_axes=1,  # Scan over the sequence length dimension
             out_axes=1
         )
         
+        # 1. Create a zero initial state internally for each sequence in the batch.
         batch_size = token_ids.shape[0]
         initial_carry_real = jnp.zeros((batch_size, self.d_model_total), dtype=self.dtype)
 
-        # Layers defined in setup() are still accessed via self.
+        # 2. Embed and concatenate to form a real-valued sequence.
         token_embeds_r, token_embeds_i = self.token_embed(token_ids)
         xs_real = jnp.concatenate([token_embeds_r, token_embeds_i], axis=-1)
 
-        # The scanner is now defined and used in the same valid context.
+        # 3. Apply the GRU scanner.
         final_carry_real, hidden_states_real = gru_scanner(
-            d_model_total=self.d_model_total, dtype=self.dtype
+            d_model_total=self.d_model_total, dtype=self.dtype, name="GRU_Scanned"
         )(initial_carry_real, xs_real)
         
+        # 4. Split back into "complex" components.
         h_r, h_i = jnp.split(hidden_states_real, 2, axis=-1)
         hidden_states_complex = (h_r, h_i)
         
+        # 5. Normalize and get logits.
         normalized_hidden_states = self.layer_norm(hidden_states_complex)
         logits = self.collapse_head(normalized_hidden_states)
 
@@ -191,8 +201,6 @@ class DripHead(nn.Module):
         final_carry_complex = (final_carry_r, final_carry_i)
         
         return final_carry_complex, normalized_hidden_states, logits
-
-
         
 class FunnelCakeConstructor:
     def __init__(self, config, tokenizer):
@@ -221,7 +229,7 @@ class FunnelCakeConstructor:
         print(f"--- Initializing Complex Drip Head {mode_str}... ---")
         self.key, drip_key = jax.random.split(self.key)
         
-        # The model initialization remains the same. The internal fix doesn't change the external API.
+        # The model's __call__ is now stateless, so we only need to pass tokens for init.
         dummy_tokens = jnp.zeros((2, self.config['train_chunk_size']), dtype=jnp.int32)
         params = self.drip_head.init(drip_key, dummy_tokens)['params']
         
@@ -249,6 +257,7 @@ class FunnelCakeConstructor:
         def train_step(state, batch, margin):
             anchor, positive, negative = batch
             def loss_fn(params):
+                # The model no longer needs an initial_carry argument.
                 _, anchor_h_c, _ = state.apply_fn({'params': params}, anchor)
                 _, positive_h_c, _ = state.apply_fn({'params': params}, positive)
                 _, negative_h_c, _ = state.apply_fn({'params': params}, negative)
@@ -275,61 +284,46 @@ class FunnelCakeConstructor:
             pbar = tqdm(range(0, len(indices), batch_size), desc=f"Epoch {epoch + 1} (SFIN)", total=len(indices)//batch_size)
             for i in pbar:
                 if self.should_shutdown: break
-                        
                 batch_indices = indices[i:i+batch_size]
                 if len(batch_indices) < batch_size: continue
                 
                 anchors_list, positives_list, negatives_list = [], [], []
-                
                 for start_idx in batch_indices:
                     anchors_list.append(tokens[start_idx : start_idx + chunk_size])
                     positives_list.append(tokens[start_idx + 10 : start_idx + 10 + chunk_size])
-                    
                     tries = 0
                     while tries < 100:
                         neg_start_idx = np.random.randint(0, n_tokens - chunk_size)
                         negative_chunk = tokens[neg_start_idx : neg_start_idx + chunk_size]
-                        unique_tokens = set(negative_chunk)
-                        if space_token_id in unique_tokens: unique_tokens.remove(space_token_id)
-                        if len(unique_tokens) >= min_unique_non_space:
-                            negatives_list.append(negative_chunk)
-                            break
+                        if len(set(negative_chunk)) >= min_unique_non_space:
+                            negatives_list.append(negative_chunk); break
                         tries += 1
-                    else:
-                        negatives_list.append(tokens[neg_start_idx : neg_start_idx + chunk_size])
+                    else: negatives_list.append(tokens[0:chunk_size]) # Fallback
 
-                if len(anchors_list) != batch_size: continue
-
+                if len(negatives_list) != batch_size: continue
                 batch_jnp = (jnp.array(anchors_list), jnp.array(positives_list), jnp.array(negatives_list))
                 self.train_state, loss = train_step(self.train_state, batch_jnp, current_margin)
                 pbar.set_postfix(avg_loss=f"{loss.item():.4f}")
 
-            if self.should_shutdown: 
-                print("\n--- Interrupt honored. Saving trained weights... ---")
-                break
-                
+            if self.should_shutdown: print("\n--- Interrupt honored... ---"); break
+        
+        if not self.should_shutdown: print("\n--- Training Complete ---")
         self.drip_head_params = self.train_state.params
         self.save_trained_weights(self.config['basename'])
 
     def save_trained_weights(self, basename):
         params_to_save = self.drip_head_params if self.train_state is None else self.train_state.params
-        if params_to_save is None: 
-            print("[WARN] No Drip Head parameters found to save.")
-            return
+        if params_to_save is None: print("[WARN] No Drip Head parameters found to save."); return
         print(f"--- Saving Drip Head weights to {basename}.weights.pkl ---")
-        with open(f"{basename}.weights.pkl", 'wb') as f: 
-            pickle.dump(jax.device_get(params_to_save), f)
+        with open(f"{basename}.weights.pkl", 'wb') as f: pickle.dump(jax.device_get(params_to_save), f)
         print("--- Weights saved. ---")
     
     def load_trained_weights(self, basename):
         weights_file = f"{basename}.weights.pkl"
         self._init_drip_head(training=False)
-        if not os.path.exists(weights_file): 
-            print("[INFO] No pre-trained weights found. Using random projection.")
-            return
+        if not os.path.exists(weights_file): print("[INFO] No pre-trained weights found."); return
         print(f"--- Loading trained Drip Head weights from {weights_file} ---")
-        with open(weights_file, 'rb') as f: 
-            self.drip_head_params = pickle.load(f)
+        with open(weights_file, 'rb') as f: self.drip_head_params = pickle.load(f)
         param_count = sum(x.size for x in jax.tree.leaves(self.drip_head_params))
         print(f"--- Trained weights loaded. {param_count:,} params. ---")
     
@@ -350,7 +344,6 @@ class FunnelCakeConstructor:
         pbar = tqdm(total=len(tokens), unit='tok', unit_scale=True, desc="Constructing Filament")
         for i in range(0, len(tokens), batch_size):
             if self.should_shutdown: break
-                    
             batch_tokens = tokens[i:i+batch_size]
             original_len = len(batch_tokens)
             if original_len == 0: continue
@@ -411,15 +404,15 @@ class FunnelCakeConstructor:
         print("--- Pre-compiling generation function for common prompt lengths... ---")
         
         @jax.jit
-        def get_logits_and_state_jitted(params, tokens):
-            final_hidden_complex, _, logits = self.drip_head.apply({'params': params}, tokens)
-            return final_hidden_complex, logits
+        def get_final_state_jitted(params, tokens):
+            final_carry_complex, _, _ = self.drip_head.apply({'params': params}, tokens)
+            return final_carry_complex
 
-        get_logits_and_state_jitted(self.drip_head_params, jnp.ones((1, 1), dtype=jnp.int32))
+        get_final_state_jitted(self.drip_head_params, jnp.ones((1, 1), dtype=jnp.int32))
         for length in [8, 16, 32, 64]:
             print(f"    Compiling for length {length}...")
             dummy_tokens = jnp.ones((1, length), dtype=jnp.int32)
-            get_logits_and_state_jitted(self.drip_head_params, dummy_tokens)
+            get_final_state_jitted(self.drip_head_params, dummy_tokens)
         print("--- Pre-compilation complete. ---")
 
     def load(self, basename):
@@ -441,50 +434,91 @@ class FunnelCakeConstructor:
             print("\n[ERROR] Funnel Cake is empty.")
             return
         print(f"\n\033[1;32m{prompt}\033[0m", end='', flush=True)
-        d_model_comp = self.d_model // 2
-        
-        # Note: Your original generation loop logic had some inconsistencies with the
-        # state management. I've left the simplified version from your provided code.
-        # Refactoring this for efficient, step-by-step generation would require
-        # a dedicated model method that processes one token at a time.
-        
-        prompt_tokens = self.tokenizer.encode(prompt)
-        if not prompt_tokens:
-            prompt_tokens = [self.tokenizer.tokenizer.token_to_id("<PAD>")]
 
-        final_carry, _, _ = self.drip_head.apply({'params': self.drip_head_params}, jnp.array(prompt_tokens)[jnp.newaxis,:])
+        @jax.jit
+        def get_model_outputs(params, tokens):
+            # This single jitted function will get all outputs from the model.
+            return self.drip_head.apply({'params': params}, tokens)
+
+        # 1. Process the entire prompt to get the initial hidden state.
+        prompt_tokens = self.tokenizer.encode(prompt)
+        if not prompt_tokens: prompt_tokens = [self.tokenizer.tokenizer.token_to_id("<PAD>")]
+
+        final_carry, _, _ = get_model_outputs(self.drip_head_params, jnp.array([prompt_tokens]))
         hidden_state_complex = jax.tree.map(lambda x: x.squeeze(0), final_carry)
-        
+
         hidden_state_collapsed = jnp.concatenate(hidden_state_complex)
         _, start_indices = self.hyperbolic_index.search(np.array(hidden_state_collapsed, dtype=np.float32).reshape(1, -1), 1)
         current_point = jnp.array(self.H_sphere_points[start_indices[0][0]])
         velocity_vector = jnp.zeros_like(current_point)
         
-        print("\n[INFO] Generation loop is simplified for this version. Full logic requires further refactoring.")
-        # We will stop here to demonstrate the main bug is fixed.
+        current_tokens = list(prompt_tokens)
+
+        for i in range(max_new):
+            if self.should_shutdown: print("\n--- Interrupt honored. ---"); break
+            
+            temp_start, temp_end = temp, max(0.1, temp * 0.5)
+            current_temp = temp_start + (temp_end - temp_start) * (i / max(max_new - 1, 1))
+
+            intent_vector = PoincareBall.logmap0(current_point) - hidden_state_collapsed
+            _, neighbor_indices = self.hyperbolic_index.search(np.expand_dims(np.array(current_point), 0), self.config['knn_sampling'])
+            neighbors = jnp.array(self.H_sphere_points[neighbor_indices.flatten()])
+            tangent_vectors = jax.vmap(PoincareBall.logmap0)(neighbors)
+            local_flow_vector = jnp.mean(tangent_vectors, axis=0)
+            
+            new_velocity = (velocity_vector * momentum) + (intent_vector * 0.2) + (local_flow_vector * (1 - momentum))
+            velocity_vector = new_velocity / jnp.linalg.norm(new_velocity).clip(1e-6)
+            current_point = PoincareBall.expmap_p(current_point, velocity_vector * self.config['geodesic_step_size'])
+            
+            _, closest_indices = self.hyperbolic_index.search(np.expand_dims(np.array(current_point), 0), 1)
+            chosen_neighbor_idx = closest_indices.flatten()[0]
+            retrieved_chunk_tokens = self.H_sphere_metadata[chosen_neighbor_idx]['token_ids']
+            if not retrieved_chunk_tokens: continue
+            
+            # 2. Get logits based on the *current* sequence of tokens.
+            _, _, logits = get_model_outputs(self.drip_head_params, jnp.array([current_tokens]))
+            next_step_logits = logits.squeeze()[ -1, :] # Get logits for the very last token
+            
+            allowed_tokens = jnp.array(list(set(retrieved_chunk_tokens)))
+            mask = jnp.full(self.tokenizer.get_vocab_size(), -jnp.inf)
+            mask = mask.at[allowed_tokens].set(0.0)
+            masked_logits = next_step_logits + mask
+            
+            probs = nn.softmax(masked_logits / current_temp)
+            self.key, subkey = jax.random.split(self.key)
+            next_token_id = jax.random.categorical(subkey, jnp.log(probs.clip(1e-9)))
+            
+            decoded_token = self.tokenizer.decode([next_token_id.item()])
+            print(decoded_token.replace('Ġ', ' '), end='', flush=True)
+            
+            # 3. Update the hidden state by appending the new token and re-running the model.
+            current_tokens.append(next_token_id.item())
+            final_carry, _, _ = get_model_outputs(self.drip_head_params, jnp.array([current_tokens]))
+            hidden_state_complex = jax.tree.map(lambda x: x.squeeze(0), final_carry)
+            hidden_state_collapsed = jnp.concatenate(hidden_state_complex)
+            
+        print()
+
 
 def main():
-    parser = argparse.ArgumentParser(description="WubuMind Funnel Cake Constructor v22.1 (Corrected GRU)")
+    parser = argparse.ArgumentParser(description="WubuMind Funnel Cake Constructor v22.2 (Robust Compact Model)")
     parser.add_argument('command', choices=['pretokenize', 'train', 'construct', 'generate'], help="The command to execute.")
     parser.add_argument('--basename', type=str, default="wubumind_funnel_cake_v1", help="Basename for model files.")
     parser.add_argument('--epochs', type=int, default=3, help="Number of training epochs.")
-    parser.add_argument('--batch-size', type=int, default=256, help="Batch size for training. Adjust based on VRAM.")
+    parser.add_argument('--batch-size', type=int, default=4096, help="Batch size for training. Adjust based on VRAM.")
     parser.add_argument('--temp', type=float, default=0.9, help="Initial temperature for generation.")
     parser.add_argument('--momentum', type=float, default=0.85, help="Momentum for the missile guidance system.")
     parser.add_argument('--max-new', type=int, default=200, help="Maximum new tokens to generate.")
     args = parser.parse_args()
 
-    MODEL_CONFIG = {
-        'd_model': 256, 'solidify_chunk_size': 256, 'knn': 5, 'geodesic_step_size': 0.05, 
-        'knn_sampling': 3, 'basename': args.basename, 'learning_rate': 1e-4, 'train_chunk_size': 64
-    }
-    TOKENIZER_CONFIG = {'vocab_size': 4096, 'tokenizer_path': f"{args.basename}_bpe.json"}
+    MODEL_CONFIG = { 'd_model': 256, 'solidify_chunk_size': 256, 'knn': 5, 'geodesic_step_size': 0.05, 'knn_sampling': 3, 'basename': args.basename, 'learning_rate': 1e-4, 'train_chunk_size': 64 }
+    TOKENIZER_CONFIG = {'vocab_size': 8192, 'tokenizer_path': f"{args.basename}_bpe.json"}
     CORPUS_FILE_PATH = f"{args.basename}.corpus.txt"
     TOKEN_FILE_PATH = f"{args.basename}.tokens.bin"
     CAKE_FILE_PATH = f"{args.basename}.cake"
     WEIGHTS_FILE_PATH = f"{args.basename}.weights.pkl"
 
-    print(f"--- WubuMind Funnel Cake Foundry v22.1 (Corrected GRU) ---")
+    print(f"--- WubuMind Funnel Cake Foundry v22.2 (Robust Compact Model) ---")
     
     if args.command == 'pretokenize':
         print("--- Running Pre-tokenization Step ---")
@@ -507,24 +541,21 @@ def main():
         print("--- Pre-tokenization complete. You can now run the 'train' command. ---")
 
     elif args.command == 'train':
-        if not os.path.exists(TOKEN_FILE_PATH): print(f"[FATAL] Token file '{TOKEN_FILE_PATH}' not found. Please run 'pretokenize' first."), sys.exit(1)
+        if not os.path.exists(TOKEN_FILE_PATH): print(f"[FATAL] Token file '{TOKEN_FILE_PATH}' not found."), sys.exit(1)
         constructor = FunnelCakeConstructor(MODEL_CONFIG, WubuTokenizer(TOKENIZER_CONFIG['tokenizer_path']))
-        if os.path.exists(WEIGHTS_FILE_PATH): print(f"--- Deleting old weights file before training: {WEIGHTS_FILE_PATH} ---"), os.remove(WEIGHTS_FILE_PATH)
+        if os.path.exists(WEIGHTS_FILE_PATH): print(f"--- Deleting old weights: {WEIGHTS_FILE_PATH} ---"), os.remove(WEIGHTS_FILE_PATH)
         constructor.train(TOKEN_FILE_PATH, epochs=args.epochs, batch_size=args.batch_size)
-        print("\n--- Training complete. It is recommended to run 'construct' next. ---")
 
     elif args.command == 'construct':
-        if not os.path.exists(TOKEN_FILE_PATH): print(f"[FATAL] Token file '{TOKEN_FILE_PATH}' not found. Please run 'pretokenize' first."), sys.exit(1)
-        if not os.path.exists(WEIGHTS_FILE_PATH): print(f"[FATAL] Weights file '{WEIGHTS_FILE_PATH}' not found. Please run 'train' first."), sys.exit(1)
+        if not os.path.exists(TOKEN_FILE_PATH): print(f"[FATAL] Token file '{TOKEN_FILE_PATH}' not found."), sys.exit(1)
+        if not os.path.exists(WEIGHTS_FILE_PATH): print(f"[FATAL] Weights file '{WEIGHTS_FILE_PATH}' not found."), sys.exit(1)
         constructor = FunnelCakeConstructor(MODEL_CONFIG, WubuTokenizer(TOKENIZER_CONFIG['tokenizer_path']))
         if os.path.exists(CAKE_FILE_PATH): print(f"--- Deleting old cake file: {CAKE_FILE_PATH} ---"), os.remove(CAKE_FILE_PATH)
         constructor.construct(TOKEN_FILE_PATH)
-        print("\n--- Construction complete. Model is ready for generation. ---")
 
     elif args.command == "generate":
         tokenizer = WubuTokenizer(TOKENIZER_CONFIG['tokenizer_path'])
-        if not tokenizer.tokenizer or not os.path.exists(CAKE_FILE_PATH):
-            print(f"[FATAL] Model files not found. Please run 'pretokenize', 'train', and 'construct' first."), sys.exit(1)
+        if not tokenizer.tokenizer or not os.path.exists(CAKE_FILE_PATH): print(f"[FATAL] Model files not found."), sys.exit(1)
         constructor = FunnelCakeConstructor(MODEL_CONFIG, tokenizer)
         constructor.load(args.basename)
         print("\n--- Oracle Command Console (Missile Guidance Edition) ---")
