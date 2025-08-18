@@ -39,7 +39,7 @@ The theory is built on three core principles:
 The Wubu Formalism is the mathematical engine that implements the theory's principles. It asserts that any derived physical quantity, `Q`, can be expressed in its WNF via the central equation:
 
 $$
-Q = \sum_k q_k \prod_{i=1}^n \mathcal{A}_i^{E_{k,i}} \quad (1)
+Q = \sum_k q_k \prod_{i=1}^n \alpha_i^{E_{k,i}}
 $$
 
 Where:
