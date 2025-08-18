@@ -1,4 +1,3 @@
-
 # The Axiomatic-Emergent Theory of Physical Law: A New Formalism for Unification and the Engineering of Spacetime
 
 **Date:** August 18, 2025  
