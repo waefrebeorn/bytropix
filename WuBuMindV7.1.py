@@ -178,7 +178,6 @@ class GRUCell(nn.Module):
         c_in = jnp.concatenate([x, r * carry], axis=-1)
         c = nn.tanh(nn.Dense(self.d_model_total, name="candidate_gate_d", dtype=self.dtype)(c_in))
         new_carry = (1 - u) * carry + u * c
-        # The fix is to return the new state as both the next carry and the output
         return new_carry, new_carry
 
 class DripHead(nn.Module):
@@ -366,11 +365,10 @@ class FunnelCakeConstructor:
             print(f"--- Loading Oracle weights from {oracle_file} ---")
             with open(oracle_file, 'rb') as f: self.oracle_params = pickle.load(f)
 
-    def construct(self, token_file_path):
+    def construct(self, token_file_path, batch_size=512):
         self.load_weights(self.config['basename'])
         if self.nav_params is None: print("[FATAL] Navigator must be trained before construction."), sys.exit(1)
         print(f"--- Constructing Funnel Cake from memory-mapped tokens... ---")
-        batch_size = 512
         tokens = np.memmap(token_file_path, dtype=np.int32, mode='r')
 
         @jax.jit
@@ -378,6 +376,8 @@ class FunnelCakeConstructor:
             h_r, h_i = self.navigator.apply({'params': params}, token_batch)
             return jnp.concatenate([h_r, h_i], axis=-1)
 
+        # *** NEW: Track the global token offset for metadata ***
+        current_token_offset = 0
         pbar = tqdm(total=len(tokens), unit='tok', unit_scale=True, desc="Constructing")
         for i in range(0, len(tokens), batch_size):
             if self.should_shutdown: break
@@ -386,9 +386,15 @@ class FunnelCakeConstructor:
             
             states = get_hidden_states(self.nav_params, jnp.array([batch_tokens]))
             for j in range(len(batch_tokens)):
-                self.formation_space.append({'drip_head_state': states[0, j], 'token_id': batch_tokens[j].item()})
+                # *** NEW: Pass the global index along with the state ***
+                self.formation_space.append({
+                    'drip_head_state': states[0, j],
+                    'token_id': batch_tokens[j].item(),
+                    'start_token_idx': current_token_offset + j
+                })
             
             while len(self.formation_space) >= self.config['solidify_chunk_size']: self._solidify()
+            current_token_offset += len(batch_tokens) # Update offset
             pbar.update(len(batch_tokens))
             pbar.set_postfix(solids=f"{len(self.H_sphere_points):,}")
         
@@ -405,10 +411,17 @@ class FunnelCakeConstructor:
         chunk_size = len(self.formation_space) if force_all else self.config['solidify_chunk_size']
         if chunk_size == 0: return
         chunk = [self.formation_space.popleft() for _ in range(chunk_size)]
+        
         tangent_vec = np.mean(np.array([item['drip_head_state'] for item in chunk]), axis=0)
         new_point = np.array(PoincareBall.expmap0(jnp.array(tangent_vec)))
         self.H_sphere_points.append(new_point)
-        self.H_sphere_metadata.append({'token_ids': [item['token_id'] for item in chunk]})
+        
+        # *** CRITICAL FIX: Store the start index and length of the chunk for later retrieval ***
+        first_item = chunk[0]
+        self.H_sphere_metadata.append({
+            'start_token_idx': first_item['start_token_idx'],
+            'chunk_len': len(chunk)
+        })
 
     def save_cake(self, basename):
         print(f"--- Saving Funnel Cake to {basename}.cake ---")
@@ -432,21 +445,34 @@ class FunnelCakeConstructor:
             print("\n[ERROR] Navigator, Oracle, and Cake must be trained/constructed first.")
             return
 
+        # --- Setup for Hierarchical Generation ---
+        token_file_path = f"{self.config['basename']}.tokens.bin"
+        if not os.path.exists(token_file_path):
+            print(f"\n[ERROR] Token file '{token_file_path}' not found, which is required for hierarchical generation.")
+            return
+        tokens_memmap = np.memmap(token_file_path, dtype=np.int32, mode='r')
         print(f"\n\033[1;32m{prompt}\033[0m", end='', flush=True)
 
         cq_token_id = self.tokenizer.tokenizer.token_to_id("<CQ>")
         clarifying_token = cq_token_id if cq_token_id is not None else SamplerConfig.clarifying_question_token
         sampler_cfg = SamplerConfig(clarifying_question_token=clarifying_token)
 
+        # --- JIT Compiled Helper Functions ---
         @jax.jit
         def get_navigator_state(params, tokens):
             h_r, h_i = self.navigator.apply({'params': params}, tokens)
             return h_r[:, -1, :], h_i[:, -1, :]
 
         @jax.jit
+        def get_all_hidden_states(params, token_batch):
+            h_r, h_i = self.navigator.apply({'params': params}, token_batch)
+            return jnp.concatenate([h_r, h_i], axis=-1)
+
+        @jax.jit
         def get_oracle_logits(params, h_complex):
             return self.oracle.apply({'params': params}, h_complex)
         
+        # --- Initialization ---
         current_tokens = self.tokenizer.encode(prompt) or [self.tokenizer.tokenizer.token_to_id("<PAD>")]
         h_r, h_i = get_navigator_state(self.nav_params, jnp.array([current_tokens]))
         hidden_state_collapsed = jnp.concatenate([h_r.squeeze(), h_i.squeeze()])
@@ -455,35 +481,66 @@ class FunnelCakeConstructor:
         current_point = jnp.array(self.ball_tree.data[start_indices[0][0]])
         velocity_vector = jnp.zeros_like(current_point)
         
+        # --- Main Generation Loop ---
         for _ in range(max_new):
             if self.should_shutdown: break
             
             self.key, subkey = jax.random.split(self.key)
-            
+
+            # === TIER 1: HIGH-LEVEL CONCEPT NAVIGATION (on the 256:1 Cake) ===
             current_anchor_state = hidden_state_collapsed
             intent_vector = PoincareBall.logmap0(current_point) - current_anchor_state
             
             k_for_flow = max(1, self.config['knn_sampling'])
-            _, neighbor_indices = self.ball_tree.query(np.expand_dims(np.array(current_point), 0), k=k_for_flow)
-            neighbors = jnp.array([self.ball_tree.data[idx] for idx in neighbor_indices.flatten()])
-            local_flow_vector = jnp.mean(jax.vmap(PoincareBall.logmap0)(neighbors), axis=0)
+            _, neighbor_indices_high_level = self.ball_tree.query(np.expand_dims(np.array(current_point), 0), k=k_for_flow)
+            neighbors_high_level = jnp.array([self.ball_tree.data[idx] for idx in neighbor_indices_high_level.flatten()])
+            local_flow_vector = jnp.mean(jax.vmap(PoincareBall.logmap0)(neighbors_high_level), axis=0)
 
             guidance_vector = (intent_vector * 0.8) + (local_flow_vector * 0.2)
             new_velocity = (velocity_vector * momentum) + (guidance_vector * (1 - momentum))
             velocity_vector = new_velocity / jnp.linalg.norm(new_velocity).clip(1e-6)
-            current_point = PoincareBall.expmap_p(current_point, velocity_vector * self.config['geodesic_step_size'])
             
-            oracle_input_h_r, oracle_input_h_i = jnp.split(PoincareBall.logmap0(current_point), 2)
+            # This is our target direction in the abstract concept space
+            current_point = PoincareBall.expmap_p(current_point, velocity_vector * self.config['geodesic_step_size'])
+
+            # === TIER 2: LOW-LEVEL TOKEN NAVIGATION (on a temporary 1:1 Micro-Cake) ===
+            
+            # 1. Identify the local neighborhood in the corpus
+            k_for_micro_cake = self.config['micro_cake_neighbors']
+            _, neighbor_indices = self.ball_tree.query(np.expand_dims(np.array(current_point), 0), k=k_for_micro_cake)
+            
+            # 2. Retrieve the raw tokens from these neighbors using our new metadata
+            micro_cake_tokens = []
+            for idx in neighbor_indices.flatten():
+                meta = self.H_sphere_metadata[idx]
+                start_idx, chunk_len = meta['start_token_idx'], meta['chunk_len']
+                micro_cake_tokens.extend(tokens_memmap[start_idx : start_idx + chunk_len])
+            
+            if not micro_cake_tokens: continue # Safety check
+
+            # 3. Build the temporary "Micro-Cake" on the fly
+            micro_states = get_all_hidden_states(self.nav_params, jnp.array([micro_cake_tokens]))[0]
+            micro_ball_tree = BallTree(np.array(micro_states, dtype=np.float32))
+
+            # 4. Navigate within the micro-cake to find the best next state
+            target_micro_state_tangent = current_anchor_state + velocity_vector * self.config['micro_step_size']
+            _, best_next_idx = micro_ball_tree.query(np.array(target_micro_state_tangent).reshape(1, -1), k=1)
+            final_oracle_input_state = micro_states[best_next_idx[0][0]]
+
+            # === FINAL STEP: GENERATION & UPDATE ===
+            
+            # 1. Get logits from the Oracle using the highly-specific state found in the micro-cake
+            oracle_input_h_r, oracle_input_h_i = jnp.split(final_oracle_input_state, 2)
             final_logits = get_oracle_logits(self.oracle_params, (oracle_input_h_r[None, None, :], oracle_input_h_i[None, None, :]))
             
+            # 2. Sample using the XJDR Metacognitive Sampler
             next_token_id = xjdr_metacognitive_sample(subkey, final_logits.squeeze(), sampler_cfg).item()
             
-            # --- THE FIX ---
-            # Temporarily set skip_special_tokens to False to see what the model is REALLY saying
+            # 3. Decode and print
             decoded_token = self.tokenizer.tokenizer.decode([next_token_id], skip_special_tokens=False)
             print(decoded_token.replace('Ġ', ' '), end='', flush=True)
-            # --- END FIX ---
 
+            # 4. Update the running state for the next iteration
             current_tokens.append(next_token_id)
             if len(current_tokens) > 256: current_tokens.pop(0)
 
@@ -493,7 +550,7 @@ class FunnelCakeConstructor:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="WubuMind Funnel Cake v24.0 (Oracle Edition)")
+    parser = argparse.ArgumentParser(description="WubuMind Funnel Cake v24.1 (Hierarchical Oracle Edition)")
     parser.add_argument('command', choices=['pretokenize', 'train_navigator', 'train_oracle', 'construct', 'generate'], help="The command to execute.")
     parser.add_argument('--basename', type=str, default="wubumind_v24", help="Basename for model files.")
     parser.add_argument('--epochs', type=int, default=3, help="Number of training epochs.")
@@ -503,14 +560,17 @@ def main():
     args = parser.parse_args()
 
     MODEL_CONFIG = { 
-        'd_model': 256, 'solidify_chunk_size': 256, 'knn': 5, 'geodesic_step_size': 0.25, 
+        'd_model': 256, 'solidify_chunk_size': 256, 'geodesic_step_size': 0.25, 
         'knn_sampling': 3, 'basename': args.basename, 'learning_rate': 1e-4, 'learning_rate_oracle': 5e-5,
-        'train_chunk_size': 128 
+        'train_chunk_size': 128,
+        # --- NEW HIERARCHICAL CONFIG ---
+        'micro_cake_neighbors': 5, # Number of high-level neighbors to build the micro-cake from
+        'micro_step_size': 0.05,    # Smaller step size for fine-grained navigation
     }
     TOKENIZER_CONFIG = {'vocab_size': 8192, 'tokenizer_path': f"{args.basename}_bpe.json"}
     TOKEN_FILE_PATH = f"{args.basename}.tokens.bin"
 
-    print(f"--- WubuMind Funnel Cake Foundry v24.0 (Oracle Edition) ---")
+    print(f"--- WubuMind Funnel Cake Foundry v24.1 (Hierarchical Oracle Edition) ---")
     
     tokenizer = WubuTokenizer(TOKENIZER_CONFIG['tokenizer_path'])
     
@@ -545,10 +605,10 @@ def main():
 
         elif args.command == 'construct':
             if not os.path.exists(TOKEN_FILE_PATH): print(f"[FATAL] Token file not found: {TOKEN_FILE_PATH}"), sys.exit(1)
-            constructor.construct(TOKEN_FILE_PATH)
+            constructor.construct(TOKEN_FILE_PATH, batch_size=args.batch_size)
 
         elif args.command == "generate":
-            print("\n--- Oracle Command Console (v24.0) ---")
+            print("\n--- Hierarchical Oracle Command Console (v24.1) ---")
             while True:
                 if constructor.should_shutdown: break
                 try: prompt = input("\nYour Prompt> ")
