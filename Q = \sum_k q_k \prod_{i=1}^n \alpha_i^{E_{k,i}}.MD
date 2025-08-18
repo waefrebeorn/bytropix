@@ -69,7 +69,7 @@ The coefficient term, `e² / (2ε₀h)`, contains dimensionful constants not in 
 We are logically compelled to define a new, irreducible term, `κ`, the **Quantum Vacuum Factor**, to represent this bundle of constants related to quantum electrodynamics and the vacuum. For convenience, we define it as:
 
 $$
-\kappa \equiv \frac{e^4}{4\epsilon_0^2 h^2} \quad (2)
+\kappa \equiv \frac{e^4}{4\epsilon_0^2 h^2} 
 $$
 
 Where:
@@ -82,7 +82,7 @@ This definition encapsulates the properties of the quantum vacuum as described b
 With this, we can now write `c` in a valid WNF by substituting `κ` back into the expression for `c`:
 
 $$
-c = \sqrt{\frac{\kappa}{\alpha}} = \kappa^{1/2} \alpha^{-1/2} \quad (3)
+c = \sqrt{\frac{\kappa}{\alpha}} = \kappa^{1/2} \alpha^{-1/2} 
 $$
 
 This expression is compliant with Equation (1): the coefficient is `q=1` (rational), and the exponents (`1/2`, `-1/2`) are rational. The formalism has successfully exposed that `c` is not foundational. Its value is a consequence of the relationship between the strength of electromagnetism (`α`) and the properties of the quantum vacuum (`κ`).
