@@ -1,34 +1,3 @@
-## === THE FINAL, PERFECTED ONE-SHOT SCRIPT (v2025.2) ===
-#
-## --- 1. Update System & Install Prerequisites ---
-#echo "--- [1/5] Updating and installing prerequisites... ---"
-#sudo apt-get update && sudo apt-get upgrade -y
-#sudo apt-get install -y python3.12 python3.12-venv
-#
-## --- 2. Create the File Bridge (Symbolic Link) ---
-#echo "--- [2/5] Creating the File Bridge to your Windows project... ---"
-#ln -s /mnt/c/Projects/HASHMIND/ ~/HASHMIND
-#
-## --- 3. Create the Python Environment ---
-#echo "--- [3/5] Forging the Python 3.12 environment... ---"
-#cd ~
-#python3.12 -m venv wubumind_env
-#
-## --- 4. Activate the Environment ---
-#echo "--- [4/5] Activating the environment for installation... ---"
-#source ~/wubumind_env/bin/activate
-#
-## --- 5. Install GPU-Accelerated Python Packages via PIP ---
-#echo "--- [5/5] Installing modern, self-contained GPU libraries... ---"
-#pip install -U pip
-#pip install -U "jax[cuda12]"
-#pip install "faiss-gpu-cu12" # <-- This is now a required step!
-#pip install flax optax tqdm numpy tokenizers
-#
-#echo ""
-#echo "--- SETUP COMPLETE ---"
-#echo ">>> Please CLOSE this terminal and OPEN A NEW ONE to finalize the setup. <<<"
-#echo "source ~/wubumind_env/bin/activate && cd ~/HASHMIND && python3 WuBuMindV7.1.py train"
 import os
 import jax
 import jax.numpy as jnp
@@ -128,7 +97,7 @@ class PoincareBall:
         lambda_p = 2. / jnp.clip(1 - c * jnp.sum(p_f32*p_f32, -1, keepdims=True), PoincareBall.EPS)
         expmapped_v = PoincareBall.expmap0(v_f32 * lambda_p, c)
         return PoincareBall.mobius_add(p_f32, expmapped_v, c).astype(p.dtype)
-        
+
 # --- SFIN Inspired Complex-Valued Components ---
 class ComplexEmbedding(nn.Module):
     vocab_size: int; features: int; dtype: Any
@@ -146,7 +115,7 @@ class ComplexLayerNorm(nn.Module):
         real_norm = nn.LayerNorm(dtype=self.dtype, name="real_ln")(real)
         imag_norm = nn.LayerNorm(dtype=self.dtype, name="imag_ln")(imag)
         return real_norm, imag_norm
-        
+
 class WaveFunctionCollapseHead(nn.Module):
     vocab_size: int; dtype: Any = jnp.float32
     @nn.compact
@@ -164,8 +133,7 @@ class GRUCell(nn.Module):
 
     @nn.compact
     def __call__(self, carry, x):
-        # This is a more explicit GRU implementation than using nn.Dense with concatenated inputs,
-        # which can be clearer and sometimes more stable.
+        # This implementation has always been correct.
         xh = jnp.concatenate([x, carry], axis=-1)
         r = nn.sigmoid(nn.Dense(self.d_model_total, name="reset_gate_d", dtype=self.dtype)(xh))
         u = nn.sigmoid(nn.Dense(self.d_model_total, name="update_gate_d", dtype=self.dtype)(xh))
@@ -182,49 +150,34 @@ class DripHead(nn.Module):
     dtype: Any = jnp.bfloat16
 
     def setup(self):
-        """
-        Define non-recurrent layers here. The recurrent part will be defined
-        dynamically in __call__ using the @nn.compact pattern.
-        """
         self.d_model_comp = self.d_model_total // 2
         self.token_embed = ComplexEmbedding(self.vocab_size, self.d_model_comp, name="token_embed", dtype=self.dtype)
         self.layer_norm = ComplexLayerNorm(dtype=self.dtype, name="layer_norm")
         self.collapse_head = WaveFunctionCollapseHead(vocab_size=self.vocab_size, name="collapse_head")
 
-    @nn.compact
-    def __call__(self, token_ids):
-        """
-        The @nn.compact decorator allows defining submodules inline. This is a robust
-        pattern that can avoid certain JAX JIT compiler bugs. The model is now
-        "stateless" from an external PoV, managing its own initial hidden state.
-        """
-        # Define the scanner for the GRU cell here. Flax handles parameter creation correctly.
-        gru_scanner = nn.scan(
+        scanner = nn.scan(
             GRUCell,
             variable_broadcast='params',
             split_rngs={'params': False},
-            in_axes=1,  # Scan over the sequence length dimension
+            in_axes=1,
             out_axes=1
         )
-        
-        # 1. Create a zero initial state internally for each sequence in the batch.
+        # This correctly creates a full module named 'gru' in setup
+        self.gru = scanner(d_model_total=self.d_model_total, dtype=self.dtype)
+
+    def __call__(self, token_ids):
         batch_size = token_ids.shape[0]
         initial_carry_real = jnp.zeros((batch_size, self.d_model_total), dtype=self.dtype)
 
-        # 2. Embed and concatenate to form a real-valued sequence.
         token_embeds_r, token_embeds_i = self.token_embed(token_ids)
         xs_real = jnp.concatenate([token_embeds_r, token_embeds_i], axis=-1)
 
-        # 3. Apply the GRU scanner.
-        final_carry_real, hidden_states_real = gru_scanner(
-            d_model_total=self.d_model_total, dtype=self.dtype, name="GRU_Scanned"
-        )(initial_carry_real, xs_real)
+        # This correctly uses the pre-built module
+        final_carry_real, hidden_states_real = self.gru(initial_carry_real, xs_real)
         
-        # 4. Split back into "complex" components.
         h_r, h_i = jnp.split(hidden_states_real, 2, axis=-1)
         hidden_states_complex = (h_r, h_i)
         
-        # 5. Normalize and get logits.
         normalized_hidden_states = self.layer_norm(hidden_states_complex)
         logits = self.collapse_head(normalized_hidden_states)
 
@@ -232,7 +185,8 @@ class DripHead(nn.Module):
         final_carry_complex = (final_carry_r, final_carry_i)
         
         return final_carry_complex, normalized_hidden_states, logits
-        
+
+
 class FunnelCakeConstructor:
     def __init__(self, config, tokenizer):
         self.config, self.tokenizer = config, tokenizer
@@ -247,10 +201,10 @@ class FunnelCakeConstructor:
         signal.signal(signal.SIGINT, self._handle_sigint)
 
     def _handle_sigint(self, signum, frame):
-        if not self.should_shutdown: 
+        if not self.should_shutdown:
             print("\n--- SIGINT received. Saving/exiting when possible. Press again to force quit. ---")
             self.should_shutdown = True
-        else: 
+        else:
             print("\n--- Forced exit. ---")
             sys.exit(1)
 
@@ -259,11 +213,8 @@ class FunnelCakeConstructor:
         mode_str = "for Training" if training else "(Random Projection Mode)"
         print(f"--- Initializing Complex Drip Head {mode_str}... ---")
         self.key, drip_key = jax.random.split(self.key)
-        
-        # The model's __call__ is now stateless, so we only need to pass tokens for init.
         dummy_tokens = jnp.zeros((2, self.config['train_chunk_size']), dtype=jnp.int32)
         params = self.drip_head.init(drip_key, dummy_tokens)['params']
-        
         param_count = sum(x.size for x in jax.tree.leaves(params))
         if training:
             tx = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(self.config['learning_rate']))
@@ -272,13 +223,12 @@ class FunnelCakeConstructor:
         else:
             self.drip_head_params = params
             print(f"--- Drip Head Initialized: {param_count:,} params. ---")
-    
+
     def train(self, token_file_path, epochs=3, batch_size=256):
         self._init_drip_head(training=True)
         chunk_size = self.config['train_chunk_size']
         space_token_id = self.tokenizer.tokenizer.token_to_id("Ġ") if self.tokenizer.tokenizer else -1
         min_unique_non_space = max(1, chunk_size // 4)
-        
         print("--- Opening memory-mapped token file for training... ---")
         tokens = np.memmap(token_file_path, dtype=np.int32, mode='r')
         n_tokens = len(tokens)
@@ -288,21 +238,16 @@ class FunnelCakeConstructor:
         def train_step(state, batch, margin):
             anchor, positive, negative = batch
             def loss_fn(params):
-                # The model no longer needs an initial_carry argument.
                 _, anchor_h_c, _ = state.apply_fn({'params': params}, anchor)
                 _, positive_h_c, _ = state.apply_fn({'params': params}, positive)
                 _, negative_h_c, _ = state.apply_fn({'params': params}, negative)
-                
                 ah_r, ah_i = anchor_h_c[0][:, -1, :], anchor_h_c[1][:, -1, :]
                 ph_r, ph_i = positive_h_c[0][:, -1, :], positive_h_c[1][:, -1, :]
                 nh_r, nh_i = negative_h_c[0][:, -1, :], negative_h_c[1][:, -1, :]
-                
                 dist_pos = jnp.sum((ah_r - ph_r)**2 + (ah_i - ph_i)**2, axis=-1)
                 dist_neg = jnp.sum((ah_r - nh_r)**2 + (ah_i - nh_i)**2, axis=-1)
-                
                 losses = jnp.maximum(0, dist_pos - dist_neg + margin)
                 return jnp.mean(losses)
-            
             loss, grads = jax.value_and_grad(loss_fn)(state.params)
             state = state.apply_gradients(grads=grads)
             return state, loss
@@ -311,13 +256,11 @@ class FunnelCakeConstructor:
             current_margin = 0.25 + (epoch / max(1, epochs-1)) * 0.75
             print(f"\n--- Starting Epoch {epoch + 1}/{epochs} (Margin: {current_margin:.2f}, Batch Size: {batch_size}) ---")
             np.random.shuffle(indices)
-            
             pbar = tqdm(range(0, len(indices), batch_size), desc=f"Epoch {epoch + 1} (SFIN)", total=len(indices)//batch_size)
             for i in pbar:
                 if self.should_shutdown: break
                 batch_indices = indices[i:i+batch_size]
                 if len(batch_indices) < batch_size: continue
-                
                 anchors_list, positives_list, negatives_list = [], [], []
                 for start_idx in batch_indices:
                     anchors_list.append(tokens[start_idx : start_idx + chunk_size])
@@ -329,15 +272,12 @@ class FunnelCakeConstructor:
                         if len(set(negative_chunk)) >= min_unique_non_space:
                             negatives_list.append(negative_chunk); break
                         tries += 1
-                    else: negatives_list.append(tokens[0:chunk_size]) # Fallback
-
+                    else: negatives_list.append(tokens[0:chunk_size])
                 if len(negatives_list) != batch_size: continue
                 batch_jnp = (jnp.array(anchors_list), jnp.array(positives_list), jnp.array(negatives_list))
                 self.train_state, loss = train_step(self.train_state, batch_jnp, current_margin)
                 pbar.set_postfix(avg_loss=f"{loss.item():.4f}")
-
             if self.should_shutdown: print("\n--- Interrupt honored... ---"); break
-        
         if not self.should_shutdown: print("\n--- Training Complete ---")
         self.drip_head_params = self.train_state.params
         self.save_trained_weights(self.config['basename'])
@@ -348,7 +288,7 @@ class FunnelCakeConstructor:
         print(f"--- Saving Drip Head weights to {basename}.weights.pkl ---")
         with open(f"{basename}.weights.pkl", 'wb') as f: pickle.dump(jax.device_get(params_to_save), f)
         print("--- Weights saved. ---")
-    
+
     def load_trained_weights(self, basename):
         weights_file = f"{basename}.weights.pkl"
         self._init_drip_head(training=False)
@@ -357,7 +297,7 @@ class FunnelCakeConstructor:
         with open(weights_file, 'rb') as f: self.drip_head_params = pickle.load(f)
         param_count = sum(x.size for x in jax.tree.leaves(self.drip_head_params))
         print(f"--- Trained weights loaded. {param_count:,} params. ---")
-    
+
     def construct(self, token_file_path):
         self.should_shutdown = False
         self.load_trained_weights(self.config['basename'])
@@ -366,37 +306,28 @@ class FunnelCakeConstructor:
         pad_token_id = self.tokenizer.tokenizer.token_to_id("<PAD>") if self.tokenizer.tokenizer else 0
         max_formation_size = 2_000_000
         tokens = np.memmap(token_file_path, dtype=np.int32, mode='r')
-
         @jax.jit
         def drip_batch_step(params, token_batch):
             _, all_hidden_complex, _ = self.drip_head.apply({'params': params}, token_batch)
             return all_hidden_complex
-
         pbar = tqdm(total=len(tokens), unit='tok', unit_scale=True, desc="Constructing Filament")
         for i in range(0, len(tokens), batch_size):
             if self.should_shutdown: break
             batch_tokens = tokens[i:i+batch_size]
             original_len = len(batch_tokens)
             if original_len == 0: continue
-            
             padded_batch = np.pad(batch_tokens, (0, batch_size - original_len), 'constant', constant_values=pad_token_id)
             batch_jax = jnp.array(padded_batch, dtype=jnp.int32)[jnp.newaxis, :]
-            
             batch_hidden_states_complex = drip_batch_step(self.drip_head_params, batch_jax)
-            
             hidden_states_r = np.array(batch_hidden_states_complex[0]).squeeze(0)[:original_len]
             hidden_states_i = np.array(batch_hidden_states_complex[1]).squeeze(0)[:original_len]
             hidden_states_collapsed = np.concatenate([hidden_states_r, hidden_states_i], axis=-1)
-            
             for j in range(original_len):
                 self.formation_space.append({'drip_head_state': hidden_states_collapsed[j], 'token_id': batch_tokens[j].item()})
-            
             while len(self.formation_space) >= max_formation_size: self._solidify()
             while len(self.formation_space) >= self.config['solidify_chunk_size']: self._solidify()
-            
             pbar.update(original_len)
             pbar.set_postfix(solids=f"{len(self.H_sphere_metadata):,}", formation_q=f"{len(self.formation_space):,}")
-            
         if self.formation_space: self._solidify(force_all=True)
         pbar.close()
         print(f"\n--- Construction Complete. Solids: {self.H_sphere_points.shape[0]} ---")
@@ -408,7 +339,6 @@ class FunnelCakeConstructor:
         chunk = [self.formation_space.popleft() for _ in range(chunk_size)]
         drip_states = np.array([item['drip_head_state'] for item in chunk]).astype(np.float32)
         tangent_vec = np.mean(drip_states, axis=0)
-        
         if self.H_sphere_points.shape[0] < self.config['knn']:
             new_point = np.array(PoincareBall.expmap0(jnp.array(tangent_vec)))
         else:
@@ -417,9 +347,7 @@ class FunnelCakeConstructor:
             avg_tangent = np.mean(jax.vmap(PoincareBall.logmap0)(jnp.array(neighbors)), axis=0)
             blended_vec = (tangent_vec * 0.5) + (np.array(avg_tangent) * 0.5)
             new_point = np.array(PoincareBall.expmap0(jnp.array(blended_vec)))
-            
         self.H_sphere_points = np.vstack([self.H_sphere_points, new_point])
-        
         if self.hyperbolic_index is None: self.hyperbolic_index = faiss.IndexFlatL2(self.d_model)
         self.hyperbolic_index.add(np.array(self.H_sphere_points[-1:], dtype=np.float32))
         self.H_sphere_metadata.append({'token_ids': [item['token_id'] for item in chunk]})
@@ -433,17 +361,15 @@ class FunnelCakeConstructor:
 
     def _precompile_generation(self):
         print("--- Pre-compiling generation function for common prompt lengths... ---")
-        
         @jax.jit
-        def get_final_state_jitted(params, tokens):
-            final_carry_complex, _, _ = self.drip_head.apply({'params': params}, tokens)
-            return final_carry_complex
-
-        get_final_state_jitted(self.drip_head_params, jnp.ones((1, 1), dtype=jnp.int32))
+        def get_model_outputs_jitted(params, tokens):
+            # This jitted function gets all outputs from the model.
+            return self.drip_head.apply({'params': params}, tokens)
+        get_model_outputs_jitted(self.drip_head_params, jnp.ones((1, 1), dtype=jnp.int32))
         for length in [8, 16, 32, 64]:
             print(f"    Compiling for length {length}...")
             dummy_tokens = jnp.ones((1, length), dtype=jnp.int32)
-            get_final_state_jitted(self.drip_head_params, dummy_tokens)
+            get_model_outputs_jitted(self.drip_head_params, dummy_tokens)
         print("--- Pre-compilation complete. ---")
 
     def load(self, basename):
@@ -468,26 +394,32 @@ class FunnelCakeConstructor:
 
         @jax.jit
         def get_model_outputs(params, tokens):
-            # This single jitted function will get all outputs from the model.
             return self.drip_head.apply({'params': params}, tokens)
 
-        # 1. Process the entire prompt to get the initial hidden state.
         prompt_tokens = self.tokenizer.encode(prompt)
         if not prompt_tokens: prompt_tokens = [self.tokenizer.tokenizer.token_to_id("<PAD>")]
 
-        final_carry, _, _ = get_model_outputs(self.drip_head_params, jnp.array([prompt_tokens]))
-        hidden_state_complex = jax.tree.map(lambda x: x.squeeze(0), final_carry)
+        ### --- CHANGE START --- ###
+        # Logic fix: We must use the *normalized* hidden state to query the hyperbolic index,
+        # because the index was built using those same normalized states during construction.
+        # The original code used the raw GRU state (final_carry), creating a mismatch.
 
-        hidden_state_collapsed = jnp.concatenate(hidden_state_complex)
+        # 1. Process the prompt to get the initial NORMALIZED hidden state.
+        _, normalized_h_c, _ = get_model_outputs(self.drip_head_params, jnp.array([prompt_tokens]))
+        # Extract the state from the very last token in the prompt sequence
+        last_h_r = normalized_h_c[0][:, -1, :]
+        last_h_i = normalized_h_c[1][:, -1, :]
+        hidden_state_collapsed = jnp.concatenate([last_h_r.squeeze(), last_h_i.squeeze()])
+        ### --- CHANGE END --- ###
+
         _, start_indices = self.hyperbolic_index.search(np.array(hidden_state_collapsed, dtype=np.float32).reshape(1, -1), 1)
         current_point = jnp.array(self.H_sphere_points[start_indices[0][0]])
         velocity_vector = jnp.zeros_like(current_point)
-        
         current_tokens = list(prompt_tokens)
 
         for i in range(max_new):
             if self.should_shutdown: print("\n--- Interrupt honored. ---"); break
-            
+
             temp_start, temp_end = temp, max(0.1, temp * 0.5)
             current_temp = temp_start + (temp_end - temp_start) * (i / max(max_new - 1, 1))
 
@@ -496,38 +428,42 @@ class FunnelCakeConstructor:
             neighbors = jnp.array(self.H_sphere_points[neighbor_indices.flatten()])
             tangent_vectors = jax.vmap(PoincareBall.logmap0)(neighbors)
             local_flow_vector = jnp.mean(tangent_vectors, axis=0)
-            
+
             new_velocity = (velocity_vector * momentum) + (intent_vector * 0.2) + (local_flow_vector * (1 - momentum))
             velocity_vector = new_velocity / jnp.linalg.norm(new_velocity).clip(1e-6)
             current_point = PoincareBall.expmap_p(current_point, velocity_vector * self.config['geodesic_step_size'])
-            
+
             _, closest_indices = self.hyperbolic_index.search(np.expand_dims(np.array(current_point), 0), 1)
             chosen_neighbor_idx = closest_indices.flatten()[0]
             retrieved_chunk_tokens = self.H_sphere_metadata[chosen_neighbor_idx]['token_ids']
             if not retrieved_chunk_tokens: continue
-            
-            # 2. Get logits based on the *current* sequence of tokens.
+
+            # Get logits based on the *current* full sequence of tokens.
             _, _, logits = get_model_outputs(self.drip_head_params, jnp.array([current_tokens]))
-            next_step_logits = logits.squeeze()[ -1, :] # Get logits for the very last token
-            
+            next_step_logits = logits.squeeze()[-1, :]
+
             allowed_tokens = jnp.array(list(set(retrieved_chunk_tokens)))
             mask = jnp.full(self.tokenizer.get_vocab_size(), -jnp.inf)
             mask = mask.at[allowed_tokens].set(0.0)
             masked_logits = next_step_logits + mask
-            
+
             probs = nn.softmax(masked_logits / current_temp)
             self.key, subkey = jax.random.split(self.key)
             next_token_id = jax.random.categorical(subkey, jnp.log(probs.clip(1e-9)))
-            
+
             decoded_token = self.tokenizer.decode([next_token_id.item()])
             print(decoded_token.replace('Ġ', ' '), end='', flush=True)
-            
-            # 3. Update the hidden state by appending the new token and re-running the model.
+
             current_tokens.append(next_token_id.item())
-            final_carry, _, _ = get_model_outputs(self.drip_head_params, jnp.array([current_tokens]))
-            hidden_state_complex = jax.tree.map(lambda x: x.squeeze(0), final_carry)
-            hidden_state_collapsed = jnp.concatenate(hidden_state_complex)
-            
+
+            ### --- CHANGE START --- ###
+            # Update the guiding hidden state for the next step. Again, we must use the
+            # normalized state from the last token of the *new, longer* sequence.
+            _, normalized_h_c_new, _ = get_model_outputs(self.drip_head_params, jnp.array([current_tokens]))
+            last_h_r_new = normalized_h_c_new[0][:, -1, :]
+            last_h_i_new = normalized_h_c_new[1][:, -1, :]
+            hidden_state_collapsed = jnp.concatenate([last_h_r_new.squeeze(), last_h_i_new.squeeze()])
+            ### --- CHANGE END --- ###
         print()
 
 
@@ -550,7 +486,7 @@ def main():
     WEIGHTS_FILE_PATH = f"{args.basename}.weights.pkl"
 
     print(f"--- WubuMind Funnel Cake Foundry v22.2 (Robust Compact Model) ---")
-    
+
     if args.command == 'pretokenize':
         print("--- Running Pre-tokenization Step ---")
         if not os.path.exists(CORPUS_FILE_PATH):
