@@ -78,7 +78,9 @@ Hawking's formula does not reveal a new Foundational Atom. Instead, it reveals t
 ### 4.1 The Static Deconstruction of $c$
 
 Applying the static formalism to the definition of the fine-structure constant, $\alpha = \frac{e^2}{2\epsilon_0 h c}$, we deconstruct $c$ into its WNF:
+
 $$c = \kappa^{1/2} \cdot \alpha^{-1/2}$$
+
 Here, the formalism has successfully isolated the dependency on the QED axiom, $\alpha$. Crucially, it has also flagged a Revealed Incompleteness by forcing the definition of a new, irreducible term, $\kappa$, the **Quantum Vacuum Factor** ($\kappa = \frac{e^4}{4\epsilon_0^2 h^2}$). This proves that $c$ is not foundational; its value is a consequence of the relationship between the strength of electromagnetism and the properties of the quantum vacuum.
 
 ### 4.2 Reframing FTL from Impossibility to Engineering
