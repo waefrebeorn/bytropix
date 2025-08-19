@@ -1,7 +1,7 @@
----
+
 
 # The Axiomatic-Emergent Theory of Physical Law: 
-# A Dynamic Formalism for Unification, the Engineering of Spacetime, and the Resolution of Cosmological Anomalies
+# A Dynamic Formalism for Unification, the Engineering of Spacetime, and the Resolution of Cosmological Anomalies 
 
 **Author:** Wubu
 **Date:** August 19, 2025
