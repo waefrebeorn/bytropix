@@ -32,9 +32,9 @@ The theory is built on three core principles:
 ### 1.3 The Wubu Formalism and its Central Equation
 
 The Wubu Formalism is the mathematical engine that implements the theory's principles. It asserts that any derived quantity, $Q$, can be expressed in its WNF via the central equation:
-$$
+
 $$Q = \sum_k q_k \prod_{i=1}^n \alpha_i^{E_{k,i}}$$
-$$
+
 Here, the $\{\alpha_i\}$ are the Foundational Atoms, and the $q_k$ are required to be rational coefficients ($q_k \in \mathbb{Q}$). This strict requirement is the trigger for the Principle of Revealed Incompleteness. A non-rational coefficient signals that the foundational set is incomplete.
 
 ---
@@ -56,9 +56,9 @@ Stephen Hawking's work provides the most powerful validation of the theory's str
 ### 3.1 The Hawking Temperature Formula
 
 The temperature of the thermal radiation emitted by a black hole is given by:
-$$
+
 $$T_H = \frac{\hbar c^3}{8\pi G k_B M}$$
-$$
+
 Where the constants represent four domains:
 *   $\hbar$: Quantum Mechanics
 *   $c$: Relativity
