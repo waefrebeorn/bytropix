@@ -57,7 +57,7 @@ Stephen Hawking's work provides the most powerful validation of the theory's str
 
 The temperature of the thermal radiation emitted by a black hole is given by:
 $$
-T_H = \frac{\hbar c^3}{8\pi G k_B M}
+$$T_H = \frac{\hbar c^3}{8\pi G k_B M}$$
 $$
 Where the constants represent four domains:
 *   $\hbar$: Quantum Mechanics
