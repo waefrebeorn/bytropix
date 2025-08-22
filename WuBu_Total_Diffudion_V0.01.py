@@ -76,10 +76,18 @@ class ComplexEmbedding(nn.Module): # ...
     num_embeddings: int; features: int; dtype: Any = jnp.bfloat16
     @nn.compact
     def __call__(self, x): return nn.Embed(self.num_embeddings, self.features, name="real_embed", dtype=self.dtype)(x), nn.Embed(self.num_embeddings, self.features, name="imag_embed", dtype=self.dtype)(x)
-class ComplexLayerNorm(nn.Module): # ...
-    dtype: Any = jnp.float32
+class ComplexLayerNorm(nn.Module):
+    dtype: Any = jnp.float32 # Keep LayerNorm ops in float32 for stability
+
     @nn.compact
-    def __call__(self, x_complex: Tuple[jnp.ndarray, jnp.ndarray]): real, imag = x_complex; return nn.tanh(nn.LayerNorm(dtype=self.dtype, name="real_ln")(real)), nn.tanh(nn.LayerNorm(dtype=self.dtype, name="imag_ln")(imag))
+    def __call__(self, x_complex: Tuple[jnp.ndarray, jnp.ndarray]):
+        real, imag = x_complex
+        # LayerNorm parameters (scale, bias) will be float32
+        real_norm = nn.LayerNorm(dtype=self.dtype, name="real_ln")(real)
+        imag_norm = nn.LayerNorm(dtype=self.dtype, name="imag_ln")(imag)
+        # tanh is a safe activation. Cast back to input dtype if needed, but tanh output is fine.
+        return nn.tanh(real_norm), nn.tanh(imag_norm)
+
 class GalacticNavigator(nn.Module):
     d_model_total: int
     num_patches: int
@@ -204,77 +212,94 @@ def _get_or_create_caption_pairs(image_dir: str): # ...
     data_to_cache = {'pairs': anchor_positive_pairs, 'all_paths': valid_paths}
     with open(cache_file, "wb") as f: pickle.dump(data_to_cache, f)
     return anchor_positive_pairs, valid_paths
-# --- (Keep all other code the same) ---
+
+
+
 
 def create_laion_dataset(image_pairs: List[Tuple[str, str]], all_image_paths: List[str], image_size: int, batch_size: int, cache: bool = True):
     """
-    Creates a highly optimized tf.data pipeline for triplets.
-    V4: Re-ordered for maximum performance to parallelize CPU work (decoding/resizing)
-    and hide latency.
+    Creates a highly optimized and robust tf.data pipeline for triplets.
+    V5: Handles corrupted images by skipping them.
     """
-    def _load_and_preprocess_image(path):
-        # This function contains the expensive CPU work
-        image_bytes = tf.io.read_file(path)
-        # Use decode_and_crop_jpeg for a potential speedup if all images are JPEG
-        image = tf.image.decode_image(image_bytes, channels=3, expand_animations=False)
-        # Setting the shape is important for tf.data optimizations
-        image.set_shape([None, None, 3])
-        # Resize is a major bottleneck
-        image = tf.image.resize(image, [image_size, image_size], method=tf.image.ResizeMethod.BICUBIC)
-        image = tf.clip_by_value(image, 0.0, 255.0)
-        # Normalize
-        return (tf.cast(image, tf.float32) / 127.5) - 1.0
+    def _safe_load_and_preprocess_image(path):
+        """
+        Wraps the loading function in a try-catch block within TensorFlow.
+        Returns a blank image and a boolean `False` if loading fails.
+        """
+        try:
+            image_bytes = tf.io.read_file(path)
+            image = tf.image.decode_image(image_bytes, channels=3, expand_animations=False)
+            image.set_shape([None, None, 3])
+            image = tf.image.resize(image, [image_size, image_size], method=tf.image.ResizeMethod.BICUBIC)
+            image = tf.clip_by_value(image, 0.0, 255.0)
+            image = (tf.cast(image, tf.float32) / 127.5) - 1.0
+            return image, True # Return the image and a success flag
+        except tf.errors.InvalidArgumentError:
+            # This error is caught if tf.image.decode_image fails.
+            print(f"\n[Data Warning] Skipping corrupted image: {path.numpy().decode('utf-8')}\n")
+            # Return a dummy image and a failure flag.
+            # The dummy image must have the correct shape and type.
+            return tf.zeros([image_size, image_size, 3], dtype=tf.float32), False
+
+    def load_and_filter_triplet(pair, neg_path):
+        """
+        Loads all three images and checks their success flags.
+        """
+        anchor_path, positive_path = pair
+        
+        # Use a TensorFlow py_function to wrap our safe loader.
+        # This allows us to use python-level try-except logic and printing.
+        anchor_img, anchor_ok = tf.py_function(_safe_load_and_preprocess_image, [anchor_path], [tf.float32, tf.bool])
+        pos_img, pos_ok = tf.py_function(_safe_load_and_preprocess_image, [positive_path], [tf.float32, tf.bool])
+        neg_img, neg_ok = tf.py_function(_safe_load_and_preprocess_image, [neg_path], [tf.float32, tf.bool])
+        
+        # Ensure the shapes are correctly set after py_function
+        anchor_img.set_shape([image_size, image_size, 3])
+        pos_img.set_shape([image_size, image_size, 3])
+        neg_img.set_shape([image_size, image_size, 3])
+        
+        # A triplet is valid only if all three images loaded correctly.
+        all_ok = tf.logical_and(tf.logical_and(anchor_ok, pos_ok), neg_ok)
+        
+        return (anchor_img, pos_img, neg_img), all_ok
 
     num_samples = len(image_pairs)
     print(f"--- Building PURE TF DATA pipeline with {num_samples} anchor-positive pairs. ---")
     
-    # 1. Create datasets of file paths. This is cheap.
+    # --- The pipeline structure remains the same ---
     anchor_paths = [p[0] for p in image_pairs]
     positive_paths = [p[1] for p in image_pairs]
     ds_pairs = tf.data.Dataset.from_tensor_slices((anchor_paths, positive_paths))
-
     ds_negs = tf.data.Dataset.from_tensor_slices(all_image_paths)
-    
-    # 2. Create the triplet paths dataset. This is still just manipulating strings.
-    # Shuffle the negatives well and repeat indefinitely.
     ds_negs = ds_negs.shuffle(buffer_size=10000).repeat()
     ds = tf.data.Dataset.zip((ds_pairs, ds_negs))
-
-    # 3. IMPORTANT: Shuffle the complete set of triplet *paths*.
-    # Shuffling file paths is cheap. Shuffling decoded images is expensive.
-    # This ensures that the data loader is always pulling random items.
     ds = ds.shuffle(buffer_size=5000)
 
-    # 4. NOW, apply the expensive loading function.
-    # `num_parallel_calls=tf.data.AUTOTUNE` tells TF to use multiple CPU cores
-    # to run `_load_and_preprocess_image` in the background.
-    def load_triplet(pair, neg_path):
-        anchor_path, positive_path = pair
-        return (
-            _load_and_preprocess_image(anchor_path),
-            _load_and_preprocess_image(positive_path),
-            _load_and_preprocess_image(neg_path)
-        )
-    ds = ds.map(load_triplet, num_parallel_calls=tf.data.AUTOTUNE)
+    # --- The changes are in the mapping and filtering ---
+    
+    # 1. Map the new safe loading function.
+    # Each element will now be ((anchor, pos, neg), all_ok_flag).
+    ds = ds.map(load_and_filter_triplet, num_parallel_calls=tf.data.AUTOTUNE)
+    
+    # 2. Filter out the bad triplets.
+    # This keeps only the elements where the all_ok_flag is True.
+    ds = ds.filter(lambda images, all_ok: all_ok)
+    
+    # 3. After filtering, we only have the images left.
+    # Remap to discard the now-unnecessary boolean flag.
+    ds = ds.map(lambda images, all_ok: images)
 
-    # 5. Caching (optional but highly recommended for 2nd+ epoch speed)
-    # This step should come AFTER mapping. It stores the result of the expensive map operation.
+    # The rest of the pipeline is the same.
     if cache:
         image_dir_name = Path(image_pairs[0][0]).parent.name
         cache_filename = f"./{image_dir_name}_{image_size}px.tfcache"
         print(f"--- Caching dataset to file: '{cache_filename}'. First epoch will be slow. Subsequent epochs will be very fast. ---")
         ds = ds.cache(cache_filename)
-
-    # 6. Batch the loaded images.
+        
     ds = ds.batch(batch_size, drop_remainder=True)
-
-    # 7. CRITICAL: Prefetch. This is the key to hiding latency.
-    # It tells TensorFlow to prepare N batches on the CPU *while* the GPU is busy
-    # training on the current batch. This ensures the GPU never has to wait.
     ds = ds.prefetch(buffer_size=tf.data.AUTOTUNE)
 
-    return ds, num_samples
-    
+    return ds, num_samples 
 # NEW: Dynamic Loss Balancer
 class DynamicLossController:
     # ... (code unchanged from v0.28)
@@ -302,16 +327,14 @@ class GalacticDiffusionFunnel:
     def __init__(self, config):
         self.config = config
         self.key = jax.random.PRNGKey(config['seed'])
-        self.params = {} # This will store CPU parameters
+        self.params = {}
         self.should_shutdown = False
         signal.signal(signal.SIGINT, self._handle_sigint)
-
-        d_model = config['d_model']
+        self.d_model = config['d_model']
         self.models = {
-            'patch_encoder': ImagePatchEncoder(patch_size=config['patch_size'], in_channels=config['channels'], embed_dim=d_model),
-            'navigator': GalacticNavigator(d_model_total=d_model, num_patches=config['num_patches_side']**2),
-            # Use the faster, non-rematerialized UNet
-            'denoiser': GalacticDenoisingUNet(d_model=d_model) 
+            'patch_encoder': ImagePatchEncoder(patch_size=config['patch_size'], in_channels=config['channels'], embed_dim=self.d_model, dtype=jnp.bfloat16),
+            'navigator': GalacticNavigator(d_model_total=self.d_model, num_patches=config['num_patches_side']**2, dtype=jnp.bfloat16),
+            'denoiser': GalacticDenoisingUNet(d_model=self.d_model) # Inner dtype is bfloat16
         }
         self.diffusion = DiffusionProcess(timesteps=config['diffusion_timesteps'])
         self.num_devices = jax.local_device_count()
@@ -321,7 +344,7 @@ class GalacticDiffusionFunnel:
         self.should_shutdown = True
 
     def _init_params(self):
-        # ... (this method is correct, no changes needed)
+        # ... (This method is fine, no changes needed)
         if self.params: return
         print("--- Initializing model parameters on CPU... ---")
         weights_file = Path(f"{self.config['basename']}.weights.pkl")
@@ -347,51 +370,70 @@ class GalacticDiffusionFunnel:
             self.params['denoiser'] = self.models['denoiser'].init(den_key, dummy_patches, dummy_time, dummy_cond)['params']
         print("--- CPU Initialization Complete. VRAM should be clear. ---")
 
+
     def train(self, image_dir, epochs, batch_size, cache_dataset=True):
         self._init_params()
         if batch_size % self.num_devices != 0: raise ValueError(f"Batch size must be divisible by {self.num_devices}")
         
-        print(f"--- Starting UNIFIED Self-Balancing Training on {self.num_devices} devices ---")
+        print(f"--- Starting STABILIZED Training on {self.num_devices} devices ---")
         
-        optimizer = optax.chain(
-            optax.clip_by_global_norm(1.0),
-            optax.adamw(self.config['learning_rate'], weight_decay=0.01)
-        )
-        state = train_state.TrainState.create(apply_fn=None, params=self.params, tx=optimizer)
-
+        # <<< FIX IS HERE: DEFINE `image_pairs` and `all_paths` BEFORE USING THEM >>>
         image_pairs, all_paths = _get_or_create_caption_pairs(image_dir)
         
         dataset, num_samples = create_laion_dataset(
-            image_pairs, 
-            all_paths, 
-            self.config['image_size'], 
-            batch_size, 
-            cache=cache_dataset
+            image_pairs, all_paths, self.config['image_size'], batch_size, cache=cache_dataset
+        )
+        steps_per_epoch = num_samples // batch_size
+        total_steps = epochs * steps_per_epoch
+        warmup_steps = min(5000, int(0.1 * total_steps)) # 10% of total steps or 5k, whichever is smaller
+
+        print(f"--- Training Info ---")
+        print(f"Steps per epoch: {steps_per_epoch}")
+        print(f"Total steps:     {total_steps}")
+        print(f"Warmup steps:    {warmup_steps}")
+        
+        # <<< GAMEPLAN: STABILIZED OPTIMIZER >>>
+        lr_schedule = optax.warmup_cosine_decay_schedule(
+            init_value=1e-7,
+            peak_value=self.config['learning_rate'],
+            warmup_steps=warmup_steps,
+            decay_steps=total_steps - warmup_steps,
+            end_value=1e-6
+        )
+
+        optimizer = optax.chain(
+            # Adaptive clipping is much more robust than global norm clipping for explosions.
+            optax.clip_by_global_norm(1.0),
+            optax.adamw(learning_rate=lr_schedule, weight_decay=1e-2, b1=0.9, b2=0.95)
         )
         
+        state = train_state.TrainState.create(apply_fn=None, params=self.params, tx=optimizer)
         loss_controller = DynamicLossController(['triplet', 'denoise'])
 
-        # <<< FIX 1: REMOVE STATIC ARGS FROM PMAP DEFINITION >>>
         @partial(jax.pmap, axis_name='batch')
         def p_train_step(state, batch, key, triplet_w, denoise_w):
+            
             def loss_fn(params):
                 anchor_img, positive_img, negative_img = batch
                 B = anchor_img.shape[0]
                 
-                anchor_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, anchor_img).reshape(B, -1, self.config['d_model'])
-                positive_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, positive_img).reshape(B, -1, self.config['d_model'])
-                negative_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, negative_img).reshape(B, -1, self.config['d_model'])
+                # --- bfloat16 NN ops ---
+                anchor_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, anchor_img).reshape(B, -1, self.d_model)
+                positive_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, positive_img).reshape(B, -1, self.d_model)
+                negative_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, negative_img).reshape(B, -1, self.d_model)
                 
                 all_patches = jnp.stack([anchor_patches, positive_patches, negative_patches])
                 h_all = self.models['navigator'].apply({'params': params['navigator']}, all_patches)
                 h_anchor, h_pos, h_neg = [jax.tree.map(lambda x: x[i], h_all) for i in range(3)]
                 
+                # --- float32 hyperbolic ops and loss ---
                 triplet_loss = 0.0
                 margin = 0.5
                 for m in ['syn', 'sem', 'exe']:
-                    ah_r, ah_i = jnp.mean(h_anchor[m][0], 1), jnp.mean(h_anchor[m][1], 1)
-                    ph_r, ph_i = jnp.mean(h_pos[m][0], 1), jnp.mean(h_pos[m][1], 1)
-                    nh_r, nh_i = jnp.mean(h_neg[m][0], 1), jnp.mean(h_neg[m][1], 1)
+                    # Cast to float32 for stable distance calculation
+                    ah_r, ah_i = jnp.mean(h_anchor[m][0], 1).astype(jnp.float32), jnp.mean(h_anchor[m][1], 1).astype(jnp.float32)
+                    ph_r, ph_i = jnp.mean(h_pos[m][0], 1).astype(jnp.float32), jnp.mean(h_pos[m][1], 1).astype(jnp.float32)
+                    nh_r, nh_i = jnp.mean(h_neg[m][0], 1).astype(jnp.float32), jnp.mean(h_neg[m][1], 1).astype(jnp.float32)
                     dist_pos = jnp.sum((ah_r - ph_r)**2 + (ah_i - ph_i)**2, axis=-1)
                     dist_neg = jnp.sum((ah_r - nh_r)**2 + (ah_i - nh_i)**2, axis=-1)
                     triplet_loss += jnp.mean(jnp.maximum(0, dist_pos - dist_neg + margin))
@@ -400,21 +442,44 @@ class GalacticDiffusionFunnel:
                 t = jax.random.randint(key_t, (B,), 0, self.diffusion.timesteps)
                 noise = jax.random.normal(key_noise, anchor_patches.shape)
                 noisy_patches = self.diffusion.q_sample(anchor_patches, t, noise)
+                
                 sem_r, sem_i = h_anchor['sem']
                 cake_cond = jnp.concatenate([sem_r, sem_i], axis=-1).mean(axis=1)
+                
+                # Denoising path
                 pred_noise = self.models['denoiser'].apply({'params': params['denoiser']}, noisy_patches, t, cake_cond)
-                denoising_loss = jnp.mean((pred_noise - noise)**2)
+                
+                # <<< GAMEPLAN: STABLE LOSS CALCULATION >>>
+                # Cast predictions and noise to float32 before squaring
+                denoising_loss = jnp.mean((pred_noise.astype(jnp.float32) - noise.astype(jnp.float32))**2)
 
+                # Combine losses in float32
                 total_loss = (triplet_loss * triplet_w) + (denoising_loss * denoise_w)
+                
                 return total_loss, (triplet_loss, denoising_loss)
 
+            # Compute gradients
             (loss, (triplet_loss, denoising_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+            
+            # Synchronize gradients across devices
             grads = jax.lax.pmean(grads, axis_name='batch')
+            
+            # <<< GAMEPLAN: GRADIENT MONITORING >>>
+            grad_norm = optax.global_norm(grads)
+            
+            # Apply updates
             new_state = state.apply_gradients(grads=grads)
-            metrics = {'loss': loss, 'triplet': triplet_loss, 'denoise': denoising_loss}
+            
+            metrics = {
+                'loss': loss, 
+                'triplet': triplet_loss, 
+                'denoise': denoising_loss,
+                'grad_norm': grad_norm,
+                'lr': lr_schedule(state.step) # Log current learning rate
+            }
             return new_state, jax.lax.pmean(metrics, axis_name='batch')
 
-        # --- JIT WARM-UP ---
+        # --- JIT WARM-UP (Corrected from previous step) ---
         print("\n--- JIT Compiling unified training step... This WILL take several minutes. Please wait. ---")
         start_jit = time.time()
         p_state = replicate(state)
@@ -425,21 +490,17 @@ class GalacticDiffusionFunnel:
         
         sharded_dummy_batch = common_utils.shard(dummy_batch)
         dummy_key = common_utils.shard_prng_key(self.key)
-        
-        # <<< FIX 2: BROADCAST THE DUMMY WEIGHTS FOR THE JIT CALL >>>
-        # Create an array of shape (num_devices,) for the weights
         dummy_triplet_w = jnp.ones(self.num_devices)
         dummy_denoise_w = jnp.ones(self.num_devices)
         
         _, jit_metrics_output = p_train_step(p_state, sharded_dummy_batch, dummy_key, dummy_triplet_w, dummy_denoise_w)
         jit_metrics_output['loss'].block_until_ready()
-        
         print(f"--- Compilation finished in {time.time() - start_jit:.2f}s. Starting training. ---")
         
         for epoch in range(epochs):
             if self.should_shutdown: break
             print(f"\n--- Starting Epoch {epoch+1}/{epochs} ---")
-            pbar = tqdm(dataset.as_numpy_iterator(), total=num_samples // batch_size, desc=f"Epoch {epoch+1}")
+            pbar = tqdm(dataset.as_numpy_iterator(), total=steps_per_epoch, desc=f"Epoch {epoch+1}")
             
             last_step_metrics = {'triplet': 1.0, 'denoise': 1.0}
 
@@ -451,22 +512,27 @@ class GalacticDiffusionFunnel:
                 sharded_keys = np.array(step_keys)
                 
                 weights = loss_controller.update(last_step_metrics)
-                
-                # <<< FIX 3: BROADCAST THE DYNAMIC WEIGHTS FOR EACH STEP >>>
                 triplet_w_sharded = jnp.full((self.num_devices,), weights['triplet'])
                 denoise_w_sharded = jnp.full((self.num_devices,), weights['denoise'])
 
                 p_state, metrics = p_train_step(p_state, sharded_batch, sharded_keys, triplet_w_sharded, denoise_w_sharded)
                 
                 metrics = unreplicate(metrics)
+                
+                # Check for non-finite values and stop if they occur
+                if not np.isfinite(metrics['loss']):
+                    print("\n[FATAL] Loss is no longer finite. Halting training.")
+                    print(f"Metrics: {metrics}")
+                    self.save_weights() # Save weights for debugging
+                    return # Exit training
+
                 last_step_metrics = {k: v for k, v in metrics.items() if k in ['triplet', 'denoise']}
 
                 pbar.set_postfix(
-                    loss=f"{metrics['loss']:.4f}",
-                    triplet=f"{metrics['triplet']:.4f}",
-                    denoise=f"{metrics['denoise']:.4f}",
-                    w_tri=f"{weights['triplet']:.3f}", # Display the scalar weight
-                    w_den=f"{weights['denoise']:.3f}"  # Display the scalar weight
+                    loss=f"{metrics['loss']:.3f}",
+                    denoise=f"{metrics['denoise']:.3f}",
+                    gnorm=f"{metrics['grad_norm']:.3f}",
+                    lr=f"{metrics['lr']:.1e}"
                 )
 
             self.params = unreplicate(p_state).params
@@ -479,27 +545,25 @@ class GalacticDiffusionFunnel:
         with open(f"{self.config['basename']}.weights.pkl", 'wb') as f: pickle.dump(data_to_save, f)
 
 
-
-
 def main():
-    parser = argparse.ArgumentParser(description="GDF v0.29 (Corrected Unified Trainer)"); 
+    parser = argparse.ArgumentParser(description="GDF v0.30 (Stabilized Trainer)");
     parser.add_argument('command', nargs='?', default='train', choices=['train'], help="Action to perform.")
     parser.add_argument('--basename', type=str, default="gdf_model", help="Basename for model files.")
     parser.add_argument('--image_dir', type=str, default="./images/", help="Path to image directory.")
     parser.add_argument('--epochs', type=int, default=100, help="Number of training epochs.")
-    parser.add_argument('--batch-size', type=int, default=None, help="Global batch size. Defaults to 2 * num_gpus.")
+    parser.add_argument('--batch-size', type=int, default=None, help="Global batch size. Defaults to 8 * num_gpus.")
     parser.add_argument('--d-model', type=int, default=512, help="Model embedding dimension.")
-    parser.add_argument('--learning-rate', type=float, default=1e-4, help="Base learning rate.")
+    parser.add_argument('--learning-rate', type=float, default=2e-4, help="Peak learning rate.") # Increased slightly as schedule is more stable
     parser.add_argument('--seed', type=int, default=42, help="Random seed.")
-    # <<< ADD THIS ARGUMENT >>>
     parser.add_argument('--no-cache', action='store_false', dest='cache_dataset', 
                         help="Disable dataset caching. Caching is on by default for performance.")
     
     args = parser.parse_args()
     num_devices = jax.local_device_count()
     if args.batch_size is None:
-        args.batch_size = max(1, 2 * num_devices)
-        print(f"[INFO] --batch-size not set. Defaulting to {args.batch_size} ({num_devices} devices * 2).")
+        # A larger default batch size is better for stability and throughput
+        args.batch_size = max(1, 8 * num_devices)
+        print(f"[INFO] --batch-size not set. Defaulting to {args.batch_size} ({num_devices} devices * 8).")
 
     patch_size = 32
     image_size = 512
@@ -513,12 +577,12 @@ def main():
         'seed': args.seed,
     }
     
-    print(f"--- Galactic Diffusion Funnel v0.29 on {num_devices} device(s) ---")
+    print(f"--- Galactic Diffusion Funnel v0.30 on {num_devices} device(s) ---")
     gdf = GalacticDiffusionFunnel(MODEL_CONFIG)
     
     if args.command == 'train':
-        # <<< PASS THE NEW ARGUMENT HERE >>>
         gdf.train(args.image_dir, args.epochs, args.batch_size, cache_dataset=args.cache_dataset)
+
 
 if __name__ == "__main__":
     try:
