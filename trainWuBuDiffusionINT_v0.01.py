@@ -21,6 +21,8 @@ from functools import partial
 import random
 import time
 from pathlib import Path
+import torch
+from PIL import Image
 
 # --- JAX Configuration: Optimized for Speed ---
 CPU_DEVICE = jax.devices("cpu")[0]
@@ -35,13 +37,12 @@ try:
     tf.config.set_visible_devices([], 'GPU')
 except ImportError: print("[FATAL] `tensorflow` not found."), sys.exit(1)
 try:
-    from sklearn.neighbors import NearestNeighbors
-    from sklearn.feature_extraction.text import TfidfVectorizer
-except ImportError: print("[FATAL] `scikit-learn` not found."), sys.exit(1)
-try:
     from tqdm import tqdm
 except ImportError: print("[FATAL] `tqdm` not found."), sys.exit(1)
-
+try:
+    import clip
+    _clip_device = "cuda" if torch.cuda.is_available() else "cpu"
+except ImportError: print("[FATAL] `clip` and `torch` are now required for training. Please `pip install git+https://github.com/openai/CLIP.git`"), sys.exit(1)
 
 # --- WUBU GEOMETRY (FROM YOUR RESEARCH) ---
 class PoincareBall:
@@ -69,7 +70,7 @@ class PoincareBall:
         direction = v_f32 / safe_v_norm; magnitude = jnp.tanh(sqrt_c * safe_v_norm) / sqrt_c
         result = jnp.where(v_norm < PoincareBall.EPS, jnp.zeros_like(v_f32), PoincareBall.project(magnitude * direction)); return result.astype(v.dtype)
 
-# --- MODEL DEFINITIONS (v7.0 - Hard Negative Mining) ---
+# --- MODEL DEFINITIONS (v9.0 - Sphere Alignment) ---
 class ComplexEmbedding(nn.Module):
     num_embeddings: int; features: int; dtype: Any = jnp.bfloat16
     @nn.compact
@@ -116,25 +117,35 @@ class HyperbolicDenoisingBlock(nn.Module):
     d_model: int; num_heads: int; mlp_dim: int; dtype: Any = jnp.bfloat16
     
     @nn.compact
-    def __call__(self, x, time_emb, cake_cond, curvature):
+    def __call__(self, x, time_emb, cond_sequence, curvature):
         h_tangent = PoincareBall.logmap0(x, curvature)
-        h_norm = nn.LayerNorm(dtype=jnp.float32)(h_tangent)
+        h_norm = nn.LayerNorm(dtype=jnp.float32, name="ln_1")(h_tangent)
         
         attn_out_tangent = nn.MultiHeadDotProductAttention(
-            num_heads=self.num_heads, qkv_features=self.d_model, dtype=self.dtype
-        )(h_norm, h_norm)
+            num_heads=self.num_heads, qkv_features=self.d_model, dtype=self.dtype, name="self_attn"
+        )(h_norm)
         
         attn_out_poincare = PoincareBall.expmap0(attn_out_tangent, curvature)
         x = PoincareBall.mobius_add(x, attn_out_poincare, curvature)
 
         h_tangent = PoincareBall.logmap0(x, curvature)
-        h_norm = nn.LayerNorm(dtype=jnp.float32)(h_tangent)
+        h_norm_for_cross = nn.LayerNorm(dtype=jnp.float32, name="ln_2")(h_tangent)
+        cond_norm = nn.LayerNorm(dtype=jnp.float32, name="ln_cond")(cond_sequence)
+
+        cross_attn_out_tangent = nn.MultiHeadDotProductAttention(
+            num_heads=self.num_heads, qkv_features=self.d_model, dtype=self.dtype, name="cross_attn"
+        )(inputs_q=h_norm_for_cross, inputs_kv=cond_norm)
+
+        cross_attn_out_poincare = PoincareBall.expmap0(cross_attn_out_tangent, curvature)
+        x = PoincareBall.mobius_add(x, cross_attn_out_poincare, curvature)
+
+        h_tangent = PoincareBall.logmap0(x, curvature)
+        h_norm_for_mlp = nn.LayerNorm(dtype=jnp.float32, name="ln_3")(h_tangent)
 
         time_cond_proj = nn.Dense(self.d_model, dtype=self.dtype)(nn.gelu(time_emb))
-        cake_cond_proj = nn.Dense(self.d_model, dtype=self.dtype)(nn.gelu(cake_cond))
-        h_norm = h_norm + time_cond_proj[:, None, :] + cake_cond_proj[:, None, :]
+        h_norm_for_mlp = h_norm_for_mlp + time_cond_proj[:, None, :]
         
-        mlp_out_tangent = nn.Dense(self.mlp_dim, dtype=self.dtype)(h_norm)
+        mlp_out_tangent = nn.Dense(self.mlp_dim, dtype=self.dtype)(h_norm_for_mlp)
         mlp_out_tangent = nn.gelu(mlp_out_tangent)
         mlp_out_tangent = nn.Dense(self.d_model, dtype=self.dtype)(mlp_out_tangent)
 
@@ -147,19 +158,18 @@ class HyperbolicDenoisingNetwork(nn.Module):
     d_model: int; num_layers: int; num_heads: int; mlp_dim: int
     
     @nn.compact
-    def __call__(self, noisy_patches, time, cake_conditioning):
+    def __call__(self, noisy_patches, time, cond_sequence):
         curvature = self.param('curvature', nn.initializers.constant(1.0), (1,), jnp.float32)
         curvature = nn.softplus(curvature) + 1e-7
 
         h = PoincareBall.project(noisy_patches)
-        cake_cond_norm = nn.LayerNorm(dtype=jnp.float32, name="cake_cond_ln")(cake_conditioning)
         time_emb = SinusoidalPosEmb(self.d_model)(time)
         time_emb = nn.Dense(self.d_model)(time_emb)
 
-        for _ in range(self.num_layers):
+        for i in range(self.num_layers):
             h = HyperbolicDenoisingBlock(
-                d_model=self.d_model, num_heads=self.num_heads, mlp_dim=self.mlp_dim
-            )(h, time_emb, cake_cond_norm, curvature)
+                d_model=self.d_model, num_heads=self.num_heads, mlp_dim=self.mlp_dim, name=f"block_{i}"
+            )(h, time_emb, cond_sequence, curvature)
         
         predicted_noise_tangent = PoincareBall.logmap0(h, curvature)
         predicted_noise = nn.Dense(self.d_model, dtype=jnp.float32, name='out_proj')(predicted_noise_tangent)
@@ -225,84 +235,92 @@ def _extract(a, t, x_shape):
 
 # --- DATA PIPELINE ---
 def _bytes_feature(value): return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+
 def convert_to_tfrecords(image_dir: str, image_size: int):
-    from tqdm import tqdm
-    print("--- Converting dataset to TFRecord format with Hard Negative Mining... ---")
-    image_paths_raw = sorted([p for p in Path(image_dir).rglob('*') if p.suffix.lower() in ('.png', '.jpg', '.jpeg')])
-    captions, image_paths = [], []
-    for img_path in tqdm(image_paths_raw, desc="Reading captions"):
-        txt_path = img_path.with_suffix('.txt')
-        if txt_path.exists():
-            captions.append(txt_path.read_text(encoding='utf-8', errors='ignore').strip())
-            image_paths.append(str(img_path))
+    # --- NEW: Check if files already exist ---
+    record_file = Path(image_dir) / f"singles_{image_size}.tfrecord"
+    clip_file = Path(image_dir) / f"clip_embeddings_{image_size}.pkl"
+    info_file = Path(image_dir) / "dataset_info.pkl"
 
-    if not image_paths: raise ValueError(f"No images with matching .txt files found in {image_dir}")
+    if record_file.exists() and clip_file.exists() and info_file.exists():
+        print("--- TFRecord, CLIP embeddings, and info file already exist. Skipping conversion. ---")
+        print("--- To re-run, please delete the existing files. ---")
+        return
 
-    print("--- Building TF-IDF matrix... ---")
-    vectorizer = TfidfVectorizer(stop_words='english', max_features=20000)
-    caption_vectors = vectorizer.fit_transform(captions)
-
-    num_neighbors = min(50, len(image_paths))
-    print(f"--- Finding {num_neighbors} nearest neighbors for each image... ---")
-    neighbors = NearestNeighbors(n_neighbors=num_neighbors, algorithm='brute', metric='cosine').fit(caption_vectors)
-    distances, indices = neighbors.kneighbors(caption_vectors)
+    print("--- Converting dataset and calculating CLIP embeddings... ---")
+    image_paths_raw = sorted([p for p in Path(image_dir).rglob('*') if p.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp')])
     
-    def process_image(path):
+    # --- NEW: In-memory lists ---
+    all_img_bytes_for_tfrecord = []
+    all_pil_images_for_clip = []
+
+    for path in tqdm(image_paths_raw, desc="Processing images in memory"):
         try:
-            img_bytes = tf.io.read_file(path)
-            img = tf.image.decode_image(img_bytes, channels=3, expand_animations=False)
-            img = tf.image.resize(img, [image_size, image_size], method=tf.image.ResizeMethod.BICUBIC)
-            img = tf.cast(tf.clip_by_value(img, 0, 255), tf.uint8)
-            return tf.io.encode_jpeg(img, quality=95).numpy()
+            img = Image.open(path).convert("RGB").resize((image_size, image_size), Image.BICUBIC)
+            # For CLIP
+            all_pil_images_for_clip.append(img)
+            # For TFRecord
+            img_np = np.array(img)
+            all_img_bytes_for_tfrecord.append(tf.io.encode_jpeg(img_np, quality=95).numpy())
         except Exception as e:
             print(f"Warning: Skipping corrupted image {path} due to error: {e}")
-            return None
 
-    triplet_tfrecord_path = Path(image_dir) / f"triplets_{image_size}.tfrecord"
-    single_tfrecord_path = Path(image_dir) / f"singles_{image_size}.tfrecord"
-    written_count = 0
-    with tf.io.TFRecordWriter(str(triplet_tfrecord_path)) as triplet_writer, \
-         tf.io.TFRecordWriter(str(single_tfrecord_path)) as single_writer:
-        for i in tqdm(range(len(image_paths)), desc="Writing TFRecords with Hard Negatives"):
-            anchor_path = image_paths[i]
-            
-            # The positive is always the closest neighbor (that isn't itself)
-            positive_path = image_paths[indices[i][1]]
+    # --- NEW: Write TFRecord from memory ---
+    print(f"--- Writing {len(all_img_bytes_for_tfrecord)} images to {record_file}... ---")
+    with tf.io.TFRecordWriter(str(record_file)) as writer:
+        for img_bytes in all_img_bytes_for_tfrecord:
+            feature = {'image': _bytes_feature(img_bytes)}
+            example = tf.train.Example(features=tf.train.Features(feature=feature))
+            writer.write(example.SerializeToString())
 
-            # Hard Negative Mining:
-            # The pool of hard negatives are the next closest neighbors (from index 2 to num_neighbors)
-            hard_negative_pool_indices = indices[i][2:]
-            if len(hard_negative_pool_indices) == 0:
-                continue # Skip if there's no one else to choose from
-            
-            # Select a random negative from this much more challenging pool
-            chosen_negative_idx = random.choice(hard_negative_pool_indices)
-            negative_path = image_paths[chosen_negative_idx]
+    # --- NEW: Batch process CLIP from memory ---
+    print(f"--- Calculating CLIP embeddings (using device: {_clip_device})... ---")
+    clip_model, clip_preprocess = clip.load("ViT-B/32", device=_clip_device)
+    all_clip_embeddings = []
+    clip_batch_size = 256 # Sensible default for batching to GPU
 
-            anchor_bytes, pos_bytes, neg_bytes = process_image(anchor_path), process_image(positive_path), process_image(negative_path)
-            
-            if all((anchor_bytes, pos_bytes, neg_bytes)):
-                triplet_feature = {'anchor': _bytes_feature(anchor_bytes), 'positive': _bytes_feature(pos_bytes), 'negative': _bytes_feature(neg_bytes)}
-                triplet_example = tf.train.Example(features=tf.train.Features(feature=triplet_feature)); triplet_writer.write(triplet_example.SerializeToString())
-                single_feature = {'image': _bytes_feature(anchor_bytes)}
-                single_example = tf.train.Example(features=tf.train.Features(feature=single_feature)); single_writer.write(single_example.SerializeToString())
-                written_count += 1
-                
-    with open(Path(image_dir) / "dataset_info.pkl", "wb") as f: pickle.dump({"num_samples": written_count}, f)
-    print(f"--- TFRecord conversion complete. Wrote {written_count} valid triplets and singles. ---")
+    for i in tqdm(range(0, len(all_pil_images_for_clip), clip_batch_size), desc="Calculating CLIP embeddings"):
+        batch_pil = all_pil_images_for_clip[i:i + clip_batch_size]
+        processed_images = torch.stack([clip_preprocess(p) for p in batch_pil]).to(_clip_device)
+        with torch.no_grad():
+            embeddings = clip_model.encode_image(processed_images).cpu().numpy()
+        all_clip_embeddings.append(embeddings)
 
+    clip_embeddings_np = np.concatenate(all_clip_embeddings)
+    with open(clip_file, 'wb') as f:
+        pickle.dump(clip_embeddings_np, f)
+    
+    num_samples = len(clip_embeddings_np)
+    with open(info_file, "wb") as f: pickle.dump({"num_samples": num_samples}, f)
+    print(f"--- Conversion complete. Found {num_samples} valid images. ---")
 def create_dataset(image_dir: str, image_size: int, batch_size: int):
-    record_file = Path(image_dir) / f"triplets_{image_size}.tfrecord"
-    if not record_file.exists(): raise FileNotFoundError(f"TFRecord file not found. Run 'convert-to-tfrecords' command first.")
-    print(f"--- Loading from optimized TFRecord: {record_file} ---")
-    def _parse_and_normalize(proto):
+    record_file = Path(image_dir) / f"singles_{image_size}.tfrecord"
+    clip_file = Path(image_dir) / f"clip_embeddings_{image_size}.pkl"
+
+    if not record_file.exists() or not clip_file.exists():
+        raise FileNotFoundError(f"TFRecord or CLIP embeddings file not found. Run 'convert-to-tfrecords' command first.")
+        
+    print(f"--- Loading images from: {record_file} ---")
+    print(f"--- Loading CLIP embeddings from: {clip_file} ---")
+    
+    with open(clip_file, 'rb') as f:
+        clip_embeddings = pickle.load(f)
+
+    def _parse_image(proto):
         img = tf.io.decode_jpeg(proto, channels=3); img = (tf.cast(img, tf.float32) / 127.5) - 1.0; img.set_shape([image_size, image_size, 3]); return img
-    feature_desc = {'anchor': tf.io.FixedLenFeature([], tf.string), 'positive': tf.io.FixedLenFeature([], tf.string), 'negative': tf.io.FixedLenFeature([], tf.string)}
-    def parser(x):
-        features = tf.io.parse_single_example(x, feature_desc)
-        return (_parse_and_normalize(features['anchor']), _parse_and_normalize(features['positive']), _parse_and_normalize(features['negative']))
-    ds = tf.data.TFRecordDataset(str(record_file), num_parallel_reads=tf.data.AUTOTUNE)
-    ds = ds.shuffle(4096).repeat().map(parser, num_parallel_calls=tf.data.AUTOTUNE)
+    
+    feature_desc = {'image': tf.io.FixedLenFeature([], tf.string)}
+    def parser(x): return _parse_image(tf.io.parse_single_example(x, feature_desc)['image'])
+
+    img_ds = tf.data.TFRecordDataset(str(record_file), num_parallel_reads=tf.data.AUTOTUNE)
+    img_ds = img_ds.map(parser, num_parallel_calls=tf.data.AUTOTUNE)
+    
+    clip_ds = tf.data.Dataset.from_tensor_slices(clip_embeddings)
+    
+    # Zip the two datasets together
+    ds = tf.data.Dataset.zip((img_ds, clip_ds))
+    ds = ds.shuffle(4096).repeat()
     ds = ds.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
     return ds
 
@@ -367,8 +385,9 @@ class GalacticDiffusionFunnel:
             dummy_patch_grid = self.models['patch_encoder'].apply({'params': self.params['patch_encoder']}, dummy_image)
             dummy_patches_flat = dummy_patch_grid.reshape(1, -1, self.d_model)
             self.params['navigator'] = self.models['navigator'].init(nav_key, dummy_patches_flat)['params']
-            dummy_time = jnp.array([0]); dummy_cond = jnp.zeros((1, self.d_model))
-            self.params['denoiser'] = self.models['denoiser'].init(den_key, dummy_patches_flat, dummy_time, dummy_cond)['params']
+            dummy_time = jnp.array([0])
+            dummy_cond_sequence = jnp.zeros_like(dummy_patches_flat)
+            self.params['denoiser'] = self.models['denoiser'].init(den_key, dummy_patches_flat, dummy_time, dummy_cond_sequence)['params']
             self.params['patch_decoder'] = self.models['patch_decoder'].init(dec_key, dummy_patch_grid)['params']
         print("--- CPU Initialization Complete. ---")
 
@@ -386,44 +405,54 @@ class GalacticDiffusionFunnel:
             self._init_params()
             state = train_state.TrainState.create(apply_fn=None, params=self.params, tx=optimizer)
             p_state = replicate(state)
-            loss_priorities = {'triplet': 1.0, 'denoise': 2.0}
+            loss_priorities = {'sphere_align': 1.0, 'denoise': 1.0}
             loss_controller = DynamicLossController(loss_priorities)
             start_step = 0
 
+        def sphere_alignment_loss(our_embeddings, clip_embeddings):
+            # L2 normalize both sets of embeddings
+            our_embeddings = our_embeddings / jnp.linalg.norm(our_embeddings, axis=-1, keepdims=True).clip(1e-6)
+            clip_embeddings = clip_embeddings / jnp.linalg.norm(clip_embeddings, axis=-1, keepdims=True).clip(1e-6)
+            
+            # Calculate pairwise cosine similarity matrices
+            our_sim_matrix = our_embeddings @ our_embeddings.T
+            clip_sim_matrix = clip_embeddings @ clip_embeddings.T
+            
+            # Loss is the MSE between the two similarity matrices
+            return jnp.mean((our_sim_matrix - jax.lax.stop_gradient(clip_sim_matrix))**2)
+
         @partial(jax.pmap, axis_name='devices', donate_argnums=(0,))
         def p_train_step(state, batch, key, weights):
+            img_batch, clip_batch = batch
+
             def loss_fn(params):
-                anchor_img, positive_img, negative_img = batch
-                B = anchor_img.shape[0]; 
-                anchor_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, anchor_img).reshape(B, -1, self.d_model)
-                positive_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, positive_img).reshape(B, -1, self.d_model)
-                negative_patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, negative_img).reshape(B, -1, self.d_model)
-                all_patches = jnp.stack([anchor_patches, positive_patches, negative_patches])
-                h_all = self.models['navigator'].apply({'params': params['navigator']}, all_patches)
-                h_anchor, h_pos, h_neg = [jax.tree.map(lambda x: x[i], h_all) for i in range(3)]
-                triplet_loss = 0.0; margin = 0.5
-                for m in ['syn', 'sem', 'exe']:
-                    ah_r, ah_i = jnp.mean(h_anchor[m][0], 1).astype(jnp.float32), jnp.mean(h_anchor[m][1], 1).astype(jnp.float32)
-                    ph_r, ph_i = jnp.mean(h_pos[m][0], 1).astype(jnp.float32), jnp.mean(h_pos[m][1], 1).astype(jnp.float32)
-                    nh_r, nh_i = jnp.mean(h_neg[m][0], 1).astype(jnp.float32), jnp.mean(h_neg[m][1], 1).astype(jnp.float32)
-                    dist_pos = jnp.sum((ah_r - ph_r)**2 + (ah_i - ph_i)**2, axis=-1)
-                    dist_neg = jnp.sum((ah_r - nh_r)**2 + (ah_i - nh_i)**2, axis=-1)
-                    triplet_loss += jnp.mean(jnp.maximum(0, dist_pos - dist_neg + margin))
+                B = img_batch.shape[0]; 
+                patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, img_batch).reshape(B, -1, self.d_model)
+                nav_states = self.models['navigator'].apply({'params': params['navigator']}, patches)
+                
+                # Sphere Alignment Loss
+                sem_r, sem_i = nav_states['sem']
+                our_sem_embeddings = jnp.concatenate([sem_r, sem_i], axis=-1).mean(axis=1)
+                align_loss = sphere_alignment_loss(our_sem_embeddings, clip_batch)
+
+                # Denoising Loss
                 key_t, key_noise = jax.random.split(key)
                 t = jax.random.randint(key_t, (B,), 0, self.diffusion.timesteps)
-                noise = jax.random.normal(key_noise, anchor_patches.shape)
-                noisy_patches = self.diffusion.q_sample(jax.lax.stop_gradient(anchor_patches), t, noise)
-                sem_r, sem_i = h_anchor['sem']
-                cake_cond = jnp.concatenate([sem_r, sem_i], axis=-1).mean(axis=1)
-                pred_noise = self.models['denoiser'].apply({'params': params['denoiser']}, noisy_patches, t, jax.lax.stop_gradient(cake_cond))
+                noise = jax.random.normal(key_noise, patches.shape)
+                noisy_patches = self.diffusion.q_sample(jax.lax.stop_gradient(patches), t, noise)
+                
+                cond_sequence = jnp.concatenate([sem_r, sem_i], axis=-1)
+                pred_noise = self.models['denoiser'].apply({'params': params['denoiser']}, noisy_patches, t, jax.lax.stop_gradient(cond_sequence))
+                
                 denoising_loss = jnp.mean((pred_noise.astype(jnp.float32) - noise.astype(jnp.float32))**2)
-                total_loss = (triplet_loss * weights['triplet']) + (denoising_loss * weights['denoise'])
-                return total_loss, {'triplet': triplet_loss, 'denoise': denoising_loss}
+                
+                total_loss = (align_loss * weights['sphere_align']) + (denoising_loss * weights['denoise'])
+                return total_loss, {'sphere_align': align_loss, 'denoise': denoising_loss}
 
             (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
             grads = jax.lax.pmean(grads, axis_name='devices')
             new_state = state.apply_gradients(grads=grads)
-            metrics = {'loss': loss, 'triplet': aux['triplet'], 'denoise': aux['denoise'], 'grad_norm': optax.global_norm(grads), 'lr': lr_schedule_fn(state.step)}
+            metrics = {'loss': loss, 'sphere_align': aux['sphere_align'], 'denoise': aux['denoise'], 'grad_norm': optax.global_norm(grads), 'lr': lr_schedule_fn(state.step)}
             metrics = jax.lax.pmean(metrics, axis_name='devices')
             return new_state, metrics
 
@@ -432,7 +461,7 @@ class GalacticDiffusionFunnel:
         sharded_dummy_batch = common_utils.shard(dummy_batch)
         self.key, *compile_keys = jax.random.split(self.key, self.num_devices + 1)
         sharded_keys = jnp.array(compile_keys)
-        dummy_weights = replicate({'triplet': 1.0, 'denoise': 1.0})
+        dummy_weights = replicate({'sphere_align': 1.0, 'denoise': 1.0})
         jit_start_time = time.time()
         p_state, _ = p_train_step(p_state, sharded_dummy_batch, sharded_keys, dummy_weights)
         jax.block_until_ready(p_state)
@@ -465,7 +494,7 @@ class GalacticDiffusionFunnel:
                             self.save_checkpoint(p_state, loss_controller, global_step)
                             return
                         
-                        pbar.set_postfix(step=f"{global_step}/{total_steps}", loss=f"{metrics['loss']:.3f}", triplet=f"{metrics['triplet']:.3f}", denoise=f"{metrics['denoise']:.3f}", lr=f"{metrics['lr']:.1e}")
+                        pbar.set_postfix(step=f"{global_step}/{total_steps}", loss=f"{metrics['loss']:.3f}", align=f"{metrics['sphere_align']:.3f}", denoise=f"{metrics['denoise']:.3f}", lr=f"{metrics['lr']:.1e}")
                         pbar.update(1)
                         global_step += 1
                 
@@ -528,7 +557,7 @@ class GalacticDiffusionFunnel:
         with open(save_path, 'wb') as f: pickle.dump(data_to_save, f)
 
 def main():
-    parser = argparse.ArgumentParser(description="GDF Trainer (WuBu Spheres v7.0)");
+    parser = argparse.ArgumentParser(description="GDF Trainer (WuBu Spheres v9.0)");
     parser.add_argument('command', choices=['convert-to-tfrecords', 'train'], default='train', nargs='?', help="Action to perform.")
     parser.add_argument('--image_dir', type=str, default="./images/", help="Path to image directory.")
     parser.add_argument('--basename', type=str, default="gdf_model", help="Basename for model files.")
