@@ -34,13 +34,12 @@ try:
     tf.config.set_visible_devices([], 'GPU')
 except ImportError: print("[FATAL] `tensorflow` not found."), sys.exit(1)
 try:
-    from sklearn.neighbors import BallTree, NearestNeighbors
-    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.neighbors import NearestNeighbors
 except ImportError: print("[FATAL] `scikit-learn` not found."), sys.exit(1)
 try:
     import clip
     _clip_device = "cuda" if torch.cuda.is_available() else "cpu"
-except ImportError: print("[INFO] `clip` not found."), (clip := None)
+except ImportError: print("[FATAL] `clip` and `torch` are required. Please `pip install git+https://github.com/openai/CLIP.git`"), sys.exit(1)
 
 
 # --- WUBU GEOMETRY (FROM YOUR RESEARCH) ---
@@ -70,7 +69,7 @@ class PoincareBall:
         result = jnp.where(v_norm < PoincareBall.EPS, jnp.zeros_like(v_f32), PoincareBall.project(magnitude * direction)); return result.astype(v.dtype)
 
 
-# --- MODEL DEFINITIONS (v6.3 - No JIT Generation) ---
+# --- MODEL DEFINITIONS (v9.0 - Sphere Alignment) ---
 class ComplexEmbedding(nn.Module):
     num_embeddings: int; features: int; dtype: Any = jnp.bfloat16
     @nn.compact
@@ -117,25 +116,35 @@ class HyperbolicDenoisingBlock(nn.Module):
     d_model: int; num_heads: int; mlp_dim: int; dtype: Any = jnp.bfloat16
     
     @nn.compact
-    def __call__(self, x, time_emb, cake_cond, curvature):
+    def __call__(self, x, time_emb, cond_sequence, curvature):
         h_tangent = PoincareBall.logmap0(x, curvature)
-        h_norm = nn.LayerNorm(dtype=jnp.float32)(h_tangent)
+        h_norm = nn.LayerNorm(dtype=jnp.float32, name="ln_1")(h_tangent)
         
         attn_out_tangent = nn.MultiHeadDotProductAttention(
-            num_heads=self.num_heads, qkv_features=self.d_model, dtype=self.dtype
-        )(h_norm, h_norm)
+            num_heads=self.num_heads, qkv_features=self.d_model, dtype=self.dtype, name="self_attn"
+        )(h_norm)
         
         attn_out_poincare = PoincareBall.expmap0(attn_out_tangent, curvature)
         x = PoincareBall.mobius_add(x, attn_out_poincare, curvature)
 
         h_tangent = PoincareBall.logmap0(x, curvature)
-        h_norm = nn.LayerNorm(dtype=jnp.float32)(h_tangent)
+        h_norm_for_cross = nn.LayerNorm(dtype=jnp.float32, name="ln_2")(h_tangent)
+        cond_norm = nn.LayerNorm(dtype=jnp.float32, name="ln_cond")(cond_sequence)
+
+        cross_attn_out_tangent = nn.MultiHeadDotProductAttention(
+            num_heads=self.num_heads, qkv_features=self.d_model, dtype=self.dtype, name="cross_attn"
+        )(inputs_q=h_norm_for_cross, inputs_kv=cond_norm)
+
+        cross_attn_out_poincare = PoincareBall.expmap0(cross_attn_out_tangent, curvature)
+        x = PoincareBall.mobius_add(x, cross_attn_out_poincare, curvature)
+
+        h_tangent = PoincareBall.logmap0(x, curvature)
+        h_norm_for_mlp = nn.LayerNorm(dtype=jnp.float32, name="ln_3")(h_tangent)
 
         time_cond_proj = nn.Dense(self.d_model, dtype=self.dtype)(nn.gelu(time_emb))
-        cake_cond_proj = nn.Dense(self.d_model, dtype=self.dtype)(nn.gelu(cake_cond))
-        h_norm = h_norm + time_cond_proj[:, None, :] + cake_cond_proj[:, None, :]
+        h_norm_for_mlp = h_norm_for_mlp + time_cond_proj[:, None, :]
         
-        mlp_out_tangent = nn.Dense(self.mlp_dim, dtype=self.dtype)(h_norm)
+        mlp_out_tangent = nn.Dense(self.mlp_dim, dtype=self.dtype)(h_norm_for_mlp)
         mlp_out_tangent = nn.gelu(mlp_out_tangent)
         mlp_out_tangent = nn.Dense(self.d_model, dtype=self.dtype)(mlp_out_tangent)
 
@@ -148,19 +157,18 @@ class HyperbolicDenoisingNetwork(nn.Module):
     d_model: int; num_layers: int; num_heads: int; mlp_dim: int
     
     @nn.compact
-    def __call__(self, noisy_patches, time, cake_conditioning):
+    def __call__(self, noisy_patches, time, cond_sequence):
         curvature = self.param('curvature', nn.initializers.constant(1.0), (1,), jnp.float32)
         curvature = nn.softplus(curvature) + 1e-7
 
         h = PoincareBall.project(noisy_patches)
-        cake_cond_norm = nn.LayerNorm(dtype=jnp.float32, name="cake_cond_ln")(cake_conditioning)
         time_emb = SinusoidalPosEmb(self.d_model)(time)
         time_emb = nn.Dense(self.d_model)(time_emb)
 
-        for _ in range(self.num_layers):
+        for i in range(self.num_layers):
             h = HyperbolicDenoisingBlock(
-                d_model=self.d_model, num_heads=self.num_heads, mlp_dim=self.mlp_dim
-            )(h, time_emb, cake_cond_norm, curvature)
+                d_model=self.d_model, num_heads=self.num_heads, mlp_dim=self.mlp_dim, name=f"block_{i}"
+            )(h, time_emb, cond_sequence, curvature)
         
         predicted_noise_tangent = PoincareBall.logmap0(h, curvature)
         predicted_noise = nn.Dense(self.d_model, dtype=jnp.float32, name='out_proj')(predicted_noise_tangent)
@@ -225,24 +233,23 @@ class DynamicLossController:
     def __init__(self, target_weights: Dict[str, float], history_len: int = 100, adjustment_strength: float = 0.01, min_weight: float = 0.1):
         self.loss_names = list(target_weights.keys()); self.target_weights = target_weights; target_sum = sum(self.target_weights.values()); self.target_proportions = {name: w / target_sum for name, w in self.target_weights.items()}; self.weights = {name: 1.0 for name in self.loss_names}; self.loss_histories = {name: deque(maxlen=history_len) for name in self.loss_names}; self.strength = adjustment_strength; self.min_weight = min_weight
 
-# --- DATA PIPELINE ---
-def create_dataset(image_dir: str, image_size: int, batch_size: int, for_triplets: bool):
-    record_file = Path(image_dir) / f"{'triplets' if for_triplets else 'singles'}_{image_size}.tfrecord"
-    if not record_file.exists(): raise FileNotFoundError(f"TFRecord file not found. Please run the trainer script with the 'convert-to-tfrecords' command first.")
+# --- DATA PIPELINE (for construct command) ---
+def create_dataset_for_construct(image_dir: str, image_size: int, batch_size: int):
+    record_file = Path(image_dir) / f"singles_{image_size}.tfrecord"
+    if not record_file.exists():
+        raise FileNotFoundError(f"TFRecord file not found. Run the trainer script with 'convert-to-tfrecords' command first.")
     print(f"--- Loading from optimized TFRecord: {record_file} ---")
-    def _parse_and_normalize(proto):
-        img = tf.io.decode_jpeg(proto, channels=3); img = (tf.cast(img, tf.float32) / 127.5) - 1.0; img.set_shape([image_size, image_size, 3]); return img
-    if for_triplets:
-        feature_desc = {'anchor': tf.io.FixedLenFeature([], tf.string), 'positive': tf.io.FixedLenFeature([], tf.string), 'negative': tf.io.FixedLenFeature([], tf.string)}
-        def parser(x):
-            features = tf.io.parse_single_example(x, feature_desc)
-            return (_parse_and_normalize(features['anchor']), _parse_and_normalize(features['positive']), _parse_and_normalize(features['negative']))
-    else:
+    def _parse(proto):
         feature_desc = {'image': tf.io.FixedLenFeature([], tf.string)}
-        def parser(x): return _parse_and_normalize(tf.io.parse_single_example(x, feature_desc)['image'])
+        img_bytes = tf.io.parse_single_example(proto, feature_desc)['image']
+        img = tf.io.decode_jpeg(img_bytes, channels=3)
+        img_for_model = (tf.cast(img, tf.float32) / 127.5) - 1.0
+        img_for_model.set_shape([image_size, image_size, 3])
+        return img_for_model, img
+        
     ds = tf.data.TFRecordDataset(str(record_file), num_parallel_reads=tf.data.AUTOTUNE)
-    ds = ds.shuffle(4096).repeat().map(parser, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+    ds = ds.map(_parse, num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     return ds
 
 class GDFInference:
@@ -257,84 +264,97 @@ class GDFInference:
             'patch_decoder': StableImagePatchDecoder(patch_size=config['patch_size'], out_channels=config['channels'], embed_dim=self.d_model)
         }
         self.diffusion = DiffusionProcess(timesteps=config['diffusion_timesteps'])
-        if clip: self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device=_clip_device)
-        else: self.clip_model, self.clip_preprocess = None, None
+        self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device=_clip_device)
 
     def _load_params(self):
         if self.params: return
         print("--- Loading model parameters from disk... ---")
-        checkpoint_path = Path(f"{self.config['basename']}.checkpoint.pkl")
-        weights_path = Path(f"{self.config['basename']}.weights.pkl")
-        load_path = None
-        if checkpoint_path.exists():
-            print(f"--- Found checkpoint file: {checkpoint_path} ---")
-            load_path = checkpoint_path
-        elif weights_path.exists():
-            print(f"--- No checkpoint found. Using final weights file: {weights_path} ---")
-            load_path = weights_path
-        else:
+        load_path = Path(f"{self.config['basename']}.weights.pkl")
+        if not load_path.exists():
+            load_path = Path(f"{self.config['basename']}.checkpoint.pkl")
+        if not load_path.exists():
             print(f"[FATAL] No checkpoint or weights file found for basename '{self.config['basename']}'. Please train a model first.")
             sys.exit(1)
-        try:
-            with open(load_path, 'rb') as f:
-                saved_data = pickle.load(f)
-        except (EOFError, pickle.UnpicklingError):
-            print(f"[FATAL] File at {load_path} is corrupted or empty.")
-            sys.exit(1)
+        
+        print(f"--- Loading from: {load_path} ---")
+        with open(load_path, 'rb') as f:
+            saved_data = pickle.load(f)
+
         if saved_data.get('d_model') != self.config['d_model']:
             print(f"[FATAL] d_model mismatch! File is for {saved_data.get('d_model')}, but config is for {self.config['d_model']}.")
             sys.exit(1)
         
-        if 'params' in saved_data:
-            self.params = saved_data['params']
-        else:
-            print(f"[FATAL] Could not find model parameters in {load_path}.")
-            sys.exit(1)
+        self.params = saved_data.get('params')
+        if not self.params:
+            print(f"[FATAL] Could not find model parameters in {load_path}. Checkpoint might be from an old version."), sys.exit(1)
         print("--- Weights loaded successfully. ---")
 
     def construct(self, image_dir, batch_size, num_samples):
         self._load_params()
-        if not self.clip_model: print("[ERROR] CLIP model required for construct command."); return
 
         @jax.jit
-        def get_sem_embedding(params, img_batch):
+        def get_sem_sequence(params, img_batch):
             patches = self.models['patch_encoder'].apply({'params': params['patch_encoder']}, img_batch).reshape(img_batch.shape[0], -1, self.d_model)
             nav_states = self.models['navigator'].apply({'params': params['navigator']}, patches)
             sem_r, sem_i = nav_states['sem']
-            return jnp.concatenate([sem_r.mean(1), sem_i.mean(1)], axis=-1)
+            return jnp.concatenate([sem_r, sem_i], axis=-1)
 
-        dataset = create_dataset(image_dir, self.config['image_size'], batch_size, for_triplets=False)
-        steps = num_samples // batch_size
-        if steps == 0: raise ValueError(f"num_samples ({num_samples}) is smaller than batch_size ({batch_size}).")
-        all_sem_embeddings, all_clip_embeddings = [], []
-        data_iterator = dataset.as_numpy_iterator()
-        for _ in tqdm(range(steps), desc="Baking cake", total=steps):
-            batch = next(data_iterator)
-            sem_embeddings = get_sem_embedding(self.params, batch)
-            all_sem_embeddings.append(jax.device_get(sem_embeddings))
-            with torch.no_grad():
-                pil_images = [Image.fromarray(((img * 0.5 + 0.5) * 255).astype(np.uint8)) for img in batch]
+        dataset = create_dataset_for_construct(image_dir, self.config['image_size'], batch_size)
+        
+        all_sem_sequences = []
+        all_clip_embeddings = []
+        
+        total_batches = (num_samples + batch_size - 1) // batch_size
+        data_iterator = iter(dataset)
+
+        for _ in tqdm(range(total_batches), desc="Baking cake", total=total_batches):
+            try:
+                model_batch, clip_batch_uint8 = next(data_iterator)
+                sem_sequences = get_sem_sequence(self.params, model_batch.numpy())
+                all_sem_sequences.append(jax.device_get(sem_sequences))
+                
+                pil_images = [Image.fromarray(img.numpy()) for img in clip_batch_uint8]
                 processed_images = torch.stack([self.clip_preprocess(p) for p in pil_images]).to(_clip_device)
-                all_clip_embeddings.append(self.clip_model.encode_image(processed_images).cpu().numpy())
-        sem_embeddings_np = np.concatenate(all_sem_embeddings); clip_embeddings_np = np.concatenate(all_clip_embeddings)
-        print(f"--- Building BallTree index for {len(sem_embeddings_np)} embeddings... ---")
-        ball_tree = BallTree(sem_embeddings_np, leaf_size=40)
-        cake_data = {'ball_tree': ball_tree, 'clip_embeddings': clip_embeddings_np}
-        cake_path = f"{self.config['basename']}.cake.pkl"; open(cake_path, 'wb').write(pickle.dumps(cake_data))
+                with torch.no_grad():
+                    embeddings = self.clip_model.encode_image(processed_images).cpu().numpy()
+                all_clip_embeddings.append(embeddings)
+            except tf.errors.OutOfRangeError:
+                break
+
+        sem_sequences_np = np.concatenate(all_sem_sequences)
+        clip_embeddings_np = np.concatenate(all_clip_embeddings)
+        
+        print(f"--- Building NearestNeighbors index for {len(clip_embeddings_np)} CLIP embeddings... ---")
+        clip_nn = NearestNeighbors(n_neighbors=16, algorithm='brute', metric='cosine')
+        clip_nn.fit(clip_embeddings_np)
+        
+        cake_data = {'clip_nn': clip_nn, 'sem_sequences': sem_sequences_np}
+        cake_path = f"{self.config['basename']}.cake.pkl"
+        with open(cake_path, 'wb') as f:
+            pickle.dump(cake_data, f)
         print(f"--- Funnel Cake saved to {cake_path} ---")
 
     def generate(self, prompt_text: str, num_samples: int, guidance_scale: float, steps: int):
         self._load_params()
-        if not self.clip_model: print("[ERROR] CLIP model required for generate command."); return
 
         print(f"--- Generating: '{prompt_text}' | CFG: {guidance_scale} | Steps: {steps} ---")
         cake_path = Path(f"{self.config['basename']}.cake.pkl")
         if not cake_path.exists(): print(f"[ERROR] Cake file not found. Run 'construct' first."); return
         with open(cake_path, 'rb') as f: cake_data = pickle.load(f)
-        with torch.no_grad(): text_features = self.clip_model.encode_text(clip.tokenize([prompt_text]).to(_clip_device)).cpu().numpy()
-        dists = np.linalg.norm(cake_data['clip_embeddings'] - text_features, axis=1); closest_idx = np.argmin(dists)
-        cond_embedding = jnp.array(cake_data['ball_tree'].data[closest_idx])
-        cond_batch = jnp.stack([cond_embedding] * num_samples); uncond_batch = jnp.zeros_like(cond_batch)
+
+        print(f"--- Finding best match for prompt... ---")
+        with torch.no_grad():
+            text_features = self.clip_model.encode_text(clip.tokenize([prompt_text]).to(_clip_device)).cpu().numpy()
+        
+        distances, indices = cake_data['clip_nn'].kneighbors(text_features)
+        best_match_idx = indices[0, 0]
+        
+        cond_sequence = jnp.array(cake_data['sem_sequences'][best_match_idx])
+        cond_batch = jnp.stack([cond_sequence] * num_samples)
+        
+        # Create a zeroed sequence for unconditional guidance
+        uncond_batch = jnp.zeros_like(cond_batch)
+        
         full_cond_batch = jnp.concatenate([cond_batch, uncond_batch])
         self.key, sample_key = jax.random.split(self.key)
         latents = jax.random.normal(sample_key, (num_samples, self.num_patches, self.d_model))
@@ -346,7 +366,9 @@ class GDFInference:
             t = timesteps[i]
             t_batch = jnp.full((num_samples * 2,), t)
             
-            pred_noise_double = self.models['denoiser'].apply({'params': self.params['denoiser']}, jnp.concatenate([latents, latents]), t_batch, full_cond_batch)
+            combined_latents = jnp.concatenate([latents, latents])
+            
+            pred_noise_double = self.models['denoiser'].apply({'params': self.params['denoiser']}, combined_latents, t_batch, full_cond_batch)
             pred_noise_cond, pred_noise_uncond = jnp.split(pred_noise_double, 2)
             guided_noise = pred_noise_uncond + guidance_scale * (pred_noise_cond - pred_noise_uncond)
             
@@ -355,8 +377,8 @@ class GDFInference:
             sqrt_one_minus_alpha_cumprod = _extract(self.diffusion.sqrt_one_minus_alphas_cumprod, t_batch_single, latents.shape)
             pred_mean = (latents - (1. - alpha_t) / sqrt_one_minus_alpha_cumprod * guided_noise) / jnp.sqrt(alpha_t)
             
-            posterior_variance_t = _extract(self.diffusion.posterior_variance, t_batch_single, latents.shape)
             if t > 0:
+                posterior_variance_t = _extract(self.diffusion.posterior_variance, t_batch_single, latents.shape)
                 self.key, step_key = jax.random.split(self.key)
                 noise = jax.random.normal(step_key, latents.shape)
                 latents = pred_mean + jnp.sqrt(posterior_variance_t) * noise
@@ -378,34 +400,40 @@ class GDFInference:
             print(f"Image saved to {save_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description="GDF Inference Engine (WuBu Spheres v6.3)");
+    parser = argparse.ArgumentParser(description="GDF Inference Engine (WuBu Spheres v9.0)");
     parser.add_argument('command', choices=['construct', 'generate'], help="Action to perform.")
     parser.add_argument('--image_dir', type=str, default="./images/", help="Path to image directory for 'construct'.")
     parser.add_argument('--basename', type=str, default="gdf_model", help="Basename for model files.")
     parser.add_argument('--d-model', type=int, default=256, help="Model embedding dimension of the loaded weights.")
-    parser.add_argument('--batch-size', type=int, default=None, help="Batch size for 'construct'. Defaults to 4 * num_devices.")
+    parser.add_argument('--batch-size', type=int, default=None, help="Batch size for 'construct'. Defaults to 256.")
     parser.add_argument('--prompt', type=str, default="a beautiful landscape painting", help="Text prompt for generation.")
-    parser.add_argument('--num_samples', dest='num_samples', nargs='?', default=1, type=int, help="Number of images to generate or use for cake construction.")
+    parser.add_argument('--num-samples', type=int, default=1, help="Number of images to generate or use for cake construction.")
     parser.add_argument('--guidance-scale', '-g', type=float, default=7.5, help="Classifier-Free Guidance scale.")
-    parser.add_argument('--steps', type=int, default=500, help="Number of denoising steps for generation.")
-    parser.add_argument('--seed', type=int, default=42, help="Random seed.")
+    parser.add_argument('--steps', type=int, default=50, help="Number of denoising steps for generation.")
+    parser.add_argument('--seed', type=int, default=None, help="Random seed. If not set, a random seed will be used.")
     args = parser.parse_args()
-    num_devices = jax.local_device_count()
+
+    if args.seed is None:
+        args.seed = int(time.time() * 1000)
+        print(f"[INFO] No seed provided. Using random seed: {args.seed}")
+
     if args.batch_size is None:
-        args.batch_size = max(1, 4 * num_devices)
+        args.batch_size = 256
         if args.command == 'construct': print(f"[INFO] --batch-size not set. Defaulting to {args.batch_size}.")
+    
     patch_size = 32; image_size = 512
     MODEL_CONFIG = {
         'basename': f"{args.basename}_{args.d_model}d", 'image_size': image_size, 'patch_size': patch_size,
         'num_patches_side': image_size // patch_size, 'channels': 3, 'd_model': args.d_model,
         'diffusion_timesteps': 1000, 'learning_rate': 0, 'seed': args.seed}
-    print(f"--- GDF Inference on {num_devices} device(s) | Mode: {args.command.upper()} ---")
+    
+    print(f"--- GDF Inference on {jax.local_device_count()} device(s) | Mode: {args.command.upper()} ---")
     gdf_inference = GDFInference(MODEL_CONFIG)
-    dataset_info_path = Path(args.image_dir) / "dataset_info.pkl"
-    if not dataset_info_path.exists() and args.command == 'construct':
-        print(f"[FATAL] dataset_info.pkl not found. Run the trainer script with the 'convert-to-tfrecords' command first."); sys.exit(1)
     
     if args.command == 'construct':
+        dataset_info_path = Path(args.image_dir) / "dataset_info.pkl"
+        if not dataset_info_path.exists():
+            print(f"[FATAL] dataset_info.pkl not found. Run 'convert-to-tfrecords' in train.py first."); sys.exit(1)
         with open(dataset_info_path, "rb") as f: num_total_samples = pickle.load(f)['num_samples']
         print(f"--- Found {num_total_samples} samples in dataset info. ---")
         num_to_construct = min(args.num_samples, num_total_samples) if args.num_samples > 1 else num_total_samples
