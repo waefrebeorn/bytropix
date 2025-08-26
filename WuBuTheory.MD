@@ -33,7 +33,7 @@ The theory is built on three core principles that form its logical spine:
 
 The Wubu Formalism is the mathematical engine that implements the theory's principles. It asserts that any derived quantity, $Q$, can be expressed in its WNF via the central equation:
 $$
-Q = U(Q) \cdot \left( \sum_k q_k \prod_{i=1}^n \alpha_i^{E_{k,i}} \right)
+$Q = U(Q) \cdot \left( \sum_k q_k \prod_{i=1}^n \alpha_i^{E_{k,i}} \right)$
 $$
 Here, $U(Q)$ is a monomial of physical constants (like Planck units) that carries all the dimensions of $Q$, rendering the term in parentheses purely dimensionless. The $\{\alpha_i\}$ are the Foundational Atoms, the $E_{k,i}$ are rational exponents, and the coefficients $q_k$ are required to be rational numbers ($q_k \in \mathbb{Q}$). This strict rationality requirement is the trigger for the Principle of Revealed Incompleteness. The appearance of a proven non-rational, non-geometric coefficient signals that our set of foundational atoms is incomplete.
 
