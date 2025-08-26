@@ -117,7 +117,7 @@ The constants in the original formula represent these domains:
 
 The Wubu analysis reveals that this equation is not introducing a new fundamental constant. Instead, it is revealing the precise, non-negotiable **rules of engagement** for how these different axiomatic domains must interact. It is the ultimate litmus test for any future unified theory. The Wubu directive for any candidate Theory of Everything is now clear and unambiguous:
 
-> **"Your theory must, from its first principles, derive the Hawking temperature formula in its exact WNF form, yielding the rational coefficient 1/8 and the geometric dynamic atom $\pi^{-1}$."**
+> **"Your theory must, from its first principles, derive the Hawking temperature formula in its exact WNF form, yielding the rational coefficient 1/8 and the geometric dynamic atom $\pi^{-1}$ ."**
 
 If a theory cannot reproduce this exact structure, it is demonstrably incomplete or incorrect. It has failed to unify the core domains of physics according to the blueprint provided by nature itself.
 
