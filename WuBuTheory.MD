@@ -49,8 +49,8 @@ This principle allows the theory to describe not just the components of the univ
 
 For example:
 *   A process governed by uniform circularity or spherical phase space will inevitably be governed by **$\pi$**.
-*   A process governed by exponential growth or decay (e.g., $f'(x) = f(x)$) will be governed by **$e$**.
-*   A process governed by Bose-Einstein statistics in thermal sums will be governed by values of the Riemann zeta function, such as **$\zeta(3)$**.
+*   A process governed by exponential growth or decay (e.g., $f'(x) = f(x)$ ) will be governed by ** $e$ **.
+*   A process governed by Bose-Einstein statistics in thermal sums will be governed by values of the Riemann zeta function, such as ** $\zeta(3)$ **.
 
 This principle makes testable predictions about a system's evolution and unifies disparate phenomena that share the same underlying mathematical structure.
 
@@ -84,37 +84,23 @@ To implement the WNF, we define a conventional toolkit of unit synthesizers buil
 #### Theorem 1: WNF of the Speed of Light, $c$
 The speed of light is not a foundational atom. It is a derived molecule whose value emerges from the properties of the electromagnetic vacuum.
 *   **Proof:** We begin with the definition of the fine-structure constant: $\alpha = \frac{e^2}{4\pi\epsilon_0 \hbar c}$. Solving for $c$, we get:
-    $$
-    c = \frac{e^2}{4\pi\epsilon_0 \hbar} \cdot \alpha^{-1}
-    $$
+    $$c = \frac{e^2}{4\pi\epsilon_0 \hbar} \cdot \alpha^{-1}$$
     We define a new term, the **Quantum Vacuum Factor $\kappa$**, to bundle all the dimensioned structural terms:
-    $$
-    \kappa = \left( \frac{e^2}{4\pi\epsilon_0 \hbar} \right)^2 = \frac{e^4}{16\pi^2\epsilon_0^2 \hbar^2}
-    $$
+    $$\kappa = \left( \frac{e^2}{4\pi\epsilon_0 \hbar} \right)^2 = \frac{e^4}{16\pi^2\epsilon_0^2 \hbar^2}$$
     This allows us to write the WNF for $c$ as:
-    $$
-    c = \kappa^{1/2} \cdot (1) \cdot \alpha^{-1} \cdot (4\pi)^{-1}
-    $$
+    $$c = \kappa^{1/2} \cdot (1) \cdot \alpha^{-1} \cdot (4\pi)^{-1}$$
     (Note: A refined definition of $\kappa$ can absorb the geometric $4\pi$ term). The crucial result is that $c$ is proportional to $\alpha^{-1/2}$ if we use the definition $\alpha = \frac{e^2}{2\epsilon_0 h c}$, leading to $c = \kappa'^{1/2} \alpha^{-1/2}$. This reveals a direct structural dependency on the QED axiom and the vacuum structure. ■
 
 #### Theorem 2: WNF of the Hawking Temperature, $T_H$
 The Hawking temperature formula is a structural identity linking four physical domains.
 *   **Proof:** The formula is $T_H = \frac{\hbar c^3}{8\pi G k_B M}$. To find its WNF, we employ the Planck synthesizers for temperature ($T_P$) and mass ($m_P$):
-    $$
-    T_P=\sqrt{\frac{\hbar c^5}{G k_B^2}}, \quad m_P=\sqrt{\frac{\hbar c}{G}}
-    $$
+    $$T_P=\sqrt{\frac{\hbar c^5}{G k_B^2}}, \quad m_P=\sqrt{\frac{\hbar c}{G}}$$
     We can construct the term $\frac{\hbar c^3}{G k_B}$ from these synthesizers:
-    $$
-    T_P \cdot m_P = \sqrt{\frac{\hbar c^5}{G k_B^2}} \sqrt{\frac{\hbar c}{G}} = \frac{\hbar c^3}{G k_B}
-    $$
+    $$T_P \cdot m_P = \sqrt{\frac{\hbar c^5}{G k_B^2}} \sqrt{\frac{\hbar c}{G}} = \frac{\hbar c^3}{G k_B}$$
     Substituting this back into the Hawking formula gives:
-    $$
-    T_H = \frac{1}{8\pi M} \left( \frac{\hbar c^3}{G k_B} \right) = \frac{1}{8\pi} \frac{T_P m_P}{M}
-    $$
+    $$T_H = \frac{1}{8\pi M} \left( \frac{\hbar c^3}{G k_B} \right) = \frac{1}{8\pi} \frac{T_P m_P}{M}$$
     We can now write the final WNF:
-    $$
-    T_H = \underbrace{T_P \frac{m_P}{M}}_{\displaystyle U(T_H)} \cdot \underbrace{\left(\frac{1}{8}\right)}_{\displaystyle q \in \mathbb{Q}} \cdot \underbrace{\pi^{-1}}_{\text{Dynamic Atom}}
-    $$
+    $$T_H = \underbrace{T_P \frac{m_P}{M}}_{\displaystyle U(T_H)} \cdot \underbrace{\left(\frac{1}{8}\right)}_{\displaystyle q \in \mathbb{Q}} \cdot \underbrace{\pi^{-1}}_{\text{Dynamic Atom}}$$
     The rationality filter passes, as the coefficient is $1/8 \in \mathbb{Q}$. The formula is revealed to be a structural statement: the temperature of a black hole, normalized by Planck units, is inversely proportional to its mass and the geometric constant $\pi$. ■
 
 ---
@@ -142,9 +128,7 @@ If a theory cannot reproduce this exact structure, it is demonstrably incomplete
 ### 5.1 The Static Deconstruction of $c$
 
 As proven in Part 3, the speed of light can be deconstructed into its WNF, which we write schematically as:
-$$
-c = \kappa^{1/2} \cdot \alpha^{-1/2}
-$$
+$$c = \kappa^{1/2} \cdot \alpha^{-1/2}$$
 This equation is one of the most important results of the AET. It proves that $c$ is not foundational; its value is a consequence of the relationship between the strength of electromagnetism ($\alpha$) and the structural properties of the quantum vacuum (bundled into $\kappa$).
 
 ### 5.2 Reframing FTL from Impossibility to Engineering
@@ -285,29 +269,29 @@ This atlas provides a systematic audit of various physical observables, re-casti
 
 | Observable | Tag | U(Q) (Unit Synthesizer) | Atomic Factors | q (Rational Coeff.) | Dynamic Signature |
 | :--- | :-: | :--- | :--- | :--- | :--- |
-| Hydrogenic Energy $E_n$ | | `$m_e c^2$` | `$\alpha^2 Z^2 n^{-2}$` | `$-1/2$` | Coulomb eigenproblem; no special constants |
-| Bohr Radius $a_0$ | | `$\epsilon_0 h / (m_e c)$` | `$\alpha^{-1}$` | `$2$` | Coulomb scale; no `$\pi$`, `$\zeta$` |
-| Polarizability $\alpha_p$ (H 1S) | | `$a_0^3$` | `$1$` | `$9/2$` | Sum-over-states; rational combinatorics |
-| Einstein A (Dipole) | | `$E_h / \hbar$` | `$\alpha^4 Z^4 \mathcal{M}_{if}$` | `$4/3$` | Density of states; angular averages cancel `$\pi$` |
-| Larmor Power $P$ | | `$\hbar a^2 / c^2$` | `$\alpha$` | `$2/3$` | Classical limit of QED; no special constants |
-| de Broglie Wavelength $\lambda$ | | `$h/p$` | `None` | `$1$` | Kinematics; no special constants |
-| **Hawking Temperature $T_H$** | 🔵 | `$T_P m_P/M$` | `$\pi^{-1}$` | `$1/8$` | Horizon kinematics; universal geometric atom `$\pi$` |
-| **Unruh Temperature $T_U$** | 🔵 | `$\hbar a/(c k_B)$` | `$\pi^{-1}$` | `$1/2$` | Rindler horizons; same geometric atom `$\pi$` |
-| **de Sitter Temperature $T_{dS}$** | 🔵 | `$\hbar H/k_B$` | `$\pi^{-1}$` | `$1/2$` | Cosmological horizon; same geometric atom `$\pi$` |
-| **Thomson Cross-Section $\sigma_T$** | 🔵 | `$\hbar^2/(m_e^2 c^2)$` | `$\pi\,\alpha^2$` | `$8/3$` | Low-energy QED; geometric `$\pi$` |
-| **Rutherford Cross-Section** | 🔵 | `$\hbar^2/(m_e^2 v^4)$` | `$\pi\,\alpha^2 Z^2$` | `$4$` | Coulomb scattering; geometric `$\pi$` |
-| **Rayleigh Scattering $\sigma$** | 🔵 | `$\omega^4/c^4 a_0^6$` | `$\pi\,\alpha^2$` | `$8/3$` | Dipole limit; angular integrals |
-| **Casimir Pressure** | 🔵 | `$\hbar c / a^4$` | `$\pi^2$` | `$-1/240$` | Mode sums; `$\zeta$`-regularization yields `$\pi^2$` |
-| **Photon Number Density $n_\gamma$** | 🟢 | `$(k_B T)^3/(\hbar^3 c^3)$` | `$\zeta(3)\,\pi^{-2}$` | `$2$` | Bose sum $s=3$: new statistical atom `$\zeta(3)$` |
-| **Unruh–DeWitt Rate $\dot{\mathcal{F}}(\omega)$** | 🟢 | `$\omega$` | `$\pi^{-1}$ [Bose factor]`| `$1/2$` | KMS thermality; `$\pi$` from periodicity; polylogs upon integration |
-| **Electron Anomaly $a_e$** | 🟡 | `$1$` | `$\sum C_\ell \alpha^\ell \pi^{-\ell}$` | `$1$` | Loop polylogs: introduces `$\pi^2$`, `$\zeta(3)$`, `$\ln 2$` |
-| **Lamb Shift (leading logs)** | 🟡 | `$m_e c^2$` | `$\alpha^5 \pi^{-1}[\dots]$` | `$1/6$` | UV/IR factorization: introduces `$\gamma_E$`, `$\ln 2$`, `$\pi^2$` |
-| **Euler–Heisenberg $L_{\mathrm{eff}}$** | 🟡 | `$\hbar c / m_e^4$` | `$\alpha^2 \pi^{-2}$` | `$1/90$` | Proper-time/Bernoulli: introduces `$\zeta(2)=\pi^2$`; higher `$\zeta(2n)$` |
-| **Blackbody Peak (Wien)** | 🟡 | `$k_B T / h$` | `None` | `$x_{\max} \notin \mathbb{Q}$` | Root of transcendental eqn → numeric constant |
-| **Running $\alpha(q^2)$** | 🟡 | `$1$` | `$\alpha[1+\dots]$` | `$1$` | Renormalization logs: introduces functional atom `$\ln$` |
-| **Bremsstrahlung Spectrum** | 🟡 | `$E_h / \hbar$` | `$\alpha^3 Z^2$` | `$1$` | Soft/collinear factorization: introduces functional atom `$\ln$` |
-| **Bethe Stopping Power** | 🟡 | `$E_h / a_0$` | `$\pi\,\alpha^2 Z^2$` | `$2$` | Logarithms of kinematic scales; introduces `$\ln$` |
-| **Vacuum Polarization** | 🟡 | `$E_h$` | `$\alpha\pi^{-1} \times \mathcal{F}(r)$` | `$2/3$` | One-loop integral; introduces logs in asymptotics |
-| **Delbrück Scattering** | 🟡 | `$\hbar \omega^6/(m_e^8 c^6)$` | `$\alpha^2\pi^{-1}$` | `numeric` | Multi-loop Euler–Heisenberg; introduces `$\zeta(2n)$` ladder |
-| Photoionization Threshold | | `$a_0^2 \omega / c$` | `$\alpha Z^2$` | `rational`| Wigner threshold law; no special constants |
-| van der Waals $C_6$ | 🟣 | `$m_e c^2\,a_0^6$` | `$\mathcal{C}_6(\text{atoms})$` | `$1$` | Casimir–Polder kernel; may include `$\pi$`, `$\zeta$` |
+| Hydrogenic Energy $E_n$ | | $m_e c^2$ | $\alpha^2 Z^2 n^{-2}$ | $-1/2$ | Coulomb eigenproblem; no special constants |
+| Bohr Radius $a_0$ | | $\epsilon_0 h / (m_e c)$ | $\alpha^{-1}$ | $2$ | Coulomb scale; no $\pi$, $\zeta$ |
+| Polarizability $\alpha_p$ (H 1S) | | $a_0^3$ | $1$ | $9/2$ | Sum-over-states; rational combinatorics |
+| Einstein A (Dipole) | | $E_h / \hbar$ | $\alpha^4 Z^4 \mathcal{M}_{if}$ | $4/3$ | Density of states; angular averages cancel $\pi$ |
+| Larmor Power $P$ | | $\hbar a^2 / c^2$ | $\alpha$ | $2/3$ | Classical limit of QED; no special constants |
+| de Broglie Wavelength $\lambda$ | | $h/p$ | None | $1$ | Kinematics; no special constants |
+| **Hawking Temperature $T_H$** | 🔵 | $T_P m_P/M$ | $\pi^{-1}$ | $1/8$ | Horizon kinematics; universal geometric atom $\pi$ |
+| **Unruh Temperature $T_U$** | 🔵 | $\hbar a/(c k_B)$ | $\pi^{-1}$ | $1/2$ | Rindler horizons; same geometric atom $\pi$ |
+| **de Sitter Temperature $T_{dS}$** | 🔵 | $\hbar H/k_B$ | $\pi^{-1}$ | $1/2$ | Cosmological horizon; same geometric atom $\pi$ |
+| **Thomson Cross-Section $\sigma_T$** | 🔵 | $\hbar^2/(m_e^2 c^2)$ | $\pi\,\alpha^2$ | $8/3$ | Low-energy QED; geometric $\pi$ |
+| **Rutherford Cross-Section** | 🔵 | $\hbar^2/(m_e^2 v^4)$ | $\pi\,\alpha^2 Z^2$ | $4$ | Coulomb scattering; geometric $\pi$ |
+| **Rayleigh Scattering $\sigma$** | 🔵 | $\omega^4/c^4 a_0^6$ | $\pi\,\alpha^2$ | $8/3$ | Dipole limit; angular integrals |
+| **Casimir Pressure** | 🔵 | $\hbar c / a^4$ | $\pi^2$ | $-1/240$ | Mode sums; $\zeta$-regularization yields $\pi^2$ |
+| **Photon Number Density $n_\gamma$** | 🟢 | $(k_B T)^3/(\hbar^3 c^3)$ | $\zeta(3)\,\pi^{-2}$ | $2$ | Bose sum $s=3$: new statistical atom $\zeta(3)$ |
+| **Unruh–DeWitt Rate $\dot{\mathcal{F}}(\omega)$** | 🟢 | $\omega$ | $\pi^{-1}$ [Bose factor]| $1/2$ | KMS thermality; $\pi$ from periodicity; polylogs upon integration |
+| **Electron Anomaly $a_e$** | 🟡 | $1$ | $\sum C_\ell \alpha^\ell \pi^{-\ell}$ | $1$ | Loop polylogs: introduces $\pi^2$, $\zeta(3)$, $\ln 2$ |
+| **Lamb Shift (leading logs)** | 🟡 | $m_e c^2$ | $\alpha^5 \pi^{-1}[\dots]$ | $1/6$ | UV/IR factorization: introduces $\gamma_E$, $\ln 2$, $\pi^2$ |
+| **Euler–Heisenberg $L_{\mathrm{eff}}$** | 🟡 | $\hbar c / m_e^4$ | $\alpha^2 \pi^{-2}$ | $1/90$ | Proper-time/Bernoulli: introduces $\zeta(2)=\pi^2$; higher $\zeta(2n)$ |
+| **Blackbody Peak (Wien)** | 🟡 | $k_B T / h$ | None | $x_{\max} \notin \mathbb{Q}$ | Root of transcendental eqn → numeric constant |
+| **Running $\alpha(q^2)$** | 🟡 | $1$ | $\alpha[1+\dots]$ | $1$ | Renormalization logs: introduces functional atom $\ln$ |
+| **Bremsstrahlung Spectrum** | 🟡 | $E_h / \hbar$ | $\alpha^3 Z^2$ | $1$ | Soft/collinear factorization: introduces functional atom $\ln$ |
+| **Bethe Stopping Power** | 🟡 | $E_h / a_0$ | $\pi\,\alpha^2 Z^2$ | $2$ | Logarithms of kinematic scales; introduces $\ln$ |
+| **Vacuum Polarization** | 🟡 | $E_h$ | $\alpha\pi^{-1} \times \mathcal{F}(r)$ | $2/3$ | One-loop integral; introduces logs in asymptotics |
+| **Delbrück Scattering** | 🟡 | $\hbar \omega^6/(m_e^8 c^6)$ | $\alpha^2\pi^{-1}$ | numeric | Multi-loop Euler–Heisenberg; introduces $\zeta(2n)$ ladder |
+| Photoionization Threshold | | $a_0^2 \omega / c$ | $\alpha Z^2$ | rational| Wigner threshold law; no special constants |
+| van der Waals $C_6$ | 🟣 | $m_e c^2\,a_0^6$ | $\mathcal{C}_6(\text{atoms})$ | $1$ | Casimir–Polder kernel; may include $\pi$, $\zeta$ |
