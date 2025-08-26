@@ -49,8 +49,8 @@ This principle allows the theory to describe not just the components of the univ
 
 For example:
 *   A process governed by uniform circularity or spherical phase space will inevitably be governed by **$\pi$**.
-*   A process governed by exponential growth or decay (e.g., $f'(x) = f(x)$ ) will be governed by **$e$**.
-*   A process governed by Bose-Einstein statistics in thermal sums will be governed by values of the Riemann zeta function, such as **$\zeta(3)$**.
+*   A process governed by exponential growth or decay (e.g., $f'(x) = f(x)$ ) will be governed by $e$.
+*   A process governed by Bose-Einstein statistics in thermal sums will be governed by values of the Riemann zeta function, such as $\zeta(3)$.
 
 This principle makes testable predictions about a system's evolution and unifies disparate phenomena that share the same underlying mathematical structure.
 
