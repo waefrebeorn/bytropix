@@ -62,7 +62,9 @@ except ImportError:
 # =================================================================================================
 # Optimizer and Foundational Model Components
 # =================================================================================================
-DTYPE = jnp.float32
+DTYPE = jnp.bfloat16
+MANIFOLD_DTYPE = jnp.float32
+
 class SentinelState(NamedTuple):
     sign_history: chex.ArrayTree; dampened_count: Optional[jnp.ndarray] = None; dampened_pct: Optional[jnp.ndarray] = None
 def sentinel(dampening_factor: float = 0.1, history_len: int = 5, oscillation_threshold: int = 3) -> optax.GradientTransformation:
@@ -79,118 +81,130 @@ def sentinel(dampening_factor: float = 0.1, history_len: int = 5, oscillation_th
         new_state = SentinelState(sign_history=new_sign_history, dampened_count=num_oscillating, dampened_pct=(num_oscillating / (total_params + 1e-8)))
         return dampened_updates, new_state
     return optax.GradientTransformation(init_fn, update_fn)
+
 class ImageEncoder(nn.Module):
     d_model: int; dtype: Any = DTYPE
     @nn.compact
     def __call__(self, images: jnp.ndarray) -> jnp.ndarray:
-        x = nn.Conv(32, (4, 4), (2, 2))(images); x = nn.gelu(x); x = nn.LayerNorm()(x)
-        x = nn.Conv(64, (4, 4), (2, 2))(x); x = nn.gelu(x); x = nn.LayerNorm()(x)
-        x = nn.Conv(128, (3, 3), padding='SAME')(x); x = nn.gelu(x); x = nn.LayerNorm()(x)
-        return nn.Dense(self.d_model)(jnp.mean(x, axis=(1, 2)))
+        x = nn.Conv(32, (4, 4), (2, 2), dtype=self.dtype)(images); x = nn.gelu(x); x = nn.LayerNorm(dtype=self.dtype)(x)
+        x = nn.Conv(64, (4, 4), (2, 2), dtype=self.dtype)(x); x = nn.gelu(x); x = nn.LayerNorm(dtype=self.dtype)(x)
+        x = nn.Conv(128, (3, 3), padding='SAME', dtype=self.dtype)(x); x = nn.gelu(x); x = nn.LayerNorm(dtype=self.dtype)(x)
+        return nn.Dense(self.d_model, dtype=self.dtype)(jnp.mean(x, axis=(1, 2)))
 class TextEncoder(nn.Module):
     d_model: int; dtype: Any = DTYPE
     @nn.compact
     def __call__(self, text_embeds: jnp.ndarray) -> jnp.ndarray:
-        h = nn.Dense(self.d_model * 2)(text_embeds); h = nn.gelu(h); h = nn.LayerNorm()(h)
-        return nn.Dense(self.d_model)(h)
+        h = nn.Dense(self.d_model * 2, dtype=self.dtype)(text_embeds); h = nn.gelu(h); h = nn.LayerNorm(dtype=self.dtype)(h)
+        return nn.Dense(self.d_model, dtype=self.dtype)(h)
 class LatentMapDecoder(nn.Module):
     d_model: int; map_size: int = 16; map_channels: int = 64; dtype: Any = DTYPE
     @nn.compact
     def __call__(self, z: jnp.ndarray) -> jnp.ndarray:
-        h = nn.Dense(512)(z); h = nn.gelu(h)
-        h = nn.Dense(self.map_size * self.map_size * self.map_channels)(h)
+        h = nn.Dense(512, dtype=self.dtype)(z); h = nn.gelu(h)
+        h = nn.Dense(self.map_size * self.map_size * self.map_channels, dtype=self.dtype)(h)
         return h.reshape(-1, self.map_size, self.map_size, self.map_channels)
+
 class MathematicalPerceptualLoss(nn.Module):
     @nn.compact
     def __call__(self, gen_img, real_img, style_weight=1e6, fft_weight=1.0, color_weight=1.0):
+        gen_img, real_img = jax.tree_util.tree_map(lambda x: x.astype(jnp.float32), (gen_img, real_img))
         def gram_matrix(x): b, h, w, c = x.shape; x = x.reshape((b, h * w, c)); return jnp.einsum('bic,bjc->bij', x, x) / (h * w)
         def color_loss(x1, x2): m1, s1 = jnp.mean(x1, (1,2)), jnp.std(x1, (1,2)); m2, s2 = jnp.mean(x2, (1,2)), jnp.std(x2, (1,2)); return jnp.mean(jnp.abs(m1-m2)) + jnp.mean(jnp.abs(s1-s2))
         def fft_loss(x1, x2): return jnp.mean(jnp.abs(jnp.abs(jnp.fft.fftn(x1,(1,2))) - jnp.abs(jnp.fft.fftn(x2,(1,2)))))
         return (style_weight * jnp.mean(jnp.abs(gram_matrix(gen_img) - gram_matrix(real_img))) + color_weight * color_loss(gen_img, real_img) + fft_weight * fft_loss(gen_img, real_img))
 
-# =================================================================================================
-# The Wubu-Poincaré Architecture (Corrected Implementation)
-# =================================================================================================
 class PositionalEncoding(nn.Module):
     num_freqs: int
+    dtype: Any = MANIFOLD_DTYPE
     @nn.compact
     def __call__(self, x):
-        freqs = 2.**jnp.arange(self.num_freqs) * jnp.pi
+        freqs = 2.**jnp.arange(self.num_freqs, dtype=self.dtype) * jnp.pi
+        x = x.astype(self.dtype)
         return jnp.concatenate([x] + [f(x * freq) for freq in freqs for f in (jnp.sin, jnp.cos)], axis=-1)
+
 class PoincareCoordinateDecoder(nn.Module):
     d_model: int; map_channels: int; num_freqs: int = 12; mlp_width: int = 256; mlp_depth: int = 4
+    mlp_dtype: Any = DTYPE
+    manifold_dtype: Any = MANIFOLD_DTYPE
     
     def setup(self):
         mlp_layers = []
         input_dim = (2 * self.num_freqs + 1) * 2 + self.d_model + self.map_channels
         for i in range(self.mlp_depth):
-            mlp_layers.append(nn.Dense(self.mlp_width, name=f"mlp_{i}"))
+            mlp_layers.append(nn.Dense(self.mlp_width, dtype=self.mlp_dtype, name=f"mlp_{i}"))
             mlp_layers.append(nn.gelu)
-        mlp_layers.append(nn.Dense(3, name="mlp_out"))
+        mlp_layers.append(nn.Dense(3, dtype=self.mlp_dtype, name="mlp_out"))
         self.coordinate_mlp = nn.Sequential(mlp_layers)
-        self.pos_encoder = PositionalEncoding(self.num_freqs)
+        self.pos_encoder = PositionalEncoding(self.num_freqs, dtype=self.manifold_dtype)
         
     def __call__(self, z: jnp.ndarray, z_grid: jnp.ndarray, resolution: int) -> jnp.ndarray:
         B = z.shape[0]
-        x = jnp.linspace(-1, 1, resolution)
-        y = jnp.linspace(-1, 1, resolution)
+        x = jnp.linspace(-1, 1, resolution, dtype=self.manifold_dtype)
+        y = jnp.linspace(-1, 1, resolution, dtype=self.manifold_dtype)
         grid_x, grid_y = jnp.meshgrid(x, y, indexing='ij')
         coords = jnp.stack([grid_x, grid_y], axis=-1).reshape(resolution * resolution, 2)
+        encoded_coords = self.pos_encoder(coords)
         coords_rescaled = (coords + 1) / 2 * (z_grid.shape[1] - 1)
-        z_grid_for_sampling = z_grid.transpose(0, 3, 1, 2)
+        z_grid_for_sampling = z_grid.astype(self.manifold_dtype).transpose(0, 3, 1, 2)
         def sample_one_channel(grid_2d, coords_2d): 
             return jax.scipy.ndimage.map_coordinates(grid_2d, coords_2d.T, order=1, mode='reflect')
         sampled_features_batched = jax.vmap(jax.vmap(sample_one_channel, in_axes=(0, None)), in_axes=(0, None))(
             z_grid_for_sampling, coords_rescaled
         )
         sampled_features = sampled_features_batched.transpose(0, 2, 1)
-        encoded_coords = self.pos_encoder(coords)
         encoded_coords_tiled = jnp.repeat(encoded_coords[None, :, :], B, axis=0)
         z_tiled = jnp.repeat(z[:, None, :], resolution * resolution, axis=1)
-        mlp_input = jnp.concatenate([encoded_coords_tiled, z_tiled, sampled_features], axis=-1)
+        mlp_input = jnp.concatenate([
+            encoded_coords_tiled.astype(self.mlp_dtype), 
+            z_tiled.astype(self.mlp_dtype), 
+            sampled_features.astype(self.mlp_dtype)
+        ], axis=-1)
         output_pixels = self.coordinate_mlp(mlp_input)
         output_image = output_pixels.reshape(B, resolution, resolution, 3)
         return nn.tanh(output_image)
 
 class Chimera(nn.Module):
-    d_model: int; map_channels: int = 64; resolutions: tuple = (64, 128, 256, 512); dtype: Any = DTYPE
+    d_model: int; map_channels: int = 64; resolutions: tuple = (64, 128, 256, 512)
+    dtype: Any = DTYPE
+    
     def setup(self):
-        self.image_encoder = ImageEncoder(d_model=self.d_model)
-        self.text_encoder = TextEncoder(d_model=self.d_model)
-        self.latent_map_decoder = LatentMapDecoder(d_model=self.d_model, map_channels=self.map_channels)
-        self.coord_decoder = PoincareCoordinateDecoder(d_model=self.d_model, map_channels=self.map_channels, name='poincare_decoder')
+        self.image_encoder = ImageEncoder(d_model=self.d_model, dtype=self.dtype)
+        self.text_encoder = TextEncoder(d_model=self.d_model, dtype=self.dtype)
+        self.latent_map_decoder = LatentMapDecoder(d_model=self.d_model, map_channels=self.map_channels, dtype=self.dtype)
+        self.coord_decoder = PoincareCoordinateDecoder(d_model=self.d_model, map_channels=self.map_channels)
         self.perceptual_loss_fn = MathematicalPerceptualLoss()
 
     def __call__(self, batch):
-        z_image = self.image_encoder(batch['images'][64])
-        z_text = self.text_encoder(batch['clip_text_embeddings'])
+        z_image = self.image_encoder(batch['images'][64].astype(self.dtype))
+        z_text = self.text_encoder(batch['clip_text_embeddings'].astype(self.dtype))
         z_grid = self.latent_map_decoder(z_image)
         recons = {res: self.coord_decoder(z_image, z_grid, res) for res in self.resolutions}
         return recons, z_image, z_text
 
     def encode_text_only(self, text_embeds):
-        return self.text_encoder(text_embeds)
+        return self.text_encoder(text_embeds.astype(self.dtype))
 
     def decode_from_z(self, z, resolution=512):
         z_grid = self.latent_map_decoder(z)
         return self.coord_decoder(z, z_grid, resolution)
 
 # =================================================================================================
-# Training and Generation Infrastructure (RESTRUCTURED)
+# Training and Generation Infrastructure (Stable Sequential Logic)
 # =================================================================================================
-
-# --- STEP 1: A PMAPPED function for the SHARED ENCODERS ---
 @partial(jax.pmap, axis_name='devices', static_broadcasted_argnums=(2, 3))
 def p_shared_step(state, batch, model_apply_fn, w_align):
     def loss_fn(params):
-        z_image = model_apply_fn({'params': params}, batch['images'][64], method=lambda m, x: m.image_encoder(x))
-        z_text = model_apply_fn({'params': params}, batch['clip_text_embeddings'], method=lambda m, x: m.text_encoder(x))
-        loss_align = jnp.mean((z_image - z_text)**2)
-        loss_reg = 1e-4 * (jnp.mean(z_image**2) + jnp.mean(z_text**2))
+        img_in = batch['images'][64].astype(DTYPE)
+        text_in = batch['clip_text_embeddings'].astype(DTYPE)
+        z_image = model_apply_fn({'params': params}, img_in, method=lambda m, x: m.image_encoder(x))
+        z_text = model_apply_fn({'params': params}, text_in, method=lambda m, x: m.text_encoder(x))
+        loss_align = jnp.mean((z_image.astype(jnp.float32) - z_text.astype(jnp.float32))**2)
+        loss_reg = 1e-4 * (jnp.mean(z_image.astype(jnp.float32)**2) + jnp.mean(z_text.astype(jnp.float32)**2))
         total_loss = w_align * loss_align + loss_reg
         return total_loss, (z_image, z_text, loss_align)
 
-    (loss, (z_image, z_text, align_loss)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+    (loss, (z_image, z_text, align_loss)), grads = grad_fn(state.params)
     
     grads = jax.lax.pmean(grads, axis_name='devices')
     new_state = state.apply_gradients(grads=grads)
@@ -199,17 +213,21 @@ def p_shared_step(state, batch, model_apply_fn, w_align):
     return new_state, z_image, jax.lax.pmean(metrics, axis_name='devices')
 
 
-# --- STEP 2: A PMAPPED function for a SINGLE GENERATOR update ---
 @partial(jax.pmap, axis_name='devices', static_broadcasted_argnums=(4, 5, 6), donate_argnums=(0,))
 def p_generator_step(state, batch, z_image, dropout_key, resolution, model_apply_fn, w_perceptual):
     target_image = batch['images'][resolution]
     z_image_detached = jax.lax.stop_gradient(z_image)
 
     def generator_loss_fn(params):
-        z_grid = model_apply_fn({'params': params}, z_image_detached, method=lambda m, x: m.latent_map_decoder(x))
-        recon = model_apply_fn({'params': params}, z_image_detached, z_grid, resolution, method=lambda m, z, zg, res: m.coord_decoder(z, zg, res))
-        
-        B, H, W, C = target_image.shape
+        inputs = (z_image_detached, resolution)
+        recon = model_apply_fn(
+            {'params': params}, 
+            inputs, 
+            method=lambda m, args: m.decode_from_z(args[0], args[1])
+        )
+        recon_f32, target_image_f32 = recon.astype(jnp.float32), target_image.astype(jnp.float32)
+
+        B, H, W, C = target_image_f32.shape
         patch_size = 64
         
         if H > patch_size:
@@ -219,11 +237,11 @@ def p_generator_step(state, batch, z_image, dropout_key, resolution, model_apply
                 return jax.lax.dynamic_slice(img, (corner_y, corner_x, 0), (patch_size, patch_size, C))
 
             batch_keys = jax.random.split(dropout_key, B)
-            target_patches = jax.vmap(random_crop)(batch_keys, target_image)
-            recon_patches = jax.vmap(random_crop)(batch_keys, recon)
+            target_patches = jax.vmap(random_crop)(batch_keys, target_image_f32)
+            recon_patches = jax.vmap(random_crop)(batch_keys, recon_f32)
             target, pred = target_patches, recon_patches
         else:
-            target, pred = target_image, recon
+            target, pred = target_image_f32, recon_f32
 
         loss = jnp.mean(jnp.abs(target - pred))
         perceptual_loss = 0.0
@@ -231,7 +249,7 @@ def p_generator_step(state, batch, z_image, dropout_key, resolution, model_apply
             perceptual_loss = model_apply_fn({'params': params}, pred, target, method=lambda m, g, r: m.perceptual_loss_fn(g, r))
             loss += w_perceptual * perceptual_loss
             
-        aux = {'recon': recon, f'pixel_loss_{resolution}': jnp.mean(jnp.abs(target_image - recon)), 'perceptual_loss': perceptual_loss}
+        aux = {f'pixel_loss_{resolution}': jnp.mean(jnp.abs(target_image_f32 - recon_f32)), 'perceptual_loss': perceptual_loss}
         return loss, aux
 
     (loss, aux_outputs), grads = jax.value_and_grad(generator_loss_fn, has_aux=True)(state.params)
@@ -348,7 +366,7 @@ class Trainer:
         self.args = args; self.num_devices = jax.local_device_count(); self.should_shutdown=False; signal.signal(signal.SIGINT, self.request_shutdown); self.key = jax.random.PRNGKey(args.seed)
         self.metric_histories = {f'pixel_loss_{res}': deque(maxlen=200) for res in [64, 128, 256, 512]}
         self.metric_histories.update({'align_loss': deque(maxlen=200), 'dampened_pct': deque(maxlen=200), 'perceptual_loss': deque(maxlen=200)})
-        self.model = Chimera(d_model=args.d_model, dtype=DTYPE)
+        self.model = Chimera(d_model=args.d_model)
         if self.args.use_q_controller:
             q_config = Q_CONTROLLER_CONFIG_FINETUNE if args.finetune else Q_CONTROLLER_CONFIG_NORMAL
             self.q_controller = JaxHakmemQController(initial_lr=self.args.lr, config=q_config, is_finetune=args.finetune); threading.Thread(target=self._listen_for_boost, daemon=True).start()
@@ -423,12 +441,10 @@ class Trainer:
         p_state_after_shared, z_image_for_compile, _ = p_shared_step(p_state, common_utils.shard(jit_batch), self.model.apply, w_align)
         
         print("--- Compiling generator steps sequentially... ---")
-        # METICULOUS FIX: We must thread the state through the compilation loop to respect donation.
         p_state_for_gen_compile = p_state_after_shared
         for i, res in enumerate(self.model.resolutions):
             print(f"Compiling for {res}x{res}...")
             p_gen_key = jax.random.split(gen_keys[i], self.num_devices)
-            # Pass the valid state, and capture the new valid state for the next iteration.
             p_state_for_gen_compile, _ = p_generator_step(p_state_for_gen_compile, common_utils.shard(jit_batch), z_image_for_compile, p_gen_key, res, self.model.apply, self.args.perceptual_weight)
 
         print(">>> Compilation successful! Starting training. <<<")
@@ -495,14 +511,14 @@ class Trainer:
             print("\n--- Training loop finished. Saving final state... ---"); self._save_checkpoint(p_state, epoch_for_save, ckpt_path); print(f"--- :floppy_disk: Final state for epoch {epoch_for_save+1} saved. ---")
 class Generator:
     def __init__(self, args):
-        self.args = args; self.model = Chimera(d_model=args.d_model, dtype=DTYPE)
+        self.args = args; self.model = Chimera(d_model=args.d_model)
         model_path = Path(f"{self.args.basename}_{self.args.d_model}d_wubu.pkl")
         if not model_path.exists(): print(f"[FATAL] Model file not found at {model_path}."), sys.exit(1)
         with open(model_path, 'rb') as f: data = pickle.load(f); self.params = data['params']
         self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device=_clip_device)
         for param in self.clip_model.parameters(): param.requires_grad = False
     @partial(jax.jit, static_argnames=('self', 'resolution'))
-    def _decode(self, params, z, resolution): return self.model.apply({'params': params}, z, resolution=resolution, method=self.model.decode_from_z)
+    def _decode(self, params, z, resolution): return self.model.apply({'params': params}, (z, resolution), method=lambda m, args: m.decode_from_z(args[0], args[1]))
     @partial(jax.jit, static_argnames=('self',))
     def _encode_text(self, params, text_embed): return self.model.apply({'params': params}, text_embed, method=self.model.encode_text_only)
     def _save_image(self, tensor, path_str):
