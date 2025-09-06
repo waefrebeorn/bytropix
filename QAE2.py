@@ -4,7 +4,7 @@ os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
-
+import math
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
@@ -69,23 +69,46 @@ class PoincareSphere:
 # 2. MODEL ARCHITECTURE (HYBRID MODEL)
 # =================================================================================================
 
+
 class PathModulator(nn.Module):
-    latent_grid_size: int = 16
+    latent_grid_size: int
+    input_image_size: int
     dtype: Any = jnp.float32
+
     @nn.compact
     def __call__(self, images: jnp.ndarray) -> jnp.ndarray:
-        x = nn.Conv(32, (4, 4), (2, 2), name="conv1", dtype=self.dtype)(images); x = nn.gelu(x)
-        x = nn.Conv(64, (4, 4), (2, 2), name="conv2", dtype=self.dtype)(x); x = nn.gelu(x)
-        x = nn.Conv(128, (4, 4), (2, 2), name="conv3", dtype=self.dtype)(x); x = nn.gelu(x)
-        x = nn.Conv(256, (4, 4), (2, 2), name="conv4", dtype=self.dtype)(x); x = nn.gelu(x)
-        target_stride = 32 // self.latent_grid_size
-        x = nn.Conv(256, (3, 3), (target_stride, target_stride), padding='SAME', name="conv5", dtype=self.dtype)(x); x = nn.gelu(x)
+        input_size = self.input_image_size
+
+        is_power_of_two = self.latent_grid_size > 0 and (self.latent_grid_size & (self.latent_grid_size - 1) == 0)
+        if not is_power_of_two or self.latent_grid_size > input_size:
+            raise ValueError(f"latent_grid_size must be a power of two ... Got {self.latent_grid_size}.")
+
+        num_downsamples = int(math.log2(input_size / self.latent_grid_size))
+
+        x = images
+        # --- THE FIX IS HERE ---
+        # Start with a base number of features.
+        features = 32
+        for i in range(num_downsamples):
+            # 1. Use the CURRENT `features` value to create the convolution.
+            #    (First iter uses 32, second uses 64, etc.)
+            x = nn.Conv(features, (4, 4), (2, 2), name=f"downsample_conv_{i}", dtype=self.dtype)(x)
+            x = nn.gelu(x)
+
+            # 2. NOW, update the features variable for the NEXT iteration.
+            features *= 2
+
+        # Final feature processing...
+        x = nn.Conv(256, (3, 3), padding='SAME', name="final_feature_conv", dtype=self.dtype)(x)
+        x = nn.gelu(x)
         path_params = nn.Conv(3, (1, 1), name="path_params", dtype=self.dtype)(x)
+
         delta_c = nn.tanh(path_params[..., 0]) * jnp.pi
         chi_c = nn.tanh(path_params[..., 1]) * (jnp.pi / 4.0)
         radius = nn.sigmoid(path_params[..., 2]) * (jnp.pi / 2.0)
         return jnp.stack([delta_c, chi_c, radius], axis=-1)
-
+        
+        
 class TopologicalObserver(nn.Module):
     d_model: int; num_path_steps: int = 16; dtype: Any = jnp.float32
     @nn.compact
@@ -133,9 +156,18 @@ class CoordinateDecoder(nn.Module):
         return nn.tanh(output_pixels)
 
 class TopologicalCoordinateGenerator(nn.Module):
-    d_model: int; latent_grid_size: int = 16; dtype: Any = jnp.float32
+    d_model: int
+    latent_grid_size: int
+    input_image_size: int = 512  # <-- ADD THIS ATTRIBUTE WITH A DEFAULT
+    dtype: Any = jnp.float32
+    
     def setup(self):
-        self.modulator = PathModulator(latent_grid_size=self.latent_grid_size, name="modulator", dtype=self.dtype)
+        self.modulator = PathModulator(
+            latent_grid_size=self.latent_grid_size,
+            input_image_size=self.input_image_size, # <-- PASS IT DOWN
+            name="modulator",
+            dtype=self.dtype
+        )
         self.observer = TopologicalObserver(d_model=self.d_model, name="observer", dtype=self.dtype)
         self.coord_decoder = CoordinateDecoder(d_model=self.d_model, name="coord_decoder", dtype=self.dtype)
     def __call__(self, images, coords):
@@ -181,7 +213,7 @@ class Trainer:
         self.args = args; self.key = jax.random.PRNGKey(args.seed); self.should_shutdown = False
         signal.signal(signal.SIGINT, lambda s,f: setattr(self,'should_shutdown',True))
         self.num_devices = jax.local_device_count()
-        self.model = TopologicalCoordinateGenerator(d_model=args.d_model, latent_grid_size=args.latent_grid_size)
+        self.model = TopologicalCoordinateGenerator(d_model=args.d_model, latent_grid_size=args.latent_grid_size, input_image_size=args.image_size)
         if Pixels is None: print("[Warning] `rich-pixels` not installed. Visual preview will be disabled. Run: pip install rich-pixels")
         self.recon_loss_history = deque(maxlen=200)
 
@@ -366,7 +398,7 @@ class Trainer:
 class Compressor:
     def __init__(self, args):
         self.args = args
-        self.model = TopologicalCoordinateGenerator(d_model=args.d_model, latent_grid_size=args.latent_grid_size)
+        self.model = TopologicalCoordinateGenerator(d_model=args.d_model, latent_grid_size=args.latent_grid_size, input_image_size=args.image_size)
         model_path = Path(f"{self.args.basename}_{self.args.d_model}d_512.pkl")
         if not model_path.exists(): print(f"[FATAL] Model file not found at {model_path}. Train a model first."), sys.exit(1)
         if jax.process_index() == 0: print(f"--- Loading compressor model from {model_path} ---")
@@ -501,25 +533,32 @@ def main():
     p_train.add_argument('--d-model', type=int, default=128); p_train.add_argument('--latent-grid-size', type=int, default=16)
     p_train.add_argument('--epochs', type=int, default=100); p_train.add_argument('--batch-size', type=int, default=4, help="Batch size PER DEVICE.")
     p_train.add_argument('--lr', type=float, default=2e-4); p_train.add_argument('--seed', type=int, default=42)
+    p_train.add_argument('--image-size', type=int, default=512, help="The resolution of the training images.")
     # --- Compression Commands ---
     p_comp = subparsers.add_parser("compress", help="Compress a single image to a file.")
     p_comp.add_argument('--image-path', type=str, required=True); p_comp.add_argument('--output-path', type=str, required=True)
     p_comp.add_argument('--basename', type=str, required=True); p_comp.add_argument('--d-model', type=int, default=128); p_comp.add_argument('--latent-grid-size', type=int, default=16)
+    p_comp.add_argument('--image-size', type=int, default=512, help="The resolution the model was trained on.")
     p_dcomp = subparsers.add_parser("decompress", help="Decompress a file to a 512x512 image.")
     p_dcomp.add_argument('--compressed-path', type=str, required=True); p_dcomp.add_argument('--output-path', type=str, required=True)
     p_dcomp.add_argument('--basename', type=str, required=True); p_dcomp.add_argument('--d-model', type=int, default=128); p_dcomp.add_argument('--latent-grid-size', type=int, default=16)
+    p_dcomp.add_argument('--image-size', type=int, default=512, help="The resolution the model was trained on.")
+
     # --- Generative Commands (Inspired by Chimera) ---
     p_db = subparsers.add_parser("build-db", help="Build a latent database for generative tasks.")
     p_db.add_argument('--image-dir', type=str, required=True); p_db.add_argument('--basename', type=str, required=True)
     p_db.add_argument('--d-model', type=int, default=128); p_db.add_argument('--latent-grid-size', type=int, default=16)
     p_db.add_argument('--batch-size', type=int, default=16, help="Batch size for DB creation.")
+    p_db.add_argument('--image-size', type=int, default=512, help="The resolution the model was trained on.")
     p_gen = subparsers.add_parser("generate", help="Generate an image from a text prompt (via nearest latent).")
+    p_gen.add_argument('--image-size', type=int, default=512, help="The resolution the model was trained on.")
     p_gen.add_argument('--image-dir', type=str, required=True, help="Path to the original image dataset (for DB lookup)."); p_gen.add_argument('--prompt', type=str, required=True)
     p_gen.add_argument('--basename', type=str, required=True); p_gen.add_argument('--d-model', type=int, default=128); p_gen.add_argument('--latent-grid-size', type=int, default=16)
     p_anim = subparsers.add_parser("animate", help="Create a latent space interpolation between two prompts.")
     p_anim.add_argument('--image-dir', type=str, required=True); p_anim.add_argument('--start', type=str, required=True); p_anim.add_argument('--end', type=str, required=True)
     p_anim.add_argument('--basename', type=str, required=True); p_anim.add_argument('--d-model', type=int, default=128); p_anim.add_argument('--latent-grid-size', type=int, default=16)
     p_anim.add_argument('--steps', type=int, default=60)
+    p_anim.add_argument('--image-size', type=int, default=512, help="The resolution the model was trained on.")
     args = parser.parse_args()
     if args.command == "prepare-data": prepare_data(args.image_dir)
     elif args.command == "train": Trainer(args).train()
