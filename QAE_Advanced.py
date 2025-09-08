@@ -686,6 +686,7 @@ class Compressor:
         return jnp.stack([delta,chi,radius],axis=-1)
 
 
+
 class VideoCompressor(Compressor):
     def __init__(self, args):
         super().__init__(args)
@@ -702,6 +703,7 @@ class VideoCompressor(Compressor):
             new_coords = jnp.reshape(coords + single_flow, (H * W, 2)).T
             warped_channels = [jax.scipy.ndimage.map_coordinates(single_latent[..., c], new_coords, order=1, mode='reflect').reshape(H, W) for c in range(3)]
             return jnp.stack(warped_channels, axis=-1)
+        # This is the correct function name, used by both compress and decompress
         self._vmapped_warp_fn = jax.vmap(warp_latents_standalone)
 
     @partial(jax.jit, static_argnames=('self',))
@@ -733,7 +735,6 @@ class VideoCompressor(Compressor):
 
         print(f"--- Compressing video to single file: {output_path} ---")
 
-        # Process I-Frame
         ret, frame = cap.read()
         if not ret: print("[FATAL] Could not read first frame."); sys.exit(1)
         img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).resize((512,512),Image.Resampling.LANCZOS)
@@ -766,7 +767,6 @@ class VideoCompressor(Compressor):
             
             residual_batch_gpu, p_final_gpu = self._process_p_frame_batch(p_prev_gpu, jax.device_put(np.stack(flow_batch)), self.full_params)
             
-            # Instead of saving, collect the quantized residuals
             for res_frame in np.array(residual_batch_gpu):
                 all_quantized_p_frames.append(self._quantize_residuals(res_frame))
 
@@ -775,17 +775,12 @@ class VideoCompressor(Compressor):
             
         pbar.close(); cap.release()
 
-        # Now, write the single consolidated file
         with open(output_path, 'wb') as f:
-            # Pack and write the header
             header = struct.pack('<HII', self.args.latent_grid_size, quantized_iframe.nbytes, len(all_quantized_p_frames))
             f.write(header)
-            # Write the I-frame data
             f.write(quantized_iframe.tobytes())
-            # Concatenate all P-frames and write their data
             if all_quantized_p_frames:
-                full_p_frame_block = np.stack(all_quantized_p_frames)
-                f.write(full_p_frame_block.tobytes())
+                f.write(np.stack(all_quantized_p_frames).tobytes())
         
         original_size = video_p.stat().st_size
         compressed_size = output_path.stat().st_size
@@ -797,16 +792,11 @@ class VideoCompressor(Compressor):
         print(f"--- Decompressing single file: {input_path} ---")
 
         with open(input_path, 'rb') as f:
-            # Read and unpack the header (10 bytes)
             header_bytes = f.read(10)
             latent_grid_size, i_frame_data_length, num_p_frames = struct.unpack('<HII', header_bytes)
-
-            # Read I-frame data and reconstruct it
             iframe_bytes = f.read(i_frame_data_length)
             quantized_iframe = np.frombuffer(iframe_bytes, dtype=np.uint8).reshape((latent_grid_size, latent_grid_size, 3))
             p_current = jnp.expand_dims(self._dequantize_latents(quantized_iframe), 0)
-
-            # Read the entire P-frame block and reconstruct it
             p_frame_bytes_per_frame = latent_grid_size * latent_grid_size * 3
             all_p_frame_bytes = f.read(num_p_frames * p_frame_bytes_per_frame)
             quantized_pframes = np.frombuffer(all_p_frame_bytes, dtype=np.uint8).reshape((num_p_frames, latent_grid_size, latent_grid_size, 3))
@@ -824,7 +814,11 @@ class VideoCompressor(Compressor):
             flow = jnp.expand_dims(cv2.calcOpticalFlowFarneback(prvs_gray, nxt_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0), 0)
             flow_latent = jax.image.resize(flow, (1, self.args.latent_grid_size, self.args.latent_grid_size, 2), 'bilinear')
             
-            p_warped = self._warp_fn_jitted(p_current, flow_latent)
+            # --- THIS IS THE FIX ---
+            # Use the correct, existing function name
+            p_warped = self._vmapped_warp_fn(p_current, flow_latent)
+            # --- END OF FIX ---
+
             p_current = p_warped + residual
             
             frame_recon_np = self._decode_and_convert(p_current)
@@ -836,7 +830,6 @@ class VideoCompressor(Compressor):
     def _decode_and_convert(self, latent_batch):
         recon = self._decode_batched(latent_batch)
         return np.array((recon[0]*0.5+0.5).clip(0,1)*255, dtype=np.uint8)       
-        
         
         
         
