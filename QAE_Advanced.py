@@ -283,19 +283,30 @@ def prepare_video_data(video_path: str, data_dir: str):
     with open(data_p/"dataset_info.pkl", 'wb') as f: pickle.dump({'num_frames': len(frames)}, f)
     (data_p/"prep_complete.flag").touch(); print("✅ Video data preparation complete.")
 
+# Replace the old create_video_dataset function with this one
+
 def create_video_dataset(data_dir: str, batch_size: int, clip_len: int):
-    data_p = Path(data_dir); frames_dir, flow_dir = data_p / "frames", data_p / "flow"
-    with open(data_p/"dataset_info.pkl", 'rb') as f: num_frames = pickle.load(f)['num_frames']
+    data_p = Path(data_dir)
+    frames_dir = data_p / "frames"
+    with open(data_p/"dataset_info.pkl", 'rb') as f:
+        num_frames = pickle.load(f)['num_frames']
+
     def generator():
         while True:
-            start_idx = np.random.randint(0, num_frames - clip_len); frames, flows = [], []
+            start_idx = np.random.randint(0, num_frames - clip_len)
+            frames = []
             for i in range(clip_len):
-                frames.append((np.array(Image.open(frames_dir/f"frame_{start_idx+i:05d}.jpg"), dtype=np.float32)/127.5)-1.0)
-                if i > 0: flows.append(np.load(flow_dir/f"flow_{start_idx+i-1:05d}.npy").astype(np.float32))
-            yield np.stack(frames, axis=0), np.stack(flows, axis=0)
-    output_signature = (tf.TensorSpec(shape=(clip_len,512,512,3),dtype=tf.float32), tf.TensorSpec(shape=(clip_len-1,512,512,2),dtype=tf.float32))
-    return tf.data.Dataset.from_generator(generator,output_signature=output_signature).batch(batch_size,drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+                frame_path = frames_dir / f"frame_{start_idx+i:05d}.jpg"
+                frame = (np.array(Image.open(frame_path), dtype=np.float32) / 127.5) - 1.0
+                frames.append(frame)
+            # Only yield the frames now
+            yield np.stack(frames, axis=0)
 
+    # The output signature is now just one tensor
+    output_signature = tf.TensorSpec(shape=(clip_len, 512, 512, 3), dtype=tf.float32)
+    return tf.data.Dataset.from_generator(
+        generator, output_signature=output_signature
+    ).batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 # =================================================================================================
 # 4. ADVANCED TRAINING FRAMEWORK
 # =================================================================================================
@@ -465,10 +476,9 @@ class VideoTrainer(AdvancedTrainer):
         model = VideoCodecModel(d_model=args.d_model, latent_grid_size=args.latent_grid_size, input_image_size=args.image_size)
         super().__init__(args, model)
 
-
     def train(self):
         phase1_ckpt_path = Path(f"{self.args.basename}_{self.args.d_model}d_512.pkl")
-        phase2_ckpt_path = Path(f"{self.args.basename}_{self.args.d_model}d_512_video.pkl")
+        phase2_ckpt_path = Path(f"{self.args.basename}_{self.args.d_model}d_512_video_autoregressive.pkl")
         if not phase1_ckpt_path.exists(): print(f"[FATAL] Phase 1 checkpoint not found at {phase1_ckpt_path}. Run 'train' first."), sys.exit(1)
         print("--- Loading Phase 1 (frozen) model ---");
         with open(phase1_ckpt_path, 'rb') as f: phase1_data = pickle.load(f)
@@ -480,7 +490,7 @@ class VideoTrainer(AdvancedTrainer):
 
         loaded_opt_state = None
         if phase2_ckpt_path.exists():
-            print(f"--- Resuming Phase 2 training from {phase2_ckpt_path} ---")
+            print(f"--- Resuming Auto-Regressive training from {phase2_ckpt_path} ---")
             with open(phase2_ckpt_path, 'rb') as f: phase2_data = pickle.load(f)
             params = {'image_codec': phase1_data['params'], 'correction_net': phase2_data['params']}
             if 'opt_state' in phase2_data:
@@ -491,7 +501,7 @@ class VideoTrainer(AdvancedTrainer):
             start_epoch = phase2_data.get('epoch', 0) + 1
             if self.q_controller and 'q_controller_state' in phase2_data: self.q_controller.load_state_dict(phase2_data['q_controller_state']); print("--- Q-Controller state loaded. ---")
         else:
-            print("--- Initializing new Phase 2 model ---")
+            print("--- Initializing new Phase 2 model for Auto-Regressive Training ---")
             with jax.default_device(CPU_DEVICE):
                 dummy_latent = jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3))
                 dummy_flow = jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 2))
@@ -514,48 +524,120 @@ class VideoTrainer(AdvancedTrainer):
 
         p_state = replicate(state)
 
-        @partial(jax.pmap, axis_name='devices', static_broadcasted_argnums=(2, 3))
-        def train_step_video(state, batch, clip_len, loss_resolution):
-            frames, flows = batch
-            def warp_latents(single_latent, single_flow):
-                H, W, _ = single_latent.shape
-                grid_y, grid_x = jnp.meshgrid(jnp.arange(H), jnp.arange(W), indexing='ij'); coords = jnp.stack([grid_y, grid_x], axis=-1)
-                new_coords = jnp.reshape(coords + single_flow, (H * W, 2)).T
-                warped_channels = [jax.scipy.ndimage.map_coordinates(single_latent[..., c], new_coords, order=1, mode='reflect').reshape(H, W) for c in range(3)]
-                return jnp.stack(warped_channels, axis=-1)
-            def loss_fn(params):
-                p_current_recon = self.model.apply({'params': params}, frames[:, 0], method=lambda m, i: m.image_codec.modulator(i))
-                def unroll_step(carry, step_data):
-                    p_prev_recon, prev_loss = carry; frame_target, flow_gt = step_data
-                    flow_latent = jax.image.resize(flow_gt, (flow_gt.shape[0], self.args.latent_grid_size, self.args.latent_grid_size, 2), 'bilinear')
-                    p_warped = jax.vmap(warp_latents)(p_prev_recon, flow_latent)
-                    p_residual = self.model.apply({'params': params}, p_warped, flow_latent, method=lambda m, p, f: m.correction_net(p,f))
-                    p_current_recon = p_warped + p_residual
-                    x_coords = jnp.linspace(-1, 1, loss_resolution)
-                    coords = jnp.stack(jnp.meshgrid(x_coords, x_coords, indexing='ij'), axis=-1).reshape(-1, 2)
-                    recon_pixels_low_res = self.model.apply({'params': params}, p_current_recon, coords, method=lambda m, p, c: m.image_codec.decode(p, c))
-                    frame_recon_low_res = recon_pixels_low_res.reshape(frame_target.shape[0], loss_resolution, loss_resolution, 3)
-                    frame_target_low_res = jax.image.resize(frame_target, (frame_target.shape[0], loss_resolution, loss_resolution, 3), 'bilinear')
-                    loss = jnp.mean(jnp.abs(frame_target_low_res - frame_recon_low_res))
-                    return (p_current_recon, prev_loss + loss), frame_recon_low_res
+        def calculate_flow_py(prvs_gray, nxt_gray):
+            prvs_np = np.asarray(prvs_gray)
+            nxt_np = np.asarray(nxt_gray)
+            flow = cv2.calcOpticalFlowFarneback(prvs_np, nxt_np, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+            return flow.astype(np.float32)
 
-                final_carry, recon_frames = jax.lax.scan(unroll_step, (p_current_recon, 0.0), (jnp.swapaxes(frames,0,1)[1:], jnp.swapaxes(flows,0,1)))
-                total_loss = final_carry[1]
-                return total_loss / (clip_len - 1), jnp.swapaxes(recon_frames, 0, 1)
+        @partial(jax.pmap, axis_name='devices', static_broadcasted_argnums=(2, 3, 4))
+        def train_step_video(state, frames, clip_len, num_patch_pixels, loss_resolution, pmap_sampling_key):
+            
+            def loss_fn(params):
+                @jax.custom_jvp
+                def optical_flow_callback(prvs_gray, nxt_gray):
+                    return jax.pure_callback(
+                        calculate_flow_py,
+                        jax.ShapeDtypeStruct((loss_resolution, loss_resolution, 2), jnp.float32),
+                        prvs_gray, nxt_gray,
+                        vmap_method='sequential'
+                    )
+
+                @optical_flow_callback.defjvp
+                def optical_flow_callback_jvp(primals, tangents):
+                    prvs_gray, nxt_gray = primals
+                    primal_out = optical_flow_callback(prvs_gray, nxt_gray)
+                    tangent_out = jnp.zeros_like(primal_out)
+                    return primal_out, tangent_out
+
+                def _single_example_loss_fn(frames_single, params, pmap_sampling_key_inner):
+                    H, W = self.args.image_size, self.args.image_size
+                    x_coords_full = jnp.linspace(-1, 1, H)
+                    full_coords = jnp.stack(jnp.meshgrid(x_coords_full, x_coords_full, indexing='ij'), axis=-1).reshape(-1, 2)
+                    
+                    def rgb_to_grayscale_jax(rgb_image):
+                        weights = jnp.array([0.299, 0.587, 0.114])
+                        return jnp.dot(rgb_image, weights)
+                    
+                    patch_indices = jax.random.choice(pmap_sampling_key_inner, H * W, shape=(num_patch_pixels,), replace=False)
+                    coords_patch = full_coords[patch_indices]
+
+                    target_pixels_full = frames_single.reshape(clip_len, H * W, 3)
+                    target_pixels_patch = target_pixels_full[:, patch_indices, :]
+
+                    def warp_latents(single_latent, single_flow):
+                        grid_size = single_latent.shape[0]
+                        grid_y, grid_x = jnp.meshgrid(jnp.arange(grid_size), jnp.arange(grid_size), indexing='ij'); coords = jnp.stack([grid_y, grid_x], axis=-1)
+                        new_coords = jnp.reshape(coords + single_flow, (grid_size**2, 2)).T
+                        warped_channels = [jax.scipy.ndimage.map_coordinates(single_latent[..., c], new_coords, order=1, mode='reflect').reshape(grid_size, grid_size) for c in range(3)]
+                        return jnp.stack(warped_channels, axis=-1)
+                    
+                    frame0 = jnp.expand_dims(frames_single[0], axis=0)
+                    p_recon0 = self.model.apply({'params': params}, frame0, method=lambda m, i: m.image_codec.modulator(i))
+                    recon0_patch = self.model.apply({'params': params}, p_recon0, coords_patch, method=lambda m, p, c: m.image_codec.decode(p, c))
+                    loss0 = jnp.mean(jnp.abs(target_pixels_patch[0] - recon0_patch))
+
+                    def unroll_step(carry, xs):
+                        p_prev_recon, recon_prev_low_res = carry
+                        frame_target_t, target_patch_t = xs
+
+                        prvs_gray = rgb_to_grayscale_jax(recon_prev_low_res)
+                        target_t_low_res = jax.image.resize(frame_target_t, (loss_resolution, loss_resolution, 3), 'bilinear')
+                        nxt_gray = rgb_to_grayscale_jax(target_t_low_res)
+                        
+                        flow = optical_flow_callback(prvs_gray, nxt_gray)
+                        
+                        flow_latent = jax.image.resize(flow, (self.args.latent_grid_size, self.args.latent_grid_size, 2), 'bilinear')
+                        
+                        p_warped = warp_latents(jnp.squeeze(p_prev_recon, axis=0), flow_latent)
+                        p_warped_batched = jnp.expand_dims(p_warped, 0)
+                        flow_latent_batched = jnp.expand_dims(flow_latent, 0)
+                        
+                        p_residual = self.model.apply({'params': params}, p_warped_batched, flow_latent_batched, method=lambda m, p, f: m.correction_net(p,f))
+                        p_current_recon = p_warped_batched + p_residual
+                        
+                        recon_patch_t = self.model.apply({'params': params}, p_current_recon, coords_patch, method=lambda m, p, c: m.image_codec.decode(p, c))
+                        loss_t = jnp.mean(jnp.abs(target_patch_t - recon_patch_t))
+
+                        x_coords_low_res = jnp.linspace(-1, 1, loss_resolution)
+                        low_res_coords = jnp.stack(jnp.meshgrid(x_coords_low_res, x_coords_low_res, indexing='ij'), axis=-1).reshape(-1, 2)
+                        recon_current_low_res = self.model.apply({'params': params}, p_current_recon, low_res_coords, method=lambda m, p, c: m.image_codec.decode(p, c)).reshape(loss_resolution, loss_resolution, 3)
+                        
+                        return (p_current_recon, recon_current_low_res), loss_t
+
+                    x_coords_low_res = jnp.linspace(-1, 1, loss_resolution)
+                    low_res_coords = jnp.stack(jnp.meshgrid(x_coords_low_res, x_coords_low_res, indexing='ij'), axis=-1).reshape(-1, 2)
+                    recon0_low_res = self.model.apply({'params': params}, p_recon0, low_res_coords, method=lambda m, p, c: m.image_codec.decode(p, c)).reshape(loss_resolution, loss_resolution, 3)
+
+                    initial_carry = (p_recon0, recon0_low_res)
+                    frames_rest = frames_single[1:]
+                    target_patches_rest = target_pixels_patch[1:]
+
+                    final_carry, p_frame_losses = jax.lax.scan(unroll_step, initial_carry, (frames_rest, target_patches_rest))
+                    
+                    total_loss = loss0 + jnp.mean(p_frame_losses)
+                    return total_loss / clip_len, recon0_low_res
+                
+                device_keys = jax.random.split(pmap_sampling_key, frames.shape[0])
+                batch_losses, recon_frames = jax.vmap(_single_example_loss_fn, in_axes=(0, None, 0))(frames, params, device_keys)
+                return jnp.mean(batch_losses), recon_frames
 
             (loss, recon_frames), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
             grads = jax.lax.pmean(grads, 'devices')
             return state.apply_gradients(grads=grads), jax.lax.pmean(loss, 'devices'), jax.lax.pmean(recon_frames, 'devices')
-
-        dataset = create_video_dataset(self.args.data_dir, self.args.batch_size*self.num_devices, self.args.clip_len); it = dataset.as_numpy_iterator()
+        
+        # --- Main Training Loop ---
+        dataset = create_video_dataset(self.args.data_dir, self.args.batch_size, self.args.clip_len)
+        it = dataset.as_numpy_iterator()
         with open(Path(self.args.data_dir)/"dataset_info.pkl",'rb') as f: num_frames = pickle.load(f)['num_frames']
         steps_per_epoch = (num_frames // self.args.clip_len) // (self.args.batch_size * self.num_devices)
 
-        print("--- Compiling JAX video function... ---")
-        p_state, _, _ = train_step_video(p_state, common_utils.shard(next(it)), self.args.clip_len, self.args.loss_resolution)
-        print("--- Compilation complete. Starting video training. ---")
+        print("--- Compiling JAX auto-regressive video function (vmap-scan)... ---")
+        dummy_keys = jax.random.split(jax.random.PRNGKey(0), self.num_devices)
+        p_state, _, _ = train_step_video(p_state, common_utils.shard(next(it)), self.args.clip_len, self.args.num_patch_pixels, self.args.loss_resolution, dummy_keys)
+        print("--- Compilation complete. Starting auto-regressive training. ---")
 
-        layout=Layout(name="root"); layout.split(Layout(Panel(f"[bold]Phase 2: Video Dynamics Model[/] | Base: [cyan]{self.args.basename}_{self.args.d_model}d[/]", expand=False),size=3), Layout(ratio=1,name="main"), Layout(size=3,name="footer"))
+        layout=Layout(name="root"); layout.split(Layout(Panel(f"[bold]Phase 2: Video Dynamics (Auto-Regressive)[/] | Base: [cyan]{self.args.basename}_{self.args.d_model}d[/]", expand=False),size=3), Layout(ratio=1,name="main"), Layout(size=3,name="footer"))
         layout["main"].split_row(Layout(name="left"),Layout(name="right",ratio=2)); layout["left"].split(Layout(name="stats"), Layout(name="preview"))
         preview_panel = Panel("...", title="[bold]🔎 Video Preview[/]", border_style="green", height=18); layout["left"]["preview"].update(preview_panel)
         progress=Progress(TextColumn("[bold]Epoch {task.fields[epoch]}/{task.fields[total_epochs]}"), BarColumn(),"[p.p.]{task.percentage:>3.1f}%","•",TimeRemainingColumn(),"•",TimeElapsedColumn(), TextColumn("LR: {task.fields[lr]:.2e}"))
@@ -571,13 +653,15 @@ class VideoTrainer(AdvancedTrainer):
                         if self.q_controller:
                             current_lr = self.q_controller.choose_action()
                             opt_state_unrep = unreplicate(p_state.opt_state)
-                            # --- THIS IS THE FIX ---
-                            # .inner_state is a TUPLE. We index it to get the state of inject_hyperparams.
                             opt_state_unrep.inner_states['trainable'].inner_state[-1].hyperparams['learning_rate'] = jnp.asarray(current_lr)
                             p_state = p_state.replace(opt_state=replicate(opt_state_unrep))
                         else: current_lr = self.args.lr
 
-                        batch_np = next(it); p_state, loss, recon_frames = train_step_video(p_state, common_utils.shard(batch_np), self.args.clip_len, self.args.loss_resolution)
+                        batch_np = next(it)
+                        self.key, sampling_key = jax.random.split(self.key)
+                        device_keys = jax.random.split(sampling_key, self.num_devices)
+                        p_state, loss, recon_frames = train_step_video(p_state, common_utils.shard(batch_np), self.args.clip_len, self.args.num_patch_pixels, self.args.loss_resolution, device_keys)
+                        
                         loss_val = unreplicate(loss)
                         if self.q_controller: self.q_controller.update_q_value(loss_val)
 
@@ -594,8 +678,12 @@ class VideoTrainer(AdvancedTrainer):
                             recon_panel=Panel(Align.center(f"[cyan]{self._get_sparkline(self.recon_loss_history,spark_w)}[/]"),title=f"Video Reconstruction Loss (L1)",height=3, border_style="cyan")
                             layout["right"].update(Panel(recon_panel,title="[bold]📉 Losses[/]",border_style="magenta"))
                         if step > 0 and step % 25 == 0:
-                            orig_frame = np.array((batch_np[0][0][-1]*0.5+0.5).clip(0,1)*255, dtype=np.uint8)
-                            recon_frame_np = np.array((unreplicate(recon_frames)[0][-1]*0.5+0.5).clip(0,1)*255, dtype=np.uint8)
+                            # --- THE FIX IS HERE ---
+                            # 1. Compare the same frame (the first one) for both
+                            orig_frame = np.array((batch_np[0][0]*0.5+0.5).clip(0,1)*255, dtype=np.uint8)
+                            # 2. Use the correct indexing for the reconstructed frame
+                            recon_frame_np = np.array((unreplicate(recon_frames)[0]*0.5+0.5).clip(0,1)*255, dtype=np.uint8)
+                            # --- END OF FIX ---
                             self._update_preview_panel(preview_panel, orig_frame, recon_frame_np)
                         progress.update(epoch_task, advance=1, lr=current_lr)
                     if self.should_shutdown: break
@@ -611,25 +699,6 @@ class VideoTrainer(AdvancedTrainer):
             if self.q_controller: data_to_save['q_controller_state'] = self.q_controller.state_dict()
             with open(phase2_ckpt_path, 'wb') as f: pickle.dump(data_to_save, f)
             print("--- :floppy_disk: Final Phase 2 state saved. ---")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -686,14 +755,15 @@ class Compressor:
         return jnp.stack([delta,chi,radius],axis=-1)
 
 
-
 class VideoCompressor(Compressor):
     def __init__(self, args):
         super().__init__(args)
         self.video_model = VideoCodecModel(d_model=args.d_model, latent_grid_size=args.latent_grid_size, input_image_size=args.image_size)
-        phase2_model_path = Path(f"{self.args.basename}_{self.args.d_model}d_512_video.pkl")
-        if not phase2_model_path.exists(): print(f"[FATAL] Phase 2 model not found at {phase2_model_path}. Run 'train-video' first."), sys.exit(1)
-        print(f"--- Loading Phase 2 model from {phase2_model_path} ---")
+        # --- FIX: Point to the new auto-regressive model file ---
+        phase2_model_path = Path(f"{self.args.basename}_{self.args.d_model}d_512_video_autoregressive.pkl")
+        if not phase2_model_path.exists(): print(f"[FATAL] Auto-regressive Phase 2 model not found at {phase2_model_path}. Run 'train-video' first."), sys.exit(1)
+        
+        print(f"--- Loading Auto-Regressive Phase 2 model from {phase2_model_path} ---")
         with open(phase2_model_path, 'rb') as f: phase2_params = pickle.load(f)['params']
         self.full_params = jax.device_put({'image_codec': self.params, 'correction_net': phase2_params})
 
@@ -703,8 +773,7 @@ class VideoCompressor(Compressor):
             new_coords = jnp.reshape(coords + single_flow, (H * W, 2)).T
             warped_channels = [jax.scipy.ndimage.map_coordinates(single_latent[..., c], new_coords, order=1, mode='reflect').reshape(H, W) for c in range(3)]
             return jnp.stack(warped_channels, axis=-1)
-        # This is the correct function name, used by both compress and decompress
-        self._vmapped_warp_fn = jax.vmap(warp_latents_standalone)
+        self._vmapped_warp_fn = jax.jit(jax.vmap(warp_latents_standalone))
 
     @partial(jax.jit, static_argnames=('self',))
     def _process_p_frame_batch(self, p_initial_gpu, flow_batch_gpu, params):
@@ -789,14 +858,14 @@ class VideoCompressor(Compressor):
 
     def video_decompress(self):
         input_path, output_path = Path(self.args.input_path), Path(self.args.output_path)
-        print(f"--- Decompressing single file: {input_path} ---")
+        print(f"--- Decompressing single file (Auto-Regressive): {input_path} ---")
 
         with open(input_path, 'rb') as f:
             header_bytes = f.read(10)
             latent_grid_size, i_frame_data_length, num_p_frames = struct.unpack('<HII', header_bytes)
             iframe_bytes = f.read(i_frame_data_length)
             quantized_iframe = np.frombuffer(iframe_bytes, dtype=np.uint8).reshape((latent_grid_size, latent_grid_size, 3))
-            p_current = jnp.expand_dims(self._dequantize_latents(quantized_iframe), 0)
+            p_current = jax.device_put(jnp.expand_dims(self._dequantize_latents(quantized_iframe), 0))
             p_frame_bytes_per_frame = latent_grid_size * latent_grid_size * 3
             all_p_frame_bytes = f.read(num_p_frames * p_frame_bytes_per_frame)
             quantized_pframes = np.frombuffer(all_p_frame_bytes, dtype=np.uint8).reshape((num_p_frames, latent_grid_size, latent_grid_size, 3))
@@ -807,34 +876,47 @@ class VideoCompressor(Compressor):
         writer.append_data(frame_recon_np)
         prvs_gray = cv2.cvtColor(frame_recon_np, cv2.COLOR_RGB2GRAY)
 
-        for i in tqdm(range(num_p_frames), desc="Decoding P-Frames"):
-            residual = jnp.expand_dims(self._dequantize_residuals(quantized_pframes[i]), 0)
-            draft_frame_np = self._decode_and_convert(p_current)
-            nxt_gray = cv2.cvtColor(draft_frame_np, cv2.COLOR_RGB2GRAY)
-            flow = jnp.expand_dims(cv2.calcOpticalFlowFarneback(prvs_gray, nxt_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0), 0)
-            flow_latent = jax.image.resize(flow, (1, self.args.latent_grid_size, self.args.latent_grid_size, 2), 'bilinear')
-            
-            # --- THIS IS THE FIX ---
-            # Use the correct, existing function name
-            p_warped = self._vmapped_warp_fn(p_current, flow_latent)
-            # --- END OF FIX ---
+        @jax.jit
+        def clamp_latents(p):
+            delta, chi, radius = p[..., 0], p[..., 1], p[..., 2]
+            delta_c = jnp.clip(delta, -jnp.pi, jnp.pi)
+            chi_c = jnp.clip(chi, -jnp.pi / 4.0, jnp.pi / 4.0)
+            radius_c = jnp.clip(radius, 0, jnp.pi / 2.0)
+            return jnp.stack([delta_c, chi_c, radius_c], axis=-1)
 
-            p_current = p_warped + residual
+        for i in tqdm(range(num_p_frames), desc="Decoding P-Frames"):
+            residual = jax.device_put(jnp.expand_dims(self._dequantize_residuals(quantized_pframes[i]), 0))
             
-            frame_recon_np = self._decode_and_convert(p_current)
-            writer.append_data(frame_recon_np)
-            prvs_gray = cv2.cvtColor(frame_recon_np, cv2.COLOR_RGB2GRAY)
+            # --- AUTO-REGRESSIVE DECODING LOGIC ---
+            # 1. Decode the current frame to get the `next` gray image for flow calculation
+            current_recon_np = self._decode_and_convert(p_current)
+            nxt_gray = cv2.cvtColor(current_recon_np, cv2.COLOR_RGB2GRAY)
+
+            # 2. Calculate flow between the previous decoded frame and the current one
+            flow = cv2.calcOpticalFlowFarneback(prvs_gray, nxt_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+            flow_gpu = jax.device_put(jnp.expand_dims(flow, 0))
+            flow_latent = jax.image.resize(flow_gpu, (1, self.args.latent_grid_size, self.args.latent_grid_size, 2), 'bilinear')
+            
+            # 3. Warp the previous latent, apply residual, and clamp
+            p_warped = self._vmapped_warp_fn(p_current, flow_latent)
+            p_current = p_warped + residual
+            p_current = clamp_latents(p_current)
+            
+            # 4. Decode the final, stabilized latent for this frame and write to video
+            final_frame_np = self._decode_and_convert(p_current)
+            writer.append_data(final_frame_np)
+
+            # 5. Update the `previous` gray frame for the next iteration's flow calculation
+            prvs_gray = cv2.cvtColor(final_frame_np, cv2.COLOR_RGB2GRAY)
+            # --- END OF LOGIC ---
             
         writer.close(); print(f"✅ Video decompressed to {output_path}")
 
     def _decode_and_convert(self, latent_batch):
         recon = self._decode_batched(latent_batch)
-        return np.array((recon[0]*0.5+0.5).clip(0,1)*255, dtype=np.uint8)       
-        
-        
-        
-        
-        
+        return np.array((recon[0]*0.5+0.5).clip(0,1)*255, dtype=np.uint8)
+
+
 class Generator(Compressor):
     def __init__(self, args):
         super().__init__(args)
@@ -916,7 +998,9 @@ def main():
     p_train_vid.add_argument('--lr', type=float, default=1e-4); p_train_vid.add_argument('--seed', type=int, default=42); p_train_vid.add_argument('--clip-len', type=int, default=8)
     p_train_vid.add_argument('--use-q-controller', action='store_true', help="Enable adaptive LR via Q-Learning."); p_train_vid.add_argument('--use-sentinel', action='store_true', help="Enable Sentinel optimizer to dampen oscillations.")
     p_train_vid.add_argument('--finetune', action='store_true', help="Use finetuning Q-Controller config.")
-    p_train_vid.add_argument('--loss-resolution', type=int, default=256, help="Resolution for calculating loss to save VRAM (e.g., 128, 256).")
+    p_train_vid.add_argument('--loss-resolution', type=int, default=256, help="Intermediate resolution for optical flow calculation during training (e.g., 128, 256).")
+    p_train_vid.add_argument('--num-patch-pixels', type=int, default=8192, help="Number of pixels to sample for patched loss calculation.")
+
 
     p_comp = subparsers.add_parser("compress", help="Compress a single image to a file.", parents=[parent_parser]); p_comp.add_argument('--image-path', type=str, required=True); p_comp.add_argument('--output-path', type=str, required=True)
     p_dcomp = subparsers.add_parser("decompress", help="Decompress a file to an image.", parents=[parent_parser]); p_dcomp.add_argument('--compressed-path', type=str, required=True); p_dcomp.add_argument('--output-path', type=str, required=True)
