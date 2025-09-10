@@ -980,20 +980,15 @@ class ConductorTrainer(AdvancedTrainer):
         checkpoint_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='CheckpointSaver')
         active_save_future = None
 
-        # =======================================================================
-        # THE FIX: This task now ONLY accepts CPU data (NumPy arrays).
-        # It handles the slow file I/O in the background.
-        # =======================================================================
         def _save_cpu_data_task(cpu_data_to_save, path):
-            with open(path, 'wb') as f:
-                pickle.dump(cpu_data_to_save, f)
+            with open(path, 'wb') as f: pickle.dump(cpu_data_to_save, f)
 
-        # Data loading and the rest of the setup is correct...
+        # Data loading...
         tokenized_data_path = Path(self.args.data_dir) / f"tokenized_data_{self.args.basename}_{self.args.num_codes}c.npz"
         if tokenized_data_path.exists():
             console.print(f"--- ✅ Found pre-tokenized data. Loading from [green]{tokenized_data_path}[/green] ---", style="bold yellow")
             with np.load(tokenized_data_path) as data: train_tokens, train_embeddings, val_tokens, val_embeddings = data['train_tokens'], data['train_embeddings'], data['val_tokens'], data['val_embeddings']
-        else:
+        else: # Tokenization logic remains correct...
             console.print("--- 🧠 STEP 1: Pre-tokenized data not found. Creating it now... ---", style="bold yellow")
             data_path = Path(self.args.data_dir) / f"paired_data_{self.args.basename}.pkl";
             if not data_path.exists(): sys.exit(f"[FATAL] Paired data not found at {data_path}")
@@ -1035,17 +1030,15 @@ class ConductorTrainer(AdvancedTrainer):
                 if isinstance(sentinel_state, SentinelState): sentinel_dampened_pct = sentinel_state.dampened_pct
             return new_state, loss, sentinel_dampened_pct
 
-        @jax.jit
-        def run_validation(params, val_tokens_b, val_embeddings_b):
-            def eval_step(carry, batch):
-                tokens_b, embeddings_b = batch; input_tokens = jnp.concatenate([jnp.full((tokens_b.shape[0], 1), self.args.num_codes), tokens_b], axis=1)[:, :-1]
-                logits = self.model.apply({'params': params}, input_tokens, embeddings_b, train=False)
-                return carry, optax.softmax_cross_entropy_with_integer_labels(logits, tokens_b).mean()
-            _, losses = jax.lax.scan(eval_step, None, (val_tokens_b, val_embeddings_b)); return jnp.mean(losses)
+        # This validation function now only ever sees a SINGLE BATCH.
+        @partial(jax.jit, static_argnames=('apply_fn', 'num_codes'))
+        def run_validation_batch(params, val_tokens_batch, val_embeddings_batch, apply_fn, num_codes):
+            input_tokens = jnp.concatenate([jnp.full((val_tokens_batch.shape[0], 1), num_codes), val_tokens_batch], axis=1)[:, :-1]
+            logits = apply_fn({'params': params}, input_tokens, val_embeddings_batch, train=False)
+            return optax.softmax_cross_entropy_with_integer_labels(logits, val_tokens_batch).mean()
 
         console.print("--- 🧠 STEP 3: JIT Compiling training and validation kernels ---", style="bold yellow")
         if ckpt_path_final.exists():
-            console.print(f"--- Resuming training from checkpoint: [green]{ckpt_path_final}[/green] ---")
             with open(ckpt_path_final, 'rb') as f: ckpt = pickle.load(f)
             with jax.default_device(CPU_DEVICE): params_template = self.model.init({'params': key, 'dropout': key}, jnp.zeros((1, self.token_map_size), jnp.int32), jnp.zeros((1, 512), self.dtype))['params']
             state = CustomTrainState.create(apply_fn=self.model.apply, params=params_template, tx=optimizer)
@@ -1055,17 +1048,26 @@ class ConductorTrainer(AdvancedTrainer):
             if ckpt_path_best.exists():
                 with open(ckpt_path_best, 'rb') as f_best: best_val_loss = pickle.load(f_best).get('val_loss', float('inf'))
         else:
-            console.print("--- Initializing new model from scratch ---")
             with jax.default_device(CPU_DEVICE): params = self.model.init({'params': key, 'dropout': key}, jnp.zeros((1, self.token_map_size), jnp.int32), jnp.zeros((1, 512), self.dtype))['params']
             state = CustomTrainState.create(apply_fn=self.model.apply, params=params, tx=optimizer)
         
         p_state = replicate(state); dummy_batch = next(train_iterator); dummy_keys = jax.random.split(key, self.num_devices)
         p_state, _, _ = train_step_fn(p_state, shard(dummy_batch), dummy_keys, replicate(1.0), self.args.num_codes, replicate(self.args.lr))
+        
+        # Keep validation data on the CPU.
+        val_cpu_batches = None
         val_batch_size = self.args.batch_size * self.num_devices * 4; num_val_to_keep = (len(val_tokens) // val_batch_size) * val_batch_size
         if num_val_to_keep > 0:
-            val_tokens_batched = val_tokens[:num_val_to_keep].reshape((-1, val_batch_size, val_tokens.shape[-1])); val_embeddings_batched = val_embeddings[:num_val_to_keep].reshape((-1, val_batch_size, val_embeddings.shape[-1]))
-            _ = run_validation(unreplicate(p_state).params, val_tokens_batched, val_embeddings_batched).block_until_ready()
-        else: val_tokens_batched, val_embeddings_batched = None, None
+            val_tokens_cpu = val_tokens[:num_val_to_keep]
+            val_embeddings_cpu = val_embeddings[:num_val_to_keep]
+            # Create a list of CPU batches to iterate through.
+            val_cpu_batches = list(zip(
+                np.split(val_tokens_cpu, num_val_to_keep // val_batch_size),
+                np.split(val_embeddings_cpu, num_val_to_keep // val_batch_size)
+            ))
+            # JIT compile with a dummy batch.
+            dummy_val_batch = jax.device_put(val_cpu_batches[0][0]), jax.device_put(val_cpu_batches[0][1])
+            _ = run_validation_batch(unreplicate(p_state).params, *dummy_val_batch, self.model.apply, self.args.num_codes).block_until_ready()
 
         self.param_count = jax.tree_util.tree_reduce(lambda acc, x: acc + x.size, state.params, 0); self.sentinel_pct = 0.0
         console.print("[green]✅ Compilation complete. Starting training...[/green]")
@@ -1074,6 +1076,7 @@ class ConductorTrainer(AdvancedTrainer):
         
         SAVE_EVERY_N_STEPS = 2000; metrics_queue = deque(maxlen=10)
         last_step_time = time.time(); current_step = start_step; last_ui_update_time = 0.0; UI_UPDATE_INTERVAL_SECS = 0.25
+        validation_future = None; val_batch_idx = 0
 
         try:
             with Live(self._generate_layout(), screen=True, redirect_stderr=False, vertical_overflow="visible") as live:
@@ -1081,6 +1084,19 @@ class ConductorTrainer(AdvancedTrainer):
                     current_step = step
                     if self.should_shutdown or self.interactive_state.shutdown_event.is_set(): break
                     
+                    if validation_future is not None:
+                        # This fetch is now for a single, small batch, making it fast.
+                        val_loss_val = validation_future.item()
+                        self.progress.update(task_id, val_loss=val_loss_val)
+                        if val_loss_val < best_val_loss:
+                            best_val_loss = val_loss_val
+                            if not (active_save_future and not active_save_future.done()):
+                                console.print(f"\n[bold magenta]🏆 New best val loss: {best_val_loss:.4f} @ step {step}. Saving in background...[/bold magenta]")
+                                host_state_unreplicated = jax.device_get(unreplicate(p_state))
+                                data_for_save = {'params': host_state_unreplicated.params, 'val_loss': best_val_loss, 'step': step}
+                                active_save_future = checkpoint_executor.submit(_save_cpu_data_task, data_for_save, ckpt_path_best)
+                        validation_future = None
+
                     batch = next(train_iterator); sharded_batch = shard(batch)
                     key, train_step_key = jax.random.split(key); sharded_keys = jax.random.split(train_step_key, self.num_devices)
                     lr = self.q_controller.choose_action() if self.q_controller else self.args.lr
@@ -1096,29 +1112,24 @@ class ConductorTrainer(AdvancedTrainer):
                             if self.args.use_sentinel: self.sentinel_dampen_history.append(metrics['sentinel_pct'].item()); self.sentinel_pct = metrics['sentinel_pct'].item()
                         if self.q_controller: self.q_controller.update_q_value(loss_val)
 
-                    val_loss_val = self.progress.tasks[task_id].fields['val_loss']
-                    if (step + 1) % self.args.eval_every == 0 and val_tokens_batched is not None:
+                    if (step + 1) % self.args.eval_every == 0 and val_cpu_batches is not None:
                         gpu_params = unreplicate(p_state).params
-                        val_loss_val = run_validation(gpu_params, val_tokens_batched, val_embeddings_batched).item()
-                        if val_loss_val < best_val_loss:
-                            best_val_loss = val_loss_val
-                            if not (active_save_future and not active_save_future.done()):
-                                console.print(f"\n[bold magenta]🏆 New best val loss: {best_val_loss:.4f} @ step {step+1}. Saving in background...[/bold magenta]")
-                                # Stage 1: Blocking transfer in main thread. This is fast.
-                                host_state_unreplicated = jax.device_get(unreplicate(p_state))
-                                data_for_save = {'params': host_state_unreplicated.params, 'val_loss': best_val_loss, 'step': step + 1}
-                                # Stage 2: Submit CPU data for non-blocking disk write.
-                                active_save_future = checkpoint_executor.submit(_save_cpu_data_task, data_for_save, ckpt_path_best)
+                        # Get the next batch from CPU RAM.
+                        tokens_batch_cpu, embeddings_batch_cpu = val_cpu_batches[val_batch_idx]
+                        # The tiny "hitch" is just this single, small transfer.
+                        val_batch_gpu = jax.device_put(tokens_batch_cpu), jax.device_put(embeddings_batch_cpu)
+                        # Launch the calculation asynchronously.
+                        validation_future = run_validation_batch(gpu_params, *val_batch_gpu, self.model.apply, self.args.num_codes)
+                        # Cycle to the next validation batch for the next time.
+                        val_batch_idx = (val_batch_idx + 1) % len(val_cpu_batches)
 
-                    self.progress.update(task_id, advance=1, loss=loss_val, val_loss=val_loss_val, best_val_loss=best_val_loss)
+                    self.progress.update(task_id, advance=1, loss=loss_val, best_val_loss=best_val_loss)
                     
                     if (step + 1) % SAVE_EVERY_N_STEPS == 0:
                         if not (active_save_future and not active_save_future.done()):
-                            # Stage 1: Blocking transfer.
                             host_state_unreplicated = jax.device_get(unreplicate(p_state))
                             q_state = self.q_controller.state_dict() if self.q_controller else None
                             data_for_save = {'params': host_state_unreplicated.params, 'opt_state': host_state_unreplicated.opt_state, 'step': step + 1, 'q_controller_state': q_state}
-                            # Stage 2: Non-blocking disk write.
                             active_save_future = checkpoint_executor.submit(_save_cpu_data_task, data_for_save, ckpt_path_final)
                         else:
                             console.print(f"[yellow]Skipping regular checkpoint at step {step+1}: previous save is still in progress.[/yellow]")
@@ -1139,8 +1150,6 @@ class ConductorTrainer(AdvancedTrainer):
             console.print(f"✅ Config saved to [green]{config_path}[/green]")
             if ckpt_path_best.exists(): console.print(f"👑 Best model (by validation) remains at [bold magenta]{ckpt_path_best}[/bold magenta]")
             self.interactive_state.set_shutdown(); key_listener_thread.join()
-
-
 
 
 
@@ -1251,13 +1260,13 @@ def main():
 
     p_tok = subparsers.add_parser("train-tokenizer", help="Train the Latent Tokenizer (VQ-VAE).", parents=[base_parser, train_parser])
     p_tok.add_argument('--data-dir', type=str, required=True); p_tok.add_argument('--d-model', type=int, required=True); p_tok.add_argument('--latent-grid-size', type=int, required=True)
-    p_tok.add_argument('--steps', type=int, default=20000); p_tok.add_argument('--batch-size', type=int, default=128); p_tok.add_argument('--lr', type=float, default=3e-4)
+    p_tok.add_argument('--steps', type=int, default=150000); p_tok.add_argument('--batch-size', type=int, default=128); p_tok.add_argument('--lr', type=float, default=3e-4)
     p_tok.add_argument('--num-codes', type=int, default=8192); p_tok.add_argument('--code-dim', type=int, default=256)
 
     p_cond = subparsers.add_parser("train-conductor", help="Train the Generative Conductor (Transformer).", parents=[base_parser, train_parser])
     p_cond.add_argument('--data-dir', type=str, required=True); p_cond.add_argument('--latent-grid-size', type=int, required=True)
-    p_cond.add_argument('--steps', type=int, default=150000); p_cond.add_argument('--batch-size', type=int, default=32, help="Batch size PER DEVICE."); p_cond.add_argument('--lr', type=float, default=1e-4)
-    p_cond.add_argument('--eval-every', type=int, default=50, help="Run validation every N steps.") # <-- ADD THIS LINE
+    p_cond.add_argument('--steps', type=int, default=1500000); p_cond.add_argument('--batch-size', type=int, default=32, help="Batch size PER DEVICE."); p_cond.add_argument('--lr', type=float, default=1e-4)
+    p_cond.add_argument('--eval-every', type=int, default=2500, help="Run validation every N steps.") # <-- ADD THIS LINE
     p_cond.add_argument('--num-codes', type=int, default=8192); p_cond.add_argument('--code-dim', type=int, default=256)
     p_cond.add_argument('--num-layers', type=int, default=12); p_cond.add_argument('--d-model-cond', type=int, default=768); p_cond.add_argument('--num-heads', type=int, default=12)
 
