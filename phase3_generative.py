@@ -71,6 +71,14 @@ except ImportError:
     print("[FATAL] Required dependency `flash-attn-jax` is missing. Please run: pip install flash-attn-jax, pip install einops")
     sys.exit(1)
 # --- Dependency Checks ---
+# =================================================================================================
+# GUI PREVIEW DEPENDENCIES (Place near other imports)
+# =================================================================================================
+try:
+    from rich_pixels import Pixels
+except ImportError:
+    print("[Warning] `rich-pixels` not found. Visual preview in GUI will be disabled. Run: pip install rich-pixels")
+    Pixels = None
 try:
     import tensorflow as tf
     tf.config.set_visible_devices([], 'GPU')
@@ -200,13 +208,22 @@ class TopologicalCoordinateGenerator(nn.Module):
 # =================================================================================================
 # 2. ADVANCED TRAINING TOOLKIT
 # =================================================================================================
-
+# =================================================================================================
+# INTERACTIVE GUI HELPERS (Place before the ConductorTrainer class)
+# =================================================================================================
 class InteractivityState:
     """A thread-safe class to hold shared state for interactive controls."""
     def __init__(self):
         self.lock = threading.Lock()
+        self.preview_prompt_change = 0  # -1 for prev, 1 for next
         self.sentinel_dampening_log_factor = -1.0
         self.shutdown_event = threading.Event()
+
+    def get_and_reset_preview_change(self):
+        with self.lock:
+            change = self.preview_prompt_change
+            self.preview_prompt_change = 0
+            return change
 
     def update_sentinel_factor(self, direction):
         with self.lock:
@@ -227,7 +244,9 @@ def listen_for_keys(shared_state: InteractivityState):
                 key = msvcrt.getch()
                 if key == b'\xe0': # Arrow key prefix
                     arrow = msvcrt.getch()
-                    if arrow == b'H': shared_state.update_sentinel_factor(1) # Up
+                    if arrow == b'K': shared_state.preview_prompt_change = -1 # Left
+                    elif arrow == b'M': shared_state.preview_prompt_change = 1 # Right
+                    elif arrow == b'H': shared_state.update_sentinel_factor(1) # Up
                     elif arrow == b'P': shared_state.update_sentinel_factor(-1) # Down
             time.sleep(0.05)
     else: # Linux/macOS
@@ -239,10 +258,14 @@ def listen_for_keys(shared_state: InteractivityState):
                     char = sys.stdin.read(1)
                     if char == '\x1b': # ESC sequence
                         next_chars = sys.stdin.read(2)
-                        if next_chars == '[A': shared_state.update_sentinel_factor(1) # Up
+                        if next_chars == '[A': shared_state.update_sentinel_factor(1)    # Up
                         elif next_chars == '[B': shared_state.update_sentinel_factor(-1) # Down
+                        elif next_chars == '[C':                                          # Right
+                             with shared_state.lock: shared_state.preview_prompt_change = 1
+                        elif next_chars == '[D':                                          # Left
+                             with shared_state.lock: shared_state.preview_prompt_change = -1
         finally: termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
+        
 def get_sentinel_lever_ascii(log_factor: float):
     """Generates an ASCII art lever for the UI."""
     levels = np.linspace(-3.0, 0.0, 7); idx = np.digitize(log_factor, levels, right=True)
@@ -320,23 +343,54 @@ class JaxHakmemQController:
 
 
 # =================================================================================================
-# 3. PHASE 3 ARCHITECTURE: TOKENIZER & CONDUCTOR
+# FINAL, CHECKPOINT-COMPATIBLE VECTOR QUANTIZER
 # =================================================================================================
-
 class VectorQuantizer(nn.Module):
-    num_embeddings: int; embedding_dim: int; beta: float = 0.25
-    @nn.compact
-    def __call__(self, z_e):
-        codebook = self.param('codebook', nn.initializers.uniform(), (self.embedding_dim, self.num_embeddings))
-        z_e_flat = z_e.reshape(-1, self.embedding_dim)
-        d = jnp.sum(z_e_flat**2,1,keepdims=True) - 2*jnp.dot(z_e_flat,codebook) + jnp.sum(codebook**2,0,keepdims=True)
-        indices = jnp.argmin(d, axis=1)
-        z_q = codebook.T[indices].reshape(z_e.shape)
-        commitment_loss = self.beta * jnp.mean((jax.lax.stop_gradient(z_q) - z_e)**2)
-        codebook_loss = jnp.mean((z_q - jax.lax.stop_gradient(z_e))**2)
-        z_q_ste = z_e + jax.lax.stop_gradient(z_q - z_e)
-        return {"quantized": z_q_ste, "indices": indices.reshape(z_e.shape[:-1]), "loss": commitment_loss + codebook_loss}
+    num_codes: int
+    code_dim: int
+    beta: float = 0.25
 
+    @nn.compact
+    def __call__(self, z):
+        # --- This is the original, correct way your VQ was defined ---
+        # It creates a parameter named 'codebook' directly in the 'vq' scope.
+        codebook = self.param(
+            'codebook',
+            nn.initializers.uniform(),
+            (self.code_dim, self.num_codes)
+        )
+
+        z_flat = z.reshape(-1, self.code_dim)
+        
+        # Distances from z to embeddings
+        d = jnp.sum(z_flat**2, axis=1, keepdims=True) - 2 * jnp.dot(z_flat, codebook) + jnp.sum(codebook**2, axis=0, keepdims=True)
+        indices = jnp.argmin(d, axis=1)
+        
+        # Quantize using the codebook
+        z_q = codebook.T[indices].reshape(z.shape)
+
+        # VQ Losses
+        commitment_loss = self.beta * jnp.mean((jax.lax.stop_gradient(z_q) - z)**2)
+        codebook_loss = jnp.mean((z_q - jax.lax.stop_gradient(z))**2)
+        
+        # Straight-through estimator
+        z_q_ste = z + jax.lax.stop_gradient(z_q - z)
+        
+        return {
+            "quantized": z_q_ste,
+            "indices": indices.reshape(z.shape[:-1]),
+            "loss": commitment_loss + codebook_loss
+        }
+
+    def lookup(self, indices):
+        """A dedicated method to look up embedding vectors from integer indices."""
+        # This method now correctly looks for the 'codebook' parameter.
+        codebook = self.variables['params']['codebook']
+        return codebook.T[indices]
+
+# =================================================================================================
+# FINAL, CORRECTED TOKENIZER - No changes needed here now
+# =================================================================================================
 class LatentTokenizerVQ(nn.Module):
     num_codes: int
     code_dim: int
@@ -344,145 +398,134 @@ class LatentTokenizerVQ(nn.Module):
     dtype: Any = jnp.float32
 
     def setup(self):
-        """Define all submodules here once."""
         self.enc_conv1 = nn.Conv(128, (3,3), (2,2), 'SAME', name="enc_conv1", dtype=self.dtype)
         self.enc_conv2 = nn.Conv(256, (3,3), (2,2), 'SAME', name="enc_conv2", dtype=self.dtype)
         self.enc_proj = nn.Conv(self.code_dim, (1,1), name="enc_proj", dtype=self.dtype)
         
+        # This now uses the checkpoint-compatible VectorQuantizer
         self.vq = VectorQuantizer(self.num_codes, self.code_dim, name="vq")
         
         self.dec_convT1 = nn.ConvTranspose(256, (3,3), (2,2), 'SAME', name="dec_convT1", dtype=self.dtype)
         self.dec_convT2 = nn.ConvTranspose(3, (3,3), (2,2), 'SAME', name="dec_convT2", dtype=self.dtype)
 
     def __call__(self, path_params_grid):
-        """
-        The main forward pass for training. Uses the submodules defined in setup().
-        """
         target_size = self.latent_grid_size // 4
-        
-        # --- Encoding Path ---
         h = nn.gelu(self.enc_conv1(path_params_grid))
         h = nn.gelu(self.enc_conv2(h))
         z_e = self.enc_proj(h)
         assert z_e.shape[1] == target_size and z_e.shape[2] == target_size, f"Incorrect spatial dim: {z_e.shape}"
-        
-        # --- VQ Step ---
         vq_out = self.vq(z_e)
         z_q = vq_out["quantized"]
-        
-        # --- Decoding Path ---
         h_r = nn.gelu(self.dec_convT1(z_q))
         p_r = self.dec_convT2(h_r)
-        
         return {"reconstructed_path_params": p_r, "indices": vq_out["indices"], "vq_loss": vq_out["loss"]}
 
     def encode(self, path_params_grid):
-        """Encodes latents to token indices. Reuses layers from setup()."""
         h = nn.gelu(self.enc_conv1(path_params_grid))
         h = nn.gelu(self.enc_conv2(h))
         z_e = self.enc_proj(h)
         return self.vq(z_e)["indices"]
 
     def decode(self, indices):
-        """Decodes token indices back to latents. Reuses layers from setup()."""
-        # When `apply` is called, the parameters are bound to the submodules.
-        # We can access the codebook directly from the `self.vq` submodule instance.
-        codebook = self.vq.codebook
-        z_q = codebook.T[indices.flatten()].reshape(indices.shape + (self.code_dim,))
+        # This correctly calls the new lookup method, which finds the 'codebook' param.
+        z_q = self.vq.lookup(indices)
         h_r = nn.gelu(self.dec_convT1(z_q))
         return self.dec_convT2(h_r)
-
+        
+        
+        
 import math
 from flax.linen import initializers
 from flax.linen import dot_product_attention
 
 # ==============================================================================
-# FINAL, CORRECTED ATTENTION: Using the correct Flax API.
+# FINAL, CORRECTED ATTENTION: Using pre-allocated KV cache for jax.lax.scan
 # ==============================================================================
 
 class StandardAttention(nn.Module):
     """
-    A robust multi-head attention that correctly uses Flax APIs.
-    - For training (`decode=False`), it uses the highly optimized built-in module.
-    - For inference (`decode=True`), it implements attention manually to enable KV caching.
+    A robust multi-head attention module designed to work with a pre-allocated
+    Key-Value (KV) cache for efficient autoregressive generation within jax.lax.scan.
     """
     num_heads: int
     dtype: Any = jnp.float32
+    # --- [SOLUTION] Add num_positions to the module's signature ---
+    # This makes it an expected parameter during initialization.
+    # It's optional because it's only needed for decoding cache setup.
+    num_positions: Optional[int] = None
 
     @nn.compact
-    def __call__(self, x: jnp.ndarray, context: Optional[jnp.ndarray] = None, mask: Optional[jnp.ndarray] = None, decode: bool = False):
+    def __call__(self, x: jnp.ndarray, context: Optional[jnp.ndarray] = None, mask: Optional[jnp.ndarray] = None, decode: bool = False, index: Optional[jnp.ndarray] = None):
         is_self_attn = context is None
         
-        if not decode:
-            # --- TRAINING/EVAL PATH (SIMPLE & ROBUST) ---
-            # Use the built-in module correctly. It handles all projections internally.
-            return nn.MultiHeadDotProductAttention(
-                num_heads=self.num_heads,
-                dtype=self.dtype,
-                kernel_init=initializers.xavier_uniform()
-            )(inputs_q=x, inputs_kv=(x if is_self_attn else context), mask=mask)
+        d_model = x.shape[-1]
+        head_dim = d_model // self.num_heads
+        
+        q_proj = nn.Dense(d_model, name="query", dtype=self.dtype, kernel_init=initializers.xavier_uniform())
+        k_proj = nn.Dense(d_model, name="key", dtype=self.dtype, kernel_init=initializers.xavier_uniform())
+        v_proj = nn.Dense(d_model, name="value", dtype=self.dtype, kernel_init=initializers.xavier_uniform())
+        out_proj = nn.Dense(d_model, name="out", dtype=self.dtype, kernel_init=initializers.xavier_uniform())
 
+        kv_source = x if is_self_attn else context
+        
+        q = q_proj(x)
+        
+        if decode and is_self_attn:
+            # --- [SOLUTION] Ensure num_positions is available ---
+            if self.num_positions is None:
+                raise ValueError("num_positions must be provided to StandardAttention during decoding.")
+
+            # Initialize the pre-allocated cache using the provided num_positions.
+            cache_k = self.variable('cache', 'cached_key', lambda: jnp.zeros((x.shape[0], self.num_positions, d_model), dtype=self.dtype))
+            cache_v = self.variable('cache', 'cached_value', lambda: jnp.zeros((x.shape[0], self.num_positions, d_model), dtype=self.dtype))
+
+            k_new = k_proj(kv_source)
+            v_new = v_proj(kv_source)
+
+            # Write the new key/value into the cache at the current index.
+            cache_k.value = cache_k.value.at[:, index, :].set(k_new.squeeze(axis=1))
+            cache_v.value = cache_v.value.at[:, index, :].set(v_new.squeeze(axis=1))
+            
+            k = cache_k.value
+            v = cache_v.value
         else:
-            # --- INFERENCE PATH w/ KV CACHE (MANUAL IMPLEMENTATION) ---
-            if not is_self_attn:
-                # Caching is only implemented for self-attention in this model
-                return nn.MultiHeadDotProductAttention(
-                    num_heads=self.num_heads,
-                    dtype=self.dtype,
-                    kernel_init=initializers.xavier_uniform()
-                )(inputs_q=x, inputs_kv=context, mask=mask)
+            k = k_proj(kv_source)
+            v = v_proj(kv_source)
 
-            B, L, D = x.shape
-            head_dim = D // self.num_heads
+        B, L_q, _ = q.shape
+        _, L_kv, _ = k.shape
+        
+        q_heads = q.reshape(B, L_q, self.num_heads, head_dim)
+        k_heads = k.reshape(B, L_kv, self.num_heads, head_dim)
+        v_heads = v.reshape(B, L_kv, self.num_heads, head_dim)
 
-            # Define projection layers
-            q_proj = nn.Dense(D, name="q_proj", dtype=self.dtype, kernel_init=initializers.xavier_uniform())
-            k_proj = nn.Dense(D, name="k_proj", dtype=self.dtype, kernel_init=initializers.xavier_uniform())
-            v_proj = nn.Dense(D, name="v_proj", dtype=self.dtype, kernel_init=initializers.xavier_uniform())
-            out_proj = nn.Dense(D, name="out_proj", dtype=self.dtype, kernel_init=initializers.xavier_uniform())
+        attn_output = dot_product_attention(q_heads, k_heads, v_heads, mask=mask, dtype=self.dtype)
 
-            # Access the cache via mutable variables
-            cache_k = self.variable('cache', 'key', lambda: jnp.zeros((B, 0, self.num_heads, head_dim), dtype=self.dtype))
-            cache_v = self.variable('cache', 'value', lambda: jnp.zeros((B, 0, self.num_heads, head_dim), dtype=self.dtype))
-            
-            # Project current inputs (L is always 1 during fast decoding)
-            q = q_proj(x).reshape(B, L, self.num_heads, head_dim)
-            k = k_proj(x).reshape(B, L, self.num_heads, head_dim)
-            v = v_proj(x).reshape(B, L, self.num_heads, head_dim)
-
-            # Append current key/value to the cache
-            k = jnp.concatenate([cache_k.value, k], axis=1)
-            v = jnp.concatenate([cache_v.value, v], axis=1)
-
-            # Update the cache variables for the next step
-            cache_k.value = k
-            cache_v.value = v
-            
-            # Create a causal mask for the full sequence length
-            causal_mask = nn.make_causal_mask(jnp.ones((B, k.shape[1]), dtype=jnp.bool_))
-
-            # Perform scaled dot-product attention
-            attn_output = dot_product_attention(q, k, v, mask=causal_mask)
-
-            # Reshape and project output
-            return out_proj(attn_output.reshape(B, L, D))
+        return out_proj(attn_output.reshape(B, L_q, d_model))
 
 
 class TransformerBlock(nn.Module):
     """
-    Transformer block using the reliable StandardAttention module.
-    (Corrected to pass 'decode' flag to cross-attention).
+    Transformer block now correctly instantiates StandardAttention with num_positions.
     """
-    num_heads: int; d_model: int; dtype: Any = jnp.float32
+    num_heads: int; d_model: int; num_positions: int; dtype: Any = jnp.float32
     
     @nn.compact
-    def __call__(self, x, context, mask, decode: bool = False):
+    def __call__(self, x, context, mask, decode: bool = False, index: Optional[jnp.ndarray] = None):
         sa_input = nn.LayerNorm(dtype=self.dtype)(x)
-        x = x + StandardAttention(self.num_heads, self.dtype, name='sa')(sa_input, mask=mask, decode=decode)
+        
+        # --- [SOLUTION] Instantiate StandardAttention directly, passing num_positions ---
+        # This is cleaner than using functools.partial and avoids the TypeError.
+        x = x + StandardAttention(
+            num_heads=self.num_heads, 
+            dtype=self.dtype, 
+            num_positions=self.num_positions, # Pass it here
+            name='sa'
+        )(sa_input, mask=mask, decode=decode, index=index)
 
+        # Cross-attention does not use a cache, so it doesn't need num_positions.
         ca_input = nn.LayerNorm(dtype=self.dtype)(x)
-        # BUG FIX: Ensure the 'decode' flag is passed to all sub-modules.
-        x = x + StandardAttention(self.num_heads, self.dtype, name='ca')(ca_input, context=context, decode=decode)
+        x = x + StandardAttention(num_heads=self.num_heads, dtype=self.dtype, name='ca')(ca_input, context=context)
         
         ffn_input = nn.LayerNorm(dtype=self.dtype)(x)
         h = nn.gelu(nn.Dense(self.d_model * 4, dtype=self.dtype, kernel_init=initializers.xavier_uniform())(ffn_input))
@@ -491,14 +534,16 @@ class TransformerBlock(nn.Module):
         return x
 
 
+
+
+
 class GenerativeConductor(nn.Module):
     num_codes: int; num_positions: int; d_model: int; num_heads: int; num_layers: int; clip_dim: int
-    # This attribute remains for configuration and documentation purposes.
     uncond_drop_rate: float = 0.1
     dtype: Any = jnp.float32
 
     @nn.compact
-    def __call__(self, tokens, text_emb, train: bool = False, decode: bool = False):
+    def __call__(self, tokens, text_emb, train: bool = False, decode: bool = False, index: Optional[jnp.ndarray] = None):
         B, L = tokens.shape
         
         uncond_embedding = self.param(
@@ -509,40 +554,45 @@ class GenerativeConductor(nn.Module):
         
         if train:
             key = self.make_rng('dropout')
-            # =======================================================================
-            # THE FINAL, DEFINITIVE FIX:
-            # We bypass the faulty `self` proxy by accessing the dropout rate
-            # directly from the class definition (`GenerativeConductor.uncond_drop_rate`).
-            # The JIT tracer understands this is a simple Python float and handles
-            # it correctly, avoiding the `_ScalarMeta` TypeError for good.
-            # We still cast to float32 for the bernoulli function's requirement.
-            # =======================================================================
             p_drop = jnp.asarray(GenerativeConductor.uncond_drop_rate, dtype=jnp.float32)
             should_drop = jax.random.bernoulli(key, p_drop, (B, 1))
-            
             text_emb = jnp.where(should_drop, uncond_embedding, text_emb)
 
         tok_emb = nn.Embed(self.num_codes + 1, self.d_model, name='token_embedding', dtype=self.dtype)(tokens)
         pos_emb = self.param('pos_embedding', nn.initializers.normal(.02), (self.num_positions, self.d_model), self.dtype)
         
-        current_pos = L
+        # --- [SCAN COMPATIBILITY FIX] ---
+        # The logic now uses the externally provided 'index' for positional embeddings.
         if decode:
-            step = self.variable('cache', 'step', lambda: 0)
-            current_pos = step.value
-            step.value += 1
-        
-        x = tok_emb + pos_emb[current_pos : current_pos + L]
-        x = x.astype(self.dtype)
+            # During decoding, L is always 1. 'index' is the current step in the sequence.
+            chex.assert_rank(index, 0) # Ensure index is a scalar
+            positional_embedding = pos_emb[index]
+            x = tok_emb + positional_embedding[None, None, :]
+        else:
+            # During training, we use a standard static slice.
+            positional_embedding = pos_emb[:L]
+            x = tok_emb + positional_embedding[None, :, :]
+        # --- [END FIX] ---
 
+        x = x.astype(self.dtype)
         ctx = nn.Dense(self.d_model, name='text_projection', dtype=self.dtype)(text_emb)[:,None,:]
-        mask = nn.make_causal_mask(jnp.ones((B, L), dtype=jnp.bool_))
+        
+        if decode:
+            # During decoding, create a causal mask for the *single query token*
+            # against all keys in the cache up to the current index.
+            mask = nn.make_attention_mask(
+                jnp.ones((B, 1), dtype=jnp.bool_), # Query is length 1
+                jnp.arange(self.num_positions) < (index + 1), # Keys are valid up to index
+                dtype=jnp.bool_
+            )
+        else:
+            # Standard causal mask for training.
+            mask = nn.make_causal_mask(jnp.ones((B, L), dtype=jnp.bool_))
         
         for i in range(self.num_layers):
-            x = TransformerBlock(self.num_heads, self.d_model, self.dtype, name=f'block_{i}')(x, context=ctx, mask=mask, decode=decode)
+            x = TransformerBlock(self.num_heads, self.d_model, self.num_positions, self.dtype, name=f'block_{i}')(x, context=ctx, mask=mask, decode=decode, index=index)
             
-        return nn.Dense(self.num_codes, name='logit_head', dtype=self.dtype)(nn.LayerNorm(dtype=self.dtype)(x))
-        
-        
+        return nn.Dense(self.num_codes, name='logit_head', dtype=self.dtype)(nn.LayerNorm(dtype=self.dtype)(x))   
         
 # =================================================================================================
 # 4. DATA PREPARATION (Corrected for Robust Pairing)
@@ -887,19 +937,31 @@ class TokenizerTrainer(AdvancedTrainer):
             
           
 
-# ==============================================================================
+
+
+
+
+# =================================================================================================
 # UPGRADE: ConductorTrainer with CFG Training Loop
-# ==============================================================================
+# =================================================================================================
 class ConductorTrainer(AdvancedTrainer):
-    # __init__ and _generate_layout methods remain the same as your original code...
     def __init__(self, args):
         super().__init__(args)
         self.dtype = jnp.bfloat16 if args.use_bfloat16 else jnp.float32
         
         console = Console()
 
+        if args.vram_saver_mode:
+            console.print("--- [bold yellow]VRAM Saver Mode ENABLED[/bold yellow]. Using lower-resolution previews. ---")
+            self.preview_resolution = 96
+            self.preview_top_k = 128
+        else:
+            self.preview_resolution = 128
+            self.preview_top_k = 256
+
         tok_path_best = Path(f"tokenizer_{args.basename}_{args.num_codes}c_best.pkl")
         tok_path_final = Path(f"tokenizer_{args.basename}_{args.num_codes}c_final.pkl")
+        tok_config_path = Path(f"tokenizer_{args.basename}_{args.num_codes}c_config.pkl")
 
         if tok_path_best.exists():
             console.print(f"--- Loading BEST tokenizer from [green]{tok_path_best}[/green] ---")
@@ -907,51 +969,78 @@ class ConductorTrainer(AdvancedTrainer):
         elif tok_path_final.exists():
             console.print(f"--- Loading FINAL tokenizer from [yellow]{tok_path_final}[/yellow] ---")
             with open(tok_path_final,'rb') as f: self.tok_params = pickle.load(f)['params']
-        else:
-            sys.exit(f"[FATAL] No tokenizer model found. Train tokenizer first.")
-
-        self.tokenizer = LatentTokenizerVQ(args.num_codes, args.code_dim, args.latent_grid_size, self.dtype)
+        else: sys.exit(f"[FATAL] No tokenizer model found. Train tokenizer first.")
         
-        self.token_map_size = (args.latent_grid_size // 4) ** 2
-        # Use the NEW GenerativeConductor definition
+        if not tok_config_path.exists(): sys.exit(f"[FATAL] Tokenizer config not found: {tok_config_path}")
+        with open(tok_config_path, 'rb') as f: self.tok_config = pickle.load(f)
+
+        try:
+            p1_paths = list(Path('.').glob(f"{args.basename}_*d_512.pkl"))
+            if not p1_paths: raise StopIteration
+            if len(p1_paths) > 1:
+                console.print(f"[bold red]FATAL: Ambiguous Phase 1 model. Found multiple matches for '{args.basename}_*d_512.pkl':[/]")
+                for p in p1_paths: console.print(f"- {p}")
+                sys.exit(1)
+            p1_path = p1_paths[0]
+            p1_d_model_str = p1_path.stem.split('_')[-2]
+            p1_d_model = int(p1_d_model_str.replace('d', ''))
+
+        except (StopIteration, IndexError, ValueError):
+            sys.exit(f"[FATAL] Could not find or parse a unique Phase 1 model file matching the pattern: '{args.basename}_*d_512.pkl'")
+
+        console.print(f"--- Discovered and loading Phase 1 AE from: [green]{p1_path}[/green] (d_model={p1_d_model}) ---")
+        self.p1_model = TopologicalCoordinateGenerator(p1_d_model, self.tok_config['latent_grid_size'], 512, self.dtype)
+        with open(p1_path, 'rb') as f: self.p1_params = pickle.load(f)['params']
+
+        self.tokenizer = LatentTokenizerVQ(**self.tok_config, dtype=self.dtype)
+        self.token_map_size = (self.tok_config['latent_grid_size'] // 4) ** 2
         self.model = GenerativeConductor(args.num_codes, self.token_map_size + 1, args.d_model_cond, args.num_heads, args.num_layers, 512, self.dtype)
         
+        # --- [SOLUTION] Restore the missing interactive_state initialization ---
         self.interactive_state = InteractivityState()
         self.loss_history = deque(maxlen=200)
         self.sentinel_dampen_history = deque(maxlen=200)
         self.spinner_chars = ["🧠", "⚡", "💾", "📈", "🧠", "⚡", "💽", "📉"]
-        self.spinner_idx = 0
-        self.param_count = 0
-        self.steps_per_sec = 0.0
+        self.spinner_idx = 0; self.param_count = 0; self.steps_per_sec = 0.0
         self.ui_lock = threading.Lock()
         
-    def _generate_layout(self) -> Layout:
-        # This function remains largely the same, but it will be called less frequently.
-        with self.ui_lock:
-            layout = Layout(name="root")
-            layout.split(
-                Layout(name="header", size=3),
-                Layout(ratio=1, name="main"),
-                self.progress,
-                Layout(name="footer", size=1)
-            )
+        self.clip_model, _ = clip.load("ViT-B/32", device=_clip_device)
+        
+        self.validation_prompts = [
+            "A photorealistic portrait of an ancient warrior queen",
+            "A cute Corgi puppy playing in a field of flowers, impressionist painting",
+            "A stunning sports car racing through a neon-lit city at night, synthwave",
+            "A serene Japanese zen garden with a cherry blossom tree, watercolor",
+        ]
+        self.current_preview_prompt_idx = 0
+        self.current_preview_image_np = None
 
-            layout["main"].split_row(Layout(name="left", minimum_size=55), Layout(name="right", ratio=1))
-            self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars); spinner = self.spinner_chars[self.spinner_idx]
+    def _generate_layout(self) -> Layout:
+        with self.ui_lock:
+            console = Console()
+            width = console.width
+            LAYOUT_BREAKPOINT = 120
+
+            self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
+            spinner = self.spinner_chars[self.spinner_idx]
             precision_str = "[bold purple]BF16[/]" if self.dtype == jnp.bfloat16 else "[dim]FP32[/]"
             header_text = f"{spinner} [bold]Generative Conductor[/] | Params: [yellow]{self.param_count/1e6:.2f}M[/] | Precision: {precision_str}"
-            layout["header"].update(Panel(Align.center(header_text), style="bold magenta", title="[dim]wubumind.ai[/dim]", title_align="right"))
+            header_panel = Panel(Align.center(header_text), style="bold magenta", title="[dim]wubumind.ai[/dim]", title_align="right")
+
             stats_tbl = Table.grid(expand=True, padding=(0,1)); stats_tbl.add_column(style="dim",width=15); stats_tbl.add_column(justify="right")
             loss_val=self.loss_history[-1] if self.loss_history else 0; loss_emoji, color = ("👌","green") if loss_val < 2.5 else (("👍","yellow") if loss_val < 4.0 else ("😟","red"))
             stats_tbl.add_row("X-Entropy Loss", f"[{color}]{loss_val:.4f}[/] {loss_emoji}"); stats_tbl.add_row("Steps/sec", f"[blue]{self.steps_per_sec:.2f}[/] 🏃💨")
             mem, util = self._get_gpu_stats(); stats_tbl.add_row("GPU Mem", f"[yellow]{mem}[/]"); stats_tbl.add_row("GPU Util", f"[yellow]{util}[/]")
             stats_panel = Panel(stats_tbl, title="[bold]📊 Core Stats[/]", border_style="blue", height=6)
+
             q_table = Table.grid(expand=True, padding=(0,1)); q_table.add_column("Ctrl", style="bold cyan", width=6); q_table.add_column("Metric", style="dim", width=10); q_table.add_column("Value", justify="left")
             if self.q_controller:
                 status=self.q_controller.status; status_emoji, color = ("😎","green") if "IMPROVING" in status else (("🤔","yellow") if "STAGNATED" in status else (("😠","red") if "REGRESSING" in status else (("🐣","blue") if "WARMUP" in status else ("🤖","dim"))))
                 q_table.add_row("🧠 LR", "Status", f"[{color}]{status}[/] {status_emoji}"); q_table.add_row("", "Reward", f"{self.q_controller.last_reward:+.2f}")
                 q_panel = Panel(q_table, title="[bold]🤖 Q-Controller[/]", border_style="green", height=4)
             else: q_panel = Panel(Align.center("[dim]Q-Ctrl Off[/dim]"), title="[bold]🤖 Q-Controller[/]", border_style="dim", height=4)
+
+            sentinel_panel_widget = None
             if self.args.use_sentinel:
                 sentinel_layout = Layout(); log_factor = self.interactive_state.sentinel_dampening_log_factor
                 lever_panel = Panel(get_sentinel_lever_ascii(log_factor), title="Dampen 🚀", title_align="left")
@@ -960,18 +1049,50 @@ class ConductorTrainer(AdvancedTrainer):
                 status_panel = Panel(Align.center(Text(status_str)), title="Status 🚦", height=4)
                 sentinel_layout.split_row(Layout(lever_panel), Layout(status_panel))
                 sentinel_panel_widget = Panel(sentinel_layout, title="[bold]🕹️ Sentinel Interactive[/]", border_style="yellow", height=11)
-                left_panels = [stats_panel, q_panel, sentinel_panel_widget]
-            else: left_panels = [stats_panel, q_panel]
-            layout["left"].update(Group(*left_panels))
-            spark_w = 40; loss_spark = Panel(Align.center(f"[cyan]{self._get_sparkline(self.loss_history, spark_w)}[/]"), title="Loss Trend", height=3, border_style="cyan")
+
+            spark_w = max(10, width - 20) if width < LAYOUT_BREAKPOINT else 40
+            loss_spark = Panel(Align.center(f"[cyan]{self._get_sparkline(self.loss_history, spark_w)}[/]"), title="Loss Trend", height=3, border_style="cyan")
             graph_panels = [loss_spark]
             if self.args.use_sentinel:
                 sentinel_spark = Panel(Align.center(f"[magenta]{self._get_sparkline(self.sentinel_dampen_history, spark_w)}[/]"), title="Sentinel Dampening %", height=3, border_style="magenta")
                 graph_panels.append(sentinel_spark)
-            graphs_group = Panel(Group(*graph_panels), title="[bold]📉 Trends[/]")
-            layout["right"].update(graphs_group)
-            layout["footer"].update(Align.center(Text("↑/↓: Adjust Sentinel  |  Ctrl+C to Exit", style="dim")))
+            trends_group = Panel(Group(*graph_panels), title="[bold]📉 Trends[/]")
+
+            preview_content = Align.center("...Waiting for first validation step...")
+            if self.current_preview_image_np is not None:
+                if Pixels is None:
+                    preview_content = Align.center(Text("Install `rich-pixels` for previews", style="yellow"))
+                else:
+                    if width < LAYOUT_BREAKPOINT: term_width = max(20, width - 8)
+                    else: term_width = max(20, width - 55 - 10)
+                    h, w, _ = self.current_preview_image_np.shape
+                    term_height = int(term_width * (h / w) * 0.5)
+                    pil_img = Image.fromarray(self.current_preview_image_np).resize((term_width, term_height), Image.Resampling.LANCZOS)
+                    preview_content = Pixels.from_image(pil_img)
+            
+            current_prompt = self.validation_prompts[self.current_preview_prompt_idx]
+            prompt_text = Text(f"Prompt #{self.current_preview_prompt_idx+1}: \"{current_prompt}\"", justify="center")
+            preview_panel = Panel(Group(prompt_text, Align.center(preview_content)), title="[bold]🖼️ Live Generation Preview[/]", border_style="green", height=40)
+            
+            layout = Layout(name="root")
+            layout.split(
+                Layout(header_panel, name="header", size=3),
+                Layout(ratio=1, name="main"),
+                self.progress,
+                Layout(Align.center(Text("←/→: Change Preview | ↑/↓: Adjust Sentinel  |  Ctrl+C to Exit", style="dim")), name="footer", size=1)
+            )
+
+            left_column_panels = [stats_panel, q_panel]
+            if sentinel_panel_widget: left_column_panels.append(sentinel_panel_widget)
+            
+            if width < LAYOUT_BREAKPOINT:
+                layout["main"].split(Group(*left_column_panels), trends_group, preview_panel)
+            else:
+                right_column = Group(trends_group, preview_panel)
+                layout["main"].split_row(Layout(Group(*left_column_panels), name="left", minimum_size=55), Layout(right_column, name="right", ratio=1))
+            
             return layout
+
 
     def train(self):
         console = Console()
@@ -983,12 +1104,15 @@ class ConductorTrainer(AdvancedTrainer):
         def _save_cpu_data_task(cpu_data_to_save, path):
             with open(path, 'wb') as f: pickle.dump(cpu_data_to_save, f)
 
-        # Data loading...
+        with torch.no_grad():
+            text_tokens = clip.tokenize(self.validation_prompts).to(_clip_device)
+            self.validation_embeddings = self.clip_model.encode_text(text_tokens).cpu().numpy()
+
         tokenized_data_path = Path(self.args.data_dir) / f"tokenized_data_{self.args.basename}_{self.args.num_codes}c.npz"
         if tokenized_data_path.exists():
             console.print(f"--- ✅ Found pre-tokenized data. Loading from [green]{tokenized_data_path}[/green] ---", style="bold yellow")
             with np.load(tokenized_data_path) as data: train_tokens, train_embeddings, val_tokens, val_embeddings = data['train_tokens'], data['train_embeddings'], data['val_tokens'], data['val_embeddings']
-        else: # Tokenization logic remains correct...
+        else:
             console.print("--- 🧠 STEP 1: Pre-tokenized data not found. Creating it now... ---", style="bold yellow")
             data_path = Path(self.args.data_dir) / f"paired_data_{self.args.basename}.pkl";
             if not data_path.exists(): sys.exit(f"[FATAL] Paired data not found at {data_path}")
@@ -1003,8 +1127,7 @@ class ConductorTrainer(AdvancedTrainer):
             val_split_idx = int(len(all_tokens_flat) * 0.02); train_indices, val_indices = shuffled_indices[val_split_idx:], shuffled_indices[:val_split_idx]
             train_tokens, train_embeddings = all_tokens_flat[train_indices], all_embeddings[train_indices]; val_tokens, val_embeddings = all_tokens_flat[val_indices], all_embeddings[val_indices]
             np.savez_compressed(tokenized_data_path, train_tokens=train_tokens, train_embeddings=train_embeddings, val_tokens=val_tokens, val_embeddings=val_embeddings)
-
-        console.print("--- 🧠 STEP 2: Building asynchronous data pipeline ---", style="bold yellow")
+        
         train_ds = tf.data.Dataset.from_tensor_slices((train_tokens, train_embeddings)).shuffle(10000, seed=self.args.seed).repeat().batch(self.args.batch_size * self.num_devices, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
         train_iterator = train_ds.as_numpy_iterator()
 
@@ -1013,7 +1136,31 @@ class ConductorTrainer(AdvancedTrainer):
         
         ckpt_path_final = Path(f"conductor_{self.args.basename}_{self.args.num_layers}l_final.pkl"); ckpt_path_best = Path(f"conductor_{self.args.basename}_{self.args.num_layers}l_best.pkl")
         best_val_loss, start_step = float('inf'), 0
+        
+        def get_initial_variables(init_key):
+            dummy_tokens = jnp.zeros((1, 1), jnp.int32)
+            dummy_embeddings = jnp.zeros((1, 512), self.dtype)
+            return self.model.init({'params': init_key, 'dropout': init_key}, dummy_tokens, dummy_embeddings, decode=True, index=0)
 
+        if ckpt_path_final.exists():
+            with open(ckpt_path_final, 'rb') as f: ckpt = pickle.load(f)
+            with jax.default_device(CPU_DEVICE): params_template = get_initial_variables(key)['params']
+            state = CustomTrainState.create(apply_fn=self.model.apply, params=params_template, tx=optimizer)
+            state = state.replace(params=ckpt['params'], opt_state=ckpt['opt_state'], step=ckpt.get('step',0))
+            start_step = state.step; console.print(f"✅ Resuming from step {start_step + 1}")
+            if self.q_controller and ckpt.get('q_controller_state'): self.q_controller.load_state_dict(ckpt['q_controller_state']);
+            if ckpt_path_best.exists():
+                with open(ckpt_path_best, 'rb') as f_best: best_val_loss = pickle.load(f_best).get('val_loss', float('inf'))
+        else:
+            with jax.default_device(CPU_DEVICE): params = get_initial_variables(key)['params']
+            state = CustomTrainState.create(apply_fn=self.model.apply, params=params, tx=optimizer)
+
+        self.param_count = jax.tree_util.tree_reduce(lambda acc, x: acc + x.size, state.params, 0)
+        p_state = replicate(state)
+        
+        console.print("--- 🧠 STEP 3: JIT Compiling training and validation kernels (one-time cost)... ---")
+        
+        # --- [THE FINAL SOLUTION] Remove `donate_argnums` from the pmap decorator. ---
         @partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(4,))
         def train_step_fn(state, batch, dropout_key, damp_factor, num_codes, lr):
             opt_state_list = list(state.opt_state); hp_state = opt_state_list[-1]; new_hp_state = hp_state._replace(hyperparams={'learning_rate': lr}); opt_state_list[-1] = new_hp_state; state = state.replace(opt_state=tuple(opt_state_list))
@@ -1030,53 +1177,101 @@ class ConductorTrainer(AdvancedTrainer):
                 if isinstance(sentinel_state, SentinelState): sentinel_dampened_pct = sentinel_state.dampened_pct
             return new_state, loss, sentinel_dampened_pct
 
-        # This validation function now only ever sees a SINGLE BATCH.
         @partial(jax.jit, static_argnames=('apply_fn', 'num_codes'))
         def run_validation_batch(params, val_tokens_batch, val_embeddings_batch, apply_fn, num_codes):
             input_tokens = jnp.concatenate([jnp.full((val_tokens_batch.shape[0], 1), num_codes), val_tokens_batch], axis=1)[:, :-1]
             logits = apply_fn({'params': params}, input_tokens, val_embeddings_batch, train=False)
             return optax.softmax_cross_entropy_with_integer_labels(logits, val_tokens_batch).mean()
+        
+        @partial(jax.jit, static_argnames=('tokenizer_apply_fn', 'p1_model_apply_fn', 'resolution', 'num_chunks', 'grid_dim'))
+        def _render_from_tokens_jit(tokenizer_apply_fn, tok_params, p1_model_apply_fn, p1_params, full_tokens, resolution, num_chunks, grid_dim):
+            token_grid = full_tokens.reshape(full_tokens.shape[0], grid_dim, grid_dim)
+            path_params = tokenizer_apply_fn({'params': tok_params}, token_grid, method=LatentTokenizerVQ.decode)
+            coords = jnp.stack(jnp.meshgrid(jnp.linspace(-1, 1, resolution), jnp.linspace(-1, 1, resolution), indexing='ij'), -1).reshape(-1, 2)
+            coord_chunks = jnp.array_split(coords, num_chunks, axis=0)
+            def scan_body(carry, chunk):
+                pixels = p1_model_apply_fn({'params': p1_params}, path_params, chunk, method=TopologicalCoordinateGenerator.decode)
+                return carry, pixels
+            _, pixel_chunks = jax.lax.scan(scan_body, None, jnp.stack(coord_chunks))
+            pixels_batched = jnp.concatenate(pixel_chunks, axis=1)
+            img = pixels_batched.reshape(full_tokens.shape[0], resolution, resolution, 3)
+            return ((img * 0.5 + 0.5) * 255).astype(jnp.uint8)
 
-        console.print("--- 🧠 STEP 3: JIT Compiling training and validation kernels ---", style="bold yellow")
-        if ckpt_path_final.exists():
-            with open(ckpt_path_final, 'rb') as f: ckpt = pickle.load(f)
-            with jax.default_device(CPU_DEVICE): params_template = self.model.init({'params': key, 'dropout': key}, jnp.zeros((1, self.token_map_size), jnp.int32), jnp.zeros((1, 512), self.dtype))['params']
-            state = CustomTrainState.create(apply_fn=self.model.apply, params=params_template, tx=optimizer)
-            state = state.replace(params=ckpt['params'], opt_state=ckpt['opt_state'], step=ckpt.get('step',0))
-            start_step = state.step; console.print(f"✅ Resuming from step {start_step + 1}")
-            if self.q_controller and ckpt.get('q_controller_state'): self.q_controller.load_state_dict(ckpt['q_controller_state']);
-            if ckpt_path_best.exists():
-                with open(ckpt_path_best, 'rb') as f_best: best_val_loss = pickle.load(f_best).get('val_loss', float('inf'))
-        else:
-            with jax.default_device(CPU_DEVICE): params = self.model.init({'params': key, 'dropout': key}, jnp.zeros((1, self.token_map_size), jnp.int32), jnp.zeros((1, 512), self.dtype))['params']
-            state = CustomTrainState.create(apply_fn=self.model.apply, params=params, tx=optimizer)
+        @partial(jax.jit, static_argnames=('model_apply_fn', 'num_steps', 'top_k', 'bos_token_id'))
+        def _autoregressive_sample_jit(model_apply_fn, variables, text_emb, key, num_steps, top_k, bos_token_id):
+            
+            def scan_body(carry, xs_slice):
+                current_vars, last_token = carry
+                step_index, key_step = xs_slice
+                logits, new_mutable_vars = model_apply_fn(
+                    current_vars, last_token, text_emb, train=False, decode=True, index=step_index, mutable=['cache']
+                )
+                output_vars = {'params': current_vars['params'], 'cache': new_mutable_vars['cache']}
+                logits_flat = logits.squeeze(axis=1)
+                top_k_logits, top_k_indices = jax.lax.top_k(logits_flat, k=top_k)
+                next_token_idx = jax.random.categorical(key_step, top_k_logits, axis=-1)
+                next_token = jnp.take_along_axis(top_k_indices, next_token_idx[..., None], axis=-1)
+                return (output_vars, next_token), next_token
+
+            initial_token = jnp.full((text_emb.shape[0], 1), bos_token_id, dtype=jnp.int32)
+            keys = jax.random.split(key, num_steps)
+            initial_carry = (variables, initial_token)
+            xs = (jnp.arange(num_steps), keys)
+            _, generated_tokens_collection = jax.lax.scan(scan_body, initial_carry, xs)
+            generated_tokens = generated_tokens_collection.squeeze(axis=-1).transpose()
+            return generated_tokens
+
+        def _generate_validation_preview(conductor_params, initial_cache, text_emb, key, num_steps, resolution, top_k):
+            variables = {'params': conductor_params, 'cache': initial_cache}
+            final_tokens = _autoregressive_sample_jit(
+                self.model.apply, variables, text_emb, 
+                key, num_steps, top_k, self.args.num_codes
+            )
+            grid_dim = self.tok_config['latent_grid_size'] // 4
+            return _render_from_tokens_jit(
+                self.tokenizer.apply, self.tok_params, self.p1_model.apply, self.p1_params, 
+                final_tokens, resolution, 16, grid_dim
+            )
         
-        p_state = replicate(state); dummy_batch = next(train_iterator); dummy_keys = jax.random.split(key, self.num_devices)
-        p_state, _, _ = train_step_fn(p_state, shard(dummy_batch), dummy_keys, replicate(1.0), self.args.num_codes, replicate(self.args.lr))
+        jit_run_validation_batch = jax.jit(run_validation_batch, static_argnums=(3, 4))
+        jit_generate_validation_preview = jax.jit(_generate_validation_preview, static_argnames=('num_steps', 'resolution', 'top_k'))
         
-        # Keep validation data on the CPU.
+        # We can now compile everything with a single clean state, as no functions are donating.
+        clean_state_for_compile = jax.device_get(unreplicate(p_state))
+        
         val_cpu_batches = None
-        val_batch_size = self.args.batch_size * self.num_devices * 4; num_val_to_keep = (len(val_tokens) // val_batch_size) * val_batch_size
-        if num_val_to_keep > 0:
-            val_tokens_cpu = val_tokens[:num_val_to_keep]
-            val_embeddings_cpu = val_embeddings[:num_val_to_keep]
-            # Create a list of CPU batches to iterate through.
-            val_cpu_batches = list(zip(
-                np.split(val_tokens_cpu, num_val_to_keep // val_batch_size),
-                np.split(val_embeddings_cpu, num_val_to_keep // val_batch_size)
-            ))
-            # JIT compile with a dummy batch.
-            dummy_val_batch = jax.device_put(val_cpu_batches[0][0]), jax.device_put(val_cpu_batches[0][1])
-            _ = run_validation_batch(unreplicate(p_state).params, *dummy_val_batch, self.model.apply, self.args.num_codes).block_until_ready()
-
-        self.param_count = jax.tree_util.tree_reduce(lambda acc, x: acc + x.size, state.params, 0); self.sentinel_pct = 0.0
+        if len(val_tokens) > 0:
+            val_batch_size = self.args.batch_size * self.num_devices
+            MAX_VAL_SAMPLES = 1024
+            num_val_to_keep = min(len(val_tokens), MAX_VAL_SAMPLES)
+            num_val_to_keep = (num_val_to_keep // val_batch_size) * val_batch_size
+            
+            if num_val_to_keep > 0:
+                val_tokens_cpu, val_embeddings_cpu = val_tokens[:num_val_to_keep], val_embeddings[:num_val_to_keep]
+                val_cpu_batches = list(zip(np.split(val_tokens_cpu, num_val_to_keep // val_batch_size), np.split(val_embeddings_cpu, num_val_to_keep // val_batch_size)))
+                
+                dummy_val_batch = jax.device_put(val_cpu_batches[0][0]), jax.device_put(val_cpu_batches[0][1])
+                jit_run_validation_batch(clean_state_for_compile.params, *dummy_val_batch, self.model.apply, self.args.num_codes)
+                
+                with jax.default_device(CPU_DEVICE): initial_cache = get_initial_variables(key)['cache']
+                dummy_text_emb = jnp.zeros((1, 512), dtype=self.dtype)
+                jit_generate_validation_preview(clean_state_for_compile.params, initial_cache, dummy_text_emb, key, self.token_map_size, self.preview_resolution, self.preview_top_k)
+                del dummy_val_batch, initial_cache, dummy_text_emb
+        
+        dummy_batch = next(train_iterator); sharded_batch = shard(dummy_batch)
+        dummy_keys = jax.random.split(key, self.num_devices)
+        train_step_fn(p_state, sharded_batch, dummy_keys, replicate(1.0), self.args.num_codes, replicate(self.args.lr))
+        
+        del clean_state_for_compile, dummy_batch, sharded_batch, dummy_keys
+        
         console.print("[green]✅ Compilation complete. Starting training...[/green]")
+        
         self.progress = Progress(TextColumn("[bold]Step {task.completed}/{task.total}"), BarColumn(), "[p.p.]{task.percentage:>3.1f}%", "•", TextColumn("Loss: {task.fields[loss]:.4f}"), "•", TextColumn("Val: {task.fields[val_loss]:.4f}"), "•", TextColumn("[bold green]Best: {task.fields[best_val_loss]:.4f}[/]"), TimeRemainingColumn())
         task_id = self.progress.add_task("train", total=self.args.steps, completed=start_step, loss=0, val_loss=0, best_val_loss=best_val_loss)
-        
-        SAVE_EVERY_N_STEPS = 2000; metrics_queue = deque(maxlen=10)
+        SAVE_EVERY_N_STEPS = 2000
         last_step_time = time.time(); current_step = start_step; last_ui_update_time = 0.0; UI_UPDATE_INTERVAL_SECS = 0.25
-        validation_future = None; val_batch_idx = 0
+        validation_future = None; preview_future = None; val_batch_idx = 0
+        with jax.default_device(CPU_DEVICE): initial_inference_cache = get_initial_variables(key)['cache']
 
         try:
             with Live(self._generate_layout(), screen=True, redirect_stderr=False, vertical_overflow="visible") as live:
@@ -1085,43 +1280,58 @@ class ConductorTrainer(AdvancedTrainer):
                     if self.should_shutdown or self.interactive_state.shutdown_event.is_set(): break
                     
                     if validation_future is not None:
-                        # This fetch is now for a single, small batch, making it fast.
                         val_loss_val = validation_future.item()
                         self.progress.update(task_id, val_loss=val_loss_val)
                         if val_loss_val < best_val_loss:
                             best_val_loss = val_loss_val
                             if not (active_save_future and not active_save_future.done()):
                                 console.print(f"\n[bold magenta]🏆 New best val loss: {best_val_loss:.4f} @ step {step}. Saving in background...[/bold magenta]")
-                                host_state_unreplicated = jax.device_get(unreplicate(p_state))
-                                data_for_save = {'params': host_state_unreplicated.params, 'val_loss': best_val_loss, 'step': step}
+                                host_state_unreplicated = jax.device_get(unreplicate(p_state)); data_for_save = {'params': host_state_unreplicated.params, 'val_loss': best_val_loss, 'step': step}
                                 active_save_future = checkpoint_executor.submit(_save_cpu_data_task, data_for_save, ckpt_path_best)
                         validation_future = None
 
+                    if preview_future is not None:
+                        preview_future.block_until_ready()
+                        with self.ui_lock:
+                            self.current_preview_image_np = np.asarray(preview_future[0])
+                        preview_future = None
+
                     batch = next(train_iterator); sharded_batch = shard(batch)
-                    key, train_step_key = jax.random.split(key); sharded_keys = jax.random.split(train_step_key, self.num_devices)
+                    key, train_step_key, preview_key = jax.random.split(key, 3); sharded_keys = jax.random.split(train_step_key, self.num_devices)
                     lr = self.q_controller.choose_action() if self.q_controller else self.args.lr
                     damp_factor = self.interactive_state.get_sentinel_factor() if self.args.use_sentinel else 1.0
-                    p_state, p_loss, p_sentinel_pct = train_step_fn(p_state, sharded_batch, sharded_keys, replicate(damp_factor), self.args.num_codes, replicate(lr))
-                    metrics_queue.append({'loss': p_loss, 'sentinel_pct': p_sentinel_pct})
                     
-                    loss_val = self.progress.tasks[task_id].fields['loss']
-                    if step >= metrics_queue.maxlen:
-                        metrics = unreplicate(metrics_queue.popleft()); loss_val = metrics['loss'].item()
-                        with self.ui_lock: 
-                            self.loss_history.append(loss_val)
-                            if self.args.use_sentinel: self.sentinel_dampen_history.append(metrics['sentinel_pct'].item()); self.sentinel_pct = metrics['sentinel_pct'].item()
-                        if self.q_controller: self.q_controller.update_q_value(loss_val)
+                    p_state, p_loss, p_sentinel_pct = train_step_fn(p_state, sharded_batch, sharded_keys, replicate(damp_factor), self.args.num_codes, replicate(lr))
+                    
+                    # Since donation is removed, we can safely read the results.
+                    loss_val = unreplicate(p_loss).item()
+                    sentinel_val = unreplicate(p_sentinel_pct).item()
+
+                    del batch, sharded_batch, sharded_keys, p_loss, p_sentinel_pct
+
+                    with self.ui_lock: 
+                        self.loss_history.append(loss_val)
+                        if self.args.use_sentinel: self.sentinel_dampen_history.append(sentinel_val); self.sentinel_pct = sentinel_val
+                    if self.q_controller: self.q_controller.update_q_value(loss_val)
+
+                    preview_prompt_change = self.interactive_state.get_and_reset_preview_change()
+                    if preview_prompt_change != 0:
+                        with self.ui_lock: self.current_preview_prompt_idx = (self.current_preview_prompt_idx + preview_prompt_change) % len(self.validation_prompts)
 
                     if (step + 1) % self.args.eval_every == 0 and val_cpu_batches is not None:
-                        gpu_params = unreplicate(p_state).params
-                        # Get the next batch from CPU RAM.
+                        unrep_state_for_eval = jax.device_get(unreplicate(p_state))
+                        
                         tokens_batch_cpu, embeddings_batch_cpu = val_cpu_batches[val_batch_idx]
-                        # The tiny "hitch" is just this single, small transfer.
                         val_batch_gpu = jax.device_put(tokens_batch_cpu), jax.device_put(embeddings_batch_cpu)
-                        # Launch the calculation asynchronously.
-                        validation_future = run_validation_batch(gpu_params, *val_batch_gpu, self.model.apply, self.args.num_codes)
-                        # Cycle to the next validation batch for the next time.
+                        validation_future = jit_run_validation_batch(unrep_state_for_eval.params, *val_batch_gpu, self.model.apply, self.args.num_codes)
                         val_batch_idx = (val_batch_idx + 1) % len(val_cpu_batches)
+                        
+                        if preview_future is None:
+                            prompt_idx = self.current_preview_prompt_idx
+                            text_emb = jnp.expand_dims(self.validation_embeddings[prompt_idx], 0)
+                            preview_future = jit_generate_validation_preview(unrep_state_for_eval.params, initial_inference_cache, text_emb, preview_key, self.token_map_size, self.preview_resolution, self.preview_top_k)
+                        
+                        del unrep_state_for_eval, val_batch_gpu, text_emb
 
                     self.progress.update(task_id, advance=1, loss=loss_val, best_val_loss=best_val_loss)
                     
@@ -1131,8 +1341,6 @@ class ConductorTrainer(AdvancedTrainer):
                             q_state = self.q_controller.state_dict() if self.q_controller else None
                             data_for_save = {'params': host_state_unreplicated.params, 'opt_state': host_state_unreplicated.opt_state, 'step': step + 1, 'q_controller_state': q_state}
                             active_save_future = checkpoint_executor.submit(_save_cpu_data_task, data_for_save, ckpt_path_final)
-                        else:
-                            console.print(f"[yellow]Skipping regular checkpoint at step {step+1}: previous save is still in progress.[/yellow]")
 
                     current_time = time.time()
                     self.steps_per_sec = 1.0 / (current_time - last_step_time + 1e-9); last_step_time = current_time
@@ -1140,16 +1348,20 @@ class ConductorTrainer(AdvancedTrainer):
         finally:
             console.print(f"\n[yellow]--- Training loop exited at step {current_step + 1}. Waiting for final save... ---[/yellow]")
             checkpoint_executor.shutdown(wait=True)
-            host_state = jax.device_get(unreplicate(p_state))
-            final_data_to_save = {'params': host_state.params, 'opt_state': host_state.opt_state, 'step': current_step + 1, 'q_controller_state': self.q_controller.state_dict() if self.q_controller else None}
-            with open(ckpt_path_final, 'wb') as f: pickle.dump(final_data_to_save, f)
-            console.print(f"✅ Final resume-state saved to [green]{ckpt_path_final}[/green]")
+            if 'p_state' in locals():
+                host_state = jax.device_get(unreplicate(p_state))
+                final_data_to_save = {'params': host_state.params, 'opt_state': host_state.opt_state, 'step': current_step + 1, 'q_controller_state': self.q_controller.state_dict() if self.q_controller else None}
+                with open(ckpt_path_final, 'wb') as f: pickle.dump(final_data_to_save, f)
+                console.print(f"✅ Final resume-state saved to [green]{ckpt_path_final}[/green]")
+                del p_state, host_state
+            
             config = { 'num_codes': self.args.num_codes, 'num_positions': self.token_map_size + 1, 'd_model': self.args.d_model_cond, 'num_heads': self.args.num_heads, 'num_layers': self.args.num_layers, 'clip_dim': 512 }
             config_path = Path(f"conductor_{self.args.basename}_{self.args.num_layers}l_config.pkl")
             with open(config_path, 'wb') as f: pickle.dump(config, f)
             console.print(f"✅ Config saved to [green]{config_path}[/green]")
             if ckpt_path_best.exists(): console.print(f"👑 Best model (by validation) remains at [bold magenta]{ckpt_path_best}[/bold magenta]")
             self.interactive_state.set_shutdown(); key_listener_thread.join()
+
 
 
 
@@ -1269,7 +1481,8 @@ def main():
     p_cond.add_argument('--eval-every', type=int, default=2500, help="Run validation every N steps.") # <-- ADD THIS LINE
     p_cond.add_argument('--num-codes', type=int, default=8192); p_cond.add_argument('--code-dim', type=int, default=256)
     p_cond.add_argument('--num-layers', type=int, default=12); p_cond.add_argument('--d-model-cond', type=int, default=768); p_cond.add_argument('--num-heads', type=int, default=12)
-
+    p_cond.add_argument('--vram-saver-mode', action='store_true', help="Enable aggressive VRAM saving optimizations (e.g., lower-res previews). Recommended for <= 8GB GPUs.")
+    
     inference_parser = argparse.ArgumentParser(add_help=False); inference_parser.add_argument('--temp', type=float, default=0.9); inference_parser.add_argument('--top-k', type=int, default=256)
     p_gen = subparsers.add_parser("generate", help="Generate an image from a text prompt.", parents=[base_parser, inference_parser]); p_gen.add_argument('--prompt', type=str, required=True); p_gen.add_argument('--seed', type=int, default=lambda: int(time.time()))
     p_edit = subparsers.add_parser("edit", help="Edit an image using a new text prompt.", parents=[base_parser, inference_parser]); p_edit.add_argument('--source-image', type=str, required=True); p_edit.add_argument('--prompt', type=str, required=True); p_edit.add_argument('--seed', type=int, default=lambda: int(time.time()))
