@@ -18,7 +18,7 @@ import threading
 import signal
 from functools import partial
 from pathlib import Path
-from typing import Any, NamedTuple, Optional, Dict
+from typing import Any, NamedTuple, Optional, Dict, Tuple
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor # ### OPTIMIZATION 2 ###
 import atexit
@@ -432,8 +432,276 @@ class LatentTokenizerVQ(nn.Module):
         h_r = nn.gelu(self.dec_convT1(z_q))
         return self.dec_convT2(h_r)
         
-        
-        
+# =================================================================================================
+# ADVANCED ENTROPIC SAMPLER (DSlider) - Self-Contained Integration
+# Source: Entropix, adapted for high-performance image generation.
+# =================================================================================================
+from dataclasses import dataclass, field, fields
+
+# --- [THE DEFINITIVE SOLUTION] ---
+# Explicit PyTree registration correctly separates dynamic JAX arrays from static, hashable Python values.
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class DSThreshold:
+    # Explicitly define fields in the order they will be unflattened
+    bilinear: jnp.ndarray
+    linear_state_ent: jnp.ndarray
+    linear_state_std: jnp.ndarray
+    weight: float
+    bias: float
+    linear_naked_ent: float
+    linear_naked_varent: float
+
+    def tree_flatten(self):
+        # Children are JAX arrays (dynamic data)
+        children = (self.bilinear, self.linear_state_ent, self.linear_state_std)
+        # Aux_data are Python primitives (static data)
+        aux_data = (self.weight, self.bias, self.linear_naked_ent, self.linear_naked_varent)
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        bilinear, linear_state_ent, linear_state_std = children
+        weight, bias, linear_naked_ent, linear_naked_varent = aux_data
+        return cls(bilinear, linear_state_ent, linear_state_std, weight, bias, linear_naked_ent, linear_naked_varent)
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class DSConfig:
+    # --- Dynamic Children (JAX arrays or other PyTrees) ---
+    dirichlet_support: jnp.ndarray
+    outlier_threshold: DSThreshold
+    argmax_threshold: DSThreshold
+    dirichlet_threshold: DSThreshold
+    target_entropy: DSThreshold
+    # --- Static Aux Data (Python primitives) ---
+    outlier_topk: int
+    noise_floor: float
+    emwa_ent_naked_coeff: float
+    emwa_varent_naked_coeff: float
+    emwa_topk_ent_naked_coeff: float
+    emwa_temp_coeff: float
+    emwa_logp_base: float
+    emwa_logp_exp_factor: float
+    emwa_dir_ent_coeff: float
+    emwa_ent_scaffold_coeff: float
+    emwa_varent_scaffold_coeff: float
+    token_cross_ent_naked_coeff: float
+    token_cross_ent_scaffold_coeff: float
+    token_cross_var_naked_coeff: float
+    token_cross_var_scaffold_coeff: float
+    perturb_base_coeff: float
+    perturb_exp_coeff: float
+
+    def tree_flatten(self):
+        children = (self.dirichlet_support, self.outlier_threshold, self.argmax_threshold, self.dirichlet_threshold, self.target_entropy)
+        aux_data = (self.outlier_topk, self.noise_floor, self.emwa_ent_naked_coeff, self.emwa_varent_naked_coeff, self.emwa_topk_ent_naked_coeff,
+                    self.emwa_temp_coeff, self.emwa_logp_base, self.emwa_logp_exp_factor, self.emwa_dir_ent_coeff, self.emwa_ent_scaffold_coeff,
+                    self.emwa_varent_scaffold_coeff, self.token_cross_ent_naked_coeff, self.token_cross_ent_scaffold_coeff,
+                    self.token_cross_var_naked_coeff, self.token_cross_var_scaffold_coeff, self.perturb_base_coeff, self.perturb_exp_coeff)
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        (dirichlet_support, outlier_threshold, argmax_threshold, dirichlet_threshold, target_entropy) = children
+        (outlier_topk, noise_floor, emwa_ent_naked_coeff, emwa_varent_naked_coeff, emwa_topk_ent_naked_coeff,
+         emwa_temp_coeff, emwa_logp_base, emwa_logp_exp_factor, emwa_dir_ent_coeff, emwa_ent_scaffold_coeff,
+         emwa_varent_scaffold_coeff, token_cross_ent_naked_coeff, token_cross_ent_scaffold_coeff,
+         token_cross_var_naked_coeff, token_cross_var_scaffold_coeff, perturb_base_coeff, perturb_exp_coeff) = aux_data
+        return cls(dirichlet_support, outlier_threshold, argmax_threshold, dirichlet_threshold, target_entropy,
+                   outlier_topk, noise_floor, emwa_ent_naked_coeff, emwa_varent_naked_coeff, emwa_topk_ent_naked_coeff,
+                   emwa_temp_coeff, emwa_logp_base, emwa_logp_exp_factor, emwa_dir_ent_coeff, emwa_ent_scaffold_coeff,
+                   emwa_varent_scaffold_coeff, token_cross_ent_naked_coeff, token_cross_ent_scaffold_coeff,
+                   token_cross_var_naked_coeff, token_cross_var_scaffold_coeff, perturb_base_coeff, perturb_exp_coeff)
+
+
+def DEFAULT_DS_CONFIG():
+    return DSConfig(
+        outlier_topk=16,
+        dirichlet_support=jnp.arange(1, 257),
+        noise_floor=-18.42068,
+        emwa_ent_naked_coeff=0.01,
+        emwa_varent_naked_coeff=0.01,
+        emwa_topk_ent_naked_coeff=0.01,
+        emwa_temp_coeff=0.01,
+        emwa_logp_base=2.0,
+        emwa_logp_exp_factor=1.0,
+        emwa_dir_ent_coeff=0.01,
+        emwa_ent_scaffold_coeff=0.01,
+        emwa_varent_scaffold_coeff=0.01,
+        token_cross_ent_naked_coeff=0.01,
+        token_cross_ent_scaffold_coeff=0.01,
+        token_cross_var_naked_coeff=0.01,
+        token_cross_var_scaffold_coeff=0.01,
+        perturb_base_coeff=0.5,
+        perturb_exp_coeff=0.1,
+        outlier_threshold=DSThreshold(bilinear=jnp.zeros((4,4)), linear_state_ent=jnp.zeros(4), linear_state_std=jnp.zeros(4), weight=1.0, bias=0.5, linear_naked_ent=0.0, linear_naked_varent=0.0),
+        argmax_threshold=DSThreshold(bilinear=jnp.zeros((4,4)), linear_state_ent=jnp.zeros(4), linear_state_std=jnp.zeros(4), weight=1.0, bias=-0.5, linear_naked_ent=0.0, linear_naked_varent=0.0),
+        dirichlet_threshold=DSThreshold(bilinear=jnp.zeros((4,4)), linear_state_ent=jnp.zeros(4), linear_state_std=jnp.zeros(4), weight=1.0, bias=-0.5, linear_naked_ent=0.0, linear_naked_varent=0.0),
+        target_entropy=DSThreshold(bilinear=jnp.zeros((4,4)), linear_state_ent=jnp.array([0., 0., 0., 1.0]), linear_state_std=jnp.zeros(4), weight=0.0, bias=0.5, linear_naked_ent=0.0, linear_naked_varent=0.0)
+    )
+
+@dataclass
+class SamplerLogicConfig:
+  low_naked_entropy_threshold = 0.3
+  high_naked_entropy_threshold = 2.5
+  low_naked_varentropy_threshold = 1.2
+  high_naked_varentropy_threshold = 2.5
+
+# --- Core State and Math Kernels (unchanged) ---
+EPS = 1e-8
+MIN_TEMP = 0.1
+MAX_TEMP = 10.0
+
+class DSState(NamedTuple):
+  emwa_dir: jnp.ndarray; emwa_logp_on_supp: jnp.ndarray; emwa_temp: jnp.ndarray
+  emwa_ent_scaffold: jnp.ndarray; emwa_ent_naked: jnp.ndarray; emwa_varent_scaffold: jnp.ndarray
+  emwa_varent_naked: jnp.ndarray; token_cross_ent_scaffold: jnp.ndarray
+  token_cross_ent_naked: jnp.ndarray; token_cross_var_scaffold: jnp.ndarray
+  token_cross_var_naked: jnp.ndarray; emwa_dir_ent: jnp.ndarray; emwa_topk_ent_naked: jnp.ndarray
+
+@jax.jit
+def ent_varent(logp: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+  p = jnp.exp(logp); ent = -jnp.sum(p * logp, axis=-1)
+  diff = logp + ent[..., None]; varent = jnp.sum(p * diff**2, axis=-1)
+  return ent, varent
+
+@jax.jit
+def normalize_logits(logits: jnp.ndarray, noise_floor: float) -> jnp.ndarray:
+  shifted = logits - jnp.max(logits, axis=-1, keepdims=True)
+  normalized = shifted - jax.nn.logsumexp(shifted + EPS, axis=-1, keepdims=True)
+  return jnp.where(normalized < noise_floor, jnp.log(EPS), normalized)
+
+@jax.jit
+def dirichlet_log_likelihood_from_logprob(logprobs: jnp.ndarray, alpha: jnp.ndarray) -> jnp.ndarray:
+  return (jnp.sum((alpha - 1.0) * logprobs, axis=-1) - jax.scipy.special.gammaln(jnp.sum(alpha, axis=-1)) + jnp.sum(jax.scipy.special.gammaln(alpha), axis=-1))
+
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8, 9))
+def fit_dirichlet(target_values, init_alpha=None, initial_lr=1.2, decay_alpha=0.1, decay_beta=2.0, decay_gamma=0.25, decay_nu=0.75, max_iters=140, tol=1e-4, dtype: jnp.dtype = jnp.bfloat16):
+  batch_shape=target_values.shape[:-1]; n=target_values.shape[-1]; min_lr=1e-8
+  target_values=target_values.astype(jnp.float32)
+  if init_alpha is None: init_alpha=jnp.ones((*batch_shape, n), dtype=jnp.float32)
+  def halley_update(alpha,target_values):
+    p1=jax.scipy.special.polygamma(1,alpha);p2=jax.scipy.special.polygamma(2,alpha);S=jnp.sum(alpha,axis=-1,keepdims=True);s1=jax.scipy.special.polygamma(1,S);s2=jax.scipy.special.polygamma(2,S);p1_inv=1./p1;sum_p1_inv=jnp.sum(p1_inv,axis=-1,keepdims=True);denom=jnp.where(jnp.abs(1.-s1*sum_p1_inv)<1e-12,1e-12,1.-s1*sum_p1_inv);coeff=s1/denom;error=jax.scipy.special.digamma(alpha)-jax.scipy.special.digamma(S)-target_values;temp=p1_inv*error;sum_temp=jnp.sum(temp,axis=-1,keepdims=True);J_inv_error=temp+coeff*sum_temp*p1_inv;sum_J_inv_error=jnp.sum(J_inv_error,axis=-1,keepdims=True);H_J_inv_error=p2*J_inv_error-s2*sum_J_inv_error;temp2=p1_inv*H_J_inv_error;sum_temp2=jnp.sum(temp2,axis=-1,keepdims=True);J_inv_H_J_inv_error=temp2+coeff*sum_temp2*p1_inv
+    return -J_inv_error+.5*J_inv_H_J_inv_error
+  def scan_body(carry, _):
+    alpha,converged,error_norm,step=carry;S=jnp.sum(alpha,axis=-1,keepdims=True);error=jax.scipy.special.digamma(alpha)-jax.scipy.special.digamma(S)-target_values;error_norm=jnp.linalg.norm(error,axis=-1);new_converged=converged|(error_norm<tol);lr=jnp.maximum(initial_lr*jnp.exp(-decay_alpha*(step**decay_nu))*jnp.abs(jnp.cos(decay_beta/(step**decay_gamma))),min_lr);delta_alpha=jnp.clip(lr[...,None]*halley_update(alpha,target_values),-.5*alpha,.5*alpha);new_alpha=jnp.where(new_converged[...,None],alpha,jnp.maximum(alpha+delta_alpha,alpha/2))
+    return (new_alpha,new_converged,error_norm,step+1),None
+  init_state=(init_alpha,jnp.zeros(batch_shape,dtype=jnp.bool_),jnp.full(batch_shape,jnp.inf),jnp.ones(batch_shape,dtype=jnp.int32));(final_alpha,final_converged,_,final_step),_=jax.lax.scan(scan_body,init_state,None,length=max_iters)
+  return final_alpha.astype(dtype),final_step-1,final_converged
+
+@partial(jax.jit, static_argnames=("bsz", "dtype"))
+def initialize_state(logits: jax.Array, bsz: int, config: DSConfig, dtype=jnp.bfloat16) -> DSState:
+    # --- [THE DEFINITIVE FIX] ---
+    # The initial logits from the model have a sequence length dimension (L=1),
+    # e.g., shape (B, 1, V). This extra dimension corrupts the shape of all
+    # initial state metrics (e.g., entropy becomes (B, 1) instead of (B,)).
+    # We must squeeze this dimension out *before* any calculations.
+    if logits.ndim == 3:
+        logits = logits.squeeze(1)
+    # Now logits has the correct shape (B, V).
+
+    logprobs = normalize_logits(logits, config.noise_floor)
+    ent, varent = ent_varent(logprobs) # ent and varent will now have the correct shape (B,)
+
+    topk_logits, topk_indices = jax.lax.top_k(logprobs, config.outlier_topk)
+    topk_logprobs = normalize_logits(topk_logits, config.noise_floor)
+    topk_ent, _ = ent_varent(topk_logprobs)
+    logprobs_on_supp = normalize_logits(logits[..., config.dirichlet_support], config.noise_floor)
+    initial_dir, _, _ = fit_dirichlet(jnp.mean(logprobs_on_supp, axis=0, keepdims=True))
+    avg_dir_ent = dirichlet_log_likelihood_from_logprob(logprobs_on_supp, initial_dir).mean()
+    topk_token_logprobs = jnp.take_along_axis(logprobs, topk_indices, axis=-1)
+    
+    # All metrics are now correctly shaped, so the initial state will be correct.
+    single_state = DSState(
+        emwa_dir=initial_dir, 
+        emwa_logp_on_supp=jnp.mean(logprobs_on_supp, axis=0, keepdims=True), 
+        emwa_temp=jnp.ones((1,), dtype=dtype), 
+        emwa_ent_scaffold=ent, 
+        emwa_ent_naked=ent, 
+        emwa_varent_scaffold=jnp.zeros((1,), dtype=dtype), 
+        emwa_varent_naked=varent, 
+        token_cross_ent_scaffold=ent, 
+        token_cross_ent_naked=-topk_token_logprobs.mean(), 
+        token_cross_var_scaffold=jnp.zeros((1,), dtype=dtype), 
+        token_cross_var_naked=topk_token_logprobs.var(), 
+        emwa_dir_ent=avg_dir_ent, 
+        emwa_topk_ent_naked=topk_ent
+    )
+    return jax.tree_util.tree_map(lambda x: x.repeat(bsz, axis=0), single_state)
+
+@jax.jit
+def update_emwa(new: jax.Array, old: jax.Array, coeff: float | jax.Array) -> jax.Array:
+  return coeff * new + (1 - coeff) * old
+
+@jax.jit
+def adaptive_dirichlet_step(key: jax.random.PRNGKey, state: DSState, logits: jnp.ndarray, config: DSConfig):
+    dtype = logits.dtype; bsz, vsz = logits.shape; output_tokens = jnp.zeros(bsz, dtype=jnp.int32)
+    naked_log_probs = normalize_logits(logits, config.noise_floor)
+    naked_ent, naked_varent = ent_varent(naked_log_probs)
+    new_emwa_ent_naked = update_emwa(naked_ent, state.emwa_ent_naked, config.emwa_ent_naked_coeff)
+    new_emwa_varent_naked = update_emwa(naked_varent, state.emwa_varent_naked, config.emwa_varent_naked_coeff)
+    topk_logits, topk_indices = jax.lax.top_k(naked_log_probs, config.outlier_topk)
+    topk_logprobs = normalize_logits(topk_logits, config.noise_floor)
+    naked_topk_ent, _ = ent_varent(topk_logprobs)
+    new_emwa_topk_ent_naked = update_emwa(naked_topk_ent, state.emwa_topk_ent_naked, config.emwa_topk_ent_naked_coeff)
+    argmax_threshold = config.argmax_threshold.weight * state.emwa_topk_ent_naked + config.argmax_threshold.bias
+    argmax_mask = (naked_topk_ent < argmax_threshold)
+    argmax_indices = jnp.argmax(topk_logprobs, axis=-1)
+    argmax_tokens = jnp.take_along_axis(topk_indices, argmax_indices[:, None], axis=-1).squeeze(1)
+    output_tokens = jnp.where(argmax_mask, argmax_tokens, output_tokens)
+    inlier_sampling_mask = ~argmax_mask
+    inlier_sampling_temp = jnp.ones_like(state.emwa_temp)
+    inlier_choices = jax.random.categorical(key, topk_logprobs / inlier_sampling_temp[:, None])
+    inlier_tokens = jnp.take_along_axis(topk_indices, inlier_choices[:, None], axis=-1).squeeze(1)
+    output_tokens = jnp.where(inlier_sampling_mask, inlier_tokens, output_tokens)
+    scaffold_ent, scaffold_varent = naked_ent, naked_varent
+    naked_token_logprob = jnp.take_along_axis(naked_log_probs, output_tokens[:,None], axis=-1).squeeze(-1)
+    scaffold_token_logprob = naked_token_logprob
+    new_state = state._replace(emwa_ent_naked=new_emwa_ent_naked, emwa_varent_naked=new_emwa_varent_naked, emwa_topk_ent_naked=new_emwa_topk_ent_naked)
+    return new_state, output_tokens, naked_ent, naked_varent, scaffold_ent, scaffold_varent, naked_token_logprob, scaffold_token_logprob
+
+@jax.jit
+def dslider_sampler_step(key: jax.random.PRNGKey, state: DSState, logits: jnp.ndarray, config: DSConfig):
+  cfg = SamplerLogicConfig()
+  main_key, resample_key = jax.random.split(key)
+
+  # --- Step 1: Propose initial tokens for all items in the batch ---
+  (proposed_state, proposed_token, naked_ent, naked_varent, *_) = adaptive_dirichlet_step(main_key, state, logits, config)
+
+  # --- Step 2: Identify which items need resampling (High Entropy High Variance) ---
+  is_hehv = (naked_ent > cfg.high_naked_entropy_threshold) & (naked_varent > cfg.high_naked_varentropy_threshold)
+
+  # --- Step 3: *Unconditionally* perform resampling for all items ---
+  # This is more JIT-friendly than lax.cond with a non-static predicate.
+  # The .at[] operation correctly handles batching by creating a new masked array.
+  masked_logits = logits.at[jnp.arange(logits.shape[0]), proposed_token].set(-1e9)
+  (resampled_state, resampled_token, *_) = adaptive_dirichlet_step(resample_key, proposed_state, masked_logits, config)
+
+  # --- Step 4: Selectively combine the results using the `is_hehv` mask ---
+  # jnp.where correctly handles selecting between the two pre-computed results.
+  final_token = jnp.where(is_hehv, resampled_token, proposed_token)
+
+  # For the state, we must also use `where`. We broadcast the 1D `is_hehv` mask 
+  # to match the shape of each leaf in the state PyTree.
+  final_state = jax.tree_util.tree_map(
+      lambda original, resampled: jnp.where(is_hehv.reshape(-1, *([1] * (original.ndim - 1))), resampled, original),
+      proposed_state,
+      resampled_state
+  )
+
+  return final_token, final_state
+
+
+
+
+
+
+
+
+
+   
 import math
 from flax.linen import initializers
 from flax.linen import dot_product_attention
@@ -506,94 +774,126 @@ class StandardAttention(nn.Module):
 
 class TransformerBlock(nn.Module):
     """
-    Transformer block now correctly instantiates StandardAttention with num_positions.
+    [FIXED] Transformer block that correctly defines all submodules in setup()
+    to ensure a static parameter structure for JAX compatibility.
     """
     num_heads: int; d_model: int; num_positions: int; dtype: Any = jnp.float32
-    
-    @nn.compact
-    def __call__(self, x, context, mask, decode: bool = False, index: Optional[jnp.ndarray] = None):
-        sa_input = nn.LayerNorm(dtype=self.dtype)(x)
-        
-        # --- [SOLUTION] Instantiate StandardAttention directly, passing num_positions ---
-        # This is cleaner than using functools.partial and avoids the TypeError.
-        x = x + StandardAttention(
-            num_heads=self.num_heads, 
-            dtype=self.dtype, 
-            num_positions=self.num_positions, # Pass it here
-            name='sa'
-        )(sa_input, mask=mask, decode=decode, index=index)
 
-        # Cross-attention does not use a cache, so it doesn't need num_positions.
-        ca_input = nn.LayerNorm(dtype=self.dtype)(x)
-        x = x + StandardAttention(num_heads=self.num_heads, dtype=self.dtype, name='ca')(ca_input, context=context)
-        
-        ffn_input = nn.LayerNorm(dtype=self.dtype)(x)
-        h = nn.gelu(nn.Dense(self.d_model * 4, dtype=self.dtype, kernel_init=initializers.xavier_uniform())(ffn_input))
-        h = nn.Dense(self.d_model, dtype=self.dtype, kernel_init=initializers.xavier_uniform())(h)
+    def setup(self):
+        # Define all layers and modules here, once.
+        self.ln1 = nn.LayerNorm(dtype=self.dtype)
+        self.sa = StandardAttention(
+            num_heads=self.num_heads,
+            dtype=self.dtype,
+            num_positions=self.num_positions,
+            name='sa'
+        )
+        self.ln2 = nn.LayerNorm(dtype=self.dtype)
+        self.ca = StandardAttention(
+            num_heads=self.num_heads,
+            dtype=self.dtype,
+            name='ca'
+            # num_positions is not needed for cross-attention as it doesn't cache.
+        )
+        self.ln3 = nn.LayerNorm(dtype=self.dtype)
+        self.mlp_dense1 = nn.Dense(self.d_model * 4, dtype=self.dtype, kernel_init=initializers.xavier_uniform())
+        self.mlp_dense2 = nn.Dense(self.d_model, dtype=self.dtype, kernel_init=initializers.xavier_uniform())
+
+    def __call__(self, x, context, mask, decode: bool = False, index: Optional[jnp.ndarray] = None):
+        # Use the pre-defined modules from self.
+        sa_input = self.ln1(x)
+        x = x + self.sa(sa_input, mask=mask, decode=decode, index=index)
+
+        ca_input = self.ln2(x)
+        x = x + self.ca(ca_input, context=context)
+
+        ffn_input = self.ln3(x)
+        h = nn.gelu(self.mlp_dense1(ffn_input))
+        h = self.mlp_dense2(h)
         x = x + h
         return x
 
 
-
-
+import jax.lax # Import the lax module
 
 class GenerativeConductor(nn.Module):
     num_codes: int; num_positions: int; d_model: int; num_heads: int; num_layers: int; clip_dim: int
     uncond_drop_rate: float = 0.1
     dtype: Any = jnp.float32
 
-    @nn.compact
-    def __call__(self, tokens, text_emb, train: bool = False, decode: bool = False, index: Optional[jnp.ndarray] = None):
-        B, L = tokens.shape
-        
-        uncond_embedding = self.param(
+    def setup(self):
+        """
+        Defines the entire static structure of the model.
+        """
+        self.uncond_embedding = self.param(
             'uncond_embedding',
             nn.initializers.normal(0.02),
             (1, self.clip_dim), self.dtype
         )
+        self.token_embedding = nn.Embed(self.num_codes + 1, self.d_model, name='token_embedding', dtype=self.dtype)
+        self.pos_embedding = self.param('pos_embedding', nn.initializers.normal(.02), (self.num_positions, self.d_model), self.dtype)
+        self.text_projection = nn.Dense(self.d_model, name='text_projection', dtype=self.dtype)
+        self.logit_head = nn.Dense(self.num_codes, name='logit_head', dtype=self.dtype)
+        self.norm = nn.LayerNorm(dtype=self.dtype)
+        
+        self.blocks = [
+            TransformerBlock(self.num_heads, self.d_model, self.num_positions, self.dtype, name=f'block_{i}')
+            for i in range(self.num_layers)
+        ]
+
+    def __call__(self, tokens, text_emb, train: bool = False, decode: bool = False, index: Optional[jnp.ndarray] = None):
+        B, L = tokens.shape
         
         if train:
             key = self.make_rng('dropout')
-            p_drop = jnp.asarray(GenerativeConductor.uncond_drop_rate, dtype=jnp.float32)
-            should_drop = jax.random.bernoulli(key, p_drop, (B, 1))
-            text_emb = jnp.where(should_drop, uncond_embedding, text_emb)
+            
+            # --- [THE DEFINITIVE FIX] ---
+            # The JAX tracer is incorrectly resolving `self.uncond_drop_rate` to a
+            # type object (<class 'jnp.bfloat16'>) instead of its numerical value
+            # when the module's dtype is bfloat16. To fix this, we bypass the
+            # problematic instance attribute lookup (`self.`) and access the static
+            # value directly from the class definition (`GenerativeConductor.`).
+            # This retrieves the original Python float 0.1, which JAX can correctly handle.
+            p = GenerativeConductor.uncond_drop_rate
+            should_drop = jax.random.bernoulli(key, p, (B, 1))
+            
+            text_emb = jnp.where(should_drop, self.uncond_embedding, text_emb)
 
-        tok_emb = nn.Embed(self.num_codes + 1, self.d_model, name='token_embedding', dtype=self.dtype)(tokens)
-        pos_emb = self.param('pos_embedding', nn.initializers.normal(.02), (self.num_positions, self.d_model), self.dtype)
+        tok_emb = self.token_embedding(tokens)
         
-        # --- [SCAN COMPATIBILITY FIX] ---
-        # The logic now uses the externally provided 'index' for positional embeddings.
         if decode:
-            # During decoding, L is always 1. 'index' is the current step in the sequence.
-            chex.assert_rank(index, 0) # Ensure index is a scalar
-            positional_embedding = pos_emb[index]
+            chex.assert_rank(index, 0)
+            positional_embedding = self.pos_embedding[index]
             x = tok_emb + positional_embedding[None, None, :]
         else:
-            # During training, we use a standard static slice.
-            positional_embedding = pos_emb[:L]
+            positional_embedding = self.pos_embedding[:L]
             x = tok_emb + positional_embedding[None, :, :]
-        # --- [END FIX] ---
 
         x = x.astype(self.dtype)
-        ctx = nn.Dense(self.d_model, name='text_projection', dtype=self.dtype)(text_emb)[:,None,:]
+        ctx = self.text_projection(text_emb)[:,None,:]
         
         if decode:
-            # During decoding, create a causal mask for the *single query token*
-            # against all keys in the cache up to the current index.
             mask = nn.make_attention_mask(
-                jnp.ones((B, 1), dtype=jnp.bool_), # Query is length 1
-                jnp.arange(self.num_positions) < (index + 1), # Keys are valid up to index
+                jnp.ones((B, 1), dtype=jnp.bool_),
+                jnp.arange(self.num_positions) < (index + 1),
                 dtype=jnp.bool_
             )
         else:
-            # Standard causal mask for training.
             mask = nn.make_causal_mask(jnp.ones((B, L), dtype=jnp.bool_))
         
-        for i in range(self.num_layers):
-            x = TransformerBlock(self.num_heads, self.d_model, self.num_positions, self.dtype, name=f'block_{i}')(x, context=ctx, mask=mask, decode=decode, index=index)
+        for block in self.blocks:
+            x = block(x, context=ctx, mask=mask, decode=decode, index=index)
             
-        return nn.Dense(self.num_codes, name='logit_head', dtype=self.dtype)(nn.LayerNorm(dtype=self.dtype)(x))   
-        
+        return self.logit_head(self.norm(x))
+
+
+
+
+
+
+
+
+     
 # =================================================================================================
 # 4. DATA PREPARATION (Corrected for Robust Pairing)
 # =================================================================================================
@@ -951,13 +1251,13 @@ class ConductorTrainer(AdvancedTrainer):
         
         console = Console()
 
+        # --- DSlider and VRAM Saver Config ---
+        self.ds_config = DEFAULT_DS_CONFIG()
         if args.vram_saver_mode:
             console.print("--- [bold yellow]VRAM Saver Mode ENABLED[/bold yellow]. Using lower-resolution previews. ---")
             self.preview_resolution = 96
-            self.preview_top_k = 128
         else:
             self.preview_resolution = 128
-            self.preview_top_k = 256
 
         tok_path_best = Path(f"tokenizer_{args.basename}_{args.num_codes}c_best.pkl")
         tok_path_final = Path(f"tokenizer_{args.basename}_{args.num_codes}c_final.pkl")
@@ -996,7 +1296,6 @@ class ConductorTrainer(AdvancedTrainer):
         self.token_map_size = (self.tok_config['latent_grid_size'] // 4) ** 2
         self.model = GenerativeConductor(args.num_codes, self.token_map_size + 1, args.d_model_cond, args.num_heads, args.num_layers, 512, self.dtype)
         
-        # --- [SOLUTION] Restore the missing interactive_state initialization ---
         self.interactive_state = InteractivityState()
         self.loss_history = deque(maxlen=200)
         self.sentinel_dampen_history = deque(maxlen=200)
@@ -1031,18 +1330,22 @@ class ConductorTrainer(AdvancedTrainer):
             loss_val=self.loss_history[-1] if self.loss_history else 0; loss_emoji, color = ("👌","green") if loss_val < 2.5 else (("👍","yellow") if loss_val < 4.0 else ("😟","red"))
             stats_tbl.add_row("X-Entropy Loss", f"[{color}]{loss_val:.4f}[/] {loss_emoji}"); stats_tbl.add_row("Steps/sec", f"[blue]{self.steps_per_sec:.2f}[/] 🏃💨")
             mem, util = self._get_gpu_stats(); stats_tbl.add_row("GPU Mem", f"[yellow]{mem}[/]"); stats_tbl.add_row("GPU Util", f"[yellow]{util}[/]")
-            stats_panel = Panel(stats_tbl, title="[bold]📊 Core Stats[/]", border_style="blue", height=6)
+            stats_panel = Panel(stats_tbl, title="[bold]📊 Core Stats[/]", border_style="blue", height=5)
 
             q_table = Table.grid(expand=True, padding=(0,1)); q_table.add_column("Ctrl", style="bold cyan", width=6); q_table.add_column("Metric", style="dim", width=10); q_table.add_column("Value", justify="left")
             if self.q_controller:
-                status=self.q_controller.status; status_emoji, color = ("😎","green") if "IMPROVING" in status else (("🤔","yellow") if "STAGNATED" in status else (("😠","red") if "REGRESSING" in status else (("🐣","blue") if "WARMUP" in status else ("🤖","dim"))))
-                q_table.add_row("🧠 LR", "Status", f"[{color}]{status}[/] {status_emoji}"); q_table.add_row("", "Reward", f"{self.q_controller.last_reward:+.2f}")
+                status_full = self.q_controller.status
+                status_short = status_full.split(' ')[0] # Extract main status word for tidiness
+                status_emoji, color = ("😎","green") if "IMPROVING" in status_short else (("🤔","yellow") if "STAGNATED" in status_short else (("😠","red") if "REGRESSING" in status_short else (("🐣","blue") if "WARMUP" in status_short else ("🤖","dim"))))
+                q_table.add_row("🧠 LR", "Status", f"[{color}]{status_short}[/] {status_emoji}"); q_table.add_row("", "Reward", f"{self.q_controller.last_reward:+.2f}")
                 q_panel = Panel(q_table, title="[bold]🤖 Q-Controller[/]", border_style="green", height=4)
             else: q_panel = Panel(Align.center("[dim]Q-Ctrl Off[/dim]"), title="[bold]🤖 Q-Controller[/]", border_style="dim", height=4)
 
             sentinel_panel_widget = None
             if self.args.use_sentinel:
-                sentinel_layout = Layout(); log_factor = self.interactive_state.sentinel_dampening_log_factor
+                sentinel_layout = Layout()
+                # --- FIX: Corrected attribute name ---
+                log_factor = self.interactive_state.sentinel_dampening_log_factor
                 lever_panel = Panel(get_sentinel_lever_ascii(log_factor), title="Dampen 🚀", title_align="left")
                 status_str_padded = f"{getattr(self, 'sentinel_pct', 0.0): >7.2%}"
                 status_str = f"Dampened: {status_str_padded}"
@@ -1050,7 +1353,7 @@ class ConductorTrainer(AdvancedTrainer):
                 sentinel_layout.split_row(Layout(lever_panel), Layout(status_panel))
                 sentinel_panel_widget = Panel(sentinel_layout, title="[bold]🕹️ Sentinel Interactive[/]", border_style="yellow", height=11)
 
-            spark_w = max(10, width - 20) if width < LAYOUT_BREAKPOINT else 40
+            spark_w = max(10, (width // 2 if width >= LAYOUT_BREAKPOINT else width) - 10)
             loss_spark = Panel(Align.center(f"[cyan]{self._get_sparkline(self.loss_history, spark_w)}[/]"), title="Loss Trend", height=3, border_style="cyan")
             graph_panels = [loss_spark]
             if self.args.use_sentinel:
@@ -1058,26 +1361,37 @@ class ConductorTrainer(AdvancedTrainer):
                 graph_panels.append(sentinel_spark)
             trends_group = Panel(Group(*graph_panels), title="[bold]📉 Trends[/]")
 
-            preview_content = Align.center("...Waiting for first validation step...")
+            left_col_width = 50
+            if width < LAYOUT_BREAKPOINT:
+                available_width = width - 4
+            else:
+                available_width = width - left_col_width - 4
+            max_preview_width = 90
+            term_width = max(20, min(available_width, max_preview_width))
+            term_height = int(term_width * 1.0 * 0.5)
+
+            preview_renderable = None
             if self.current_preview_image_np is not None:
                 if Pixels is None:
-                    preview_content = Align.center(Text("Install `rich-pixels` for previews", style="yellow"))
+                    preview_renderable = Align.center(Text("Install `rich-pixels` for previews", style="yellow"))
                 else:
-                    if width < LAYOUT_BREAKPOINT: term_width = max(20, width - 8)
-                    else: term_width = max(20, width - 55 - 10)
-                    h, w, _ = self.current_preview_image_np.shape
-                    term_height = int(term_width * (h / w) * 0.5)
                     pil_img = Image.fromarray(self.current_preview_image_np).resize((term_width, term_height), Image.Resampling.LANCZOS)
-                    preview_content = Pixels.from_image(pil_img)
-            
+                    preview_renderable = Pixels.from_image(pil_img)
+            else:
+                waiting_text = Align.center("...Waiting for first validation step...")
+                # --- [THE DEFINITIVE FIX] ---
+                # Changed the incorrect keyword `minimum_height` to the correct `minimum_size`.
+                # This reserves vertical space and PREVENTS the GUI from "jumping".
+                preview_renderable = Layout(waiting_text, minimum_size=term_height)
+
             current_prompt = self.validation_prompts[self.current_preview_prompt_idx]
             prompt_text = Text(f"Prompt #{self.current_preview_prompt_idx+1}: \"{current_prompt}\"", justify="center")
-            preview_panel = Panel(Group(prompt_text, Align.center(preview_content)), title="[bold]🖼️ Live Generation Preview[/]", border_style="green", height=40)
-            
+            preview_panel = Panel(Group(prompt_text, Align.center(preview_renderable)), title="[bold]🖼️ Live Generation Preview[/]", border_style="green")
+
             layout = Layout(name="root")
             layout.split(
                 Layout(header_panel, name="header", size=3),
-                Layout(ratio=1, name="main"),
+                Layout(name="main"),
                 self.progress,
                 Layout(Align.center(Text("←/→: Change Preview | ↑/↓: Adjust Sentinel  |  Ctrl+C to Exit", style="dim")), name="footer", size=1)
             )
@@ -1088,12 +1402,14 @@ class ConductorTrainer(AdvancedTrainer):
             if width < LAYOUT_BREAKPOINT:
                 layout["main"].split(Group(*left_column_panels), trends_group, preview_panel)
             else:
-                right_column = Group(trends_group, preview_panel)
-                layout["main"].split_row(Layout(Group(*left_column_panels), name="left", minimum_size=55), Layout(right_column, name="right", ratio=1))
-            
+                left_column_panels.append(trends_group)
+                layout["main"].split_row(
+                    Layout(Group(*left_column_panels), name="left", size=left_col_width),
+                    Layout(preview_panel, name="right", ratio=1)
+                )
+
             return layout
-
-
+            
     def train(self):
         console = Console()
         key_listener_thread = threading.Thread(target=listen_for_keys, args=(self.interactive_state,), daemon=True); key_listener_thread.start()
@@ -1160,7 +1476,6 @@ class ConductorTrainer(AdvancedTrainer):
         
         console.print("--- 🧠 STEP 3: JIT Compiling training and validation kernels (one-time cost)... ---")
         
-        # --- [THE FINAL SOLUTION] Remove `donate_argnums` from the pmap decorator. ---
         @partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(4,))
         def train_step_fn(state, batch, dropout_key, damp_factor, num_codes, lr):
             opt_state_list = list(state.opt_state); hp_state = opt_state_list[-1]; new_hp_state = hp_state._replace(hyperparams={'learning_rate': lr}); opt_state_list[-1] = new_hp_state; state = state.replace(opt_state=tuple(opt_state_list))
@@ -1197,46 +1512,67 @@ class ConductorTrainer(AdvancedTrainer):
             img = pixels_batched.reshape(full_tokens.shape[0], resolution, resolution, 3)
             return ((img * 0.5 + 0.5) * 255).astype(jnp.uint8)
 
-        @partial(jax.jit, static_argnames=('model_apply_fn', 'num_steps', 'top_k', 'bos_token_id'))
-        def _autoregressive_sample_jit(model_apply_fn, variables, text_emb, key, num_steps, top_k, bos_token_id):
+        @partial(jax.jit, static_argnames=('model_apply_fn', 'num_steps', 'bos_token_id'))
+        def _dslider_autoregressive_sample_jit(model_apply_fn, variables, initial_ds_state, text_emb, key, ds_config, num_steps, bos_token_id):
             
             def scan_body(carry, xs_slice):
-                current_vars, last_token = carry
+                current_vars, last_token, current_ds_state = carry
                 step_index, key_step = xs_slice
+
                 logits, new_mutable_vars = model_apply_fn(
                     current_vars, last_token, text_emb, train=False, decode=True, index=step_index, mutable=['cache']
                 )
+                
                 output_vars = {'params': current_vars['params'], 'cache': new_mutable_vars['cache']}
-                logits_flat = logits.squeeze(axis=1)
-                top_k_logits, top_k_indices = jax.lax.top_k(logits_flat, k=top_k)
-                next_token_idx = jax.random.categorical(key_step, top_k_logits, axis=-1)
-                next_token = jnp.take_along_axis(top_k_indices, next_token_idx[..., None], axis=-1)
-                return (output_vars, next_token), next_token
+
+                next_token, new_ds_state = dslider_sampler_step(
+                    key_step, current_ds_state, logits.squeeze(1), ds_config
+                )
+                
+                return (output_vars, next_token[:, None], new_ds_state), next_token
 
             initial_token = jnp.full((text_emb.shape[0], 1), bos_token_id, dtype=jnp.int32)
             keys = jax.random.split(key, num_steps)
-            initial_carry = (variables, initial_token)
+            initial_carry = (variables, initial_token, initial_ds_state)
             xs = (jnp.arange(num_steps), keys)
+            
             _, generated_tokens_collection = jax.lax.scan(scan_body, initial_carry, xs)
-            generated_tokens = generated_tokens_collection.squeeze(axis=-1).transpose()
+            
+            # --- [THE DEFINITIVE FIX] ---
+            # The output of scan is (sequence_length, batch_size), e.g., (576, 1).
+            # We must transpose it to (batch_size, sequence_length), e.g., (1, 576).
+            # The previous `.squeeze()` call was incorrectly removing the batch dimension.
+            generated_tokens = generated_tokens_collection.transpose()
+            
             return generated_tokens
 
-        def _generate_validation_preview(conductor_params, initial_cache, text_emb, key, num_steps, resolution, top_k):
+        @partial(jax.jit, static_argnames=('num_steps', 'resolution'))
+        def _generate_validation_preview(conductor_params, initial_cache, text_emb, key, ds_config, num_steps, resolution):
+            # The initial state contains both params and the empty cache
             variables = {'params': conductor_params, 'cache': initial_cache}
-            final_tokens = _autoregressive_sample_jit(
-                self.model.apply, variables, text_emb, 
-                key, num_steps, top_k, self.args.num_codes
+            
+            bos_token = jnp.full((text_emb.shape[0], 1), self.args.num_codes, dtype=jnp.int32)
+            
+            # Run one step to populate the cache for the first token (BOS)
+            initial_logits, updated_mutable_state = self.model.apply(variables, bos_token, text_emb, train=False, decode=True, index=0, mutable=['cache'])
+            
+            variables_for_scan = {'params': conductor_params, 'cache': updated_mutable_state['cache']}
+            
+            initial_ds_state = initialize_state(initial_logits, bsz=text_emb.shape[0], config=ds_config, dtype=self.dtype)
+            
+            # This now receives a correctly shaped (B, L) tensor.
+            final_tokens = _dslider_autoregressive_sample_jit(
+                self.model.apply, variables_for_scan, initial_ds_state, text_emb, 
+                key, ds_config, num_steps, self.args.num_codes
             )
+            
             grid_dim = self.tok_config['latent_grid_size'] // 4
+            # This call will now succeed because final_tokens has the correct shape.
             return _render_from_tokens_jit(
                 self.tokenizer.apply, self.tok_params, self.p1_model.apply, self.p1_params, 
                 final_tokens, resolution, 16, grid_dim
             )
         
-        jit_run_validation_batch = jax.jit(run_validation_batch, static_argnums=(3, 4))
-        jit_generate_validation_preview = jax.jit(_generate_validation_preview, static_argnames=('num_steps', 'resolution', 'top_k'))
-        
-        # We can now compile everything with a single clean state, as no functions are donating.
         clean_state_for_compile = jax.device_get(unreplicate(p_state))
         
         val_cpu_batches = None
@@ -1251,11 +1587,11 @@ class ConductorTrainer(AdvancedTrainer):
                 val_cpu_batches = list(zip(np.split(val_tokens_cpu, num_val_to_keep // val_batch_size), np.split(val_embeddings_cpu, num_val_to_keep // val_batch_size)))
                 
                 dummy_val_batch = jax.device_put(val_cpu_batches[0][0]), jax.device_put(val_cpu_batches[0][1])
-                jit_run_validation_batch(clean_state_for_compile.params, *dummy_val_batch, self.model.apply, self.args.num_codes)
+                run_validation_batch(clean_state_for_compile.params, *dummy_val_batch, self.model.apply, self.args.num_codes)
                 
                 with jax.default_device(CPU_DEVICE): initial_cache = get_initial_variables(key)['cache']
                 dummy_text_emb = jnp.zeros((1, 512), dtype=self.dtype)
-                jit_generate_validation_preview(clean_state_for_compile.params, initial_cache, dummy_text_emb, key, self.token_map_size, self.preview_resolution, self.preview_top_k)
+                _generate_validation_preview(clean_state_for_compile.params, initial_cache, dummy_text_emb, key, self.ds_config, self.token_map_size, self.preview_resolution)
                 del dummy_val_batch, initial_cache, dummy_text_emb
         
         dummy_batch = next(train_iterator); sharded_batch = shard(dummy_batch)
@@ -1303,7 +1639,6 @@ class ConductorTrainer(AdvancedTrainer):
                     
                     p_state, p_loss, p_sentinel_pct = train_step_fn(p_state, sharded_batch, sharded_keys, replicate(damp_factor), self.args.num_codes, replicate(lr))
                     
-                    # Since donation is removed, we can safely read the results.
                     loss_val = unreplicate(p_loss).item()
                     sentinel_val = unreplicate(p_sentinel_pct).item()
 
@@ -1323,13 +1658,13 @@ class ConductorTrainer(AdvancedTrainer):
                         
                         tokens_batch_cpu, embeddings_batch_cpu = val_cpu_batches[val_batch_idx]
                         val_batch_gpu = jax.device_put(tokens_batch_cpu), jax.device_put(embeddings_batch_cpu)
-                        validation_future = jit_run_validation_batch(unrep_state_for_eval.params, *val_batch_gpu, self.model.apply, self.args.num_codes)
+                        validation_future = run_validation_batch(unrep_state_for_eval.params, *val_batch_gpu, self.model.apply, self.args.num_codes)
                         val_batch_idx = (val_batch_idx + 1) % len(val_cpu_batches)
                         
                         if preview_future is None:
                             prompt_idx = self.current_preview_prompt_idx
                             text_emb = jnp.expand_dims(self.validation_embeddings[prompt_idx], 0)
-                            preview_future = jit_generate_validation_preview(unrep_state_for_eval.params, initial_inference_cache, text_emb, preview_key, self.token_map_size, self.preview_resolution, self.preview_top_k)
+                            preview_future = _generate_validation_preview(unrep_state_for_eval.params, initial_inference_cache, text_emb, preview_key, self.ds_config, self.token_map_size, self.preview_resolution)
                         
                         del unrep_state_for_eval, val_batch_gpu, text_emb
 
@@ -1361,6 +1696,11 @@ class ConductorTrainer(AdvancedTrainer):
             console.print(f"✅ Config saved to [green]{config_path}[/green]")
             if ckpt_path_best.exists(): console.print(f"👑 Best model (by validation) remains at [bold magenta]{ckpt_path_best}[/bold magenta]")
             self.interactive_state.set_shutdown(); key_listener_thread.join()
+
+
+
+
+
 
 
 
@@ -1478,7 +1818,7 @@ def main():
     p_cond = subparsers.add_parser("train-conductor", help="Train the Generative Conductor (Transformer).", parents=[base_parser, train_parser])
     p_cond.add_argument('--data-dir', type=str, required=True); p_cond.add_argument('--latent-grid-size', type=int, required=True)
     p_cond.add_argument('--steps', type=int, default=1500000); p_cond.add_argument('--batch-size', type=int, default=32, help="Batch size PER DEVICE."); p_cond.add_argument('--lr', type=float, default=1e-4)
-    p_cond.add_argument('--eval-every', type=int, default=2500, help="Run validation every N steps.") # <-- ADD THIS LINE
+    p_cond.add_argument('--eval-every', type=int, default=500, help="Run validation every N steps.") # <-- ADD THIS LINE
     p_cond.add_argument('--num-codes', type=int, default=8192); p_cond.add_argument('--code-dim', type=int, default=256)
     p_cond.add_argument('--num-layers', type=int, default=12); p_cond.add_argument('--d-model-cond', type=int, default=768); p_cond.add_argument('--num-heads', type=int, default=12)
     p_cond.add_argument('--vram-saver-mode', action='store_true', help="Enable aggressive VRAM saving optimizations (e.g., lower-res previews). Recommended for <= 8GB GPUs.")
