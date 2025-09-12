@@ -1451,11 +1451,7 @@ class TokenizerTrainer(AdvancedTrainer):
         }
         self.lambda_controller = PIDLambdaController(
             targets={'l1': 0.05, 'vq': 0.1, 'moment': 0.2, 'fft': 0.5, 'autocorr': 0.1, 'edge': 0.1, 'color_cov': 0.05, 'ssim': 0.02},
-            
-            # --- [THE FIX: BOOST COLOR-AWARE WEIGHTS] ---
-            # Increase the starting importance of L1 and Color Covariance.
-            base_weights={'l1': 2.0, 'vq': 1.5, 'adv': 0.5, 'moment': 0.5, 'fft': 0.5, 'autocorr': 2.0, 'edge': 2.5, 'color_cov': 2.5, 'ssim': 3.0},
-            
+            base_weights={'l1': 1.0, 'vq': 1.5, 'adv': 0.5, 'moment': 0.5, 'fft': 0.5, 'autocorr': 2.0, 'edge': 2.5, 'color_cov': 1.0, 'ssim': 3.0},
             gains=pid_gains
         )
         
@@ -1613,7 +1609,7 @@ class TokenizerTrainer(AdvancedTrainer):
         key = jax.random.PRNGKey(self.args.seed)
         g_key, d_key, self.train_key = jax.random.split(key, 3)
         gen_optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=self.args.lr, b1=0.5, b2=0.9)
-        disc_optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=self.args.lr * 0.5, b1=0.5, b2=0.9)
+        disc_optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=self.args.lr * 0.8, b1=0.5, b2=0.9)
         dummy_input = jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3), self.dtype)
         gen_params = self.generator_model.init(g_key, dummy_input)['params']; disc_params = self.discriminator_model.init(d_key, dummy_input)['params']
         self.param_count = jax.tree_util.tree_reduce(lambda acc, x: acc + x.size, gen_params, 0)
@@ -1648,7 +1644,7 @@ class TokenizerTrainer(AdvancedTrainer):
             states = GANTrainStates(generator=states.generator.replace(params=gen_params, opt_state=gen_opt_state), discriminator=states.discriminator.replace(params=ckpt['disc_params'], opt_state=disc_opt_state))
             console.print(f"✅ Resuming session from epoch {start_epoch + 1}, step {global_step}. Best val loss: {best_val_loss:.4f}")
         
-        # --- [DEFINITIVE FIX] Replace the ENTIRE old train_step function with this one ---
+        # --- [SYSTEMS RETROFIT 4] Update the train_step function ---
         @partial(jax.jit, static_argnames=('gen_apply_fn', 'disc_apply_fn', 'd_is_locked_out'))
         def train_step(states, batch, key, lambdas, gen_apply_fn, disc_apply_fn, d_is_locked_out: bool):
             # Unpack all lambdas. The PID controller now provides all of them.
@@ -1656,28 +1652,24 @@ class TokenizerTrainer(AdvancedTrainer):
              lambda_moment, lambda_fft, lambda_autocorr, lambda_edge, 
              lambda_color_cov, lambda_ssim) = lambdas
 
-            # --- 1. GENERATOR LOSS & GRADIENTS ---
             def generator_loss_fn(p):
                 gen_output = gen_apply_fn({'params': p}, batch)
                 recon = gen_output['reconstructed_path_params']
                 
-                # Core Losses
+                # --- Core Losses ---
                 l1_loss = jnp.mean(jnp.abs(batch - recon))
                 vq_loss = gen_output['vq_loss']
+                adv_loss = jnp.mean((disc_apply_fn({'params': states.discriminator.params}, recon) - 1)**2)
                 
-                # [FIX #1: LOGICAL CONSISTENCY] 
-                # The generator must target the same smoothed label as the discriminator.
-                label_smoothing = 0.1
-                target_for_generator = 1.0 - label_smoothing
-                adv_loss = jnp.mean((disc_apply_fn({'params': states.discriminator.params}, recon) - target_for_generator)**2)
-                
-                # Perceptual & Regularization Losses
+                # --- Perceptual Suite ---
                 perceptual_losses = self.perceptual_loss_fn(batch, recon, key)
+
+                # --- Stink Field (Varentropy) ---
                 z_e = gen_output['pre_quant_latents']
                 _, varent = ent_varent(z_e.reshape(-1, z_e.shape[-1]))
                 varentropy_loss = jnp.mean(varent)
 
-                # Grand Unification of Losses
+                # --- The Grand Unification of Losses ---
                 total_loss = (lambda_l1 * l1_loss) + \
                              (lambda_vq * vq_loss) + \
                              (lambda_adv * adv_loss) + \
@@ -1689,48 +1681,30 @@ class TokenizerTrainer(AdvancedTrainer):
                              (lambda_color_cov * perceptual_losses['color_cov']) + \
                              (lambda_ssim * perceptual_losses['ssim'])
 
-                # Prepare the full metrics dictionary for the PID and UI
+                # --- Prepare the full metrics dictionary for the PID and UI ---
                 all_metrics = {'l1': l1_loss, 'vq': vq_loss, 'adv': adv_loss, 'varentropy': varentropy_loss}
-                all_metrics.update(perceptual_losses) 
+                all_metrics.update(perceptual_losses) # Merge the dictionaries
 
                 return total_loss, all_metrics
 
             (g_loss_total, metrics), g_grads = jax.value_and_grad(generator_loss_fn, has_aux=True)(states.generator.params)
             new_gen_state = states.generator.apply_gradients(grads=g_grads)
             
-            # --- 2. DISCRIMINATOR LOSS & GRADIENTS ---
             def discriminator_loss_fn(disc_params):
                 def compute_d_loss():
                     recon = gen_state.apply_fn({'params': new_gen_state.params}, batch)['reconstructed_path_params']
-                    
-                    # [FIX #2: EFFICIENT & JIT-FRIENDLY LABEL SMOOTHING]
-                    # Get discriminator output for real images ONCE.
-                    logits_real = disc_apply_fn({'params': disc_params}, batch)
-                    
-                    # Create smoothed labels with the same shape as the output.
-                    label_smoothing = 0.1
-                    labels_real = jnp.ones_like(logits_real) * (1.0 - label_smoothing)
-                    
-                    # Calculate loss using the pre-computed logits.
-                    loss_real = jnp.mean((logits_real - labels_real)**2)
-                    
-                    # Get discriminator output for fake images and calculate loss (target is 0).
-                    logits_fake = disc_apply_fn({'params': disc_params}, jax.lax.stop_gradient(recon))
-                    loss_fake = jnp.mean(logits_fake**2)
-                    
+                    loss_real = jnp.mean((disc_apply_fn({'params': disc_params}, batch) - 1)**2)
+                    loss_fake = jnp.mean(disc_apply_fn({'params': disc_params}, jax.lax.stop_gradient(recon))**2)
                     return ((loss_real + loss_fake) * 0.5).astype(jnp.float32)
-                
                 return jax.lax.cond(d_is_locked_out, lambda: 0.0, compute_d_loss)
             
             d_loss, d_grads = jax.value_and_grad(discriminator_loss_fn)(states.discriminator.params)
             new_disc_state = states.discriminator.apply_gradients(grads=d_grads)
             
-            # --- 3. RETURN RESULTS ---
-            # [FIX #3: THE MISSING RETURN]
-            # Add final loss values to the metrics dict and return the new state and metrics.
             metrics['g_loss'] = g_loss_total
             metrics['d_loss'] = d_loss
             return GANTrainStates(generator=new_gen_state, discriminator=new_disc_state), metrics
+            
         @partial(jax.jit, static_argnames=('apply_fn',))
         def eval_step(gen_params, apply_fn, batch, key):
             out = apply_fn({'params': gen_params}, batch)
@@ -1901,17 +1875,6 @@ class TokenizerTrainer(AdvancedTrainer):
             with open(config_path, 'wb') as f: pickle.dump(config, f)
             console.print(f"✅ Config saved to [green]{config_path}[/green]")
             if ckpt_path_best.exists(): console.print(f"👑 Best model (by validation) remains at [bold magenta]{ckpt_path_best}[/bold magenta]")
-
-
-
-
-
-
-
-
-
-
-
 
 # =================================================================================================
 # UPGRADE: ConductorTrainer with CFG Training Loop
