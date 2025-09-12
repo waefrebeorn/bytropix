@@ -54,13 +54,19 @@ except NameError:
     os.environ['JAX_PERSISTENT_CACHE_PATH'] = str(cache_dir)
     print(f"--- JAX persistent cache enabled at (fallback global): {cache_dir} ---")
 # 
+import math
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import chex
 from flax import linen as nn
+from flax.linen import initializers
+from flax.linen import dot_product_attention
+import jax.lax # Import the lax module
 from flax.training import train_state
+from flax.training.train_state import TrainState
 from flax.jax_utils import unreplicate, replicate
 from flax.training.common_utils import shard
 from tqdm import tqdm
@@ -696,15 +702,292 @@ def dslider_sampler_step(key: jax.random.PRNGKey, state: DSState, logits: jnp.nd
 
 
 
+# Place these new helper functions near your other JAX math kernels.
+@partial(jax.jit, static_argnames=('max_lag',))
+def calculate_autocorrelation_features(patches: jnp.ndarray, max_lag: int = 8) -> jnp.ndarray:
+    """
+    Calculates a feature vector based on the spatial autocorrelation of a batch of patches.
+    This is sensitive to the spatial structure and texture fabric.
+    """
+    # We operate on grayscale patches for texture analysis.
+    patches_gray = jnp.mean(patches, axis=-1, keepdims=True)
+    
+    # Center the data by removing the mean (we only care about variance and structure)
+    patches_centered = patches_gray - jnp.mean(patches_gray, axis=(1, 2), keepdims=True)
+    
+    # Calculate the variance as a normalization factor
+    norm_factor = jnp.var(patches_centered, axis=(1, 2), keepdims=True) + 1e-6
+
+    # Define a set of lags (offsets) to check.
+    # We'll check horizontal, vertical, and both diagonal directions.
+    lags_x = jnp.arange(1, max_lag + 1)
+    lags_y = jnp.arange(1, max_lag + 1)
+
+    def _calculate_correlation_at_lag(lag_x, lag_y):
+        # Roll the patch to create the shifted version
+        shifted = jnp.roll(patches_centered, (lag_y, lag_x), axis=(1, 2))
+        
+        # Calculate the covariance between original and shifted
+        covariance = jnp.mean(patches_centered * shifted, axis=(1, 2, 3))
+        
+        # Normalize to get the correlation coefficient
+        return covariance / jnp.squeeze(norm_factor)
+
+    # Vmap for efficiency across different lags.
+    # We create a feature vector from correlations at different spatial offsets.
+    
+    # Horizontal correlations
+    corr_h = jax.vmap(_calculate_correlation_at_lag, in_axes=(0, None))(lags_x, 0)
+    
+    # Vertical correlations
+    corr_v = jax.vmap(_calculate_correlation_at_lag, in_axes=(None, 0))(0, lags_y)
+    
+    # Diagonal correlations
+    corr_d = jax.vmap(_calculate_correlation_at_lag, in_axes=(0, 0))(lags_x, lags_y)
+    
+    # Concatenate all features into a single vector per patch
+    # Transpose is needed to get shape (num_patches, num_features)
+    return jnp.concatenate([corr_h.T, corr_v.T, corr_d.T], axis=-1)
+
+
+def _compute_sobel_magnitude(patches: jnp.ndarray, kernel_x: jnp.ndarray, kernel_y: jnp.ndarray) -> jnp.ndarray:
+    """A pure, non-nested helper to compute Sobel gradient magnitude for a batch of patches."""
+    mag_channels = []
+    
+    # Pre-shape the kernels for convolution: (H, W, In_Channels, Out_Channels)
+    k_x_4d = kernel_x[..., None, None]
+    k_y_4d = kernel_y[..., None, None]
+
+    # Explicitly define the tensor layouts for the convolution operation.
+    dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
+
+    for i in range(patches.shape[-1]):
+        channel_slice = patches[..., i]
+        image_4d = channel_slice[..., None]
+        
+        # --- [THE FIX] ---
+        # Use the full, low-level convolution function that accepts dimension_numbers.
+        grad_x = jax.lax.conv_general_dilated(
+            image_4d.astype(jnp.float32), 
+            k_x_4d, 
+            window_strides=(1, 1), 
+            padding='SAME', 
+            dimension_numbers=dimension_numbers
+        )
+        grad_y = jax.lax.conv_general_dilated(
+            image_4d.astype(jnp.float32), 
+            k_y_4d, 
+            window_strides=(1, 1), 
+            padding='SAME', 
+            dimension_numbers=dimension_numbers
+        )
+        
+        magnitude = jnp.sqrt(grad_x**2 + grad_y**2 + 1e-6)
+        mag_channels.append(jnp.squeeze(magnitude, axis=-1))
+    
+    mag_per_channel = jnp.stack(mag_channels, axis=-1)
+    return jnp.linalg.norm(mag_per_channel, axis=-1)
+
+
+@jax.jit
+def calculate_edge_loss(patches1: jnp.ndarray, patches2: jnp.ndarray) -> jnp.ndarray:
+    """
+    [DEFINITIVE FIX v3] Calculates loss based on Sobel gradients.
+    This version uses a top-level helper function, completely removing the nested `def`
+    that was confusing the JIT compiler.
+    """
+    # Define Sobel kernels once.
+    sobel_x_kernel = jnp.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=jnp.float32)
+    sobel_y_kernel = jnp.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=jnp.float32)
+
+    # Call the clean, non-nested helper function for each set of patches.
+    mag1 = _compute_sobel_magnitude(patches1, sobel_x_kernel, sobel_y_kernel)
+    mag2 = _compute_sobel_magnitude(patches2, sobel_x_kernel, sobel_y_kernel)
+    
+    # Return the final loss.
+    return jnp.mean(jnp.abs(mag1 - mag2))
 
 
 
+@jax.jit
+def calculate_color_covariance_loss(patches1: jnp.ndarray, patches2: jnp.ndarray) -> jnp.ndarray:
+    """Calculates loss based on the Gram matrix of color channels to enforce color style."""
+    def get_gram_matrix(patches):
+        # N, H, W, C -> N, H*W, C
+        features = patches.reshape(patches.shape[0], -1, patches.shape[-1])
+        # N, C, H*W @ N, H*W, C -> N, C, C
+        gram = jax.vmap(lambda x: x.T @ x)(features)
+        # Normalize by number of elements
+        return gram / (features.shape[1] * features.shape[2])
+
+    gram1 = get_gram_matrix(patches1)
+    gram2 = get_gram_matrix(patches2)
+
+    return jnp.mean(jnp.abs(gram1 - gram2))
+
+@jax.jit
+def calculate_ssim_loss(patches1: jnp.ndarray, patches2: jnp.ndarray, max_val: float = 2.0) -> jnp.ndarray:
+    """Calculates the structural dissimilarity (1 - SSIM) loss."""
+    # SSIM constants
+    C1 = (0.01 * max_val)**2
+    C2 = (0.03 * max_val)**2
+    
+    # We operate on grayscale
+    patches1_gray = jnp.mean(patches1, axis=-1)
+    patches2_gray = jnp.mean(patches2, axis=-1)
+
+    mu1 = jnp.mean(patches1_gray, axis=(1, 2))
+    mu2 = jnp.mean(patches2_gray, axis=(1, 2))
+    
+    var1 = jnp.var(patches1_gray, axis=(1, 2))
+    var2 = jnp.var(patches2_gray, axis=(1, 2))
+    
+    # Reshape for broadcasting
+    mu1_mu2 = mu1 * mu2
+    mu1_sq = mu1**2
+    mu2_sq = mu2**2
+    
+    # Covariance
+    covar = jnp.mean(patches1_gray * patches2_gray, axis=(1,2)) - mu1_mu2
+    
+    # SSIM formula components
+    numerator = (2 * mu1_mu2 + C1) * (2 * covar + C2)
+    denominator = (mu1_sq + mu2_sq + C1) * (var1 + var2 + C2)
+    
+    ssim = numerator / denominator
+    
+    # We want to minimize dissimilarity
+    return jnp.mean(1.0 - ssim)
+@partial(jax.jit, static_argnames=('num_moments',))
+def calculate_moments(patches, num_moments=4):
+    flat_patches = patches.reshape(patches.shape[0], -1, patches.shape[-1])
+    mean = jnp.mean(flat_patches, axis=1)
+    var = jnp.var(flat_patches, axis=1)
+    if num_moments <= 2: return jnp.concatenate([mean, var], axis=-1)
+    centered = flat_patches - mean[:, None, :]; std_dev = jnp.sqrt(var + 1e-6)
+    skew = jnp.mean((centered / std_dev[:, None, :])**3, axis=1)
+    if num_moments <= 3: return jnp.concatenate([mean, var, skew], axis=-1)
+    kurt = jnp.mean((centered / std_dev[:, None, :])**4, axis=1)
+    return jnp.concatenate([mean, var, skew, kurt], axis=-1)
+
+@jax.jit
+def fft_magnitude_log(patches):
+    def fft_on_slice(patch_2d): return jnp.log(jnp.abs(jnp.fft.fft2(patch_2d)) + 1e-6)
+    return jax.vmap(jax.vmap(fft_on_slice, in_axes=-1, out_axes=-1))(patches)
+
+@partial(jax.vmap, in_axes=(0, 0, 0, None, None), out_axes=0)
+def _extract_patches_vmapped(image, x_coords, y_coords, patch_size, c):
+    """A static, vmapped helper to extract patches from a single image."""
+    def get_patch(x, y):
+         return jax.lax.dynamic_slice(image, (y, x, 0), (patch_size, patch_size, c))
+    return jax.vmap(get_patch)(x_coords, y_coords)
+
+# REPLACE your JAXPerceptualLoss class with this new, upgraded version.
+
+class JAXMultiMetricPerceptualLoss:
+    """
+    A stateless, physics-informed diagnostic suite for generative models.
+    It returns a dictionary of unweighted loss components for external PID control.
+    """
+    def __init__(self, num_patches=64, patch_size=32):
+        self.num_patches = num_patches
+        self.patch_size = patch_size
+        self._calculate_losses_jit = partial(jax.jit, static_argnames=('batch_size',))(self._calculate_losses)
+
+    def _calculate_losses(self, img1, img2, key, batch_size: int) -> Dict[str, jnp.ndarray]:
+        """The core, JIT-compatible loss calculation logic."""
+        _, h, w, c = img1.shape
+        x_coords = jax.random.randint(key, (batch_size, self.num_patches), 0, w - self.patch_size)
+        y_coords = jax.random.randint(key, (batch_size, self.num_patches), 0, h - self.patch_size)
+
+        patches1 = _extract_patches_vmapped(img1, x_coords, y_coords, self.patch_size, c)
+        patches2 = _extract_patches_vmapped(img2, x_coords, y_coords, self.patch_size, c)
+
+        patches1 = patches1.reshape(-1, self.patch_size, self.patch_size, c)
+        patches2 = patches2.reshape(-1, self.patch_size, self.patch_size, c)
+        
+        # --- Run all diagnostics across multiple scales ---
+        scales = [1.0, 0.5] # Run on full and half-res patches
+        all_losses = {
+            'moment': [], 'fft': [], 'autocorr': [],
+            'edge': [], 'color_cov': [], 'ssim': []
+        }
+
+        for scale in scales:
+            new_size = int(self.patch_size * scale)
+            if new_size < 16: continue
+
+            p1 = jax.image.resize(patches1, (patches1.shape[0], new_size, new_size, c), 'bilinear')
+            p2 = jax.image.resize(patches2, (patches2.shape[0], new_size, new_size, c), 'bilinear')
+
+            # --- Append measurements from each diagnostic to the list ---
+            all_losses['moment'].append(jnp.mean(jnp.abs(calculate_moments(p1) - calculate_moments(p2))))
+            all_losses['fft'].append(jnp.mean(jnp.abs(fft_magnitude_log(jnp.mean(p1, axis=-1, keepdims=True)) - fft_magnitude_log(jnp.mean(p2, axis=-1, keepdims=True)))))
+            all_losses['autocorr'].append(jnp.mean(jnp.abs(calculate_autocorrelation_features(p1) - calculate_autocorrelation_features(p2))))
+            all_losses['edge'].append(calculate_edge_loss(p1, p2))
+            all_losses['color_cov'].append(calculate_color_covariance_loss(p1, p2))
+            all_losses['ssim'].append(calculate_ssim_loss(p1, p2))
+
+        # --- Average the results across scales for a final report ---
+        final_losses = {k: jnp.mean(jnp.array(v)) for k, v in all_losses.items() if v}
+        return final_losses
+
+    def __call__(self, img1, img2, key):
+        if img1.ndim != 4 or img2.ndim != 4:
+            raise ValueError(f"Inputs must be 4D tensors, got {img1.shape} and {img2.shape}")
+        return self._calculate_losses_jit(img1, img2, key, batch_size=img1.shape[0])      
+        
+        
+# --- NEW VQ-GAN MODEL DEFINITIONS ---
+class PatchDiscriminator(nn.Module):
+    num_filters: int = 64; num_layers: int = 3; dtype: Any = jnp.float32
+    @nn.compact
+    def __call__(self, x):
+        h = nn.Conv(self.num_filters, (4, 4), (2, 2), 'SAME', dtype=self.dtype)(x)
+        h = nn.leaky_relu(h, 0.2)
+        for i in range(1, self.num_layers):
+            nf = self.num_filters * (2**i)
+            h = nn.Conv(nf, (4, 4), (2, 2), 'SAME', dtype=self.dtype)(h)
+            h = nn.LayerNorm(dtype=self.dtype)(h)
+            h = nn.leaky_relu(h, 0.2)
+        return nn.Conv(1, (4, 4), (1, 1), 'SAME', dtype=self.dtype)(h)
+
+# Rename to reflect its new GAN-based training
+class LatentTokenizerVQGAN(nn.Module):
+    num_codes: int; code_dim: int; latent_grid_size: int; dtype: Any = jnp.float32
+    def setup(self):
+        self.enc_conv1 = nn.Conv(128, (3,3), (2,2), 'SAME', name="enc_conv1", dtype=self.dtype)
+        self.enc_conv2 = nn.Conv(256, (3,3), (2,2), 'SAME', name="enc_conv2", dtype=self.dtype)
+        self.enc_proj = nn.Conv(self.code_dim, (1,1), name="enc_proj", dtype=self.dtype)
+        self.vq = VectorQuantizer(self.num_codes, self.code_dim, name="vq")
+        self.dec_convT1 = nn.ConvTranspose(256, (3,3), (2,2), 'SAME', name="dec_convT1", dtype=self.dtype)
+        self.dec_convT2 = nn.ConvTranspose(3, (3,3), (2,2), 'SAME', name="dec_convT2", dtype=self.dtype)
+
+    def __call__(self, path_params_grid):
+        target_size = self.latent_grid_size // 4
+        h = nn.gelu(self.enc_conv1(path_params_grid)); h = nn.gelu(self.enc_conv2(h))
+        z_e = self.enc_proj(h)
+        assert z_e.shape[1] == target_size and z_e.shape[2] == target_size, f"Incorrect spatial dim: {z_e.shape}"
+        vq_out = self.vq(z_e); z_q = vq_out["quantized"]
+        p_r = self.dec_convT2(nn.gelu(self.dec_convT1(z_q)))
+        # [THE CHANGE] Also return the pre-quantization latents for the "stink field" loss
+        return {"reconstructed_path_params": p_r, "indices": vq_out["indices"], "vq_loss": vq_out["loss"], "pre_quant_latents": z_e}
+
+    def encode(self, path_params_grid):
+        h = nn.gelu(self.enc_conv1(path_params_grid)); h = nn.gelu(self.enc_conv2(h))
+        z_e = self.enc_proj(h); return self.vq(z_e)["indices"]
+
+    def decode(self, indices):
+        z_q = self.vq.lookup(indices); h_r = nn.gelu(self.dec_convT1(z_q)); return self.dec_convT2(h_r)
+
+# --- State holder for GAN training ---
+class GANTrainStates(NamedTuple):
+    generator: TrainState
+    discriminator: TrainState
 
 
    
-import math
-from flax.linen import initializers
-from flax.linen import dot_product_attention
+
 
 # ==============================================================================
 # FINAL, CORRECTED ATTENTION: Using pre-allocated KV cache for jax.lax.scan
@@ -814,10 +1097,12 @@ class TransformerBlock(nn.Module):
         return x
 
 
-import jax.lax # Import the lax module
+
+# In GenerativeConductor class
 
 class GenerativeConductor(nn.Module):
     num_codes: int; num_positions: int; d_model: int; num_heads: int; num_layers: int; clip_dim: int
+    # [ADD] Add a dropout rate for the text condition
     uncond_drop_rate: float = 0.1
     dtype: Any = jnp.float32
 
@@ -825,6 +1110,8 @@ class GenerativeConductor(nn.Module):
         """
         Defines the entire static structure of the model.
         """
+        # [ADD] Create a learnable parameter for the unconditional embedding.
+        # This will represent the "null prompt".
         self.uncond_embedding = self.param(
             'uncond_embedding',
             nn.initializers.normal(0.02),
@@ -844,19 +1131,15 @@ class GenerativeConductor(nn.Module):
     def __call__(self, tokens, text_emb, train: bool = False, decode: bool = False, index: Optional[jnp.ndarray] = None):
         B, L = tokens.shape
         
+        # [ADD] The core CFG training logic
         if train:
+            # Get a dropout RNG stream
             key = self.make_rng('dropout')
             
-            # --- [THE DEFINITIVE FIX] ---
-            # The JAX tracer is incorrectly resolving `self.uncond_drop_rate` to a
-            # type object (<class 'jnp.bfloat16'>) instead of its numerical value
-            # when the module's dtype is bfloat16. To fix this, we bypass the
-            # problematic instance attribute lookup (`self.`) and access the static
-            # value directly from the class definition (`GenerativeConductor.`).
-            # This retrieves the original Python float 0.1, which JAX can correctly handle.
-            p = GenerativeConductor.uncond_drop_rate
-            should_drop = jax.random.bernoulli(key, p, (B, 1))
+            # Create a random mask for which batch items to drop the prompt for
+            should_drop = jax.random.bernoulli(key, self.uncond_drop_rate, (B, 1))
             
+            # Use the mask to select between the real text embedding and the learned unconditional one
             text_emb = jnp.where(should_drop, self.uncond_embedding, text_emb)
 
         tok_emb = self.token_embedding(tokens)
@@ -885,7 +1168,6 @@ class GenerativeConductor(nn.Module):
             x = block(x, context=ctx, mask=mask, decode=decode, index=index)
             
         return self.logit_head(self.norm(x))
-
 
 
 
@@ -1070,172 +1352,562 @@ class AdvancedTrainer:
         if max_v==min_v or np.isnan(min_v) or np.isnan(max_v): return " " * w
         bins=np.linspace(min_v,max_v,len(s)); indices=np.clip(np.digitize(hist,bins)-1,0,len(s)-1)
         return "".join(s[i] for i in indices)
-# =================================================================================================
-# FINAL, PRODUCTION-READY TokenizerTrainer with Clean Metrics
-# This version ensures that both the train and eval steps compute and return
-# the total loss, reconstruction loss, and VQ loss. The UI is updated
-# to display this full, informative breakdown.
-# =================================================================================================
+
+
+
+
+
+# In TokenizerTrainer
+
+class PIDLambdaController:
+    """
+    A PID controller to dynamically balance the generator's reconstruction loss weights.
+    [UPGRADED] to handle a generic dictionary of losses for the full diagnostic suite.
+    """
+    def __init__(self, targets: Dict[str, float], base_weights: Dict[str, float], gains: Dict[str, Tuple[float, float, float]]):
+        self.targets = targets
+        self.base_weights = base_weights
+        self.gains = gains
+        # Initialize state for all potential keys to prevent errors during training
+        all_keys = set(targets.keys()) | set(base_weights.keys())
+        self.integral_error = {k: 0.0 for k in all_keys}
+        self.last_error = {k: 0.0 for k in all_keys}
+        self.derivative = {k: 0.0 for k in all_keys}
+
+    def __call__(self, last_metrics: Dict[str, float]) -> Dict[str, float]:
+        final_lambdas = {}
+        
+        # Dynamically calculate lambdas for all targets
+        for name, target in self.targets.items():
+            kp, ki, kd = self.gains[name]
+            current_loss = last_metrics.get(name, target) # Use target as default if metric not present yet
+            error = current_loss - target
+            
+            self.integral_error[name] += error
+            # Clamp the integral term to prevent wind-up
+            self.integral_error[name] = np.clip(self.integral_error[name], -5.0, 5.0)
+            self.derivative[name] = error - self.last_error[name]
+            
+            adjustment = (kp * error) + (ki * self.integral_error[name]) + (kd * self.derivative[name])
+            multiplier = np.exp(adjustment)
+            
+            calculated_lambda = self.base_weights[name] * multiplier
+            self.last_error[name] = error
+            
+            # Apply specific clipping rules for stability
+            if name == 'l1':
+                final_lambdas[name] = np.clip(calculated_lambda, 0.2, 5.0)
+            elif name == 'vq':
+                final_lambdas[name] = np.clip(calculated_lambda, 0.5, 10.0)
+            elif name == 'ssim':
+                 final_lambdas[name] = np.clip(calculated_lambda, 0.5, 30.0)
+            else: # General clipping for other perceptual terms
+                final_lambdas[name] = np.clip(calculated_lambda, 0.1, 20.0)
+
+        # Handle fixed-weight losses like 'adv'
+        if 'adv' in self.base_weights:
+            final_lambdas['adv'] = self.base_weights['adv']
+
+        return final_lambdas
+
+    def state_dict(self):
+        return {'integral_error': self.integral_error, 'last_error': self.last_error}
+    
+    def load_state_dict(self, state):
+        self.integral_error = state.get('integral_error', self.integral_error)
+        self.last_error = state.get('last_error', self.last_error)
+        
+        
+        
 class TokenizerTrainer(AdvancedTrainer):
+    """
+    [MISSION CONTROL] The complete TokenizerTrainer, featuring the stateful PID
+    controller and a dense, multi-graph, interactive GUI with ASYNCHRONOUS and
+    THROTTLED-RENDER LIVE PREVIEW for maximum performance.
+    [UPGRADED] with a full suite of perceptual loss diagnostics.
+    """
     def __init__(self, args):
         super().__init__(args)
+        self.args = args
         self.dtype = jnp.bfloat16 if args.use_bfloat16 else jnp.float32
-        self.model = LatentTokenizerVQ(args.num_codes, args.code_dim, args.latent_grid_size, self.dtype)
+        self.generator_model = LatentTokenizerVQGAN(args.num_codes, args.code_dim, args.latent_grid_size, self.dtype)
+        self.discriminator_model = PatchDiscriminator(dtype=self.dtype)
+        
+        # --- [SYSTEMS RETROFIT 1] Instantiate the new multi-metric diagnostic suite ---
+        self.perceptual_loss_fn = JAXMultiMetricPerceptualLoss()
+
+        # GAN Balancer & Lockout State
+        self.d_loss_ema = 0.5; self.d_loss_ema_alpha = 0.05
+        self.d_loss_target_min = 0.3; self.d_loss_target_max = 0.6
+        self.g_lr_multiplier = 1.0; self.d_lr_multiplier = 1.0
+        self.d_lockout_steps = 0; self.d_lockout_threshold = 0.009
+        self.d_lockout_duration = 5
+
+        # --- [SYSTEMS RETROFIT 2] Reconfigure the PID Controller for the full diagnostic suite ---
+        pid_gains = {
+            'l1': (1.5, 0.01, 2.0), 'vq': (1.8, 0.01, 2.5),
+            'moment': (1.0, 0.01, 1.0), 'fft': (1.2, 0.01, 1.5), 'autocorr': (2.5, 0.02, 3.5),
+            'edge': (2.8, 0.02, 4.0), 'color_cov': (2.0, 0.02, 2.5), 'ssim': (3.0, 0.03, 3.0)
+        }
+        self.lambda_controller = PIDLambdaController(
+            targets={'l1': 0.05, 'vq': 0.1, 'moment': 0.2, 'fft': 0.5, 'autocorr': 0.1, 'edge': 0.1, 'color_cov': 0.05, 'ssim': 0.02},
+            
+            # --- [THE FIX: BOOST COLOR-AWARE WEIGHTS] ---
+            # Increase the starting importance of L1 and Color Covariance.
+            base_weights={'l1': 2.0, 'vq': 1.5, 'adv': 0.5, 'moment': 0.5, 'fft': 0.5, 'autocorr': 2.0, 'edge': 2.5, 'color_cov': 2.5, 'ssim': 3.0},
+            
+            gains=pid_gains
+        )
+        
+        self.interactive_state = InteractivityState()
+        self.ui_lock = threading.Lock()
+        self.param_count = 0
+        
+        # UI State (can be expanded later if needed)
+        self.hist_len = 400
+        self.g_loss_hist = deque(maxlen=self.hist_len); self.d_loss_hist = deque(maxlen=self.hist_len)
+        self.l1_hist = deque(maxlen=self.hist_len); self.ssim_hist = deque(maxlen=self.hist_len) # Changed from perc
+        self.vq_hist = deque(maxlen=self.hist_len); self.varent_hist = deque(maxlen=self.hist_len)
+        self.last_metrics_for_ui = {}; self.current_lambdas_for_ui = {}
+        self.p1_params = None; self.p1_decoder_model = None
+        self.preview_latents = None
+        self.current_preview_np = None
+        self.current_recon_np = None
+        self.rendered_original_preview = None
+        self.rendered_recon_preview = None
+
+    def get_geometric_boosts(self, path_params_batch: jnp.ndarray):
+        avg_radius = jnp.mean(path_params_batch[..., 2])
+        complexity_factor = avg_radius / (jnp.pi / 2.0)
+        # This boost now applies to all perceptual terms, not just one.
+        # We will apply it inside the train loop.
+        return jnp.exp(complexity_factor)
+
+    def _generate_layout(self) -> Layout:
+        with self.ui_lock:
+            root_layout = Layout(name="root")
+            root_layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="main_content", ratio=1),
+                Layout(self.progress, name="footer", size=3)
+            )
+            root_layout["main_content"].split_row(
+                Layout(name="left_column", ratio=2, minimum_size=50),
+                Layout(name="right_column", ratio=3)
+            )
+            
+            left_stack = Layout(name="left_stack")
+            right_stack = Layout(name="right_stack")
+            left_stack.split_column(
+                Layout(name="stats", minimum_size=6),
+                Layout(name="gan_balancer", minimum_size=6),
+                Layout(name="q_controller", minimum_size=5),
+                Layout(name="pid_controller", ratio=1, minimum_size=12) # Increased size for more rows
+            )
+            right_stack.split_column(
+                Layout(name="live_trends", minimum_size=15),
+                Layout(name="live_preview", ratio=1, minimum_size=10)
+            )
+
+            precision_str = "[bold purple]BF16[/]" if self.dtype == jnp.bfloat16 else "[dim]FP32[/]"
+            header_text = f"🧬 [bold]Tokenizer Trainer[/] | Params: [yellow]{self.param_count/1e6:.2f}M[/] | Precision: {precision_str}"
+            root_layout["header"].update(Panel(Align.center(header_text), style="bold blue", title="[dim]wubumind.ai[/dim]", title_align="right"))
+
+            g_loss, d_loss = self.last_metrics_for_ui.get('g_loss', 0), self.last_metrics_for_ui.get('d_loss', 0)
+            l1, ssim, vq, edge = (self.last_metrics_for_ui.get(k,0) for k in ['l1','ssim','vq','edge'])
+            stats_tbl = Table.grid(expand=True); stats_tbl.add_column(style="dim",width=14); stats_tbl.add_column()
+            stats_tbl.add_row("G / D Loss", f"[cyan]{g_loss:.3f}[/] / [magenta]{d_loss:.3f}[/]")
+            stats_tbl.add_row("L1 / VQ", f"[green]{l1:.2e}[/] / [green]{vq:.2e}[/]")
+            stats_tbl.add_row("SSIM / Edge", f"[yellow]{ssim:.2e}[/] / [yellow]{edge:.2e}[/]")
+            mem, util = self._get_gpu_stats(); stats_tbl.add_row("GPU Mem / Util", f"[yellow]{mem}[/] / [yellow]{util}[/]")
+            left_stack["stats"].update(Panel(stats_tbl, title="[bold]📊 Core Stats[/]", border_style="blue"))
+            
+            gan_balancer_tbl = Table.grid(expand=True); gan_balancer_tbl.add_column(style="dim", width=12); gan_balancer_tbl.add_column(style="yellow")
+            gan_balancer_tbl.add_row("D Loss EMA", f"{self.d_loss_ema:.3f}")
+            gan_balancer_tbl.add_row("G LR Mult", f"{self.g_lr_multiplier:.2f}x")
+            gan_balancer_tbl.add_row("D LR Mult", f"{self.d_lr_multiplier:.2f}x")
+            if self.d_lockout_steps > 0:
+                lockout_text = Text(f"LOCKED ({self.d_lockout_steps})", style="bold red")
+                gan_balancer_tbl.add_row("Status", lockout_text)
+            left_stack["gan_balancer"].update(Panel(gan_balancer_tbl, title="[bold]⚖️ GAN Balancer[/]", border_style="yellow"))
+            
+            q_panel_content = Align.center("[dim]Q-Ctrl Off[/dim]")
+            if self.q_controller:
+                q_tbl = Table.grid(expand=True); q_tbl.add_column(style="dim",width=12); q_tbl.add_column()
+                status_full = self.q_controller.status; status_short = status_full.split(' ')[0]
+                status_emoji, color = ("😎","green") if "IMPROVING" in status_short else (("🤔","yellow") if "STAGNATED" in status_short else (("😠","red") if "REGRESSING" in status_short else (("🐣","blue") if "WARMUP" in status_short else ("🤖","dim"))))
+                q_tbl.add_row("Base LR", f"[{color}]{self.q_controller.current_lr:.2e}[/] {status_emoji}")
+                q_tbl.add_row("Reward", f"{self.q_controller.last_reward:+.2e}"); q_tbl.add_row("Exploration", f"{self.q_controller.exploration_rate_q:.2e}")
+                q_panel_content = q_tbl
+            left_stack["q_controller"].update(Panel(q_panel_content, title="[bold]🤖 Q-Controller[/]", border_style="green"))
+            
+            pid_internals_tbl = Table("Loss", "Error", "Integral", "Deriv", "Mult", "Final λ", title_style="bold yellow")
+            for name in self.lambda_controller.targets:
+                error = self.lambda_controller.last_error.get(name, 0.0)
+                integral = self.lambda_controller.integral_error.get(name, 0.0)
+                derivative = self.lambda_controller.derivative.get(name, 0.0)
+                multiplier = np.exp((self.lambda_controller.gains[name][0] * error) + (self.lambda_controller.gains[name][1] * integral) + (self.lambda_controller.gains[name][2] * derivative))
+                pid_internals_tbl.add_row(name.capitalize(), f"{error:+.2e}", f"{integral:+.2e}", f"{derivative:+.2e}", f"{multiplier:.2e}", f"{self.current_lambdas_for_ui.get(name, 0):.2e}")
+            left_stack["pid_controller"].update(Panel(pid_internals_tbl, title="[bold]🧠 PID Controller Internals[/]", border_style="yellow"))
+
+            spark_w = 40
+            g_loss_panel = Panel(Align.center(f"{self._get_sparkline(self.g_loss_hist, spark_w)}"), title="G Loss", height=3, border_style="cyan")
+            d_loss_panel = Panel(Align.center(f"{self._get_sparkline(self.d_loss_hist, spark_w)}"), title="D Loss", height=3, border_style="magenta")
+            ssim_panel = Panel(Align.center(f"{self._get_sparkline(self.ssim_hist, spark_w)}"), title="SSIM", height=3, border_style="green")
+            vq_panel = Panel(Align.center(f"{self._get_sparkline(self.vq_hist, spark_w)}"), title="VQ", height=3, border_style="yellow")
+            graphs = [g_loss_panel, d_loss_panel, ssim_panel, vq_panel]
+            right_stack["live_trends"].update(Panel(Group(*graphs), title="[bold]📈 Live Trends[/]"))
+            
+            if self.rendered_recon_preview is None and self.current_recon_np is not None:
+                 if Pixels: self.rendered_recon_preview = Align.center(Pixels.from_image(Image.fromarray(self.current_recon_np)))
+
+            preview_content = Align.center("...Waiting for first validation...")
+            if self.rendered_original_preview and self.rendered_recon_preview:
+                preview_table = Table.grid(expand=True); preview_table.add_column(ratio=1); preview_table.add_column(ratio=1)
+                preview_table.add_row(Text("Original", justify="center"), Text("Reconstruction", justify="center"))
+                preview_table.add_row(self.rendered_original_preview, self.rendered_recon_preview)
+                preview_content = preview_table
+            
+            right_stack["live_preview"].update(Panel(preview_content, title="[bold]🖼️ Live Validation Preview[/]", border_style="green"))
+
+            root_layout["left_column"].update(left_stack)
+            root_layout["right_column"].update(right_stack)
+            
+            return root_layout
 
     def train(self):
         console = Console()
+        background_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='Tokenizer_BG_Worker')
+        active_preview_future = None
+        
+        console.print("--- Loading Phase 1 AE for visual validation... ---", style="yellow")
+        try:
+            p1_path = next(Path('.').glob(f"{self.args.basename}_{self.args.d_model}d_512.pkl"))
+        except StopIteration:
+            sys.exit(f"[FATAL] Could not find Phase 1 AE model needed for previews.")
+        with open(p1_path, 'rb') as f: self.p1_params = pickle.load(f)['params']
+        self.p1_decoder_model = TopologicalCoordinateGenerator(self.args.d_model, self.args.latent_grid_size, 512, dtype=jnp.float32)
+        
         data_path = Path(self.args.data_dir) / f"tokenizer_latents_{self.args.basename}.pkl"
-        if not data_path.exists(): sys.exit(f"[FATAL] Tokenizer latent data not found: {data_path}. Run 'prepare-tokenizer-data' first.")
-        
-        console.print(f"--- Loading all pre-computed latents into RAM from [green]{data_path}[/green] ---")
         with open(data_path, 'rb') as f: latents_data = pickle.load(f)['latents']
-        
         np.random.seed(self.args.seed); shuffled_indices = np.random.permutation(len(latents_data))
         val_split_idx = int(len(latents_data) * 0.01)
-        train_indices = shuffled_indices[val_split_idx:]; val_indices = shuffled_indices[:val_split_idx]
-        train_data = latents_data[train_indices]; val_data = latents_data[val_indices]
+        train_data, val_data = latents_data[shuffled_indices[val_split_idx:]], latents_data[shuffled_indices[:val_split_idx]]
+        self.preview_latents = jnp.asarray(val_data[:4], dtype=jnp.float32)
+        
+        @partial(jax.jit, static_argnames=('resolution','patch_size'))
+        def render_image(params, path_params, resolution=128, patch_size=64):
+             coords = jnp.stack(jnp.meshgrid(jnp.linspace(-1,1,resolution),jnp.linspace(-1,1,resolution),indexing='ij'),-1).reshape(-1,2)
+             coord_chunks = jnp.array_split(coords, (resolution**2)//(patch_size**2))
+             pixels_list = [self.p1_decoder_model.apply({'params': params}, path_params, c, method=self.p1_decoder_model.decode) for c in coord_chunks]
+             return jnp.concatenate(pixels_list, axis=1).reshape(path_params.shape[0], resolution, resolution, 3)
+        
+        original_preview_batch = render_image(self.p1_params, self.preview_latents)
+        self.current_preview_np = np.array(((original_preview_batch[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
+        if Pixels:
+            self.rendered_original_preview = Align.center(Pixels.from_image(Image.fromarray(self.current_preview_np)))
+        
         console.print(f"✅ Data split: {len(train_data)} training samples, {len(val_data)} validation samples.")
+        steps_per_epoch = math.ceil(len(train_data) / self.args.batch_size)
         
         key = jax.random.PRNGKey(self.args.seed)
+        g_key, d_key, self.train_key = jax.random.split(key, 3)
+        gen_optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=self.args.lr, b1=0.5, b2=0.9)
+        disc_optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=self.args.lr * 0.5, b1=0.5, b2=0.9)
+        dummy_input = jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3), self.dtype)
+        gen_params = self.generator_model.init(g_key, dummy_input)['params']; disc_params = self.discriminator_model.init(d_key, dummy_input)['params']
+        self.param_count = jax.tree_util.tree_reduce(lambda acc, x: acc + x.size, gen_params, 0)
+        gen_state = TrainState.create(apply_fn=self.generator_model.apply, params=gen_params, tx=gen_optimizer)
+        disc_state = TrainState.create(apply_fn=self.discriminator_model.apply, params=disc_params, tx=disc_optimizer)
+        states = GANTrainStates(generator=gen_state, discriminator=disc_state)
+        ckpt_path = Path(f"tokenizer_{self.args.basename}_{self.args.num_codes}c_gan_final.pkl"); ckpt_path_best = Path(f"tokenizer_{self.args.basename}_{self.args.num_codes}c_gan_best.pkl")
+        best_val_loss, start_epoch, global_step = float('inf'), 0, 0
         
-        optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.inject_hyperparams(optax.adamw)(learning_rate=self.args.lr))
-        
-        ckpt_path_final = Path(f"tokenizer_{self.args.basename}_{self.args.num_codes}c_final.pkl")
-        ckpt_path_best = Path(f"tokenizer_{self.args.basename}_{self.args.num_codes}c_best.pkl")
-        best_val_loss = float('inf'); start_step = 0
+        # --- [SYSTEMS RETROFIT 3] Initialize last_metrics with all new keys ---
+        last_metrics = {
+            'g_loss': 0.0, 'd_loss': 0.5, 'l1': 0.05, 'vq': 0.1, 
+            'moment': 0.2, 'fft': 0.5, 'autocorr': 0.1, 'edge': 0.1, 
+            'color_cov': 0.05, 'ssim': 0.02, 'varentropy': 0.0
+        }
 
-        if ckpt_path_final.exists():
-            console.print(f"--- Resuming training from checkpoint: [green]{ckpt_path_final}[/green] ---")
-            with open(ckpt_path_final, 'rb') as f: checkpoint_data = pickle.load(f)
-            with jax.default_device(CPU_DEVICE):
-                params_template = self.model.init(key, jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3), self.dtype))['params']
-            state = CustomTrainState.create(apply_fn=self.model.apply, params=params_template, tx=optimizer)
-            state = state.replace(params=checkpoint_data['params'], opt_state=checkpoint_data['opt_state'])
-            start_step = checkpoint_data.get('step', 0)
-            console.print(f"✅ Resuming from step {start_step + 1}")
-            if self.q_controller and 'q_controller_state' in checkpoint_data:
-                self.q_controller.load_state_dict(checkpoint_data['q_controller_state']); console.print("✅ Q-Controller state loaded.")
+        if ckpt_path.exists():
+            console.print(f"--- Resuming training state from: [green]{ckpt_path}[/green] ---")
+            with open(ckpt_path, 'rb') as f: ckpt = pickle.load(f)
+            gen_opt_state, disc_opt_state = ckpt['gen_opt_state'], ckpt['disc_opt_state']
+            start_epoch = ckpt.get('epoch', 0)
+            # Make sure loaded metrics have all keys for the new controller
+            loaded_metrics = ckpt.get('last_metrics', {})
+            last_metrics.update(loaded_metrics)
+            global_step = ckpt.get('global_step', start_epoch * steps_per_epoch)
+            if self.q_controller and 'q_controller_state' in ckpt: self.q_controller.load_state_dict(ckpt['q_controller_state']); console.print(f"🤖 Q-Controller state restored.")
+            if 'pid_controller_state' in ckpt: self.lambda_controller.load_state_dict(ckpt['pid_controller_state']); console.print(f"🧠 PID Controller state restored.")
             if ckpt_path_best.exists():
-                with open(ckpt_path_best, 'rb') as f_best: best_val_loss = pickle.load(f_best).get('val_loss', float('inf')); console.print(f"✅ Best validation loss loaded: {best_val_loss:.4f}")
-        else:
-            console.print("--- Initializing new model from scratch ---")
-            with jax.default_device(CPU_DEVICE):
-                params = self.model.init(key, jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3), self.dtype))['params']
-            state = CustomTrainState.create(apply_fn=self.model.apply, params=params, tx=optimizer)
+                console.print(f"--- Loading BEST generator weights from: [bold magenta]{ckpt_path_best}[/bold magenta] ---")
+                with open(ckpt_path_best, 'rb') as f_best: best_ckpt = pickle.load(f_best); gen_params = best_ckpt['params']; best_val_loss = best_ckpt.get('val_loss', float('inf'))
+            else: gen_params = ckpt['gen_params']
+            states = GANTrainStates(generator=states.generator.replace(params=gen_params, opt_state=gen_opt_state), discriminator=states.discriminator.replace(params=ckpt['disc_params'], opt_state=disc_opt_state))
+            console.print(f"✅ Resuming session from epoch {start_epoch + 1}, step {global_step}. Best val loss: {best_val_loss:.4f}")
+        
+        # --- [DEFINITIVE FIX] Replace the ENTIRE old train_step function with this one ---
+        @partial(jax.jit, static_argnames=('gen_apply_fn', 'disc_apply_fn', 'd_is_locked_out'))
+        def train_step(states, batch, key, lambdas, gen_apply_fn, disc_apply_fn, d_is_locked_out: bool):
+            # Unpack all lambdas. The PID controller now provides all of them.
+            (lambda_l1, lambda_vq, lambda_adv, lambda_stink, 
+             lambda_moment, lambda_fft, lambda_autocorr, lambda_edge, 
+             lambda_color_cov, lambda_ssim) = lambdas
 
-        # --- [CLEANUP] JIT functions now return all 3 metrics ---
-        @partial(jax.jit, static_argnames=('apply_fn',))
-        def train_step_fn(state, apply_fn, batch):
-            def loss_fn(p):
-                out = apply_fn({'params': p}, batch)
-                recon_loss = jnp.mean(jnp.abs(out['reconstructed_path_params'] - batch))
-                vq_loss = out['vq_loss']
-                total_loss = recon_loss + vq_loss
-                return total_loss.astype(jnp.float32), (recon_loss, vq_loss)
+            # --- 1. GENERATOR LOSS & GRADIENTS ---
+            def generator_loss_fn(p):
+                gen_output = gen_apply_fn({'params': p}, batch)
+                recon = gen_output['reconstructed_path_params']
+                
+                # Core Losses
+                l1_loss = jnp.mean(jnp.abs(batch - recon))
+                vq_loss = gen_output['vq_loss']
+                
+                # [FIX #1: LOGICAL CONSISTENCY] 
+                # The generator must target the same smoothed label as the discriminator.
+                label_smoothing = 0.1
+                target_for_generator = 1.0 - label_smoothing
+                adv_loss = jnp.mean((disc_apply_fn({'params': states.discriminator.params}, recon) - target_for_generator)**2)
+                
+                # Perceptual & Regularization Losses
+                perceptual_losses = self.perceptual_loss_fn(batch, recon, key)
+                z_e = gen_output['pre_quant_latents']
+                _, varent = ent_varent(z_e.reshape(-1, z_e.shape[-1]))
+                varentropy_loss = jnp.mean(varent)
+
+                # Grand Unification of Losses
+                total_loss = (lambda_l1 * l1_loss) + \
+                             (lambda_vq * vq_loss) + \
+                             (lambda_adv * adv_loss) + \
+                             (lambda_stink * varentropy_loss) + \
+                             (lambda_moment * perceptual_losses['moment']) + \
+                             (lambda_fft * perceptual_losses['fft']) + \
+                             (lambda_autocorr * perceptual_losses['autocorr']) + \
+                             (lambda_edge * perceptual_losses['edge']) + \
+                             (lambda_color_cov * perceptual_losses['color_cov']) + \
+                             (lambda_ssim * perceptual_losses['ssim'])
+
+                # Prepare the full metrics dictionary for the PID and UI
+                all_metrics = {'l1': l1_loss, 'vq': vq_loss, 'adv': adv_loss, 'varentropy': varentropy_loss}
+                all_metrics.update(perceptual_losses) 
+
+                return total_loss, all_metrics
+
+            (g_loss_total, metrics), g_grads = jax.value_and_grad(generator_loss_fn, has_aux=True)(states.generator.params)
+            new_gen_state = states.generator.apply_gradients(grads=g_grads)
             
-            (total_loss, (recon_loss, vq_loss)), g = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-            new_state = state.apply_gradients(grads=g)
-            return new_state, total_loss, recon_loss, vq_loss
-
+            # --- 2. DISCRIMINATOR LOSS & GRADIENTS ---
+            def discriminator_loss_fn(disc_params):
+                def compute_d_loss():
+                    recon = gen_state.apply_fn({'params': new_gen_state.params}, batch)['reconstructed_path_params']
+                    
+                    # [FIX #2: EFFICIENT & JIT-FRIENDLY LABEL SMOOTHING]
+                    # Get discriminator output for real images ONCE.
+                    logits_real = disc_apply_fn({'params': disc_params}, batch)
+                    
+                    # Create smoothed labels with the same shape as the output.
+                    label_smoothing = 0.1
+                    labels_real = jnp.ones_like(logits_real) * (1.0 - label_smoothing)
+                    
+                    # Calculate loss using the pre-computed logits.
+                    loss_real = jnp.mean((logits_real - labels_real)**2)
+                    
+                    # Get discriminator output for fake images and calculate loss (target is 0).
+                    logits_fake = disc_apply_fn({'params': disc_params}, jax.lax.stop_gradient(recon))
+                    loss_fake = jnp.mean(logits_fake**2)
+                    
+                    return ((loss_real + loss_fake) * 0.5).astype(jnp.float32)
+                
+                return jax.lax.cond(d_is_locked_out, lambda: 0.0, compute_d_loss)
+            
+            d_loss, d_grads = jax.value_and_grad(discriminator_loss_fn)(states.discriminator.params)
+            new_disc_state = states.discriminator.apply_gradients(grads=d_grads)
+            
+            # --- 3. RETURN RESULTS ---
+            # [FIX #3: THE MISSING RETURN]
+            # Add final loss values to the metrics dict and return the new state and metrics.
+            metrics['g_loss'] = g_loss_total
+            metrics['d_loss'] = d_loss
+            return GANTrainStates(generator=new_gen_state, discriminator=new_disc_state), metrics
         @partial(jax.jit, static_argnames=('apply_fn',))
-        def eval_step_fn(params, apply_fn, batch):
-            out = apply_fn({'params': params}, batch)
-            recon_loss = jnp.mean(jnp.abs(out['reconstructed_path_params'] - batch))
-            vq_loss = out['vq_loss']
-            total_loss = recon_loss + vq_loss
-            return total_loss.astype(jnp.float32), recon_loss.astype(jnp.float32), vq_loss.astype(jnp.float32)
+        def eval_step(gen_params, apply_fn, batch, key):
+            out = apply_fn({'params': gen_params}, batch)
+            l1_loss = jnp.mean(jnp.abs(out['reconstructed_path_params']-batch))
+            perceptual_losses = self.perceptual_loss_fn(out['reconstructed_path_params'], batch, key)
+            # A good validation loss combines a raw pixel metric with a structural one.
+            return (l1_loss + perceptual_losses['ssim'] + perceptual_losses['edge']).astype(jnp.float32)
 
-        console.print("[bold yellow]🚀 JIT compiling (first run)...[/bold yellow]")
-        dummy_batch = jnp.asarray(train_data[:self.args.batch_size], dtype=self.dtype)
-        state, _, _, _ = train_step_fn(state, self.model.apply, dummy_batch)
-        eval_step_fn(state.params, self.model.apply, dummy_batch); console.print("[green]✅ Compilation complete.[/green]")
+        @partial(jax.jit, static_argnames=('gen_apply_fn',))
+        def generate_preview(gen_params, gen_apply_fn, p1_params, preview_latents_batch):
+            recon_path_params = gen_apply_fn({'params': gen_params}, preview_latents_batch)['reconstructed_path_params']
+            return render_image(p1_params, recon_path_params)
         
-        # --- [CLEANUP] UI now displays the full breakdown ---
-        progress = Progress(
-            TextColumn("[bold blue]Training..."), BarColumn(), "[p.p.]{task.percentage:>3.0f}%", "•",
-            TextColumn("Loss(R/VQ): {task.fields[loss]:.3f} ({task.fields[recon]:.3f}/{task.fields[vq]:.3f})"), "•",
-            TextColumn("Val(R/VQ): {task.fields[val_loss]:.3f} ({task.fields[val_recon]:.3f}/{task.fields[val_vq]:.3f})"), "•",
-            TextColumn("[bold green]Best: {task.fields[best_val_loss]:.4f}[/]"),
-            TimeElapsedColumn()
+        def _update_preview_task(gen_params, gen_apply_fn, p1_params, preview_latents_batch):
+            recon_batch = generate_preview(gen_params, gen_apply_fn, p1_params, preview_latents_batch)
+            recon_batch.block_until_ready()
+            recon_np = np.array(((recon_batch[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
+            
+            with self.ui_lock:
+                self.current_recon_np = recon_np
+                if Pixels:
+                    self.rendered_recon_preview = Align.center(Pixels.from_image(Image.fromarray(self.current_recon_np)))
+
+        console.print("[bold yellow]🚀 JIT compiling GAN training step...[/bold yellow]")
+        dummy_batch = jnp.asarray(train_data[:self.args.batch_size], dtype=self.dtype); compile_key, self.train_key = jax.random.split(self.train_key)
+        
+        # JIT compile with the full lambda tuple
+        dummy_lambda_dict = self.lambda_controller(last_metrics)
+        dummy_lambdas = (
+            dummy_lambda_dict['l1'], dummy_lambda_dict['vq'], dummy_lambda_dict['adv'], 0.2,
+            dummy_lambda_dict['moment'], dummy_lambda_dict['fft'], dummy_lambda_dict['autocorr'],
+            dummy_lambda_dict['edge'], dummy_lambda_dict['color_cov'], dummy_lambda_dict['ssim']
         )
-        task_id = progress.add_task(
-            "train", total=self.args.steps, completed=start_step,
-            loss=0, recon=0, vq=0,
-            val_loss=0, val_recon=0, val_vq=0,
-            best_val_loss=best_val_loss
-        )
+        states, _ = train_step(states, dummy_batch, compile_key, dummy_lambdas, self.generator_model.apply, self.discriminator_model.apply, d_is_locked_out=False)
+        if len(val_data) > 0:
+            compile_key, self.train_key = jax.random.split(self.train_key)
+            eval_step(states.generator.params, self.generator_model.apply, jnp.asarray(val_data[:self.args.batch_size], dtype=self.dtype), compile_key)
+        generate_preview(states.generator.params, self.generator_model.apply, self.p1_params, self.preview_latents[:1])
+        console.print("[green]✅ Compilation complete.[/green]")
+
+        self.progress = Progress(TextColumn("[bold]Epoch {task.completed}/{task.total} [green]Best Val: {task.fields[val_loss]:.2e}[/]"), BarColumn(), "•", TextColumn("Step {task.fields[step]}/{task.fields[steps_per_epoch]}"), "•", TimeRemainingColumn(), TextColumn("Ctrl+C to Exit"))
+        epoch_task = self.progress.add_task("epochs", total=self.args.epochs, completed=start_epoch, val_loss=best_val_loss, step=0, steps_per_epoch=steps_per_epoch)
         
-        rng = np.random.default_rng(self.args.seed); train_indices_shuffler = np.arange(len(train_data)); current_idx = 0
-        EVAL_EVERY_N_STEPS = 500; SAVE_EVERY_N_STEPS = 2000
-        
-        current_step = start_step
+        rng = np.random.default_rng(self.args.seed); train_indices_shuffler = np.arange(len(train_data))
+        last_ui_update_time = 0.0; UI_UPDATE_INTERVAL_SECS = 0.25
+
         try:
-            with Live(progress, console=console, screen=False, vertical_overflow="visible") as live:
-                for step in range(start_step, self.args.steps):
-                    current_step = step
+            with Live(self._generate_layout(), screen=True, redirect_stderr=False, vertical_overflow="visible") as live:
+                for epoch in range(start_epoch, self.args.epochs):
                     if self.should_shutdown: break
-
-                    if current_idx + self.args.batch_size > len(train_data):
-                        rng.shuffle(train_indices_shuffler); current_idx = 0
-                    
-                    batch_indices = train_indices_shuffler[current_idx : current_idx + self.args.batch_size]
-                    train_batch = jnp.asarray(train_data[batch_indices], dtype=self.dtype); current_idx += self.args.batch_size
-
-                    if self.q_controller:
-                        lr = self.q_controller.choose_action(); state.opt_state[-1].hyperparams['learning_rate'] = jnp.asarray(lr)
-                    
-                    state, l, rl, vql = train_step_fn(state, self.model.apply, train_batch)
-                    
-                    loss_val, recon_val, vq_val = l.item(), rl.item(), vql.item()
-                    if self.q_controller: self.q_controller.update_q_value(loss_val)
-
-                    # Get previous validation values to keep them stable between eval runs
-                    p_fields = progress.tasks[task_id].fields
-                    val_l, val_rl, val_vql = p_fields['val_loss'], p_fields['val_recon'], p_fields['val_vq']
-
-                    if (step + 1) % EVAL_EVERY_N_STEPS == 0:
-                        val_metrics = [eval_step_fn(state.params, self.model.apply, jnp.asarray(val_data[i:i+self.args.batch_size], dtype=self.dtype)) for i in range(0, len(val_data), self.args.batch_size) if i < len(val_data)]
-                        if val_metrics:
-                            val_l_cpu, val_rl_cpu, val_vql_cpu = zip(*[(m[0].item(), m[1].item(), m[2].item()) for m in val_metrics])
-                            val_l, val_rl, val_vql = np.mean(val_l_cpu), np.mean(val_rl_cpu), np.mean(val_vql_cpu)
+                    rng.shuffle(train_indices_shuffler)
+                    for step_in_epoch in range(steps_per_epoch):
+                        if self.should_shutdown: break
                         
-                        if val_l < best_val_loss:
-                            best_val_loss = val_l
-                            console.print(f"[bold magenta]🏆 New best val loss: {best_val_loss:.4f} @ step {step+1}. Saving...[/bold magenta]")
-                            with open(ckpt_path_best, 'wb') as f: pickle.dump({'params': state.params, 'val_loss': best_val_loss, 'step': step+1}, f)
+                        start_idx = step_in_epoch * self.args.batch_size; end_idx = start_idx + self.args.batch_size
+                        if start_idx >= len(train_indices_shuffler): continue
+                        batch_indices = train_indices_shuffler[start_idx:end_idx]; train_batch = jnp.asarray(train_data[batch_indices], dtype=self.dtype)
+                        
+                        # --- [SYSTEMS RETROFIT 5] Create the full lambda tuple ---
+                        perc_boost = self.get_geometric_boosts(train_batch)
+                        lambda_dict = self.lambda_controller(last_metrics)
+                        
+                        # Apply geometric boost to all perceptual terms
+                        for k in self.lambda_controller.targets.keys():
+                            if k not in ['l1', 'vq', 'adv']:
+                                lambda_dict[k] *= perc_boost
+                        
+                        self.current_lambdas_for_ui = lambda_dict
+                        
+                        lambda_stink = 0.2
+                        # The order here MUST match the unpacking order in train_step
+                        current_lambdas = (
+                            lambda_dict['l1'], lambda_dict['vq'], lambda_dict['adv'], lambda_stink,
+                            lambda_dict['moment'], lambda_dict['fft'], lambda_dict['autocorr'],
+                            lambda_dict['edge'], lambda_dict['color_cov'], lambda_dict['ssim']
+                        )
+                        
+                        base_lr = self.args.lr
+                        if self.q_controller: base_lr = self.q_controller.choose_action()
 
-                    progress.update(task_id, advance=1, loss=loss_val, recon=recon_val, vq=vq_val,
-                                    val_loss=val_l, val_recon=val_rl, val_vq=val_vql,
-                                    best_val_loss=best_val_loss)
+                        self.d_loss_ema = (1 - self.d_loss_ema_alpha) * self.d_loss_ema + self.d_loss_ema_alpha * last_metrics.get('d_loss', 0.5)
+
+                        d_is_locked_out = False
+                        if self.d_lockout_steps > 0: self.d_lockout_steps -= 1; d_is_locked_out = True
+                        elif self.d_loss_ema < self.d_lockout_threshold: self.d_lockout_steps = self.d_lockout_duration; d_is_locked_out = True
+                        
+                        self.g_lr_multiplier = 1.0; self.d_lr_multiplier = 1.0
+                        if not d_is_locked_out:
+                            if self.d_loss_ema < self.d_loss_target_min: self.d_lr_multiplier = 0.5; self.g_lr_multiplier = 1.5
+                            elif self.d_loss_ema > self.d_loss_target_max: self.d_lr_multiplier = 1.5; self.g_lr_multiplier = 0.5
+                        
+                        states.generator.opt_state.hyperparams['learning_rate'] = base_lr * self.g_lr_multiplier
+                        states.discriminator.opt_state.hyperparams['learning_rate'] = (base_lr * 0.8) * self.d_lr_multiplier
+                        
+                        step_key, self.train_key = jax.random.split(self.train_key)
+                        
+                        states, metrics = train_step(states, train_batch, step_key, current_lambdas, self.generator_model.apply, self.discriminator_model.apply, d_is_locked_out=d_is_locked_out)
+                        metrics_cpu = {k: v.item() for k, v in metrics.items()}
+                        last_metrics = metrics_cpu; self.last_metrics_for_ui = metrics_cpu
+
+                        with self.ui_lock:
+                            self.g_loss_hist.append(metrics_cpu['g_loss']); self.d_loss_hist.append(metrics_cpu['d_loss'])
+                            self.l1_hist.append(metrics_cpu['l1']); self.ssim_hist.append(metrics_cpu.get('ssim',0.0))
+                            self.vq_hist.append(metrics_cpu['vq']); self.varent_hist.append(metrics_cpu['varentropy'])
+                        
+                        if self.q_controller: self.q_controller.update_q_value(metrics_cpu['g_loss'])
+                        
+                        global_step += 1
+                        self.progress.update(epoch_task, step=step_in_epoch + 1)
+                        
+                        if global_step % self.args.eval_every == 0:
+                            if not (active_preview_future and not active_preview_future.done()):
+                                host_gen_params = jax.device_get(states.generator.params)
+                                active_preview_future = background_executor.submit(_update_preview_task, host_gen_params, self.generator_model.apply, self.p1_params, self.preview_latents)
+                            
+                            if len(val_data) > 0:
+                                eval_key, self.train_key = jax.random.split(self.train_key)
+                                eval_keys = jax.random.split(eval_key, (len(val_data) // self.args.batch_size) + 1)
+                                val_losses = [eval_step(states.generator.params, self.generator_model.apply, jnp.asarray(val_data[i:i+self.args.batch_size], dtype=self.dtype), eval_keys[j]) for j, i in enumerate(range(0, len(val_data), self.args.batch_size))]
+                                val_loss = np.mean([v.item() for v in val_losses]) if val_losses else float('inf')
+                                if val_loss < best_val_loss:
+                                    best_val_loss = val_loss
+                                    console.print(f"\n[bold magenta]🏆 New best val loss: {best_val_loss:.2e} @ step {global_step}. Saving...[/bold magenta]")
+                                    with open(ckpt_path_best, 'wb') as f: pickle.dump({'params': states.generator.params, 'val_loss': best_val_loss, 'epoch': epoch, 'global_step': global_step}, f)
+                                self.progress.update(epoch_task, val_loss=best_val_loss)
+
+                        current_time = time.time()
+                        if current_time - last_ui_update_time > UI_UPDATE_INTERVAL_SECS:
+                            live.update(self._generate_layout()); last_ui_update_time = current_time
+
+                    self.progress.update(epoch_task, advance=1)
                     
-                    if (step + 1) % SAVE_EVERY_N_STEPS == 0:
-                        data_to_save = {'params': state.params, 'opt_state': state.opt_state, 'step': step + 1, 'q_controller_state': self.q_controller.state_dict() if self.q_controller else None}
-                        with open(ckpt_path_final, 'wb') as f: pickle.dump(data_to_save, f)
+                    host_state_to_save = jax.device_get(states)
+                    q_state_to_save = self.q_controller.state_dict() if self.q_controller else None
+                    pid_state_to_save = self.lambda_controller.state_dict()
+                    data_to_save = {'gen_params': host_state_to_save.generator.params, 
+                                    'gen_opt_state': host_state_to_save.generator.opt_state, 
+                                    'disc_params': host_state_to_save.discriminator.params, 
+                                    'disc_opt_state': host_state_to_save.discriminator.opt_state, 
+                                    'epoch': epoch, 'global_step': global_step, 
+                                    'q_controller_state': q_state_to_save, 
+                                    'last_metrics': last_metrics, 
+                                    'pid_controller_state': pid_state_to_save}
+                    with open(ckpt_path, 'wb') as f: pickle.dump(data_to_save, f)
         finally:
-            console.print(f"\n[yellow]--- Training loop exited at step {current_step + 1}. Saving final state... ---[/yellow]")
-            final_data_to_save = {'params': state.params, 'opt_state': state.opt_state, 'step': current_step + 1, 'q_controller_state': self.q_controller.state_dict() if self.q_controller else None}
-            with open(ckpt_path_final, 'wb') as f: pickle.dump(final_data_to_save, f)
-            console.print(f"✅ Final resume-state saved to [green]{ckpt_path_final}[/green]")
+            console.print(f"\n[yellow]--- Training loop exited. Waiting for background tasks to finish... ---[/yellow]")
+            background_executor.shutdown(wait=True)
+            final_epoch_count = self.args.epochs if 'epoch' not in locals() else epoch
+            console.print(f"\n[yellow]--- Training session finished at epoch {final_epoch_count+1}. Saving final state... ---[/yellow]")
+            
+            if 'states' in locals():
+                host_state_final = jax.device_get(states)
+                q_state_to_save = self.q_controller.state_dict() if self.q_controller else None
+                pid_state_to_save = self.lambda_controller.state_dict()
+                final_data = {'gen_params': host_state_final.generator.params,
+                              'gen_opt_state': host_state_final.generator.opt_state,
+                              'disc_params': host_state_final.discriminator.params,
+                              'disc_opt_state': host_state_final.discriminator.opt_state,
+                              'epoch': final_epoch_count, 'global_step': global_step,
+                              'q_controller_state': q_state_to_save,
+                              'last_metrics': last_metrics,
+                              'pid_controller_state': pid_state_to_save}
+                with open(ckpt_path, 'wb') as f: pickle.dump(final_data, f)
+                console.print(f"✅ Final resume-state saved to [green]{ckpt_path}[/green]")
+
             config = {'num_codes': self.args.num_codes, 'code_dim': self.args.code_dim, 'latent_grid_size': self.args.latent_grid_size}
-            config_path = Path(f"tokenizer_{self.args.basename}_{self.args.num_codes}c_config.pkl")
+            config_path = Path(str(ckpt_path).replace("_final.pkl", "_config.pkl"))
             with open(config_path, 'wb') as f: pickle.dump(config, f)
             console.print(f"✅ Config saved to [green]{config_path}[/green]")
-            if ckpt_path_best.exists(): console.print(f"👑 Best model (by validation) remains at [bold magenta]{ckpt_path_best}[/bold magenta]")          
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-          
+            if ckpt_path_best.exists(): console.print(f"👑 Best model (by validation) remains at [bold magenta]{ckpt_path_best}[/bold magenta]")
+
+
+
+
+
+
+
 
 
 
@@ -1251,165 +1923,159 @@ class ConductorTrainer(AdvancedTrainer):
         
         console = Console()
 
-        # --- DSlider and VRAM Saver Config ---
         self.ds_config = DEFAULT_DS_CONFIG()
-        if args.vram_saver_mode:
-            console.print("--- [bold yellow]VRAM Saver Mode ENABLED[/bold yellow]. Using lower-resolution previews. ---")
-            self.preview_resolution = 96
-        else:
-            self.preview_resolution = 128
+        self.preview_resolution = 96 if args.vram_saver_mode else 128
 
-        tok_path_best = Path(f"tokenizer_{args.basename}_{args.num_codes}c_best.pkl")
-        tok_path_final = Path(f"tokenizer_{args.basename}_{args.num_codes}c_final.pkl")
-        tok_config_path = Path(f"tokenizer_{args.basename}_{args.num_codes}c_config.pkl")
+        tok_config_path = Path(f"tokenizer_{args.basename}_{args.num_codes}c_gan_config.pkl")
+        if not tok_config_path.exists(): sys.exit(f"[FATAL] VQ-GAN tokenizer config not found: {tok_config_path}. Run the new 'train-tokenizer' first.")
+        
+        tok_path_best = Path(str(tok_config_path).replace("_config.pkl", "_best.pkl"))
+        tok_path_final = Path(str(tok_config_path).replace("_config.pkl", "_final.pkl"))
 
         if tok_path_best.exists():
-            console.print(f"--- Loading BEST tokenizer from [green]{tok_path_best}[/green] ---")
+            console.print(f"--- Loading BEST VQ-GAN tokenizer from [green]{tok_path_best}[/green] ---")
             with open(tok_path_best,'rb') as f: self.tok_params = pickle.load(f)['params']
         elif tok_path_final.exists():
-            console.print(f"--- Loading FINAL tokenizer from [yellow]{tok_path_final}[/yellow] ---")
-            with open(tok_path_final,'rb') as f: self.tok_params = pickle.load(f)['params']
-        else: sys.exit(f"[FATAL] No tokenizer model found. Train tokenizer first.")
+            console.print(f"--- Loading FINAL VQ-GAN tokenizer from [yellow]{tok_path_final}[/yellow] ---")
+            with open(tok_path_final,'rb') as f: self.tok_params = pickle.load(f)['gen_params']
+        else: sys.exit(f"[FATAL] No VQ-GAN tokenizer model found. Train tokenizer first.")
         
-        if not tok_config_path.exists(): sys.exit(f"[FATAL] Tokenizer config not found: {tok_config_path}")
         with open(tok_config_path, 'rb') as f: self.tok_config = pickle.load(f)
-
+        
         try:
-            p1_paths = list(Path('.').glob(f"{args.basename}_*d_512.pkl"))
-            if not p1_paths: raise StopIteration
-            if len(p1_paths) > 1:
-                console.print(f"[bold red]FATAL: Ambiguous Phase 1 model. Found multiple matches for '{args.basename}_*d_512.pkl':[/]")
-                for p in p1_paths: console.print(f"- {p}")
-                sys.exit(1)
-            p1_path = p1_paths[0]
-            p1_d_model_str = p1_path.stem.split('_')[-2]
-            p1_d_model = int(p1_d_model_str.replace('d', ''))
+            p1_path = next(Path('.').glob(f"{args.basename}_*d_512.pkl"))
+            p1_d_model = int(p1_path.stem.split('_')[-2].replace('d', ''))
+        except (StopIteration, ValueError):
+            sys.exit(f"[FATAL] Could not find or parse a unique Phase 1 model file matching: '{args.basename}_*d_512.pkl'")
 
-        except (StopIteration, IndexError, ValueError):
-            sys.exit(f"[FATAL] Could not find or parse a unique Phase 1 model file matching the pattern: '{args.basename}_*d_512.pkl'")
-
-        console.print(f"--- Discovered and loading Phase 1 AE from: [green]{p1_path}[/green] (d_model={p1_d_model}) ---")
+        console.print(f"--- Loading Phase 1 AE from: [green]{p1_path}[/green] (d_model={p1_d_model}) ---")
         self.p1_model = TopologicalCoordinateGenerator(p1_d_model, self.tok_config['latent_grid_size'], 512, self.dtype)
         with open(p1_path, 'rb') as f: self.p1_params = pickle.load(f)['params']
 
-        self.tokenizer = LatentTokenizerVQ(**self.tok_config, dtype=self.dtype)
+        self.tokenizer = LatentTokenizerVQGAN(**self.tok_config, dtype=self.dtype)
         self.token_map_size = (self.tok_config['latent_grid_size'] // 4) ** 2
-        self.model = GenerativeConductor(args.num_codes, self.token_map_size + 1, args.d_model_cond, args.num_heads, args.num_layers, 512, self.dtype)
+        self.model = GenerativeConductor(
+            num_codes=args.num_codes + 1,
+            num_positions=self.token_map_size + 1, 
+            d_model=args.d_model_cond, 
+            num_heads=args.num_heads, 
+            num_layers=args.num_layers, 
+            clip_dim=512, 
+            dtype=self.dtype
+        )
         
         self.interactive_state = InteractivityState()
-        self.loss_history = deque(maxlen=200)
-        self.sentinel_dampen_history = deque(maxlen=200)
+        self.loss_history = deque(maxlen=200); self.sentinel_dampen_history = deque(maxlen=200)
         self.spinner_chars = ["🧠", "⚡", "💾", "📈", "🧠", "⚡", "💽", "📉"]
-        self.spinner_idx = 0; self.param_count = 0; self.steps_per_sec = 0.0
+        self.spinner_idx, self.param_count, self.steps_per_sec = 0, 0, 0.0
         self.ui_lock = threading.Lock()
         
         self.clip_model, _ = clip.load("ViT-B/32", device=_clip_device)
-        
         self.validation_prompts = [
-            "A photorealistic portrait of an ancient warrior queen",
-            "A cute Corgi puppy playing in a field of flowers, impressionist painting",
-            "A stunning sports car racing through a neon-lit city at night, synthwave",
-            "A serene Japanese zen garden with a cherry blossom tree, watercolor",
+            "red cup",
+            "orange cat",
+            "blue ball",
+            "green grass with tree",
+            "purple car",
         ]
-        self.current_preview_prompt_idx = 0
-        self.current_preview_image_np = None
+        self.current_preview_prompt_idx = 0; self.current_preview_image_np = None
+
 
     def _generate_layout(self) -> Layout:
         with self.ui_lock:
             console = Console()
-            width = console.width
-            LAYOUT_BREAKPOINT = 120
-
+            
+            # --- Header ---
             self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
             spinner = self.spinner_chars[self.spinner_idx]
             precision_str = "[bold purple]BF16[/]" if self.dtype == jnp.bfloat16 else "[dim]FP32[/]"
             header_text = f"{spinner} [bold]Generative Conductor[/] | Params: [yellow]{self.param_count/1e6:.2f}M[/] | Precision: {precision_str}"
             header_panel = Panel(Align.center(header_text), style="bold magenta", title="[dim]wubumind.ai[/dim]", title_align="right")
 
+            # --- Left Column (Fixed Height Components) ---
             stats_tbl = Table.grid(expand=True, padding=(0,1)); stats_tbl.add_column(style="dim",width=15); stats_tbl.add_column(justify="right")
             loss_val=self.loss_history[-1] if self.loss_history else 0; loss_emoji, color = ("👌","green") if loss_val < 2.5 else (("👍","yellow") if loss_val < 4.0 else ("😟","red"))
             stats_tbl.add_row("X-Entropy Loss", f"[{color}]{loss_val:.4f}[/] {loss_emoji}"); stats_tbl.add_row("Steps/sec", f"[blue]{self.steps_per_sec:.2f}[/] 🏃💨")
             mem, util = self._get_gpu_stats(); stats_tbl.add_row("GPU Mem", f"[yellow]{mem}[/]"); stats_tbl.add_row("GPU Util", f"[yellow]{util}[/]")
-            stats_panel = Panel(stats_tbl, title="[bold]📊 Core Stats[/]", border_style="blue", height=5)
-
-            q_table = Table.grid(expand=True, padding=(0,1)); q_table.add_column("Ctrl", style="bold cyan", width=6); q_table.add_column("Metric", style="dim", width=10); q_table.add_column("Value", justify="left")
+            stats_panel = Panel(stats_tbl, title="[bold]📊 Core Stats[/]", border_style="blue")
+            
+            q_panel = Panel(Align.center("[dim]Q-Ctrl Off[/dim]"), title="[bold]🤖 Q-Controller[/]", border_style="dim")
             if self.q_controller:
-                status_full = self.q_controller.status
-                status_short = status_full.split(' ')[0] # Extract main status word for tidiness
+                q_table = Table.grid(expand=True, padding=(0,1)); q_table.add_column("Ctrl", style="bold cyan", width=6); q_table.add_column("Metric", style="dim", width=10); q_table.add_column("Value", justify="left")
+                status_full = self.q_controller.status; status_short = status_full.split(' ')[0]
                 status_emoji, color = ("😎","green") if "IMPROVING" in status_short else (("🤔","yellow") if "STAGNATED" in status_short else (("😠","red") if "REGRESSING" in status_short else (("🐣","blue") if "WARMUP" in status_short else ("🤖","dim"))))
                 q_table.add_row("🧠 LR", "Status", f"[{color}]{status_short}[/] {status_emoji}"); q_table.add_row("", "Reward", f"{self.q_controller.last_reward:+.2f}")
-                q_panel = Panel(q_table, title="[bold]🤖 Q-Controller[/]", border_style="green", height=4)
-            else: q_panel = Panel(Align.center("[dim]Q-Ctrl Off[/dim]"), title="[bold]🤖 Q-Controller[/]", border_style="dim", height=4)
+                q_panel = Panel(q_table, title="[bold]🤖 Q-Controller[/]", border_style="green")
 
-            sentinel_panel_widget = None
+            # [GUI FIX] Integrate footer text cleanly into the left column
+            footer_text = Text("←/→: Change Preview | ↑/↓: Adjust Sentinel | Ctrl+C to Exit", style="dim", justify="center")
+            
+            left_column_panels = [stats_panel, q_panel]
             if self.args.use_sentinel:
-                sentinel_layout = Layout()
-                # --- FIX: Corrected attribute name ---
-                log_factor = self.interactive_state.sentinel_dampening_log_factor
+                sentinel_layout = Layout(); log_factor = self.interactive_state.sentinel_dampening_log_factor
                 lever_panel = Panel(get_sentinel_lever_ascii(log_factor), title="Dampen 🚀", title_align="left")
-                status_str_padded = f"{getattr(self, 'sentinel_pct', 0.0): >7.2%}"
-                status_str = f"Dampened: {status_str_padded}"
-                status_panel = Panel(Align.center(Text(status_str)), title="Status 🚦", height=4)
-                sentinel_layout.split_row(Layout(lever_panel), Layout(status_panel))
-                sentinel_panel_widget = Panel(sentinel_layout, title="[bold]🕹️ Sentinel Interactive[/]", border_style="yellow", height=11)
+                status_str_padded = f"{getattr(self, 'sentinel_pct', 0.0): >7.2%}"; status_str = f"Dampened: {status_str_padded}"
+                status_panel = Panel(Align.center(Text(status_str)), title="Status 🚦", height=4); sentinel_layout.split_row(Layout(lever_panel), Layout(status_panel))
+                sentinel_panel = Panel(sentinel_layout, title="[bold]🕹️ Sentinel Interactive[/]", border_style="yellow")
+                left_column_panels.append(sentinel_panel)
 
-            spark_w = max(10, (width // 2 if width >= LAYOUT_BREAKPOINT else width) - 10)
+            left_column = Layout(Group(*left_column_panels, Panel(footer_text)))
+
+            # --- Right Column (Trends + Preview) ---
+            right_column_layout = Layout(name="right_col")
+            
+            # Define a fixed height for the trend graphs
+            trends_height = 5 if not self.args.use_sentinel else 8
+
+            spark_w = max(10, console.width - 45) # Flexible width
             loss_spark = Panel(Align.center(f"[cyan]{self._get_sparkline(self.loss_history, spark_w)}[/]"), title="Loss Trend", height=3, border_style="cyan")
             graph_panels = [loss_spark]
             if self.args.use_sentinel:
                 sentinel_spark = Panel(Align.center(f"[magenta]{self._get_sparkline(self.sentinel_dampen_history, spark_w)}[/]"), title="Sentinel Dampening %", height=3, border_style="magenta")
                 graph_panels.append(sentinel_spark)
-            trends_group = Panel(Group(*graph_panels), title="[bold]📉 Trends[/]")
+            trends_panel = Panel(Group(*graph_panels), title="[bold]📉 Trends[/]", height=trends_height)
 
-            left_col_width = 50
-            if width < LAYOUT_BREAKPOINT:
-                available_width = width - 4
-            else:
-                available_width = width - left_col_width - 4
-            max_preview_width = 90
-            term_width = max(20, min(available_width, max_preview_width))
-            term_height = int(term_width * 1.0 * 0.5)
-
-            preview_renderable = None
-            if self.current_preview_image_np is not None:
-                if Pixels is None:
-                    preview_renderable = Align.center(Text("Install `rich-pixels` for previews", style="yellow"))
-                else:
-                    pil_img = Image.fromarray(self.current_preview_image_np).resize((term_width, term_height), Image.Resampling.LANCZOS)
-                    preview_renderable = Pixels.from_image(pil_img)
-            else:
-                waiting_text = Align.center("...Waiting for first validation step...")
-                # --- [THE DEFINITIVE FIX] ---
-                # Changed the incorrect keyword `minimum_height` to the correct `minimum_size`.
-                # This reserves vertical space and PREVENTS the GUI from "jumping".
-                preview_renderable = Layout(waiting_text, minimum_size=term_height)
-
+            # --- Preview Panel (The Star of the Show) ---
             current_prompt = self.validation_prompts[self.current_preview_prompt_idx]
-            prompt_text = Text(f"Prompt #{self.current_preview_prompt_idx+1}: \"{current_prompt}\"", justify="center")
-            preview_panel = Panel(Group(prompt_text, Align.center(preview_renderable)), title="[bold]🖼️ Live Generation Preview[/]", border_style="green")
+            prompt_text = Text(f"Prompt #{self.current_preview_prompt_idx+1}: \"{current_prompt}\"", justify="center", no_wrap=False, overflow="fold")
+            
+            preview_content = Align.center("...Waiting for first validation step...")
+            if self.current_preview_image_np is not None:
+                # [GUI FIX] Let Pixels render inside an Align.center directly. This is the most robust way.
+                if Pixels:
+                    preview_content = Align.center(Pixels.from_image(Image.fromarray(self.current_preview_image_np)))
+                else:
+                    preview_content = Align.center(Text("Install `rich-pixels`", style="yellow"))
 
-            layout = Layout(name="root")
-            layout.split(
-                Layout(header_panel, name="header", size=3),
-                Layout(name="main"),
-                self.progress,
-                Layout(Align.center(Text("←/→: Change Preview | ↑/↓: Adjust Sentinel  |  Ctrl+C to Exit", style="dim")), name="footer", size=1)
+            # The preview panel is now a simple group of the prompt and the content.
+            preview_group = Group(prompt_text, preview_content)
+            preview_panel = Panel(preview_group, title="[bold]🖼️ Live Generation Preview[/]", border_style="green")
+            
+            # [GUI FIX] Explicitly split the right column. Trends get a fixed size, Preview gets the rest.
+            right_column_layout.split_column(
+                Layout(trends_panel, size=trends_height),
+                Layout(preview_panel, ratio=1, name="preview_area")
             )
 
-            left_column_panels = [stats_panel, q_panel]
-            if sentinel_panel_widget: left_column_panels.append(sentinel_panel_widget)
-            
-            if width < LAYOUT_BREAKPOINT:
-                layout["main"].split(Group(*left_column_panels), trends_group, preview_panel)
-            else:
-                left_column_panels.append(trends_group)
-                layout["main"].split_row(
-                    Layout(Group(*left_column_panels), name="left", size=left_col_width),
-                    Layout(preview_panel, name="right", ratio=1)
-                )
-
+            # --- Final Layout Assembly ---
+            layout = Layout(name="root")
+            # The footer is gone from the main split.
+            layout.split(
+                Layout(header_panel, name="header", size=3),
+                Layout(name="main", ratio=1),
+                Layout(self.progress, name="progress", size=3)
+            )
+            layout["main"].split_row(Layout(left_column, name="left", size=42), right_column_layout)
             return layout
-            
+
+
+
+
+
+
+
+
+
     def train(self):
         console = Console()
         key_listener_thread = threading.Thread(target=listen_for_keys, args=(self.interactive_state,), daemon=True); key_listener_thread.start()
@@ -1476,22 +2142,45 @@ class ConductorTrainer(AdvancedTrainer):
         
         console.print("--- 🧠 STEP 3: JIT Compiling training and validation kernels (one-time cost)... ---")
         
-        @partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(4,))
-        def train_step_fn(state, batch, dropout_key, damp_factor, num_codes, lr):
-            opt_state_list = list(state.opt_state); hp_state = opt_state_list[-1]; new_hp_state = hp_state._replace(hyperparams={'learning_rate': lr}); opt_state_list[-1] = new_hp_state; state = state.replace(opt_state=tuple(opt_state_list))
-            tokens_flat, embeddings = batch; input_tokens = jnp.concatenate([jnp.full((tokens_flat.shape[0], 1), num_codes), tokens_flat], axis=1)[:, :-1]
+        
+# In ConductorTrainer.train()
+
+        @partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(5,))
+        def train_step_fn(state, batch, dropout_key, lr, damp_factor, num_codes):
+            tokens_flat, embeddings = batch
+            input_tokens = jnp.concatenate([jnp.full((tokens_flat.shape[0], 1), num_codes), tokens_flat], axis=1)[:, :-1]
+            
             def loss_fn(p):
+                # [UPDATE] Pass the dropout RNG stream to the model's apply_fn
                 logits = state.apply_fn({'params': p}, input_tokens, embeddings, train=True, rngs={'dropout': dropout_key})
-                return optax.softmax_cross_entropy_with_integer_labels(logits, tokens_flat).mean().astype(jnp.float32)
-            loss, grads = jax.value_and_grad(loss_fn)(state.params)
-            grads = jax.lax.pmean(grads, 'batch'); loss = jax.lax.pmean(loss, 'batch')
-            new_state = state.apply_gradients(grads=grads, dampening_factor=damp_factor)
+                
+                ce_loss = optax.softmax_cross_entropy_with_integer_labels(logits, tokens_flat).mean()
+
+                logits_flat = logits.reshape(-1, logits.shape[-1])
+                log_probs = jax.nn.log_softmax(logits_flat, axis=-1)
+                _, varent = ent_varent(log_probs)
+                varentropy_loss = varent.mean()
+                
+                lambda_varentropy = 0.01 
+                total_loss = ce_loss + (lambda_varentropy * varentropy_loss)
+                
+                return total_loss.astype(jnp.float32), total_loss.astype(jnp.float32)
+
+            (loss, loss_for_reporting), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+            
+            grads = jax.lax.pmean(grads, 'batch')
+            loss_reported = jax.lax.pmean(loss_for_reporting, 'batch')
+            
+            new_state = state.apply_gradients(grads=grads, dampening_factor=damp_factor, learning_rate=lr)
+            
             sentinel_dampened_pct = 0.0
             if self.args.use_sentinel:
-                sentinel_state = new_state.opt_state[1]
-                if isinstance(sentinel_state, SentinelState): sentinel_dampened_pct = sentinel_state.dampened_pct
-            return new_state, loss, sentinel_dampened_pct
-
+                if len(new_state.opt_state) > 1 and isinstance(new_state.opt_state[1], SentinelState):
+                    sentinel_state = new_state.opt_state[1]
+                    sentinel_dampened_pct = sentinel_state.dampened_pct
+            
+            return new_state, loss_reported, sentinel_dampened_pct
+            
         @partial(jax.jit, static_argnames=('apply_fn', 'num_codes'))
         def run_validation_batch(params, val_tokens_batch, val_embeddings_batch, apply_fn, num_codes):
             input_tokens = jnp.concatenate([jnp.full((val_tokens_batch.shape[0], 1), num_codes), val_tokens_batch], axis=1)[:, :-1]
@@ -1501,7 +2190,7 @@ class ConductorTrainer(AdvancedTrainer):
         @partial(jax.jit, static_argnames=('tokenizer_apply_fn', 'p1_model_apply_fn', 'resolution', 'num_chunks', 'grid_dim'))
         def _render_from_tokens_jit(tokenizer_apply_fn, tok_params, p1_model_apply_fn, p1_params, full_tokens, resolution, num_chunks, grid_dim):
             token_grid = full_tokens.reshape(full_tokens.shape[0], grid_dim, grid_dim)
-            path_params = tokenizer_apply_fn({'params': tok_params}, token_grid, method=LatentTokenizerVQ.decode)
+            path_params = tokenizer_apply_fn({'params': tok_params}, token_grid, method=LatentTokenizerVQGAN.decode)
             coords = jnp.stack(jnp.meshgrid(jnp.linspace(-1, 1, resolution), jnp.linspace(-1, 1, resolution), indexing='ij'), -1).reshape(-1, 2)
             coord_chunks = jnp.array_split(coords, num_chunks, axis=0)
             def scan_body(carry, chunk):
@@ -1514,172 +2203,109 @@ class ConductorTrainer(AdvancedTrainer):
 
         @partial(jax.jit, static_argnames=('model_apply_fn', 'num_steps', 'bos_token_id'))
         def _dslider_autoregressive_sample_jit(model_apply_fn, variables, initial_ds_state, text_emb, key, ds_config, num_steps, bos_token_id):
-            
             def scan_body(carry, xs_slice):
                 current_vars, last_token, current_ds_state = carry
                 step_index, key_step = xs_slice
-
-                logits, new_mutable_vars = model_apply_fn(
-                    current_vars, last_token, text_emb, train=False, decode=True, index=step_index, mutable=['cache']
-                )
-                
+                logits, new_mutable_vars = model_apply_fn(current_vars, last_token, text_emb, train=False, decode=True, index=step_index, mutable=['cache'])
                 output_vars = {'params': current_vars['params'], 'cache': new_mutable_vars['cache']}
-
-                next_token, new_ds_state = dslider_sampler_step(
-                    key_step, current_ds_state, logits.squeeze(1), ds_config
-                )
-                
+                next_token, new_ds_state = dslider_sampler_step(key_step, current_ds_state, logits.squeeze(1), ds_config)
                 return (output_vars, next_token[:, None], new_ds_state), next_token
-
             initial_token = jnp.full((text_emb.shape[0], 1), bos_token_id, dtype=jnp.int32)
             keys = jax.random.split(key, num_steps)
             initial_carry = (variables, initial_token, initial_ds_state)
             xs = (jnp.arange(num_steps), keys)
-            
             _, generated_tokens_collection = jax.lax.scan(scan_body, initial_carry, xs)
-            
-            # --- [THE DEFINITIVE FIX] ---
-            # The output of scan is (sequence_length, batch_size), e.g., (576, 1).
-            # We must transpose it to (batch_size, sequence_length), e.g., (1, 576).
-            # The previous `.squeeze()` call was incorrectly removing the batch dimension.
-            generated_tokens = generated_tokens_collection.transpose()
-            
-            return generated_tokens
+            return generated_tokens_collection.transpose()
 
         @partial(jax.jit, static_argnames=('num_steps', 'resolution'))
         def _generate_validation_preview(conductor_params, initial_cache, text_emb, key, ds_config, num_steps, resolution):
-            # The initial state contains both params and the empty cache
             variables = {'params': conductor_params, 'cache': initial_cache}
-            
             bos_token = jnp.full((text_emb.shape[0], 1), self.args.num_codes, dtype=jnp.int32)
-            
-            # Run one step to populate the cache for the first token (BOS)
             initial_logits, updated_mutable_state = self.model.apply(variables, bos_token, text_emb, train=False, decode=True, index=0, mutable=['cache'])
-            
             variables_for_scan = {'params': conductor_params, 'cache': updated_mutable_state['cache']}
-            
             initial_ds_state = initialize_state(initial_logits, bsz=text_emb.shape[0], config=ds_config, dtype=self.dtype)
-            
-            # This now receives a correctly shaped (B, L) tensor.
-            final_tokens = _dslider_autoregressive_sample_jit(
-                self.model.apply, variables_for_scan, initial_ds_state, text_emb, 
-                key, ds_config, num_steps, self.args.num_codes
-            )
-            
+            final_tokens = _dslider_autoregressive_sample_jit(self.model.apply, variables_for_scan, initial_ds_state, text_emb, key, ds_config, num_steps, self.args.num_codes)
             grid_dim = self.tok_config['latent_grid_size'] // 4
-            # This call will now succeed because final_tokens has the correct shape.
-            return _render_from_tokens_jit(
-                self.tokenizer.apply, self.tok_params, self.p1_model.apply, self.p1_params, 
-                final_tokens, resolution, 16, grid_dim
-            )
+            return _render_from_tokens_jit(self.tokenizer.apply, self.tok_params, self.p1_model.apply, self.p1_params, final_tokens, resolution, 16, grid_dim)
         
         clean_state_for_compile = jax.device_get(unreplicate(p_state))
-        
-        val_cpu_batches = None
         if len(val_tokens) > 0:
-            val_batch_size = self.args.batch_size * self.num_devices
-            MAX_VAL_SAMPLES = 1024
-            num_val_to_keep = min(len(val_tokens), MAX_VAL_SAMPLES)
-            num_val_to_keep = (num_val_to_keep // val_batch_size) * val_batch_size
-            
-            if num_val_to_keep > 0:
-                val_tokens_cpu, val_embeddings_cpu = val_tokens[:num_val_to_keep], val_embeddings[:num_val_to_keep]
-                val_cpu_batches = list(zip(np.split(val_tokens_cpu, num_val_to_keep // val_batch_size), np.split(val_embeddings_cpu, num_val_to_keep // val_batch_size)))
-                
+            val_batch_size = self.args.batch_size * self.num_devices; MAX_VAL_SAMPLES = 1024
+            num_val_to_keep = min(len(val_tokens), MAX_VAL_SAMPLES); num_val_to_keep = (num_val_to_keep // val_batch_size) * val_batch_size
+            val_cpu_batches = list(zip(np.split(val_tokens[:num_val_to_keep], num_val_to_keep // val_batch_size), np.split(val_embeddings[:num_val_to_keep], num_val_to_keep // val_batch_size))) if num_val_to_keep > 0 else None
+            if val_cpu_batches:
                 dummy_val_batch = jax.device_put(val_cpu_batches[0][0]), jax.device_put(val_cpu_batches[0][1])
                 run_validation_batch(clean_state_for_compile.params, *dummy_val_batch, self.model.apply, self.args.num_codes)
-                
                 with jax.default_device(CPU_DEVICE): initial_cache = get_initial_variables(key)['cache']
-                dummy_text_emb = jnp.zeros((1, 512), dtype=self.dtype)
-                _generate_validation_preview(clean_state_for_compile.params, initial_cache, dummy_text_emb, key, self.ds_config, self.token_map_size, self.preview_resolution)
-                del dummy_val_batch, initial_cache, dummy_text_emb
+                _generate_validation_preview(clean_state_for_compile.params, initial_cache, jnp.zeros((1, 512), dtype=self.dtype), key, self.ds_config, self.token_map_size, self.preview_resolution)
         
-        dummy_batch = next(train_iterator); sharded_batch = shard(dummy_batch)
-        dummy_keys = jax.random.split(key, self.num_devices)
-        train_step_fn(p_state, sharded_batch, dummy_keys, replicate(1.0), self.args.num_codes, replicate(self.args.lr))
-        
-        del clean_state_for_compile, dummy_batch, sharded_batch, dummy_keys
-        
+        dummy_batch = next(train_iterator); sharded_batch = shard(dummy_batch); dummy_keys = jax.random.split(key, self.num_devices)
+        p_state, _, _ = train_step_fn(p_state, sharded_batch, dummy_keys, replicate(jnp.array(self.args.lr)), replicate(jnp.array(1.0)), self.args.num_codes)
         console.print("[green]✅ Compilation complete. Starting training...[/green]")
         
         self.progress = Progress(TextColumn("[bold]Step {task.completed}/{task.total}"), BarColumn(), "[p.p.]{task.percentage:>3.1f}%", "•", TextColumn("Loss: {task.fields[loss]:.4f}"), "•", TextColumn("Val: {task.fields[val_loss]:.4f}"), "•", TextColumn("[bold green]Best: {task.fields[best_val_loss]:.4f}[/]"), TimeRemainingColumn())
-        task_id = self.progress.add_task("train", total=self.args.steps, completed=start_step, loss=0, val_loss=0, best_val_loss=best_val_loss)
-        SAVE_EVERY_N_STEPS = 2000
-        last_step_time = time.time(); current_step = start_step; last_ui_update_time = 0.0; UI_UPDATE_INTERVAL_SECS = 0.25
-        validation_future = None; preview_future = None; val_batch_idx = 0
+        task_id = self.progress.add_task("train", total=self.args.steps, completed=start_step, loss=0, val_loss=best_val_loss, best_val_loss=best_val_loss)
+        SAVE_EVERY_N_STEPS = 2000; last_step_time = time.time(); current_step = start_step; 
         with jax.default_device(CPU_DEVICE): initial_inference_cache = get_initial_variables(key)['cache']
-
+        
+        last_val_loss = best_val_loss
+        
         try:
             with Live(self._generate_layout(), screen=True, redirect_stderr=False, vertical_overflow="visible") as live:
                 for step in range(start_step, self.args.steps):
                     current_step = step
                     if self.should_shutdown or self.interactive_state.shutdown_event.is_set(): break
                     
-                    if validation_future is not None:
-                        val_loss_val = validation_future.item()
-                        self.progress.update(task_id, val_loss=val_loss_val)
-                        if val_loss_val < best_val_loss:
-                            best_val_loss = val_loss_val
-                            if not (active_save_future and not active_save_future.done()):
-                                console.print(f"\n[bold magenta]🏆 New best val loss: {best_val_loss:.4f} @ step {step}. Saving in background...[/bold magenta]")
-                                host_state_unreplicated = jax.device_get(unreplicate(p_state)); data_for_save = {'params': host_state_unreplicated.params, 'val_loss': best_val_loss, 'step': step}
-                                active_save_future = checkpoint_executor.submit(_save_cpu_data_task, data_for_save, ckpt_path_best)
-                        validation_future = None
-
-                    if preview_future is not None:
-                        preview_future.block_until_ready()
-                        with self.ui_lock:
-                            self.current_preview_image_np = np.asarray(preview_future[0])
-                        preview_future = None
-
                     batch = next(train_iterator); sharded_batch = shard(batch)
                     key, train_step_key, preview_key = jax.random.split(key, 3); sharded_keys = jax.random.split(train_step_key, self.num_devices)
+                    
                     lr = self.q_controller.choose_action() if self.q_controller else self.args.lr
                     damp_factor = self.interactive_state.get_sentinel_factor() if self.args.use_sentinel else 1.0
                     
-                    p_state, p_loss, p_sentinel_pct = train_step_fn(p_state, sharded_batch, sharded_keys, replicate(damp_factor), self.args.num_codes, replicate(lr))
+                    p_lr = replicate(jnp.array(lr)); p_damp = replicate(jnp.array(damp_factor))
                     
-                    loss_val = unreplicate(p_loss).item()
-                    sentinel_val = unreplicate(p_sentinel_pct).item()
-
-                    del batch, sharded_batch, sharded_keys, p_loss, p_sentinel_pct
-
-                    with self.ui_lock: 
-                        self.loss_history.append(loss_val)
-                        if self.args.use_sentinel: self.sentinel_dampen_history.append(sentinel_val); self.sentinel_pct = sentinel_val
+                    p_state, p_loss, p_sentinel_pct = train_step_fn(p_state, sharded_batch, sharded_keys, p_lr, p_damp, self.args.num_codes)
+                    
+                    loss_val = unreplicate(p_loss).item(); sentinel_val = unreplicate(p_sentinel_pct).item()
+                    with self.ui_lock: self.loss_history.append(loss_val)
+                    if self.args.use_sentinel: self.sentinel_dampen_history.append(sentinel_val); self.sentinel_pct = sentinel_val
                     if self.q_controller: self.q_controller.update_q_value(loss_val)
 
                     preview_prompt_change = self.interactive_state.get_and_reset_preview_change()
                     if preview_prompt_change != 0:
                         with self.ui_lock: self.current_preview_prompt_idx = (self.current_preview_prompt_idx + preview_prompt_change) % len(self.validation_prompts)
 
-                    if (step + 1) % self.args.eval_every == 0 and val_cpu_batches is not None:
+                    if (step + 1) % self.args.eval_every == 0 and val_cpu_batches:
                         unrep_state_for_eval = jax.device_get(unreplicate(p_state))
                         
-                        tokens_batch_cpu, embeddings_batch_cpu = val_cpu_batches[val_batch_idx]
-                        val_batch_gpu = jax.device_put(tokens_batch_cpu), jax.device_put(embeddings_batch_cpu)
-                        validation_future = run_validation_batch(unrep_state_for_eval.params, *val_batch_gpu, self.model.apply, self.args.num_codes)
-                        val_batch_idx = (val_batch_idx + 1) % len(val_cpu_batches)
+                        val_losses = [run_validation_batch(unrep_state_for_eval.params, jax.device_put(tokens), jax.device_put(embs), self.model.apply, self.args.num_codes) for tokens, embs in val_cpu_batches]
+                        last_val_loss = np.mean([v.item() for v in val_losses])
                         
-                        if preview_future is None:
-                            prompt_idx = self.current_preview_prompt_idx
-                            text_emb = jnp.expand_dims(self.validation_embeddings[prompt_idx], 0)
-                            preview_future = _generate_validation_preview(unrep_state_for_eval.params, initial_inference_cache, text_emb, preview_key, self.ds_config, self.token_map_size, self.preview_resolution)
+                        if last_val_loss < best_val_loss:
+                            best_val_loss = last_val_loss
+                            if not (active_save_future and not active_save_future.done()):
+                                console.print(f"\n[bold magenta]🏆 New best val loss: {best_val_loss:.4f} @ step {step+1}. Saving in background...[/bold magenta]")
+                                data_for_save = {'params': unrep_state_for_eval.params, 'val_loss': best_val_loss, 'step': step+1}
+                                active_save_future = checkpoint_executor.submit(_save_cpu_data_task, data_for_save, ckpt_path_best)
                         
-                        del unrep_state_for_eval, val_batch_gpu, text_emb
+                        text_emb = jnp.expand_dims(self.validation_embeddings[self.current_preview_prompt_idx], 0)
+                        preview_img_array = _generate_validation_preview(unrep_state_for_eval.params, initial_inference_cache, text_emb, preview_key, self.ds_config, self.token_map_size, self.preview_resolution)
+                        preview_img_array.block_until_ready()
+                        with self.ui_lock:
+                            self.current_preview_image_np = np.asarray(preview_img_array[0])
 
-                    self.progress.update(task_id, advance=1, loss=loss_val, best_val_loss=best_val_loss)
+                    self.progress.update(task_id, advance=1, loss=loss_val, val_loss=last_val_loss, best_val_loss=best_val_loss)
                     
                     if (step + 1) % SAVE_EVERY_N_STEPS == 0:
                         if not (active_save_future and not active_save_future.done()):
                             host_state_unreplicated = jax.device_get(unreplicate(p_state))
-                            q_state = self.q_controller.state_dict() if self.q_controller else None
-                            data_for_save = {'params': host_state_unreplicated.params, 'opt_state': host_state_unreplicated.opt_state, 'step': step + 1, 'q_controller_state': q_state}
+                            data_for_save = {'params': host_state_unreplicated.params, 'opt_state': host_state_unreplicated.opt_state, 'step': step + 1, 'q_controller_state': self.q_controller.state_dict() if self.q_controller else None}
                             active_save_future = checkpoint_executor.submit(_save_cpu_data_task, data_for_save, ckpt_path_final)
 
-                    current_time = time.time()
-                    self.steps_per_sec = 1.0 / (current_time - last_step_time + 1e-9); last_step_time = current_time
-                    if current_time - last_ui_update_time > UI_UPDATE_INTERVAL_SECS: live.update(self._generate_layout()); last_ui_update_time = current_time
+                    current_time = time.time(); self.steps_per_sec = 1.0 / (current_time - last_step_time + 1e-9); last_step_time = current_time
+                    
+                    # [GUI FIX] Update every step, but throttle the actual console render call
+                    live.update(self._generate_layout(), refresh=True)
         finally:
             console.print(f"\n[yellow]--- Training loop exited at step {current_step + 1}. Waiting for final save... ---[/yellow]")
             checkpoint_executor.shutdown(wait=True)
@@ -1688,7 +2314,6 @@ class ConductorTrainer(AdvancedTrainer):
                 final_data_to_save = {'params': host_state.params, 'opt_state': host_state.opt_state, 'step': current_step + 1, 'q_controller_state': self.q_controller.state_dict() if self.q_controller else None}
                 with open(ckpt_path_final, 'wb') as f: pickle.dump(final_data_to_save, f)
                 console.print(f"✅ Final resume-state saved to [green]{ckpt_path_final}[/green]")
-                del p_state, host_state
             
             config = { 'num_codes': self.args.num_codes, 'num_positions': self.token_map_size + 1, 'd_model': self.args.d_model_cond, 'num_heads': self.args.num_heads, 'num_layers': self.args.num_layers, 'clip_dim': 512 }
             config_path = Path(f"conductor_{self.args.basename}_{self.args.num_layers}l_config.pkl")
@@ -1710,85 +2335,285 @@ class ConductorTrainer(AdvancedTrainer):
 # =================================================================================================
 
 class Generator:
+    """
+    An advanced, parameter-agnostic inference engine for the Phase 3 stack.
+    
+    This class loads all necessary trained components (Phase 1 AE, Tokenizer, Conductor)
+    based on a single basename and provides high-level methods for text-to-image
+    generation and editing.
+    
+    The key upgrade is the implementation of Classifier-Free Guidance (CFG) in the
+    autoregressive sampling loop, which dramatically improves text-image alignment.
+    """
     def __init__(self, args):
-        self.args = args; console = Console()
-        console.print("--- 🧠 Loading Full Generative Stack (Agnostic Mode) ---", style="bold yellow")
+        self.args = args
+        self.console = Console()
+        self.console.print("--- 🧠 Loading Full Generative Stack (CFG-Enabled) ---", style="bold yellow")
+        
+        # --- Discover and Load Model Configurations ---
         try:
             conductor_config_path = next(Path('.').glob(f"conductor_{args.basename}_*_config.pkl"))
             tokenizer_config_path = next(Path('.').glob(f"tokenizer_{args.basename}_*_config.pkl"))
+            # [FIX] Use a more robust glob pattern to find the Phase 1 model regardless of d_model.
+            p1_path = next(Path('.').glob(f"{args.basename}_*d_512.pkl"))
         except StopIteration:
-            sys.exit(f"[FATAL] Could not find required config files for basename '{args.basename}'. Please train the models first.")
+            sys.exit(f"[FATAL] Could not find required config or model files for basename '{args.basename}'. Please train the models first.")
 
         with open(conductor_config_path, 'rb') as f: self.cond_config = pickle.load(f)
         with open(tokenizer_config_path, 'rb') as f: self.tok_config = pickle.load(f)
-        
-        self.dtype = jnp.float32 # Use FP32 for inference for max quality
-        p1_d_model_str = args.basename.split('_')[-1]
-        try: p1_d_model = int(p1_d_model_str.replace('d',''))
-        except (ValueError, IndexError): sys.exit(f"[FATAL] Could not parse d_model from basename '{args.basename}'. Expected format like '..._96d'.")
-        
+
+        # --- Initialize Models with Correct Architectures ---
+        self.dtype = jnp.float32  # Use FP32 for inference for max quality
+        p1_d_model = int(p1_path.stem.split('_')[-2].replace('d',''))
+
         self.p1_model = TopologicalCoordinateGenerator(p1_d_model, self.tok_config['latent_grid_size'], 512, self.dtype)
-        self.tokenizer = LatentTokenizerVQ(**self.tok_config, dtype=self.dtype)
+        # [FIX] Instantiate the exact same model class used for training (LatentTokenizerVQGAN).
+        self.tokenizer = LatentTokenizerVQGAN(**self.tok_config, dtype=self.dtype)
         self.conductor = GenerativeConductor(**self.cond_config, dtype=self.dtype)
-        self.p1_encoder = PathModulator(self.tok_config['latent_grid_size'], 512, self.dtype)
         
-        p1_path = next(Path('.').glob(f"{args.basename}_512.pkl"))
-        tok_path = Path(str(tokenizer_config_path).replace("_config.pkl", ".pkl"))
-        cond_path = Path(str(conductor_config_path).replace("_config.pkl", ".pkl"))
+        # --- Load Trained Parameters ---
+        cond_ckpt_path = Path(str(conductor_config_path).replace("_config.pkl", "_best.pkl"))
+        if not cond_ckpt_path.exists():
+            cond_ckpt_path = Path(str(cond_ckpt_path).replace("_best.pkl", "_final.pkl"))
         
-        with open(p1_path, 'rb') as f: self.p1_params=pickle.load(f)['params']
-        with open(tok_path,'rb') as f: self.tok_params=pickle.load(f)['params']
-        with open(cond_path,'rb') as f: self.cond_params=pickle.load(f)['params']
-        console.print(f"✅ Models and configs loaded for basename [cyan]'{args.basename}'[/cyan]")
+        tok_ckpt_path = Path(str(tokenizer_config_path).replace("_config.pkl", "_best.pkl"))
+        if not tok_ckpt_path.exists():
+            tok_ckpt_path = Path(str(tok_ckpt_path).replace("_best.pkl", "_final.pkl"))
 
-        self.clip_model, _ = clip.load("ViT-B/32", device=_clip_device); console.print("✅ [CLIP] Text Encoder loaded.")
+        self.console.print(f"-> Loading Phase 1 AE from: [green]{p1_path}[/green]")
+        with open(p1_path, 'rb') as f: self.p1_params = pickle.load(f)['params']
         
-        self._jit_get_logits = jax.jit(lambda t,e: self.conductor.apply({'params':self.cond_params},t,e))
-        self._jit_decode_tokens = jax.jit(lambda i: self.tokenizer.apply({'params':self.tok_params}, i, method=self.tokenizer.decode))
-        self._jit_encode_tokens = jax.jit(lambda p: self.tokenizer.apply({'params':self.tok_params}, p, method=self.tokenizer.encode))
-        self.p1_encoder_fn = jax.jit(lambda i: self.p1_encoder.apply({'params':self.p1_params['modulator']}, i))
+        self.console.print(f"-> Loading Tokenizer from: [green]{tok_ckpt_path}[/green]")
+        with open(tok_ckpt_path, 'rb') as f:
+            # [FIX] Robustly load tokenizer params from either 'best' or 'final' checkpoint format.
+            tok_ckpt = pickle.load(f)
+            self.tok_params = tok_ckpt.get('params', tok_ckpt.get('gen_params'))
 
-        @partial(jax.jit, static_argnames=('resolution','patch_size'))
-        def _render(params, latent_batch, resolution=512, patch_size=256):
+        self.console.print(f"-> Loading Conductor from: [green]{cond_ckpt_path}[/green]")
+        with open(cond_ckpt_path, 'rb') as f: self.cond_params = pickle.load(f)['params']
+        
+        # --- CRITICAL FOR CFG: Extract the learned unconditional embedding ---
+        self.uncond_embedding = self.cond_params['uncond_embedding']
+
+        self.console.print(f"✅ Models and configs loaded for basename [cyan]'{args.basename}'[/cyan]")
+
+        # --- Load CLIP and JIT Compile Core Functions ---
+        self.clip_model, _ = clip.load("ViT-B/32", device=_clip_device)
+        self.console.print("✅ [CLIP] Text Encoder loaded.")
+        
+        self.ds_config = DEFAULT_DS_CONFIG()
+        self.token_map_size = (self.tok_config['latent_grid_size'] // 4) ** 2
+
+        self.console.print("--- 🚀 JIT Compiling inference kernels (this may take a moment)... ---")
+        self._jit_compile_functions()
+        self.console.print("✅ All kernels compiled.")
+
+    def _jit_compile_functions(self):
+        """JIT compiles all necessary functions for fast inference."""
+        
+        # --- The core CFG sampling loop ---
+        @partial(jax.jit, static_argnames=('model_apply_fn', 'num_steps', 'bos_token_id', 'guidance_scale'))
+        def _cfg_dslider_autoregressive_sample_jit(
+            model_apply_fn, variables, initial_ds_state,
+            cond_emb, uncond_emb, key, ds_config,
+            guidance_scale, num_steps, bos_token_id
+        ):
+            # 1. Stack conditional and unconditional embeddings for a single parallel forward pass
+            text_emb = jnp.concatenate([cond_emb, uncond_emb], axis=0) # Batch size is now 2
+            
+            # 2. Duplicate the initial state (cache, DSState) for the two parallel runs
+            doubled_vars = jax.tree_util.tree_map(lambda x: jnp.concatenate([x,x], axis=0), variables)
+            doubled_ds_state = jax.tree_util.tree_map(lambda x: jnp.concatenate([x,x], axis=0), initial_ds_state)
+            
+            def scan_body(carry, xs_slice):
+                current_vars, last_token, current_ds_state = carry
+                step_index, key_step = xs_slice
+
+                # 3. Run model ONCE on the stacked batch of size 2
+                logits, new_mutable_vars = model_apply_fn(
+                    current_vars, last_token, text_emb, train=False, decode=True, index=step_index, mutable=['cache']
+                )
+                output_vars = {'params': current_vars['params'], 'cache': new_mutable_vars['cache']}
+
+                # 4. Split the output logits back into conditional and unconditional
+                logits_cond, logits_uncond = logits[0:1], logits[1:2]
+                
+                # 5. Apply the CFG formula - THIS IS THE MAGIC
+                cfg_logits = logits_uncond + guidance_scale * (logits_cond - logits_uncond)
+
+                # 6. Sample using ONLY the CFG-enhanced logits. We only need the DS state for the conditional branch.
+                ds_state_cond = jax.tree_util.tree_map(lambda x: x[0:1], current_ds_state)
+                next_token, new_ds_state_cond = dslider_sampler_step(key_step, ds_state_cond, cfg_logits.squeeze(1), ds_config)
+                
+                # 7. For the next loop iteration, both branches need a token and a state. We feed the same token
+                #    to both and update both states with the new conditional state.
+                new_ds_state_doubled = jax.tree_util.tree_map(lambda x: jnp.concatenate([x, x], axis=0), new_ds_state_cond)
+                next_token_doubled = jnp.concatenate([next_token, next_token], axis=0)
+                
+                return (output_vars, next_token_doubled[:, None], new_ds_state_doubled), next_token
+
+            # Prepare initial inputs for the scan loop
+            initial_token = jnp.full((2, 1), bos_token_id, dtype=jnp.int32)
+            keys = jax.random.split(key, num_steps)
+            initial_carry = (doubled_vars, initial_token, doubled_ds_state)
+            xs = (jnp.arange(num_steps), keys)
+            
+            # Run the scan
+            _, generated_tokens_collection = jax.lax.scan(scan_body, initial_carry, xs)
+            
+            # Transpose from (L, B) to (B, L) and return only the conditional branch's result
+            generated_tokens = generated_tokens_collection.transpose()
+            return generated_tokens[0:1, :]
+
+        # --- Helper for rendering ---
+        @partial(jax.jit, static_argnames=('resolution', 'patch_size'))
+        def _render_fn(p1_params, path_params, resolution=512, patch_size=256):
             coords = jnp.stack(jnp.meshgrid(jnp.linspace(-1,1,resolution),jnp.linspace(-1,1,resolution),indexing='ij'),-1).reshape(-1,2)
-            pixels = [self.p1_model.apply({'params':params}, latent_batch, c, method=self.p1_model.decode) for c in jnp.array_split(coords, (resolution**2)//(patch_size**2))]
-            return jnp.concatenate(pixels, axis=1).reshape(latent_batch.shape[0], resolution, resolution, 3)
-        self._render_fn = _render
+            coord_chunks = jnp.array_split(coords, (resolution**2)//(patch_size**2))
+            pixels_list = [self.p1_model.apply({'params': p1_params}, path_params, c, method=self.p1_model.decode) for c in coord_chunks]
+            return jnp.concatenate(pixels_list, axis=1).reshape(path_params.shape[0], resolution, resolution, 3)
+            
+        # --- Store jitted functions ---
+        self._cfg_sampler = _cfg_dslider_autoregressive_sample_jit
+        self._render_fn = _render_fn
+        # [FIX] This now correctly calls the method on the LatentTokenizerVQGAN instance
+        self._decode_tokens_fn = jax.jit(lambda i: self.tokenizer.apply({'params':self.tok_params}, i, method=self.tokenizer.decode))
+        self._get_initial_vars_fn = jax.jit(lambda k: self.conductor.init({'params':k, 'dropout':k}, jnp.zeros((1,1),jnp.int32), jnp.zeros((1,512), self.dtype), decode=True, index=0))
 
-    def _sample(self, key, text_emb, num_steps, initial_tokens, temp=1.0, top_k=50):
-        tokens = initial_tokens
-        for _ in range(num_steps):
-            key, subkey = jax.random.split(key)
-            logits = self._jit_get_logits(tokens, text_emb)[:, -1, :] / temp
-            top_k_logits, top_k_indices = jax.lax.top_k(logits, k=top_k)
-            next_token_idx = jax.random.categorical(subkey, top_k_logits)
-            next_token = jnp.take_along_axis(top_k_indices, next_token_idx[:, None], axis=-1)
-            tokens = jnp.concatenate([tokens, next_token], axis=1)
-        return tokens
-
-    def generate(self, prompt, seed):
-        console = Console(); console.print(f"--- 🎨 Generating image for prompt: \"[italic yellow]{prompt}[/italic yellow]\" ---")
+    def generate(self, prompt: str, seed: int, guidance_scale: float):
+        self.console.print(f"--- 🎨 Generating image for prompt: \"[italic yellow]{prompt}[/italic yellow]\" ---")
+        self.console.print(f"-> Using Seed: {seed}, CFG Scale: {guidance_scale}")
         key = jax.random.PRNGKey(seed)
-        with torch.no_grad(): text_emb = self.clip_model.encode_text(clip.tokenize([prompt]).to(_clip_device)).cpu().numpy().astype(jnp.float32)
-        console.print("1/3: Composing scene with Conductor..."); initial_tokens = jnp.full((1, 1), self.cond_config['num_codes'], dtype=jnp.int32); tokens_with_bos = self._sample(key, text_emb, self.cond_config['num_positions'] - 1, initial_tokens, temp=self.args.temp, top_k=self.args.top_k)
-        console.print("2/3: Decoding tokens with Tokenizer..."); token_grid = tokens_with_bos[:, 1:].reshape(1, self.tok_config['latent_grid_size']//4, self.tok_config['latent_grid_size']//4); path_params = self._jit_decode_tokens(token_grid)
-        console.print("3/3: Rendering final 512x512 image..."); recon_np = np.array(((self._render_fn(self.p1_params, path_params)[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
-        filename = f"GEN_{Path(self.args.basename).stem}_{prompt.replace(' ', '_')[:40]}_{seed}.png"; Image.fromarray(recon_np).save(filename)
-        console.print(f"✅ Image saved to [green]{filename}[/green]")
         
-    def edit(self, source_image_path, new_prompt, seed):
-        console = Console(); key = jax.random.PRNGKey(seed); console.print(f"--- ✏️ Editing [cyan]{source_image_path}[/cyan] with prompt: \"[italic yellow]{new_prompt}[/italic yellow]\" ---")
-        console.print("1/4: Encoding source image..."); img = Image.open(source_image_path).convert("RGB").resize((512,512)); path_params = self.p1_encoder_fn(jnp.expand_dims((np.array(img, dtype=np.float32)/127.5)-1.0, 0)); source_tokens_flat = self._jit_encode_tokens(path_params).reshape(1, -1)
-        with torch.no_grad(): text_emb = self.clip_model.encode_text(clip.tokenize([new_prompt]).to(_clip_device)).cpu().numpy().astype(jnp.float32)
-        console.print("2/4: Re-composing scene with new prompt..."); num_to_keep = (self.cond_config['num_positions'] - 1) // 2; initial_tokens = jnp.concatenate([jnp.full((1,1), self.cond_config['num_codes']), source_tokens_flat[:, :num_to_keep]], axis=1); composed_tokens = self._sample(key, text_emb, (self.cond_config['num_positions']-1) - num_to_keep, initial_tokens, temp=self.args.temp, top_k=self.args.top_k)
-        console.print("3/4: Decoding new tokens..."); token_grid = composed_tokens[:, 1:].reshape(1, self.tok_config['latent_grid_size']//4, self.tok_config['latent_grid_size']//4); new_path_params = self._jit_decode_tokens(token_grid)
-        console.print("4/4: Rendering edited 512x512 image..."); recon_np = np.array(((self._render_fn(self.p1_params, new_path_params)[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
-        filename = f"EDIT_{Path(self.args.basename).stem}_{Path(source_image_path).stem}_{new_prompt.replace(' ', '_')[:20]}_{seed}.png"; Image.fromarray(recon_np).save(filename)
-        console.print(f"✅ Edited image saved to [green]{filename}[/green]")
+        # 1. Prepare inputs
+        key, init_key, sample_key = jax.random.split(key, 3)
+        with torch.no_grad():
+            cond_text_emb = self.clip_model.encode_text(clip.tokenize([prompt]).to(_clip_device)).cpu().numpy().astype(self.dtype)
+        
+        # Get initial model state (params + empty cache)
+        initial_vars = self._get_initial_vars_fn(init_key)
+        initial_vars['params'] = self.cond_params # Overwrite with loaded params
+        
+        # 2. Run one step to get initial logits for the DSState
+        bos_token = jnp.full((1, 1), self.cond_config['num_codes'], dtype=jnp.int32)
+        initial_logits, updated_vars = self.conductor.apply(initial_vars, bos_token, cond_text_emb, decode=True, index=0, mutable=['cache'])
+        initial_ds_state = initialize_state(initial_logits, bsz=1, config=self.ds_config, dtype=self.dtype)
+
+        self.console.print("1/3: Composing scene with Conductor (CFG Sampling)...")
+        # 3. Run the main CFG sampling loop
+        final_tokens = self._cfg_sampler(
+            self.conductor.apply, updated_vars, initial_ds_state,
+            cond_text_emb, self.uncond_embedding,
+            sample_key, self.ds_config, guidance_scale,
+            self.token_map_size, self.cond_config['num_codes']
+        )
+        
+        self.console.print("2/3: Decoding tokens with Tokenizer...")
+        grid_dim = self.tok_config['latent_grid_size'] // 4
+        token_grid = final_tokens.reshape(1, grid_dim, grid_dim)
+        path_params = self._decode_tokens_fn(token_grid)
+
+        self.console.print("3/3: Rendering final 512x512 image...")
+        recon_batch = self._render_fn(self.p1_params, path_params)
+        recon_np = np.array(((recon_batch[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
+        
+        filename = f"GEN_{Path(self.args.basename).stem}_{prompt.replace(' ', '_')[:40]}_{seed}_cfg{guidance_scale:.1f}.png"
+        Image.fromarray(recon_np).save(filename)
+        self.console.print(f"✅ Image saved to [green]{filename}[/green]")
+
+
+
+
+
 
 # =================================================================================================
 # 7. MAIN EXECUTION BLOCK
 # =================================================================================================
+
+# [ADD] Place the new function definition before main() so it can be called.
+def run_tokenizer_check(args):
+    """Loads a trained tokenizer and reconstructs a single image to test its quality."""
+    console = Console()
+    console.print("--- 🔬 Running Tokenizer Sanity Check ---", style="bold yellow")
+
+    # --- Load Tokenizer Config and Params ---
+    try:
+        tok_config_path = next(Path('.').glob(f"tokenizer_{args.basename}_*_config.pkl"))
+        tok_path_best = Path(str(tok_config_path).replace("_config.pkl", "_best.pkl"))
+        if not tok_path_best.exists():
+            tok_path_best = Path(str(tok_config_path).replace("_config.pkl", "_final.pkl"))
+    except StopIteration:
+        sys.exit(f"[FATAL] Could not find tokenizer config/model for basename '{args.basename}'.")
+    
+    with open(tok_config_path, 'rb') as f: tok_config = pickle.load(f)
+
+    console.print(f"-> Loading tokenizer from [green]{tok_path_best}[/green]")
+    with open(tok_path_best, 'rb') as f:
+        tok_ckpt = pickle.load(f)
+        tok_params = tok_ckpt.get('params', tok_ckpt.get('gen_params'))
+
+    # --- Initialize Model ---
+    dtype = jnp.float32 # Use high precision for check
+    tokenizer = LatentTokenizerVQGAN(**tok_config, dtype=dtype)
+    
+    # --- JIT the Reconstruction Function ---
+    @jax.jit
+    def reconstruct(params, path_params_grid):
+        # The __call__ method of the VQGAN performs a full encode-decode pass
+        return tokenizer.apply({'params': params}, path_params_grid)['reconstructed_path_params']
+
+    # --- Load and Preprocess Phase 1 Latents ---
+    console.print("-> Loading Phase 1 AE to get input latents...", style="dim")
+    try:
+        p1_path = next(Path('.').glob(f"{args.basename}_*d_512.pkl"))
+        p1_d_model = int(p1_path.stem.split('_')[-2].replace('d',''))
+    except StopIteration:
+        sys.exit(f"[FATAL] Could not find Phase 1 model for basename '{args.basename}'.")
+    
+    with open(p1_path, 'rb') as f: p1_params = pickle.load(f)['params']
+    p1_modulator = PathModulator(tok_config['latent_grid_size'], 512, dtype=dtype)
+    
+    @jax.jit
+    def get_path_params(params, image):
+        return p1_modulator.apply({'params': params['modulator']}, image)
+
+    # --- Process the Image ---
+    console.print(f"-> Processing image: {args.image_path}")
+    img = Image.open(args.image_path).convert("RGB").resize((512, 512), Image.Resampling.LANCZOS)
+    img_np = (np.array(img, dtype=np.float32) / 127.5) - 1.0
+    img_batch = jnp.expand_dims(img_np, axis=0)
+
+    # 1. Image -> Path Params (Phase 1 Encoder)
+    path_params_grid = get_path_params(p1_params, img_batch)
+    
+    # 2. Path Params -> Reconstructed Path Params (Tokenizer Autoencoder)
+    recon_path_params = reconstruct(tok_params, path_params_grid)
+    
+    # 3. Reconstructed Path Params -> Image (Phase 1 Decoder)
+    console.print("-> Rendering final image from tokenizer's reconstruction...")
+    p1_decoder_model = TopologicalCoordinateGenerator(p1_d_model, tok_config['latent_grid_size'], 512, dtype=dtype)
+    
+    @partial(jax.jit, static_argnames=('resolution','patch_size'))
+    def render_image(params, path_params, resolution=512, patch_size=256):
+        coords = jnp.stack(jnp.meshgrid(jnp.linspace(-1,1,resolution),jnp.linspace(-1,1,resolution),indexing='ij'),-1).reshape(-1,2)
+        coord_chunks = jnp.array_split(coords, (resolution**2)//(patch_size**2))
+        pixels_list = [p1_decoder_model.apply({'params': params}, path_params, c, method=p1_decoder_model.decode) for c in coord_chunks]
+        return jnp.concatenate(pixels_list, axis=1).reshape(path_params.shape[0], resolution, resolution, 3)
+
+    final_image_batch = render_image(p1_params, recon_path_params)
+    
+    # --- Save Output ---
+    recon_np = np.array(((final_image_batch[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
+    
+    # Create a comparison image
+    comparison_img = Image.new('RGB', (1034, 512), (20, 20, 20))
+    comparison_img.paste(img, (5, 0))
+    comparison_img.paste(Image.fromarray(recon_np), (512 + 17, 0))
+    
+    comparison_img.save(args.output_path)
+    console.print(f"✅ Sanity check complete. Comparison saved to [green]{args.output_path}[/green]")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Phase 3 Generative Framework (Advanced Trainer)", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1802,45 +2627,51 @@ def main():
     train_parser.add_argument('--use-sentinel', action='store_true', help="Enable Sentinel optimizer to dampen oscillations.")
     train_parser.add_argument('--finetune', action='store_true', help="Use finetuning Q-Controller config.")
     
-    # --- PARSER DEFINITIONS (MODIFIED) ---
     p_prep = subparsers.add_parser("prepare-paired-data", help="Pre-process (image, text) -> (latent, embedding).", parents=[base_parser])
     p_prep.add_argument('--data-dir', type=str, required=True); p_prep.add_argument('--d-model', type=int, required=True); p_prep.add_argument('--latent-grid-size', type=int, required=True); p_prep.add_argument('--batch-size', type=int, default=128)
 
-    # New parser for tokenizer preprocessing
     p_prep_tok = subparsers.add_parser("prepare-tokenizer-data", help="Pre-process images into latents for the tokenizer.", parents=[base_parser])
     p_prep_tok.add_argument('--data-dir', type=str, required=True); p_prep_tok.add_argument('--d-model', type=int, required=True); p_prep_tok.add_argument('--latent-grid-size', type=int, required=True); p_prep_tok.add_argument('--batch-size', type=int, default=128)
 
     p_tok = subparsers.add_parser("train-tokenizer", help="Train the Latent Tokenizer (VQ-VAE).", parents=[base_parser, train_parser])
     p_tok.add_argument('--data-dir', type=str, required=True); p_tok.add_argument('--d-model', type=int, required=True); p_tok.add_argument('--latent-grid-size', type=int, required=True)
-    p_tok.add_argument('--steps', type=int, default=150000); p_tok.add_argument('--batch-size', type=int, default=128); p_tok.add_argument('--lr', type=float, default=3e-4)
+    p_tok.add_argument('--epochs', type=int, default=100, help="Number of training epochs.") ; p_tok.add_argument('--batch-size', type=int, default=128); p_tok.add_argument('--lr', type=float, default=3e-4)
+    # [NEW ARGUMENT]
+    p_tok.add_argument('--eval-every', type=int, default=1000, help="Run validation and update preview every N steps.")
     p_tok.add_argument('--num-codes', type=int, default=8192); p_tok.add_argument('--code-dim', type=int, default=256)
 
     p_cond = subparsers.add_parser("train-conductor", help="Train the Generative Conductor (Transformer).", parents=[base_parser, train_parser])
     p_cond.add_argument('--data-dir', type=str, required=True); p_cond.add_argument('--latent-grid-size', type=int, required=True)
     p_cond.add_argument('--steps', type=int, default=1500000); p_cond.add_argument('--batch-size', type=int, default=32, help="Batch size PER DEVICE."); p_cond.add_argument('--lr', type=float, default=1e-4)
-    p_cond.add_argument('--eval-every', type=int, default=500, help="Run validation every N steps.") # <-- ADD THIS LINE
+    p_cond.add_argument('--eval-every', type=int, default=500, help="Run validation every N steps.")
     p_cond.add_argument('--num-codes', type=int, default=8192); p_cond.add_argument('--code-dim', type=int, default=256)
     p_cond.add_argument('--num-layers', type=int, default=12); p_cond.add_argument('--d-model-cond', type=int, default=768); p_cond.add_argument('--num-heads', type=int, default=12)
     p_cond.add_argument('--vram-saver-mode', action='store_true', help="Enable aggressive VRAM saving optimizations (e.g., lower-res previews). Recommended for <= 8GB GPUs.")
     
     inference_parser = argparse.ArgumentParser(add_help=False); inference_parser.add_argument('--temp', type=float, default=0.9); inference_parser.add_argument('--top-k', type=int, default=256)
-    p_gen = subparsers.add_parser("generate", help="Generate an image from a text prompt.", parents=[base_parser, inference_parser]); p_gen.add_argument('--prompt', type=str, required=True); p_gen.add_argument('--seed', type=int, default=lambda: int(time.time()))
-    p_edit = subparsers.add_parser("edit", help="Edit an image using a new text prompt.", parents=[base_parser, inference_parser]); p_edit.add_argument('--source-image', type=str, required=True); p_edit.add_argument('--prompt', type=str, required=True); p_edit.add_argument('--seed', type=int, default=lambda: int(time.time()))
+    p_gen = subparsers.add_parser("generate", help="Generate an image from a text prompt.", parents=[base_parser, inference_parser])
+    p_gen.add_argument('--prompt', type=str, required=True)
+    p_gen.add_argument('--seed', type=int, default=lambda: int(time.time()))
+    p_gen.add_argument('--guidance-scale', type=float, default=7.5, help="Classifier-Free Guidance scale. Higher values mean stronger prompt adherence.")
+    
+    p_check_tok = subparsers.add_parser("check-tokenizer", help="Reconstruct an image through the tokenizer to check its quality.", parents=[base_parser])
+    p_check_tok.add_argument('--image-path', type=str, required=True)
+    p_check_tok.add_argument('--output-path', type=str, default="tokenizer_recon_check.png")
     
     args = parser.parse_args()
     
-    if args.command in ["generate", "edit"]: args.seed = args.seed() if callable(args.seed) else args.seed
+    if args.command in ["generate"]: args.seed = args.seed() if callable(args.seed) else args.seed
     if args.command == "train-conductor":
         if args.d_model_cond % args.num_heads != 0: sys.exit(f"[FATAL] Conductor d_model_cond ({args.d_model_cond}) must be divisible by num_heads ({args.num_heads}).")
         if args.latent_grid_size % 4 != 0: sys.exit(f"[FATAL] latent_grid_size ({args.latent_grid_size}) must be divisible by 4 due to tokenizer architecture.")
 
-    # --- COMMAND DISPATCH (MODIFIED) ---
+    # --- COMMAND DISPATCH ---
     if args.command == "prepare-paired-data": prepare_paired_data(args)
-    elif args.command == "prepare-tokenizer-data": prepare_tokenizer_data(args) # New command
+    elif args.command == "prepare-tokenizer-data": prepare_tokenizer_data(args)
     elif args.command == "train-tokenizer": TokenizerTrainer(args).train()
     elif args.command == "train-conductor": ConductorTrainer(args).train()
-    elif args.command == "generate": Generator(args).generate(args.prompt, args.seed)
-    elif args.command == "edit": Generator(args).edit(args.source_image, args.prompt, args.seed)
-
+    elif args.command == "check-tokenizer": run_tokenizer_check(args)
+    elif args.command == "generate": Generator(args).generate(args.prompt, args.seed, args.guidance_scale)
+    
 if __name__ == "__main__":
     main()
