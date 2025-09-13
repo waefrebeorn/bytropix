@@ -2442,9 +2442,9 @@ class GenerationalConductorTrainer(BaseConductorTrainer):
         self.console.print("--- [MODE] Generational 'No Teacher' Spatiotemporal Ecosystem is ACTIVE. ---", style="bold yellow")
         
         self.population_tiers = {
-            "kids":     {"count": 8, "d_model": 32, "num_layers": 4,  "num_heads": 4,  "dtype": jnp.bfloat16},
-            "students": {"count": 4, "d_model": 48, "num_layers": 8,  "num_heads": 8,  "dtype": jnp.float32},
-            "polisher": {"count": 2, "d_model": 96, "num_layers": 12, "num_heads": 12, "dtype": jnp.float32}
+            "kids":     {"count": 2, "d_model": 256, "num_layers": 4,  "num_heads": 8,  "dtype": jnp.bfloat16},
+            "students": {"count": 1, "d_model": 512, "num_layers": 8,  "num_heads": 8,  "dtype": jnp.float32},
+            "polisher": {"count": 1, "d_model": 768, "num_layers": 12, "num_heads": 12, "dtype": jnp.float32}
         }
         
         self.agent_population = {tier: {'models': [], 'states': []} for tier in self.population_tiers}
