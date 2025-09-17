@@ -75,7 +75,7 @@ try:
     tf.config.set_visible_devices([], 'GPU')
     import clip
     import torch
-    from transformers import FlaxCLIPVisionModel
+    from transformers import FlaxCLIPVisionModel, FlaxCLIPModel
     from rich.live import Live
     from rich.progress import Progress, BarColumn, TextColumn
     from rich.console import Console, Group
@@ -105,7 +105,86 @@ jax.config.update('jax_disable_jit', False)
 # =================================================================================================
 
 
+def hsv_to_rgb(h, s, v):
+    """Differentiable HSV to RGB conversion for JAX."""
+    i = jnp.floor(h * 6.0)
+    f = h * 6.0 - i
+    p = v * (1.0 - s)
+    q = v * (1.0 - f * s)
+    t = v * (1.0 - (1.0 - f) * s)
+    
+    i = jnp.asarray(i, dtype=jnp.int32) % 6
+    
+    # Use lax.switch for conditional logic in JAX
+    rgb = jax.lax.switch(i, [
+        lambda v, t, p: jnp.stack([v, t, p], axis=-1),
+        lambda v, t, p: jnp.stack([q, v, p], axis=-1),
+        lambda v, t, p: jnp.stack([p, v, t], axis=-1),
+        lambda v, t, p: jnp.stack([p, q, v], axis=-1),
+        lambda v, t, p: jnp.stack([t, p, v], axis=-1),
+        lambda v, t, p: jnp.stack([v, p, q], axis=-1),
+    ], v, t, p)
+    return rgb
 
+
+class SingularityShader(nn.Module):
+    """
+    A differentiable shader that implements the co-polarized singular phase
+    mechanism described in Nature Communications (doi: 10.1038/s41467-025-60956-2).
+    It translates learned physical parameters (delta, chi) into RGB colors
+    by mapping the phase and amplitude of the complex transmittance to HSV color space.
+    """
+    dtype: Any = jnp.float32
+
+    @nn.compact
+    def __call__(self, control_params: jnp.ndarray) -> jnp.ndarray:
+        # --- 1. Interpret the 3-channel input from the CoordinateDecoder ---
+        # The decoder output is in [-1, 1] due to nn.tanh. We map these to
+        # physically meaningful ranges for delta, chi, and a brightness scalar.
+        
+        # Channel 0 -> Delta (Retardance): Map to [0, 4π].
+        # This gives the model two full 2π cycles to work with, allowing for
+        # more complex phase landscapes. This channel will become the primary
+        # control for the final output phase.
+        delta = (control_params[..., 0] * 0.5 + 0.5) * 4.0 * jnp.pi
+
+        # Channel 1 -> Chi (Ellipticity): Map to [0, π/2].
+        # The paper shows the most efficient path is near chi = π/4. We give the model the
+        # full range to learn the optimal path that balances efficiency and effect.
+        chi = (control_params[..., 1] * 0.5 + 0.5) * (jnp.pi / 2.0)
+
+        # Channel 2 -> Brightness Scalar: Map to [0, 1].
+        # An additional degree of freedom for the model to control overall brightness.
+        brightness_scalar = control_params[..., 2] * 0.5 + 0.5
+
+        # --- 2. Calculate the Complex Transmittance using the paper's formula ---
+        t_co = PoincareSphere.calculate_co_polarized_transmittance(delta, chi)
+        
+        # --- 3. Decompose the complex value into Amplitude and Phase ---
+        # The amplitude |t_co| determines the physical efficiency/brightness.
+        amplitude = jnp.abs(t_co)
+        
+        # The angle of t_co is the topologically protected geometric phase.
+        phase = jnp.angle(t_co) # This will be in [-π, π]
+
+        # --- 4. Map Physics (Amplitude, Phase) to Color (HSV) ---
+        # Hue: The phase directly controls the color. We map [-π, π] to [0, 1].
+        hue = (phase + jnp.pi) / (2 * jnp.pi)
+        
+        # Saturation: We can keep it high for vibrant colors.
+        saturation = jnp.ones_like(hue) * 0.95
+        
+        # Value (Brightness): This is determined by the physical transmittance amplitude.
+        value = amplitude
+        
+        # --- 5. Convert HSV to RGB ---
+        # This is a standard, differentiable conversion.
+        rendered_hsv = hsv_to_rgb(hue, saturation, value)
+        
+        # --- 6. Apply the final learned brightness control ---
+        final_rgb = rendered_hsv * brightness_scalar[..., None]
+        
+        return jnp.asarray(final_rgb, dtype=self.dtype)
  
 class PoincareSphere:
     @staticmethod
@@ -722,19 +801,22 @@ class ManifoldTrainer(AdvancedTrainer):
         self.p1_params, self.p1_model, _ = self._load_phase1(args)
         self.tok_params, self.tokenizer, _ = self._load_tokenizer(args)
         
-        self.uncond_embedding = jax.device_put(jnp.zeros((1, 512), dtype=self.dtype))
+        self.console.print("--- Loading Full CLIP Model for pixel-level loss... ---")
+        self.full_clip_model = FlaxCLIPModel.from_pretrained("openai/clip-vit-base-patch32", dtype=self.dtype)
+        self.clip_params = self.full_clip_model.params
 
+        self.uncond_embedding = jax.device_put(jnp.zeros((1, 512), dtype=self.dtype))
         self.conductor_model = ManifoldConductor(num_codes=args.num_codes, d_model=args.d_model_cond, num_heads=args.num_heads, num_layers=args.num_layers, latent_grid_size=args.latent_grid_size, dtype=self.dtype)
-        
         self.discriminator_model = PatchDiscriminator(dtype=jnp.float32)
-        
         self.clip_projector = CLIPImageProjector(dtype=self.dtype)
         
         self.perceptual_loss_fn = JAXMultiMetricPerceptualLoss(num_patches=64, patch_size=16)
+        
         self.pid_controller = PIDLambdaController(
-            targets={'mae': 0.1, 'gan_g': 0.5, 'perceptual': 0.2, 'clip': 0.25},
-            base_weights={'mae': 1.0, 'gan_g': 1.0, 'perceptual': 0.5, 'clip': 1.0},
-            gains={'mae': (0.1, 0.01, 0.05), 'gan_g': (0.2, 0.02, 0.1), 'perceptual': (0.2, 0.02, 0.1), 'clip': (0.25, 0.03, 0.1)}
+            targets={'mae': 0.1, 'gan_g': 0.5, 'perceptual': 0.2, 'clip': 0.25, 'patch_clip': 0.25, 'global_clip': 0.3},
+            base_weights={'mae': 1.0, 'gan_g': 1.0, 'perceptual': 0.5, 'clip': 1.0, 'patch_clip': 1.5, 'global_clip': 1.0},
+            gains={'mae': (0.1, 0.01, 0.05), 'gan_g': (0.2, 0.02, 0.1), 'perceptual': (0.2, 0.02, 0.1), 
+                   'clip': (0.25, 0.03, 0.1), 'patch_clip': (0.3, 0.04, 0.15), 'global_clip': (0.2, 0.03, 0.1)}
         )
         self.last_metrics_for_ui = {}; self.ui_lock = threading.Lock(); self.loss_hist = deque(maxlen=400)
         self.lambdas = self.pid_controller.base_weights.copy()
@@ -785,7 +867,7 @@ class ManifoldTrainer(AdvancedTrainer):
         loss_table = Table(title="Losses", show_header=False, box=None)
         loss_table.add_column(style="cyan"); loss_table.add_column(justify="right")
         
-        for k in ['mae', 'gan_g', 'perceptual', 'clip', 'total_d']:
+        for k in ['mae', 'gan_g', 'perceptual', 'clip', 'patch_clip', 'global_clip', 'total_d']:
             value = self.last_metrics_for_ui.get(f'loss/{k}', 0.0)
             try: formatted_value = f"{value:.3f}"
             except (ValueError, TypeError): formatted_value = "N/A"
@@ -848,7 +930,8 @@ class ManifoldTrainer(AdvancedTrainer):
             final_ckpt_path = Path(str(ckpt_path).replace("_checkpoint.pkl", "_final.pkl"))
             final_save_data = {
                 'conductor_ema_params': jax.device_get(state.conductor.ema_params),
-                'p1_params': jax.device_get(state.painter.params)
+                'p1_params': jax.device_get(state.painter.params),
+                'clip_projector_params': jax.device_get(state.clip_projector.params)
             }
             with open(final_ckpt_path, 'wb') as f:
                  pickle.dump(final_save_data, f)
@@ -869,64 +952,39 @@ class ManifoldTrainer(AdvancedTrainer):
 
             cond_data = ckpt_data['conductor_state']
             
-            # --- MODIFICATION START ---
-            # Create a standard TrainState first.
             base_cond_state = TrainState.create(
                 apply_fn=self.conductor_model.apply,
                 params=cond_data['params'],
                 tx=optimizers['conductor']
             )
-
-            # Manually unpack the attributes instead of using .to_dict()
             restored_cond_state = ConductorTrainState(
-                step=base_cond_state.step,
-                apply_fn=base_cond_state.apply_fn,
-                params=base_cond_state.params,
-                tx=base_cond_state.tx,
-                opt_state=base_cond_state.opt_state,
-                q_state=cond_data['q_state'],
+                step=base_cond_state.step, apply_fn=base_cond_state.apply_fn,
+                params=base_cond_state.params, tx=base_cond_state.tx,
+                opt_state=base_cond_state.opt_state, q_state=cond_data['q_state'],
                 ema_params=cond_data['ema_params']
-            ).replace( # Now only replace step and opt_state from the loaded data
-                step=cond_data['step'],
-                opt_state=cond_data['opt_state']
-            )
-            # --- MODIFICATION END ---
+            ).replace(step=cond_data['step'], opt_state=cond_data['opt_state'])
 
             disc_data = ckpt_data['discriminator_state']
             restored_disc_state = CustomTrainState.create(
                 apply_fn=self.discriminator_model.apply,
-                params=disc_data['params'],
-                tx=optimizers['discriminator']
-            ).replace(
-                step=disc_data['step'],
-                opt_state=disc_data['opt_state']
-            )
+                params=disc_data['params'], tx=optimizers['discriminator']
+            ).replace(step=disc_data['step'], opt_state=disc_data['opt_state'])
 
             clip_proj_data = ckpt_data['clip_projector_state']
             restored_clip_proj_state = CustomTrainState.create(
                 apply_fn=self.clip_projector.apply,
-                params=clip_proj_data['params'],
-                tx=optimizers['clip_projector']
-            ).replace(
-                step=clip_proj_data['step'],
-                opt_state=clip_proj_data['opt_state']
-            )
+                params=clip_proj_data['params'], tx=optimizers['clip_projector']
+            ).replace(step=clip_proj_data['step'], opt_state=clip_proj_data['opt_state'])
             
             painter_data = ckpt_data['painter_state']
             restored_painter_state = CustomTrainState.create(
                 apply_fn=self.p1_model.apply,
-                params=painter_data['params'],
-                tx=optimizers['painter']
-            ).replace(
-                step=painter_data['step'],
-                opt_state=painter_data['opt_state']
-            )
+                params=painter_data['params'], tx=optimizers['painter']
+            ).replace(step=painter_data['step'], opt_state=painter_data['opt_state'])
 
             state = GANTrainStates(
-                conductor=restored_cond_state, 
-                discriminator=restored_disc_state, 
-                clip_projector=restored_clip_proj_state,
-                painter=restored_painter_state
+                conductor=restored_cond_state, discriminator=restored_disc_state, 
+                clip_projector=restored_clip_proj_state, painter=restored_painter_state
             )
             
             global_step = ckpt_data['global_step']
@@ -994,59 +1052,53 @@ class ManifoldTrainer(AdvancedTrainer):
         
         ckpt_path = Path(f"manifold_{self.args.basename}_{self.args.num_codes}c_checkpoint.pkl")
         
-        optimizers = {
-            'conductor': conductor_optimizer,
-            'discriminator': discriminator_optimizer,
-            'clip_projector': clip_projector_optimizer,
-            'painter': painter_optimizer
-        }
+        optimizers = {'conductor': conductor_optimizer, 'discriminator': discriminator_optimizer, 'clip_projector': clip_projector_optimizer, 'painter': painter_optimizer}
         state, global_step = self._load_checkpoint(ckpt_path, optimizers)
         
         if state is None:
             def merge_params(base_params, pretrained_params):
                 merged = base_params.copy()
                 for key, value in pretrained_params.items():
-                    if key in merged and isinstance(merged.get(key), dict) and isinstance(value, dict):
-                        merged[key] = merge_params(merged[key], value)
-                    elif key in merged:
-                        merged[key] = value
+                    if key in merged and isinstance(merged.get(key), dict) and isinstance(value, dict): merged[key] = merge_params(merged[key], value)
+                    elif key in merged: merged[key] = value
                 return merged
 
             key, cond_key, disc_key, clip_key, painter_key = jax.random.split(key, 5)
             q_controller_state = init_q_controller(Q_CONTROLLER_CONFIG_MANIFOLD)
             H_tok, W_tok = self.args.latent_grid_size // 4, self.args.latent_grid_size // 4
-            
-            initialized_p1_params = self.p1_model.init(
-                {'params': painter_key},
-                jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3)),
-                jnp.zeros((1, 2)),
-                jnp.zeros((1, 512)),
-                method=self.p1_model.decode
-            )['params']
-            
-            merged_p1_params = merge_params(initialized_p1_params, self.p1_params)
-            self.p1_params = merged_p1_params
-            
+            initialized_p1_params = self.p1_model.init({'params': painter_key}, jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3)), jnp.zeros((1, 2)), jnp.zeros((1, 512)), method=self.p1_model.decode)['params']
+            self.p1_params = merge_params(initialized_p1_params, self.p1_params)
             conductor_params = self.conductor_model.init({'params': cond_key}, jnp.zeros((1, H_tok, W_tok), dtype=jnp.int32), jnp.zeros((1, 512), dtype=self.dtype), jnp.zeros((1, H_tok, W_tok), dtype=jnp.int32))['params']
             discriminator_params = self.discriminator_model.init(disc_key, jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3), dtype=self.discriminator_model.dtype))['params']
             clip_projector_params = self.clip_projector.init(clip_key, jnp.zeros((1, self.args.d_model), dtype=self.dtype))['params']
-            
             conductor_state = ConductorTrainState.create(apply_fn=self.conductor_model.apply, params=conductor_params, tx=conductor_optimizer, q_state=q_controller_state, ema_params=conductor_params)
             discriminator_state = CustomTrainState.create(apply_fn=self.discriminator_model.apply, params=discriminator_params, tx=discriminator_optimizer)
             clip_projector_state = CustomTrainState.create(apply_fn=self.clip_projector.apply, params=clip_projector_params, tx=clip_projector_optimizer)
             painter_state = CustomTrainState.create(apply_fn=self.p1_model.apply, params=self.p1_params, tx=painter_optimizer)
-            
             state = GANTrainStates(conductor=conductor_state, discriminator=discriminator_state, clip_projector=clip_projector_state, painter=painter_state)
         
         state_holder["q_state"] = state.conductor.q_state
-        
+
+        # --- DEFINITIVE FIX: Define train_step as a closure inside train() ---
         @partial(jit, static_argnames=('train',))
         def train_step(state: GANTrainStates, batch_data, key, lambdas, dampening_factor, train):
-            target_indices, salience_indices, command_vector, path_params_grid_real = batch_data
-            key, q_key, train_key, perc_key, gumbel_key = jax.random.split(key, 5)
-            q_state = q_controller_choose_action(state.conductor.q_state, q_key)
             
-            def conductor_and_clip_loss_fn(conductor_params, clip_proj_params, painter_params):
+            patch_render_size, global_render_size = 96, 224
+            
+            @partial(jit, static_argnames=('patch_render_size', 'global_render_size'))
+            def jitted_generate_pixels(painter_params, path_params_reconstructed, batch_patch_coords, global_coords, final_command, patch_render_size, global_render_size):
+                B = path_params_reconstructed.shape[0]
+                render_patch_vmapped = jax.vmap(lambda pp, coords, cmd: self.p1_model.apply({'params': painter_params}, pp[None, ...], coords, command_vector=cmd[None, ...], method=self.p1_model.decode).squeeze(0))
+                rendered_patches = render_patch_vmapped(path_params_reconstructed, batch_patch_coords, final_command)
+                rendered_patches = rendered_patches.reshape(B, patch_render_size, patch_render_size, 3)
+
+                rendered_global = self.p1_model.apply({'params': painter_params}, path_params_reconstructed, global_coords, command_vector=final_command, method=self.p1_model.decode)
+                rendered_global = rendered_global.reshape(B, global_render_size, global_render_size, 3)
+                return rendered_patches, rendered_global
+
+            # --- FIX: `has_aux=True` is not a valid argument for `jit`. Removed it. ---
+            @jit
+            def jitted_loss_and_path_params(conductor_params, train_key, target_indices, final_command, salience_indices):
                 B, H_tok, W_tok = target_indices.shape
                 num_to_keep = int(H_tok * W_tok * (1 - self.args.mask_ratio))
                 ids_shuffle = jnp.argsort(jax.random.uniform(train_key, (B, H_tok * W_tok)), axis=1)
@@ -1054,9 +1106,7 @@ class ManifoldTrainer(AdvancedTrainer):
                 masked_indices = jnp.full((B, H_tok * W_tok), self.args.num_codes + 1, dtype=jnp.int32)
                 visible_indices = jnp.take_along_axis(target_indices.reshape(B, H_tok*W_tok), ids_keep, axis=1)
                 input_indices = masked_indices.at[jnp.arange(B)[:, None], ids_keep].set(visible_indices).reshape(B, H_tok, W_tok)
-                is_unconditional = jax.random.uniform(train_key, (B, 1)) < 0.1
-                final_command = jnp.where(is_unconditional, self.uncond_embedding, command_vector)
-                predicted_logits = state.conductor.apply_fn({'params': conductor_params}, input_indices, final_command, salience_indices, train=train)
+                predicted_logits = self.conductor_model.apply({'params': conductor_params}, input_indices, final_command, salience_indices, train=train)
                 loss_mask = jnp.ones((B, H_tok * W_tok)).at[jnp.arange(B)[:, None], ids_keep].set(0)
                 mae_loss = (optax.softmax_cross_entropy_with_integer_labels(predicted_logits.reshape(-1, self.args.num_codes), target_indices.reshape(-1)).reshape(B, -1) * loss_mask).sum() / (loss_mask.sum() + 1e-9)
                 gumbel_ste = gumbel_softmax_straight_through(predicted_logits, gumbel_key)
@@ -1064,27 +1114,60 @@ class ManifoldTrainer(AdvancedTrainer):
                 full_grid_ste = jnp.zeros_like(gumbel_ste).reshape(B, -1, self.args.num_codes).at[jnp.arange(B)[:, None], ids_keep].set(visible_one_hot)
                 pred_mask = jnp.ones((B, H_tok * W_tok), dtype=jnp.bool_).at[jnp.arange(B)[:, None], ids_keep].set(False)
                 full_grid_ste = jnp.where(pred_mask[..., None], gumbel_ste.reshape(B, -1, self.args.num_codes), full_grid_ste).reshape(B, H_tok, W_tok, -1)
-                codebook = self.tok_params['vq']['codebook']
-                z_q_ste = jnp.einsum('bhwc,dc->bhwd', full_grid_ste, codebook)
+                z_q_ste = jnp.einsum('bhwc,dc->bhwd', full_grid_ste, self.tok_params['vq']['codebook'])
                 path_params_reconstructed = self.tokenizer.apply({'params': self.tok_params}, z_q_ste, method=self.tokenizer.decode_from_quantized)
+                return mae_loss, path_params_reconstructed
                 
-                reconstructed_features = self.p1_model.apply({'params': painter_params}, path_params_reconstructed, method=self.p1_model.get_features)
-                projected_feature_grid = state.clip_projector.apply_fn({'params': clip_proj_params}, reconstructed_features)
-                clip_loss = calculate_compositional_clip_loss(projected_feature_grid, command_vector)
+            # --- The Bridge ---
+            target_indices, salience_indices, command_vector, path_params_grid_real = batch_data
+            key, q_key, train_key, perc_key, gumbel_key, render_key = jax.random.split(key, 6)
+            q_state = q_controller_choose_action(state.conductor.q_state, q_key)
 
-                perceptual_losses = self.perceptual_loss_fn(path_params_reconstructed, path_params_grid_real, perc_key)
+            is_unconditional = jax.random.uniform(train_key, (self.args.batch_size, 1)) < 0.1
+            final_command = jnp.where(is_unconditional, self.uncond_embedding, command_vector)
+
+            # 1. First part of forward pass (JIT)
+            mae_loss, path_params_reconstructed = jitted_loss_and_path_params(state.conductor.params, train_key, target_indices, final_command, salience_indices)
+
+            # 2. Render pixels (JIT)
+            global_coords = jnp.mgrid[-1:1:global_render_size*1j, -1:1:global_render_size*1j].transpose(1, 2, 0).reshape(-1, 2)
+            patch_width = 0.5; rand_centers = jax.random.uniform(render_key, (self.args.batch_size, 2), minval=-(1-patch_width), maxval=(1-patch_width))
+            def create_patch_coords(center):
+                cx, cy = center[1], center[0]; ax = jnp.linspace(cx - patch_width/2, cx + patch_width/2, patch_render_size); ay = jnp.linspace(cy - patch_width/2, cy + patch_width/2, patch_render_size)
+                return jnp.stack(jnp.meshgrid(ax, ay), axis=-1).reshape(-1, 2)
+            batch_patch_coords = jax.vmap(create_patch_coords)(rand_centers)
+            rendered_patches, rendered_global = jitted_generate_pixels(state.painter.params, path_params_reconstructed, batch_patch_coords, global_coords, final_command, patch_render_size, global_render_size)
+
+            # 3. Get CLIP embeddings in plain Python (outside any JIT)
+            patch_clip_input = encode_image_for_clip(rendered_patches, jnp.zeros_like(rendered_patches[..., 0]))
+            global_clip_input = encode_image_for_clip(rendered_global, jnp.zeros_like(rendered_global[..., 0]))
+            patch_image_embeddings = self.full_clip_model.get_image_features(pixel_values=patch_clip_input, params=self.clip_params)
+            global_image_embeddings = self.full_clip_model.get_image_features(pixel_values=global_clip_input, params=self.clip_params)
+
+            # 4. Calculate final loss and gradients (JIT)
+            def final_loss_fn(conductor_params, clip_proj_params, painter_params):
+                # We need to recompute the path_params inside the grad scope
+                _, path_params_reconstructed_grad = jitted_loss_and_path_params(conductor_params, train_key, target_indices, final_command, salience_indices)
+                reconstructed_features = self.p1_model.apply({'params': painter_params}, path_params_reconstructed_grad, method=self.p1_model.get_features)
+                projected_feature_grid = state.clip_projector.apply_fn({'params': clip_proj_params}, reconstructed_features)
+                feature_clip_loss = calculate_compositional_clip_loss(projected_feature_grid, command_vector)
+                perceptual_losses = self.perceptual_loss_fn(path_params_reconstructed_grad, path_params_grid_real, perc_key)
                 perceptual_loss = jnp.mean(jnp.array(list(perceptual_losses.values())))
-                d_fake_logits = state.discriminator.apply_fn({'params': state.discriminator.params}, path_params_reconstructed)
+                d_fake_logits = state.discriminator.apply_fn({'params': state.discriminator.params}, path_params_reconstructed_grad)
                 gan_g_loss = jnp.mean((d_fake_logits - 1.0)**2)
-                total_loss = (lambdas['mae'] * mae_loss + lambdas['gan_g'] * gan_g_loss + lambdas['perceptual'] * perceptual_loss + lambdas['clip'] * clip_loss)
-                return total_loss, ( {'loss/total_g': total_loss, 'loss/mae': mae_loss, 'loss/gan_g': gan_g_loss, 'loss/perceptual': perceptual_loss, 'loss/clip': clip_loss}, path_params_reconstructed)
-                
-            grad_fn = jax.value_and_grad(conductor_and_clip_loss_fn, argnums=(0, 1, 2), has_aux=True)
-            (g_loss, (g_metrics, path_params_reconstructed_sg)), (g_grads, clip_proj_grads, painter_grads) = grad_fn(state.conductor.params, state.clip_projector.params, state.painter.params)
+                patch_clip_loss = calculate_clip_similarity_loss(patch_image_embeddings, final_command)
+                global_clip_loss = calculate_clip_similarity_loss(global_image_embeddings, final_command)
+                total_loss = (lambdas['mae'] * mae_loss + lambdas['gan_g'] * gan_g_loss + lambdas['perceptual'] * perceptual_loss + lambdas['clip'] * feature_clip_loss + lambdas['patch_clip'] * patch_clip_loss + lambdas['global_clip'] * global_clip_loss)
+                metrics = {'loss/total_g': total_loss, 'loss/mae': mae_loss, 'loss/gan_g': gan_g_loss, 'loss/perceptual': perceptual_loss, 'loss/clip': feature_clip_loss, 'loss/patch_clip': patch_clip_loss, 'loss/global_clip': global_clip_loss}
+                return total_loss, metrics
+
+            grad_fn = jax.value_and_grad(final_loss_fn, argnums=(0, 1, 2), has_aux=True)
+            (g_loss, g_metrics), (g_grads, clip_proj_grads, painter_grads) = grad_fn(state.conductor.params, state.clip_projector.params, state.painter.params)
             
+            # --- Rest of the step is standard ---
             def discriminator_loss_fn(discriminator_params):
                 d_real = state.discriminator.apply_fn({'params': discriminator_params}, path_params_grid_real)
-                d_fake = state.discriminator.apply_fn({'params': discriminator_params}, jax.lax.stop_gradient(path_params_reconstructed_sg))
+                d_fake = state.discriminator.apply_fn({'params': discriminator_params}, jax.lax.stop_gradient(path_params_reconstructed))
                 loss_real, loss_fake = jnp.mean((d_real - 0.9)**2), jnp.mean((d_fake - 0.1)**2)
                 return (loss_real + loss_fake) * 0.5, {'loss/total_d': (loss_real + loss_fake) * 0.5}
 
@@ -1099,12 +1182,7 @@ class ManifoldTrainer(AdvancedTrainer):
             new_ema = jax.tree_util.tree_map(lambda ema, p: ema*0.999 + p*(1-0.999), state.conductor.ema_params, new_cond_state.params)
             metrics = {**g_metrics, **d_metrics, 'sentinel_pct': new_cond_state.opt_state[1].dampened_pct, 'lr': q_state.current_value, 'q_status': q_state.status_code}
             
-            return GANTrainStates(
-                conductor=new_cond_state.replace(ema_params=new_ema, q_state=q_state), 
-                discriminator=new_disc_state, 
-                clip_projector=new_clip_proj_state,
-                painter=new_painter_state
-            ), metrics
+            return GANTrainStates(conductor=new_cond_state.replace(ema_params=new_ema, q_state=q_state), discriminator=new_disc_state, clip_projector=new_clip_proj_state, painter=new_painter_state), metrics
 
         self.console.print(f"--- JIT Compiling Train Step... ---")
         state_holder["q_state"] = state.conductor.q_state
@@ -1132,7 +1210,9 @@ class ManifoldTrainer(AdvancedTrainer):
                         damp_factor_py = self.interactive_state.get_sentinel_factor()
                         current_damp_factor_jnp = jnp.array(damp_factor_py, dtype=self.dtype)
                         self.lambdas = self.pid_controller(self.last_metrics_for_ui)
+                        
                         state_holder["q_state"] = state.conductor.q_state
+                        
                         state, metrics = jitted_train_step(state, batch_data, step_key, self.lambdas, current_damp_factor_jnp, train=True)
                         
                         with self.ui_lock:
@@ -1166,7 +1246,8 @@ class ManifoldTrainer(AdvancedTrainer):
             self.console.print("✅ Final save complete.")
 
 
-            
+
+        
     def _update_preview_task(self, state: GANTrainStates, key: chex.PRNGKey):
         prompt_idx_change = self.interactive_state.get_and_reset_preview_change()
         with self.ui_lock:
@@ -1187,7 +1268,9 @@ class ManifoldTrainer(AdvancedTrainer):
         img_np = np.array(((image_batch[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
         if Pixels:
             with self.ui_lock: self.rendered_preview = Pixels.from_image(Image.fromarray(img_np))
-            
+
+
+
 
 
 # =================================================================================================
@@ -1201,13 +1284,16 @@ def _jitted_manifold_inference(manifold_params, manifold_model, p1_model, tok_mo
         coords = jnp.mgrid[-1:1:resolution*1j, -1:1:resolution*1j].transpose(1, 2, 0).reshape(-1, 2)
         coord_chunks = jnp.array_split(coords, (resolution*resolution) // (patch_size*patch_size))
         
-        # --- MODIFICATION: Pass the command_vector to the decode method ---
-        # The painter now knows what it's supposed to be painting!
+        # --- COHERENCE ENHANCEMENT MODIFICATION ---
+        # We must pass the text `command_vector` to the painter's decode method.
+        # This activates the FiLM conditioning layers in the CoordinateDecoder,
+        # giving the painter direct, high-level guidance on what it should be rendering.
+        # This dramatically improves object coherence.
         pixel_chunks = [p1_model.apply(
             {'params': p1_params}, 
             path_params_grid, 
             c, 
-            command_vector=command_vector,  # Pass the text embedding here
+            command_vector=command_vector,
             method=p1_model.decode
         ) for c in coord_chunks]
         # --- END MODIFICATION ---
@@ -1285,13 +1371,13 @@ class Generator:
     def __init__(self, args):
         self.args, self.console = args, Console()
         self.console.print("--- 🧠 Loading Manifold Conductor for Generation ---", style="bold green")
-        self.dtype = jnp.float32 # Inference is better with float32
-        
-        # Load all necessary model definitions
+        self.dtype = jnp.float32
+
         _, self.p1_model, _ = ManifoldTrainer._load_phase1(self, args)
         self.tok_params, self.tokenizer, _ = ManifoldTrainer._load_tokenizer(self, args)
         self.conductor_model = ManifoldConductor(num_codes=args.num_codes, d_model=args.d_model_cond, num_heads=args.num_heads, num_layers=args.num_layers, latent_grid_size=args.latent_grid_size, dtype=self.dtype)
-        
+        self.clip_projector = CLIPImageProjector(dtype=self.dtype)
+
         ckpt_path = Path(f"manifold_{args.basename}_{args.num_codes}c_final.pkl")
         if not ckpt_path.exists(): sys.exit(f"FATAL: Checkpoint not found: {ckpt_path}")
         self.console.print(f"-> Loading weights from [green]{ckpt_path}[/green]")
@@ -1300,40 +1386,110 @@ class Generator:
             ckpt_data = pickle.load(f)
             self.conductor_params = ckpt_data['conductor_ema_params']
             self.p1_params = ckpt_data['p1_params']
+            if 'clip_projector_params' not in ckpt_data: sys.exit("FATAL: clip_projector_params not found. Please retrain/save a new model.")
+            self.clip_projector_params = ckpt_data['clip_projector_params']
             
         self.uncond_embedding = jnp.zeros((1, 512), dtype=self.dtype)
         self.clip_model, _ = clip.load("ViT-B/32", device=_clip_device)
         self.console.print("--- 🚀 JIT Compiling Manifold inference pipeline... ---")
-        _ = self.generate("a test compile run", 42, 4.0, 2, True)
+        _ = self.generate("a test compile run", 42, 4.0, 12, True, refinement_steps=0) # Compile run
         self.console.print("--- ✅ Compilation Complete ---")
 
-    def generate(self, prompt, seed, guidance_scale, decoding_steps, _compile_run=False):
+    @partial(jit, static_argnames=('self', 'grid_size'))
+    def _get_refined_salience_map(self, draft_image_batch, command_vector, grid_size):
+        """JIT-compiled function to perform one step of salience map refinement."""
+        # The modulator expects input in the range [-1, 1]
+        draft_image_batch_norm = (draft_image_batch * 2.0) - 1.0
+        
+        # 1. Encode the draft image into the latent manifold
+        path_params_grid = self.p1_model.apply({'params': self.p1_params}, draft_image_batch_norm)
+        
+        # 2. Extract features from this new latent grid
+        feature_canvas = self.p1_model.apply({'params': self.p1_params}, path_params_grid, method=self.p1_model.get_features)
+        
+        # 3. Project features into CLIP-space
+        projected_features = self.clip_projector.apply({'params': self.clip_projector_params}, feature_canvas)
+        
+        # 4. Perform CLIP similarity scan
+        patches_norm = projected_features / (jnp.linalg.norm(projected_features, axis=-1, keepdims=True) + 1e-6)
+        text_norm = command_vector / (jnp.linalg.norm(command_vector, axis=-1, keepdims=True) + 1e-6)
+        similarity_heatmap = jnp.einsum('bhwd,bd->bhw', patches_norm, text_norm[:, None, :])
+        
+        # 5. Normalize and enhance the heatmap to create the final map
+        similarity_heatmap = jnp.squeeze(similarity_heatmap, axis=0)
+        h_min, h_max = similarity_heatmap.min(), similarity_heatmap.max()
+        normalized_map = (similarity_heatmap - h_min) / (h_max - h_min + 1e-6)
+        return jnp.power(normalized_map, 2.5)
+
+    def generate(self, prompt: str, seed: int, guidance_scale: float, decoding_steps: int, _compile_run: bool = False, salience_map: Optional[np.ndarray] = None, output_filename_prefix: str = "MANIFOLD", refinement_steps: int = 3):
         if not _compile_run: self.console.print(f"--- 🎨 Orchestrating shaders for: \"[italic yellow]{prompt}[/italic yellow]\" ---")
         key = jax.random.PRNGKey(seed)
         with torch.no_grad():
             tokens = clip.tokenize([prompt]).to(_clip_device)
             command_vector = self.clip_model.encode_text(tokens).cpu().numpy().astype(self.dtype)
         
-        dummy_salience_latents = jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3))
-        dummy_salience_indices = self.tokenizer.apply({'params': self.tok_params}, dummy_salience_latents, method=self.tokenizer.encode)
+        grid_size = self.args.latent_grid_size
         
+        if salience_map is not None:
+             self.console.print(f"--- Salience: Using user-provided map, skipping refinement. ---")
+             final_salience_map = jnp.array(salience_map)
+        else:
+            # --- ITERATIVE MANIFOLD REFINEMENT LOOP ---
+            # Initial salience map is still generated from the prompt as a starting point.
+            # We use a generic latent grid for this very first pass.
+            self.console.print("--- [Pass 0] Salience: Auto-generating initial map from prompt... ---")
+            generic_path_params = jnp.zeros((1, grid_size, grid_size, 3), dtype=self.dtype)
+            feature_canvas = self.p1_model.apply({'params': self.p1_params}, generic_path_params, method=self.p1_model.get_features)
+            projected_features = self.clip_projector.apply({'params': self.clip_projector_params}, feature_canvas)
+            patches_norm = projected_features / (jnp.linalg.norm(projected_features, axis=-1, keepdims=True) + 1e-6)
+            text_norm = command_vector / (jnp.linalg.norm(command_vector, axis=-1, keepdims=True) + 1e-6)
+            similarity_heatmap = jnp.einsum('bhwd,bd->bhw', patches_norm, text_norm[:, None, :])
+            h_min, h_max = similarity_heatmap.min(), similarity_heatmap.max()
+            normalized_map = (similarity_heatmap - h_min) / (h_max - h_min + 1e-6)
+            current_salience_map = jnp.power(jnp.squeeze(normalized_map), 2.5)
+
+            for i in range(refinement_steps):
+                self.console.print(f"--- [Pass {i+1}/{refinement_steps}] Refining composition... ---")
+                key, gen_key = jax.random.split(key)
+                
+                # Tokenize the current salience map
+                salience_latents = jnp.repeat(current_salience_map[None, ..., None], 3, axis=-1)
+                salience_indices = self.tokenizer.apply({'params': self.tok_params}, salience_latents, method=self.tokenizer.encode)
+
+                # Generate a low-resolution draft image (e.g., 256x256) for speed
+                draft_image_batch = _jitted_manifold_inference(
+                    self.conductor_params, self.conductor_model, self.p1_model, self.tokenizer, 
+                    self.p1_params, self.tok_params, command_vector, self.uncond_embedding, 
+                    salience_indices, gen_key, resolution=256, patch_size=128, num_steps=decoding_steps, 
+                    grid_size=self.args.latent_grid_size//4, num_codes=self.args.num_codes, guidance_scale=guidance_scale
+                )
+                
+                # The output image is [-1, 1], we need [0, 1] for the refinement encoder
+                draft_image_0_1 = draft_image_batch * 0.5 + 0.5
+                
+                # Refine the salience map based on this new draft
+                current_salience_map = self._get_refined_salience_map(draft_image_0_1, command_vector, grid_size)
+            
+            final_salience_map = current_salience_map
+        
+        # --- FINAL RENDER ---
+        self.console.print("--- [Final Pass] Rendering full resolution image... ---")
+        salience_latents = jnp.repeat(final_salience_map[None, ..., None], 3, axis=-1)
+        salience_indices = self.tokenizer.apply({'params': self.tok_params}, salience_latents, method=self.tokenizer.encode)
+
         image_batch = _jitted_manifold_inference(
             self.conductor_params, self.conductor_model, self.p1_model, self.tokenizer, 
-            self.p1_params, self.tok_params,
-            command_vector, self.uncond_embedding, dummy_salience_indices, key, 
-            resolution=512, patch_size=256, num_steps=decoding_steps, 
-            grid_size=self.args.latent_grid_size//4, num_codes=self.args.num_codes, 
-            guidance_scale=guidance_scale
+            self.p1_params, self.tok_params, command_vector, self.uncond_embedding, 
+            salience_indices, key, resolution=512, patch_size=256, num_steps=decoding_steps, 
+            grid_size=self.args.latent_grid_size//4, num_codes=self.args.num_codes, guidance_scale=guidance_scale
         )
         
         image_batch.block_until_ready()
         if _compile_run: return
+        
         img_np = np.array(((image_batch[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
-        filename = f"MANIFOLD_{Path(self.args.basename).stem}_{prompt.replace(' ', '_')[:40]}_{seed}.png"
+        filename = f"{output_filename_prefix}_{Path(self.args.basename).stem}_{prompt.replace(' ', '_')[:40]}_{seed}.png"
         Image.fromarray(img_np).save(filename); self.console.print(f"✅ Image saved to [green]{filename}[/green]")
-
-
-
 
 # =================================================================================================
 # 7. MAIN EXECUTION BLOCK (FINAL)
