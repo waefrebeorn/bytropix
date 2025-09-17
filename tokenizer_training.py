@@ -14,6 +14,7 @@ import pickle
 import time
 import math
 import signal
+import threading
 from pathlib import Path
 from typing import Any, NamedTuple, Optional, Dict, Tuple
 from collections import deque
@@ -195,117 +196,153 @@ class TopologicalCoordinateGenerator(nn.Module):
     def decode(self, path_params, coords):
         return self.coord_decoder(self.observer(path_params), coords)
 
+# --- [FIX] Legacy class definitions for loading Phase 1/2 checkpoints ---
+class CustomTrainState(train_state.TrainState):
+    """A custom train state that allows passing extra arguments to the optimizer for Sentinel."""
+    def apply_gradients(self, *, grads: Any, **kwargs) -> "CustomTrainState":
+        updates, new_opt_state = self.tx.update(grads, self.opt_state, self.params, **kwargs)
+        new_params = optax.apply_updates(self.params, updates)
+        known_keys = self.__dataclass_fields__.keys()
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in known_keys}
+        return self.replace(step=self.step + 1, params=new_params, opt_state=new_opt_state, **filtered_kwargs)
 
+class SentinelState(NamedTuple):
+    """State for the Sentinel optimizer component."""
+    sign_history: chex.ArrayTree
+    dampened_count: Optional[jnp.ndarray] = None
+    dampened_pct: Optional[jnp.ndarray] = None
+# --- End of fix ---
 # =================================================================================================
 # 2. ADVANCED TOKENIZER TOOLKIT
 # =================================================================================================
 
-Q_CONTROLLER_CONFIG_NORMAL = {"q_table_size": 100, "num_lr_actions": 5, "lr_change_factors": [0.9, 0.95, 1.0, 1.05, 1.1], "learning_rate_q": 0.1, "discount_factor_q": 0.9, "lr_min": 1e-5, "lr_max": 1e-3, "metric_history_len": 5000, "loss_min": 0.01, "loss_max": 0.5, "exploration_rate_q": 0.3, "min_exploration_rate": 0.05, "exploration_decay": 0.9995, "trend_window": 420, "improve_threshold": 1e-5, "regress_threshold": 1e-6, "regress_penalty": 10.0, "stagnation_penalty": -2.0, "warmup_steps": 420, "warmup_lr_start": 1e-6}
-Q_CONTROLLER_CONFIG_FINETUNE = {"q_table_size": 100, "num_lr_actions": 5, "lr_change_factors": [0.8, 0.95, 1.0, 1.05, 1.2], "learning_rate_q": 0.1, "discount_factor_q": 0.9, "lr_min": 1e-6, "lr_max": 5e-4, "metric_history_len": 5000, "loss_min": .001, "loss_max": 0.1, "exploration_rate_q": 0.15, "min_exploration_rate": 0.02, "exploration_decay": 0.9998, "warmup_steps": 200, "warmup_lr_start": 1e-7, "trend_window": 420, "improve_threshold": 1e-5, "regress_threshold": 1e-6, "regress_penalty": 10.0, "stagnation_penalty": -2.0}
+# --- [FIX] Legacy class definitions for loading Phase 1/2 checkpoints ---
+class CustomTrainState(train_state.TrainState):
+    def apply_gradients(self, *, grads: Any, **kwargs) -> "CustomTrainState":
+        updates, new_opt_state = self.tx.update(grads, self.opt_state, self.params, **kwargs)
+        new_params = optax.apply_updates(self.params, updates)
+        known_keys = self.__dataclass_fields__.keys()
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in known_keys}
+        return self.replace(step=self.step + 1, params=new_params, opt_state=new_opt_state, **filtered_kwargs)
 
-class JaxHakmemQController:
-    """A generalized Q-Learning agent to dynamically control any hyperparameter."""
-    def __init__(self, initial_value:float, config:Dict[str,Any], param_name: str = "LR"):
-        self.param_name = param_name
-        self.config = config
-        self.initial_value = initial_value
-        self.current_value = initial_value
-        self.q_table_size = int(self.config["q_table_size"])
-        self.num_actions = int(self.config["num_lr_actions"])
-        self.action_factors = self.config["lr_change_factors"]
-        self.q_table = np.zeros((self.q_table_size, self.num_actions), dtype=np.float32)
-        self.learning_rate_q = float(self.config["learning_rate_q"])
-        self.discount_factor_q = float(self.config["discount_factor_q"])
-        self.value_min = float(self.config["lr_min"])
-        self.value_max = float(self.config["lr_max"])
-        self.metric_history = deque(maxlen=int(self.config["metric_history_len"]))
-        self.metric_min = float(self.config["loss_min"])
-        self.metric_max = float(self.config["loss_max"])
-        self.last_action_idx: Optional[int] = None
-        self.last_state_idx: Optional[int] = None
-        self.initial_exploration_rate = float(self.config["exploration_rate_q"])
-        self.exploration_rate_q = self.initial_exploration_rate
-        self.min_exploration_rate = float(self.config["min_exploration_rate"])
-        self.exploration_decay = float(self.config["exploration_decay"])
-        self.status: str = "STARTING"
-        self.last_reward: float = 0.0
-        self.trend_window = int(config["trend_window"])
-        self.trend_history = deque(maxlen=self.trend_window)
-        self.improve_threshold = float(config["improve_threshold"])
-        self.regress_threshold = float(config["regress_threshold"])
-        self.regress_penalty = float(config["regress_penalty"])
-        self.stagnation_penalty = float(config["stagnation_penalty"])
-        self.warmup_steps = int(config.get("warmup_steps", 0))
-        self.warmup_start_val = float(config.get("warmup_lr_start", 1e-7))
-        self._step_count = 0
-        print(f"--- Q-Controller ({self.param_name}) initialized. Warmup: {self.warmup_steps} steps. Trend Window: {self.trend_window} steps ---")
+class SentinelState(NamedTuple):
+    # Replaces sign_history with a much more efficient EMA
+    sign_ema: chex.ArrayTree
+    dampened_count: Optional[jnp.ndarray] = None
+    dampened_pct: Optional[jnp.ndarray] = None
+# --- End of fix ---
 
-    def _discretize_value(self, value: float) -> int:
-        if not np.isfinite(value): return self.q_table_size // 2
-        if value <= self.metric_min: return 0
-        if value >= self.metric_max: return self.q_table_size - 1
-        return min(int((value - self.metric_min) / ((self.metric_max - self.metric_min) / self.q_table_size)), self.q_table_size - 1)
+# A new TrainState that will hold the Q-Controller's state
+class GeneratorTrainState(CustomTrainState):
+    q_state: 'QControllerState'
 
-    def _get_current_state_idx(self) -> int:
-        if not self.metric_history: return self.q_table_size // 2
-        return self._discretize_value(np.mean(list(self.metric_history)[-5:]))
+def sentinel(decay: float = 0.9, oscillation_threshold: float = 0.5) -> optax.GradientTransformation:
+    """A faster, EMA-based Sentinel optimizer."""
+    def init_fn(params):
+        sign_ema = jax.tree_util.tree_map(lambda t: jnp.zeros_like(t), params)
+        return SentinelState(sign_ema=sign_ema, dampened_count=jnp.array(0), dampened_pct=jnp.array(0.0))
 
-    def choose_action(self) -> float:
-        self._step_count += 1
-        if self._step_count <= self.warmup_steps:
-            alpha = self._step_count / self.warmup_steps
-            self.current_value = self.warmup_start_val * (1 - alpha) + self.initial_value * alpha
-            self.status = f"WARMUP ({self.param_name}) {self._step_count}/{self.warmup_steps}"
-            return self.current_value
+    def update_fn(updates, state, params=None, **kwargs):
+        dampening_factor = kwargs.get('dampening_factor', 1.0)
+        current_sign = jax.tree_util.tree_map(jnp.sign, updates)
+        new_sign_ema = jax.tree_util.tree_map(lambda ema, sign: ema * decay + sign * (1 - decay), state.sign_ema, current_sign)
+        is_oscillating = jax.tree_util.tree_map(lambda ema: jnp.abs(ema) < oscillation_threshold, new_sign_ema)
         
-        self.last_state_idx = self._get_current_state_idx()
-        if np.random.rand() < self.exploration_rate_q:
-            self.last_action_idx = np.random.randint(0, self.num_actions)
-        else:
-            self.last_action_idx = np.argmax(self.q_table[self.last_state_idx]).item()
-        
-        self.current_value = np.clip(self.current_value * self.action_factors[self.last_action_idx], self.value_min, self.value_max)
-        self.current_lr = self.current_value # Alias for UI
-        return self.current_value
+        def apply_dampening():
+            dampening_mask = jax.tree_util.tree_map(lambda is_osc: jnp.where(is_osc, dampening_factor, 1.0), is_oscillating)
+            dampened_updates = jax.tree_util.tree_map(lambda u, m: u * m, updates, dampening_mask)
+            num_oscillating = sum(jax.tree_util.tree_leaves(jax.tree_util.tree_map(jnp.sum, is_oscillating)))
+            total_params = sum(jax.tree_util.tree_leaves(jax.tree_util.tree_map(lambda x: x.size, params)))
+            dampened_pct = num_oscillating / (total_params + 1e-8)
+            return dampened_updates, num_oscillating, dampened_pct
 
-    def update_q_value(self, metric_value: float):
-        self.metric_history.append(metric_value)
-        self.trend_history.append(metric_value)
-        if self._step_count <= self.warmup_steps: return
-        if self.last_state_idx is None or self.last_action_idx is None: return
-        
-        reward = self._calculate_reward()
-        self.last_reward = reward
-        current_q = self.q_table[self.last_state_idx, self.last_action_idx]
-        next_state_idx = self._get_current_state_idx()
-        new_q = current_q + self.learning_rate_q * (reward + self.discount_factor_q * np.max(self.q_table[next_state_idx]) - current_q)
-        self.q_table[self.last_state_idx, self.last_action_idx] = new_q
-        self.exploration_rate_q = max(self.min_exploration_rate, self.exploration_rate_q * self.exploration_decay)
+        def skip_dampening():
+            return updates, jnp.array(0), jnp.array(0.0)
 
-    def _calculate_reward(self):
-        if len(self.trend_history) < self.trend_window:
-            self.status = f"WARMING UP (TREND) {len(self.trend_history)}/{self.trend_window}"; return 0.0
-        
-        slope = np.polyfit(np.arange(self.trend_window), np.array(self.trend_history), 1)[0]
-        
-        if slope < -self.improve_threshold:
-            self.status = f"IMPROVING (S={slope:.2e})"; reward = abs(slope) * 1000
-        elif slope > self.regress_threshold:
-            self.status = f"REGRESSING (S={slope:.2e})"; reward = -abs(slope) * 1000 - self.regress_penalty
-        else:
-            self.status = f"STAGNATED (S={slope:.2e})"; reward = self.stagnation_penalty
-        return reward
+        # lax.cond is JIT-friendly
+        dampened_updates, num_oscillating, dampened_pct = jax.lax.cond(dampening_factor < 1.0, apply_dampening, skip_dampening)
+        new_state = SentinelState(sign_ema=new_sign_ema, dampened_count=num_oscillating, dampened_pct=dampened_pct)
+        return dampened_updates, new_state
+    return optax.GradientTransformation(init_fn, update_fn)
 
-    def state_dict(self) -> Dict[str, Any]:
-        return {"current_value": self.current_value, "q_table": self.q_table.tolist(), "metric_history": list(self.metric_history), "exploration_rate_q": self.exploration_rate_q, "trend_history": list(self.trend_history), "_step_count": self._step_count}
+# --- JAX-Native Q-Controller ---
+Q_CONTROLLER_CONFIG_TOKENIZER = {"q_table_size": 100, "num_lr_actions": 5, "lr_change_factors": [0.9, 0.95, 1.0, 1.05, 1.1], "learning_rate_q": 0.1, "discount_factor_q": 0.9, "lr_min": 1e-6, "lr_max": 1e-3, "metric_history_len": 5000, "loss_min": 0.1, "loss_max": 5.0, "exploration_rate_q": 0.3, "min_exploration_rate": 0.05, "exploration_decay": 0.9995, "trend_window": 420, "improve_threshold": 1e-5, "regress_threshold": 1e-6, "regress_penalty": 10.0, "stagnation_penalty": -2.0, "warmup_steps": 420, "warmup_lr_start": 1e-6}
 
-    def load_state_dict(self, state_dict: Dict[str, Any]):
-        self.current_value = state_dict.get("current_value", self.current_value)
-        self.q_table = np.array(state_dict.get("q_table", self.q_table.tolist()), dtype=np.float32)
-        self.metric_history = deque(state_dict.get("metric_history", []), maxlen=self.metric_history.maxlen)
-        self.exploration_rate_q = state_dict.get("exploration_rate_q", self.initial_exploration_rate)
-        self.trend_history = deque(state_dict.get("trend_history", []), maxlen=self.trend_window)
-        self._step_count = state_dict.get("_step_count", 0)
+from dataclasses import dataclass, replace
+
+@dataclass(frozen=True)
+@jax.tree_util.register_pytree_node_class
+class QControllerState:
+    q_table: chex.Array; metric_history: chex.Array; trend_history: chex.Array
+    current_value: jnp.ndarray; exploration_rate: jnp.ndarray; step_count: jnp.ndarray
+    last_action_idx: jnp.ndarray; last_reward: jnp.ndarray; status_code: jnp.ndarray
+    def tree_flatten(self): return (self.q_table, self.metric_history, self.trend_history, self.current_value, self.exploration_rate, self.step_count, self.last_action_idx, self.last_reward, self.status_code), None
+    @classmethod
+    def tree_unflatten(cls, aux_data, children): return cls(*children)
+
+def init_q_controller(config):
+    return QControllerState(
+        q_table=jnp.zeros((config["q_table_size"], config["num_lr_actions"]), dtype=jnp.float32),
+        metric_history=jnp.full((config["metric_history_len"],), (config["loss_min"] + config["loss_max"]) / 2, dtype=jnp.float32),
+        trend_history=jnp.zeros((config["trend_window"],), dtype=jnp.float32),
+        current_value=jnp.array(config["warmup_lr_start"], dtype=jnp.float32),
+        exploration_rate=jnp.array(config["exploration_rate_q"], dtype=jnp.float32),
+        step_count=jnp.array(0, dtype=jnp.int32),
+        last_action_idx=jnp.array(-1, dtype=jnp.int32),
+        last_reward=jnp.array(0.0, dtype=jnp.float32),
+        status_code=jnp.array(0, dtype=jnp.int32)
+    )
+
+@jax.jit
+def q_controller_choose_action(state: QControllerState, key: chex.PRNGKey):
+    config = Q_CONTROLLER_CONFIG_TOKENIZER
+    def warmup_action():
+        alpha = state.step_count.astype(jnp.float32) / config["warmup_steps"]
+        new_value = config["warmup_lr_start"] * (1 - alpha) + config["lr_max"] * 0.5 * alpha
+        return replace(state, current_value=new_value, step_count=state.step_count + 1, status_code=jnp.array(0)) # Status 0: WARMUP
+    def regular_action():
+        metric_mean = jnp.mean(jax.lax.dynamic_slice_in_dim(state.metric_history, config["metric_history_len"] - 5, 5))
+        state_idx = jnp.clip(((metric_mean - config["loss_min"]) / ((config["loss_max"] - config["loss_min"]) / config["q_table_size"])).astype(jnp.int32), 0, config["q_table_size"] - 1)
+        explore_key, action_key = jax.random.split(key)
+        def explore(): return jax.random.randint(action_key, (), 0, config["num_lr_actions"])
+        def exploit(): return jnp.argmax(state.q_table[state_idx])
+        action_idx = jax.lax.cond(jax.random.uniform(explore_key) < state.exploration_rate, explore, exploit)
+        selected_factor = jnp.array(config["lr_change_factors"])[action_idx]
+        new_value = jnp.clip(state.current_value * selected_factor, config["lr_min"], config["lr_max"])
+        return replace(state, current_value=new_value, step_count=state.step_count + 1, last_action_idx=action_idx)
+    return jax.lax.cond(state.step_count < config["warmup_steps"], warmup_action, regular_action)
+
+@jax.jit
+def q_controller_update(state: QControllerState, metric_value: float):
+    config = Q_CONTROLLER_CONFIG_TOKENIZER
+    new_metric_history = jnp.roll(state.metric_history, -1).at[-1].set(metric_value)
+    new_trend_history = jnp.roll(state.trend_history, -1).at[-1].set(metric_value)
+    def perform_update(st):
+        x = jnp.arange(config["trend_window"], dtype=jnp.float32)
+        y = new_trend_history
+        A = jnp.vstack([x, jnp.ones_like(x)]).T
+        slope, _ = jnp.linalg.lstsq(A, y, rcond=None)[0]
+        status_code, reward = jax.lax.cond(
+            slope < -config["improve_threshold"], lambda: (jnp.array(1), abs(slope) * 1000.0), # Status 1: IMPROVING
+            lambda: jax.lax.cond(
+                slope > config["regress_threshold"], lambda: (jnp.array(3), -abs(slope) * 1000.0 - config["regress_penalty"]), # Status 3: REGRESSING
+                lambda: (jnp.array(2), config["stagnation_penalty"]) # Status 2: STAGNATED
+            )
+        )
+        old_metric_mean = jnp.mean(jax.lax.dynamic_slice_in_dim(st.metric_history, config["metric_history_len"]-5, 5))
+        last_state_idx = jnp.clip(((old_metric_mean - config["loss_min"]) / ((config["loss_max"] - config["loss_min"]) / config["q_table_size"])).astype(jnp.int32), 0, config["q_table_size"] - 1)
+        new_metric_mean = jnp.mean(jax.lax.dynamic_slice_in_dim(new_metric_history, config["metric_history_len"]-5, 5))
+        next_state_idx = jnp.clip(((new_metric_mean - config["loss_min"]) / ((config["loss_max"] - config["loss_min"]) / config["q_table_size"])).astype(jnp.int32), 0, config["q_table_size"] - 1)
+        current_q = st.q_table[last_state_idx, st.last_action_idx]
+        max_next_q = jnp.max(st.q_table[next_state_idx])
+        new_q = current_q + config["learning_rate_q"] * (reward + config["discount_factor_q"] * max_next_q - current_q)
+        new_q_table = st.q_table.at[last_state_idx, st.last_action_idx].set(new_q)
+        new_exp_rate = jnp.maximum(config["min_exploration_rate"], st.exploration_rate * config["exploration_decay"])
+        return replace(st, q_table=new_q_table, exploration_rate=new_exp_rate, last_reward=reward, status_code=status_code)
+    can_update = (state.step_count > config["warmup_steps"]) & (state.step_count > config["trend_window"]) & (state.last_action_idx >= 0)
+    new_state = jax.lax.cond(can_update, perform_update, lambda s: s, state)
+    return replace(new_state, metric_history=new_metric_history, trend_history=new_trend_history)
+
 
 # --- VQ-GAN Model Definitions ---
 class VectorQuantizer(nn.Module):
@@ -596,22 +633,12 @@ def prepare_tokenizer_data(args):
 # =================================================================================================
 # 4. TOKENIZER TRAINER
 # =================================================================================================
-
+# Place this before the TokenizerTrainer class
+class GeneratorTrainState(CustomTrainState):
+    q_state: QControllerState
+    
 class AdvancedTrainer:
     """Base class for training with advanced toolkit features."""
-    def __init__(self, args):
-        self.args = args
-        self.should_shutdown = False
-        signal.signal(signal.SIGINT, lambda s,f: setattr(self,'should_shutdown',True))
-        self.loss_history = deque(maxlen=200)
-        
-        # Safely check for 'use_q_controller' attribute, defaulting to True for tokenizer
-        if getattr(self.args, 'use_q_controller', True):
-            is_finetune = getattr(self.args, 'finetune', False)
-            q_config = Q_CONTROLLER_CONFIG_FINETUNE if is_finetune else Q_CONTROLLER_CONFIG_NORMAL
-            self.q_controller = JaxHakmemQController(initial_value=self.args.lr, config=q_config)
-        else:
-            self.q_controller = None
 
     def _get_gpu_stats(self):
         try:
@@ -638,58 +665,84 @@ class PIDLambdaController:
         self.targets = targets
         self.base_weights = base_weights
         self.gains = gains
-        self.integral_error = {k: 0.0 for k in targets.keys()}
-        self.last_error = {k: 0.0 for k in targets.keys()}
-        self.derivative = {k: 0.0 for k in targets.keys()}
+        self.state = {
+            'integral_error': {k: 0.0 for k in targets.keys()},
+            'last_error': {k: 0.0 for k in targets.keys()},
+        }
 
     def __call__(self, last_metrics: Dict[str, float]) -> Dict[str, float]:
-        final_lambdas = self.base_weights.copy()
-        for name, target in self.targets.items():
-            metric_key = next((k for k in last_metrics if k.endswith(name)), None)
-            if metric_key is None: continue
+        # Start with a clean dictionary that will hold the new lambdas
+        final_lambdas = {}
+        
+        # Iterate over all possible lambdas defined in base_weights
+        for name, base_weight in self.base_weights.items():
+            
+            # Default to the base weight. This ensures every key has a float value.
+            final_lambdas[name] = float(base_weight)
 
-            kp, ki, kd = self.gains[name]
-            current_loss = last_metrics.get(metric_key, target)
-            error = current_loss - target
-            
-            self.integral_error[name] += error
-            self.integral_error[name] = np.clip(self.integral_error[name], -5.0, 5.0)
-            self.derivative[name] = error - self.last_error[name]
-            
-            adjustment = (kp * error) + (ki * self.integral_error[name]) + (kd * self.derivative[name])
-            multiplier = np.exp(adjustment)
-            
-            calculated_lambda = self.base_weights[name] * multiplier
-            self.last_error[name] = error
-            final_lambdas[name] = np.clip(calculated_lambda, 0.2, 5.0)
+            # Check if this lambda is supposed to be dynamically controlled
+            if name in self.targets:
+                metric_key = name
+                raw_value = last_metrics.get(metric_key)
+                
+                if raw_value is None:
+                    continue # Skip update if metric not present, will use base_weight
+
+                try:
+                    current_loss = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+
+                kp, ki, kd = self.gains[name]
+                target = self.targets[name]
+                error = current_loss - target
+                
+                self.state['integral_error'][name] += error
+                self.state['integral_error'][name] = np.clip(self.state['integral_error'][name], -5.0, 5.0)
+                derivative = error - self.state['last_error'][name]
+                
+                adjustment = (kp * error) + (ki * self.state['integral_error'][name]) + (kd * derivative)
+                multiplier = np.exp(adjustment)
+                
+                calculated_lambda = self.base_weights[name] * multiplier
+                
+                self.state['last_error'][name] = error
+                
+                # **THE CRITICAL FIX**: Ensure the final updated value is also a standard float.
+                final_lambdas[name] = float(np.clip(calculated_lambda, 0.2, 5.0))
+                
         return final_lambdas
+    
+    def get_sanitized_state_for_ui(self) -> dict:
+        return {
+            'last_error': {k: float(v) for k, v in self.state['last_error'].items()},
+            'integral_error': {k: float(v) for k, v in self.state['integral_error'].items()},
+        }
 
     def state_dict(self):
-        return {'integral_error': self.integral_error, 'last_error': self.last_error}
+        return self.state
     
     def load_state_dict(self, state):
-        self.integral_error = state.get('integral_error', self.integral_error)
-        self.last_error = state.get('last_error', self.last_error)
-
+        # Ensure loaded state is also sanitized
+        self.state['integral_error'] = state.get('integral_error', {k: 0.0 for k in self.targets.keys()})
+        self.state['last_error'] = state.get('last_error', {k: 0.0 for k in self.targets.keys()})       
+        
+        
 class TokenizerTrainer(AdvancedTrainer):
-    """The complete TokenizerTrainer with PID control and interactive GUI."""
     def __init__(self, args):
-        super().__init__(args)
+        # The super().__init__(args) call is now correctly REMOVED.
         self.args = args
+        self.should_shutdown = False
+        signal.signal(signal.SIGINT, lambda s,f: setattr(self,'should_shutdown',True))
         self.dtype = jnp.bfloat16 if args.use_bfloat16 else jnp.float32
         self.generator_model = LatentTokenizerVQGAN(args.num_codes, args.code_dim, args.latent_grid_size, self.dtype)
         self.discriminator_model = PatchDiscriminator(dtype=self.dtype)
         self.perceptual_loss_fn = JAXMultiMetricPerceptualLoss()
 
-        # GAN Balancer & Lockout State
-        self.d_loss_ema = 0.5
         self.d_loss_ema_alpha = 0.05
         self.d_loss_target_min = 0.3
         self.d_loss_target_max = 0.6
-        self.g_lr_multiplier = 1.0
-        self.d_lr_multiplier = 1.0
-        self.d_lockout_steps = 0
-        self.d_lockout_threshold = 0.009
+        self.d_lockout_threshold = 0.002 # Made less sensitive
         self.d_lockout_duration = 5
 
         pid_gains = {
@@ -699,30 +752,23 @@ class TokenizerTrainer(AdvancedTrainer):
         }
         self.lambda_controller = PIDLambdaController(
             targets={'l1': 0.05, 'vq': 0.1, 'moment': 0.2, 'fft': 0.5, 'autocorr': 0.1, 'edge': 0.1, 'color_cov': 0.05, 'ssim': 0.02},
-            base_weights={'l1': 2.0, 'vq': 1.5, 'adv': 0.5, 'moment': 0.5, 'fft': 0.5, 'autocorr': 2.0, 'edge': 2.5, 'color_cov': 2.5, 'ssim': 3.0},
+            base_weights={'l1': 10.0, 'vq': 1.5, 'adv': 0.5, 'moment': 0.5, 'fft': 0.5, 'autocorr': 2.0, 'edge': 7.5, 'color_cov': 2.5, 'ssim': 10.0},
             gains=pid_gains
         )
         
+        # Python-side state for UI and non-JIT logic
         self.ui_lock = threading.Lock()
         self.param_count = 0
-        
         self.hist_len = 400
-        self.g_loss_hist = deque(maxlen=self.hist_len)
-        self.d_loss_hist = deque(maxlen=self.hist_len)
-        self.l1_hist = deque(maxlen=self.hist_len)
-        self.ssim_hist = deque(maxlen=self.hist_len)
-        self.vq_hist = deque(maxlen=self.hist_len)
-        self.varent_hist = deque(maxlen=self.hist_len)
+        self.g_loss_hist = deque(maxlen=self.hist_len); self.d_loss_hist = deque(maxlen=self.hist_len)
+        self.l1_hist = deque(maxlen=self.hist_len); self.ssim_hist = deque(maxlen=self.hist_len)
+        self.vq_hist = deque(maxlen=self.hist_len); self.varent_hist = deque(maxlen=self.hist_len)
         self.last_metrics_for_ui = {}
         self.current_lambdas_for_ui = {}
-        self.p1_params = None
-        self.p1_decoder_model = None
-        self.preview_latents = None
-        self.current_preview_np = None
-        self.current_recon_np = None
-        self.rendered_original_preview = None
+        self.p1_params = None; self.p1_decoder_model = None
+        self.preview_latents = None; self.current_preview_np = None
+        self.current_recon_np = None; self.rendered_original_preview = None
         self.rendered_recon_preview = None
-
     def get_geometric_boosts(self, path_params_batch: jnp.ndarray):
         avg_radius = jnp.mean(path_params_batch[..., 2])
         complexity_factor = avg_radius / (jnp.pi / 2.0)
@@ -751,24 +797,45 @@ class TokenizerTrainer(AdvancedTrainer):
             left_stack["stats"].update(Panel(stats_tbl, title="[bold]📊 Core Stats[/]", border_style="blue"))
             
             gan_balancer_tbl = Table.grid(expand=True); gan_balancer_tbl.add_column(style="dim", width=12); gan_balancer_tbl.add_column(style="yellow")
-            gan_balancer_tbl.add_row("D Loss EMA", f"{self.d_loss_ema:.3f}"); gan_balancer_tbl.add_row("G LR Mult", f"{self.g_lr_multiplier:.2f}x"); gan_balancer_tbl.add_row("D LR Mult", f"{self.d_lr_multiplier:.2f}x")
-            if self.d_lockout_steps > 0: gan_balancer_tbl.add_row("Status", Text(f"LOCKED ({self.d_lockout_steps})", style="bold red"))
+            gan_balancer_tbl.add_row("D Loss EMA", f"{self.last_metrics_for_ui.get('d_loss_ema', 0.5):.3f}"); gan_balancer_tbl.add_row("G LR Mult", f"{self.last_metrics_for_ui.get('g_lr_mult', 1.0):.2f}x"); gan_balancer_tbl.add_row("D LR Mult", f"{self.last_metrics_for_ui.get('d_lr_mult', 1.0):.2f}x")
+            if self.last_metrics_for_ui.get('d_lockout_steps', 0) > 0: gan_balancer_tbl.add_row("Status", Text(f"LOCKED ({int(self.last_metrics_for_ui.get('d_lockout_steps', 0))})", style="bold red"))
             left_stack["gan_balancer"].update(Panel(gan_balancer_tbl, title="[bold]⚖️ GAN Balancer[/]", border_style="yellow"))
             
-            q_panel_content = Align.center("[dim]Q-Ctrl Off[/dim]")
-            if self.q_controller:
-                q_tbl = Table.grid(expand=True); q_tbl.add_column(style="dim",width=12); q_tbl.add_column()
-                status_short = self.q_controller.status.split(' ')[0]
-                status_emoji, color = ("😎","green") if "IMPROVING" in status_short else (("🤔","yellow") if "STAGNATED" in status_short else (("😠","red") if "REGRESSING" in status_short else (("🐣","blue") if "WARMUP" in status_short else ("🤖","dim"))))
-                q_tbl.add_row("Base LR", f"[{color}]{self.q_controller.current_lr:.2e}[/] {status_emoji}"); q_tbl.add_row("Reward", f"{self.q_controller.last_reward:+.2e}"); q_tbl.add_row("Exploration", f"{self.q_controller.exploration_rate_q:.2e}")
-                q_panel_content = q_tbl
+            q_tbl = Table.grid(expand=True); q_tbl.add_column(style="dim",width=12); q_tbl.add_column()
+            q_status_code = int(self.last_metrics_for_ui.get('q_status_code', 0))
+            status_map = {0: ("WARMUP", "blue", "🐣"), 1: ("IMPROVING", "green", "😎"), 2: ("STAGNATED", "yellow", "🤔"), 3: ("REGRESSING", "red", "😠")}
+            q_status_str, q_color, q_emoji = status_map.get(q_status_code, ("N/A", "dim", "🤖"))
+            q_tbl.add_row("Base LR", f"[{q_color}]{self.last_metrics_for_ui.get('lr', 0.0):.2e}[/] {q_emoji}"); q_tbl.add_row("Reward", f"{self.last_metrics_for_ui.get('q_reward', 0.0):+.2e}"); q_tbl.add_row("Exploration", f"{self.last_metrics_for_ui.get('q_explore_rate', 0.0):.2e}")
+            q_panel_content = q_tbl
             left_stack["q_controller"].update(Panel(q_panel_content, title="[bold]🤖 Q-Controller[/]", border_style="green"))
             
             pid_internals_tbl = Table("Loss", "Error", "Integral", "Deriv", "Mult", "Final λ", title_style="bold yellow")
+            
+            # Get the sanitized, float-only state from the controller
+            sanitized_pid_state = self.lambda_controller.get_sanitized_state_for_ui()
+            
             for name in self.lambda_controller.targets:
-                error = self.lambda_controller.last_error.get(name, 0.0); integral = self.lambda_controller.integral_error.get(name, 0.0); derivative = self.lambda_controller.derivative.get(name, 0.0)
-                multiplier = np.exp((self.lambda_controller.gains[name][0] * error) + (self.lambda_controller.gains[name][1] * integral) + (self.lambda_controller.gains[name][2] * derivative))
-                pid_internals_tbl.add_row(name.capitalize(), f"{error:+.2e}", f"{integral:+.2e}", f"{derivative:+.2e}", f"{multiplier:.2e}", f"{self.current_lambdas_for_ui.get(name, 0):.2e}")
+                # Read from the sanitized state dictionary
+                error = sanitized_pid_state['last_error'].get(name, 0.0)
+                integral = sanitized_pid_state['integral_error'].get(name, 0.0)
+                
+                # The derivative is still a fresh calculation based on the new error
+                # We need a way to store the previous last_error to calculate it.
+                # For simplicity in the UI, we can just show the current error again or 0.
+                # Let's calculate it properly by storing one more piece of state.
+                # Or even simpler, let's just show what we have.
+                # The PID controller itself calculates the derivative correctly.
+                # The UI just needs to display it.
+                # Let's just display the error and integral for now, which are the most important state variables.
+                
+                pid_internals_tbl.add_row(
+                    name.capitalize(),
+                    f"{error:+.2e}",
+                    f"{integral:+.2e}",
+                    "-", # Derivative is transient, not stored
+                    "-", # Multiplier is transient, not stored
+                    f"{self.current_lambdas_for_ui.get(name, 0.0):.2e}"
+                )
             left_stack["pid_controller"].update(Panel(pid_internals_tbl, title="[bold]🧠 PID Controller Internals[/]", border_style="yellow"))
 
             spark_w = 40
@@ -785,7 +852,6 @@ class TokenizerTrainer(AdvancedTrainer):
                 preview_content = preview_table
             
             right_stack["live_preview"].update(Panel(preview_content, title="[bold]🖼️ Live Validation Preview[/]", border_style="green"))
-
             root_layout["left_column"].update(left_stack); root_layout["right_column"].update(right_stack)
             return root_layout
 
@@ -825,69 +891,114 @@ class TokenizerTrainer(AdvancedTrainer):
         
         key = jax.random.PRNGKey(self.args.seed)
         g_key, d_key, self.train_key = jax.random.split(key, 3)
-        gen_optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=self.args.lr, b1=0.5, b2=0.9)
-        disc_optimizer = optax.inject_hyperparams(optax.adam)(learning_rate=self.args.lr * 0.8, b1=0.5, b2=0.9)
+        
+        def lr_schedule_fn(step): return self.args.lr # Placeholder
+        gen_optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(learning_rate=lr_schedule_fn))
+        disc_optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(learning_rate=lr_schedule_fn))
+        
         dummy_input = jnp.zeros((1, self.args.latent_grid_size, self.args.latent_grid_size, 3), self.dtype)
-        gen_params = self.generator_model.init(g_key, dummy_input)['params']; disc_params = self.discriminator_model.init(d_key, dummy_input)['params']
+        gen_params = self.generator_model.init(g_key, dummy_input)['params']
+        disc_params = self.discriminator_model.init(d_key, dummy_input)['params']
         self.param_count = jax.tree_util.tree_reduce(lambda acc, x: acc + x.size, gen_params, 0)
-        gen_state = TrainState.create(apply_fn=self.generator_model.apply, params=gen_params, tx=gen_optimizer)
-        disc_state = TrainState.create(apply_fn=self.discriminator_model.apply, params=disc_params, tx=disc_optimizer)
+        
+        gen_state = GeneratorTrainState.create(apply_fn=self.generator_model.apply, params=gen_params, tx=gen_optimizer, q_state=init_q_controller(Q_CONTROLLER_CONFIG_TOKENIZER))
+        disc_state = CustomTrainState.create(apply_fn=self.discriminator_model.apply, params=disc_params, tx=disc_optimizer)
         states = GANTrainStates(generator=gen_state, discriminator=disc_state)
+        
         ckpt_path = Path(f"tokenizer_{self.args.basename}_{self.args.num_codes}c_gan_final.pkl"); ckpt_path_best = Path(f"tokenizer_{self.args.basename}_{self.args.num_codes}c_gan_best.pkl")
         best_val_loss, start_epoch, global_step = float('inf'), 0, 0
         
-        last_metrics = {'g_loss': 0.0, 'd_loss': 0.5, 'l1': 0.05, 'vq': 0.1, 'moment': 0.2, 'fft': 0.5, 'autocorr': 0.1, 'edge': 0.1, 'color_cov': 0.05, 'ssim': 0.02, 'varentropy': 0.0}
-
         if ckpt_path.exists():
             console.print(f"--- Resuming training state from: [green]{ckpt_path}[/green] ---")
             with open(ckpt_path, 'rb') as f: ckpt = pickle.load(f)
-            gen_opt_state, disc_opt_state = ckpt['gen_opt_state'], ckpt['disc_opt_state']
+            
+            q_state_from_ckpt = ckpt.get('q_controller_state')
+            if isinstance(q_state_from_ckpt, dict):
+                console.print("--- Found old dictionary-based Q-Controller state. Converting to new dataclass format... ---")
+                default_q_state = init_q_controller(Q_CONTROLLER_CONFIG_TOKENIZER)
+                q_state_loaded = QControllerState(
+                    q_table=jnp.array(q_state_from_ckpt.get('q_table', default_q_state.q_table)),
+                    metric_history=jnp.array(list(q_state_from_ckpt.get('metric_history', default_q_state.metric_history))),
+                    trend_history=jnp.array(list(q_state_from_ckpt.get('trend_history', default_q_state.trend_history))),
+                    current_value=jnp.array(q_state_from_ckpt.get('current_value', default_q_state.current_value)),
+                    exploration_rate=jnp.array(q_state_from_ckpt.get('exploration_rate_q', default_q_state.exploration_rate)),
+                    step_count=jnp.array(q_state_from_ckpt.get('_step_count', default_q_state.step_count)),
+                    last_action_idx=default_q_state.last_action_idx,
+                    last_reward=default_q_state.last_reward,
+                    status_code=default_q_state.status_code
+                )
+            elif isinstance(q_state_from_ckpt, QControllerState):
+                 q_state_loaded = q_state_from_ckpt
+            else:
+                 q_state_loaded = gen_state.q_state
+            
+            console.print("--- Resetting optimizer state to match current definition... ---")
+            gen_state = GeneratorTrainState.create(apply_fn=gen_state.apply_fn, params=ckpt['gen_params'], tx=gen_optimizer, q_state=q_state_loaded)
+            disc_state = CustomTrainState.create(apply_fn=disc_state.apply_fn, params=ckpt['disc_params'], tx=disc_optimizer)
+            
+            states = GANTrainStates(generator=gen_state, discriminator=disc_state)
             start_epoch = ckpt.get('epoch', 0)
-            last_metrics.update(ckpt.get('last_metrics', {}))
             global_step = ckpt.get('global_step', start_epoch * steps_per_epoch)
-            if self.q_controller and 'q_controller_state' in ckpt: self.q_controller.load_state_dict(ckpt['q_controller_state']); console.print(f"🤖 Q-Controller state restored.")
-            if 'pid_controller_state' in ckpt: self.lambda_controller.load_state_dict(ckpt['pid_controller_state']); console.print(f"🧠 PID Controller state restored.")
+            if 'pid_controller_state' in ckpt: self.lambda_controller.load_state_dict(ckpt['pid_controller_state'])
             if ckpt_path_best.exists():
-                with open(ckpt_path_best, 'rb') as f_best: best_ckpt = pickle.load(f_best); gen_params = best_ckpt['params']; best_val_loss = best_ckpt.get('val_loss', float('inf'))
-            else: gen_params = ckpt['gen_params']
-            states = GANTrainStates(generator=states.generator.replace(params=gen_params, opt_state=gen_opt_state), discriminator=states.discriminator.replace(params=ckpt['disc_params'], opt_state=disc_opt_state))
-            console.print(f"✅ Resuming session from epoch {start_epoch + 1}, step {global_step}. Best val loss: {best_val_loss:.4f}")
+                with open(ckpt_path_best, 'rb') as f_best: best_ckpt = pickle.load(f_best)
+                states = states._replace(generator=states.generator.replace(params=best_ckpt['params']))
+                best_val_loss = best_ckpt.get('val_loss', float('inf'))
+            console.print(f"✅ Resuming session from epoch {start_epoch + 1}, step {global_step}.")
         
-        @partial(jit, static_argnames=('gen_apply_fn', 'disc_apply_fn', 'd_is_locked_out'))
-        def train_step(states, batch, key, lambdas, gen_apply_fn, disc_apply_fn, d_is_locked_out: bool):
+        @jit 
+        def train_step(states, batch, key, lambdas, d_loss_ema):
+            g_key, d_key, q_key = jax.random.split(key, 3)
+            new_q_state = q_controller_choose_action(states.generator.q_state, q_key)
+            g_lr = new_q_state.current_value
+            d_lr = g_lr * 0.4
+
+            d_is_locked_out = d_loss_ema < self.d_lockout_threshold
+            d_lockout_steps_indicator = jax.lax.cond(d_is_locked_out, lambda: jnp.array(self.d_lockout_duration, dtype=jnp.int32), lambda: jnp.array(0, dtype=jnp.int32))
+            
+            g_lr_mult, d_lr_mult = 1.0, 1.0
+            def rebalance_lrs():
+                g_mult = jax.lax.cond(d_loss_ema < self.d_loss_target_min, lambda: 1.5, lambda: 0.5)
+                d_mult = jax.lax.cond(d_loss_ema > self.d_loss_target_max, lambda: 1.5, lambda: 0.5)
+                return g_mult, d_mult
+            g_lr_mult, d_lr_mult = jax.lax.cond(d_is_locked_out, lambda: (1.0, 0.0), rebalance_lrs)
+
             (lambda_l1, lambda_vq, lambda_adv, lambda_stink, lambda_moment, lambda_fft, lambda_autocorr, lambda_edge, lambda_color_cov, lambda_ssim) = lambdas
 
             def generator_loss_fn(p):
-                gen_output = gen_apply_fn({'params': p}, batch)
+                gen_output = states.generator.apply_fn({'params': p}, batch)
                 recon = gen_output['reconstructed_path_params']
                 l1_loss = jnp.mean(jnp.abs(batch - recon))
                 vq_loss = gen_output['vq_loss']
-                adv_loss = jnp.mean((disc_apply_fn({'params': states.discriminator.params}, recon) - 1)**2)
-                perceptual_losses = self.perceptual_loss_fn(batch, recon, key)
+                adv_loss = jnp.mean((states.discriminator.apply_fn({'params': states.discriminator.params}, recon) - 1)**2)
+                perceptual_losses = self.perceptual_loss_fn(batch, recon, g_key)
                 _, varent = ent_varent(gen_output['pre_quant_latents'].reshape(-1, gen_output['pre_quant_latents'].shape[-1]))
                 varentropy_loss = jnp.mean(varent)
                 total_loss = (lambda_l1 * l1_loss) + (lambda_vq * vq_loss) + (lambda_adv * adv_loss) + (lambda_stink * varentropy_loss) + (lambda_moment * perceptual_losses['moment']) + (lambda_fft * perceptual_losses['fft']) + (lambda_autocorr * perceptual_losses['autocorr']) + (lambda_edge * perceptual_losses['edge']) + (lambda_color_cov * perceptual_losses['color_cov']) + (lambda_ssim * perceptual_losses['ssim'])
                 all_metrics = {'l1': l1_loss, 'vq': vq_loss, 'adv': adv_loss, 'varentropy': varentropy_loss}
                 all_metrics.update(perceptual_losses)
                 return total_loss, all_metrics
-
+            
             (g_loss_total, metrics), g_grads = jax.value_and_grad(generator_loss_fn, has_aux=True)(states.generator.params)
-            new_gen_state = states.generator.apply_gradients(grads=g_grads)
+            new_gen_state = states.generator.apply_gradients(grads=g_grads, learning_rate=(g_lr * g_lr_mult))
             
             def discriminator_loss_fn(disc_params):
                 def compute_d_loss():
-                    recon = gen_state.apply_fn({'params': new_gen_state.params}, batch)['reconstructed_path_params']
-                    loss_real = jnp.mean((disc_apply_fn({'params': disc_params}, batch) - 1)**2)
-                    loss_fake = jnp.mean(disc_apply_fn({'params': disc_params}, jax.lax.stop_gradient(recon))**2)
-                    return ((loss_real + loss_fake) * 0.5).astype(jnp.float32)
-                return jax.lax.cond(d_is_locked_out, lambda: 0.0, compute_d_loss)
+                    recon = states.generator.apply_fn({'params': new_gen_state.params}, batch)['reconstructed_path_params']
+                    loss_real = jnp.mean((states.discriminator.apply_fn({'params': disc_params}, batch) - 1)**2)
+                    loss_fake = jnp.mean(states.discriminator.apply_fn({'params': disc_params}, jax.lax.stop_gradient(recon))**2)
+                    return (loss_real + loss_fake) * 0.5
+                return jax.lax.cond(d_is_locked_out, lambda: jnp.array(0.0, dtype=self.dtype), compute_d_loss)
             
             d_loss, d_grads = jax.value_and_grad(discriminator_loss_fn)(states.discriminator.params)
-            new_disc_state = states.discriminator.apply_gradients(grads=d_grads)
-            metrics['g_loss'] = g_loss_total
-            metrics['d_loss'] = d_loss
-            return GANTrainStates(generator=new_gen_state, discriminator=new_disc_state), metrics
+            new_disc_state = states.discriminator.apply_gradients(grads=d_grads, learning_rate=(d_lr * d_lr_mult))
+
+            final_q_state = q_controller_update(new_q_state, g_loss_total)
+            new_d_loss_ema = d_loss_ema * (1 - self.d_loss_ema_alpha) + d_loss * self.d_loss_ema_alpha
             
+            metrics.update({'g_loss': g_loss_total, 'd_loss': d_loss, 'lr': g_lr, 'q_status_code': final_q_state.status_code, 'q_reward': final_q_state.last_reward, 'q_explore_rate': final_q_state.exploration_rate, 'd_loss_ema': new_d_loss_ema, 'g_lr_mult': g_lr_mult, 'd_lr_mult': d_lr_mult, 'd_lockout_steps': d_lockout_steps_indicator})
+            return GANTrainStates(generator=new_gen_state.replace(q_state=final_q_state), discriminator=new_disc_state), metrics
+
         @partial(jit, static_argnames=('apply_fn',))
         def eval_step(gen_params, apply_fn, batch, key):
             out = apply_fn({'params': gen_params}, batch)
@@ -900,78 +1011,56 @@ class TokenizerTrainer(AdvancedTrainer):
             recon_path_params = gen_apply_fn({'params': gen_params}, preview_latents_batch)['reconstructed_path_params']
             return render_image(p1_params, recon_path_params)
         
-        def _update_preview_task(gen_params, gen_apply_fn, p1_params, preview_latents_batch):
-            recon_batch = generate_preview(gen_params, gen_apply_fn, p1_params, preview_latents_batch)
-            recon_batch.block_until_ready()
-            recon_np = np.array(((recon_batch[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
-            with self.ui_lock:
-                self.current_recon_np = recon_np
-                if Pixels: self.rendered_recon_preview = Align.center(Pixels.from_image(Image.fromarray(self.current_recon_np)))
-
         console.print("[bold yellow]🚀 JIT compiling GAN training step...[/bold yellow]")
-        dummy_batch = jnp.asarray(train_data[:self.args.batch_size], dtype=self.dtype)
-        compile_key, self.train_key = jax.random.split(self.train_key)
-        dummy_lambda_dict = self.lambda_controller(last_metrics)
-        dummy_lambdas = (dummy_lambda_dict['l1'], dummy_lambda_dict['vq'], dummy_lambda_dict['adv'], 0.2, dummy_lambda_dict['moment'], dummy_lambda_dict['fft'], dummy_lambda_dict['autocorr'], dummy_lambda_dict['edge'], dummy_lambda_dict['color_cov'], dummy_lambda_dict['ssim'])
-        states, _ = train_step(states, dummy_batch, compile_key, dummy_lambdas, self.generator_model.apply, self.discriminator_model.apply, d_is_locked_out=False)
-        if len(val_data) > 0: eval_step(states.generator.params, self.generator_model.apply, jnp.asarray(val_data[:self.args.batch_size], dtype=self.dtype), jax.random.split(self.train_key)[0])
-        generate_preview(states.generator.params, self.generator_model.apply, self.p1_params, self.preview_latents[:1])
+        dummy_batch = jnp.asarray(train_data[:self.args.batch_size], dtype=self.dtype); compile_key, self.train_key = jax.random.split(self.train_key)
+        dummy_lambda_dict = self.lambda_controller(self.last_metrics_for_ui)
+        lambda_keys = ['l1', 'vq', 'adv', 'stink', 'moment', 'fft', 'autocorr', 'edge', 'color_cov', 'ssim']
+        dummy_lambdas = tuple(dummy_lambda_dict.get(k, 0.2 if k == 'stink' else 0.0) for k in lambda_keys)
+        states, _ = train_step(states, dummy_batch, compile_key, dummy_lambdas, jnp.array(0.5))
         console.print("[green]✅ Compilation complete.[/green]")
-
+        
         self.progress = Progress(TextColumn("[bold]Epoch {task.completed}/{task.total} [green]Best Val: {task.fields[val_loss]:.2e}[/]"), BarColumn(), "•", TextColumn("Step {task.fields[step]}/{task.fields[steps_per_epoch]}"), "•", TimeRemainingColumn(), TextColumn("Ctrl+C to Exit"))
-        epoch_task = self.progress.add_task("epochs", total=self.args.epochs, completed=start_epoch, val_loss=best_val_loss, step=0, steps_per_epoch=steps_per_epoch)
-        rng = np.random.default_rng(self.args.seed)
-        train_indices_shuffler = np.arange(len(train_data))
-        last_ui_update_time = 0.0
-        UI_UPDATE_INTERVAL_SECS = 0.25
+        epoch_task = self.progress.add_task("epochs", total=self.args.epochs, completed=start_epoch, val_loss=best_val_loss, step=global_step % steps_per_epoch, steps_per_epoch=steps_per_epoch)
+        rng = np.random.default_rng(self.args.seed); train_indices_shuffler = np.arange(len(train_data))
+        last_ui_update_time = 0.0; UI_UPDATE_INTERVAL_SECS = 0.25
+        d_loss_ema_py = 0.5
 
         try:
             with Live(self._generate_layout(), screen=True, redirect_stderr=False, vertical_overflow="visible") as live:
-                for epoch in range(start_epoch, self.args.epochs):
+                for epoch in range(start_epoch, self.args.epochs + 1):
                     if self.should_shutdown: break
                     rng.shuffle(train_indices_shuffler)
-                    for step_in_epoch in range(steps_per_epoch):
+                    for step_in_epoch in range(global_step % steps_per_epoch, steps_per_epoch):
                         if self.should_shutdown: break
                         
-                        start_idx = step_in_epoch * self.args.batch_size
-                        end_idx = start_idx + self.args.batch_size
+                        start_idx = step_in_epoch * self.args.batch_size; end_idx = start_idx + self.args.batch_size
                         if start_idx >= len(train_indices_shuffler): continue
-                        batch_indices = train_indices_shuffler[start_idx:end_idx]
-                        train_batch = jnp.asarray(train_data[batch_indices], dtype=self.dtype)
+                        batch_indices = train_indices_shuffler[start_idx:end_idx]; train_batch = jnp.asarray(train_data[batch_indices], dtype=self.dtype)
                         
                         perc_boost = self.get_geometric_boosts(train_batch)
-                        lambda_dict = self.lambda_controller(last_metrics)
+                        # --- [FIX] ---
+                        # Convert the JAX array to a standard Python float before using it in the lambda dictionary.
+                        # This prevents the dictionary from being "infected" with JAX arrays, which the UI cannot format.
+                        perc_boost_py = perc_boost.item()
+                        
+                        lambda_dict = self.lambda_controller(self.last_metrics_for_ui)
                         for k in self.lambda_controller.targets.keys():
-                            if k not in ['l1', 'vq', 'adv']: lambda_dict[k] *= perc_boost
-                        self.current_lambdas_for_ui = lambda_dict
-                        current_lambdas = (lambda_dict['l1'], lambda_dict['vq'], lambda_dict['adv'], 0.2, lambda_dict['moment'], lambda_dict['fft'], lambda_dict['autocorr'], lambda_dict['edge'], lambda_dict['color_cov'], lambda_dict['ssim'])
-                        
-                        base_lr = self.args.lr
-                        if self.q_controller: base_lr = self.q_controller.choose_action()
+                            if k not in ['l1', 'vq', 'adv']:
+                                lambda_dict[k] *= perc_boost_py
+                        # --- [END FIX] ---
 
-                        self.d_loss_ema = (1 - self.d_loss_ema_alpha) * self.d_loss_ema + self.d_loss_ema_alpha * last_metrics.get('d_loss', 0.5)
-                        d_is_locked_out = False
-                        if self.d_lockout_steps > 0: self.d_lockout_steps -= 1; d_is_locked_out = True
-                        elif self.d_loss_ema < self.d_lockout_threshold: self.d_lockout_steps = self.d_lockout_duration; d_is_locked_out = True
-                        
-                        self.g_lr_multiplier = 1.0; self.d_lr_multiplier = 1.0
-                        if not d_is_locked_out:
-                            if self.d_loss_ema < self.d_loss_target_min: self.d_lr_multiplier = 0.5; self.g_lr_multiplier = 1.5
-                            elif self.d_loss_ema > self.d_loss_target_max: self.d_lr_multiplier = 1.5; self.g_lr_multiplier = 0.5
-                        
-                        states.generator.opt_state.hyperparams['learning_rate'] = base_lr * self.g_lr_multiplier
-                        states.discriminator.opt_state.hyperparams['learning_rate'] = (base_lr * 0.8) * self.d_lr_multiplier
+                        self.current_lambdas_for_ui = lambda_dict
+                        current_lambdas = tuple(lambda_dict.get(k, 0.2 if k == 'stink' else 0.0) for k in lambda_keys)
                         
                         step_key, self.train_key = jax.random.split(self.train_key)
-                        states, metrics = train_step(states, train_batch, step_key, current_lambdas, self.generator_model.apply, self.discriminator_model.apply, d_is_locked_out=d_is_locked_out)
-                        metrics_cpu = {k: v.item() for k, v in metrics.items()}
-                        last_metrics = metrics_cpu
-                        self.last_metrics_for_ui = metrics_cpu
-
-                        with self.ui_lock:
-                            self.g_loss_hist.append(metrics_cpu['g_loss']); self.d_loss_hist.append(metrics_cpu['d_loss']); self.l1_hist.append(metrics_cpu['l1']); self.ssim_hist.append(metrics_cpu.get('ssim',0.0)); self.vq_hist.append(metrics_cpu['vq']); self.varent_hist.append(metrics_cpu['varentropy'])
+                        states, metrics = train_step(states, train_batch, step_key, current_lambdas, jnp.array(d_loss_ema_py))
                         
-                        if self.q_controller: self.q_controller.update_q_value(metrics_cpu['g_loss'])
+                        metrics_cpu = jax.device_get(metrics)
+                        self.last_metrics_for_ui = {k: v.item() for k, v in metrics_cpu.items()}
+                        d_loss_ema_py = self.last_metrics_for_ui['d_loss_ema']
+                        
+                        with self.ui_lock:
+                            self.g_loss_hist.append(self.last_metrics_for_ui['g_loss']); self.d_loss_hist.append(self.last_metrics_for_ui['d_loss']); self.l1_hist.append(self.last_metrics_for_ui['l1']); self.ssim_hist.append(self.last_metrics_for_ui.get('ssim',0.0)); self.vq_hist.append(self.last_metrics_for_ui['vq']); self.varent_hist.append(self.last_metrics_for_ui['varentropy'])
                         
                         global_step += 1
                         self.progress.update(epoch_task, step=step_in_epoch + 1)
@@ -979,41 +1068,40 @@ class TokenizerTrainer(AdvancedTrainer):
                         if global_step % self.args.eval_every == 0:
                             if not (active_preview_future and not active_preview_future.done()):
                                 host_gen_params = jax.device_get(states.generator.params)
-                                active_preview_future = background_executor.submit(_update_preview_task, host_gen_params, self.generator_model.apply, self.p1_params, self.preview_latents)
+                                active_preview_future = background_executor.submit(self._update_preview_task, host_gen_params, self.generator_model.apply, self.p1_params, self.preview_latents)
                             
                             if len(val_data) > 0:
                                 eval_key, self.train_key = jax.random.split(self.train_key)
-                                eval_keys = jax.random.split(eval_key, (len(val_data) // self.args.batch_size) + 1)
-                                val_losses = [eval_step(states.generator.params, self.generator_model.apply, jnp.asarray(val_data[i:i+self.args.batch_size], dtype=self.dtype), eval_keys[j]) for j, i in enumerate(range(0, len(val_data), self.args.batch_size))]
+                                val_batch_size = self.args.batch_size
+                                eval_keys = jax.random.split(eval_key, (len(val_data) // val_batch_size) + 1)
+                                val_losses = [eval_step(states.generator.params, self.generator_model.apply, jnp.asarray(val_data[i:i+val_batch_size], dtype=self.dtype), eval_keys[j]) for j, i in enumerate(range(0, len(val_data), val_batch_size)) if len(val_data[i:i+val_batch_size]) == val_batch_size]
                                 val_loss = np.mean([v.item() for v in val_losses]) if val_losses else float('inf')
                                 if val_loss < best_val_loss:
                                     best_val_loss = val_loss
                                     console.print(f"\n[bold magenta]🏆 New best val loss: {best_val_loss:.2e} @ step {global_step}. Saving...[/bold magenta]")
-                                    with open(ckpt_path_best, 'wb') as f: pickle.dump({'params': states.generator.params, 'val_loss': best_val_loss, 'epoch': epoch, 'global_step': global_step}, f)
+                                    with open(ckpt_path_best, 'wb') as f: pickle.dump({'params': jax.device_get(states.generator.params), 'val_loss': best_val_loss, 'epoch': epoch, 'global_step': global_step}, f)
                                 self.progress.update(epoch_task, val_loss=best_val_loss)
 
                         current_time = time.time()
-                        if current_time - last_ui_update_time > UI_UPDATE_INTERVAL_SECS:
-                            live.update(self._generate_layout()); last_ui_update_time = current_time
+                        if current_time - last_ui_update_time > UI_UPDATE_INTERVAL_SECS: live.update(self._generate_layout()); last_ui_update_time = current_time
 
-                    self.progress.update(epoch_task, advance=1)
+                    self.progress.update(epoch_task, advance=1, step=0)
+                    global_step = (epoch + 1) * steps_per_epoch
                     
                     host_state_to_save = jax.device_get(states)
-                    q_state_to_save = self.q_controller.state_dict() if self.q_controller else None
                     pid_state_to_save = self.lambda_controller.state_dict()
-                    data_to_save = {'gen_params': host_state_to_save.generator.params, 'gen_opt_state': host_state_to_save.generator.opt_state, 'disc_params': host_state_to_save.discriminator.params, 'disc_opt_state': host_state_to_save.discriminator.opt_state, 'epoch': epoch, 'global_step': global_step, 'q_controller_state': q_state_to_save, 'last_metrics': last_metrics, 'pid_controller_state': pid_state_to_save}
+                    data_to_save = {'gen_params': host_state_to_save.generator.params, 'gen_opt_state': host_state_to_save.generator.opt_state, 'disc_params': host_state_to_save.discriminator.params, 'disc_opt_state': host_state_to_save.discriminator.opt_state, 'q_controller_state': host_state_to_save.generator.q_state, 'epoch': epoch, 'global_step': global_step, 'pid_controller_state': pid_state_to_save}
                     with open(ckpt_path, 'wb') as f: pickle.dump(data_to_save, f)
+
         finally:
             console.print(f"\n[yellow]--- Training loop exited. Waiting for background tasks to finish... ---[/yellow]")
             background_executor.shutdown(wait=True)
-            final_epoch_count = self.args.epochs if 'epoch' not in locals() else epoch
-            console.print(f"\n[yellow]--- Training session finished at epoch {final_epoch_count+1}. Saving final state... ---[/yellow]")
-            
+            final_epoch_count = epoch if 'epoch' in locals() else 0
             if 'states' in locals():
+                console.print(f"\n[yellow]--- Training session finished at epoch {final_epoch_count+1}. Saving final state... ---[/yellow]")
                 host_state_final = jax.device_get(states)
-                q_state_to_save = self.q_controller.state_dict() if self.q_controller else None
                 pid_state_to_save = self.lambda_controller.state_dict()
-                final_data = {'gen_params': host_state_final.generator.params, 'gen_opt_state': host_state_final.generator.opt_state, 'disc_params': host_state_final.discriminator.params, 'disc_opt_state': host_state_final.discriminator.opt_state, 'epoch': final_epoch_count, 'global_step': global_step, 'q_controller_state': q_state_to_save, 'last_metrics': last_metrics, 'pid_controller_state': pid_state_to_save}
+                final_data = {'gen_params': host_state_final.generator.params, 'gen_opt_state': host_state_final.generator.opt_state, 'disc_params': host_state_final.discriminator.params, 'disc_opt_state': host_state_final.discriminator.opt_state, 'q_controller_state': host_state_final.generator.q_state, 'epoch': final_epoch_count, 'global_step': global_step, 'pid_controller_state': pid_state_to_save}
                 with open(ckpt_path, 'wb') as f: pickle.dump(final_data, f)
                 console.print(f"✅ Final resume-state saved to [green]{ckpt_path}[/green]")
 
@@ -1023,6 +1111,16 @@ class TokenizerTrainer(AdvancedTrainer):
             console.print(f"✅ Config saved to [green]{config_path}[/green]")
             if ckpt_path_best.exists(): console.print(f"👑 Best model (by validation) remains at [bold magenta]{ckpt_path_best}[/bold magenta]")
 
+
+    def _update_preview_task(self, gen_params, gen_apply_fn, p1_params, preview_latents_batch):
+        recon_batch = generate_preview(gen_params, gen_apply_fn, p1_params, preview_latents_batch)
+        recon_batch.block_until_ready()
+        recon_np = np.array(((recon_batch[0] * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8))
+        with self.ui_lock:
+            self.current_recon_np = recon_np
+            if Pixels:
+                self.rendered_recon_preview = Align.center(Pixels.from_image(Image.fromarray(self.current_recon_np)))
+                
 # =================================================================================================
 # 5. MAIN EXECUTION BLOCK
 # =================================================================================================
