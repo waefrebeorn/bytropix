@@ -1,10 +1,10 @@
 # =================================================================================================
 #
-#        PHASE 3: DIRECT KNOWLEDGE DISTILLATION (Upgraded with Full Phase 1 Toolkit)
+#        PHASE 3: HYPER-OPTIMIZED ECHO+GT DISTILLATION (AUTONOMOUS VERSION)
 #
-#       Distills a text encoder's knowledge into a tiny, self-contained, physics-informed
-#       text-to-image generator using a self-referential consistency loss, supervised by
-#       a full, dynamically-weighted perceptual loss suite.
+#       Distills a text encoder's knowledge into a tiny, self-contained, text-to-image
+#       generator. This version features autonomous difficulty regularization and
+#       validation-based saving for peak performance and robustness.
 #
 #       >>> WORKFLOW: Use `coco_preprocessor.py` first, then run `prepare-distill-data` on its output. <<<
 #
@@ -62,7 +62,7 @@ from flax.core import freeze, unfreeze
 from flax import struct
 import chex
 from PIL import Image
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # --- Dependency Checks ---
 print("--- Checking Core Dependencies ---")
@@ -87,7 +87,6 @@ from rich.live import Live; from rich.table import Table; from rich.panel import
 from rich.text import Text
 import pynvml; pynvml.nvmlInit()
 from tqdm import tqdm
-# Only import transformers if needed for data prep
 try:
     from transformers import SiglipImageProcessor, SiglipTextModel, SiglipTokenizer
     import torch
@@ -104,20 +103,23 @@ jax.config.update("jax_debug_nans", False); jax.config.update('jax_disable_jit',
 class InteractivityState:
     def __init__(self):
         self.lock = threading.Lock()
-        self.preview_index_change, self.sentinel_dampening_log_factor = 0, 0.0
+        self.preview_index_change = 0
         self.shutdown_event, self.force_save = threading.Event(), False
+        self.gt_blast_active = False # TOGGLE state
+        self.rerun_batch_request = False # ONE-SHOT event
+
     def get_and_reset_preview_change(self):
         with self.lock: change = self.preview_index_change; self.preview_index_change = 0; return change
     def get_and_reset_force_save(self):
         with self.lock: save = self.force_save; self.force_save = False; return save
-    def update_sentinel_factor(self, direction):
-        with self.lock: self.sentinel_dampening_log_factor = np.clip(self.sentinel_dampening_log_factor + direction*0.5, -3.0, 0.0)
-    def get_sentinel_factor(self):
-        with self.lock: return 10**self.sentinel_dampening_log_factor
+    def toggle_gt_blast(self):
+        with self.lock: self.gt_blast_active = not self.gt_blast_active
+    def get_and_reset_rerun_request(self):
+        with self.lock: rerun = self.rerun_batch_request; self.rerun_batch_request = False; return rerun
     def set_shutdown(self): self.shutdown_event.set()
 
 def listen_for_keys(shared_state: InteractivityState):
-    print("--- Key listener started. Controls: [←/→] Preview | [↑/↓] Sentinel | [s] Force Save | [q] Quit ---")
+    print("--- Key listener started. Controls: [←/→] Preview | [s] Save | [g] Toggle GT Blast | [b] Rerun Batch | [q] Quit ---")
     if platform.system() == "Windows": import msvcrt # type: ignore
     else: fd, old_settings = sys.stdin.fileno(), termios.tcgetattr(sys.stdin.fileno())
     try:
@@ -129,23 +131,20 @@ def listen_for_keys(shared_state: InteractivityState):
             else:
                 if select.select([sys.stdin], [], [], 0.05)[0]: key = sys.stdin.read(1)
                 else: continue
+
             if key in [b'q', 'q', b'\x03', '\x03']: shared_state.set_shutdown(); break
             elif key in [b's', 's']:
                 with shared_state.lock: shared_state.force_save = True
+            elif key in [b'g', 'g']:
+                shared_state.toggle_gt_blast()
+            elif key in [b'b', 'b']:
+                with shared_state.lock: shared_state.rerun_batch_request = True
             elif key == b'\xe0' or key == '\x1b': # Arrow keys
                 arrow = msvcrt.getch() if platform.system() == "Windows" else sys.stdin.read(2)
                 if arrow in [b'K', '[D']: shared_state.preview_index_change = -1
                 elif arrow in [b'M', '[C']: shared_state.preview_index_change = 1
-                elif arrow in [b'H', '[A']: shared_state.update_sentinel_factor(1)
-                elif arrow in [b'P', '[B']: shared_state.update_sentinel_factor(-1)
     finally:
         if platform.system() != "Windows": termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-def get_sentinel_lever_ascii(log_factor: float):
-    idx = np.clip(int((-np.clip(log_factor, -3.0, 0.0) / 3.0) * 6), 0, 6)
-    bars = ["│         │"] * 7; bars[idx] = "│█████████│"
-    labels = ["1.0 (Off)", " ", "0.1", " ", "0.01", " ", "0.001"]
-    return "\n".join([f" {labels[i]:<10} {bars[i]}" for i in range(7)])
 
 class QControllerState(struct.PyTreeNode):
     q_table: chex.Array; metric_history: chex.Array; trend_history: chex.Array
@@ -156,39 +155,37 @@ class QControllerState(struct.PyTreeNode):
 class QControllerConfig:
     q_table_size: int = 100; num_lr_actions: int = 5
     lr_change_factors: Tuple[float, ...] = (0.9, 0.95, 1.0, 1.05, 1.1)
-    learning_rate_q: float = 0.1; discount_factor_q: float = 0.9
-    lr_min: float = 1e-6; lr_max: float = 1e-3
+    learning_rate_q: float = 0.1; discount_factor_q: float = 0.9; lr_min: float = 1e-6; lr_max: float = 1e-3
     metric_history_len: int = 100; loss_min: float = 0.01; loss_max: float = 5.0
     exploration_rate_q: float = 0.3; min_exploration_rate: float = 0.05; exploration_decay: float = 0.9998
     trend_window: int = 50; improve_threshold: float = 1e-5; regress_threshold: float = 1e-6
     regress_penalty: float = 5.0; stagnation_penalty: float = -1.0
     warmup_steps: int = 500; warmup_lr_start: float = 1e-6
 
-Q_CONTROLLER_CONFIG = QControllerConfig()
-
-def init_q_controller(config: QControllerConfig, initial_lr):
-    return QControllerState(
-        q_table=jnp.zeros((config.q_table_size, config.num_lr_actions)),
-        metric_history=jnp.full((config.metric_history_len,), (config.loss_min + config.loss_max) / 2),
-        trend_history=jnp.zeros((config.trend_window,)), current_lr=jnp.array(config.warmup_lr_start),
-        exploration_rate=jnp.array(config.exploration_rate_q), step_count=jnp.array(0),
-        last_action_idx=jnp.array(-1), last_reward=jnp.array(0.0), status_code=jnp.array(0), trend_slope=jnp.array(0.0))
-
 @partial(jax.jit, static_argnames=('config', 'target_lr'))
-def q_controller_choose_action(state, key, config, target_lr):
+def q_controller_choose_action(state, key, config: QControllerConfig, target_lr):
     def warmup_action():
         alpha = state.step_count.astype(jnp.float32) / config.warmup_steps
         lr = config.warmup_lr_start * (1 - alpha) + target_lr * alpha
         return state.replace(current_lr=lr, step_count=state.step_count + 1, status_code=jnp.array(0))
     def regular_action():
         mean = jnp.mean(jax.lax.dynamic_slice_in_dim(state.metric_history, config.metric_history_len - 10, 10))
-        state_idx = jnp.clip(((mean - config.loss_min) / ((config.loss_max-config.loss_min)/config.q_table_size)).astype(jnp.int32), 0, config.q_table_size-1)
+        state_idx = jnp.clip(((mean - config.loss_min) / ((config.loss_max - config.loss_min) / config.q_table_size)).astype(jnp.int32), 0, config.q_table_size - 1)
         explore, act = jax.random.split(key)
         action_idx = jax.lax.cond(jax.random.uniform(explore) < state.exploration_rate,
-            lambda: jax.random.randint(act, (), 0, config.num_lr_actions), lambda: jnp.argmax(state.q_table[state_idx]))
-        new_lr = jnp.clip(state.current_lr * config.lr_change_factors[action_idx], config.lr_min, config.lr_max)
+            lambda: jax.random.randint(act, (), 0, config.num_lr_actions),
+            lambda: jnp.argmax(state.q_table[state_idx]))
+        lr_factors_arr = jnp.array(config.lr_change_factors); lr_multiplier = lr_factors_arr[action_idx]
+        new_lr = jnp.clip(state.current_lr * lr_multiplier, config.lr_min, config.lr_max)
         return state.replace(current_lr=new_lr, step_count=state.step_count + 1, last_action_idx=action_idx)
     return jax.lax.cond(state.step_count < config.warmup_steps, warmup_action, regular_action)
+
+def init_q_controller(config: QControllerConfig, initial_lr):
+    return QControllerState(q_table=jnp.zeros((config.q_table_size, config.num_lr_actions)),
+        metric_history=jnp.full((config.metric_history_len,), (config.loss_min + config.loss_max) / 2),
+        trend_history=jnp.zeros((config.trend_window,)), current_lr=jnp.array(config.warmup_lr_start),
+        exploration_rate=jnp.array(config.exploration_rate_q), step_count=jnp.array(0),
+        last_action_idx=jnp.array(-1), last_reward=jnp.array(0.0), status_code=jnp.array(0), trend_slope=jnp.array(0.0))
 
 @partial(jax.jit, static_argnames=('config',))
 def q_controller_update(state, metric_value, config):
@@ -212,33 +209,19 @@ def q_controller_update(state, metric_value, config):
     can_update = (st_new.step_count > config.warmup_steps) & (st_new.step_count > config.trend_window) & (st_new.last_action_idx >= 0)
     return jax.lax.cond(can_update, perform_q_update, lambda s: s, st_new)
 
-class SentinelState(NamedTuple):
-    sign_ema: chex.ArrayTree; dampened_pct: jnp.ndarray
-
-def sentinel(decay: float = 0.9, oscillation_threshold: float = 0.5) -> optax.GradientTransformation:
-    def init_fn(params): return SentinelState(jax.tree_util.tree_map(jnp.zeros_like, params), jnp.array(0.0))
-    def update_fn(updates, state, params=None, **kwargs):
-        damp_factor = kwargs.get('dampening_factor', 1.0)
-        signs = jax.tree_util.tree_map(jnp.sign, updates)
-        new_ema = jax.tree_util.tree_map(lambda ema, s: ema * decay + s * (1-decay), state.sign_ema, signs)
-        is_osc = jax.tree_util.tree_map(lambda ema: jnp.abs(ema) < oscillation_threshold, new_ema)
-        mask = jax.tree_util.tree_map(lambda osc: jnp.where(osc, damp_factor, 1.0), is_osc)
-        damp_updates = jax.tree_util.tree_map(lambda u, m: u * m, updates, mask)
-        num_damp = sum(jax.tree_util.tree_leaves(jax.tree_util.tree_map(jnp.sum, jax.tree_util.tree_map(lambda x: x < 1.0, mask))))
-        total = sum(jax.tree_util.tree_leaves(jax.tree_util.tree_map(lambda x: x.size, params)))
-        pct = num_damp / (total + 1e-8)
-        return damp_updates, SentinelState(new_ema, pct)
-    return optax.GradientTransformation(init_fn, update_fn)
-
 class PIDLambdaController:
-    def __init__(self, targets: Dict[str, float], base_weights: Dict[str, float], gains: Dict[str, Tuple[float, float, float]], warmup_steps: int = 500):
-        self.targets, self.base_weights, self.gains, self.warmup_steps = targets, base_weights, gains, warmup_steps
+    def __init__(self, targets: Dict[str, float], base_weights: Dict[str, float], gains: Dict[str, Tuple[float, float, float]], warmup_steps: int = 500, gt_flood_steps: int = 0, ease_in_steps: int = 0):
+        self.targets, self.base_weights, self.gains = targets, base_weights, gains
+        self.warmup_steps, self.gt_flood_steps, self.ease_in_steps = warmup_steps, gt_flood_steps, ease_in_steps
         self.state = {'integral_error': {k: 0.0 for k in targets}, 'last_error': {k: 0.0 for k in targets}}
     def __call__(self, last_metrics: Dict[str, float], step: int) -> Dict[str, float]:
-        if step < self.warmup_steps: return self.base_weights
-        lambdas = {}
+        if self.gt_flood_steps > 0 and step < self.gt_flood_steps:
+            flooded_weights = {k: 0.01 for k in self.base_weights};
+            if 'gt_patch' in flooded_weights: flooded_weights['gt_patch'] = 50.0
+            return flooded_weights
+        pid_lambdas = {}
         for name, base in self.base_weights.items():
-            lambdas[name] = float(base)
+            pid_lambdas[name] = float(base)
             if name in self.targets:
                 val = last_metrics.get(f'loss/{name}');
                 if val is None: continue
@@ -248,41 +231,50 @@ class PIDLambdaController:
                 self.state['integral_error'][name] += error; self.state['integral_error'][name] = np.clip(self.state['integral_error'][name], -5.0, 5.0)
                 derivative = error - self.state['last_error'][name]
                 adj = (kp * error) + (ki * self.state['integral_error'][name]) + (kd * derivative)
-                lambdas[name] = float(np.clip(base * np.exp(adj), 0.1, 20.0)); self.state['last_error'][name] = error
-        return lambdas
+                pid_lambdas[name] = float(np.clip(base * np.exp(adj), 0.1, 50.0)); self.state['last_error'][name] = error
+        if self.ease_in_steps > 0 and step >= self.gt_flood_steps and step < (self.gt_flood_steps + self.ease_in_steps):
+            progress = (step - self.gt_flood_steps) / self.ease_in_steps; eased_lambdas = {}
+            for name, pid_val in pid_lambdas.items(): eased_lambdas[name] = 0.01 * (1.0 - progress) + pid_val * progress
+            return eased_lambdas
+        if step < self.warmup_steps: return self.base_weights
+        return pid_lambdas
     def state_dict(self): return self.state
     def load_state_dict(self, state):
         self.state['integral_error'] = state.get('integral_error', {k: 0.0 for k in self.targets})
         self.state['last_error'] = state.get('last_error', {k: 0.0 for k in self.targets})
 
+@struct.dataclass
+class PatchBufferState:
+    patches1_buffer: chex.Array; patches2_buffer: chex.Array
+
+class PatchBuffer:
+    def __init__(self, buffer_size: int, patch_shape: Tuple[int, ...]):
+        full_buffer_shape = (buffer_size,) + patch_shape
+        self.state = PatchBufferState(
+            patches1_buffer=jnp.zeros(full_buffer_shape, dtype=jnp.float32),
+            patches2_buffer=jnp.zeros(full_buffer_shape, dtype=jnp.float32))
+    @partial(jit, static_argnames=('self',))
+    def update_and_get(self, state: PatchBufferState, new_p1: chex.Array, new_p2: chex.Array) -> Tuple[PatchBufferState, chex.Array, chex.Array]:
+        num_new_patches = new_p1.shape[0]
+        p1_rolled = jnp.roll(state.patches1_buffer, shift=-num_new_patches, axis=0)
+        p2_rolled = jnp.roll(state.patches2_buffer, shift=-num_new_patches, axis=0)
+        start_index = state.patches1_buffer.shape[0] - num_new_patches
+        new_p1_buffer = jax.lax.dynamic_update_slice_in_dim(p1_rolled, new_p1.astype(jnp.float32), start_index, axis=0)
+        new_p2_buffer = jax.lax.dynamic_update_slice_in_dim(p2_rolled, new_p2.astype(jnp.float32), start_index, axis=0)
+        new_state = PatchBufferState(patches1_buffer=new_p1_buffer, patches2_buffer=new_p2_buffer)
+        return new_state, new_p1_buffer, new_p2_buffer
+
 class CustomTrainState(train_state.TrainState):
-    ema_params: Any; q_controller_state: QControllerState
+    q_controller_state: QControllerState
+    patch_buffer_state: PatchBufferState
     def apply_gradients(self, *, grads: Any, **kwargs) -> "CustomTrainState":
         updates, new_opt_state = self.tx.update(grads, self.opt_state, self.params, **kwargs)
         new_params = optax.apply_updates(self.params, updates)
-        new_ema = jax.tree_util.tree_map(lambda ema, p: ema * 0.999 + p * (1-0.999), self.ema_params, new_params)
-        return self.replace(step=self.step + 1, params=new_params, opt_state=new_opt_state, ema_params=new_ema)
+        return self.replace(step=self.step + 1, params=new_params, opt_state=new_opt_state)
 
 # =================================================================================================
 # 2. MODEL DEFINITIONS & PERCEPTUAL LOSS TOOLKIT
 # =================================================================================================
-@partial(jax.jit)
-def rgb_to_ycber(image: jnp.ndarray) -> jnp.ndarray:
-    rgb_01 = (image + 1.0) / 2.0; r,g,b = rgb_01[...,0], rgb_01[...,1], rgb_01[...,2]
-    y = 0.299*r + 0.587*g + 0.114*b; cb = -0.168736*r - 0.331264*g + 0.5*b; cr = 0.5*r - 0.418688*g - 0.081312*b
-    return jnp.stack([y, cb, cr], axis=-1)
-
-@partial(jax.jit)
-def ycber_to_rgb(image: jnp.ndarray) -> jnp.ndarray:
-    y,cb,cr = image[...,0], image[...,1], image[...,2]; r = y + 1.402 * cr; g = y - 0.344136*cb - 0.714136*cr; b = y + 1.772 * cb
-    return jnp.clip(jnp.stack([r,g,b], axis=-1), 0., 1.) * 2. - 1.
-
-class PoincareSphere:
-    @staticmethod
-    def calculate_co_polarized_transmittance(delta: jnp.ndarray, chi: jnp.ndarray) -> jnp.ndarray:
-        delta_f32, chi_f32 = jnp.asarray(delta, dtype=jnp.float32), jnp.asarray(chi, dtype=jnp.float32)
-        real_part = jnp.cos(delta_f32 / 2); imag_part = jnp.sin(delta_f32 / 2) * jnp.sin(2 * chi_f32)
-        return real_part + 1j * imag_part
 @partial(jax.jit)
 def rgb_to_ycber_sym(image: jnp.ndarray) -> jnp.ndarray:
     r, g, b = image[..., 0], image[..., 1], image[..., 2]
@@ -294,12 +286,17 @@ def rgb_to_ycber_sym(image: jnp.ndarray) -> jnp.ndarray:
 @partial(jax.jit)
 def ycber_sym_to_rgb(image: jnp.ndarray) -> jnp.ndarray:
     y, cb, cr = image[..., 0], image[..., 1], image[..., 2]
-    cb_unscaled = cb / 2.0
-    cr_unscaled = cr / 2.0
+    cb_unscaled, cr_unscaled = cb / 2.0, cr / 2.0
     r = y + 1.402 * cr_unscaled
     g = y - 0.344136 * cb_unscaled - 0.714136 * cr_unscaled
     b = y + 1.772 * cb_unscaled
     return jnp.clip(jnp.stack([r, g, b], axis=-1), -1.0, 1.0)
+class PoincareSphere:
+    @staticmethod
+    def calculate_co_polarized_transmittance(delta: jnp.ndarray, chi: jnp.ndarray) -> jnp.ndarray:
+        delta_f32, chi_f32 = jnp.asarray(delta, dtype=jnp.float32), jnp.asarray(chi, dtype=jnp.float32)
+        real_part = jnp.cos(delta_f32 / 2); imag_part = jnp.sin(delta_f32 / 2) * jnp.sin(2 * chi_f32)
+        return real_part + 1j * imag_part
 class PathModulator(nn.Module):
     latent_grid_size: int; input_image_size: int; dtype: Any = jnp.float32
     @nn.compact
@@ -318,7 +315,6 @@ class PathModulator(nn.Module):
             return nn.tanh(params_raw[...,0])*jnp.pi, nn.tanh(params_raw[...,1])*(jnp.pi/4.0), nn.sigmoid(params_raw[...,2])*(jnp.pi/2.0)
         d_y, c_y, r_y = create_head("y_luma", x); d_cb, c_cb, r_cb = create_head("cb_chroma", x); d_cr, c_cr, r_cr = create_head("cr_chroma", x)
         return jnp.stack([d_y, c_y, r_y, d_cb, c_cb, r_cb, d_cr, c_cr, r_cr], axis=-1)
-
 class CoordinateDecoder(nn.Module):
     d_model: int; num_freqs: int = 10; mlp_width: int = 256; mlp_depth: int = 4; dtype: Any = jnp.float32
     @nn.remat
@@ -373,10 +369,14 @@ class TextToPathParamsProjector(nn.Module):
     @nn.compact
     def __call__(self, command_vector: jnp.ndarray) -> jnp.ndarray:
         pooled = jnp.mean(command_vector, axis=1)
-        x = nn.Dense(4*4*1024,dtype=self.dtype)(pooled); x=nn.gelu(x); x=x.reshape(-1,4,4,1024)
-        for feats in [512, 256, 128, 64]:
-            x = nn.ConvTranspose(feats,(4,4),(2,2),'SAME',dtype=self.dtype)(x); x=nn.gelu(x)
-        p = nn.Conv(9,(1,1),dtype=self.dtype,bias_init=lambda k,s,d:jnp.zeros(s,d).at[jnp.array([2,5,8])].set(0.))(x)
+        x = nn.Dense(4 * 4 * 1024, dtype=self.dtype, name="input_proj")(pooled); x = nn.gelu(x)
+        x = x.reshape(-1, 4, 4, 1024)
+        features = [512, 256, 128, 64]; current_res = 4
+        for i, feats in enumerate(features):
+            if current_res >= self.latent_grid_size: break
+            x = nn.ConvTranspose(feats, (4, 4), (2, 2), 'SAME', dtype=self.dtype, name=f"upsample_{i}")(x)
+            x = nn.LayerNorm(dtype=self.dtype)(x); x = nn.gelu(x); current_res *= 2
+        p = nn.Conv(9, (3, 3), padding='SAME', dtype=self.dtype, name="output_conv", bias_init=lambda k,s,d:jnp.zeros(s,d).at[jnp.array([2,5,8])].set(0.))(x)
         d_y,c_y,r_y=nn.tanh(p[...,0])*jnp.pi,nn.tanh(p[...,1])*(jnp.pi/4.),nn.sigmoid(p[...,2])*(jnp.pi/2.)
         d_cb,c_cb,r_cb=nn.tanh(p[...,3])*jnp.pi,nn.tanh(p[...,4])*(jnp.pi/4.),nn.sigmoid(p[...,5])*(jnp.pi/2.)
         d_cr,c_cr,r_cr=nn.tanh(p[...,6])*jnp.pi,nn.tanh(p[...,7])*(jnp.pi/4.),nn.sigmoid(p[...,8])*(jnp.pi/2.)
@@ -397,8 +397,7 @@ def _compute_sobel_magnitude(patches: jnp.ndarray, kx: jnp.ndarray, ky: jnp.ndar
         return jnp.sqrt(jnp.maximum(grad_x**2 + grad_y**2, 0.) + 1e-6)
     patches_nchw = jnp.transpose(patches_f32, (0, 3, 1, 2))
     magnitudes_nchw = jax.vmap(jax.vmap(apply_sobel_on_slice))(patches_nchw)
-    magnitudes_nhwc = jnp.transpose(magnitudes_nchw, (0, 2, 3, 1))
-    return jnp.linalg.norm(magnitudes_nhwc, axis=-1)
+    return jnp.linalg.norm(jnp.transpose(magnitudes_nchw, (0, 2, 3, 1)), axis=-1)
 @jit
 def calculate_edge_loss(p1: jnp.ndarray, p2: jnp.ndarray) -> jnp.ndarray:
     sobel_x, sobel_y = jnp.array([[-1,0,1],[-2,0,2],[-1,0,1]],jnp.float32), jnp.array([[-1,-2,-1],[0,0,0],[1,2,1]],jnp.float32)
@@ -426,23 +425,95 @@ def calculate_moments(patches, num_moments=4):
     kurt=jnp.mean(norm_dev**4,1); return jnp.concatenate([mean,var,skew,kurt],-1)
 @jit
 def fft_magnitude_log(patches): return jax.vmap(lambda p: jnp.log(jnp.abs(jnp.fft.fft2(p))+1e-5))(patches.astype(jnp.float32))
-@partial(jax.vmap, in_axes=(0,0,0,None,None), out_axes=0)
-def _extract_patches_vmapped(img, x, y, ps, c): return jax.vmap(lambda i,j:jax.lax.dynamic_slice(img,(j,i,0),(ps,ps,c)))(x,y)
+@partial(jit, static_argnames=('num_samples', 'patch_size'))
+def golden_spiral_sample(key: chex.PRNGKey, h: int, w: int, num_samples: int, patch_size: int) -> Tuple[chex.Array, chex.Array]:
+    golden_angle = jnp.pi * (3. - jnp.sqrt(5.)); i = jnp.arange(num_samples, dtype=jnp.float32)
+    offset_key, rotation_key = jax.random.split(key); offset = jax.random.uniform(offset_key) * num_samples
+    theta = golden_angle * (i + offset); radius = jnp.sqrt(i / num_samples)
+    rotation_angle = jax.random.uniform(rotation_key, minval=0, maxval=2*jnp.pi)
+    x = 0.5 + radius * jnp.cos(theta + rotation_angle); y = 0.5 + radius * jnp.sin(theta + rotation_angle)
+    x_coords = jnp.clip((x * w).astype(jnp.int32), 0, w - patch_size)
+    y_coords = jnp.clip((y * h).astype(jnp.int32), 0, h - patch_size)
+    return y_coords, x_coords
+
 class JAXMultiMetricPerceptualLoss:
-    def __init__(self, num_patches=64, patch_size=64):
-        self.num_patches, self.patch_size = num_patches, patch_size
-        self._calculate_losses_jit = partial(jax.jit, static_argnames=('batch_size',))(self._calculate_losses)
-    def _calculate_losses(self, img1, img2, key, batch_size: int):
-        _, h, w, c = img1.shape; k1, k2 = jax.random.split(key)
-        x=jax.random.randint(k1,(batch_size,self.num_patches),0,w-self.patch_size); y=jax.random.randint(k2,(batch_size,self.num_patches),0,h-self.patch_size)
-        p1=_extract_patches_vmapped(img1,x,y,self.patch_size,c).reshape(-1,self.patch_size,self.patch_size,c)
-        p2=_extract_patches_vmapped(img2,x,y,self.patch_size,c).reshape(-1,self.patch_size,self.patch_size,c)
-        l={'l1':jnp.mean(jnp.abs(p1-p2)),'moment':jnp.mean(jnp.abs(calculate_moments(p1)-calculate_moments(p2))),
-           'fft':jnp.mean(jnp.abs(fft_magnitude_log(jnp.mean(p1,-1))-fft_magnitude_log(jnp.mean(p2,-1)))),
-           'autocorr':jnp.mean(jnp.abs(calculate_autocorrelation_features(p1)-calculate_autocorrelation_features(p2))),
-           'edge':calculate_edge_loss(p1,p2),'color_cov':calculate_color_covariance_loss(p1,p2),'ssim':calculate_ssim_loss(p1,p2)}
-        return {f'loss/{k}': v for k, v in l.items()}
-    def __call__(self, img1, img2, key): return self._calculate_losses_jit(img1, img2, key, batch_size=img1.shape[0])
+    def __init__(self, patch_size=32):
+        self.patch_size = patch_size
+        image_area = 512 * 512; patch_area = patch_size * patch_size
+        self.num_patches = int((image_area * 0.25) / patch_area)
+    @partial(jit, static_argnames=('self', 'use_buffer'))
+    def __call__(self, img1, img2, key, patch_buffer_state=None, use_buffer=False):
+        _, h, w, c = img1.shape; batch_size = img1.shape[0]; keys = jax.random.split(key, batch_size)
+        @partial(jax.vmap, in_axes=(0, 0, 0))
+        def get_patches_for_image(single_img1, single_img2, k):
+            y_coords, x_coords = golden_spiral_sample(k, h, w, self.num_patches, self.patch_size)
+            p1 = jax.vmap(lambda y, x: jax.lax.dynamic_slice(single_img1, (y, x, 0), (self.patch_size, self.patch_size, c)))(y_coords, x_coords)
+            p2 = jax.vmap(lambda y, x: jax.lax.dynamic_slice(single_img2, (y, x, 0), (self.patch_size, self.patch_size, c)))(y_coords, x_coords)
+            return p1, p2
+        p1_current, p2_current = get_patches_for_image(img1, img2, keys)
+        p1_current = p1_current.reshape(-1, self.patch_size, self.patch_size, c)
+        p2_current = p2_current.reshape(-1, self.patch_size, self.patch_size, c)
+        p1_for_loss, p2_for_loss = p1_current, p2_current
+        if use_buffer and patch_buffer_state is not None:
+            p1_for_loss = jnp.concatenate([p1_current, patch_buffer_state.patches1_buffer], axis=0)
+            p2_for_loss = jnp.concatenate([p2_current, patch_buffer_state.patches2_buffer], axis=0)
+        losses = {'l1': jnp.mean(jnp.abs(p1_for_loss - p2_for_loss)),
+            'moment': jnp.mean(jnp.abs(calculate_moments(p1_for_loss) - calculate_moments(p2_for_loss))),
+            'fft': jnp.mean(jnp.abs(fft_magnitude_log(jnp.mean(p1_for_loss, -1)) - fft_magnitude_log(jnp.mean(p2_for_loss, -1)))),
+            'autocorr': jnp.mean(jnp.abs(calculate_autocorrelation_features(p1_for_loss) - calculate_autocorrelation_features(p2_for_loss))),
+            'edge': calculate_edge_loss(p1_for_loss, p2_for_loss),
+            'color_cov': calculate_color_covariance_loss(p1_for_loss, p2_for_loss),
+            'ssim': calculate_ssim_loss(p1_for_loss, p2_for_loss)}
+        return {f'loss/{k}': v for k, v in losses.items()}, (p1_current, p2_current)
+
+class WeightAverager:
+    def __init__(self, buffer_size=16):
+        self.buffer_size = buffer_size; self.buffer = None; self.current_idx = 0; self.steps_since_init = 0
+    def init_buffer(self, example_params):
+        self.buffer = jax.tree_util.tree_map(lambda x: jnp.zeros((self.buffer_size,) + x.shape, dtype=x.dtype), example_params)
+    def update(self, new_params):
+        if self.buffer is None: self.init_buffer(new_params)
+        self.buffer = jax.tree_util.tree_map(lambda buf, new: buf.at[self.current_idx].set(new), self.buffer, new_params)
+        self.current_idx = (self.current_idx + 1) % self.buffer_size; self.steps_since_init += 1
+    @partial(jit, static_argnames=('self',))
+    def _get_averaged_params_jitted(self, buffer, num_valid_entries):
+        def create_and_apply_mask(buf):
+            mask_1d = jnp.arange(self.buffer_size) < num_valid_entries
+            mask = mask_1d.reshape((self.buffer_size,) + (1,) * (buf.ndim - 1))
+            return jnp.sum(buf * mask, axis=0)
+        summed_params = jax.tree_util.tree_map(create_and_apply_mask, buffer)
+        averaged_params = jax.tree_util.tree_map(lambda s: s / jnp.maximum(1, num_valid_entries), summed_params)
+        return averaged_params
+    def get_averaged_params(self):
+        if self.buffer is None: return None
+        num_valid_entries = jnp.minimum(self.steps_since_init, self.buffer_size)
+        return self._get_averaged_params_jitted(self.buffer, num_valid_entries)
+
+def apply_blur_schedule(global_step: jnp.ndarray, schedule: Tuple[int, int, int, float, float]) -> jnp.ndarray:
+    warmup_start, warmup_end, cooldown_end, max_sigma, min_sigma = schedule; step = global_step.astype(jnp.float32)
+    is_in_warmup = (step >= warmup_start) & (step < warmup_end); is_in_cooldown = (step >= warmup_end) & (step < cooldown_end)
+    warmup_progress = jnp.clip((step - warmup_start) / (warmup_end - warmup_start + 1e-6), 0.0, 1.0)
+    cooldown_progress = jnp.clip((step - warmup_end) / (cooldown_end - warmup_end + 1e-6), 0.0, 1.0)
+    sigma = jnp.where(is_in_warmup, min_sigma + warmup_progress * (max_sigma - min_sigma),
+        jnp.where(is_in_cooldown, max_sigma - cooldown_progress * (max_sigma - min_sigma), min_sigma))
+    return sigma
+
+def apply_gaussian_blur(images: jnp.ndarray, sigma: jnp.ndarray, key: chex.PRNGKey) -> jnp.ndarray:
+    MAX_KERNEL_SIZE = 11
+    def _blur_op(img_batch):
+        radius = (MAX_KERNEL_SIZE - 1) // 2; x = jnp.arange(-radius, radius + 1).astype(jnp.float32)
+        kernel_1d = jnp.exp(-0.5 * (x / sigma)**2); current_radius = jnp.ceil(sigma * 2)
+        mask = jnp.abs(x) <= current_radius; masked_kernel = kernel_1d * mask
+        kernel_1d_normalized_f32 = masked_kernel / (jnp.sum(masked_kernel) + 1e-6)
+        kernel_1d_normalized = kernel_1d_normalized_f32.astype(img_batch.dtype)
+        num_channels = img_batch.shape[-1]
+        kernel_h = jnp.tile(kernel_1d_normalized.reshape(1, MAX_KERNEL_SIZE, 1, 1), (1, 1, 1, num_channels))
+        kernel_v = jnp.tile(kernel_1d_normalized.reshape(MAX_KERNEL_SIZE, 1, 1, 1), (1, 1, 1, num_channels))
+        img_nchw = img_batch.transpose(0, 3, 1, 2); dn = ('NCHW', 'HWIO', 'NCHW')
+        blurred_h = jax.lax.conv_general_dilated(img_nchw, kernel_h, window_strides=(1, 1), padding='SAME', feature_group_count=num_channels, dimension_numbers=dn)
+        blurred_v = jax.lax.conv_general_dilated(blurred_h, kernel_v, window_strides=(1, 1), padding='SAME', feature_group_count=num_channels, dimension_numbers=dn)
+        return blurred_v.transpose(0, 2, 3, 1)
+    return jax.lax.cond(sigma > 0.01, _blur_op, lambda x: x, images)
 
 # =================================================================================================
 # 3. UNIFIED & ROBUST DATA PREPARATION
@@ -450,35 +521,23 @@ class JAXMultiMetricPerceptualLoss:
 def prepare_distill_data(source_dir: str, target_dir: str, text_encoder_id: str):
     console = Console()
     if not all([SiglipImageProcessor, SiglipTextModel, SiglipTokenizer, torch]):
-        console.print("[bold red]FATAL: `transformers` and `torch` are required. Please install them.[/bold red]")
-        sys.exit(1)
-
-    source_path, target_path = Path(source_dir), Path(target_dir)
-    target_path.mkdir(exist_ok=True)
+        console.print("[bold red]FATAL: `transformers` and `torch` are required. Please install them.[/bold red]"); sys.exit(1)
+    source_path, target_path = Path(source_dir), Path(target_dir); target_path.mkdir(exist_ok=True)
     console.print(f"--- 🔍 Scanning for aligned image-text pairs in [cyan]{source_path}[/cyan]... ---")
     image_paths = sorted(list(source_path.rglob('*.jpg')) + list(source_path.rglob('*.png')) + list(source_path.rglob('*.webp')))
-    
-    aligned_pairs = []
+    aligned_pairs = [];
     for img_path in tqdm(image_paths, desc="Verifying pairs"):
-        txt_path = img_path.with_suffix('.txt')
-        if txt_path.exists(): aligned_pairs.append((img_path, txt_path))
-
-    if not aligned_pairs:
-        console.print(f"[bold red]FATAL: No aligned .jpg/.txt pairs found in {source_path}.[/bold red]"); sys.exit(1)
-
+        if (txt_path := img_path.with_suffix('.txt')).exists(): aligned_pairs.append((img_path, txt_path))
+    if not aligned_pairs: console.print(f"[bold red]FATAL: No aligned .jpg/.txt pairs found in {source_path}.[/bold red]"); sys.exit(1)
     console.print(f"--- ✅ Found {len(aligned_pairs)} aligned pairs. ---")
     console.print(f"--- 🧠 Loading Text Encoder: [yellow]{text_encoder_id}[/yellow]... ---")
-    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     text_model = SiglipTextModel.from_pretrained(text_encoder_id).to(device)
-    tokenizer = SiglipTokenizer.from_pretrained(text_encoder_id)
-    text_model.eval()
-
+    tokenizer = SiglipTokenizer.from_pretrained(text_encoder_id); text_model.eval()
     safe_name = text_encoder_id.replace('/','_')
     distill_record_file = target_path / f"distill_data_{safe_name}.tfrecord"
     image_record_file = target_path / "data_512x512.tfrecord"
     console.print(f"--- ✍️ Writing aligned TFRecords to [cyan]{target_path}[/cyan]... ---")
-    
     with tf.io.TFRecordWriter(str(image_record_file)) as img_writer, \
          tf.io.TFRecordWriter(str(distill_record_file)) as distill_writer:
         for img_path, txt_path in tqdm(aligned_pairs, desc="Processing and Writing"):
@@ -486,402 +545,399 @@ def prepare_distill_data(source_dir: str, target_dir: str, text_encoder_id: str)
                 img = Image.open(img_path).convert("RGB").resize((512, 512), Image.Resampling.LANCZOS)
                 img_bytes = tf.io.encode_jpeg(np.array(img), quality=95).numpy()
                 img_writer.write(tf.train.Example(features=tf.train.Features(feature={'image': tf.train.Feature(bytes_list=tf.train.BytesList(value=[img_bytes]))})).SerializeToString())
-                
                 with open(txt_path, 'r', encoding='utf-8') as f: prompt = f.read().strip()
                 with torch.no_grad():
                     inputs = tokenizer([prompt], padding="max_length", max_length=64, return_tensors="pt").to(device)
                     embedding = text_model(**inputs).last_hidden_state.squeeze(0).cpu().numpy().astype(np.float16)
-                
                 distill_writer.write(tf.train.Example(features=tf.train.Features(feature={
                     'embedding': tf.train.Feature(bytes_list=tf.train.BytesList(value=[embedding.tobytes()])),
                     'prompt': tf.train.Feature(bytes_list=tf.train.BytesList(value=[prompt.encode('utf-8')]))
                 })).SerializeToString())
             except Exception as e:
                 console.print(f"[yellow]Skipping {img_path.name} due to error: {e}[/yellow]")
-
     console.print(f"\n--- 🎉 Unified data preparation complete! ---")
     console.print(f"✅ Image TFRecord: [green]{image_record_file}[/green]")
     console.print(f"✅ Distill TFRecord: [green]{distill_record_file}[/green]")
 
 # =================================================================================================
-# 4. DISTILLATION TRAINER
+# 4. DISTILLATION TRAINER & HYPER-OPTIMIZED TRAINING STEP
 # =================================================================================================
+@partial(jax.jit, static_argnames=('trainer', 'image_size', 'q_config_static', 'physics_model_static', 'student_encoder_static', 'blur_schedule'))
+def train_step(state, global_step, super_command_vec, super_gt_images, main_lambdas_tuple, sub_lambdas_tuple, key, trainer, image_size, q_config_static, physics_model_static, student_encoder_static, blur_schedule):
+    lambda_gt_patch, lambda_echo, lambda_perceptual, lambda_diversity = main_lambdas_tuple
+    lambda_l1, lambda_ssim, lambda_edge, lambda_moment, lambda_color_cov, lambda_autocorr, lambda_fft = sub_lambdas_tuple
+    grad_key, q_key, teacher_key, student_key, blur_key = jax.random.split(key, 5)
+
+    def loss_fn(params):
+        student_path_params = student_encoder_static.apply({'params': params}, super_command_vec)
+        student_img = trainer._generate_target_image(trainer.fixed_physics_params, student_path_params, physics_model_static, image_size)
+        teacher_path_params = student_path_params + jax.random.normal(teacher_key, student_path_params.shape) * 1e-2
+        teacher_img = trainer._generate_target_image(trainer.fixed_physics_params, teacher_path_params, physics_model_static, image_size)
+        echo_img = jax.lax.stop_gradient(teacher_img)
+        perceptual_metrics_gt, (p1_new, p2_new) = trainer.loss_calculator(student_img,super_gt_images,student_key,patch_buffer_state=state.patch_buffer_state,use_buffer=True)
+        blur_sigma = apply_blur_schedule(global_step, blur_schedule)
+        gt_patch_loss = perceptual_metrics_gt['loss/l1']
+        total_perceptual_loss = ( lambda_ssim * perceptual_metrics_gt['loss/ssim'] + lambda_edge * perceptual_metrics_gt['loss/edge'] + lambda_moment * perceptual_metrics_gt['loss/moment'] + lambda_color_cov * perceptual_metrics_gt['loss/color_cov'] + lambda_autocorr * perceptual_metrics_gt['loss/autocorr'] + lambda_fft * perceptual_metrics_gt['loss/fft'] )
+        echo_loss = jnp.mean(jnp.abs(student_img - echo_img))
+        diversity_loss = -jnp.mean(jnp.std(student_path_params, axis=(1, 2)))
+        total_loss = ( lambda_gt_patch * gt_patch_loss + lambda_perceptual * total_perceptual_loss + lambda_echo * echo_loss + lambda_diversity * diversity_loss )
+        metrics = { 'loss/total': total_loss, 'loss/gt_patch': gt_patch_loss, 'loss/perceptual': total_perceptual_loss, 'loss/echo': echo_loss, 'loss/diversity': diversity_loss, 'blur_sigma': blur_sigma, 'latent_mean': jnp.mean(student_path_params), 'latent_std': jnp.mean(jnp.std(student_path_params, axis=(1,2,3))) }
+        metrics.update(perceptual_metrics_gt)
+        return total_loss, (metrics, student_img, p1_new, p2_new)
+
+    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+    (loss, (metrics, generated_image, p1_new, p2_new)), grads = grad_fn(state.params)
+    apply_kwargs = {}; new_q_state = state.q_controller_state
+    if trainer.args.use_q_controller:
+        q_state_slice = q_controller_choose_action(state.q_controller_state, q_key, q_config_static, trainer.args.lr)
+        apply_kwargs['learning_rate'] = q_state_slice.current_lr; new_q_state = q_state_slice
+    new_state = state.apply_gradients(grads=grads, **apply_kwargs)
+    new_patch_buffer_state, _, _ = trainer.patch_buffer.update_and_get(state.patch_buffer_state, p1_new, p2_new)
+    if trainer.args.use_q_controller:
+        new_q_state = q_controller_update(new_q_state, metrics['loss/total'], q_config_static)
+        new_state = new_state.replace(q_controller_state=new_q_state, patch_buffer_state=new_patch_buffer_state)
+        metrics['q_status'] = new_q_state.status_code; metrics['learning_rate'] = new_q_state.current_lr
+    else:
+        new_state = new_state.replace(patch_buffer_state=new_patch_buffer_state)
+        metrics['learning_rate'] = jnp.array(trainer.args.lr)
+    return new_state, metrics, generated_image
+
+# --- NEW: JIT-compiled validation step ---
+@partial(jax.jit, static_argnames=('trainer', 'image_size', 'physics_model_static', 'student_encoder_static'))
+def validation_step(student_params, command_vec, gt_images, trainer, image_size, physics_model_static, student_encoder_static):
+    student_path_params = student_encoder_static.apply({'params': student_params}, command_vec)
+    student_img = trainer._generate_target_image(trainer.fixed_physics_params, student_path_params, physics_model_static, image_size)
+    l1_loss = jnp.mean(jnp.abs(student_img - gt_images))
+    return l1_loss
+
 class DistillationTrainer:
-    def __init__(self, args):
+    def __init__(self, args, fixed_physics_params):
         self.args = args; self.console = Console()
+        self.fixed_physics_params = fixed_physics_params
         self.interactive_state = InteractivityState()
         self.dtype = jnp.bfloat16 if args.use_bfloat16 else jnp.float32
-        self.loss_calculator = JAXMultiMetricPerceptualLoss(patch_size=64)
-        
-        # PID Controller for Perceptual Sub-Losses
-        sub_loss_pid_gains = {'l1':(0.8,0.01,1.0),'ssim':(1.5,0.02,2.0),'edge':(1.2,0.01,1.5),'moment':(0.5,0.005,0.8),
-                              'color_cov':(0.7,0.005,1.0),'autocorr':(0.6,0.005,0.9),'fft':(0.4,0.005,0.5)}
-        self.sub_loss_lambda_controller = PIDLambdaController(
-            targets={'l1':0.01,'ssim':0.1,'edge':0.15,'moment':0.15,'color_cov':0.02,'autocorr':0.15,'fft':0.1},
-            base_weights={'l1':1.0,'ssim':0.8,'edge':1.0,'moment':1.0,'color_cov':0.9,'autocorr':0.3,'fft':0.4},
-            gains=sub_loss_pid_gains, warmup_steps=1000)
-
-        # PID Controller for Main Loss Components
-        main_loss_pid_gains = {'echo':(0.6,0.01,0.8),'perceptual':(0.5,0.01,0.7),'gt_patch':(0.7,0.01,0.9),'diversity':(0.5,0.005,0.6)}
-        self.main_loss_lambda_controller = PIDLambdaController(
-            targets={'echo': 0.1, 'perceptual': 0.25, 'gt_patch': 0.50, 'diversity': 0.1},
-            base_weights={'echo': 1.0, 'perceptual': 0.5, 'gt_patch': 0.5, 'diversity': 0.05},
-            gains=main_loss_pid_gains, warmup_steps=1000)
-        
+        self.loss_calculator = JAXMultiMetricPerceptualLoss(patch_size=32)
+        PATCH_BUFFER_SIZE = 4096; PATCH_SHAPE = (self.loss_calculator.patch_size, self.loss_calculator.patch_size, 3)
+        self.patch_buffer = PatchBuffer(buffer_size=PATCH_BUFFER_SIZE, patch_shape=PATCH_SHAPE)
+        self.console.print(f"--- 🧠 Perceptual Memory: Patch buffer enabled (size: [cyan]{PATCH_BUFFER_SIZE}[/cyan]). ---")
+        self.weight_averager = WeightAverager(buffer_size=16)
+        self.console.print(f"--- 💡 DFT-Inspired Smoothing: Averaging last [cyan]16[/cyan] weight states for previews. ---")
+        self.blur_schedule = (1, 10000, 10000, 1.0, 0.0)
+        self.console.print(f"--- Curriculum: Progressive blur active from steps {self.blur_schedule[0]}-{self.blur_schedule[2]} (max sigma: {self.blur_schedule[3]}). ---")
+        self.physics_model = TopologicalCoordinateGenerator(d_model=args.d_model, latent_grid_size=args.latent_grid_size, input_image_size=args.image_size, dtype=self.dtype)
+        if args.use_q_controller: self.q_controller_config = QControllerConfig()
+        sub_loss_pid_gains = {'l1':(0.8,0.01,1.0),'ssim':(1.5,0.02,2.0),'edge':(1.2,0.01,1.5),'moment':(0.5,0.005,0.8),'color_cov':(0.7,0.005,1.0),'autocorr':(0.6,0.005,0.9),'fft':(0.4,0.005,0.5)}
+        self.sub_loss_lambda_controller = PIDLambdaController(targets={'l1':0.01,'ssim':0.1,'edge':0.15,'moment':0.15,'color_cov':0.02,'autocorr':0.15,'fft':0.1}, base_weights={'l1':1.5,'ssim':1.2,'edge':1.0,'moment':0.8,'color_cov':0.9,'autocorr':0.2,'fft':0.2}, gains=sub_loss_pid_gains, warmup_steps=1000)
+        main_loss_pid_gains = {'gt_patch': (1.5, 0.05, 1.2), 'echo': (0.5, 0.01, 0.7), 'perceptual': (0.4, 0.01, 0.6), 'diversity': (0.5, 0.005, 0.6)}
+        self.main_loss_lambda_controller = PIDLambdaController(targets={'gt_patch': 0.05, 'echo': 0.25, 'perceptual': 0.35, 'diversity': -0.6}, base_weights={'gt_patch': 15.0, 'echo': 0.4, 'perceptual': 0.4, 'diversity': 0.02}, gains=main_loss_pid_gains, warmup_steps=500, gt_flood_steps=5000)
         self.text_encoder_id = "google/siglip-base-patch16-224"; self.SEQUENCE_LENGTH=64; self.EXPECTED_EMBEDDING_DIM=768
         self.param_count = 0; self.last_metrics = {}; self.loss_hist = deque(maxlen=200); self.current_lambdas = {}
-        self.steps_per_sec = 0.0; self.ui_lock = threading.Lock(); self.rendered_preview = None; self.current_prompt = "..."
+        self.steps_per_sec = 0.0; self.ui_lock = threading.Lock()
+        self.live_preview_image_np = None; self.live_preview_prompt = "..."
+        self.current_step_image_np = None; self.current_prompt = "..."
+        
+        # --- NEW: Autonomous Regulation State ---
+        self.intervention_status = ""
+        self.adr_active = False
+        self.adr_buffer = []
+        self.adr_idx = 0
+        self.adr_loss_history = deque(maxlen=50) # For averaging
+        self.HIGH_LOSS_THRESHOLD = 30.0
+        self.LOW_LOSS_THRESHOLD = 13.0
+        self.ADR_BUFFER_SIZE = 50
+        self.best_val_score = -1.0
+        self.current_val_score = -1.0
+
+        self.jitted_train_step = partial(train_step, trainer=self, image_size=self.args.image_size,
+            q_config_static=self.q_controller_config if self.args.use_q_controller else None,
+            physics_model_static=self.physics_model,
+            student_encoder_static=TextToPathParamsProjector(self.args.latent_grid_size,self.dtype),
+            blur_schedule=self.blur_schedule)
+        self.jitted_validation_step = partial(validation_step, trainer=self, image_size=self.args.image_size,
+            physics_model_static=self.physics_model,
+            student_encoder_static=TextToPathParamsProjector(self.args.latent_grid_size, self.dtype))
 
     def _get_gpu_stats(self):
         try: h=pynvml.nvmlDeviceGetHandleByIndex(0); m=pynvml.nvmlDeviceGetMemoryInfo(h); u=pynvml.nvmlDeviceGetUtilizationRates(h); return f"{m.used/1024**3:.2f}/{m.total/1024**3:.2f} GiB",f"{u.gpu}%"
         except: return "N/A","N/A"
-
     def _get_sparkline(self, data: deque, w=50):
         s=" ▂▃▄▅▆▇█"; hist=np.array(list(data));
         if len(hist) < 2: return " " * w
-        hist = hist[-w:]; min_v, max_v = hist.min(), hist.max()
+        hist = hist[-w:]; min_v, max_v = hist.min(), hist.max();
         if max_v == min_v or np.isnan(min_v) or np.isnan(max_v): return " " * w
         bins=np.linspace(min_v,max_v,len(s)); indices=np.clip(np.digitize(hist,bins)-1,0,len(s)-1); return "".join(s[i] for i in indices)
+        
+    def _run_validation(self, student_params_avg, validation_set):
+        self.console.print("\n--- 🤖 Running validation... ---")
+        total_loss = 0.0
+        for val_emb, _, val_gt in tqdm(validation_set, desc="Validating", leave=False):
+            loss = self.jitted_validation_step(student_params_avg, val_emb, val_gt)
+            total_loss += loss
+        avg_loss = total_loss / len(validation_set)
+        score = 1.0 - avg_loss # Higher is better
+        return float(score)
 
     def _generate_layout(self):
         with self.ui_lock:
             layout = Layout(name="root"); layout.split(Layout(name="header",size=3), Layout(ratio=1,name="main"), Layout(name="footer",size=3))
             layout["main"].split_row(Layout(name="left",minimum_size=60), Layout(name="right",ratio=1))
-            precision = "[bold purple]BF16[/]" if self.args.use_bfloat16 else "[dim]FP32[/]"
-            header = f"🧠⚡ [bold]Echo+GT Distillation[/] | Model: [cyan]{self.args.basename}_{self.args.d_model}d[/] | Params: [yellow]{self.param_count/1e6:.2f}M[/] | Precision: {precision}"
+            header = f"🚀⚡ [bold]Hyper-Optimized Distillation[/] | Model: [cyan]{self.args.basename}_{self.args.d_model}d[/] | Params: [yellow]{self.param_count/1e6:.2f}M[/]"
             layout["header"].update(Panel(Align.center(header), style="bold magenta", title="[dim]wubumind.ai[/dim]", title_align="right"))
-
             stats_tbl = Table.grid(expand=True,padding=(0,1)); stats_tbl.add_column(style="dim",width=15); stats_tbl.add_column(justify="right")
             mem,util = self._get_gpu_stats(); stats_tbl.add_row("Steps/sec", f"[blue]{self.steps_per_sec:.2f}[/] 🚀"); stats_tbl.add_row("GPU Mem/Util", f"[yellow]{mem}[/] / [yellow]{util}[/]")
             lr = self.last_metrics.get('learning_rate', self.args.lr); stats_tbl.add_row("Learning Rate", f"[green]{float(lr):.2e}[/]")
+            blur_sigma = self.last_metrics.get('blur_sigma', 0.0); stats_tbl.add_row("Blur Sigma (σ)", f"[magenta]{float(blur_sigma):.2f}[/]")
             
+            # --- NEW: Validation Score Display ---
+            if self.best_val_score > -1:
+                stats_tbl.add_row("Val Score", f"[cyan]{self.current_val_score:.4f}[/] (Best: [bold green]{self.best_val_score:.4f}[/])")
+            else:
+                stats_tbl.add_row("Val Score", "[dim]N/A[/]")
+
             left_panels = [Panel(stats_tbl, title="[bold]📊 Core Stats[/]", border_style="blue")]
-
-            loss_table = Table(show_header=False, box=None, padding=(0,1)); loss_table.add_column(style="cyan",width=10); loss_table.add_column(justify="right",style="white",width=10); loss_table.add_column(justify="right",style="yellow")
+            loss_table = Table(show_header=False, box=None, padding=(0,1)); loss_table.add_column(style="cyan",width=12); loss_table.add_column(justify="right",style="white",width=10); loss_table.add_column(justify="right",style="yellow")
             loss_table.add_row("[bold]Metric[/bold]", "[bold]Value[/bold]", "[bold]λ (PID)[/bold]")
-            loss_keys = ['echo', 'perceptual', 'gt_patch', 'diversity', 'l1', 'ssim', 'edge', 'moment', 'color_cov', 'autocorr', 'fft']
+            loss_keys = ['gt_patch', 'echo', 'perceptual', 'diversity', 'l1', 'ssim', 'edge', 'moment', 'color_cov', 'autocorr', 'fft']
             for key in loss_keys:
-                value = self.last_metrics.get(f'loss/{key}', 0.0);
-                display_name = key.capitalize().replace('_', ' ')
-                if key == 'gt_patch': display_name = "GT Patch"
-                if key in ['perceptual', 'gt_patch']:
-                    loss_table.add_row(f"[bold]{display_name}[/bold]", f"{value:.4f}", f"{self.current_lambdas.get(key, 0.0):.2f}")
-                elif key in ['echo', 'diversity']:
-                    loss_table.add_row(f"[bold]{display_name}[/bold]", f"{value:.4f}", f"{self.current_lambdas.get(key, 0.0):.2f}")
-                else:
-                    loss_table.add_row(display_name, f"{value:.4f}", f"{self.current_lambdas.get(key, 0.0):.2f}")
-            loss_panel = Panel(loss_table, title="[bold]Loss Components[/]", border_style="cyan")
-            left_panels.append(loss_panel)
-
+                value = self.last_metrics.get(f'loss/{key}', 0.0); display_name = key.replace('_gt', ' GT').capitalize(); is_main = key in ['gt_patch', 'echo', 'perceptual', 'diversity']
+                if is_main: display_name_styled = f"[bold]{display_name}[/bold]"
+                else: display_name_styled = display_name
+                loss_table.add_row(display_name_styled, f"{value:.4f}", f"{self.current_lambdas.get(key, 0.0):.2f}")
+            loss_panel = Panel(loss_table, title="[bold]Loss Components[/]", border_style="cyan"); left_panels.append(loss_panel)
             if self.args.use_q_controller:
                 q_code=int(self.last_metrics.get('q_status',0)); q_status={0:"[blue]WARMUP",1:"[green]IMPROVING",2:"[yellow]STAGNATED",3:"[red]REGRESSING"}.get(q_code,"[dim]N/A[/dim]")
-                q_panel = Panel(Align.center(q_status), title="[bold]Autonomous LR Scheduler 🧠[/]", border_style="green", height=3)
-                left_panels.append(q_panel)
-
-            if self.args.use_sentinel:
-                sentinel_panel = Panel(Group(Text(f"Dampened: {self.last_metrics.get('sentinel_pct',0.0):.2%}",justify="center"),Text(get_sentinel_lever_ascii(self.interactive_state.sentinel_dampening_log_factor),justify="center")), title="[bold]🕹️ Sentinel (↑/↓)[/]", border_style="yellow")
-                left_panels.append(sentinel_panel)
-
+                q_panel = Panel(Align.center(q_status), title="[bold]Autonomous LR Scheduler 🧠[/]", border_style="green", height=3); left_panels.append(q_panel)
+            if self.intervention_status:
+                intervention_panel = Panel(Align.center(f"[bold yellow]{self.intervention_status}[/bold yellow]"), title="[bold red]🔴 Live Interventions[/bold red]", border_style="red", height=3)
+                left_panels.append(intervention_panel)
             layout["left"].update(Group(*left_panels))
-
             total_loss = self.last_metrics.get('loss/total', 0.0)
             spark = Panel(Align.center(f"[cyan]{self._get_sparkline(self.loss_hist,60)}[/]"), title=f"Total Loss: {total_loss:.4f}", height=3, border_style="cyan")
-            preview = self.rendered_preview or Text("...", justify="center")
-            prompt = Panel(Text(self.current_prompt, justify="center"), title="[bold]Live Preview (←/→)[/]", border_style="green")
-            layout["right"].update(Group(spark, prompt, Panel(preview, title="Generated Image 👨‍🎓")))
+            prompt_panel = Panel(Text(self.current_prompt, justify="center"), title="[bold]Live Prompt (Current Batch)[/]", border_style="green")
+            current_img_render = Text("...", justify="center")
+            if self.current_step_image_np is not None and Pixels:
+                term_w=48; h,w,_=self.current_step_image_np.shape; term_h=int(term_w*(h/w)*0.5)
+                current_img_render = Pixels.from_image(Image.fromarray(self.current_step_image_np).resize((term_w, term_h), Image.NEAREST))
+            current_img_panel = Panel(Align.center(current_img_render), title="Generated Image (Live Weights)")
+            live_prompt_panel = Panel(Text(self.live_preview_prompt, justify="center"), title="[bold]Live Preview Prompt (←/→)[/]", border_style="yellow")
+            live_img_render = Text("...", justify="center")
+            if self.live_preview_image_np is not None and Pixels:
+                term_w=48; h,w,_=self.live_preview_image_np.shape; term_h=int(term_w*(h/w)*0.5)
+                live_img_render = Pixels.from_image(Image.fromarray(self.live_preview_image_np).resize((term_w, term_h), Image.LANCZOS))
+            live_img_panel = Panel(Align.center(live_img_render), title="Live Preview Image (Averaged Weights)")
+            layout["right"].update(Group(spark, prompt_panel, current_img_panel, live_prompt_panel, live_img_panel))
             layout["footer"].update(self.progress); return layout
 
-    @partial(jit, static_argnames=('self','student_encoder','fixed_decoder_model','resolution'))
-    def _generate_student_image(self, student_params, fixed_decoder_params, command_vec, student_encoder, fixed_decoder_model, resolution):
-         paths = student_encoder.apply({'params': student_params}, command_vec)
-         coords = jnp.mgrid[-1:1:resolution*1j,-1:1:resolution*1j].transpose(1,2,0).reshape(-1,2)
-         pixels = fixed_decoder_model.apply({'params': fixed_decoder_params}, paths, coords, method='decode_from_path_params')
-         return pixels.reshape(paths.shape[0], resolution, resolution, 3)
-
-    @partial(jit, static_argnames=('self','fixed_decoder_model','resolution'))
     def _generate_target_image(self, fixed_decoder_params, path_params, fixed_decoder_model, resolution):
          coords = jnp.mgrid[-1:1:resolution*1j,-1:1:resolution*1j].transpose(1,2,0).reshape(-1,2)
          pixels = fixed_decoder_model.apply({'params': fixed_decoder_params}, path_params, coords, method='decode_from_path_params')
          return pixels.reshape(path_params.shape[0], resolution, resolution, 3)
-
-    def _update_preview_task(self, student_ema_params, fixed_decoder_params, preview_batch, student_encoder, fixed_decoder_model):
-        emb_p, prompt_p, _ = preview_batch
-        img_p = self._generate_student_image(student_ema_params, fixed_decoder_params, emb_p, student_encoder, fixed_decoder_model, 128)
-        img_p.block_until_ready()
-        img_np = ((np.array(img_p[0])*0.5+0.5)*255).clip(0,255).astype(np.uint8)
+    @partial(jit, static_argnames=('self','student_encoder','resolution'))
+    def _generate_preview_jitted(self, student_params, command_vec, student_encoder, resolution):
+         paths = student_encoder.apply({'params': student_params}, command_vec)
+         coords = jnp.mgrid[-1:1:resolution*1j,-1:1:resolution*1j].transpose(1,2,0).reshape(-1,2)
+         pixels = self.physics_model.apply({'params': self.fixed_physics_params}, paths, coords, method='decode_from_path_params')
+         return pixels.reshape(paths.shape[0], resolution, resolution, 3)
+    def _update_live_preview_task(self, student_params_avg, preview_data, student_encoder):
+        val_emb, val_prompt, _ = preview_data
+        val_img = self._generate_preview_jitted(student_params_avg, val_emb, student_encoder, 128)
+        val_img.block_until_ready()
         with self.ui_lock:
-            self.current_prompt = prompt_p[0].decode('utf-8')
-            if Pixels:
-                term_w=64; h,w,_=img_np.shape; term_h=int(term_w*(h/w)*0.5)
-                self.rendered_preview = Pixels.from_image(Image.fromarray(img_np).resize((term_w, term_h), Image.LANCZOS))
+            self.live_preview_prompt = val_prompt[0].decode('utf-8')
+            self.live_preview_image_np = ((np.array(val_img[0])*0.5+0.5)*255).clip(0,255).astype(np.uint8)
 
     def train(self):
         key_listener_thread = threading.Thread(target=listen_for_keys, args=(self.interactive_state,), daemon=True); key_listener_thread.start()
-
-        safe_name = self.text_encoder_id.replace('/','_')
-        distill_record_file = Path(self.args.data_dir) / f"distill_data_{safe_name}.tfrecord"
-        image_record_file = Path(self.args.data_dir) / "data_512x512.tfrecord"
-
-        if not distill_record_file.exists() or not image_record_file.exists():
-            self.console.print(f"[bold red]FATAL: TFRecord files not found![/bold red]")
-            self.console.print(f"Please run the `prepare-distill-data` command on your high-quality dataset first.")
-            sys.exit(1)
-        
-        num_records = sum(1 for _ in tf.data.TFRecordDataset(str(distill_record_file)))
-        super_bs = self.args.batch_size * self.args.rebatch_size
-        steps_per_epoch=num_records//super_bs; 
-        total_steps=steps_per_epoch*self.args.epochs
-        self.console.print(f"--- 🚀 Performance Mode: Rebatching {self.args.rebatch_size} steps per data load. ---")
-        self.console.print(f"--- Found {num_records} aligned samples. Total steps: {total_steps} ({steps_per_epoch} steps/epoch) ---")
-
+        safe_name = self.text_encoder_id.replace('/','_'); distill_record_file = Path(self.args.data_dir)/f"distill_data_{safe_name}.tfrecord"; image_record_file = Path(self.args.data_dir)/"data_512x512.tfrecord"
+        if not distill_record_file.exists() or not image_record_file.exists(): self.console.print("[bold red]FATAL: TFRecord files not found![/bold red]"); sys.exit(1)
+        num_records = sum(1 for _ in tf.data.TFRecordDataset(str(distill_record_file))); super_bs = self.args.batch_size*self.args.rebatch_size; steps_per_epoch=num_records//super_bs; total_steps=steps_per_epoch*self.args.epochs if steps_per_epoch > 0 else 0
+        self.console.print(f"--- 🚀 Super-Batch size: {super_bs}. ---"); self.console.print(f"--- Found {num_records} samples. Total steps: {total_steps} ({steps_per_epoch} steps/epoch) ---")
         emb_shape = (self.SEQUENCE_LENGTH, self.EXPECTED_EMBEDDING_DIM)
-
-        def _parse_distill(proto):
-            features = {'embedding': tf.io.FixedLenFeature([], tf.string), 'prompt': tf.io.FixedLenFeature([], tf.string)}
-            p = tf.io.parse_single_example(proto, features)
-            emb = tf.cast(tf.reshape(tf.io.decode_raw(p['embedding'], tf.float16), emb_shape), self.dtype)
-            return emb, p['prompt']
-
-        def _parse_image(proto):
-            features = {'image': tf.io.FixedLenFeature([], tf.string)}
-            p = tf.io.parse_single_example(proto, features)
-            img = tf.io.decode_jpeg(p['image'], channels=3)
-            img = tf.image.resize(img, [self.args.image_size, self.args.image_size], method='area')
-            return tf.cast(img, self.dtype) / 127.5 - 1.0
-
-        distill_ds = tf.data.TFRecordDataset(str(distill_record_file)).map(_parse_distill, num_parallel_calls=tf.data.AUTOTUNE)
-        image_ds = tf.data.TFRecordDataset(str(image_record_file)).map(_parse_image, num_parallel_calls=tf.data.AUTOTUNE)
+        def _parse_distill(proto): features={'embedding':tf.io.FixedLenFeature([],tf.string),'prompt':tf.io.FixedLenFeature([],tf.string)}; p=tf.io.parse_single_example(proto,features); emb=tf.cast(tf.reshape(tf.io.decode_raw(p['embedding'],tf.float16),emb_shape),self.dtype); return emb, p['prompt']
+        def _parse_image(proto): features={'image':tf.io.FixedLenFeature([],tf.string)}; p=tf.io.parse_single_example(proto,features); img=tf.io.decode_jpeg(p['image'],channels=3); img=tf.image.resize(img,[self.args.image_size,self.args.image_size],method='area'); return tf.cast(img,self.dtype)/127.5-1.0
+        ds_base = tf.data.Dataset.zip((tf.data.TFRecordDataset(str(distill_record_file)), tf.data.TFRecordDataset(str(image_record_file))))
+        def _parse_combined(distill_proto, image_proto): emb,prompt=_parse_distill(distill_proto); img=_parse_image(image_proto); return emb,prompt,img
         
-        combined_ds = tf.data.Dataset.zip((distill_ds, image_ds))
-        ds_base = combined_ds.map(lambda x, y: (x[0], x[1], y), num_parallel_calls=tf.data.AUTOTUNE)
-        
-        p1_glob = list(Path('.').glob(f"{self.args.basename}_{self.args.d_model}d_*_best.pkl"))
-        if not p1_glob: self.console.print(f"[bold red]FATAL: Phase 1 model not found![/bold red] Searched for [cyan]'{self.args.basename}_{self.args.d_model}d_*_best.pkl'[/cyan]."), sys.exit(1)
-        self.console.print(f"--- Loading Phase 1 weights from: [cyan]{p1_glob[0]}[/cyan] ---")
-        with open(p1_glob[0], 'rb') as f: p1_data = pickle.load(f)
+        # --- NEW: Create Validation Set ---
+        all_preview_data = [_parse_combined(*item) for item in list(ds_base.take(50).as_numpy_iterator())]
+        preview_data_buffer = [(np.expand_dims(e,0),np.expand_dims(p,0),np.expand_dims(i,0)) for e,p,i in all_preview_data[:40]]
+        validation_set = [(np.expand_dims(e,0),np.expand_dims(p,0),np.expand_dims(i,0)) for e,p,i in all_preview_data[40:]]
+        self.console.print(f"--- 📊 Validation set created with {len(validation_set)} samples. ---")
 
-        fixed_physics_model = TopologicalCoordinateGenerator(self.args.d_model,self.args.latent_grid_size,self.args.image_size,self.dtype)
-        fixed_physics_params = freeze(p1_data['ema_params'])
-
-        student_encoder = TextToPathParamsProjector(self.args.latent_grid_size, self.dtype)
-        optimizer_chain=[optax.clip_by_global_norm(1.0)]
-        if self.args.use_sentinel: optimizer_chain.append(sentinel())
-        optimizer_chain.append(optax.inject_hyperparams(optax.adamw)(learning_rate=self.args.lr if not self.args.use_q_controller else Q_CONTROLLER_CONFIG.lr_min))
-        optimizer=optax.chain(*optimizer_chain)
-
-        key=jax.random.PRNGKey(self.args.seed); start_step=0; ckpt_path=Path(f"{self.args.basename}_{self.args.d_model}d_distilled_t2i.ckpt.pkl")
-
+        WARMUP_STEPS = 10000; WARMUP_BATCHES_COUNT = 100
+        self.console.print(f"--- 🧠 [bold yellow]Staggered Bloom Warmup[/] enabled for the first {WARMUP_STEPS} steps. ---"); self.console.print(f"--- Pre-loading {WARMUP_BATCHES_COUNT} batches for the curriculum... ---")
+        warmup_batches_tf = list(ds_base.shuffle(10000, seed=self.args.seed).map(_parse_combined).batch(super_bs, drop_remainder=True).take(WARMUP_BATCHES_COUNT).as_numpy_iterator())
+        warmup_batches_np = [(e, p, i) for e, p, i in warmup_batches_tf]; self.console.print(f"--- ✅ {len(warmup_batches_np)} batches loaded into memory for warmup. ---")
+        student_encoder = TextToPathParamsProjector(self.args.latent_grid_size,self.dtype)
+        lr_for_init = self.args.lr if not self.args.use_q_controller else self.q_controller_config.lr_min
+        optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.inject_hyperparams(optax.adamw)(learning_rate=lr_for_init))
+        key = jax.random.PRNGKey(self.args.seed); ckpt_path = Path(f"{self.args.basename}_{self.args.d_model}d_distilled_t2i.ckpt")
+        best_ckpt_path = Path(f"{self.args.basename}_{self.args.d_model}d_distilled_t2i_best.pkl")
+        self.console.print("--- Initializing model state... ---")
+        dummy_input = jnp.zeros((1,self.SEQUENCE_LENGTH,self.EXPECTED_EMBEDDING_DIM),self.dtype)
+        state = CustomTrainState.create(apply_fn=student_encoder.apply,params=student_encoder.init(key, dummy_input)['params'],tx=optimizer,q_controller_state=init_q_controller(self.q_controller_config, self.args.lr) if self.args.use_q_controller else None,patch_buffer_state=self.patch_buffer.state)
+        start_step = 0
         if ckpt_path.exists():
-            self.console.print(f"--- Resuming from checkpoint: [cyan]{ckpt_path}[/cyan] ---")
-            with open(ckpt_path, 'rb') as f: data = pickle.load(f)
-            params=data['params']; ema_params=data.get('ema_params',params); start_step=data.get('step',0)
-            q_state = data.get('q_controller_state', init_q_controller(Q_CONTROLLER_CONFIG, self.args.lr))
-            if 'pid_controller_state' in data: self.sub_loss_lambda_controller.load_state_dict(data['pid_controller_state'])
-            if 'main_pid_controller_state' in data: self.main_loss_lambda_controller.load_state_dict(data['main_pid_controller_state'])
-            state = CustomTrainState.create(apply_fn=student_encoder.apply, params=params, tx=optimizer, ema_params=ema_params, q_controller_state=q_state)
-            state = state.replace(opt_state=data['opt_state'], step=start_step)
-        else:
-            self.console.print("--- Initializing new model state ---")
-            dummy_input = jnp.zeros((1,self.SEQUENCE_LENGTH,self.EXPECTED_EMBEDDING_DIM),self.dtype)
-            params = student_encoder.init(key, dummy_input)['params']
-            q_state = init_q_controller(Q_CONTROLLER_CONFIG, self.args.lr)
-            state = CustomTrainState.create(apply_fn=student_encoder.apply, params=params, tx=optimizer, ema_params=params, q_controller_state=q_state)
+            self.console.print(f"--- Loading checkpoint: [cyan]{ckpt_path}[/cyan] ---");
+            with open(ckpt_path,'rb') as f: data=pickle.load(f)
+            start_step=data.get('step',0); self.best_val_score=data.get('best_val_score', -1.0)
+            patch_buffer_state_from_ckpt = data.get('patch_buffer_state', self.patch_buffer.state)
+            state=state.replace(params=data['params'], step=start_step, opt_state=data['opt_state'], patch_buffer_state=patch_buffer_state_from_ckpt)
+            if self.args.use_q_controller and 'q_controller_state' in data: state = state.replace(q_controller_state=data['q_controller_state'])
+            self.console.print(f"--- Resuming from step {start_step} (Best Val Score: {self.best_val_score:.4f}) ---")
+        else: self.console.print("--- No checkpoint found. Starting from scratch. ---")
         with self.ui_lock: self.param_count = sum(p.size for p in jax.tree_util.tree_leaves(state.params))
-
-        @partial(jit, static_argnames=('loss_calculator_static','student_encoder_static','physics_model_static','image_size','rebatch_size','batch_size'))
-        def train_super_step(state, super_command_vec, super_gt_images, damp, main_lambdas_tuple, sub_lambdas_tuple, key, loss_calculator_static, student_encoder_static, physics_model_static, image_size, rebatch_size, batch_size):
-            def body(i, carry):
-                state, key, metrics_sum = carry
-                vec = jax.lax.dynamic_slice_in_dim(super_command_vec, i*batch_size, batch_size, axis=0)
-                gt_image_batch = jax.lax.dynamic_slice_in_dim(super_gt_images, i*batch_size, batch_size, axis=0)
-                g_key, q_key, key = jax.random.split(key, 3)
-
-                def loss_fn(p):
-                    loss_key, perc_key, gt_perc_key = jax.random.split(g_key, 3)
-                    path_intent = student_encoder_static.apply({'params': p}, vec)
-                    img_student = self._generate_student_image(p, fixed_physics_params, vec, student_encoder_static, physics_model_static, image_size)
-                    
-                    path_echo = physics_model_static.apply({'params': fixed_physics_params}, img_student, method='encode')
-                    img_target = self._generate_target_image(fixed_physics_params, path_echo, physics_model_static, image_size)
-                    echo_loss = jnp.mean(jnp.abs(path_intent - path_echo))
-                    perceptual_losses = loss_calculator_static(img_student, jax.lax.stop_gradient(img_target), perc_key)
-                    gt_perceptual_losses = loss_calculator_static(img_student, jax.lax.stop_gradient(gt_image_batch), gt_perc_key)
-
-                    l_l1,l_ssim,l_edge,l_moment,l_ccov,l_acorr,l_fft = sub_lambdas_tuple
-                    perceptual_loss = (l_l1*perceptual_losses['loss/l1'] + l_ssim*perceptual_losses['loss/ssim'] +
-                                       l_edge*perceptual_losses['loss/edge'] + l_moment*perceptual_losses['loss/moment'] +
-                                       l_ccov*perceptual_losses['loss/color_cov'] + l_acorr*perceptual_losses['loss/autocorr'] +
-                                       l_fft*perceptual_losses['loss/fft'])
-                    
-                    gt_patch_loss = (l_l1*gt_perceptual_losses['loss/l1'] + l_ssim*gt_perceptual_losses['loss/ssim'] +
-                                     l_edge*gt_perceptual_losses['loss/edge'] + l_moment*gt_perceptual_losses['loss/moment'] +
-                                     l_ccov*gt_perceptual_losses['loss/color_cov'] + l_acorr*gt_perceptual_losses['loss/autocorr'] +
-                                     l_fft*gt_perceptual_losses['loss/fft'])
-
-                    radii = path_intent[..., jnp.array([2, 5, 8])]; mean_radius = jnp.mean(radii)
-                    radius_diversity_loss = 1.0 / (mean_radius + 1e-6)
-
-                    l_echo, l_perc, l_gt, l_div = main_lambdas_tuple
-                    total_loss = (l_echo * echo_loss) + (l_perc * perceptual_loss) + (l_gt * gt_patch_loss) + (l_div * radius_diversity_loss)
-
-                    all_metrics = {
-                        'loss/total': total_loss, 'loss/echo': echo_loss, 
-                        'loss/diversity': radius_diversity_loss, 'loss/perceptual': perceptual_loss,
-                        'loss/gt_patch': gt_patch_loss
-                    }
-                    all_metrics.update(perceptual_losses)
-                    return total_loss, all_metrics
-                
-                (loss, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-                
-                new_q, lr = state.q_controller_state, jnp.array(self.args.lr)
-                if self.args.use_q_controller:
-                    new_q = q_controller_choose_action(state.q_controller_state, q_key, Q_CONTROLLER_CONFIG, self.args.lr); lr = new_q.current_lr
-                
-                new_state = state.apply_gradients(grads=grads, dampening_factor=damp, learning_rate=lr).replace(q_controller_state=new_q)
-                
-                if self.args.use_q_controller:
-                    safe_loss = jnp.nan_to_num(loss, nan=Q_CONTROLLER_CONFIG.loss_max, posinf=Q_CONTROLLER_CONFIG.loss_max)
-                    new_state = new_state.replace(q_controller_state=q_controller_update(new_state.q_controller_state, safe_loss, Q_CONTROLLER_CONFIG))
-
-                metrics = {**aux_metrics, 'learning_rate': lr}
-                if self.args.use_sentinel: metrics['sentinel_pct'] = new_state.opt_state[1].dampened_pct
-                if self.args.use_q_controller: metrics.update({k: getattr(new_state.q_controller_state, k) for k in ['status_code','last_reward','trend_slope']})
-                return new_state, key, jax.tree_util.tree_map(lambda x,y:x+y, metrics_sum, metrics)
-
-            loss_keys = ['total','echo','perceptual', 'gt_patch', 'diversity','l1','ssim','edge','moment','color_cov','autocorr','fft']
-            initial_metrics = {f'loss/{k}':0. for k in loss_keys}; initial_metrics['learning_rate'] = 0.
-            if self.args.use_sentinel: initial_metrics['sentinel_pct'] = 0.
-            if self.args.use_q_controller: initial_metrics.update({'status_code':0.,'last_reward':0.,'trend_slope':0.})
-
-            final_state, _, total_metrics = jax.lax.fori_loop(0, rebatch_size, body, (state, key, initial_metrics))
-            avg_metrics = jax.tree_util.tree_map(lambda x: x/rebatch_size, total_metrics)
-            if self.args.use_q_controller:
-                avg_metrics['q_status'],avg_metrics['q_reward'],avg_metrics['q_trend'] = avg_metrics.pop('status_code'),avg_metrics.pop('last_reward'),avg_metrics.pop('trend_slope')
-            return final_state, avg_metrics
-
-        preview_data_buffer = [next(iter(ds_base.take(50).batch(1).as_numpy_iterator()))]
-        preview_idx = 0
-        
-        start_epoch = start_step // steps_per_epoch if steps_per_epoch > 0 else 0
-        global_step = start_step
-
-        self.progress = Progress(TextColumn("[bold]Epoch {task.fields[epoch]}/{task.fields[epochs]}"), BarColumn(), "•", TextColumn("Step {task.completed}/{task.total}"))
-        main_task = self.progress.add_task("train", total=total_steps, completed=start_step, epoch=start_epoch+1, epochs=self.args.epochs)
-        
-        last_time=time.time(); live=Live(self._generate_layout(),screen=True,redirect_stderr=False,vertical_overflow="crop",auto_refresh=False)
-        
+        preview_idx = 0; global_step = start_step
+        self.progress = Progress(TextColumn("[bold]Epoch {task.fields[epoch]}/{task.fields[epochs]}"),BarColumn(),"•",TextColumn("Step {task.completed}/{task.total}"))
+        main_task = self.progress.add_task("train",total=total_steps,completed=start_step,epoch=global_step//steps_per_epoch+1 if steps_per_epoch>0 else 1,epochs=self.args.epochs)
+        last_time, last_ui_update_time, last_val_time = time.time(), 0.0, time.time()
+        main_ds_iterator = iter(tfds.as_numpy(ds_base.shuffle(10000, seed=self.args.seed).map(_parse_combined).repeat().batch(super_bs, drop_remainder=True).prefetch(tf.data.AUTOTUNE)))
+        live = Live(self._generate_layout(),screen=True,redirect_stderr=False,vertical_overflow="crop",auto_refresh=False)
         try:
             live.start()
             with ThreadPoolExecutor(max_workers=1) as async_pool:
                 active_preview_future = None
-                for epoch in range(start_epoch, self.args.epochs):
+                while global_step < total_steps:
                     if self.interactive_state.shutdown_event.is_set(): break
-                    self.console.print(f"\n--- Epoch {epoch+1}/{self.args.epochs} --- Shuffling data with seed {self.args.seed + epoch}... ---")
-
-                    ds = ds_base.shuffle(buffer_size=num_records, seed=self.args.seed + epoch)
-                    ds = ds.batch(super_bs, drop_remainder=True)
-                    train_iterator = iter(tfds.as_numpy(ds.prefetch(2)))
                     
-                    for step_in_epoch in range(steps_per_epoch):
-                        if self.interactive_state.shutdown_event.is_set(): break
-                        
-                        try: super_vec, super_prompts, super_gt_images = next(train_iterator)
-                        except StopIteration: break
-
-                        damp = self.interactive_state.get_sentinel_factor(); key, step_key = jax.random.split(key)
-                        
+                    # --- AUTONOMOUS DIFFICULTY REGULATOR (ADR) LOGIC ---
+                    if not self.adr_active and (self.last_metrics.get('loss/total', 0) > self.HIGH_LOSS_THRESHOLD and global_step > WARMUP_STEPS):
+                        self.adr_active = True
+                        self.adr_buffer = [next(main_ds_iterator) for _ in range(self.ADR_BUFFER_SIZE)]
+                        self.adr_idx = 0
+                        self.adr_loss_history.clear()
+                    
+                    current_status = ""
+                    if self.adr_active:
+                        super_vec, super_prompts, super_gt_images = self.adr_buffer[self.adr_idx]
+                        self.adr_idx = (self.adr_idx + 1) % self.ADR_BUFFER_SIZE
+                        avg_adr_loss = np.mean(self.adr_loss_history) if self.adr_loss_history else self.HIGH_LOSS_THRESHOLD
+                        current_status = f"ADR ACTIVE 🔁 (Loss: {avg_adr_loss:.2f} / Target: <{self.LOW_LOSS_THRESHOLD})"
+                        if avg_adr_loss < self.LOW_LOSS_THRESHOLD:
+                            self.adr_active = False
+                            current_status = "ADR Deactivated ✅"
+                    else: # Normal operation
+                        if global_step < WARMUP_STEPS: # curriculum learning
+                            # ... (warmup logic remains the same)
+                            stage = min((global_step * 10) // WARMUP_STEPS, 9); frontier_start_idx, frontier_end_idx = stage * 10, (stage + 1) * 10; reinforcement_end_idx = stage * 10
+                            frontier_indices = np.random.randint(frontier_start_idx, frontier_end_idx, size=int(0.75 * super_bs)) if super_bs > 1 else [np.random.randint(frontier_start_idx, frontier_end_idx)]
+                            if reinforcement_end_idx > 0: chosen_batch_indices = np.concatenate([frontier_indices, np.random.randint(0, reinforcement_end_idx, size=int(0.25 * super_bs)) if super_bs > 1 else [np.random.randint(0, reinforcement_end_idx)]])
+                            else: chosen_batch_indices = np.random.randint(0, frontier_end_idx, size=super_bs)
+                            np.random.shuffle(chosen_batch_indices); vecs, prompts, gts = [], [], [];
+                            for i in chosen_batch_indices: e, p, img = warmup_batches_np[i % WARMUP_BATCHES_COUNT]; vecs.append(e); prompts.append(p); gts.append(img)
+                            super_vec, super_prompts, super_gt_images = np.concatenate(vecs), np.concatenate(prompts), np.concatenate(gts)
+                        else:
+                            try: super_vec, super_prompts, super_gt_images = next(main_ds_iterator)
+                            except StopIteration: break
+                    
+                    with self.interactive_state.lock: is_gt_blast_active = self.interactive_state.gt_blast_active
+                    if is_gt_blast_active:
+                        current_main_lambdas = {'gt_patch': 100.0, 'echo': 0.01, 'perceptual': 0.01, 'diversity': 0.0}
+                        current_sub_lambdas = self.sub_loss_lambda_controller(self.last_metrics, global_step)
+                        current_status += " | GT BLAST ACTIVE! 💥"
+                    else:
                         current_sub_lambdas = self.sub_loss_lambda_controller(self.last_metrics, global_step)
                         current_main_lambdas = self.main_loss_lambda_controller(self.last_metrics, global_step)
-                        self.current_lambdas = {**current_main_lambdas, **current_sub_lambdas}
+                    self.intervention_status = current_status.strip(" | ")
 
-                        sub_lambda_keys = ['l1', 'ssim', 'edge', 'moment', 'color_cov', 'autocorr', 'fft']
-                        main_lambda_keys = ['echo', 'perceptual', 'gt_patch', 'diversity']
-                        sub_lambdas_for_jit = tuple(current_sub_lambdas[k] for k in sub_lambda_keys)
-                        main_lambdas_for_jit = tuple(current_main_lambdas[k] for k in main_lambda_keys)
-                        
-                        if self.args.use_q_controller:
-                            state = state.replace(q_controller_state=state.q_controller_state.replace(step_count=jnp.array(global_step, dtype=jnp.int32)))
-                        
-                        state, metrics = train_super_step(state, super_vec, super_gt_images, damp, main_lambdas_for_jit, sub_lambdas_for_jit, step_key, self.loss_calculator, student_encoder, fixed_physics_model, self.args.image_size, self.args.rebatch_size, self.args.batch_size)
-                        jax.tree_util.tree_map(lambda x: x.block_until_ready(), (state, metrics))
+                    key, step_key = jax.random.split(key)
+                    self.current_lambdas = {**current_main_lambdas, **current_sub_lambdas}
+                    sub_lambda_keys = ['l1','ssim','edge','moment','color_cov','autocorr','fft']; main_lambda_keys = ['gt_patch', 'echo', 'perceptual', 'diversity']
+                    sub_lambdas_for_jit = tuple(current_sub_lambdas.get(k,0.0) for k in sub_lambda_keys); main_lambdas_for_jit = tuple(current_main_lambdas.get(k,0.0) for k in main_lambda_keys)
+                    if self.args.use_q_controller: state = state.replace(q_controller_state=state.q_controller_state.replace(step_count=jnp.array(global_step,dtype=jnp.int32)))
+                    state, metrics, generated_image_batch = self.jitted_train_step(state=state, global_step=jnp.array(global_step),super_command_vec=super_vec, super_gt_images=super_gt_images,main_lambdas_tuple=main_lambdas_for_jit, sub_lambdas_tuple=sub_lambdas_for_jit,key=step_key)
+                    self.weight_averager.update(state.params)
+                    jax.device_get(metrics); time_now=time.time()
+                    self.steps_per_sec = super_bs/(time_now-last_time+1e-6); last_time=time_now
+                    global_step += 1; epoch = global_step // steps_per_epoch if steps_per_epoch > 0 else 0
+                    self.progress.update(main_task, completed=global_step, epoch=epoch+1)
+                    metrics_np = jax.tree_util.tree_map(np.asarray, metrics)
 
-                        time_now=time.time(); self.steps_per_sec=self.args.rebatch_size/(time_now-last_time+1e-6); last_time=time_now
-                        global_step += self.args.rebatch_size
-                        self.progress.update(main_task, completed=global_step, epoch=epoch+1)
-                        
-                        metrics_np = jax.device_get(jax.tree_util.tree_map(np.asarray, metrics))
+                    if self.adr_active: self.adr_loss_history.append(metrics_np['loss/total'])
+                    
+                    if time_now - last_ui_update_time > 0.2:
+                        last_ui_update_time = time_now
                         with self.ui_lock:
-                            self.last_metrics = {k:v.item() if hasattr(v,'item') else v for k,v in metrics_np.items()}
-                            if np.isfinite(self.last_metrics['loss/total']): self.loss_hist.append(self.last_metrics['loss/total'])
-
-                        preview_change = self.interactive_state.get_and_reset_preview_change()
-                        if preview_change != 0: preview_idx = (preview_idx + preview_change) % len(preview_data_buffer)
-                        
+                            self.last_metrics = {k:v.item() for k,v in metrics_np.items()}
+                            if 'loss/total' in self.last_metrics and np.isfinite(self.last_metrics['loss/total']): self.loss_hist.append(self.last_metrics['loss/total'])
+                            self.current_prompt = super_prompts[0].decode('utf-8')
+                            self.current_step_image_np = ((np.array(generated_image_batch[0])*0.5+0.5)*255).clip(0,255).astype(np.uint8)
+                        preview_idx += self.interactive_state.get_and_reset_preview_change(); preview_idx %= len(preview_data_buffer)
                         if active_preview_future is None or active_preview_future.done():
-                             if active_preview_future: active_preview_future.result()
-                             active_preview_future = async_pool.submit(self._update_preview_task, state.ema_params, fixed_physics_params, preview_data_buffer[preview_idx], student_encoder, fixed_physics_model)
-                        
+                            if active_preview_future: active_preview_future.result()
+                            if (averaged_params := self.weight_averager.get_averaged_params()) is not None:
+                                avg_params_device = jax.device_put(averaged_params)
+                                student_encoder_ref = TextToPathParamsProjector(self.args.latent_grid_size,self.dtype)
+                                active_preview_future = async_pool.submit(self._update_live_preview_task, avg_params_device, preview_data_buffer[preview_idx], student_encoder_ref)
                         live.update(self._generate_layout(), refresh=True)
 
-                        if self.interactive_state.get_and_reset_force_save() or (global_step > 0 and (global_step % self.args.save_every < self.args.rebatch_size)):
-                            self.console.print(f"\n--- 💾 Saving checkpoint at step {global_step}... ---")
-                            data_to_save = {'params': jax.device_get(state.params), 'ema_params': jax.device_get(state.ema_params),
-                                            'opt_state': jax.device_get(state.opt_state), 'q_controller_state': jax.device_get(state.q_controller_state),
-                                            'pid_controller_state': self.sub_loss_lambda_controller.state_dict(), 
-                                            'main_pid_controller_state': self.main_loss_lambda_controller.state_dict(), 'step': global_step}
-                            with open(ckpt_path, 'wb') as f: pickle.dump(data_to_save, f)
+                    # --- NEW: Validation and Best Model Saving Logic ---
+                    if time_now - last_val_time > self.args.save_every:
+                        last_val_time = time_now
+                        if (avg_params := self.weight_averager.get_averaged_params()) is not None:
+                            avg_params_device = jax.device_put(avg_params)
+                            self.current_val_score = self._run_validation(avg_params_device, validation_set)
+                            if self.current_val_score > self.best_val_score:
+                                self.best_val_score = self.current_val_score
+                                self.console.print(f"\n--- ⭐ New Best Validation Score: {self.best_val_score:.4f}! Saving model... ---")
+                                best_model_data = {'student_encoder_params': unfreeze(jax.device_get(avg_params_device)), 'fixed_physics_params': self.fixed_physics_params}
+                                with open(best_ckpt_path, 'wb') as f: pickle.dump(best_model_data, f)
+                            else:
+                                self.console.print(f"\n--- Validation score: {self.current_val_score:.4f} (Best: {self.best_val_score:.4f}) ---")
+                        # Also save a regular checkpoint
+                        self.console.print(f"--- 💾 Saving regular checkpoint at step {global_step}... ---")
+                        data_to_save = {'params': jax.device_get(state.params), 'opt_state': jax.device_get(state.opt_state), 'q_controller_state': jax.device_get(state.q_controller_state), 'patch_buffer_state': jax.device_get(state.patch_buffer_state), 'best_val_score': self.best_val_score, 'step': global_step}
+                        with open(ckpt_path, 'wb') as f: pickle.dump(data_to_save, f)
         finally:
             live.stop(); self.interactive_state.set_shutdown(); key_listener_thread.join(timeout=1)
             self.console.print("\n--- Training finished. ---")
             if 'state' in locals():
                 if not self.interactive_state.shutdown_event.is_set():
                     self.console.print("\n--- Saving final model... ---")
-                    clean_params={'student_encoder_params':unfreeze(jax.device_get(state.ema_params)),'fixed_physics_params':fixed_physics_params}
-                    final_path = Path(f"{self.args.basename}_{self.args.d_model}d_distilled_t2i_echo_gt.pkl")
-                    with open(final_path, 'wb') as f: pickle.dump(clean_params, f)
-                    self.console.print(f"✅ Self-contained T2I model saved to [green]{final_path}[/green]")
+                    final_averaged_params = self.weight_averager.get_averaged_params()
+                    final_path_avg = Path(f"{self.args.basename}_{self.args.d_model}d_distilled_t2i_final.pkl")
+                    with open(final_path_avg,'wb') as f: pickle.dump({'student_encoder_params':unfreeze(jax.device_get(final_averaged_params)),'fixed_physics_params':self.fixed_physics_params},f)
+                    self.console.print(f"✅ Final averaged weights model saved to [green]{final_path_avg}[/green]")
+                    self.console.print(f"🏆 Best validation model saved to [yellow]{best_ckpt_path}[/yellow]")
                 else:
                     self.console.print(f"\n--- 💾 Saving final checkpoint due to interruption... ---")
-                    data = {'params':jax.device_get(state.params),'ema_params':jax.device_get(state.ema_params),
-                            'opt_state':jax.device_get(state.opt_state),'q_controller_state':jax.device_get(state.q_controller_state),
-                            'pid_controller_state': self.sub_loss_lambda_controller.state_dict(), 
-                            'main_pid_controller_state': self.main_loss_lambda_controller.state_dict(), 'step':global_step}
-                    with open(ckpt_path, 'wb') as f: pickle.dump(data, f)
+                    data={'params':jax.device_get(state.params),'opt_state':jax.device_get(state.opt_state),'q_controller_state':jax.device_get(state.q_controller_state), 'patch_buffer_state': jax.device_get(state.patch_buffer_state), 'best_val_score':self.best_val_score, 'step':global_step}
+                    with open(ckpt_path,'wb') as f: pickle.dump(data,f)
                     self.console.print(f"✅ Checkpoint saved to [cyan]{ckpt_path}[/cyan].")
 
 def main():
-    parser = argparse.ArgumentParser(description="Phase 3: Echo+GT Distillation", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(description="Phase 3: Hyper-Optimized Echo+GT Distillation", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    
     parent_parser = argparse.ArgumentParser(add_help=False)
-    parent_parser.add_argument('--basename',type=str,required=True,help="Basename for model files.")
+    parent_parser.add_argument('--basename',type=str,required=True,help="Basename for model files (must match Phase 1).")
     parent_parser.add_argument('--d-model',type=int,default=64,help="Model dimension of Phase 1 AE.")
     parent_parser.add_argument('--latent-grid-size',type=int,default=64,help="Latent grid size of Phase 1 AE.")
-    parent_parser.add_argument('--image-size',type=int,default=512,help="Image resolution.")
-
-    p_prep = subparsers.add_parser("prepare-distill-data", help="Create aligned TFRecords from a folder of image/.txt pairs (e.g., from coco_preprocessor.py).")
+    parent_parser.add_argument('--image-size',type=int,default=512,help="Image resolution for training data.")
+    p_prep = subparsers.add_parser("prepare-distill-data", help="Create aligned TFRecords from a folder of image/.txt pairs.")
     p_prep.add_argument('--source-dir', type=str, required=True, help="Directory with ALIGNED images and .txt files.")
     p_prep.add_argument('--target-dir', type=str, required=True, help="Directory to save the final TFRecord files.")
     p_prep.add_argument('--text-encoder-id', type=str, default="google/siglip-base-patch16-224", help="Hugging Face ID of the text encoder.")
-    
-    p_train = subparsers.add_parser("train", help="Distill knowledge using Echo and Ground Truth Loss.", parents=[parent_parser])
+    p_train = subparsers.add_parser("train", help="Distill knowledge using Echo and a super-charged Ground Truth Loss.", parents=[parent_parser])
     p_train.add_argument('--data-dir',type=str,required=True,help="Directory containing the ALIGNED TFRecord files.")
     p_train.add_argument('--epochs',type=int,default=100)
     p_train.add_argument('--batch-size',type=int,default=1,help="Size of mini-batches processed on GPU at once.")
-    p_train.add_argument('--rebatch-size',type=int,default=50,help="Number of mini-batches per super-batch to reduce Python overhead.")
+    p_train.add_argument('--rebatch-size',type=int,default=1,help="Effective batch size is batch-size * rebatch-size.")
     p_train.add_argument('--lr',type=float,default=2e-4,help="Target learning rate for the Autonomous Scheduler.")
     p_train.add_argument('--seed',type=int,default=42)
-    p_train.add_argument('--use-bfloat16',action='store_true')
+    p_train.add_argument('--use-bfloat16',action='store_true', help="Use BFloat16 for training to save memory and increase speed.")
     p_train.add_argument('--use-q-controller',action='store_true',help="Enable Autonomous LR Scheduler.")
-    p_train.add_argument('--use-sentinel',action='store_true',help="Enable Sentinel optimizer.")
-    p_train.add_argument('--save-every',type=int,default=2000,help="Save a checkpoint every N steps.")
-
+    p_train.add_argument('--save-every',type=int,default=300,help="Run validation and save checkpoint every N seconds.")
     args = parser.parse_args()
     if args.command == "prepare-distill-data":
         prepare_distill_data(args.source_dir, args.target_dir, args.text_encoder_id)
     elif args.command == "train":
-        trainer = DistillationTrainer(args)
+        p1_glob = list(Path('.').glob(f"{args.basename}_{args.d_model}d_*_best.pkl"))
+        if not p1_glob:
+            print(f"[bold red]FATAL: Phase 1 model not found![/bold red] Searched for [cyan]'{args.basename}_{args.d_model}d_*_best.pkl'[/cyan]."), sys.exit(1)
+        print(f"--- Loading Phase 1 weights from: [cyan]{p1_glob[0]}[/cyan] ---")
+        with open(p1_glob[0], 'rb') as f: p1_data = pickle.load(f)
+        fixed_physics_params = freeze(p1_data['ema_params'])
+        trainer = DistillationTrainer(args, fixed_physics_params)
         trainer.train()
     else:
         print(f"Unknown command: {args.command}")
