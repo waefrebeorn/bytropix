@@ -320,8 +320,8 @@ class TinyRecursiveMarkovianThinker(nn.Module):
         self.token_embedding = nn.Embed(self.config.VOCAB_SIZE, self.config.D_MODEL, dtype=self.dtype)
         self.input_dropout = nn.Dropout(self.config.DROPOUT)
         self.reasoning_net = GroupedReasoningBlock(self.config, self.dtype)
-        self.project_z_update = nn.Dense(self.config.D_MODEL, dtype=self.dtype)
-        self.project_y_update = nn.Dense(self.config.D_MODEL, dtype=self.dtype)
+        self.z_update_proj = nn.Dense(self.config.D_MODEL, dtype=self.dtype)
+        self.y_update_proj = nn.Dense(self.config.D_MODEL, dtype=self.dtype)
         self.output_head = nn.Dense(self.config.VOCAB_SIZE, dtype=self.dtype)
         self.y_init = self.param('y_init', nn.initializers.normal(), (1, self.config.CHUNK_SIZE, self.config.D_MODEL))
         self.z_init = self.param('z_init', nn.initializers.normal(), (1, self.config.CHUNK_SIZE, self.config.D_MODEL))
@@ -332,31 +332,19 @@ class TinyRecursiveMarkovianThinker(nn.Module):
         pe = pe.at[:, 0::2].set(jnp.sin(position * div_term))
         pe = pe.at[:, 1::2].set(jnp.cos(position * div_term))
         self.pos_encoding = pe
-    @nn.compact
-    def deep_recursion(self, x_embed, y, z, deterministic):
-        def scan_body(module, carry, _):
-            y_c, z_c = carry
-            z_input_raw = jnp.concatenate([x_embed, y_c, z_c], axis=-1)
-            z_input_proj = module.project_z_update(z_input_raw)
-            z_out = module.reasoning_net(z_input_proj, module.causal_mask, deterministic)
-            y_input_raw = jnp.concatenate([y_c, z_out], axis=-1)
-            y_input_proj = module.project_y_update(y_input_raw)
-            y_out = module.reasoning_net(y_input_proj, module.causal_mask, deterministic)
-            return (y_out, z_out), None
-        scanner = nn.scan(
-            scan_body,
-            variable_broadcast='params',
-            split_rngs={'params': False, 'dropout': True},
-            length=self.config.N_LATENT_RECURSION_STEPS
-        )
-        initial_carry = (y, z)
-        (y_final, z_final), _ = scanner(self, initial_carry, None)
-        return y_final, z_final
     def __call__(self, indices, y_start, z_start, ds_state, global_step, deterministic=False) -> Tuple:
         batch_size = indices.shape[0]
         x_embed = self.token_embedding(indices) + self.pos_encoding
         x_embed = self.input_dropout(x_embed, deterministic=deterministic)
-        y_final, z_final = self.deep_recursion(x_embed, y_start, z_start, deterministic)
+        y, z = y_start, z_start
+        for _ in range(self.config.N_LATENT_RECURSION_STEPS):
+            z_input_raw = jnp.concatenate([x_embed, y, z], axis=-1)
+            z_input_proj = self.z_update_proj(z_input_raw)
+            z = self.reasoning_net(z_input_proj, self.causal_mask, deterministic)
+            y_input_raw = jnp.concatenate([y, z], axis=-1)
+            y_input_proj = self.y_update_proj(y_input_raw)
+            y = self.reasoning_net(y_input_proj, self.causal_mask, deterministic)
+        y_final, z_final = y, z
         logits = self.output_head(y_final)
         is_cog_loss_active = self.config.ENTROPIX_ENABLED and self.config.USE_COGNITIVE_LOSS and global_step > self.config.COGNITIVE_LOSS_WARMUP_STEPS
         def compute_cog_loss():
@@ -548,7 +536,7 @@ class SotaTrainerJAX:
             restored_state = serialization.from_bytes(state, serialized_state)
             state = restored_state
             self.console.print(f"--- Resumed from step {int(state.step)}. ---", style="blue")
-        jitted_train_step = self.create_jitted_train_step(model, dirichlet_support)
+        jitted_update_step = self.create_jitted_update_step(model, dirichlet_support)
         dataset, num_examples = create_direct_text_dataset(raw_text_path, self.config.BLOCK_SIZE, self.config.BATCH_SIZE, self.config.REBATCH_SIZE, is_training=True)
         data_iterator = iter(tfds.as_numpy(dataset))
         try:
@@ -574,7 +562,7 @@ class SotaTrainerJAX:
             (compile_x, compile_y) = next(data_iterator)
             compile_x = compile_x.reshape(self.config.REBATCH_SIZE, self.config.BATCH_SIZE, self.config.BLOCK_SIZE)
             compile_y = compile_y.reshape(self.config.REBATCH_SIZE, self.config.BATCH_SIZE, self.config.BLOCK_SIZE)
-            _, _, _ = jitted_train_step(state, compile_x[0], compile_y[0])
+            jitted_update_step(state, compile_x[0], compile_y[0])
             state.params['y_init'].block_until_ready() 
             self.console.print("--- ✅ Compilation complete. Starting training loop. ---")
             while int(state.step) < total_steps and not self.interactive_state.shutdown_event.is_set():
@@ -585,48 +573,12 @@ class SotaTrainerJAX:
                     if self.interactive_state.shutdown_event.is_set(): break
                     batch_x_np = super_batch_x_np[i]
                     batch_y_np = super_batch_y_np[i]
-                    
-                    q_key, dropout_key = jax.random.split(state.dropout_key)
-                    
-                    if self.config.USE_Q_CONTROLLER:
-                        q_state_pre_update = q_controller_choose_action(state.q_state, q_key, self.config.LEARNING_RATE)
-                        lr = q_state_pre_update.current_lr
-                        # Temporarily update state with new Q-state and key for the JIT step
-                        state_for_jit = state.replace(q_state=q_state_pre_update, dropout_key=dropout_key)
-                    else:
-                        lr = self.config.LEARNING_RATE
-                        state_for_jit = state.replace(dropout_key=dropout_key)
-                    
-                    grads, metrics, new_state_aux = jitted_train_step(state_for_jit, batch_x_np, batch_y_np)
-                    
-                    updates, new_opt_state = state.tx.update(grads, state.opt_state, state_for_jit.params, learning_rate=lr)
-                    new_params = optax.apply_updates(state_for_jit.params, updates)
-                    new_ema_params = jax.tree_util.tree_map(
-                        lambda ema, p: ema * self.config.EMA_DECAY + p * (1.0 - self.config.EMA_DECAY),
-                        state_for_jit.ema_params, new_params
-                    )
-                    
-                    # Now, update the Q-controller state based on the calculated loss
-                    if self.config.USE_Q_CONTROLLER:
-                        final_q_state = q_controller_update(state_for_jit.q_state, metrics['loss'])
-                    else:
-                        final_q_state = new_state_aux.q_state
-
-                    # Final state update: use new_state_aux as base to keep PID states
-                    state = new_state_aux.replace(
-                        step=state.step + 1,
-                        params=new_params,
-                        ema_params=new_ema_params,
-                        opt_state=new_opt_state,
-                        q_state=final_q_state
-                    )
-
+                    state, metrics = jitted_update_step(state, batch_x_np, batch_y_np)
                     time_now = time.time()
                     self.shared_state['steps_per_sec'] = 1.0 / (time_now - last_step_time + 1e-9)
                     last_step_time = time_now
                     metrics_np = jax.device_get(metrics)
                     self.shared_state.update({k: v.item() for k, v in metrics_np.items()})
-                    self.shared_state['learning_rate'] = float(lr)
                     if self.config.USE_Q_CONTROLLER: self.shared_state['q_status_code'] = int(state.q_state.status_code)
                     loss_item, cog_loss_item = metrics_np['loss'], metrics_np['cognitive_loss']
                     if np.isfinite(loss_item):
@@ -650,70 +602,84 @@ class SotaTrainerJAX:
             self.console.print("\n--- Training loop terminated. Saving final state... ---")
             if 'state' in locals(): self._save_checkpoint(state, ckpt_path)
             ui_thread.join(timeout=1); key_listener_thread.join(timeout=1)
-    def create_jitted_train_step(self, model, dirichlet_support):
+    def create_jitted_update_step(self, model, dirichlet_support):
         @partial(jit)
-        def train_step_fn(state: JaxTrainState, batch_x: chex.Array, batch_y: chex.Array):
-            current_batch_size = batch_x.shape[0]
+        def update_step_fn(state: JaxTrainState, batch_x: chex.Array, batch_y: chex.Array):
+            dropout_key, q_key, new_base_key = jax.random.split(state.dropout_key, 3)
+            if self.config.USE_Q_CONTROLLER:
+                q_state_pre_action = q_controller_choose_action(state.q_state, q_key, self.config.LEARNING_RATE)
+                lr = q_state_pre_action.current_lr
+            else:
+                q_state_pre_action = state.q_state
+                lr = jnp.array(self.config.LEARNING_RATE)
             def loss_fn(params):
                 temp_engine = EntropixEngine(config=self.config, dirichlet_support=dirichlet_support)
-                batch_indices = batch_x; batch_targets = batch_y
+                current_batch_size = batch_x.shape[0]
                 y = jnp.broadcast_to(params['y_init'], (current_batch_size, self.config.CHUNK_SIZE, self.config.D_MODEL))
                 z = jnp.broadcast_to(params['z_init'], (current_batch_size, self.config.CHUNK_SIZE, self.config.D_MODEL))
                 ds_state = temp_engine.initialize_state(current_batch_size, self.dtype)
                 num_chunks = self.config.BLOCK_SIZE // self.config.CHUNK_SIZE
-                def chunk_scan_fn(chunk_carry, chunk_idx):
-                    y_c, z_c, ds_state_c, key_c, chaos_pid, div_pid = chunk_carry
+                def chunk_scan_fn(carry, chunk_idx):
+                    y_prev, z_prev, ds_state_prev, pid_chaos_prev, pid_div_prev = carry
+                    y_in, z_in, ds_state_in = map(jax.lax.stop_gradient, (y_prev, z_prev, ds_state_prev))
                     chunk_start = chunk_idx * self.config.CHUNK_SIZE
-                    indices = jax.lax.dynamic_slice_in_dim(batch_indices, chunk_start, self.config.CHUNK_SIZE, axis=1)
-                    targets = jax.lax.dynamic_slice_in_dim(batch_targets, chunk_start, self.config.CHUNK_SIZE, axis=1)
-                    def supervision_scan_fn(sup_carry, _):
-                        y_s, z_s, ds_state_s, key_s, chaos_pid_s, div_pid_s = sup_carry
-                        key_s, dropout_key_s = jax.random.split(key_s)
-                        (y_final, z_final), logits, cog_metrics, loss_comp, ds_state_new = model.apply(
-                            {'params': params}, indices, y_s, z_s, ds_state_s, 
-                            global_step=state.step, rngs={'dropout': dropout_key_s}
-                        )
-                        task_loss = jnp.mean(optax.softmax_cross_entropy_with_integer_labels(logits.reshape(-1, self.config.VOCAB_SIZE), targets.reshape(-1)))
-                        def update_cognitive_loss(carry):
-                            c_m, l_c, chaos_pid_p, div_pid_p = carry
-                            new_pid_chaos, chaos_w = pid_update(chaos_pid_p, c_m.chaos_metric.mean(), self.pid_controllers['chaos'][0], self.pid_controllers['chaos'][1], self.config.PID_WEIGHT_LIMIT)
-                            new_pid_div, div_w = pid_update(div_pid_p, c_m.kl_divergence.mean(), self.pid_controllers['divergence'][0], self.pid_controllers['divergence'][1], self.config.PID_WEIGHT_LIMIT)
-                            cog_l = chaos_w * l_c.loss_chaos + div_w * l_c.loss_divergence
-                            return cog_l, new_pid_chaos, new_pid_div, chaos_w, div_w, c_m
-                        is_cog_active = self.config.ENTROPIX_ENABLED and self.config.USE_COGNITIVE_LOSS and (state.step > self.config.COGNITIVE_LOSS_WARMUP_STEPS)
-                        cognitive_loss, chaos_pid_s, div_pid_s, chaos_w, div_w, cog_metrics_out = jax.lax.cond(
-                            is_cog_active, update_cognitive_loss,
-                            lambda carry: (jnp.array(0.0, dtype=task_loss.dtype), carry[2], carry[3], 
-                                           jnp.array(0.0, dtype=task_loss.dtype), jnp.array(0.0, dtype=task_loss.dtype), carry[0]),
-                            (cog_metrics, loss_comp, chaos_pid_s, div_pid_s)
-                        )
-                        total_loss = task_loss + cognitive_loss
-                        return (y_final, z_final, ds_state_new, key_s, chaos_pid_s, div_pid_s), (total_loss, cognitive_loss, chaos_w, div_w, cog_metrics_out)
-                    (y_c, z_c, ds_state_c, key_c, chaos_pid, div_pid), (losses, cog_losses, chaos_ws, div_ws, all_cog_metrics) = jax.lax.scan(
-                        supervision_scan_fn, (y_c, z_c, ds_state_c, key_c, chaos_pid, div_pid), None, length=self.config.N_SUPERVISION_STEPS
+                    indices = jax.lax.dynamic_slice_in_dim(batch_x, chunk_start, self.config.CHUNK_SIZE, axis=1)
+                    targets = jax.lax.dynamic_slice_in_dim(batch_y, chunk_start, self.config.CHUNK_SIZE, axis=1)
+                    (y_final, z_final), logits, cog_metrics, loss_comp, ds_state_new = model.apply(
+                        {'params': params}, indices, y_in, z_in, ds_state_in, 
+                        global_step=state.step, rngs={'dropout': dropout_key}
                     )
-                    return (y_c, z_c, ds_state_c, key_c, chaos_pid, div_pid), (jnp.sum(losses), jnp.sum(cog_losses), chaos_ws[-1], div_ws[-1], all_cog_metrics)
-                key, chunk_key = jax.random.split(state.dropout_key)
-                (_, _, _, _, final_chaos_pid, final_div_pid), (chunk_losses, chunk_cog_losses, final_chaos_w, final_div_w, last_cog_metrics) = jax.lax.scan(
-                    chunk_scan_fn, (y, z, ds_state, chunk_key, state.pid_chaos_state, state.pid_divergence_state), jnp.arange(num_chunks)
+                    task_loss = jnp.mean(optax.softmax_cross_entropy_with_integer_labels(logits.reshape(-1, self.config.VOCAB_SIZE), targets.reshape(-1)))
+                    def update_cognitive_loss(carry):
+                        c_m, l_c, chaos_pid, div_pid = carry
+                        new_pid_chaos, chaos_w = pid_update(chaos_pid, c_m.chaos_metric.mean(), self.pid_controllers['chaos'][0], self.pid_controllers['chaos'][1], self.config.PID_WEIGHT_LIMIT)
+                        new_pid_div, div_w = pid_update(div_pid, c_m.kl_divergence.mean(), self.pid_controllers['divergence'][0], self.pid_controllers['divergence'][1], self.config.PID_WEIGHT_LIMIT)
+                        return chaos_w * l_c.loss_chaos + div_w * l_c.loss_divergence, new_pid_chaos, new_pid_div, chaos_w, div_w, c_m
+                    is_cog_active = self.config.ENTROPIX_ENABLED and self.config.USE_COGNITIVE_LOSS and (state.step > self.config.COGNITIVE_LOSS_WARMUP_STEPS)
+                    cognitive_loss, pid_chaos_new, pid_div_new, chaos_w, div_w, cog_metrics_out = jax.lax.cond(
+                        is_cog_active, update_cognitive_loss,
+                        lambda carry: (jnp.zeros((), dtype=task_loss.dtype), carry[2], carry[3], jnp.zeros((), dtype=task_loss.dtype), jnp.zeros((), dtype=task_loss.dtype), carry[0]),
+                        (cog_metrics, loss_comp, pid_chaos_prev, pid_div_prev)
+                    )
+                    return (y_final, z_final, ds_state_new, pid_chaos_new, pid_div_new), (task_loss + cognitive_loss, cognitive_loss, chaos_w, div_w, cog_metrics_out)
+                initial_carry = (y, z, ds_state, state.pid_chaos_state, state.pid_divergence_state)
+                ( _, _, _, final_chaos_pid, final_div_pid), collected_metrics = jax.lax.scan(
+                    chunk_scan_fn, initial_carry, jnp.arange(num_chunks)
                 )
-                num_accum = num_chunks * self.config.N_SUPERVISION_STEPS
-                avg_loss = jnp.sum(chunk_losses) / num_accum
-                avg_cog_loss = jnp.sum(chunk_cog_losses) / num_accum
-                updated_state_aux = state.replace(dropout_key=key, pid_chaos_state=final_chaos_pid, pid_divergence_state=final_div_pid)
+                chunk_losses, chunk_cog_losses, final_chaos_w, final_div_w, last_cog_metrics = collected_metrics
+                avg_loss, avg_cog_loss = jnp.mean(chunk_losses), jnp.mean(chunk_cog_losses)
+                aux_from_loss = {'pid_chaos_state': final_chaos_pid, 'pid_divergence_state': final_div_pid}
                 metrics_dict = {
                     'loss': avg_loss, 'cognitive_loss': avg_cog_loss,
-                    'chaos_weight': jnp.mean(final_chaos_w), 'divergence_weight': jnp.mean(final_div_w),
-                    'naked_entropy': jnp.mean(last_cog_metrics.naked_entropy),
-                    'naked_varentropy': jnp.mean(last_cog_metrics.naked_varentropy),
-                    'kl_divergence': jnp.mean(last_cog_metrics.kl_divergence),
-                    'chaos_metric': jnp.mean(last_cog_metrics.chaos_metric),
+                    'chaos_weight': final_chaos_w[-1], 'divergence_weight': final_div_w[-1],
+                    'naked_entropy': jnp.mean(last_cog_metrics.naked_entropy[-1]),
+                    'naked_varentropy': jnp.mean(last_cog_metrics.naked_varentropy[-1]),
+                    'kl_divergence': jnp.mean(last_cog_metrics.kl_divergence[-1]),
+                    'chaos_metric': jnp.mean(last_cog_metrics.chaos_metric[-1]),
                     'cog_loss_active': (state.step > self.config.COGNITIVE_LOSS_WARMUP_STEPS).astype(self.dtype)
                 }
-                return avg_loss, (updated_state_aux, metrics_dict)
-            (loss, (new_state_aux, metrics)), grads = value_and_grad(loss_fn, has_aux=True)(state.params)
-            return grads, metrics, new_state_aux
-        return train_step_fn
+                return avg_loss, (aux_from_loss, metrics_dict)
+            (loss, (aux_from_loss, metrics)), grads = value_and_grad(loss_fn, has_aux=True)(state.params)
+            updates, new_opt_state = state.tx.update(grads, state.opt_state, state.params, learning_rate=lr)
+            new_params = optax.apply_updates(state.params, updates)
+            new_ema_params = jax.tree_util.tree_map(
+                lambda ema, p: ema * self.config.EMA_DECAY + p * (1.0 - self.config.EMA_DECAY),
+                state.ema_params, new_params
+            )
+            if self.config.USE_Q_CONTROLLER:
+                final_q_state = q_controller_update(q_state_pre_action, metrics['loss'])
+            else:
+                final_q_state = state.q_state
+            new_state = state.replace(
+                step=state.step + 1, params=new_params, ema_params=new_ema_params,
+                opt_state=new_opt_state, q_state=final_q_state,
+                pid_chaos_state=aux_from_loss['pid_chaos_state'],
+                pid_divergence_state=aux_from_loss['pid_divergence_state'],
+                dropout_key=new_base_key
+            )
+            metrics['learning_rate'] = lr
+            return new_state, metrics
+        return update_step_fn
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ascended Thinker v2.1 (JAX): Advanced Trainer")
     cfg = Config()
