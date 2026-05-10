@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" font-family="monospace">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1565C0"/>
+    </marker>
+    <linearGradient id="ph1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFECB3"/>
+      <stop offset="100%" stop-color="#FFE082"/>
+    </linearGradient>
+    <linearGradient id="ph2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C8E6C9"/>
+      <stop offset="100%" stop-color="#A5D6A7"/>
+    </linearGradient>
+    <linearGradient id="ph3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#BBDEFB"/>
+      <stop offset="100%" stop-color="#90CAF9"/>
+    </linearGradient>
+    <linearGradient id="ph4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D1C4E9"/>
+      <stop offset="100%" stop-color="#B39DDB"/>
+    </linearGradient>
+    <linearGradient id="ph5" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F8BBD0"/>
+      <stop offset="100%" stop-color="#F48FB1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="20" font-weight="bold" fill="#222">Research Timeline: The WuBu Nesting Journey</text>
+  <text x="450" y="62" text-anchor="middle" font-size="13" fill="#666">August 2025 → April 2026 — From philosophy to CUDA kernels</text>
+
+  <!-- Timeline spine -->
+  <line x1="100" y1="120" x2="100" y2="660" stroke="#333" stroke-width="3"/>
+
+  <!-- Phase 1: Physics Theory -->
+  <rect x="130" y="110" width="700" height="70" rx="8" fill="url(#ph1)" stroke="#F57F17" stroke-width="2"/>
+  <circle cx="100" cy="145" r="12" fill="#F57F17"/>
+  <text x="100" y="149" text-anchor="middle" font-size="9" fill="white" font-weight="bold">1</text>
+  <text x="145" y="133" font-size="14" font-weight="bold" fill="#E65100">Aug 2025: The Physics Paper</text>
+  <text x="145" y="153" font-size="11" fill="#555">Axiomatic-Emergent Theory (Qpaper.MD) — Wubu Formalism, κ-factor, FTL vacuum engineering</text>
+  <text x="145" y="170" font-size="10" fill="#888">Key insight: c = κ^½ · α^(-½) — FTL is vacuum engineering, not propulsion</text>
+
+  <!-- Phase 2: Encoders -->
+  <rect x="130" y="200" width="700" height="70" rx="8" fill="url(#ph2)" stroke="#2E7D32" stroke-width="2"/>
+  <circle cx="100" cy="235" r="12" fill="#2E7D32"/>
+  <text x="100" y="239" text-anchor="middle" font-size="9" fill="white" font-weight="bold">2</text>
+  <text x="145" y="223" font-size="14" font-weight="bold" fill="#1B5E20">Sep 2025: Neural Encoders</text>
+  <text x="145" y="243" font-size="11" fill="#555">Full-scale symmetric encoders → topological autoencoders (QAE) → Chimera ResNet</text>
+  <text x="145" y="260" font-size="10" fill="#888">Phase 1-3: 512×512 autoencoders with deterministic keys, quaternion attention</text>
+
+  <!-- Phase 3: Audio/Video -->
+  <rect x="130" y="290" width="700" height="70" rx="8" fill="url(#ph3)" stroke="#1565C0" stroke-width="2"/>
+  <circle cx="100" cy="325" r="12" fill="#1565C0"/>
+  <text x="100" y="329" text-anchor="middle" font-size="9" fill="white" font-weight="bold">3</text>
+  <text x="145" y="313" font-size="14" font-weight="bold" fill="#0D47A1">Sep-Oct 2025: Multi-Modal Expansion</text>
+  <text x="145" y="333" font-size="11" fill="#555">Audio synthesis (wubusynth), video diffusion, CLIP-guided generation</text>
+  <text x="145" y="350" font-size="10" fill="#888">Galactic Core architecture, EnCodec tokenizer, HGA-UNet diffusion</text>
+
+  <!-- Phase 4: Geodesic / Brain Engines -->
+  <rect x="130" y="380" width="700" height="70" rx="8" fill="url(#ph4)" stroke="#4527A0" stroke-width="2"/>
+  <circle cx="100" cy="415" r="12" fill="#4527A0"/>
+  <text x="100" y="419" text-anchor="middle" font-size="9" fill="white" font-weight="bold">4</text>
+  <text x="145" y="403" font-size="14" font-weight="bold" fill="#311B92">Nov 2025: Geodesic AI Brain</text>
+  <text x="145" y="423" font-size="11" fill="#555">Geodesic layers, spherical experiments, hyperbolic attention, clockwork attention</text>
+  <text x="145" y="440" font-size="10" fill="#888">20+ geodesic variants: sphere, benchmarks, active recall, complex fields — validated manifold learning</text>
+
+  <!-- Phase 5: Paper + CUDA -->
+  <rect x="130" y="470" width="700" height="70" rx="8" fill="url(#ph5)" stroke="#880E4F" stroke-width="2"/>
+  <circle cx="100" cy="505" r="12" fill="#880E4F"/>
+  <text x="100" y="509" text-anchor="middle" font-size="9" fill="white" font-weight="bold">5</text>
+  <text x="145" y="493" font-size="14" font-weight="bold" fill="#4A148C">Jan-Apr 2026: WuBu Nesting Paper → CUDA</text>
+  <text x="145" y="513" font-size="11" fill="#555">Full paper (WuBu_Nesting.pdf), LaTeX source, llama.cpp integration</text>
+  <text x="145" y="530" font-size="10" fill="#888">Hamilton encoder CUDA kernel, BSP tree GPU, PCIe MoE cache — 39.9 t/s at 256K context</text>
+
+  <!-- Commit highlights -->
+  <line x1="100" y1="575" x2="830" y2="575" stroke="#DDD" stroke-width="1"/>
+
+  <text x="140" y="595" font-size="12" font-weight="bold" fill="#333">Commit highlights from the diary:</text>
+  <text x="140" y="615" font-size="11" fill="#555">"daddy came back with sci fi math" — "I GIVE THIS TO THE WORLD"</text>
+  <text x="140" y="635" font-size="11" fill="#555">"geodesic ai brain lol its a sphere bruh" — "I solved video and audio in one morning"</text>
+  <text x="140" y="655" font-size="11" fill="#555">"VALIDATED Energy-Based Manifold Learning or Neuromorphic Topology" — "quantum work tracking"</text>
+</svg>

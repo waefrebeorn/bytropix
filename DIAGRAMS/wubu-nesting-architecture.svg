@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" font-family="monospace">
+  <defs>
+    <radialGradient id="g1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#E8F5E9"/>
+      <stop offset="100%" stop-color="#A5D6A7"/>
+    </radialGradient>
+    <radialGradient id="g2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFF3E0"/>
+      <stop offset="100%" stop-color="#FFCC80"/>
+    </radialGradient>
+    <radialGradient id="g3" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#E3F2FD"/>
+      <stop offset="100%" stop-color="#90CAF9"/>
+    </radialGradient>
+    <radialGradient id="g4" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#F3E5F5"/>
+      <stop offset="100%" stop-color="#CE93D8"/>
+    </radialGradient>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="22" font-weight="bold" fill="#222">WuBu Nesting (層疊嵌套) Architecture</text>
+  <text x="450" y="65" text-anchor="middle" font-size="14" fill="#666">Nested Hyperbolic Spaces with Tangent Space Rotations</text>
+
+  <!-- Level 4 (outermost) -->
+  <circle cx="450" cy="380" r="260" fill="none" stroke="#388E3C" stroke-width="3" stroke-dasharray="8,4"/>
+  <circle cx="450" cy="380" r="250" fill="url(#g1)" fill-opacity="0.3" stroke="#388E3C" stroke-width="2"/>
+  <text x="450" y="150" text-anchor="middle" font-size="13" fill="#2E7D32">Level 1: Hⁿ₁(c₁, s₁)</text>
+  <text x="450" y="168" text-anchor="middle" font-size="11" fill="#555">"Coarse Structure — Global Context"</text>
+
+  <!-- Level 3 -->
+  <circle cx="450" cy="380" r="190" fill="url(#g2)" fill-opacity="0.3" stroke="#E65100" stroke-width="2"/>
+  <text x="450" y="210" text-anchor="middle" font-size="13" fill="#E65100">Level 2: Hⁿ₂(c₂, s₂)</text>
+  <text x="450" y="228" text-anchor="middle" font-size="11" fill="#555">"Parts &amp; Components — Meso Features"</text>
+
+  <!-- Level 2 -->
+  <circle cx="450" cy="380" r="130" fill="url(#g3)" fill-opacity="0.3" stroke="#1565C0" stroke-width="2"/>
+  <text x="450" y="275" text-anchor="middle" font-size="13" fill="#1565C0">Level 3: Hⁿ₃(c₃, s₃)</text>
+  <text x="450" y="293" text-anchor="middle" font-size="11" fill="#555">"Substructures — Fine Details"</text>
+
+  <!-- Level 1 (innermost) -->
+  <circle cx="450" cy="380" r="70" fill="url(#g4)" fill-opacity="0.3" stroke="#6A1B9A" stroke-width="2"/>
+  <text x="450" y="365" text-anchor="middle" font-size="13" fill="#6A1B9A">Level 4: Hⁿ₄(c₄, s₄)</text>
+  <text x="450" y="385" text-anchor="middle" font-size="11" fill="#555">"Atomic — Core Features"</text>
+
+  <!-- Boundary points -->
+  <circle cx="340" cy="480" r="6" fill="#D32F2F"/>
+  <text x="330" y="505" text-anchor="middle" font-size="10" fill="#D32F2F">B₁</text>
+  <circle cx="580" cy="280" r="6" fill="#D32F2F"/>
+  <text x="570" y="270" text-anchor="middle" font-size="10" fill="#D32F2F">B₂</text>
+  <circle cx="370" cy="420" r="6" fill="#D32F2F"/>
+  <text x="380" y="440" text-anchor="middle" font-size="10" fill="#D32F2F">B₃</circle>
+
+  <!-- Legend -->
+  <rect x="50" y="600" width="800" height="90" rx="8" fill="#FAFAFA" stroke="#DDD"/>
+  <text x="70" y="620" font-size="12" font-weight="bold" fill="#333">Key Components:</text>
+  <text x="70" y="638" font-size="11" fill="#555">Adaptive Curvature cₙ —> Learnable geometry at each level</text>
+  <text x="70" y="654" font-size="11" fill="#555">Scale sₙ —> Zoom factor modulating tangent space ↔ hyperbolic mapping</text>
+  <text x="70" y="670" font-size="11" fill="#555">Boundary Manifolds Bᵢⱼ —> Learnable substructure landmarks</text>
+  <text x="70" y="686" font-size="11" fill="#555">Rotation Rₙ ∈ SO(n) —> Tangent space rotation between levels</text>
+  <text x="450" y="638" font-size="11" fill="#555">Descriptors ldₙ —> Level-specific geometric characteristics</text>
+  <text x="450" y="654" font-size="11" fill="#555">Spread σₙ —> Uncertainty/falloff at each scale</text>
+  <text x="450" y="670" font-size="11" fill="#555">Flow Fₙ —> Intra-level tangent space dynamics</text>
+  <text x="450" y="686" font-size="11" fill="#555">Relative Vectors dₙⱼₖ —> vₙ - v''_{Bⱼₖ} after rotation</text>
+</svg>
