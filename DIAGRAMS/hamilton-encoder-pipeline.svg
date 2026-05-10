@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" font-family="monospace">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1565C0"/>
+    </marker>
+    <linearGradient id="box1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E8F5E9"/>
+      <stop offset="100%" stop-color="#C8E6C9"/>
+    </linearGradient>
+    <linearGradient id="box2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFF3E0"/>
+      <stop offset="100%" stop-color="#FFE0B2"/>
+    </linearGradient>
+    <linearGradient id="box3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E3F2FD"/>
+      <stop offset="100%" stop-color="#BBDEFB"/>
+    </linearGradient>
+    <linearGradient id="box4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F3E5F5"/>
+      <stop offset="100%" stop-color="#E1BEE7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="20" font-weight="bold" fill="#222">The Hamilton Encoder Pipeline</text>
+  <text x="450" y="62" text-anchor="middle" font-size="13" fill="#666">From RGB Pixels to Quaternion-Encoded Latent Vectors (CUDA)</text>
+
+  <!-- Input -->
+  <rect x="50" y="100" width="140" height="60" rx="8" fill="url(#box1)" stroke="#2E7D32" stroke-width="2"/>
+  <text x="120" y="126" text-anchor="middle" font-size="13" font-weight="bold" fill="#2E7D32">Input</text>
+  <text x="120" y="146" text-anchor="middle" font-size="11" fill="#333">RGB Tensor</text>
+  <text x="120" y="160" text-anchor="middle" font-size="9" fill="#777">shape: [B, C, H, W]</text>
+
+  <polyline points="190,130 230,130" stroke="#1565C0" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 1: Conv encoding -->
+  <rect x="240" y="90" width="150" height="80" rx="8" fill="url(#box2)" stroke="#E65100" stroke-width="2"/>
+  <text x="315" y="116" text-anchor="middle" font-size="13" font-weight="bold" fill="#E65100">2×2 Avg Pool</text>
+  <text x="315" y="136" text-anchor="middle" font-size="11" fill="#333">RGB → HSL conv</text>
+  <text x="315" y="156" text-anchor="middle" font-size="9" fill="#777">stride 2, downsample</text>
+
+  <polyline points="390,130 430,130" stroke="#1565C0" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: HSL -> Quaternion -->
+  <rect x="440" y="90" width="150" height="80" rx="8" fill="url(#box3)" stroke="#1565C0" stroke-width="2"/>
+  <text x="515" y="116" text-anchor="middle" font-size="13" font-weight="bold" fill="#1565C0">Quaternion Encode</text>
+  <text x="515" y="136" text-anchor="middle" font-size="11" fill="#333">H → w, S → x, L → y</text>
+  <text x="515" y="156" text-anchor="middle" font-size="9" fill="#777">normalized to unit quat</text>
+
+  <polyline points="590,130 630,130" stroke="#1565C0" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 3: 5-channel output -->
+  <rect x="640" y="90" width="160" height="80" rx="8" fill="url(#box4)" stroke="#6A1B9A" stroke-width="2"/>
+  <text x="720" y="116" text-anchor="middle" font-size="13" font-weight="bold" fill="#6A1B9A">Encoded Output</text>
+  <text x="720" y="136" text-anchor="middle" font-size="11" fill="#333">Quat(w,x,y,z) + Ampl</text>
+  <text x="720" y="156" text-anchor="middle" font-size="9" fill="#777">F32, 5-channel</text>
+
+  <!-- BSP Tree section -->
+  <rect x="240" y="250" width="560" height="140" rx="10" fill="#FFF8E1" stroke="#F57C00" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="520" y="278" text-anchor="middle" font-size="15" font-weight="bold" fill="#E65100">BSP Tree — Quaternion-Split Indexing</text>
+
+  <!-- Tree nodes -->
+  <circle cx="370" cy="310" r="25" fill="#FFE0B2" stroke="#F57C00" stroke-width="2"/>
+  <text x="370" y="315" text-anchor="middle" font-size="10" fill="#E65100">Root</text>
+  <circle cx="300" cy="355" r="20" fill="#FFE0B2" stroke="#F57C00" stroke-width="1.5"/>
+  <text x="300" y="359" text-anchor="middle" font-size="9" fill="#E65100">L</text>
+  <circle cx="440" cy="355" r="20" fill="#FFE0B2" stroke="#F57C00" stroke-width="1.5"/>
+  <text x="440" y="359" text-anchor="middle" font-size="9" fill="#E65100">R</text>
+  <line x1="370" y1="335" x2="300" y2="345" stroke="#F57C00" stroke-width="1.5"/>
+  <line x1="370" y1="335" x2="440" y2="345" stroke="#F57C00" stroke-width="1.5"/>
+
+  <text x="560" y="310" font-size="12" fill="#333">Each BSPNode stores:</text>
+  <text x="560" y="328" font-size="11" fill="#555">• Split quaternion (rotation axis)</text>
+  <text x="560" y="346" font-size="11" fill="#555">• Child pointer indices</text>
+  <text x="560" y="364" font-size="11" fill="#555">• Sphere cap boundary</text>
+  <text x="560" y="382" font-size="11" fill="#555">• Left/right child quat ranges</text>
+
+  <!-- KV Cache section -->
+  <rect x="100" y="450" width="700" height="100" rx="10" fill="#E8EAF6" stroke="#3949AB" stroke-width="2"/>
+  <text x="450" y="480" text-anchor="middle" font-size="15" font-weight="bold" fill="#283593">GPU KV Cache — Fused Attention</text>
+  <text x="450" y="502" text-anchor="middle" font-size="12" fill="#333">Query is BSP-traversed → only relevant KV pairs attend → O(log N) instead of O(N)</text>
+  <text x="450" y="522" text-anchor="middle" font-size="11" fill="#666">Quaternion angular distance replaces dot-product similarity</text>
+  <text x="450" y="540" text-anchor="middle" font-size="11" fill="#666">KV cache stored as raw F16 (3-component); encoded F32 (5-component) only for BSP tree</text>
+
+  <!-- Flow arrows between sections -->
+  <polyline points="720,170 720,210 450,210 450,248" stroke="#1565C0" stroke-width="2" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow)"/>
+
+  <polyline points="370,370 370,390 450,390 450,448" stroke="#1565C0" stroke-width="2" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow)"/>
+
+  <!-- Performance box -->
+  <rect x="100" y="580" width="700" height="70" rx="8" fill="#F5F5F5" stroke="#999" stroke-width="1.5"/>
+  <text x="450" y="604" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">Performance (RTX 5050, 256K context, Qwen3.6-35B)</text>
+  <text x="450" y="624" text-anchor="middle" font-size="12" fill="#1565C0">Generation: 39.9 t/s | Prefill: 137.2 t/s | KV cache memory reduction: ~62%</text>
+  <text x="450" y="642" text-anchor="middle" font-size="11" fill="#666">Hamilton encoder overhead: ~3% (within noise) on RTX 5050</text>
+</svg>
