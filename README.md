@@ -18,7 +18,7 @@ Instead of billion-parameter brute force, WuBu uses:
 - **BSP trees** (binary space partitioning) for logarithmic-time attention
 - **Hamilton encoders** that map data to quaternion representations
 
-This repo contains the complete research arc — from a physics theory paper in August 2025 to CUDA GPU kernels running at 39.9 tokens/second at 256K context in April 2026.
+This repo contains the complete research arc — from a physics theory paper in August 2025 to working JAX/Python prototypes for AI representation compression.
 
 ---
 
@@ -32,7 +32,7 @@ Oct 2025 — Audio/Video Generation, Diffusion Models
 Nov 2025 — Geodesic AI Brain (20+ geodesic layer experiments)
 Jan 2026 — WuBu Nesting Paper (full academic paper + LaTeX)
 Mar 2026 — Audio & Video "Solved"  
-Apr 2026 — CUDA Integration: Hamilton encoder + BSP tree + KV cache
+Apr 2026 — BSP tree + quaternion encoding for AI compression
 ```
 
 [View the full timeline in SVG](./DIAGRAMS/research-timeline.svg)
@@ -186,18 +186,15 @@ This repo is valuable for anyone learning about:
 
 ---
 
-## The llama.cpp Connection
+## The Mission
 
-The CUDA integration lives in a separate fork: `llama-cpp-rotorquant`. The BYTROPIX repo documents the *what and why* — the fork has the *how*.
-
-Key numbers from the CUDA work:
-- **Generation**: 39.9 t/s at 256K context
-- **Prefill**: 137.2 t/s
-- **KV cache reduction**: ~62%
-- **Hamilton encoder overhead**: ~3% on RTX 5050
-- **BSP tree**: O(log N) query instead of O(N)
-
-[Read the full CUDA documentation](./LLAMA-CPP-INTEGRATION/README.md)
+| The WuBu math is the product — a compression framework for AI representations.
+| No servers, no APIs, no CUDA benchmarks. Pure math. Pure geometry.
+| 
+| **Live API (public):** `https://insured-despite-editors-offering.trycloudflare.com`
+| **Docs:** `/docs` endpoint
+| **Payment:** BTC → `36sPuujTrcQN24G2NHDbcrARTtEYqyxzdP` or CashApp `$ManGamer`
+| **Pricing:** $0.05/1K calls (embed), $0.10/1K (nest), $0.15/1K (GAAD)
 
 ---
 
