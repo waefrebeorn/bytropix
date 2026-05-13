@@ -83,5 +83,8 @@ tokenize_corpus: tools/tokenize_corpus.c src/wubu_tokenizer.o src/gguf_reader.o
 train_real: tools/train_real.c src/wubu_model.o src/wubu_ssm.o src/wubu_mobius.o src/gguf_reader.o src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+dump_mmproj: tools/dump_mmproj.c src/gguf_reader.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 clean:
 	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus src/*.o
