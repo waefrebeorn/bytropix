@@ -1,207 +1,184 @@
-# bytropix — WuBu Nesting (層疊嵌套)
+# bytropix — WuBu Text AI
 
-**Adaptive, Rotation-Aware, Nested Hyperbolic Architectures for AI**
-
----
-
-> This is a research lab notebook, not a polished library. Every file here represents a moment of discovery, a failed experiment, or a breakthrough. The value is in the ideas and the journey.
+**Pure C + CUDA implementation of Qwen3.6-35B-A3B with WuBu nested hyperbolic geometry.**
+*In progress — training loop phase under active development.*
 
 ---
 
-## What is this?
+## Navigation
 
-bytropix is the research archive of the **WuBu Nesting (層疊嵌套 — céngdié qiàntào)** project: a geometric deep learning framework that builds AI architectures *inside the correct geometry of the data* rather than forcing data through flat Euclidean layers.
+### Phase Roadmap (current state)
 
-Instead of billion-parameter brute force, WuBu uses:
-- **Nested hyperbolic spaces** (Russian doll geometry) with learnable curvature and scale
-- **Quaternion rotations** (SO(4)) in tangent spaces between levels
-- **BSP trees** (binary space partitioning) for logarithmic-time attention
-- **Hamilton encoders** that map data to quaternion representations
+![Phase Roadmap](DIAGRAMS/phase-roadmap.svg)
 
-This repo contains the complete research arc — from a physics theory paper in August 2025 to working JAX/Python prototypes for AI representation compression.
+| Phase | Component | Status | Key Files |
+|-------|-----------|--------|-----------|
+| **0** | GGUF Tensor Layout | ✅ Complete | `tools/dump_gguf.py`, `.hermes/tensor_layout.txt` |
+| **1** | Embedding Graft | ✅ Complete | `include/gguf_reader.h`, `src/gguf_reader.c`, `data/qwen36_embeddings_c.bin` |
+| **2** | Attention Port | ✅ Complete | `src/wubu_ssm.c`, `src/cuda_kernels.cu`, `tools/test_gpu.c` |
+| **2.5** | GPU Verification | ✅ Complete | 9.53 tok/s GPU, 47.83× vs CPU baseline |
+| **3** | Training Loop | 🔄 In Progress | Tokenizer fix → TST bag training → AdamW/RSGD |
+| **4** | MoE Port | ⏳ Future | 256 experts, 8 active |
+| **5** | Vision Port | ⏳ Future | 27-layer 3D ViT |
+| **6** | CUDA Optimization | ⏳ Ongoing | Runs alongside Phase 3+ |
+
+### Architecture Diagrams
+
+| Diagram | Description |
+|---------|-------------|
+| `DIAGRAMS/gguf-rip-pipeline.svg` | How Qwen3.6 GGUF weights become WuBu hyperbolic embeddings |
+| `DIAGRAMS/llamacpp-clone-infrastructure.svg` | How we fork, study, and extract from llama.cpp |
+| `DIAGRAMS/wubu-math-pipeline.svg` | Euclidean → Poincaré → Möbius → Nested geometric pipeline |
+| `DIAGRAMS/phase-roadmap.svg` | Full project phase roadmap with timeline and metrics |
+| `DIAGRAMS/wubu-nesting-architecture.svg` | Original WuBu nesting architecture (4-level hyperbolic hierarchy) |
+| `DIAGRAMS/hamilton-encoder-pipeline.svg` | Hamilton encoder pipeline (from earlier research) |
+| `DIAGRAMS/research-timeline.svg` | Complete bytropix research timeline |
+
+### Project Management
+
+- **Master Plan**: `.hermes/mind-palace/plans/master_impl_plan_v2.md` — All 6 phases with step-by-step tasks
+- **Current Focus**: `.hermes/mind-palace/tier3-impl/10-training-loop/README.md` — Phase 3 training loop details
+- **TST Paper Reference**: `.hermes/references/TST_TOKEN_SUPERPOSITION.md` — Token-Superposition Training method
+- **Fresh Session Prompt**: `.hermes/mind-palace/fresh_start_prompt.md` — Paste this to begin a new CLI session
+- **Devil's Advocate**: `.hermes/plans/2026-05-12-devil-advocate-roadmap.md` — Risk analysis
+
+### Mind Palace (Vault)
+
+| Tier | Area | Description | Entry Point |
+|------|------|-------------|-------------|
+| **1** | Core | WuBu theory, architecture reference, C baseline | `.hermes/mind-palace/tier1-core/` |
+| **2** | Research | DeepSeek, Qwen, fast attention, hyperbolic papers | `.hermes/mind-palace/tier2-research/` |
+| **3** | Implementation | Embedding graft → attention → training → MoE → vision | `.hermes/mind-palace/tier3-impl/` |
+| **4** | Validation | Benchmarks, debugging workflows | `.hermes/mind-palace/tier4-validation/` |
+
+### Bytropix Research Vault
+
+| Area | Description |
+|------|-------------|
+| `THEORY/` | WuBu nesting physics, philosophy, academic paper |
+| `MATH/` | Formalism + Lean formal proofs (4 verified) |
+| `ENCODERS/` | 6 research phases: symmetric AE → topological → generative → hash-mind → Hamilton |
+| `ATTENTION/` | 4 attention variants: sparse, hyperbolic, topological, entropix |
+| `DIFFUSION/` | HGA UNet + funnel diffusion |
+| `AUDIO/` | WubuSynth galactic core |
+| `OPTIMIZERS/` | Q-Controller, PID, toroidal gradient |
+
+### Additional References
+
+- **Research Papers**: `.hermes/research/papers/` — Qwen, DeepSeek architecture references
+- **Lean Proofs**: `MATH/lean/wubu_proofs/` — 4 formal verification proofs
+- **Presentation**: `.hermes/presentation/README.md` — Presentation layer for this repo
 
 ---
 
-## The Research Arc
+## How This Project Works
 
+### Architecture Summary
+
+This project builds a **Qwen3.6-35B-A3B-compatible language model from scratch in pure C**, using the WuBu nested hyperbolic geometry framework instead of standard Euclidean computation.
+
+**Model spec:**
+- 40 layers: 30 SSM (Gated Delta Net) + 10 GQA, repeating 3:1
+- Hidden: 2048, Vocab: 248320, Context: 262K native
+- MoE: 256 experts, 8 active + 1 shared (Phase 4)
+- Training: Token-Superposition Training (2605.06546) — bag s tokens, MCE loss
+
+### How We Rip the GGUF
+
+![GGUF Pipeline](DIAGRAMS/gguf-rip-pipeline.svg)
+
+1. **Read** the GGUF checkpoint with `gguf_reader.c` — locates all 733 tensors, reads metadata
+2. **Extract** weights: SSM/GQA projections for C forward pass, embeddings for hyperbolic mapping
+3. **Dequantize** Q5_K embedding layer → f32
+4. **Map** Euclidean embeddings to Poincaré ball (R = 0.956 = 3 × mean_norm)
+5. **Verify** quality: 95% nearest-neighbor preservation, 73 zero-norm special tokens at origin
+
+### How We Study llama.cpp
+
+![llama.cpp Infrastructure](DIAGRAMS/llamacpp-clone-infrastructure.svg)
+
+We maintain a fork at `~/HASHMIND/llama-cpp-rotorquant/` for three purposes:
+
+- **A. Architecture Study**: Read `qwen3next.cpp` to understand SSM recurrence, tensor splits, MRoPE
+- **B. Source Extraction**: Pull GGUF reader patterns, dequant routines, CUDA dispatch styles
+- **C. Benchmark Runner**: Run baseline `llama-server` for performance comparison and logit reference
+
+Our WuBuText C implementation is **from scratch** — we read the llama.cpp source to understand the architecture, then write our own code with WuBu math.
+
+### WuBu Math Flow
+
+![WuBu Math Pipeline](DIAGRAMS/wubu-math-pipeline.svg)
+
+| Step | Operation | Location |
+|------|-----------|----------|
+| 1 | Token embeddings (Euclidean) | `gguf_reader.c` |
+| 2 | Poincaré ball map (exp_map) | `src/wubu_mobius.c` |
+| 3 | SSM Gated Delta Net recurrence | `src/wubu_ssm.c` |
+| 4 | GQA full attention (10/40 layers) | `src/wubu_ssm.c` |
+| 5 | Möbius gyration in tangent space | `src/wubu_mobius.c` |
+| 6 | Nested hyperbolic hierarchy (future) | Phase 4+ |
+
+### Current Active Phase: Phase 3 — Training Loop
+
+**Method:** Token-Superposition Training (TST) from Peng/Gigant/Quesnelle (2605.06546)
+
+The approach: during the superposition phase, bag `s` contiguous tokens, average their embeddings into one "s-token", run forward pass on the shorter sequence, predict the next bag via multi-hot cross-entropy. During the recovery phase, revert to standard next-token CE. No architecture changes needed. Validated up to 2.5× speedup on 10B A1B MoE.
+
+**Current blocker:** BBPE tokenizer O(N²) merge lookup — needs hash table optimization before training can begin.
+
+---
+
+## Build & Run
+
+```bash
+# Build everything
+make all
+
+# Extract embeddings from GGUF
+# (see tools/extract_and_map.c for details)
+
+# Run GPU benchmark (all 40 layers)
+make bench_e2e
+./bench_e2e /path/to/Qwen3.6-35B-A3B.gguf
+
+# GPU test (single layer comparison vs CPU)
+make test_gpu_run
 ```
-Aug 2025 — Physics Theory (Axiomatic-Emergent Theory, Wubu Formalism)
-Sep 2025 — Symmetric Neural Encoders (Phase 1-3, 512×512 autoencoders)
-Sep 2025 — HashMind & Rolling Hash Attention
-Oct 2025 — Audio/Video Generation, Diffusion Models
-Nov 2025 — Geodesic AI Brain (20+ geodesic layer experiments)
-Jan 2026 — WuBu Nesting Paper (full academic paper + LaTeX)
-Mar 2026 — Audio & Video "Solved"  
-Apr 2026 — BSP tree + quaternion encoding for AI compression
-```
 
-[View the full timeline in SVG](./DIAGRAMS/research-timeline.svg)
+### Key Make Targets
 
----
+| Target | Description |
+|--------|-------------|
+| `all` | Build all tools and tests |
+| `test_ssm` | SSM forward pass test |
+| `test_gpu` | GPU forward pass test (single layer comparison) |
+| `bench_e2e` | Full 40-layer GPU vs CPU benchmark |
+| `test_model` | Load full model and run forward pass |
+| `clean` | Clean build artifacts |
 
-## Repository Map
+### CUDA Setup
 
-```
-bytropix/
-├── THEORY/              ← The philosophy and academic papers
-│   ├── 01-foundational-philosophy.md    "The Geometry IS the Architecture"
-│   ├── 02-axiomatic-emergent-theory.md  Physics: Wubu Formalism, FTL, κ-factor
-│   ├── 03-wubu-nesting-paper.md         The full WuBu Nesting paper
-│   ├── 04-spatio-temporal-findings.md   From hyperbolic surfaces to AI
-│   ├── WuBu_Nesting.pdf                The actual PDF
-│   └── WuBuHypCD.tex                   LaTeX source
-│
-├── MATH/                ← The mathematical foundations
-│   └── wubu-formalism.md              Q = Σ q_k ∏ α_i^E
-│
-├── ENCODERS/            ← The heart of the research
-│   ├── phase1-symmetric-encoder/       Symmetric geometric autoencoders
-│   ├── phase2-topological-ae/          Holomorphic Quantum Autoencoders
-│   ├── phase3-generative/              Text-to-image generative pipelines
-│   ├── hash-mind/                      Rolling hash attention, WuBuMind JAX
-│   └── hamilton-encoder-cpu/           Geodesic layers, Chimera ResNet, CPU prototypes
-│
-├── DIFFUSION/           ← Hyperbolic geometric attention for generation
-│   ├── hga-unet/                       Hyperbolic Geometric Attention UNet
-│   └── funnel-diffusion/               Funnel diffusion, CLIP video
-│
-├── AUDIO/               ← Unsupervised adversarial audio synthesis
-│   └── wubusynth/                      Galactic Core synthesizer
-│
-├── ATTENTION/           ← Beyond dot-product attention
-│   ├── wubu-sparse-attention/          RAS indexer working/associative memory
-│   ├── hyperbolic-attention/           Clockwork attention, kNN hyperbolic
-│   ├── entropix-sampler/               Dynamic entropic sampling
-│   └── topological-sequence-model/     Linear-complexity topological attention
-│
-├── OPTIMIZERS/          ← Meta-learning optimizers
-│   └── q-controller/                   Q-learning LR/momentum control, PID
-│
-├── LLAMA-CPP-INTEGRATION/  ← CUDA GPU integration (reference)
-│   ├── hamilton-encoder-cuda/          RGB→HSL→quaternion CUDA kernel
-│   ├── bsp-tree-cuda/                  BSP tree quaternion-split on GPU
-│   └── expert-cache/                   PCIe MoE expert cache
-│
-├── DIAGRAMS/            ← SVG educational diagrams
-│   ├── wubu-nesting-architecture.svg
-│   ├── hamilton-encoder-pipeline.svg
-│   └── research-timeline.svg
-│
-├── MEDIA/               ← Generated images from the models
-│
-└── DRAFT/               ← Batch files, setup scripts, drafts
+```bash
+# nvcc available at /usr/local/cuda-13.1/bin/nvcc
+# Requires cuBLAS
+make test_gpu  # links against -lcublas -lcudart
 ```
 
 ---
 
-## How to Navigate This Repo
+## Current Status (May 13, 2026)
 
-### Start Here (Newcomers)
+**Phase 1 ✅ Phase 2 ✅ Phase 2.5 ✅ Phase 3 🔄**
 
-1. **`THEORY/01-foundational-philosophy.md`** — 5-minute read. Understand the *why*.
-2. **`DIAGRAMS/wubu-nesting-architecture.svg`** — Visual overview of the architecture.
-3. **`ENCODERS/hash-mind/wubu_nesting_impl.py`** — The actual implementation with:
-   - HyperbolicUtils (exp/log maps with scale awareness)
-   - Hamilton product (quaternion rotation)
-   - WuBuNestingLayer (the core layer)
-4. **`LLAMA-CPP-INTEGRATION/README.md`** — How it all becomes CUDA.
+- Embedding extraction and Poincaré mapping: **verified** (95% NN preservation)
+- All 40 layers in C: **functional** on CPU
+- All 40 layers on GPU: **verified** (9.53 tok/s, 47.83× speedup)
+- CUDA kernels: **SSM delta net, GQA attention, activations, norms**
+- Training loop: **TST method selected, tokenizer fix in progress**
+- TST paper: **downloaded, analyzed, integrated into plan**
 
-### For Theory Readers
-
-- **`THEORY/02-axiomatic-emergent-theory.md`** — Physics: the Wubu Formalism
-- **`THEORY/03-wubu-nesting-paper.md`** — The full academic paper (515 lines)
-- **`MATH/wubu-formalism.md`** — The central equation
-
-### For Practitioners
-
-- **`ENCODERS/hash-mind/WuBuMindJAX.py`** — Full JAX implementation with hyperbolic kNN attention
-- **`ENCODERS/hamilton-encoder-cpu/chimera_quaternion.py`** — Quaternion attention
-- **`ATTENTION/wubu-sparse-attention/WuBuSparseAttention.py`** — Working/associative memory
-- **`OPTIMIZERS/q-controller/qcontroller.py`** — HAKMEM Q-learning optimizer
-
-### For CUDA Engineers
-
-- **`LLAMA-CPP-INTEGRATION/README.md`** — Full pipeline documentation
-- **`DIAGRAMS/hamilton-encoder-pipeline.svg`** — Pipeline visualization
+**Next steps:** Fix tokenizer merge lookup → implement TST bag embeddings + MCE loss → stub training loop with gradient descent.
 
 ---
 
-## The Commit Diary
-
-The commit history of this repo is a raw, unfiltered research diary. Each message captures a moment:
-
-| Date | Message |
-|------|---------|
-| 2025-08-19 | `gemini went hawking last night` |
-| 2025-09-06 | `THIS WORKS AND SHOULD BE RESEARCHED` |
-| 2025-09-11 | `XJDR SAMPLER IMAGE TOKENIZATION` |
-| 2025-09-21 | `deepseek saw the paper and wrote a paper` |
-| 2025-09-30 | `BOOM SHAKA LAKA AUDIO AND TEXT` |
-| 2025-10-04 | `WE PUT IN WORK` |
-| 2025-10-29 | `I GIVE THIS TO THE WORLD` |
-| 2025-10-31 | `daddy came back with sci fi math` |
-| 2025-11-22 | `VALIDATED "Energy-Based Manifold Learning or Neuromorphic Topology"` |
-| 2025-11-26 | `"geodesic ai brain" lol its a sphere bruh` |
-| 2026-01-28 | `WuBu Nesting Paper drop commit` |
-| 2026-03-09 | `I solved video and audio in one morning` |
-| 2026-04-04 | `quantum work tracking` |
-
-This is not git hygiene — this is a research diary. Every commit tells a story of what was discovered, broken, fixed, or screamed at that day.
-
----
-
-## The Core Philosophy
-
-> Standard AI learns by brute force. It uses immense, billion-parameter models to approximate relationships in data, often inefficiently and without a true understanding of intrinsic structure.
->
-> *This is like trying to flatten a globe onto a piece of paper — you will always have distortion and lose essential information.*
->
-> The WuBu philosophy is different. We don't fight the geometry of the data; **we build the architecture inside the correct geometry from the start.**
-
-— PHILOSOPHY.md
-
----
-
-## Key Frameworks & Libraries Used
-
-- **PyTorch** — Most encoder and attention experiments
-- **JAX/Flax** — WuBuMind, diffusion, audio, geodesic layers
-- **CUDA** — Hamilton encoder kernel, BSP tree, expert cache
-- **llama.cpp** — Integration target for production inference
-- **EnCodec (Meta)** — Audio tokenization backbone
-- **CLIP** — Text conditioning for diffusion models
-
----
-
-## Educational Value
-
-This repo is valuable for anyone learning about:
-
-- **Hyperbolic geometry for ML** — Working implementations of Poincaré ball exp/log maps
-- **Geometric deep learning** — From theory to CUDA in one repo
-- **Quaternion neural networks** — Hamilton product, SO(4) rotations
-- **Attention mechanisms** — Sparse, hyperbolic, topological, entropic
-- **Research methodology** — Raw, unfiltered research process
-- **CUDA kernel development** — How theory becomes GPU code
-
----
-
-## The Mission
-
-| The WuBu math is the product — a compression framework for AI representations.
-| No servers, no APIs, no CUDA benchmarks. Pure math. Pure geometry.
-| 
-| **Live API (public):** `https://insured-despite-editors-offering.trycloudflare.com`
-| **Docs:** `/docs` endpoint
-| **Payment:** BTC → `36sPuujTrcQN24G2NHDbcrARTtEYqyxzdP` or CashApp `$ManGamer`
-| **Pricing:** $0.05/1K calls (embed), $0.10/1K (nest), $0.15/1K (GAAD)
-
----
-
-## License
-
-This is research code. Use it to learn, experiment, and build upon. Attribution appreciated but not required — science moves forward when ideas are shared.
-
----
-
-> *"I GIVE THIS TO THE WORLD"* — Oct 29, 2025 commit message
+> This repo is a research laboratory notebook. Every file represents a moment of discovery, a failed experiment, or a breakthrough. The value is in the ideas and the journey.

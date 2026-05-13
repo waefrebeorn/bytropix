@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" font-family="monospace">
+  <defs>
+    <linearGradient id="llama-lib" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E8EAF6"/>
+      <stop offset="100%" stop-color="#C5CAE9"/>
+    </linearGradient>
+    <linearGradient id="fork1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFF3E0"/>
+      <stop offset="100%" stop-color="#FFE0B2"/>
+    </linearGradient>
+    <linearGradient id="fork2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E8F5E9"/>
+      <stop offset="100%" stop-color="#C8E6C9"/>
+    </linearGradient>
+    <linearGradient id="fork3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E3F2FD"/>
+      <stop offset="100%" stop-color="#BBDEFB"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="20" font-weight="bold" fill="#222">llama.cpp Clone Infrastructure</text>
+  <text x="450" y="60" text-anchor="middle" font-size="12" fill="#666">How we fork, study, extract from, and mirror llama.cpp for WuBuText</text>
+
+  <!-- Main llama.cpp -->
+  <rect x="300" y="85" width="300" height="50" rx="10" fill="url(#llama-lib)" stroke="#7986CB" stroke-width="2"/>
+  <text x="450" y="106" text-anchor="middle" font-size="13" font-weight="bold" fill="#283593">Original: ggerganov/llama.cpp</text>
+  <text x="450" y="122" text-anchor="middle" font-size="10" fill="#555">Master branch | Official GGUF + CUDA + MoE implementation</text>
+
+  <line x1="450" y1="135" x2="450" y2="165" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Fork point -->
+  <rect x="280" y="165" width="340" height="50" rx="10" fill="#FAFAFA" stroke="#FF7043" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="450" y="186" text-anchor="middle" font-size="12" font-weight="bold" fill="#D84315">Fork: waefrebeorn/llama-cpp-rotorquant</text>
+  <text x="450" y="202" text-anchor="middle" font-size="10" fill="#555">WaefreBeorn's fork | WuBu-modified | CUDA graphs + experts + dFlash</text>
+
+  <!-- Three branches -->
+  <path d="M 450 215 L 450 230 L 150 230 L 150 250" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 450 215 L 450 230 L 450 230 L 450 250" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 450 215 L 450 230 L 750 230 L 750 250" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Branch A: Study -->
+  <rect x="30" y="250" width="240" height="80" rx="10" fill="url(#fork1)" stroke="#FF8A65" stroke-width="2"/>
+  <text x="150" y="272" text-anchor="middle" font-size="12" font-weight="bold" fill="#E65100">A. Architecture Study</text>
+  <text x="150" y="292" text-anchor="middle" font-size="10" fill="#555">Read qwen3next.cpp for:</text>
+  <text x="150" y="308" text-anchor="middle" font-size="10" fill="#555">- SSM recurrence formula</text>
+  <text x="150" y="322" text-anchor="middle" font-size="10" fill="#555">- attn_qkv tensor split layout</text>
+
+  <!-- Branch B: Source -->
+  <rect x="310" y="250" width="280" height="80" rx="10" fill="url(#fork2)" stroke="#66BB6A" stroke-width="2"/>
+  <text x="450" y="272" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">B. GGUF Model Extraction</text>
+  <text x="450" y="292" text-anchor="middle" font-size="10" fill="#555">Extract embeddings &amp; weights</text>
+  <text x="450" y="308" text-anchor="middle" font-size="10" fill="#555">Dequantize with gguf_reader.c</text>
+  <text x="450" y="322" text-anchor="middle" font-size="10" fill="#555">Map to Poincaré ball</text>
+
+  <!-- Branch C: Run -->
+  <rect x="620" y="250" width="240" height="80" rx="10" fill="url(#fork3)" stroke="#64B5F6" stroke-width="2"/>
+  <text x="740" y="272" text-anchor="middle" font-size="12" font-weight="bold" fill="#1565C0">C. Benchmark Runner</text>
+  <text x="740" y="292" text-anchor="middle" font-size="10" fill="#555">llama-server for baseline</text>
+  <text x="740" y="308" text-anchor="middle" font-size="10" fill="#555">Perf comparison tok/s</text>
+  <text x="740" y="322" text-anchor="middle" font-size="10" fill="#555">Reference logits</text>
+
+  <!-- Branch A outputs -->
+  <line x1="150" y1="330" x2="150" y2="365" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="50" y="365" width="200" height="60" rx="8" fill="#FFF8E1" stroke="#FFB74D" stroke-width="1.5"/>
+  <text x="150" y="385" text-anchor="middle" font-size="10" font-weight="bold" fill="#E65100">Design Documents</text>
+  <text x="150" y="402" text-anchor="middle" font-size="9" fill="#555">.hermes/mind-palace/</text>
+  <text x="150" y="416" text-anchor="middle" font-size="9" fill="#555">tier3-impl/9-attention-port/</text>
+
+  <!-- Branch B outputs -->
+  <line x1="450" y1="330" x2="450" y2="365" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="340" y="365" width="220" height="60" rx="8" fill="#E8F5E9" stroke="#81C784" stroke-width="1.5"/>
+  <text x="450" y="385" text-anchor="middle" font-size="10" font-weight="bold" fill="#2E7D32">Extracted Assets</text>
+  <text x="450" y="402" text-anchor="middle" font-size="9" fill="#555">data/qwen36_embeddings_c.bin</text>
+  <text x="450" y="416" text-anchor="middle" font-size="9" fill="#555">tools/gguf_dump.py (tensor layout)</text>
+
+  <!-- Branch C outputs -->
+  <line x1="740" y1="330" x2="740" y2="365" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="640" y="365" width="200" height="60" rx="8" fill="#E3F2FD" stroke="#64B5F6" stroke-width="1.5"/>
+  <text x="740" y="385" text-anchor="middle" font-size="10" font-weight="bold" fill="#1565C0">Benchmark Results</text>
+  <text x="740" y="402" text-anchor="middle" font-size="9" fill="#555">34.9 tok/s baseline (mmap)</text>
+  <text x="740" y="416" text-anchor="middle" font-size="9" fill="#555">38.67 tok/s with Hamilton</text>
+
+  <!-- All converge to C model -->
+  <path d="M 150 425 L 150 460 L 740 460" fill="none" stroke="#555" stroke-width="2"/>
+  <path d="M 450 425 L 450 450" fill="none" stroke="#555" stroke-width="2"/>
+  <path d="M 450 450 L 740 450" fill="none" stroke="#555" stroke-width="2"/>
+  <path d="M 740 425 L 740 470" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- WuBuText C Model -->
+  <rect x="590" y="470" width="300" height="55" rx="12" fill="#F3E5F5" stroke="#CE93D8" stroke-width="2.5"/>
+  <text x="740" y="492" text-anchor="middle" font-size="14" font-weight="bold" fill="#6A1B9A">WuBuText AI — Pure C + CUDA</text>
+  <text x="740" y="510" text-anchor="middle" font-size="10" fill="#555">40 layers (30 SSM + 10 GQA) | 9.53 tok/s GPU</text>
+  <text x="740" y="522" text-anchor="middle" font-size="10" fill="#555">Phase 3 training loop: TST method</text>
+
+  <!-- Legend -->
+  <rect x="50" y="580" width="800" height="100" rx="8" fill="#FAFAFA" stroke="#DDD"/>
+  <text x="70" y="600" font-size="12" font-weight="bold" fill="#333">What Was Taken From llama.cpp:</text>
+  <text x="70" y="618" font-size="11" fill="#555">• GGUF format: checkpoint persistence model (tensors + metadata)</text>
+  <text x="70" y="634" font-size="11" fill="#555">• Qwen3.6 architecture reference: SSM recurrence, GQA, MRoPE, MoE routing</text>
+  <text x="70" y="650" font-size="11" fill="#555">• CUDA pattern: cuBLAS for matmul, custom kernels for SSM/attention/activations</text>
+  <text x="70" y="666" font-size="11" fill="#555">• From scratch: entire WuBu hyperbolic geometry, TST training, Poincaré embedding mapping</text>
+  <text x="450" y="618" font-size="11" fill="#555">• Tensor layout: how attn_qkv splits across heads + attention types</text>
+  <text x="450" y="634" font-size="11" fill="#555">• Tokenizer data: merges, vocab tokens from GGUF metadata</text>
+  <text x="450" y="650" font-size="11" fill="#555">• Build system: cmake CUDA architecture flags, SM targets, GGML dependency model</text>
+</svg>

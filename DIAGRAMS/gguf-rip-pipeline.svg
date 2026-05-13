@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 650" font-family="monospace">
+  <defs>
+    <linearGradient id="gguf-in" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E8EAF6"/>
+      <stop offset="100%" stop-color="#C5CAE9"/>
+    </linearGradient>
+    <linearGradient id="gguf-parse" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFF3E0"/>
+      <stop offset="100%" stop-color="#FFE0B2"/>
+    </linearGradient>
+    <linearGradient id="extract" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E8F5E9"/>
+      <stop offset="100%" stop-color="#C8E6C9"/>
+    </linearGradient>
+    <linearGradient id="map" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E3F2FD"/>
+      <stop offset="100%" stop-color="#BBDEFB"/>
+    </linearGradient>
+    <linearGradient id="verify" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F3E5F5"/>
+      <stop offset="100%" stop-color="#E1BEE7"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="40" text-anchor="middle" font-size="20" font-weight="bold" fill="#222">GGUF Representation Pipeline</text>
+  <text x="450" y="60" text-anchor="middle" font-size="12" fill="#666">How Qwen3.6-35B-A3B weights become WuBu hyperbolic embeddings</text>
+
+  <!-- Step 1: GGUF Model -->
+  <rect x="300" y="85" width="300" height="50" rx="10" fill="url(#gguf-in)" stroke="#7986CB" stroke-width="2"/>
+  <text x="450" y="106" text-anchor="middle" font-size="13" font-weight="bold" fill="#283593">1. Qwen3.6-35B-A3B GGUF</text>
+  <text x="450" y="122" text-anchor="middle" font-size="10" fill="#555">IQ2_M quantized | 733 tensors | llama.cpp checkpoint format</text>
+
+  <line x1="450" y1="135" x2="450" y2="165" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: C Parser -->
+  <rect x="280" y="165" width="340" height="55" rx="10" fill="url(#gguf-parse)" stroke="#FF8A65" stroke-width="2"/>
+  <text x="450" y="186" text-anchor="middle" font-size="13" font-weight="bold" fill="#E65100">2. gguf_reader.c — C GGUF Parser</text>
+  <text x="450" y="202" text-anchor="middle" font-size="10" fill="#555">Reads GGUF header | Locates tensor offsets | Q5_K dequant for embedding layer</text>
+  <text x="450" y="215" text-anchor="middle" font-size="10" fill="#888">include/gguf_reader.h | src/gguf_reader.c</text>
+
+  <line x1="450" y1="220" x2="450" y2="250" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Fork: SSM+GQA weights vs Embeddings -->
+  <rect x="50" y="250" width="380" height="70" rx="10" fill="url(#extract)" stroke="#66BB6A" stroke-width="2"/>
+  <text x="240" y="272" text-anchor="middle" font-size="13" font-weight="bold" fill="#2E7D32">3a. Weight Extraction</text>
+  <text x="240" y="290" text-anchor="middle" font-size="10" fill="#555">30 SSM layers: attn_qkv, ssm_conv1d, ssm_a, ssm_dt, ssm_alpha, ssm_beta</text>
+  <text x="240" y="306" text-anchor="middle" font-size="10" fill="#555">10 GQA layers: wq, wk, wv, attn_gate + all output projections</text>
+  <text x="240" y="316" text-anchor="middle" font-size="10" fill="#888">→ src/wubu_ssm.c | src/cuda_kernels.cu | tools/test_gpu.c</text>
+
+  <rect x="470" y="250" width="380" height="70" rx="10" fill="url(#extract)" stroke="#66BB6A" stroke-width="2"/>
+  <text x="660" y="272" text-anchor="middle" font-size="13" font-weight="bold" fill="#2E7D32">3b. Embedding Extraction</text>
+  <text x="660" y="290" text-anchor="middle" font-size="10" fill="#555">Reads token_embd.weight (Q5_K, 248320×2048)</text>
+  <text x="660" y="306" text-anchor="middle" font-size="10" fill="#555">Dequantizes to f32 | Saves to raw binary</text>
+  <text x="660" y="316" text-anchor="middle" font-size="10" fill="#888">→ data/qwen36_embeddings_c.bin</text>
+
+  <path d="M 450 220 L 450 230 L 240 230 L 240 250" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 450 220 L 450 230 L 660 230 L 660 250" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 4: Poincaré Mapping -->
+  <line x1="660" y1="320" x2="660" y2="355" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="470" y="355" width="380" height="55" rx="10" fill="url(#map)" stroke="#64B5F6" stroke-width="2"/>
+  <text x="660" y="376" text-anchor="middle" font-size="13" font-weight="bold" fill="#1565C0">4. Poincaré Ball Mapping (R=0.956)</text>
+  <text x="660" y="394" text-anchor="middle" font-size="10" fill="#555">exp_map: Euclidean → Poincaré ball of radius R = 3 × mean_norm</text>
+  <text x="660" y="408" text-anchor="middle" font-size="10" fill="#888">src/mobius.c | wubu_mobius.h | tools/extract_and_map.c</text>
+
+  <!-- Step 5: Verification -->
+  <line x1="660" y1="410" x2="660" y2="445" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="470" y="445" width="380" height="55" rx="10" fill="url(#verify)" stroke="#CE93D8" stroke-width="2"/>
+  <text x="660" y="466" text-anchor="middle" font-size="13" font-weight="bold" fill="#6A1B9A">5. Quality Verification</text>
+  <text x="660" y="484" text-anchor="middle" font-size="10" fill="#555">95% nearest-neighbor preservation | 73 zero-norm special tokens at origin</text>
+  <text x="660" y="498" text-anchor="middle" font-size="10" fill="#888">tools/analyze_embeddings.py | STATS in .hermes/</text>
+
+  <!-- Integration arrows back to main -->
+  <path d="M 240 320 L 240 380 L 100 380 L 100 500" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="6,3"/>
+  <path d="M 660 500 L 660 540 L 100 540 L 100 520" fill="none" stroke="#555" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="6,3"/>
+
+  <!-- Final assembly -->
+  <text x="55" y="565" font-size="12" font-weight="bold" fill="#333">40-Layer Model Assembly:</text>
+  <rect x="50" y="575" width="800" height="55" rx="8" fill="#FAFAFA" stroke="#DDD"/>
+  <text x="70" y="593" font-size="11" fill="#555">Phase 1: Embedding lookup → Poincaré exp_map → RMSNorm</text>
+  <text x="70" y="610" font-size="11" fill="#555">Phase 2: 30× SSM + 10× GQA (CUDA verified: 9.53 tok/s GPU, 47.83× speedup)</text>
+  <text x="70" y="625" font-size="11" fill="#555">Phase 3: TST training loop (bag s tokens → average → MCE loss) — IN PROGRESS</text>
+</svg>
