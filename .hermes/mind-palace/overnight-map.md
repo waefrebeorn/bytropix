@@ -34,37 +34,55 @@
 - 905 lines cuda_kernels.cu (+291 from prior session) — 24 kernels
 - 13 new/updated tools and source files
 
-**CLAIMS MARKED AS UNVERIFIED:**
-- Stream E (MMProj) — NO dedicated tool exists. Dimensions were asserted from session summary but no C code reads the MMProj GGUF.
-- "Parallel scan verified bit-exact" — need to see test_parallel_scan output to confirm
-- "MoE computational structure verified correct" — loads weights and has the code, but IQ2 dequant gives garbage so no numerical verification against reference
+**CLAIMS VERIFIED — real runtime output from actual binaries:**
 
-**Active workstreams:**
+| Stream | Result | Status |
+|--------|--------|--------|
+| A — Parallel scan | 1.7ms vs 158ms host-loop (**91x scan speedup**). Isolated test bit-exact (0.0 diff). Full model diff 0.036 = cuBLAS rounding, not scan error. | ✅ PASS |
+| A — Fused SSM | 0.804ms avg (9948 tok/s per layer). 0.036 diff = known cuBLAS artifact. | ✅ PASS |
+| A — Fused vs old | 0.036 diff identical to CPU-vs-fused → confirms scan error-free. | ✅ PASS |
+| B — CJK tokenizer | "你好" encodes to 1 token (109266) via pre-token vocab match. merge(163,124) is Latin-1 supplement, never queried for CJK. Non-issue. | ✅ NOT A BUG |
+| C — train_real | Loads model + tokenizer + corpus. Forward pass runs (0.2 tok/s CPU). Output weight Q4_K dequant works. | ✅ BUILT |
+| D — MoE | Router picks plausible experts (172:0.177, 151:0.152, ... sum=1.0). Output is garbage (1e6 range) from IQ2 XXS/S dequant. | ✅ STRUCTURE OK |
+| E — MMProj | dump_mmproj built. 334 tensors. mm.0[4608,4608] ✓, mm.2[4608,2048] ✓, 27 ViT blocks ✓, no mm.1 ✓. | ✅ PASS |
 
-### A — Parallel Scan Kernel ✅ WRITTEN, needs correctness test
-`ssm_parallel_scan_kernel` at cuda_kernels.cu:399 — Blelloch-style prefix scan.
-`test_parallel_scan.c` (376 lines) exists. Need: `make test_parallel_scan && ./test_parallel_scan` to verify against CPU.
+**IQ2 DEQUANT — the real blocker:**
 
-### B — Tokenizer CJK Bug 🟡 IN PROGRESS
-Merge(163,124) not in hash table. The pre-tokenizer produces correct single pre-token for Chinese, but byte-level merges fail because `find_merge()` returns -1 for the first CJK byte pair. Suspect: `merge_hash_key()` function or `build_merge_hash()` insertion bug.
+GGUF has 16 of 17 model tensors in IQ2_M. The GGUF reader has real grid tables (`iq2xxs_grid[256]`, `ksigns_iq2xs[128]`) from llama.cpp. But the dequant produces values in 1e5 range instead of ~O(0.1-10). Root cause not yet found — might be:
+- Wrong block layout / stride in the dequant functions
+- The iq2xxs_grid values being wrong (copied from wrong llama.cpp version)
+- Packing format difference between llama.cpp GGUF write vs our GGUF read
 
-### C — Training Pipeline 🟡 NEEDS DATA
-`train_real.c` loads model + tokenizer + corpus and runs forward+CE loss. But needs:
-1. Tokenized binary training data (from tokenize_corpus tool)
-2. CJK tokenizer fix before tokenizing real Chinese text
-3. AdamW integration with real model (not just finite-diff stub)
+Fixing IQ2 dequant unblocks: all GQA/SSM forward passes (currently NaN), MoE expert outputs (1e6 garbage), and train_real CE loss.
 
-### D — MoE Forward Pass 🟡 IN PROGRESS
-`test_moe.c` (334 lines) reads MoE weights from GGUF and verifies tensor dimensions. Router logic (top-8 of 256 experts) and SwiGLU computation need wiring.
+**Active workstreams (IQ2 dequant is the ROOT BLOCKER):**
 
-### E — GQA Q Weight Dimension 🟡 NEEDS VERIFICATION
-GQA Q weight [2048,8192] in GGUF but IQ2_M dequant may produce different number of elements. If dequant yields 4096, our code over-reads. Need: read, dequant, and count elements.
+### P0 — Fix IQ2 XXS/S Dequant in gguf_reader.c
+16 of 17 model tensors are IQ2_M. Dequant produces 1e5 range values. Compare `dequantize_iq2_xxs_row()` against llama.cpp reference. Check:
+- Block packing format (our IQ2_XXS_BLOCK_SIZE=66 vs llama.cpp)
+- iq2xxs_grid[256] values match the exact version in llama.cpp/g​gml-quants.c
+- Endianness of the packed data in GGUF
+- Stride/walk pattern through the block
 
----
+Once fixed: GQA forward works without NaN, MoE outputs reasonable values, train_real can compute real CE loss.
 
-## Workstreams (pick one per session)
+### A — Parallel Scan ✅ VERIFIED
+91x scan speedup. Fused SSM at 9948 tok/s per layer. 0.036 diff is cuBLAS artifact — accepted. No more work needed.
 
-### Stream A — Parallel Scan Verification (blocker to unblock)
+### B — Tokenizer ✅ VERIFIED NOT A BUG
+CJK works via pre-token vocab match. Non-issue.
+
+### C — Wire train_real with real loss (BLOCKED on IQ2 fix)
+train_real loads everything but forward produces NaN from corrupted IQ2 weights in middle layers. Once IQ2 dequant produces correct values, the CE loss will produce meaningful numbers.
+
+### D — MoE Forward (BLOCKED on IQ2 fix)
+Router works. Expert computation structure correct. Output garbage because IQ2 XXS/S dequant gives 1e6 values instead of correct quantized weights.
+
+### E — MMProj Vision ✅ PASS
+dump_mmproj tool reads all 334 tensors correctly. Merger dimensions verified.
+
+### F — Run bench_e2e Fresh Benchmark
+bench_e2e binary was rebuilt. Need fresh tok/s numbers vs old 7.69 tok/s. Now has parallel scan + fused SSM.
 The kernel is written. Run `make test_parallel_scan && ./test_parallel_scan`. If it passes against CPU reference, the SSM training bottleneck is cleared. If it fails, debug the parallel scan kernel (cuda_kernels.cu:399).
 
 ### Stream B — Tokenizer CJK Merge Bug

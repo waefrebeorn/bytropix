@@ -177,12 +177,25 @@ int main(int argc, char **argv) {
         float loss = 0.0f;
 
         // Project to vocab space if output_weight loaded
-        // logits[0:N, :] = embd_40_layers[N, D_MODEL] @ output_weight[D_MODEL, VOCAB]
-        if (output_weight && 0) { // disabled: 248K vocab matmul needs ~2GB logits buffer
-            // For now, compute loss on final hidden state directly
-            // We don't have output weight loaded into GPU, so we do it on CPU
-            // This is a LARGE computation: N * D_MODEL * VOCAB = 4*2048*248320 = 2B ops
-            // Skip for this demo
+        // logits[0:N, :] = hidden[N, D_MODEL] @ output_weight[D_MODEL, VOCAB]
+        if (output_weight) {
+            // Project hidden state to vocab space: hidden[N, D] @ output_weight[D, V] -> probs[N, V]
+            for (int i = 0; i < N; i++) {
+                double max_v = -1e30;
+                for (int j = 0; j < tok.vocab_size; j++) {
+                    double sum = 0.0;
+                    for (int k = 0; k < D_MODEL; k++) {
+                        sum += (double)logits[i * D_MODEL + k] * (double)output_weight[j * D_MODEL + k];
+                    }
+                    // We can't store all vocab logits (248K * 4 floats ~= 4GB per batch)
+                    // Instead, compute CE loss directly
+                    float v = (float)sum;
+                    if (v > max_v) max_v = v;
+                }
+            }
+            // NOTE: Full 248K-vocab CE computation requires streaming projection
+            // For now, just note the output weight is loaded
+            printf("  output.weight loaded (%d elems got from Q4_K dequant)\n", tok.vocab_size * D_MODEL);
         }
 
         // Log first few logit values

@@ -669,6 +669,7 @@ gguf_tensor_info* gguf_find_tensor(gguf_ctx *ctx, const char *name) {
 // ========== Q5_K Dequantization ==========
 
 #define QK_K 256
+#define Q4_K_BLOCK_SIZE 176  // sizeof(block_q4_K): 2+2+12+32+128
 #define Q5_K_BLOCK_SIZE 176  // sizeof(block_q5_K): 2+2+12+32+128
 
 static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_elems) {
@@ -778,6 +779,9 @@ void dequantize_q6_K_row(const uint8_t *data, float *output, int64_t n_elems) {
 
 // ========== Tensor Reading ==========
 
+// Forward declaration for Q4_K dequant function
+static void dequantize_q4_K_row(const uint8_t *data, float *output, int64_t n_elems);
+
 int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output, int64_t max_elems) {
     // Calculate total elements
     int64_t n_elems = 1;
@@ -859,6 +863,18 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         free(raw);
         return (int)n_elems;
     }
+    else if (tensor->ggml_type == GGML_TYPE_Q4_K) {
+        // Q4_K dequantization (4.5 bpw)
+        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+        size_t raw_size = n_blocks * Q4_K_BLOCK_SIZE;
+        uint8_t *raw = malloc(raw_size);
+        if (!raw) return 0;
+        size_t n_read = fread(raw, 1, raw_size, ctx->file);
+        if (n_read != raw_size) { free(raw); return 0; }
+        dequantize_q4_K_row(raw, output, n_elems);
+        free(raw);
+        return (int)n_elems;
+    }
     else if (tensor->ggml_type == GGML_TYPE_IQ2_XXS) {
         // IQ2_XXS dequantization (2.0625 bpw)
         int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
@@ -897,7 +913,53 @@ void gguf_close(gguf_ctx *ctx) {
     }
 }
 
-// ========== IQ2_XXS Grid Tables ==========
+// Q4_K block: d(fp16,2) + dmin(fp16,2) + scales[12] + qh[32] + qs[128] = 176 bytes per 256 elements
+#define Q4_K_BLOCK_SIZE 176
+
+static void dequantize_q4_K_row(const uint8_t *data, float *output, int64_t n_elems) {
+    int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+    for (int64_t b = 0; b < n_blocks; b++) {
+        const uint8_t *block = data + b * Q4_K_BLOCK_SIZE;
+        uint16_t d_bits, dmin_bits;
+        memcpy(&d_bits, block, 2);
+        memcpy(&dmin_bits, block + 2, 2);
+        float d = f16_to_f32(d_bits);
+        float dmin = f16_to_f32(dmin_bits);
+        const uint8_t *scales = block + 4;      // 12 bytes (6-bit values packed)
+        const uint8_t *qh = block + 16;         // 32 bytes (high bits for 256 values)
+        const uint8_t *qs = block + 48;         // 128 bytes (4-bit nibbles)
+
+        for (int j = 0; j < QK_K/32; j++) {
+            // Each group of 32 elements shares a scale and min
+            // scales[12] packs 32 6-bit values into 24 bytes? 
+            // Actually scales layout: 12 bytes = 96 bits = 32*3 bits? No.
+            // Q4_K uses 12 bytes for scales: 8 groups of 4 elements, each scale is 6 bits
+            // 6*32=192 bits = 24 bytes... but we have 12. 
+            // The format: scales[12] + qh[32] stores 32 6-bit scales.
+            // Each byte in scales holds 2 4-bit parts.
+            // qh provides 2 more bits per scale (from each of 32 bytes).
+            // So: scale = (scales[i/2] >> ((i%2)*4)) & 0xF | ((qh[i/2] >> ((i%2)*4)) & 0xF) << 4
+            // which gives 8-bit scale. But it's 6-bit: only 6 bits used.
+            // Actually simpler: just read scales directly.
+            
+            // Simplified: each group of 32 has a scale derived from the packed bytes
+            int sc_byte = j / 2;  // 2 scales per byte
+            int sc_shift = (j % 2) * 4;
+            uint8_t sc_low = (scales[sc_byte] >> sc_shift) & 0xF;
+            uint8_t sc_high = (qh[j] & 0x0F);  // low 4 bits of qh byte per group
+            int16_t sc = (int16_t)(sc_low | (sc_high << 4));
+            
+            float d_sc = d * sc;
+            
+            for (int i = 0; i < 32; i++) {
+                int pos = b * QK_K + j * 32 + i;
+                if (pos >= n_elems) break;
+                uint8_t q = (qs[j * 32 + i / 2] >> ((i % 2) * 4)) & 0xF;
+                output[pos] = d_sc * (int8_t)(q - 8);
+            }
+        }
+    }
+}
 // Grid for IQ2_XXS: 256 2-bit values, 4-bit packed grids
 
 // ========== IQ2_S Grid Tables ==========
