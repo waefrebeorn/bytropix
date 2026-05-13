@@ -1,7 +1,7 @@
 CC = gcc
 NVCC = nvcc
-CFLAGS = -O2 -Wall -Wextra -Wno-unused-parameter -I include
-LDFLAGS = -lm
+CFLAGS = -O2 -Wall -Wextra -Wno-unused-parameter -I include -fopenmp
+LDFLAGS = -lm -fopenmp
 NVCC_FLAGS = -O2 -I include -arch=sm_120
 CUDA_LIBS = -lcublas -lcudart
 CUDA_INC = -I/usr/local/cuda-13.1/include
