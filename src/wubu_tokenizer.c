@@ -1,0 +1,582 @@
+#define _GNU_SOURCE
+#include "wubu_tokenizer.h"
+#include "gguf_reader.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <unistd.h>
+
+// ========== Byte-level encoding helpers ==========
+
+// Qwen3.6 exact byte-to-token mapping from original tokenizer.json
+static const int byte_encoder_qwen36[256] = {
+     -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,
+     -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,
+     -1,    0,    1,    2,    3,    4,    5,    6,    7,    8,    9,   10,   11,   12,   13,   14,
+     15,   16,   17,   18,   19,   20,   21,   22,   23,   24,   25,   26,   27,   28,   29,   30,
+     31,   32,   33,   34,   35,   36,   37,   38,   39,   40,   41,   42,   43,   44,   45,   46,
+     47,   48,   49,   50,   51,   52,   53,   54,   55,   56,   57,   58,   59,   60,   61,   62,
+     63,   64,   65,   66,   67,   68,   69,   70,   71,   72,   73,   74,   75,   76,   77,   78,
+     79,   80,   81,   82,   83,   84,   85,   86,   87,   88,   89,   90,   91,   92,   93,   -1,
+     -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,
+     -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,
+     -1,   94,   95,   96,   97,   98,   99,  100,  101,  102,  103,  104,  105,   -1,  106,  107,
+    108,  109,  110,  111,  112,  113,  114,  115,  116,  117,  118,  119,  120,  121,  122,  123,
+    124,  125,  126,  127,  128,  129,  130,  131,  132,  133,  134,  135,  136,  137,  138,  139,
+    140,  141,  142,  143,  144,  145,  146,  147,  148,  149,  150,  151,  152,  153,  154,  155,
+    156,  157,  158,  159,  160,  161,  162,  163,  164,  165,  166,  167,  168,  169,  170,  171,
+    172,  173,  174,  175,  176,  177,  178,  179,  180,  181,  182,  183,  184,  185,  186,  187
+};
+
+static int gpt2_byte_encoder[256] = {0};
+
+static void init_byte_encoder(void) {
+    static int initialized = 0;
+    if (initialized) return;
+    initialized = 1;
+    for (int i = 0; i < 256; i++)
+        gpt2_byte_encoder[i] = byte_encoder_qwen36[i];
+    int highest = 187;
+    int remap_idxs[] = {
+        0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,
+        32, 127, 128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,
+        148,149,150,151,152,153,154,155,156,157,158,159, 160, 173
+    };
+    for (size_t i = 0; i < sizeof(remap_idxs)/sizeof(int); i++) {
+        int b = remap_idxs[i];
+        gpt2_byte_encoder[b] = highest + 1 + (int)i;
+    }
+}
+
+// ========== FNV-1a hash helpers ==========
+
+static uint32_t merge_hash_key(int left_id, int right_id) {
+    uint32_t h = 2166136261u;
+    h = (h ^ (uint32_t)(left_id & 0xFF)) * 16777619u;
+    h = (h ^ (uint32_t)((left_id >> 8) & 0xFF)) * 16777619u;
+    h = (h ^ (uint32_t)((left_id >> 16) & 0xFF)) * 16777619u;
+    h = (h ^ (uint32_t)((left_id >> 24) & 0xFF)) * 16777619u;
+    h = (h ^ (uint32_t)(right_id & 0xFF)) * 16777619u;
+    h = (h ^ (uint32_t)((right_id >> 8) & 0xFF)) * 16777619u;
+    h = (h ^ (uint32_t)((right_id >> 16) & 0xFF)) * 16777619u;
+    h = (h ^ (uint32_t)((right_id >> 24) & 0xFF)) * 16777619u;
+    return h;
+}
+
+static int find_merge(const wubu_tokenizer_t *tok, int left, int right, int *merged_id) {
+    if (!tok || !tok->merge_hash || tok->merge_hash_size <= 0) return -1;
+    uint32_t h = merge_hash_key(left, right);
+    int idx = (int)(h & (uint32_t)(tok->merge_hash_size - 1));
+    for (int i = 0; i < tok->merge_hash_size; i++) {
+        int e = (idx + i) & (tok->merge_hash_size - 1);
+        if (!tok->merge_hash[e].valid) return -1;
+        if (tok->merge_hash[e].left_id == left && tok->merge_hash[e].right_id == right) {
+            *merged_id = tok->merge_hash[e].merged_id;
+            return tok->merge_hash[e].priority;
+        }
+    }
+    return -1;
+}
+
+static int find_token_by_string(const wubu_tokenizer_t *tok, const uint8_t *bytes, int blen) {
+    if (!tok || !tok->vocab_hash || tok->vocab_hash_size <= 0 || blen <= 0) return -1;
+    uint32_t h = 2166136261u;
+    int n = blen < 8 ? blen : 8;
+    for (int i = 0; i < n; i++)
+        h = (h ^ (uint32_t)bytes[i]) * 16777619u;
+    int idx = (int)(h & (uint32_t)(tok->vocab_hash_size - 1));
+    for (int i = 0; i < tok->vocab_hash_size; i++) {
+        int e = (idx + i) & (tok->vocab_hash_size - 1);
+        if (!tok->vocab_hash[e].valid) return -1;
+        int tid = tok->vocab_hash[e].token_id;
+        if (tid >= 0 && tid < tok->vocab_size &&
+            tok->vocab[tid].byte_len == blen &&
+            memcmp(tok->vocab[tid].bytes, bytes, blen) == 0)
+            return tid;
+    }
+    return -1;
+}
+
+// ========== Init from binary files (pre-extracted tokenizer data) ==========
+
+// Forward declarations
+static void build_byte_token_ids(wubu_tokenizer_t *tok);
+static void build_vocab_hash(wubu_tokenizer_t *tok);
+
+bool wubu_tokenizer_init(wubu_tokenizer_t *tok, const char *gguf_path) {
+    // Load pre-extracted tokenizer data from data/vocab.bin, data/merges.bin
+    (void)gguf_path; // We use pre-extracted files in data/ directory
+    if (!tok) return false;
+    memset(tok, 0, sizeof(*tok));
+    init_byte_encoder();
+    tok->bos_id = -1; tok->eos_id = -1; tok->pad_id = -1;
+    
+    // Load vocab
+    FILE *f = fopen("data/vocab.bin", "rb");
+    if (!f) { fprintf(stderr, "Can't open data/vocab.bin (run python/extract_tokenizer.py first)\n"); return false; }
+    
+    uint32_t vs;
+    if (fread(&vs, 4, 1, f) != 1 || vs == 0) { fclose(f); return false; }
+    tok->vocab_size = (int)vs;
+    tok->vocab = (wubu_token_t *)calloc(tok->vocab_size, sizeof(wubu_token_t));
+    
+    for (uint32_t vi = 0; vi < vs; vi++) {
+        uint32_t slen;
+        if (fread(&slen, 4, 1, f) != 1) { fprintf(stderr,"Truncated vocab at %u\n",vi); break; }
+        int max_slen = WUBU_TOKENIZER_MAX_TOKEN_BYTES - 1;
+        if (slen > (uint32_t)max_slen) {
+            // Token too long: copy what fits, skip the rest
+            fread(tok->vocab[vi].bytes, 1, (size_t)max_slen, f);
+            tok->vocab[vi].bytes[max_slen] = '\0';
+            tok->vocab[vi].byte_len = max_slen;
+            fseek(f, (long)(slen - (uint32_t)max_slen), SEEK_CUR);
+        } else {
+            size_t nrd = fread(tok->vocab[vi].bytes, 1, slen, f);
+            tok->vocab[vi].bytes[nrd] = '\0';
+            tok->vocab[vi].byte_len = (int)nrd;
+        }
+        tok->vocab[vi].id = (int)vi;
+    }
+    fclose(f);
+    printf("  Vocab: %d tokens loaded\n", tok->vocab_size);
+    
+    build_byte_token_ids(tok);
+    build_vocab_hash(tok);
+    
+    // Load merges
+    f = fopen("data/merges.bin", "rb");
+    if (f) {
+        uint32_t ms;
+        fread(&ms, 4, 1, f);
+        if (ms > 0) {
+            tok->merges = (wubu_merge_t *)calloc(ms, sizeof(wubu_merge_t));
+            
+            for (uint32_t mi = 0; mi < ms; mi++) {
+                uint32_t slen;
+                if (fread(&slen, 4, 1, f) != 1) break;
+                if (slen > 512) { fprintf(stderr,"Bad merge len %u at %u\n",slen,mi); break; }
+                char *merge_str = (char *)malloc(slen + 1);
+                fread(merge_str, 1, slen, f);
+                merge_str[slen] = '\0';
+                
+                char *space = strchr(merge_str, ' ');
+                if (space) {
+                    *space = '\0';
+                    int left_id = find_token_by_string(tok, (const uint8_t*)merge_str, (int)(space - merge_str));
+                    int right_id = find_token_by_string(tok, (const uint8_t*)(space+1), (int)(slen - (space - merge_str) - 1));
+                    
+                    uint8_t mb[WUBU_TOKENIZER_MAX_TOKEN_BYTES];
+                    int mbl = (int)(space - merge_str) + (int)(slen - (space - merge_str) - 1);
+                    if (mbl > WUBU_TOKENIZER_MAX_TOKEN_BYTES-1) mbl = WUBU_TOKENIZER_MAX_TOKEN_BYTES-1;
+                    memcpy(mb, merge_str, space - merge_str);
+                    memcpy(mb + (space - merge_str), space + 1, slen - (space - merge_str) - 1);
+                    int merged_id = find_token_by_string(tok, mb, mbl);
+                    
+                    *space = ' '; // restore
+                    
+                    if (left_id >= 0 && right_id >= 0 && merged_id >= 0) {
+                        tok->merges[tok->n_merges].left_id = left_id;
+                        tok->merges[tok->n_merges].right_id = right_id;
+                        tok->merges[tok->n_merges].new_id = merged_id;
+                        tok->merges[tok->n_merges].priority = (int)mi;
+                        tok->n_merges++;
+                    }
+                }
+                free(merge_str);
+            }
+            printf("  Merges: %d loaded (%d resolved)\n", ms, tok->n_merges);
+        }
+        fclose(f);
+    } else {
+        printf("  No merges file\n");
+    }
+    
+    // Load special tokens
+    f = fopen("data/special_tokens.bin", "rb");
+    if (f) {
+        int32_t ids[3];
+        if (fread(ids, 4, 3, f) == 3) {
+            tok->bos_id = ids[0]; tok->eos_id = ids[1]; tok->pad_id = ids[2];
+        }
+        fclose(f);
+    }
+    
+    // Build merge hash
+    if (tok->n_merges > 0) {
+        tok->merge_hash_size = 1;
+        while (tok->merge_hash_size < tok->n_merges * 2) tok->merge_hash_size *= 2;
+        tok->merge_hash = (wubu_merge_hash_entry_t *)calloc(tok->merge_hash_size, sizeof(wubu_merge_hash_entry_t));
+        int collisions = 0;
+        for (int i = 0; i < tok->n_merges; i++) {
+            uint32_t h = merge_hash_key(tok->merges[i].left_id, tok->merges[i].right_id);
+            int idx = (int)(h & (uint32_t)(tok->merge_hash_size - 1));
+            for (int j = 0; j < tok->merge_hash_size; j++) {
+                int e = (idx + j) & (tok->merge_hash_size - 1);
+                if (!tok->merge_hash[e].valid) {
+                    tok->merge_hash[e].left_id = tok->merges[i].left_id;
+                    tok->merge_hash[e].right_id = tok->merges[i].right_id;
+                    tok->merge_hash[e].merged_id = tok->merges[i].new_id;
+                    tok->merge_hash[e].priority = tok->merges[i].priority;
+                    tok->merge_hash[e].valid = 1;
+                    if (j > 0) collisions++;
+                    break;
+                }
+            }
+        }
+        printf("  Merge hash: %d entries in %d slots (%d collisions)\n",
+               tok->n_merges, tok->merge_hash_size, collisions);
+    }
+    
+    printf("  BOS=%d, EOS=%d, PAD=%d\n", tok->bos_id, tok->eos_id, tok->pad_id);
+    return true;
+}
+
+// ========== Init from text files ==========
+static void build_byte_token_ids(wubu_tokenizer_t *tok) {
+    for (int i = 0; i < 256; i++) tok->byte_token_ids[i] = gpt2_byte_encoder[i];
+    for (int i = 0; i < tok->vocab_size; i++) {
+        if (tok->vocab[i].byte_len == 1) {
+            uint8_t b = (uint8_t)tok->vocab[i].bytes[0];
+            tok->byte_token_ids[b] = i;
+        }
+    }
+}
+
+static void build_vocab_hash(wubu_tokenizer_t *tok) {
+    tok->vocab_hash_size = 1;
+    while (tok->vocab_hash_size < tok->vocab_size * 2) tok->vocab_hash_size *= 2;
+    tok->vocab_hash = (wubu_vocab_hash_entry_t *)calloc(tok->vocab_hash_size, sizeof(wubu_vocab_hash_entry_t));
+    
+    for (int i = 0; i < tok->vocab_size; i++) {
+        const uint8_t *bytes = (const uint8_t *)tok->vocab[i].bytes;
+        int blen = tok->vocab[i].byte_len;
+        if (blen <= 0) continue;
+        
+        uint32_t h = 2166136261u;
+        int n = blen < 8 ? blen : 8;
+        for (int j = 0; j < n; j++)
+            h = (h ^ (uint32_t)bytes[j]) * 16777619u;
+        
+        int idx = (int)(h & (uint32_t)(tok->vocab_hash_size - 1));
+        for (int j = 0; j < tok->vocab_hash_size; j++) {
+            int e = (idx + j) & (tok->vocab_hash_size - 1);
+            if (!tok->vocab_hash[e].valid) {
+                tok->vocab_hash[e].token_id = i;
+                tok->vocab_hash[e].valid = 1;
+                break;
+            }
+        }
+    }
+}
+
+static void build_merge_hash_from_arrays(wubu_tokenizer_t *tok, char **merge_strings, int n_merges) {
+    if (!tok || !merge_strings || n_merges <= 0) return;
+    
+    // First pass: resolve string pairs to token IDs
+    tok->merges = (wubu_merge_t *)calloc(n_merges, sizeof(wubu_merge_t));
+    tok->n_merges = 0;
+    
+    for (int mi = 0; mi < n_merges; mi++) {
+        char *s = merge_strings[mi];
+        char *space = strchr(s, ' ');
+        if (!space) continue;
+        
+        *space = '\0';
+        const char *left_str = s;
+        const char *right_str = space + 1;
+        int left_len = (int)strlen(left_str);
+        int right_len = (int)strlen(right_str);
+        
+        int left_id = find_token_by_string(tok, (const uint8_t *)left_str, left_len);
+        int right_id = find_token_by_string(tok, (const uint8_t *)right_str, right_len);
+        
+        // Concatenated string = merged token
+        uint8_t merged_bytes[WUBU_TOKENIZER_MAX_TOKEN_BYTES];
+        int mblen = left_len + right_len;
+        if (mblen > WUBU_TOKENIZER_MAX_TOKEN_BYTES - 1) mblen = WUBU_TOKENIZER_MAX_TOKEN_BYTES - 1;
+        memcpy(merged_bytes, left_str, left_len);
+        memcpy(merged_bytes + left_len, right_str, right_len);
+        int merged_id = find_token_by_string(tok, merged_bytes, mblen);
+        
+        *space = ' '; // restore
+        
+        if (left_id >= 0 && right_id >= 0 && merged_id >= 0) {
+            tok->merges[tok->n_merges].left_id = left_id;
+            tok->merges[tok->n_merges].right_id = right_id;
+            tok->merges[tok->n_merges].new_id = merged_id;
+            tok->merges[tok->n_merges].priority = mi;
+            tok->n_merges++;
+        }
+    }
+    
+    // Build hash table
+    tok->merge_hash_size = 1;
+    while (tok->merge_hash_size < tok->n_merges * 2) tok->merge_hash_size *= 2;
+    tok->merge_hash = (wubu_merge_hash_entry_t *)calloc(tok->merge_hash_size, sizeof(wubu_merge_hash_entry_t));
+    
+    int collisions = 0;
+    for (int i = 0; i < tok->n_merges; i++) {
+        uint32_t h = merge_hash_key(tok->merges[i].left_id, tok->merges[i].right_id);
+        int idx = (int)(h & (uint32_t)(tok->merge_hash_size - 1));
+        int placed = 0;
+        for (int j = 0; j < tok->merge_hash_size; j++) {
+            int e = (idx + j) & (tok->merge_hash_size - 1);
+            if (!tok->merge_hash[e].valid) {
+                tok->merge_hash[e].left_id = tok->merges[i].left_id;
+                tok->merge_hash[e].right_id = tok->merges[i].right_id;
+                tok->merge_hash[e].merged_id = tok->merges[i].new_id;
+                tok->merge_hash[e].priority = tok->merges[i].priority;
+                tok->merge_hash[e].valid = 1;
+                if (j > 0) collisions++;
+                placed = 1;
+                break;
+            }
+        }
+    }
+    printf("  Merge hash: %d entries in %d slots (%d collisions)\n",
+           tok->n_merges, tok->merge_hash_size, collisions);
+}
+
+// ========== Init from text files ==========
+
+bool wubu_tokenizer_init_from_files(wubu_tokenizer_t *tok,
+                                     const char *vocab_path,
+                                     const char *merges_path,
+                                     int bos_id,
+                                     int eos_id,
+                                     int pad_id) {
+    if (!tok || !vocab_path || !merges_path) return false;
+    memset(tok, 0, sizeof(*tok));
+    init_byte_encoder();
+    tok->bos_id = bos_id; tok->eos_id = eos_id; tok->pad_id = pad_id;
+    
+    // Count lines
+    int vs = 0; char buf[4096];
+    FILE *f = fopen(vocab_path, "r");
+    if (!f) return false;
+    while (fgets(buf,sizeof(buf),f)) vs++;
+    fclose(f);
+    
+    int ms = 0;
+    f = fopen(merges_path, "r");
+    if (!f) return false;
+    while (fgets(buf,sizeof(buf),f)) ms++;
+    fclose(f);
+    
+    tok->vocab = (wubu_token_t *)calloc(vs, sizeof(wubu_token_t));
+    tok->vocab_size = vs;
+    tok->merges = (wubu_merge_t *)calloc(ms, sizeof(wubu_merge_t));
+    tok->n_merges = ms;
+    
+    // Read vocab
+    f = fopen(vocab_path, "r");
+    int idx = 0;
+    while (fgets(buf,sizeof(buf),f) && idx < vs) {
+        char *sep = strchr(buf, ' ');
+        if (sep) {
+            *sep = '\0'; idx = atoi(buf);
+            char *str = sep+1; int slen = (int)strlen(str);
+            if (slen > 0 && str[slen-1]=='\n') str[--slen]='\0';
+            if (slen > WUBU_TOKENIZER_MAX_TOKEN_BYTES-1) slen = WUBU_TOKENIZER_MAX_TOKEN_BYTES-1;
+            memcpy(tok->vocab[idx].bytes, str, slen);
+            tok->vocab[idx].bytes[slen] = '\0';
+            tok->vocab[idx].byte_len = slen; tok->vocab[idx].id = idx;
+        }
+    }
+    fclose(f);
+    
+    // Read merges
+    f = fopen(merges_path, "r");
+    int mi = 0;
+    while (fgets(buf,sizeof(buf),f) && mi < ms) {
+        int left, right;
+        if (sscanf(buf, "%d %d", &left, &right) == 2) {
+            if (left < vs && right < vs) {
+                uint8_t mb[WUBU_TOKENIZER_MAX_TOKEN_BYTES];
+                int mbl = tok->vocab[left].byte_len + tok->vocab[right].byte_len;
+                if (mbl > WUBU_TOKENIZER_MAX_TOKEN_BYTES-1) mbl = WUBU_TOKENIZER_MAX_TOKEN_BYTES-1;
+                memcpy(mb, tok->vocab[left].bytes, tok->vocab[left].byte_len);
+                memcpy(mb+tok->vocab[left].byte_len, tok->vocab[right].bytes, tok->vocab[right].byte_len);
+                int mid = find_token_by_string(tok, mb, mbl);
+                tok->merges[mi].left_id = left; tok->merges[mi].right_id = right;
+                tok->merges[mi].new_id = mid>=0 ? mid : left;
+                tok->merges[mi].priority = mi; mi++;
+            }
+        }
+    }
+    fclose(f);
+    tok->n_merges = mi;
+    
+    build_byte_token_ids(tok);
+    build_vocab_hash(tok);
+    
+    // Build merge hash
+    tok->merge_hash_size = 1;
+    while (tok->merge_hash_size < tok->n_merges * 2) tok->merge_hash_size *= 2;
+    tok->merge_hash = (wubu_merge_hash_entry_t *)calloc(tok->merge_hash_size, sizeof(wubu_merge_hash_entry_t));
+    for (int i = 0; i < tok->n_merges; i++) {
+        uint32_t h = merge_hash_key(tok->merges[i].left_id, tok->merges[i].right_id);
+        int idx = (int)(h & (uint32_t)(tok->merge_hash_size - 1));
+        for (int j = 0; j < tok->merge_hash_size; j++) {
+            int e = (idx+j) & (tok->merge_hash_size-1);
+            if (!tok->merge_hash[e].valid) {
+                tok->merge_hash[e].left_id = tok->merges[i].left_id;
+                tok->merge_hash[e].right_id = tok->merges[i].right_id;
+                tok->merge_hash[e].merged_id = tok->merges[i].new_id;
+                tok->merge_hash[e].priority = tok->merges[i].priority;
+                tok->merge_hash[e].valid = 1; break;
+            }
+        }
+    }
+    return true;
+}
+
+void wubu_tokenizer_free(wubu_tokenizer_t *tok) {
+    if (tok) {
+        free(tok->vocab); free(tok->merges);
+        free(tok->merge_hash); free(tok->vocab_hash);
+        memset(tok, 0, sizeof(*tok));
+    }
+}
+
+// ========== Encode ==========
+
+int wubu_tokenizer_encode(wubu_tokenizer_t *tok,
+                          const char *text,
+                          int *output_ids,
+                          int max_output_ids) {
+    if (!tok || !text || !output_ids) return -1;
+    int text_len = (int)strlen(text);
+    if (text_len <= 0) return 0;
+    
+    // Convert text to byte tokens
+    uint8_t *byte_tokens = (uint8_t *)malloc((size_t)text_len);
+    int n_bytes = 0;
+    for (int i = 0; i < text_len; i++) {
+        int tid = tok->byte_token_ids[(uint8_t)text[i]];
+        if (tid >= 0) byte_tokens[n_bytes++] = (uint8_t)tid;
+    }
+    if (n_bytes <= 0) { free(byte_tokens); return 0; }
+    
+    int *work_ids = (int *)malloc((size_t)n_bytes * 2 * sizeof(int));
+    char *work_merged = (char *)malloc((size_t)n_bytes * 2);
+    int work_len = n_bytes;
+    for (int i = 0; i < n_bytes; i++) work_ids[i] = byte_tokens[i];
+    memset(work_merged, 0, (size_t)work_len);
+    
+    int changed = 1;
+    while (changed && work_len > 1) {
+        changed = 0;
+        int best_prio = -1, best_pos = -1, best_right = -1, best_mid = -1;
+        
+        for (int i = 0; i < work_len - 1; i++) {
+            if (work_merged[i]) continue;
+            int j = i + 1;
+            while (j < work_len && work_merged[j]) j++;
+            if (j >= work_len) break;
+            
+            int merged_id;
+            int prio = find_merge(tok, work_ids[i], work_ids[j], &merged_id);
+            if (prio >= 0 && (best_prio < 0 || prio < best_prio)) {
+                best_prio = prio; best_pos = i; best_right = j; best_mid = merged_id;
+            }
+        }
+        
+        if (best_pos >= 0 && best_mid >= 0) {
+            work_merged[best_right] = 1;
+            work_ids[best_pos] = best_mid;
+            changed = 1;
+        }
+    }
+    
+    int total = 0;
+    for (int i = 0; i < work_len; i++)
+        if (!work_merged[i] && total < max_output_ids)
+            output_ids[total++] = work_ids[i];
+    
+    free(byte_tokens); free(work_ids); free(work_merged);
+    return total;
+}
+
+// ========== Decode (with GPT-2 byte encoding fix) ==========
+
+int wubu_tokenizer_decode(wubu_tokenizer_t *tok,
+                          const int *input_ids,
+                          int n_ids,
+                          char *output_text,
+                          int max_output_chars) {
+    if (!input_ids || !output_text || max_output_chars <= 0) return -1;
+    
+    int total = 0;
+    for (int i = 0; i < n_ids && total < max_output_chars - 1; i++) {
+        int id = input_ids[i];
+        if (id >= 0 && id < tok->vocab_size) {
+            const uint8_t *bytes = (const uint8_t *)tok->vocab[id].bytes;
+            int blen = tok->vocab[id].byte_len;
+            for (int j = 0; j < blen && total < max_output_chars - 1; j++) {
+                uint8_t b = bytes[j];
+                // GPT-2 byte encoding: U+0100..U+01FF as 2-byte UTF-8 (0xC4-0xC7, 0x80-0xBF)
+                if ((b >= 0xC4 && b <= 0xC7) && (j + 1 < blen)) {
+                    uint8_t b2 = bytes[j + 1];
+                    if (b2 >= 0x80 && b2 <= 0xBF) {
+                        output_text[total++] = (char)((uint8_t)(((b & 0x03) << 6) | (b2 & 0x3F)));
+                        j++;
+                        continue;
+                    }
+                }
+                output_text[total++] = (char)b;
+            }
+        }
+    }
+    output_text[total] = '\0';
+    return total;
+}
+
+// ========== Python bridge (fallback) ==========
+
+int wubu_tokenizer_encode_python(wubu_tokenizer_t *tok,
+                                 const char *text,
+                                 int *output_ids,
+                                 int max_output_ids) {
+    char script_path[] = "/tmp/wubu_tokenize_XXXXXX";
+    int fd = mkstemp(script_path);
+    if (fd < 0) return -1;
+    
+    char script[66000];
+    int slen = snprintf(script, sizeof(script),
+        "import sys, json\n"
+        "from transformers import AutoTokenizer\n"
+        "t = AutoTokenizer.from_pretrained('Qwen/Qwen3.6-35B-A3B', trust_remote_code=True)\n"
+        "text = sys.argv[1]\n"
+        "ids = t.encode(text)\n"
+        "print(' '.join(str(i) for i in ids))\n");
+    write(fd, script, slen);
+    close(fd);
+    
+    char cmd[66000];
+    snprintf(cmd, sizeof(cmd), "python3 %s ", script_path);
+    int clen = (int)strlen(cmd);
+    cmd[clen++] = '\'';
+    for (int i = 0; text[i] && clen < (int)sizeof(cmd) - 10; i++) {
+        if (text[i] == '\'') { cmd[clen++] = '\''; cmd[clen++] = '\\'; cmd[clen++] = '\''; cmd[clen++] = '\''; }
+        else cmd[clen++] = text[i];
+    }
+    cmd[clen++] = '\''; cmd[clen] = '\0';
+    
+    FILE *pipe = popen(cmd, "r");
+    unlink(script_path);
+    if (!pipe) return -1;
+    
+    char result[65536];
+    if (!fgets(result, sizeof(result), pipe)) { pclose(pipe); return -1; }
+    pclose(pipe);
+    
+    int n = 0;
+    char *token = strtok(result, " \n");
+    while (token && n < max_output_ids) {
+        output_ids[n++] = atoi(token);
+        token = strtok(NULL, " \n");
+    }
+    return n;
+}

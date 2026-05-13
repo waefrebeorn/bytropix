@@ -740,8 +740,7 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
 // IQ2 block sizes (used in gguf_read_tensor_f32) — verified from GGUF data offsets
 // block_iq2_xxs: 66 bytes per 256 elements = 2.0625 bpw
 #define IQ2_XXS_BLOCK_SIZE 66
-// block_iq2_s: 98 bytes per 256 elements = 3.0625 bpw
-#define IQ2_S_BLOCK_SIZE 98
+#define IQ2_S_BLOCK_SIZE 114
 
 void dequantize_q6_K_row(const uint8_t *data, float *output, int64_t n_elems) {
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
@@ -916,7 +915,22 @@ void gguf_close(gguf_ctx *ctx) {
 // Q4_K block: d(fp16,2) + dmin(fp16,2) + scales[12] + qh[32] + qs[128] = 176 bytes per 256 elements
 #define Q4_K_BLOCK_SIZE 176
 
+static inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t *d, uint8_t *m) {
+    // From llama.cpp ggml-quants.c
+    if (j < 4) {
+        *d = q[j] & 63; *m = q[j + 4] & 63;
+    } else {
+        *d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
+        *m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4);
+    }
+}
+
 static void dequantize_q4_K_row(const uint8_t *data, float *output, int64_t n_elems) {
+    // Reference: llama.cpp ggml-quants.c dequantize_row_q4_K()
+    // block_q4_K: d(fp16,2) + dmin(fp16,2) + scales[12] + qh[32] + qs[128] = 176 bytes
+    // Uses get_scale_min_k4 for scale/min extraction
+    // qs stores 256 4-bit values: qs[l] = 2 nibbles, each 0..15
+    // Output: d * sc * q - min * m  (UNSIGNED q, NOT signed q-8!)
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
     for (int64_t b = 0; b < n_blocks; b++) {
         const uint8_t *block = data + b * Q4_K_BLOCK_SIZE;
@@ -925,38 +939,26 @@ static void dequantize_q4_K_row(const uint8_t *data, float *output, int64_t n_el
         memcpy(&dmin_bits, block + 2, 2);
         float d = f16_to_f32(d_bits);
         float dmin = f16_to_f32(dmin_bits);
-        const uint8_t *scales = block + 4;      // 12 bytes (6-bit values packed)
-        const uint8_t *qh = block + 16;         // 32 bytes (high bits for 256 values)
-        const uint8_t *qs = block + 48;         // 128 bytes (4-bit nibbles)
-
-        for (int j = 0; j < QK_K/32; j++) {
-            // Each group of 32 elements shares a scale and min
-            // scales[12] packs 32 6-bit values into 24 bytes? 
-            // Actually scales layout: 12 bytes = 96 bits = 32*3 bits? No.
-            // Q4_K uses 12 bytes for scales: 8 groups of 4 elements, each scale is 6 bits
-            // 6*32=192 bits = 24 bytes... but we have 12. 
-            // The format: scales[12] + qh[32] stores 32 6-bit scales.
-            // Each byte in scales holds 2 4-bit parts.
-            // qh provides 2 more bits per scale (from each of 32 bytes).
-            // So: scale = (scales[i/2] >> ((i%2)*4)) & 0xF | ((qh[i/2] >> ((i%2)*4)) & 0xF) << 4
-            // which gives 8-bit scale. But it's 6-bit: only 6 bits used.
-            // Actually simpler: just read scales directly.
+        
+        const uint8_t *scales = block + 4;  // 12 bytes
+        
+        int is = 0;
+        for (int j = 0; j < QK_K; j += 64) {
+            uint8_t sc, m;
+            get_scale_min_k4(is + 0, scales, &sc, &m);
+            float d1 = d * sc; float m1 = dmin * m;
+            get_scale_min_k4(is + 1, scales, &sc, &m);
+            float d2 = d * sc; float m2 = dmin * m;
             
-            // Simplified: each group of 32 has a scale derived from the packed bytes
-            int sc_byte = j / 2;  // 2 scales per byte
-            int sc_shift = (j % 2) * 4;
-            uint8_t sc_low = (scales[sc_byte] >> sc_shift) & 0xF;
-            uint8_t sc_high = (qh[j] & 0x0F);  // low 4 bits of qh byte per group
-            int16_t sc = (int16_t)(sc_low | (sc_high << 4));
+            // qs at block+48, offset by j/2 bytes per 64-element chunk
+            const uint8_t *bq = block + 48 + j/2;
+            int base = b * QK_K + j;
+            for (int l = 0; l < 32 && (base + l) < n_elems; l++)
+                output[base + l] = d1 * (bq[l] & 0xF) - m1;
+            for (int l = 0; l < 32 && (base + 32 + l) < n_elems; l++)
+                output[base + 32 + l] = d2 * (bq[l] >> 4) - m2;
             
-            float d_sc = d * sc;
-            
-            for (int i = 0; i < 32; i++) {
-                int pos = b * QK_K + j * 32 + i;
-                if (pos >= n_elems) break;
-                uint8_t q = (qs[j * 32 + i / 2] >> ((i % 2) * 4)) & 0xF;
-                output[pos] = d_sc * (int8_t)(q - 8);
-            }
+            is += 2;
         }
     }
 }
@@ -1055,30 +1057,41 @@ static const uint8_t ksigns_iq2xs[128] = {
 #define IQ2_XXS_BLOCK_SIZE 66
 
 void dequantize_iq2_xxs_row(const uint8_t *data, float *output, int64_t n_elems) {
+    // Reference: llama.cpp ggml-quants.c dequantize_row_iq2_xxs()
+    // Grid values in iq2xxs_grid are absolute magnitudes (0x08=8, 0x19=25, 0x2b=43)
+    // Signs come from ksigns_iq2xs table, NOT from (grid_value - 8)
+    // CRITICAL FIX: raw grid[j] * sign, NOT (grid[j]-8).
+    static const uint8_t kmask_iq2xs[8] = {1, 2, 4, 8, 16, 32, 64, 128};
+    static const uint8_t ksigns_iq2xs[128] = {
+          0, 129, 130,   3, 132,   5,   6, 135, 136,   9,  10, 139,  12, 141, 142,  15,
+        144,  17,  18, 147,  20, 149, 150,  23,  24, 153, 154,  27, 156,  29,  30, 159,
+        160,  33,  34, 163,  36, 165, 166,  39,  40, 169, 170,  43, 172,  45,  46, 175,
+         48, 177, 178,  51, 180,  53,  54, 183, 184,  57,  58, 187,  60, 189, 190,  63,
+        192,  65,  66, 195,  68, 197, 198,  71,  72, 201, 202,  75, 204,  77,  78, 207,
+         80, 209, 210,  83, 212,  85,  86, 215, 216,  89,  90, 219,  92, 221, 222,  95,
+         96, 225, 226,  99, 228, 101, 102, 231, 232, 105, 106, 235, 108, 237, 238, 111,
+        240, 113, 114, 243, 116, 245, 246, 119, 120, 249, 250, 123, 252, 125, 126, 255,
+    };
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+    uint32_t aux32[2];
+    const uint8_t *aux8 = (const uint8_t *)aux32;
     for (int64_t b = 0; b < n_blocks; b++) {
         const uint8_t *block = data + b * IQ2_XXS_BLOCK_SIZE;
-        // d is fp16 at bytes 0-1
         uint16_t d_bits;
         memcpy(&d_bits, block, 2);
         float d = f16_to_f32(d_bits);
-        // qs starts at byte 2, is uint16_t[32] = 64 bytes
         const uint16_t *qs16 = (const uint16_t *)(block + 2);
-        
-        uint32_t aux32[2];
-        const uint8_t *aux8 = (const uint8_t *)aux32;
-        
         for (int ib32 = 0; ib32 < QK_K/32; ib32++) {
-            // Read 2 uint32_t (8 bytes) from qs for this group
             memcpy(aux32, qs16 + 4*ib32, 2*sizeof(uint32_t));
-            // Scale from top 4 bits of aux32[1]
             float db = d * (0.5f + (float)(aux32[1] >> 28)) * 0.25f;
             for (int l = 0; l < 4; l++) {
                 const uint8_t *grid = (const uint8_t *)(&iq2xxs_grid[aux8[l]]);
-                const uint8_t signs = ksigns_iq2xs[(aux32[1] >> (7*l)) & 127];
+                uint8_t signs = ksigns_iq2xs[(aux32[1] >> (7*l)) & 127];
                 int64_t base = b * QK_K + ib32 * 32 + l * 8;
-                for (int j = 0; j < 8 && (base + j) < n_elems; j++) {
-                    float val = db * (float)((int8_t)grid[j] - 8);
+                for (int j = 0; j < 8; j++) {
+                    if (base + j >= n_elems) break;
+                    // FIXED: grid[j] is absolute magnitude, NOT offset from 8
+                    float val = db * (float)grid[j];
                     if (signs & kmask_iq2xs[j]) {
                         output[base + j] = -val;
                     } else {
@@ -1090,64 +1103,62 @@ void dequantize_iq2_xxs_row(const uint8_t *data, float *output, int64_t n_elems)
     }
 }
 
-// ========== IQ2_S Dequantization ==========
+// ========== IQ2_S Dequantization (llama.cpp reference) ==========
 
-// block_iq2_s: d(fp16,2) + qs[64] + qh[32] + scales[32] + d2(fp16,2) = 132 bytes per 256 elements
-#define IQ2_S_BLOCK_SIZE 132
-
+// block_iq2_s: d(fp16,2) + qs[64] + qh[32] + scales[16] = 114 bytes per 256 elements
+// From ggml-common.h: grid of 1024 uint64, each packing 8 int8 values
+static uint64_t iq2s_grid[1024] = {
+#include "iq2s_grid.inc"
+};
 void dequantize_iq2_s_row(const uint8_t *data, float *output, int64_t n_elems) {
+    // Reference: llama.cpp ggml-quants.c dequantize_row_iq2_s()
+    // block_iq2_s layout:
+    //   d (fp16, 2 bytes)
+    //   qs (64 bytes): first 32 bytes = 2-bit grid indices (4 per byte), 
+    //                   last 32 bytes = sign bits (8 per byte)
+    //   qh (32 bytes): high 2 bits for 10-bit grid index
+    //   scales (16 bytes): 2 × 4-bit scales per ib32 group
+    // Total: 2 + 64 + 32 + 16 = 114 bytes
+    
+    static const uint8_t kmask_iq2xs[8] = {1, 2, 4, 8, 16, 32, 64, 128};
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+    
     for (int64_t b = 0; b < n_blocks; b++) {
         const uint8_t *block = data + b * IQ2_S_BLOCK_SIZE;
+        
         uint16_t d_bits;
         memcpy(&d_bits, block, 2);
         float d = f16_to_f32(d_bits);
-        uint16_t d2_bits;
-        memcpy(&d2_bits, block + 130, 2);
-        float d2 = f16_to_f32(d2_bits);
         
-        const uint8_t *qs = block + 2;       // 64 bytes
-        const uint8_t *qh = block + 66;      // 32 bytes
-        const uint8_t *scales = block + 98;  // 32 bytes (8-bit scales)
+        const uint8_t *qs = block + 2;        // 64 bytes
+        const uint8_t *qh = block + 66;       // 32 bytes
+        const uint8_t *scales = block + 98;   // 16 bytes
+        const uint8_t *signs = qs + 32;       // last 32 bytes of qs
         
-        for (int i = 0; i < QK_K/32; i++) {
-            // IQ2_S uses 8-bit scales, two scales per 32-element group
-            float s1 = (float)(int8_t)scales[i*2] + 0.5f;
-            float s2 = (float)(int8_t)scales[i*2+1] + 0.5f;
-            float dl1 = d * s1;
-            float dl2 = d2 * s2;
+        float *y = output + b * QK_K;
+        
+        for (int ib32 = 0; ib32 < QK_K/32; ib32++) {
+            float db[2];
+            db[0] = d * (0.5f + (float)(scales[ib32] & 0x0F)) * 0.25f;
+            db[1] = d * (0.5f + (float)(scales[ib32] >>   4)) * 0.25f;
             
             for (int l = 0; l < 4; l++) {
-                int byte_idx = i * 8 + l;
-                if (byte_idx >= 64) break;
-                uint8_t q_byte = qs[byte_idx];
+                float dl = db[l/2];
                 
-                uint8_t v0 = (q_byte >> 0) & 3;
-                uint8_t v1 = (q_byte >> 2) & 3;
-                uint8_t v2 = (q_byte >> 4) & 3;
-                uint8_t v3 = (q_byte >> 6) & 3;
+                // Grid index: qs[l] (8 low bits) | qh[ib32] (2 high bits << (8-2*l))
+                uint16_t grid_idx = qs[l] | ((qh[ib32] << (8 - 2*l)) & 0x300);
                 
-                // qh provides extra bits for each value
-                // For IQ2_S: qh stores 2 extra bits per element pair
-                uint16_t h_pair;
-                memcpy(&h_pair, qh + i*4 + l*2, 2);  // 2 bytes = 16 bits for 8 elements (2 bits each)
+                const int8_t *grid = (const int8_t *)(&iq2s_grid[grid_idx]);
                 
-                uint8_t h0 = (h_pair >> 0) & 3;
-                uint8_t h1 = (h_pair >> 2) & 3;
-                uint8_t h2 = (h_pair >> 4) & 3;
-                uint8_t h3 = (h_pair >> 6) & 3;
-                
-                uint8_t g0 = v0 | (h0 << 2);
-                uint8_t g1 = v1 | (h1 << 2);
-                uint8_t g2 = v2 | (h2 << 2);
-                uint8_t g3 = v3 | (h3 << 2);
-                
-                int base_idx = b * QK_K + i * 32 + l * 4;
-                if (base_idx < n_elems) output[base_idx + 0] = dl1 * (float)(g0 - 8);
-                if (base_idx+1 < n_elems) output[base_idx + 1] = dl1 * (float)(g1 - 8);
-                if (base_idx+2 < n_elems) output[base_idx + 2] = dl2 * (float)(g2 - 8);
-                if (base_idx+3 < n_elems) output[base_idx + 3] = dl2 * (float)(g3 - 8);
+                for (int j = 0; j < 8; j++) {
+                    float val = dl * (float)grid[j];
+                    if (signs[l] & kmask_iq2xs[j]) val = -val;
+                    y[j] = val;
+                }
+                y += 8;
             }
+            qs += 4;
+            signs += 4;
         }
     }
 }

@@ -51,6 +51,7 @@ int main(int argc, char **argv) {
     printf("========================================================\n");
     printf("  Model: %s\n", model_path);
     printf("  Corpus: %s\n", corpus_path);
+    fflush(stdout);
 
     // ===== Load tokenizer =====
     printf("\n--- Loading tokenizer ---\n");
@@ -177,27 +178,44 @@ int main(int argc, char **argv) {
         float loss = 0.0f;
 
         // Project to vocab space if output_weight loaded
-        // logits[0:N, :] = hidden[N, D_MODEL] @ output_weight[D_MODEL, VOCAB]
+        // Project to vocab space and compute CE loss
         if (output_weight) {
-            // Project hidden state to vocab space: hidden[N, D] @ output_weight[D, V] -> probs[N, V]
+            float total_loss_val = 0.0f;
             for (int i = 0; i < N; i++) {
-                double max_v = -1e30;
+                const float *h = logits + i * D_MODEL;
+                int target = targets[i];
+                
+                // Compute all 248K vocab logits in streaming fashion
+                // hidden[D] @ output_weight[D, V] = logits[V]
+                double max_l = -1e30;
+                double target_logit = 0.0;
+                
                 for (int j = 0; j < tok.vocab_size; j++) {
                     double sum = 0.0;
-                    for (int k = 0; k < D_MODEL; k++) {
-                        sum += (double)logits[i * D_MODEL + k] * (double)output_weight[j * D_MODEL + k];
-                    }
-                    // We can't store all vocab logits (248K * 4 floats ~= 4GB per batch)
-                    // Instead, compute CE loss directly
-                    float v = (float)sum;
-                    if (v > max_v) max_v = v;
+                    for (int k = 0; k < D_MODEL; k++)
+                        sum += (double)h[k] * (double)output_weight[j * D_MODEL + k];
+                    if (j == target) target_logit = sum;
+                    if (sum > max_l) max_l = sum;
                 }
+                
+                // log-sum-exp = max_l + log(sum(exp(logits - max_l)))
+                double sum_exp = 0.0;
+                for (int j = 0; j < tok.vocab_size; j++) {
+                    double sum = 0.0;
+                    for (int k = 0; k < D_MODEL; k++)
+                        sum += (double)h[k] * (double)output_weight[j * D_MODEL + k];
+                    sum_exp += exp(sum - max_l);
+                }
+                double log_sum_exp = max_l + log(sum_exp);
+                
+                // CE = -(target_logit - log_sum_exp)
+                double ce = -(target_logit - log_sum_exp);
+                total_loss_val += (float)ce;
             }
-            // NOTE: Full 248K-vocab CE computation requires streaming projection
-            // For now, just note the output weight is loaded
-            printf("  output.weight loaded (%d elems got from Q4_K dequant)\n", tok.vocab_size * D_MODEL);
+            loss = total_loss_val / N;
+            printf("  CE loss: %.4f\n", loss);
         }
-
+        
         // Log first few logit values
         if (run == 0) {
             printf("  Logits[0:8] for token 0:");
