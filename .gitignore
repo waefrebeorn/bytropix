@@ -32,6 +32,9 @@ test_tok
 data/vocab.bin
 data/merges.bin
 data/special_tokens.bin
+data/*.bin
+data/*.gz
+data/*.jsonl
 
 # Python cache
 __pycache__/
