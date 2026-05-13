@@ -1,0 +1,141 @@
+=== ARCHITECTURE SECTION ===
+
+
+The Qwen3 series includes 6 dense models, namely Qwen3-0.6B, Qwen3-1.7B, Qwen3-4B, Qwen3-8B,
+Qwen3-14B, and Qwen3-32B, and 2 MoE models, Qwen3-30B-A3B and Qwen3-235B-A22B. The flagship
+model, Qwen3-235B-A22B, has a total of 235B parameters with 22B activated ones. Below, we elaborate
+on the architecture of the Qwen3 models.
+The architecture of the Qwen3 dense models is similar to Qwen2.5 (Yang et al., 2024b), including using
+Grouped Query Attention (GQA, Ainslie et al., 2023), SwiGLU (Dauphin et al., 2017), Rotary Positional
+Embeddings (RoPE, Su et al., 2024), and RMSNorm (Jiang et al., 2023) with pre-normalization. Besides,
+we remove QKV-bias used in Qwen2 (Yang et al., 2024a) and introduce QK-Norm (Dehghani et al., 2023)
+to the attention mechanism to ensure stable training for Qwen3. Key information on model architecture
+is provided in Table 1.
+The Qwen3 MoE models share the same fundamental architecture as the Qwen3 dense models. Key
+information on model architecture is provided in Table 2. We follow Qwen2.5-MoE (Yang et al., 2024b)
+and implement fine-grained expert segmentation (Dai et al., 2024). The Qwen3 MoE models have 128 total
+experts with 8 activated experts per token. Unlike Qwen2.5-MoE, the Qwen3-MoE design excludes shared
+experts. Furthermore, we adopt the global-batch load balancing loss (Qiu et al., 2025) to encourage expert
+specialization. These architectural and training innovations have yielded substantial improvements in
+model performance across downstream tasks.
+Qwen3 models utilize Qwen’s tokenizer (Bai et al., 2023), which implements byte-level byte-pair encoding
+(BBPE, Brown et al., 2020; Wang et al., 2020; Sennrich et al., 2016) with a vocabulary size of 151,669.
+Table 1: Model architecture of Qwen3 dense models.
+Models
+
+Layers
+
+Heads (Q / KV)
+
+Tie Embedding
+
+Context Length
+
+28
+28
+36
+36
+40
+64
+
+16 / 8
+16 / 8
+32 / 8
+32 / 8
+40 / 8
+64 / 8
+
+Yes
+Yes
+Yes
+No
+No
+No
+
+32K
+32K
+128K
+128K
+128K
+128K
+
+Qwen3-0.6B
+Qwen3-1.7B
+Qwen3-4B
+Qwen3-8B
+Qwen3-14B
+Qwen
+
+=== tokenizer at 10116 ===
+ substantial improvements in
+model performance across downstream tasks.
+Qwen3 models utilize Qwen’s tokenizer (Bai et al., 2023), which implements byte-level byte-pair encoding
+(BBPE, Brown et al., 2020; Wang et al., 2020; Sennrich et al., 2016) with a vocabulary size of 151,669.
+Table 1: Model architecture of Qwen3 dense models.
+Models
+
+Layers
+
+Heads (Q / KV)
+
+Tie Embedding
+
+Context Length
+
+28
+28
+
+=== embedding at 9111 ===
+ouped Query Attention (GQA, Ainslie et al., 2023), SwiGLU (Dauphin et al., 2017), Rotary Positional
+Embeddings (RoPE, Su et al., 2024), and RMSNorm (Jiang et al., 2023) with pre-normalization. Besides,
+we remove QKV-bias used in Qwen2 (Yang et al., 2024a) and introduce QK-Norm (Dehghani et al., 2023)
+to the attention mechanism to ensure stable training for Qwen3. Key information on model architect
+
+=== vocab at 10269 ===
+evel byte-pair encoding
+(BBPE, Brown et al., 2020; Wang et al., 2020; Sennrich et al., 2016) with a vocabulary size of 151,669.
+Table 1: Model architecture of Qwen3 dense models.
+Models
+
+Layers
+
+Heads (Q / KV)
+
+Tie Embedding
+
+Context Length
+
+28
+28
+36
+36
+40
+64
+
+16 / 8
+16 / 8
+32 / 8
+32 / 8
+40 / 8
+64 / 8
+
+Yes
+Yes
+Yes
+No
+No
+No
+
+32K
+32K
+128K
+128K
+128K
+128K
+
+Qwen3-0.6B
+Qwen3-1.7B
+Qwen3-4B
+Qwen3-8B
+Qwen3
+
