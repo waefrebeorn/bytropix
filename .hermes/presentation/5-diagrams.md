@@ -8,7 +8,7 @@
 
 **File:** `../../DIAGRAMS/phase-roadmap.svg`
 
-Six-phase project roadmap (May 2026) showing the WuBuText AI buildout from embedding graft through CUDA optimization. Phases 1 (Embedding Graft) and 2 (Attention Port) are complete ✓; Phase 3 (Training Loop) is active; Phases 4–6 (MoE Port, Vision Port, CUDA Optimization) are planned. Includes key metrics GGUF reader statistics, 9.53 tok/s GPU throughput, and the Token-Superposition Training (TST) setup.
+Six-phase project roadmap (May 2026) showing the WuBuText AI buildout from embedding graft through CUDA optimization. Phases 1 (Embedding Graft) and 2 (Attention Port — CPU) are done ✓; Phase 3 (Training Loop) is active; Phases 4–6 planned. ⚠️ DA Audit May 13: GPU forward path produces zeros — old "9.53 tok/s" claim was false positive. CPU forward verified at CE 12.66. GPU weight loading bug (bench.c) is P0 fix. See devils_advocate_v3.md for full audit.
 
 ---
 
@@ -16,7 +16,7 @@ Six-phase project roadmap (May 2026) showing the WuBuText AI buildout from embed
 
 **File:** `../../DIAGRAMS/gguf-rip-pipeline.svg`
 
-End-to-end pipeline extracting Qwen3.6-35B-A3B weights from llama.cpp GGUF format into WuBu hyperbolic embeddings. Tracks the flow from GGUF tensor parsing → weight extraction (SSM/GQA layers) + embedding dequantization → Poincaré ball mapping (R=0.956) → quality verification (95% NN preservation). Culminates in the 40-layer model assembly with CUDA-verified 9.53 tok/s throughput.
+End-to-end pipeline extracting Qwen3.6-35B-A3B weights from llama.cpp GGUF format into WuBu hyperbolic embeddings. Tracks the flow from GGUF tensor parsing → weight extraction (SSM/GQA layers) + embedding dequantization → Poincaré ball mapping (R=0.956) → quality verification (95% NN preservation). Culminates in the 40-layer model assembly — CPU forward verified (CE 12.66), GPU forward ⛔ blocked by weight loading bug (DA Audit May 13).
 
 ---
 
