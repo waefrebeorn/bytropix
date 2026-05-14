@@ -222,7 +222,8 @@ void wubu_cuda_poincare_recurrence(cublasHandle_t handle, cudaStream_t stream,
     float *d_h_states,
     const float *d_q_norm, const float *d_k_norm, const float *d_v_conv,
     const float *d_gate, const float *d_beta,
-    float *d_delta_out);
+    float *d_delta_out,
+    float *d_states_t);
 
 // ================================================================
 // CUDA context management

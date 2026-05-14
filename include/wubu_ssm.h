@@ -182,6 +182,23 @@ void wubu_poincare_gqa_forward(const float *x, int B, int T,
                                float R,
                                float *output);
 
+// Poincaré SSM backward pass (gyration chain rule)
+// Uses saved state trajectory from gpu_poincare_ssm_forward_save
+void wubu_poincare_ssm_backward(int B, int T, float R,
+    const float *normed, const float *attn_out, const float *d_attn_out,
+    const ssm_layer_weights *w,
+    const float *d_qkv, const float *d_z, const float *d_beta_r,
+    const float *d_alpha_r, const float *d_conv, const float *d_q_c,
+    const float *d_k_c, const float *d_v_c, const float *d_q_n,
+    const float *d_k_n, const float *d_delta, const float *d_z_s,
+    const float *d_states_t, const float *d_beta_s, const float *d_gate,
+    const float *d_conv_s,
+    float *d_normed,
+    float *d_qkv_weight, float *d_gate_weight,
+    float *d_beta_weight, float *d_alpha_weight,
+    float *d_conv1d_weight, float *d_ssm_out_weight,
+    float *d_ssm_norm_weight, float *d_state_init_grad);
+
 // Utility functions
 int wubu_is_ssm_layer(int layer_idx);
 void wubu_softplus(int n, const float *x, float *out);

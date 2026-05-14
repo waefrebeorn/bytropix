@@ -226,6 +226,40 @@ void gpu_poincare_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
                      float *d_z_silu,
                      float R);
 
+// GPU Poincaré SSM forward — save variant (captures state trajectory)
+void gpu_poincare_ssm_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
+                     const float *d_x, int B, int T,
+                     const float *d_attn_qkv,
+                     const float *d_attn_gate,
+                     const float *d_ssm_beta,
+                     const float *d_ssm_alpha,
+                     const float *d_ssm_dt_bias,
+                     const float *d_ssm_a,
+                     const float *d_ssm_conv1d,
+                     const float *d_ssm_norm,
+                     const float *d_ssm_out,
+                     float *d_ssm_state,
+                     float *d_conv_state,
+                     float *d_output,
+                     float *d_qkv,
+                     float *d_z,
+                     float *d_beta,
+                     float *d_alpha,
+                     float *d_beta_sig,
+                     float *d_alpha_bi,
+                     float *d_gate,
+                     float *d_conv_input,
+                     float *d_conv_out,
+                     float *d_q_conv,
+                     float *d_k_conv,
+                     float *d_v_conv,
+                     float *d_q_norm,
+                     float *d_k_norm,
+                     float *d_delta_out,
+                     float *d_z_silu,
+                     float R,
+                     float *d_states_t);
+
 #ifdef __cplusplus
 }
 #endif
