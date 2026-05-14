@@ -652,7 +652,8 @@ gguf_ctx* gguf_open(const char *path) {
     long pad = (ctx->alignment - (data_start % ctx->alignment)) % ctx->alignment;
     ctx->data_blob_offset = data_start + pad;
     
-    fprintf(stderr, "Data blob at offset %lu\n", ctx->data_blob_offset);
+    fprintf(stderr, "Tensor info end at offset %ld, aligned to %lu (pad=%ld, alignment=%ld)\n", 
+            data_start, ctx->data_blob_offset, pad, ctx->alignment);
     
     return ctx;
 }
@@ -740,7 +741,11 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
 // IQ2 block sizes (used in gguf_read_tensor_f32) — verified from GGUF data offsets
 // block_iq2_xxs: 66 bytes per 256 elements = 2.0625 bpw
 #define IQ2_XXS_BLOCK_SIZE 66
-#define IQ2_S_BLOCK_SIZE 114
+#define IQ2_S_BLOCK_SIZE 82
+#define IQ3_XXS_BLOCK_SIZE 98  // d(fp16,2) + qs[96] = 98 bytes
+
+// Forward declarations for dequant functions defined after gguf_read_tensor_f32
+void dequantize_iq3_xxs_row(const uint8_t *data, float *output, int64_t n_elems);
 
 void dequantize_q6_K_row(const uint8_t *data, float *output, int64_t n_elems) {
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
@@ -844,6 +849,25 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         free(raw);
         return (int)n_elems;
     }
+    else if (tensor->ggml_type == GGML_TYPE_Q8_0) {
+        // Q8_0 dequantization (8.5 bpw, 32 elements per block)
+        int64_t q8_blocks = (n_elems + 31) / 32;
+        size_t raw_size = q8_blocks * 34;  // d(fp16,2) + qs[32] = 34 bytes
+        uint8_t *raw = malloc(raw_size);
+        if (!raw) return 0;
+        size_t n_read = fread(raw, 1, raw_size, ctx->file);
+        if (n_read != raw_size) { free(raw); return 0; }
+        for (int64_t b = 0; b < q8_blocks; b++) {
+            uint16_t d_bits;
+            memcpy(&d_bits, raw + b * 34, 2);
+            float d = f16_to_f32(d_bits);
+            const int8_t *qs = (const int8_t *)(raw + b * 34 + 2);
+            for (int j = 0; j < 32 && b * 32 + j < n_elems; j++)
+                output[b * 32 + j] = d * (float)qs[j];
+        }
+        free(raw);
+        return (int)n_elems;
+    }
     else if (tensor->ggml_type == GGML_TYPE_IQ1_S) {
         // IQ1_S dequantization (1.5625 bpw)
         int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
@@ -895,6 +919,18 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         size_t n_read = fread(raw, 1, raw_size, ctx->file);
         if (n_read != raw_size) { free(raw); return 0; }
         dequantize_iq2_s_row(raw, output, n_elems);
+        free(raw);
+        return (int)n_elems;
+    }
+    else if (tensor->ggml_type == GGML_TYPE_IQ3_XXS) {
+        // IQ3_XXS dequantization (3.0625 bpw)
+        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+        size_t raw_size = n_blocks * IQ3_XXS_BLOCK_SIZE;
+        uint8_t *raw = malloc(raw_size);
+        if (!raw) return 0;
+        size_t n_read = fread(raw, 1, raw_size, ctx->file);
+        if (n_read != raw_size) { free(raw); return 0; }
+        dequantize_iq3_xxs_row(raw, output, n_elems);
         free(raw);
         return (int)n_elems;
     }
@@ -1105,7 +1141,7 @@ void dequantize_iq2_xxs_row(const uint8_t *data, float *output, int64_t n_elems)
 
 // ========== IQ2_S Dequantization (llama.cpp reference) ==========
 
-// block_iq2_s: d(fp16,2) + qs[64] + qh[32] + scales[16] = 114 bytes per 256 elements
+// block_iq2_s: d(fp16,2) + qs[64] + qh[8] + scales[8] = 82 bytes per 256 elements
 // From ggml-common.h: grid of 1024 uint64, each packing 8 int8 values
 static uint64_t iq2s_grid[1024] = {
 #include "iq2s_grid.inc"
@@ -1116,9 +1152,9 @@ void dequantize_iq2_s_row(const uint8_t *data, float *output, int64_t n_elems) {
     //   d (fp16, 2 bytes)
     //   qs (64 bytes): first 32 bytes = 2-bit grid indices (4 per byte), 
     //                   last 32 bytes = sign bits (8 per byte)
-    //   qh (32 bytes): high 2 bits for 10-bit grid index
-    //   scales (16 bytes): 2 × 4-bit scales per ib32 group
-    // Total: 2 + 64 + 32 + 16 = 114 bytes
+    //   qh (8 bytes): high 2 bits for 10-bit grid index
+    //   scales (8 bytes): 2 × 4-bit scales per ib32 group
+    // Total: 2 + 64 + 8 + 8 = 82 bytes
     
     static const uint8_t kmask_iq2xs[8] = {1, 2, 4, 8, 16, 32, 64, 128};
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
@@ -1131,8 +1167,8 @@ void dequantize_iq2_s_row(const uint8_t *data, float *output, int64_t n_elems) {
         float d = f16_to_f32(d_bits);
         
         const uint8_t *qs = block + 2;        // 64 bytes
-        const uint8_t *qh = block + 66;       // 32 bytes
-        const uint8_t *scales = block + 98;   // 16 bytes
+        const uint8_t *qh = block + 66;       // 8 bytes
+        const uint8_t *scales = block + 74;   // 8 bytes
         const uint8_t *signs = qs + 32;       // last 32 bytes of qs
         
         float *y = output + b * QK_K;
@@ -1159,6 +1195,65 @@ void dequantize_iq2_s_row(const uint8_t *data, float *output, int64_t n_elems) {
             }
             qs += 4;
             signs += 4;
+        }
+    }
+}
+
+// ========== IQ3_XXS Dequantization (3.0625 bpw, reference llama.cpp) ==========
+
+// iq3xxs_grid: 256 entries, each uint32 packs 4 int8 values
+static const uint32_t iq3xxs_grid[256] = {
+#include "iq3xxs_grid.inc"
+};
+
+void dequantize_iq3_xxs_row(const uint8_t *data, float *output, int64_t n_elems) {
+    // Reference: llama.cpp ggml-quants.c dequantize_row_iq3_xxs()
+    // block_iq3_xxs: d(fp16,2) + qs[64] + scales_and_signs[32] = 98 bytes
+    //   qs: 64 bytes = 64 × 8-bit grid indices (stored as full bytes)
+    //   scales_and_signs: 32 bytes = 8 × uint32, each:
+    //     upper 4 bits: scale nibble, db = d*(0.5+scale)*0.5
+    //     lower 28 bits: 4 × 7-bit sign indices → ksigns_iq2xs
+    
+    static const uint8_t kmask_iq2xs[8] = {1, 2, 4, 8, 16, 32, 64, 128};
+    
+    int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+    
+    for (int64_t b = 0; b < n_blocks; b++) {
+        const uint8_t *block = data + b * IQ3_XXS_BLOCK_SIZE;
+        
+        uint16_t d_bits;
+        memcpy(&d_bits, block, 2);
+        float d = f16_to_f32(d_bits);
+        
+        const uint8_t *qs = block + 2;              // 64 bytes grid indices
+        const uint8_t *scales_and_signs = qs + 64;  // 32 bytes
+        
+        float *y = output + b * QK_K;
+        
+        for (int ib32 = 0; ib32 < QK_K/32; ib32++) {
+            uint32_t aux32;
+            memcpy(&aux32, scales_and_signs + 4*ib32, 4);
+            float db = d * (0.5f + (float)(aux32 >> 28)) * 0.5f;
+            
+            for (int l = 0; l < 4; l++) {
+                uint8_t signs = ksigns_iq2xs[(aux32 >> (7*l)) & 127];
+                uint8_t idx1 = qs[2*l+0];
+                uint8_t idx2 = qs[2*l+1];
+                
+                const uint8_t *grid1 = (const uint8_t *)(iq3xxs_grid + idx1);
+                const uint8_t *grid2 = (const uint8_t *)(iq3xxs_grid + idx2);
+                
+                for (int j = 0; j < 4; j++) {
+                    float v1 = db * (float)(int8_t)grid1[j];
+                    float v2 = db * (float)(int8_t)grid2[j];
+                    if (signs & kmask_iq2xs[j+0]) v1 = -v1;
+                    if (signs & kmask_iq2xs[j+4]) v2 = -v2;
+                    y[j+0] = v1;
+                    y[j+4] = v2;
+                }
+                y += 8;
+            }
+            qs += 8;
         }
     }
 }

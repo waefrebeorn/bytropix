@@ -86,5 +86,14 @@ train_real: tools/train_real.c src/wubu_model.o src/wubu_ssm.o src/wubu_mobius.o
 dump_mmproj: tools/dump_mmproj.c src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+verify_iq2s: tools/verify_iq2s.c src/gguf_reader.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+verify_dequant: tools/verify_dequant.c src/gguf_reader.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+check_forward: tools/check_forward.c src/wubu_model.o src/wubu_ssm.o src/wubu_mobius.o src/gguf_reader.o src/wubu_tokenizer.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 clean:
-	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus src/*.o
+	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model src/*.o

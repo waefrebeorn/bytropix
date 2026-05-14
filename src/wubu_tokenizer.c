@@ -61,6 +61,12 @@ static uint32_t merge_hash_key(int left_id, int right_id) {
     h = (h ^ (uint32_t)((right_id >> 8) & 0xFF)) * 16777619u;
     h = (h ^ (uint32_t)((right_id >> 16) & 0xFF)) * 16777619u;
     h = (h ^ (uint32_t)((right_id >> 24) & 0xFF)) * 16777619u;
+    // MurmurHash3 finalizer — avalanches low bits for better table distribution
+    h ^= h >> 16;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16;
     return h;
 }
 
