@@ -83,6 +83,9 @@ train_real: tools/train_real.c $(MODEL_OBJ) src/wubu_tokenizer.o
 train_backprop: tools/train_backprop.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+train_gpu: tools/train_gpu.c src/bench.o $(MODEL_OBJ) $(CUDA_OBJ) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
+
 dump_mmproj: tools/dump_mmproj.c src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -112,4 +115,4 @@ train_stub_run: train_stub
 	./train_stub
 
 clean:
-	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model src/*.o
+	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu src/*.o
