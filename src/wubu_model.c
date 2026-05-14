@@ -368,6 +368,225 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     free(x);
 }
 
+// ========== Backward Pass ==========
+
+void wubu_model_backward_from_embd(
+    const wubu_model_t *model,
+    const float *embeddings,
+    const float *logits, const float *d_logits,
+    const float *saved_normed,     // [n_layers * N * D_MODEL]
+    const float *saved_attn_out,   // [n_layers * N * D_MODEL]
+    const float *saved_normed2,    // [n_layers * N * D_MODEL]
+    const float *saved_ffn_out,    // [n_layers * N * D_MODEL]
+    float *d_embeddings,
+    int B, int T)
+{
+    const int N = B * T;
+    const int n_layers = model->n_layers;
+    const int layer_sz = N * D_MODEL;
+    
+    float *d_x = (float *)malloc(N * D_MODEL * sizeof(float));
+    memcpy(d_x, d_logits, N * D_MODEL * sizeof(float));
+    
+    // Per-layer temp state buffers (reused via ssm_states/conv_states in model)
+    // For exact backward, we need to re-run the forward with save
+    
+    // Process layers in reverse
+    for (int l = n_layers - 1; l >= 0; l--) {
+        const wubu_layer_t *layer = &model->layers[l];
+        const float *normed = saved_normed + l * layer_sz;
+        const float *attn_out = saved_attn_out + l * layer_sz;
+        const float *normed2 = saved_normed2 + l * layer_sz;
+        
+        float *d_ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+        float *d_x_after_attn = (float *)malloc(N * D_MODEL * sizeof(float));
+        float *d_attn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+        memcpy(d_ffn_out, d_x, layer_sz);
+        memcpy(d_x_after_attn, d_x, layer_sz);
+        
+        // Post-attention RMSNorm backward
+        wubu_rms_norm_backward(B, T, D_MODEL, normed2, layer->post_attn_norm_weight,
+                               1e-6f, d_ffn_out, d_x_after_attn);
+        memcpy(d_attn_out, d_x_after_attn, layer_sz);
+        
+        // Layer backward — exact with saved intermediates
+        float *d_normed = (float *)calloc(N * D_MODEL, sizeof(float));
+        
+        if (layer->is_ssm) {
+            // Re-run SSM forward WITH save to capture intermediates for backward
+            ssm_fwd_save_t save;
+            memset(&save, 0, sizeof(save));
+            
+            // Allocate save buffers for one layer
+            float *ssm_state_tmp = model->ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
+            float *conv_state_tmp = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
+            
+            int state_sz = SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
+            
+            // We need a separate states_t buffer (not the in-place one)
+            float *states_t = (float *)malloc((T+1) * state_sz * sizeof(float));
+            float *qkv_all_b = (float *)malloc(N * CONV_DIM * sizeof(float));
+            float *z_all_b = (float *)malloc(N * VALUE_DIM * sizeof(float));
+            float *beta_raw_b = (float *)malloc(N * DT_RANK * sizeof(float));
+            float *alpha_raw_b = (float *)malloc(N * DT_RANK * sizeof(float));
+            float *conv_out_b = (float *)malloc(N * CONV_DIM * sizeof(float));
+            float *q_conv_b = (float *)malloc(N * KEY_DIM * sizeof(float));
+            float *k_conv_b = (float *)malloc(N * KEY_DIM * sizeof(float));
+            float *v_conv_b = (float *)malloc(N * VALUE_DIM * sizeof(float));
+            float *q_norm_b = (float *)malloc(N * KEY_DIM * sizeof(float));
+            float *k_norm_b = (float *)malloc(N * KEY_DIM * sizeof(float));
+            float *delta_out_b = (float *)malloc(N * VALUE_DIM * sizeof(float));
+            float *z_silu_b = (float *)malloc(N * VALUE_DIM * sizeof(float));
+            float *beta_flat_b = (float *)malloc(N * DT_RANK * sizeof(float));
+            float *gate_flat_b = (float *)malloc(N * DT_RANK * sizeof(float));
+            float *conv_state_copy = (float *)malloc((CONV_KERNEL-1) * CONV_DIM * sizeof(float));
+            
+            if (!states_t || !qkv_all_b || !z_all_b || !beta_raw_b || !alpha_raw_b ||
+                !conv_out_b || !q_conv_b || !k_conv_b || !v_conv_b ||
+                !q_norm_b || !k_norm_b || !delta_out_b || !z_silu_b ||
+                !beta_flat_b || !gate_flat_b || !conv_state_copy) {
+                fprintf(stderr, "model backward SSM save alloc failed\n");
+                free(states_t); free(qkv_all_b); free(z_all_b);
+                free(beta_raw_b); free(alpha_raw_b);
+                free(conv_out_b); free(q_conv_b); free(k_conv_b); free(v_conv_b);
+                free(q_norm_b); free(k_norm_b); free(delta_out_b); free(z_silu_b);
+                free(beta_flat_b); free(gate_flat_b); free(conv_state_copy);
+                free(d_ffn_out); free(d_x_after_attn); free(d_attn_out); free(d_normed);
+                free(d_x); return;
+            }
+            
+            save.states_t = states_t;
+            save.qkv_all = qkv_all_b;
+            save.z_all = z_all_b;
+            save.beta_raw = beta_raw_b;
+            save.alpha_raw = alpha_raw_b;
+            save.conv_post_silu = conv_out_b;
+            save.q_conv = q_conv_b;
+            save.k_conv = k_conv_b;
+            save.v_conv = v_conv_b;
+            save.q_norm = q_norm_b;
+            save.k_norm = k_norm_b;
+            save.delta_out = delta_out_b;
+            save.z_silu = z_silu_b;
+            save.beta_flat = beta_flat_b;
+            save.gate_flat = gate_flat_b;
+            save.conv_state_copy = conv_state_copy;
+            
+            // Save current SSM state, run save-forward, then restore
+            float *saved_ssm_state = (float *)malloc(state_sz * sizeof(float));
+            memcpy(saved_ssm_state, ssm_state_tmp, state_sz * sizeof(float));
+            
+            // Run forward with save — attn_out goes to a dummy buffer
+            float *fwd_out = (float *)malloc(N * D_MODEL * sizeof(float));
+            wubu_ssm_forward_save(normed, B, T, &layer->ssm,
+                                   ssm_state_tmp, conv_state_tmp,
+                                   fwd_out, &save);
+            
+            // Run exact backward
+            wubu_ssm_backward(B, T, normed, attn_out, d_attn_out,
+                              save.qkv_all, save.z_all,
+                              save.beta_raw, save.alpha_raw,
+                              save.conv_post_silu,
+                              save.q_conv, save.k_conv, save.v_conv,
+                              save.q_norm, save.k_norm,
+                              save.delta_out, save.z_silu,
+                              save.states_t,
+                              save.beta_flat, save.gate_flat,
+                              save.conv_state_copy,
+                              &layer->ssm,
+                              d_normed, NULL, NULL, NULL, NULL,
+                              NULL, NULL, NULL, NULL);
+            
+            // Restore SSM state
+            memcpy(ssm_state_tmp, saved_ssm_state, state_sz * sizeof(float));
+            
+            free(saved_ssm_state);
+            free(fwd_out);
+            free(states_t); free(qkv_all_b); free(z_all_b);
+            free(beta_raw_b); free(alpha_raw_b);
+            free(conv_out_b); free(q_conv_b); free(k_conv_b); free(v_conv_b);
+            free(q_norm_b); free(k_norm_b); free(delta_out_b); free(z_silu_b);
+            free(beta_flat_b); free(gate_flat_b); free(conv_state_copy);
+            
+        } else {
+            // GQA backward with saved intermediates
+            gqa_fwd_save_t save;
+            memset(&save, 0, sizeof(save));
+            
+            int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
+            int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;
+            
+            float *Q_norm_b = (float *)malloc(N * q_dim * sizeof(float));
+            float *Q_raw_b = (float *)malloc(N * q_dim * sizeof(float));
+            float *K_norm_b = (float *)malloc(N * kv_dim * sizeof(float));
+            float *K_raw_b = (float *)malloc(N * kv_dim * sizeof(float));
+            float *V_b = (float *)malloc(N * kv_dim * sizeof(float));
+            float *gate_b = (float *)malloc(N * q_dim * sizeof(float));
+            float *gate_sig_b = (float *)malloc(N * q_dim * sizeof(float));
+            float *attn_pre_gate_b = (float *)malloc(N * q_dim * sizeof(float));
+            
+            if (!Q_norm_b || !Q_raw_b || !K_norm_b || !K_raw_b || !V_b ||
+                !gate_b || !gate_sig_b || !attn_pre_gate_b) {
+                fprintf(stderr, "model backward GQA save alloc failed\n");
+                free(Q_norm_b); free(Q_raw_b); free(K_norm_b); free(K_raw_b);
+                free(V_b); free(gate_b); free(gate_sig_b); free(attn_pre_gate_b);
+                free(d_ffn_out); free(d_x_after_attn); free(d_attn_out); free(d_normed);
+                free(d_x); return;
+            }
+            
+            save.Q_norm = Q_norm_b;
+            save.Q_raw = Q_raw_b;
+            save.K_norm = K_norm_b;
+            save.K_raw = K_raw_b;
+            save.V = V_b;
+            save.gate = gate_b;
+            save.gate_sig = gate_sig_b;
+            save.attn_out_pre_gate = attn_pre_gate_b;
+            
+            // Run forward with save
+            float *fwd_out = (float *)malloc(N * D_MODEL * sizeof(float));
+            wubu_gqa_forward_save(normed, B, T, &layer->gqa, fwd_out, &save);
+            
+            // Run exact backward
+            wubu_gqa_backward(B, T, normed,
+                              save.Q_norm, save.Q_raw,
+                              save.K_norm, save.K_raw,
+                              save.V,
+                              save.gate, save.gate_sig,
+                              save.attn_out_pre_gate, attn_out,
+                              d_attn_out,
+                              &layer->gqa,
+                              d_normed,
+                              NULL, NULL, NULL, NULL, NULL, NULL);
+            
+            free(fwd_out);
+            free(Q_norm_b); free(Q_raw_b); free(K_norm_b); free(K_raw_b);
+            free(V_b); free(gate_b); free(gate_sig_b); free(attn_pre_gate_b);
+        }
+        
+        // Pre-attention RMSNorm backward
+        float *d_x_pre_attn = (float *)malloc(N * D_MODEL * sizeof(float));
+        memset(d_x_pre_attn, 0, layer_sz);
+        wubu_rms_norm_backward(B, T, D_MODEL, normed, layer->attn_norm_weight,
+                               1e-6f, d_normed, d_x_pre_attn);
+        
+        // Residual: x_pre_attn also feeds x_after_attn = x_pre_attn + attn_out
+        for (int i = 0; i < N * D_MODEL; i++)
+            d_x_pre_attn[i] += d_x_after_attn[i];
+        
+        memcpy(d_x, d_x_pre_attn, layer_sz);
+        
+        free(d_ffn_out);
+        free(d_x_after_attn);
+        free(d_attn_out);
+        free(d_normed);
+        free(d_x_pre_attn);
+    }
+    
+    memcpy(d_embeddings, d_x, N * D_MODEL * sizeof(float));
+    free(d_x);
+}
+
 void wubu_model_forward(wubu_model_t *model,
                         const int *token_ids, int B, int T,
                         float *logits) {

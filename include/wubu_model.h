@@ -76,6 +76,23 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                                   const float *embeddings, int B, int T,
                                   float *logits);
 
+// Model-level backward pass
+// Requires saved layer outputs from forward (normed, attn_out, normed2, ffn_out arrays)
+// All arrays are [n_layers * B * T * D_MODEL] flattened
+// SSM/GQA intermediates arrays (per layer) — see wubu_ssm_backward / wubu_gqa_backward
+// For MoE: gradient passes through (identity backward)
+// Output: d_embeddings [B, T, D_MODEL]
+void wubu_model_backward_from_embd(
+    const wubu_model_t *model,
+    const float *embeddings,
+    const float *logits, const float *d_logits,
+    const float *saved_normed,     // [n_layers * N * D_MODEL]
+    const float *saved_attn_out,   // [n_layers * N * D_MODEL]
+    const float *saved_normed2,    // [n_layers * N * D_MODEL]
+    const float *saved_ffn_out,    // [n_layers * N * D_MODEL]
+    float *d_embeddings,
+    int B, int T);
+
 #ifdef __cplusplus
 }
 #endif

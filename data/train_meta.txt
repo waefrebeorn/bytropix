@@ -1,0 +1,8 @@
+vocab_size=248320
+n_merges=247587
+bos_id=248044
+eos_id=248046
+pad_id=248055
+total_tokens=320544
+corpus_chars=4410144
+corpus_file=data/corpus_raw.txt

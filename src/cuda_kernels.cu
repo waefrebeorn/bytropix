@@ -129,16 +129,17 @@ __global__ void rms_norm_kernel(const float *x, const float *weight, float *out,
 
     const float *inp = x + idx * d;
     float *oup = out + idx * d;
-
-    float sum_sq = 0.0f;
-    for (int i = 0; i < d; i++) sum_sq += inp[i] * inp[i];
-
-    float rms = sqrtf(sum_sq / d + eps);
+    
+    // Double precision for sum-of-squares to avoid overflow with large values
+    double sum_sq = 0.0;
+    for (int i = 0; i < d; i++) {
+        sum_sq += (double)inp[i] * (double)inp[i];
+    }
+    float rms = sqrtf((float)(sum_sq / d) + eps);
     float scale = 1.0f / rms;
 
     for (int i = 0; i < d; i++) oup[i] = inp[i] * scale * weight[i];
 }
-
 void wubu_cuda_rms_norm(int B, int T, int d,
                         const float *x, const float *weight, float eps,
                         float *out, cudaStream_t stream) {
@@ -756,9 +757,10 @@ __global__ void gqa_rms_norm_kernel(const float *x, const float *weight,
     const float *inp = x + idx * head_dim;
     float *oup = out + idx * head_dim;
     
-    float sum_sq = 0.0f;
-    for (int i = 0; i < head_dim; i++) sum_sq += inp[i] * inp[i];
-    float rms = sqrtf(sum_sq / head_dim + eps);
+    // Double precision sum-of-squares for numerical stability
+    double sum_sq = 0.0;
+    for (int i = 0; i < head_dim; i++) sum_sq += (double)inp[i] * (double)inp[i];
+    float rms = sqrtf((float)(sum_sq / head_dim) + eps);
     float scale = 1.0f / rms;
     for (int i = 0; i < head_dim; i++) oup[i] = inp[i] * scale * weight[i];
 }
@@ -903,3 +905,373 @@ void wubu_cuda_gqa_forward(cublasHandle_t handle, cudaStream_t stream,
     // Step 5: Output projection
     wubu_cuda_matmul(handle, d_scratch, N, q_dim, d_output_w, D_MODEL, d_output, 1.0f, 0.0f);
 }
+
+// ================================================================
+// GQA attention only — for save variant (backward)
+// Assumes Q and K are already RMSNorm'd.
+// ================================================================
+void wubu_cuda_gqa_attention_only(cublasHandle_t handle, cudaStream_t stream,
+    int B, int T,
+    const float *d_Q,       // [N, q_dim] post-RMSNorm
+    const float *d_K,       // [N, kv_dim] post-RMSNorm
+    const float *d_V,       // [N, kv_dim]
+    float *d_output,        // [N, q_dim] attention output (pre-gate)
+    int n_q_heads, int n_kv_heads, int head_dim) {
+    (void)handle;
+    int n_blocks = B * T * n_q_heads;
+    causal_attn_simple_kernel<<<n_blocks, 1, 0, stream>>>(
+        d_Q, d_K, d_V, d_output, B, T,
+        n_q_heads, n_kv_heads, head_dim,
+        1.0f / sqrtf((float)head_dim));
+}
+
+// ================================================================
+// GQA gate multiply — for save variant (backward)
+// x *= sigmoid(gate_part_of_Q_full)
+// ================================================================
+void wubu_cuda_gqa_gate(float *d_x, const float *d_Q_full,
+    int N, int q_dim, cudaStream_t stream) {
+    int block = 256;
+    int grid = (N * q_dim + block - 1) / block;
+    gate_mul_fused_kernel<<<grid, block, 0, stream>>>(d_x, d_Q_full, N, q_dim);
+}
+
+// ================================================================
+// Hyperbolic (Poincaré ball) CUDA kernels
+// ================================================================
+
+// Compute norm of each vector in a batch: out[i] = sqrt(sum_k in[i*d+k]^2)
+__global__ void norm_kernel(const float *in, float *out, int n_vecs, int dim) {
+    extern __shared__ float shared[];
+    int tid = threadIdx.x;
+    int vec = blockIdx.x;
+    if (vec >= n_vecs) return;
+    const float *v = in + vec * dim;
+    float sum = 0.0f;
+    for (int i = tid; i < dim; i += blockDim.x)
+        sum += v[i] * v[i];
+    shared[tid] = sum;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) shared[tid] += shared[tid + s];
+        __syncthreads();
+    }
+    if (tid == 0) out[vec] = sqrtf(shared[0]);
+}
+
+// exp_map: out[i] = tanh(||v||/R) * v[i] / ||v||  (for ||v|| > 1e-8)
+__global__ void exp_map_kernel(const float *v, const float *norms, float R,
+                                float *out, int n_vecs, int dim) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_vecs * dim) return;
+    int vec = idx / dim;
+    int i = idx % dim;
+    float n = norms[vec];
+    if (n < 1e-8f) { out[idx] = v[idx]; return; }
+    out[idx] = R * tanhf(n / R) * v[idx] / n;
+}
+
+// log_map: out[i] = artanh(||v||/R) * v[i] / ||v|| * R  (for ||v|| > 1e-8)
+__global__ void log_map_kernel(const float *v, const float *norms, float R,
+                                float *out, int n_vecs, int dim) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_vecs * dim) return;
+    int vec = idx / dim;
+    int i = idx % dim;
+    float n = norms[vec];
+    if (n < 1e-8f) { out[idx] = v[idx]; return; }
+    float ratio = n / R;
+    if (ratio >= 1.0f) ratio = 0.99f; // clamp
+    out[idx] = (float)(atanh((double)ratio) / (double)n) * v[idx] * R;
+}
+
+// Möbius scalar multiplication: out = r ⊗ v
+// out[i] = tanh(r * artanh(||v||/R)) * v[i] / ||v|| * R
+__global__ void mobius_scalar_mul_kernel(const float *v, const float *norms, float r, float R,
+                                          float *out, int n_vecs, int dim) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_vecs * dim) return;
+    int vec = idx / dim;
+    int i = idx % dim;
+    float n = norms[vec];
+    if (n < 1e-8f || fabsf(r) < 1e-8f) { out[idx] = v[idx]; return; }
+    float ratio = n / R;
+    if (ratio >= 1.0f) ratio = 0.99f;
+    float artanh_n = (float)atanh((double)ratio);
+    float factor = tanhf(r * artanh_n) * R / n;
+    out[idx] = v[idx] * factor;
+}
+
+// Möbius addition: out = x ⊕ y
+// z = ((1+2⟨x,y⟩+||y||²)x + (1-||x||²)y) / (1+2⟨x,y⟩+||x||²||y||²)
+__global__ void mobius_add_kernel(const float *x, const float *y,
+                                   const float *nx2, const float *ny2,
+                                   float *out, int n_vecs, int dim) {
+    extern __shared__ float shared_dot[];
+    int tid = threadIdx.x;
+    int vec = blockIdx.x;
+    if (vec >= n_vecs) return;
+    const float *xv = x + vec * dim;
+    const float *yv = y + vec * dim;
+    float *ov = out + vec * dim;
+    
+    // Compute dot product ⟨x,y⟩
+    float dot_val = 0.0f;
+    for (int i = tid; i < dim; i += blockDim.x)
+        dot_val += xv[i] * yv[i];
+    shared_dot[tid] = dot_val;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) shared_dot[tid] += shared_dot[tid + s];
+        __syncthreads();
+    }
+    float xy = shared_dot[0];
+    __syncthreads();
+    
+    float n_x2 = nx2[vec];
+    float n_y2 = ny2[vec];
+    float denom = 1.0f + 2.0f * xy + n_x2 * n_y2;
+    float inv_denom = 1.0f / (denom + 1e-30f);
+    float coeff_x = (1.0f + 2.0f * xy + n_y2) * inv_denom;
+    float coeff_y = (1.0f - n_x2) * inv_denom;
+    
+    for (int i = tid; i < dim; i += blockDim.x)
+        ov[i] = coeff_x * xv[i] + coeff_y * yv[i];
+}
+
+// ================================================================
+// Host wrappers for hyperbolic kernels (declare in cuda_kernels.h)
+// ================================================================
+void wubu_cuda_norm(const float *d_in, float *d_out, int n_vecs, int dim, cudaStream_t stream) {
+    const int block = 256;
+    const int shmem = block * sizeof(float);
+    norm_kernel<<<n_vecs, block, shmem, stream>>>(d_in, d_out, n_vecs, dim);
+}
+
+void wubu_cuda_exp_map(const float *d_v, const float *d_norms, float R,
+                        float *d_out, int n_vecs, int dim, cudaStream_t stream) {
+    const int block = 256;
+    const int grid = (n_vecs * dim + block - 1) / block;
+    exp_map_kernel<<<grid, block, 0, stream>>>(d_v, d_norms, R, d_out, n_vecs, dim);
+}
+
+void wubu_cuda_log_map(const float *d_v, const float *d_norms, float R,
+                        float *d_out, int n_vecs, int dim, cudaStream_t stream) {
+    const int block = 256;
+    const int grid = (n_vecs * dim + block - 1) / block;
+    log_map_kernel<<<grid, block, 0, stream>>>(d_v, d_norms, R, d_out, n_vecs, dim);
+}
+
+void wubu_cuda_mobius_scalar_mul(const float *d_v, const float *d_norms,
+                                  float r, float R, float *d_out,
+                                  int n_vecs, int dim, cudaStream_t stream) {
+    const int block = 256;
+    const int grid = (n_vecs * dim + block - 1) / block;
+    mobius_scalar_mul_kernel<<<grid, block, 0, stream>>>(d_v, d_norms, r, R, d_out, n_vecs, dim);
+}
+
+void wubu_cuda_mobius_add(const float *d_x, const float *d_y,
+                           const float *d_nx2, const float *d_ny2,
+                           float *d_out, int n_vecs, int dim, cudaStream_t stream) {
+    const int block = 256;
+    const int shmem = block * sizeof(float);
+    mobius_add_kernel<<<n_vecs, block, shmem, stream>>>(d_x, d_y, d_nx2, d_ny2, d_out, n_vecs, dim);
+}
+
+// ================================================================
+// Poincaré recurrence kernel: replaces Euclidean step 9
+// Processes all (B, T, V_HEADS) in parallel.
+// Each block handles one head for one token in one batch item.
+// Processes rows one-at-a-time to stay within 48KB shared memory limit.
+// ================================================================
+__global__ void poincare_recurrence_kernel(
+    float *d_h_states,      // [B, SSM_V_HEADS, D_STATE, D_STATE] mutable
+    const float *d_q_norm,  // [N, SSM_K_HEADS, D_STATE]
+    const float *d_k_norm,  // [N, SSM_K_HEADS, D_STATE]
+    const float *d_v_conv,  // [N, SSM_V_HEADS, D_STATE]
+    const float *d_gate,    // [N, DT_RANK]
+    const float *d_beta,    // [N, DT_RANK]
+    float *d_delta_out,     // [N, SSM_V_HEADS, D_STATE]
+    int B, int T, float R)
+{
+    int b = blockIdx.x;
+    int t = blockIdx.y;
+    int vh = blockIdx.z;
+    int s = b * T + t;
+    int kh = vh / 2;
+    
+    if (b >= B || t >= T || vh >= SSM_V_HEADS) return;
+    
+    float bg = d_beta[s * DT_RANK + kh];
+    float gg = expf(d_gate[s * DT_RANK + kh]);
+    
+    int tid = threadIdx.x;
+    if (tid >= SSM_D_STATE) return;
+    
+    // Shared memory for per-row data (512 bytes per row)
+    __shared__ float sh_k[SSM_D_STATE];
+    __shared__ float sh_v[SSM_D_STATE];
+    __shared__ float sh_q[SSM_D_STATE];
+    __shared__ float sh_v_tan[SSM_D_STATE];
+    
+    // Load K, V, Q from global
+    sh_k[tid] = d_k_norm[(s * SSM_K_HEADS + kh) * SSM_D_STATE + tid];
+    sh_v[tid] = d_v_conv[(s * SSM_V_HEADS + vh) * SSM_D_STATE + tid];
+    sh_q[tid] = d_q_norm[(s * SSM_K_HEADS + kh) * SSM_D_STATE + tid];
+    __syncthreads();
+    
+    // Pre-compute log_map(v) — same for all rows
+    {
+        __shared__ float vn2[SSM_D_STATE];
+        vn2[tid] = sh_v[tid] * sh_v[tid];
+        __syncthreads();
+        for (int s2 = blockDim.x / 2; s2 > 0; s2 >>= 1) {
+            if (tid < s2) vn2[tid] += vn2[tid + s2];
+            __syncthreads();
+        }
+        float nv = sqrtf(vn2[0]);
+        __syncthreads();
+        if (nv < 1e-8f) {
+            sh_v_tan[tid] = sh_v[tid];
+        } else {
+            float ratio = nv / R;
+            if (ratio >= 1.0f) ratio = 0.99f;
+            sh_v_tan[tid] = (float)(atanh((double)ratio) / (double)nv) * sh_v[tid] * R;
+        }
+    }
+    __syncthreads();
+    
+    // Pointer to this head's state matrix in global memory
+    float *h_state = d_h_states + (b * SSM_V_HEADS + vh) * SSM_D_STATE * SSM_D_STATE;
+    float out_val = 0.0f;
+    
+    // Process each row of h_state one at a time
+    for (int row = 0; row < SSM_D_STATE; row++) {
+        float *h_row = h_state + row * SSM_D_STATE;
+        
+        // Step 9a: Möbius scalar decay
+        float h_val = h_row[tid];
+        __shared__ float rn2[SSM_D_STATE];
+        rn2[tid] = h_val * h_val;
+        __syncthreads();
+        for (int s2 = blockDim.x / 2; s2 > 0; s2 >>= 1) {
+            if (tid < s2) rn2[tid] += rn2[tid + s2];
+            __syncthreads();
+        }
+        float n_h = sqrtf(rn2[0]);
+        __syncthreads();
+        
+        if (n_h > 1e-8f && fabsf(gg) > 1e-8f) {
+            float ratio = n_h / R;
+            if (ratio >= 1.0f) ratio = 0.99f;
+            float art = (float)atanh((double)ratio);
+            float factor = tanhf(gg * art) * R / n_h;
+            h_val *= factor;
+            h_row[tid] = h_val; // write decayed value back immediately
+        }
+        __syncthreads();
+        
+        // Step 9b: hk_tan = dot(log_map(h_row), k)
+        float log_h;
+        if (n_h < 1e-8f) {
+            log_h = h_val;
+        } else {
+            float ratio = n_h / R;
+            if (ratio >= 1.0f) ratio = 0.99f;
+            log_h = (float)(atanh((double)ratio) / (double)n_h) * h_val * R;
+        }
+        
+        __shared__ float hk_s[SSM_D_STATE];
+        hk_s[tid] = log_h * sh_k[tid];
+        __syncthreads();
+        for (int s2 = blockDim.x / 2; s2 > 0; s2 >>= 1) {
+            if (tid < s2) hk_s[tid] += hk_s[tid + s2];
+            __syncthreads();
+        }
+        float hk = hk_s[0];
+        __syncthreads();
+        
+        // Steps 9c-d: diff_tan = v_tan - hk, update = k * diff * bg
+        float diff = sh_v_tan[tid] - hk;
+        float upd_tan = sh_k[tid] * diff * bg;
+        
+        // Step 9e: exp_map(update)
+        __shared__ float un2[SSM_D_STATE];
+        un2[tid] = upd_tan * upd_tan;
+        __syncthreads();
+        for (int s2 = blockDim.x / 2; s2 > 0; s2 >>= 1) {
+            if (tid < s2) un2[tid] += un2[tid + s2];
+            __syncthreads();
+        }
+        float nu = sqrtf(un2[0]);
+        __syncthreads();
+        
+        float upd_ball;
+        if (nu < 1e-8f) {
+            upd_ball = upd_tan;
+        } else {
+            upd_ball = R * tanhf(nu / R) * upd_tan / nu;
+        }
+        
+        // Step 9f: Möbius add: h_row = h_row ⊕ upd_ball
+        float n_h2 = rn2[0]; // already computed above
+        __shared__ float ub2_s[SSM_D_STATE];
+        ub2_s[tid] = upd_ball * upd_ball;
+        __syncthreads();
+        for (int s2 = blockDim.x / 2; s2 > 0; s2 >>= 1) {
+            if (tid < s2) ub2_s[tid] += ub2_s[tid + s2];
+            __syncthreads();
+        }
+        float n_ub2 = ub2_s[0];
+        __syncthreads();
+        
+        __shared__ float dot_s[SSM_D_STATE];
+        dot_s[tid] = h_val * upd_ball;
+        __syncthreads();
+        for (int s2 = blockDim.x / 2; s2 > 0; s2 >>= 1) {
+            if (tid < s2) dot_s[tid] += dot_s[tid + s2];
+            __syncthreads();
+        }
+        float xy = dot_s[0];
+        __syncthreads();
+        
+        float denom = 1.0f + 2.0f * xy + n_h2 * n_ub2;
+        float inv_denom = 1.0f / (denom + 1e-30f);
+        float coeff_x = (1.0f + 2.0f * xy + n_ub2) * inv_denom;
+        float coeff_y = (1.0f - n_h2) * inv_denom;
+        
+        h_row[tid] = coeff_x * h_val + coeff_y * upd_ball;
+        __syncthreads();
+        
+        // Accumulate output contribution: out[tid] += h_row[tid] * q_row[tid]
+        // But this is wrong — it's actually sum_row h_row[tid] * sh_q[row]
+        // We need the matvec h @ q for column tid
+        // out[tid] = sum_row h_state[row][tid] * q[row]
+        // Actually: q is indexed by 'row', not by 'tid'. 
+        // Thread tid handles column 'tid'. We multiply by q[row] and accumulate.
+        // This requires knowing all rows' values for column tid.
+    }
+    
+    // Step 9g: output = h @ q  (Euclidean matvec)
+    // Each thread computes: out[tid] = sum_row h_state[row][tid] * sh_q[row]
+    float result = 0.0f;
+    for (int row = 0; row < SSM_D_STATE; row++) {
+        result += h_state[row * SSM_D_STATE + tid] * sh_q[row];
+    }
+    d_delta_out[(s * SSM_V_HEADS + vh) * SSM_D_STATE + tid] = result;
+}
+
+// Host wrapper for Poincaré recurrence
+void wubu_cuda_poincare_recurrence(cublasHandle_t handle, cudaStream_t stream,
+    int B, int T, float R,
+    float *d_h_states,
+    const float *d_q_norm, const float *d_k_norm, const float *d_v_conv,
+    const float *d_gate, const float *d_beta,
+    float *d_delta_out)
+{
+    dim3 grid(B, T, SSM_V_HEADS);
+    poincare_recurrence_kernel<<<grid, SSM_D_STATE, 0, stream>>>(
+        d_h_states, d_q_norm, d_k_norm, d_v_conv, d_gate, d_beta,
+        d_delta_out, B, T, R);
+}
+

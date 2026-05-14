@@ -1,0 +1,34 @@
+============================================================
+  WubuNestGPT v2 — GPU Training (JAX/Flax/CUDA)
+  Architecture: LatentAttention + SparseMoE + Hyperbolic
+  Float32, JIT-compiled for speed
+============================================================
+
+[1/4] Creating tokenizer (vocab_size=5000)...
+  Vocab size: 1506
+
+[2/4] Loading corpus from ../ENCODERS/phase3-generative/CORPUS.py...
+Loaded 19 text chunks (total chars: 177801)
+  Loaded 19 text chunks
+
+[3/4] Creating WubuNestGPT v2...
+  d_model=192, layers=3, heads=4
+  Latent attention: d_c=192, d_h=48
+  MoE: 4 experts, top-2 per token
+/home/wubu/wubumind_env/lib/python3.12/site-packages/jax/_src/ops/scatter.py:104: FutureWarning: scatter inputs have incompatible types: cannot safely cast value from dtype=float32 to dtype=bfloat16 with jax_numpy_dtype_promotion=standard. In future JAX releases this will result in an error.
+  warnings.warn(
+  Total parameters: 2,132,160
+
+[4/4] Preparing training data...
+  Total tokens: 25,728
+  Sequences: 201 (seq_len=128)
+
+  Initializing optimizer (AdamW + cosine decay)...
+
+============================================================
+  STARTING TRAINING — 5000 steps
+  Batch size: 8, Device: cuda:0
+  Data repeats: ~201 epochs
+============================================================
+
+  [JIT warmup] Compiling train_step on CUDA...

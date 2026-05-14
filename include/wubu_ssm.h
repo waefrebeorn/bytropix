@@ -109,6 +109,35 @@ void wubu_ssm_forward(const float *x, int B, int T,
                       float *conv_state,
                       float *output);
 
+// Saved SSM forward intermediates (for backward pass)
+// All arrays [B*T x dim] unless noted
+typedef struct {
+    float *qkv_all;      // [N, CONV_DIM]
+    float *z_all;        // [N, VALUE_DIM]
+    float *beta_raw;     // [N, DT_RANK]
+    float *alpha_raw;    // [N, DT_RANK]
+    float *conv_post_silu; // [N, CONV_DIM] (post-SiLU conv output)
+    float *q_conv;       // [N, KEY_DIM]
+    float *k_conv;       // [N, KEY_DIM]
+    float *v_conv;       // [N, VALUE_DIM]
+    float *q_norm;       // [N, KEY_DIM]
+    float *k_norm;       // [N, KEY_DIM]
+    float *delta_out;    // [N, VALUE_DIM] (pre-gated-norm)
+    float *z_silu;       // [N, VALUE_DIM]
+    float *beta_flat;    // [N, DT_RANK] sigmoid(beta_raw)
+    float *gate_flat;    // [N, DT_RANK] alpha_softplus * ssm_a
+    float *states_t;     // [(T+1), SSM_V_HEADS, SSM_D_STATE, SSM_D_STATE] per-timestep states
+    float *conv_state_copy; // [B, CONV_KERNEL-1, CONV_DIM] copy of conv_state
+} ssm_fwd_save_t;
+
+// Single SSM + save forward (pass save=NULL for standard forward)
+void wubu_ssm_forward_save(const float *x, int B, int T,
+                           const ssm_layer_weights *weights,
+                           float *ssm_state,
+                           float *conv_state,
+                           float *output,
+                           ssm_fwd_save_t *save);
+
 // Single GQA layer forward pass
 // x: [B, T, D_MODEL]
 // weights: GQA layer weights
@@ -116,6 +145,24 @@ void wubu_ssm_forward(const float *x, int B, int T,
 void wubu_gqa_forward(const float *x, int B, int T,
                       const gqa_layer_weights *weights,
                       float *output);
+
+// Saved GQA forward intermediates (for backward pass)
+typedef struct {
+    float *Q_norm;    // [N, GQA_Q_HEADS * GQA_HEAD_DIM]
+    float *Q_raw;     // [N, GQA_Q_HEADS * GQA_HEAD_DIM] (pre-RMSNorm)
+    float *K_norm;    // [N, GQA_KV_HEADS * GQA_HEAD_DIM]
+    float *K_raw;     // [N, GQA_KV_HEADS * GQA_HEAD_DIM] (pre-RMSNorm)
+    float *V;         // [N, GQA_KV_HEADS * GQA_HEAD_DIM]
+    float *gate;      // [N, GQA_Q_HEADS * GQA_HEAD_DIM] (pre-sigmoid)
+    float *gate_sig;  // [N, GQA_Q_HEADS * GQA_HEAD_DIM] (sigmoid output)
+    float *attn_out_pre_gate; // [N, GQA_Q_HEADS * GQA_HEAD_DIM]
+} gqa_fwd_save_t;
+
+// Single GQA + save forward (pass save=NULL for standard forward)
+void wubu_gqa_forward_save(const float *x, int B, int T,
+                           const gqa_layer_weights *weights,
+                           float *output,
+                           gqa_fwd_save_t *save);
 
 // Single Poincaré SSM layer forward pass (hyperbolic recurrence)
 // Same interface as wubu_ssm_forward but uses Möbius operations
@@ -153,6 +200,92 @@ void wubu_rope(int B, int T, int n_heads, int head_dim,
                const float *x, const int *positions,
                int n_rot, const int *sections,
                float base, float *output);
+
+// ============================================================
+// Backward Pass Functions (Phase 4)
+// ============================================================
+
+// Backward through SSM output projection (Step 11)
+void wubu_ssm_backward_output_proj(
+    const float *delta_out, const float *d_output,
+    const float *ssm_out_weight,
+    float *d_delta_out, float *d_ssm_out_weight, int N);
+
+// Backward through gated normalization (Step 10)
+void wubu_ssm_backward_gated_norm(
+    const float *x, const float *z_silu,
+    const float *d_out, const float *norm_w,
+    float *d_x, float *d_z_silu, int B, int T);
+
+// Backward through SiLU activation
+void wubu_silu_backward(int n, const float *x, const float *y,
+                        const float *dy, float *dx);
+
+// Backward through L2 normalization
+void wubu_l2_norm_backward(int B, int T, int n_heads, int d,
+                           const float *x, float eps,
+                           const float *d_out, float *d_x);
+
+// Backward through SSM delta net recurrence (Step 9) — BPTT
+void wubu_ssm_backward_recurrence(
+    int B, int T,
+    const float *saved_states,
+    const float *q_norm, const float *k_norm,
+    const float *v_conv,
+    const float *beta_flat, const float *gate_flat,
+    const float *d_output,
+    float *d_q_norm, float *d_k_norm,
+    float *d_v_conv,
+    float *d_beta_flat, float *d_gate_flat,
+    float *d_state_init);
+
+// Full SSM layer backward (chains steps 11 through 0)
+void wubu_ssm_backward(
+    int B, int T,
+    const float *x, const float *output, const float *d_output,
+    const float *qkv_all, const float *z_all,
+    const float *beta_raw, const float *alpha_raw,
+    const float *conv_output,
+    const float *q_conv, const float *k_conv, const float *v_conv,
+    const float *q_norm, const float *k_norm,
+    const float *delta_out, const float *z_silu,
+    const float *ssm_states,
+    const float *beta_flat, const float *gate_flat,
+    const float *conv_state,   // [B, CONV_KERNEL-1, CONV_DIM] — for conv1d wgrad
+    const ssm_layer_weights *w,
+    float *d_x,
+    float *d_qkv_weight, float *d_gate_weight,
+    float *d_beta_weight, float *d_alpha_weight,
+    float *d_conv1d_weight, float *d_ssm_out_weight,
+    float *d_ssm_norm_weight,
+    float *d_ssm_state_init);
+
+// GQA attention backward (Step 5)
+void wubu_gqa_backward_attention(
+    int B, int T,
+    const float *Q_norm, const float *K_norm, const float *V,
+    const float *d_attn_out,
+    float *d_Q, float *d_K, float *d_V);
+
+// Full GQA layer backward (chains steps 7 through 1)
+void wubu_gqa_backward(
+    int B, int T,
+    const float *x, const float *Q_norm, const float *Q_raw,
+    const float *K_norm, const float *K_raw,
+    const float *V,
+    const float *gate, const float *gate_sig,
+    const float *attn_out, const float *output,
+    const float *d_output,
+    const gqa_layer_weights *w,
+    float *d_x,
+    float *d_q_weight, float *d_k_weight, float *d_v_weight,
+    float *d_q_norm_weight, float *d_k_norm_weight,
+    float *d_out_weight);
+
+// RMSNorm backward helper
+void wubu_rms_norm_backward(int B, int T, int d,
+                            const float *x, const float *weight, float eps,
+                            const float *d_out, float *d_x);
 
 #ifdef __cplusplus
 }

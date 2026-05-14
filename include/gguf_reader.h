@@ -60,10 +60,21 @@ typedef struct {
     
     // File handle
     FILE *file;
+    
+    // Optional: buffered data blob (mmap or malloc'd copy)
+    void *data_blob;
+    size_t data_blob_size;
 } gguf_ctx;
 
 // Open GGUF file and parse headers
 gguf_ctx* gguf_open(const char *path);
+
+// Buffer entire data blob in RAM for fast tensor reads
+// Call after gguf_open, before any gguf_read_tensor_f32 calls
+int gguf_buffer_data(gguf_ctx *ctx);
+
+// Calculate raw (quantized) byte size for a tensor type/element count
+int64_t gguf_raw_size(int ggml_type, int64_t n_elems);
 
 // Find a tensor by name
 gguf_tensor_info* gguf_find_tensor(gguf_ctx *ctx, const char *name);
