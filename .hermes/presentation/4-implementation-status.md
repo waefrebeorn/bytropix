@@ -1,135 +1,78 @@
 # 4. Implementation Status
 
-**Date:** May 2026
-**Tone:** Conservative — verified claims, acknowledged blockers, no unsubstantiated speculation.
+**Date:** May 13, 2026 — DA Audit Update
+**Tone:** Conservative — verified claims, DA-caught stale claims identified.
 
 ---
 
-## Phase 1: GGUF Reader + Embeddings Extraction + Poincaré Mapping (✅ Done)
+## Phase 0: GGUF Reader ✅
 
-**Files:**
-- `include/gguf_reader.h`, `src/gguf_reader.c` — GGUF file parser (header, tensor info, weight data)
-- `tools/dbg_gguf.c`, `tools/dump_gguf.py` — debugging and inspection utilities
-- `include/wubu_mobius.h`, `src/wubu_mobius.c` — Poincaré exp_map, log_map, Möbius operations
-- `tools/test_tokenizer.c`, `tools/test_tokenizer_simple.c` — tokenizer test harnesses
+**Files:** `src/gguf_reader.c`, `include/gguf_reader.h`
 
 **What works:**
-- Full GGUF format parsing (GGML quantized types Q4_0–Q8_K, IQ2_XS, IQ1_S)
-- Tensor extraction by name — verified against Qwen3.6-35B-A3B GGUF
+- Full GGUF format parsing (13 GGML types: F32, Q4_0–Q8_K, IQ2_XXS, IQ2_S, IQ3_XXS, IQ3_S, IQ1_S)
+- Tensor extraction by name — verified against Qwen3.6-35B-A3B GGUF (733 tensors)
+- Q4_K/Q5_K dequant fixed: `block_q4_K` has NO qh field (144 bytes, not 176). This was the ROOT CAUSE of all NaN and garbage output in prior sessions.
+- All 733 tensors of 11GB model load and dequant correctly on CPU.
+
+**DA Caught:** Old claims about "IQ2 dequant garbage" were wrong — Q4_K was the root bug.
+
+---
+
+## Phase 1: Embedding Graft ✅
+
+**Files:** `src/wubu_mobius.c`, `include/wubu_mobius.h`, `data/qwen36_embeddings_c.bin`
+
+**What works:**
 - Euclidean → Poincaré exponential mapping at radius R=0.956
-- Poincaré → Euclidean log map (for LM head projection)
-- 73 zero-norm special tokens correctly positioned at origin
-- ~95% nearest-neighbor preservation after mapping (preliminary)
-
-**What's pending:**
-- No formal validation of embedding quality beyond k-NN preservation
-- Möbius gyration (gyr[x,y]z) implemented but untrained — full use deferred to Phase 3
+- ~95% nearest-neighbor preservation
+- Embeddings file on disk: 1.9GB, 248K tokens, ready for training
 
 ---
 
-## Phase 2: SSM/GQA Forward Pass in C + CUDA (✅ Done)
+## Phase 2: SSM/GQA Forward Pass (CPU) ✅ — (GPU ⛔)
 
-**Files:**
-- `include/wubu_ssm.h`, `src/wubu_ssm.c` — SSM (30 layers) + GQA (10 layers) CPU forward
-- `include/cuda_kernels.h`, `src/cuda_kernels.cu` — CUDA kernel layer (cuBLAS matmul, element-wise, RMSNorm, conv1d, Gated Delta Net step, GQA fused kernel)
-- `include/bench.h`, `src/bench.c` — GPU weight load, GPU forward wrappers
-- `test_ssm_forward.c`, `test_poincare_ssm.c` — unit-level forward pass tests
-- `tools/ssm_reference.py` — Python reference for cross-check
+**Files:** `src/wubu_ssm.c`, `src/cuda_kernels.cu`, `src/bench.c`, `src/wubu_model.c`
 
-**Verified:**
-- All 40 layers (30 SSM + 10 GQA) forward on RTX 5050: **9.53 tok/s**
-- CPU baseline: ~0.20 tok/s — **47.83× GPU speedup** (419.85 ms per forward pass)
-- B=1, T=4, correctness check: GPU/CPU outputs match within tolerance (cuBLAS FMA-ordering divergence only)
-- SSM recurrent state (SSM_D_STATE=128 per head, per-layer persistence)
-- GQA: 16 Q-heads / 2 KV-heads, 8:1 ratio, fused Q/K RMSNorm + causal attention
+**CPU forward (works ✅):**
+- All 40 layers (30 SSM + 10 GQA) forward on CPU via `wubu_model_forward_from_embd`
+- CE loss: 12.66 (near random baseline 12.42) — logits non-zero
+- 0.2 tok/s CPU throughput
 
-**What's pending:**
-- No optimized CUDA kernels beyond cuBLAS and fused element-wise ops — all matmul delegated to cuBLAS (addressed in Phase 6)
-- No attention kernel for large T — current GQA is full O(N²) causal; no sparse/flash attention variant
+**GPU forward (broken ⛔):**
+- `bench_e2e` produces ALL ZEROS for both CPU and GPU paths (max val 0.000000)
+- **Root cause:** GPU weight loading functions (`gpu_load_ssm_layer`, `gpu_load_gqa_layer` in bench.c) read wrong data from GGUF
+- `train_gpu` produces CE loss 69 vs expected 12.4 — same root cause
+
+**DA Caught:** Prior docs claimed "GPU/CPU agreement verified at 9.53 tok/s" — this was a false positive from zero-output comparison.
 
 ---
 
-## Phase 2.5: GPU Verification (✅ Done)
+## Phase 3: Training Loop 🔄
 
-**Files:**
-- `tools/bench_e2e.c` — end-to-end 40-layer benchmark with CPU+GPU correctness comparison
-- `test_tokenizer` — tokenizer functional validation binary
+**Files:** `tools/train_real.c`, `tools/train_backprop.c`, `tools/train_gpu.c`
 
-**Verified:**
-- Full pipeline: GGUF load → tokenizer → forward pass (all 40 layers) — assembled and benchmarked
-- GPU/CPU logit-level agreement confirmed within numerical tolerance
-- No correctness regressions between single-layer and full-model stacking
+**What works:**
+- Tokenizer implemented: GPT-2 BPE, CJK round-trip, 248K vocab, merge hash (11% collision rate)
+- train_real: CPU forward + CE loss + output projection (508M elements). CE loss 12.66.
+- test_moe: 256 experts + shared expert, output [-0.028, 0.031], NaN=0, 36.6 tok/s CPU.
 
----
-
-## Phase 3: Training Loop with TST (🔄 In Progress)
-
-**Files (existing):**
-- `include/wubu_model.h` — model struct with layer array, token embedding, output weight, state buffers
-- `src/wubu_tokenizer.c` — BPE tokenizer encode/decode (867 lines)
-- `include/wubu_tokenizer.h` — tokenizer struct + init/encode/decode API
-- `tools/test_tokenizer.c` — test harness
-
-**What's done:**
-- Model skeleton (`wubu_model_t`) defines the layer stack, embedding, output projection, and state buffers
-- Tokenizer implements GPT-2 byte-level BPE encoding/decoding with hash-table merge lookup
-- TST training loop design documented in architecture diagram (superposition + recovery phases)
-
-**Current blocker — tokenizer merge lookup:**
-- `build_merge_hash()` calls `find_token_by_string()` to resolve each merge rule's merged ID by concatenating left/right vocab strings and looking up in a 248K-entry vocab hash table
-- For 248K merges with variable-length vocab strings (up to 256 bytes each), string concatenation + hash lookup per entry is O(N) in merge count with non-trivial per-iteration cost
-- The BPE encode loop is structured but **not yet profiled at training scale** — the real concern is the per-token merge loop scanning all adjacent pairs in a 256-byte working array on every merge iteration
-
-**What needs building:**
-- **`src/wubu_train.c`** — complete TST training loop:
-  - Superposition phase: bag-of-s embedding averaging + multi-hot cross-entropy loss
-  - Recovery phase: standard next-token CE loss
-  - Dual optimizer: AdamW (Euclidean params) + Riemannian SGD (Poincaré ball params)
-  - GGUF-compatible checkpointing every 1000 steps
-  - CPU-offloaded optimizer states (8 GB VRAM constraint)
-- Profiling the tokenizer encode path on representative training text and fixing any hot paths
+**What's broken:**
+- train_backprop: hangs during model init (≥180s timeout)
+- train_gpu: GPU forward produces CE 69 (wrong)
+- MoE not integrated into training loop
 
 ---
 
-## Phase 4: MoE Port (⏳ Future)
+## Phase 2.5: GPU Verification ⚠️
 
-**Files:**
-- `WUBUNEST_V2/wubu_moe.py` — Python MoE routing prototype (experimental, not ported to C)
-
-**Status:** Not started in C/CUDA. The model spec calls for 256 experts with 8 active + 1 shared per token, with MoE routing in FFN layers. All relevant weight tensors exist in the Qwen3.6 GGUF but are not loaded. Depends on training loop reaching convergence first.
-
-**Key unknowns:**
-- Expert load balancing strategy (auxiliary loss? token choice?)
-- Router implementation (softmax top-k? Sinkhorn?)
-- GPU memory budget for 256 expert FFN weights on 8 GB VRAM
+**Status:** Revoked. Prior "verified" claims were based on all-zero output from broken GPU weight loading. CPU forward is verified (train_real). GPU verification requires P0 fix.
 
 ---
 
-## Phase 5: Vision Port (⏳ Future)
+## Key DA Audit Findings (May 13)
 
-**Status:** Not started. 27-layer 3D ViT architecture identified in research vault (phase3-generative encoder work) but no C/CUDA code exists. No timeline — MoE must ship first.
-
----
-
-## Phase 6: CUDA Optimization (⏳ Ongoing)
-
-**Status:** No dedicated optimization work has begun. Current GPU performance relies entirely on cuBLAS SGEMM for matmuls (~90% of FLOPs) and simple fused element-wise kernels. Planned work:
-
-- Fused attention kernel (eliminate intermediate materialization of Q*K^T)
-- Kernel fusion for SSM Gated Delta Net step (reduce kernel launch overhead)
-- Quantized matmul kernels for on-the-fly dequant (avoid f16 weight expansion)
-- Stream overlap for CPU-offloaded optimizer states during training
-
----
-
-## Summary Table
-
-| Phase | Component | Status | Key Metric | Remaining Work |
-|-------|-----------|--------|------------|----------------|
-| 1 | GGUF reader + Poincaré | ✅ Done | 95% NN preservation | Formal validation |
-| 2 | SSM/GQA C+CUDA | ✅ Done | 9.53 tok/s, 47.83× | Sparse attention |
-| 2.5 | GPU verification | ✅ Done | GPU/CPU match <1e-3 | — |
-| **3** | **Training loop** | **🔄 Blocked** | **No tok/s yet** | **Tokenizer fix + `wubu_train.c`** |
-| 4 | MoE (256 experts) | ⏳ Future | — | Full C port |
-| 5 | Vision (27-layer ViT) | ⏳ Future | — | Full C port |
-| 6 | CUDA optimization | ⏳ Ongoing | — | Fused + quantized kernels |
+1. **5 of 8 binaries PASS** with fresh verified output
+2. **3 binaries fail** — all traceable to GPU weight loading bug or train_backprop hang
+3. **Old claims debunked:** "CE loss commented out" ❌, "IQ2 garbage" ❌, "bench_e2e 29x PASS" ❌
+4. **Real P0:** Fix GPU weight loading in bench.c
