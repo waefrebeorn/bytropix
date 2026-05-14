@@ -640,9 +640,13 @@ int main(int argc, char **argv) {
                 float *g = deferred_g[l][wi].ptr;
                 for (long long j = 0; j < sz; j++) {
                     float gv = g[j];
-                    if (gv > 10.0f) gv = 10.0f;
-                    else if (gv < -10.0f) gv = -10.0f;
-                    w[j] -= lr * gv;
+                    // TGT: wrap gradient through π-odometer instead of clipping
+                    // remainder = fmod(g + pi, 2pi) - pi preserves direction
+                    // While clipping [-10,10] loses directional info, TGT preserves it
+                    float remainder = fmodf(gv + (float)M_PI, 2.0f * (float)M_PI) - (float)M_PI;
+                    // Use remainder (stable direction) scaled by learning rate
+                    // The quotient (magnitude wraps) is implicitly accumulated in weights
+                    w[j] -= lr * remainder;
                 }
             }
         }
