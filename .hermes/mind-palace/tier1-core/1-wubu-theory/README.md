@@ -2,8 +2,8 @@
 
 ## Where To Find It
 
-Full text: `.hermes/research/THEORY/WuBu_Nesting.md` (converted from PDF, 27K chars)
-Full text v0.1: `.hermes/research/ENCODERS/hash-mind/WuBuNestingv0.1.md` (converted from PDF, 36K chars)
+Full text: `../../THEORY/WuBu_Nesting.md` (converted from PDF, 27K chars)
+Full text v0.1: `../../ENCODERS/hash-mind/WuBuNestingv0.1.md` (converted from PDF, 36K chars)
 
 ## Key Concepts for Implementation
 
