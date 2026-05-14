@@ -124,10 +124,10 @@ int main(int argc, char **argv) {
     moe.ffn_gate_shexp = (float *)malloc(ns * sizeof(float));
     gguf_dequantize(b->gate_shexp, b->ty_gs, ns, moe.ffn_gate_shexp);
     moe.ffn_up_shexp = (float *)malloc(ns * sizeof(float));
-    gguf_dequantize(b->gate_shexp, b->ty_gs, ns, moe.ffn_up_shexp); // same type
+    gguf_dequantize(b->up_shexp, b->ty_gs, ns, moe.ffn_up_shexp);
     moe.ffn_down_shexp = (float *)malloc(ns * sizeof(float));
-    gguf_dequantize(b->gate_shexp, b->ty_gs, ns, moe.ffn_down_shexp);
-    printf("  Shared expert dequant: %.3f ms\\n", (now_sec() - t0) * 1000);
+    gguf_dequantize(b->down_shexp, b->ty_gs, ns, moe.ffn_down_shexp);
+    printf("  Shared expert dequant (3 tensors): %.3f ms\\n", (now_sec() - t0) * 1000);
     moe.loaded = true;
     
     // Benchmark: MoE forward
