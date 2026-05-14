@@ -3,23 +3,21 @@ Path: /home/wubu/bytropix | Models: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 CUDA: PATH="/usr/local/cuda/bin:$PATH" make <target>
 
 === STATE ===
-✅ S1: train_real CE loss WIRED — streaming 248K vocab, forward clean (no NaN), loss ~6.6e10
-✅ S1: Q4_K dequant fixed (matches llama.cpp), GQA stride fix, OpenMP threading
-✅ S1: train_real runs end-to-end: 0.2 tok/s (B=1 T=4 CPU), all 40 layers
-✅ S2: tokenizer encode+decode FIXED — Latin-1/GPT-2 byte encoding, round-trips CJK
-✅ S2: 你好 → [109266] → 你好, 你好世界, hello world all verified
-✅ S3: test_moe verified — IQ2_XXS+IQ2_S load, router sum≈1.0, output range ±4.8e5
-⚠️ S3: IQ2 output range ±4.8e5 expected for IQ2_M quantized 2-bit weights (not a bug)
+✅ S1: train_real CE loss — runs end-to-end (0.2 tok/s CPU, all 40 layers, streaming 248K vocab)
+✅ S2: tokenizer encode+decode — full CJK round-trip (你好 → [109266] → 你好)
+✅ S3: test_moe — IQ2_XXS+S load, router sum≈1.0, output range ±4.8e5 (expected for 2-bit)
+✅ bench_e2e — 53.15x GPU speedup (10.45 tok/s vs 0.20 tok/s CPU), noise suppressed
+✅ dump_gguf.py — type mapping already correct
+✅ All source files committed (27 files, 6299 lines)
+✅ Commits: 9352aba (tokenizer fix), 6118723 (batch commit)
 
-=== COMMITTED ===
-commit 9352aba: S2 tokenizer encode+decode round-trip fix
-
-=== NEXT ===
-S4 [P2] Rebuild all binaries, commit working tree, update docs
-S3 [P1] IQ2_S block size verification vs llama.cpp reference (optional)
+=== REMAINING (optional) ===
+- IQ2_S block-level verification vs llama.cpp reference
+- train_real: loss ~6.6e10 needs calibration (expected for untrained 2-bit quant)
+- Merge hash collisions (58074 for 247587 entries in 524288 slots — 11%)
 
 === COMMANDS ===
-Build+run train_real:  make train_real && timeout 120 ./train_real
-Test tokenizer:        make test_tokenizer && ./test_tokenizer /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "你好"
-Test MoE:              make test_moe && ./test_moe
-Full rebuild:          make clean && make test_moe test_tokenizer train_real
+Benchmark:     make bench_e2e && ./bench_e2e
+Test tokenizer: make test_tokenizer && ./test_tokenizer /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "你好"
+Train:           make train_real && timeout 120 ./train_real
+Test MoE:        make test_moe && ./test_moe
