@@ -843,7 +843,7 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         return (int)n_elems;
     }
     
-    // For quantized types, get raw data pointer from file if not buffered
+    // For quantized types: ensure we have raw data pointer (from data_blob or file read)
     if (!src) {
         // Calculate raw size and read into heap buffer
         int64_t raw_size = gguf_raw_size(tensor->ggml_type, n_elems);
@@ -861,15 +861,15 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         }
         src = raw_heap;
     }
-    else if (tensor->ggml_type == GGML_TYPE_Q6_K) {
+    
+    // Dequantize based on type (runs regardless of src origin)
+    if (tensor->ggml_type == GGML_TYPE_Q6_K) {
         // Q6_K dequantization (6.5625 bpw)
         int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
         dequantize_q6_K_row(src, output, n_elems);
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_Q5_K) {
         dequantize_q5_K_row(src, output, n_elems);
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_Q8_0) {
         // Q8_0 dequantization (8.5 bpw, 32 elements per block)
@@ -882,35 +882,27 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
             for (int j = 0; j < 32 && b * 32 + j < n_elems; j++)
                 output[b * 32 + j] = d * (float)qs[j];
         }
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ1_S) {
         dequantize_iq1_s_row(src, output, n_elems);
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_Q4_K) {
         dequantize_q4_K_row(src, output, n_elems);
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ2_XXS) {
         dequantize_iq2_xxs_row(src, output, n_elems);
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ2_S) {
         dequantize_iq2_s_row(src, output, n_elems);
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ3_S) {
         dequantize_iq3_s_row(src, output, n_elems);
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ3_XXS) {
         dequantize_iq3_xxs_row(src, output, n_elems);
-        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ1_M) {
         dequantize_iq1_m_row(src, output, n_elems);
-        goto done;
     }
     else {
         fprintf(stderr, "Error: unsupported GGML type %d for %s\n", tensor->ggml_type, tensor->name);
@@ -918,7 +910,7 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         return 0;
     }
     
-done:
+    // Cleanup
     if (raw_heap) free(raw_heap);
     return (int)n_elems;
 }
@@ -983,7 +975,7 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_F32:   return n_elems * 4;
         case GGML_TYPE_F16:   return n_elems * 2;
         case GGML_TYPE_Q6_K:  return n_blocks * 210;  // d[2] + ql[128] + qh[64] + scales[16]
-        case GGML_TYPE_Q5_K:  return n_blocks * 144;  // d[2] + dmin[2] + scales[12] + qh[2] + qs[128] (no qh in modern)
+        case GGML_TYPE_Q5_K:  return n_blocks * 176;  // d[2] + dmin[2] + scales[12] + qh[32] + qs[128] (verified from model file)
         case GGML_TYPE_Q8_0:  return ((n_elems + 31) / 32) * 34;  // d[2] + qs[32]
         case GGML_TYPE_IQ1_S: return n_blocks * 42;   // d[2] + qs[32] + qh[8]
         case GGML_TYPE_IQ1_M: return n_blocks * 56;   // d[2] + qs[32] + qh[16] + scales[6]
