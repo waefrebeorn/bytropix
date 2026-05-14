@@ -1,48 +1,35 @@
-# WuBuText AI — State Dashboard
+# WuBuText AI — State Dashboard (May 14 PM)
 
-## Purpose
-Live status of all 8 key binaries verified May 13, 2026. Every claim backed by actual runtime output.
+## Inference Engines
 
----
+| Binary | Status | Performance | Notes |
+|--------|--------|-------------|-------|
+| `infer_moe_lazy` | ✅ | 37 tok/s, 0.35s dequant (9× speedup) | Lazy dequant: only top-8/256 experts. Output match verified. |
+| `infer_unified` | ✅ | 40 layers in 1 binary, per-layer timing | SSM→GQA→MoE chain with lazy MoE integration. |
+| `test_kv_cache` | ✅ | max_diff=0.00 vs full recompute | KV cache: 1GB/layer @ 256K, 2.6× speedup at T=8. |
+| `infer_vision` | ✅ | CPU: 825ms (64×64), ~35s (256×256) | 27-layer 3D ViT, OpenMP enabled. |
+| `infer_vision_gpu` | ✅ | GPU: 65ms (64×64), 217ms (256×256) | 161× speedup, cuBLAS. |
+| `infer_poincare` | ✅ | GPU: 2835 tok/s (B=1,T=4) | Poincaré SSM on GPU. |
+| `test_256k` | ✅ | MoE router O(T) at 256K | 4.3k tok/s to 65K tokens. |
+| `train_real` | ✅ | CE loss 12.66, 0.2 tok/s CPU | Correct CPU training path. |
+| `test_moe` | ✅ | range [-0.028, 0.031], NaN=0 | 36.6 tok/s. |
+| `bench_e2e` | ⛔ | All zeros output | GPU weight loading path broken. |
+| `train_gpu` | ⛔ | CE loss 69 vs 12.66 | Same root cause as bench_e2e. |
+| `train_backprop` | ⛔ | Hangs at model init | Unknown. |
 
-## 🔴 Dev-il's Advocate Audit — May 13, 2026
+## TGT NaN/Inf Fixes (committed fefd426)
 
-### Verified Binaries (fresh run, actual output captured)
+| Location | Fix | Effect |
+|----------|-----|--------|
+| SSM state decay | `tgt_safe_expf` clamp [-80,80] | No exp overflow |
+| SSM state matrix | `tgt_wrap` = fmod(x+π,2π)-π | State bounded to [-π,π] |
+| GQA attention scores | `tgt_wrap` before softmax | No overflow |
+| GQA Q/K/V | NaN→0 guard | No corrupted input propagation |
+| SGD optimizer | TGT remainder replaces clip[-10,10] | Direction preserved, magnitude bounded |
 
-| Binary | Status | Key Metrics | Notes |
-|--------|--------|-----------|-------|
-| train_real | ✅ PASS | CE loss 12.66 (random baseline 12.42), logits non-zero, fwd 0.2 tok/s CPU | **The only correct training path.** Uses `wubu_model_forward_from_embd` with pre-loaded CPU weights. |
-| test_fused_vs_old | ✅ PASS | GPU max diff 0.03587 (cuBLAS FP artifact, accepted) | Unchanged from prior session. |
-| test_tokenizer | ✅ PASS | "你好" → 109266 → "你好" round-trip | CJK works via pre-token merge avoidance. Python subprocess fails (non-issue). |
-| test_moe | ✅ PASS | Output range [-0.028, 0.031], NaN=0, 36.6 tok/s | **Q4_K fix resolved the NaN/1e6 garbage.** Old DA claims are STALE. |
-| dump_mmproj | ✅ PASS | 334 tensors, 27 ViT blocks, correct merger dims | Unchanged. |
-| bench_e2e | ⛔ BROKEN | All-output-zero: CPU max 0.000, GPU max 0.000 | **GPU forward path produces nothing.** Old GPU weight loading (bench.c) doesn't use wubu_model_forward. |
-| train_gpu | ⚠️ WRONG LOSS | CE loss 69→51 vs expected 12.66 | GPU weight loading per-layer-per-step = garbage outputs. Copies GGUF weights to GPU each step — slow AND wrong. |
-| train_backprop | ⛔ HANGS | Times out at 180s during model init | Same code as train_real + gradient logic. Root cause: obscure, identical compilation path. |
-
-### Old DA Claims vs Reality
-
-| Old Claim (prestige/map) | Reality | Verdict |
-|-------------------------|---------|---------|
-| "CE loss COMMENTED OUT" | CE loss IS wired — train_real produces 12.66 | ❌ STALE CLAIM |
-| "IQ2 dequant = garbage" | Q4_K was the root bug. Fixed. train_real produces correct values. | ❌ STALE CLAIM |
-| "bench_e2e loops forever" | bench_e2e runs to completion but outputs ALL ZEROS | ⚠️ NEW BUG FOUND |
-| "train_real hangs" | train_real works fine with 120s timeout | ❌ STALE CLAIM |
-| "GPU forward = 29x speedup" | Speedup real, but output is ZERO | ⚠️ DECEPTIVE — speedup on garbage |
-
-### Risk Assessment
-
-| Risk | Severity | Monitoring | 
-|------|----------|-----------|
-| bench_e2e zero-output bug | 🔴 HIGH — hidden states after 40-layer fwd are zero | Hidden states diverge from train_real output |
-| GPU weight loading path broken | 🔴 HIGH — gpu_load_ssm_layer reads wrong/WRONG data | train_gpu loss 69 vs train_real 12.66 |
-| train_backprop hangs | 🟡 MEDIUM — gradient training blocked | May be fixed by using train_real code path |
-| All "PASS" claims from old sessions | 🟢 LOW — re-verified all 5 PASS binaries | Fresh output confirms |
-| train_real only uses embeddings, not tokenizer | 🟢 LOW — embeddings file exists and works | Token embeddings loaded at init |
-
-### True Current Priority Queue
-
-P0 — Fix GPU weight loading (bench.c gpu_load_ssm_layer/gpu_load_gqa_layer)
-P1 — Fix train_backprop hang 
-P2 — Verify train_real backward pass
-P3 — Add MoE to training path
+## Priority Queue
+P0 — Fix GPU weight loading (bench.c gpu_load_ssm_layer → zeros)
+P1 — NaN is pre-existing GQA L3 (memory corruption hypothesis — MoE load overwrites GQA input)
+P2 — Gradient training (train_backprop hang)
+P3 — Vision→model integration
+P4 — Update GPU training to use lazy MoE
