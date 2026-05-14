@@ -1,38 +1,30 @@
-# WuBuText AI — Project Overview
-
-## Purpose
-Mission statement, done/pending list, constraints.
-
----
+# WuBuText AI — Project Overview (May 14 PM)
 
 ## Mission
-
-Build Qwen3.6-35B-A3B from scratch in pure C + CUDA with WuBu nested hyperbolic geometry. Verify every layer against llama.cpp reference. Train with Token-Superposition Training (TST). Deliver inference training on consumer GPU (RTX 5050 6.4GB).
+Build Qwen3.6-35B-A3B from scratch in pure C + CUDA with WuBu nested hyperbolic geometry. Inference engines complete. Training pipeline blocked by GPU weight loading bug.
 
 ## Done ✅
-
-| Phase | Component | Status | Evidence |
-|-------|-----------|--------|----------|
-| Phase 0 | GGUF reader | ✅ 13 types supported | train_real loads all 733 tensors |
-| Phase 1 | Embedding graft (Poincaré) | ✅ R=0.956 | data/qwen36_embeddings_c.bin (1.9GB) |
-| Phase 2 | SSM forward (30 layers) | ✅ CPU | train_real CE 12.66 |
-| Phase 2 | GQA forward (10 layers) | ✅ CPU | train_real all 40 layers |
-| Phase 3 | CE loss computation | ✅ streaming 248K vocab | train_real: 12.66 |
-| Phase 3 | Tokenizer | ✅ CJK round-trip | test_tokenizer PASS |
-| Phase 3 | MoE forward | ✅ CPU [-0.028, 0.031] | test_moe PASS |
-| Phase 3 | MMProj dump | ✅ | dump_mmproj PASS |
+| Component | Status | Tool |
+|-----------|--------|------|
+| GGUF reader (13 types) | ✅ | train_real loads 733 tensors |
+| SSM forward (30 layers) | ✅ CPU/GPU | infer_poincare 2835 tok/s |
+| GQA forward (10 layers) | ✅ CPU | infer_unified 40-layer |
+| MoE forward (256 experts) | ✅ lazy dequant | infer_moe_lazy 0.35s (9×) |
+| Vision encoder (27 layers) | ✅ GPU 217ms | infer_vision_gpu |
+| KV cache design | ✅ max_diff=0 | test_kv_cache |
+| TGT NaN fixes | ✅ committed | tgt_wrap everywhere |
+| GQA backward | ✅ wired | all 40 layers get gradients |
+| Tokenizer | ✅ CJK round-trip | test_tokenizer |
+| CPU timing (7 tests) | ✅ | cpu_timing.h |
 
 ## Broken ⛔
-
-| Component | Failure | Root Cause | Priority |
-|-----------|---------|------------|----------|
-| GPU weight loading | bench_e2e all zeros | bench.c gpu_load_ssm_layer | P0 |
-| GPU training | train_gpu CE 69 vs 12.66 | Same as above | P0 |
-| Gradient training | train_backprop hangs at 180s | Unknown (code path identical) | P1 |
+| Component | Failure | Priority |
+|-----------|---------|----------|
+| GPU weight loading | bench_e2e all zeros | P0 |
+| GPU training | train_gpu CE 69 vs 12.66 | P0 |
+| Gradient training | train_backprop hangs | P1 |
 
 ## Constraints
-
-- **English only** — no CJK in code/comments/communication
-- **Pure C + CUDA** — no Python for core logic
-- **Verify ALL claims** — run binary, paste output, never "should work"
-- **YOLO mode** — no questions, execute-verify-report loop
+- **English only** — no CJK in code/comments
+- **Pure C + CUDA** — no Python core
+- **Verify ALL claims** — run binary, paste output

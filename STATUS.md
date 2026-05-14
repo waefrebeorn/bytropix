@@ -39,9 +39,22 @@ Qwen3.6-35B-A3B from scratch in C + CUDA. 40-layer hybrid (30 SSM + 10 GQA), 204
 | `test_kv_cache` | ✅ | **KV cache for GQA: max_diff=0 vs full recompute**. 1 GB/layer @ 256K. 2.6× speedup at T=8. |
 
 ### Known issues
-- **SSM/GQA forward produces NaN at first GQA layer (L3)** — pre-existing bug. Even with real token embeddings. Blocks clean inference validation.
-- **P0 gradient explosion (4e13 ratio)** — sole training blocker
-- **bench_e2e** — untested (same NaN root cause)
+- **GQA forward produces NaN at layer 3** — pre-existing bug. Memory corruption hypothesis: MoE weight load overwrites GQA input buffer via pointer aliasing. NaN guard (NaN→0) applied as safety net.
+- **P0 gradient explosion (4e13 ratio)** — TGT π-odometer wrapping applied to SGD step (replaced clip[-10,10] with fmod remainder). Needs training run to verify.
+- **bench_e2e** — all zeros output. GPU weight loading path broken (bench.c).
+- **train_backprop** — hangs at model init. Unknown cause.
+- **train_gpu** — CE loss 69 vs expected 12.66. Same root cause as bench_e2e.
+
+## TGT (Toroidal Gradient Transformation) — Applied May 14
+```
+BOUNDARY = 2π
+remainder = fmod(x + π, BOUNDARY) - π   # maps any value to [-π, π]
+quotient = floor((x + π) / BOUNDARY)    # magnitude wraps (integer)
+tgt_safe_expf: clamp x to [-80,80] before expf to prevent float32 overflow
+```
+
+Applied to: SSM state decay (safe_expf), SSM state matrix entries (tgt_wrap), GQA attention scores (tgt_wrap), GQA Q/K/V projections (NaN→0 guard), SGD optimizer (tgt_wrap replaces clip[-10,10]).
+Committed in fefd426.
 
 ## Critical Gaps
 

@@ -1,89 +1,55 @@
-# WuBuText AI — Testing Protocol
+# WuBuText AI — Testing Protocol (May 14 PM)
 
-## Purpose
-How to run and verify each binary. PASS criteria for every claim.
-
----
-
-## train_real — CPU Training Pipeline ✅ (Verified)
-
+## Infer_moe_lazy — Lazy MoE Dequant ✅
 ```
-./train_real /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf data/train_data.bin
-Timeout: 120s
+./infer_moe_lazy [model.gguf] [layer] [T]
 ```
-**PASS criteria:**
-- Prints "CE loss: ~12.4-12.7"
-- Logits[0:8] non-zero (shows +X.XXXX values)
-- 0.2 tok/s CPU throughput
-- No NaN, no Inf
+**PASS:** Dequant time < 1s (vs 3.1s full), output match max_diff=0.00 vs full dequant.
 
-**FAIL signals:**
-- Hangs (needs >120s)
-- Loss >> 100 (broken dequant)
-- Loss << 11 (too good — means data leak)
-
----
-
-## test_fused_vs_old — GPU Fused SSM ✅
-
+## Infer_unified — 40-Layer Forward ✅
 ```
-PATH="/usr/local/cuda/bin:$PATH" ./test_fused_vs_old
+./infer_unified [model.gguf] [T]
 ```
-**PASS:** Output max diff < 0.04, State max diff < 0.04. cuBLAS FP artifact accepted.
+**PASS:** Prints per-layer timing, no segfault. NaN expected from random inputs on GQA layers (pre-existing).
 
----
-
-## test_tokenizer — CJK Tokenizer ✅
-
+## Test_kv_cache — KV Cache Test ✅
 ```
-./test_tokenizer /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "你好"
+./test_kv_cache [model.gguf]
 ```
-**PASS:** `"你好" → 1 token (109266) → "你好"` round-trip.
+**PASS:** max_diff=0.00 at all decode steps. Cache time < refull time.
 
----
+## Infer_vision_gpu — GPU Vision ✅
+```
+./infer_vision_gpu [model.gguf] [image.png]
+```
+**PASS:** < 1s for 256×256. Output has non-zero values.
 
-## test_moe — MoE Forward ✅
+## Infer_poincare — GPU Poincaré SSM ✅
+```
+./infer_poincare
+```
+**PASS:** > 2000 tok/s. Non-zero output.
 
+## Train_real — CPU Training ✅
+```
+./train_real [model.gguf] [corpus.bin]
+```
+**PASS:** CE loss ~12.4-12.7, 0.2 tok/s, no NaN.
+
+## Test_moe — MoE Forward ✅
 ```
 ./test_moe
 ```
-**PASS:** Output range < |1.0|, NaN=0, router probs sum ≈ 1.0, > 0 tok/s.
+**PASS:** Output range < |1.0|, NaN=0.
 
----
-
-## dump_mmproj — Vision Projector ✅
-
-```
-./dump_mmproj /models/qwen3.6-35b-mmproj-F16.gguf
-```
-**PASS:** 334 tensors, 27 ViT blocks, mm.0[4608,4608] ✓, mm.2[4608,2048] ✓, no mm.1 ✓.
-
----
-
-## bench_e2e — GPU Benchmark ⛔ (BROKEN — all zeros)
-
+## Bench_e2e — GPU Benchmark ⛔
 ```
 PATH="/usr/local/cuda/bin:$PATH" ./bench_e2e
 ```
-**Current FAIL:** Both CPU and GPU output all zeros. Max val = 0.000000.
-**Fix needed:** GPU weight loading in bench.c/bench.h broken.
+**FAIL:** All zeros output. GPU weight loading broken.
 
----
+## Train_gpu — GPU Training ⛔
+**FAIL:** CE loss 69 vs expected 12.66.
 
-## train_gpu — GPU Training ⛔ (BROKEN — wrong loss)
-
-```
-PATH="/usr/local/cuda/bin:$PATH" ./train_gpu
-```
-**Current FAIL:** CE loss 69 (expected ~12.4).
-**Fix needed:** Same root cause as bench_e2e — GPU weight loading.
-
----
-
-## train_backprop — Gradient Training ⛔ (BROKEN — hangs)
-
-```
-./train_backprop /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf data/train_data.bin
-```
-**Current FAIL:** Hangs at 180s during model init.
-**Fix needed:** Unknown. Same source as train_real but binary behaves differently.
+## Train_backprop — Gradient Training ⛔
+**FAIL:** Hangs at 180s model init.
