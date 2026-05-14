@@ -76,6 +76,9 @@ int gguf_buffer_data(gguf_ctx *ctx);
 // Calculate raw (quantized) byte size for a tensor type/element count
 int64_t gguf_raw_size(int ggml_type, int64_t n_elems);
 
+// Dequantize raw quantized bytes to f32
+void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float *output);
+
 // Find a tensor by name
 gguf_tensor_info* gguf_find_tensor(gguf_ctx *ctx, const char *name);
 

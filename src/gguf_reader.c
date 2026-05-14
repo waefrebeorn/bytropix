@@ -932,6 +932,49 @@ void gguf_close(gguf_ctx *ctx) {
     }
 }
 
+// Dequantize raw buffer to f32 using the appropriate dequant function
+// data: raw quantized bytes (must be at least gguf_raw_size(type, n_elems) bytes)
+void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float *output) {
+    switch (ggml_type) {
+        case GGML_TYPE_F32:
+            memcpy(output, data, n_elems * sizeof(float));
+            break;
+        case GGML_TYPE_F16: {
+            for (int64_t i = 0; i < n_elems; i++) {
+                uint16_t h;
+                memcpy(&h, data + i * 2, 2);
+                output[i] = f16_to_f32(h);
+            }
+            break;
+        }
+        case GGML_TYPE_Q6_K: dequantize_q6_K_row(data, output, n_elems); break;
+        case GGML_TYPE_Q5_K: dequantize_q5_K_row(data, output, n_elems); break;
+        case GGML_TYPE_Q8_0: {
+            int64_t n_blocks = (n_elems + 31) / 32;
+            for (int64_t b = 0; b < n_blocks; b++) {
+                uint16_t d_bits;
+                memcpy(&d_bits, data + b * 34, 2);
+                float d = f16_to_f32(d_bits);
+                const int8_t *qs = (const int8_t *)(data + b * 34 + 2);
+                for (int j = 0; j < 32 && b * 32 + j < n_elems; j++)
+                    output[b * 32 + j] = d * (float)qs[j];
+            }
+            break;
+        }
+        case GGML_TYPE_IQ1_S: dequantize_iq1_s_row(data, output, n_elems); break;
+        case GGML_TYPE_IQ1_M: dequantize_iq1_m_row(data, output, n_elems); break;
+        case GGML_TYPE_IQ2_XXS: dequantize_iq2_xxs_row(data, output, n_elems); break;
+        case GGML_TYPE_IQ2_S: dequantize_iq2_s_row(data, output, n_elems); break;
+        case GGML_TYPE_IQ3_S: dequantize_iq3_s_row(data, output, n_elems); break;
+        case GGML_TYPE_IQ3_XXS: dequantize_iq3_xxs_row(data, output, n_elems); break;
+        case GGML_TYPE_Q4_K: dequantize_q4_K_row(data, output, n_elems); break;
+        default:
+            fprintf(stderr, "Dequant: unsupported type %d\n", ggml_type);
+            memset(output, 0, n_elems * sizeof(float));
+            break;
+    }
+}
+
 // Calculate raw (quantized) byte size for a tensor type with n_elems
 int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
     // All supported quant types use QK_K=256 block size
