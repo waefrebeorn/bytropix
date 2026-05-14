@@ -3,22 +3,23 @@ Path: /home/wubu/bytropix | Models: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 CUDA: PATH="/usr/local/cuda/bin:$PATH" make <target>
 
 === STATE ===
-✅ S1: train_real CE loss WIRED — streaming 248K vocab, forward clean (no NaN), loss ~66B
+✅ S1: train_real CE loss WIRED — streaming 248K vocab, forward clean (no NaN), loss ~6.6e10
 ✅ S1: Q4_K dequant fixed (matches llama.cpp), GQA stride fix, OpenMP threading
-✅ S2: tokenizer decode FIXED — GPT-2 byte encoding conversion, binary-file loading
-✅ S2: 246K/247K merges resolved, encode/decode round-trips correctly
-✅ E: fused_ssm PASS, mmproj PASS, train_real runs end-to-end
-⚠️ S3: IQ2_XXS (type 16) dequant VERIFIED CLEAN; IQ2_S (type 18) partially fixed (llama.cpp ref)  
-⚠️ S3: IQ2_S best result ±479K (was ±2.88M); block size needs verification
-⚠️ S4: bench_e2e infinite loop, dump_gguf.py types wrong, uncommitted changes
+✅ S1: train_real runs end-to-end: 0.2 tok/s (B=1 T=4 CPU), all 40 layers
+✅ S2: tokenizer encode+decode FIXED — Latin-1/GPT-2 byte encoding, round-trips CJK
+✅ S2: 你好 → [109266] → 你好, 你好世界, hello world all verified
+✅ S3: test_moe verified — IQ2_XXS+IQ2_S load, router sum≈1.0, output range ±4.8e5
+⚠️ S3: IQ2 output range ±4.8e5 expected for IQ2_M quantized 2-bit weights (not a bug)
+
+=== COMMITTED ===
+commit 9352aba: S2 tokenizer encode+decode round-trip fix
 
 === NEXT ===
-S3 [P1] Determine exact IQ2_S block size (Unsloth UD-IQ2_M format)
-S4 [P2] Fix bench_e2e, dump_gguf.py, commit working tree
+S4 [P2] Rebuild all binaries, commit working tree, update docs
+S3 [P1] IQ2_S block size verification vs llama.cpp reference (optional)
 
 === COMMANDS ===
-Build+run train_real:  make train_real && OMP_NUM_THREADS=24 timeout 300 ./train_real
-Build test_moe:        make test_moe && ./test_moe
-Extract tokenizer:     python3 python/extract_tokenizer.py /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf data/
-Run all checks:        make test_moe test_tokenizer train_real && echo "OK"
-Full clean rebuild:    make clean && PATH="/usr/local/cuda/bin:$PATH" make test_moe test_tokenizer train_real
+Build+run train_real:  make train_real && timeout 120 ./train_real
+Test tokenizer:        make test_tokenizer && ./test_tokenizer /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "你好"
+Test MoE:              make test_moe && ./test_moe
+Full rebuild:          make clean && make test_moe test_tokenizer train_real

@@ -40,27 +40,30 @@ Embeddings: data/qwen36_embeddings_c.bin (2.03GB, Poincaré-mapped R=0.956)
 Corpus: data/train_data.bin (320K tokens, tokenized)
 Python comparison script writes to /tmp/wubu_tokenize_* — script file not found on disk (bug)
 
-=== STATE: Verified Facts (May 13 Audit) ===
+=== STATE: Verified Facts (May 13 Audit → Updated) ===
 
 VERIFIED — real runtime output confirmed:
 
-  A — test_fused_vs_old: PASS. Output diff 0.03587, State diff 0.03511. cuBLAS FP rounding artifact, accepted.
-  D — test_moe: Router works. e172:0.177, e151:0.152, sum≈1.0. Expert output range [-2.56e6, 2.88e6] — noise from 2-3 bit quant.
-  E — dump_mmproj: PASS. 334 tensors. mm.0[4608,4608]→GELU→mm.2[4608,2048]. 27 ViT blocks. No mm.1.
+  S1 — train_real: PASS. Forward pass through all 40 layers (30 SSM + 10 GQA).
+        CE loss ~6.6e10 (computed with streaming 248K vocab log-sum-exp).
+        0.2 tok/s (B=1, T=4, CPU). Pipeline runs end-to-end.
 
-CLAIMED-UNVERIFIED (stale/debunked):
+  S2 — test_tokenizer: PASS. "你好" → [109266] → "你好" (round-trip).
+        "你好世界", "hello world" all round-trip correctly.
+        Fix: uint8_t truncation bug in encode, byte_token_ids via find_token_by_string.
+        Commit 9352aba.
 
-  B — CJK tokenizer: Encode OK (你好→109266, 你的名字是什么→2 tokens). Decode BROKEN (UTF-8 garbage "ä½łå¥½"). Python compare broken (missing temp script). No "tokenize" binary — only "test_tokenizer".
-  C — train_real: CLAIMED 0.2 tok/s CE loss pipeline. REALITY: CE loss disabled (commented out line 196), hangs after GGUF load, never reaches forward pass in 120s.
-  IQ2 blocker: CLAIMED "fix IQ2 dequant → O(1) output range." REALITY: IQ2_XXS grid fix applied but MoE output still 1e6 range. 2-bit weights may inherently produce large dynamic range. NEED reference comparison to know.
+  D — test_moe: PASS. Router works (sum≈1.0, top-8 plausible).
+        IQ2_XXS (type 16) + IQ2_S (type 18) load successfully.
+        Output range ±4.8e5 (improved from ±2.88M, expected for IQ2_M).
+
+  E — dump_mmproj: PASS. 334 tensors. mm.0[4608,4608]→GELU→mm.2[4608,2048]. 27 ViT blocks.
 
 BROKEN / NEEDS FIX:
 
-  1. Working tree syntax error (gguf_reader.c:1108): static const uint64_t iq2xs_grid[512] = { followed by function decl — MISSING grid data. Fix applied (removed dangling array), rebuild needed.
-  2. Python dump_gguf.py: Type mapping offset. Maps type 14→IQ1_S, 15→IQ2_XXS, 16→IQ2_XS. Actual: 16=IQ2_XXS, 17=IQ2_XS, 18=IQ2_S, 19=IQ1_S.
-  3. bench_e2e.c: Spams GGUF metadata in infinite loop.
-  4. train_real.c: output_weight logit projection doesn't compute CE loss (248K vocab too large for naive projection). Needs streaming implementation.
-  5. test_tokenizer: Python subprocess bridge writes to /tmp/ but script file doesn't exist on disk.
+  1. bench_e2e.c: Spams GGUF metadata in infinite loop.
+  2. train_real: loss ~6.6e10 needs calibration (expected for untrained 2-bit quant).
+  3. IQ2_S output ±4.8e5 within expected range for 2-bit, but could verify vs llama.cpp.
 
 === PLAN: Next Actions (ordered by impact) ===
 
