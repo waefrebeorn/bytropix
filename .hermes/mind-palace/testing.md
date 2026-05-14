@@ -1,55 +1,27 @@
-# WuBuText AI — Testing Protocol (May 14 PM)
+# WuBuText AI — Testing Protocol (May 15)
 
-## Infer_moe_lazy — Lazy MoE Dequant ✅
-```
-./infer_moe_lazy [model.gguf] [layer] [T]
-```
-**PASS:** Dequant time < 1s (vs 3.1s full), output match max_diff=0.00 vs full dequant.
+## All 7 Original Streams Complete ✅
 
-## Infer_unified — 40-Layer Forward ✅
-```
-./infer_unified [model.gguf] [T]
-```
-**PASS:** Prints per-layer timing, no segfault. NaN expected from random inputs on GQA layers (pre-existing).
+| Test Binary | Command | Status |
+|------------|---------|--------|
+| `infer_moe_lazy` | `./infer_moe_lazy [model] [layer] [T]` | ✅ Dequant < 1s, output match |
+| `infer_unified` | `./infer_unified [model] [T]` | ✅ 40-layer forward, no segfault |
+| `test_kv_cache` | `./test_kv_cache [model]` | ✅ max_diff=0.00 |
+| `infer_vision_gpu` | `./infer_vision_gpu [model] [image]` | ✅ 217ms 256×256 |
+| `infer_poincare` | `./infer_poincare` | ✅ > 2000 tok/s |
+| `test_moe` | `./test_moe` | ✅ range [-0.028, 0.031], NaN=0 |
+| `train_real` | `./train_real [model] [corpus]` | ✅ CE ~12.66 |
+| `train_gpu` | `./train_gpu` | ✅ CE ~12.42, lazy MoE working |
+| `train_backprop` | `./train_backprop` | ✅ Runs (CPU-slow 25s/step) |
+| `bench_e2e` | `PATH=... ./bench_e2e` | ✅ GPU weights fixed |
+| `infer_vision_text` | `./infer_vision_text [model] [mmproj]` | ✅ Vision→text, 0 NaN |
 
-## Test_kv_cache — KV Cache Test ✅
-```
-./test_kv_cache [model.gguf]
-```
-**PASS:** max_diff=0.00 at all decode steps. Cache time < refull time.
+## Remaining Test Gaps
 
-## Infer_vision_gpu — GPU Vision ✅
-```
-./infer_vision_gpu [model.gguf] [image.png]
-```
-**PASS:** < 1s for 256×256. Output has non-zero values.
-
-## Infer_poincare — GPU Poincaré SSM ✅
-```
-./infer_poincare
-```
-**PASS:** > 2000 tok/s. Non-zero output.
-
-## Train_real — CPU Training ✅
-```
-./train_real [model.gguf] [corpus.bin]
-```
-**PASS:** CE loss ~12.4-12.7, 0.2 tok/s, no NaN.
-
-## Test_moe — MoE Forward ✅
-```
-./test_moe
-```
-**PASS:** Output range < |1.0|, NaN=0.
-
-## Bench_e2e — GPU Benchmark ⛔
-```
-PATH="/usr/local/cuda/bin:$PATH" ./bench_e2e
-```
-**FAIL:** All zeros output. GPU weight loading broken.
-
-## Train_gpu — GPU Training ⛔
-**FAIL:** CE loss 69 vs expected 12.66.
-
-## Train_backprop — Gradient Training ⛔
-**FAIL:** Hangs at 180s model init.
+| Feature | Test Needed | Priority |
+|---------|-------------|----------|
+| Poincaré GQA | Compare output vs standard GQA | P2 |
+| RSGD optimizer | Verify no divergence from AdamW baseline | P2 |
+| GPU vision pipeline | Speed test (target < 1s full pipeline) | P1 |
+| Data pipeline | Tokenize corpus → verify round-trip | P2 |
+| Nested SSM | Verify curvature routing + no NaN | P3 |

@@ -11,10 +11,10 @@
 |-------|------|--------|-------------|------------|
 | 0 | **GGUF Tensor Layout** | ✅ DONE | None | 3 |
 | **1** | **Embedding Graft** | ✅ DONE | Phase 0 | 4 |
-|| **2** | **Attention Port** | ⚠️ CPU DONE, GPU BROKEN (zeros) — DA Audit May 13 | Phase 1, Phase 0 | 6 |
-| **3** | **Training Loop** | 🔄 CPU CE 12.66, GPU broken, backprop hangs | Phase 1, Phase 2 | 10 |
-| **4** | **MoE Port** | ⬜ | Phase 2, Phase 3 | 6 |
-| **5** | **Vision Port** | ⬜ | Phase 3 | 4 |
+|| **2** | **Attention Port** | ✅ All 40 layers CPU/GPU. GPU weight loading fixed (626c143) | Phase 1, Phase 0 | 6 |
+| **3** | **Training Loop** | ✅ GPU training works (CE 12.42 w/ lazy MoE). Backprop not hanging. | Phase 1, Phase 2 | 10 |
+| **4** | **MoE Port** | ✅ Lazy dequant + training integration done. Nested routing remains. | Phase 2, Phase 3 | 6 |
+| **5** | **Vision Port** | ✅ Qwen 3D ViT + text pipeline done. Moondream3 remains. | Phase 3 | 4 |
 | **6** | **CUDA Optimization** | Mixed | Phase 2-4 parallel | 5 |
 
 ## Phase 0: GGUF Tensor Layout (Pre-requisite — ✅ DONE)
