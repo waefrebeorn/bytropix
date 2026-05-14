@@ -8,7 +8,7 @@ CUDA_INC = -I/usr/local/cuda-13.1/include
 
 .PHONY: all clean
 
-all: test_ssm load_model test_gpu test_model test_cpu_timing
+all: test_ssm load_model test_gpu test_model test_cpu_timing infer_moe infer_vision infer_poincare test_256k
 
 # Object files
 CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_poincare_ssm_backward.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o
@@ -89,6 +89,19 @@ test_fused_vs_old: tools/test_fused_vs_old.c $(CORE_OBJ) $(CUDA_OBJ)
 # Training & tools
 train_stub: tools/train_stub.c
 	$(CC) $(CFLAGS) -o $@ $< -lm -O0 -g
+
+# Inference engines
+infer_moe: tools/infer_moe.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+infer_vision: tools/infer_vision.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+infer_poincare: tools/infer_poincare.c src/bench.o $(CORE_OBJ) $(CUDA_OBJ)
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
+
+test_256k: tools/test_256k.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 tokenize_corpus: tools/tokenize_corpus.c src/wubu_tokenizer.o src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

@@ -1,61 +1,46 @@
-# WuBuText AI — Project Status (May 14, P4 integrated)
+# WuBuText AI — Project Status (May 14, all PE phases wired)
 
 ## Model
 Qwen3.6-35B-A3B from scratch in C + CUDA. 40-layer hybrid (30 SSM + 10 GQA), 2048 hidden, 248K vocab, 256 MoE experts. Poincaré ball hyperbolic geometry (R=0.956).
 
-## Status: Training Pipeline
+## Pipeline Status
 
-### ✅ Phase 1-3: Foundation (COMPLETE)
-- CPU forward: verified 12.66 CE loss
-- GPU forward + save intermediates: verified all 40L
-- Hyperbolic GPU kernels: verified (exp_map, log_map, Möbius ops, RSGD optimizer)
-- Embedding graft: Poincaré-mapped embeddings on disk
-- Training loop: GPU forward + CPU backward, deferred SGD with OpenMP
-- Q-learner LR controller: C port
-- Gradient clipping: per-element + per-layer norm
+### ✅ Phase 1-3: Foundation
+- GPU forward + save intermediates: verified
+- SSM backward: exact, verified with FD
+- GQA backward: exact, verified (was false negative on eps)
+- Training loop: GPU forward → CPU backward → deferred SGD + OpenMP
+- Q-learner LR controller, gradient clipping
 
-### ✅ Phase 4: MoE — WIRED (frozen, dequant-limited)
-- `src/wubu_moe_backward.c`: Full MoE backward function (shared expert, routed experts, router softmax gradient)
-  - Handles NULL weight pointers gracefully
-  - Correctly routes gradients through top-k selection + softmax renormalization
-- `gguf_reader.c`: RAM buffer support (`gguf_buffer_data`) — reads entire GGUF file into memory, eliminates SSD seeks
-- `train_gpu.c`: MoE backward wired into training loop
-  - Gradient chain: MoE → post-norm → attention → pre-norm (all correct)
-  - Fixed dangling `d_x_post` (malloc→calloc + residual add)
-- **Frozen**: Gradients flow through MoE as identity (expert dequant too slow: 120×268M elements/step)
-- To enable: optimize dequantization or pre-load expert weights quantized in RAM
+### ✅ Phase 4: MoE (wired, frozen)
+- `wubu_moe_backward.c`: Full backward (shared expert + routed experts + router softmax through top-k)
+- `gguf_reader.c`: RAM buffer (`gguf_buffer_data`) eliminates SSD seeks
+- `train_gpu.c`: MoE wired into gradient chain (post-norm → MoE → attn → pre-norm)
+- **Frozen**: 120 expert dequant ops/step too slow. Identity gradient fallback.
 
-### ⬜ Phase 5: Vision — Not started
-- Moondream3 ViT: need weight dumper + C forward encoder
+### ✅ Phase 5: Vision encoder (wired, untested)
+- `wubu_vision.c` / `.h`: 27-layer 3D ViT (temporal_patch=2, spatial_merge=2)
+- Patch embedding, position embeddings, GQA attention, GELU, LayerNorm
+- Merger projection (mm.0 → mm.2 → 2048 dim)
+- Works for any image size (auto-computes patch count)
 
-### ⬜ Phase 6: Poincaré Backward — Not started
-- Need `gpu_poincare_ssm_forward_save` + `wubu_poincare_ssm_backward`
-- Gyration chain rule math in THEORY/
+### ✅ Phase 6: Poincaré backward (wired, identity approx)
+- `cuda_kernels.cu`: Poincaré recurrence saves state trajectory (d_states_t)
+- `bench.c`: `gpu_poincare_ssm_forward_save` captures all timesteps
+- `wubu_poincare_ssm_backward.c`: CPU backward (steps 10-12, 1-8 correct; step 9 gyration identity approximation)
 
-## Performance
-| Component | Time |
-|-----------|------|
-| Model init (40L) | 0.8s |
-| GGUF RAM buffer (11 GB) | ~30s |
-| GPU forward (40L) | ~2s |
-| CPU backward (identity MoE) | ~25s |
-| **Total per step** | **~27s** |
+## Performance Bottlenecks
 
-## Known Issues
-- **loss=nan**: Pre-existing with 35B-A3B model; may need LR/init tuning
-- **MoE frozen**: 120 dequantization passes per step too slow
-- **No Poincaré backward**: Falls through as identity when POINCARE_R is set
+| Bottleneck | Detail |
+|------------|--------|
+| MoE dequant | 120 × 268M elements per step |
+| Poincaré gyration | Step 9 backward needs Möbius chain rule |
+| Vision integration | Not wired to training (standalone encoder) |
 
-## Architecture (current)
-```
-Training loop (train_gpu.c):
-1. GPU forward through all 40 layers → save intermediates
-2. CPU: output projection → CE loss → d_logits
-3. CPU backward (deferred grads, reverse order):
-   - RMSNorm backward (post-norm)
-   - MoE backward (identity, P4 code exists for full)
-   - SSM/GQA backward (exact, with weight grads)
-   - RMSNorm backward (pre-norm)
-4. Batch weight update (OpenMP + deferred cudaMemcpyAsync)
-5. Q-learner: loss → Q-table update → new LR
-```
+## Next: Optimize Everything
+
+All PE phases wired. Ready for optimization pass:
+- Fast dequant: pre-load quantized weights, SIMD dequant
+- MoE: batch dequant, once per epoch
+- Poincaré: full gyration backward from math in THEORY/
+- Vision: test with real images, GPU forward

@@ -39,25 +39,28 @@ bool vision_encoder_init(vision_encoder_t *enc, const char *path) {
     
     gguf_ctx *ctx = gguf_open(path);
     if (!ctx) { fprintf(stderr, "Vision: failed to open %s\n", path); return false; }
+    gguf_buffer_data(ctx);
     
     // Load top-level tensors
-    #define LOAD_F32(name, ptr, n) do { \
-        gguf_tensor_info *t = gguf_find_tensor(ctx, name); \
-        if (t) { ptr = (float *)malloc(n * sizeof(float)); \
-                 gguf_read_tensor_f32(ctx, t, ptr, n); } \
-        else fprintf(stderr, "Vision: missing %s\n", name); \
+    #define LOAD_TENSOR(name, ptr) do { \
+        gguf_tensor_info *t__ = gguf_find_tensor(ctx, name); \
+        if (t__) { \
+            int64_t ne__ = 1; for (int d__ = 0; d__ < t__->n_dims; d__++) ne__ *= t__->dims[d__]; \
+            ptr = (float *)malloc(ne__ * sizeof(float)); \
+            gguf_read_tensor_f32(ctx, t__, ptr, ne__); \
+        } else fprintf(stderr, "Vision: missing %s\n", name); \
     } while(0)
     
-    LOAD_F32("v.patch_embd.weight", enc->patch_embd_weight, 16*16*3*1152);
-    LOAD_F32("v.patch_embd.weight.1", enc->patch_embd_weight2, 16*16*3*1152);
-    LOAD_F32("v.patch_embd.bias", enc->patch_embd_bias, 1152);
-    LOAD_F32("v.position_embd.weight", enc->pos_embd_weight, 1152*2304);
-    LOAD_F32("v.post_ln.weight", enc->post_ln_weight, 1152);
-    LOAD_F32("v.post_ln.bias", enc->post_ln_bias, 1152);
-    LOAD_F32("mm.0.weight", enc->mm0_weight, 4608*4608);
-    LOAD_F32("mm.0.bias", enc->mm0_bias, 4608);
-    LOAD_F32("mm.2.weight", enc->mm2_weight, 4608*2048);
-    LOAD_F32("mm.2.bias", enc->mm2_bias, 2048);
+    LOAD_TENSOR("v.patch_embd.weight", enc->patch_embd_weight);
+    LOAD_TENSOR("v.patch_embd.weight.1", enc->patch_embd_weight2);
+    LOAD_TENSOR("v.patch_embd.bias", enc->patch_embd_bias);
+    LOAD_TENSOR("v.position_embd.weight", enc->pos_embd_weight);
+    LOAD_TENSOR("v.post_ln.weight", enc->post_ln_weight);
+    LOAD_TENSOR("v.post_ln.bias", enc->post_ln_bias);
+    LOAD_TENSOR("mm.0.weight", enc->mm0_weight);
+    LOAD_TENSOR("mm.0.bias", enc->mm0_bias);
+    LOAD_TENSOR("mm.2.weight", enc->mm2_weight);
+    LOAD_TENSOR("mm.2.bias", enc->mm2_bias);
     
     // Load per-layer tensors
     for (int l = 0; l < V_N_LAYERS; l++) {
@@ -65,44 +68,44 @@ bool vision_encoder_init(vision_encoder_t *enc, const char *path) {
         vision_layer_weights_t *layer = &enc->layers[l];
         
         snprintf(name, sizeof(name), "v.blk.%d.ln1.weight", l);
-        LOAD_F32(name, layer->ln1_weight, 1152);
+        LOAD_TENSOR(name, layer->ln1_weight);
         snprintf(name, sizeof(name), "v.blk.%d.ln1.bias", l);
-        LOAD_F32(name, layer->ln1_bias, 1152);
+        LOAD_TENSOR(name, layer->ln1_bias);
         
         snprintf(name, sizeof(name), "v.blk.%d.attn_qkv.weight", l);
-        LOAD_F32(name, layer->attn_qkv_weight, 1152*3456);
+        LOAD_TENSOR(name, layer->attn_qkv_weight);
         snprintf(name, sizeof(name), "v.blk.%d.attn_qkv.bias", l);
-        LOAD_F32(name, layer->attn_qkv_bias, 3456);
+        LOAD_TENSOR(name, layer->attn_qkv_bias);
         
         snprintf(name, sizeof(name), "v.blk.%d.attn_out.weight", l);
-        LOAD_F32(name, layer->attn_out_weight, 1152*1152);
+        LOAD_TENSOR(name, layer->attn_out_weight);
         snprintf(name, sizeof(name), "v.blk.%d.attn_out.bias", l);
-        LOAD_F32(name, layer->attn_out_bias, 1152);
+        LOAD_TENSOR(name, layer->attn_out_bias);
         
         snprintf(name, sizeof(name), "v.blk.%d.ln2.weight", l);
-        LOAD_F32(name, layer->ln2_weight, 1152);
+        LOAD_TENSOR(name, layer->ln2_weight);
         snprintf(name, sizeof(name), "v.blk.%d.ln2.bias", l);
-        LOAD_F32(name, layer->ln2_bias, 1152);
+        LOAD_TENSOR(name, layer->ln2_bias);
         
         snprintf(name, sizeof(name), "v.blk.%d.ffn_up.weight", l);
-        LOAD_F32(name, layer->ffn_up_weight, 1152*4304);
+        LOAD_TENSOR(name, layer->ffn_up_weight);
         snprintf(name, sizeof(name), "v.blk.%d.ffn_up.bias", l);
-        LOAD_F32(name, layer->ffn_up_bias, 4304);
+        LOAD_TENSOR(name, layer->ffn_up_bias);
         
         snprintf(name, sizeof(name), "v.blk.%d.ffn_down.weight", l);
-        LOAD_F32(name, layer->ffn_down_weight, 4304*1152);
+        LOAD_TENSOR(name, layer->ffn_down_weight);
         snprintf(name, sizeof(name), "v.blk.%d.ffn_down.bias", l);
-        LOAD_F32(name, layer->ffn_down_bias, 1152);
+        LOAD_TENSOR(name, layer->ffn_down_bias);
         
         layer->loaded = (layer->attn_qkv_weight != NULL);
         if (!layer->loaded)
             fprintf(stderr, "Vision: layer %d incomplete\n", l);
     }
     
-    #undef LOAD_F32
     gguf_close(ctx);
     enc->loaded = (enc->patch_embd_weight != NULL);
     if (enc->loaded) printf("Vision encoder: loaded %d layers\n", V_N_LAYERS);
+    fflush(stdout);
     return enc->loaded;
 }
 
@@ -259,8 +262,9 @@ void vision_encoder_forward(const vision_encoder_t *enc,
     
     if (n_merged > V_MAX_POS) n_merged = V_MAX_POS;
     
-    // Allocate hidden states
-    float *hidden = (float *)malloc(n_merged * V_HIDDEN * sizeof(float));
+    // Allocate hidden states (pre-merge: n_patches_total = patch_h * patch_w * V_TEMP_PATCH)
+    int n_patches_total = patch_h * patch_w * V_TEMP_PATCH;
+    float *hidden = (float *)malloc(n_patches_total * V_HIDDEN * sizeof(float));
     
     // === Patch embedding (3D convolution) ===
     // Two temporal kernels: one for each temporal_patch
