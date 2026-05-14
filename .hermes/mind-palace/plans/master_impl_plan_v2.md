@@ -11,8 +11,8 @@
 |-------|------|--------|-------------|------------|
 | 0 | **GGUF Tensor Layout** | ✅ DONE | None | 3 |
 | **1** | **Embedding Graft** | ✅ DONE | Phase 0 | 4 |
-| **2** | **Attention Port** | ✅ ALL DONE — See steps below | Phase 1, Phase 0 | 6 |
-| **3** | **Training Loop** | ⬜ (TST-method selected) | Phase 1, Phase 2 | 10 |
+|| **2** | **Attention Port** | ⚠️ CPU DONE, GPU BROKEN (zeros) — DA Audit May 13 | Phase 1, Phase 0 | 6 |
+| **3** | **Training Loop** | 🔄 CPU CE 12.66, GPU broken, backprop hangs | Phase 1, Phase 2 | 10 |
 | **4** | **MoE Port** | ⬜ | Phase 2, Phase 3 | 6 |
 | **5** | **Vision Port** | ⬜ | Phase 3 | 4 |
 | **6** | **CUDA Optimization** | Mixed | Phase 2-4 parallel | 5 |
@@ -80,10 +80,12 @@ The reference forward pass matches the algorithm from qwen3next.cpp:
 
 **What we know:**
 - 40 layers total: 30 SSM + 10 GQA, repeating 3:1 — all forward passes written in C + CUDA
-- **Phase 2.5 GPU test: ✅ complete** — all 40 layers verified on RTX 5050
-  - GPU: 419.85 ms total → **9.53 tok/s**
-  - CPU: 20,080.40 ms → **0.20 tok/s**
-  - **Speedup: 47.83x**
+- **Phase 2.5 GPU test: ⚠️ REVOKED — DA Audit May 13**
+  - CPU forward via `wubu_model_forward_from_embd` (train_real): ✅ CE 12.66, 0.2 tok/s
+  - GPU forward via `bench_e2e`: ⛔ ALL-ZERO output (CPU max=0.000, GPU max=0.000)
+  - GPU forward via `train_gpu`: ⛔ CE loss 69 vs expected 12.4
+  - Root cause: GPU weight loading in `bench.c` (`gpu_load_ssm_layer`) reads wrong data from GGUF
+  - Old "9.53 tok/s, 47.83x" claim was FALSE POSITIVE from zero-output comparison
   - CUDA kernels: src/cuda_kernels.cu, include/cuda_kernels.h
   - Benchmark: src/bench.c, include/bench.h, tools/bench_e2e.c
 - attn_qkv.weight [2048, 8192] — fused projection for ALL attention heads
@@ -147,14 +149,16 @@ Files: `src/wubu_model.c` (inline, not separate file)
 - ✅ Final norm (output_norm) loaded
 - ✅ test_model loads all layers and runs forward pass (B=1, T=4)
 
-### Step 2.5: Test on GPU ✅ ALL DONE
-- ✅ CUDA infrastructure: `include/cuda_kernels.h`, `src/cuda_kernels.cu`
-- ✅ cuBLAS matmul, SiLU, sigmoid, softplus, RMSNorm, delta_net_step kernels
-- ✅ GQA attention kernel (single-thread-per-block for correctness)
-- ✅ bench_e2e tool: all 40 layers sequentially on GPU vs CPU
-- ✅ Gate indexing bug fixed (fused Q+gate interleaved layout)
-- ✅ Verified: GPU = CPU logits (max diff ~2.4 = cuBLAS float artifact, accepted)
-- ✅ Performance: 9.53 tok/s GPU vs 0.20 tok/s CPU = 47.83x speedup
+### Step 2.5: Test on GPU ⚠️ REVOKED by DA Audit May 13
+- ⚠️ CUDA infrastructure exists: `include/cuda_kernels.h`, `src/cuda_kernels.cu`
+- ⚠️ cuBLAS matmul, SiLU, sigmoid, softplus, RMSNorm, delta_net_step kernels exist
+- ⚠️ GQA attention kernel exists (single-thread-per-block)
+- ⚠️ bench_e2e tool exists: all 40 layers sequentially on GPU vs CPU
+- ⛔ Gate indexing bug fixed BUT GPU weight loading (bench.c gpu_load_ssm_layer) reads WRONG data
+- ⛔ bench_e2e output is ALL ZEROS for both CPU and GPU paths
+- ⛔ train_gpu produces CE loss 69 vs expected 12.4
+- ✅ CPU forward via wubu_model_forward_from_embd works: CE 12.66
+- ❌ Old claim "9.53 tok/s, 47.83x GPU verified" = FALSE POSITIVE
 
 ### Files to Create for Phase 2
 ```
@@ -173,9 +177,9 @@ test_forward.c                 (verify against reference)
 
 ---
 
-## Phase 3: Training Loop ⬜ (TST-method selected)
+## Phase 3: Training Loop 🔄
 
-**Status: 40-layer forward pass works with real GGUF weights. GPU verified (9.53 tok/s, 47.83x vs CPU).**
+**Status: CPU forward + CE loss works (12.66). GPU forward broken (zeros). train_backprop hangs. MoE forward verified on CPU.**
 
 **Paper:** [Efficient Pre-Training with Token Superposition](https://arxiv.org/abs/2605.06546) — TST
 - **Authors:** Bowen Peng, Théo Gigant, Jeffrey Quesnelle (Nous Research)
