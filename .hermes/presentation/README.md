@@ -67,8 +67,8 @@ presentation/
 | Möbius Ops | `include/wubu_mobius.h`, `src/wubu_mobius.c` | ✅ Done |
 | Model Assembly | `include/wubu_model.h`, `src/wubu_model.c` | ✅ Done |
 | CUDA Kernels | `include/cuda_kernels.h`, `src/cuda_kernels.cu` | ✅ Done |
-| GPU Benchmark | `include/bench.h`, `src/bench.c`, `tools/bench_e2e.c` | ✅ Done |
-| CUDA Test | `tools/test_gpu.c` | ✅ Done |
+| GPU Benchmark | `include/bench.h`, `src/bench.c`, `tools/bench_e2e.c` | ⛔ Broken (zeros) |
+| CUDA Test | `tools/test_gpu.c` | ⛔ Broken (wrong loss) |
 | Tokenizer | `include/wubu_tokenizer.h`, `src/wubu_tokenizer.c` | 🟡 Needs fix |
 | Training Loop | — | 🔄 Not started |
 | MoE | — | ⏳ Future |
