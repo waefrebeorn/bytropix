@@ -35,6 +35,15 @@ typedef struct {
 
 typedef struct { float *ptr; long long sz; } weight_grad_t;
 
+// Per-layer MoE cached data for lazy dequant (forward→backward)
+typedef struct {
+    int n_unique;
+    int unique_ids[32];
+    float *deq_gate_inp;
+    float *gate_shexp, *up_shexp, *down_shexp;
+    float *expert_gate[32], *expert_up[32], *expert_down[32];
+} lazy_moe_cache_t;
+
 int main(int argc, char **argv) {
     const char *model_path = argc > 1 ? argv[1]
         : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
@@ -223,6 +232,49 @@ int main(int argc, char **argv) {
     // Buffer entire GGUF in RAM for fast MoE weight access (no SSD seeks)
     gguf_buffer_data(gguf_moe);
     
+    // Pre-compute quantized MoE tensor pointers per layer
+    typedef struct {
+        const uint8_t *q_gate_inp, *q_gate_exps, *q_up_exps, *q_down_exps;
+        const uint8_t *q_gate_shexp, *q_up_shexp, *q_down_shexp;
+        int ty_gi, ty_ge, ty_gs;
+        int64_t expert_raw, expert_raw_down;
+    } moe_qdata_t;
+    moe_qdata_t *moe_qdata = calloc(model.n_layers, sizeof(moe_qdata_t));
+    lazy_moe_cache_t *moe_cache = calloc(model.n_layers, sizeof(lazy_moe_cache_t));
+    int moe_enabled = 1;
+    if (getenv("NO_MOE")) moe_enabled = 0;
+    
+    char mname[256];
+    for (int l = 0; l < model.n_layers; l++) {
+        moe_qdata_t *mq = &moe_qdata[l];
+        gguf_tensor_info *t;
+        snprintf(mname, sizeof(mname), "blk.%d.ffn_gate_inp.weight", l);
+        t = gguf_find_tensor(gguf_moe, mname);
+        if (t) { mq->ty_gi = t->ggml_type; mq->q_gate_inp = (const uint8_t *)gguf_moe->data_blob + t->data_offset; }
+        snprintf(mname, sizeof(mname), "blk.%d.ffn_gate_exps.weight", l);
+        t = gguf_find_tensor(gguf_moe, mname);
+        if (t) { mq->ty_ge = t->ggml_type; mq->q_gate_exps = (const uint8_t *)gguf_moe->data_blob + t->data_offset; }
+        snprintf(mname, sizeof(mname), "blk.%d.ffn_up_exps.weight", l);
+        t = gguf_find_tensor(gguf_moe, mname);
+        if (t) mq->q_up_exps = (const uint8_t *)gguf_moe->data_blob + t->data_offset;
+        snprintf(mname, sizeof(mname), "blk.%d.ffn_down_exps.weight", l);
+        t = gguf_find_tensor(gguf_moe, mname);
+        if (t) mq->q_down_exps = (const uint8_t *)gguf_moe->data_blob + t->data_offset;
+        snprintf(mname, sizeof(mname), "blk.%d.ffn_gate_shexp.weight", l);
+        t = gguf_find_tensor(gguf_moe, mname);
+        if (t) { mq->ty_gs = t->ggml_type; mq->q_gate_shexp = (const uint8_t *)gguf_moe->data_blob + t->data_offset; }
+        snprintf(mname, sizeof(mname), "blk.%d.ffn_up_shexp.weight", l);
+        t = gguf_find_tensor(gguf_moe, mname);
+        if (t) mq->q_up_shexp = (const uint8_t *)gguf_moe->data_blob + t->data_offset;
+        snprintf(mname, sizeof(mname), "blk.%d.ffn_down_shexp.weight", l);
+        t = gguf_find_tensor(gguf_moe, mname);
+        if (t) mq->q_down_shexp = (const uint8_t *)gguf_moe->data_blob + t->data_offset;
+        mq->expert_raw = gguf_raw_size(mq->ty_ge, (int64_t)D_MODEL * D_FF);
+        mq->expert_raw_down = gguf_raw_size(mq->ty_ge, (int64_t)D_FF * D_MODEL);
+    }
+    if (moe_enabled) printf("  MoE: lazy (top-%d/%d experts per layer)\n", N_ACTIVE_EXPTS, N_EXPERTS);
+    else printf("  MoE: disabled (identity)\n");
+    
     double total_time = 0.0;
     for (int step = 0; step < n_steps; step++) {
         int start_idx = (step * N) % (total_tokens - N - 1);
@@ -352,10 +404,103 @@ int main(int argc, char **argv) {
             
             cudaMemcpy(saved_normed2 + l * N * D_MODEL, d_norm_p,
                       N * D_MODEL * sizeof(float), cudaMemcpyDeviceToHost);
-            // MoE: defer to backward. ffn_out = normed2 (identity) during forward.
-            // Backward loads MoE weights from GGUF and runs both forward+backward.
-            memcpy(saved_ffn_out + l * N * D_MODEL, saved_normed2 + l * N * D_MODEL,
-                   N * D_MODEL * sizeof(float));
+            // === Lazy MoE forward (replaces identity) ===
+            if (moe_enabled && moe_qdata[l].q_gate_exps) {
+                moe_qdata_t *mq = &moe_qdata[l];
+                lazy_moe_cache_t *mc = &moe_cache[l];
+                const float *n2 = saved_normed2 + l * N * D_MODEL;
+                float *ffn_out = saved_ffn_out + l * N * D_MODEL;
+                
+                // 1. Dequantize router
+                if (!mc->deq_gate_inp)
+                    mc->deq_gate_inp = (float *)malloc(D_MODEL * N_EXPERTS * sizeof(float));
+                gguf_dequantize(mq->q_gate_inp, mq->ty_gi, D_MODEL * N_EXPERTS, mc->deq_gate_inp);
+                
+                // 2. Route: compute scores
+                float *scores = (float *)malloc(N * N_EXPERTS * sizeof(float));
+                for (int s = 0; s < N; s++) {
+                    for (int e = 0; e < N_EXPERTS; e++) {
+                        double sum = 0.0;
+                        for (int k = 0; k < D_MODEL; k++)
+                            sum += (double)n2[s*D_MODEL+k] * (double)mc->deq_gate_inp[e*D_MODEL+k];
+                        scores[s*N_EXPERTS+e] = (float)sum;
+                    }
+                }
+                
+                // 3. Softmax → top-k → unique expert IDs
+                int topk_idx[4*8]; float topk_wt[4*8];
+                mc->n_unique = 0;
+                for (int s = 0; s < N; s++) {
+                    float *sc = scores + s * N_EXPERTS;
+                    float mx = sc[0]; for (int e=1; e<N_EXPERTS; e++) if(sc[e]>mx) mx=sc[e];
+                    float se = 0; for (int e=0; e<N_EXPERTS; e++) se += expf(sc[e]-mx);
+                    float inv = 1.0f/(se+1e-30f);
+                    float sm[256]; for(int e=0;e<N_EXPERTS;e++) sm[e]=expf(sc[e]-mx)*inv;
+                    int *is = topk_idx + s*N_ACTIVE_EXPTS;
+                    float *ws = topk_wt + s*N_ACTIVE_EXPTS;
+                    for(int k=0;k<N_ACTIVE_EXPTS;k++){
+                        int bi=-1; float bv=-1e30f;
+                        for(int e=0;e<N_EXPERTS;e++){
+                            int used=0; for(int pk=0;pk<k;pk++) if(is[pk]==e){used=1;break;}
+                            if(!used&&sm[e]>bv){bv=sm[e];bi=e;}
+                        }
+                        is[k]=bi; ws[k]=bv;
+                    }
+                    float sw=0; for(int k=0;k<N_ACTIVE_EXPTS;k++) sw+=ws[k];
+                    if(sw>1e-30f){float iv=1.0f/sw;for(int k=0;k<N_ACTIVE_EXPTS;k++)ws[k]*=iv;}
+                    for(int k=0;k<N_ACTIVE_EXPTS;k++){
+                        if(is[k]<0)continue;
+                        int seen=0; for(int u=0;u<mc->n_unique;u++) if(mc->unique_ids[u]==is[k]){seen=1;break;}
+                        if(!seen) mc->unique_ids[mc->n_unique++]=is[k];
+                    }
+                }
+                
+                // 4. Dequantize shared expert (once, cached)
+                if (!mc->gate_shexp && mq->q_gate_shexp) {
+                    mc->gate_shexp = (float *)malloc(D_MODEL*SHARED_D_FF*sizeof(float));
+                    mc->up_shexp = (float *)malloc(D_MODEL*SHARED_D_FF*sizeof(float));
+                    mc->down_shexp = (float *)malloc(SHARED_D_FF*D_MODEL*sizeof(float));
+                    gguf_dequantize(mq->q_gate_shexp, mq->ty_gs, (int64_t)D_MODEL*SHARED_D_FF, mc->gate_shexp);
+                    gguf_dequantize(mq->q_up_shexp, mq->ty_gs, (int64_t)D_MODEL*SHARED_D_FF, mc->up_shexp);
+                    gguf_dequantize(mq->q_down_shexp, mq->ty_gs, (int64_t)SHARED_D_FF*D_MODEL, mc->down_shexp);
+                }
+                
+                // 5. Dequantize unique experts + build moe_weights_t
+                moe_weights_t mw; memset(&mw,0,sizeof(mw));
+                mw.ffn_gate_inp = mc->deq_gate_inp;
+                mw.ffn_gate_shexp = mc->gate_shexp; mw.ffn_up_shexp = mc->up_shexp; mw.ffn_down_shexp = mc->down_shexp;
+                mw.loaded = true;
+                
+                float *ge = (float *)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF,sizeof(float));
+                float *ue = (float *)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF,sizeof(float));
+                float *de = (float *)calloc((int64_t)N_EXPERTS*D_FF*D_MODEL,sizeof(float));
+                
+                for (int u = 0; u < mc->n_unique; u++) {
+                    int eid = mc->unique_ids[u];
+                    mc->expert_gate[u] = (float *)malloc((int64_t)D_MODEL*D_FF*sizeof(float));
+                    mc->expert_up[u] = (float *)malloc((int64_t)D_MODEL*D_FF*sizeof(float));
+                    mc->expert_down[u] = (float *)malloc((int64_t)D_FF*D_MODEL*sizeof(float));
+                    gguf_dequantize(mq->q_gate_exps+(int64_t)eid*mq->expert_raw, mq->ty_ge, (int64_t)D_MODEL*D_FF, mc->expert_gate[u]);
+                    gguf_dequantize(mq->q_up_exps+(int64_t)eid*mq->expert_raw, mq->ty_ge, (int64_t)D_MODEL*D_FF, mc->expert_up[u]);
+                    gguf_dequantize(mq->q_down_exps+(int64_t)eid*mq->expert_raw_down, mq->ty_ge, (int64_t)D_FF*D_MODEL, mc->expert_down[u]);
+                    memcpy(ge+(int64_t)eid*D_MODEL*D_FF, mc->expert_gate[u], (int64_t)D_MODEL*D_FF*sizeof(float));
+                    memcpy(ue+(int64_t)eid*D_MODEL*D_FF, mc->expert_up[u], (int64_t)D_MODEL*D_FF*sizeof(float));
+                    memcpy(de+(int64_t)eid*D_FF*D_MODEL, mc->expert_down[u], (int64_t)D_FF*D_MODEL*sizeof(float));
+                }
+                mw.ffn_gate_exps = ge; mw.ffn_up_exps = ue; mw.ffn_down_exps = de;
+                
+                // 6. Run MoE forward
+                wubu_moe_forward(n2, B, T, &mw, ffn_out);
+                free(ge); free(ue); free(de); free(scores);
+                
+                // 7. Upload MoE output to GPU for residual add
+                cudaMemcpyAsync(d_norm_p, ffn_out, N*D_MODEL*sizeof(float),
+                               cudaMemcpyHostToDevice, stream);
+            } else {
+                // Identity pass-through (MoE disabled or no tensor)
+                memcpy(saved_ffn_out + l * N * D_MODEL, saved_normed2 + l * N * D_MODEL,
+                       N * D_MODEL * sizeof(float));
+            }
             
             cublasSaxpy(cublas_h, N * D_MODEL, &alpha, d_norm_p, 1, d_cur, 1);
             cudaStreamSynchronize(stream);
@@ -481,16 +626,70 @@ int main(int argc, char **argv) {
             
             const float *normed2_inp = saved_normed2 + l * N * D_MODEL;
             
-            // === MoE backward: identity gradient (dequant-limited, see P4) ===
-            float *d_normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
-            memcpy(d_normed2, d_x_bwd, N * D_MODEL * sizeof(float));
-            
-            // Post-attention RMSNorm backward: gradient from d_normed2
-            wubu_rms_norm_backward(B, T, D_MODEL, normed2_inp, layer->post_attn_norm_weight,
-                                   1e-6f, d_normed2, d_x_post);
-            // Add residual path gradient: x[l] = x_mid + ffn_out
-            for (int i = 0; i < N * D_MODEL; i++) d_x_post[i] += d_x_bwd[i];
-            free(d_normed2);
+            // === Lazy MoE backward (uses forward-cached weights) ===
+            if (moe_enabled && moe_cache[l].n_unique > 0) {
+                lazy_moe_cache_t *mc = &moe_cache[l];
+                const float *normed2_inp = saved_normed2 + l * N * D_MODEL;
+                
+                // Rebuild moe_weights_t from cached dequantized experts
+                moe_weights_t mw; memset(&mw,0,sizeof(mw));
+                mw.ffn_gate_inp = mc->deq_gate_inp;
+                mw.ffn_gate_shexp = mc->gate_shexp;
+                mw.ffn_up_shexp = mc->up_shexp;
+                mw.ffn_down_shexp = mc->down_shexp;
+                mw.loaded = true;
+                
+                float *ge = (float *)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF,sizeof(float));
+                float *ue = (float *)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF,sizeof(float));
+                float *de = (float *)calloc((int64_t)N_EXPERTS*D_FF*D_MODEL,sizeof(float));
+                for (int u = 0; u < mc->n_unique; u++) {
+                    int eid = mc->unique_ids[u];
+                    memcpy(ge+(int64_t)eid*D_MODEL*D_FF, mc->expert_gate[u], (int64_t)D_MODEL*D_FF*sizeof(float));
+                    memcpy(ue+(int64_t)eid*D_MODEL*D_FF, mc->expert_up[u], (int64_t)D_MODEL*D_FF*sizeof(float));
+                    memcpy(de+(int64_t)eid*D_FF*D_MODEL, mc->expert_down[u], (int64_t)D_FF*D_MODEL*sizeof(float));
+                }
+                mw.ffn_gate_exps = ge; mw.ffn_up_exps = ue; mw.ffn_down_exps = de;
+                
+                // Allocate MoE weight gradients
+                float *d_normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
+                float *d_gate_inp = (float *)calloc(D_MODEL*N_EXPERTS, sizeof(float));
+                float *d_gate_exps = (float *)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF, sizeof(float));
+                float *d_up_exps = (float *)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF, sizeof(float));
+                float *d_down_exps = (float *)calloc((int64_t)N_EXPERTS*D_FF*D_MODEL, sizeof(float));
+                float *d_gs = (float *)calloc((int64_t)D_MODEL*SHARED_D_FF, sizeof(float));
+                float *d_us = (float *)calloc((int64_t)D_MODEL*SHARED_D_FF, sizeof(float));
+                float *d_ds = (float *)calloc((int64_t)SHARED_D_FF*D_MODEL, sizeof(float));
+                
+                wubu_moe_backward(d_x_bwd, B, T, normed2_inp, &mw,
+                    d_normed2, d_gate_inp, d_gate_exps, d_up_exps, d_down_exps,
+                    d_gs, d_us, d_ds);
+                
+                // Post-attention RMSNorm backward
+                wubu_rms_norm_backward(B, T, D_MODEL, normed2_inp, layer->post_attn_norm_weight,
+                                       1e-6f, d_normed2, d_x_post);
+                for (int i = 0; i < N * D_MODEL; i++) d_x_post[i] += d_x_bwd[i];
+                
+                // Free + dealloc temp arrays
+                free(ge); free(ue); free(de);
+                free(d_gate_inp); free(d_gate_exps); free(d_up_exps); free(d_down_exps);
+                free(d_gs); free(d_us); free(d_ds);
+                
+                // Free cached MoE expert weights (no longer needed)
+                for (int u = 0; u < mc->n_unique; u++) {
+                    free(mc->expert_gate[u]); free(mc->expert_up[u]); free(mc->expert_down[u]);
+                    mc->expert_gate[u] = NULL; mc->expert_up[u] = NULL; mc->expert_down[u] = NULL;
+                }
+                mc->n_unique = 0;
+                // Keep deq_gate_inp and shared expert for reuse (freed at end)
+            } else {
+                // Identity MoE backward (unchanged)
+                float *d_normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
+                memcpy(d_normed2, d_x_bwd, N * D_MODEL * sizeof(float));
+                wubu_rms_norm_backward(B, T, D_MODEL, normed2_inp, layer->post_attn_norm_weight,
+                                       1e-6f, d_normed2, d_x_post);
+                for (int i = 0; i < N * D_MODEL; i++) d_x_post[i] += d_x_bwd[i];
+                free(d_normed2);
+            }
             
             float *d_attn_out = d_x_post;
             
