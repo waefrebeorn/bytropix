@@ -1,0 +1,379 @@
+#include "bench.h"
+#include <cuda_runtime.h>
+#include <cublas_v2.h>
+
+// ================================================================
+// GPU SSM Layer Forward Pass
+// ================================================================
+void gpu_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
+                     const float *d_x, int B, int T,
+                     const float *d_attn_qkv,
+                     const float *d_attn_gate,
+                     const float *d_ssm_beta,
+                     const float *d_ssm_alpha,
+                     const float *d_ssm_dt_bias,
+                     const float *d_ssm_a,
+                     const float *d_ssm_conv1d,
+                     const float *d_ssm_norm,
+                     const float *d_ssm_out,
+                     float *d_ssm_state,
+                     float *d_conv_state,
+                     float *d_output,
+                     float *d_qkv,
+                     float *d_z,
+                     float *d_beta,
+                     float *d_alpha,
+                     float *d_beta_sig,
+                     float *d_alpha_bi,
+                     float *d_gate,
+                     float *d_conv_input,
+                     float *d_conv_out,
+                     float *d_q_conv,
+                     float *d_k_conv,
+                     float *d_v_conv,
+                     float *d_q_norm,
+                     float *d_k_norm,
+                     float *d_delta_out,
+                     float *d_z_silu) {
+    const int N = B * T;
+    const int qkv_dim = KEY_DIM * 2 + VALUE_DIM; // 8192
+
+    // ===== Step 1: QKV projection =====
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_qkv, qkv_dim, d_qkv, 1.0f, 0.0f);
+
+    // ===== Step 2: z gate projection =====
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_gate, VALUE_DIM, d_z, 1.0f, 0.0f);
+
+    // ===== Step 3: beta/alpha projections =====
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_ssm_beta, DT_RANK, d_beta, 1.0f, 0.0f);
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_ssm_alpha, DT_RANK, d_alpha, 1.0f, 0.0f);
+
+    // ===== Step 4: beta = sigmoid(beta_raw), gate = softplus(alpha + dt_bias) * ssm_a =====
+    wubu_cuda_sigmoid(N * DT_RANK, d_beta, d_beta_sig, stream);
+    wubu_cuda_add_bias(N, DT_RANK, d_alpha, d_ssm_dt_bias, d_alpha_bi, stream);
+    wubu_cuda_softplus(N * DT_RANK, d_alpha_bi, d_gate, stream);
+    wubu_cuda_mul_by_scalar(N, DT_RANK, d_gate, d_ssm_a, d_gate, stream);
+
+    // ===== Step 5: Convolution =====
+    // First CONV_KERNEL-1 positions are conv_state, then qkv data
+    for (int b = 0; b < B; b++) {
+        cudaMemcpyAsync(d_conv_input + b * (T + CONV_KERNEL - 1) * CONV_DIM,
+                        d_conv_state + b * (CONV_KERNEL - 1) * CONV_DIM,
+                        (CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(d_conv_input + b * (T + CONV_KERNEL - 1) * CONV_DIM + (CONV_KERNEL - 1) * CONV_DIM,
+                        d_qkv + b * T * CONV_DIM,
+                        T * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+    }
+
+    // Convolution + SiLU
+    wubu_cuda_conv1d(B, T, CONV_DIM, CONV_KERNEL, d_conv_input, d_ssm_conv1d, d_conv_out, stream);
+    wubu_cuda_silu(N * CONV_DIM, d_conv_out, d_conv_out, stream);
+
+    // Update conv_state: last CONV_KERNEL-1 elements
+    for (int b = 0; b < B; b++) {
+        cudaMemcpyAsync(d_conv_state + b * (CONV_KERNEL - 1) * CONV_DIM,
+                        d_conv_input + (b * (T + CONV_KERNEL - 1) + T) * CONV_DIM,
+                        (CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+    }
+
+    // ===== Step 6: Split Q, K, V =====
+    wubu_cuda_split_qkv(N, KEY_DIM, VALUE_DIM, d_conv_out,
+                        d_q_conv, d_k_conv, d_v_conv, stream);
+
+    // ===== Step 7: L2 Normalize Q and K =====
+    wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, stream);
+    wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, stream);
+
+    // ===== Steps 8-9: Gated Delta Net recurrence =====
+    int repeat_factor = SSM_V_HEADS / SSM_K_HEADS;
+    
+    // Allocate persistent channel for the step kernel (done once per layer)
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            int s = b * T + t;
+
+            // Read beta and gate per-token (small, DT_RANK=32)
+            float beta_host[DT_RANK], gate_host[DT_RANK];
+            cudaMemcpyAsync(beta_host, d_beta_sig + s * DT_RANK,
+                           DT_RANK * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaMemcpyAsync(gate_host, d_gate + s * DT_RANK,
+                           DT_RANK * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+
+            for (int vh = 0; vh < SSM_V_HEADS; vh++) {
+                int kh = vh / repeat_factor;
+                float bg = beta_host[kh];
+                float gg = gate_host[kh];
+
+                float *d_q_vh = d_q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
+                float *d_k_vh = d_k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
+                float *d_v_vh = d_v_conv + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
+                float *d_h = d_ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
+                float *d_out_vh = d_delta_out + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
+
+                wubu_cuda_delta_net_step(d_h, d_k_vh, d_v_vh, d_q_vh,
+                                         gg, bg, d_out_vh, stream);
+            }
+        }
+    }
+
+    // ===== Step 10: Gated normalization =====
+    wubu_cuda_silu(N * VALUE_DIM, d_z, d_z_silu, stream);
+    wubu_cuda_gated_norm(B, T, SSM_V_HEADS, SSM_D_STATE,
+                         d_delta_out, d_ssm_norm, d_z_silu, stream);
+
+    // ===== Step 11: Output projection =====
+    wubu_cuda_matmul(cublas_h, d_delta_out, N, VALUE_DIM, d_ssm_out, D_MODEL, d_output, 1.0f, 0.0f);
+
+    cudaStreamSynchronize(stream);
+}
+
+// ================================================================
+// GPU GQA Forward Pass
+// ================================================================
+void gpu_gqa_forward(cublasHandle_t cublas_h, cudaStream_t stream,
+                     const float *d_x, int B, int T,
+                     const float *d_attn_q,
+                     const float *d_attn_k,
+                     const float *d_attn_v,
+                     const float *d_attn_out_w,
+                     const float *d_q_norm_w,
+                     const float *d_k_norm_w,
+                     float *d_output,
+                     float *d_Q_full,
+                     float *d_K,
+                     float *d_V,
+                     float *d_scratch) {
+    const int N = B * T;
+    int q_dim_x2 = GQA_Q_HEADS * GQA_HEAD_DIM * 2; // 8192
+    int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;       // 512
+
+    // ===== Step 1: Q + gate fused projection =====
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_q, q_dim_x2, d_Q_full, 1.0f, 0.0f);
+    // ===== Step 2: K projection =====
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_k, kv_dim, d_K, 1.0f, 0.0f);
+    // ===== Step 2b: V projection =====
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_v, kv_dim, d_V, 1.0f, 0.0f);
+
+    // ===== Steps 3-7: Fused GQA attention =====
+    wubu_cuda_gqa_forward(cublas_h, stream,
+        B, T,
+        d_Q_full, d_K, d_V,
+        d_q_norm_w, d_k_norm_w,
+        d_attn_out_w,
+        d_output, d_scratch);
+
+    cudaStreamSynchronize(stream);
+}
+
+// ================================================================
+// GPU SSM Weight Loader
+// ================================================================
+int gpu_load_ssm_layer(gguf_ctx *ctx, int layer_idx,
+                       gpu_ssm_weights *w, cudaStream_t stream) {
+    char name[256];
+    int qkv_dim = KEY_DIM * 2 + VALUE_DIM; // 8192
+    gguf_tensor_info *t;
+
+    memset(w, 0, sizeof(*w));
+
+    // Allocate GPU memory for all weights
+    w->d_attn_qkv    = wubu_cuda_alloc(D_MODEL * qkv_dim * sizeof(float));
+    w->d_attn_gate   = wubu_cuda_alloc(D_MODEL * VALUE_DIM * sizeof(float));
+    w->d_ssm_beta    = wubu_cuda_alloc(D_MODEL * DT_RANK * sizeof(float));
+    w->d_ssm_alpha   = wubu_cuda_alloc(D_MODEL * DT_RANK * sizeof(float));
+    w->d_ssm_dt_bias = wubu_cuda_alloc(DT_RANK * sizeof(float));
+    w->d_ssm_a       = wubu_cuda_alloc(DT_RANK * sizeof(float));
+    w->d_ssm_conv1d  = wubu_cuda_alloc(CONV_KERNEL * CONV_DIM * sizeof(float));
+    w->d_ssm_norm    = wubu_cuda_alloc(SSM_D_STATE * sizeof(float));
+    w->d_ssm_out     = wubu_cuda_alloc(VALUE_DIM * D_MODEL * sizeof(float));
+
+    if (!w->d_attn_qkv || !w->d_attn_gate || !w->d_ssm_beta || !w->d_ssm_alpha ||
+        !w->d_ssm_dt_bias || !w->d_ssm_a || !w->d_ssm_conv1d || !w->d_ssm_norm || !w->d_ssm_out) {
+        fprintf(stderr, "GPU weight allocation failed (layer %d)\n", layer_idx);
+        gpu_free_ssm_weights(w);
+        return 0;
+    }
+
+    // Load + upload each tensor
+    float *host_buf;
+
+    snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(D_MODEL * qkv_dim * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, D_MODEL * qkv_dim);
+    wubu_cuda_to_device(host_buf, w->d_attn_qkv, D_MODEL * qkv_dim * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.attn_gate.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(D_MODEL * VALUE_DIM * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, D_MODEL * VALUE_DIM);
+    wubu_cuda_to_device(host_buf, w->d_attn_gate, D_MODEL * VALUE_DIM * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.ssm_beta.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(D_MODEL * DT_RANK * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, D_MODEL * DT_RANK);
+    wubu_cuda_to_device(host_buf, w->d_ssm_beta, D_MODEL * DT_RANK * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.ssm_alpha.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(D_MODEL * DT_RANK * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, D_MODEL * DT_RANK);
+    wubu_cuda_to_device(host_buf, w->d_ssm_alpha, D_MODEL * DT_RANK * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.ssm_dt.bias", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(DT_RANK * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, DT_RANK);
+    wubu_cuda_to_device(host_buf, w->d_ssm_dt_bias, DT_RANK * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.ssm_a", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(DT_RANK * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, DT_RANK);
+    wubu_cuda_to_device(host_buf, w->d_ssm_a, DT_RANK * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.ssm_conv1d.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(CONV_KERNEL * CONV_DIM * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, CONV_KERNEL * CONV_DIM);
+    wubu_cuda_to_device(host_buf, w->d_ssm_conv1d, CONV_KERNEL * CONV_DIM * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.ssm_norm.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(SSM_D_STATE * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, SSM_D_STATE);
+    wubu_cuda_to_device(host_buf, w->d_ssm_norm, SSM_D_STATE * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.ssm_out.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_ssm_weights(w); return 0; }
+    host_buf = (float *)malloc(VALUE_DIM * D_MODEL * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, VALUE_DIM * D_MODEL);
+    wubu_cuda_to_device(host_buf, w->d_ssm_out, VALUE_DIM * D_MODEL * sizeof(float), stream);
+    free(host_buf);
+
+    cudaStreamSynchronize(stream);
+    return 1;
+}
+
+void gpu_free_ssm_weights(gpu_ssm_weights *w) {
+    wubu_cuda_free(w->d_attn_qkv);
+    wubu_cuda_free(w->d_attn_gate);
+    wubu_cuda_free(w->d_ssm_beta);
+    wubu_cuda_free(w->d_ssm_alpha);
+    wubu_cuda_free(w->d_ssm_dt_bias);
+    wubu_cuda_free(w->d_ssm_a);
+    wubu_cuda_free(w->d_ssm_conv1d);
+    wubu_cuda_free(w->d_ssm_norm);
+    wubu_cuda_free(w->d_ssm_out);
+}
+
+// ================================================================
+// GPU GQA Weight Loader
+// ================================================================
+int gpu_load_gqa_layer(gguf_ctx *ctx, int layer_idx,
+                       gpu_gqa_weights *w, cudaStream_t stream) {
+    char name[256];
+    int q_dim_x2 = GQA_Q_HEADS * GQA_HEAD_DIM * 2; // 8192
+    int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;       // 512
+    int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;          // 4096
+    gguf_tensor_info *t;
+
+    memset(w, 0, sizeof(*w));
+
+    w->d_attn_q     = wubu_cuda_alloc(D_MODEL * q_dim_x2 * sizeof(float));
+    w->d_attn_k     = wubu_cuda_alloc(D_MODEL * kv_dim * sizeof(float));
+    w->d_attn_v     = wubu_cuda_alloc(D_MODEL * kv_dim * sizeof(float));
+    w->d_attn_out_w = wubu_cuda_alloc(q_dim * D_MODEL * sizeof(float));
+    w->d_q_norm_w   = wubu_cuda_alloc(GQA_HEAD_DIM * sizeof(float));
+    w->d_k_norm_w   = wubu_cuda_alloc(GQA_HEAD_DIM * sizeof(float));
+
+    if (!w->d_attn_q || !w->d_attn_k || !w->d_attn_v || !w->d_attn_out_w || !w->d_q_norm_w || !w->d_k_norm_w) {
+        fprintf(stderr, "GQA GPU weight allocation failed (layer %d)\n", layer_idx);
+        gpu_free_gqa_weights(w);
+        return 0;
+    }
+
+    float *host_buf;
+
+    snprintf(name, sizeof(name), "blk.%d.attn_q.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_gqa_weights(w); return 0; }
+    host_buf = (float *)malloc(D_MODEL * q_dim_x2 * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, D_MODEL * q_dim_x2);
+    wubu_cuda_to_device(host_buf, w->d_attn_q, D_MODEL * q_dim_x2 * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.attn_k.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_gqa_weights(w); return 0; }
+    host_buf = (float *)malloc(D_MODEL * kv_dim * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, D_MODEL * kv_dim);
+    wubu_cuda_to_device(host_buf, w->d_attn_k, D_MODEL * kv_dim * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.attn_v.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_gqa_weights(w); return 0; }
+    host_buf = (float *)malloc(D_MODEL * kv_dim * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, D_MODEL * kv_dim);
+    wubu_cuda_to_device(host_buf, w->d_attn_v, D_MODEL * kv_dim * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.attn_output.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_gqa_weights(w); return 0; }
+    host_buf = (float *)malloc(q_dim * D_MODEL * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, q_dim * D_MODEL);
+    wubu_cuda_to_device(host_buf, w->d_attn_out_w, q_dim * D_MODEL * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.attn_q_norm.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_gqa_weights(w); return 0; }
+    host_buf = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, GQA_HEAD_DIM);
+    wubu_cuda_to_device(host_buf, w->d_q_norm_w, GQA_HEAD_DIM * sizeof(float), stream);
+    free(host_buf);
+
+    snprintf(name, sizeof(name), "blk.%d.attn_k_norm.weight", layer_idx);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "Missing %s\n", name); gpu_free_gqa_weights(w); return 0; }
+    host_buf = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, host_buf, GQA_HEAD_DIM);
+    wubu_cuda_to_device(host_buf, w->d_k_norm_w, GQA_HEAD_DIM * sizeof(float), stream);
+    free(host_buf);
+
+    cudaStreamSynchronize(stream);
+    return 1;
+}
+
+void gpu_free_gqa_weights(gpu_gqa_weights *w) {
+    wubu_cuda_free(w->d_attn_q);
+    wubu_cuda_free(w->d_attn_k);
+    wubu_cuda_free(w->d_attn_v);
+    wubu_cuda_free(w->d_attn_out_w);
+    wubu_cuda_free(w->d_q_norm_w);
+    wubu_cuda_free(w->d_k_norm_w);
+}
