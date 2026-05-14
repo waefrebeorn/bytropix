@@ -670,10 +670,20 @@ gguf_tensor_info* gguf_find_tensor(gguf_ctx *ctx, const char *name) {
 // ========== Q5_K Dequantization ==========
 
 #define QK_K 256
-#define Q4_K_BLOCK_SIZE 176  // sizeof(block_q4_K): 2+2+12+32+128
-#define Q5_K_BLOCK_SIZE 176  // sizeof(block_q5_K): 2+2+12+32+128
+// block_q4_K: d(2) + dmin(2) + scales(12) + qs(128) = 144 bytes (NO qh field in modern format)
+#define Q4_K_BLOCK_SIZE 144
+// block_q5_K: d(2) + dmin(2) + scales(12) + qh(32) + qs(128) = 176 bytes
+#define Q5_K_BLOCK_SIZE 176
+
+// Forward declaration for 6-bit scale extraction (defined after Q5_K)
+static inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t *d, uint8_t *m);
 
 static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_elems) {
+    // Reference: llama.cpp ggml-quants.c dequantize_row_q5_K()
+    // block_q5_K: d(2) + dmin(2) + scales(12) + qh(32) + qs(128) = 176 bytes
+    // scales use 6-bit encoding via get_scale_min_k4 (same as Q4_K)
+    // qh provides 256 high bits (1 per element), used in shifts via u1/u2
+    // qs stores 256 low 4-bit nibbles
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
     
     for (int64_t b = 0; b < n_blocks; b++) {
@@ -686,30 +696,24 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
         float d = f16_to_f32(d_bits);
         float dmin = f16_to_f32(dmin_bits);
         
-        const uint8_t *scales = block + 4;       // 12 bytes
-        const uint8_t *qh = block + 16;          // 32 bytes
-        const uint8_t *qs = block + 48;          // 128 bytes
+        const uint8_t *scales = block + 4;  // 12 bytes — 6-bit scales (get_scale_min_k4)
+        const uint8_t *qh = block + 16;     // 32 bytes — 256 high bits
+        const uint8_t *qs = block + 48;     // 128 bytes — low 4-bit nibbles
         
         int64_t out_offset = b * QK_K;
         int64_t remaining = n_elems - out_offset;
         if (remaining > QK_K) remaining = QK_K;
         
-        int is_idx = 0;
+        int is = 0;
+        uint8_t sc, m;
         uint8_t u1 = 1, u2 = 2;
         
         for (int j = 0; j < QK_K && j < remaining; j += 64) {
-            // Decode scales from byte pairs
-            uint8_t b1 = scales[is_idx];
-            uint8_t b2 = scales[is_idx + 1];
-            uint8_t sc1 = b1 & 0x0F;
-            uint8_t m1 = (b1 >> 4) & 0x0F;
-            uint8_t sc2 = b2 & 0x0F;
-            uint8_t m2 = (b2 >> 4) & 0x0F;
-            
-            float d1 = d * sc1;
-            float m1_val = dmin * m1;
-            float d2 = d * sc2;
-            float m2_val = dmin * m2;
+            // Get 6-bit scale/min packed in scales (same as Q4_K)
+            get_scale_min_k4(is + 0, scales, &sc, &m);
+            float d1 = d * sc; float m1 = dmin * m;
+            get_scale_min_k4(is + 1, scales, &sc, &m);
+            float d2 = d * sc; float m2 = dmin * m;
             
             int ql_base = j / 2; // 32 qs bytes per 64-element group
             
@@ -717,17 +721,17 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
                 uint8_t lo = qs[ql_base + l];
                 uint8_t hi = qh[l];
                 
-                float val1 = (lo & 0x0F) + ((hi & u1) ? 16 : 0);
-                float val2 = (lo >> 4)   + ((hi & u2) ? 16 : 0);
+                float val1 = (float)((lo & 0x0F) + ((hi & u1) ? 16 : 0));
+                float val2 = (float)((lo >> 4)   + ((hi & u2) ? 16 : 0));
                 
                 int idx1 = out_offset + j + l;
                 int idx2 = out_offset + j + 32 + l;
                 
-                if (idx1 < n_elems) output[idx1] = d1 * val1 - m1_val;
-                if (idx2 < n_elems) output[idx2] = d2 * val2 - m2_val;
+                if (idx1 < n_elems) output[idx1] = d1 * val1 - m1;
+                if (idx2 < n_elems) output[idx2] = d2 * val2 - m2;
             }
             
-            is_idx += 2;
+            is += 2;
             u1 <<= 2;
             u2 <<= 2;
         }
@@ -962,8 +966,8 @@ void gguf_close(gguf_ctx *ctx) {
     }
 }
 
-// Q4_K block: d(fp16,2) + dmin(fp16,2) + scales[12] + qh[32] + qs[128] = 176 bytes per 256 elements
-#define Q4_K_BLOCK_SIZE 176
+// Q4_K block: d(fp16,2) + dmin(fp16,2) + scales[12] + qs[128] = 144 bytes per 256 elements (modern, NO qh field)
+#define Q4_K_BLOCK_SIZE 144
 
 static inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t *d, uint8_t *m) {
     // From llama.cpp ggml-quants.c
@@ -977,8 +981,8 @@ static inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t *d, uint8_t
 
 static void dequantize_q4_K_row(const uint8_t *data, float *output, int64_t n_elems) {
     // Reference: llama.cpp ggml-quants.c dequantize_row_q4_K()
-    // block_q4_K: d(fp16,2) + dmin(fp16,2) + scales[12] + qh[32] + qs[128] = 176 bytes
-    // Uses get_scale_min_k4 for scale/min extraction
+    // block_q4_K: d(fp16,2) + dmin(fp16,2) + scales[12] + qs[128] = 144 bytes
+    // Modern Q4_K has NO qh field — scales use 6-bit encoding via get_scale_min_k4
     // qs stores 256 4-bit values: qs[l] = 2 nibbles, each 0..15
     // Output: d * sc * q - min * m  (UNSIGNED q, NOT signed q-8!)
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
@@ -991,6 +995,7 @@ static void dequantize_q4_K_row(const uint8_t *data, float *output, int64_t n_el
         float dmin = f16_to_f32(dmin_bits);
         
         const uint8_t *scales = block + 4;  // 12 bytes
+        const uint8_t *qs = block + 16;     // qs starts after d+dmin+scales (no qh in Q4_K)
         
         int is = 0;
         for (int j = 0; j < QK_K; j += 64) {
@@ -1000,8 +1005,8 @@ static void dequantize_q4_K_row(const uint8_t *data, float *output, int64_t n_el
             get_scale_min_k4(is + 1, scales, &sc, &m);
             float d2 = d * sc; float m2 = dmin * m;
             
-            // qs at block+48, offset by j/2 bytes per 64-element chunk
-            const uint8_t *bq = block + 48 + j/2;
+            // qs offset by j/2 bytes per 64-element chunk
+            const uint8_t *bq = qs + j/2;
             int base = b * QK_K + j;
             for (int l = 0; l < 32 && (base + l) < n_elems; l++)
                 output[base + l] = d1 * (bq[l] & 0xF) - m1;
