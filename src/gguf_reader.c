@@ -805,180 +805,182 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         return 0;
     }
     
-    // Seek to tensor data
+    // Get raw data pointer (from buffer or file)
     uint64_t tensor_pos = ctx->data_blob_offset + tensor->data_offset;
-    fseek(ctx->file, tensor_pos, SEEK_SET);
+    const uint8_t *src = NULL;
+    uint8_t *raw_heap = NULL;
+    if (ctx->data_blob) {
+        src = (const uint8_t *)ctx->data_blob + tensor->data_offset;
+    }
     
     if (tensor->ggml_type == GGML_TYPE_F32) {
         // Direct read
-        size_t n_read = fread(output, 4, n_elems, ctx->file);
-        return (int)(n_read == (size_t)n_elems ? n_elems : 0);
+        if (src) {
+            memcpy(output, src, n_elems * sizeof(float));
+        } else {
+            fseek(ctx->file, tensor_pos, SEEK_SET);
+            size_t n_read = fread(output, 4, n_elems, ctx->file);
+            if (n_read != (size_t)n_elems) return 0;
+        }
+        return (int)n_elems;
     }
     else if (tensor->ggml_type == GGML_TYPE_F16) {
         // Half-float to float
-        for (int64_t i = 0; i < n_elems; i++) {
-            uint16_t h;
-            if (fread(&h, 2, 1, ctx->file) != 1) return (int)i;
-            output[i] = f16_to_f32(h);
+        if (src) {
+            for (int64_t i = 0; i < n_elems; i++) {
+                uint16_t h;
+                memcpy(&h, src + i * 2, 2);
+                output[i] = f16_to_f32(h);
+            }
+        } else {
+            fseek(ctx->file, tensor_pos, SEEK_SET);
+            for (int64_t i = 0; i < n_elems; i++) {
+                uint16_t h;
+                if (fread(&h, 2, 1, ctx->file) != 1) return (int)i;
+                output[i] = f16_to_f32(h);
+            }
         }
         return (int)n_elems;
+    }
+    
+    // For quantized types, get raw data pointer from file if not buffered
+    if (!src) {
+        // Calculate raw size and read into heap buffer
+        int64_t raw_size = gguf_raw_size(tensor->ggml_type, n_elems);
+        if (raw_size <= 0) {
+            fprintf(stderr, "Error: unknown type %d (cannot determine raw size)\n", tensor->ggml_type);
+            return 0;
+        }
+        raw_heap = (uint8_t *)malloc(raw_size);
+        if (!raw_heap) return 0;
+        fseek(ctx->file, tensor_pos, SEEK_SET);
+        size_t n_read = fread(raw_heap, 1, raw_size, ctx->file);
+        if (n_read != (size_t)raw_size) {
+            free(raw_heap);
+            return 0;
+        }
+        src = raw_heap;
     }
     else if (tensor->ggml_type == GGML_TYPE_Q6_K) {
         // Q6_K dequantization (6.5625 bpw)
         int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        // block_q6_K: ql[128] + qh[64] + scales[16] + d[2] = 210 bytes
-        size_t raw_size = n_blocks * 210;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) {
-            free(raw);
-            return 0;
-        }
-        
-        dequantize_q6_K_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_q6_K_row(src, output, n_elems);
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_Q5_K) {
-        // Q5_K dequantization
-        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        size_t raw_size = n_blocks * Q5_K_BLOCK_SIZE;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) {
-            free(raw);
-            return 0;
-        }
-        
-        dequantize_q5_K_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_q5_K_row(src, output, n_elems);
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_Q8_0) {
         // Q8_0 dequantization (8.5 bpw, 32 elements per block)
         int64_t q8_blocks = (n_elems + 31) / 32;
-        size_t raw_size = q8_blocks * 34;  // d(fp16,2) + qs[32] = 34 bytes
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) { free(raw); return 0; }
         for (int64_t b = 0; b < q8_blocks; b++) {
             uint16_t d_bits;
-            memcpy(&d_bits, raw + b * 34, 2);
+            memcpy(&d_bits, src + b * 34, 2);
             float d = f16_to_f32(d_bits);
-            const int8_t *qs = (const int8_t *)(raw + b * 34 + 2);
+            const int8_t *qs = (const int8_t *)(src + b * 34 + 2);
             for (int j = 0; j < 32 && b * 32 + j < n_elems; j++)
                 output[b * 32 + j] = d * (float)qs[j];
         }
-        free(raw);
-        return (int)n_elems;
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ1_S) {
-        // IQ1_S dequantization (1.5625 bpw)
-        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        // block_iq1_s: ggml_half(2) + qs[32] + qh[8] = 42 bytes
-        size_t raw_size = n_blocks * 42;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) {
-            free(raw);
-            return 0;
-        }
-        
-        dequantize_iq1_s_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_iq1_s_row(src, output, n_elems);
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_Q4_K) {
-        // Q4_K dequantization (4.5 bpw)
-        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        size_t raw_size = n_blocks * Q4_K_BLOCK_SIZE;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) { free(raw); return 0; }
-        dequantize_q4_K_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_q4_K_row(src, output, n_elems);
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ2_XXS) {
-        // IQ2_XXS dequantization (2.0625 bpw)
-        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        size_t raw_size = n_blocks * IQ2_XXS_BLOCK_SIZE;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) { free(raw); return 0; }
-        dequantize_iq2_xxs_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_iq2_xxs_row(src, output, n_elems);
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ2_S) {
-        // IQ2_S dequantization (2.5625 bpw)
-        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        size_t raw_size = n_blocks * IQ2_S_BLOCK_SIZE;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) { free(raw); return 0; }
-        dequantize_iq2_s_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_iq2_s_row(src, output, n_elems);
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ3_S) {
-        // IQ3_S dequantization (3.4375 bpw)
-        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        size_t raw_size = n_blocks * IQ3_S_BLOCK_SIZE;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) { free(raw); return 0; }
-        dequantize_iq3_s_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_iq3_s_row(src, output, n_elems);
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ3_XXS) {
-        // IQ3_XXS dequantization (3.0625 bpw)
-        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        size_t raw_size = n_blocks * IQ3_XXS_BLOCK_SIZE;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) { free(raw); return 0; }
-        dequantize_iq3_xxs_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_iq3_xxs_row(src, output, n_elems);
+        goto done;
     }
     else if (tensor->ggml_type == GGML_TYPE_IQ1_M) {
-        // IQ1_M dequantization (1.75 bpw)
-        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
-        size_t raw_size = n_blocks * IQ1_M_BLOCK_SIZE;
-        uint8_t *raw = malloc(raw_size);
-        if (!raw) return 0;
-        size_t n_read = fread(raw, 1, raw_size, ctx->file);
-        if (n_read != raw_size) { free(raw); return 0; }
-        dequantize_iq1_m_row(raw, output, n_elems);
-        free(raw);
-        return (int)n_elems;
+        dequantize_iq1_m_row(src, output, n_elems);
+        goto done;
     }
     else {
         fprintf(stderr, "Error: unsupported GGML type %d for %s\n", tensor->ggml_type, tensor->name);
+        if (raw_heap) free(raw_heap);
         return 0;
     }
+    
+done:
+    if (raw_heap) free(raw_heap);
+    return (int)n_elems;
 }
 
 void gguf_close(gguf_ctx *ctx) {
     if (ctx) {
         if (ctx->file) fclose(ctx->file);
+        free(ctx->data_blob);
         free(ctx->tensors);
         free(ctx);
     }
+}
+
+// Calculate raw (quantized) byte size for a tensor type with n_elems
+int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
+    // All supported quant types use QK_K=256 block size
+    int64_t n_blocks = (n_elems + 255) / 256;
+    switch (ggml_type) {
+        case GGML_TYPE_F32:   return n_elems * 4;
+        case GGML_TYPE_F16:   return n_elems * 2;
+        case GGML_TYPE_Q6_K:  return n_blocks * 210;  // d[2] + ql[128] + qh[64] + scales[16]
+        case GGML_TYPE_Q5_K:  return n_blocks * 144;  // d[2] + dmin[2] + scales[12] + qh[2] + qs[128] (no qh in modern)
+        case GGML_TYPE_Q8_0:  return ((n_elems + 31) / 32) * 34;  // d[2] + qs[32]
+        case GGML_TYPE_IQ1_S: return n_blocks * 42;   // d[2] + qs[32] + qh[8]
+        case GGML_TYPE_IQ1_M: return n_blocks * 56;   // d[2] + qs[32] + qh[16] + scales[6]
+        case GGML_TYPE_IQ2_XXS: return n_blocks * 72; // d[2] + qs[64] + qh[6]
+        case GGML_TYPE_IQ2_S: return n_blocks * 88;    // d[2] + qs[64] + qh[16] + scales[6]
+        case GGML_TYPE_IQ3_S: return n_blocks * 116;   // d[2] + qs[96] + qh[12] + scales[6]
+        case GGML_TYPE_IQ3_XXS: return n_blocks * 104; // d[2] + qs[96] + qh[6]
+        case GGML_TYPE_Q4_K:  return n_blocks * 144;  // d[2] + dmin[2] + scales[12] + qs[128]
+        default: return -1;
+    }
+}
+
+// Buffer the entire GGUF data blob in RAM for fast random access
+// After this, gguf_read_tensor_f32 reads from RAM instead of SSD
+int gguf_buffer_data(gguf_ctx *ctx) {
+    if (ctx->data_blob) return 1;  // already buffered
+    
+    // Get file size
+    fseek(ctx->file, 0, SEEK_END);
+    long file_size = ftell(ctx->file);
+    uint64_t blob_size = file_size - ctx->data_blob_offset;
+    fseek(ctx->file, ctx->data_blob_offset, SEEK_SET);
+    
+    ctx->data_blob = malloc(blob_size);
+    if (!ctx->data_blob) {
+        fprintf(stderr, "gguf_buffer_data: failed to allocate %lu bytes\n", (unsigned long)blob_size);
+        return 0;
+    }
+    
+    size_t n_read = fread(ctx->data_blob, 1, blob_size, ctx->file);
+    if (n_read != blob_size) {
+        fprintf(stderr, "gguf_buffer_data: read %zu/%lu bytes\n", n_read, (unsigned long)blob_size);
+        free(ctx->data_blob);
+        ctx->data_blob = NULL;
+        return 0;
+    }
+    
+    ctx->data_blob_size = blob_size;
+    fprintf(stderr, "  GGUF data blob buffered: %lu MB\n", (unsigned long)(blob_size / (1024*1024)));
+    return 1;
 }
 
 // Q4_K block: d(fp16,2) + dmin(fp16,2) + scales[12] + qs[128] = 144 bytes per 256 elements (modern, NO qh field)

@@ -188,7 +188,8 @@ int main(int argc, char **argv) {
     // Generate dummy input (single token)
     int B = 1, T = 1;
     float *x = (float *)malloc(B * T * D_MODEL * sizeof(float));
-    for (int i = 0; i < B * T * D_MODEL; i++) x[i] = 1.0f;  // uniform input
+    srand(42);
+    for (int i = 0; i < B * T * D_MODEL; i++) x[i] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;  // non-uniform
     
     if (is_ssm) {
         // Load SSM weights

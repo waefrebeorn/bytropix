@@ -1,0 +1,31 @@
+============================================================
+  WuBuNestGPT — Pure NumPy Training
+  Architecture: LatentAttention + Hyperbolic Gyration + MLA
+  Zero compilation overhead
+============================================================
+
+[1] Loading corpus...
+  Loaded 19 text chunks (175,113 chars)
+
+[2] Building tokenizer...
+  Vocab size: 106
+
+[3] Building WuBuNestGPT...
+  d_model=384, layers=6, heads=8
+  d_compressed=192 (MLA latent)
+  d_ff=1536
+  WuBuNestGPT built: 11,162,112 params
+
+[4] Preparing training data...
+  Total tokens: 175,131
+  Sequences: 1368 (seq_len=128)
+
+============================================================
+  TRAINING: 5000 steps, batch=8, lr=0.0003
+============================================================
+
+  Step     1/5000 | loss: 4.8436 (avg: 4.8436) | 25 tok/s | 41158ms
+  Step     2/5000 | loss: 4.8424 (avg: 4.8424) | 25 tok/s | 41046ms
+  Step     3/5000 | loss: 4.8469 (avg: 4.8469) | 24 tok/s | 41803ms
+  Step     4/5000 | loss: 4.8396 (avg: 4.8396) | 26 tok/s | 39462ms
+  Step     5/5000 | loss: 4.8572 (avg: 4.8572) | 28 tok/s | 36907ms

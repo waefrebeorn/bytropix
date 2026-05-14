@@ -19,7 +19,10 @@
 | **2.5** | GPU Verification | ✅ Complete | 9.53 tok/s GPU, 47.83× vs CPU baseline |
 | **3** | Training Loop | 🔄 In Progress | Tokenizer fix → TST bag training → AdamW/RSGD |
 | **4** | MoE Port | ⏳ Future | 256 experts, 8 active |
-| **5** | Vision Port | ⏳ Future | 27-layer 3D ViT |
+| **5a** | Vision Port (Qwen 3D ViT) | ⏳ Future | 27-layer 3D ViT, native tight integration (FIRST) |
+| **5b** | Vision Manifold (Moondream3) | ⏳ Future | vLLM weight dump → C ViT port → Poincaré graft (SECONDARY) |
+| **5a plan** | [Qwen 3D ViT Plan](.hermes/mind-palace/tier3-impl/12-vision/README.md) | GGUF dump → C port → WuBu hyperbolic graft |
+| **5b plan** | [Moondream3 Integration](.hermes/mind-palace/tier3-impl/12-vision/12b-moondream3-manifold.md) | vLLM weight dump, same C port pattern |
 | **6** | CUDA Optimization | ⏳ Ongoing | Runs alongside Phase 3+ |
 
 ### Architecture Diagrams

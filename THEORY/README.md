@@ -59,6 +59,33 @@ The LaTeX source for the WuBuHypCD paper. For those who want to hack on the pape
 ### `references.bib`
 The bibliography for the WuBu Nesting project. Includes citations across hyperbolic geometry (Nickel & Kiela, Ganea et al.), quaternion neural networks, HypCD, geometric topology (Parlier-Wu-Xue on the separating systole), condensed matter physics (Wang-Low on optical hyperbolicity in TMDs), and more. Useful if you're writing derivative work or want to chase citation trails.
 
+### `papers/GAAD-WuBu-ST1.md` and `papers/GAAD-WuBu-ST2.md`
+**GAAD: Golden Aspect Adaptive Decomposition** — a φ-inspired front-end for aspect-ratio agnostic frame decomposition. Stage 1 introduces Recursive Golden Subdivision and Phi-Spiral Sectoring. Stage 2 integrates GAAD with WuBu-ST for the full video framework.
+
+### `papers/DFT-WuBu.md` and `papers/DCT-WuBu.md`
+**Spectral-domain WuBu variants.** DFT-WuBu integrates discrete Fourier transforms with hyperbolic geometry for frequency-domain reasoning. DCT-WuBu uses discrete cosine transforms for compression-oriented representations.
+
+### `math_viz/` — Runnable Math Proofs (7 scripts)
+Python scripts that generate the key diagrams and numeric proofs from first principles. Each script is self-contained and verifiable:
+
+| Script | Proves | Run Command |
+|--------|--------|-------------|
+| `01_nested_hyperbolic_spaces.py` | Nested Poincaré disks, φ-scaled curvatures | `python3 THEORY/math_viz/01_nested_hyperbolic_spaces.py` |
+| `02_golden_ratio_decomposition.py` | GAAD: φ-subdivision + spiral sectors | `python3 THEORY/math_viz/02_golden_ratio_decomposition.py` |
+| `03_poincare_clock.py` | Soul/Echo gradient recovery (error < 1e-15) | `python3 THEORY/math_viz/03_poincare_clock.py` |
+| `04_lie_group_nesting.py` | WuBu as G-bundle, SO(n) connection | `python3 THEORY/math_viz/04_lie_group_nesting.py` |
+| `05_fiber_bundle_proof.py` | Fiber bundle structure proof | `python3 THEORY/math_viz/05_fiber_bundle_proof.py` |
+| `06_symplectic_optimizer.py` | Symplectic RSGD on T(H^n) | `python3 THEORY/math_viz/06_symplectic_optimizer.py` |
+| `07_lean_certificate.py` | Lean formal certificate stub | `python3 THEORY/math_viz/07_lean_certificate.py` |
+
+Requires `pip install matplotlib numpy`. All originate from `~/HASHMIND/bytropix/math_viz/`.
+
+### `math_viz/lean/`
+Lean formal proof files corresponding to the mathematical claims in the math_viz scripts. Currently a stub directory for future expansion.
+
+### `math_viz/run_all.py`
+Batch runner for all math_viz scripts.
+
 ### `WuBu Spatio-Temporal Nesting.md`
 **The spatio-temporal extension.** This document extends the WuBu Nesting framework into the time domain with a dual-nested architecture:
 

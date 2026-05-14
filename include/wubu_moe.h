@@ -59,6 +59,23 @@ void wubu_moe_router(const float *x, int B, int T,
                      const float *gate_inp,
                      float *scores);
 
+// MoE backward pass
+// d_output: [B*T, D_MODEL] — gradient at MoE output (FFN path)
+// normed2: [B*T, D_MODEL] — saved MoE input
+// d_normed2: [B*T, D_MODEL] — output gradient w.r.t. MoE input
+// weight_grad_bufs: pre-allocated zero-initialized gradient buffers (or NULL to skip)
+void wubu_moe_backward(const float *d_output, int B, int T,
+                       const float *normed2,
+                       const moe_weights_t *w,
+                       float *d_normed2,
+                       float *d_gate_inp,
+                       float *d_gate_exps,
+                       float *d_up_exps,
+                       float *d_down_exps,
+                       float *d_gate_shexp,
+                       float *d_up_shexp,
+                       float *d_down_shexp);
+
 #ifdef __cplusplus
 }
 #endif

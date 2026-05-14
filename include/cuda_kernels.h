@@ -191,6 +191,39 @@ void wubu_cuda_gqa_forward(cublasHandle_t handle, cudaStream_t stream,
     float *d_output,            // [N, D_MODEL] — final output
     float *d_scratch);          // [N, q_dim] — temp for attention out
 
+// GQA attention only (assumes Q/K already RMSNorm'd)
+void wubu_cuda_gqa_attention_only(cublasHandle_t handle, cudaStream_t stream,
+    int B, int T,
+    const float *d_Q, const float *d_K, const float *d_V,
+    float *d_output, int n_q_heads, int n_kv_heads, int head_dim);
+
+// GQA gate multiply: x *= sigmoid(gate_part_of_Q_full)
+void wubu_cuda_gqa_gate(float *d_x, const float *d_Q_full,
+    int N, int q_dim, cudaStream_t stream);
+
+// ================================================================
+// Poincaré ball hyperbolic CUDA kernels
+// ================================================================
+void wubu_cuda_norm(const float *d_in, float *d_out, int n_vecs, int dim, cudaStream_t stream);
+void wubu_cuda_exp_map(const float *d_v, const float *d_norms, float R,
+                        float *d_out, int n_vecs, int dim, cudaStream_t stream);
+void wubu_cuda_log_map(const float *d_v, const float *d_norms, float R,
+                        float *d_out, int n_vecs, int dim, cudaStream_t stream);
+void wubu_cuda_mobius_scalar_mul(const float *d_v, const float *d_norms,
+                                  float r, float R, float *d_out,
+                                  int n_vecs, int dim, cudaStream_t stream);
+void wubu_cuda_mobius_add(const float *d_x, const float *d_y,
+                           const float *d_nx2, const float *d_ny2,
+                           float *d_out, int n_vecs, int dim, cudaStream_t stream);
+
+// Poincaré recurrence — replaces Euclidean step 9 in SSM forward
+void wubu_cuda_poincare_recurrence(cublasHandle_t handle, cudaStream_t stream,
+    int B, int T, float R,
+    float *d_h_states,
+    const float *d_q_norm, const float *d_k_norm, const float *d_v_conv,
+    const float *d_gate, const float *d_beta,
+    float *d_delta_out);
+
 // ================================================================
 // CUDA context management
 // ================================================================

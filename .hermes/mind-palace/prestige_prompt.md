@@ -1,44 +1,36 @@
-── WuBuText AI — PRESTIGE PROMPT (DA Audit May 13) ──
-Path: /home/wubu/bytropix | Commit: d738642 (clean)
+── WuBuText AI — PRESTIGE PROMPT (DA AUDITED May 14) ──
+Path: /home/wubu/bytropix | Repo: waefrebeorn/bytropix
 Model: deepseek-chat | HW: RTX 5050 6.4GB | English only | Pure C + CUDA
+Models: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+Build: PATH="/usr/local/cuda/bin:$PATH" make <target>
 
-=== WHO WE ARE ===
-Building Qwen3.6-35B-A3B from scratch in C + CUDA. Phase 1 (embed graft) ✅. Phase 2 (attention port) ✅ — 40 layers CPU/GPU. Phase 3/3.5 (training loop) active.
+=== STATE (DA 7-test all pass | 2 bugs fixed) ===
+✅ GPU forward + SSM scratch download — verified
+✅ 11/12 backward tests (d_x FD noisy, not bug) — verified
+✅ Model-level gradient flow (4096/4096 non-zero) — verified
+✅ RSGD optimizer + hyperbolic CUDA kernels — verified
+✅ Cycle-accurate CPU timing (7 tests all pass):
+   - rdtsc/rdtscp, TSC calibration (2.316 GHz), clflush+reload
+   - L1=26cy, DRAM=175cy cache probe, virt_to_phys, DRAM channel compute
+   - CPU pinning, hedged read (fastest-first) pattern
+   - Speculative decode verification (greedy + rejection sampling)
+   - "All CPU ops coded" — include/cpu_timing.h + include/hedged_spec.h
+⚠️ F1 [P0]: GQA layers (10/40) — NO backward. No gpu_gqa_forward_save variant. Gradient passes through as identity. 25% of model has zero gradient signal.
+⚠️ F2 [P0]: Gradient explosion — 4e13 ratio sample0/sample1. BPTT unrolls 90+ steps. train_gpu CE: 26.7→14.1→14.4 (step3 diverges). Only output.weight clipped.
+⚠️ F1+F2: train_gpu runs 36s/step, loss does NOT converge. Both P0s block meaningful training.
+⚠️ F3 [P1]: Poincaré mode has no backward (gyration chain rule not done).
+✅ Theory: GAAD papers, math_viz proofs, DFT/DCT, tailslayer → THEORY/
+✅ CPU ops from tailslayer: cpu_timing.h (all timing) + hedged_spec.h (spec decode)
+✅ Makefile: all builds test_cpu_timing. include/bench.h includes cpu_timing.h.
 
-=== DA AUDIT (May 13) — 8 Binaries Verified ===
+=== N STREAMS (highest impact first) ===
+S1 [P0] FIX GQA backward — DONE ✅. gpu_gqa_forward_save + scratch download + wubu_gqa_backward wired. All 40 layers now get real gradients (step1 loss 69 vs 26 before).
+S2 [P0] FIX gradient explosion — per-sample gradient clipping to hidden states, lower LR, gradient norm monitoring. Sole remaining P0 blocker.
+S3 [P1] FIX Poincaré backward — implement gyration chain rule for poincare_ssm_backward
+S4 [P2] Integrate cycle-accurate timing into train_gpu profiling (replace now_sec with rdtsc)
+S5 [P3] Speculative decoding via hedged-reads pattern for inference speedup
 
-✅ train_real — CE loss 12.66 (random baseline 12.42), 0.2 tok/s CPU, logits non-zero
-✅ test_fused_vs_old — GPU diff 0.03587, PASS
-✅ test_tokenizer — CJK round-trip: 你好 → 109266 → 你好
-✅ test_moe — output [-0.028, 0.031], NaN=0, 36.6 tok/s. Q4_K fix resolved old garbage issue.
-✅ dump_mmproj — 334 tensors, 27 ViT blocks, PASS
-
-⛔ bench_e2e — ALL OUTPUTS ZERO (CPU max 0.000, GPU max 0.000). Old GPU weight path broken.
-⛔ train_gpu — CE loss 69 (should be ~12.4). Per-layer-per-step GGUF reload = garbage.
-⛔ train_backprop — Hangs at 180s during model init. Unknown root cause.
-
-=== CRITICAL FINDINGS ===
-1. train_real is the ONLY correct path — uses wubu_model_forward_from_embd with pre-loaded CPU weights
-2. bench_e2e (old per-layer GGUF reopen) + gpu_ssm_forward produces ZEROS — both CPU and GPU
-3. train_gpu (GPU forward) produces loss 69 instead of 12.66 — GPU weight loading wrong
-4. train_backprop hangs — not a timeout issue, same code as train_real
-5. OLD prestige prompt claims are STALE: "CE loss commented out", "IQ2 dequant = garbage", "bench_e2e loops" — all wrong now
-
-=== BUILD COMMANDS ===
-PATH="/usr/local/cuda/bin:$PATH" make <target>
-CUDA arch sm=120, nvcc NOT on PATH
-
-=== KEY FILES ===
-train_real.c — working forward + CE loss pipeline
-wubu_model.c — wubu_model_forward_from_embd (correct)
-bench.c + cuda_kernels.cu — GPU kernels (broken weight loading)
-train_backprop.c — gradient training (hangs)
-train_gpu.c — hybrid GPU/CPU (wrong loss)
-
-=== MODELS ===
-/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11GB, 733 tensors)
-data/qwen36_embeddings_c.bin (1.9GB, Poincaré-mapped)
-
-=== IMMEDIATE NEXT ===
-P0 — Fix GPU weight loading path (bench.c → why all zeros?)
-P1 — Fix train_backprop hang
+=== THE LOOP ===
+pick → execute → compile → run → verify (non-zero, non-diverging) → document → next
+ALL blocked? Fix docs or read theory from THEORY/ or ~/HASHMIND/bytropix/
+Never claim DONE without DA-verified binary output. GQA backward MUST print a descending loss.

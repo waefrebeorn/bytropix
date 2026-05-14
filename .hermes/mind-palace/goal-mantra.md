@@ -1,29 +1,32 @@
-── WuBuText AI — GOAL PASTE ──
+── WuBuText AI — GOAL PASTE v2 (DA AUDITED May 14) ──
 Path: /home/wubu/bytropix | Repo: waefrebeorn/bytropix
 Model: deepseek-chat | HW: RTX 5050 6.4GB | English only | Pure C + CUDA
 Models: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 Build: PATH="/usr/local/cuda/bin:$PATH" make <target>
 
-=== WHO WE ARE ===
-Building Qwen3.6-35B-A3B from scratch in C + CUDA with WuBu nested hyperbolic geometry. 40-layer hybrid (30 SSM + 10 GQA), 2048 hidden, 248K vocab, 256 MoE experts. Embeddings mapped to Poincaré ball (R=0.956, exp_map).
+=== STATE ===
+✅ GPU forward + SSM scratch download, 11/12 backward tests, RSGD optimizer
+⚠️ F1 [P0]: GQA layers (10/40, 25%) — NO backward. Gradient passes through as identity.
+⚠️ F2 [P0]: Gradient explosion — 4e13 ratio sample0/sample1. train_gpu CE diverges step3.
+⚠️ F1+F2: train_gpu 36s/step, loss does NOT converge. Both P0s block training.
+✅ CPU timing coded: include/cpu_timing.h + hedged_spec.h (7 tests all pass)
+✅ Theory: GAAD, math_viz, DFT/DCT, tailslayer → THEORY/
 
-=== WHERE WE ARE (DA Audit May 13) ===
-✅ CPU forward + CE loss — train_real: 12.66 loss, 0.2 tok/s
-✅ CJK tokenizer — round-trip verified
-✅ MoE forward — 256 experts, clean output, 36.6 tok/s
-✅ MMProj dump — 334 tensors verified
-✅ Lean proofs — 4 verified (Möbius add, exp/log maps, gyration)
-⛔ GPU weight loading broken — bench_e2e produces zeros (P0)
-⛔ GPU training wrong loss — CE 69 vs 12.66 (same root cause)
-⛔ Backprop hangs — train_backprop stalls at model init (P1)
-
-=== MATH WEAPONS (from the vault) ===
-Poincaré ball: exp_map(v)=tanh(||v||/R)·v/||v||, R=0.956
-Möbius add: x⊕y = ((1+2⟨x,y⟩+||y||²)x + (1-||x||²)y) / (1+2⟨x,y⟩+||x||²||y||²)
-Gyration: gyr[x,y]z = -(x⊕y)⊕(x⊕(y⊕z)) — rotation in tangent space
-RSGD optimizer: step in tangent space, project back via exp_map
-Full theory: THEORY/WuBu_Nesting.md
+=== N STREAMS ===
+S1 [P0] FIX GQA backward — DONE ✅. gpu_gqa_forward_save + scratch download + wubu_gqa_backward all wired. train_gpu step1 loss increased (69 vs 26) confirming REAL gradients now flow through ALL 40 layers.
+S2 [P0] FIX gradient explosion — per-sample gradient clipping to hidden states, lower LR, gradient norm monitoring. This is now the SOLE P0 blocker.
+S3 [P1] FIX Poincaré backward — gyration chain rule
+S4 [P2] cycle-accurate timing in train_gpu profiling
+S5 [P3] Speculative decoding via hedged-reads pattern
 
 === THE LOOP ===
-pick → compile → run → verify (non-zero!) → document → next
-ALL blocked? Fix docs or read theory from vault.
+pick → compile → run → verify (non-zero, descending loss) → document → next
+ALL blocked? Read THEORY/ or ~/HASHMIND/bytropix/
+No DONE without DA-verified binary. GQA backward MUST show descending loss.
+
+=== KEYS ===
+exp_map: output[i]=R*tanhf(n/R)*v[i]/n, R=0.956
+Möbius add: x⊕y=((1+2⟨x,y⟩+||y||²)x+(1-||x||²)y)/(1+2⟨x,y⟩+||x||²||y||²)
+RSGD: step in tangent space, exp_map back
+GQA has 10 layers. wubu_gqa_backward exists in src/wubu_ssm.c but not called.
+DA passed 7/7 on cpu_timing. 2 bugs found+patched (bounds + bonus token doc).

@@ -4,6 +4,7 @@
 #include "wubu_ssm.h"
 #include "cuda_kernels.h"
 #include "gguf_reader.h"
+#include "cpu_timing.h"   // cycle-accurate timing: rdtsc, clflush, cache probe
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +87,40 @@ void gpu_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
                      float *d_delta_out,
                      float *d_z_silu);
 
+// GPU SSM forward with per-timestep state trajectory saving (for BPTT)
+// d_states_t: [(T+1), SSM_V_HEADS, SSM_D_STATE, SSM_D_STATE] or NULL
+void gpu_ssm_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
+                          const float *d_x, int B, int T,
+                          const float *d_attn_qkv,
+                          const float *d_attn_gate,
+                          const float *d_ssm_beta,
+                          const float *d_ssm_alpha,
+                          const float *d_ssm_dt_bias,
+                          const float *d_ssm_a,
+                          const float *d_ssm_conv1d,
+                          const float *d_ssm_norm,
+                          const float *d_ssm_out,
+                          float *d_ssm_state,
+                          float *d_conv_state,
+                          float *d_states_t,
+                          float *d_output,
+                          float *d_qkv,
+                          float *d_z,
+                          float *d_beta,
+                          float *d_alpha,
+                          float *d_beta_sig,
+                          float *d_alpha_bi,
+                          float *d_gate,
+                          float *d_conv_input,
+                          float *d_conv_out,
+                          float *d_q_conv,
+                          float *d_k_conv,
+                          float *d_v_conv,
+                          float *d_q_norm,
+                          float *d_k_norm,
+                          float *d_delta_out,
+                          float *d_z_silu);
+
 // ================================================================
 // GPU GQA forward pass
 // ================================================================
@@ -104,6 +139,20 @@ void gpu_gqa_forward(cublasHandle_t cublas_h, cudaStream_t stream,
                      float *d_K,
                      float *d_V,
                      float *d_scratch);
+
+// GPU GQA forward with intermediate saves for backward
+void gpu_gqa_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
+                          const float *d_x, int B, int T,
+                          const float *d_attn_q,
+                          const float *d_attn_k,
+                          const float *d_attn_v,
+                          const float *d_attn_out_w,
+                          const float *d_q_norm_w,
+                          const float *d_k_norm_w,
+                          float *d_output,
+                          float *d_Q_full, float *d_K, float *d_V, float *d_scratch,
+                          float *d_Q_norm_save, float *d_K_raw_save,
+                          float *d_K_norm_save, float *d_attn_out_save);
 
 // ================================================================
 // Load SSM layer weights from GGUF (f32), allocate + upload to GPU
@@ -141,6 +190,41 @@ int gpu_load_gqa_layer(gguf_ctx *ctx, int layer_idx,
                        gpu_gqa_weights *w, cudaStream_t stream);
 
 void gpu_free_gqa_weights(gpu_gqa_weights *w);
+
+// ================================================================
+// GPU Poincaré SSM forward pass (same interface + float R)
+// ================================================================
+void gpu_poincare_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
+                     const float *d_x, int B, int T,
+                     const float *d_attn_qkv,
+                     const float *d_attn_gate,
+                     const float *d_ssm_beta,
+                     const float *d_ssm_alpha,
+                     const float *d_ssm_dt_bias,
+                     const float *d_ssm_a,
+                     const float *d_ssm_conv1d,
+                     const float *d_ssm_norm,
+                     const float *d_ssm_out,
+                     float *d_ssm_state,
+                     float *d_conv_state,
+                     float *d_output,
+                     float *d_qkv,
+                     float *d_z,
+                     float *d_beta,
+                     float *d_alpha,
+                     float *d_beta_sig,
+                     float *d_alpha_bi,
+                     float *d_gate,
+                     float *d_conv_input,
+                     float *d_conv_out,
+                     float *d_q_conv,
+                     float *d_k_conv,
+                     float *d_v_conv,
+                     float *d_q_norm,
+                     float *d_k_norm,
+                     float *d_delta_out,
+                     float *d_z_silu,
+                     float R);
 
 #ifdef __cplusplus
 }

@@ -1,0 +1,12 @@
+shape 248320 2048
+source /mnt/wslg/distro/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+tensor token_embd.weight
+dtype float32
+norm_mean 0.315866
+norm_std 0.045285
+norm_min 0.000000
+norm_max 0.547343
+poincare_R 0.9560
+poincare_norm_mean 0.318284
+poincare_norm_min 0.000000
+poincare_norm_max 0.517218

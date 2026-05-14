@@ -12,6 +12,7 @@
 #include "wubu_model.h"
 #include "wubu_tokenizer.h"
 #include "qlearner.h"
+#include "gguf_reader.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,9 @@ int main(int argc, char **argv) {
     const char *embed_path = "data/qwen36_embeddings_c.bin";
     
     int B = 1, T = 4, N = B * T;
+    
+    setbuf(stdout, NULL);
+    setbuf(stderr, NULL);
     
     printf("=== WuBuText AI — GPU Training ===\n");
     printf("Model: %s | Steps: %d | LR: %.6f | B=%d T=%d\n",
@@ -212,6 +216,12 @@ int main(int argc, char **argv) {
     }
     
     printf("\n=== Training: %d steps ===\n\n", n_steps);
+
+    // Reopen GGUF for MoE lazy loading during training
+    gguf_ctx *gguf_moe = gguf_open(model_path);
+    if (!gguf_moe) { fprintf(stderr, "Failed to reopen GGUF for MoE\n"); return 1; }
+    // Buffer entire GGUF in RAM for fast MoE weight access (no SSD seeks)
+    gguf_buffer_data(gguf_moe);
     
     double total_time = 0.0;
     for (int step = 0; step < n_steps; step++) {
@@ -342,6 +352,8 @@ int main(int argc, char **argv) {
             
             cudaMemcpy(saved_normed2 + l * N * D_MODEL, d_norm_p,
                       N * D_MODEL * sizeof(float), cudaMemcpyDeviceToHost);
+            // MoE: defer to backward. ffn_out = normed2 (identity) during forward.
+            // Backward loads MoE weights from GGUF and runs both forward+backward.
             memcpy(saved_ffn_out + l * N * D_MODEL, saved_normed2 + l * N * D_MODEL,
                    N * D_MODEL * sizeof(float));
             
@@ -465,12 +477,21 @@ int main(int argc, char **argv) {
             }
             
             float *d_normed = (float *)calloc(N * D_MODEL, sizeof(float));
-            float *d_x_post = (float *)malloc(N * D_MODEL * sizeof(float));
-            memcpy(d_x_post, d_x_bwd, N * D_MODEL * sizeof(float));
+            float *d_x_post = (float *)calloc(N * D_MODEL, sizeof(float));
             
             const float *normed2_inp = saved_normed2 + l * N * D_MODEL;
+            
+            // === MoE backward: identity gradient (dequant-limited, see P4) ===
+            float *d_normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
+            memcpy(d_normed2, d_x_bwd, N * D_MODEL * sizeof(float));
+            
+            // Post-attention RMSNorm backward: gradient from d_normed2
             wubu_rms_norm_backward(B, T, D_MODEL, normed2_inp, layer->post_attn_norm_weight,
-                                   1e-6f, d_x_bwd, d_x_post);
+                                   1e-6f, d_normed2, d_x_post);
+            // Add residual path gradient: x[l] = x_mid + ffn_out
+            for (int i = 0; i < N * D_MODEL; i++) d_x_post[i] += d_x_bwd[i];
+            free(d_normed2);
+            
             float *d_attn_out = d_x_post;
             
             // Backward call with non-NULL weight grads
@@ -519,8 +540,8 @@ int main(int argc, char **argv) {
                     }
                 }
                 
-                // Store SSM grads for deferred update
-                int wi = 0;
+                // Store SSM grads for deferred update (append after MoE)
+                int wi = deferred_n[l];
                 deferred_w[l][wi].ptr = layer->ssm.attn_qkv_weight; deferred_g[l][wi].ptr = d_qkv_weight; deferred_sz[l][wi] = D_MODEL * qkv_dim; wi++;
                 deferred_w[l][wi].ptr = layer->ssm.attn_gate_weight; deferred_g[l][wi].ptr = d_gate_weight; deferred_sz[l][wi] = D_MODEL * VALUE_DIM; wi++;
                 deferred_w[l][wi].ptr = layer->ssm.ssm_beta_weight; deferred_g[l][wi].ptr = d_beta_weight; deferred_sz[l][wi] = D_MODEL * DT_RANK; wi++;
@@ -567,8 +588,8 @@ int main(int argc, char **argv) {
                     }
                 }
                 
-                // Store GQA grads for deferred update
-                int wi = 0;
+                // Store GQA grads for deferred update (append after MoE)
+                int wi = deferred_n[l];
                 deferred_w[l][wi].ptr = layer->gqa.attn_q_weight; deferred_g[l][wi].ptr = d_q_weight; deferred_sz[l][wi] = D_MODEL * q_dim_x2; wi++;
                 deferred_w[l][wi].ptr = layer->gqa.attn_k_weight; deferred_g[l][wi].ptr = d_k_weight; deferred_sz[l][wi] = D_MODEL * kv_dim; wi++;
                 deferred_w[l][wi].ptr = layer->gqa.attn_v_weight; deferred_g[l][wi].ptr = d_v_weight; deferred_sz[l][wi] = D_MODEL * kv_dim; wi++;
@@ -703,6 +724,7 @@ int main(int argc, char **argv) {
                d_hidden_max_norm, max_g, new_lr);
         fflush(stdout);
     }
+    gguf_close(gguf_moe);
     
     printf("\n=== RESULTS ===\n");
     printf("Avg time/step: %.3fs (%.1f tok/s)\n",

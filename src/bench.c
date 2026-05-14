@@ -131,6 +131,128 @@ void gpu_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
     cudaStreamSynchronize(stream);
 }
 
+// GPU SSM forward with per-timestep state trajectory saving
+void gpu_ssm_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
+                          const float *d_x, int B, int T,
+                          const float *d_attn_qkv,
+                          const float *d_attn_gate,
+                          const float *d_ssm_beta,
+                          const float *d_ssm_alpha,
+                          const float *d_ssm_dt_bias,
+                          const float *d_ssm_a,
+                          const float *d_ssm_conv1d,
+                          const float *d_ssm_norm,
+                          const float *d_ssm_out,
+                          float *d_ssm_state,
+                          float *d_conv_state,
+                          float *d_states_t,
+                          float *d_output,
+                          float *d_qkv,
+                          float *d_z,
+                          float *d_beta,
+                          float *d_alpha,
+                          float *d_beta_sig,
+                          float *d_alpha_bi,
+                          float *d_gate,
+                          float *d_conv_input,
+                          float *d_conv_out,
+                          float *d_q_conv,
+                          float *d_k_conv,
+                          float *d_v_conv,
+                          float *d_q_norm,
+                          float *d_k_norm,
+                          float *d_delta_out,
+                          float *d_z_silu) {
+    // Steps 1-7: IDENTICAL to gpu_ssm_forward
+    const int N = B * T;
+    const int qkv_dim = KEY_DIM * 2 + VALUE_DIM;
+    int state_sz = SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
+    
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_qkv, qkv_dim, d_qkv, 1.0f, 0.0f);
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_gate, VALUE_DIM, d_z, 1.0f, 0.0f);
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_ssm_beta, DT_RANK, d_beta, 1.0f, 0.0f);
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_ssm_alpha, DT_RANK, d_alpha, 1.0f, 0.0f);
+    
+    wubu_cuda_sigmoid(N * DT_RANK, d_beta, d_beta_sig, stream);
+    wubu_cuda_add_bias(N, DT_RANK, d_alpha, d_ssm_dt_bias, d_alpha_bi, stream);
+    wubu_cuda_softplus(N * DT_RANK, d_alpha_bi, d_gate, stream);
+    wubu_cuda_mul_by_scalar(N, DT_RANK, d_gate, d_ssm_a, d_gate, stream);
+    
+    for (int b = 0; b < B; b++) {
+        cudaMemcpyAsync(d_conv_input + b * (T + CONV_KERNEL - 1) * CONV_DIM,
+                        d_conv_state + b * (CONV_KERNEL - 1) * CONV_DIM,
+                        (CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(d_conv_input + b * (T + CONV_KERNEL - 1) * CONV_DIM + (CONV_KERNEL - 1) * CONV_DIM,
+                        d_qkv + b * T * CONV_DIM,
+                        T * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+    }
+    wubu_cuda_conv1d(B, T, CONV_DIM, CONV_KERNEL, d_conv_input, d_ssm_conv1d, d_conv_out, stream);
+    wubu_cuda_silu(N * CONV_DIM, d_conv_out, d_conv_out, stream);
+    
+    for (int b = 0; b < B; b++) {
+        cudaMemcpyAsync(d_conv_state + b * (CONV_KERNEL - 1) * CONV_DIM,
+                        d_conv_input + (b * (T + CONV_KERNEL - 1) + T) * CONV_DIM,
+                        (CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+    }
+    
+    wubu_cuda_split_qkv(N, KEY_DIM, VALUE_DIM, d_conv_out, d_q_conv, d_k_conv, d_v_conv, stream);
+    wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, stream);
+    wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, stream);
+    
+    // Step 8-9: Recurrence with trajectory saving
+    int repeat_factor = SSM_V_HEADS / SSM_K_HEADS;
+    
+    // Save initial state if trajectory buffer provided
+    if (d_states_t)
+        cudaMemcpyAsync(d_states_t, d_ssm_state, state_sz * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+    
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            int s = b * T + t;
+            
+            float beta_host[DT_RANK], gate_host[DT_RANK];
+            cudaMemcpyAsync(beta_host, d_beta_sig + s * DT_RANK,
+                           DT_RANK * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaMemcpyAsync(gate_host, d_gate + s * DT_RANK,
+                           DT_RANK * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+            
+            for (int vh = 0; vh < SSM_V_HEADS; vh++) {
+                int kh = vh / repeat_factor;
+                float bg = beta_host[kh];
+                float gg = gate_host[kh];
+                
+                float *d_q_vh = d_q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
+                float *d_k_vh = d_k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
+                float *d_v_vh = d_v_conv + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
+                float *d_h = d_ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
+                float *d_out_vh = d_delta_out + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
+                
+                wubu_cuda_delta_net_step(d_h, d_k_vh, d_v_vh, d_q_vh,
+                                         gg, bg, d_out_vh, stream);
+            }
+            
+            // Save state after this timestep
+            if (d_states_t)
+                cudaMemcpyAsync(d_states_t + (b * (T+1) + t + 1) * state_sz,
+                                d_ssm_state, state_sz * sizeof(float),
+                                cudaMemcpyDeviceToDevice, stream);
+        }
+    }
+    
+    // Steps 10-11: IDENTICAL to gpu_ssm_forward
+    wubu_cuda_silu(N * VALUE_DIM, d_z, d_z_silu, stream);
+    wubu_cuda_gated_norm(B, T, SSM_V_HEADS, SSM_D_STATE,
+                         d_delta_out, d_ssm_norm, d_z_silu, stream);
+    wubu_cuda_matmul(cublas_h, d_delta_out, N, VALUE_DIM, d_ssm_out, D_MODEL, d_output, 1.0f, 0.0f);
+    
+    cudaStreamSynchronize(stream);
+}
+
 // ================================================================
 // GPU GQA Forward Pass
 // ================================================================
@@ -165,6 +287,92 @@ void gpu_gqa_forward(cublasHandle_t cublas_h, cudaStream_t stream,
         d_q_norm_w, d_k_norm_w,
         d_attn_out_w,
         d_output, d_scratch);
+
+    cudaStreamSynchronize(stream);
+}
+
+// ================================================================
+// GPU GQA Forward Pass — Save Variant (for backward)
+// ================================================================
+// Runs identical forward but saves intermediates needed for wubu_gqa_backward.
+// Extra save buffers (GPU, pre-allocated by caller, or NULL to skip):
+//   d_Q_norm_save  [N, q_dim] — post-RMSNorm Q (before attention overwrites scratch)
+//   d_K_raw_save   [N, kv_dim] — pre-RMSNorm K (before RMSNorm overwrites d_K)
+//   d_K_norm_save  [N, kv_dim] — post-RMSNorm K
+//   d_attn_out_save [N, q_dim] — post-gate attention output (before output proj)
+void gpu_gqa_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
+                          const float *d_x, int B, int T,
+                          const float *d_attn_q,
+                          const float *d_attn_k,
+                          const float *d_attn_v,
+                          const float *d_attn_out_w,
+                          const float *d_q_norm_w,
+                          const float *d_k_norm_w,
+                          float *d_output,
+                          float *d_Q_full, float *d_K, float *d_V, float *d_scratch,
+                          float *d_Q_norm_save, float *d_K_raw_save,
+                          float *d_K_norm_save, float *d_attn_out_save) {
+    const int N = B * T;
+    int q_dim_x2 = GQA_Q_HEADS * GQA_HEAD_DIM * 2;
+    int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
+    int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;
+    int head_dim = GQA_HEAD_DIM;
+
+    // Step 1: Q + gate fused projection
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_q, q_dim_x2, d_Q_full, 1.0f, 0.0f);
+    // Step 2: K projection
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_k, kv_dim, d_K, 1.0f, 0.0f);
+    // Step 2b: V projection
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_v, kv_dim, d_V, 1.0f, 0.0f);
+    cudaStreamSynchronize(stream);
+
+    // Save K_raw before RMSNorm overwrites d_K (if requested)
+    if (d_K_raw_save)
+        cudaMemcpyAsync(d_K_raw_save, d_K, N * kv_dim * sizeof(float),
+                       cudaMemcpyDeviceToDevice, stream);
+
+    // Step 3: Copy Q from d_Q_full first half to d_scratch
+    int block = 256;
+    int grid_copy = (N * q_dim + block - 1) / block;
+    // Use a simple cudaMemcpy for the Q portion: first q_dim floats of d_Q_full
+    cudaMemcpyAsync(d_scratch, d_Q_full, N * q_dim * sizeof(float),
+                   cudaMemcpyDeviceToDevice, stream);
+
+    // Step 4: RMSNorm Q (in-place on d_scratch)
+    int grid_norm_q = (B * T * GQA_Q_HEADS + block - 1) / block;
+    wubu_cuda_rms_norm(B, T, GQA_Q_HEADS * head_dim, d_scratch, d_q_norm_w, 1e-6f, d_scratch, stream);
+    cudaStreamSynchronize(stream);
+
+    // Save Q_norm before attention overwrites d_scratch (if requested)
+    if (d_Q_norm_save)
+        cudaMemcpyAsync(d_Q_norm_save, d_scratch, N * q_dim * sizeof(float),
+                       cudaMemcpyDeviceToDevice, stream);
+
+    // Step 5: RMSNorm K (in-place on d_K)
+    int grid_norm_k = (B * T * GQA_KV_HEADS + block - 1) / block;
+    wubu_cuda_rms_norm(B, T, GQA_KV_HEADS * head_dim, d_K, d_k_norm_w, 1e-6f, d_K, stream);
+    cudaStreamSynchronize(stream);
+
+    // Save K_norm (if requested)
+    if (d_K_norm_save)
+        cudaMemcpyAsync(d_K_norm_save, d_K, N * kv_dim * sizeof(float),
+                       cudaMemcpyDeviceToDevice, stream);
+
+    // Step 6: Causal attention
+    // d_scratch (Q_norm) is input, d_scratch output (attn_out pre-gate)
+    wubu_cuda_gqa_attention_only(cublas_h, stream, B, T, d_scratch, d_K, d_V,
+                                  d_scratch, GQA_Q_HEADS, GQA_KV_HEADS, head_dim);
+
+    // Save pre-gate attention output (if requested)
+    if (d_attn_out_save)
+        cudaMemcpyAsync(d_attn_out_save, d_scratch, N * q_dim * sizeof(float),
+                       cudaMemcpyDeviceToDevice, stream);
+
+    // Step 7: Gate — sigmoid then multiply (in-place on d_scratch)
+    wubu_cuda_gqa_gate(d_scratch, d_Q_full, N, q_dim, stream);
+
+    // Step 8: Output projection
+    wubu_cuda_matmul(cublas_h, d_scratch, N, q_dim, d_attn_out_w, D_MODEL, d_output, 1.0f, 0.0f);
 
     cudaStreamSynchronize(stream);
 }
@@ -376,4 +584,93 @@ void gpu_free_gqa_weights(gpu_gqa_weights *w) {
     wubu_cuda_free(w->d_attn_out_w);
     wubu_cuda_free(w->d_q_norm_w);
     wubu_cuda_free(w->d_k_norm_w);
+}
+
+// ================================================================
+// GPU Poincaré SSM Layer Forward Pass
+// Identical to gpu_ssm_forward except Step 9 uses Poincaré recurrence.
+// ================================================================
+void gpu_poincare_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
+                     const float *d_x, int B, int T,
+                     const float *d_attn_qkv,
+                     const float *d_attn_gate,
+                     const float *d_ssm_beta,
+                     const float *d_ssm_alpha,
+                     const float *d_ssm_dt_bias,
+                     const float *d_ssm_a,
+                     const float *d_ssm_conv1d,
+                     const float *d_ssm_norm,
+                     const float *d_ssm_out,
+                     float *d_ssm_state,
+                     float *d_conv_state,
+                     float *d_output,
+                     float *d_qkv,
+                     float *d_z,
+                     float *d_beta,
+                     float *d_alpha,
+                     float *d_beta_sig,
+                     float *d_alpha_bi,
+                     float *d_gate,
+                     float *d_conv_input,
+                     float *d_conv_out,
+                     float *d_q_conv,
+                     float *d_k_conv,
+                     float *d_v_conv,
+                     float *d_q_norm,
+                     float *d_k_norm,
+                     float *d_delta_out,
+                     float *d_z_silu,
+                     float R) {
+    const int N = B * T;
+    const int qkv_dim = KEY_DIM * 2 + VALUE_DIM; // 8192
+
+    // ===== Steps 1-4: IDENTICAL to Euclidean =====
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_qkv, qkv_dim, d_qkv, 1.0f, 0.0f);
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_gate, VALUE_DIM, d_z, 1.0f, 0.0f);
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_ssm_beta, DT_RANK, d_beta, 1.0f, 0.0f);
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_ssm_alpha, DT_RANK, d_alpha, 1.0f, 0.0f);
+
+    wubu_cuda_sigmoid(N * DT_RANK, d_beta, d_beta_sig, stream);
+    wubu_cuda_add_bias(N, DT_RANK, d_alpha, d_ssm_dt_bias, d_alpha_bi, stream);
+    wubu_cuda_softplus(N * DT_RANK, d_alpha_bi, d_gate, stream);
+    wubu_cuda_mul_by_scalar(N, DT_RANK, d_gate, d_ssm_a, d_gate, stream);
+
+    // ===== Steps 5-8: IDENTICAL to Euclidean =====
+    for (int b = 0; b < B; b++) {
+        cudaMemcpyAsync(d_conv_input + b * (T + CONV_KERNEL - 1) * CONV_DIM,
+                        d_conv_state + b * (CONV_KERNEL - 1) * CONV_DIM,
+                        (CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(d_conv_input + b * (T + CONV_KERNEL - 1) * CONV_DIM + (CONV_KERNEL - 1) * CONV_DIM,
+                        d_qkv + b * T * CONV_DIM,
+                        T * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+    }
+    wubu_cuda_conv1d(B, T, CONV_DIM, CONV_KERNEL, d_conv_input, d_ssm_conv1d, d_conv_out, stream);
+    wubu_cuda_silu(N * CONV_DIM, d_conv_out, d_conv_out, stream);
+
+    for (int b = 0; b < B; b++) {
+        cudaMemcpyAsync(d_conv_state + b * (CONV_KERNEL - 1) * CONV_DIM,
+                        d_conv_input + (b * (T + CONV_KERNEL - 1) + T) * CONV_DIM,
+                        (CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
+                        cudaMemcpyDeviceToDevice, stream);
+    }
+
+    wubu_cuda_split_qkv(N, KEY_DIM, VALUE_DIM, d_conv_out,
+                        d_q_conv, d_k_conv, d_v_conv, stream);
+    wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, stream);
+    wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, stream);
+
+    // ===== Step 9: POINCARÉ RECURRENCE (replaces Euclidean) =====
+    wubu_cuda_poincare_recurrence(cublas_h, stream, B, T, R,
+        d_ssm_state, d_q_norm, d_k_norm, d_v_conv,
+        d_gate, d_beta_sig, d_delta_out);
+
+    // ===== Steps 10-11: IDENTICAL to Euclidean =====
+    wubu_cuda_silu(N * VALUE_DIM, d_z, d_z_silu, stream);
+    wubu_cuda_gated_norm(B, T, SSM_V_HEADS, SSM_D_STATE,
+                         d_delta_out, d_ssm_norm, d_z_silu, stream);
+    wubu_cuda_matmul(cublas_h, d_delta_out, N, VALUE_DIM, d_ssm_out, D_MODEL, d_output, 1.0f, 0.0f);
+
+    cudaStreamSynchronize(stream);
 }
