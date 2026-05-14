@@ -8,7 +8,7 @@ CUDA_INC = -I/usr/local/cuda-13.1/include
 
 .PHONY: all clean
 
-all: test_ssm load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k
+all: test_ssm load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache
 
 # Object files
 CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_poincare_ssm_backward.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o
@@ -118,6 +118,9 @@ src/cuda_vision.o: src/cuda_vision.cu include/cuda_vision.h include/wubu_vision.
 test_256k: tools/test_256k.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_kv_cache: tools/test_kv_cache.c $(CORE_OBJ) $(CUDA_OBJ)
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
+
 tokenize_corpus: tools/tokenize_corpus.c src/wubu_tokenizer.o src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -178,4 +181,4 @@ test_cpu_timing: tools/test_cpu_timing.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
 
 clean:
-	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k src/*.o tools/*.o
+	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache src/*.o tools/*.o
