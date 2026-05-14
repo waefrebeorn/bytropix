@@ -119,7 +119,7 @@ used by the rest of the model, enabling unified weight loading.
 
 ---
 
-## Moondream3 Vision Encoder Spec (from huggingface config)
+## Moondream3 Vision Encoder Spec (from config.py VisionConfig)
 
 - Type: SigLIP-style ViT
 - Depth: 27 layers
@@ -127,9 +127,12 @@ used by the rest of the model, enabling unified weight loading.
 - Intermediate: 4304
 - Heads: 16
 - Patch size: 14×14
-- Image size: 448×448
+- **Image size: 378×378** (NOT 448 — this was a doc error)
+- Grid: 27×27 = 729 patches
 - Output dim: 2048 (projection matches text hidden)
+- Proj inner dim: 8192
 - Activation: GELU (approximate tanh)
+- Weight dtype: BF16 (original) → F32 (dumped)
 
 ---
 
@@ -141,7 +144,7 @@ used by the rest of the model, enabling unified weight loading.
 | Encoder params | ~300M | ~1.5B |
 | Output dim | 1152 → project to 2048 | Same |
 | Patch size | 14×14 | 16×16, temporal=2 |
-| Image resolution | 448×448 (fixed) | Flexible, up to 1280×720 |
+| Image resolution | 378×378 (fixed, 27×27 grid) | Flexible, up to 1280×720 |
 | Video support | Frame-by-frame | Native temporal patches |
 | Weight source | vLLM dump → .bin | GGUF extract |
 | C port pattern | Same as Phase 0-1 (GGUF rip) | Same |
@@ -153,9 +156,11 @@ used by the rest of the model, enabling unified weight loading.
 
 | Sub-phase | Component | Status | Deliverable |
 |-----------|-----------|--------|-------------|
-| **5b.1** | Weight dump script | ⏳ TODO | `tools/dump_moondream3_weights.py` |
-| **5b.1** | Dumped weight files | ⏳ TODO | `data/moondream3_vision_weights.bin` |
+| **5b.1** | Weight dump script | ✅ DONE | `tools/dump_moondream3_weights.py` |
+| **5b.1** | Dumped weight files | ✅ DONE | `data/moondream3_vision_weights.bin` (1.71GB f32) |
+| **5b.1** | Dump index + config | ✅ DONE | `data/moondream3_vision_index.json` + `config.txt` |
 | **5b.2** | C ViT forward | ⏳ TODO | `src/wubu_vision_moondream.c` |
+| **5b.2** | C Vision header | ⏳ TODO | `include/wubu_vision_moondream.h` |
 | **5b.2** | Vision test harness | ⏳ TODO | `tools/test_vision_moondream.c` |
 | **5b.2** | Poincaré graft (exp_map) | ⏳ TODO | Include `wubu_mobius.h` |
 | **5b.3** | Vision-language training | ⏳ FUTURE | Joint training loop |

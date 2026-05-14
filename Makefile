@@ -8,10 +8,10 @@ CUDA_INC = -I/usr/local/cuda-13.1/include
 
 .PHONY: all clean
 
-all: test_ssm load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text
+all: test_ssm load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa
 
 # Object files
-CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_poincare_ssm_backward.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o
+CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o
 RSGD_OBJ = src/rsgd.o
@@ -32,6 +32,9 @@ src/wubu_moe_backward.o: src/wubu_moe_backward.c include/wubu_moe.h include/wubu
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_poincare_ssm_backward.o: src/wubu_poincare_ssm_backward.c include/wubu_ssm.h include/wubu_mobius.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_poincare_gqa.o: src/wubu_poincare_gqa.c include/wubu_poincare_gqa.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_vision.o: src/wubu_vision.c include/wubu_vision.h include/wubu_ssm.h
@@ -57,6 +60,9 @@ test_ssm: test_ssm_forward.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_poincare_ssm: test_poincare_ssm.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_poincare_gqa: tools/test_poincare_gqa.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_tokenizer: tools/test_tokenizer.c src/wubu_tokenizer.o src/gguf_reader.o
@@ -163,6 +169,9 @@ test: test_ssm
 test_poincare: test_poincare_ssm
 	./test_poincare_ssm
 
+test_poincare_gqa_run: test_poincare_gqa
+	./test_poincare_gqa
+
 test_gpu_run: test_gpu
 	./test_gpu
 
@@ -192,4 +201,4 @@ test_cpu_timing: tools/test_cpu_timing.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
 
 clean:
-	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache src/*.o tools/*.o
+	rm -f test_ssm test_poincare_ssm test_poincare_gqa load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache src/*.o tools/*.o
