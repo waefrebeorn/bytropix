@@ -141,8 +141,8 @@ bool wubu_tokenizer_init(wubu_tokenizer_t *tok, const char *gguf_path) {
     fclose(f);
     printf("  Vocab: %d tokens loaded\n", tok->vocab_size);
     
-    build_byte_token_ids(tok);
     build_vocab_hash(tok);
+    build_byte_token_ids(tok);
     
     // Load merges
     f = fopen("data/merges.bin", "rb");
@@ -234,13 +234,46 @@ bool wubu_tokenizer_init(wubu_tokenizer_t *tok, const char *gguf_path) {
 
 // ========== Init from text files ==========
 static void build_byte_token_ids(wubu_tokenizer_t *tok) {
-    for (int i = 0; i < 256; i++) tok->byte_token_ids[i] = gpt2_byte_encoder[i];
-    for (int i = 0; i < tok->vocab_size; i++) {
-        if (tok->vocab[i].byte_len == 1) {
-            uint8_t b = (uint8_t)tok->vocab[i].bytes[0];
-            tok->byte_token_ids[b] = i;
+    // Look up each byte's Latin-1 character in the vocab (matches merge table encoding).
+    // Fallback to GPT-2 byte encoder for control/special bytes not found in vocab lookup.
+    for (int i = 0; i < 256; i++) {
+        uint8_t utf8[4];
+        int ulen;
+        if (i < 0x80) {
+            utf8[0] = (uint8_t)i;
+            ulen = 1;
+        } else if (i < 0x800) {
+            utf8[0] = 0xC0 | (uint8_t)(i >> 6);
+            utf8[1] = 0x80 | (uint8_t)(i & 0x3F);
+            ulen = 2;
+        } else {
+            utf8[0] = 0xE0 | (uint8_t)(i >> 12);
+            utf8[1] = 0x80 | (uint8_t)((i >> 6) & 0x3F);
+            utf8[2] = 0x80 | (uint8_t)(i & 0x3F);
+            ulen = 3;
+        }
+        int tid = find_token_by_string(tok, utf8, ulen);
+        if (tid < 0) {
+            tid = gpt2_byte_encoder[i];  // GPT-2 byte encoding fallback
+        }
+        tok->byte_token_ids[i] = tid;
+    }
+    // Build decode lookup table and is_byte_token
+    tok->is_byte_token = (bool *)calloc((size_t)tok->vocab_size, sizeof(bool));
+    for (int i = 0; i < 256; i++) {
+        int tid = tok->byte_token_ids[i];
+        if (tid >= 0 && tid < tok->vocab_size) {
+            tok->is_byte_token[tid] = true;
+            // Store the actual text bytes for this byte's token (for decode)
+            int blen = tok->vocab[tid].byte_len;
+            if (blen > 0 && blen <= 4) {
+                memcpy(tok->byte_text_bytes[i], tok->vocab[tid].bytes, blen);
+                tok->byte_text_len[i] = blen;
+            }
         }
     }
+    printf("  byte_token_ids[0xE4]=%d, [0xBD]=%d, [0xA0]=%d\n",
+           tok->byte_token_ids[0xE4], tok->byte_token_ids[0xBD], tok->byte_token_ids[0xA0]);
 }
 
 static void build_vocab_hash(wubu_tokenizer_t *tok) {
@@ -408,8 +441,8 @@ bool wubu_tokenizer_init_from_files(wubu_tokenizer_t *tok,
     fclose(f);
     tok->n_merges = mi;
     
-    build_byte_token_ids(tok);
     build_vocab_hash(tok);
+    build_byte_token_ids(tok);
     
     // Build merge hash
     tok->merge_hash_size = 1;
@@ -436,6 +469,7 @@ void wubu_tokenizer_free(wubu_tokenizer_t *tok) {
     if (tok) {
         free(tok->vocab); free(tok->merges);
         free(tok->merge_hash); free(tok->vocab_hash);
+        free(tok->is_byte_token);
         memset(tok, 0, sizeof(*tok));
     }
 }
@@ -451,11 +485,11 @@ int wubu_tokenizer_encode(wubu_tokenizer_t *tok,
     if (text_len <= 0) return 0;
     
     // Convert text to byte tokens
-    uint8_t *byte_tokens = (uint8_t *)malloc((size_t)text_len);
+    int *byte_tokens = (int *)malloc((size_t)text_len * sizeof(int));
     int n_bytes = 0;
     for (int i = 0; i < text_len; i++) {
         int tid = tok->byte_token_ids[(uint8_t)text[i]];
-        if (tid >= 0) byte_tokens[n_bytes++] = (uint8_t)tid;
+        if (tid >= 0) byte_tokens[n_bytes++] = tid;
     }
     if (n_bytes <= 0) { free(byte_tokens); return 0; }
     
@@ -512,20 +546,43 @@ int wubu_tokenizer_decode(wubu_tokenizer_t *tok,
     for (int i = 0; i < n_ids && total < max_output_chars - 1; i++) {
         int id = input_ids[i];
         if (id >= 0 && id < tok->vocab_size) {
-            const uint8_t *bytes = (const uint8_t *)tok->vocab[id].bytes;
-            int blen = tok->vocab[id].byte_len;
-            for (int j = 0; j < blen && total < max_output_chars - 1; j++) {
-                uint8_t b = bytes[j];
-                // GPT-2 byte encoding: U+0100..U+01FF as 2-byte UTF-8 (0xC4-0xC7, 0x80-0xBF)
-                if ((b >= 0xC4 && b <= 0xC7) && (j + 1 < blen)) {
-                    uint8_t b2 = bytes[j + 1];
-                    if (b2 >= 0x80 && b2 <= 0xBF) {
-                        output_text[total++] = (char)((uint8_t)(((b & 0x03) << 6) | (b2 & 0x3F)));
-                        j++;
-                        continue;
+            // For byte-level tokens: find which byte this token represents
+            if (tok->is_byte_token && tok->is_byte_token[id]) {
+                int byte_val = -1;
+                for (int b = 0; b < 256; b++) {
+                    if (tok->byte_token_ids[b] == id) {
+                        byte_val = b;
+                        break;
                     }
                 }
-                output_text[total++] = (char)b;
+                if (byte_val >= 0) {
+                    output_text[total++] = (char)(uint8_t)byte_val;
+                    continue;
+                }
+            }
+            
+            // For non-byte tokens: scan for known byte token texts
+            const uint8_t *bytes = (const uint8_t *)tok->vocab[id].bytes;
+            int blen = tok->vocab[id].byte_len;
+            for (int j = 0; j < blen && total < max_output_chars - 1; ) {
+                // Find the LONGEST matching byte-level token text at this position
+                int best_bv = -1, best_len = 0;
+                for (int bv = 0; bv < 256; bv++) {
+                    int tlen = tok->byte_text_len[bv];
+                    if (tlen > best_len && j + tlen <= blen) {
+                        if (memcmp(&bytes[j], tok->byte_text_bytes[bv], tlen) == 0) {
+                            best_bv = bv;
+                            best_len = tlen;
+                        }
+                    }
+                }
+                if (best_bv >= 0) {
+                    output_text[total++] = (char)(uint8_t)best_bv;
+                    j += best_len;
+                } else {
+                    output_text[total++] = (char)bytes[j];
+                    j++;
+                }
             }
         }
     }
