@@ -124,8 +124,24 @@ void wubu_conv1d(int B, int T, int C, int k,
     }
 }
 
+// TGT (Toroidal Gradient Transformation) safe wrapping using π odometer
+// Keeps values in [-π, π] range, preventing float32 overflow
+#define TGT_PI      3.14159265358979323846f
+#define TGT_BOUNDARY (2.0f * TGT_PI)
+
+static inline float tgt_wrap(float x) {
+    return fmodf(x + TGT_PI, TGT_BOUNDARY) - TGT_PI;
+}
+
+static inline float tgt_safe_expf(float x) {
+    // Clamp to avoid float32 overflow: expf(89) ≈ 5e38 ≈ overflow
+    if (x > 80.0f) x = 80.0f;
+    if (x < -80.0f) return 0.0f;
+    return expf(x);
+}
+
 // ============================================================
-// SSM Layer Forward Pass
+// SSM Layer Forward Pass (Euclidean)
 // ============================================================
 
 void wubu_ssm_forward(const float *x, int B, int T,
@@ -300,7 +316,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 int kh = vh / repeat_factor;  // which K-head maps to this V-head
                 
                 float bg = beta_s[kh];
-                float gg = expf(gate_s[kh]);
+                float gg = tgt_safe_expf(gate_s[kh]);  // TGT: safe exp (clamped, no overflow)
                 
                 // Get Q, K, V for this head
                 const float *q_vh = q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
@@ -336,6 +352,13 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     for (int j = 0; j < SSM_D_STATE; j++) {
                         h[i * SSM_D_STATE + j] += k_vh[i] * diff[j] * bg;
+                    }
+                }
+                
+                // TGT: wrap state entries to prevent float32 overflow
+                for (int i = 0; i < SSM_D_STATE; i++) {
+                    for (int j = 0; j < SSM_D_STATE; j++) {
+                        h[i * SSM_D_STATE + j] = tgt_wrap(h[i * SSM_D_STATE + j]);
                     }
                 }
                 
@@ -551,7 +574,7 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
                 int kh = vh / (SSM_V_HEADS / SSM_K_HEADS);
                 float bg = beta_s[kh];
-                float gg = expf(gate_s[kh]);
+                float gg = tgt_safe_expf(gate_s[kh]);  // TGT: safe exp (clamped)
                 const float *q_vh = q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *k_vh = k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *v_vh = v_conv + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
@@ -811,7 +834,7 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
                 int kh = vh / repeat_factor;
                 
                 float bg = beta_s[kh];
-                float gg = expf(gate_s[kh]);  // scalar for Möbius multiplication
+                float gg = tgt_safe_expf(gate_s[kh]);  // TGT: safe exp (clamped)  // scalar for Möbius multiplication
                 
                 const float *q_vh = q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *k_vh = k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
@@ -1092,6 +1115,8 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     for (int i = 0; i < GQA_HEAD_DIM; i++)
                         score += q_vec[i] * k_vec[i];
                     score *= scale;
+                    // TGT: wrap attention score to prevent overflow
+                    score = tgt_wrap(score);
                     attn_weights[t_k] = score;
                     if (score > max_score) max_score = score;
                 }
@@ -1263,6 +1288,8 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
                     for (int i = 0; i < GQA_HEAD_DIM; i++)
                         score += q_vec[i] * k_vec[i];
                     score *= scale;
+                    // TGT: wrap attention score to prevent overflow
+                    score = tgt_wrap(score);
                     attn_weights[t_k] = score;
                     if (score > max_score) max_score = score;
                 }
