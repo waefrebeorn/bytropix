@@ -28,8 +28,9 @@ enum ggml_type {
     GGML_TYPE_Q8_K   = 15,
     GGML_TYPE_IQ2_XXS = 16,
     GGML_TYPE_IQ2_XS  = 17,
-    GGML_TYPE_IQ2_S   = 18,
+    GGML_TYPE_IQ3_XXS = 18,
     GGML_TYPE_IQ1_S   = 19,
+    GGML_TYPE_IQ2_S   = 22,
     GGML_TYPE_IQ1_M   = 23,
 };
 
