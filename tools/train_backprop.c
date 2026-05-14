@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
     printf("  %d tokens loaded\n", total_tokens);
     
     // Load embeddings file
-    const char *embed_path = "data/qwen36_embeddings_c.bin";
+    const char *embed_path = "data/qwen36_embeddings_c.bin.raw";
     printf("\n--- Loading embeddings ---\n");
     f = fopen(embed_path, "rb");
     if (!f) { fprintf(stderr, "Can't open %s\n", embed_path); return 1; }

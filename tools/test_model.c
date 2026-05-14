@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     
     // Also run Euclidean SSM only (for comparison)
     float *embd = (float *)malloc(B * T * D_MODEL * sizeof(float));
-    FILE *f = fopen("data/qwen36_embeddings_c.bin", "rb");
+    FILE *f = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
     if (f) {
         for (int i = 0; i < B * T; i++) {
             int id = tokens[i];

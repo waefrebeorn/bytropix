@@ -197,7 +197,7 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     
     // Embeddings: use pre-extracted file from Phase 1
     model->use_embedding_file = true;
-    FILE *emb_f = fopen("data/qwen36_embeddings_c.bin", "rb");
+    FILE *emb_f = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
     if (emb_f) {
         fseek(emb_f, 0, SEEK_END);
         long emb_size = ftell(emb_f);
@@ -594,7 +594,7 @@ void wubu_model_forward(wubu_model_t *model,
     float *embd = (float *)malloc(B * T * D_MODEL * sizeof(float));
     
     if (model->use_embedding_file) {
-        FILE *f = fopen("data/qwen36_embeddings_c.bin", "rb");
+        FILE *f = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
         if (f) {
             for (int i = 0; i < B * T; i++) {
                 int id = token_ids[i];
