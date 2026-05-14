@@ -8,10 +8,10 @@ CUDA_INC = -I/usr/local/cuda-13.1/include
 
 .PHONY: all clean
 
-all: test_ssm test_nested_ssm load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa
+all: test_ssm test_nested_ssm load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic
 
 # Object files
-CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o
+CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o
 RSGD_OBJ = src/rsgd.o
@@ -29,6 +29,9 @@ src/wubu_mobius.o: src/wubu_mobius.c include/wubu_mobius.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_moe.o: src/wubu_moe.c include/wubu_moe.h include/wubu_ssm.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_moe_hyperbolic.o: src/wubu_moe_hyperbolic.c include/wubu_moe_hyperbolic.h include/wubu_moe.h include/wubu_mobius.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_moe_backward.o: src/wubu_moe_backward.c include/wubu_moe.h include/wubu_ssm.h
@@ -55,6 +58,9 @@ src/cuda_kernels.o: src/cuda_kernels.cu include/cuda_kernels.h
 src/rsgd.o: src/rsgd.c include/rsgd.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+src/wubu_tst.o: src/wubu_tst.c include/wubu_tst.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 src/bench.o: src/bench.c include/bench.h include/cuda_kernels.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) $(CUDA_INC) -c -o $@ $<
 
@@ -78,6 +84,9 @@ test_model: tools/test_model.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_moe: tools/test_moe.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_moe_hyperbolic: tools/test_moe_hyperbolic.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 load_model: tools/load_model_layer.c $(CORE_OBJ)
@@ -181,6 +190,12 @@ test_poincare: test_poincare_ssm
 test_poincare_gqa_run: test_poincare_gqa
 	./test_poincare_gqa
 
+test_tst: tools/test_tst.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_tst_run: test_tst
+	./test_tst
+
 test_gpu_run: test_gpu
 	./test_gpu
 
@@ -210,4 +225,4 @@ test_cpu_timing: tools/test_cpu_timing.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
 
 clean:
-	rm -f test_ssm test_nested_ssm test_poincare_ssm test_poincare_gqa load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache src/*.o tools/*.o
+	rm -f test_ssm test_nested_ssm test_poincare_ssm test_poincare_gqa load_model test_model test_gpu tokenize_corpus test_moe test_moe_hyperbolic train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache test_tst src/*.o tools/*.o
