@@ -8,12 +8,16 @@ CUDA_INC = -I/usr/local/cuda-13.1/include
 
 .PHONY: all clean
 
-all: test_ssm load_model test_gpu test_model
+all: test_ssm load_model test_gpu test_model test_cpu_timing
 
 # Object files
-CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_moe.o src/gguf_reader.o
+CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_moe.o src/gguf_reader.o src/qlearner.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o
+RSGD_OBJ = src/rsgd.o
+
+src/qlearner.o: src/qlearner.c include/qlearner.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_ssm.o: src/wubu_ssm.c include/wubu_ssm.h include/wubu_mobius.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -32,6 +36,9 @@ src/wubu_model.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h inclu
 
 src/cuda_kernels.o: src/cuda_kernels.cu include/cuda_kernels.h
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+
+src/rsgd.o: src/rsgd.c include/rsgd.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/bench.o: src/bench.c include/bench.h include/cuda_kernels.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) $(CUDA_INC) -c -o $@ $<
@@ -114,5 +121,24 @@ bench_e2e_run: bench_e2e
 train_stub_run: train_stub
 	./train_stub
 
+test_gpu_poincare: tools/test_gpu_poincare.c $(CORE_OBJ) $(CUDA_OBJ) src/bench.o
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
+
+test_rsgd: tools/test_rsgd.c $(RSGD_OBJ) src/gguf_reader.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_backward: tools/test_backward.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_bwd_model: tools/test_bwd_model.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_backward_simple: tools/test_backward_simple.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+# CPU timing + hedged spec tests (from tailslayer pattern)
+test_cpu_timing: tools/test_cpu_timing.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
+
 clean:
-	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu src/*.o
+	rm -f test_ssm test_poincare_ssm load_model test_model test_gpu tokenize_corpus test_moe train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing src/*.o tools/*.o
