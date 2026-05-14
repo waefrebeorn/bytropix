@@ -24,8 +24,8 @@ __global__ void attention_kernel(const float *q, const float *k, const float *v,
     const float *q_row = q + row * d + head * head_dim;
     float *out_row = out + row * d + head * head_dim;
     
-    // Registers: scores up to n=256
-    __shared__ float scores[256];
+    // Registers: scores up to n=1024
+    __shared__ float scores[1024];
     float max_val = -1e30f;
     
     for (int t = 0; t < n; t++) {
