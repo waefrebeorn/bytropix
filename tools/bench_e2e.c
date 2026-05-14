@@ -183,11 +183,9 @@ int main(int argc, char **argv) {
         int is_ssm = wubu_is_ssm_layer(layer);
 
         if (is_ssm) {
-            // Load SSM weights
+            // [load weights, same as before]
             ssm_layer_weights w;
             memset(&w, 0, sizeof(w));
-            // (Re-open GGUF each time — suppress stderr noise from metadata prints)
-            // Temporarily redirect stderr to suppress GGUF metadata spam
             int saved_stderr = dup(STDERR_FILENO);
             FILE *null_f = fopen("/dev/null", "w");
             dup2(fileno(null_f), STDERR_FILENO);
@@ -258,6 +256,17 @@ int main(int argc, char **argv) {
             wubu_ssm_forward(cpu_in, B, T, &w,
                              ssm_states_cpu[layer], conv_states_cpu[layer], cpu_out);
             t_cpu_total += now_sec() - t0;
+            
+            // DEBUG: check output
+            if (layer < 5) {
+                float max_v = 0;
+                for (int i = 0; i < N * D_MODEL; i++) {
+                    float av = cpu_out[i] < 0 ? -cpu_out[i] : cpu_out[i];
+                    if (av > max_v) max_v = av;
+                }
+                fprintf(stderr, "MARK_LAYER%d: SSM cpu_out max=%.6f cpu_in[0]=%.6f\n",
+                        layer, max_v, cpu_out[0]);
+            }
 
             // Free weights (keep states for correctness comparison)
             free(w.attn_qkv_weight); free(w.attn_gate_weight);
