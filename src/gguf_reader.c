@@ -8,6 +8,7 @@
 // From ggml-common.h — lookup table for 1.5625 bpw dequantization
 #define NGRID_IQ1S 2048
 #define IQ1S_DELTA 0.125f
+#define IQ1M_DELTA 0.125f
 
 static uint64_t iq1s_grid[NGRID_IQ1S] = {
     0xffffffffffffffff, 0xffffffffffffff01, 0xffffffffffff0000, 0xffffffffffff01ff,
@@ -748,10 +749,12 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
 #define IQ2_S_BLOCK_SIZE 82
 #define IQ3_XXS_BLOCK_SIZE 98  // d(fp16,2) + qs[96] = 98 bytes
 #define IQ3_S_BLOCK_SIZE 110   // d(2) + qs[64] + qh[8] + signs[32] + scales[4] = 110
+#define IQ1_M_BLOCK_SIZE 56    // qs[32] + qh[16] + scales[8] = 56
 
 // Forward declarations for dequant functions defined after gguf_read_tensor_f32
 void dequantize_iq3_xxs_row(const uint8_t *data, float *output, int64_t n_elems);
 void dequantize_iq3_s_row(const uint8_t *data, float *output, int64_t n_elems);
+void dequantize_iq1_m_row(const uint8_t *data, float *output, int64_t n_elems);
 
 void dequantize_q6_K_row(const uint8_t *data, float *output, int64_t n_elems) {
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
@@ -949,6 +952,18 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         size_t n_read = fread(raw, 1, raw_size, ctx->file);
         if (n_read != raw_size) { free(raw); return 0; }
         dequantize_iq3_xxs_row(raw, output, n_elems);
+        free(raw);
+        return (int)n_elems;
+    }
+    else if (tensor->ggml_type == GGML_TYPE_IQ1_M) {
+        // IQ1_M dequantization (1.75 bpw)
+        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+        size_t raw_size = n_blocks * IQ1_M_BLOCK_SIZE;
+        uint8_t *raw = malloc(raw_size);
+        if (!raw) return 0;
+        size_t n_read = fread(raw, 1, raw_size, ctx->file);
+        if (n_read != raw_size) { free(raw); return 0; }
+        dequantize_iq1_m_row(raw, output, n_elems);
         free(raw);
         return (int)n_elems;
     }
@@ -1394,6 +1409,49 @@ void dequantize_iq1_s_row(const uint8_t *data, float *output, int64_t n_elems) {
     }
 }
 
+// IQ1_M dequantization (1.75 bpw, 256 elements/block)
+// Block: qs[32] + qh[16] + scales[8] = 56 bytes
+// Global fp16 scale packed into high 4 bits of scales[0..3] as uint16_ts
+void dequantize_iq1_m_row(const uint8_t *data, float *output, int64_t n_elems) {
+    int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+    for (int64_t b = 0; b < n_blocks; b++) {
+        const uint8_t *block = data + b * IQ1_M_BLOCK_SIZE;
+        const uint8_t *qs = block;        // 32 bytes
+        const uint8_t *qh = block + 32;   // 16 bytes
+        const uint16_t *sc = (const uint16_t *)(block + 48); // 4 uint16_ts = 8 bytes
+        
+        // Extract global fp16 scale from high nibbles of 4 scale uint16_ts
+        uint16_t scale_bits = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) |
+                              ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+        float global_scale = f16_to_f32(scale_bits);
+        
+        for (int ib = 0; ib < 8; ib++) {           // 8 sub-blocks of 32 elements each
+            // Sub-scale: 3 bits from scales[ib/4], bits 3*(ib%4)..3*(ib%4)+2
+            int sc_idx = ib / 4;
+            int sc_shift = 3 * (ib % 4);
+            float dl = global_scale * (float)(2 * ((sc[sc_idx] >> sc_shift) & 0x7) + 1);
+            
+            for (int il = 0; il < 4; il++) {       // 4 groups of 8 elements per sub-block
+                int64_t base = b * QK_K + ib * 32 + il * 8;
+                
+                // Delta sign from qh[2*ib+il/2] bit at position (0x08 << 4*(il%2))
+                float delta = (qh[2 * ib + il / 2] & (0x08 << 4 * (il % 2)))
+                              ? -1.0f - IQ1M_DELTA : -1.0f + IQ1M_DELTA;
+                
+                // 11-bit grid index: low 8 bits from qs, high 3 from qh
+                uint16_t idx = qs[4 * ib + il] |
+                    (uint16_t)(((qh[2 * ib + il / 2] >> (4 * (il % 2))) & 7) << 8);
+                
+                uint64_t grid_packed = iq1s_grid[idx];
+                int8_t *grid = (int8_t *)&grid_packed;
+                
+                for (int j = 0; j < 8 && (base + j) < n_elems; j++)
+                    output[base + j] = dl * ((float)grid[j] + delta);
+            }
+        }
+    }
+}
+
 // ========== Poincaré / Hyperbolic Ops ==========
 
 float wubu_norm(const float *v, int dim) {
@@ -1410,13 +1468,14 @@ float wubu_dot(const float *a, const float *b, int dim) {
 
 void wubu_exp_map(const float *input, int dim, float R, float *output) {
     // Map Euclidean vector to Poincaré ball:
-    // exp_map(x) = tanh(||x||/R) × x/||x||
+    // exp_map(v) = R * tanh(||v||/R) × v/||v||
+    // Output norm = R * tanh(||v||/R) < R
     float norm = wubu_norm(input, dim);
     if (norm < 1e-8f) {
         memcpy(output, input, dim * sizeof(float));
         return;
     }
-    float factor = tanhf(norm / R) / norm;
+    float factor = R * tanhf(norm / R) / norm;
     for (int i = 0; i < dim; i++) {
         output[i] = factor * input[i];
     }
