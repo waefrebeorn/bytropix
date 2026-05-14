@@ -743,9 +743,11 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
 #define IQ2_XXS_BLOCK_SIZE 66
 #define IQ2_S_BLOCK_SIZE 82
 #define IQ3_XXS_BLOCK_SIZE 98  // d(fp16,2) + qs[96] = 98 bytes
+#define IQ3_S_BLOCK_SIZE 110   // d(2) + qs[64] + qh[8] + signs[32] + scales[4] = 110
 
 // Forward declarations for dequant functions defined after gguf_read_tensor_f32
 void dequantize_iq3_xxs_row(const uint8_t *data, float *output, int64_t n_elems);
+void dequantize_iq3_s_row(const uint8_t *data, float *output, int64_t n_elems);
 
 void dequantize_q6_K_row(const uint8_t *data, float *output, int64_t n_elems) {
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
@@ -919,6 +921,18 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         size_t n_read = fread(raw, 1, raw_size, ctx->file);
         if (n_read != raw_size) { free(raw); return 0; }
         dequantize_iq2_s_row(raw, output, n_elems);
+        free(raw);
+        return (int)n_elems;
+    }
+    else if (tensor->ggml_type == GGML_TYPE_IQ3_S) {
+        // IQ3_S dequantization (3.4375 bpw)
+        int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+        size_t raw_size = n_blocks * IQ3_S_BLOCK_SIZE;
+        uint8_t *raw = malloc(raw_size);
+        if (!raw) return 0;
+        size_t n_read = fread(raw, 1, raw_size, ctx->file);
+        if (n_read != raw_size) { free(raw); return 0; }
+        dequantize_iq3_s_row(raw, output, n_elems);
         free(raw);
         return (int)n_elems;
     }
@@ -1254,6 +1268,88 @@ void dequantize_iq3_xxs_row(const uint8_t *data, float *output, int64_t n_elems)
                 y += 8;
             }
             qs += 8;
+        }
+    }
+}
+
+// ========== IQ3_S Dequantization (3.4375 bpw, reference llama.cpp) ==========
+
+// iq3s_grid: 512 entries, each uint32 packs 4 int8 values
+static const uint32_t iq3s_grid[512] = {
+#include "iq3s_grid.inc"
+};
+
+void dequantize_iq3_s_row(const uint8_t *data, float *output, int64_t n_elems) {
+    // Reference: llama.cpp ggml-quants.c dequantize_row_iq3_s()
+    // block_iq3_s: d(2) + qs[64] + qh[8] + signs[32] + scales[4] = 110 bytes
+    //   qs: 64 bytes = 128 × 4-bit grid indices (2 per byte)
+    //   qh: 8 bytes = high bit for 9-bit grid index
+    //   signs: 32 bytes = 32 × 8-bit sign masks
+    //   scales: 4 bytes = 8 × 4-bit scales (2 per byte, for pairs of ib32 groups)
+    // Processed in pairs of ib32 groups: each scale byte covers 2 groups (64 elems)
+    
+    static const uint8_t kmask_iq2xs[8] = {1, 2, 4, 8, 16, 32, 64, 128};
+    
+    int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+    
+    for (int64_t b = 0; b < n_blocks; b++) {
+        const uint8_t *block = data + b * IQ3_S_BLOCK_SIZE;
+        
+        uint16_t d_bits;
+        memcpy(&d_bits, block, 2);
+        float d = f16_to_f32(d_bits);
+        
+        const uint8_t *qs = block + 2;              // 64 bytes
+        const uint8_t *qh = block + 66;              // 8 bytes
+        const uint8_t *signs = block + 74;           // 32 bytes
+        const uint8_t *scales = block + 106;         // 4 bytes
+        
+        float *y = output + b * QK_K;
+        
+        // Process in pairs: ib32 = 0,2,4,6 (4 pairs × 2 groups = 8 groups)
+        for (int ib32 = 0; ib32 < QK_K/32; ib32 += 2) {
+            int sc_idx = ib32 / 2;
+            float db1 = d * (1.0f + 2.0f * (float)(scales[sc_idx] & 0x0F));
+            float db2 = d * (1.0f + 2.0f * (float)(scales[sc_idx] >>   4));
+            
+            // First group (ib32)
+            for (int l = 0; l < 4; l++) {
+                uint16_t idx1 = qs[2*l+0] | ((qh[0] << (8 - 2*l)) & 0x100);
+                uint16_t idx2 = qs[2*l+1] | ((qh[0] << (7 - 2*l)) & 0x100);
+                const uint8_t *grid1 = (const uint8_t *)(iq3s_grid + idx1);
+                const uint8_t *grid2 = (const uint8_t *)(iq3s_grid + idx2);
+                for (int j = 0; j < 4; j++) {
+                    float v1 = db1 * (float)(int8_t)grid1[j];
+                    float v2 = db1 * (float)(int8_t)grid2[j];
+                    if (signs[l] & kmask_iq2xs[j+0]) v1 = -v1;
+                    if (signs[l] & kmask_iq2xs[j+4]) v2 = -v2;
+                    y[j+0] = v1;
+                    y[j+4] = v2;
+                }
+                y += 8;
+            }
+            qs += 8;
+            signs += 4;
+            
+            // Second group (ib32+1)
+            for (int l = 0; l < 4; l++) {
+                uint16_t idx1 = qs[2*l+0] | ((qh[1] << (8 - 2*l)) & 0x100);
+                uint16_t idx2 = qs[2*l+1] | ((qh[1] << (7 - 2*l)) & 0x100);
+                const uint8_t *grid1 = (const uint8_t *)(iq3s_grid + idx1);
+                const uint8_t *grid2 = (const uint8_t *)(iq3s_grid + idx2);
+                for (int j = 0; j < 4; j++) {
+                    float v1 = db2 * (float)(int8_t)grid1[j];
+                    float v2 = db2 * (float)(int8_t)grid2[j];
+                    if (signs[l] & kmask_iq2xs[j+0]) v1 = -v1;
+                    if (signs[l] & kmask_iq2xs[j+4]) v2 = -v2;
+                    y[j+0] = v1;
+                    y[j+4] = v2;
+                }
+                y += 8;
+            }
+            qh += 2;
+            qs += 8;
+            signs += 4;
         }
     }
 }
