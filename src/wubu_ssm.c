@@ -1072,6 +1072,16 @@ void wubu_gqa_forward(const float *x, int B, int T,
         }
     }
     
+    // NaN guard: replace any NaN/Inf in Q_full, K, V with 0
+    for (int i = 0; i < N * q_dim * 2; i++)
+        if (isnan(Q_full[i]) || isinf(Q_full[i])) Q_full[i] = 0.0f;
+    for (int i = 0; i < N * q_dim; i++)
+        if (isnan(gate[i]) || isinf(gate[i])) gate[i] = 0.0f;
+    for (int i = 0; i < N * kv_dim; i++) {
+        if (isnan(K[i]) || isinf(K[i])) K[i] = 0.0f;
+        if (isnan(V[i]) || isinf(V[i])) V[i] = 0.0f;
+    }
+    
     // Step 4: Q/K RMSNorm
     // Q_full has [N, q_dim*2] — split Q (first q_dim) from gate (second q_dim)
     // Q_norm should only normalize the Q portion, not the gate
