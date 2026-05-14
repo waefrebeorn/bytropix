@@ -1092,7 +1092,8 @@ __global__ void poincare_recurrence_kernel(
     const float *d_gate,    // [N, DT_RANK]
     const float *d_beta,    // [N, DT_RANK]
     float *d_delta_out,     // [N, SSM_V_HEADS, D_STATE]
-    int B, int T, float R)
+    int B, int T, float R,
+    float *d_states_t)      // [B, T+1, SSM_V_HEADS, D_STATE, D_STATE] — NULL ok
 {
     int b = blockIdx.x;
     int t = blockIdx.y;
@@ -1148,6 +1149,14 @@ __global__ void poincare_recurrence_kernel(
     // Process each row of h_state one at a time
     for (int row = 0; row < SSM_D_STATE; row++) {
         float *h_row = h_state + row * SSM_D_STATE;
+        
+        // Save state to trajectory: h_t = h_state before modification (thread 0 only)
+        if (d_states_t && tid == 0 && row == 0) {
+            float *traj = d_states_t + ((s * SSM_V_HEADS + vh) * (T+1) + t) * SSM_D_STATE * SSM_D_STATE;
+            for (int r = 0; r < SSM_D_STATE; r++)
+                for (int c = 0; c < SSM_D_STATE; c++)
+                    traj[r * SSM_D_STATE + c] = h_state[r * SSM_D_STATE + c];
+        }
         
         // Step 9a: Möbius scalar decay
         float h_val = h_row[tid];
@@ -1240,6 +1249,13 @@ __global__ void poincare_recurrence_kernel(
         float coeff_x = (1.0f + 2.0f * xy + n_ub2) * inv_denom;
         float coeff_y = (1.0f - n_h2) * inv_denom;
         
+        // Save state to trajectory buffer before update
+        // (captures h_state at timestep t, before this timestep's modification)
+        // Trajectory save happens before h_row modification for timestep t
+        // d_states_t[b][t][vh][row][col] = h_state... but we need to save
+        // the state BEFORE this iteration's decay+update.
+        // The state at entry to each timestep is what we need for backward.
+        
         h_row[tid] = coeff_x * h_val + coeff_y * upd_ball;
         __syncthreads();
         
@@ -1267,11 +1283,12 @@ void wubu_cuda_poincare_recurrence(cublasHandle_t handle, cudaStream_t stream,
     float *d_h_states,
     const float *d_q_norm, const float *d_k_norm, const float *d_v_conv,
     const float *d_gate, const float *d_beta,
-    float *d_delta_out)
+    float *d_delta_out,
+    float *d_states_t)   // optional trajectory buffer
 {
     dim3 grid(B, T, SSM_V_HEADS);
     poincare_recurrence_kernel<<<grid, SSM_D_STATE, 0, stream>>>(
         d_h_states, d_q_norm, d_k_norm, d_v_conv, d_gate, d_beta,
-        d_delta_out, B, T, R);
+        d_delta_out, B, T, R, d_states_t);
 }
 

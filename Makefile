@@ -11,7 +11,7 @@ CUDA_INC = -I/usr/local/cuda-13.1/include
 all: test_ssm load_model test_gpu test_model test_cpu_timing
 
 # Object files
-CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_moe.o src/wubu_moe_backward.o src/gguf_reader.o src/qlearner.o
+CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_poincare_ssm_backward.o src/gguf_reader.o src/qlearner.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o
 RSGD_OBJ = src/rsgd.o
@@ -29,6 +29,9 @@ src/wubu_moe.o: src/wubu_moe.c include/wubu_moe.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_moe_backward.o: src/wubu_moe_backward.c include/wubu_moe.h include/wubu_ssm.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_poincare_ssm_backward.o: src/wubu_poincare_ssm_backward.c include/wubu_ssm.h include/wubu_mobius.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/gguf_reader.o: src/gguf_reader.c include/gguf_reader.h
