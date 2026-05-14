@@ -279,7 +279,7 @@ void vision_encoder_forward(const vision_encoder_t *enc,
             for (int ph = 0; ph < patch_h; ph++) {
                 for (int pw = 0; pw < patch_w; pw++) {
                     int idx = (b * V_TEMP_PATCH + tp) * (patch_h * patch_w) + ph * patch_w + pw;
-                    if (idx >= n_merged) break;
+                    if (idx >= n_patches_total) break;
                     
                     float *out = hidden + idx * V_HIDDEN;
                     memcpy(out, enc->patch_embd_bias, V_HIDDEN * sizeof(float));
@@ -300,86 +300,85 @@ void vision_encoder_forward(const vision_encoder_t *enc,
         }
     }
     
-    // === Spatial merge: 2×2 → 1 ===
-    // Average adjacent 2×2 patches
-    float *merged = (float *)malloc(n_merged * V_HIDDEN * sizeof(float));
-    memset(merged, 0, n_merged * V_HIDDEN * sizeof(float));
+    // === Add position embeddings (before ViT, on un-merged patches) ===
+    for (int i = 0; i < n_patches_total && i < V_MAX_POS; i++)
+        for (int f = 0; f < V_HIDDEN; f++)
+            hidden[i * V_HIDDEN + f] += enc->pos_embd_weight[f * V_MAX_POS + i];
+    
+    // === 27 ViT layers ===
+    float *vit_inp = hidden;
+    float *vit_out = (float *)malloc(n_patches_total * V_HIDDEN * sizeof(float));
+    
+    for (int l = 0; l < V_N_LAYERS; l++) {
+        if (!enc->layers[l].loaded) {
+            memcpy(vit_out, vit_inp, n_patches_total * V_HIDDEN * sizeof(float));
+        } else {
+            vision_layer_forward(&enc->layers[l], vit_inp, n_patches_total, vit_out);
+        }
+        // Swap
+        if (l < V_N_LAYERS - 1) {
+            memcpy(vit_inp, vit_out, n_patches_total * V_HIDDEN * sizeof(float));
+        }
+    }
+    
+    // === Post layer norm ===
+    vision_layer_norm(vit_out, n_patches_total, V_HIDDEN, enc->post_ln_weight, enc->post_ln_bias, 1e-6f, vit_out);
+    
+    // === Spatial merge: 2×2 concatenate (not average!) ===
+    // Each group of 4 spatial neighbors → concatenated along feature dim → 4608
+    #define V_MERGE_DIM (V_HIDDEN * 4)  // 4608
+    float *merged = (float *)malloc(n_merged * V_MERGE_DIM * sizeof(float));
+    memset(merged, 0, n_merged * V_MERGE_DIM * sizeof(float));
     
     for (int tp = 0; tp < V_TEMP_PATCH; tp++) {
+        int temporal_base = tp * (patch_h * patch_w);  // contiguous: tp=0:0..255, tp=1:256..511
         for (int mh = 0; mh < merged_h; mh++) {
             for (int mw = 0; mw < merged_w; mw++) {
-                int dst = tp * (merged_h * merged_w) + mh * merged_w + mw;
-                float inv = 1.0f / 4.0f;
+                int dst_idx = tp * (merged_h * merged_w) + mh * merged_w + mw;
+                float *dst_row = merged + dst_idx * V_MERGE_DIM;
                 for (int dy = 0; dy < 2; dy++) {
                     for (int dx = 0; dx < 2; dx++) {
-                        int src = tp * (patch_h * patch_w) + (mh * 2 + dy) * patch_w + (mw * 2 + dx);
+                        int src_flat = temporal_base + (mh * 2 + dy) * patch_w + (mw * 2 + dx);
+                        const float *src_row = vit_out + src_flat * V_HIDDEN;
+                        int chan_offset = (dy * 2 + dx) * V_HIDDEN;
                         for (int f = 0; f < V_HIDDEN; f++)
-                            merged[dst * V_HIDDEN + f] += hidden[src * V_HIDDEN + f] * inv;
+                            dst_row[chan_offset + f] = src_row[f];
                     }
                 }
             }
         }
     }
     
-    // === Add position embeddings ===
-    for (int i = 0; i < n_merged && i < V_MAX_POS; i++)
-        for (int f = 0; f < V_HIDDEN; f++)
-            merged[i * V_HIDDEN + f] += enc->pos_embd_weight[f * V_MAX_POS + i];
-    
-    // === 27 ViT layers ===
-    float *inp = merged;
-    float *out = (float *)malloc(n_merged * V_HIDDEN * sizeof(float));
-    
-    for (int l = 0; l < V_N_LAYERS; l++) {
-        if (!enc->layers[l].loaded) {
-            memcpy(out, inp, n_merged * V_HIDDEN * sizeof(float));
-        } else {
-            vision_layer_forward(&enc->layers[l], inp, n_merged, out);
+    // === MMProj: mm0 → GELU → mm2 (per merged token) ===
+    if (enc->mm0_weight) {
+        #define V_PROJ_DIM V_MERGE_DIM  // 4608
+        for (int i = 0; i < n_merged; i++) {
+            const float *row = merged + i * V_PROJ_DIM;
+            float mm0_buf[4608];
+            // mm.0: [4608] @ [4608,4608] + bias → GELU
+            for (int j = 0; j < 4608; j++) {
+                double sum = enc->mm0_bias[j];
+                for (int k = 0; k < 4608; k++)
+                    sum += (double)row[k] * (double)enc->mm0_weight[k * 4608 + j];
+                mm0_buf[j] = gelu_tanh((float)sum);
+            }
+            // mm.2: [4608] @ [4608,2048] + bias → output
+            float *out_row = output + i * V_OUT_HIDDEN;
+            for (int j = 0; j < V_OUT_HIDDEN; j++) {
+                double sum = enc->mm2_bias[j];
+                for (int k = 0; k < 4608; k++)
+                    sum += (double)mm0_buf[k] * (double)enc->mm2_weight[k * V_OUT_HIDDEN + j];
+                out_row[j] = (float)sum;
+            }
         }
-        // Swap
-        if (l < V_N_LAYERS - 1) {
-            memcpy(inp, out, n_merged * V_HIDDEN * sizeof(float));
-        }
-    }
-    
-    // === Post layer norm ===
-    vision_layer_norm(out, n_merged, V_HIDDEN, enc->post_ln_weight, enc->post_ln_bias, 1e-6f, out);
-    
-    // === Merger: flatten [n_merged, 1152] → concat with temporal dims → mm0 → GELU → mm2 ===
-    // The merger takes vision features from V_TEMP_PATCH temporal indices.
-    // After 2 temporal patches, we have tp embeddings each of n_merged_2d = n_merged/2 patches.
-    // These are concatenated: [n_merged/2 * 1152 * 2] = [n_merged * 1152]
-    // mm0 projects 4608 → 4608 (n_merged must be 4 for 4608)
-    // Actually: the merger takes all n_merged vision tokens and processes them.
-    // mm.0.weight [4608,4608] suggests it handles 4 patches (4*1152=4608)
-    // This is for a fixed image size that produces exactly 4 merged patches.
-    
-    // For now: if n_merged * V_HIDDEN == 4608, run the merger
-    int merged_dim = n_merged * V_HIDDEN;
-    if (merged_dim == 4608 && enc->mm0_weight) {
-        // mm.0: [4608] @ [4608,4608] + bias → GELU
-        float *mm0_out = (float *)malloc(4608 * sizeof(float));
-        for (int j = 0; j < 4608; j++) {
-            double sum = enc->mm0_bias[j];
-            for (int k = 0; k < 4608; k++)
-                sum += (double)out[k] * (double)enc->mm0_weight[k * 4608 + j];
-            mm0_out[j] = gelu_tanh((float)sum);
-        }
-        
-        // mm.2: [4608] @ [4608,2048] + bias → output
-        for (int j = 0; j < V_OUT_HIDDEN; j++) {
-            double sum = enc->mm2_bias[j];
-            for (int k = 0; k < 4608; k++)
-                sum += (double)mm0_out[k] * (double)enc->mm2_weight[k * V_OUT_HIDDEN + j];
-            output[j] = (float)sum;
-        }
-        free(mm0_out);
     } else {
-        // Pass through (no merger or wrong size)
-        memcpy(output, out, n_merged * V_HIDDEN * sizeof(float));
+        // No merger — just flatten (shouldn't happen for Qwen3VL)
+        for (int i = 0; i < n_merged; i++)
+            memcpy(output + i * V_OUT_HIDDEN, merged + i * V_MERGE_DIM,
+                   (V_MERGE_DIM < V_OUT_HIDDEN ? V_MERGE_DIM : V_OUT_HIDDEN) * sizeof(float));
     }
     
     free(hidden);
+    free(vit_out);
     free(merged);
-    free(out);
 }
