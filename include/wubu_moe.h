@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 
+#include "gguf_reader.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,6 +43,15 @@ typedef struct {
 void wubu_moe_forward(const float *x, int B, int T,
                       const moe_weights_t *w,
                       float *output);
+
+// Load one layer's MoE weights from an open GGUF context
+// Allocates and dequantizes all 3 expert tensors (O(3 GB))
+// Caller must free with wubu_moe_free_layer after use
+// Returns 1 on success, 0 on failure
+int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe);
+
+// Free one layer's MoE weights
+void wubu_moe_free_layer(moe_weights_t *moe);
 
 // Helper: compute router logits and select top-k experts
 // scores: [B*T, N_EXPERTS] — output router logits

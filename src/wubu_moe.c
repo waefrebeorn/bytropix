@@ -6,6 +6,88 @@
 #include <stdio.h>
 #include <assert.h>
 
+int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe) {
+    char name[256];
+    memset(moe, 0, sizeof(*moe));
+    
+    // Router: ffn_gate_inp.weight [D_MODEL, N_EXPERTS]
+    snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp.weight", layer);
+    gguf_tensor_info *t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
+    moe->ffn_gate_inp = (float *)malloc(D_MODEL * N_EXPERTS * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, moe->ffn_gate_inp, D_MODEL * N_EXPERTS))
+        { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
+    
+    // Expert gate
+    snprintf(name, sizeof(name), "blk.%d.ffn_gate_exps.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
+    int64_t n = (int64_t)D_MODEL * D_FF * N_EXPERTS;
+    moe->ffn_gate_exps = (float *)malloc(n * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, moe->ffn_gate_exps, n))
+        { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
+    
+    // Expert up
+    snprintf(name, sizeof(name), "blk.%d.ffn_up_exps.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
+    moe->ffn_up_exps = (float *)malloc(n * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, moe->ffn_up_exps, n))
+        { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
+    
+    // Expert down
+    snprintf(name, sizeof(name), "blk.%d.ffn_down_exps.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
+    n = (int64_t)D_FF * D_MODEL * N_EXPERTS;
+    moe->ffn_down_exps = (float *)malloc(n * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, moe->ffn_down_exps, n))
+        { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
+    
+    // Shared expert gate
+    snprintf(name, sizeof(name), "blk.%d.ffn_gate_shexp.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
+    moe->ffn_gate_shexp = (float *)malloc(D_MODEL * SHARED_D_FF * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, moe->ffn_gate_shexp, D_MODEL * SHARED_D_FF))
+        { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
+    
+    // Shared expert up
+    snprintf(name, sizeof(name), "blk.%d.ffn_up_shexp.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
+    moe->ffn_up_shexp = (float *)malloc(D_MODEL * SHARED_D_FF * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, moe->ffn_up_shexp, D_MODEL * SHARED_D_FF))
+        { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
+    
+    // Shared expert down
+    snprintf(name, sizeof(name), "blk.%d.ffn_down_shexp.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
+    moe->ffn_down_shexp = (float *)malloc(SHARED_D_FF * D_MODEL * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, moe->ffn_down_shexp, SHARED_D_FF * D_MODEL))
+        { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
+    
+    // ffn_gate_inp_shexp exists but is unused in forward
+    moe->ffn_gate_inp_shexp = NULL;
+    
+    moe->loaded = true;
+    return 1;
+}
+
+void wubu_moe_free_layer(moe_weights_t *moe) {
+    if (!moe || !moe->loaded) return;
+    free(moe->ffn_gate_inp);
+    free(moe->ffn_gate_exps);
+    free(moe->ffn_up_exps);
+    free(moe->ffn_down_exps);
+    free(moe->ffn_gate_shexp);
+    free(moe->ffn_up_shexp);
+    free(moe->ffn_down_shexp);
+    free(moe->ffn_gate_inp_shexp);
+    memset(moe, 0, sizeof(*moe));
+}
+
 // ============================================================
 // MoE Router: x @ gate_inp → softmax → top-k selection
 // ============================================================
