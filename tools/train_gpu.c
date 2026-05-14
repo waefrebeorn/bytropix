@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
     if (getenv("LR")) lr = atof(getenv("LR"));
     float poincare_R = 0.0f;
     if (getenv("POINCARE_R")) poincare_R = atof(getenv("POINCARE_R"));
-    const char *embed_path = "data/qwen36_embeddings_c.bin";
+    const char *embed_path = "data/qwen36_embeddings_c.bin.raw";
     
     int B = 1, T = 4, N = B * T;
     

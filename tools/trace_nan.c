@@ -17,7 +17,7 @@ static double now_sec(void) {
 int main() {
     const char *model_path = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *corpus_path = "data/train_data.bin";
-    const char *embed_path = "data/qwen36_embeddings_c.bin";
+    const char *embed_path = "data/qwen36_embeddings_c.bin.raw";
 
     // Load model
     wubu_model_t model;
