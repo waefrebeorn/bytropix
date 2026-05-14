@@ -1,43 +1,28 @@
-# WuBuText AI — Plan (May 14 PM)
+# WuBuText AI — Plan (May 15)
 
 ## Purpose
-Current priorities based on inference phase completion.
+Post-S7 priorities. All 7 original streams complete. Now: math games, manifold, optimizations.
 
----
+## Priority Queue
 
-## P0 — Fix GPU weight loading (bench.c → zeros)
+P0 — **Fix pre-existing NaN in model logits** (~0.5%). Blocks reliable training eval.
 
-**Symptom:** bench_e2e all zeros, train_gpu CE 69 vs 12.66.
-**Root cause:** gpu_load_ssm_layer/gpu_load_gqa_layer read wrong data from GGUF.
+P0 — **Fix CPU GQA RMSNorm dim** (d=4096 with weight[256]). Wrong for i>=256.
 
-**Fix:** Replace bench.c weight loading with wubu_model_init path (which works correctly).
+P1 — **Wire GPU vision** (cuda_vision.cu 217ms vs CPU 74s) into `infer_vision_text`.
 
----
+P1 — **Implement RSGD optimizer** for Poincaré params (step in tangent, project back).
 
-## P1 — Fix training pipeline
+P2 — **Poincaré GQA**: Replace softmax with hyperbolic distance attention.
 
-**After P0:** rebuild train_gpu with fixed GPU forward.
-**TGT wrapping already applied to SGD step** (replaced clip[-10,10] with π-odometer).
+P2 — **Data pipeline**: Tokenize corpus → .bin for C training loop.
 
-**Verify:** CE loss ≈ 12.4-12.7 (matches train_real).
+P3 — **Nested SSM**: Product of K Poincaré balls with K curvatures.
 
----
+P3 — **Nested MoE**: Poincaré distance routing + 2-level hierarchy.
 
-## P2 — Fix train_backprop hang
+P3 — **TST**: Token Superposition Training (bag s=8, MCE loss).
 
-**Symptom:** Times out at 180s during model init.
-**Root cause:** Unknown. Same source as train_real but hangs.
+P4 — **CUDA kernels**: SSM scan (parallel associative), MoE dispatch (grouped GEMM).
 
----
-
-## P3 — Vision→model integration
-
-**Status:** mmproj extracted, GPU ViT working (217ms).
-**Need:** Wire mmproj output into 40-layer model pipeline.
-
----
-
-## P4 — Integrate lazy MoE into training
-
-**Status:** infer_moe_lazy works for inference. Need training equivalent.
-**Benefit:** Eliminates 120-expert dequant bottleneck (9× speedup).
+P4 — **Moondream3 port**: Weight dump + C ViT + hyperbolic graft.

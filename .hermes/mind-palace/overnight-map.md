@@ -1,42 +1,35 @@
-# WuBuText AI — Overnight Navigation Map (May 13 DA Update)
+# WuBuText AI — Overnight Navigation Map (May 15)
 
 ## Where We Are
 
-**DA Audit complete.** 8 binaries tested. 5 pass, 3 fail in new ways.
+**All 7 original streams complete.** S1-S7 committed and verified. Moving to math games, manifold, and optimizations.
 
-### Verified ✅
-- train_real: CE 12.66, forward pass correct on CPU
-- test_fused_vs_old: GPU diff 0.036
-- test_tokenizer: CJK round-trip works
-- test_moe: [-0.028, 0.031], NaN=0, 36.6 tok/s
-- dump_mmproj: 334 tensors
+### S1-S7 All Verified ✅
+- GPU weight loading fixed (626c143)
+- Training pipeline with TGT gradients + lazy MoE, CE=12.42
+- train_backprop verified (not hanging, just CPU-slow)
+- GQA L3 NaN: CPU dim mismatch, not memory corruption
+- Vision→text pipeline: real screenshot, 0 NaN
+- Lazy MoE in training: top-8/256, cached fwd/bwd
+- output.weight loaded from GGUF
 
-### Broken ⛔ (NEW findings — not in old docs)
-- bench_e2e: ALL ZEROS output (was previously claimed as "PASS: 29x speedup")
-- train_gpu: CE loss 69 vs expected 12.66
-- train_backprop: hangs at 180s
+### Remaining Work
 
-### Critical Context
-- Q4_K dequant fix resolved ALL NaN and garbage output issues
-- Old prestige prompt claims about "IQ2 garbage" and "CE loss commented out" are FALSE
-- GPU weight loading in bench.c is the ROOT CAUSE of bench_e2e + train_gpu failures
+| Priority | Work | Status |
+|----------|------|--------|
+| P0 | Pre-existing NaN in model logits (~0.5%) | ❌ |
+| P0 | CPU GQA RMSNorm dim mismatch (d=4096, weight[256]) | ❌ |
+| P1 | Wire GPU vision (cuda_vision.cu 217ms) into pipeline | ❌ |
+| P1 | RSGD optimizer for Poincaré params | ❌ |
+| P2 | Poincaré GQA (hyperbolic distance attention) | ❌ |
+| P2 | Data pipeline (corpus→token IDs .bin) | ❌ |
+| P3 | Nested SSM (K curvatures product of balls) | ❌ |
+| P3 | Nested MoE (Poincaré router + hierarchy) | ❌ |
+| P3 | TST Token Superposition Training | ❌ |
+| P4 | Moondream3 weight dump + C port | ❌ |
+| P4 | CUDA kernels (SSM scan, MoE dispatch) | ❌ |
 
-## Workstreams
-
-### A — Fix GPU weight loading (P0)
-Root cause of bench_e2e zeros + train_gpu wrong loss. `gpu_load_ssm_layer()` reads bad data from GGUF.
-
-### B — Fix train_backprop hang (P1)
-Same code as train_real. Add fflush + malloc guards.
-
-### C — Integrate MoE into training (P2)
-test_moe passes. Wire 256 experts into train_real.
-
-## Data You Should Not Re-Derive
-- train_real is the ONLY correct forward path — uses wubu_model_forward_from_embd with pre-loaded CPU weights
-- bench_e2e reopens GGUF 40 times per run — old code path from before Q4_K fix
-- train_gpu reopens GGUF 40 times PER STEP — also broken weight loading
-- All PASS claims from prior sessions about bench_e2e are based on zero-output or stale buggy weights
-
-## Fallback
-If all workstreams stuck: clean rebuild from scratch, then test train_real alone. That path works.
+### Build Command
+```bash
+PATH="/usr/local/cuda/bin:$PATH" make <target>
+```
