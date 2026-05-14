@@ -131,6 +131,17 @@ int main(int argc, char **argv) {
     printf("  B=%d, T=%d, N=%d tokens/batch\n", B, T, N);
     printf("  Total batches available: %d\n", total_batches);
     printf("  Vocab: %d\n", tok.vocab_size);
+    
+    if (getenv("ENABLE_MOE")) {
+        model.enable_moe = true;
+        printf("  MoE: ENABLED (per-layer lazy load)\n");
+        if (getenv("MOE_LAYERS")) {
+            model.moe_max_layers = atoi(getenv("MOE_LAYERS"));
+            printf("  MoE: first %d layers only (set MOE_LAYERS=N)\n", model.moe_max_layers);
+        }
+    } else {
+        printf("  MoE: disabled (set ENABLE_MOE=1 to enable)\n");
+    }
 
     // ===== Run forward pass =====
     printf("\n--- Running forward pass (layer loop) ---\n");

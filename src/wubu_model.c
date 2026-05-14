@@ -214,17 +214,21 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     model->ssm_states = (float *)calloc(ssm_state_size + conv_state_size, sizeof(float));
     model->conv_states = model->ssm_states + ssm_state_size;
     
+    model->gguf_ctx = ctx;  // Keep ctx open for per-layer MoE loading
+    model->enable_moe = false;  // MoE disabled by default (memory: 3.2 GB/layer)
+    model->moe_max_layers = 0;  // 0 = all layers
+    
     printf("Model initialized: %d layers (%d SSM, %d GQA), %d vocab\n",
            model->n_layers,
            model->n_layers - model->n_layers/4,
            model->n_layers/4,
            model->vocab_size);
     
-    gguf_close(ctx);
     return true;
     
 fail:
     gguf_close(ctx);
+    model->gguf_ctx = NULL;
     wubu_model_free(model);
     return false;
 }
@@ -266,6 +270,10 @@ void wubu_model_free(wubu_model_t *model) {
     free(model->layers);
     free(model->norm_weight);
     free(model->ssm_states);
+    if (model->gguf_ctx) {
+        gguf_close(model->gguf_ctx);
+        model->gguf_ctx = NULL;
+    }
     memset(model, 0, sizeof(*model));
 }
 
@@ -322,9 +330,20 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         float *normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
         wubu_rms_norm(B, T, D_MODEL, x, layer->post_attn_norm_weight, 1e-6f, normed2);
         
-        // MoE (FFN) forward — DeepSeek-style: shared expert + routed top-8 experts
+        // MoE (FFN) forward — per-layer lazy load if enabled
         float *ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
-        wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+        if (model->enable_moe && model->gguf_ctx &&
+            (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
+            if (wubu_moe_load_layer(model->gguf_ctx, l, &layer->moe)) {
+                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+                wubu_moe_free_layer(&layer->moe);
+            } else {
+                memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));
+            }
+        } else {
+            // Pass-through when MoE disabled
+            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+        }
         
         // Residual: x = x + ffn_out
         for (int i = 0; i < N * D_MODEL; i++) x[i] += ffn_out[i];

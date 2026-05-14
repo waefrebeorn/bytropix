@@ -47,6 +47,15 @@ typedef struct {
     // State buffers (reused across calls)
     float *ssm_states;    // [max_layers, SSM_V_HEADS, SSM_D_STATE, SSM_D_STATE]
     float *conv_states;   // [max_layers, B, CONV_KERNEL-1, CONV_DIM]
+    
+    // GGUF context (for per-layer MoE lazy loading)
+    struct gguf_ctx *gguf_ctx;
+    
+    // Enable MoE during forward (default: false for memory reasons)
+    bool enable_moe;
+    
+    // MoE test: only load MoE for first N layers (0 = all)
+    int moe_max_layers;
 } wubu_model_t;
 
 // Create model, load from GGUF
