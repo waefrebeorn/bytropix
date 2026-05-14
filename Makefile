@@ -80,6 +80,9 @@ tokenize_corpus: tools/tokenize_corpus.c src/wubu_tokenizer.o src/gguf_reader.o
 train_real: tools/train_real.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+train_backprop: tools/train_backprop.c $(MODEL_OBJ) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 dump_mmproj: tools/dump_mmproj.c src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
