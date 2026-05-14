@@ -2,6 +2,7 @@
 #define WUBU_MODEL_H
 
 #include "wubu_ssm.h"
+#include "wubu_moe.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -23,8 +24,8 @@ typedef struct {
     // Post-attention norm
     float *post_attn_norm_weight; // [D_MODEL], RMSNorm
     
-    // FFN (MoE) — placeholder for Phase 4
-    // Not yet loaded
+    // MoE (FFN) weights
+    moe_weights_t moe;
 } wubu_layer_t;
 
 // Complete model

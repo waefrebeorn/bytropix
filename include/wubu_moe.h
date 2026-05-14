@@ -1,0 +1,55 @@
+#ifndef WUBU_MOE_H
+#define WUBU_MOE_H
+
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// MoE hyperparameters for Qwen3.6-35B-A3B
+#define N_EXPERTS       256   // total routed experts
+#define N_ACTIVE_EXPTS  8     // top-k experts per token
+#define D_FF            512   // expert intermediate dimension
+#define SHARED_D_FF     512   // shared expert intermediate dimension
+
+// MoE weights for one layer
+typedef struct {
+    // Router
+    float *ffn_gate_inp;      // [D_MODEL, N_EXPERTS] = [2048, 256] — router weight
+    
+    // Routed experts (3D tensors, expert index is slowest dim)
+    float *ffn_gate_exps;     // [D_MODEL, D_FF, N_EXPERTS] = [2048, 512, 256]
+    float *ffn_up_exps;       // [D_MODEL, D_FF, N_EXPERTS] = [2048, 512, 256]
+    float *ffn_down_exps;     // [D_FF, D_MODEL, N_EXPERTS] = [512, 2048, 256]
+    
+    // Shared expert (always active)
+    float *ffn_gate_shexp;    // [D_MODEL, SHARED_D_FF] = [2048, 512]
+    float *ffn_up_shexp;      // [D_MODEL, SHARED_D_FF] = [2048, 512]
+    float *ffn_down_shexp;    // [SHARED_D_FF, D_MODEL] = [512, 2048]
+    
+    // Router bias for shared expert
+    float *ffn_gate_inp_shexp; // [D_MODEL] — not used in forward, kept for completeness
+    
+    // Whether weights are loaded
+    bool loaded;
+} moe_weights_t;
+
+// MoE forward pass for one layer
+// x: [B, T, D_MODEL] — input (post-attention normalized)
+// output: [B, T, D_MODEL] — MoE output
+void wubu_moe_forward(const float *x, int B, int T,
+                      const moe_weights_t *w,
+                      float *output);
+
+// Helper: compute router logits and select top-k experts
+// scores: [B*T, N_EXPERTS] — output router logits
+void wubu_moe_router(const float *x, int B, int T,
+                     const float *gate_inp,
+                     float *scores);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // WUBU_MOE_H

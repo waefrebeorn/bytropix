@@ -179,6 +179,10 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             if (!ok) { fprintf(stderr, "Failed to load GQA weights for layer %d\n", l); goto fail; }
             printf("  Layer %d: GQA loaded\n", l);
         }
+        
+        // Load MoE (FFN) weights — NOT loaded by default (memory: 3.2 GB/layer)
+        // Use test_moe.c for standalone MoE testing
+        layer->moe.loaded = false;
     }
     
     // Load final norm
@@ -231,6 +235,15 @@ void wubu_model_free(wubu_model_t *model) {
         wubu_layer_t *layer = &model->layers[l];
         free(layer->attn_norm_weight);
         free(layer->post_attn_norm_weight);
+        // Free MoE weights
+        free(layer->moe.ffn_gate_inp);
+        free(layer->moe.ffn_gate_exps);
+        free(layer->moe.ffn_up_exps);
+        free(layer->moe.ffn_down_exps);
+        free(layer->moe.ffn_gate_shexp);
+        free(layer->moe.ffn_up_shexp);
+        free(layer->moe.ffn_down_shexp);
+        free(layer->moe.ffn_gate_inp_shexp);
         if (layer->is_ssm) {
             free(layer->ssm.attn_qkv_weight);
             free(layer->ssm.attn_gate_weight);
@@ -309,11 +322,16 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         float *normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
         wubu_rms_norm(B, T, D_MODEL, x, layer->post_attn_norm_weight, 1e-6f, normed2);
         
-        // FFN placeholder: just pass through (Phase 4 will add MoE)
-        memcpy(x, normed2, N * D_MODEL * sizeof(float));
+        // MoE (FFN) forward — DeepSeek-style: shared expert + routed top-8 experts
+        float *ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+        wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+        
+        // Residual: x = x + ffn_out
+        for (int i = 0; i < N * D_MODEL; i++) x[i] += ffn_out[i];
         
         free(normed);
         free(normed2);
+        free(ffn_out);
     }
     
     // Final RMSNorm
