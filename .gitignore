@@ -22,6 +22,9 @@ trace_nan
 load_model
 test_tokenizer_dbg
 test_tok
+infer_moe_lazy
+infer_unified
+test_kv_cache
 
 # Build artifacts
 *.o
