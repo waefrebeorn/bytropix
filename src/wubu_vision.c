@@ -147,6 +147,7 @@ static void vision_layer_forward(
     
     // QKV projection: [n, 1152] @ [1152, 3456] -> [n, 3456]
     float *qkv = (float *)malloc(n * 3456 * sizeof(float));
+    #pragma omp parallel for collapse(2)
     for (int s = 0; s < n; s++)
         for (int j = 0; j < 3456; j++) {
             double sum = w->attn_qkv_bias[j];
@@ -201,6 +202,7 @@ static void vision_layer_forward(
     
     // Attention output projection
     float *attn_proj = (float *)malloc(n * V_HIDDEN * sizeof(float));
+    #pragma omp parallel for collapse(2)
     for (int s = 0; s < n; s++)
         for (int j = 0; j < V_HIDDEN; j++) {
             double sum = w->attn_out_bias[j];
@@ -220,6 +222,7 @@ static void vision_layer_forward(
     
     // FFN up projection + GELU
     float *ffn_up = (float *)malloc(n * V_INTERMEDIATE * sizeof(float));
+    #pragma omp parallel for collapse(2)
     for (int s = 0; s < n; s++)
         for (int j = 0; j < V_INTERMEDIATE; j++) {
             double sum = w->ffn_up_bias[j];
@@ -230,6 +233,7 @@ static void vision_layer_forward(
     
     // FFN down projection
     float *ffn_down = (float *)malloc(n * V_HIDDEN * sizeof(float));
+    #pragma omp parallel for collapse(2)
     for (int s = 0; s < n; s++)
         for (int j = 0; j < V_HIDDEN; j++) {
             double sum = w->ffn_down_bias[j];

@@ -21,12 +21,12 @@ int main(int argc, char **argv) {
     int W = argc > 3 ? atoi(argv[3]) : 256;
     
     printf("=== Vision Inference Engine ===\n");
-    printf("Model: %s\\nImage: %dx%d\\n", path, H, W);
+    printf("Model: %s\nImage: %dx%d\n", path, H, W);
     
     double t0 = now_sec();
     vision_encoder_t enc;
     if (!vision_encoder_init(&enc, path)) return 1;
-    printf("  Loaded in %.2fs\\n", now_sec() - t0);
+    printf("  Loaded in %.2fs\n", now_sec() - t0);
     
     // Create synthetic image (checkerboard)
     int C = 3;
@@ -36,29 +36,31 @@ int main(int argc, char **argv) {
             for (int x = 0; x < W; x++)
                 pixels[c * H * W + y * W + x] = ((x / 16 + y / 16) % 2) * 0.8f + 0.1f;
     
-    // Forward
-    // Forward - pre-compute output size
-    int n_merged = (H/16/2) * (W/16/2) * 2;
-    int out_dim = (n_merged * V_HIDDEN == 4608) ? V_OUT_HIDDEN : n_merged * V_HIDDEN;
+    // Forward - compute n_merged correctly
+    int n_merged = (H/16/2) * (W/16/2) * V_TEMP_PATCH;  // 8*8*2=128 for 256x256
+    int out_dim = n_merged * V_HIDDEN;
+    // If 4 patches exactly, merger reduces to V_OUT_HIDDEN
+    if (n_merged == 4 && enc.mm0_weight) out_dim = V_OUT_HIDDEN;
     float *output = (float *)malloc(out_dim * sizeof(float));
     double t1 = now_sec();
     vision_encoder_forward(&enc, pixels, 1, C, H, W, output);
     double t_vision = now_sec() - t1;
-    printf("  Forward: %.3f ms\\n", t_vision * 1000);
+    printf("  Forward: %.3f ms\n", t_vision * 1000);
     
     // Output stats
-    float min_v = 1e30, max_v = -1e30;
-    for (int i = 0; i < 2048; i++) {
+    float min_v = 1e30, max_v = -1e30; int nan_c = 0;
+    for (int i = 0; i < out_dim; i++) {
         if (output[i] < min_v) min_v = output[i];
         if (output[i] > max_v) max_v = output[i];
+        if (isnan(output[i])) nan_c++;
     }
     printf("  Output[0:8]:");
     for (int i = 0; i < 8 && i < out_dim; i++) printf(" %+.4f", output[i]);
-    printf("\\n  Range: [%.4f, %.4f] | dim=%d\\n", min_v, max_v, out_dim);
+    printf("\n  Range: [%.4f, %.4f] | NaN: %d | dim=%d\n", min_v, max_v, nan_c, out_dim);
     
     free(pixels);
     free(output);
     vision_encoder_free(&enc);
-    printf("=== Vision Inference PASS ===\\n");
+    printf("=== Vision Inference PASS ===\n");
     return 0;
 }
