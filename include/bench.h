@@ -192,6 +192,19 @@ int gpu_load_gqa_layer(gguf_ctx *ctx, int layer_idx,
 void gpu_free_gqa_weights(gpu_gqa_weights *w);
 
 // ================================================================
+// GPU Output Projection — hiddens → logits via cuBLAS SGEMM
+// output_weight_host: [vocab_size, D_MODEL] row-major (from GGUF)
+// d_output_logits: [B*T, vocab_size] GPU output buffer
+// ================================================================
+float* gpu_upload_output_weight(cublasHandle_t handle, const float *host_weight,
+                                 int vocab_size, cudaStream_t stream);
+void gpu_output_projection(cublasHandle_t handle, cudaStream_t stream,
+                           const float *d_hidden, int B, int T,
+                           const float *d_output_weight, int vocab_size,
+                           float *d_logits);
+void gpu_free_output_weight(float *d_weight);
+
+// ================================================================
 // GPU Poincaré SSM forward pass (same interface + float R)
 // ================================================================
 void gpu_poincare_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
