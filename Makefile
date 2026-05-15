@@ -107,6 +107,9 @@ test_fused: tools/test_fused.c $(CORE_OBJ) $(CUDA_OBJ)
 test_fused_vs_old: tools/test_fused_vs_old.c $(CORE_OBJ) $(CUDA_OBJ)
 	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
 
+test_cuda_kernels: tools/test_cuda_kernels.c $(CORE_OBJ) $(CUDA_OBJ)
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
+
 # Training & tools
 train_stub: tools/train_stub.c
 	$(CC) $(CFLAGS) -o $@ $< -lm -O0 -g

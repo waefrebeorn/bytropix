@@ -226,6 +226,59 @@ void wubu_cuda_poincare_recurrence(cublasHandle_t handle, cudaStream_t stream,
     float *d_states_t);
 
 // ================================================================
+// SSM scalar parallel associative scan (Mamba-style)
+// Implements: h[t] = A[t] * h[t-1] + B[t] * v[t]
+// Uses Blelloch-style parallel prefix scan over the associative
+// operator (a,b) composed with (c,d) -> (a*c, a*d + b)
+//
+// A, B: [B_, T]     — scalar per-token A and B
+// v:    [B_, T, d]  — input vectors
+// h:    [B_, d]     — initial state (in) / final state (out)
+// delta_out: [B_, T, d] — full scan output for all timesteps
+// ================================================================
+void wubu_cuda_ssm_scalar_scan(int B_, int T, int d,
+    const float *d_A,        // [B_, T]
+    const float *d_B,        // [B_, T]
+    const float *d_v,        // [B_, T, d]
+    float *d_h,              // [B_, d] — in/out
+    float *d_delta_out,      // [B_, T, d]
+    cudaStream_t stream);
+
+// ================================================================
+// MoE dispatch: group tokens by expert, do batched matmuls on GPU
+//
+// Takes token→expert assignments, builds an expert → token mapping
+// via histogram + prefix sum, permutes tokens into an expert-grouped
+// buffer, then does one cublasSgemm per expert (gate+up matmuls)
+// followed by SiLU activation and down-projection.
+//
+// d_x: [B, T, D_MODEL] input tokens
+// d_assignments: [B*T, N_ACTIVE_EXPTS] — expert indices (top-k per token)
+// d_weights: [B*T, N_ACTIVE_EXPTS] — routing weights
+// d_gate_exps: [D_MODEL, D_FF, N_EXPERTS] — expert gate weights
+// d_up_exps:   [D_MODEL, D_FF, N_EXPERTS] — expert up weights
+// d_down_exps: [D_FF, D_MODEL, N_EXPERTS] — expert down weights
+// d_output: [B, T, D_MODEL] — output (shared expert + routed expert)
+// d_scratch: workspace (size determined by query function)
+//
+// Returns required scratch size on query (d_scratch = NULL).
+// ================================================================
+size_t wubu_cuda_moe_dispatch_query_scratch(int B, int T);
+void wubu_cuda_moe_dispatch(cublasHandle_t handle, cudaStream_t stream,
+    int B, int T,
+    const float *d_x,            // [B*T, D_MODEL]
+    const int *d_assignments,    // [B*T, N_ACTIVE_EXPTS]
+    const float *d_weights,      // [B*T, N_ACTIVE_EXPTS]
+    const float *d_gate_exps,    // [D_MODEL, D_FF, N_EXPERTS]
+    const float *d_up_exps,      // [D_MODEL, D_FF, N_EXPERTS]
+    const float *d_down_exps,    // [D_FF, D_MODEL, N_EXPERTS]
+    const float *d_gate_shexp,   // [D_MODEL, SHARED_D_FF]
+    const float *d_up_shexp,     // [D_MODEL, SHARED_D_FF]
+    const float *d_down_shexp,   // [SHARED_D_FF, D_MODEL]
+    float *d_output,             // [B*T, D_MODEL]
+    float *d_scratch);           // workspace or NULL to query
+
+// ================================================================
 // CUDA context management
 // ================================================================
 bool wubu_cuda_init(cublasHandle_t *handle, cudaStream_t *stream);

@@ -1,5 +1,6 @@
 #include "cuda_kernels.h"
 #include "wubu_ssm.h"
+#include "wubu_moe.h"
 #include <stdio.h>
 
 // ================================================================
@@ -1292,3 +1293,402 @@ void wubu_cuda_poincare_recurrence(cublasHandle_t handle, cudaStream_t stream,
         d_delta_out, B, T, R, d_states_t);
 }
 
+// ================================================================
+// SSM SCALAR PARALLEL ASSOCIATIVE SCAN
+//
+// Implements: h[t][i] = A[t] * h[t-1][i] + B[t] * v[t][i]
+//
+// Each dimension i is independent. We use a true parallel scan
+// across T time steps for each dimension simultaneously.
+//
+// Grid: (B_ * d) blocks, each block = T threads
+// Each block handles one (batch, dim) pair.
+// Uses shared memory tree (Blelloch up-sweep) for inclusive scan.
+//
+// Associative operator: (a,b) ∘ (c,d) = (a*c, a*d + b)
+// representing: h -> a*h + b
+// ================================================================
+
+__global__ void ssm_scalar_scan_kernel(
+    const float *A,            // [B_, T]
+    const float *B,            // [B_, T]
+    const float *v,            // [B_, T, d]
+    float *h,                  // [B_, d] — initial (in), final (out)
+    float *delta_out,          // [B_, T, d]
+    int B_, int T, int d) {
+
+    // blockIdx.x = batch * d + dim
+    int batch = blockIdx.x / d;
+    int dim = blockIdx.x % d;
+    if (batch >= B_ || dim >= d) return;
+
+    int t = threadIdx.x;  // 0..T-1
+    if (t >= T) return;
+
+    extern __shared__ float sh_pair[];  // [T, 2] — but we need 2x for double buffer
+    // We'll use sh_pair[0..T*2-1] as buffer A, sh_pair[T*2..T*4-1] as buffer B
+    float *bufA = sh_pair;
+    float *bufB = sh_pair + T * 2;
+
+    // Compute initial pair for this (batch, dim, t)
+    float a_val = A[batch * T + t];
+    float b_val = B[batch * T + t] * v[((batch * T) + t) * d + dim];
+
+    // Store in buffer A
+    bufA[t * 2 + 0] = a_val;
+    bufA[t * 2 + 1] = b_val;
+    __syncthreads();
+
+    // Hillis-Steele parallel prefix scan (correct double-buffered version)
+    // This gives inclusive scan: pairs[t] = pair[0]∘...∘pair[t]
+    for (int stride = 1; stride < T; stride <<= 1) {
+        if (t >= stride) {
+            // Compose: apply element at (t-stride) FIRST, then element at t
+            // compose(prev, curr) = (prev.a*curr.a, prev.a*curr.b + prev.b)
+            // This means: first apply curr, then apply prev — WRONG order.
+            // We need to apply (t-stride) first, then t.
+            // So: compose(curr, prev) = (curr.a*prev.a, curr.a*prev.b + curr.b)
+            float pa = bufA[(t - stride) * 2 + 0];  // prev.a
+            float pb = bufA[(t - stride) * 2 + 1];  // prev.b
+            float ca = bufA[t * 2 + 0];              // curr.a
+            float cb = bufA[t * 2 + 1];              // curr.b
+            bufB[t * 2 + 0] = ca * pa;               // curr.a * prev.a
+            bufB[t * 2 + 1] = ca * pb + cb;          // curr.a * prev.b + curr.b
+        } else {
+            bufB[t * 2 + 0] = bufA[t * 2 + 0];
+            bufB[t * 2 + 1] = bufA[t * 2 + 1];
+        }
+        __syncthreads();
+        // Swap buffers: copy B back to A for next iteration
+        bufA[t * 2 + 0] = bufB[t * 2 + 0];
+        bufA[t * 2 + 1] = bufB[t * 2 + 1];
+        __syncthreads();
+    }
+
+    // After double-buffered loop, bufA has the inclusive scan result
+    // pairs[t] = (Π(A[0..t]), h[t] assuming h[0]=0)
+    // So h[t] = Π(A[0..t]) * h0 + (inclusive b-scan)
+
+    float prefix_a = bufA[t * 2 + 0];
+    float prefix_b = bufA[t * 2 + 1];
+
+    // Apply initial state: h[t] = prefix_a * h[0] + prefix_b
+    float h0 = h[batch * d + dim];
+    float out_val = prefix_a * h0 + prefix_b;
+
+    delta_out[((batch * T) + t) * d + dim] = out_val;
+
+    if (t == T - 1) {
+        h[batch * d + dim] = out_val;
+    }
+}
+
+void wubu_cuda_ssm_scalar_scan(int B_, int T, int d,
+    const float *d_A,
+    const float *d_B,
+    const float *d_v,
+    float *d_h,
+    float *d_delta_out,
+    cudaStream_t stream) {
+
+    // Each block handles one (batch, dim) pair with T threads
+    int grid = B_ * d;
+    int block = T;
+    if (block > 1024) block = 1024;  // safety
+
+    size_t shmem = T * 2 * 2 * sizeof(float);  // double buffer: [T, 2] * 2
+    ssm_scalar_scan_kernel<<<grid, block, shmem, stream>>>(
+        d_A, d_B, d_v, d_h, d_delta_out, B_, T, d);
+}
+
+// ================================================================
+// MoE DISPATCH KERNEL
+//
+// Groups tokens by expert assignment, does one batched matmul per
+// expert using cuBLAS.
+//
+// Algorithm:
+//   1. Build histogram of tokens per expert (from assignments)
+//   2. Exclusive prefix sum over histogram → expert token offsets
+//   3. Scatter tokens into expert-grouped buffer
+//   4. For each expert with >0 tokens:
+//      a. gate = tokens @ gate_weight  [n_tok, D_FF]
+//      b. up   = tokens @ up_weight    [n_tok, D_FF]
+//      c. act = SiLU(gate) * up
+//      d. down = act @ down_weight     [n_tok, D_MODEL]
+//      e. Scatter back, weighted by routing weights
+//
+// Shared expert is handled separately (less work, all tokens).
+// ================================================================
+
+// Kernel: histogram count of tokens per expert
+// assignments: [B*T, N_ACTIVE_EXPTS] — expert indices
+// weights: [B*T, N_ACTIVE_EXPTS] — routing weights (skip near-zero)
+// histogram: [N_EXPERTS] — output counts (must be zeroed)
+__global__ void moe_histogram_kernel(const int *assignments,
+                                     const float *weights,
+                                     int *histogram,
+                                     int N, int topk) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N * topk) return;
+    float w = weights[idx];
+    if (w < 1e-30f) return;
+    int e = assignments[idx];
+    if (e >= 0 && e < N_EXPERTS) {
+        atomicAdd(&histogram[e], 1);
+    }
+}
+
+// Kernel: scatter tokens into expert-grouped buffer + weight buffer + token_map
+// assignments: [B*T, N_ACTIVE_EXPTS] — expert indices
+// weights: [B*T, N_ACTIVE_EXPTS] — routing weights
+// x: [B*T, D_MODEL] — input tokens
+// expert_offsets: [N_EXPERTS] — exclusive prefix sum of histogram
+// permuted_x: [total_assigned, D_MODEL] — token buffer grouped by expert
+// permuted_w: [total_assigned] — routing weights in same order
+// token_map: [total_assigned] — original token index for each slot
+// expert_token_idx: running counter (per-expert) — must be zeroed
+__global__ void moe_scatter_kernel(const float *x,
+                                   const int *assignments,
+                                   const float *weights,
+                                   const int *expert_offsets,
+                                   float *permuted_x,
+                                   float *permuted_w,
+                                   int *token_map,
+                                   int *expert_token_idx,
+                                   int N, int topk, int d_model) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N * topk) return;
+    int token = idx / topk;
+    int k = idx % topk;
+    int e = assignments[idx];
+    if (e < 0 || e >= N_EXPERTS) return;
+    float w = weights[idx];
+    if (w < 1e-30f) return;
+
+    // Atomically claim the next slot for this expert
+    int slot = atomicAdd(&expert_token_idx[e], 1);
+    int write_pos = expert_offsets[e] + slot;
+
+    // Copy token vector to permuted buffer
+    const float *x_src = x + token * d_model;
+    float *x_dst = permuted_x + write_pos * d_model;
+    for (int i = 0; i < d_model; i++) {
+        x_dst[i] = x_src[i];
+    }
+
+    // Store weight and original token index
+    permuted_w[write_pos] = w;
+    token_map[write_pos] = token;
+}
+
+// Kernel: scatter back expert outputs to original token positions
+// Adds weighted expert output to the token's position in the output buffer.
+// output: [B*T, D_MODEL] — accumulated output (zero-init)
+// permuted_out: [total_assigned, D_MODEL] — expert outputs grouped by expert
+// token_map: [total_assigned] — original token index for each slot
+// weights: [total_assigned] — routing weight for each assignment
+__global__ void moe_scatter_back_kernel(float *output,
+                                        const float *permuted_out,
+                                        const int *token_map,
+                                        const float *weights,
+                                        int total_assigned,
+                                        int d_model) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_assigned * d_model) return;
+    int slot = idx / d_model;
+    int dim = idx % d_model;
+    int token = token_map[slot];
+    float w = weights[slot];
+    atomicAdd(&output[token * d_model + dim], w * permuted_out[idx]);
+}
+
+// Element-wise multiply kernel: y[i] = x[i] * z[i]
+// For act = silu(gate) * up
+__global__ void elemul_kernel(float *y, const float *x, const float *z, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    y[i] = x[i] * z[i];
+}
+
+// Element-wise add kernel: y[i] += x[i]
+__global__ void elemadd_kernel(float *y, const float *x, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    y[i] += x[i];
+}
+
+// Query scratch size for MoE dispatch
+size_t wubu_cuda_moe_dispatch_query_scratch(int B, int T) {
+    int N = B * T;
+    int max_assigned = N * N_ACTIVE_EXPTS;  // upper bound
+    // histogram: N_EXPERTS ints
+    // expert_offsets: N_EXPERTS ints
+    // expert_token_idx: N_EXPERTS ints
+    // permuted_x: max_assigned * D_MODEL floats
+    // permuted_w: max_assigned floats
+    // token_map: max_assigned ints
+    // gate_out: max_assigned * D_FF floats (temp for matmul)
+    // up_out: max_assigned * D_FF floats
+    // act_out: max_assigned * D_FF floats
+    // permuted_out: max_assigned * D_MODEL floats
+    size_t total = 0;
+    total += N_EXPERTS * 3 * sizeof(int);          // histogram + offsets + idx
+    total += max_assigned * D_MODEL * sizeof(float); // permuted_x
+    total += max_assigned * sizeof(float);           // permuted_w
+    total += max_assigned * sizeof(int);             // token_map
+    total += max_assigned * D_FF * 3 * sizeof(float); // gate + up + act
+    total += max_assigned * D_MODEL * sizeof(float); // permuted_out
+    total += 1024 * 1024;  // padding
+    return total;
+}
+
+void wubu_cuda_moe_dispatch(cublasHandle_t handle, cudaStream_t stream,
+    int B, int T,
+    const float *d_x,
+    const int *d_assignments,
+    const float *d_weights,
+    const float *d_gate_exps,
+    const float *d_up_exps,
+    const float *d_down_exps,
+    const float *d_gate_shexp,
+    const float *d_up_shexp,
+    const float *d_down_shexp,
+    float *d_output,
+    float *d_scratch) {
+
+    int N = B * T;
+    int max_assigned = N * N_ACTIVE_EXPTS;
+
+    // Scratch layout (offsets in bytes): using char* arithmetic
+    size_t offset = 0;
+    int *d_histogram     = (int*)((char*)d_scratch + offset); offset += N_EXPERTS * sizeof(int);
+    int *d_expert_offsets= (int*)((char*)d_scratch + offset); offset += N_EXPERTS * sizeof(int);
+    int *d_expert_idx    = (int*)((char*)d_scratch + offset); offset += N_EXPERTS * sizeof(int);
+    float *d_permuted_x  = (float*)((char*)d_scratch + offset); offset += max_assigned * D_MODEL * sizeof(float);
+    float *d_permuted_w  = (float*)((char*)d_scratch + offset); offset += max_assigned * sizeof(float);
+    int *d_token_map     = (int*)((char*)d_scratch + offset); offset += max_assigned * sizeof(int);
+    float *d_gate_out    = (float*)((char*)d_scratch + offset); offset += max_assigned * D_FF * sizeof(float);
+    float *d_up_out      = (float*)((char*)d_scratch + offset); offset += max_assigned * D_FF * sizeof(float);
+    float *d_act_out     = (float*)((char*)d_scratch + offset); offset += max_assigned * D_FF * sizeof(float);
+    float *d_permuted_out= (float*)((char*)d_scratch + offset); offset += max_assigned * D_MODEL * sizeof(float);
+    // Remaining scratch is padding
+
+    int block = 256;
+
+    // Step 0: Zero histograms and counter
+    cudaMemsetAsync(d_histogram, 0, N_EXPERTS * sizeof(int), stream);
+    cudaMemsetAsync(d_expert_idx, 0, N_EXPERTS * sizeof(int), stream);
+
+    // Step 1: Compute histogram of tokens per expert
+    int grid_hist = (N * N_ACTIVE_EXPTS + block - 1) / block;
+    moe_histogram_kernel<<<grid_hist, block, 0, stream>>>(
+        d_assignments, d_weights, d_histogram, N, N_ACTIVE_EXPTS);
+
+    // Step 2: Exclusive prefix sum over histogram → expert_offsets
+    // Simple sequential kernel since N_EXPERTS=256 is small
+    // We'll do it on device: first a kernel copies, then does prefix
+    // Actually let's do a simple kernel with 1 block, 256 threads
+    {
+        // Copy histogram to offsets first
+        int grid_cp = (N_EXPERTS + block - 1) / block;
+        // We'll do prefix sum in a separate kernel with 1 block
+        // For simplicity, use cudaMemcpy + sequential CPU for 256 ints
+        // This is fast enough for N_EXPERTS=256
+        int hist_host[N_EXPERTS];
+        cudaMemcpyAsync(hist_host, d_histogram, N_EXPERTS * sizeof(int),
+                        cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+
+        int offsets[N_EXPERTS + 1];
+        offsets[0] = 0;
+        for (int i = 0; i < N_EXPERTS; i++) {
+            offsets[i + 1] = offsets[i] + hist_host[i];
+        }
+        int total_assigned = offsets[N_EXPERTS];
+        cudaMemcpyAsync(d_expert_offsets, offsets, N_EXPERTS * sizeof(int),
+                        cudaMemcpyHostToDevice, stream);
+        // Also store total_assigned in d_expert_offsets + N_EXPERTS as a sentinel
+        cudaMemcpyAsync(d_expert_offsets + N_EXPERTS, &total_assigned, sizeof(int),
+                        cudaMemcpyHostToDevice, stream);
+
+        // Step 3: Scatter tokens into permuted buffer
+        moe_scatter_kernel<<<grid_hist, block, 0, stream>>>(
+            d_x, d_assignments, d_weights, d_expert_offsets,
+            d_permuted_x, d_permuted_w, d_token_map, d_expert_idx,
+            N, N_ACTIVE_EXPTS, D_MODEL);
+
+        // Step 4: For each expert with >0 tokens, do matmuls
+        // We iterate over experts sequentially on CPU, launching cuBLAS
+        for (int e = 0; e < N_EXPERTS; e++) {
+            int n_tok = hist_host[e];
+            if (n_tok == 0) continue;
+
+            const float *tok_buf = d_permuted_x + offsets[e] * D_MODEL;
+            const float *w_gate = d_gate_exps + (int64_t)e * D_MODEL * D_FF;
+            const float *w_up   = d_up_exps   + (int64_t)e * D_MODEL * D_FF;
+            const float *w_down = d_down_exps  + (int64_t)e * D_FF * D_MODEL;
+
+            float *gate_buf = d_gate_out + offsets[e] * D_FF;
+            float *up_buf   = d_up_out   + offsets[e] * D_FF;
+            float *act_buf  = d_act_out  + offsets[e] * D_FF;
+            float *out_buf  = d_permuted_out + offsets[e] * D_MODEL;
+
+            // gate = tokens @ gate_weight  [n_tok, D_MODEL] @ [D_MODEL, D_FF] -> [n_tok, D_FF]
+            wubu_cuda_matmul(handle, tok_buf, n_tok, D_MODEL, w_gate, D_FF, gate_buf, 1.0f, 0.0f);
+
+            // up   = tokens @ up_weight    [n_tok, D_MODEL] @ [D_MODEL, D_FF] -> [n_tok, D_FF]
+            wubu_cuda_matmul(handle, tok_buf, n_tok, D_MODEL, w_up, D_FF, up_buf, 1.0f, 0.0f);
+
+            // act = SiLU(gate) * up
+            wubu_cuda_silu(n_tok * D_FF, gate_buf, act_buf, stream);
+            // Element-wise multiply: act_buf = act_buf * up_buf
+            {
+                int b = 256;
+                int g = (n_tok * D_FF + b - 1) / b;
+                elemul_kernel<<<g, b, 0, stream>>>(act_buf, act_buf, up_buf, n_tok * D_FF);
+            }
+
+            // out = act @ down_weight  [n_tok, D_FF] @ [D_FF, D_MODEL] -> [n_tok, D_MODEL]
+            wubu_cuda_matmul(handle, act_buf, n_tok, D_FF, w_down, D_MODEL, out_buf, 1.0f, 0.0f);
+        }
+
+        // Step 5: Scatter back weighted outputs to original token positions
+        int total_assigned_final = 0;
+        if (N_EXPERTS > 0) {
+            cudaMemcpyAsync(&total_assigned_final, d_expert_offsets + N_EXPERTS,
+                            sizeof(int), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+        }
+        cudaMemsetAsync(d_output, 0, N * D_MODEL * sizeof(float), stream);
+        if (total_assigned_final > 0) {
+            int g_sb = (total_assigned_final * D_MODEL + 255) / 256;
+            moe_scatter_back_kernel<<<g_sb, 256, 0, stream>>>(
+                d_output, d_permuted_out, d_token_map, d_permuted_w,
+                total_assigned_final, D_MODEL);
+        }
+
+        // Step 6: Shared expert contribution (all tokens)
+        // Use d_gate_out (first N * D_FF entries) as temp for shared expert per-token results
+        // Since D_FF >= SHARED_D_FF, this is safe: d_gate_out has N*D_FF entries.
+        {
+            float *shared_temp = d_gate_out;
+            // gate: [N, D_MODEL] @ [D_MODEL, SHARED_D_FF] -> [N, SHARED_D_FF]
+            wubu_cuda_matmul(handle, d_x, N, D_MODEL, d_gate_shexp, SHARED_D_FF, shared_temp, 1.0f, 0.0f);
+            // up: [N, D_MODEL] @ [D_MODEL, SHARED_D_FF] -> [N, SHARED_D_FF] -> store in d_up_out region
+            wubu_cuda_matmul(handle, d_x, N, D_MODEL, d_up_shexp, SHARED_D_FF, d_up_out, 1.0f, 0.0f);
+            // SiLU gate -> store back to shared_temp
+            wubu_cuda_silu(N * SHARED_D_FF, shared_temp, shared_temp, stream);
+            // Multiply by up: shared_temp = SiLU(gate) * up
+            {
+                int b = 256;
+                int g = (N * SHARED_D_FF + b - 1) / b;
+                elemul_kernel<<<g, b, 0, stream>>>(shared_temp, shared_temp, d_up_out, N * SHARED_D_FF);
+            }
+            // Down proj: [N, SHARED_D_FF] @ [SHARED_D_FF, D_MODEL] -> [N, D_MODEL], add to output
+            wubu_cuda_matmul(handle, shared_temp, N, SHARED_D_FF, d_down_shexp, D_MODEL, d_output, 1.0f, 1.0f);
+        }
+    }
+}
+
+// (elemul_kernel and elemadd_kernel are defined above)
