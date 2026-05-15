@@ -79,6 +79,7 @@ data/special_tokens.bin
 data/*.bin
 data/*.gz
 data/*.jsonl
+data/*.raw
 
 # Python cache
 __pycache__/
