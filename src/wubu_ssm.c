@@ -315,8 +315,8 @@ void wubu_ssm_forward(const float *x, int B, int T,
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
                 int kh = vh / repeat_factor;  // which K-head maps to this V-head
                 
-                float bg = beta_s[kh];
-                float gg = tgt_safe_expf(gate_s[kh]);  // TGT: safe exp (clamped, no overflow)
+                float bg = beta_s[vh];
+                float gg = tgt_safe_expf(gate_s[vh]);  // TGT: safe exp (clamped, no overflow)
                 
                 // Get Q, K, V for this head
                 const float *q_vh = q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
@@ -351,7 +351,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 // State update with diff
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     for (int j = 0; j < SSM_D_STATE; j++) {
-                        h[i * SSM_D_STATE + j] += k_vh[i] * diff[j] * bg;
+                        h[i * SSM_D_STATE + j] += k_vh[j] * diff[i] * bg;
                     }
                 }
                 
@@ -566,8 +566,8 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
             #pragma omp parallel for
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
                 int kh = vh / (SSM_V_HEADS / SSM_K_HEADS);
-                float bg = beta_s[kh];
-                float gg = tgt_safe_expf(gate_s[kh]);  // TGT: safe exp (clamped)
+                float bg = beta_s[vh];
+                float gg = tgt_safe_expf(gate_s[vh]);  // TGT: safe exp (clamped)
                 const float *q_vh = q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *k_vh = k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *v_vh = v_conv + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
@@ -586,7 +586,7 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     float diff = v_vh[i] - hk[i];
                     for (int j = 0; j < SSM_D_STATE; j++)
-                        h[i * SSM_D_STATE + j] += k_vh[i] * diff * bg;
+                        h[i * SSM_D_STATE + j] += k_vh[j] * diff * bg;
                 }
                 
                 float *out = delta_out + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
@@ -826,8 +826,8 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
                 int kh = vh / repeat_factor;
                 
-                float bg = beta_s[kh];
-                float gg = tgt_safe_expf(gate_s[kh]);  // TGT: safe exp (clamped)  // scalar for Möbius multiplication
+                float bg = beta_s[vh];
+                float gg = tgt_safe_expf(gate_s[vh]);  // TGT: safe exp (clamped)  // scalar for Möbius multiplication
                 
                 const float *q_vh = q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *k_vh = k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;

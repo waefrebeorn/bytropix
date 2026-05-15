@@ -117,10 +117,10 @@ static float* find_ex(lm_t *m, int eid, int w) {
 }
 static void moe_exp_fwd(const float*x,const float*gw,const float*uw,const float*dw,float*tmp,float*out){
     float*go=tmp,*uo=tmp+D_FF,*ao=tmp+D_FF*2;
-    for(int j=0;j<D_FF;j++){float s=0;for(int k=0;k<D_MODEL;k++)s+=x[k]*gw[k*D_FF+j];go[j]=s;}
-    for(int j=0;j<D_FF;j++){float s=0;for(int k=0;k<D_MODEL;k++)s+=x[k]*uw[k*D_FF+j];uo[j]=s;}
+    for(int j=0;j<D_FF;j++){float s=0;for(int k=0;k<D_MODEL;k++)s+=x[k]*gw[k+j*D_MODEL];go[j]=s;}
+    for(int j=0;j<D_FF;j++){float s=0;for(int k=0;k<D_MODEL;k++)s+=x[k]*uw[k+j*D_MODEL];uo[j]=s;}
     for(int j=0;j<D_FF;j++){float g=go[j];ao[j]=((g<-80.0f)?0.0f:g/(1.0f+expf(-g)))*uo[j];}
-    for(int j=0;j<D_MODEL;j++){float s=0;for(int k=0;k<D_FF;k++)s+=ao[k]*dw[k*D_MODEL+j];out[j]=s;}
+    for(int j=0;j<D_MODEL;j++){float s=0;for(int k=0;k<D_FF;k++)s+=ao[k]*dw[k+j*D_FF];out[j]=s;}
 }
 static void moe_fwd_1tok(const float*x,lm_t*mc,float*out){
     float scores[256]; wubu_moe_router(x,1,1,mc->router,scores);
@@ -146,10 +146,10 @@ static void moe_fwd_1tok(const float*x,lm_t*mc,float*out){
     float*scr=malloc(D_FF*3*4);
     if(mc->sh_gate){
         float*sg=scr,*su=scr+D_FF,*sa=scr+D_FF*2;
-        for(int j=0;j<SHARED_D_FF;j++){float s2=0;for(int k=0;k<D_MODEL;k++)s2+=x[k]*mc->sh_gate[k*SHARED_D_FF+j];sg[j]=s2;}
-        for(int j=0;j<SHARED_D_FF;j++){float s2=0;for(int k=0;k<D_MODEL;k++)s2+=x[k]*mc->sh_up[k*SHARED_D_FF+j];su[j]=s2;}
+        for(int j=0;j<SHARED_D_FF;j++){float s2=0;for(int k=0;k<D_MODEL;k++)s2+=x[k]*mc->sh_gate[k+j*D_MODEL];sg[j]=s2;}
+        for(int j=0;j<SHARED_D_FF;j++){float s2=0;for(int k=0;k<D_MODEL;k++)s2+=x[k]*mc->sh_up[k+j*D_MODEL];su[j]=s2;}
         for(int j=0;j<SHARED_D_FF;j++){float g=sg[j];sa[j]=((g<-80.0f)?0.0f:g/(1.0f+expf(-g)))*su[j];}
-        for(int j=0;j<D_MODEL;j++){float s2=0;for(int k=0;k<SHARED_D_FF;k++)s2+=sa[k]*mc->sh_down[k*D_MODEL+j];out[j]=s2;}
+        for(int j=0;j<D_MODEL;j++){float s2=0;for(int k=0;k<SHARED_D_FF;k++)s2+=sa[k]*mc->sh_down[k+j*SHARED_D_FF];out[j]=s2;}
     }else memset(out,0,D_MODEL*4);
     for(int kk=0;kk<N_ACTIVE_EXPTS;kk++){int e=tki[kk];float wgt=tkw[kk];if(e<0||wgt<1e-30f)continue;
         float*gw=find_ex(mc,e,0),*uw=find_ex(mc,e,1),*dw=find_ex(mc,e,2);

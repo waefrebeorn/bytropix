@@ -21,18 +21,16 @@ void gpu_output_projection(cublasHandle_t handle, cudaStream_t stream,
                            float *d_logits) {
     int N = B * T;
     float alpha = 1.0f, beta = 0.0f;
-    // d_hidden: [N, D_MODEL] row-major → col-major is [D_MODEL, N]
-    // We want op(A) = d_hidden^T, using CUBLAS_OP_T
-    // A (stored) is [D_MODEL, N] col-major, ldA=D_MODEL
-    // C = A^T * B where A^T is [N, D_MODEL], B is [D_MODEL, vocab_size]
-    // Result: C[N, vocab_size] = hidden[N, D_MODEL] @ weight[D_MODEL, vocab_size]
-    cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+    // d_hidden: [N, D_MODEL] row-major → col-major [D_MODEL, N], ld=D_MODEL
+    // d_output_weight: [D_MODEL, V] row-major → col-major [V, D_MODEL], ld=V
+    // With both OP_T: C[N, V] = hidden^T @ weight^T = hidden @ weight (row-major)
+    cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_T,
                 N, vocab_size, D_MODEL,
                 &alpha,
                 d_hidden, D_MODEL,
-                d_output_weight, D_MODEL,
+                d_output_weight, vocab_size,
                 &beta,
-                d_logits, N);  // ldC = N (not vocab_size!)
+                d_logits, vocab_size);
     cudaStreamSynchronize(stream);
 }
 
@@ -143,8 +141,8 @@ void gpu_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
 
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
                 int kh = vh / repeat_factor;
-                float bg = beta_host[kh];
-                float gg = gate_host[kh];
+                float bg = beta_host[vh];
+                float gg = gate_host[vh];
 
                 float *d_q_vh = d_q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 float *d_k_vh = d_k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
@@ -261,8 +259,8 @@ void gpu_ssm_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
             
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
                 int kh = vh / repeat_factor;
-                float bg = beta_host[kh];
-                float gg = gate_host[kh];
+                float bg = beta_host[vh];
+                float gg = gate_host[vh];
                 
                 float *d_q_vh = d_q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 float *d_k_vh = d_k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;

@@ -337,7 +337,7 @@ __global__ void conv1d_kernel(const float *input, const float *kernel,
     int inp_offset = (b * (T + k - 1) + t) * C + c;
     float sum = 0.0f;
     for (int ki = 0; ki < k; ki++) {
-        sum += input[inp_offset + ki * C] * kernel[ki * C + c];
+        sum += input[inp_offset + ki * C] * kernel[ki + c * k];
     }
     output[idx] = sum;
 }
@@ -377,13 +377,16 @@ __global__ void delta_net_step_kernel(float *h,
 
     float egate = tgt_safe_expf(gate_raw);
 
-    // Phase 1: decay h, then compute hk[i] = sum_j h[i,j] * k[j]
-    // Order matters: decay BEFORE hk (matches CPU)
+    // Phase 1: decay h (each thread decays its row i)
+    for (int j = 0; j < d; j++) {
+        h[i * d + j] *= egate;
+    }
+    __syncthreads();
+
+    // Phase 2: compute hk[i] = sum_j h[i,j] * k_vh[j]  (h @ k)
     float hk_i = 0.0f;
     for (int j = 0; j < d; j++) {
-        float hij = h[i * d + j] * egate;  // decay
-        h[i * d + j] = hij;                // store decayed
-        hk_i += hij * k_vh[j];             // hk from decayed h
+        hk_i += h[i * d + j] * k_vh[j];  // row i of h dotted with k_vh
     }
     hk[i] = hk_i;
     __syncthreads();
@@ -392,17 +395,18 @@ __global__ void delta_net_step_kernel(float *h,
     diff[i] = v_vh[i] - hk[i];
     __syncthreads();
 
-    // Phase 3: h[i,j] += k_vh[i] * diff[j] * beta
-    // k_vh[i] is thread-local, diff[j] is in shared memory
+    // Phase 3: h[i,j] += k_vh[j] * diff[i] * beta  (transposed outer product matches reference)
+    // k_vh[j] varies per column, diff[i] is thread-local
     for (int j = 0; j < d; j++) {
-        h[i * d + j] += k_vh[i] * diff[j] * beta;
+        h[i * d + j] += k_vh[j] * diff[i] * beta;
     }
     __syncthreads();
 
-    // Phase 4: out_vh[i] = sum_j h[i,j] * q_vh[j]
+    // Phase 4: out_vh[i] = sum_j h[i,j] * q_vh[j] / sqrt(S_k)
+    const float q_scale = 1.0f / sqrtf(128.0f);
     float oi = 0.0f;
     for (int j = 0; j < d; j++) {
-        oi += h[i * d + j] * q_vh[j];
+        oi += h[i * d + j] * q_vh[j] * q_scale;
     }
     out_vh[i] = oi;
 }
