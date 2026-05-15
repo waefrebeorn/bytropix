@@ -1,56 +1,49 @@
-=== WuBuText AI — GOAL PASTE (May 16 v12 — HONEST) ===
+=== WuBuText AI — GOAL PASTE (May 16 v13 — HONEST) ===
 
-HARD TRUTH: infer_text_gpu v5 compiles and runs fast but produces GARBAGE.
-All "✅" on binaries means "doesn't crash" NOT "produces correct output."
-Reference (llama.cpp): "Here's a thinking process:" — Us: "iscInset了下去idesiby客的我们都会论usher..."
+HARD TRUTH: ALL inference binaries produce garbage.
+3 bugs fixed this session (Q5_K dequant, TGT wrap, GQA gate verified) but root cause remains.
+Output (MOE=0): loops `ò`(21502)/`_tuples`(86196) — logits flat 9-11.
+Output (MOE=1): jumps languages each step — semantically dead.
+Reference (llama.cpp): "Here's a thinking process:\n\n1."
 
-=== WHAT WE ACTUALLY HAVE ===
-- infer_text_gpu v5: GPU accelerated, fast decode, but WRONG output
-- infer_text v2: CPU baseline, also WRONG output
-- llama.cpp: BUILT at ~/llama.cpp — reference for all comparisons
-- Q5_K dequant: Suspected bug, fix in source but impact unconfirmed
-- API server: tools/serve.py works in sandbox, needs working inference backend
-- SSM/GQA kernels: Exist and run, but produce wrong results
-- all 6 training flags: WIRED but most are forward-only (no gradient flow)
-- vault: 60+ research docs, architecture references, paper summaries
-
-=== COMPLETED (Verified Working) ===
+=== WHAT ACTUALLY WORKS ===
+- llama.cpp: BUILT at ~/llama.cpp/build/bin/llama-cli — correct output ✅
 - test_kv_cache: KV cache matches full recompute (max_diff=0.00) ✅
-- test_256k: MoE router O(T) scaling verified to 65K ✅
-- Q5_K dequant: Source fix applied ✅
-- RoPE: Added to CPU GQA prefill path ✅
-- Sampling: temp/top-k/top-p added ✅
-- API server: Built + sandbox tested (14 tests) ✅
-- EOS detection: Fixed (eos=bos=248044) ✅
-- SGEMM ldC bug: Fixed (zero-logits problem) ✅
+- test_256k: MoE router O(T) scaling to 65K ✅
+- Q4_K dequant: verified vs llama.cpp reference ✅
+- Q5_K dequant: qh bit-indexing FIXED (matches ref) but not root cause
+- GQA gate: applied in both prefill + decode paths ✅
+- API server: tools/serve.py sandbox (14 tests) ✅
+- EOS detection: correct (gen>1 for eos=bos=248044) ✅
+- NaN in training: FIXED (MoE weight interleaving) ✅
+- Per-expert dequant: 11s/step (16×), 0 NaN all configs ✅
 
-=== P0 — FIX INFERENCE (Everything depends on this) ===
-- Compare hidden states layer-by-layer vs llama.cpp
-- Fix SSM forward pass (most likely root cause)
-- Fix MoE dequant (IQ2_XXS/IQ3_XXS)
-- Fix tokenizer or switch to GGUF-native
-- Must produce "Here's a thinking process:" not garbage
+=== WHAT'S BROKEN (P0) ===
+- ALL inference binaries produce garbage
+- SSM output mean=2.85 vs embedding mean=0.02 (140× magnitude)
+- Root cause: SSM weight dequant (ssm_out.weight Q5_K) or SSM recurrence formula
+- MOE=0: loops `ò`/`_tuples` (stuck in 2-token attractor)
+- MOE=1: jumps random languages (dequant errors in IQ2_XXS/IQ2_S?)
+- Q5_K dequant fix changed output but didn't fix it
+- TGT wrap removal had no effect on 6-tok sequences
 
-=== P1 — VERIFY ALL COMPONENTS ===
-- train_integrated: What does CE=12.42 actually mean?
-- Poincaré graft: Verify 95% NN preservation against raw embeddings
-- Vision pipeline: Works for Moondream3 but is that model correct?
-- All "✅" in old state.md: Re-verify against reference
+=== DIAGNOSTICS ===
+Embedding stats: mean=0.02 max=0.20 — normal
+Layer 0 SSM attn_out: mean=2.85 max=47.9 — 140× embedding magnitude (suspicious)
+Top-5 logits: 8.86-10.04 range — flat (gap <0.5)
 
-=== P2 — HYPERBOLIC BACKWARD PASSES ===
-- Poincaré GQA backward (missing — forward only)
-- Nested SSM backward (missing — forward only)
-- Nested MoE backward (missing — forward only)
+=== PRIORITY ===
+P0 — Fix inference by verifying weights layer-by-layer vs llama.cpp
+P1 — Verify all components against reference
+P2 — Hyperbolic backward passes (forward-only = can't train)
+P3 — GPU acceleration, tailslayer, 256K
 
-=== P3 — GPU ACCELERATION & SCALE ===
-- MoE on-device dequant (PCIe bottleneck: 21GB/token)
-- Tailslayer spec decode
-- 256K context verification
+=== COMMITS THIS SESSION ===
+39aeaa1 — Q5_K dequant qh fix + debug logit dump
+4e8a216 — TGT wrap removed from SSM forward
+ba4b43b — Hidden state magnitude debug dump
 
 TGT: remainder = fmod(x+π, 2π)-π | tgt_safe_expf: clamp [-80,80]
-Useful only when inference works.
-
-BUILD: make infer_text_gpu | REFERENCE: ~/llama.cpp/build/bin/llama-cli
+REFERENCE: ~/llama.cpp/build/bin/llama-cli
+BUILD: make infer_text
 HW: RTX 5050, sm=120
-
-Old versions: vault/bins/state-v10-May15-PM.md, plan-v11-May16-AM.md, goal-mantra-v10-May15-PM.md
