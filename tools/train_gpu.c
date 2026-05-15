@@ -13,6 +13,11 @@
 #include "wubu_tokenizer.h"
 #include "qlearner.h"
 #include "gguf_reader.h"
+#include "rsgd.h"
+#include "wubu_tst.h"
+#include "wubu_poincare_gqa.h"
+#include "wubu_nested_ssm.h"
+#include "wubu_moe_hyperbolic.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,7 +60,16 @@ int main(int argc, char **argv) {
     if (getenv("POINCARE_R")) poincare_R = atof(getenv("POINCARE_R"));
     const char *embed_path = "data/qwen36_embeddings_c.bin.raw";
     
-    int B = 1, T = 4, N = B * T;
+    // Integration flags
+    int tst_enabled = getenv("TST") ? atoi(getenv("TST")) : 0;
+    int rsgd_enabled = getenv("RSGD") ? atoi(getenv("RSGD")) : 0;
+    int pga_enabled = getenv("PGA") ? atoi(getenv("PGA")) : 0;
+    int nested_ssm_enabled = getenv("NESTED_SSM") ? atoi(getenv("NESTED_SSM")) : 0;
+    int nested_moe_enabled = getenv("NESTED_MOE") ? atoi(getenv("NESTED_MOE")) : 0;
+    int tst_bag_size = tst_enabled ? 8 : 0;
+    
+    int B = 1, T = getenv("TST") ? 16 : 4, N = B * T;
+    (void)B;
     
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
@@ -287,6 +301,34 @@ int main(int argc, char **argv) {
             fseek(f, id * D_MODEL * sizeof(float), SEEK_SET);
             fread(embd + i * D_MODEL, sizeof(float), D_MODEL, f);
         }
+        // === TST: Bag embeddings for superposition phase ===
+        int T_eff = T, N_eff = N;
+        int tst_targets_buf[/*max bags*/ 64 * 8]; // [N/s, s]
+        int n_tst_bags = 0;
+        float bagged_embd[/*N/8 max*/ 64 * D_MODEL];
+        
+        if (tst_enabled && step % 4 == 0) { // 25% superposition steps
+            // Bag embeddings
+            int s = tst_bag_size;
+            int T_bagged = T / s;
+            int N_bagged = N / s;
+            for (int b = 0; b < B; b++) {
+                for (int t = 0; t < T_bagged; t++) {
+                    float *out = bagged_embd + (b * T_bagged + t) * D_MODEL;
+                    memset(out, 0, D_MODEL * sizeof(float));
+                    for (int k = 0; k < s; k++) {
+                        const float *in = embd + (b * T + t * s + k) * D_MODEL;
+                        for (int d = 0; d < D_MODEL; d++) out[d] += in[d] / s;
+                    }
+                }
+            }
+            // Targets: shift left by s-1, create bags
+            int shifted[64];
+            for (int i = 0; i < N - s + 1; i++) shifted[i] = tokens[start_idx + i + s - 1];
+            n_tst_bags = tst_prepare_targets(shifted, tst_targets_buf, B, T - s + 1, s);
+            T_eff = T_bagged; N_eff = N_bagged;
+        }
+        
         fclose(f);
         
         int targets[N];
@@ -296,11 +338,18 @@ int main(int argc, char **argv) {
         double t0 = now_sec();
         
         // === GPU Forward Pass ===
-        cudaMemcpyAsync(d_x, embd, N * D_MODEL * sizeof(float), cudaMemcpyHostToDevice, stream);
+        const float *fwd_embd = (tst_enabled && step % 4 == 0) ? bagged_embd : embd;
+        int use_tst_step = (tst_enabled && step % 4 == 0);
+        int fwd_B = B;
+        (void)fwd_B;
+        int fwd_T = use_tst_step ? T_eff : T;
+        int fwd_N = fwd_B * fwd_T;
+        
+        cudaMemcpyAsync(d_x, fwd_embd, fwd_N * D_MODEL * sizeof(float), cudaMemcpyHostToDevice, stream);
         
         if (poincare_R > 0.0f) {
-            wubu_cuda_norm(d_x, d_poincare_norms, N, D_MODEL, stream);
-            wubu_cuda_exp_map(d_x, d_poincare_norms, poincare_R, d_x, N, D_MODEL, stream);
+            wubu_cuda_norm(d_x, d_poincare_norms, fwd_N, D_MODEL, stream);
+            wubu_cuda_exp_map(d_x, d_poincare_norms, poincare_R, d_x, fwd_N, D_MODEL, stream);
         }
         
         float *d_cur = d_x;
