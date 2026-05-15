@@ -302,11 +302,14 @@ void gpu_gqa_forward(cublasHandle_t cublas_h, cudaStream_t stream,
                      const float *d_attn_out_w,
                      const float *d_q_norm_w,
                      const float *d_k_norm_w,
+                     // Output (GPU)
                      float *d_output,
+                     // Scratch (pre-allocated)
                      float *d_Q_full,
                      float *d_K,
                      float *d_V,
-                     float *d_scratch) {
+                     float *d_scratch,
+                     const float *d_sincos) {
     const int N = B * T;
     int q_dim_x2 = GQA_Q_HEADS * GQA_HEAD_DIM * 2; // 8192
     int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;       // 512
@@ -324,7 +327,7 @@ void gpu_gqa_forward(cublasHandle_t cublas_h, cudaStream_t stream,
         d_Q_full, d_K, d_V,
         d_q_norm_w, d_k_norm_w,
         d_attn_out_w,
-        d_output, d_scratch, NULL);
+        d_output, d_scratch, d_sincos);
 
     cudaStreamSynchronize(stream);
 }

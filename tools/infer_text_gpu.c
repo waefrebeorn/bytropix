@@ -60,13 +60,13 @@ static void moe_exp_fwd(const float*x,const float*gw,const float*uw,const float*
 }
 static void moe_fwd_1tok(const float*x,lm_t*mc,float*out){
     float scores[256]; wubu_moe_router(x,1,1,mc->router,scores);
-    float mx=scores[0]; for(int e=1;e<N_EXPERTS;e++)if(scores[e]>mx)mx=scores[e];
-    float se=0; for(int e=0;e<N_EXPERTS;e++)se+=expf(scores[e]-mx);
-    float iv=1.0f/(se+1e-30f),sm[256]; for(int e=0;e<N_EXPERTS;e++)sm[e]=expf(scores[e]-mx)*iv;
+    // Normalized sigmoid gating (DeepSeek-V3 style)
+    float sv[256]; for(int e=0;e<N_EXPERTS;e++)sv[e]=1.0f/(1.0f+expf(-scores[e]));
     int tki[8]; float tkw[8];
     for(int k=0;k<N_ACTIVE_EXPTS;k++){int bi=-1;float bv=-1e30f;
-        for(int e=0;e<N_EXPERTS;e++){int u=0;for(int pk=0;pk<k;pk++)if(tki[pk]==e){u=1;break;}if(!u&&sm[e]>bv){bv=sm[e];bi=e;}}
+        for(int e=0;e<N_EXPERTS;e++){int u=0;for(int pk=0;pk<k;pk++)if(tki[pk]==e){u=1;break;}if(!u&&sv[e]>bv){bv=sv[e];bi=e;}}
         tki[k]=bi; tkw[k]=bv;}
+    // Normalize top-k weights to sum to 1
     float sw=0; for(int k=0;k<N_ACTIVE_EXPTS;k++)sw+=tkw[k];
     if(sw>1e-30f){float iw=1.0f/sw;for(int k=0;k<N_ACTIVE_EXPTS;k++)tkw[k]*=iw;}
 
@@ -159,6 +159,23 @@ int main(int argc,char**argv){
     float*d_SOut=wubu_cuda_alloc(maxT*D_MODEL*4);
     float*d_ow=NULL,*d_hid=NULL,*d_log=NULL;
     if(mdl.output_weight){d_ow=gpu_upload_output_weight(ch,mdl.output_weight,vs,st);d_hid=wubu_cuda_alloc(D_MODEL*4);d_log=wubu_cuda_alloc(vs*4);}
+
+    // RoPE sin/cos table with length extrapolation (Qwen2.5-1M)
+    // Train at 64K, extrapolate to 256K via scale_factor=0.25
+    float *h_sc = malloc(maxT * ROTARY_DIM * sizeof(float));
+    for (int p = 0; p < maxT; p++) {
+        for (int i = 0; i < ROTARY_DIM / 2; i++) {
+            float theta = powf(ROPE_THETA, -2.0f * i / ROTARY_DIM);
+            float scale = 0.25f; // 4× context extrapolation
+            float angle = p * theta * scale;
+            h_sc[p * ROTARY_DIM + i * 2]     = cosf(angle);
+            h_sc[p * ROTARY_DIM + i * 2 + 1] = sinf(angle);
+        }
+    }
+    float *d_sc = wubu_cuda_alloc(maxT * ROTARY_DIM * sizeof(float));
+    cudaMemcpyAsync(d_sc, h_sc, maxT * ROTARY_DIM * sizeof(float), cudaMemcpyHostToDevice, st);
+    free(h_sc);
+
     cudaStreamSynchronize(st);
 
     // MoE setup
@@ -197,7 +214,7 @@ int main(int argc,char**argv){
         wubu_rms_norm(1,np,D_MODEL,res,mdl.layers[l].attn_norm_weight,1e-6f,h_n);
         cudaMemcpyAsync(d_X,h_n,np*D_MODEL*4,cudaMemcpyHostToDevice,st);
         if(mdl.layers[l].is_ssm){gpu_ssm_forward(ch,st,d_X,1,np,ssm_w[l].d_attn_qkv,ssm_w[l].d_attn_gate,ssm_w[l].d_ssm_beta,ssm_w[l].d_ssm_alpha,ssm_w[l].d_ssm_dt_bias,ssm_w[l].d_ssm_a,ssm_w[l].d_ssm_conv1d,ssm_w[l].d_ssm_norm,ssm_w[l].d_ssm_out,d_ss[l],d_cs[l],d_SOut,d_qkv,d_z,d_beta,d_alpha,d_bsig,d_abi,d_gate,d_ci,d_co,d_qc,d_kc,d_vc,d_qn,d_kn,d_del,d_zs);cudaMemcpyAsync(h_a,d_SOut,np*D_MODEL*4,cudaMemcpyDeviceToHost,st);}
-        else{gpu_gqa_forward(ch,st,d_X,1,np,gqa_w[l].d_attn_q,gqa_w[l].d_attn_k,gqa_w[l].d_attn_v,gqa_w[l].d_attn_out_w,gqa_w[l].d_q_norm_w,gqa_w[l].d_k_norm_w,d_GOut,d_Qf,d_Kb,d_Vb,d_Scr);cudaMemcpyAsync(h_a,d_GOut,np*D_MODEL*4,cudaMemcpyDeviceToHost,st);}
+        else{gpu_gqa_forward(ch,st,d_X,1,np,gqa_w[l].d_attn_q,gqa_w[l].d_attn_k,gqa_w[l].d_attn_v,gqa_w[l].d_attn_out_w,gqa_w[l].d_q_norm_w,gqa_w[l].d_k_norm_w,d_GOut,d_Qf,d_Kb,d_Vb,d_Scr,d_sc);cudaMemcpyAsync(h_a,d_GOut,np*D_MODEL*4,cudaMemcpyDeviceToHost,st);}
         cudaStreamSynchronize(st);
         for(int i=0;i<np*D_MODEL;i++)res[i]+=h_a[i];
         wubu_rms_norm(1,np,D_MODEL,res,mdl.layers[l].post_attn_norm_weight,1e-6f,h_n);
@@ -237,7 +254,7 @@ int main(int argc,char**argv){
             wubu_rms_norm(1,T,D_MODEL,res,mdl.layers[l].attn_norm_weight,1e-6f,h_n);
             cudaMemcpyAsync(d_X,h_n,T*D_MODEL*4,cudaMemcpyHostToDevice,st);
             if(mdl.layers[l].is_ssm){gpu_ssm_forward(ch,st,d_X,1,T,ssm_w[l].d_attn_qkv,ssm_w[l].d_attn_gate,ssm_w[l].d_ssm_beta,ssm_w[l].d_ssm_alpha,ssm_w[l].d_ssm_dt_bias,ssm_w[l].d_ssm_a,ssm_w[l].d_ssm_conv1d,ssm_w[l].d_ssm_norm,ssm_w[l].d_ssm_out,d_ss[l],d_cs[l],d_SOut,d_qkv,d_z,d_beta,d_alpha,d_bsig,d_abi,d_gate,d_ci,d_co,d_qc,d_kc,d_vc,d_qn,d_kn,d_del,d_zs);cudaMemcpyAsync(h_a,d_SOut,T*D_MODEL*4,cudaMemcpyDeviceToHost,st);}
-            else{gpu_gqa_forward(ch,st,d_X,1,T,gqa_w[l].d_attn_q,gqa_w[l].d_attn_k,gqa_w[l].d_attn_v,gqa_w[l].d_attn_out_w,gqa_w[l].d_q_norm_w,gqa_w[l].d_k_norm_w,d_GOut,d_Qf,d_Kb,d_Vb,d_Scr);cudaMemcpyAsync(h_a,d_GOut,T*D_MODEL*4,cudaMemcpyDeviceToHost,st);}
+            else{gpu_gqa_forward(ch,st,d_X,1,T,gqa_w[l].d_attn_q,gqa_w[l].d_attn_k,gqa_w[l].d_attn_v,gqa_w[l].d_attn_out_w,gqa_w[l].d_q_norm_w,gqa_w[l].d_k_norm_w,d_GOut,d_Qf,d_Kb,d_Vb,d_Scr,d_sc);cudaMemcpyAsync(h_a,d_GOut,T*D_MODEL*4,cudaMemcpyDeviceToHost,st);}
             cudaStreamSynchronize(st);
             for(int i=0;i<T*D_MODEL;i++)res[i]+=h_a[i];
             wubu_rms_norm(1,T,D_MODEL,res,mdl.layers[l].post_attn_norm_weight,1e-6f,h_n);
@@ -276,6 +293,7 @@ int main(int argc,char**argv){
     cudaFree(d_X);cudaFree(d_Qf);cudaFree(d_Kb);cudaFree(d_Vb);cudaFree(d_Scr);cudaFree(d_GOut);
     cudaFree(d_qkv);cudaFree(d_z);cudaFree(d_beta);cudaFree(d_alpha);cudaFree(d_bsig);cudaFree(d_abi);cudaFree(d_gate);
     cudaFree(d_ci);cudaFree(d_co);cudaFree(d_qc);cudaFree(d_kc);cudaFree(d_vc);cudaFree(d_qn);cudaFree(d_kn);cudaFree(d_del);cudaFree(d_zs);cudaFree(d_SOut);
+    cudaFree(d_sc);
     cudaFree(d_ow);cudaFree(d_hid);cudaFree(d_log);
     cublasDestroy(ch);cudaStreamDestroy(st);
     free(h_e);free(h_n);free(h_a);free(h_m);free(logits);free(embd);
