@@ -108,7 +108,7 @@ void wubu_moe_router(const float *x, int B, int T,
         for (int e = 0; e < N_EXPERTS; e++) {
             float sum = 0.0f;
             for (int k = 0; k < D_MODEL; k++) {
-                sum += x_s[k] * gate_inp[k * N_EXPERTS + e];
+                sum += x_s[k] * gate_inp[k + e * D_MODEL];
             }
             score_s[e] = sum;
         }
@@ -136,7 +136,7 @@ static void moe_expert_forward(
     for (int j = 0; j < D_FF; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_MODEL; k++)
-            sum += x[k] * gate_weight[k * D_FF + j];
+            sum += x[k] * gate_weight[k + j * D_MODEL];
         gate_out[j] = sum;
     }
     
@@ -144,7 +144,7 @@ static void moe_expert_forward(
     for (int j = 0; j < D_FF; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_MODEL; k++)
-            sum += x[k] * up_weight[k * D_FF + j];
+            sum += x[k] * up_weight[k + j * D_MODEL];
         up_out[j] = sum;
     }
     
@@ -162,7 +162,7 @@ static void moe_expert_forward(
     for (int j = 0; j < D_MODEL; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_FF; k++)
-            sum += act[k] * down_weight[k * D_MODEL + j];
+            sum += act[k] * down_weight[k + j * D_FF];
         output[j] = sum;
     }
 }
@@ -267,7 +267,7 @@ void wubu_moe_forward(const float *x, int B, int T,
         for (int j = 0; j < SHARED_D_FF; j++) {
             float sum = 0.0f;
             for (int k = 0; k < D_MODEL; k++)
-                sum += x_s[k] * w->ffn_gate_shexp[k * SHARED_D_FF + j];
+                sum += x_s[k] * w->ffn_gate_shexp[k + j * D_MODEL];
             shared_gate[j] = sum;
         }
         
@@ -275,7 +275,7 @@ void wubu_moe_forward(const float *x, int B, int T,
         for (int j = 0; j < SHARED_D_FF; j++) {
             float sum = 0.0f;
             for (int k = 0; k < D_MODEL; k++)
-                sum += x_s[k] * w->ffn_up_shexp[k * SHARED_D_FF + j];
+                sum += x_s[k] * w->ffn_up_shexp[k + j * D_MODEL];
             shared_up[j] = sum;
         }
         
@@ -290,7 +290,7 @@ void wubu_moe_forward(const float *x, int B, int T,
         for (int j = 0; j < D_MODEL; j++) {
             float sum = 0.0f;
             for (int k = 0; k < SHARED_D_FF; k++)
-                sum += shared_act[k] * w->ffn_down_shexp[k * D_MODEL + j];
+                sum += shared_act[k] * w->ffn_down_shexp[k + j * SHARED_D_FF];
             out_s[j] = sum;
         }
         

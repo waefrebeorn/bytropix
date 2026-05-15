@@ -116,7 +116,7 @@ void wubu_conv1d(int B, int T, int C, int k,
                 for (int ki = 0; ki < k; ki++) {
                     int t_in = t + ki;  // input already padded with k-1 at start
                     sum += input[(b * (T + k - 1) + t_in) * C + c] *
-                           kernel[ki * C + c];
+                           kernel[ki + c * k];
                 }
                 output[(b * T + t) * C + c] = sum;
             }
@@ -192,7 +192,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
         for (int j = 0; j < C; j++) {
             float sum = 0.0f;
             for (int i = 0; i < D_MODEL; i++) {
-                sum += x_s[i] * w->attn_qkv_weight[i * C + j];
+                sum += x_s[i] * w->attn_qkv_weight[i + j * D_MODEL];
             }
             qkv_s[j] = sum;
         }
@@ -205,7 +205,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
         for (int j = 0; j < VALUE_DIM; j++) {
             float sum = 0.0f;
             for (int i = 0; i < D_MODEL; i++) {
-                sum += x_s[i] * w->attn_gate_weight[i * VALUE_DIM + j];
+                sum += x_s[i] * w->attn_gate_weight[i + j * D_MODEL];
             }
             z_s[j] = sum;
         }
@@ -219,8 +219,8 @@ void wubu_ssm_forward(const float *x, int B, int T,
         for (int j = 0; j < DT_RANK; j++) {
             float sum_b = 0.0f, sum_a = 0.0f;
             for (int i = 0; i < D_MODEL; i++) {
-                sum_b += x_s[i] * w->ssm_beta_weight[i * DT_RANK + j];
-                sum_a += x_s[i] * w->ssm_alpha_weight[i * DT_RANK + j];
+                sum_b += x_s[i] * w->ssm_beta_weight[i + j * D_MODEL];
+                sum_a += x_s[i] * w->ssm_alpha_weight[i + j * D_MODEL];
             }
             beta_s[j] = sum_b;
             alpha_s[j] = sum_a;
@@ -403,7 +403,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
         for (int j = 0; j < D_MODEL; j++) {
             float sum = 0.0f;
             for (int i = 0; i < VALUE_DIM; i++) {
-                sum += inp[i] * w->ssm_out_weight[i * D_MODEL + j];
+                sum += inp[i] * w->ssm_out_weight[i + j * VALUE_DIM];
             }
             out[j] = sum;
         }
@@ -750,8 +750,8 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
         for (int j = 0; j < DT_RANK; j++) {
             float sum_b = 0.0f, sum_a = 0.0f;
             for (int i = 0; i < D_MODEL; i++) {
-                sum_b += x_s[i] * w->ssm_beta_weight[i * DT_RANK + j];
-                sum_a += x_s[i] * w->ssm_alpha_weight[i * DT_RANK + j];
+                sum_b += x_s[i] * w->ssm_beta_weight[i + j * D_MODEL];
+                sum_a += x_s[i] * w->ssm_alpha_weight[i + j * D_MODEL];
             }
             beta_s[j] = sum_b;
             alpha_s[j] = sum_a;
@@ -948,7 +948,7 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
         for (int j = 0; j < D_MODEL; j++) {
             float sum = 0.0f;
             for (int i = 0; i < VALUE_DIM; i++) {
-                sum += inp[i] * w->ssm_out_weight[i * D_MODEL + j];
+                sum += inp[i] * w->ssm_out_weight[i + j * VALUE_DIM];
             }
             out[j] = sum;
         }

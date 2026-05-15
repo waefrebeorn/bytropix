@@ -109,20 +109,20 @@ static void gqa_kv_decode(
     float q_raw[4096], q_norm[4096], k_raw[512], k_norm[512], v_raw[512];
 
     // Q proj
-    for (int j = 0; j < q_dim; j++) {
-        double sum = 0.0;
-        for (int i = 0; i < D_MODEL; i++)
-            sum += (double)x_step[i] * (double)w->attn_q_weight[i * (q_dim * 2) + j];
-        q_raw[j] = (float)sum;
+        for (int j = 0; j < q_dim; j++) {
+            double sum = 0.0;
+            for (int i = 0; i < D_MODEL; i++)
+                sum += (double)x_step[i] * (double)w->attn_q_weight[i + j * D_MODEL];
+            q_raw[j] = (float)sum;
     }
     memcpy(q_norm, q_raw, q_dim * sizeof(float));
     wubu_rms_norm(1, GQA_Q_HEADS, GQA_HEAD_DIM, q_norm, w->attn_q_norm_weight, 1e-6f, q_norm);
 
     // K proj
-    for (int j = 0; j < kv_dim; j++) {
-        double sum = 0.0;
-        for (int i = 0; i < D_MODEL; i++)
-            sum += (double)x_step[i] * (double)w->attn_k_weight[i * kv_dim + j];
+        for (int j = 0; j < kv_dim; j++) {
+            double sum = 0.0;
+            for (int i = 0; i < D_MODEL; i++)
+                sum += (double)x_step[i] * (double)w->attn_k_weight[i + j * D_MODEL];
         k_raw[j] = (float)sum;
     }
     memcpy(k_norm, k_raw, kv_dim * sizeof(float));
@@ -133,10 +133,10 @@ static void gqa_kv_decode(
     apply_rotary_to_buf(k_norm, GQA_KV_HEADS, cache->current_T, rope_sc);
 
     // V proj
-    for (int j = 0; j < kv_dim; j++) {
-        double sum = 0.0;
-        for (int i = 0; i < D_MODEL; i++)
-            sum += (double)x_step[i] * (double)w->attn_v_weight[i * kv_dim + j];
+        for (int j = 0; j < kv_dim; j++) {
+            double sum = 0.0;
+            for (int i = 0; i < D_MODEL; i++)
+                sum += (double)x_step[i] * (double)w->attn_v_weight[i + j * D_MODEL];
         v_raw[j] = (float)sum;
     }
 
@@ -146,10 +146,10 @@ static void gqa_kv_decode(
 
     // Gate proj
     float gate[4096];
-    for (int j = 0; j < q_dim; j++) {
-        double sum = 0.0;
-        for (int i = 0; i < D_MODEL; i++)
-            sum += (double)x_step[i] * (double)w->attn_q_weight[i * (q_dim * 2) + (j + q_dim)];
+        for (int j = 0; j < q_dim; j++) {
+            double sum = 0.0;
+            for (int i = 0; i < D_MODEL; i++)
+                sum += (double)x_step[i] * (double)w->attn_q_weight[i + (j + q_dim) * D_MODEL];
         gate[j] = (float)sum;
     }
 
@@ -196,7 +196,7 @@ static void gqa_kv_decode(
     for (int i = 0; i < q_dim; i++) {
         float a = attn_out[i];
         for (int j = 0; j < D_MODEL; j++)
-            output[j] += a * w->attn_output_weight[i * D_MODEL + j];
+            output[j] += a * w->attn_output_weight[i + j * q_dim];
     }
     free(attn_out);
 }
@@ -254,7 +254,7 @@ static void moe_expert_forward_lazy(const float *x, const float *gate_w,
     for (int j = 0; j < D_FF; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_MODEL; k++)
-            sum += x[k] * gate_w[k * D_FF + j];
+            sum += x[k] * gate_w[k + j * D_MODEL];
         gate_out[j] = sum;
     }
 
@@ -262,7 +262,7 @@ static void moe_expert_forward_lazy(const float *x, const float *gate_w,
     for (int j = 0; j < D_FF; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_MODEL; k++)
-            sum += x[k] * up_w[k * D_FF + j];
+            sum += x[k] * up_w[k + j * D_MODEL];
         up_out[j] = sum;
     }
 
@@ -277,7 +277,7 @@ static void moe_expert_forward_lazy(const float *x, const float *gate_w,
     for (int j = 0; j < D_MODEL; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_FF; k++)
-            sum += act_out[k] * down_w[k * D_MODEL + j];
+            sum += act_out[k] * down_w[k + j * D_FF];
         output[j] = sum;
     }
 }
@@ -396,13 +396,13 @@ static void lazy_moe_decode(
             for (int j = 0; j < SHARED_D_FF; j++) {
                 float sum = 0.0f;
                 for (int k = 0; k < D_MODEL; k++)
-                    sum += x_s[k] * mc->sh_gate[k * SHARED_D_FF + j];
+                    sum += x_s[k] * mc->sh_gate[k + j * D_MODEL];
                 sg[j] = sum;
             }
             for (int j = 0; j < SHARED_D_FF; j++) {
                 float sum = 0.0f;
                 for (int k = 0; k < D_MODEL; k++)
-                    sum += x_s[k] * mc->sh_up[k * SHARED_D_FF + j];
+                    sum += x_s[k] * mc->sh_up[k + j * D_MODEL];
                 su[j] = sum;
             }
             for (int j = 0; j < SHARED_D_FF; j++) {
@@ -412,7 +412,7 @@ static void lazy_moe_decode(
             for (int j = 0; j < D_MODEL; j++) {
                 float sum = 0.0f;
                 for (int k = 0; k < SHARED_D_FF; k++)
-                    sum += sa[k] * mc->sh_down[k * D_MODEL + j];
+                    sum += sa[k] * mc->sh_down[k + j * SHARED_D_FF];
                 out_s[j] = sum;
             }
         } else {
@@ -773,28 +773,28 @@ int main(int argc, char **argv) {
                 for (int j = 0; j < q_dim; j++) {
                     double sum = 0.0;
                     for (int i = 0; i < D_MODEL; i++)
-                        sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i * (q_dim * 2) + j];
+                        sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i + j * D_MODEL];
                     Q[s * q_dim + j] = (float)sum;
                 }
                 // gate
                 for (int j = 0; j < q_dim; j++) {
                     double sum = 0.0;
                     for (int i = 0; i < D_MODEL; i++)
-                        sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i * (q_dim * 2) + (j + q_dim)];
+                        sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i + (j + q_dim) * D_MODEL];
                     gate_buf[s * q_dim + j] = (float)sum;
                 }
                 // K
                 for (int j = 0; j < kv_dim; j++) {
                     double sum = 0.0;
                     for (int i = 0; i < D_MODEL; i++)
-                        sum += (double)xs[i] * (double)ly->w.gqa.attn_k_weight[i * kv_dim + j];
+                        sum += (double)xs[i] * (double)ly->w.gqa.attn_k_weight[i + j * D_MODEL];
                     K[s * kv_dim + j] = (float)sum;
                 }
                 // V
                 for (int j = 0; j < kv_dim; j++) {
                     double sum = 0.0;
                     for (int i = 0; i < D_MODEL; i++)
-                        sum += (double)xs[i] * (double)ly->w.gqa.attn_v_weight[i * kv_dim + j];
+                        sum += (double)xs[i] * (double)ly->w.gqa.attn_v_weight[i + j * D_MODEL];
                     V[s * kv_dim + j] = (float)sum;
                 }
             }
@@ -856,7 +856,7 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < q_dim; i++) {
                     float a = in[i];
                     for (int j = 0; j < D_MODEL; j++)
-                        out[j] += a * ly->w.gqa.attn_output_weight[i * D_MODEL + j];
+                        out[j] += a * ly->w.gqa.attn_output_weight[i + j * q_dim];
                 }
             }
 
