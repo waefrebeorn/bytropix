@@ -979,7 +979,7 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_Q8_0:  return ((n_elems + 31) / 32) * 34;  // d[2] + qs[32]
         case GGML_TYPE_IQ1_S: return n_blocks * 42;   // d[2] + qs[32] + qh[8]
         case GGML_TYPE_IQ1_M: return n_blocks * 56;   // d[2] + qs[32] + qh[16] + scales[6]
-        case GGML_TYPE_IQ2_XXS: return n_blocks * 72; // d[2] + qs[64] + qh[6]
+        case GGML_TYPE_IQ2_XXS: return n_blocks * 66; // d[2] + qs[64] = 66 (NOT 72 — verified empirically)
         case GGML_TYPE_IQ2_S: return n_blocks * 88;    // d[2] + qs[64] + qh[16] + scales[6]
         case GGML_TYPE_IQ3_S: return n_blocks * 116;   // d[2] + qs[96] + qh[12] + scales[6]
         case GGML_TYPE_IQ3_XXS: return n_blocks * 104; // d[2] + qs[96] + qh[6]

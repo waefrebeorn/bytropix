@@ -1,5 +1,5 @@
 # Vault: draftPY — Experimental Drafts & Derivations
-#
+
 ## Location: `draftPY/`
 40+ experimental scripts — early prototypes, alternative architectures, paper implementations.
 
@@ -35,12 +35,11 @@
 
 ### Other
 - `WuBuNesting.py` — Core nesting
-d_Full.py` — Full integration
-    39|- `HashMind.py` — Rolling hash attention prototype
-    40|- `oldwubunest.py` — Legacy
-    41|- `create_demo_data.py`, `inference.py`, `main.py` — Utilities
-    42|
+- `WuBuNest_Full.py` — Full integration
+- `HashMind.py` — Rolling hash attention prototype
+- `oldwubunest.py` — Legacy
+- `create_demo_data.py`, `inference.py`, `main.py` — Utilities
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

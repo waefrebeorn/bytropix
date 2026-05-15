@@ -1,45 +1,27 @@
-# Timeline — WuBuText AI Build Order
+# Timeline — WuBuText AI Actual Build History (May 2026)
 
-## Phase Order
+All phases complete. Actual timeline vs original plan below.
 
-```
-Week 1:  Embedding Grafting (Phase 1)
-  ├── Step 1.1: GGUF reader + extract embeddings
-  ├── Step 1.2: Analyze distribution, determine R
-  ├── Step 1.3: Poincaré mapping
-  └── Step 1.4: Verify + test on baseline
+## Actual Timeline
 
-Week 2:  Attention Port (Phase 2)
-  ├── Step 2.1: Standard Gated DeltaNet in C
-  ├── Step 2.2: Hyperbolic gyration variant
-  ├── Step 2.3: GQA full attention
-  └── Step 2.4: Test convergence
+| Phase | Component | Target Week | Actual | Key Milestone |
+|-------|-----------|-------------|--------|---------------|
+| 0 | GGUF Tensor Layout | — | May 12 | 733 tensors, 13 GGML types parsed |
+| 1 | Embedding Graft | Week 1 | May 12 | 95% NN preservation, R=0.956 |
+| 2 | Attention Port | Week 2 | May 12-13 | 30 SSM + 10 GQA layers, CPU/GPU |
+| 3 | Training Loop | Week 3 | May 13 | 177s/step baseline |
+| 4 | MoE Port | Week 4 | May 13-14 | 256 expert, lazy dequant 9× |
+| 5 | Vision Port | Week 6 | May 14 | 27-layer 3D ViT, 99ms GPU |
+| 6 | CUDA Optimization | — | May 14-15 | 177s→11s/step (16×) |
 
-Week 3:  Training Loop (Phase 3)
-  ├── Step 3.1: Data pipeline
-  ├── Step 3.2: Loss + MTP
-  ├── Step 3.3: WuBu optimizer
-  ├── Step 3.4: Training config
-  ├── Step 3.5: CUDA kernels
-  └── Step 3.6: Checkpointing
+## Key Dates
+- **May 12:** Embeddings grafted, embedding→Poincaré verified
+- **May 13:** Full 40-layer model forward working, backward passes verified
+- **May 14:** All 7 cold gaps closed. NaN root cause found: gguf_raw_size(IQ2_XXS) 72→66. Per-expert dequant implemented. 177s→13s/step.
+- **May 15:** v6 milestone. 11s/step, 0 NaN all flags. Vault audit done (12 vaults + tailslayer). Paper audit (32 Qwen files, 14 discrepancies catalogued). All SVGs updated.
 
-Week 4:  MoE Port (Phase 4)
-  ├── Step 4.1: Standard MoE router
-  ├── Step 4.2: Hyperbolic distance routing
-  ├── Step 4.3: Nested geometry tree
-  └── Step 4.4: Shared expert
-
-Week 5:  Integration + Training
-  ├── Full model integration
-  ├── Hyperparameter tuning
-  └── First end-to-end training run
-
-Week 6:  Validation + Vision (Phase 5)
-  ├── Benchmarking
-  ├── WuBuVision encoder port
-  └── Report results
-```
-
-## Progress Tracking
-
-Each step marked [ ] = not started, [/] = in progress, [X] = done.
+## Remaining Priorities
+- P0: GPU MoE forward (eliminate 40 syncs, target <3s)
+- P1: PGA LR tuning, multi-step convergence
+- P2: MRoPE, sparse attention port, tailslayer spec-decode kernel, Q-Controller, Hamilton encoder
+- P3: MTP head, vision encoder verification

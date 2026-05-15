@@ -24,8 +24,14 @@ Standard AI learns by brute force — flattening globes onto paper. WuBu builds 
 | exp_map | `tanh(\|x\|/R) × x/\|x\|` | Embedding → Poincaré (pre-forward) | ✅ Done |
 | log_map | `R × artanh(\|x\|) × x/\|x\|` | Poincaré → LM Head (pre-output) | ✅ Done |
 | Möbius add | `x⊕y` standard formula | SSM recurrence (Phase 2) | ✅ Done |
-| Poincaré distance | `arcosh(1 + 2\|x-y\|²/((1-\|x\|²)(1-\|y\|²)))` | MoE router (Phase 4) | 🔄 Planned |
-| RSGD optimizer | step in tangent space, project back | Training loop (Phase 3) | 🔄 Planned |
+| Poincaré distance | `arcosh(1 + 2\|x-y\|²/((1-\|x\|²)(1-\|y\|²)))` | MoE router (Phase 4) | ✅ Done |
+| RSGD optimizer | step in tangent space, project back | Training loop (Phase 3) | ✅ Done |
+| Gyration closed-form | exact algebraic | SSM momentum correction | ✅ Done (3× faster) |
 
-## Update Note (May 13)
-The vault theory directory previously listed files (01-foundational-philosophy.md, 02-axiomatic-emergent-theory.md, etc.) that did not exist as separate files — those sections are incorporated into `../../THEORY/WuBu_Nesting.md`. This README now links to the actual physical file locations.
+## Implementation Status (May 15 v6)
+All hyperbolic operations now fully implemented in C/CUDA with verified backward passes.
+Cold gaps closed: exp_map/log_map → Möbius → gyration → Poincaré distance → RSGD → output projection.
+
+---
+
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

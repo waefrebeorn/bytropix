@@ -85,6 +85,45 @@ void wubu_poincare_router_free(poincare_router_t *router);
 void wubu_nested_moe_router_free(nested_moe_router_t *router);
 
 // ============================================================
+// Poincaré router backward pass (single-level)
+// ============================================================
+// Backprop through Poincaré distance routing.
+// Straight-through: top-k selection is treated as non-differentiable.
+// Only gradient through the assigned scores flows back to centroids and input.
+// x:        [B*T, D_MODEL] — forward input (Euclidean, same as forward)
+// scores:   [B*T, N_EXPERTS] — forward output (pre-softmax scores)
+// d_scores: [B*T, N_EXPERTS] — upstream gradient
+// router:   centroids + temperature
+// d_x:      [B*T, D_MODEL] — gradient w.r.t. input (add to existing, or NULL)
+// d_centroids: [N_EXPERTS * D_MODEL] — gradient w.r.t. centroids (or NULL)
+void wubu_poincare_router_backward(const float *x, int B, int T,
+                                   const float *scores,
+                                   const float *d_scores,
+                                   const poincare_router_t *router,
+                                   float *d_x,
+                                   float *d_centroids);
+
+// ============================================================
+// Two-level nested MoE router backward (straight-through estimation)
+// ============================================================
+// x:        [B*T, D_MODEL] — forward input (Euclidean)
+// out_indices:  [B*T, N_ACTIVE_EXPTS] — forward selected expert indices
+// out_weights:  [B*T, N_ACTIVE_EXPTS] — forward final normalized weights
+// d_out_weights: [B*T, N_ACTIVE_EXPTS] — upstream gradient w.r.t. final weights
+// router:   coarse + fine centroids + temperature
+// d_x:      [B*T, D_MODEL] — gradient w.r.t. input (accumulate, or NULL)
+// d_coarse_centroids: [N_HYPERBOLIC_GROUPS * D_MODEL] — gradient (or NULL)
+// d_fine_centroids: [N_EXPERTS * D_MODEL] — gradient (or NULL)
+void wubu_nested_moe_router_backward(
+    const float *x, int B, int T,
+    const int *out_indices, const float *out_weights,
+    const float *d_out_weights,
+    const nested_moe_router_t *router,
+    float *d_x,
+    float *d_coarse_centroids,
+    float *d_fine_centroids);
+
+// ============================================================
 // Utility functions (also usable from test code)
 // ============================================================
 

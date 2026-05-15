@@ -96,7 +96,8 @@
   <line x1="450" y1="610" x2="450" y2="635" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- Row 7: Integration gap -->
-  <rect x="200" y="635" width="500" height="40" rx="8" fill="#FFEBEE" stroke="#E53935" stroke-width="2"/>
-  <text x="450" y="653" text-anchor="middle" font-size="11" font-weight="bold" fill="#C62828">INTEGRATION GAP: All modules standalone — not wired to train_gpu</text>
-  <text x="450" y="669" text-anchor="middle" font-size="10" fill="#C62828">Next: wire TST+RSGD+NestedSSM+PoincareGQA+NestedMoE into full training pipeline</text>
+  <rect x="150" y="635" width="600" height="45" rx="8" fill="#E8F5E9" stroke="#4CAF50" stroke-width="2"/>
+  <text x="450" y="653" text-anchor="middle" font-size="11" font-weight="bold" fill="#2E7D32">✅ ALL 7 MODULES INTEGRATED into train_integrated</text>
+  <text x="450" y="670" text-anchor="middle" font-size="10" fill="#555">NaN root cause FIXED (MoE weight interleaving). CE≈19, 0 NaN, 11s/step (16×)</text>
+  <text x="450" y="686" text-anchor="middle" font-size="10" fill="#888">P0-P2 DONE: 11s/step, 0 NaN, hidden max=13</text>
 </svg>

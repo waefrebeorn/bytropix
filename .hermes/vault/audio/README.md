@@ -1,5 +1,5 @@
 # Vault: Audio — WubuSynth Galactic Core Synthesizer
-#
+
 ## Location: `AUDIO/wubusynth/`
 
 ### Files
@@ -10,12 +10,11 @@
 - `vhf_demos.py` — Demo generation scripts
 
 ### Architecture
-sed adversarial audio synthesis uses:
-    14|- EnCodec backbone for tokenization
-    15|- Galactic core processing for harmonic enhancement
-    16|- VHF radio chain for band-limited processing
-    17|
+Based adversarial audio synthesis uses:
+- EnCodec backbone for tokenization
+- Galactic core processing for harmonic enhancement
+- VHF radio chain for band-limited processing
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

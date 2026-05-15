@@ -83,7 +83,7 @@ GPU acceleration for all compute-heavy operations:
 
 ---
 
-## 7. TST Training Loop (`src/wubu_train.c`, planned)
+## 7. TST Training Loop (`train_integrated`, ✅ integrated)
 
 Token-Superposition Training (TST, arXiv:2605.06546) for up to 2.5× pre-training speedup:
 

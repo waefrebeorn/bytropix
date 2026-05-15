@@ -1,5 +1,5 @@
 # Vault: Lean Proofs — Formal Verification of WuBu Math
-#
+
 ## Location: `MATH/lean/wubu_proofs/`
 
 ### 4 Proof Files
@@ -10,14 +10,12 @@
 
 ### mathlib4 Build
 Currently compiling (lake build) — algebra, topology, ring theory modules.
-Lean 4.29.1, lake 5.0.0.
-s ~20 parallel workers.
-    15|
-    16|### Other Math Files
-    17|- `MATH/wubu-formalism.md` — The central Wubu equation: Q = Σ q_k ∏ α_i^E
-    18|- `MATH/README.md` — Math directory overview
-    19|
+Lean 4.29.1, lake 5.0.0. Uses ~20 parallel workers.
+
+### Other Math Files
+- `MATH/wubu-formalism.md` — The central Wubu equation: Q = Σ q_k ∏ α_i^E
+- `MATH/README.md` — Math directory overview
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

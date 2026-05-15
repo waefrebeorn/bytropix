@@ -1,11 +1,12 @@
 # Vault: Attention — 4 Variants
-#
+
 ## 1. WuBuSparseAttention (`wubu-sparse-attention/`)
-*Best for C/CUDA port — clean PyTorch, standard ops*
+*Best for C/CUDA port — clean PyTorch, standard ops. **Highest ROI vault port.** *
 - Dual memory: Working (recent 256 dense) + Associative (historic sparse index)
 - RAS indexer: Q/K → 64-dim → top-k (64) → gather full K/V → sparse attention
 - 6-layer decoder, d_model=512, 8 heads
 - Complexity: O(n·k) + O(n·W) ≈ O(n·320) — effectively linear
+- **RoPE theta discrepancy confirmed:** config.json says θ=10,000,000. Verify constant in our partial_rotary_factor=0.25 (64/256 dims rotary, rest identity)
 
 ## 2. Topological Sequence Model (`topological-sequence-model/`)
 *Inspired the Hamilton encoder CUDA kernel — O(n) complexity*
@@ -25,11 +26,10 @@
 ## 4. Entropix Sampler (`entropix-sampler/`)
 *Inference-time dynamic sampling — not attention*
 - DSState: 12-field NamedTuple tracking entropy/varentropy/temperature/Dirichlet
-LV/HELV/LEHV/HEHV → accept/explore/resample
-    29|- `fit_dirichlet()` — Halley's method, heavy jax.scipy.special dependency
-    30|- Port viability: low — gamma/polygamma not natively in CUDA
-    31|
+- LV/HELV/LEHV/HEHV → accept/explore/resample
+- `fit_dirichlet()` — Halley's method, heavy jax.scipy.special dependency
+- Port viability: low — gamma/polygamma not natively in CUDA
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation. Port priority: P2 — Sparse attention first (O(n·k) linear).*

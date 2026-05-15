@@ -1,5 +1,5 @@
 # Vault: C Training — Pure C Port of HashMind
-#
+
 ## Location: `ENCODERS/hash-mind/c/`
 ## Files:
 ```
@@ -37,11 +37,9 @@ make test     # build + quick training test (5 epochs)
 - Dual-source embedding: char_embed[D_MODEL] + hash_val * hash_projector[D_MODEL]
 - Sinusoidal positional encoding
 - 4 transformer blocks: LayerNorm → QKV attention (4 heads, 16-dim) → Out proj → Residual → LayerNorm → FFN(64→256→64, ReLU) → Residual
-py loss
-    41|- Optimizer: SGD with Nesterov momentum (mu=0.9) + weight decay (wd=1e-4)
-    42|- Forward + full manual backward pass (each layer: out_w → FFN → ln2 → attn → qkv → ln1 → embed)
-    43|
+- Optimizer: SGD with Nesterov momentum (mu=0.9) + weight decay (wd=1e-4)
+- Forward + full manual backward pass (each layer: out_w → FFN → ln2 → attn → qkv → ln1 → embed)
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

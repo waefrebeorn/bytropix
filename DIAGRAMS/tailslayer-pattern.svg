@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 980" width="1200" height="980">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#16213e;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="leftBoxGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f3460;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0a2647;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="rightBoxGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#533483;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3b1f6e;stop-opacity:1" />
+    </linearGradient>
+    <marker id="arrowLeft" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#e94560" />
+    </marker>
+    <marker id="arrowRight" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f5a623" />
+    </marker>
+    <filter id="boxShadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="980" fill="url(#bgGrad)" rx="8"/>
+
+  <!-- Title -->
+  <text x="600" y="45" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="22" font-weight="bold" fill="#ececec">Tailslayer → Speculative Decoding Pattern Match</text>
+  <line x1="200" y1="58" x2="1000" y2="58" stroke="#e94560" stroke-width="1.5" opacity="0.6"/>
+
+  <!-- Column Headers -->
+  <rect x="60" y="72" width="380" height="40" rx="6" fill="#0f3460" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="98" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="bold" fill="#7ec8e3">Tailslayer Concept</text>
+
+  <rect x="760" y="72" width="380" height="40" rx="6" fill="#533483" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="98" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="15" font-weight="bold" fill="#e8b4f8">Speculative Decoding Analog</text>
+
+  <!-- ============================== -->
+  <!-- ROW 1: DRAM replicas → draft tokens -->
+  <!-- ============================== -->
+  <!-- Left box -->
+  <rect x="60" y="130" width="380" height="70" rx="8" fill="url(#leftBoxGrad)" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="157" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#7ec8e3">N DRAM Replicas</text>
+  <text x="250" y="177" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#a8d8ea">on independent memory channels</text>
+
+  <!-- Right box -->
+  <rect x="760" y="130" width="380" height="70" rx="8" fill="url(#rightBoxGrad)" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="157" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#e8b4f8">N Draft Tokens</text>
+  <text x="950" y="177" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#dbb2e8">speculated in parallel</text>
+
+  <!-- Arrow 1 -->
+  <line x1="440" y1="165" x2="755" y2="165" stroke="#e94560" stroke-width="2.5" marker-end="url(#arrowLeft)" stroke-dasharray="6,3"/>
+  <rect x="515" y="153" width="190" height="24" rx="4" fill="#1a1a2e" stroke="#e94560" stroke-width="0.8" opacity="0.9"/>
+  <text x="610" y="170" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#e94560" filter="url(#glow)">parallel independent paths</text>
+
+  <!-- ============================== -->
+  <!-- ROW 2: clflush+reload → forward pass timing -->
+  <!-- ============================== -->
+  <rect x="60" y="225" width="380" height="70" rx="8" fill="url(#leftBoxGrad)" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="252" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#7ec8e3">clflush + reload</text>
+  <text x="250" y="272" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#a8d8ea">timing side channel</text>
+
+  <rect x="760" y="225" width="380" height="70" rx="8" fill="url(#rightBoxGrad)" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="252" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#e8b4f8">Forward Pass Timing</text>
+  <text x="950" y="272" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#dbb2e8">draft verification latency</text>
+
+  <line x1="440" y1="260" x2="755" y2="260" stroke="#e94560" stroke-width="2.5" marker-end="url(#arrowLeft)" stroke-dasharray="6,3"/>
+  <rect x="515" y="248" width="190" height="24" rx="4" fill="#1a1a2e" stroke="#e94560" stroke-width="0.8" opacity="0.9"/>
+  <text x="610" y="265" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#e94560" filter="url(#glow)">measure vs. known-answer</text>
+
+  <!-- ============================== -->
+  <!-- ROW 3: hedged read → accept prefix -->
+  <!-- ============================== -->
+  <rect x="60" y="320" width="380" height="70" rx="8" fill="url(#leftBoxGrad)" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="347" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#7ec8e3">Hedged Read</text>
+  <text x="250" y="367" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#a8d8ea">first-response-wins, cancel rest</text>
+
+  <rect x="760" y="320" width="380" height="70" rx="8" fill="url(#rightBoxGrad)" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="347" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#e8b4f8">Accept Longest Valid Prefix</text>
+  <text x="950" y="367" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#dbb2e8">cancel remaining speculation</text>
+
+  <line x1="440" y1="355" x2="755" y2="355" stroke="#e94560" stroke-width="2.5" marker-end="url(#arrowLeft)" stroke-dasharray="6,3"/>
+  <rect x="515" y="343" width="190" height="24" rx="4" fill="#1a1a2e" stroke="#e94560" stroke-width="0.8" opacity="0.9"/>
+  <text x="610" y="360" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#e94560" filter="url(#glow)">early termination</text>
+
+  <!-- ============================== -->
+  <!-- ROW 4: channel scrambling → distribution alignment -->
+  <!-- ============================== -->
+  <rect x="60" y="415" width="380" height="70" rx="8" fill="url(#leftBoxGrad)" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="442" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#7ec8e3">Channel Scrambling Offset</text>
+  <text x="250" y="462" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#a8d8ea">address→channel dispersion</text>
+
+  <rect x="760" y="415" width="380" height="70" rx="8" fill="url(#rightBoxGrad)" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="442" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#e8b4f8">Draft Model Distribution</text>
+  <text x="950" y="462" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#dbb2e8">alignment with target</text>
+
+  <line x1="440" y1="450" x2="755" y2="450" stroke="#e94560" stroke-width="2.5" marker-end="url(#arrowLeft)" stroke-dasharray="6,3"/>
+  <rect x="515" y="438" width="190" height="24" rx="4" fill="#1a1a2e" stroke="#e94560" stroke-width="0.8" opacity="0.9"/>
+  <text x="610" y="455" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#e94560" filter="url(#glow)">stochastic dispersion</text>
+
+  <!-- ============================== -->
+  <!-- ROW 5: replicas pinned → experts dispatched -->
+  <!-- ============================== -->
+  <rect x="60" y="510" width="380" height="70" rx="8" fill="url(#leftBoxGrad)" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="537" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#7ec8e3">N Replicas Pinned to Cores</text>
+  <text x="250" y="557" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#a8d8ea">CPU affinity per channel</text>
+
+  <rect x="760" y="510" width="380" height="70" rx="8" fill="url(#rightBoxGrad)" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="537" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#e8b4f8">E Experts across S SMs</text>
+  <text x="950" y="557" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#dbb2e8">MoE dispatch parallelism</text>
+
+  <line x1="440" y1="545" x2="755" y2="545" stroke="#e94560" stroke-width="2.5" marker-end="url(#arrowLeft)" stroke-dasharray="6,3"/>
+  <rect x="515" y="533" width="190" height="24" rx="4" fill="#1a1a2e" stroke="#e94560" stroke-width="0.8" opacity="0.9"/>
+  <text x="610" y="550" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#e94560" filter="url(#glow)">spatial isolation</text>
+
+  <!-- ============================== -->
+  <!-- ROW 6: phys addr → bank conflict -->
+  <!-- ============================== -->
+  <rect x="60" y="605" width="380" height="70" rx="8" fill="url(#leftBoxGrad)" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="632" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#7ec8e3">Physical addr → Channel Map</text>
+  <text x="250" y="652" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#a8d8ea">low-bit address decode</text>
+
+  <rect x="760" y="605" width="380" height="70" rx="8" fill="url(#rightBoxGrad)" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="632" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#e8b4f8">CUDA Shared Memory Bank</text>
+  <text x="950" y="652" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#dbb2e8">conflict analysis</text>
+
+  <line x1="440" y1="640" x2="755" y2="640" stroke="#e94560" stroke-width="2.5" marker-end="url(#arrowLeft)" stroke-dasharray="6,3"/>
+  <rect x="515" y="628" width="190" height="24" rx="4" fill="#1a1a2e" stroke="#e94560" stroke-width="0.8" opacity="0.9"/>
+  <text x="610" y="645" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#e94560" filter="url(#glow)">address→resource mapping</text>
+
+  <!-- ============================== -->
+  <!-- ROW 7: tREFI probe → CUDA/PCIe timing -->
+  <!-- ============================== -->
+  <rect x="60" y="700" width="380" height="70" rx="8" fill="url(#leftBoxGrad)" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="727" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#7ec8e3">tREFI Probe</text>
+  <text x="250" y="747" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#a8d8ea">TSC calibration, harmonic binning</text>
+
+  <rect x="760" y="700" width="380" height="70" rx="8" fill="url(#rightBoxGrad)" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="727" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#e8b4f8">CUDA Kernel / PCIe Timing</text>
+  <text x="950" y="747" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#dbb2e8">launch latency measurement</text>
+
+  <line x1="440" y1="735" x2="755" y2="735" stroke="#e94560" stroke-width="2.5" marker-end="url(#arrowLeft)" stroke-dasharray="6,3"/>
+  <rect x="515" y="723" width="190" height="24" rx="4" fill="#1a1a2e" stroke="#e94560" stroke-width="0.8" opacity="0.9"/>
+  <text x="610" y="740" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#e94560" filter="url(#glow)">periodic probe → calibration</text>
+
+  <!-- ============================== -->
+  <!-- ROW 8: sliding window → logit alignment -->
+  <!-- ============================== -->
+  <rect x="60" y="795" width="380" height="70" rx="8" fill="url(#leftBoxGrad)" stroke="#1a5276" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="250" y="822" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#7ec8e3">Sliding Window Pair Sampling</text>
+  <text x="250" y="842" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#a8d8ea">temporal correlation tracking</text>
+
+  <rect x="760" y="795" width="380" height="70" rx="8" fill="url(#rightBoxGrad)" stroke="#7b2d8e" stroke-width="1.5" filter="url(#boxShadow)"/>
+  <text x="950" y="822" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="14" font-weight="bold" fill="#e8b4f8">Draft-Target Logit Alignment</text>
+  <text x="950" y="842" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#dbb2e8">time-synchronized comparison</text>
+
+  <line x1="440" y1="830" x2="755" y2="830" stroke="#e94560" stroke-width="2.5" marker-end="url(#arrowLeft)" stroke-dasharray="6,3"/>
+  <rect x="515" y="818" width="190" height="24" rx="4" fill="#1a1a2e" stroke="#e94560" stroke-width="0.8" opacity="0.9"/>
+  <text x="610" y="835" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" fill="#e94560" filter="url(#glow)">pairwise temporal sync</text>
+
+  <!-- Bottom accent bar -->
+  <rect x="0" y="926" width="1200" height="8" rx="0" fill="#e94560" opacity="0.7"/>
+
+  <!-- Subtle vertical divider between columns -->
+  <line x1="600" y1="72" x2="600" y2="920" stroke="#2a2a4e" stroke-width="1" stroke-dasharray="4,6" opacity="0.5"/>
+
+  <!-- Footer note -->
+  <text x="600" y="958" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="11" fill="#555577">Tailslayer — DRAM refresh tail latency reduction via hedged reads across independent memory channels</text>
+</svg>

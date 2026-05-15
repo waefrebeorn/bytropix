@@ -1,0 +1,35 @@
+# Moondream3 Vision Encoder Architecture
+# Source: config.py VisionConfig + safetensors index
+
+enc_dim         = 1152
+enc_patch_size  = 14
+enc_n_layers    = 27
+enc_ff_dim      = 4304
+enc_n_heads     = 16
+proj_out_dim    = 2048
+proj_inner_dim  = 8192
+crop_size       = 378
+grid_size       = 27
+num_patches     = 729
+head_dim        = 72
+activation      = gelu_approx (tanh)
+weight_dtype    = bfloat16 (original) → float32 (dumped)
+
+# Layer layout (per block 0..26):
+#   model.vision.blocks.N.ln1:           LayerNorm(1152)       [weight, bias]
+#   model.vision.blocks.N.attn.qkv:      Linear(1152 → 3456)  [weight, bias]  — fused Q,K,V
+#   model.vision.blocks.N.attn.proj:     Linear(1152 → 1152)  [weight, bias]
+#   model.vision.blocks.N.ln2:           LayerNorm(1152)       [weight, bias]
+#   model.vision.blocks.N.mlp.fc1:       Linear(1152 → 4304)  [weight, bias]
+#   model.vision.blocks.N.mlp.fc2:       Linear(4304 → 1152)  [weight, bias]
+
+# Global weights:
+#   model.vision.patch_emb:              Linear(588 → 1152)    [weight, bias]  14*14*3=588
+#   model.vision.pos_emb:                Parameter(1, 729, 1152)
+#   model.vision.post_ln:                LayerNorm(1152)       [weight, bias]
+#   model.vision.proj_mlp.fc1:           Linear(2304 → 8192)  [weight, bias]  — concatenated global+reconstructed
+#   model.vision.proj_mlp.fc2:           Linear(8192 → 2048)  [weight, bias]
+
+# NOTE: Actual crop_size=378, not 448 as previously documented in the plan.
+# This gives a 27×27 grid (729 patches).
+# The 448×448 in the plan is incorrect; 378×378 is from VisionConfig.crop_size.

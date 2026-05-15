@@ -105,11 +105,40 @@ int main(int argc, char **argv) {
     }
     cudaStreamSynchronize(stream); gguf_close(ctx);
     printf("  All %d layers loaded in %.2fs\n",model.n_layers,now_sec()-t_load);
+    // GPU buffer for output projection (upload once, reuse)
+    int max_N = B * (tst_enabled ? 16 : 4);
+    float *d_output_weight = wubu_cuda_alloc((int64_t)D_MODEL * V * sizeof(float));
+    float *d_logits = wubu_cuda_alloc((int64_t)max_N * V * sizeof(float));
+    cudaMemcpyAsync(d_output_weight, output_weight, (int64_t)D_MODEL * V * sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaStreamSynchronize(stream);
+    printf("  Output weight uploaded: %ld MB\n", (long)((int64_t)D_MODEL*V*4/(1024*1024)));
 
     int qkv_dim = KEY_DIM*2+VALUE_DIM;
     int q_dim_x2 = GQA_Q_HEADS*GQA_HEAD_DIM*2;
     int kv_dim = GQA_KV_HEADS*GQA_HEAD_DIM;
     int gqa_q_dim = GQA_Q_HEADS*GQA_HEAD_DIM;
+
+    // PGA backward save structs (one per layer; NULL if not PGA / not GQA)
+    poincare_gqa_fwd_save_t *pga_save = NULL;
+    if(pga_enabled){
+        pga_save = (poincare_gqa_fwd_save_t*)calloc(model.n_layers,sizeof(poincare_gqa_fwd_save_t));
+        int max_N = B * T;  // worst-case allocation
+        for(int l=0;l<model.n_layers;l++){
+            if(!model.layers[l].is_ssm){
+                pga_save[l].Q_ball = (float*)malloc(max_N*gqa_q_dim*sizeof(float));
+                pga_save[l].K_ball = (float*)malloc(max_N*kv_dim*sizeof(float));
+                pga_save[l].V_ball = (float*)malloc(max_N*kv_dim*sizeof(float));
+                pga_save[l].Q_norm = (float*)malloc(max_N*gqa_q_dim*sizeof(float));
+                pga_save[l].Q_raw  = (float*)malloc(max_N*gqa_q_dim*sizeof(float));
+                pga_save[l].K_norm = (float*)malloc(max_N*kv_dim*sizeof(float));
+                pga_save[l].K_raw  = (float*)malloc(max_N*kv_dim*sizeof(float));
+                pga_save[l].V      = (float*)malloc(max_N*kv_dim*sizeof(float));
+                pga_save[l].gate   = (float*)malloc(max_N*gqa_q_dim*sizeof(float));
+                pga_save[l].gate_sig = (float*)malloc(max_N*gqa_q_dim*sizeof(float));
+                pga_save[l].attn_out_pre_gate = (float*)malloc(max_N*gqa_q_dim*sizeof(float));
+            }
+        }
+    }
 
     float *d_x = wubu_cuda_alloc(N*D_MODEL*sizeof(float));
     float *d_out = wubu_cuda_alloc(N*D_MODEL*sizeof(float));
@@ -169,6 +198,7 @@ int main(int argc, char **argv) {
         int n_u; int uid[32];
         float *dgi,*gs,*us,*ds;
         float *eg[32],*eu[32],*ed[32];
+        float *ge_persist, *ue_persist, *de_persist; // persistent interleaved arrays (1GB each)
     } lmoe_t;
 
     gguf_ctx *gguf_moe = gguf_open(model_path);
@@ -280,7 +310,8 @@ int main(int argc, char **argv) {
         for(int l=0;l<model.n_layers;l++){
             cudaMemcpyAsync(d_norm_w,model.layers[l].attn_norm_weight,D_MODEL*sizeof(float),cudaMemcpyHostToDevice,stream);
             wubu_cuda_rms_norm(B,fwd_T,D_MODEL,d_cur,d_norm_w,1e-6f,d_np,stream);
-            cudaMemcpy(saved_normed+l*N*D_MODEL,d_np,fwd_N*D_MODEL*sizeof(float),cudaMemcpyDeviceToHost);
+            if(pga_enabled||nested_ssm_enabled)
+                cudaMemcpy(saved_normed+l*N*D_MODEL,d_np,fwd_N*D_MODEL*sizeof(float),cudaMemcpyDeviceToHost);
 
             if(model.layers[l].is_ssm){
                 if(nested_ssm_enabled){
@@ -321,7 +352,7 @@ int main(int argc, char **argv) {
                     float *cpu_out=(float*)calloc(fwd_N*D_MODEL,sizeof(float));
                     float pR=poincare_R>0?poincare_R:10.0f;
                     cudaMemcpy(cpu_in,d_np,fwd_N*D_MODEL*sizeof(float),cudaMemcpyDeviceToHost);
-                    wubu_poincare_gqa_forward(cpu_in,B,fwd_T,&model.layers[l].gqa,pR,cpu_out);
+                    wubu_poincare_gqa_forward_save(cpu_in,B,fwd_T,&model.layers[l].gqa,pR,cpu_out,&pga_save[l]);
                     cudaMemcpyAsync(d_out,cpu_out,fwd_N*D_MODEL*sizeof(float),cudaMemcpyHostToDevice,stream);
                     free(cpu_in);free(cpu_out);
                 } else {
@@ -332,15 +363,19 @@ int main(int argc, char **argv) {
                 }
             }
 
-            cudaMemcpy(saved_attn_out+l*N*D_MODEL,d_out,fwd_N*D_MODEL*sizeof(float),cudaMemcpyDeviceToHost);
+            if(pga_enabled)
+                cudaMemcpy(saved_attn_out+l*N*D_MODEL,d_out,fwd_N*D_MODEL*sizeof(float),cudaMemcpyDeviceToHost);
             float a=1.0f; cublasSaxpy(cublas_h,fwd_N*D_MODEL,&a,d_out,1,d_cur,1);
 
             cudaMemcpyAsync(d_norm_w,model.layers[l].post_attn_norm_weight,D_MODEL*sizeof(float),cudaMemcpyHostToDevice,stream);
             wubu_cuda_rms_norm(B,fwd_T,D_MODEL,d_cur,d_norm_w,1e-6f,d_np,stream);
-            cudaMemcpy(saved_normed2+l*N*D_MODEL,d_np,fwd_N*D_MODEL*sizeof(float),cudaMemcpyDeviceToHost);
+            // Async D→H copy: sync happens right before MoE uses the data
+            cudaMemcpyAsync(saved_normed2+l*N*D_MODEL,d_np,fwd_N*D_MODEL*sizeof(float),cudaMemcpyDeviceToHost,stream);
 
             // MoE
             if(moe_enabled&&moe_qdata[l].q_gate_exps){
+                // Sync normed2 before CPU reads it for MoE
+                cudaStreamSynchronize(stream);
                 lmoe_t*mc=&moe_cache[l];
                 const float*n2=saved_normed2+l*N*D_MODEL;
                 float*ffn_out=saved_ffn_out+l*N*D_MODEL;
@@ -403,27 +438,50 @@ int main(int argc, char **argv) {
                 moe_weights_t mw;memset(&mw,0,sizeof(mw));
                 mw.ffn_gate_inp=mc->dgi;mw.ffn_gate_shexp=mc->gs;
                 mw.ffn_up_shexp=mc->us;mw.ffn_down_shexp=mc->ds;mw.loaded=true;
-                float*ge=(float*)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF,sizeof(float));
-                float*ue=(float*)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF,sizeof(float));
-                float*de=(float*)calloc((int64_t)N_EXPERTS*D_FF*D_MODEL,sizeof(float));
+                // Per-expert IQ2_XXS dequant + transpose into interleaved arrays (cached in lmoe_t)
+                if(!mc->ge_persist){
+                    mc->ge_persist=(float*)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF,sizeof(float));
+                    mc->ue_persist=(float*)calloc((int64_t)N_EXPERTS*D_MODEL*D_FF,sizeof(float));
+                    mc->de_persist=(float*)calloc((int64_t)N_EXPERTS*D_FF*D_MODEL,sizeof(float));
+                }
+                float*ge=mc->ge_persist; float*ue=mc->ue_persist; float*de=mc->de_persist;
+                int64_t per_exp_elems=(int64_t)D_MODEL*D_FF;
+                int64_t per_exp_raw=gguf_raw_size(moe_qdata[l].ty_ge,per_exp_elems);
+                int64_t per_exp_raw_dn=gguf_raw_size(moe_qdata[l].ty_ge,(int64_t)D_FF*D_MODEL);
+                // Zero only the active expert regions (not full 3GB)
                 for(int u=0;u<mc->n_u;u++){
                     int eid=mc->uid[u];
-                    mc->eg[u]=(float*)malloc((int64_t)D_MODEL*D_FF*sizeof(float));
-                    mc->eu[u]=(float*)malloc((int64_t)D_MODEL*D_FF*sizeof(float));
-                    mc->ed[u]=(float*)malloc((int64_t)D_FF*D_MODEL*sizeof(float));
-                    gguf_dequantize(moe_qdata[l].q_gate_exps+(int64_t)eid*moe_qdata[l].expert_raw,
-                        moe_qdata[l].ty_ge,(int64_t)D_MODEL*D_FF,mc->eg[u]);
-                    gguf_dequantize(moe_qdata[l].q_up_exps+(int64_t)eid*moe_qdata[l].expert_raw,
-                        moe_qdata[l].ty_ge,(int64_t)D_MODEL*D_FF,mc->eu[u]);
-                    gguf_dequantize(moe_qdata[l].q_down_exps+(int64_t)eid*moe_qdata[l].expert_raw_down,
-                        moe_qdata[l].ty_ge,(int64_t)D_FF*D_MODEL,mc->ed[u]);
-                    memcpy(ge+(int64_t)eid*D_MODEL*D_FF,mc->eg[u],(int64_t)D_MODEL*D_FF*sizeof(float));
-                    memcpy(ue+(int64_t)eid*D_MODEL*D_FF,mc->eu[u],(int64_t)D_MODEL*D_FF*sizeof(float));
-                    memcpy(de+(int64_t)eid*D_FF*D_MODEL,mc->ed[u],(int64_t)D_FF*D_MODEL*sizeof(float));
+                    memset(ge+(int64_t)eid*D_MODEL*D_FF,0,(int64_t)D_MODEL*D_FF*sizeof(float));
+                    memset(ue+(int64_t)eid*D_MODEL*D_FF,0,(int64_t)D_MODEL*D_FF*sizeof(float));
+                    memset(de+(int64_t)eid*D_FF*D_MODEL,0,(int64_t)D_FF*D_MODEL*sizeof(float));
+                }
+                for(int u=0;u<mc->n_u;u++){
+                    int eid=mc->uid[u];
+                    // Gate/Up: raw dequant → temp[ff][model] → transpose → ge[model][ff]
+                    float*temp=(float*)malloc(per_exp_elems*sizeof(float));
+                    gguf_dequantize(moe_qdata[l].q_gate_exps+(int64_t)eid*per_exp_raw,
+                        moe_qdata[l].ty_ge,per_exp_elems,temp);
+                    for(int md=0;md<D_MODEL;md++)for(int ff=0;ff<D_FF;ff++)
+                        ge[(int64_t)eid*D_MODEL*D_FF+md*D_FF+ff]=temp[ff*D_MODEL+md];
+                    gguf_dequantize(moe_qdata[l].q_up_exps+(int64_t)eid*per_exp_raw,
+                        moe_qdata[l].ty_ge,per_exp_elems,temp);
+                    for(int md=0;md<D_MODEL;md++)for(int ff=0;ff<D_FF;ff++)
+                        ue[(int64_t)eid*D_MODEL*D_FF+md*D_FF+ff]=temp[ff*D_MODEL+md];
+                    free(temp);
+                    // Down: raw dequant → temp[model][ff] → transpose → de[ff][model]
+                    temp=(float*)malloc(per_exp_elems*sizeof(float));
+                    gguf_dequantize(moe_qdata[l].q_down_exps+(int64_t)eid*per_exp_raw_dn,
+                        moe_qdata[l].ty_ge,per_exp_elems,temp);
+                    for(int ff=0;ff<D_FF;ff++)for(int md=0;md<D_MODEL;md++)
+                        de[(int64_t)eid*D_FF*D_MODEL+ff*D_MODEL+md]=temp[md*D_FF+ff];
+                    free(temp);
+                    // Point backprop cache into interleaved arrays
+                    mc->eg[u]=ge+(int64_t)eid*D_MODEL*D_FF;
+                    mc->eu[u]=ue+(int64_t)eid*D_MODEL*D_FF;
+                    mc->ed[u]=de+(int64_t)eid*D_FF*D_MODEL;
                 }
                 mw.ffn_gate_exps=ge;mw.ffn_up_exps=ue;mw.ffn_down_exps=de;
                 wubu_moe_forward(n2,B,fwd_T,&mw,ffn_out);
-                free(ge);free(ue);free(de);
                 cudaMemcpyAsync(d_np,ffn_out,fwd_N*D_MODEL*sizeof(float),cudaMemcpyHostToDevice,stream);
             } else {
                 memcpy(saved_ffn_out+l*N*D_MODEL,saved_normed2+l*N*D_MODEL,fwd_N*D_MODEL*sizeof(float));
@@ -438,15 +496,15 @@ int main(int argc, char **argv) {
         cudaMemcpy(hidden,d_cur,fwd_N*D_MODEL*sizeof(float),cudaMemcpyDeviceToHost);
         cudaStreamSynchronize(stream);
 
-        // Output projection
-        for(int i=0;i<fwd_N;i++){
-            const float*h=hidden+i*D_MODEL;
-            float*log_i=logits+i*V;
-            for(int j=0;j<V;j++){
-                double sum=0;
-                for(int k=0;k<D_MODEL;k++) sum+=(double)h[k]*(double)output_weight[j*D_MODEL+k];
-                log_i[j]=(float)sum;
-            }
+        // GPU output projection: logits[N,V] = hidden[N,D_MODEL] @ output_weight[V,D_MODEL]^T
+        // cublas: C[V,N] = op(A)[D_MODEL,V]^T @ op(B)[D_MODEL,N]
+        // opA=T: A[D_MODEL,V]^T → [V,D_MODEL], opB=N: B[D_MODEL,N]
+        // Result at d_logits as [V,N] col-major = [N,V] row-major
+        { const float alpha=1.0f, beta=0.0f;
+            cublasSgemm(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                V, fwd_N, D_MODEL, &alpha,
+                d_output_weight, D_MODEL, d_cur, D_MODEL, &beta, d_logits, V);
+            cudaMemcpy(logits, d_logits, fwd_N * V * sizeof(float), cudaMemcpyDeviceToHost);
         }
 
         // Loss
@@ -478,6 +536,71 @@ int main(int argc, char **argv) {
                     }
                 }
             }
+        }
+
+        // === PGA Backward: propagate gradient through PGA GQA layers ===
+        if(pga_enabled){
+            float *d_cur_bwd = (float*)malloc(fwd_N*D_MODEL*sizeof(float));
+            memcpy(d_cur_bwd, d_hidden, fwd_N*D_MODEL*sizeof(float));
+
+            for(int l=model.n_layers-1; l>=0; l--){
+                if(model.layers[l].is_ssm) continue;
+
+                float pR = poincare_R>0 ? poincare_R : 10.0f;
+                gqa_layer_weights *gw = &model.layers[l].gqa;
+                
+                int64_t wQ = D_MODEL * gqa_q_dim * 2;
+                int64_t wK = D_MODEL * kv_dim;
+                int64_t wV = D_MODEL * kv_dim;
+                int64_t wOut = gqa_q_dim * D_MODEL;
+                
+                float *d_x_l = (float*)calloc(fwd_N*D_MODEL, sizeof(float));
+                float *d_q_w = (float*)calloc(wQ, sizeof(float));
+                float *d_k_w = (float*)calloc(wK, sizeof(float));
+                float *d_v_w = (float*)calloc(wV, sizeof(float));
+                float *d_qn_w = (float*)calloc(GQA_HEAD_DIM, sizeof(float));
+                float *d_kn_w = (float*)calloc(GQA_HEAD_DIM, sizeof(float));
+                float *d_out_w = (float*)calloc(wOut, sizeof(float));
+                
+                wubu_poincare_gqa_backward(B, fwd_T,
+                    saved_normed + l*N*D_MODEL,
+                    pga_save[l].Q_norm, pga_save[l].Q_raw,
+                    pga_save[l].K_norm, pga_save[l].K_raw,
+                    pga_save[l].V,
+                    pga_save[l].Q_ball, pga_save[l].K_ball, pga_save[l].V_ball,
+                    pga_save[l].gate, pga_save[l].gate_sig,
+                    pga_save[l].attn_out_pre_gate,
+                    saved_attn_out + l*N*D_MODEL,
+                    d_cur_bwd, gw, pR,
+                    d_x_l,
+                    d_q_w, d_k_w, d_v_w,
+                    d_qn_w, d_kn_w, d_out_w);
+                
+                // Clip + update weights
+                float lr_gqa = lr * 0.01f;
+                float max_g = 0;
+                for(int64_t i=0; i<wQ; i++){float v=fabsf(d_q_w[i]);if(v>max_g)max_g=v;}
+                for(int64_t i=0; i<wK; i++){float v=fabsf(d_k_w[i]);if(v>max_g)max_g=v;}
+                for(int64_t i=0; i<wV; i++){float v=fabsf(d_v_w[i]);if(v>max_g)max_g=v;}
+                for(int64_t i=0; i<wOut; i++){float v=fabsf(d_out_w[i]);if(v>max_g)max_g=v;}
+                float clip = max_g > 1.0f ? 1.0f/max_g : 1.0f;
+
+                for(int64_t i=0; i<wQ; i++) gw->attn_q_weight[i] -= lr_gqa * d_q_w[i] * clip;
+                for(int64_t i=0; i<wK; i++) gw->attn_k_weight[i] -= lr_gqa * d_k_w[i] * clip;
+                for(int64_t i=0; i<wV; i++) gw->attn_v_weight[i] -= lr_gqa * d_v_w[i] * clip;
+                for(int64_t i=0; i<wOut; i++) gw->attn_output_weight[i] -= lr_gqa * d_out_w[i] * clip;
+                for(int i=0; i<GQA_HEAD_DIM; i++){
+                    gw->attn_q_norm_weight[i] -= lr_gqa * d_qn_w[i] * clip;
+                    gw->attn_k_norm_weight[i] -= lr_gqa * d_kn_w[i] * clip;
+                }
+                
+                memcpy(d_cur_bwd, d_x_l, fwd_N*D_MODEL*sizeof(float));
+                
+                free(d_x_l);
+                free(d_q_w); free(d_k_w); free(d_v_w);
+                free(d_qn_w); free(d_kn_w); free(d_out_w);
+            }
+            free(d_cur_bwd);
         }
 
         // Weight update
@@ -528,5 +651,30 @@ int main(int argc, char **argv) {
     printf("Avg: %.3fs/step (%.1f tok/s)\n",total_time/n_steps,N/(total_time/n_steps));
     printf("TST=%d RSGD=%d PGA=%d NSSM=%d NMOE=%d\n",
            tst_enabled,rsgd_enabled,pga_enabled,nested_ssm_enabled,nested_moe_enabled);
+
+    // Free PGA save structs
+    if(pga_save){
+        for(int l=0;l<model.n_layers;l++){
+            if(!model.layers[l].is_ssm){
+                free(pga_save[l].Q_ball); free(pga_save[l].K_ball); free(pga_save[l].V_ball);
+                free(pga_save[l].Q_norm); free(pga_save[l].Q_raw);
+                free(pga_save[l].K_norm); free(pga_save[l].K_raw);
+                free(pga_save[l].V); free(pga_save[l].gate); free(pga_save[l].gate_sig);
+                free(pga_save[l].attn_out_pre_gate);
+            }
+        }
+        free(pga_save);
+    }
+
+    // Free MoE cache persistent buffers
+    for(int l=0;l<model.n_layers;l++){
+        free(moe_cache[l].ge_persist);
+        free(moe_cache[l].ue_persist);
+        free(moe_cache[l].de_persist);
+    }
+    // Free GPU project buffers
+    wubu_cuda_free(d_output_weight);
+    wubu_cuda_free(d_logits);
+
     return 0;
 }

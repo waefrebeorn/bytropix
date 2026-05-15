@@ -207,6 +207,19 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         fclose(emb_f);
     }
     
+    // Load output weight for logit projection
+    gguf_tensor_info *t_out = gguf_find_tensor(ctx, "output.weight");
+    if (t_out) {
+        int64_t out_elems = (int64_t)D_MODEL * model->vocab_size;
+        model->output_weight = (float *)malloc(out_elems * sizeof(float));
+        if (gguf_read_tensor_f32(ctx, t_out, model->output_weight, out_elems) > 0)
+            printf("  Output weight loaded: %ld MB\n", out_elems * sizeof(float) / (1024*1024));
+        else
+            { fprintf(stderr, "Failed to load output.weight\n"); free(model->output_weight); model->output_weight = NULL; }
+    } else {
+        printf("  WARNING: output.weight not found\n");
+    }
+    
     // Allocate state buffers
     int max_s = model->n_layers;
     int ssm_state_size = max_s * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
@@ -362,8 +375,22 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     }
     
     // Output projection (into logits space)
-    // No output weight loaded yet — just copy x to logits for now
-    memcpy(logits, x, N * D_MODEL * sizeof(float));
+    // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
+    if (model->output_weight) {
+        for (int i = 0; i < N; i++) {
+            const float *h_i = x + i * D_MODEL;
+            float *log_i = logits + i * model->vocab_size;
+            for (int j = 0; j < model->vocab_size; j++) {
+                double sum = 0.0;
+                for (int k = 0; k < D_MODEL; k++)
+                    sum += (double)h_i[k] * (double)model->output_weight[j * D_MODEL + k];
+                log_i[j] = (float)sum;
+            }
+        }
+    } else {
+        // Fallback: copy hidden states only (no output weight loaded)
+        memcpy(logits, x, N * D_MODEL * sizeof(float));
+    }
     
     free(x);
 }

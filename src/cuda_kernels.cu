@@ -3,6 +3,13 @@
 #include "wubu_moe.h"
 #include <stdio.h>
 
+// TGT-safe expf: clamp input to [-80, 80] to prevent overflow/underflow
+static __device__ __inline__ float tgt_safe_expf(float x) {
+    if (x > 80.0f) return expf(80.0f);
+    if (x < -80.0f) return 0.0f;
+    return expf(x);
+}
+
 // ================================================================
 // cuBLAS matmul wrapper (handles row-major → column-major conversion)
 // ================================================================
@@ -60,7 +67,7 @@ __global__ void softplus_kernel(const float *x, float *y, int n) {
 __global__ void exp_kernel(const float *x, float *y, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    y[i] = expf(x[i]);
+    y[i] = tgt_safe_expf(x[i]);
 }
 
 void wubu_cuda_silu(int n, const float *x, float *y, cudaStream_t stream) {
@@ -335,7 +342,7 @@ __global__ void delta_net_step_kernel(float *h,
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= d) return;
 
-    float egate = expf(gate_raw);
+    float egate = tgt_safe_expf(gate_raw);
 
     // Phase 1: decay h, then compute hk[i] = sum_j h[i,j] * k[j]
     // Order matters: decay BEFORE hk (matches CPU)
@@ -451,7 +458,7 @@ __global__ void ssm_parallel_scan_kernel(
         float vi = v_vh[i];
 
         // Step 1: Decay state
-        float egate = expf(gate_val);
+        float egate = tgt_safe_expf(gate_val);
         for (int j = 0; j < d; j++) {
             h_row[j] *= egate;
         }
@@ -1105,7 +1112,7 @@ __global__ void poincare_recurrence_kernel(
     if (b >= B || t >= T || vh >= SSM_V_HEADS) return;
     
     float bg = d_beta[s * DT_RANK + kh];
-    float gg = expf(d_gate[s * DT_RANK + kh]);
+    float gg = tgt_safe_expf(d_gate[s * DT_RANK + kh]);
     
     int tid = threadIdx.x;
     if (tid >= SSM_D_STATE) return;
