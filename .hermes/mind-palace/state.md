@@ -48,15 +48,17 @@
 | GQA KV heads | 2 (8:1 ratio) | `GQA_KV_HEADS=2` | ✅ Match |
 | SSM K/V heads | 16 K, 32 V | `SSM_K_HEADS=16, SSM_V_HEADS=32` | ✅ Match |
 | Conv kernel | 4 | `CONV_KERNEL=4` | ✅ Match |
-| Conv dim | 1536 | `CONV_DIM=8192` | ❌ Discrepancy |
+| Conv dim | 1536 (from earlier paper doc) | CONV_DIM=8192 = Q(2048)+K(2048)+V(4096) | ✅ **Not a bug** — CONV_DIM is the QKV projection output, not linear_conv_dim |
 | MoE experts | 256 | `N_EXPERTS=256` | ✅ Match |
 | Active experts | 8 | `N_ACTIVE_EXPTS=8` | ✅ Match |
 | Expert FFN dim | 512 | `D_FF=512` | ✅ Match |
-| RoPE theta | 10,000,000 | Code constant | Verify |
-| Partial RoPE | 0.25 (64/256) | Code constant | Verify |
+| RoPE theta | 10,000,000 | `ROPE_THETA=10000000.0f` (new May 15) | ✅ **Fixed** — added RoPE impl to GPU GQA forward |
+| Partial RoPE | 0.25 (64/256) | `ROTARY_DIM=64` (new May 15) | ✅ **Fixed** — apply_rotary to first 64 dims |
 | MRoPE 3D | section=[11,11,10] | ❌ Missing | Implement P2 |
 | MTP head | 1 layer | ❌ Missing | Implement P3 |
-| bos/eos | both 248044 | Tokenizer | Verify |
+| bos/eos | both 248044 | Tokenizer reads from GGUF | ✅ Match |
+| rms_norm_eps | 1e-06 | 1e-6f in code | ✅ Match |
+| router_aux_loss_coef | 0.001 | (optional, no explicit impl) | 🔍 Verify |
 
 ## Tailslayer Findings (May 15)
 

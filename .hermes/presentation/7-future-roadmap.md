@@ -174,3 +174,5 @@ Cross-reference 27-layer vision transformer against Qwen3.6 config:
 - ✅ Paper audit (32 Qwen files, arch discrepancy table)
 - ✅ Tailslayer analysis (5 files, 8-pattern analogy map)
 - ✅ 3 new SVGs (training-pipeline, tailslayer-pattern, paper-audit)
+- ✅ RoPE implementation (θ=10M, rotary_dim=64) added to GPU GQA forward
+- ✅ CONV_DIM discrepancy resolved (8192 is correct: Q2048+K2048+V4096)
