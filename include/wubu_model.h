@@ -49,7 +49,8 @@ typedef struct {
     float *conv_states;   // [max_layers, B, CONV_KERNEL-1, CONV_DIM]
     
     // GGUF context (for per-layer MoE lazy loading)
-    struct gguf_ctx *gguf_ctx;
+    // GGUF context (for per-layer MoE lazy loading)
+    gguf_ctx *gguf_ctx;
     
     // Enable MoE during forward (default: false for memory reasons)
     bool enable_moe;

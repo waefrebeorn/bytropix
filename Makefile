@@ -130,10 +130,8 @@ infer_vision: tools/infer_vision.c $(CORE_OBJ)
 infer_vision_text: tools/infer_vision_text.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-infer_vision_text_gpu: tools/infer_vision_text_gpu.o $(CORE_OBJ) src/cuda_vision.o
-	$(NVCC) $(NVCC_FLAGS) -c -o tools/infer_vision_text_gpu_nvcc.o tools/infer_vision_text_gpu.cu 2>/dev/null; \
-	gcc $(CFLAGS) $(CUDA_INC) -o $@ tools/infer_vision_text_gpu_nvcc.o $(CORE_OBJ) src/cuda_vision.o $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++ 2>/dev/null; \
-	echo "infer_vision_text_gpu: GPU vision encoder, CPU text model"
+infer_vision_text_gpu: tools/infer_vision_text_gpu_nvcc.o $(MODEL_OBJ) src/cuda_vision.o
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
 
 tools/infer_vision_text_gpu_nvcc.o: tools/infer_vision_text_gpu.cu include/cuda_vision.h include/wubu_vision.h
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
