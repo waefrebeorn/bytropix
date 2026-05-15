@@ -1183,7 +1183,7 @@ int main(int argc, char **argv) {
         gpu_output_projection(ch, st, d_hid, 1, 1, d_out_w, vs, d_log);
         cudaMemcpyAsync(logits, d_log, vs * sizeof(float), cudaMemcpyDeviceToHost, st);
         cudaStreamSynchronize(st);
-        printf("  GPU proj done\n"); fflush(stdout);
+        printf("  GPU proj done\\n"); fflush(stdout);
     } else if (mdl.output_weight) {
         #pragma omp parallel for
         for (int j = 0; j < vs; j++) {
@@ -1195,7 +1195,18 @@ int main(int argc, char **argv) {
     } else {
         memcpy(logits, h_last, D_MODEL * sizeof(float));
     }
-
+    
+    // If DUMP_LOGITS env var set, write raw logits to file
+    const char *dump_path = getenv("DUMP_LOGITS");
+    if (dump_path) {
+        FILE *f = fopen(dump_path, "wb");
+        if (f) {
+            fwrite(logits, sizeof(float), vs, f);
+            fclose(f);
+            printf("  Logits dumped to %s\\n", dump_path);
+        }
+    }
+    
     // Sample first token
     int tid = sample(logits, vs, temperature, samp_top_k, top_p, pids, np, rep_penalty);
     pids[np] = tid;
