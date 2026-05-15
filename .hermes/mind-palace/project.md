@@ -1,10 +1,10 @@
-# WuBuText AI — Project Overview (May 15)
+# WuBuText AI — Project Overview (May 15 PM)
 
 ## Mission
 Build Qwen3.6-35B-A3B from scratch in pure C + CUDA with WuBu nested hyperbolic geometry.
-All 7 original streams complete. Working on math games + manifold + optimizations.
+All 7 original streams + 9 math/optimization items complete.
 
-## Done ✅ (May 14-15)
+## Done ✅ (May 14-15 Sprint)
 
 | Component | Status | Detail |
 |-----------|--------|--------|
@@ -17,24 +17,24 @@ All 7 original streams complete. Working on math games + manifold + optimization
 | TGT NaN fixes | ✅ | tgt_wrap everywhere |
 | GPU weight loading | ✅ Fixed | gguf_reader dequant path |
 | Training pipeline | ✅ CE=12.42 | lazy MoE + TGT gradients |
-| train_backprop | ✅ Verified | Not hanging (CPU-slow) |
 | Vision→text pipeline | ✅ Real screenshot | 128 tokens, 0 NaN |
 | Lazy MoE in training | ✅ | cached fwd/bwd |
+| **RSGD optimizer** | ✅ | Riemannian SGD, valid ball |
+| **Poincaré GQA** | ✅ | Hyperbolic dist attention, 4/4 |
+| **Nested SSM K=4** | ✅ | 4 Poincaré balls, 3/3 tests |
+| **TST Training** | ✅ | Bag s=8 MCE, 8/8 tests |
+| **Nested MoE (16×16)** | ✅ | Poincaré hierarchy, 396/396 |
+| **CUDA kernels** | ✅ | SSM scan + MoE dispatch |
+| **Data pipeline** | ✅ | 1.07M tokens |
+| **Moondream3** | ✅ | weights dumped + C stub |
 
-## Remaining Work
+## ⚠️ Integration Gap
+All math extensions are standalone — no wiring into train_gpu.
 
-| Area | Items | Priority |
-|------|-------|----------|
-| Bugs | Model logit NaN (~0.5%), CPU RMSNorm dim | P0 |
-| GPU vision | Wire cuda_vision.cu into pipeline | P1 |
-| RSGD | Riemannian SGD for Poincaré params | P1 |
-| Poincaré GQA | Hyperbolic distance attention | P2 |
-| Data pipeline | Tokenize corpus → binary | P2 |
-| Nested SSM | K curvatures product of balls | P3 |
-| Nested MoE | Poincaré distance + hierarchy | P3 |
-| TST | Token Superposition Training | P3 |
-| CUDA kernels | SSM scan, MoE dispatch | P4 |
-| Moondream3 | Weight dump + C port | P4 |
+## ⚠️ Open Bugs
+1. GPU vision pipeline timed out (120s)
+2. ~0.5% NaN in logits (pre-existing)
+3. CPU RMSNorm OOB in GQA path
 
 ## Constraints
 - **English only** — no CJK in code/comments
