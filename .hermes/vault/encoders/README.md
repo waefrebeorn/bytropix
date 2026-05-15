@@ -1,5 +1,5 @@
 # Vault: ENCODERS — Research Core (5 Phases)
-#
+
 ## Phase 1: Symmetric Geometric Autoencoder
 `symmetric_geometric_autoencoder.py` — Flagship AE with U-Net-style geometric skips. Learns manifold image representation. Output: `.wubu` native latent format. `compressor.py` compresses images into tiny files.
 Key: `wubumind_codec.py`, `manipulator_v2.py` (latent style transfer)
@@ -26,11 +26,10 @@ WuBuMind versions V1-V7.1 (JAX/Flax).
 - `Wubu_Monolith.py` — Flagship geodesic encoder
 - `chimera_quaternion.py` — Quaternion attention
 - `Wubu_Geodesic_Sphere.py` — Geodesic rendering
-Geodesic_Validation_Suite.py` — Stress testing
-    30|- `Wubu_Physics_Verification_Suite.py` — Physics compliance
-    31|Key insight: validated "Energy-Based Manifold Learning" (Nov 22 commit)
-    32|
+- `Wubu_Geodesic_Validation_Suite.py` — Stress testing
+- `Wubu_Physics_Verification_Suite.py` — Physics compliance
+Key insight: validated "Energy-Based Manifold Learning" (Nov 22 commit)
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

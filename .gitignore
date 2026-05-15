@@ -25,6 +25,47 @@ test_tok
 infer_moe_lazy
 infer_unified
 test_kv_cache
+test_cuda_init
+test_cuda_kernels
+test_gyrate
+test_hyperbolic_output_proj
+test_mobius_linear
+test_mobius_new
+test_hyperbolic_backward
+test_cuda_moe
+test_nested_moe_backward
+test_nested_ssm_backward
+test_poincare_gqa_backward
+test_poincare_gqa_fused
+test_hyperbolic_ssm
+train_integrated
+train_gpu
+train_backprop
+infer_poincare
+infer_poincare_gpu
+infer_moe_lazy_gpu
+infer_unified_gpu
+infer_vision
+infer_vision_gpu
+infer_vision_text
+infer_vision_text_gpu
+scan_expert_offsets
+test_patch
+test_ssm_block
+test_nested
+test_poincare
+test_all_flags
+test_float16
+test_fwd_manual
+test_pga
+test_nan_logit
+test_nan_trace
+test_nan_xrange
+test_nested_moe_router_backward
+test_nested_ssm_backward_dbg
+test_pga_backward
+test_poincare_kv_cache
+test_poincare_router_backward
 
 # Build artifacts
 *.o
@@ -49,3 +90,7 @@ __pycache__/
 *.swp
 *.swo
 *~
+
+# Misc temp files
+/tmp/
+*.tmp

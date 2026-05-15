@@ -1,0 +1,202 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 820" font-family="'SF Mono','Consolas','DejaVu Sans Mono','Courier New',monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="box1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1c2333"/>
+      <stop offset="100%" stop-color="#232b3f"/>
+    </linearGradient>
+    <linearGradient id="box2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a2e1a"/>
+      <stop offset="100%" stop-color="#1f3a1f"/>
+    </linearGradient>
+    <linearGradient id="box3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#222244"/>
+    </linearGradient>
+    <linearGradient id="box4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2e1a1a"/>
+      <stop offset="100%" stop-color="#3a1f1f"/>
+    </linearGradient>
+    <linearGradient id="box5" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a2e2e"/>
+      <stop offset="100%" stop-color="#1f3a3a"/>
+    </linearGradient>
+    <linearGradient id="box6" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2e1a2e"/>
+      <stop offset="100%" stop-color="#3a1f3a"/>
+    </linearGradient>
+    <linearGradient id="box7" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2e2e1a"/>
+      <stop offset="100%" stop-color="#3a3a1f"/>
+    </linearGradient>
+    <linearGradient id="sidepanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow-back" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="820" fill="url(#bg)" rx="12"/>
+
+  <!-- Title -->
+  <text x="450" y="38" fill="#58a6ff" font-size="20" font-weight="bold" text-anchor="middle" filter="url(#glow)">bytropix Training Pipeline</text>
+  <text x="450" y="56" fill="#8b949e" font-size="12" text-anchor="middle">Qwen3.6-35B-A3B · DeltaNet + Poincaré · MoE 8/256 · RTX 5050</text>
+
+  <!-- ===================== BOX 1: GGUF Model Load ===================== -->
+  <rect x="40" y="75" width="350" height="76" rx="8" fill="url(#box1)" stroke="#394b6e" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="55" y="100" fill="#58a6ff" font-size="14" font-weight="bold">❶ GGUF Model Load</text>
+  <text x="55" y="118" fill="#c9d1d9" font-size="12">Qwen3.6-35B-A3B</text>
+  <text x="55" y="134" fill="#8b949e" font-size="11">IQ2_XXS quantization · 733 tensors</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="215" y1="151" x2="215" y2="195" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== BOX 2: Per-Expert Dequant ===================== -->
+  <rect x="40" y="200" width="350" height="76" rx="8" fill="url(#box2)" stroke="#238636" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="55" y="225" fill="#3fb950" font-size="14" font-weight="bold">❷ Per-Expert Dequant</text>
+  <text x="55" y="243" fill="#c9d1d9" font-size="12">8 active experts / 256 total</text>
+  <text x="55" y="259" fill="#8b949e" font-size="11">3.9ms / expert · lazy on-demand</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="215" y1="276" x2="215" y2="320" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== BOX 3: GPU Forward ===================== -->
+  <rect x="40" y="325" width="350" height="88" rx="8" fill="url(#box3)" stroke="#4a4aff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="55" y="350" fill="#7c7cff" font-size="14" font-weight="bold">❸ GPU Forward</text>
+  <text x="55" y="368" fill="#c9d1d9" font-size="12">30× SSM DeltaNet + 10× GQA Poincaré</text>
+  <text x="55" y="386" fill="#8b949e" font-size="11">GPU compute ~275ms / layer</text>
+  <text x="55" y="402" fill="#484848" font-size="10">cuDNN · fp16 · flash attention</text>
+
+  <!-- Arrow 3→4 -->
+  <line x1="215" y1="413" x2="215" y2="457" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== BOX 4: MoE Router ===================== -->
+  <rect x="40" y="462" width="350" height="76" rx="8" fill="url(#box4)" stroke="#da3633" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="55" y="487" fill="#f85149" font-size="14" font-weight="bold">❹ MoE Router</text>
+  <text x="55" y="505" fill="#c9d1d9" font-size="12">Poincaré distance routing</text>
+  <text x="55" y="521" fill="#8b949e" font-size="11">Top-8 experts · lazy dequant</text>
+
+  <!-- Arrow 4→5 -->
+  <line x1="215" y1="538" x2="215" y2="582" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== BOX 5: Output Projection ===================== -->
+  <rect x="40" y="587" width="350" height="76" rx="8" fill="url(#box5)" stroke="#1f6feb" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="55" y="612" fill="#58a6ff" font-size="14" font-weight="bold">❺ Output Projection</text>
+  <text x="55" y="630" fill="#c9d1d9" font-size="12">cublasSgemm · 248320 × 2048</text>
+  <text x="55" y="646" fill="#8b949e" font-size="11">Replaces 2B CPU FMAs</text>
+
+  <!-- Arrow 5→6 -->
+  <line x1="215" y1="663" x2="215" y2="707" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== BOX 6: CE Loss + Backward ===================== -->
+  <rect x="40" y="712" width="350" height="76" rx="8" fill="url(#box6)" stroke="#bc8cff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="55" y="737" fill="#d2a8ff" font-size="14" font-weight="bold">❻ CE Loss + Backward</text>
+  <text x="55" y="755" fill="#c9d1d9" font-size="12">PGA · NSSM · NMOE flags</text>
+  <text x="55" y="771" fill="#8b949e" font-size="11">tgt_safe_expf clamp</text>
+
+  <!-- ===================== BOX 7: Flags (right column) ===================== -->
+  <rect x="460" y="200" width="240" height="120" rx="8" fill="url(#box7)" stroke="#d29922" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="475" y="225" fill="#d29922" font-size="13" font-weight="bold">❼ Training Flags</text>
+  <text x="475" y="247" fill="#c9d1d9" font-size="11">◆ TST (token-wise step tuning)</text>
+  <text x="475" y="265" fill="#c9d1d9" font-size="11">◆ RSGD (rotary SGD)</text>
+  <text x="475" y="283" fill="#c9d1d9" font-size="11">◆ PGA (Poincaré gradient accel.)</text>
+  <text x="475" y="301" fill="#c9d1d9" font-size="11">◆ NESTED_SSM</text>
+  <text x="475" y="319" fill="#c9d1d9" font-size="11">◆ NESTED_MOE</text>
+  <text x="475" y="337" fill="#c9d1d9" font-size="11">◆ POINCARE_R</text>
+
+  <!-- Arrow 6→7 (feedback loop labeled) -->
+  <line x1="390" y1="740" x2="460" y2="315" stroke="#d29922" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-back)"/>
+  <text x="400" y="740" fill="#d29922" font-size="9" transform="rotate(-55, 400, 740)">feedback loop</text>
+
+  <!-- Arrow 7→3 (back to forward) -->
+  <line x1="460" y1="295" x2="390" y2="370" stroke="#d29922" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-back)"/>
+  <text x="405" y="325" fill="#d29922" font-size="9" transform="rotate(55, 405, 325)">apply flags</text>
+
+  <!-- ===================== SIDE PANEL: Metrics ===================== -->
+  <rect x="780" y="75" width="280" height="713" rx="10" fill="url(#sidepanel)" stroke="#30363d" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="920" y="105" fill="#58a6ff" font-size="16" font-weight="bold" text-anchor="middle">📊 Metrics</text>
+  <line x1="800" y1="118" x2="1040" y2="118" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Step Time -->
+  <text x="800" y="148" fill="#8b949e" font-size="12">Step Time</text>
+  <text x="800" y="172" fill="#f0883e" font-size="28" font-weight="bold">11 s/step</text>
+
+  <line x1="800" y1="188" x2="1040" y2="188" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Cross Entropy -->
+  <text x="800" y="218" fill="#8b949e" font-size="12">Cross-Entropy Loss</text>
+  <text x="800" y="240" fill="#3fb950" font-size="22" font-weight="bold">21.6</text>
+  <text x="870" y="240" fill="#8b949e" font-size="14">→</text>
+  <text x="890" y="240" fill="#d2a8ff" font-size="22" font-weight="bold">18.4</text>
+  <text x="960" y="240" fill="#3fb950" font-size="12">▼ 3.2</text>
+
+  <line x1="800" y1="258" x2="1040" y2="258" stroke="#21262d" stroke-width="1"/>
+
+  <!-- NaN Count -->
+  <text x="800" y="288" fill="#8b949e" font-size="12">NaN Gradients</text>
+  <text x="800" y="310" fill="#3fb950" font-size="22" font-weight="bold">0</text>
+  <text x="830" y="310" fill="#8b949e" font-size="12">/ 1.1M parameters</text>
+
+  <line x1="800" y1="328" x2="1040" y2="328" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Hardware -->
+  <text x="800" y="358" fill="#8b949e" font-size="12">Hardware</text>
+  <text x="800" y="380" fill="#c9d1d9" font-size="16" font-weight="bold">RTX 5050</text>
+  <text x="800" y="398" fill="#8b949e" font-size="12">6.4 GB VRAM</text>
+
+  <line x1="800" y1="415" x2="1040" y2="415" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Memory -->
+  <text x="800" y="445" fill="#8b949e" font-size="12">VRAM Usage</text>
+  <text x="800" y="467" fill="#58a6ff" font-size="18" font-weight="bold">5.8 GB</text>
+  <text x="880" y="467" fill="#8b949e" font-size="12">/ 6.4 GB</text>
+  <!-- Bar -->
+  <rect x="800" y="478" width="240" height="10" rx="5" fill="#21262d"/>
+  <rect x="800" y="478" width="217" height="10" rx="5" fill="#58a6ff"/>
+  <text x="1040" y="488" fill="#8b949e" font-size="10" text-anchor="end">90.6%</text>
+
+  <line x1="800" y1="500" x2="1040" y2="500" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Throughput -->
+  <text x="800" y="530" fill="#8b949e" font-size="12">Throughput</text>
+  <text x="800" y="552" fill="#f0883e" font-size="18" font-weight="bold">2,727 tok/s</text>
+
+  <line x1="800" y1="570" x2="1040" y2="570" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Model Specs -->
+  <text x="800" y="600" fill="#8b949e" font-size="12">Model</text>
+  <text x="800" y="620" fill="#c9d1d9" font-size="13">Qwen3.6-35B-A3B</text>
+  <text x="800" y="638" fill="#8b949e" font-size="11">IQ2_XXS</text>
+
+  <line x1="800" y1="655" x2="1040" y2="655" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Status -->
+  <text x="800" y="685" fill="#8b949e" font-size="12">Training Status</text>
+  <rect x="800" y="695" width="12" height="12" rx="6" fill="#3fb950"/>
+  <text x="820" y="706" fill="#c9d1d9" font-size="14">Running</text>
+  <text x="800" y="726" fill="#8b949e" font-size="11">Step 877 / 4200</text>
+  <!-- Progress bar -->
+  <rect x="800" y="738" width="240" height="8" rx="4" fill="#21262d"/>
+  <rect x="800" y="738" width="50" height="8" rx="4" fill="#3fb950"/>
+  <text x="1040" y="746" fill="#8b949e" font-size="10" text-anchor="end">20.9%</text>
+
+  <!-- Mini legend at bottom of side panel -->
+  <line x1="800" y1="760" x2="1040" y2="760" stroke="#30363d" stroke-width="1"/>
+  <text x="800" y="778" fill="#484848" font-size="9">Δ 40-layer hybrid · 8/256 MoE · Poincaré geom.</text>
+</svg>

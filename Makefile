@@ -8,10 +8,10 @@ CUDA_INC = -I/usr/local/cuda-13.1/include
 
 .PHONY: all clean
 
-all: test_ssm test_nested_ssm load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic
+all: test_ssm test_nested_ssm test_nested_ssm_backward load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated
 
 # Object files
-CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o
+CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o
 RSGD_OBJ = src/rsgd.o
@@ -23,6 +23,9 @@ src/wubu_ssm.o: src/wubu_ssm.c include/wubu_ssm.h include/wubu_mobius.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_nested_ssm.o: src/wubu_nested_ssm.c include/wubu_nested_ssm.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_nested_ssm_backward.o: src/wubu_nested_ssm_backward.c include/wubu_nested_ssm.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_mobius.o: src/wubu_mobius.c include/wubu_mobius.h
@@ -41,6 +44,21 @@ src/wubu_poincare_ssm_backward.o: src/wubu_poincare_ssm_backward.c include/wubu_
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_poincare_gqa.o: src/wubu_poincare_gqa.c include/wubu_poincare_gqa.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_poincare_gqa_backward.o: src/wubu_poincare_gqa_backward.c include/wubu_poincare_gqa.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_mobius_linear.o: src/wubu_mobius_linear.c include/wubu_mobius_linear.h include/wubu_mobius.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_mobius_gyrate.o: src/wubu_mobius_gyrate.c include/wubu_mobius.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_moe_hyperbolic_backward.o: src/wubu_moe_hyperbolic_backward.c include/wubu_moe_hyperbolic.h include/wubu_mobius.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_hyperbolic_output_proj.o: src/wubu_hyperbolic_output_proj.c include/wubu_hyperbolic_output_proj.h include/wubu_mobius_linear.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_vision.o: src/wubu_vision.c include/wubu_vision.h include/wubu_ssm.h
@@ -71,10 +89,34 @@ test_ssm: test_ssm_forward.c $(CORE_OBJ)
 test_nested_ssm: tools/test_nested_ssm.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_nested_ssm_backward: tools/test_nested_ssm_backward.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 test_poincare_ssm: test_poincare_ssm.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_poincare_gqa: tools/test_poincare_gqa.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_poincare_kv_cache: tools/test_poincare_kv_cache.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_pga_backward: tools/test_pga_backward.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_mobius_linear: tools/test_mobius_linear.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_hyperbolic_output_proj: tools/test_hyperbolic_output_proj.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_gyrate: tools/test_gyrate.c src/wubu_mobius.o src/wubu_mobius_gyrate.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_poincare_router_backward: tools/test_poincare_router_backward.c $(CORE_OBJ) src/wubu_moe_hyperbolic_backward.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_nested_moe_router_backward: tools/test_nested_moe_router_backward.c $(CORE_OBJ) src/wubu_moe_hyperbolic_backward.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_tokenizer: tools/test_tokenizer.c src/wubu_tokenizer.o src/gguf_reader.o
@@ -175,6 +217,9 @@ dump_mmproj: tools/dump_mmproj.c src/gguf_reader.o
 verify_iq2s: tools/verify_iq2s.c src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+check_iq2xxs_stride: tools/check_iq2xxs_stride.c src/gguf_reader.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 verify_dequant: tools/verify_dequant.c src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -228,5 +273,11 @@ test_backward_simple: tools/test_backward_simple.c $(CORE_OBJ)
 test_cpu_timing: tools/test_cpu_timing.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
 
+check_weights: tools/check_weights.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+check_ssm_a: tools/check_ssm_a.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 clean:
-	rm -f test_ssm test_nested_ssm test_poincare_ssm test_poincare_gqa load_model test_model test_gpu tokenize_corpus test_moe test_moe_hyperbolic train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache test_tst src/*.o tools/*.o
+	rm -f test_ssm test_nested_ssm test_poincare_ssm test_poincare_gqa load_model test_model test_gpu tokenize_corpus test_moe test_moe_hyperbolic train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache test_tst test_nested_moe_router_backward src/*.o tools/*.o

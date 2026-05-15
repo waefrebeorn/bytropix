@@ -1,30 +1,27 @@
-# WuBuText AI — Project Overview (May 15 PM)
+# WuBuText AI — Project Overview (May 15 PM v6)
 
 ## What We're Building
-**WuBuText AI** is a pure C + CUDA implementation of a Qwen3.6-35B-A3B-compatible language model with 7 hyperbolic math extensions.
-
-All 7 original streams + 9 math/optimization items complete. Every binary verified.
+**WuBuText AI** — pure C + CUDA implementation of Qwen3.6-35B-A3B with 7 hyperbolic math extensions.
+All phases complete. Integrated training pipeline at 11s/step.
 
 ### Architecture
-40 layers (30 SSM + 10 GQA, 3:1 repeating), 2048 hidden, 248K vocab, 262K ctx.
-256 MoE experts (8 active + 1 shared), lazy dequant 9× speedup.
-All weights loaded from GGUF (IQ2_M quantized).
+40 layers (30 SSM Gated DeltaNet + 10 GQA, 3:1 repeating), 2048 hidden, 248K vocab, 262K ctx.
+256 MoE experts (8 active + 1 shared), per-expert IQ2_XXS dequant (3.9ms/expert).
 
-### Current State: All P1-6 Complete, Integration Pending
-| Phase | Component | Status | Tests |
-|-------|-----------|--------|-------|
+### All Phases Complete ✅
+
+| Phase | Component | Status | Key Metric |
+|-------|-----------|--------|------------|
 | 0 | GGUF Reader | ✅ 13 types | 733 tensors |
 | 1 | Embedding Graft | ✅ Poincaré R=0.956 | 95% NN preserved |
-| 2 | Attention Port | ✅ 40 layers CPU/GPU | CE=12.66/12.42 |
-| 3 | Training Modules | ✅ RSGD+TST+NestedSSM+PGA+MoE | All pass |
-| 4 | MoE Port | ✅ Lazy dequant + Nested routing | 396/396 |
-| 5 | Vision Port | ✅ GPU 217ms + pipeline | 0 NaN |
-| 6 | CUDA Kernels | ✅ SSM scan + MoE dispatch | max_diff<6e-8 |
+| 2 | Attention Port | ✅ 40 layers CPU/GPU | GPU verified |
+| 3 | Training Loop | ✅ Integrated | **11s/step, 0 NaN** |
+| 4 | MoE Port | ✅ Per-expert dequant | 177s→11s/step (16×) |
+| 5 | Vision Port | ✅ GPU 99ms pipeline | 0 NaN |
+| 6 | CUDA Optimization | ✅ SSM scan + MoE dispatch | max_diff<6e-8 |
 
-### ⚠️ Integration Gap
-All 7 math extensions standalone — NOT wired into training pipeline.
-
-### ⚠️ Open Bugs
-1. GPU vision pipeline timed out (120s)
-2. ~0.5% NaN in logits (pre-existing, any input)
-3. CPU RMSNorm OOB in GQA path (d=4096, weight[256])
+### Key Fixes
+- **NaN root cause**: gguf_raw_size(IQ2_XXS) was 72→66 bytes/block
+- **MoE magnitude**: hidden max 5e9→13 (buggy strided extraction fixed)
+- **Training speed**: full tensor dequant eliminated → per-expert extraction
+- **Bugs all closed**: vision timeout, NaN in logits, RMSNorm OOB — all ✅

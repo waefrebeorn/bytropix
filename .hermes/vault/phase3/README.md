@@ -1,5 +1,5 @@
 # Vault: Phase 3 — Text-to-Image Generative Pipeline
-#
+
 ## Architecture (3-Stage)
 1. **AE Latent** (Phase 1/2): Images → `path_params` grid (δ, χ, radius) via Poincaré sphere polarization physics
 2. **VQ-VAE Tokenizer**: path_params → discrete codes (3072 codes, 256-dim). Conv(3×3 stride=2)×2 → VQ → ConvTranspose×2. Output: 4×24×6 = 576 tokens/image
@@ -21,11 +21,10 @@
 - Rich TUI: Live metrics, preview images, keyboard controls
 
 ## Key Scripts
- script (~3873 lines, ~225KB)
-    25|- `backupcorpus.py` — Source template for CORPUS.py (~1756 lines)
-    26|- `FORXLADEVS.py` — Standalone WubuMind text generation (~252 lines, minimal deps)
-    27|
+- `phase3_generative.py` — Main script (~3873 lines, ~225KB)
+- `backupcorpus.py` — Source template for CORPUS.py (~1756 lines)
+- `FORXLADEVS.py` — Standalone WubuMind text generation (~252 lines, minimal deps)
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

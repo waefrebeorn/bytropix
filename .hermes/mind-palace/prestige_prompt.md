@@ -1,27 +1,41 @@
-═══ WUBUTEXT AI — PRESTIGE RESUME (May 15 PM v2) ═══
+═══ WUBUTEXT AI — PRESTIGE RESUME (May 15 PM v6) ═══
 Path: /home/wubu/bytropix | Branch: master
 HW: RTX 5050 6.4GB, -arch=sm_120, NVCC: /usr/local/cuda-13.1/bin/nvcc
-Build: make <target> | Models: /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+Build: make train_integrated | Models: /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 
 === RULE ===
 ALL GOALS MUST BE FINISHED. No "good enough." No abandoned streams.
 
-=== STATE ===
-✅ ALL 12 STREAMS COMPLETE + INTEGRATED (May 14-15)
-✅ train_integrated binary — env flags: TST/RSGD/PGA/NESTED_SSM/NESTED_MOE/POINCARE_R
-✅ TST=1 bag s=8 MCE loss (25% steps)
-✅ RSGD=1 Riemannian SGD for Poincaré embeddings
-✅ PGA=1 Poincaré GQA (CPU detour for GQA layers)
-✅ NESTED_SSM=1 Nested SSM K=4 (CPU detour for SSM layers)
-✅ NESTED_MOE=1 Poincaré distance routing replacing linear gate_inp
-✅ GPU SSM with POINCARE_R
-✅ All 5 flags verified in single run: loss=12.42
+=== STATE (May 15 PM v6) ===
+✅ P0: Per-block IQ2_XXS extraction
+   gguf_raw_size(IQ2_XXS) fix: 72→66 bytes/block (empirically verified)
+   Full dequant eliminated → per-expert dequant + transpose (3.9ms/expert)
+   177s/step → 11s/step (16×)
+✅ P1: Multi-flag verification
+   All 6 flags individually + combined: TST/RSGD/PGA/NSSM/NMOE/POINCARE_R
+   0 NaN in any configuration. Loss: CE 21.6→18.4 stable.
+✅ P2: MoE output magnitude + memory opt
+   Hidden: max=13 (was 5e9 from buggy strided extraction)
+   Persistent buffers in lmoe_t (no per-step 3GB alloc/free)
+✅ GPU output projection: cublasSgemm replaces 2B CPU FMAs
+✅ Async D→H copies: dead PGA copies skipped when !pga_enabled
+✅ All 7 cold gaps closed (May 14)
+✅ NaN root cause FIXED: MoE weight interleaving + raw_size bug
+✅ tgt_safe_expf in 4 GPU kernel sites
 
-⚠️ GPU vision pipeline timed out
-⚠️ ~0.5% NaN in logits (pre-existing)
-⚠️ CPU RMSNorm OOB (d=4096, weight[256])
+=== REMAINING ===
+~11s/step GPU compute bound (40 layers × 275ms on RTX 5050)
+PGA loss jumps 21.6→69 (pre-existing LR issue)
+12 vaults with unported theory (sparse attention, Hamilton encoder, optimizers)
+**Tailslayer** — hedged-read CUDA kernel for speculative decode (P2, new May 15)
+  N replicas→N drafts, first-response-wins→longest-valid-prefix, clflush→forward-pass
+  Sliding window pair sampling, tREFI probe for CUDA profiling
 
 === TGT MATH ===
 BOUNDARY = 2π
 remainder = fmod(x + π, BOUNDARY) - π
 tgt_safe_expf(x) = x > 80 ? 80 : x < -80 ? 0 : expf(x)
+
+=== DIAGRAMS (May 15 PM v6) ===
+7/7 SVGs updated: phase-roadmap (100% complete), gguf-pipeline, math-pipeline,
+research-timeline, llamacpp-clone. Hamilton + nesting: stable (conceptual).

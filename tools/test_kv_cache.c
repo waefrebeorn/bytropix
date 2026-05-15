@@ -209,9 +209,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    // RMSNorm for Q and K
-    wubu_rms_norm(B, T_prefill, q_dim, Q_norm_full, gqa_w.attn_q_norm_weight, 1e-6f, Q_norm_full);
-    wubu_rms_norm(B, T_prefill, kv_dim, K_full, gqa_w.attn_k_norm_weight, 1e-6f, K_norm_full);
+    // RMSNorm for Q and K (per-head: reshape [B, T, n_heads*head_dim] -> [B, T*n_heads, head_dim])
+    wubu_rms_norm(B, T_prefill * GQA_Q_HEADS, GQA_HEAD_DIM, Q_norm_full, gqa_w.attn_q_norm_weight, 1e-6f, Q_norm_full);
+    wubu_rms_norm(B, T_prefill * GQA_KV_HEADS, GQA_HEAD_DIM, K_full, gqa_w.attn_k_norm_weight, 1e-6f, K_norm_full);
 
     // Attention (CPU)
     float *attn_out_pre = (float *)calloc(N_prefill * q_dim, sizeof(float));
@@ -355,15 +355,15 @@ int main(int argc, char **argv) {
             v_raw[j] = (float)sum;
         }
 
-        // RMSNorm for this token's Q
+        // RMSNorm for this token's Q (per-head: [GQA_Q_HEADS, HEAD_DIM])
         float q_norm[4096];
         memcpy(q_norm, q_raw, q_dim * sizeof(float));
-        wubu_rms_norm(1, 1, q_dim, q_norm, gqa_w.attn_q_norm_weight, 1e-6f, q_norm);
+        wubu_rms_norm(1, GQA_Q_HEADS, GQA_HEAD_DIM, q_norm, gqa_w.attn_q_norm_weight, 1e-6f, q_norm);
 
         // RMSNorm and append K, V to cache
         float k_norm[512];
         memcpy(k_norm, k_raw, kv_dim * sizeof(float));
-        wubu_rms_norm(1, 1, kv_dim, k_norm, gqa_w.attn_k_norm_weight, 1e-6f, k_norm);
+        wubu_rms_norm(1, GQA_KV_HEADS, GQA_HEAD_DIM, k_norm, gqa_w.attn_k_norm_weight, 1e-6f, k_norm);
 
         // Append to cache
         kv_cache_append(&kv_cache, k_norm, v_raw, 1);
@@ -482,8 +482,8 @@ int main(int argc, char **argv) {
             }
         }
 
-        wubu_rms_norm(1, new_T, q_dim, q_tmp, gqa_w.attn_q_norm_weight, 1e-6f, q_tmp);
-        wubu_rms_norm(1, new_T, kv_dim, k_tmp, gqa_w.attn_k_norm_weight, 1e-6f, k_norm_tmp);
+        wubu_rms_norm(1, new_T * GQA_Q_HEADS, GQA_HEAD_DIM, q_tmp, gqa_w.attn_q_norm_weight, 1e-6f, q_tmp);
+        wubu_rms_norm(1, new_T * GQA_KV_HEADS, GQA_HEAD_DIM, k_tmp, gqa_w.attn_k_norm_weight, 1e-6f, k_norm_tmp);
 
         // Attention for last token only (compare with cached)
         float *attn_ref = (float *)calloc(q_dim, sizeof(float));

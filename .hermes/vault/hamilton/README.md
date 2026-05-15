@@ -1,5 +1,5 @@
 # Vault: Hamilton Encoder (CPU Prototypes)
-#
+
 ## Location: `ENCODERS/hamilton-encoder-cpu/`
 30+ Python files — Nov 2025's "Geodesic AI Brain" month of experiments.
 See `Wubu_Geodesic_Validated.py` and `Wubu_Geodesic_Layer_Lossless.py` for production versions.
@@ -26,12 +26,17 @@ See `Wubu_Geodesic_Validated.py` and `Wubu_Geodesic_Layer_Lossless.py` for produ
 - `entropiximagepatch.py` — Image patching for entropix sampler
 - `gpt_at_home.py` / `gptcanvas.py` / `gptphysics.py` — GPT-style inference at home
 
-rence)
-    30|The CUDA ports (Hamilton encoder kernel, BSP tree, MLP) live at:
-    31|`~/HASHMIND/llama-cpp-rotorquant/llama.cppCOPY/`
-    32|See `.hermes/` vault there for full documentation.
-    33|
+## CUDA Status
+The CUDA ports (Hamilton encoder kernel, BSP tree, MLP) live at:
+`~/HASHMIND/llama-cpp-rotorquant/llama.cppCOPY/`
+
+See `.hermes/` vault there for full documentation. **Kerning CUDA kernel already ported and verified** as part of the BSP-tree integration. MLP layer also ported. Remaining: geodesic attention layer needs C/CUDA reimplementation.
+
+## Vault Audit (May 15)
+- **Port priority:** P2 — medium effort, high value for KV cache compression (~10×, 62% compression, ~3% overhead)
+- **Key insight:** Validated "Energy-Based Manifold Learning" (Nov 22 commit)
+- **Status:** CUDA kernels exist in llama.cpp fork, need copy into bytropix/src/
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

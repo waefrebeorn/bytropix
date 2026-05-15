@@ -1,5 +1,5 @@
 # Vault: hash-mind — WuBuMind JAX Versions (V1-V7.1)
-#
+
 ## Core Files
 - `WuBuMindV7.1.py` — The latest. Full pipeline: BPE tokenizer → Navigator (geometric embedding) → Oracle (text generation) → Funnel Cake (BallTree index) → Generate. Q-Controller LR, Rich TUI.
 - `WuBuMindV7.py` — V7 architecture with GRU + hyperboloid projection + multi-head attention
@@ -25,11 +25,10 @@
 - `wubu_nesting_impl.py` — Core layer: HyperbolicUtils, Hamilton product, WuBuNestingLayer
 - `wubu_nesting_example.py` — Usage example
 - `wubu_nesting_visualization.py` — ASCII + matplotlib visualization
-txt` — Training data (Shakespeare, fully commented)
-    29|- `GAAD-WuBu-ST1.md`, `GAAD-WuBu-ST2.md` — Academic paper drafts
-    30|- `ProjectAgentChimera.md` — Multi-agent training design spec
-    31|
+- `CORPUS.txt` — Training data (Shakespeare, fully commented)
+- `GAAD-WuBu-ST1.md`, `GAAD-WuBu-ST2.md` — Academic paper drafts
+- `ProjectAgentChimera.md` — Multi-agent training design spec
 
 ---
 
-*Part of the WuBuText AI project. See [Project Overview](../../README.md) and [Presentation Layer](../presentation/README.md) for navigation.*
+*Part of the WuBuText AI project. See [Project Overview](../../README.md) for navigation.*

@@ -52,18 +52,6 @@ typedef struct {
 
 /**
  * Forward pass for nested Poincaré SSM (K balls, K curvatures).
- *
- * Same input/output interface as wubu_poincare_ssm_forward, but with
- * K independent Poincaré ball states combined via gating.
- *
- * @param x             Input tensor [B, T, D_MODEL]
- * @param B             Batch size
- * @param T             Sequence length
- * @param weights       SSM layer weights (shared across all K balls)
- * @param nested_state  Nested SSM state (contains K balls + curvatures)
- * @param conv_state    Conv1D state [B, CONV_KERNEL-1, CONV_DIM]
- * @param gating        Per-ball gating weights (optional, NULL = uniform)
- * @param output        Output tensor [B, T, D_MODEL]
  */
 void wubu_nested_ssm_forward(const float *x, int B, int T,
                               const ssm_layer_weights *weights,
@@ -73,13 +61,92 @@ void wubu_nested_ssm_forward(const float *x, int B, int T,
                               float *output);
 
 /**
- * Initialize a nested SSM state with K balls and given curvatures.
- * States are initialized to zero (origin of each Poincaré ball).
+ * Saved intermediates for nested SSM backward pass.
+ * All arrays [B*T x dim] unless noted.
  *
- * @param state  State struct to initialize
- * @param K      Number of balls
- * @param R      Array of K curvature radii
- * @return       0 on success, -1 on allocation failure
+ * Ball deltas and per-timestep state trajectory are saved for BPTT.
+ */
+typedef struct {
+    // Standard SSM intermediates (same as ssm_fwd_save_t but nested)
+    float *qkv_all;        // [N, CONV_DIM]
+    float *z_all;          // [N, VALUE_DIM]
+    float *beta_raw;       // [N, DT_RANK]
+    float *alpha_raw;      // [N, DT_RANK]
+    float *conv_post_silu; // [N, CONV_DIM]
+    float *q_conv;         // [N, KEY_DIM]
+    float *k_conv;         // [N, KEY_DIM]
+    float *v_conv;         // [N, VALUE_DIM]
+    float *q_norm;         // [N, KEY_DIM]
+    float *k_norm;         // [N, KEY_DIM]
+    float *delta_out;      // [N, VALUE_DIM] (pre-gated-norm, combined)
+    float *z_silu;         // [N, VALUE_DIM]
+    float *beta_flat;      // [N, DT_RANK] sigmoid(beta_raw)
+    float *gate_flat;      // [N, DT_RANK] alpha_softplus * ssm_a
+    float *conv_state_copy;// [B, CONV_KERNEL-1, CONV_DIM]
+
+    // Nested SSM specific: number of balls (for safe cleanup)
+    int K;
+
+    // Per-ball deltas (pre-combination)
+    float **ball_deltas;   // [K][N, VALUE_DIM]
+
+    // Per-timestep state trajectory for BPTT
+    // Layout: states_t[t][k][HEAD_STATE_SZ] where t=0..T, t=0 is initial state
+    // HEAD_STATE_SZ = SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE
+    float *states_t;       // [(T+1) * K * HEAD_STATE_SZ]
+
+    // Per-ball output before gated norm (for backprop through ball combination)
+    float *ball_delta_flat; // [K * N * VALUE_DIM] flattened version of ball_deltas
+
+    // Softmax-normalized gating weights [K]
+    float w_norm[NESTED_SSM_MAX_K];
+} nested_ssm_fwd_save_t;
+
+/**
+ * Nested SSM forward with save (pass save=NULL for standard forward).
+ */
+void wubu_nested_ssm_forward_save(const float *x, int B, int T,
+                                   const ssm_layer_weights *weights,
+                                   wubu_nested_ssm_state_t *nested_state,
+                                   float *conv_state,
+                                   const wubu_nested_ssm_gating_t *gating,
+                                   float *output,
+                                   nested_ssm_fwd_save_t *save);
+
+/**
+ * Nested SSM backward pass.
+ * Uses saved intermediates from wubu_nested_ssm_forward_save.
+ *
+ * BPTT through K independent Poincaré ball recurrences.
+ */
+void wubu_nested_ssm_backward(
+    int B, int T,
+    const float *x,                    // [B*T, D_MODEL] forward input
+    const float *output,               // [B*T, D_MODEL] forward output
+    const float *d_output,             // [B*T, D_MODEL] upstream gradient
+    const float *ball_weights_raw,     // [K] pre-softmax ball weights (or NULL for uniform)
+    const wubu_nested_ssm_state_t *nested_state,  // FINAL state (after all timesteps)
+    const nested_ssm_fwd_save_t *save, // Saved intermediates from forward_save
+    const ssm_layer_weights *w,        // SSM layer weights
+    float *d_x,                        // [B*T, D_MODEL] gradient w.r.t. input
+    // Weight gradients (all can be NULL to skip weight updates)
+    float *d_qkv_weight,               // [D_MODEL, CONV_DIM]
+    float *d_gate_weight,              // [D_MODEL, VALUE_DIM]
+    float *d_beta_weight,              // [D_MODEL, DT_RANK]
+    float *d_alpha_weight,             // [D_MODEL, DT_RANK]
+    float *d_conv1d_weight,            // [CONV_KERNEL, CONV_DIM]
+    float *d_ssm_out_weight,           // [VALUE_DIM, D_MODEL]
+    float *d_ssm_norm_weight,          // [SSM_D_STATE]
+    float *d_state_init_grad           // [K * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE]
+);
+
+/**
+ * Free memory allocated in a nested_ssm_fwd_save_t struct.
+ */
+void wubu_nested_ssm_fwd_save_free(nested_ssm_fwd_save_t *save);
+
+/**
+ * Initialize a nested SSM state with K balls and given curvatures.
  */
 int wubu_nested_ssm_init(wubu_nested_ssm_state_t *state, int K, const float *R);
 

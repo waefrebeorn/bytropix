@@ -1,0 +1,2779 @@
+{
+  "model.vision.blocks.0.attn.proj.bias": {
+    "offset": 0,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.0.attn.proj.weight": {
+    "offset": 4608,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.0.attn.qkv.bias": {
+    "offset": 5313024,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.0.attn.qkv.weight": {
+    "offset": 5326848,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.0.ln1.bias": {
+    "offset": 21252096,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.0.ln1.weight": {
+    "offset": 21256704,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.0.ln2.bias": {
+    "offset": 21261312,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.0.ln2.weight": {
+    "offset": 21265920,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.0.mlp.fc1.bias": {
+    "offset": 21270528,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.0.mlp.fc1.weight": {
+    "offset": 21287744,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.0.mlp.fc2.bias": {
+    "offset": 41120576,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.0.mlp.fc2.weight": {
+    "offset": 41125184,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.1.attn.proj.bias": {
+    "offset": 60958016,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.1.attn.proj.weight": {
+    "offset": 60962624,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.1.attn.qkv.bias": {
+    "offset": 66271040,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.1.attn.qkv.weight": {
+    "offset": 66284864,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.1.ln1.bias": {
+    "offset": 82210112,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.1.ln1.weight": {
+    "offset": 82214720,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.1.ln2.bias": {
+    "offset": 82219328,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.1.ln2.weight": {
+    "offset": 82223936,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.1.mlp.fc1.bias": {
+    "offset": 82228544,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.1.mlp.fc1.weight": {
+    "offset": 82245760,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.1.mlp.fc2.bias": {
+    "offset": 102078592,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.1.mlp.fc2.weight": {
+    "offset": 102083200,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.10.attn.proj.bias": {
+    "offset": 121916032,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.10.attn.proj.weight": {
+    "offset": 121920640,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.10.attn.qkv.bias": {
+    "offset": 127229056,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.10.attn.qkv.weight": {
+    "offset": 127242880,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.10.ln1.bias": {
+    "offset": 143168128,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.10.ln1.weight": {
+    "offset": 143172736,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.10.ln2.bias": {
+    "offset": 143177344,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.10.ln2.weight": {
+    "offset": 143181952,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.10.mlp.fc1.bias": {
+    "offset": 143186560,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.10.mlp.fc1.weight": {
+    "offset": 143203776,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.10.mlp.fc2.bias": {
+    "offset": 163036608,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.10.mlp.fc2.weight": {
+    "offset": 163041216,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.11.attn.proj.bias": {
+    "offset": 182874048,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.11.attn.proj.weight": {
+    "offset": 182878656,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.11.attn.qkv.bias": {
+    "offset": 188187072,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.11.attn.qkv.weight": {
+    "offset": 188200896,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.11.ln1.bias": {
+    "offset": 204126144,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.11.ln1.weight": {
+    "offset": 204130752,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.11.ln2.bias": {
+    "offset": 204135360,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.11.ln2.weight": {
+    "offset": 204139968,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.11.mlp.fc1.bias": {
+    "offset": 204144576,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.11.mlp.fc1.weight": {
+    "offset": 204161792,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.11.mlp.fc2.bias": {
+    "offset": 223994624,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.11.mlp.fc2.weight": {
+    "offset": 223999232,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.12.attn.proj.bias": {
+    "offset": 243832064,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.12.attn.proj.weight": {
+    "offset": 243836672,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.12.attn.qkv.bias": {
+    "offset": 249145088,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.12.attn.qkv.weight": {
+    "offset": 249158912,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.12.ln1.bias": {
+    "offset": 265084160,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.12.ln1.weight": {
+    "offset": 265088768,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.12.ln2.bias": {
+    "offset": 265093376,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.12.ln2.weight": {
+    "offset": 265097984,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.12.mlp.fc1.bias": {
+    "offset": 265102592,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.12.mlp.fc1.weight": {
+    "offset": 265119808,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.12.mlp.fc2.bias": {
+    "offset": 284952640,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.12.mlp.fc2.weight": {
+    "offset": 284957248,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.13.attn.proj.bias": {
+    "offset": 304790080,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.13.attn.proj.weight": {
+    "offset": 304794688,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.13.attn.qkv.bias": {
+    "offset": 310103104,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.13.attn.qkv.weight": {
+    "offset": 310116928,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.13.ln1.bias": {
+    "offset": 326042176,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.13.ln1.weight": {
+    "offset": 326046784,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.13.ln2.bias": {
+    "offset": 326051392,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.13.ln2.weight": {
+    "offset": 326056000,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.13.mlp.fc1.bias": {
+    "offset": 326060608,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.13.mlp.fc1.weight": {
+    "offset": 326077824,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.13.mlp.fc2.bias": {
+    "offset": 345910656,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.13.mlp.fc2.weight": {
+    "offset": 345915264,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.14.attn.proj.bias": {
+    "offset": 365748096,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.14.attn.proj.weight": {
+    "offset": 365752704,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.14.attn.qkv.bias": {
+    "offset": 371061120,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.14.attn.qkv.weight": {
+    "offset": 371074944,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.14.ln1.bias": {
+    "offset": 387000192,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.14.ln1.weight": {
+    "offset": 387004800,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.14.ln2.bias": {
+    "offset": 387009408,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.14.ln2.weight": {
+    "offset": 387014016,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.14.mlp.fc1.bias": {
+    "offset": 387018624,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.14.mlp.fc1.weight": {
+    "offset": 387035840,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.14.mlp.fc2.bias": {
+    "offset": 406868672,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.14.mlp.fc2.weight": {
+    "offset": 406873280,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.15.attn.proj.bias": {
+    "offset": 426706112,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.15.attn.proj.weight": {
+    "offset": 426710720,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.15.attn.qkv.bias": {
+    "offset": 432019136,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.15.attn.qkv.weight": {
+    "offset": 432032960,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.15.ln1.bias": {
+    "offset": 447958208,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.15.ln1.weight": {
+    "offset": 447962816,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.15.ln2.bias": {
+    "offset": 447967424,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.15.ln2.weight": {
+    "offset": 447972032,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.15.mlp.fc1.bias": {
+    "offset": 447976640,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.15.mlp.fc1.weight": {
+    "offset": 447993856,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.15.mlp.fc2.bias": {
+    "offset": 467826688,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.15.mlp.fc2.weight": {
+    "offset": 467831296,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.16.attn.proj.bias": {
+    "offset": 487664128,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.16.attn.proj.weight": {
+    "offset": 487668736,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.16.attn.qkv.bias": {
+    "offset": 492977152,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.16.attn.qkv.weight": {
+    "offset": 492990976,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.16.ln1.bias": {
+    "offset": 508916224,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.16.ln1.weight": {
+    "offset": 508920832,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.16.ln2.bias": {
+    "offset": 508925440,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.16.ln2.weight": {
+    "offset": 508930048,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.16.mlp.fc1.bias": {
+    "offset": 508934656,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.16.mlp.fc1.weight": {
+    "offset": 508951872,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.16.mlp.fc2.bias": {
+    "offset": 528784704,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.16.mlp.fc2.weight": {
+    "offset": 528789312,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.17.attn.proj.bias": {
+    "offset": 548622144,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.17.attn.proj.weight": {
+    "offset": 548626752,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.17.attn.qkv.bias": {
+    "offset": 553935168,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.17.attn.qkv.weight": {
+    "offset": 553948992,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.17.ln1.bias": {
+    "offset": 569874240,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.17.ln1.weight": {
+    "offset": 569878848,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.17.ln2.bias": {
+    "offset": 569883456,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.17.ln2.weight": {
+    "offset": 569888064,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.17.mlp.fc1.bias": {
+    "offset": 569892672,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.17.mlp.fc1.weight": {
+    "offset": 569909888,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.17.mlp.fc2.bias": {
+    "offset": 589742720,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.17.mlp.fc2.weight": {
+    "offset": 589747328,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.18.attn.proj.bias": {
+    "offset": 609580160,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.18.attn.proj.weight": {
+    "offset": 609584768,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.18.attn.qkv.bias": {
+    "offset": 614893184,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.18.attn.qkv.weight": {
+    "offset": 614907008,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.18.ln1.bias": {
+    "offset": 630832256,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.18.ln1.weight": {
+    "offset": 630836864,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.18.ln2.bias": {
+    "offset": 630841472,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.18.ln2.weight": {
+    "offset": 630846080,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.18.mlp.fc1.bias": {
+    "offset": 630850688,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.18.mlp.fc1.weight": {
+    "offset": 630867904,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.18.mlp.fc2.bias": {
+    "offset": 650700736,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.18.mlp.fc2.weight": {
+    "offset": 650705344,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.19.attn.proj.bias": {
+    "offset": 670538176,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.19.attn.proj.weight": {
+    "offset": 670542784,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.19.attn.qkv.bias": {
+    "offset": 675851200,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.19.attn.qkv.weight": {
+    "offset": 675865024,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.19.ln1.bias": {
+    "offset": 691790272,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.19.ln1.weight": {
+    "offset": 691794880,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.19.ln2.bias": {
+    "offset": 691799488,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.19.ln2.weight": {
+    "offset": 691804096,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.19.mlp.fc1.bias": {
+    "offset": 691808704,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.19.mlp.fc1.weight": {
+    "offset": 691825920,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.19.mlp.fc2.bias": {
+    "offset": 711658752,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.19.mlp.fc2.weight": {
+    "offset": 711663360,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.2.attn.proj.bias": {
+    "offset": 731496192,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.2.attn.proj.weight": {
+    "offset": 731500800,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.2.attn.qkv.bias": {
+    "offset": 736809216,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.2.attn.qkv.weight": {
+    "offset": 736823040,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.2.ln1.bias": {
+    "offset": 752748288,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.2.ln1.weight": {
+    "offset": 752752896,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.2.ln2.bias": {
+    "offset": 752757504,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.2.ln2.weight": {
+    "offset": 752762112,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.2.mlp.fc1.bias": {
+    "offset": 752766720,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.2.mlp.fc1.weight": {
+    "offset": 752783936,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.2.mlp.fc2.bias": {
+    "offset": 772616768,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.2.mlp.fc2.weight": {
+    "offset": 772621376,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.20.attn.proj.bias": {
+    "offset": 792454208,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.20.attn.proj.weight": {
+    "offset": 792458816,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.20.attn.qkv.bias": {
+    "offset": 797767232,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.20.attn.qkv.weight": {
+    "offset": 797781056,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.20.ln1.bias": {
+    "offset": 813706304,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.20.ln1.weight": {
+    "offset": 813710912,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.20.ln2.bias": {
+    "offset": 813715520,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.20.ln2.weight": {
+    "offset": 813720128,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.20.mlp.fc1.bias": {
+    "offset": 813724736,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.20.mlp.fc1.weight": {
+    "offset": 813741952,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.20.mlp.fc2.bias": {
+    "offset": 833574784,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.20.mlp.fc2.weight": {
+    "offset": 833579392,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.21.attn.proj.bias": {
+    "offset": 853412224,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.21.attn.proj.weight": {
+    "offset": 853416832,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.21.attn.qkv.bias": {
+    "offset": 858725248,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.21.attn.qkv.weight": {
+    "offset": 858739072,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.21.ln1.bias": {
+    "offset": 874664320,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.21.ln1.weight": {
+    "offset": 874668928,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.21.ln2.bias": {
+    "offset": 874673536,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.21.ln2.weight": {
+    "offset": 874678144,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.21.mlp.fc1.bias": {
+    "offset": 874682752,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.21.mlp.fc1.weight": {
+    "offset": 874699968,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.21.mlp.fc2.bias": {
+    "offset": 894532800,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.21.mlp.fc2.weight": {
+    "offset": 894537408,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.22.attn.proj.bias": {
+    "offset": 914370240,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.22.attn.proj.weight": {
+    "offset": 914374848,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.22.attn.qkv.bias": {
+    "offset": 919683264,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.22.attn.qkv.weight": {
+    "offset": 919697088,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.22.ln1.bias": {
+    "offset": 935622336,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.22.ln1.weight": {
+    "offset": 935626944,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.22.ln2.bias": {
+    "offset": 935631552,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.22.ln2.weight": {
+    "offset": 935636160,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.22.mlp.fc1.bias": {
+    "offset": 935640768,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.22.mlp.fc1.weight": {
+    "offset": 935657984,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.22.mlp.fc2.bias": {
+    "offset": 955490816,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.22.mlp.fc2.weight": {
+    "offset": 955495424,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.23.attn.proj.bias": {
+    "offset": 975328256,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.23.attn.proj.weight": {
+    "offset": 975332864,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.23.attn.qkv.bias": {
+    "offset": 980641280,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.23.attn.qkv.weight": {
+    "offset": 980655104,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.23.ln1.bias": {
+    "offset": 996580352,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.23.ln1.weight": {
+    "offset": 996584960,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.23.ln2.bias": {
+    "offset": 996589568,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.23.ln2.weight": {
+    "offset": 996594176,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.23.mlp.fc1.bias": {
+    "offset": 996598784,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.23.mlp.fc1.weight": {
+    "offset": 996616000,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.23.mlp.fc2.bias": {
+    "offset": 1016448832,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.23.mlp.fc2.weight": {
+    "offset": 1016453440,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.24.attn.proj.bias": {
+    "offset": 1036286272,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.24.attn.proj.weight": {
+    "offset": 1036290880,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.24.attn.qkv.bias": {
+    "offset": 1041599296,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.24.attn.qkv.weight": {
+    "offset": 1041613120,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.24.ln1.bias": {
+    "offset": 1057538368,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.24.ln1.weight": {
+    "offset": 1057542976,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.24.ln2.bias": {
+    "offset": 1057547584,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.24.ln2.weight": {
+    "offset": 1057552192,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.24.mlp.fc1.bias": {
+    "offset": 1057556800,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.24.mlp.fc1.weight": {
+    "offset": 1057574016,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.24.mlp.fc2.bias": {
+    "offset": 1077406848,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.24.mlp.fc2.weight": {
+    "offset": 1077411456,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.25.attn.proj.bias": {
+    "offset": 1097244288,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.25.attn.proj.weight": {
+    "offset": 1097248896,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.25.attn.qkv.bias": {
+    "offset": 1102557312,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.25.attn.qkv.weight": {
+    "offset": 1102571136,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.25.ln1.bias": {
+    "offset": 1118496384,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.25.ln1.weight": {
+    "offset": 1118500992,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.25.ln2.bias": {
+    "offset": 1118505600,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.25.ln2.weight": {
+    "offset": 1118510208,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.25.mlp.fc1.bias": {
+    "offset": 1118514816,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.25.mlp.fc1.weight": {
+    "offset": 1118532032,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.25.mlp.fc2.bias": {
+    "offset": 1138364864,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.25.mlp.fc2.weight": {
+    "offset": 1138369472,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.26.attn.proj.bias": {
+    "offset": 1158202304,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.26.attn.proj.weight": {
+    "offset": 1158206912,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.26.attn.qkv.bias": {
+    "offset": 1163515328,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.26.attn.qkv.weight": {
+    "offset": 1163529152,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.26.ln1.bias": {
+    "offset": 1179454400,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.26.ln1.weight": {
+    "offset": 1179459008,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.26.ln2.bias": {
+    "offset": 1179463616,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.26.ln2.weight": {
+    "offset": 1179468224,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.26.mlp.fc1.bias": {
+    "offset": 1179472832,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.26.mlp.fc1.weight": {
+    "offset": 1179490048,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.26.mlp.fc2.bias": {
+    "offset": 1199322880,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.26.mlp.fc2.weight": {
+    "offset": 1199327488,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.3.attn.proj.bias": {
+    "offset": 1219160320,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.3.attn.proj.weight": {
+    "offset": 1219164928,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.3.attn.qkv.bias": {
+    "offset": 1224473344,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.3.attn.qkv.weight": {
+    "offset": 1224487168,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.3.ln1.bias": {
+    "offset": 1240412416,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.3.ln1.weight": {
+    "offset": 1240417024,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.3.ln2.bias": {
+    "offset": 1240421632,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.3.ln2.weight": {
+    "offset": 1240426240,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.3.mlp.fc1.bias": {
+    "offset": 1240430848,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.3.mlp.fc1.weight": {
+    "offset": 1240448064,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.3.mlp.fc2.bias": {
+    "offset": 1260280896,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.3.mlp.fc2.weight": {
+    "offset": 1260285504,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.4.attn.proj.bias": {
+    "offset": 1280118336,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.4.attn.proj.weight": {
+    "offset": 1280122944,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.4.attn.qkv.bias": {
+    "offset": 1285431360,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.4.attn.qkv.weight": {
+    "offset": 1285445184,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.4.ln1.bias": {
+    "offset": 1301370432,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.4.ln1.weight": {
+    "offset": 1301375040,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.4.ln2.bias": {
+    "offset": 1301379648,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.4.ln2.weight": {
+    "offset": 1301384256,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.4.mlp.fc1.bias": {
+    "offset": 1301388864,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.4.mlp.fc1.weight": {
+    "offset": 1301406080,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.4.mlp.fc2.bias": {
+    "offset": 1321238912,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.4.mlp.fc2.weight": {
+    "offset": 1321243520,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.5.attn.proj.bias": {
+    "offset": 1341076352,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.5.attn.proj.weight": {
+    "offset": 1341080960,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.5.attn.qkv.bias": {
+    "offset": 1346389376,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.5.attn.qkv.weight": {
+    "offset": 1346403200,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.5.ln1.bias": {
+    "offset": 1362328448,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.5.ln1.weight": {
+    "offset": 1362333056,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.5.ln2.bias": {
+    "offset": 1362337664,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.5.ln2.weight": {
+    "offset": 1362342272,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.5.mlp.fc1.bias": {
+    "offset": 1362346880,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.5.mlp.fc1.weight": {
+    "offset": 1362364096,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.5.mlp.fc2.bias": {
+    "offset": 1382196928,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.5.mlp.fc2.weight": {
+    "offset": 1382201536,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.6.attn.proj.bias": {
+    "offset": 1402034368,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.6.attn.proj.weight": {
+    "offset": 1402038976,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.6.attn.qkv.bias": {
+    "offset": 1407347392,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.6.attn.qkv.weight": {
+    "offset": 1407361216,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.6.ln1.bias": {
+    "offset": 1423286464,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.6.ln1.weight": {
+    "offset": 1423291072,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.6.ln2.bias": {
+    "offset": 1423295680,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.6.ln2.weight": {
+    "offset": 1423300288,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.6.mlp.fc1.bias": {
+    "offset": 1423304896,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.6.mlp.fc1.weight": {
+    "offset": 1423322112,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.6.mlp.fc2.bias": {
+    "offset": 1443154944,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.6.mlp.fc2.weight": {
+    "offset": 1443159552,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.7.attn.proj.bias": {
+    "offset": 1462992384,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.7.attn.proj.weight": {
+    "offset": 1462996992,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.7.attn.qkv.bias": {
+    "offset": 1468305408,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.7.attn.qkv.weight": {
+    "offset": 1468319232,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.7.ln1.bias": {
+    "offset": 1484244480,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.7.ln1.weight": {
+    "offset": 1484249088,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.7.ln2.bias": {
+    "offset": 1484253696,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.7.ln2.weight": {
+    "offset": 1484258304,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.7.mlp.fc1.bias": {
+    "offset": 1484262912,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.7.mlp.fc1.weight": {
+    "offset": 1484280128,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.7.mlp.fc2.bias": {
+    "offset": 1504112960,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.7.mlp.fc2.weight": {
+    "offset": 1504117568,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.8.attn.proj.bias": {
+    "offset": 1523950400,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.8.attn.proj.weight": {
+    "offset": 1523955008,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.8.attn.qkv.bias": {
+    "offset": 1529263424,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.8.attn.qkv.weight": {
+    "offset": 1529277248,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.8.ln1.bias": {
+    "offset": 1545202496,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.8.ln1.weight": {
+    "offset": 1545207104,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.8.ln2.bias": {
+    "offset": 1545211712,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.8.ln2.weight": {
+    "offset": 1545216320,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.8.mlp.fc1.bias": {
+    "offset": 1545220928,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.8.mlp.fc1.weight": {
+    "offset": 1545238144,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.8.mlp.fc2.bias": {
+    "offset": 1565070976,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.8.mlp.fc2.weight": {
+    "offset": 1565075584,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.9.attn.proj.bias": {
+    "offset": 1584908416,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.9.attn.proj.weight": {
+    "offset": 1584913024,
+    "size_bytes": 5308416,
+    "shape": [
+      1152,
+      1152
+    ],
+    "n_elems": 1327104
+  },
+  "model.vision.blocks.9.attn.qkv.bias": {
+    "offset": 1590221440,
+    "size_bytes": 13824,
+    "shape": [
+      3456
+    ],
+    "n_elems": 3456
+  },
+  "model.vision.blocks.9.attn.qkv.weight": {
+    "offset": 1590235264,
+    "size_bytes": 15925248,
+    "shape": [
+      3456,
+      1152
+    ],
+    "n_elems": 3981312
+  },
+  "model.vision.blocks.9.ln1.bias": {
+    "offset": 1606160512,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.9.ln1.weight": {
+    "offset": 1606165120,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.9.ln2.bias": {
+    "offset": 1606169728,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.9.ln2.weight": {
+    "offset": 1606174336,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.9.mlp.fc1.bias": {
+    "offset": 1606178944,
+    "size_bytes": 17216,
+    "shape": [
+      4304
+    ],
+    "n_elems": 4304
+  },
+  "model.vision.blocks.9.mlp.fc1.weight": {
+    "offset": 1606196160,
+    "size_bytes": 19832832,
+    "shape": [
+      4304,
+      1152
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.blocks.9.mlp.fc2.bias": {
+    "offset": 1626028992,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.blocks.9.mlp.fc2.weight": {
+    "offset": 1626033600,
+    "size_bytes": 19832832,
+    "shape": [
+      1152,
+      4304
+    ],
+    "n_elems": 4958208
+  },
+  "model.vision.patch_emb.bias": {
+    "offset": 1645866432,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.patch_emb.weight": {
+    "offset": 1645871040,
+    "size_bytes": 2709504,
+    "shape": [
+      1152,
+      588
+    ],
+    "n_elems": 677376
+  },
+  "model.vision.pos_emb": {
+    "offset": 1648580544,
+    "size_bytes": 3359232,
+    "shape": [
+      1,
+      729,
+      1152
+    ],
+    "n_elems": 839808
+  },
+  "model.vision.post_ln.bias": {
+    "offset": 1651939776,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.post_ln.weight": {
+    "offset": 1651944384,
+    "size_bytes": 4608,
+    "shape": [
+      1152
+    ],
+    "n_elems": 1152
+  },
+  "model.vision.proj_mlp.fc1.bias": {
+    "offset": 1651948992,
+    "size_bytes": 32768,
+    "shape": [
+      8192
+    ],
+    "n_elems": 8192
+  },
+  "model.vision.proj_mlp.fc1.weight": {
+    "offset": 1651981760,
+    "size_bytes": 75497472,
+    "shape": [
+      8192,
+      2304
+    ],
+    "n_elems": 18874368
+  },
+  "model.vision.proj_mlp.fc2.bias": {
+    "offset": 1727479232,
+    "size_bytes": 8192,
+    "shape": [
+      2048
+    ],
+    "n_elems": 2048
+  },
+  "model.vision.proj_mlp.fc2.weight": {
+    "offset": 1727487424,
+    "size_bytes": 67108864,
+    "shape": [
+      2048,
+      8192
+    ],
+    "n_elems": 16777216
+  }
+}
