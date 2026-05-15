@@ -739,6 +739,13 @@ int main(int argc, char **argv) {
     }
     memcpy(residual, x, np * D_MODEL * sizeof(float));
 
+    // Debug: embedding stats
+    { float esum=0, emax=-1e30, emin=1e30;
+      for (int i = 0; i < np * D_MODEL; i++) { esum += fabsf(x[i]); if(x[i]>emax)emax=x[i]; if(x[i]<emin)emin=x[i]; }
+      printf("  Embd stats: mean|%.4f max|%.4f min|%.4f (norm=%.4f)\n", esum/(np*D_MODEL), emax, emin,
+             sqrtf(esum*esum/(np*D_MODEL)));
+    }
+
     for (int l = 0; l < mdl.n_layers; l++) {
         double tl = now_sec();
         layer_ctx_t *ly = &lc[l];
@@ -871,8 +878,32 @@ int main(int argc, char **argv) {
             if (has_nan) printf("  L%d NaN\n", l);
         }
 
+        // Debug: dump layer 0 hidden state stats
+        if (l == 0) {
+            float sum=0, maxv=-1e30, minv=1e30;
+            for (int i = 0; i < np * D_MODEL; i++) {
+                sum += fabsf(attn[i]);
+                if (attn[i] > maxv) maxv = attn[i];
+                if (attn[i] < minv) minv = attn[i];
+            }
+            printf("  L0 attn_out: mean|%.4f max|%.4f min|%.4f\n", sum/(np*D_MODEL), maxv, minv);
+        }
+
         // Residual
         for (int i = 0; i < np * D_MODEL; i++) residual[i] += attn[i];
+
+        // Dump layer 0 residual stats
+        if (l == 0) {
+            float minv = 1e30, maxv = -1e30, sum = 0, sumsq = 0;
+            for (int i = 0; i < np * D_MODEL; i++) {
+                if (residual[i] < minv) minv = residual[i];
+                if (residual[i] > maxv) maxv = residual[i];
+                sum += residual[i];
+                sumsq += residual[i] * residual[i];
+            }
+            printf("  L%d residual: min=%.4f max=%.4f mean=%.4f rms=%.4f\n",
+                   l, minv, maxv, sum/(np*D_MODEL), sqrtf(sumsq/(np*D_MODEL)));
+        }
 
         // Post-attention RMSNorm
         wubu_rms_norm(1, np, D_MODEL, residual, mdl.layers[l].post_attn_norm_weight, 1e-6f, normed);
