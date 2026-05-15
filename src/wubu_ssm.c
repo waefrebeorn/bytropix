@@ -2,6 +2,7 @@
 #include "wubu_mobius.h"
 #include "gguf_reader.h"
 #include "thread_pool.h"
+#include <omp.h>
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
@@ -189,6 +190,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * D_MODEL;
         float *qkv_s = qkv_all + s * C;
+        #pragma omp parallel for
         for (int j = 0; j < C; j++) {
             float sum = 0.0f;
             for (int i = 0; i < D_MODEL; i++) {
@@ -199,6 +201,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
     
     // Step 2: z gate projection
+    #pragma omp parallel for
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * D_MODEL;
         float *z_s = z_all + s * VALUE_DIM;
@@ -212,6 +215,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
     
     // Step 3: beta/alpha projections
+    #pragma omp parallel for
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * D_MODEL;
         float *beta_s = beta_raw + s * DT_RANK;
@@ -400,6 +404,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
     for (int s = 0; s < N; s++) {
         const float *inp = delta_out + s * VALUE_DIM;
         float *out = output + s * D_MODEL;
+        #pragma omp parallel for
         for (int j = 0; j < D_MODEL; j++) {
             float sum = 0.0f;
             for (int i = 0; i < VALUE_DIM; i++) {
@@ -1000,6 +1005,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
         const float *x_s = x + s * D_MODEL;
         int q_offset = s * q_dim * 2;  // FIXED: was s * q_dim
         // Q projection (first half of fused weight)
+        #pragma omp parallel for
         for (int j = 0; j < q_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
@@ -1007,6 +1013,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
             Q_full[q_offset + j] = (float)sum;
         }
         // Gate projection (second half of fused weight)
+        #pragma omp parallel for
         for (int j = 0; j < q_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
@@ -1051,12 +1058,14 @@ void wubu_gqa_forward(const float *x, int B, int T,
     // (kv_dim defined above)
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * D_MODEL;
+        #pragma omp parallel for
         for (int j = 0; j < kv_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
                 sum += (double)x_s[i] * (double)w->attn_k_weight[i * kv_dim + j];
             K[s * kv_dim + j] = (float)sum;
         }
+        #pragma omp parallel for
         for (int j = 0; j < kv_dim; j++) {
             float sum = 0.0f;
             for (int i = 0; i < D_MODEL; i++)
@@ -1184,6 +1193,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
     for (int s = 0; s < N; s++) {
         const float *inp = attn_out + s * q_dim;
         float *out = output + s * D_MODEL;
+        #pragma omp parallel for
         for (int j = 0; j < D_MODEL; j++) {
             float sum = 0.0f;
             for (int i = 0; i < q_dim; i++)
