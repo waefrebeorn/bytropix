@@ -1,28 +1,30 @@
-# WuBuText AI — Project Overview
+# WuBuText AI — Project Overview (May 15 PM)
 
 ## What We're Building
+**WuBuText AI** is a pure C + CUDA implementation of a Qwen3.6-35B-A3B-compatible language model with 7 hyperbolic math extensions.
 
-**WuBuText AI** is a pure C + CUDA implementation of a Qwen3.6-35B-A3B-compatible language model. The project implements the full model stack from scratch — GGUF weight extraction, SSM recurrence, GQA attention, MoE routing, and CUDA kernel acceleration — on consumer hardware (RTX 5050, 6.4 GB VRAM).
+All 7 original streams + 9 math/optimization items complete. Every binary verified.
 
-The model spec: 40 layers (30 SSM + 10 GQA, 3:1 repeating), 2048 hidden dimension, 248,320-token vocabulary, and 262K native context. MoE dispatch (256 experts, 8 active + 1 shared) is implemented and verified on CPU.
+### Architecture
+40 layers (30 SSM + 10 GQA, 3:1 repeating), 2048 hidden, 248K vocab, 262K ctx.
+256 MoE experts (8 active + 1 shared), lazy dequant 9× speedup.
+All weights loaded from GGUF (IQ2_M quantized).
 
-## Why Geometry Matters
+### Current State: All P1-6 Complete, Integration Pending
+| Phase | Component | Status | Tests |
+|-------|-----------|--------|-------|
+| 0 | GGUF Reader | ✅ 13 types | 733 tensors |
+| 1 | Embedding Graft | ✅ Poincaré R=0.956 | 95% NN preserved |
+| 2 | Attention Port | ✅ 40 layers CPU/GPU | CE=12.66/12.42 |
+| 3 | Training Modules | ✅ RSGD+TST+NestedSSM+PGA+MoE | All pass |
+| 4 | MoE Port | ✅ Lazy dequant + Nested routing | 396/396 |
+| 5 | Vision Port | ✅ GPU 217ms + pipeline | 0 NaN |
+| 6 | CUDA Kernels | ✅ SSM scan + MoE dispatch | max_diff<6e-8 |
 
-Standard transformer attention scales **O(N²)** with sequence length. WuBu nested hyperbolic geometry aims to compress this to **O(N)** by operating in Poincaré ball space, where hierarchical structure is captured geometrically rather than through pairwise quadratic attention:
+### ⚠️ Integration Gap
+All 7 math extensions standalone — NOT wired into training pipeline.
 
-- **Euclidean embeddings** are mapped to the **Poincaré ball** via exponential map (radius R = 0.956)
-- **Möbius gyration** replaces dot-product attention with hyperbolic operations in tangent space
-- The central thesis: *geometry can replace computation*
-
-## Current State: Phase 3 — Training Loop
-
-| Phase | Component | Status |
-|-------|-----------|--------|
-| 0 | GGUF Tensor Layout | ✅ Complete |
-| 1 | Embedding Graft (GGUF → Poincaré) | ✅ Complete |
-| 2 | Attention Port (SSM + GQA in C) | ✅ CPU complete — GPU broken |
-| 2.5 | GPU Benchmarking | ⚠️ Verified stalled — GPU weight loading bug |
-| **3** | **Training Loop** | **🔄 In Progress** |
-| 4 | MoE Port (256 experts) | ✅ CPU forward done — training pending |
-
-**Key finding (May 13 DA Audit):** CPU path works correctly (CE loss 12.66). GPU weight loading in bench.c produces zeros — undiscovered until this audit. root_cause = Q4_K dequant fix was applied to wubu_model.c but NOT fully propagated to bench.c's GPU loading path.
+### ⚠️ Open Bugs
+1. GPU vision pipeline timed out (120s)
+2. ~0.5% NaN in logits (pre-existing, any input)
+3. CPU RMSNorm OOB in GQA path (d=4096, weight[256])

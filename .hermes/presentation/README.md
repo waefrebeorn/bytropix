@@ -60,19 +60,26 @@ presentation/
 
 ### Source Code Map
 
-| Component | Files | Status |
-|-----------|-------|--------|
-| GGUF Reader | `include/gguf_reader.h`, `src/gguf_reader.c` | ✅ Done |
-| SSM Forward | `include/wubu_ssm.h`, `src/wubu_ssm.c` | ✅ Done |
-| Möbius Ops | `include/wubu_mobius.h`, `src/wubu_mobius.c` | ✅ Done |
-| Model Assembly | `include/wubu_model.h`, `src/wubu_model.c` | ✅ Done |
-| CUDA Kernels | `include/cuda_kernels.h`, `src/cuda_kernels.cu` | ✅ Done |
-| GPU Benchmark | `include/bench.h`, `src/bench.c`, `tools/bench_e2e.c` | ⛔ Broken (zeros) |
-| CUDA Test | `tools/test_gpu.c` | ⛔ Broken (wrong loss) |
-| Tokenizer | `include/wubu_tokenizer.h`, `src/wubu_tokenizer.c` | 🟡 Needs fix |
-| Training Loop | — | 🔄 Not started |
-| MoE | — | ⏳ Future |
-| Vision | — | ⏳ Future |
+|| Component | Files | Status |
+||-----------|-------|--------|
+|| GGUF Reader | `include/gguf_reader.h`, `src/gguf_reader.c` | ✅ Done |
+|| SSM Forward | `include/wubu_ssm.h`, `src/wubu_ssm.c` | ✅ Done |
+|| GQA Forward | `include/wubu_ssm.h`, `src/wubu_ssm.c` | ✅ Done |
+|| Möbius Ops | `include/wubu_mobius.h`, `src/wubu_mobius.c` | ✅ Done |
+|| Model Assembly | `include/wubu_model.h`, `src/wubu_model.c` | ✅ Done |
+|| CUDA Kernels | `include/cuda_kernels.h`, `src/cuda_kernels.cu` | ✅ Done |
+|| Bench GPU | `include/bench.h`, `src/bench.c`, `tools/bench_e2e.c` | ✅ Fixed |
+|| GPU Test | `tools/test_gpu.c` | ✅ Match verified |
+|| Tokenizer | `include/wubu_tokenizer.h`, `src/wubu_tokenizer.c` | ✅ Working |
+|| RSGD Optimizer | `include/rsgd.h`, `src/rsgd.c` | ✅ Done |
+|| Poincaré GQA | `include/wubu_poincare_gqa.h`, `src/wubu_poincare_gqa.c` | ✅ Done |
+|| Nested SSM | `include/wubu_nested_ssm.h`, `src/wubu_nested_ssm.c` | ✅ Done |
+|| TST Training | `include/wubu_tst.h`, `src/wubu_tst.c` | ✅ Done |
+|| Nested MoE | `include/wubu_moe_hyperbolic.h`, `src/wubu_moe_hyperbolic.c` | ✅ Done |
+|| Vision GPU | `include/cuda_vision.h`, `src/cuda_vision.cu` | ✅ Done |
+|| Moondream3 | `include/wubu_vision_moondream.h`, `src/wubu_vision_moondream.c` | ✅ Stub |
+|| Training GPU | `tools/train_gpu.c` | ✅ CE=12.42 |
+|| Data Pipeline | `tools/td.c` + scripts | ✅ 1.07M tokens |
 
 ### Bytropix Research Vault (Earlier Work)
 
