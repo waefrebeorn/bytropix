@@ -348,17 +348,10 @@ void wubu_ssm_forward(const float *x, int B, int T,
                     diff[i] = v_vh[i] - hk[i];
                 }
                 
-                // Step 8d: update = outer(k, diff) * beta + state
+                // State update with diff
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     for (int j = 0; j < SSM_D_STATE; j++) {
                         h[i * SSM_D_STATE + j] += k_vh[i] * diff[j] * bg;
-                    }
-                }
-                
-                // TGT: wrap state entries to prevent float32 overflow
-                for (int i = 0; i < SSM_D_STATE; i++) {
-                    for (int j = 0; j < SSM_D_STATE; j++) {
-                        h[i * SSM_D_STATE + j] = tgt_wrap(h[i * SSM_D_STATE + j]);
                     }
                 }
                 
