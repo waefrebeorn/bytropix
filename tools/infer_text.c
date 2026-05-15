@@ -15,18 +15,13 @@
 #include "wubu_ssm.h"
 #include "wubu_tokenizer.h"
 #include "gguf_reader.h"
+#include "bench.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
 #include <signal.h>
-
-static double now_sec(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec * 1e-9;
-}
 
 // Load token_embd.weight from GGUF
 static float *load_embeddings(gguf_ctx *ctx, int *vocab_size) {
@@ -84,7 +79,7 @@ static volatile int stop_requested = 0;
 static void sigint_handler(int sig) { (void)sig; stop_requested = 1; }
 
 int main(int argc, char **argv) {
-    const char *path = argc > 1 ? argv[1]
+    const char *path = (argc > 1 && strlen(argv[1]) > 0) ? argv[1]
         : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *prompt = argc > 2 ? argv[2] : "The meaning of life is";
     int max_tokens = argc > 3 ? atoi(argv[3]) : 64;
@@ -136,7 +131,28 @@ int main(int argc, char **argv) {
     }
     printf("Embeddings: %.2f s\n", now_sec() - t0);
 
-    // ===== 5. MoE quant metadata =====
+    // ===== 5. GPU init + upload output weight =====
+    t0 = now_sec();
+    cublasHandle_t cublas_h = NULL;
+    cudaStream_t stream = NULL;
+    float *d_output_weight = NULL;
+    float *d_hidden = NULL;
+    float *d_logits_gpu = NULL;
+    int use_gpu_proj = 0;
+    if (model.output_weight && vocab_size > 0) {
+        cublasCreate(&cublas_h);
+        cudaStreamCreate(&stream);
+        d_output_weight = gpu_upload_output_weight(cublas_h, model.output_weight, vocab_size, stream);
+        cudaMalloc((void**)&d_hidden, D_MODEL * sizeof(float));
+        cudaMalloc((void**)&d_logits_gpu, vocab_size * sizeof(float));
+        use_gpu_proj = 1;
+        printf("GPU output projection: %.2f s (weight=%ld MB)\n", now_sec() - t0,
+               (int64_t)D_MODEL * vocab_size * sizeof(float) / (1024*1024));
+    } else {
+        printf("GPU output projection: disabled (no output_weight)\n");
+    }
+
+    // ===== 6. MoE quant metadata =====
     int moe_enabled = 0;
     if (getenv("MOE")) moe_enabled = atoi(getenv("MOE"));
     int moe_max_layers = 0;
@@ -258,9 +274,17 @@ int main(int argc, char **argv) {
             memcpy(x, normed, N * D_MODEL * sizeof(float));
         }
 
-        // Output projection: last token
+        // Output projection: last token (GPU accelerated)
         const float *h_last = x + (cur_T - 1) * D_MODEL;
-        if (model.output_weight) {
+        if (use_gpu_proj && d_output_weight) {
+            cudaMemcpyAsync(d_hidden, h_last, D_MODEL * sizeof(float),
+                           cudaMemcpyHostToDevice, stream);
+            gpu_output_projection(cublas_h, stream, d_hidden, 1, 1,
+                                  d_output_weight, vocab_size, d_logits_gpu);
+            cudaMemcpyAsync(logits, d_logits_gpu, vocab_size * sizeof(float),
+                           cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+        } else if (model.output_weight) {
             for (int j = 0; j < vocab_size; j++) {
                 double sum = 0.0;
                 for (int k = 0; k < D_MODEL; k++)
@@ -306,6 +330,13 @@ int main(int argc, char **argv) {
     free(logits);
     free(all_ids);
     free(moe_info);
+    if (use_gpu_proj) {
+        gpu_free_output_weight(d_output_weight);
+        cudaFree(d_hidden);
+        cudaFree(d_logits_gpu);
+        cudaStreamDestroy(stream);
+        cublasDestroy(cublas_h);
+    }
     wubu_model_free(&model);
     wubu_tokenizer_free(&tok);
 

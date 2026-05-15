@@ -3,6 +3,44 @@
 #include <cublas_v2.h>
 
 // ================================================================
+// GPU Output Projection — hidden @ output_weight^T via cuBLAS
+// ================================================================
+float* gpu_upload_output_weight(cublasHandle_t handle, const float *host_weight,
+                                 int vocab_size, cudaStream_t stream) {
+    int64_t n = (int64_t)D_MODEL * vocab_size;
+    float *d_w;
+    cudaMalloc((void**)&d_w, n * sizeof(float));
+    cudaMemcpyAsync(d_w, host_weight, n * sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaStreamSynchronize(stream);
+    return d_w;
+}
+
+void gpu_output_projection(cublasHandle_t handle, cudaStream_t stream,
+                           const float *d_hidden, int B, int T,
+                           const float *d_output_weight, int vocab_size,
+                           float *d_logits) {
+    int N = B * T;
+    float alpha = 1.0f, beta = 0.0f;
+    // d_hidden: [N, D_MODEL] row-major → col-major is [D_MODEL, N]
+    // We want op(A) = d_hidden^T, using CUBLAS_OP_T
+    // A (stored) is [D_MODEL, N] col-major, ldA=D_MODEL
+    // C = A^T * B where A^T is [N, D_MODEL], B is [D_MODEL, vocab_size]
+    // Result: C[N, vocab_size] = hidden[N, D_MODEL] @ weight[D_MODEL, vocab_size]
+    cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                N, vocab_size, D_MODEL,
+                &alpha,
+                d_hidden, D_MODEL,
+                d_output_weight, D_MODEL,
+                &beta,
+                d_logits, vocab_size);
+    cudaStreamSynchronize(stream);
+}
+
+void gpu_free_output_weight(float *d_weight) {
+    if (d_weight) cudaFree(d_weight);
+}
+
+// ================================================================
 // GPU SSM Layer Forward Pass
 // ================================================================
 void gpu_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,

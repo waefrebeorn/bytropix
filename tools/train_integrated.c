@@ -603,8 +603,8 @@ int main(int argc, char **argv) {
                     d_q_w, d_k_w, d_v_w,
                     d_qn_w, d_kn_w, d_out_w);
                 
-                // Clip + update weights
-                float lr_gqa = lr * 0.01f;
+                // Clip + update weights (lr_gqa = lr * 0.001 for PGA stability)
+                float lr_gqa = lr * 0.001f;
                 float max_g = 0;
                 for(int64_t i=0; i<wQ; i++){float v=fabsf(d_q_w[i]);if(v>max_g)max_g=v;}
                 for(int64_t i=0; i<wK; i++){float v=fabsf(d_k_w[i]);if(v>max_g)max_g=v;}
