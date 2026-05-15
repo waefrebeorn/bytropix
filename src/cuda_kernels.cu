@@ -1608,9 +1608,6 @@ void wubu_cuda_moe_dispatch(cublasHandle_t handle, cudaStream_t stream,
         int total_assigned = offsets[N_EXPERTS];
         cudaMemcpyAsync(d_expert_offsets, offsets, N_EXPERTS * sizeof(int),
                         cudaMemcpyHostToDevice, stream);
-        // Also store total_assigned in d_expert_offsets + N_EXPERTS as a sentinel
-        cudaMemcpyAsync(d_expert_offsets + N_EXPERTS, &total_assigned, sizeof(int),
-                        cudaMemcpyHostToDevice, stream);
 
         // Step 3: Scatter tokens into permuted buffer
         moe_scatter_kernel<<<grid_hist, block, 0, stream>>>(
@@ -1654,12 +1651,8 @@ void wubu_cuda_moe_dispatch(cublasHandle_t handle, cudaStream_t stream,
         }
 
         // Step 5: Scatter back weighted outputs to original token positions
-        int total_assigned_final = 0;
-        if (N_EXPERTS > 0) {
-            cudaMemcpyAsync(&total_assigned_final, d_expert_offsets + N_EXPERTS,
-                            sizeof(int), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-        }
+        // total_assigned is already computed on host at line offsets[N_EXPERTS]
+        int total_assigned_final = total_assigned;
         cudaMemsetAsync(d_output, 0, N * D_MODEL * sizeof(float), stream);
         if (total_assigned_final > 0) {
             int g_sb = (total_assigned_final * D_MODEL + 255) / 256;
