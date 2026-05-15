@@ -205,6 +205,18 @@ void gpu_output_projection(cublasHandle_t handle, cudaStream_t stream,
                            float *d_logits);
 void gpu_free_output_weight(float *d_weight);
 
+// CUDA kernel for output projection (replaces cuBLAS path)
+#ifdef __cplusplus
+extern "C" {
+#endif
+void launch_output_proj_kernel(cudaStream_t stream,
+                               const float *d_hidden, int D,
+                               const float *d_output_weight, int64_t V,
+                               float *d_logits);
+#ifdef __cplusplus
+}
+#endif
+
 // ================================================================
 // GPU Poincaré SSM forward pass (same interface + float R)
 // ================================================================
