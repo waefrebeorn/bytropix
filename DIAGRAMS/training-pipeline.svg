@@ -199,4 +199,5 @@
   <!-- Mini legend at bottom of side panel -->
   <line x1="800" y1="760" x2="1040" y2="760" stroke="#30363d" stroke-width="1"/>
   <text x="800" y="778" fill="#484848" font-size="9">Δ 40-layer hybrid · 8/256 MoE · Poincaré geom.</text>
+  <text x="800" y="796" fill="#f85149" font-size="10" font-weight="bold">⚠️ HONEST: INFERENCE BROKEN (May 16). See phase-roadmap.svg</text>
 </svg>

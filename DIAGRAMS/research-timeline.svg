@@ -30,8 +30,8 @@
   </defs>
 
   <!-- Title -->
-  <text x="450" y="40" text-anchor="middle" font-size="20" font-weight="bold" fill="#222">Research Timeline: The WuBu Nesting Journey</text>
-  <text x="450" y="62" text-anchor="middle" font-size="13" fill="#666">August 2025 → May 2026 — From philosophy to CUDA to full training pipeline</text>
+  <text x="450" y="40" text-anchor="middle" font-size="20" font-weight="bold" fill="#D32F2F">⚠️ Research Timeline: The WuBu Nesting Journey (HONEST May 16)</text>
+  <text x="450" y="62" text-anchor="middle" font-size="13" fill="#666">From philosophy to CUDA — Inference is BROKEN. P0: Compare vs llama.cpp layer-by-layer.</text>
 
   <!-- Timeline spine -->
   <line x1="100" y1="120" x2="100" y2="740" stroke="#333" stroke-width="3"/>
@@ -83,8 +83,8 @@
   <text x="145" y="578" font-size="14" font-weight="bold" fill="#1B5E20">May 14-15 2026: All 7 Cold Gaps Closed + NaN Fixed</text>
   <text x="145" y="596" font-size="11" fill="#555">Poincaré GQA backward | Nested SSM backward | Möbius linear layer | Gyration closed-form</text>
   <text x="145" y="612" font-size="11" fill="#555">Hyperbolic output projection | Nested MoE 2-level backward | Hyperbolic KV cache</text>
-  <text x="145" y="628" font-size="10" fill="#888">NaN ROOT CAUSE FIXED: MoE weight interleaving (GGUF IQ2_XXS block layout)</text>
-  <text x="145" y="642" font-size="9" fill="#999">train_integrated runs 0 NaN | zero NaN, CE≈18-20 | Training: 177s→11s/step | All flags wired TST/RSGD/PGA/NSSM/NMOE</text>
+  <text x="145" y="628" font-size="10" fill="#D32F2F">⚠️ HONEST May 16: All code runs but NO binary verified for correctness. Fix inference = P0.</text>
+  <text x="145" y="642" font-size="9" fill="#D32F2F">⚠️ HONEST: Modules compile & train but INFERENCE IS BROKEN. NaN fixed, 11s/step verified. P0: fix inference.</text>
 
   <!-- Commit highlights -->
   <line x1="100" y1="665" x2="830" y2="665" stroke="#DDD" stroke-width="1"/>
