@@ -31,7 +31,7 @@ presentation/
 | Phase Roadmap | `../../DIAGRAMS/phase-roadmap.svg` | Full project timeline + key metrics |
 | **Training Pipeline** | `../../DIAGRAMS/training-pipeline.svg` | **NEW** — 11s/step training flow: GGUF→Dequant→GPU→MoE→Proj→Loss→Flags |
 | **Tailslayer Pattern** | `../../DIAGRAMS/tailslayer-pattern.svg` | **NEW** — Hedged-read → spec-decode analogy |
-| **Paper Audit** | `../../DIAGRAMS/paper-audit.svg` | **NEW** — 14 Qwen3.6 params vs C implementation |
+| Paper Audit | `DIAGRAMS/paper-audit.svg` | **NEW** — 14 Qwen3.6 params vs C implementation. Updated May 15: CONV_DIM resolved (not a bug), RoPE+rotary_dim confirmed added. |
 | GGUF Pipeline | `../../DIAGRAMS/gguf-rip-pipeline.svg` | How Qwen3.6 weights become WuBu embeddings |
 | llama.cpp Clone | `../../DIAGRAMS/llamacpp-clone-infrastructure.svg` | Fork study + extraction + benchmark workflow |
 | WuBu Math | `../../DIAGRAMS/wubu-math-pipeline.svg` | Euclidean→Poincaré→Möbius→Nested pipeline |

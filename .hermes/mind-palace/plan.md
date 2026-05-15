@@ -14,6 +14,14 @@ Current MoE on CPU forces per-layer `cudaStreamSynchronize`. Moving to GPU elimi
 - **Impact:** Estimated 11s → ~3s/step (eliminate 40 sync points)
 - **Risk:** 3GB full expert buffer doesn't fit VRAM → need sparse upload
 
+### P0.5 — RoPE Verification (added May 15)
+Standard RoPE (θ=10M, rotary_dim=64) added to GPU GQA forward. Needs verification:
+- **Build:** `make train_integrated` (already compiles with RoPE)
+- **Test:** Forward pass with PGA=0 should now have positional encoding
+- **Verify:** Compare attention scores with and without RoPE — scores should differ by position
+- **Kernel:** `apply_rotary_qk_kernel` in cuda_kernels.cu, wired into both `wubu_cuda_gqa_forward` and `gpu_gqa_forward_save`
+- **Docs corrected:** CONV_DIM=8192 is correct (QKV projection output, not an error)
+
 ### P1 — PGA LR Tuning
 PGA backward gradients extreme (dQ=1.95, dK=0.004, dV=0.70, dX=571). Current lr_gqa=lr*0.01=1e-5 too high.
 - **Fix:** Try lr_gqa = lr * 0.001 or gradient clipping at norm=1.0

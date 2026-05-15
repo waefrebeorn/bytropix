@@ -20,7 +20,7 @@ extern "C" {
 #define SSM_D_STATE 128    // SSM state dimension (head_k_dim = head_v_dim)
 #define KEY_DIM     (SSM_D_STATE * SSM_K_HEADS)   // 2048
 #define VALUE_DIM   (SSM_D_STATE * SSM_V_HEADS)   // 4096
-#define CONV_DIM    (KEY_DIM * 2 + VALUE_DIM)     // 8192
+#define CONV_DIM    (KEY_DIM * 2 + VALUE_DIM)     // 8192 = Q(2048)+K(2048)+V(4096)
 #define CONV_KERNEL 4      // conv1d kernel size
 #define DT_RANK     32     // ssm_time_step_rank
 
@@ -28,6 +28,11 @@ extern "C" {
 #define GQA_Q_HEADS    16
 #define GQA_KV_HEADS   2
 #define GQA_HEAD_DIM   256
+
+// RoPE parameters (from Qwen3.6-35B config.json)
+#define ROPE_THETA          10000000.0f  // rope_theta
+#define PARTIAL_ROTARY_FACTOR 0.25f     // partial_rotary_factor
+#define ROTARY_DIM          ((int)(GQA_HEAD_DIM * PARTIAL_ROTARY_FACTOR))  // 64
 
 // All weights for one SSM layer
 typedef struct {

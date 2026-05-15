@@ -189,7 +189,19 @@ void wubu_cuda_gqa_forward(cublasHandle_t handle, cudaStream_t stream,
     const float *d_K_norm_w,    // [HEAD_DIM]
     const float *d_output_w,    // [q_dim, D_MODEL]
     float *d_output,            // [N, D_MODEL] — final output
-    float *d_scratch);          // [N, q_dim] — temp for attention out
+    float *d_scratch,           // [N, q_dim] — temp for attention out
+    const float *d_sincos);     // [T, ROTARY_DIM] — RoPE sin/cos table, or NULL to skip
+
+// Precompute rotary position frequencies (sin/cos) for RoPE
+// d_sincos: [T, ROTARY_DIM] — output buffer (caller allocates)
+void wubu_cuda_precompute_rotary(int T, float *d_sincos, cudaStream_t stream);
+
+// Apply RoPE to Q [N, Q_HEADS, HEAD_DIM] and K [N, KV_HEADS, HEAD_DIM] in-place
+// Applies rotary to first ROTARY_DIM dimensions of each head.
+// d_sincos: [T, ROTARY_DIM] — precomputed sin/cos (pair-duplicated for interleaved)
+void wubu_cuda_apply_rotary_to_qk(float *d_Q, float *d_K,
+    int B, int T, int n_q_heads, int n_kv_heads, int head_dim,
+    const float *d_sincos, cudaStream_t stream);
 
 // GQA attention only (assumes Q/K already RMSNorm'd)
 void wubu_cuda_gqa_attention_only(cublasHandle_t handle, cudaStream_t stream,

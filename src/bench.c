@@ -286,7 +286,7 @@ void gpu_gqa_forward(cublasHandle_t cublas_h, cudaStream_t stream,
         d_Q_full, d_K, d_V,
         d_q_norm_w, d_k_norm_w,
         d_attn_out_w,
-        d_output, d_scratch);
+        d_output, d_scratch, NULL);
 
     cudaStreamSynchronize(stream);
 }
@@ -353,10 +353,21 @@ void gpu_gqa_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
     wubu_cuda_rms_norm(B, T, GQA_KV_HEADS * head_dim, d_K, d_k_norm_w, 1e-6f, d_K, stream);
     cudaStreamSynchronize(stream);
 
-    // Save K_norm (if requested)
+    // Save K_norm (pre-RoPE) if requested — used by backward
     if (d_K_norm_save)
         cudaMemcpyAsync(d_K_norm_save, d_K, N * kv_dim * sizeof(float),
                        cudaMemcpyDeviceToDevice, stream);
+
+    // Step 5.5: Apply RoPE to RMSNorm'd Q and K (in-place)
+    float *d_sincos = NULL;
+    cudaMalloc((void**)&d_sincos, T * ROTARY_DIM * sizeof(float));
+    if (d_sincos) {
+        wubu_cuda_precompute_rotary(T, d_sincos, stream);
+        cudaStreamSynchronize(stream);
+        wubu_cuda_apply_rotary_to_qk((float*)d_scratch, (float*)d_K,
+            B, T, GQA_Q_HEADS, GQA_KV_HEADS, head_dim, d_sincos, stream);
+        cudaFree(d_sincos);
+    }
 
     // Step 6: Causal attention
     // d_scratch (Q_norm) is input, d_scratch output (attn_out pre-gate)

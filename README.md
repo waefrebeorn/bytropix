@@ -207,15 +207,16 @@ This project started as a pure theory: **WuBu Nesting** — nested hyperbolic sp
 | GQA KV heads | 2 (8:1 ratio) | `GQA_KV_HEADS=2` | ✅ Match |
 | SSM K/V heads | 16 K, 32 V | `SSM_K_HEADS=16, SSM_V_HEADS=32` | ✅ Match |
 | Conv kernel | 4 | `CONV_KERNEL=4` | ✅ Match |
-| Conv dim | 1536 | `CONV_DIM=8192` | ❌ Discrepancy |
+| Conv dim (QKV output) | 8192 | `CONV_DIM=8192` | ✅ Match (Q2048+K2048+V4096) |
 | MoE experts | 256 | `N_EXPERTS=256` | ✅ Match |
 | Active experts | 8 | `N_ACTIVE_EXPTS=8` | ✅ Match |
 | Expert FFN dim | 512 | `D_FF=512` | ✅ Match |
-| RoPE theta | 10,000,000 | Code constant | 🔍 Verify |
-| Partial RoPE | 0.25 (64/256) | Code constant | 🔍 Verify |
+| RoPE theta | 10,000,000 | `ROPE_THETA` defined | ✅ **Fixed May 15** |
+| Partial RoPE | 0.25 (64/256) | `ROTARY_DIM=64` | ✅ **Fixed May 15** |
 | MRoPE 3D | section=[11,11,10] | ❌ Missing | Implement P2 |
 | MTP head | 1 layer | ❌ Missing | Implement P3 |
-| bos/eos | both 248044 | Tokenizer | 🔍 Verify |
+| bos/eos | both 248044 | Tokenizer reads GGUF | ✅ Match |
+| rms_norm_eps | 1e-06 | `1e-6f` constant | ✅ Match |
 
 ---
 

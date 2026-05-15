@@ -742,6 +742,90 @@ void wubu_cuda_to_host(const float *dev, float *host, size_t n_bytes, cudaStream
 }
 
 // ================================================================
+// RoPE: Rotary Position Embedding (from Qwen3.6 config.json)
+//   rope_theta = 10,000,000
+//   partial_rotary_factor = 0.25 → ROTARY_DIM = 64 (out of 256 head_dim)
+// ================================================================
+
+// Precompute sin/cos for positions 0..T-1, dimension 0..ROTARY_DIM-1
+// Output layout: sincos[pos * ROTARY_DIM + i] = sin(pos * theta_i) for even i, cos for odd i
+// Where theta_i = rope_theta^(-2*floor(i/2)/ROTARY_DIM)
+__global__ void precompute_rotary_kernel(float *sincos, int T) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = T * ROTARY_DIM;
+    if (idx >= total) return;
+    int pos = idx / ROTARY_DIM;
+    int dim = idx % ROTARY_DIM;
+    int half = dim / 2;
+    float theta = powf(ROPE_THETA, -2.0f * half / ROTARY_DIM);
+    float angle = pos * theta;
+    // For each pair (2i, 2i+1): dim%2==0 → sin, dim%2==1 → cos
+    sincos[idx] = (dim % 2 == 0) ? sinf(angle) : cosf(angle);
+}
+
+void wubu_cuda_precompute_rotary(int T, float *d_sincos, cudaStream_t stream) {
+    int total = T * ROTARY_DIM;
+    int block = 256;
+    int grid = (total + block - 1) / block;
+    precompute_rotary_kernel<<<grid, block, 0, stream>>>(d_sincos, T);
+}
+
+// Apply RoPE to Q and K in-place.
+// Q layout: [B, T, n_q_heads, head_dim]
+// K layout: [B, T, n_kv_heads, head_dim]
+// sincos layout: [T, ROTARY_DIM] — for each (pos, dim): even=sin, odd=cos
+// Only first ROTARY_DIM dimensions of each head are rotated.
+__global__ void apply_rotary_qk_kernel(float *Q, float *K,
+    int B, int T, int n_q_heads, int n_kv_heads, int head_dim,
+    const float *sincos) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = B * T;
+    if (idx >= total) return;
+    int b = idx / T;
+    int t = idx % T;
+    const float *sp = sincos + t * ROTARY_DIM;
+
+    // Apply to Q: each (b,t) has n_q_heads heads of head_dim
+    float *q_base = Q + ((b * T + t) * n_q_heads) * head_dim;
+    for (int h = 0; h < n_q_heads; h++) {
+        float *qv = q_base + h * head_dim;
+        for (int d = 0; d < ROTARY_DIM; d += 2) {
+            float x0 = qv[d];
+            float x1 = qv[d+1];
+            float sin_val = sp[d];
+            float cos_val = sp[d+1];
+            qv[d]   = x0 * cos_val - x1 * sin_val;
+            qv[d+1] = x0 * sin_val + x1 * cos_val;
+        }
+        // remaining dims (ROTARY_DIM..head_dim-1) are unchanged
+    }
+
+    // Apply to K: each (b,t) has n_kv_heads heads of head_dim
+    float *k_base = K + ((b * T + t) * n_kv_heads) * head_dim;
+    for (int h = 0; h < n_kv_heads; h++) {
+        float *kv = k_base + h * head_dim;
+        for (int d = 0; d < ROTARY_DIM; d += 2) {
+            float x0 = kv[d];
+            float x1 = kv[d+1];
+            float sin_val = sp[d];
+            float cos_val = sp[d+1];
+            kv[d]   = x0 * cos_val - x1 * sin_val;
+            kv[d+1] = x0 * sin_val + x1 * cos_val;
+        }
+    }
+}
+
+void wubu_cuda_apply_rotary_to_qk(float *d_Q, float *d_K,
+    int B, int T, int n_q_heads, int n_kv_heads, int head_dim,
+    const float *d_sincos, cudaStream_t stream) {
+    int total = B * T;
+    int block = 128;
+    int grid = (total + block - 1) / block;
+    apply_rotary_qk_kernel<<<grid, block, 0, stream>>>(
+        d_Q, d_K, B, T, n_q_heads, n_kv_heads, head_dim, d_sincos);
+}
+
+// ================================================================
 // GQA RMSNorm + Causal Attention + Gate + Output Projection
 // 
 // This implements the full GQA attention step (CPU wubu_gqa_forward steps 3-6)
@@ -877,7 +961,8 @@ void wubu_cuda_gqa_forward(cublasHandle_t handle, cudaStream_t stream,
     const float *d_K_norm_w,    // [HEAD_DIM]
     const float *d_output_w,    // [q_dim, D_MODEL]
     float *d_output,            // [N, D_MODEL] — final output
-    float *d_scratch) {         // [N, q_dim] — temp for attention out
+    float *d_scratch,           // [N, q_dim] — temp for attention out
+    const float *d_sincos) {    // [T, ROTARY_DIM] — RoPE sin/cos, or NULL to skip
     const int N = B * T;
     const int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;   // 4096
     const int head_dim = GQA_HEAD_DIM;                   // 256
@@ -898,6 +983,12 @@ void wubu_cuda_gqa_forward(cublasHandle_t handle, cudaStream_t stream,
     gqa_rms_norm_kernel<<<grid_norm_k, block, 0, stream>>>(
         d_K, d_K_norm_w, (float*)d_K, B, T * GQA_KV_HEADS, head_dim, 1e-6f);
     
+    // Step 2.5: Apply RoPE to Q and K (if sin/cos table provided)
+    if (d_sincos != NULL) {
+        wubu_cuda_apply_rotary_to_qk((float*)d_scratch, (float*)d_K,
+            B, T, GQA_Q_HEADS, GQA_KV_HEADS, head_dim, d_sincos, stream);
+    }
+
     // Step 3: Causal attention (1 thread per head)
     int n_blocks = B * T * GQA_Q_HEADS;
     causal_attn_simple_kernel<<<n_blocks, 1, 0, stream>>>(  // 1 thread per block
