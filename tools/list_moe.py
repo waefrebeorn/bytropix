@@ -32,7 +32,7 @@ for i in range(n_kv):
     elif typ == 0: val = struct.unpack('<B', f.read(1))[0]
     else: f.read(1); continue
     
-    keywords = ['expert', 'moe', 'ffn', 'hidden', 'intermediate', 'n_layer', 'dense', 'n_embd', 'n_head']
+    keywords = ['expert', 'moe', 'ffn', 'hidden', 'intermediate', 'n_layer', 'dense', 'n_embd', 'n_head', 'mtp']
     if any(k in key.lower() for k in keywords):
         print(f'  {key}: {val}')
 
