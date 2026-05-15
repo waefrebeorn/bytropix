@@ -1,56 +1,79 @@
-# WuBuText AI — Testing Protocol (May 15 PM v6)
+# WuBuText AI — Testing Protocol (May 16 v8 — HONEST)
 
-## Primary Test: train_integrated
+## IMPORTANT
+**INFERENCE IS BROKEN.** Current tests check compilation + non-crash, NOT correctness.
+Reference output (llama.cpp): "Here's a thinking process:" — Our output: garbage.
+All test results should be interpreted as "compiles and doesn't crash" unless verified against llama.cpp.
 
+---
+
+## Quick Start
 ```bash
-# Forward-only (no backward)
-./train_integrated /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf data/train_data.bin 3
+bash tests/run.sh           # 9 tests, ~3 min
+bash tests/run.sh --full    # includes MOE=1 (~8 min)
+```
+Exit 0 = all PASS (compilation + non-crash). Exit 1 = FAIL found.
 
-# Flags
-TST=1 ./train_integrated ...   # Token-superposition training
-RSGD=1 ./train_integrated ...  # Riemannian SGD
-PGA=1 ./train_integrated ...   # Poincaré GQA
-NESTED_SSM=1 ./train_integrated ...  # Nested SSM K=4
-NESTED_MOE=1 ./train_integrated ...  # Poincaré MoE router
-POINCARE_R=0.956 ./train_integrated ...  # Hyperbolic SSM recurrence
+## Test Harness: `tests/run.sh`
+
+| # | Test | What It Checks | Limitation |
+|---|------|----------------|------------|
+| 1 | BUILD | `make infer_text_gpu` compiles | Doesn't verify correctness |
+| 2 | EXISTENCE | Binary + model exist, ELF 64-bit | Basic sanity only |
+| 3 | SMOKE | Runs with 1 token, exit 0, PASS marker | Doesn't check output content |
+| 4 | OUTPUT REGRESSION | Prefill + decode text matches golden `!!!` | Golden is from pre-fix version |
+| 5 | CHUNK SIZE PARITY | CHUNK=256 == CHUNK=64 produce identical text | Both produce garbage |
+| 6 | DECODE SPEED | Benchmark decode + prefill tok/s | Speed real, output wrong |
+| 7 | LONG PROMPT | 48 tok prompt, multi-chunk, completes with PASS | Memory check only |
+| 8 | LAYER CONFIG | 40 layers (30 SSM, 10 GQA) | Weight loading check |
+| 9 | CLEANLINESS | No NaN/Inf/SIGSEGV in output | No garbage detection |
+| 10 | MOE=1 (opt) | Full MOE=1 run with GPU buffers allocated | Output not verified |
+
+## What Tests DON'T Catch (Critical Gaps)
+
+- **No reference comparison**: Never compares output against llama.cpp
+- **No hidden state comparison**: Layer-by-layer numerical comparison missing
+- **No tokenizer verification**: Custom tokenizer never checked against GGUF-native
+- **No logit validation**: Never checks if output logits match reference
+- **GPU vs CPU mismatch**: Different architectures (SSM, RoPE, gates) — no cross-verification
+
+## Golden Output Files — DEPRECATED
+```
+tests/golden/prefill_short.txt     — "The meaning of life" → "!" output
+```
+This golden is from a broken inference. Do NOT use as correctness reference.
+Use llama.cpp output as ground truth instead.
+
+## Verification Protocol (Manual — until P0 fixed)
+
+### Compare vs llama.cpp
+```bash
+~/llama.cpp/build/bin/llama-cli -m /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -p "The capital of France is" -n 20 --temp 0.0
+./infer_text_gpu /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "The capital of France is" 20 2>&1
+# Compare outputs — they must MATCH for correctness
 ```
 
-Expected: loss ~21→19 after 2-3 steps, 0 NaN, 11-14s/step.
+### Layer-by-layer hidden state comparison (TODO)
+This is the gold standard fix for P0 — compare SSM hidden states, GQA logits, MoE output against reference.
 
-## All Binaries
+## What Actually Works (Verified)
+- **test_kv_cache**: `make test_kv_cache` — max_diff=0.00 vs full recompute ✅
+- **test_256k**: MoE router O(T) scaling to 65K ✅
+- **API server**: `bash tests/test_api.sh` — 14 sandbox tests pass ✅
+- **Compilation**: All binaries build cleanly ✅
 
-| Binary | Command | Status |
-|--------|---------|--------|
-| `train_integrated` | `./train_integrated [model] [corpus] [steps]` | 🟢 11s/step, 0 NaN |
-| `train_gpu` | `./train_gpu [model] [corpus] [steps]` | 🟢 CE~12.42 |
-| `train_real` | `./train_real [model] [corpus]` | 🟢 CE~12.66 |
-| `infer_moe_lazy` | `./infer_moe_lazy [model] [layer] [T]` | 🟢 37 tok/s |
-| `infer_unified` | `./infer_unified [model] [T]` | 🟢 40-layer forward |
-| `test_kv_cache` | `./test_kv_cache [model]` | 🟢 max_diff=0.00 |
-| `infer_vision_gpu` | `./infer_vision_gpu [model] [image]` | 🟢 99ms |
-| `infer_poincare` | `./infer_poincare` | 🟢 2835 tok/s |
-| `test_moe` | `./test_moe` | 🟢 NaN=0 |
-| `bench_e2e` | `PATH=... ./bench_e2e` | 🟢 GPU weights fixed |
+## Known Testing Limitations
 
-## Vault Tests (to add)
-- `test_sparse_attn` — Port sparse attention from vault, verify O(n·k) linear complexity
-- `test_q_controller` — Port Q-Controller optimizer, verify convergence vs fixed LR
-- `test_tailslayer_spec` — Port hedged-read CUDA kernel, verify N-draft verification
+- Tests check compilation + non-crash, NOT correctness
+- No GPU vs CPU cross-verification
+- No exact logit comparison (text output only)
+- No 256K stress test (48 tok max)
+- MOE=1 test optional (not default)
 
-## Paper Discrepancy Verification
+## Future Improvements
 
-| Check | How | Status |
-|-------|-----|--------|
-| head_dim 256 vs 128 | Read `GQA_HEAD_DIM` and `SSM_D_STATE` in headers | ✅ Both correct |
-| KV heads=2 | Read `GQA_KV_HEADS` | ✅ Correct |
-| MRoPE missing | Code audit — check rope implementation | ⚠️ Verify |
-| Conv dim 1536 vs 8192 | Code audit — check CONV_DIM | ⚠️ Investigate |
-| RoPE theta=10M | Check constant in wubu_ssm.c | ⚠️ Verify |
-
-## Known Issues
-
-| Issue | Test | Severity |
-|-------|------|----------|
-| PGA loss jumps 21.6→69 | `PGA=1 ./train_integrated ...` | Lr_gqa too high |
-| ~11s/step GPU compute | Baseline forward | RTX 5050 limit |
-| CONV_DIM discrepancy | Code audit needed | Possible bug |
+- Integrate `test_kv_cache` into harness (numerical max_diff)
+- Add llama.cpp reference comparison
+- Add hidden state layer-by-layer comparison
+- Add `train_integrated` CE reference baseline check
+- Add GPU memory leak detection

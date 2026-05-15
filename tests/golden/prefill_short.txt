@@ -1,0 +1,72 @@
+GGUF v3, 733 tensors, 54 KV pairs
+Tensor info end at offset 10990035, aligned to 10990048 (pad=13, alignment=32)
+  GGUF data blob buffered: 10978 MB
+GGUF v3, 733 tensors, 54 KV pairs
+Tensor info end at offset 10990035, aligned to 10990048 (pad=13, alignment=32)
+=== infer_text_gpu v5 (KV cache + chunked prefill) ===
+Model: /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+Prompt: "The meaning of life" | max=3 | MOE=0 | CHUNK=256
+  Vocab: 248320 tokens loaded
+  byte_token_ids[0xE4]=160, [0xBD]=121, [0xA0]=254
+  Merges: 247587 loaded (247587 resolved)
+  Merge hash: 247587 entries in 524288 slots (58529 collisions)
+  BOS=248044, EOS=248046, PAD=248055
+Allocating 40 layers...
+  Layer 0: SSM loaded
+  Layer 1: SSM loaded
+  Layer 2: SSM loaded
+  Layer 3: GQA loaded
+  Layer 4: SSM loaded
+  Layer 5: SSM loaded
+  Layer 6: SSM loaded
+  Layer 7: GQA loaded
+  Layer 8: SSM loaded
+  Layer 9: SSM loaded
+  Layer 10: SSM loaded
+  Layer 11: GQA loaded
+  Layer 12: SSM loaded
+  Layer 13: SSM loaded
+  Layer 14: SSM loaded
+  Layer 15: GQA loaded
+  Layer 16: SSM loaded
+  Layer 17: SSM loaded
+  Layer 18: SSM loaded
+  Layer 19: GQA loaded
+  Layer 20: SSM loaded
+  Layer 21: SSM loaded
+  Layer 22: SSM loaded
+  Layer 23: GQA loaded
+  Layer 24: SSM loaded
+  Layer 25: SSM loaded
+  Layer 26: SSM loaded
+  Layer 27: GQA loaded
+  Layer 28: SSM loaded
+  Layer 29: SSM loaded
+  Layer 30: SSM loaded
+  Layer 31: GQA loaded
+  Layer 32: SSM loaded
+  Layer 33: SSM loaded
+  Layer 34: SSM loaded
+  Layer 35: GQA loaded
+  Layer 36: SSM loaded
+  Layer 37: SSM loaded
+  Layer 38: SSM loaded
+  Layer 39: GQA loaded
+  Final norm loaded
+  Embeddings: 248320 tokens from file (1940 MB)
+  Output weight loaded: 1940 MB
+Model initialized: 40 layers (30 SSM, 10 GQA), 248320 vocab
+Prompt: 4 tok | Layers: 40 | maxT=4096
+Uploading weights...
+GPU init: 14.8 s
+--- Chunked prefill (4 tok, chunk=256) ---
+The meaning of life!
+Prefill: 0.25 s (16 tok/s)
+--- Decode (incremental) ---
+!!!
+
+=== Summary ===
+Prefill: 4 tok in 0.26 s (15 tok/s)
+Decode:  3 tok in 0.02 s (198.1 tok/s)
+Total:   15.04 s
+=== PASS ===

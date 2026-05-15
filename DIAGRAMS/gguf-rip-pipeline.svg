@@ -114,5 +114,8 @@
   <text x="715" y="617" text-anchor="middle" font-size="9" fill="#aaa">1.07M tokens — format unverified</text>
 
   <!-- Bottom status -->
-  <text x="50" y="655" font-size="11" fill="#e53935">✅ All 7 math modules integrated into train_integrated (CE≈18-20). NaN root cause FIXED: MoE weight interleaving. GPU vision 99ms with 0 NaN. P0 done: per-block extraction → 11s/step (16×)</text>
+  <text x="50" y="655" font-size="11" fill="#D32F2F">⚠️ INFERENCE BROKEN. Modules compile & run but output is garbage. NaN fixed ✅, 11s/step ✅. P0: fix inference vs llama.cpp layer-by-layer.</text>
+  <!-- API server -->
+  <rect x="30" y="670" width="840" height="25" rx="4" fill="#FFEBEE" stroke="#D32F2F" stroke-width="1"/>
+  <text x="450" y="687" text-anchor="middle" font-size="10" fill="#D32F2F">API server (tools/serve.py) works in sandbox mode. Reference: ~/llama.cpp/build/bin/llama-cli. See devils_advocate_v5.md</text>
 </svg>
