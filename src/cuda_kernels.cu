@@ -82,6 +82,18 @@ void wubu_cuda_sigmoid(int n, const float *x, float *y, cudaStream_t stream) {
     sigmoid_kernel<<<grid, block, 0, stream>>>(x, y, n);
 }
 
+// Init constant value kernels
+__global__ void init_neg_inf(float *x, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    x[i] = -1e30f;
+}
+__global__ void init_zero_kernel(float *x, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    x[i] = 0.0f;
+}
+
 void wubu_cuda_softplus(int n, const float *x, float *y, cudaStream_t stream) {
     int block = 256;
     int grid = (n + block - 1) / block;
@@ -125,11 +137,32 @@ void wubu_cuda_l2_norm(int B, int T, int n_heads, int d,
 }
 
 // ================================================================
-// RMSNorm kernel
-// Input: x [B, T, d], weight [d]
-// Output: out [B, T, d]
-// Each sequence element: out[i] = x[i] * weight[i] / sqrt(mean(x²) + eps)
+// RMSNorm per-head kernel (for GQA Q/K normalization)
+// Input: x [B, n_heads, d], weight [d]
+// Output: out [B, n_heads, d]
+// Each head independently: out[i*hd + k] = x[i*hd + k] * weight[k] / sqrt(mean(x²) + eps)
 // ================================================================
+__global__ void rms_norm_heads_kernel(const float *x, const float *weight, float *out,
+                                       int total_heads, int d, float eps) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_heads) return;
+
+    const float *inp = x + idx * d;
+    float *oup = out + idx * d;
+
+    float sum_sq = 0.0f;
+    for (int i = 0; i < d; i++) sum_sq += inp[i] * inp[i];
+    float scale = rsqrtf(sum_sq / d + eps);
+    for (int i = 0; i < d; i++) oup[i] = inp[i] * scale * weight[i];
+}
+
+void wubu_cuda_rms_norm_heads(int total_heads, int d,
+                               const float *x, const float *weight, float eps,
+                               float *out, cudaStream_t stream) {
+    int block = 256;
+    int grid = (total_heads + block - 1) / block;
+    rms_norm_heads_kernel<<<grid, block, 0, stream>>>(x, weight, out, total_heads, d, eps);
+}
 __global__ void rms_norm_kernel(const float *x, const float *weight, float *out,
                                 int N, int d, float eps) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1783,3 +1816,299 @@ void wubu_cuda_moe_dispatch(cublasHandle_t handle, cudaStream_t stream,
 }
 
 // (elemul_kernel and elemadd_kernel are defined above)
+
+// ================================================================
+// GPU MoE helper kernels
+// ================================================================
+
+// SiLU multiply: y = SiLU(gate) * up = gate * sigmoid(gate) * up
+__global__ void silu_mul_kernel(const float *gate, const float *up, float *y, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float g = gate[i];
+    float s = (g < -80.0f) ? 0.0f : (g > 80.0f) ? 1.0f : 1.0f / (1.0f + expf(-g));
+    y[i] = g * s * up[i];  // SwiGLU: SiLU(gate) * up
+}
+
+// Element-wise add: y[i] = x[i] + y[i]
+__global__ void add_kernel(const float *x, float *y, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    y[i] += x[i];
+}
+
+// ================================================================
+// GPU MoE forward — single token against active experts
+//
+// x: [D_MODEL] input token
+// gw/uw/dw: [N_EXPS, D_MODEL * D_FF] or [N_EXPS, D_FF * D_MODEL] dequantized FP32 on HOST
+// eids: [N_ACTIVE] expert IDs to use
+// ewgts: [N_ACTIVE] routing weights
+// n_active: number of active experts (usually 8)
+// out: [D_MODEL] output (GPU)
+//
+// Uploads dequantized expert weights to GPU, does cuBLAS SGEMM,
+// sums weighted results.
+// ================================================================
+void wubu_cuda_moe_fwd_1tok(cublasHandle_t handle, cudaStream_t stream,
+    const float *d_x,           // [D_MODEL] on GPU
+    const float *const*gw,      // [N_ACTIVE][D_MODEL, D_FF] host dequantized
+    const float *const*uw,      // [N_ACTIVE][D_MODEL, D_FF]
+    const float *const*dw,      // [N_ACTIVE][D_FF, D_MODEL]
+    const int *eids,            // [N_ACTIVE] (unused, for logging)
+    const float *ewgts,         // [N_ACTIVE]
+    int n_active,
+    float *d_out,               // [D_MODEL] output (GPU)
+    float *d_gate_w,            // [D_MODEL * D_FF] scratch: upload gate weight, then gate result
+    float *d_up_w,              // [D_MODEL * D_FF] scratch: upload up weight, then up result
+    float *d_silu,              // [D_FF] scratch: SiLU output
+    float *d_dn_w,              // [D_FF * D_MODEL] scratch: upload down weight
+    float *d_contrib)           // [D_MODEL] scratch: per-expert contribution
+{
+    const int dm = D_MODEL, df = D_FF;
+
+    // Zero output
+    { int block = 256; int grid = (dm + block - 1) / block;
+      init_zero_kernel<<<grid, block, 0, stream>>>(d_out, dm); }
+
+    for (int k = 0; k < n_active; k++) {
+        if (ewgts[k] < 1e-30f) continue;
+
+        // Upload gate weight [dm, df] → result [1, df]
+        cudaMemcpyAsync(d_gate_w, gw[k], (size_t)dm * df * sizeof(float), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_up_w, uw[k], (size_t)dm * df * sizeof(float), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_dn_w, dw[k], (size_t)df * dm * sizeof(float), cudaMemcpyHostToDevice, stream);
+        cudaStreamSynchronize(stream);
+
+        // Gate proj: x [1,dm] @ gate_w [dm,df] → d_gate_w [1,df]
+        wubu_cuda_matmul(handle, d_x, 1, dm, d_gate_w, df, d_gate_w, 1.0f, 0.0f);
+
+        // Up proj: x [1,dm] @ up_w [dm,df] → d_up_w [1,df]
+        wubu_cuda_matmul(handle, d_x, 1, dm, d_up_w, df, d_up_w, 1.0f, 0.0f);
+
+        // SiLU: d_silu[i] = d_gate_w[i] * sigmoid(d_gate_w[i]) * d_up_w[i]
+        { int block = 256; int grid = (df + block - 1) / block;
+          silu_mul_kernel<<<grid, block, 0, stream>>>(d_gate_w, d_up_w, d_silu, df); }
+
+        // Down proj: d_silu [1,df] @ dn_w [df,dm] → d_contrib [1,dm] * ewgts[k]
+        wubu_cuda_matmul(handle, d_silu, 1, df, d_dn_w, dm, d_contrib, ewgts[k], 0.0f);
+
+        // Add to output
+        { int block = 256; int grid = (dm + block - 1) / block;
+          add_kernel<<<grid, block, 0, stream>>>(d_contrib, d_out, dm); }
+    }
+}
+// ================================================================
+__global__ void softmax_kernel(float *x, int N, int D) {
+    int row = blockIdx.x;
+    if (row >= N) return;
+    float *r = x + row * D;
+
+    // Find max
+    float mx = -1e30f;
+    for (int j = 0; j < D; j++) if (r[j] > mx) mx = r[j];
+
+    // Exp and sum
+    float sum = 0.0f;
+    for (int j = 0; j < D; j++) { float e = expf(r[j] - mx); r[j] = e; sum += e; }
+
+    // Normalize
+    float inv = (sum > 0.0f) ? 1.0f / sum : 1.0f;
+    for (int j = 0; j < D; j++) r[j] *= inv;
+}
+
+void wubu_cuda_softmax(float *x, int N, int D, cudaStream_t stream) {
+    softmax_kernel<<<N, 1, 0, stream>>>(x, N, D);
+}
+
+// ================================================================
+// Online softmax tile kernel: process 1 row of scores against tile
+// scores: [T_tile] raw dot products (in/out: exp(s*scale - M))
+// M: [1] running max (in/out)
+// L: [1] running sum (in/out)
+// O: [hd] accumulated output (rescaled in-place)
+// ================================================================
+__global__ void online_softmax_row_kernel(float *scores, int T_tile, float scale,
+                                          float *M, float *L, float *O, int hd) {
+    // Scale scores and find max
+    float mx = -1e30f;
+    for (int j = 0; j < T_tile; j++) {
+        float s = scores[j] * scale;
+        scores[j] = s;
+        if (s > mx) mx = s;
+    }
+    float m_old = *M;
+    float m_comb = fmaxf(m_old, mx);
+
+    // Rescale old: O *= exp(m_old - m_comb), L *= exp(m_old - m_comb)
+    float rescale = expf(m_old - m_comb);
+    for (int j = 0; j < hd; j++) O[j] *= rescale;
+    float L_old = *L * rescale;
+
+    // Exp and sum new tile
+    float sum = 0.0f;
+    for (int j = 0; j < T_tile; j++) {
+        float e = expf(scores[j] - m_comb);
+        scores[j] = e;
+        sum += e;
+    }
+
+    *M = m_comb;
+    *L = L_old + sum;
+}
+
+// Normalize: O[row*hd + j] /= L[row] for all rows
+__global__ void normalize_attn_kernel(float *O, const float *L, int n_rows, int hd) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= n_rows) return;
+    float inv = 1.0f / (L[row] + 1e-30f);
+    float *o = O + (size_t)row * hd;
+    for (int j = 0; j < hd; j++) o[j] *= inv;
+}
+
+// ================================================================
+// Chunked attention — tiled version supporting T_cache up to 256K.
+//
+// Q_chunk [C, N_Q_HEADS * HEAD_DIM] — already RMSNorm'd + RoPE'd
+// K_cache [T_cache, N_KV_HEADS * HEAD_DIM] — already RMSNorm'd + RoPE'd
+// V_cache [T_cache, N_KV_HEADS * HEAD_DIM]
+// out     [C, N_Q_HEADS * HEAD_DIM] — pre-gate attention output (overwrites Q buffer)
+//
+// Uses cuBLAS SGEMM per Q-head against cached K,V.
+// For T_cache > T_TILE (4096), tiles internally with online softmax.
+// Score scratch required: C * T_TILE * sizeof(float) (much smaller than old: C*n_q*T_cache)
+// ================================================================
+#define ATTEN_TILE 4096
+
+size_t wubu_cuda_chunked_attn_query_scratch(int C, int T_max) {
+    (void)T_max;
+    // Much smaller: only need per-tile scores [C, ATTEN_TILE]
+    size_t s = (size_t)C * ATTEN_TILE * sizeof(float);
+    // Plus M, L arrays [C * n_q]
+    s += (size_t)C * GQA_Q_HEADS * 2 * sizeof(float);
+    return s;
+}
+
+void wubu_cuda_chunked_attn(cublasHandle_t handle, cudaStream_t stream,
+    int C, int T_cache,
+    const float *d_Q_chunk,   // [C, N_Q_HEADS * HEAD_DIM] RMSNorm'd + RoPE'd
+    const float *d_K_cache,   // [T_cache, N_KV_HEADS * HEAD_DIM] RMSNorm'd + RoPE'd
+    const float *d_V_cache,   // [T_cache, N_KV_HEADS * HEAD_DIM]
+    const float *d_gate_full, // [C, N_Q_HEADS * HEAD_DIM] raw gate (pre-sigmoid)
+    const float *d_output_w,  // [N_Q_HEADS * HEAD_DIM, D_MODEL]
+    float *d_out,             // [C, D_MODEL] — final output after gate + output proj
+    float *d_score_scratch)   // scratch for per-tile scores + M/L
+{
+    const int n_q = GQA_Q_HEADS;
+    const int n_kv = GQA_KV_HEADS;
+    const int gs = n_q / n_kv;
+    const int hd = GQA_HEAD_DIM;
+    const int q_dim = n_q * hd;
+    const int kv_dim = n_kv * hd;
+    const float s_scale = 1.0f / sqrtf((float)hd);
+    const float alpha = 1.0f, beta = 0.0f;
+
+    float *d_attn_out = (float*)d_Q_chunk; // reuse Q buffer for attention output
+
+    // Partition scratch: [scores_tile(C, ATT_TILE), M(C*n_q), L(C*n_q)]
+    float *d_scores_tile = d_score_scratch;
+    float *d_M = d_scores_tile + (size_t)C * ATTEN_TILE;
+    float *d_L = d_M + (size_t)C * n_q;
+
+    if (T_cache <= ATTEN_TILE) {
+        // === DIRECT: single pass (same as before, no tiling) ===
+        // Step 1: scores via cuBLAS for all heads at once
+        for (int h_kv = 0; h_kv < n_kv; h_kv++) {
+            for (int h_off = 0; h_off < gs; h_off++) {
+                int h_q = h_kv * gs + h_off;
+                float *d_sh = d_scores_tile + (size_t)h_q * T_cache;
+                cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                    T_cache, C, hd, &s_scale,
+                    d_K_cache + h_kv * hd, kv_dim,
+                    d_Q_chunk + h_q * hd, q_dim, &beta,
+                    d_sh, (size_t)n_q * T_cache);
+            }
+        }
+        // Step 2: softmax
+        for (int i = 0; i < C * n_q; i++)
+            softmax_kernel<<<1, 1, 0, stream>>>(d_scores_tile + (size_t)i * T_cache, 1, T_cache);
+        // Step 3: weighted sum with V
+        for (int h_kv = 0; h_kv < n_kv; h_kv++) {
+            for (int h_off = 0; h_off < gs; h_off++) {
+                int h_q = h_kv * gs + h_off;
+                float *d_sh = d_scores_tile + (size_t)h_q * T_cache;
+                cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                    hd, C, T_cache, &alpha,
+                    d_V_cache + h_kv * hd, kv_dim,
+                    d_sh, (size_t)n_q * T_cache, &beta,
+                    d_attn_out + h_q * hd, q_dim);
+            }
+        }
+    } else {
+        // === TILED: process T_cache in ATTEN_TILE chunks ===
+        // Initialize M = -inf, L = 0
+        int n_ml = C * n_q;
+        {   int block = 256;
+            int grid = (n_ml + block - 1) / block;
+            init_neg_inf<<<grid, block, 0, stream>>>(d_M, n_ml);
+            init_zero_kernel<<<grid, block, 0, stream>>>(d_L, n_ml);
+            // Zero out attn_out
+            init_zero_kernel<<<(C * q_dim + block - 1) / block, block, 0, stream>>>(d_attn_out, C * q_dim);
+        }
+
+        int n_tiles = (T_cache + ATTEN_TILE - 1) / ATTEN_TILE;
+        for (int ti = 0; ti < n_tiles; ti++) {
+            int t_start = ti * ATTEN_TILE;
+            int t_tile = T_cache - t_start;
+            if (t_tile > ATTEN_TILE) t_tile = ATTEN_TILE;
+
+            for (int h_kv = 0; h_kv < n_kv; h_kv++) {
+                for (int h_off = 0; h_off < gs; h_off++) {
+                    int h_q = h_kv * gs + h_off;
+
+                    // SGEMM: scores [C, t_tile] = Q_h [C, hd] @ K_tile^T [hd, t_tile]
+                    // scores_col[t_tile, C] with ld = (size_t)n_q * t_tile? 
+                    // Actually for single head with tiling, just use ld = t_tile
+                    // The scores are stored in d_scores_tile with layout [C, t_tile] row-major
+                    cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                        t_tile, C, hd, &alpha, // alpha=1, apply scale in kernel
+                        d_K_cache + (size_t)t_start * kv_dim + h_kv * hd, kv_dim,
+                        d_Q_chunk + h_q * hd, q_dim, &beta,
+                        d_scores_tile, t_tile);
+                    cudaStreamSynchronize(stream);
+
+                    // Online softmax for each row of this tile
+                    for (int c = 0; c < C; c++) {
+                        int row_idx = c * n_q + h_q;
+                        online_softmax_row_kernel<<<1, 1, 0, stream>>>(
+                            d_scores_tile + (size_t)c * t_tile, t_tile, s_scale,
+                            d_M + row_idx, d_L + row_idx,
+                            d_attn_out + (size_t)row_idx * hd, hd);
+                    }
+
+                    // SGEMM: attn_contrib [C, hd] = scores [C, t_tile] @ V_tile [t_tile, hd]
+                    // Need contiguous layout for cuBLAS: scores [C, t_tile] row-major
+                    cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                        hd, C, t_tile, &alpha,
+                        d_V_cache + (size_t)t_start * kv_dim + h_kv * hd, kv_dim,
+                        d_scores_tile, t_tile, &alpha, // ADD to (not replace) attn_out
+                        d_attn_out + h_q * hd, q_dim);
+                }
+            }
+        }
+
+        // Final normalize: attn_out[row, :] /= L[row]
+        int block = 256;
+        int grid = (n_ml + block - 1) / block;
+        normalize_attn_kernel<<<grid, block, 0, stream>>>(d_attn_out, d_L, n_ml, hd);
+        cudaStreamSynchronize(stream);
+    }
+
+    // --- Gate multiply: attn_out *= sigmoid(gate) ---
+    wubu_cuda_gqa_gate(d_attn_out, d_gate_full, C, q_dim, stream);
+
+    // --- Output projection → d_out [C, D_MODEL] ---
+    wubu_cuda_matmul(handle, d_attn_out, C, q_dim, d_output_w, D_MODEL, d_out, 1.0f, 0.0f);
+
+    cudaStreamSynchronize(stream);
+}

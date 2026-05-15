@@ -32,7 +32,7 @@ void gpu_output_projection(cublasHandle_t handle, cudaStream_t stream,
                 d_hidden, D_MODEL,
                 d_output_weight, D_MODEL,
                 &beta,
-                d_logits, vocab_size);
+                d_logits, N);  // ldC = N (not vocab_size!)
     cudaStreamSynchronize(stream);
 }
 

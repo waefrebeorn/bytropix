@@ -63,6 +63,41 @@ static void kv_free(kv_cache_t *c) {
 }
 
 // ================================================================
+// RoPE sin/cos table (pre-computed for up to MAX_CACHE_T positions)
+// ================================================================
+static float *rope_sc = NULL;
+
+static int rope_init(void) {
+    if (rope_sc) return 1;
+    rope_sc = (float *)malloc((size_t)MAX_CACHE_T * ROTARY_DIM * sizeof(float));
+    if (!rope_sc) return 0;
+    for (int p = 0; p < MAX_CACHE_T; p++) {
+        for (int i = 0; i < ROTARY_DIM / 2; i++) {
+            float theta = powf(ROPE_THETA, -2.0f * i / ROTARY_DIM);
+            float angle = (float)p * theta * 0.25f; // 4x extrapolation factor
+            rope_sc[p * ROTARY_DIM + i * 2]     = cosf(angle);
+            rope_sc[p * ROTARY_DIM + i * 2 + 1] = sinf(angle);
+        }
+    }
+    return 1;
+}
+
+static void apply_rotary_to_buf(float *buf, int n_heads, int position, const float *sc) {
+    const float *sc_p = sc + (size_t)position * ROTARY_DIM;
+    for (int h = 0; h < n_heads; h++) {
+        float *head = buf + (size_t)h * GQA_HEAD_DIM;
+        for (int i = 0; i < ROTARY_DIM / 2; i++) {
+            float cosv = sc_p[i * 2];
+            float sinv = sc_p[i * 2 + 1];
+            float d0 = head[i * 2];
+            float d1 = head[i * 2 + 1];
+            head[i * 2]     = d0 * cosv - d1 * sinv;
+            head[i * 2 + 1] = d0 * sinv + d1 * cosv;
+        }
+    }
+}
+
+// ================================================================
 // GQA decode: Q for 1 token, attend vs cached K/V
 // ================================================================
 static void gqa_kv_decode(
@@ -92,6 +127,10 @@ static void gqa_kv_decode(
     }
     memcpy(k_norm, k_raw, kv_dim * sizeof(float));
     wubu_rms_norm(1, GQA_KV_HEADS, GQA_HEAD_DIM, k_norm, w->attn_k_norm_weight, 1e-6f, k_norm);
+
+    // Apply RoPE to Q and K (in-place) at position cache->current_T
+    apply_rotary_to_buf(q_norm, GQA_Q_HEADS, cache->current_T, rope_sc);
+    apply_rotary_to_buf(k_norm, GQA_KV_HEADS, cache->current_T, rope_sc);
 
     // V proj
     for (int j = 0; j < kv_dim; j++) {
@@ -422,25 +461,77 @@ static int sample_greedy(const float *logits, int vs) {
     return b;
 }
 
-static int sample_topk(const float *logits, int vs, int k) {
-    if (k <= 1) return sample_greedy(logits, vs);
-    typedef struct { float v; int i; } p_t;
-    p_t *ps = (p_t *)malloc(vs * sizeof(p_t));
-    for (int i = 0; i < vs; i++) { ps[i].v = logits[i]; ps[i].i = i; }
-    int kk = k < vs ? k : vs;
-    for (int i = 0; i < kk; i++) {
-        int b = i;
-        for (int j = i+1; j < vs; j++) if (ps[j].v > ps[b].v) b = j;
-        p_t t = ps[i]; ps[i] = ps[b]; ps[b] = t;
+static int sample(float *logits, int vs, float temperature, int top_k, float top_p) {
+    // Greedy fallback for temperature <= 0
+    if (temperature <= 0.0f) {
+        int best = 0; float bv = logits[0];
+        for (int i = 1; i < vs; i++) if (logits[i] > bv) { bv = logits[i]; best = i; }
+        return best;
     }
-    float mv = ps[0].v, sum = 0;
-    for (int i = 0; i < kk; i++) sum += expf(ps[i].v - mv);
-    float r = (float)rand() / RAND_MAX, cum = 0;
-    for (int i = 0; i < kk; i++) {
-        cum += expf(ps[i].v - mv) / sum;
-        if (r <= cum) { int idx = ps[i].i; free(ps); return idx; }
+
+    // Working copy with temperature scaling + subtract max for stability
+    float *probs = (float *)malloc(vs * sizeof(float));
+    float max_l = logits[0];
+    for (int i = 1; i < vs; i++) if (logits[i] > max_l) max_l = logits[i];
+    for (int i = 0; i < vs; i++) probs[i] = (logits[i] - max_l) / temperature;
+
+    // Top-K: keep only the top K logits (zero out the rest by setting to -inf)
+    if (top_k > 0 && top_k < vs) {
+        float *vals = (float *)malloc(vs * sizeof(float));
+        memcpy(vals, probs, vs * sizeof(float));
+        for (int i = 0; i < top_k; i++) {
+            int best = i;
+            for (int j = i+1; j < vs; j++) if (vals[j] > vals[best]) best = j;
+            float t = vals[i]; vals[i] = vals[best]; vals[best] = t;
+        }
+        float threshold = vals[top_k - 1];
+        free(vals);
+        for (int i = 0; i < vs; i++)
+            if (probs[i] < threshold) probs[i] = -1e30f;
     }
-    int idx = ps[kk-1].i; free(ps); return idx;
+
+    // Softmax
+    max_l = probs[0];
+    for (int i = 1; i < vs; i++) if (probs[i] > max_l) max_l = probs[i];
+    float sum = 0.0f;
+    for (int i = 0; i < vs; i++) { probs[i] = expf(probs[i] - max_l); sum += probs[i]; }
+    float inv_sum = 1.0f / (sum + 1e-30f);
+    for (int i = 0; i < vs; i++) probs[i] *= inv_sum;
+
+    // Top-P (nucleus): keep smallest set whose cumulative prob >= top_p
+    if (top_p > 0.0f && top_p < 1.0f) {
+        typedef struct { float p; int i; } pair_t;
+        pair_t *pairs = (pair_t *)malloc(vs * sizeof(pair_t));
+        for (int i = 0; i < vs; i++) { pairs[i].p = probs[i]; pairs[i].i = i; }
+        for (int i = 0; i < vs; i++) {
+            int best = i;
+            for (int j = i+1; j < vs; j++) if (pairs[j].p > pairs[best].p) best = j;
+            pair_t t = pairs[i]; pairs[i] = pairs[best]; pairs[best] = t;
+        }
+        float cum = 0.0f;
+        int cutoff = vs;
+        for (int i = 0; i < vs; i++) {
+            if (pairs[i].p <= 0.0f) break;
+            cum += pairs[i].p;
+            if (cum >= top_p) { cutoff = i + 1; break; }
+        }
+        for (int i = cutoff; i < vs; i++) probs[pairs[i].i] = 0.0f;
+        free(pairs);
+        // Renormalize
+        sum = 0.0f;
+        for (int i = 0; i < vs; i++) sum += probs[i];
+        if (sum > 1e-30f) { inv_sum = 1.0f / sum; for (int i = 0; i < vs; i++) probs[i] *= inv_sum; }
+    }
+
+    // Sample from the resulting distribution
+    float r = (float)rand() / RAND_MAX;
+    float cum = 0.0f;
+    for (int i = 0; i < vs; i++) {
+        cum += probs[i];
+        if (r <= cum) { free(probs); return i; }
+    }
+    free(probs);
+    return vs - 1; // fallback (should not reach here)
 }
 
 static volatile int stop = 0;
@@ -471,13 +562,20 @@ int main(int argc, char **argv) {
     int moe_on = getenv("MOE") ? atoi(getenv("MOE")) : 0;
     int moe_max_l = getenv("MOE_LAYERS") ? atoi(getenv("MOE_LAYERS")) : 0;
     int no_gpu = getenv("NOGPU") ? 1 : 0;
+    float temperature = getenv("TEMP") ? atof(getenv("TEMP")) : 1.0f;
+    int samp_top_k = getenv("TOP_K") ? atoi(getenv("TOP_K")) : 20;
+    float top_p = getenv("TOP_P") ? atof(getenv("TOP_P")) : 0.95f;
 
     signal(SIGINT, handler);
     srand(time(NULL));
 
+    // Pre-compute RoPE sin/cos table
+    if (!rope_init()) { fprintf(stderr, "Failed to allocate RoPE table\n"); return 1; }
+
     printf("=== infer_text v2 — KV Cache + SSM Carry + Lazy MoE ===\n");
     printf("Model: %s\nPrompt: \"%s\" | max=%d | topk=%d | MOE=%d\n",
            path, prompt, max_tok, top_k, moe_on);
+    printf("Sampling: temp=%.1f top_k=%d top_p=%.2f\n", temperature, samp_top_k, top_p);
 
     double T0 = now_sec();
 
@@ -614,8 +712,9 @@ int main(int argc, char **argv) {
 
     // ---- Encode ----
     int pids[65536];
-    int np = wubu_tokenizer_encode(&tok, prompt, pids, 65536);
-    if (np <= 0) return 1;
+    int np = wubu_tokenizer_encode(&tok, prompt, pids+1, 65535);
+    if (np <= 0) { fprintf(stderr, "Failed to encode prompt\\n"); wubu_tokenizer_free(&tok); return 1; }
+    pids[0] = tok.bos_id; np++;
     printf("Prompt: %d tok\n", np);
 
     // ---- Allocate forward buffers ----
@@ -697,6 +796,12 @@ int main(int argc, char **argv) {
             memcpy(K_norm, K, np * kv_dim * sizeof(float));
             wubu_rms_norm(1, np * GQA_Q_HEADS, GQA_HEAD_DIM, Q, ly->w.gqa.attn_q_norm_weight, 1e-6f, Q);
             wubu_rms_norm(1, np * GQA_KV_HEADS, GQA_HEAD_DIM, K_norm, ly->w.gqa.attn_k_norm_weight, 1e-6f, K_norm);
+
+            // Apply RoPE to Q and K (in-place) for each position
+            for (int s = 0; s < np; s++) {
+                apply_rotary_to_buf(Q + s * q_dim, GQA_Q_HEADS, s, rope_sc);
+                apply_rotary_to_buf(K_norm + s * kv_dim, GQA_KV_HEADS, s, rope_sc);
+            }
 
             // Attention for each position (causal mask)
             float scale = 1.0f / sqrtf((float)GQA_HEAD_DIM);
@@ -812,9 +917,26 @@ int main(int argc, char **argv) {
     }
 
     // Sample first token
-    int tid = sample_topk(logits, vs, top_k);
+    int tid = sample(logits, vs, temperature, samp_top_k, top_p);
     pids[np] = tid;
     int n_total = np + 1;
+
+    // Debug: print top-5 logits
+    { int n5 = vs < 5 ? vs : 5; int top[5] = {0}; float topv[5] = {-1e30,-1e30,-1e30,-1e30,-1e30};
+      for (int j = 0; j < vs; j++) {
+        if (logits[j] > topv[n5-1]) {
+          topv[n5-1] = logits[j]; top[n5-1] = j;
+          for (int k = n5-2; k >= 0; k--) { if (topv[k] < topv[k+1]) {
+            float tv = topv[k]; int ti = top[k]; topv[k] = topv[k+1]; top[k] = top[k+1]; topv[k+1] = tv; top[k+1] = ti;
+          } }
+        } }
+      printf("\nTop-5 tokens: ");
+      for (int k = 0; k < n5; k++) {
+        char buf[256] = {0}; wubu_tokenizer_decode(&tok, top+k, 1, buf, 255);
+        printf(" [%d]='%s'(%.2f)", top[k], buf, topv[k]);
+      }
+      printf("\n");
+    }
 
     // Print prompt + first generated token
     char out_buf[1048576];
@@ -928,7 +1050,7 @@ int main(int argc, char **argv) {
         }
 
         // Sample
-        last_token = sample_topk(logits, vs, top_k);
+        last_token = sample(logits, vs, temperature, samp_top_k, top_p);
 
         // Decode & print
         pids[n_total] = last_token;
@@ -945,6 +1067,20 @@ int main(int argc, char **argv) {
 
         // EOS
         if (last_token == tok.eos_id && gen > 1) break;
+
+        // Debug: dump top-3 logits at each step
+        { int dn = 3; int dtop[3] = {0}; float dtv[3] = {-1e30,-1e30,-1e30};
+          for (int j = 0; j < vs; j++) {
+            if (logits[j] > dtv[dn-1]) {
+              dtv[dn-1] = logits[j]; dtop[dn-1] = j;
+              for (int k = dn-2; k >= 0; k--) { if (dtv[k] < dtv[k+1]) {
+                float tv = dtv[k]; int ti = dtop[k]; dtv[k] = dtv[k+1]; dtop[k] = dtop[k+1]; dtv[k+1] = tv; dtop[k+1] = ti;
+              } }
+            } }
+          char buf[256] = {0}; wubu_tokenizer_decode(&tok, dtop, 1, buf, 255);
+          printf(" [step%d] top=%d '%s'(%.2f)", gen, dtop[0], buf, dtv[0]);
+          fflush(stdout);
+        }
     }
 
     double decode_time = now_sec() - t_gen;
@@ -972,6 +1108,7 @@ int main(int argc, char **argv) {
     }
     wubu_model_free(&mdl);
     wubu_tokenizer_free(&tok);
+    free(rope_sc); rope_sc = NULL;
 
     printf("=== PASS ===\n");
     return 0;

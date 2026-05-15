@@ -1,7 +1,11 @@
-# WuBuText AI — Entry Point (May 15 PM v6)
+# WuBuText AI — Entry Point (May 16 v7)
 
-## Purpose
-Build commands, hardware spec, quick-start.
+## HONESTY NOTE
+Inference binaries compile and run but produce GARBAGE output.
+See `.hermes/mind-palace/state.md` for real status.
+Reference ground truth: `~/llama.cpp/build/bin/llama-cli`
+
+## Hardware
 
 ---
 
@@ -9,6 +13,20 @@ Build commands, hardware spec, quick-start.
 - **GPU:** NVIDIA RTX 5050, 6.4GB VRAM, sm=120
 - **NVCC:** /usr/local/cuda-13.1/bin/nvcc -arch=sm_120
 - **CPU:** AMD 16+ cores, 25GB RAM
+
+## Run API Server
+```bash
+# Sandbox mode (no GPU, fake responses, fake keys)
+python3 tools/serve.py --sandbox --port 8080
+
+# Production mode (uses real inference)
+python3 tools/serve.py --port 8080 --model /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+
+# Test the API
+bash tests/test_api.sh              # full suite (14 tests)
+curl http://localhost:8080/v1/models  # list models
+curl http://localhost:8080/health     # health check
+```
 
 ## Build
 ```bash
@@ -21,6 +39,13 @@ make infer_unified         # 40-layer SSM→GQA→MoE
 make test_kv_cache         # GQA KV cache test (256K ctx)
 make infer_vision_gpu      # GPU vision 128×128 in 99ms
 make train_real            # CPU training pipeline (reference)
+make infer_text_gpu        # GPU-accelerated inference v5 (245 tok/s)
+```
+
+## Run Tests
+```bash
+bash tests/run.sh           # 20 tests, all must PASS, ~3 min
+bash tests/run.sh --full    # includes MOE=1 (~8 min)
 ```
 
 ## Run Training
