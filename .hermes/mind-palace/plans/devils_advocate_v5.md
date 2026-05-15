@@ -11,7 +11,7 @@
 **Our output:** `<|endoftext|>The capital of France isiscInset了下去idesiby客的我们都会论usher...волоatism οικονyleconf`
 **llama.cpp output:** `Here's a thinking process:\n\n1.`
 
-**Verdict: OUR INFERENCE IS BROKEN. All "✅" status markers on `infer_text*` binaries are compilation + non-crash checks, NOT correctness checks.**
+**Verdict: OUR INFERENCE IS BROKEN. Q5_K dequant FIXED and TGT wrap REMOVED this session, but root cause remains. Output changed but still garbage.**
 
 State.md lists 8 inference binaries as ✅. NONE have been verified to produce correct output against a reference.
 
@@ -51,7 +51,7 @@ State.md lists 8 inference binaries as ✅. NONE have been verified to produce c
 | **Nested MoE** | NESTED_MOE=1 | ❓ Forward only | 396/396 tests for forward |
 | **TST (Token Superposition Training)** | TST=1 | ❓ 8/8 tests pass | Bag+MCE loss verified at small scale |
 | **PGA (Poincaré GQA Attention)** | PGA=1 | ❌ Forward only, backward missing | No gradient flow for hyperbolic attn |
-| **IQ2_XXS/IQ3_XXS/Q5_K/Q6_K dequant** | All weight loading | ⚠️ Q5_K dequant had bug, fix may be wrong | No cross-reference against llama.cpp |
+| **IQ2_XXS/IQ3_XXS/Q5_K/Q6_K dequant** | All weight loading | ⚠️ Q5_K dequant bug **FIXED** (qh indexing matched). Q4_K verified. Others unknown | Need cross-reference vs llama.cpp for Q6_K, IQ2_XXS, IQ2_S |
 | **BPE tokenizer** | All inference | ❓ Custom tokenizer from pre-extracted files | No comparison with llama.cpp's GGUF-native tokenizer |
 
 ---
@@ -123,5 +123,27 @@ Without this, ALL other work (hyperbolic, training, TST, vision) is built on a b
 ## Vault Versioning
 
 Current vault state is ephemeral — files overwritten each session.
-**Proposal:** Archive mind palace snapshots to `vault/bins/YYYY-MM-DD-v{N}/` before each major rewrite.
+Proposal: Archive mind palace snapshots to `vault/bins/YYYY-MM-DD-v{N}/` before each major rewrite.
 This gives us audit trail: what did we think was true on May 15 vs May 16.
+
+---
+
+## Session Progress (May 16 PM)
+
+### Fixed This Session
+1. **Q5_K dequant qh bit-indexing** — was treating qh as linear 32-byte bitfield. Reference stores 4 interleaved pairs per byte. **Fixed** — output changed but still garbage.
+2. **TGT state wrap removed** — SSM forward no longer wraps state to [-π,π] each step. **No effect** on 6-token sequences.
+3. **GQA gate verified** — sigmoid(gate) × attn_out applied correctly in both prefill + decode.
+4. **EOS detection verified** — gen>1 check correct for eos=bos=248044.
+
+### Key Diagnostics
+- **Embedding mean=0.02** (normal), **Layer 0 SSM out mean=2.85** (140× larger — suspicious)
+- **llama.cpp reference confirmed**: "Here's a thinking process" for "The capital of France is"
+- **MOE=0**: loops `ò`(21502)/`_tuples`(86196) — stuck in 2-token attractor
+- **MOE=1**: jumps between languages each step — different token each time but semantically dead
+
+### Remaining Suspects
+1. **SSM output projection weight dequant**: `ssm_out.weight` Q5_K dequant may still produce wrong float values
+2. **Other dequant types**: Q6_K, IQ2_XXS, IQ2_S weights not verified vs reference
+3. **SSM recurrence formula**: Gated DeltaNet implementation may differ from Qwen3.6
+4. **Tokenizer**: Custom tokenizer may produce different token IDs than GGUF-native

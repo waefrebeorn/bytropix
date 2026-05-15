@@ -1,79 +1,73 @@
-# WuBuText AI — State Dashboard (May 16 PM v12 — HONEST)
+# WuBuText AI — State Dashboard (May 16 PM v13 — HONEST)
 
 ## Ground Truth
-**infer_text_gpu v5 does NOT produce correct output.** 
-`"The capital of France is"` → our output: `iscInset了下去idesiby客的我们都会论usher...`
-llama.cpp output: `Here's a thinking process:\n\n1.`
+**ALL inference binaries produce garbage output. Q5_K dequant fixed but not root cause.**
+Prompt "The capital of France is": 
+- Our output (MOE=0): `ò` then loops `_tuples` → `ò` → `ò`...
+- Our output (MOE=1): `新项目` then jumps between languages: `judging'i quanto_pass...`
+- **llama.cpp reference**: `Here's a thinking process:\n\n1.`
 
-All ✅ statuses below mean "compiles and doesn't crash" unless otherwise noted.
+All ✅ statuses mean "compiles and doesn't crash" unless noted.
 
 ---
 
 ## Inference Engines — Real Status
 
-| Binary | Claimed | Actual Status | Real Notes |
-|--------|---------|---------------|------------|
-| `infer_text_gpu v5` | ✅ 245 tok/s | ❌ Garbage output | Speed real but output wrong. SGEMM ldC bug FIXED. RoPE added. Sampling added. |
-| `infer_text v2` | ✅ | ❌ Garbage output | Same bugs as GPU. RoPE added to prefill (May 16). Decode path RoPE still missing? |
-| `train_integrated` | ✅ CE 12.42 | ❓ CE measured | No reference baseline. Could be learning garbage patterns. |
-| `infer_moe_lazy` | ✅ 37 tok/s | ❓ Speed measured | Speed claim verifiable. MoE output never checked for correctness. |
-| `infer_unified` | ✅ | ❌ Garbage | Same architecture as infer_text, same bugs. |
-| `test_kv_cache` | ✅ max_diff=0.00 | ✅ Verified | Numerical comparison vs recompute — gold standard test. |
-| `test_256k` | ✅ MoE router 65K | ✅ Individual component | Only tests MoE router, not full pipeline. |
-| `infer_vision_gpu` | ✅ 99ms | ❓ Moondream3 | Separate model (not Qwen3.6). 27 GPU layers, 0 NaN. |
+| Binary | Claimed | Actual | Notes |
+|--------|---------|--------|-------|
+| `infer_text` v2 | ✅ | ❌ Garbage | Q5_K dequant fix applied. `ò`→`_tuples` loop (MOE=0) or lang-jumping (MOE=1) |
+| `infer_text_gpu` v5 | ✅ 245 tok/s | ❌ Garbage | Same bugs as CPU + GPU output projection |
+| `train_integrated` | ✅ CE 12.42 | ❓ CE measured | No reference baseline |
+| `infer_moe_lazy` | ✅ 37 tok/s | ❓ Speed only | Output never verified |
+| `test_kv_cache` | ✅ max_diff=0.00 | ✅ Verified | Gold standard |
+| `test_256k` | ✅ MoE router 65K | ✅ Verified | Component only |
+| `infer_vision_gpu` | ✅ 99ms | ❓ Moondream3 | Separate model |
 
-## Fixed Bugs (May 15-16)
+## Fixed Bugs (May 16 PM)
 
-| Bug | Fix | Verified? |
-|-----|-----|-----------|
-| SGEMM ldC=vocab_size (was writing logits to wrong addresses) | ✅ ldC=N | ❓ Logits non-zero now, but output still wrong |
-| Q5_K dequant high-bit byte indexing | ✅ New qh_v1_base/v2_base logic | ❓ Old and new code produce same float values for this data |
-| RoPE missing from CPU GQA prefill | ✅ Added sin/cos table + apply_rotary | ❓ Output unchanged after fix |
-| BOS not prepended | ✅ pids[0]=bos_id | ❓ Output still wrong (just has <|endoftext|> prefix now) |
-| Temperature/top-k/top-p sampling | ✅ sample() function added | ❓ Greedy still produces garbage |
-| EOS detection (eos=bos=248044) | ✅ gen>2 threshold | ❓ Never reaches EOS — output loops on garbage tokens |
+| Bug | Fix | Status |
+|-----|-----|--------|
+| Q5_K dequant qh bit-indexing | ✅ Corrected to match llama.cpp reference (qh[l] bit[chunk_id*2+0/1]) | Output changed, still garbage |
+| TGT state wrap removed | ✅ Removed from SSM forward (not in llama.cpp ref) | No effect on short sequences |
+| GQA gate verification | ✅ Already applied in both prefill + decode paths | Was never a bug |
+| EOS detection | ✅ gen>1 check for eos=bos=248044 | Correct |
+| Debug logit dump | ✅ Added top-5 prefill + step-by-step decode | Diagnostic only |
 
 ## Known Broken (No Fix Yet)
 
-| Problem | Likely Root Cause | Evidence |
-|---------|------------------|----------|
-| MOE=0 = no FFN at all | Model is MoE-only (no dense FFN layers) | Config: `moe_intermediate_size: 512`, no `intermediate_size` |
-| MOE=1 also produces garbage | MoE dequant (IQ2_XXS/IQ3_XXS), SSM fwd, or tokenizer | Output completely different from llama.cpp reference |
-| CPU vs GPU output diverges | Different architectures (SSM impl, RoPE, gate application) | Different first token from same prompt |
-| No inference binary has been verified against reference | No golden outputs for anything except "life!!!" | Test suite passes but only checks compilation + non-crash |
-| Tokenizer is custom, not GGUF-native | Pre-extracted vocab/merges files from who-knows-when | No comparison with llama.cpp's tokenizer output |
+| Problem | Evidence |
+|---------|----------|
+| MOE=0: loops `ò` (21502) and `_tuples` (86196) | Logits flat (9-11 range for top-5). SSM output mean=2.85 vs embedding mean=0.02 (140×) |
+| MOE=1: jumps languages each token | Different tokens each step but semantically garbage |
+| Causality likely SSM weight scaling | SSM output projection (`ssm_out.weight`) Q5_K dequant may still be wrong, or SSM recurrence formula differs from Qwen3.6 |
 
-## llama.cpp Reference (May 16)
+## Hidden State Diagnostics
 
-Built at `~/llama.cpp/build/bin/llama-cli`
-- Output for "The capital of France is": `Here's a thinking process:\n\n1.` 
-- GGUF-native tokenizer (correct for this model)
-- Uses full llama.cpp architecture (not our custom SSM/GQA impl)
-- **Our reference standard for all future comparisons**
+| Metric | Value | Healthy? |
+|--------|-------|----------|
+| Embedding mean | 0.02 | ✅ Normal |
+| Embedding max | 0.20 | ✅ Normal |
+| Layer 0 SSM attn_out mean | 2.85 | ❌ 140× embedding magnitude |
+| Layer 0 SSM attn_out max | 47.9 | ❌ Extreme outlier |
+| Output logits top-5 range | 8.86-10.04 | ❌ Flat (gap <0.5 between positions) |
 
-## Vault Versioning
+## What's Verified Working
+- **test_kv_cache**: max_diff=0.00 ✅
+- **test_256k**: MoE router O(T) to 65K ✅
+- **Q4_K dequant**: Matches llama.cpp reference ✅
+- **Q5_K dequant**: Fix aligns with llama.cpp reference ✅ (but output still wrong)
+- **llama.cpp reference**: BUILT at ~/llama.cpp/build/bin/llama-cli ✅
+- **API server sandbox**: 14 tests pass ✅
+- **GQA gate**: Applied correctly in both paths ✅
+- **EOS detection**: Correct logic ✅
 
-Previous mind palace versions archived to `vault/bins/`:
-- state-v10-May15-PM.md
-- plan-v11-May16-AM.md
-- goal-mantra-v10-May15-PM.md
-- testing-v7-May15-PM.md
-- project-May15.md
-- entry-v6-May15-PM.md
-- mind-palace-README-v6.md
-- index-v6-May15-PM.md
-- overnight-map-v6-May15-PM.md
-- STATUS-v3-May15-PM.md
+## Commits This Session
+- `39aeaa1` — Q5_K dequant qh fix + debug logit dump
+- `4e8a216` — TGT wrap removed from SSM forward
+- `ba4b43b` — Hidden state magnitude debug dump
 
-New versions overwrite .hermes/mind-palace/*.md. Old versions preserved in vault/bins/.
-
-## TGT Math
-BOUNDARY = 2π
-remainder = fmod(x + π, BOUNDARY) - π
-tgt_safe_expf(x) = x > 80 ? 80 : x < -80 ? 0 : expf(x)
-
-## Actual Priority
-P0 — Fix inference (compare vs llama.cpp layer by layer)
-P1 — Verify all existing component tests against reference
-P2 — Fill in hyperbolic backward passes (forward-only = can't train)
-P3 — GPU acceleration, tailslayer, 256K scaling
+## Priorities
+P0 — Fix inference: root cause in SSM weight scaling or dequant of other types
+P1 — Verify layer-by-layer hidden states vs llama.cpp
+P2 — Fix training hyperbolic backward passes
+P3 — GPU acceleration, tailslayer, 256K
