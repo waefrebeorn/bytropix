@@ -522,27 +522,36 @@ static int sample(float *logits, int vs, float temperature, int top_k, float top
 
     // Top-P (nucleus): keep smallest set whose cumulative prob >= top_p
     if (top_p > 0.0f && top_p < 1.0f) {
-        typedef struct { float p; int i; } pair_t;
-        pair_t *pairs = (pair_t *)malloc(vs * sizeof(pair_t));
-        for (int i = 0; i < vs; i++) { pairs[i].p = probs[i]; pairs[i].i = i; }
-        for (int i = 0; i < vs; i++) {
-            int best = i;
-            for (int j = i+1; j < vs; j++) if (pairs[j].p > pairs[best].p) best = j;
-            pair_t t = pairs[i]; pairs[i] = pairs[best]; pairs[best] = t;
+        // Only sort entries that survived top-K — max K entries, not full vocab
+        int nz = 0;
+        for (int i = 0; i < vs; i++) if (probs[i] > 0.0f) nz++;
+        if (nz > 0) {
+            typedef struct { float p; int i; } pair_t;
+            pair_t *pairs = (pair_t *)malloc(nz * sizeof(pair_t));
+            int idx = 0;
+            for (int i = 0; i < vs; i++)
+                if (probs[i] > 0.0f) { pairs[idx].p = probs[i]; pairs[idx].i = i; idx++; }
+            // Simple sort (nz is at most top_k=20, so O(nz²) is negligible)
+            for (int i = 0; i < nz; i++) {
+                int best = i;
+                for (int j = i+1; j < nz; j++) if (pairs[j].p > pairs[best].p) best = j;
+                pair_t t = pairs[i]; pairs[i] = pairs[best]; pairs[best] = t;
+            }
+            float cum = 0.0f;
+            int cutoff = nz;
+            for (int i = 0; i < nz; i++) {
+                if (pairs[i].p <= 0.0f) break;
+                cum += pairs[i].p;
+                if (cum >= top_p) { cutoff = i + 1; break; }
+            }
+            // Zero out excluded entries in original probs
+            for (int i = cutoff; i < nz; i++) probs[pairs[i].i] = 0.0f;
+            free(pairs);
+            // Renormalize
+            sum = 0.0f;
+            for (int i = 0; i < vs; i++) if (probs[i] > 0.0f) sum += probs[i];
+            if (sum > 1e-30f) { inv_sum = 1.0f / sum; for (int i = 0; i < vs; i++) if (probs[i] > 0.0f) probs[i] *= inv_sum; }
         }
-        float cum = 0.0f;
-        int cutoff = vs;
-        for (int i = 0; i < vs; i++) {
-            if (pairs[i].p <= 0.0f) break;
-            cum += pairs[i].p;
-            if (cum >= top_p) { cutoff = i + 1; break; }
-        }
-        for (int i = cutoff; i < vs; i++) probs[pairs[i].i] = 0.0f;
-        free(pairs);
-        // Renormalize
-        sum = 0.0f;
-        for (int i = 0; i < vs; i++) sum += probs[i];
-        if (sum > 1e-30f) { inv_sum = 1.0f / sum; for (int i = 0; i < vs; i++) probs[i] *= inv_sum; }
     }
 
     // Sample from the resulting distribution
@@ -595,6 +604,9 @@ int main(int argc, char **argv) {
     // Pre-compute RoPE sin/cos table
     if (!rope_init()) { fprintf(stderr, "Failed to allocate RoPE table\n"); return 1; }
 
+    // Disable stdout buffering for real-time debug
+    setvbuf(stdout, NULL, _IONBF, 0);
+    
     printf("=== infer_text v2 — KV Cache + SSM Carry + Lazy MoE ===\n");
     printf("Model: %s\nPrompt: \"%s\" | max=%d | topk=%d | MOE=%d%s\n",
            path, prompt, max_tok, top_k, moe_on,
@@ -833,6 +845,7 @@ int main(int argc, char **argv) {
     printf("\n--- Phase 1: Prefill (%d tok) ---\n", np);
     fflush(stdout);
     double t_prefill = now_sec();
+    printf("  Prefill start: %.3f s since prog start\n", t_prefill - T0); fflush(stdout);
 
     // Embed all prompt tokens
     for (int i = 0; i < np; i++) {
@@ -853,6 +866,7 @@ int main(int argc, char **argv) {
     printf("  Starting layer loop...\\n"); fflush(stdout);
 
     for (int l = 0; l < mdl.n_layers; l++) {
+        printf("LL %d at %.1f s\n", l, now_sec() - t_prefill); fflush(stdout);
         double tl = now_sec();
         layer_ctx_t *ly = &lc[l];
 
@@ -955,9 +969,11 @@ int main(int argc, char **argv) {
             // Gate
             for (int i = 0; i < np * q_dim; i++)
                 attn_out[i] *= 1.0f / (1.0f + expf(-gate_buf[i]));
+            printf("  GQA_GATE_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
 
             // Output projection
             memset(attn, 0, np * D_MODEL * sizeof(float));
+            printf("  OUTPROJ START at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
             for (int s = 0; s < np; s++) {
                 const float *in = attn_out + s * q_dim;
                 float *out = attn + s * D_MODEL;
@@ -970,6 +986,7 @@ int main(int argc, char **argv) {
 
             // Populate KV cache with K_norm and V
             kv_append(&ly->kv, K_norm, V, np);
+            printf("  GQA_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
 
             free(Q); free(K); free(V); free(K_norm); free(gate_buf); free(attn_out);
         } else {
@@ -1016,7 +1033,9 @@ int main(int argc, char **argv) {
         }
 
         // Post-attention RMSNorm
+        printf("  NORMB at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
         wubu_rms_norm(1, np, D_MODEL, residual, mdl.layers[l].post_attn_norm_weight, 1e-6f, normed);
+        printf("  NORM AFTER at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
 
         // MoE (lazy prefill)
         if (moe_on && lc[l].moe && (moe_max_l == 0 || l < moe_max_l)) {
@@ -1024,19 +1043,24 @@ int main(int argc, char **argv) {
                             lc[l].lm.q_gate, lc[l].lm.q_up, lc[l].lm.q_down,
                             &lc[l].lm, ffn);
         } else {
+            printf("  MOE_MEMCPY at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
             memcpy(ffn, normed, np * D_MODEL * sizeof(float));
+            printf("  MOE_MEMCPY_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
         }
 
         for (int i = 0; i < np * D_MODEL; i++) residual[i] += ffn[i];
 
         if (verb) printf("  L%d: %.3f ms\n", l, (now_sec() - tl) * 1000);
+        if (l < 5 || l == mdl.n_layers-1) printf("  L%d: %.3f s\n", l, now_sec() - t_prefill);
     }
 
     // Final RMSNorm
+    printf("  FINAL_NORM at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
     if (mdl.norm_weight) {
         wubu_rms_norm(1, np, D_MODEL, residual, mdl.norm_weight, 1e-6f, normed);
         memcpy(residual, normed, np * D_MODEL * sizeof(float));
     }
+    printf("  FINAL_NORM_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
 
     // Output projection for last token
     const float *h_last = residual + (np - 1) * D_MODEL;
@@ -1051,10 +1075,12 @@ int main(int argc, char **argv) {
              mdl.output_weight[(int64_t)0+(int64_t)4*vs]); }
     float *logits = (float *)malloc(vs * sizeof(float));
     if (use_gpu) {
+        printf("  GPU proj start\n"); fflush(stdout);
         cudaMemcpyAsync(d_hid, h_last, D_MODEL * sizeof(float), cudaMemcpyHostToDevice, st);
         gpu_output_projection(ch, st, d_hid, 1, 1, d_out_w, vs, d_log);
         cudaMemcpyAsync(logits, d_log, vs * sizeof(float), cudaMemcpyDeviceToHost, st);
         cudaStreamSynchronize(st);
+        printf("  GPU proj done\n"); fflush(stdout);
     } else if (mdl.output_weight) {
         #pragma omp parallel for
         for (int j = 0; j < vs; j++) {
