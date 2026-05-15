@@ -1,60 +1,68 @@
-═══ WUBUTEXT AI — FRESH START PROMPT (May 15 PM v6 — COMPREHENSIVE) ═══
+═══ WUBUTEXT AI — FRESH START PROMPT (May 16 v7 — HONEST) ═══
 
-You are starting a session on the WuBuText AI project.
+HARD TRUTH: Inference is BROKEN. All binaries produce GARBAGE output.
+llama.cpp reference: "Here's a thinking process:" — Us: "iscInset了下去idesiby客的我们都会论usher..."
+Everything depends on fixing this first.
 
-## Quick Context
+## Read in Order
+1. `.hermes/mind-palace/plans/devils_advocate_v5.md` — Full meta audit
+2. `.hermes/mind-palace/state.md` (v12) — HONEST state dashboard
+3. `.hermes/mind-palace/goal-mantra.md` (v12) — HONEST goal paste
+4. `.hermes/mind-palace/plan.md` — Priority queue (may still have old info)
+5. `.hermes/mind-palace/entry.md` (v7) — Build + API server docs
+6. `vault/bins/` — Archived old mind palace versions
 
-**State:** All phases complete. Training at 11s/step (16× improvement). Zero NaN across all configs.
+## What Actually Works
+- test_kv_cache: KV cache matches full recompute (max_diff=0.00) ✅
+- test_256k: MoE router O(T) scaling to 65K ✅
+- API server: tools/serve.py sandbox mode (fake responses) ✅
+- llama.cpp reference: BUILT at ~/llama.cpp/build/bin/llama-cli ✅
+- Individual component tests: SSM, GQA, MoE forward passes (numerical) ✅
+- SGEMM ldC bug: FIXED (was all-zero logits)
+- RoPE: Added to CPU GQA prefill path
+- Sampling: temp/top-k/top-p added
+- EOS detection: Fixed (eos=bos=248044)
 
-**Read first:** `.hermes/mind-palace/goal-mantra.md` (v6) — single paste for full prestige resume.
-**Plan:** `.hermes/mind-palace/plan.md` — full priority queue with vault, paper findings, tailslayer.
-**State:** `.hermes/mind-palace/state.md` — binary dashboard, metrics, known issues.
+## What's Broken (P0 — Fix First)
+- infer_text_gpu v5: GPU accelerated but wrong output
+- infer_text v2: CPU baseline, same wrong output
+- MOE=1 also produces garbage (not just MOE=0 = no FFN)
+- Root cause unknown: SSM impl? MoE dequant? Tokenizer?
 
-## Build & Run
+## Key Architecture
+- 40 layers: 30 SSM (Gated DeltaNet), 10 GQA
+- No dense FFN — ALL FFN is MoE (256 experts, 8 active, D_FF=512)
+- Qwen3.6 is instruction-tuned — needs chat template
+- eos_token_id = bos_token_id = 248044
+- Model file: ~11GB IQ2_M GGUF from Unsloth
 
+## Reference Build
 ```bash
-cd /home/wubu/bytropix
-make train_integrated
-./train_integrated /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf data/train_data.bin 3
+cd ~/llama.cpp/build/bin
+./llama-cli -m /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -p "prompt" -n 20 --temp 0.0
 ```
 
-## Key Facts
+## API Server
+```bash
+cd /home/wubu/bytropix
+python3 tools/serve.py --sandbox --port 8080    # sandbox (no GPU)
+python3 tools/serve.py --port 8080              # production
+bash tests/test_api.sh                           # 14 tests
+```
 
-- **gguf_raw_size(IQ2_XXS) = 66** (was wrong: 72). Fixed empirically.
-- **Per-expert dequant:** raw + eid × gguf_raw_size(type, per_exp_elems) → temp[ff][model] → transpose to ge[model][ff]
-- **Training:** 177s→11s/step, CE 21.6→18.4, 0 NaN
-- **GPU output projection:** cublasSgemm with CUBLAS_OP_T for output_weight[V,D_MODEL]^T
-- **Async D→H copies:** saved_normed/attn_out skipped when !pga_enabled
-- **NaN fix:** MoE weight interleaving (GGUF IQ2_XXS block layout) + raw_size bug
+## Vault Versioning
+Old mind palace versions archived to `vault/bins/` before overwriting.
+See `vault/bins/README.md` for index.
 
-## Known Issues
-
-- PGA loss jumps 21.6→69 (LR too high for PGA backward)
-- ~11s/step is GPU compute bound (40 layers SSM/GQA on RTX 5050)
-- CONV_DIM=8192 vs config 1536 (needs investigation)
-- MRoPE 3D not implemented (position encoding degrades at >32K)
-- MTP prediction head missing
-
-## Tailslayer (NEW May 15)
-Analyzed LaurieWired/tailslayer — hedged reads across DRAM channels.
-Direct pattern match: N replicas → N draft tokens, first-response-wins → longest valid prefix accept.
-Full findings at `.hermes/vault/tailslayer/README.md`
-
-## Vault Status (13 entries)
-- **P2 high ROI:** Sparse attention (PyTorch), Tailslayer (C++), Q-Controller/PID (JAX), Hamilton (CUDA)
-- **Research:** encoders, diffusion, phase3, audio, draftPY, lean-proofs
-- Full list at `.hermes/mind-palace/index.md`
-
-## Paper Audit (May 15)
-32 Qwen3.6 paper files cross-referenced. 14 config params checked.
-9 ✅ match, 2 Verify, 2 ❌ missing (MRoPE, MTP), 1 ❌ discrepancy (CONV_DIM 8192 vs 1536).
-Full table at `.hermes/mind-palace/state.md`
-
-## Mind Palace
-
-Read in this order:
-1. `.hermes/mind-palace/goal-mantra.md` — Prestige paste
-2. `.hermes/mind-palace/state.md` — Binary dashboard + paper audit + tailslayer
-3. `.hermes/mind-palace/plan.md` — Priorities
-4. `.hermes/mind-palace/entry.md` — Build commands
-5. `README.md` — Full project overview
+## Key Files
+| File | Purpose |
+|------|---------|
+| tools/infer_text_gpu.c | GPU inference (broken) |
+| tools/infer_text.c | CPU inference (broken) |
+| tools/serve.py | API server (sandbox ✅, real backend broken) |
+| src/gguf_reader.c | Dequant (Q5_K fix in source) |
+| src/wubu_ssm.c | SSM/Gated DeltaNet (likely root cause) |
+| src/wubu_moe.c | MoE router + expert compute |
+| tests/test_api.sh | API sandbox test suite (14 tests ✅) |
+| vault/unsloth-quantization-format.md | UD GGUF format docs |
+| vault/api-server.md | API endpoint documentation |

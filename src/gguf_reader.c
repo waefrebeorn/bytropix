@@ -683,7 +683,7 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
     // Reference: llama.cpp ggml-quants.c dequantize_row_q5_K()
     // block_q5_K: d(2) + dmin(2) + scales(12) + qh(32) + qs(128) = 176 bytes
     // scales use 6-bit encoding via get_scale_min_k4 (same as Q4_K)
-    // qh provides 256 high bits (1 per element), used in shifts via u1/u2
+    // qh provides 256 high bits packed linearly: bit i = value for element i
     // qs stores 256 low 4-bit nibbles
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
     
@@ -698,7 +698,7 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
         float dmin = f16_to_f32(dmin_bits);
         
         const uint8_t *scales = block + 4;  // 12 bytes — 6-bit scales (get_scale_min_k4)
-        const uint8_t *qh = block + 16;     // 32 bytes — 256 high bits
+        const uint8_t *qh = block + 16;     // 32 bytes — 256 high bits, 1 per element
         const uint8_t *qs = block + 48;     // 128 bytes — low 4-bit nibbles
         
         int64_t out_offset = b * QK_K;
@@ -707,8 +707,8 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
         
         int is = 0;
         uint8_t sc, m;
-        uint8_t u1 = 1, u2 = 2;
         
+        // 4 groups of 64 elements each
         for (int j = 0; j < QK_K && j < remaining; j += 64) {
             // Get 6-bit scale/min packed in scales (same as Q4_K)
             get_scale_min_k4(is + 0, scales, &sc, &m);
@@ -717,13 +717,22 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
             float d2 = d * sc; float m2 = dmin * m;
             
             int ql_base = j / 2; // 32 qs bytes per 64-element group
+            // qh stores high bits for each 32-element half-group:
+            // Each qh byte = 4 pairs, one pair per 64-element chunk
+            // bit [chunk*2+0] = val1 high bit (elements chunk*64 .. chunk*64+31)
+            // bit [chunk*2+1] = val2 high bit (elements chunk*64+32 .. chunk*64+63)
+            int chunk_id = j / 64;  // 0, 1, 2, 3
             
             for (int l = 0; l < 32 && (j + l) < remaining; l++) {
                 uint8_t lo = qs[ql_base + l];
-                uint8_t hi = qh[l];
                 
-                float val1 = (float)((lo & 0x0F) + ((hi & u1) ? 16 : 0));
-                float val2 = (float)((lo >> 4)   + ((hi & u2) ? 16 : 0));
+                // High bit for val1 element: qh[l] bit [chunk_id*2+0]
+                int hi1 = (qh[l] >> (chunk_id * 2 + 0)) & 1;
+                // High bit for val2 element: qh[l] bit [chunk_id*2+1]
+                int hi2 = (qh[l] >> (chunk_id * 2 + 1)) & 1;
+                
+                float val1 = (float)((lo & 0x0F) + (hi1 ? 16 : 0));
+                float val2 = (float)((lo >> 4)   + (hi2 ? 16 : 0));
                 
                 int idx1 = out_offset + j + l;
                 int idx2 = out_offset + j + 32 + l;
@@ -733,8 +742,6 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
             }
             
             is += 2;
-            u1 <<= 2;
-            u2 <<= 2;
         }
     }
 }

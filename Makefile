@@ -232,6 +232,9 @@ check_iq2xxs_stride: tools/check_iq2xxs_stride.c src/gguf_reader.o
 verify_dequant: tools/verify_dequant.c src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_dequant: tools/test_dequant.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 check_forward: tools/check_forward.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 

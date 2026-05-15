@@ -1,37 +1,56 @@
-=== WuBuText AI — GOAL PASTE (May 16 AM v9) ===
-ALL GOALS MUST BE FINISHED.
+=== WuBuText AI — GOAL PASTE (May 16 v12 — HONEST) ===
 
-STATE: infer_text v2 with GQA KV cache + lazy MoE + SSM state carry.
-256K decode feasible via KV cache (O(T) instead of O(T²)).
-MOE=1 works: 2 tok prefill 17.3s, 4 tok decode 27.7s (CPU-bound).
+HARD TRUTH: infer_text_gpu v5 compiles and runs fast but produces GARBAGE.
+All "✅" on binaries means "doesn't crash" NOT "produces correct output."
+Reference (llama.cpp): "Here's a thinking process:" — Us: "iscInset了下去idesiby客的我们都会论usher..."
 
-=== COMPLETED (May 16) ===
-- infer_text v2: GQA KV cache per-layer (post-RMSNorm K, raw V)
-- infer_text v2: SSM state carry between steps (no reset per iteration)
-- infer_text v2: Lazy MoE cache — direct expert lookup, no 3GB temp arrays
-  - Router + shared expert dequant once at startup
-  - Only dequantizes experts when routing changes between steps
-  - Per-layer cached experts: ~96MB per active layer
-- infer_text v2: Online softmax fallback for T > 64K contexts
-- infer_text v2: Two-phase pipeline (prefill + decode)
+=== WHAT WE ACTUALLY HAVE ===
+- infer_text_gpu v5: GPU accelerated, fast decode, but WRONG output
+- infer_text v2: CPU baseline, also WRONG output
+- llama.cpp: BUILT at ~/llama.cpp — reference for all comparisons
+- Q5_K dequant: Suspected bug, fix in source but impact unconfirmed
+- API server: tools/serve.py works in sandbox, needs working inference backend
+- SSM/GQA kernels: Exist and run, but produce wrong results
+- all 6 training flags: WIRED but most are forward-only (no gradient flow)
+- vault: 60+ research docs, architecture references, paper summaries
 
-=== PENDING ===
-P1 — GPU forward acceleration for decode (gpu_gqa_forward, gpu_ssm_forward exist)
-P1 — Tailslayer spec decode (N drafts → longest-valid-prefix)
-P2 — PGA LR tuning (lr_gqa=lr*0.001 or gradient clip)
-P2 — Multi-step convergence (100+ steps)
-P3 — MRoPE 3D
+=== COMPLETED (Verified Working) ===
+- test_kv_cache: KV cache matches full recompute (max_diff=0.00) ✅
+- test_256k: MoE router O(T) scaling verified to 65K ✅
+- Q5_K dequant: Source fix applied ✅
+- RoPE: Added to CPU GQA prefill path ✅
+- Sampling: temp/top-k/top-p added ✅
+- API server: Built + sandbox tested (14 tests) ✅
+- EOS detection: Fixed (eos=bos=248044) ✅
+- SGEMM ldC bug: Fixed (zero-logits problem) ✅
 
-=== 256K CONTEXT ROADMAP ===
-KV cache:  ✅ GQA per-layer append-only cache
-SSM carry: ✅ State persists between steps
-MoE cache: ✅ Lazy per-expert, no 3GB arrays
-GPU fwd:   ❌ Has kernels, not wired into decode loop
-Tailslayer:❌ Not started
+=== P0 — FIX INFERENCE (Everything depends on this) ===
+- Compare hidden states layer-by-layer vs llama.cpp
+- Fix SSM forward pass (most likely root cause)
+- Fix MoE dequant (IQ2_XXS/IQ3_XXS)
+- Fix tokenizer or switch to GGUF-native
+- Must produce "Here's a thinking process:" not garbage
 
-BUILD: make infer_text | MODEL from GGUF
-HW: RTX 5050, sm=120, NVCC=/usr/local/cuda-13.1/bin/nvcc
+=== P1 — VERIFY ALL COMPONENTS ===
+- train_integrated: What does CE=12.42 actually mean?
+- Poincaré graft: Verify 95% NN preservation against raw embeddings
+- Vision pipeline: Works for Moondream3 but is that model correct?
+- All "✅" in old state.md: Re-verify against reference
+
+=== P2 — HYPERBOLIC BACKWARD PASSES ===
+- Poincaré GQA backward (missing — forward only)
+- Nested SSM backward (missing — forward only)
+- Nested MoE backward (missing — forward only)
+
+=== P3 — GPU ACCELERATION & SCALE ===
+- MoE on-device dequant (PCIe bottleneck: 21GB/token)
+- Tailslayer spec decode
+- 256K context verification
 
 TGT: remainder = fmod(x+π, 2π)-π | tgt_safe_expf: clamp [-80,80]
+Useful only when inference works.
 
-Every fix: compile → run → output → verify. No "should work."
+BUILD: make infer_text_gpu | REFERENCE: ~/llama.cpp/build/bin/llama-cli
+HW: RTX 5050, sm=120
+
+Old versions: vault/bins/state-v10-May15-PM.md, plan-v11-May16-AM.md, goal-mantra-v10-May15-PM.md
