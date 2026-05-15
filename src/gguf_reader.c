@@ -570,7 +570,14 @@ static float f16_to_f32(uint16_t h) {
     uint32_t sign = (h >> 15) & 1;
     uint32_t exp  = (h >> 10) & 0x1F;
     uint32_t mant = h & 0x03FF;
-    if (exp == 0) return 0.0f; // simplified, no subnormals
+    if (exp == 0) {
+        // Subnormal: value = mant/1024 * 2^(-14)
+        // Compute normal (exp=1) then subtract 2^(-14) to remove leading 1
+        uint32_t normal_f32 = (sign << 31) | ((1 + 112) << 23) | (mant << 13);
+        float normal_val;
+        memcpy(&normal_val, &normal_f32, 4);
+        return normal_val - 0x1p-14f;  // subtract 2^(-14)
+    }
     uint32_t f32 = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
     float result;
     memcpy(&result, &f32, 4);
