@@ -286,6 +286,72 @@ void gpu_poincare_ssm_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
                      float R,
                      float *d_states_t);
 
+// ================================================================
+// GPU SSM decode step (1 token, state carry)
+// All d_* buffers must be GPU pointers. State persists on GPU.
+// ================================================================
+void gpu_ssm_decode_step(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *d_x_step,
+    gpu_ssm_weights *gw,
+    float *d_ssm_state, float *d_conv_state,
+    float *d_output,
+    float *d_scratch_buf);
+
+// ================================================================
+// GPU GQA decode step (1 token, CPU KV cache)
+// Uploads x_step, projects on GPU, downloads K/V for CPU KV cache,
+// downloads Q_norm for CPU attention, then output proj on GPU.
+// ================================================================
+void gpu_gqa_decode_step(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *d_x_step,
+    gpu_gqa_weights *gw,
+    // Scratch (pre-allocated on GPU)
+    float *d_Q_full,
+    float *d_K, float *d_V,
+    float *d_attn_out,
+    // Output from GPU projections (host buffers, caller-allocated)
+    float *h_Q_out,    // [GQA_Q_HEADS * GQA_HEAD_DIM * 2] = [8192]
+    float *h_K_out,    // [GQA_KV_DIM] = [512]
+    float *h_V_out);   // [GQA_KV_DIM] = [512]
+
+// GPU output projection for decode step (1 token)
+void gpu_gqa_output_proj(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *d_attn_out,    // [q_dim] on GPU
+    gpu_gqa_weights *gw,
+    float *d_output);           // [D_MODEL] on GPU
+
+// ================================================================
+// Allocate GPU scratch buffers for SSM forward (B*T tokens)
+// Returns scratch size in floats.
+// ================================================================
+size_t gpu_ssm_scratch_needed(int B, int T);
+
+// Pre-allocate GPU SSM prefill scratch buffer and return d_scratch
+void gpu_ssm_prefill_alloc(int B, int T,
+    float **d_scratch, cudaStream_t stream);
+
+// GPU SSM prefill wrapper: upload host x, run GPU forward, download output
+// State (d_ssm_state, d_conv_state) must already be on GPU.
+// d_scratch must be large enough (use gpu_ssm_scratch_needed).
+void gpu_ssm_prefill(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *h_x, int B, int T,
+    gpu_ssm_weights *gw,
+    float *d_ssm_state, float *d_conv_state,
+    float *d_scratch,
+    float *h_output);
+
+// ================================================================
+// GPU GQA prefill wrapper: upload host x, run GPU forward, download output + KV
+// ================================================================
+void gpu_gqa_prefill(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *h_x, int B, int T,
+    gpu_gqa_weights *gw,
+    const float *d_sincos,
+    float *d_Q_full, float *d_K, float *d_V, float *d_scratch,
+    float *h_output,
+    float *h_K_out,   // [B*T, GQA_KV_DIM] host output for KV cache
+    float *h_V_out);  // [B*T, GQA_KV_DIM] host output for KV cache
+
 #ifdef __cplusplus
 }
 #endif
