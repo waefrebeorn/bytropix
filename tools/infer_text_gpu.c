@@ -10,6 +10,7 @@
  */
 #include "wubu_model.h"
 #include "wubu_ssm.h"
+#include "wubu_moe.h"
 #include "wubu_tokenizer.h"
 #include "gguf_reader.h"
 #include "bench.h"
@@ -30,6 +31,66 @@ static int greedy(const float *l, int vs) {
 }
 static volatile int stop=0;
 static void handler(int s){(void)s;stop=1;}
+
+// ============ Lazy MoE (expert cache) ============
+typedef struct { int eid; float *gate,*up,*down; } lex_t;
+typedef struct {
+    lex_t *exps; int n,cap;
+    float *sh_gate,*sh_up,*sh_down,*router;
+    const uint8_t *qg,*qu,*qd;
+    int64_t rs,rsd; int ty_ge,ty_gi,ty_gs; bool has;
+} lm_t;
+static void lm_init(lm_t *m) { memset(m,0,sizeof(*m)); }
+static void lm_free(lm_t *m) {
+    for(int i=0;i<m->n;i++){free(m->exps[i].gate);free(m->exps[i].up);free(m->exps[i].down);}
+    free(m->exps);free(m->sh_gate);free(m->sh_up);free(m->sh_down);free(m->router);memset(m,0,sizeof(*m));
+}
+static float* find_ex(lm_t *m, int eid, int w) {
+    for(int i=0;i<m->n;i++) if(m->exps[i].eid==eid)
+        return w==0?m->exps[i].gate:w==1?m->exps[i].up:m->exps[i].down;
+    return NULL;
+}
+static void moe_expert_fwd_lazy(const float*x,const float*gw,const float*uw,const float*dw,float*tmp,float*out){
+    float*go=tmp,*uo=tmp+D_FF,*ao=tmp+D_FF*2;
+    for(int j=0;j<D_FF;j++){float s=0;for(int k=0;k<D_MODEL;k++)s+=x[k]*gw[k*D_FF+j];go[j]=s;}
+    for(int j=0;j<D_FF;j++){float s=0;for(int k=0;k<D_MODEL;k++)s+=x[k]*uw[k*D_FF+j];uo[j]=s;}
+    for(int j=0;j<D_FF;j++){float g=go[j];ao[j]=((g<-80.0f)?0.0f:g/(1.0f+expf(-g)))*uo[j];}
+    for(int j=0;j<D_MODEL;j++){float s=0;for(int k=0;k<D_FF;k++)s+=ao[k]*dw[k*D_MODEL+j];out[j]=s;}
+}
+static void lazy_moe_fwd(const float*x,int B,int T,const uint8_t*qg,const uint8_t*qu,const uint8_t*qd,lm_t*mc,float*out){
+    int N=B*T;float scores[256];wubu_moe_router(x,B,T,mc->router,scores);
+    int tki[N*N_ACTIVE_EXPTS];float tkw[N*N_ACTIVE_EXPTS];
+    for(int s=0;s<N;s++){float*sc=scores+s*N_EXPERTS,mx=sc[0];
+        for(int e=1;e<N_EXPERTS;e++)if(sc[e]>mx)mx=sc[e];float se=0;for(int e=0;e<N_EXPERTS;e++)se+=expf(sc[e]-mx);
+        float iv=1.0f/(se+1e-30f),sm[256];for(int e=0;e<N_EXPERTS;e++)sm[e]=expf(sc[e]-mx)*iv;
+        int*is=tki+s*N_ACTIVE_EXPTS;float*ws=tkw+s*N_ACTIVE_EXPTS;
+        for(int k=0;k<N_ACTIVE_EXPTS;k++){int bi=-1;float bv=-1e30f;for(int e=0;e<N_EXPERTS;e++){int u=0;for(int pk=0;pk<k;pk++)if(is[pk]==e){u=1;break;}if(!u&&sm[e]>bv){bv=sm[e];bi=e;}}is[k]=bi;ws[k]=bv;}
+        float sw=0;for(int k=0;k<N_ACTIVE_EXPTS;k++)sw+=ws[k];if(sw>1e-30f){float iw=1.0f/sw;for(int k=0;k<N_ACTIVE_EXPTS;k++)ws[k]*=iw;}
+    }
+    int uid[N_ACTIVE_EXPTS*N],nu=0;for(int s=0;s<N;s++){int*is=tki+s*N_ACTIVE_EXPTS;for(int k=0;k<N_ACTIVE_EXPTS;k++){int e=is[k];if(e<0)continue;int se=0;for(int u=0;u<nu;u++)if(uid[u]==e){se=1;break;}if(!se)uid[nu++]=e;}}
+    int ch=(nu!=mc->n);if(!ch){for(int u=0;u<nu;u++)if(uid[u]!=mc->exps[u].eid){ch=1;break;}}
+    if(ch){for(int i=0;i<mc->n;i++){free(mc->exps[i].gate);free(mc->exps[i].up);free(mc->exps[i].down);}mc->n=0;
+        if(!mc->exps||mc->cap<nu){free(mc->exps);mc->exps=malloc(nu*sizeof(lex_t));mc->cap=nu;}
+        for(int u=0;u<nu;u++){int64_t ne=(int64_t)D_MODEL*D_FF,nd=(int64_t)D_FF*D_MODEL;int e=uid[u];mc->exps[u].eid=e;
+            mc->exps[u].gate=malloc(ne*4);mc->exps[u].up=malloc(ne*4);mc->exps[u].down=malloc(nd*4);
+            gguf_dequantize(qg+(int64_t)e*mc->rs,mc->ty_ge,ne,mc->exps[u].gate);
+            gguf_dequantize(qu+(int64_t)e*mc->rs,mc->ty_ge,ne,mc->exps[u].up);
+            gguf_dequantize(qd+(int64_t)e*mc->rsd,mc->ty_ge,nd,mc->exps[u].down);}mc->n=nu;
+    }
+    float*scr=malloc(D_FF*3*sizeof(float));
+    for(int s=0;s<N;s++){const float*xs=x+s*D_MODEL;float*os=out+s*D_MODEL;int*is=tki+s*N_ACTIVE_EXPTS;float*ws=tkw+s*N_ACTIVE_EXPTS;
+        if(mc->sh_gate){float*sg=scr,*su=scr+D_FF,*sa=scr+D_FF*2;
+            for(int j=0;j<SHARED_D_FF;j++){float su2=0;for(int k=0;k<D_MODEL;k++)su2+=xs[k]*mc->sh_gate[k*SHARED_D_FF+j];sg[j]=su2;}
+            for(int j=0;j<SHARED_D_FF;j++){float su2=0;for(int k=0;k<D_MODEL;k++)su2+=xs[k]*mc->sh_up[k*SHARED_D_FF+j];su[j]=su2;}
+            for(int j=0;j<SHARED_D_FF;j++){float g=sg[j];sa[j]=((g<-80.0f)?0.0f:g/(1.0f+expf(-g)))*su[j];}
+            for(int j=0;j<D_MODEL;j++){float su2=0;for(int k=0;k<SHARED_D_FF;k++)su2+=sa[k]*mc->sh_down[k*D_MODEL+j];os[j]=su2;}
+        }else memset(os,0,D_MODEL*4);
+        for(int kk=0;kk<N_ACTIVE_EXPTS;kk++){int e=is[kk];float wgt=ws[kk];if(e<0||wgt<1e-30f)continue;
+            float*gw=find_ex(mc,e,0),*uw=find_ex(mc,e,1),*dw=find_ex(mc,e,2);
+            if(!gw||!uw||!dw)continue;float eo[2048];moe_expert_fwd_lazy(xs,gw,uw,dw,scr,eo);
+            for(int j=0;j<D_MODEL;j++)os[j]+=wgt*eo[j];}
+    }free(scr);
+}
 
 int main(int argc,char**argv){
     const char*path=(argc>1&&strlen(argv[1]))?argv[1]:"/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
@@ -118,12 +179,53 @@ int main(int argc,char**argv){
     }
 
     cudaStreamSynchronize(st);
+
+    // MoE setup (CPU lazy cache per layer)
+    int moe_on = getenv("MOE") ? atoi(getenv("MOE")) : 0;
+    lm_t *lm = NULL;
+    if (moe_on) {
+        lm = calloc(nL, sizeof(lm_t));
+        for (int l = 0; l < nL; l++) {
+            lm_init(&lm[l]);
+            char nm[256];
+            snprintf(nm,256,"blk.%d.ffn_gate_inp.weight",l);
+            if (!gguf_find_tensor(ctx,nm)) continue;
+            lm[l].has = true;
+            snprintf(nm,256,"blk.%d.ffn_gate_exps.weight",l);
+            gguf_tensor_info *t = gguf_find_tensor(ctx,nm);
+            if (!t) { lm[l].has = false; continue; }
+            lm[l].ty_ge = t->ggml_type;
+            lm[l].rs = gguf_raw_size(t->ggml_type, (int64_t)D_MODEL * D_FF);
+            lm[l].rsd = gguf_raw_size(t->ggml_type, (int64_t)D_FF * D_MODEL);
+            lm[l].qg = (const uint8_t*)ctx->data_blob + t->data_offset;
+            snprintf(nm,256,"blk.%d.ffn_up_exps.weight",l); t = gguf_find_tensor(ctx,nm); if (t) lm[l].qu = (const uint8_t*)ctx->data_blob + t->data_offset;
+            snprintf(nm,256,"blk.%d.ffn_down_exps.weight",l); t = gguf_find_tensor(ctx,nm); if (t) lm[l].qd = (const uint8_t*)ctx->data_blob + t->data_offset;
+            snprintf(nm,256,"blk.%d.ffn_gate_inp.weight",l); t = gguf_find_tensor(ctx,nm);
+            lm[l].ty_gi = t->ggml_type;
+            lm[l].router = malloc(D_MODEL * N_EXPERTS * 4);
+            gguf_dequantize((const uint8_t*)ctx->data_blob + t->data_offset, t->ggml_type, D_MODEL * N_EXPERTS, lm[l].router);
+            snprintf(nm,256,"blk.%d.ffn_gate_shexp.weight",l); t = gguf_find_tensor(ctx,nm);
+            if (t) {
+                lm[l].ty_gs = t->ggml_type;
+                int64_t sn = (int64_t)D_MODEL * SHARED_D_FF, sd = (int64_t)SHARED_D_FF * D_MODEL;
+                lm[l].sh_gate = malloc(sn * 4); lm[l].sh_up = malloc(sn * 4); lm[l].sh_down = malloc(sd * 4);
+                gguf_dequantize((const uint8_t*)ctx->data_blob + t->data_offset, t->ggml_type, sn, lm[l].sh_gate);
+                snprintf(nm,256,"blk.%d.ffn_up_shexp.weight",l); t = gguf_find_tensor(ctx,nm);
+                if (t) gguf_dequantize((const uint8_t*)ctx->data_blob + t->data_offset, t->ggml_type, sn, lm[l].sh_up);
+                snprintf(nm,256,"blk.%d.ffn_down_shexp.weight",l); t = gguf_find_tensor(ctx,nm);
+                if (t) gguf_dequantize((const uint8_t*)ctx->data_blob + t->data_offset, t->ggml_type, sd, lm[l].sh_down);
+            }
+        }
+        printf("MoE setup: %d layers\n", nL);
+    }
+
     printf("GPU init: %.1f s\n", now_s()-T0);
 
     // Host buffers
     float*h_emb=malloc((size_t)maxT*D_MODEL*4);
     float*h_n=malloc((size_t)maxT*D_MODEL*4);
     float*h_a=malloc((size_t)maxT*D_MODEL*4);
+    float*h_m=malloc((size_t)maxT*D_MODEL*4); // MoE output
 
     // ===== PREFILL =====
     printf("--- Prefill (%d tok) ---\n",np);
@@ -161,8 +263,13 @@ int main(int argc,char**argv){
         // Residual + post-norm on CPU
         for(int i=0;i<np*D_MODEL;i++)res[i]+=h_a[i];
         wubu_rms_norm(1,np,D_MODEL,res,mdl.layers[l].post_attn_norm_weight,1e-6f,h_n);
-        // FFN passthrough (no MoE)
-        for(int i=0;i<np*D_MODEL;i++)res[i]+=h_n[i];
+        // MoE
+        if (moe_on && lm[l].has) {
+            lazy_moe_fwd(h_n,1,np,lm[l].qg,lm[l].qu,lm[l].qd,&lm[l],h_m);
+            for(int i=0;i<np*D_MODEL;i++)res[i]+=h_m[i];
+        } else {
+            for(int i=0;i<np*D_MODEL;i++)res[i]+=h_n[i];
+        }
 
         if(verb)printf("  L%d: %.1f ms\n",l,(now_s()-tl)*1000);
     }
@@ -231,7 +338,13 @@ int main(int argc,char**argv){
             // CPU residual + post-norm
             for(int i=0;i<T*D_MODEL;i++)res[i]+=h_a[i];
             wubu_rms_norm(1,T,D_MODEL,res,mdl.layers[l].post_attn_norm_weight,1e-6f,h_n);
-            for(int i=0;i<T*D_MODEL;i++)res[i]+=h_n[i];
+            // MoE
+            if (moe_on && lm[l].has) {
+                lazy_moe_fwd(h_n,1,T,lm[l].qg,lm[l].qu,lm[l].qd,&lm[l],h_m);
+                for(int i=0;i<T*D_MODEL;i++)res[i]+=h_m[i];
+            } else {
+                for(int i=0;i<T*D_MODEL;i++)res[i]+=h_n[i];
+            }
         }
 
         // Final norm
@@ -267,7 +380,8 @@ int main(int argc,char**argv){
     cudaFree(d_qn);cudaFree(d_kn);cudaFree(d_del);cudaFree(d_zs);cudaFree(d_SOut);
     cudaFree(d_ow);cudaFree(d_hid);cudaFree(d_log);
     cublasDestroy(ch);cudaStreamDestroy(st);
-    free(h_emb);free(h_n);free(h_a);free(logits);free(embd);
+    free(h_emb);free(h_n);free(h_a);free(h_m);free(logits);free(embd);
+    if (lm) { for(int l=0;l<nL;l++) lm_free(&lm[l]); free(lm); }
     wubu_model_free(&mdl);wubu_tokenizer_free(&tok);
     printf("=== PASS ===\n");return 0;
 }
