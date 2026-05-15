@@ -138,7 +138,8 @@ void gpu_gqa_forward(cublasHandle_t cublas_h, cudaStream_t stream,
                      float *d_Q_full,
                      float *d_K,
                      float *d_V,
-                     float *d_scratch);
+                     float *d_scratch,
+                     const float *d_sincos);
 
 // GPU GQA forward with intermediate saves for backward
 void gpu_gqa_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
