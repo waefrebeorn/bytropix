@@ -483,12 +483,24 @@ static int sample_greedy(const float *logits, int vs) {
     return b;
 }
 
-static int sample(float *logits, int vs, float temperature, int top_k, float top_p) {
+static int sample(float *logits, int vs, float temperature, int top_k, float top_p,
+                  const int *recent_tokens, int n_recent, float rep_penalty) {
     // Greedy fallback for temperature <= 0
     if (temperature <= 0.0f) {
         int best = 0; float bv = logits[0];
         for (int i = 1; i < vs; i++) if (logits[i] > bv) { bv = logits[i]; best = i; }
         return best;
+    }
+
+    // Repetition penalty: scale down logits of recent tokens
+    if (rep_penalty > 1.0f && n_recent > 0) {
+        for (int r = 0; r < n_recent; r++) {
+            int id = recent_tokens[r];
+            if (id >= 0 && id < vs) {
+                if (logits[id] > 0.0f) logits[id] /= rep_penalty;
+                else logits[id] *= rep_penalty;
+            }
+        }
     }
 
     // Working copy with temperature scaling + subtract max for stability
@@ -581,6 +593,12 @@ typedef struct {
     lmoe_t lm;
     kv_cache_t kv;
     float *ssm_state, *conv_state; // per-layer SSM state (carried between steps)
+    // GPU pointers (valid if use_gpu)
+    gpu_ssm_weights gpu_ssm_w;
+    gpu_gqa_weights gpu_gqa_w;
+    float *d_ssm_state, *d_conv_state; // GPU SSM state
+    float *d_scratch_decode;           // GPU scratch for decode (1 token)
+    float *d_Q_full, *d_K, *d_V, *d_attn_out; // GPU GQA decode scratch
 } layer_ctx_t;
 
 int main(int argc, char **argv) {
@@ -596,6 +614,7 @@ int main(int argc, char **argv) {
     float temperature = getenv("TEMP") ? atof(getenv("TEMP")) : 1.0f;
     int samp_top_k = getenv("TOP_K") ? atoi(getenv("TOP_K")) : 20;
     float top_p = getenv("TOP_P") ? atof(getenv("TOP_P")) : 0.95f;
+    float rep_penalty = getenv("REP_PENALTY") ? atof(getenv("REP_PENALTY")) : 1.0f;
     int chat_mode = getenv("CHAT") ? atoi(getenv("CHAT")) : 0;
 
     signal(SIGINT, handler);
@@ -650,14 +669,26 @@ int main(int argc, char **argv) {
     cublasHandle_t ch = NULL;
     cudaStream_t st = NULL;
     float *d_out_w = NULL, *d_hid = NULL, *d_log = NULL;
+    float *d_sincos = NULL;
     int use_gpu = 0;
     if (mdl.output_weight && !no_gpu) {
+        // Check GPU memory
+        size_t free_mem, total_mem;
+        cudaMemGetInfo(&free_mem, &total_mem);
+        printf("GPU VRAM: %.0f MB free / %.0f MB total\n",
+               free_mem / (1024.0*1024.0), total_mem / (1024.0*1024.0));
         cublasCreate(&ch); cudaStreamCreate(&st);
         d_out_w = gpu_upload_output_weight(ch, mdl.output_weight, vs, st);
         cudaMalloc(&d_hid, D_MODEL * sizeof(float));
         cudaMalloc(&d_log, vs * sizeof(float));
         use_gpu = 1;
         printf("GPU out: on\n");
+        // Pre-compute RoPE for GPU (up to max_cache positions)
+        cudaMalloc(&d_sincos, MAX_CACHE_T * ROTARY_DIM * sizeof(float));
+        if (d_sincos) {
+            wubu_cuda_precompute_rotary(MAX_CACHE_T, d_sincos, st);
+            cudaStreamSynchronize(st);
+        }
     } else {
         printf("GPU out: off\n");
     }
@@ -673,10 +704,32 @@ int main(int argc, char **argv) {
             // Allocate SSM states (carried across steps)
             lc[l].ssm_state = (float *)calloc(SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE, sizeof(float));
             lc[l].conv_state = (float *)calloc((CONV_KERNEL - 1) * CONV_DIM, sizeof(float));
+            if (use_gpu) {
+                gpu_load_ssm_layer(ctx, l, &lc[l].gpu_ssm_w, st);
+                cudaMalloc(&lc[l].d_ssm_state, SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float));
+                cudaMemset(lc[l].d_ssm_state, 0, SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float));
+                cudaMalloc(&lc[l].d_conv_state, (CONV_KERNEL - 1) * CONV_DIM * sizeof(float));
+                cudaMemset(lc[l].d_conv_state, 0, (CONV_KERNEL - 1) * CONV_DIM * sizeof(float));
+                // Allocate decode scratch (B=1,T=1)
+                size_t ssz = gpu_ssm_scratch_needed(1, 1);
+                cudaMalloc(&lc[l].d_scratch_decode, ssz * sizeof(float));
+                cudaStreamSynchronize(st);
+            }
         } else {
             lc[l].is_gqa = true;
             n_gqa++;
             lc[l].w.gqa = ly->gqa;
+            if (use_gpu) {
+                gpu_load_gqa_layer(ctx, l, &lc[l].gpu_gqa_w, st);
+                int q_dim_x2 = GQA_Q_HEADS * GQA_HEAD_DIM * 2;
+                int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;
+                int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
+                cudaMalloc(&lc[l].d_Q_full, q_dim_x2 * sizeof(float));
+                cudaMalloc(&lc[l].d_K, kv_dim * sizeof(float));
+                cudaMalloc(&lc[l].d_V, kv_dim * sizeof(float));
+                cudaMalloc(&lc[l].d_attn_out, q_dim * sizeof(float));
+                cudaStreamSynchronize(st);
+            }
         }
         lc[l].moe = false;
     }
@@ -874,127 +927,177 @@ int main(int argc, char **argv) {
         wubu_rms_norm(1, np, D_MODEL, residual, mdl.layers[l].attn_norm_weight, 1e-6f, normed);
 
         if (ly->is_gqa) {
-            printf("L%d GQA start\\n", l); fflush(stdout);
-            // Full GQA forward (computes Q, K, V, attention)
-            // We need K_norm and V for caching, so use forward_save or compute separately
-            int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
-            int kv_dim = GQA_KV_DIM;
-            
-            printf("L%d alloc\\n", l); fflush(stdout);
-            float *Q = (float *)malloc(np * q_dim * sizeof(float));
-            float *K = (float *)malloc(np * kv_dim * sizeof(float));
-            float *V = (float *)malloc(np * kv_dim * sizeof(float));
-            float *K_norm = (float *)malloc(np * kv_dim * sizeof(float));
-            float *gate_buf = (float *)malloc(np * q_dim * sizeof(float));
-            float *attn_out = (float *)calloc(np * q_dim, sizeof(float));
-            printf("L%d alloc done: %p %p %p\\n", l, (void*)Q, (void*)K, (void*)V); fflush(stdout);
+            printf("L%d GQA start\n", l); fflush(stdout);
 
-            for (int s = 0; s < np; s++) {
-                const float *xs = normed + s * D_MODEL;
-                // Q
-                for (int j = 0; j < q_dim; j++) {
-                    double sum = 0.0;
-                    for (int i = 0; i < D_MODEL; i++)
-                        sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i + j * D_MODEL];
-                    Q[s * q_dim + j] = (float)sum;
-                }
-                // gate
-                for (int j = 0; j < q_dim; j++) {
-                    double sum = 0.0;
-                    for (int i = 0; i < D_MODEL; i++)
-                        sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i + (j + q_dim) * D_MODEL];
-                    gate_buf[s * q_dim + j] = (float)sum;
-                }
-                // K
-                for (int j = 0; j < kv_dim; j++) {
-                    double sum = 0.0;
-                    for (int i = 0; i < D_MODEL; i++)
-                        sum += (double)xs[i] * (double)ly->w.gqa.attn_k_weight[i + j * D_MODEL];
-                    K[s * kv_dim + j] = (float)sum;
-                }
-                // V
-                for (int j = 0; j < kv_dim; j++) {
-                    double sum = 0.0;
-                    for (int i = 0; i < D_MODEL; i++)
-                        sum += (double)xs[i] * (double)ly->w.gqa.attn_v_weight[i + j * D_MODEL];
-                    V[s * kv_dim + j] = (float)sum;
-                }
-            }
+            if (use_gpu) {
+                // GPU GQA prefill: upload, run forward + KV extract
+                int kv_dim = GQA_KV_DIM;
+                float *K_cache = (float *)malloc(np * kv_dim * sizeof(float));
+                float *V_cache = (float *)malloc(np * kv_dim * sizeof(float));
+                float *gpu_out = (float *)malloc(np * D_MODEL * sizeof(float));
 
-            // RMSNorm Q and K
-            memcpy(K_norm, K, np * kv_dim * sizeof(float));
-            wubu_rms_norm(1, np * GQA_Q_HEADS, GQA_HEAD_DIM, Q, ly->w.gqa.attn_q_norm_weight, 1e-6f, Q);
-            wubu_rms_norm(1, np * GQA_KV_HEADS, GQA_HEAD_DIM, K_norm, ly->w.gqa.attn_k_norm_weight, 1e-6f, K_norm);
+                // Allocate scratch buffer for input (reuse d_scratch)
+                float *d_scratch_prefill;
+                size_t scratch_nf = (size_t)np * D_MODEL;
+                cudaMalloc(&d_scratch_prefill, scratch_nf * sizeof(float));
 
-            // Apply RoPE to Q and K (in-place) for each position
-            for (int s = 0; s < np; s++) {
-                apply_rotary_to_buf(Q + s * q_dim, GQA_Q_HEADS, s, rope_sc);
-                apply_rotary_to_buf(K_norm + s * kv_dim, GQA_KV_HEADS, s, rope_sc);
-            }
+                gpu_gqa_prefill(ch, st, normed, 1, np,
+                    &ly->gpu_gqa_w, d_sincos,
+                    ly->d_Q_full, ly->d_K, ly->d_V,
+                    d_scratch_prefill,
+                    gpu_out,
+                    K_cache, V_cache);
 
-            // Attention for each position (causal mask)
-            float scale = 1.0f / sqrtf((float)GQA_HEAD_DIM);
-            for (int s = 0; s < np; s++) {
-                for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
-                    int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
-                    const float *qv = Q + s * q_dim + h_q * GQA_HEAD_DIM;
-                    float *out = attn_out + s * q_dim + h_q * GQA_HEAD_DIM;
+                memcpy(attn, gpu_out, np * D_MODEL * sizeof(float));
 
-                    float mx = -1e30f, sum_exp = 0.0f;
-                    for (int t = 0; t <= s; t++) {
-                        const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
-                        float sc = 0.0f;
-                        for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
-                        sc *= scale;
-                        if (t == 0 || sc > mx) mx = sc;
+                // Populate KV cache: RMSNorm K + RoPE on CPU
+                float *K_norm_cache = (float *)malloc(np * kv_dim * sizeof(float));
+                memcpy(K_norm_cache, K_cache, np * kv_dim * sizeof(float));
+                wubu_rms_norm(1, np * GQA_KV_HEADS, GQA_HEAD_DIM,
+                             K_norm_cache, ly->w.gqa.attn_k_norm_weight, 1e-6f, K_norm_cache);
+                for (int s = 0; s < np; s++)
+                    apply_rotary_to_buf(K_norm_cache + s * kv_dim, GQA_KV_HEADS, s, rope_sc);
+                kv_append(&ly->kv, K_norm_cache, V_cache, np);
+
+                cudaFree(d_scratch_prefill);
+                free(K_cache); free(V_cache); free(K_norm_cache); free(gpu_out);
+                printf("L%d GQA_GPU_DONE\n", l); fflush(stdout);
+            } else {
+                // CPU GQA prefill (original)
+                int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
+                int kv_dim = GQA_KV_DIM;
+
+                printf("L%d alloc\n", l); fflush(stdout);
+                float *Q = (float *)malloc(np * q_dim * sizeof(float));
+                float *K = (float *)malloc(np * kv_dim * sizeof(float));
+                float *V = (float *)malloc(np * kv_dim * sizeof(float));
+                float *K_norm = (float *)malloc(np * kv_dim * sizeof(float));
+                float *gate_buf = (float *)malloc(np * q_dim * sizeof(float));
+                float *attn_out = (float *)calloc(np * q_dim, sizeof(float));
+                printf("L%d alloc done: %p %p %p\n", l, (void*)Q, (void*)K, (void*)V); fflush(stdout);
+
+                for (int s = 0; s < np; s++) {
+                    const float *xs = normed + s * D_MODEL;
+                    // Q
+                    for (int j = 0; j < q_dim; j++) {
+                        double sum = 0.0;
+                        for (int i = 0; i < D_MODEL; i++)
+                            sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i + j * D_MODEL];
+                        Q[s * q_dim + j] = (float)sum;
                     }
-                    for (int t = 0; t <= s; t++) {
-                        const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
-                        float sc = 0.0f;
-                        for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
-                        sum_exp += expf(sc * scale - mx);
+                    // gate
+                    for (int j = 0; j < q_dim; j++) {
+                        double sum = 0.0;
+                        for (int i = 0; i < D_MODEL; i++)
+                            sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i + (j + q_dim) * D_MODEL];
+                        gate_buf[s * q_dim + j] = (float)sum;
                     }
-                    float inv = 1.0f / (sum_exp + 1e-30f);
-                    for (int t = 0; t <= s; t++) {
-                        const float *vv = V + t * kv_dim + h_kv * GQA_HEAD_DIM;
-                        const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
-                        float sc = 0.0f;
-                        for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
-                        float a = expf(sc * scale - mx) * inv;
-                        for (int i = 0; i < GQA_HEAD_DIM; i++) out[i] += a * vv[i];
+                    // K
+                    for (int j = 0; j < kv_dim; j++) {
+                        double sum = 0.0;
+                        for (int i = 0; i < D_MODEL; i++)
+                            sum += (double)xs[i] * (double)ly->w.gqa.attn_k_weight[i + j * D_MODEL];
+                        K[s * kv_dim + j] = (float)sum;
+                    }
+                    // V
+                    for (int j = 0; j < kv_dim; j++) {
+                        double sum = 0.0;
+                        for (int i = 0; i < D_MODEL; i++)
+                            sum += (double)xs[i] * (double)ly->w.gqa.attn_v_weight[i + j * D_MODEL];
+                        V[s * kv_dim + j] = (float)sum;
                     }
                 }
-            }
 
-            // Gate
-            for (int i = 0; i < np * q_dim; i++)
-                attn_out[i] *= 1.0f / (1.0f + expf(-gate_buf[i]));
-            printf("  GQA_GATE_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
+                // RMSNorm Q and K
+                memcpy(K_norm, K, np * kv_dim * sizeof(float));
+                wubu_rms_norm(1, np * GQA_Q_HEADS, GQA_HEAD_DIM, Q, ly->w.gqa.attn_q_norm_weight, 1e-6f, Q);
+                wubu_rms_norm(1, np * GQA_KV_HEADS, GQA_HEAD_DIM, K_norm, ly->w.gqa.attn_k_norm_weight, 1e-6f, K_norm);
 
-            // Output projection
-            memset(attn, 0, np * D_MODEL * sizeof(float));
-            printf("  OUTPROJ START at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
-            for (int s = 0; s < np; s++) {
-                const float *in = attn_out + s * q_dim;
-                float *out = attn + s * D_MODEL;
-                for (int i = 0; i < q_dim; i++) {
-                    float a = in[i];
-                    for (int j = 0; j < D_MODEL; j++)
-                        out[j] += a * ly->w.gqa.attn_output_weight[i + j * q_dim];
+                // Apply RoPE to Q and K (in-place) for each position
+                for (int s = 0; s < np; s++) {
+                    apply_rotary_to_buf(Q + s * q_dim, GQA_Q_HEADS, s, rope_sc);
+                    apply_rotary_to_buf(K_norm + s * kv_dim, GQA_KV_HEADS, s, rope_sc);
                 }
+
+                // Attention for each position (causal mask)
+                float scale = 1.0f / sqrtf((float)GQA_HEAD_DIM);
+                for (int s = 0; s < np; s++) {
+                    for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
+                        int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
+                        const float *qv = Q + s * q_dim + h_q * GQA_HEAD_DIM;
+                        float *out = attn_out + s * q_dim + h_q * GQA_HEAD_DIM;
+
+                        float mx = -1e30f, sum_exp = 0.0f;
+                        for (int t = 0; t <= s; t++) {
+                            const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                            float sc = 0.0f;
+                            for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
+                            sc *= scale;
+                            if (t == 0 || sc > mx) mx = sc;
+                        }
+                        for (int t = 0; t <= s; t++) {
+                            const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                            float sc = 0.0f;
+                            for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
+                            sum_exp += expf(sc * scale - mx);
+                        }
+                        float inv = 1.0f / (sum_exp + 1e-30f);
+                        for (int t = 0; t <= s; t++) {
+                            const float *vv = V + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                            const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                            float sc = 0.0f;
+                            for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
+                            float a = expf(sc * scale - mx) * inv;
+                            for (int i = 0; i < GQA_HEAD_DIM; i++) out[i] += a * vv[i];
+                        }
+                    }
+                }
+
+                // Gate
+                for (int i = 0; i < np * q_dim; i++)
+                    attn_out[i] *= 1.0f / (1.0f + expf(-gate_buf[i]));
+                printf("  GQA_GATE_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
+
+                // Output projection
+                memset(attn, 0, np * D_MODEL * sizeof(float));
+                printf("  OUTPROJ START at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
+                for (int s = 0; s < np; s++) {
+                    const float *in = attn_out + s * q_dim;
+                    float *out = attn + s * D_MODEL;
+                    for (int i = 0; i < q_dim; i++) {
+                        float a = in[i];
+                        for (int j = 0; j < D_MODEL; j++)
+                            out[j] += a * ly->w.gqa.attn_output_weight[i + j * q_dim];
+                    }
+                }
+
+                // Populate KV cache with K_norm and V
+                kv_append(&ly->kv, K_norm, V, np);
+                printf("  GQA_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
+
+                free(Q); free(K); free(V); free(K_norm); free(gate_buf); free(attn_out);
             }
-
-            // Populate KV cache with K_norm and V
-            kv_append(&ly->kv, K_norm, V, np);
-            printf("  GQA_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
-
-            free(Q); free(K); free(V); free(K_norm); free(gate_buf); free(attn_out);
         } else {
             // SSM forward: full prefill, save final state
-            printf("L%d SSM: B=1 T=%d\\n", l, np); fflush(stdout);
-            wubu_ssm_forward(normed, 1, np, &ly->w.ssm,
-                             ly->ssm_state, ly->conv_state, attn);
-            printf("L%d SSM done\\n", l); fflush(stdout);
+            printf("L%d SSM: B=1 T=%d\n", l, np); fflush(stdout);
+            if (use_gpu) {
+                float *d_scratch_prefill;
+                size_t snf = gpu_ssm_scratch_needed(1, np);
+                cudaMalloc(&d_scratch_prefill, snf * sizeof(float));
+
+                gpu_ssm_prefill(ch, st, normed, 1, np,
+                    &ly->gpu_ssm_w,
+                    ly->d_ssm_state, ly->d_conv_state,
+                    d_scratch_prefill,
+                    attn);
+
+                cudaFree(d_scratch_prefill);
+                printf("L%d SSM_GPU_DONE\n", l); fflush(stdout);
+            } else {
+                wubu_ssm_forward(normed, 1, np, &ly->w.ssm,
+                                 ly->ssm_state, ly->conv_state, attn);
+                printf("L%d SSM done\n", l); fflush(stdout);
+            }
         }
 
         // NaN check
@@ -1086,7 +1189,7 @@ int main(int argc, char **argv) {
         for (int j = 0; j < vs; j++) {
             double sum = 0.0;
             for (int k = 0; k < D_MODEL; k++)
-                sum += (double)h_last[k] * (double)mdl.output_weight[(int64_t)j + (int64_t)k * vs];
+                sum += (double)h_last[k] * (double)mdl.output_weight[(int64_t)j * D_MODEL + k];
             logits[j] = (float)sum;
         }
     } else {
@@ -1094,7 +1197,7 @@ int main(int argc, char **argv) {
     }
 
     // Sample first token
-    int tid = sample(logits, vs, temperature, samp_top_k, top_p);
+    int tid = sample(logits, vs, temperature, samp_top_k, top_p, pids, np, rep_penalty);
     pids[np] = tid;
     int n_total = np + 1;
 
@@ -1181,9 +1284,118 @@ int main(int argc, char **argv) {
             wubu_rms_norm(1, 1, D_MODEL, residual, mdl.layers[l].attn_norm_weight, 1e-6f, normed);
 
             if (ly->is_gqa) {
-                gqa_kv_decode(normed, &ly->w.gqa, &ly->kv, out_step);
+                if (use_gpu) {
+                    int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
+                    int kv_dim = GQA_KV_DIM;
+                    float h_Q_full[8192], h_K[512], h_V[512];
+
+                    // Upload x_step to GPU
+                    cudaMemcpyAsync(ly->d_Q_full, normed, D_MODEL * sizeof(float),
+                                    cudaMemcpyHostToDevice, st);
+                    cudaStreamSynchronize(st);
+
+                    // Projections on GPU
+                    gpu_gqa_decode_step(ch, st, ly->d_Q_full,
+                        &ly->gpu_gqa_w,
+                        ly->d_Q_full, ly->d_K, ly->d_V,
+                        ly->d_attn_out,
+                        h_Q_full, h_K, h_V);
+
+                    // CPU: RMSNorm Q + RoPE
+                    float *q_norm = h_Q_full; // reuse first q_dim
+                    memcpy(q_norm, h_Q_full, q_dim * sizeof(float));
+                    wubu_rms_norm(1, GQA_Q_HEADS, GQA_HEAD_DIM, q_norm,
+                                  ly->w.gqa.attn_q_norm_weight, 1e-6f, q_norm);
+                    apply_rotary_to_buf(q_norm, GQA_Q_HEADS, ly->kv.current_T, rope_sc);
+
+                    // CPU: RMSNorm K + RoPE
+                    float k_norm[512];
+                    memcpy(k_norm, h_K, kv_dim * sizeof(float));
+                    wubu_rms_norm(1, GQA_KV_HEADS, GQA_HEAD_DIM, k_norm,
+                                  ly->w.gqa.attn_k_norm_weight, 1e-6f, k_norm);
+                    apply_rotary_to_buf(k_norm, GQA_KV_HEADS, ly->kv.current_T, rope_sc);
+
+                    // CPU: KV cache append
+                    kv_append(&ly->kv, k_norm, h_V, 1);
+                    int new_T = ly->kv.current_T;
+
+                    // CPU: Attention
+                    float *gate = h_Q_full + q_dim; // second half of Q_full
+                    float attn_out[4096];
+                    memset(attn_out, 0, q_dim * sizeof(float));
+                    float scale = 1.0f / sqrtf((float)GQA_HEAD_DIM);
+                    for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
+                        int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
+                        const float *qv = q_norm + h_q * GQA_HEAD_DIM;
+                        float *out = attn_out + h_q * GQA_HEAD_DIM;
+
+                        float mx = -1e30f, sum_exp = 0.0f;
+                        for (int t = 0; t < new_T; t++) {
+                            const float *kv = ly->kv.h_k + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                            float s = 0.0f;
+                            for (int i = 0; i < GQA_HEAD_DIM; i++) s += qv[i] * kv[i];
+                            s *= scale;
+                            if (t == 0 || s > mx) mx = s;
+                        }
+                        for (int t = 0; t < new_T; t++) {
+                            const float *kv = ly->kv.h_k + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                            float s = 0.0f;
+                            for (int i = 0; i < GQA_HEAD_DIM; i++) s += qv[i] * kv[i];
+                            s = expf(s * scale - mx);
+                            sum_exp += s;
+                        }
+                        float inv = 1.0f / (sum_exp + 1e-30f);
+                        for (int t = 0; t < new_T; t++) {
+                            const float *vv = ly->kv.h_v + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                            const float *kv = ly->kv.h_k + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                            float s = 0.0f;
+                            for (int i = 0; i < GQA_HEAD_DIM; i++) s += qv[i] * kv[i];
+                            float a = expf(s * scale - mx) * inv;
+                            for (int i = 0; i < GQA_HEAD_DIM; i++) out[i] += a * vv[i];
+                        }
+                    }
+
+                    // Gate
+                    for (int i = 0; i < q_dim; i++)
+                        attn_out[i] *= 1.0f / (1.0f + expf(-gate[i]));
+
+                    // Upload attn_out to GPU for output projection
+                    cudaMemcpyAsync(ly->d_attn_out, attn_out, q_dim * sizeof(float),
+                                    cudaMemcpyHostToDevice, st);
+                    cudaStreamSynchronize(st);
+
+                    // Output projection on GPU
+                    gpu_gqa_output_proj(ch, st, ly->d_attn_out, &ly->gpu_gqa_w, ly->d_K);
+                    // ly->d_K reused as d_output buffer
+
+                    // Download output
+                    cudaMemcpyAsync(out_step, ly->d_K, D_MODEL * sizeof(float),
+                                    cudaMemcpyDeviceToHost, st);
+                    cudaStreamSynchronize(st);
+                } else {
+                    gqa_kv_decode(normed, &ly->w.gqa, &ly->kv, out_step);
+                }
             } else {
-                ssm_kv_decode(normed, &ly->w.ssm, ly->ssm_state, ly->conv_state, out_step);
+                if (use_gpu) {
+                    // Upload input
+                    cudaMemcpyAsync(ly->d_Q_full, normed, D_MODEL * sizeof(float),
+                                    cudaMemcpyHostToDevice, st);
+                    cudaStreamSynchronize(st);
+
+                    // SSM decode: everything on GPU, state carries over
+                    gpu_ssm_decode_step(ch, st, ly->d_Q_full,
+                        &ly->gpu_ssm_w,
+                        ly->d_ssm_state, ly->d_conv_state,
+                        ly->d_attn_out, // reuse as output buffer
+                        ly->d_scratch_decode);
+
+                    // Download output
+                    cudaMemcpyAsync(out_step, ly->d_attn_out, D_MODEL * sizeof(float),
+                                    cudaMemcpyDeviceToHost, st);
+                    cudaStreamSynchronize(st);
+                } else {
+                    ssm_kv_decode(normed, &ly->w.ssm, ly->ssm_state, ly->conv_state, out_step);
+                }
             }
 
             for (int i = 0; i < D_MODEL; i++) residual[i] += out_step[i];
@@ -1220,7 +1432,7 @@ int main(int argc, char **argv) {
             for (int j = 0; j < vs; j++) {
                 double sum = 0.0;
                 for (int k = 0; k < D_MODEL; k++)
-                    sum += (double)residual[k] * (double)mdl.output_weight[(int64_t)j + (int64_t)k * vs];
+                    sum += (double)residual[k] * (double)mdl.output_weight[(int64_t)j * D_MODEL + k];
                 logits[j] = (float)sum;
             }
         } else {
@@ -1228,7 +1440,10 @@ int main(int argc, char **argv) {
         }
 
         // Sample
-        last_token = sample(logits, vs, temperature, samp_top_k, top_p);
+        // Build recent tokens for repetition penalty (last 256)
+        int penalty_window = n_total < 256 ? n_total : 256;
+        last_token = sample(logits, vs, temperature, samp_top_k, top_p,
+                            pids + n_total - penalty_window, penalty_window, rep_penalty);
 
         // Decode & print
         pids[n_total] = last_token;
@@ -1277,11 +1492,26 @@ int main(int argc, char **argv) {
         free(lc[l].ssm_state);
         free(lc[l].conv_state);
         lmoe_free(&lc[l].lm);
+        if (use_gpu) {
+            if (lc[l].is_gqa) {
+                gpu_free_gqa_weights(&lc[l].gpu_gqa_w);
+                cudaFree(lc[l].d_Q_full);
+                cudaFree(lc[l].d_K);
+                cudaFree(lc[l].d_V);
+                cudaFree(lc[l].d_attn_out);
+            } else {
+                gpu_free_ssm_weights(&lc[l].gpu_ssm_w);
+                cudaFree(lc[l].d_ssm_state);
+                cudaFree(lc[l].d_conv_state);
+                cudaFree(lc[l].d_scratch_decode);
+            }
+        }
     }
     free(lc);
     if (use_gpu) {
         gpu_free_output_weight(d_out_w);
         cudaFree(d_hid); cudaFree(d_log);
+        if (d_sincos) cudaFree(d_sincos);
         cudaStreamDestroy(st);
         cublasDestroy(ch);
     }

@@ -17,21 +17,25 @@ int wubu_cuda_matmul(cublasHandle_t handle,
                      const float *A, int M, int K,
                      const float *B, int N,
                      float *C, float alpha, float beta) {
-    // A is [M,K] row-major, B is [K,N] row-major, C is [M,N] row-major
-    // cuBLAS expects column-major: 
-    // C_col[T] = A_col[T] @ B_col[T]  where T denotes transpose
-    // C[M,N]@row = A[M,K]@row * B[K,N]@row
-    // C_col = (B^T)[N,K] @ (A^T)[K,M]  => C_col is N×M col-major = C[M,N] row-major
-    // cublasSgemm(handle, opB, opA, N, M, K, &alpha, B, N, A, K, &beta, C, N)
-    // where C_col[N,M] = B[N,K] @ A[K,M] gives same elements as C[M,N] row-major
+    // A is [M,K] row-major: A_row[m][k] at index m*K + k.
+    // B is [K,N] column-major (GGUF layout): B_col[k][n] at index k + n*K.
+    // C is [M,N] row-major output: C_row[m][n] = sum_k A_row[m][k] * B_col[k][n].
+    //
+    // In column-major terms:
+    //   A_col[K,M] = A_row[M,K]^T  (ld=K)
+    //   B_col[K,N] = stored as-is   (ld=K)
+    //   Desired: C_col[N,M] = B_col^T[N,K] @ A_col[K,M]
+    //
+    // cublasSgemm with op(A)=T, op(B)=N:
+    //   C[N,M] = op(A)[N,K] @ op(B)[K,M]  where op(A)=B^T, op(B)=A
     return cublasSgemm(handle,
-                       CUBLAS_OP_N, CUBLAS_OP_N,
+                       CUBLAS_OP_T, CUBLAS_OP_N,
                        N, M, K,
                        &alpha,
-                       B, N,   // B is [K,N] → ld=N (leading dim of col-major is 2nd dim)
-                       A, K,   // A is [M,K] → ld=K
+                       B, K,   // B is [K,N] col-major, transposed → B^T[N,K], ld=K
+                       A, K,   // A is [M,K] row-major → A_col[K,M], ld=K
                        &beta,
-                       C, N);  // C is [M,N] → ld=N
+                       C, N);  // C is M×N row-major → C_col[N,M], ld=N
 }
 
 // ================================================================
@@ -2126,7 +2130,7 @@ __global__ void output_proj_kernel(const float *h, int D,
     if (v >= V) return;
     double sum = 0.0;
     for (int k = 0; k < D; k++)
-        sum += (double)h[k] * (double)W[v + (int64_t)k * V];
+        sum += (double)h[k] * (double)W[(int64_t)v * D + k];
     logits[v] = (float)sum;
 }
 

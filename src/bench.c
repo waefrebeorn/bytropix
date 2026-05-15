@@ -803,3 +803,254 @@ void gpu_poincare_ssm_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
     wubu_cuda_matmul(cublas_h, d_delta_out, N, VALUE_DIM, d_ssm_out, D_MODEL, d_output, 1.0f, 0.0f);
     cudaStreamSynchronize(stream);
 }
+
+// ================================================================
+// GPU SSM scratch buffer sizing and allocation
+// ================================================================
+size_t gpu_ssm_scratch_needed(int B, int T) {
+    int N = B * T;
+    const int qkv_dim = KEY_DIM * 2 + VALUE_DIM;  // 8192
+    size_t total = 0;
+    total += (size_t)N * qkv_dim;           // d_qkv
+    total += (size_t)N * VALUE_DIM;          // d_z
+    total += (size_t)N * DT_RANK;            // d_beta
+    total += (size_t)N * DT_RANK;            // d_alpha
+    total += (size_t)N * DT_RANK;            // d_beta_sig
+    total += (size_t)N * DT_RANK;            // d_alpha_bi
+    total += (size_t)N * DT_RANK;            // d_gate
+    total += (size_t)B * (T + CONV_KERNEL - 1) * CONV_DIM; // d_conv_input
+    total += (size_t)N * CONV_DIM;           // d_conv_out
+    total += (size_t)N * KEY_DIM;            // d_q_conv
+    total += (size_t)N * KEY_DIM;            // d_k_conv
+    total += (size_t)N * VALUE_DIM;          // d_v_conv
+    total += (size_t)N * KEY_DIM;            // d_q_norm
+    total += (size_t)N * KEY_DIM;            // d_k_norm
+    total += (size_t)N * VALUE_DIM;          // d_delta_out
+    total += (size_t)N * VALUE_DIM;          // d_z_silu
+    return total;
+}
+
+void gpu_ssm_prefill_alloc(int B, int T,
+    float **d_scratch, cudaStream_t stream) {
+    size_t nf = gpu_ssm_scratch_needed(B, T);
+    cudaMalloc((void**)d_scratch, nf * sizeof(float));
+}
+
+// ================================================================
+// GPU SSM prefill wrapper — upload, run, download
+// ================================================================
+void gpu_ssm_prefill(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *h_x, int B, int T,
+    gpu_ssm_weights *gw,
+    float *d_ssm_state, float *d_conv_state,
+    float *d_scratch,
+    float *h_output)
+{
+    int N = B * T;
+    const int qkv_dim = KEY_DIM * 2 + VALUE_DIM;  // 8192
+
+    // Pointers into scratch buffer
+    float *d_qkv       = d_scratch;
+    float *d_z         = d_scratch + (size_t)N * qkv_dim;
+    float *d_beta      = d_z       + (size_t)N * VALUE_DIM;
+    float *d_alpha     = d_beta    + (size_t)N * DT_RANK;
+    float *d_beta_sig  = d_alpha   + (size_t)N * DT_RANK;
+    float *d_alpha_bi  = d_beta_sig + (size_t)N * DT_RANK;
+    float *d_gate      = d_alpha_bi + (size_t)N * DT_RANK;
+    float *d_conv_input = d_gate    + (size_t)N * DT_RANK;
+    int conv_input_stride = T + CONV_KERNEL - 1;
+    float *d_conv_out  = d_conv_input + (size_t)B * conv_input_stride * CONV_DIM;
+    float *d_q_conv    = d_conv_out   + (size_t)N * CONV_DIM;
+    float *d_k_conv    = d_q_conv     + (size_t)N * KEY_DIM;
+    float *d_v_conv    = d_k_conv     + (size_t)N * KEY_DIM;
+    float *d_q_norm    = d_v_conv     + (size_t)N * VALUE_DIM;
+    float *d_k_norm    = d_q_norm     + (size_t)N * KEY_DIM;
+    float *d_delta_out = d_k_norm     + (size_t)N * KEY_DIM;
+    float *d_z_silu    = d_delta_out  + (size_t)N * VALUE_DIM;
+
+    // Upload input
+    cudaMemcpyAsync(d_scratch, h_x, (size_t)N * D_MODEL * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+    float *d_x = d_scratch; // reuse head of scratch for input
+    cudaStreamSynchronize(stream);
+
+    // Call GPU SSM forward
+    gpu_ssm_forward(cublas_h, stream,
+                    d_x, B, T,
+                    gw->d_attn_qkv, gw->d_attn_gate,
+                    gw->d_ssm_beta, gw->d_ssm_alpha,
+                    gw->d_ssm_dt_bias, gw->d_ssm_a,
+                    gw->d_ssm_conv1d, gw->d_ssm_norm, gw->d_ssm_out,
+                    d_ssm_state, d_conv_state,
+                    d_scratch,  // reuse d_scratch as output (last step overwrites)
+                    d_qkv, d_z, d_beta, d_alpha,
+                    d_beta_sig, d_alpha_bi, d_gate,
+                    d_conv_input, d_conv_out,
+                    d_q_conv, d_k_conv, d_v_conv,
+                    d_q_norm, d_k_norm,
+                    d_delta_out, d_z_silu);
+
+    // Download output (result is in d_scratch after gpu_ssm_forward writes d_output there)
+    cudaMemcpyAsync(h_output, d_scratch, (size_t)N * D_MODEL * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+}
+
+// ================================================================
+// GPU SSM decode step (1 token, state carry on GPU)
+// ================================================================
+void gpu_ssm_decode_step(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *d_x_step,
+    gpu_ssm_weights *gw,
+    float *d_ssm_state, float *d_conv_state,
+    float *d_output,
+    float *d_scratch_buf)
+{
+    const int B = 1, T = 1;
+    const int N = 1;
+
+    // All scratch pointers computed from d_scratch_buf (must be large enough for B=1,T=1)
+    const int qkv_dim = KEY_DIM * 2 + VALUE_DIM;
+    float *d_qkv       = d_scratch_buf;
+    float *d_z         = d_scratch_buf + (size_t)N * qkv_dim;
+    float *d_beta      = d_z           + (size_t)N * VALUE_DIM;
+    float *d_alpha     = d_beta        + (size_t)N * DT_RANK;
+    float *d_beta_sig  = d_alpha       + (size_t)N * DT_RANK;
+    float *d_alpha_bi  = d_beta_sig    + (size_t)N * DT_RANK;
+    float *d_gate      = d_alpha_bi    + (size_t)N * DT_RANK;
+    float *d_conv_input = d_gate       + (size_t)N * DT_RANK;
+    int conv_input_stride = T + CONV_KERNEL - 1;
+    float *d_conv_out  = d_conv_input  + (size_t)B * conv_input_stride * CONV_DIM;
+    float *d_q_conv    = d_conv_out    + (size_t)N * CONV_DIM;
+    float *d_k_conv    = d_q_conv      + (size_t)N * KEY_DIM;
+    float *d_v_conv    = d_k_conv      + (size_t)N * KEY_DIM;
+    float *d_q_norm    = d_v_conv      + (size_t)N * VALUE_DIM;
+    float *d_k_norm    = d_q_norm      + (size_t)N * KEY_DIM;
+    float *d_delta_out = d_k_norm      + (size_t)N * KEY_DIM;
+    float *d_z_silu    = d_delta_out   + (size_t)N * VALUE_DIM;
+
+    // Run full SSM forward on GPU (1 token)
+    gpu_ssm_forward(cublas_h, stream,
+                    d_x_step, B, T,
+                    gw->d_attn_qkv, gw->d_attn_gate,
+                    gw->d_ssm_beta, gw->d_ssm_alpha,
+                    gw->d_ssm_dt_bias, gw->d_ssm_a,
+                    gw->d_ssm_conv1d, gw->d_ssm_norm, gw->d_ssm_out,
+                    d_ssm_state, d_conv_state,
+                    d_output,  // output goes here
+                    d_qkv, d_z, d_beta, d_alpha,
+                    d_beta_sig, d_alpha_bi, d_gate,
+                    d_conv_input, d_conv_out,
+                    d_q_conv, d_k_conv, d_v_conv,
+                    d_q_norm, d_k_norm,
+                    d_delta_out, d_z_silu);
+    // d_output now contains the 1-token result on GPU
+}
+
+// ================================================================
+// GPU GQA decode step — projections on GPU, downloads for CPU KV cache + attention
+// ================================================================
+void gpu_gqa_decode_step(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *d_x_step,
+    gpu_gqa_weights *gw,
+    float *d_Q_full,
+    float *d_K, float *d_V,
+    float *d_attn_out,
+    float *h_Q_out,
+    float *h_K_out,
+    float *h_V_out)
+{
+    const int N = 1;
+    int q_dim_x2 = GQA_Q_HEADS * GQA_HEAD_DIM * 2; // 8192
+    int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;       // 512
+
+    // Step 1: Q + gate fused projection
+    wubu_cuda_matmul(cublas_h, d_x_step, N, D_MODEL,
+                     gw->d_attn_q, q_dim_x2, d_Q_full, 1.0f, 0.0f);
+    // Step 2: K projection
+    wubu_cuda_matmul(cublas_h, d_x_step, N, D_MODEL,
+                     gw->d_attn_k, kv_dim, d_K, 1.0f, 0.0f);
+    // Step 2b: V projection
+    wubu_cuda_matmul(cublas_h, d_x_step, N, D_MODEL,
+                     gw->d_attn_v, kv_dim, d_V, 1.0f, 0.0f);
+    cudaStreamSynchronize(stream);
+
+    // Download all results to host
+    cudaMemcpyAsync(h_Q_out, d_Q_full, q_dim_x2 * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(h_K_out, d_K, kv_dim * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(h_V_out, d_V, kv_dim * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+}
+
+// ================================================================
+// GPU GQA output projection for decode step (1 token)
+// ================================================================
+void gpu_gqa_output_proj(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *d_attn_out,
+    gpu_gqa_weights *gw,
+    float *d_output)
+{
+    const int N = 1;
+    int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM; // 4096
+    wubu_cuda_matmul(cublas_h, d_attn_out, N, q_dim,
+                     gw->d_attn_out_w, D_MODEL, d_output, 1.0f, 0.0f);
+    cudaStreamSynchronize(stream);
+}
+
+// ================================================================
+// GPU GQA prefill — full forward + KV cache extraction
+// ================================================================
+void gpu_gqa_prefill(cublasHandle_t cublas_h, cudaStream_t stream,
+    const float *h_x, int B, int T,
+    gpu_gqa_weights *gw,
+    const float *d_sincos,
+    float *d_Q_full, float *d_K, float *d_V, float *d_scratch,
+    float *h_output,
+    float *h_K_out,
+    float *h_V_out)
+{
+    const int N = B * T;
+    int q_dim_x2 = GQA_Q_HEADS * GQA_HEAD_DIM * 2; // 8192
+    int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;          // 4096
+    int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;        // 512
+
+    // Upload input
+    float *d_x = d_scratch; // reuse scratch head for input
+    cudaMemcpyAsync(d_x, h_x, (size_t)N * D_MODEL * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+
+    // Step 1: Q + gate fused projection
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL,
+                     gw->d_attn_q, q_dim_x2, d_Q_full, 1.0f, 0.0f);
+    // Step 2: K projection
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL,
+                     gw->d_attn_k, kv_dim, d_K, 1.0f, 0.0f);
+    // Step 2b: V projection
+    wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL,
+                     gw->d_attn_v, kv_dim, d_V, 1.0f, 0.0f);
+
+    // Download K and V for KV cache (before RMSNorm overwrites d_K)
+    cudaMemcpyAsync(h_K_out, d_K, (size_t)N * kv_dim * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(h_V_out, d_V, (size_t)N * kv_dim * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+
+    // Step 3-7: Fused GQA attention (RMSNorm Q/K, RoPE, attention, gate, output proj)
+    wubu_cuda_gqa_forward(cublas_h, stream,
+        B, T,
+        d_Q_full, d_K, d_V,
+        gw->d_q_norm_w, gw->d_k_norm_w,
+        gw->d_attn_out_w,
+        d_scratch, d_Q_full, d_sincos);
+    // d_scratch now contains the output [N, D_MODEL]
+
+    cudaStreamSynchronize(stream);
+
+    // Download output
+    cudaMemcpyAsync(h_output, d_scratch, (size_t)N * D_MODEL * sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+}
