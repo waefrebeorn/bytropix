@@ -67,16 +67,29 @@ static void kv_free(kv_cache_t *c) {
 // ================================================================
 static float *rope_sc = NULL;
 
+// MRoPE sections from config: [11, 11, 10]
+// Each section has independent frequency bands
+#define N_MROPE_SECTIONS 3
+static const int mrope_sections[N_MROPE_SECTIONS] = {11, 11, 10};
+
 static int rope_init(void) {
     if (rope_sc) return 1;
     rope_sc = (float *)malloc((size_t)MAX_CACHE_T * ROTARY_DIM * sizeof(float));
     if (!rope_sc) return 0;
+    
     for (int p = 0; p < MAX_CACHE_T; p++) {
-        for (int i = 0; i < ROTARY_DIM / 2; i++) {
-            float theta = powf(ROPE_THETA, -2.0f * i / ROTARY_DIM);
-            float angle = (float)p * theta * 0.25f; // 4x extrapolation factor
-            rope_sc[p * ROTARY_DIM + i * 2]     = cosf(angle);
-            rope_sc[p * ROTARY_DIM + i * 2 + 1] = sinf(angle);
+        int pair_offset = 0;
+        for (int s = 0; s < N_MROPE_SECTIONS; s++) {
+            int n_pairs = mrope_sections[s];
+            int dim = 2 * n_pairs;  // section dimension (22, 22, or 20)
+            for (int i = 0; i < n_pairs; i++) {
+                float theta = powf(ROPE_THETA, -2.0f * i / dim);
+                float angle = (float)p * theta;  // NO extra 0.25x factor
+                int idx = (pair_offset + i) * 2;
+                rope_sc[p * ROTARY_DIM + idx]     = cosf(angle);
+                rope_sc[p * ROTARY_DIM + idx + 1] = sinf(angle);
+            }
+            pair_offset += n_pairs;
         }
     }
     return 1;

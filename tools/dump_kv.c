@@ -44,7 +44,25 @@ int main() {
             case 6: { float v; fread(&v,4,1,f); printf("%f", v); break; }
             case 7: { bool v; fread(&v,1,1,f); printf("%s", v?"true":"false"); break; }
             case 8: { uint64_t sl; fread(&sl,8,1,f); char buf[65536]; fread(buf,1,sl,f); buf[sl]='\0'; printf("%s", buf); break; }
-            case 9: { uint32_t at; fread(&at,4,1,f); uint64_t al; fread(&al,8,1,f); printf("[arr:%u %llu]", at, (unsigned long long)al); break; }
+            case 9: { 
+                uint32_t at; fread(&at,4,1,f); 
+                uint64_t al; fread(&al,8,1,f); 
+                printf("[arr:");
+                for (uint64_t ai = 0; ai < al && ai < 12; ai++) {
+                    if (at == 8) { // string array
+                        uint64_t sl; fread(&sl,8,1,f); 
+                        char buf[4096]; fread(buf,1,sl,f); buf[sl]='\0'; 
+                        printf("%s ", buf);
+                    } else if (at == 5) { // int32 array
+                        int32_t v; fread(&v,4,1,f); printf("%d ", v);
+                    } else if (at == 6) { // float32 array
+                        float v; fread(&v,4,1,f); printf("%f ", v);
+                    } else {
+                        printf("(type%d) ", at);
+                        fseek(f, 4, SEEK_CUR);
+                    }
+                }
+                printf("]"); break; }
             case 10: { uint64_t v; fread(&v,8,1,f); printf("%llu", (unsigned long long)v); break; }
             case 11: { int64_t v; fread(&v,8,1,f); printf("%lld", (long long)v); break; }
             case 12: { double v; fread(&v,8,1,f); printf("%f", v); break; }
