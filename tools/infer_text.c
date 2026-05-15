@@ -21,6 +21,7 @@
 #include <time.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <omp.h>
 
 // ================================================================
 // GQA KV Cache
@@ -236,7 +237,7 @@ typedef struct {
 typedef struct {
     lexpert_t *exps;
     int n, cap;
-    float *sh_gate, *sh_up, *sh_down, *router;
+    float *sh_gate, *sh_up, *sh_down, *router, *sh_gate_proj;
     const uint8_t *q_gate, *q_up, *q_down;
     int64_t raw_sz, raw_sz_d;
     int ty_ge, ty_gi, ty_gs;
@@ -246,7 +247,7 @@ typedef struct {
 static void lmoe_init(lmoe_t *m) { memset(m, 0, sizeof(*m)); }
 static void lmoe_free(lmoe_t *m) {
     for (int i = 0; i < m->n; i++) { free(m->exps[i].gate); free(m->exps[i].up); free(m->exps[i].down); }
-    free(m->exps); free(m->sh_gate); free(m->sh_up); free(m->sh_down); free(m->router);
+    free(m->exps); free(m->sh_gate); free(m->sh_up); free(m->sh_down); free(m->router); free(m->sh_gate_proj);
     memset(m, 0, sizeof(*m));
 }
 
@@ -311,9 +312,7 @@ static void lazy_moe_decode(
     lmoe_t *mc, float *output)
 {
     int N = B * T;
-
-    // Route
-    float scores[256];
+    float *scores = (float *)malloc(N * N_EXPERTS * sizeof(float));
     wubu_moe_router(x, B, T, mc->router, scores);
 
     int topk_indices[N * N_ACTIVE_EXPTS];
@@ -428,6 +427,15 @@ static void lazy_moe_decode(
                     sum += sa[k] * mc->sh_down[k + j * SHARED_D_FF];
                 out_s[j] = sum;
             }
+            // Apply shared expert gate: sigmoid(x @ ffn_gate_inp_shexp.weight)
+            if (mc->sh_gate_proj) {
+                float gate_sum = 0.0f;
+                for (int k = 0; k < D_MODEL; k++)
+                    gate_sum += x_s[k] * mc->sh_gate_proj[k];
+                float gate_val = 1.0f / (1.0f + expf(-gate_sum));
+                for (int j = 0; j < D_MODEL; j++)
+                    out_s[j] *= gate_val;
+            }
         } else {
             memset(out_s, 0, D_MODEL * sizeof(float));
         }
@@ -452,6 +460,7 @@ static void lazy_moe_decode(
     }
 
     free(scratch);
+    free(scores);
 }
 
 // ================================================================
@@ -578,6 +587,7 @@ int main(int argc, char **argv) {
     float temperature = getenv("TEMP") ? atof(getenv("TEMP")) : 1.0f;
     int samp_top_k = getenv("TOP_K") ? atoi(getenv("TOP_K")) : 20;
     float top_p = getenv("TOP_P") ? atof(getenv("TOP_P")) : 0.95f;
+    int chat_mode = getenv("CHAT") ? atoi(getenv("CHAT")) : 0;
 
     signal(SIGINT, handler);
     srand(time(NULL));
@@ -586,8 +596,9 @@ int main(int argc, char **argv) {
     if (!rope_init()) { fprintf(stderr, "Failed to allocate RoPE table\n"); return 1; }
 
     printf("=== infer_text v2 — KV Cache + SSM Carry + Lazy MoE ===\n");
-    printf("Model: %s\nPrompt: \"%s\" | max=%d | topk=%d | MOE=%d\n",
-           path, prompt, max_tok, top_k, moe_on);
+    printf("Model: %s\nPrompt: \"%s\" | max=%d | topk=%d | MOE=%d%s\n",
+           path, prompt, max_tok, top_k, moe_on,
+           chat_mode ? " | CHAT=1" : "");
     printf("Sampling: temp=%.1f top_k=%d top_p=%.2f\n", temperature, samp_top_k, top_p);
 
     double T0 = now_sec();
@@ -624,18 +635,17 @@ int main(int argc, char **argv) {
     printf("Embd: %d tok (%.2f s)\n", vs, now_sec() - t0);
 
     // ---- GPU init ----
-    t0 = now_sec();
     cublasHandle_t ch = NULL;
     cudaStream_t st = NULL;
     float *d_out_w = NULL, *d_hid = NULL, *d_log = NULL;
     int use_gpu = 0;
-    if (!no_gpu && mdl.output_weight) {
+    if (mdl.output_weight && !no_gpu) {
         cublasCreate(&ch); cudaStreamCreate(&st);
         d_out_w = gpu_upload_output_weight(ch, mdl.output_weight, vs, st);
         cudaMalloc(&d_hid, D_MODEL * sizeof(float));
         cudaMalloc(&d_log, vs * sizeof(float));
         use_gpu = 1;
-        printf("GPU out: %.2f s\n", now_sec() - t0);
+        printf("GPU out: on\n");
     } else {
         printf("GPU out: off\n");
     }
@@ -719,16 +729,98 @@ int main(int argc, char **argv) {
                 t = gguf_find_tensor(ctx, nm);
                 if (t) gguf_dequantize((const uint8_t *)ctx->data_blob + t->data_offset,
                                        t->ggml_type, sd, lc[l].lm.sh_down);
+                snprintf(nm, sizeof(nm), "blk.%d.ffn_gate_inp_shexp.weight", l);
+                t = gguf_find_tensor(ctx, nm);
+                if (t) {
+                    lc[l].lm.sh_gate_proj = (float *)malloc(D_MODEL * sizeof(float));
+                    gguf_dequantize((const uint8_t *)ctx->data_blob + t->data_offset,
+                                    t->ggml_type, D_MODEL, lc[l].lm.sh_gate_proj);
+                }
             }
         }
     }
 
     // ---- Encode ----
-    int pids[65536];
-    int np = wubu_tokenizer_encode(&tok, prompt, pids+1, 65535);
-    if (np <= 0) { fprintf(stderr, "Failed to encode prompt\\n"); wubu_tokenizer_free(&tok); return 1; }
-    pids[0] = tok.bos_id; np++;
-    printf("Prompt: %d tok\n", np);
+    int *pids = (int *)malloc(65536 * sizeof(int));
+    if (!pids) { fprintf(stderr, "Failed to allocate pids\\n"); return 1; }
+    int np;
+    
+    if (chat_mode) {
+        // Build chat template by manually injecting special token IDs
+        // Token IDs (from vocab): <|im_start|>=248045, <|im_end|>=248046, <think>=248068
+        // Newline encodes as token 198 in Qwen3.6 BPE
+        const int IM_START = 248045;
+        const int IM_END   = 248046;
+        const int THINK    = 248068;
+        const int NL_TOKEN = 198;
+        
+        int *pids_tmp = (int *)malloc(65536 * sizeof(int));
+        if (!pids_tmp) { free(pids); fprintf(stderr, "Failed\\n"); return 1; }
+        int pos = 0;
+        
+        // BOS
+        pids_tmp[pos++] = tok.bos_id; // 248044
+        
+        // <|im_start|>system\nYou are a helpful assistant.
+        pids_tmp[pos++] = IM_START;
+        {   int n = wubu_tokenizer_encode(&tok, "system\nYou are a helpful assistant.",
+                                          pids_tmp + pos, 65535 - pos);
+            if (n <= 0) { fprintf(stderr, "Failed to encode system msg\n"); return 1; }
+            pos += n;
+        }
+        
+        // <|im_end|>\n<|im_start|>user\n
+        pids_tmp[pos++] = IM_END;
+        pids_tmp[pos++] = NL_TOKEN;
+        pids_tmp[pos++] = IM_START;
+        {   int n = wubu_tokenizer_encode(&tok, "user\n",
+                                          pids_tmp + pos, 65535 - pos);
+            if (n <= 0) { fprintf(stderr, "Failed to encode role\\n"); return 1; }
+            pos += n;
+        }
+        
+        // [USER_PROMPT]
+        {   int n = wubu_tokenizer_encode(&tok, prompt,
+                                          pids_tmp + pos, 65535 - pos);
+            if (n <= 0) { fprintf(stderr, "Failed to encode prompt\n"); return 1; }
+            pos += n;
+        }
+        
+        // <|im_end|>\n<|im_start|>assistant\n<think>\n
+        pids_tmp[pos++] = IM_END;
+        pids_tmp[pos++] = NL_TOKEN;
+        pids_tmp[pos++] = IM_START;
+        {   int n = wubu_tokenizer_encode(&tok, "assistant\n",
+                                          pids_tmp + pos, 65535 - pos);
+            if (n <= 0) { fprintf(stderr, "Failed to encode assistant prefix\n"); return 1; }
+            pos += n;
+        }
+        pids_tmp[pos++] = THINK;
+        pids_tmp[pos++] = NL_TOKEN;
+        
+        np = pos;
+        memcpy(pids, pids_tmp, np * sizeof(int));
+        free(pids_tmp);
+        printf("Chat prompt: %d tok\\n", np);
+        if (verb) {
+            printf("  Template tokens:");
+            for (int i = 0; i < np && i < 20; i++) printf(" %d", pids[i]);
+            printf("%s\\n", np > 20 ? " ..." : "");
+        }
+        // Debug: print first 10 token strings
+        if (verb) {
+            char dbuf[256];
+            for (int i = 0; i < np && i < 10; i++) {
+                wubu_tokenizer_decode(&tok, pids + i, 1, dbuf, 255);
+                printf("  tok[%d] = '%s'\\n", pids[i], dbuf);
+            }
+        }
+    } else {
+        np = wubu_tokenizer_encode(&tok, prompt, pids+1, 65535);
+        if (np <= 0) { fprintf(stderr, "Failed to encode prompt\n"); wubu_tokenizer_free(&tok); return 1; }
+        pids[0] = tok.bos_id; np++;
+        printf("Prompt: %d tok\n", np);
+    }
 
     // ---- Allocate forward buffers ----
     float *x = (float *)malloc(np * D_MODEL * sizeof(float));
@@ -755,9 +847,10 @@ int main(int argc, char **argv) {
     // Debug: embedding stats
     { float esum=0, emax=-1e30, emin=1e30;
       for (int i = 0; i < np * D_MODEL; i++) { esum += fabsf(x[i]); if(x[i]>emax)emax=x[i]; if(x[i]<emin)emin=x[i]; }
-      printf("  Embd stats: mean|%.4f max|%.4f min|%.4f (norm=%.4f)\n", esum/(np*D_MODEL), emax, emin,
+      printf("  Embd stats: mean|%.4f max|%.4f min|%.4f (norm=%.4f)\\n", esum/(np*D_MODEL), emax, emin,
              sqrtf(esum*esum/(np*D_MODEL)));
     }
+    printf("  Starting layer loop...\\n"); fflush(stdout);
 
     for (int l = 0; l < mdl.n_layers; l++) {
         double tl = now_sec();
@@ -767,18 +860,20 @@ int main(int argc, char **argv) {
         wubu_rms_norm(1, np, D_MODEL, residual, mdl.layers[l].attn_norm_weight, 1e-6f, normed);
 
         if (ly->is_gqa) {
+            printf("L%d GQA start\\n", l); fflush(stdout);
             // Full GQA forward (computes Q, K, V, attention)
             // We need K_norm and V for caching, so use forward_save or compute separately
             int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
             int kv_dim = GQA_KV_DIM;
-
-            // Compute Q, K, V for all prompt tokens
+            
+            printf("L%d alloc\\n", l); fflush(stdout);
             float *Q = (float *)malloc(np * q_dim * sizeof(float));
             float *K = (float *)malloc(np * kv_dim * sizeof(float));
             float *V = (float *)malloc(np * kv_dim * sizeof(float));
             float *K_norm = (float *)malloc(np * kv_dim * sizeof(float));
             float *gate_buf = (float *)malloc(np * q_dim * sizeof(float));
             float *attn_out = (float *)calloc(np * q_dim, sizeof(float));
+            printf("L%d alloc done: %p %p %p\\n", l, (void*)Q, (void*)K, (void*)V); fflush(stdout);
 
             for (int s = 0; s < np; s++) {
                 const float *xs = normed + s * D_MODEL;
@@ -879,8 +974,10 @@ int main(int argc, char **argv) {
             free(Q); free(K); free(V); free(K_norm); free(gate_buf); free(attn_out);
         } else {
             // SSM forward: full prefill, save final state
+            printf("L%d SSM: B=1 T=%d\\n", l, np); fflush(stdout);
             wubu_ssm_forward(normed, 1, np, &ly->w.ssm,
                              ly->ssm_state, ly->conv_state, attn);
+            printf("L%d SSM done\\n", l); fflush(stdout);
         }
 
         // NaN check
@@ -943,6 +1040,15 @@ int main(int argc, char **argv) {
 
     // Output projection for last token
     const float *h_last = residual + (np - 1) * D_MODEL;
+    { float mn=1e30,mx=-1e30,sum=0; for(int k=0;k<D_MODEL;k++){mn=fminf(mn,h_last[k]);mx=fmaxf(mx,h_last[k]);sum+=h_last[k];}
+      printf("  h_last: mean=%.4f max=%.4f min=%.4f rms=%.4f nonzero=%d\n", sum/D_MODEL,mx,mn,sqrtf(sum/D_MODEL),mx>1e-10?1:0);
+      // Also dump first 5 output weights at k=0
+      printf("  out_w[0..4]: %.6e %.6e %.6e %.6e %.6e\n",
+             mdl.output_weight[0], mdl.output_weight[1], mdl.output_weight[2], mdl.output_weight[3], mdl.output_weight[4]);
+      printf("  out_w[0+1*vs..0+5*vs]: %.6e %.6e %.6e %.6e %.6e\n",
+             mdl.output_weight[(int64_t)0+(int64_t)0*vs], mdl.output_weight[(int64_t)0+(int64_t)1*vs],
+             mdl.output_weight[(int64_t)0+(int64_t)2*vs], mdl.output_weight[(int64_t)0+(int64_t)3*vs],
+             mdl.output_weight[(int64_t)0+(int64_t)4*vs]); }
     float *logits = (float *)malloc(vs * sizeof(float));
     if (use_gpu) {
         cudaMemcpyAsync(d_hid, h_last, D_MODEL * sizeof(float), cudaMemcpyHostToDevice, st);
@@ -950,10 +1056,11 @@ int main(int argc, char **argv) {
         cudaMemcpyAsync(logits, d_log, vs * sizeof(float), cudaMemcpyDeviceToHost, st);
         cudaStreamSynchronize(st);
     } else if (mdl.output_weight) {
+        #pragma omp parallel for
         for (int j = 0; j < vs; j++) {
             double sum = 0.0;
             for (int k = 0; k < D_MODEL; k++)
-                sum += (double)h_last[k] * (double)mdl.output_weight[j * D_MODEL + k];
+                sum += (double)h_last[k] * (double)mdl.output_weight[(int64_t)j + (int64_t)k * vs];
             logits[j] = (float)sum;
         }
     } else {
@@ -1083,10 +1190,11 @@ int main(int argc, char **argv) {
             cudaMemcpyAsync(logits, d_log, vs * sizeof(float), cudaMemcpyDeviceToHost, st);
             cudaStreamSynchronize(st);
         } else if (mdl.output_weight) {
+            #pragma omp parallel for
             for (int j = 0; j < vs; j++) {
                 double sum = 0.0;
                 for (int k = 0; k < D_MODEL; k++)
-                    sum += (double)residual[k] * (double)mdl.output_weight[j * D_MODEL + k];
+                    sum += (double)residual[k] * (double)mdl.output_weight[(int64_t)j + (int64_t)k * vs];
                 logits[j] = (float)sum;
             }
         } else {
@@ -1129,11 +1237,12 @@ int main(int argc, char **argv) {
 
     double decode_time = now_sec() - t_gen;
     printf("\n\n=== Generation ===\n");
-    printf("Prefill: %d tok in %.2f s (%.0f tok/s)\n", np, prefill_time, np / prefill_time);
+    printf("Prefill: %d tok in %.2f s (%.0f tok/s) | Out proj OMP threads=%d\n", np, prefill_time, np / prefill_time, omp_get_max_threads());
     printf("Decode:  %d tok in %.2f s (%.1f tok/s)\n", gen, decode_time, gen / decode_time);
     printf("Total:   %.2f s\n", now_sec() - T0);
 
     // ---- Cleanup ----
+    free(pids);
     free(x); free(normed); free(attn); free(residual); free(ffn);
     free(x_step); free(out_step);
     free(logits); free(embd);

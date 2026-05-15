@@ -2116,3 +2116,30 @@ void wubu_cuda_chunked_attn(cublasHandle_t handle, cudaStream_t stream,
 
     cudaStreamSynchronize(stream);
 }
+
+// ================================================================
+// Output Projection CUDA Kernel — simple dot product per vocab entry
+// ================================================================
+__global__ void output_proj_kernel(const float *h, int D,
+                                    const float *W, int64_t V, float *logits) {
+    int64_t v = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (v >= V) return;
+    double sum = 0.0;
+    for (int k = 0; k < D; k++)
+        sum += (double)h[k] * (double)W[v + (int64_t)k * V];
+    logits[v] = (float)sum;
+}
+
+// ================================================================
+// Wrapper: launch output projection kernel (C-callable from bench.c)
+// ================================================================
+extern "C" void launch_output_proj_kernel(cudaStream_t stream,
+                                          const float *d_hidden, int D,
+                                          const float *d_output_weight, int64_t V,
+                                          float *d_logits) {
+    int block = 256;
+    int64_t grid64 = (V + block - 1) / block;
+    int grid = (int)grid64;
+    output_proj_kernel<<<grid, block, 0, stream>>>(d_hidden, D, d_output_weight, V, d_logits);
+    cudaStreamSynchronize(stream);
+}

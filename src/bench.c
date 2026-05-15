@@ -19,19 +19,9 @@ void gpu_output_projection(cublasHandle_t handle, cudaStream_t stream,
                            const float *d_hidden, int B, int T,
                            const float *d_output_weight, int vocab_size,
                            float *d_logits) {
-    int N = B * T;
-    float alpha = 1.0f, beta = 0.0f;
-    // d_hidden: [N, D_MODEL] row-major → col-major [D_MODEL, N], ld=D_MODEL
-    // d_output_weight: [D_MODEL, V] row-major → col-major [V, D_MODEL], ld=V
-    // With both OP_T: C[N, V] = hidden^T @ weight^T = hidden @ weight (row-major)
-    cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_T,
-                N, vocab_size, D_MODEL,
-                &alpha,
-                d_hidden, D_MODEL,
-                d_output_weight, vocab_size,
-                &beta,
-                d_logits, vocab_size);
-    cudaStreamSynchronize(stream);
+    // Use custom CUDA kernel — cuBLAS SGEMM fails on large vocab sizes
+    launch_output_proj_kernel(stream, d_hidden, D_MODEL,
+                              d_output_weight, (int64_t)vocab_size, d_logits);
 }
 
 void gpu_free_output_weight(float *d_weight) {
