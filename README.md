@@ -213,8 +213,8 @@ This project started as a pure theory: **WuBu Nesting** — nested hyperbolic sp
 | Expert FFN dim | 512 | `D_FF=512` | ✅ Match |
 | RoPE theta | 10,000,000 | `ROPE_THETA` defined | ✅ **Fixed May 15** |
 | Partial RoPE | 0.25 (64/256) | `ROTARY_DIM=64` | ✅ **Fixed May 15** |
-| MRoPE 3D | section=[11,11,10] | ❌ Missing | Implement P2 |
-| MTP head | 1 layer | ❌ Missing | Implement P3 |
+| MRoPE 3D | section=[11,11,10] | ✅ Equivalent for text-only | Full 3D needs vision token position types |
+| MTP head | 1 layer | ✅ **Fixed May 15** — aux t+2 loss w=0.3 | Reuses output_weight |
 | bos/eos | both 248044 | Tokenizer reads GGUF | ✅ Match |
 | rms_norm_eps | 1e-06 | `1e-6f` constant | ✅ Match |
 

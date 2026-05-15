@@ -521,15 +521,41 @@ int main(int argc, char **argv) {
             loss/=fwd_N;
         }
 
+        // MTP loss (multi-token prediction): predict t+2 from hidden[t]
+        // Reuses already-computed logits (same output_weight, mtp_use_dedicated_embeddings=false)
+        float mtp_loss=0;
+        if(!use_tst && fwd_N>=2){
+            for(int i=0;i<fwd_N-1;i++){
+                float*log_i=logits+i*V;  // reuse host-side logits (already softmax'd)
+                int tgt=(start_idx+i+2<total_tokens)?tokens[start_idx+i+2]:0;
+                if(tgt<0||tgt>=V)tgt=0;
+                mtp_loss-=logf(fmaxf(log_i[tgt],1e-30f));
+            }
+            mtp_loss/=fwd_N-1;
+            loss+=0.3f*mtp_loss;  // MTP weight 0.3
+        }
+
         // Gradient w.r.t. logits
         memset(dW,0,(int64_t)D_MODEL*V*sizeof(float));
         float*d_hidden=(float*)calloc(fwd_N*D_MODEL,sizeof(float));
+        int *mtp_targets = NULL;
+        if(!use_tst && fwd_N>=2){
+            mtp_targets=(int*)malloc((fwd_N-1)*sizeof(int));
+            for(int i=0;i<fwd_N-1;i++){
+                int tgt=(start_idx+i+2<total_tokens)?tokens[start_idx+i+2]:0;
+                if(tgt<0||tgt>=V)tgt=0;
+                mtp_targets[i]=tgt;
+            }
+        }
         for(int i=0;i<fwd_N;i++){
             float*log_i=logits+i*V;
             if(!use_tst){
                 int tgt=targets[i];if(tgt<0||tgt>=V)tgt=0;
+                float mtp_w = (mtp_targets && i<fwd_N-1) ? 0.3f : 0.0f;
+                int tmtp = mtp_targets ? mtp_targets[i] : 0;
                 for(int j=0;j<V;j++){
-                    float dL_dlog=log_i[j]-(j==tgt?1.0f:0.0f);
+                    float dL_dlog=(log_i[j]-(j==tgt?1.0f:0.0f))
+                                 + mtp_w*(log_i[j]-(j==tmtp?1.0f:0.0f));
                     for(int k=0;k<D_MODEL;k++){
                         d_hidden[i*D_MODEL+k]+=dL_dlog*output_weight[j*D_MODEL+k];
                         dW[j*D_MODEL+k]+=dL_dlog*hidden[i*D_MODEL+k]/fwd_N;
@@ -537,6 +563,7 @@ int main(int argc, char **argv) {
                 }
             }
         }
+        free(mtp_targets);
 
         // === PGA Backward: propagate gradient through PGA GQA layers ===
         if(pga_enabled){
@@ -630,11 +657,12 @@ int main(int argc, char **argv) {
         double step_time=now_sec()-t0;
         total_time+=step_time;
 
-        printf("Step %3d: loss=%.4f (%.3fs, %.1f tok/s)%s%s%s%s%s\n",
+        printf("Step %3d: loss=%.4f (%.3fs, %.1f tok/s)%s%s%s%s%s%s\n",
                step+1,loss,step_time,fwd_N/step_time,
                use_tst?" TST":"",rsgd_enabled?" RSGD":"",
                pga_enabled?" PGA":"",nested_ssm_enabled?" NSSM":"",
-               nested_moe_enabled?" NMOE":"");
+               nested_moe_enabled?" NMOE":"",
+               mtp_loss>0?" MTP":"");
         fflush(stdout);
         free(d_hidden);
     }

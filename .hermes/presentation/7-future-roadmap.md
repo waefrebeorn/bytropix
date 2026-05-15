@@ -176,3 +176,5 @@ Cross-reference 27-layer vision transformer against Qwen3.6 config:
 - ✅ 3 new SVGs (training-pipeline, tailslayer-pattern, paper-audit)
 - ✅ RoPE implementation (θ=10M, rotary_dim=64) added to GPU GQA forward
 - ✅ CONV_DIM discrepancy resolved (8192 is correct: Q2048+K2048+V4096)
+- ✅ MTP head — auxiliary t+2 prediction loss (w=0.3), reuses output_weight, gradient integrated
+- ✅ MRoPE 3D — text-only equivalent via standard RoPE (t=h=w=seq_pos), full 3D blocked on vision
