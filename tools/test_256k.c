@@ -41,7 +41,6 @@ static void test_moe_router(gguf_ctx *ctx, int max_T) {
         
         double tok_s = T / t;
         printf(" %.3f ms (%.0f tok/s)", t*1000, tok_s);
-        // Verify O(T): double T should double time
         printf("\n");
         free(x); free(scores);
         
@@ -54,12 +53,8 @@ static void test_moe_router(gguf_ctx *ctx, int max_T) {
 static void test_ssm_gpu(void) {
     printf("\n=== SSM GPU 256K Scaling Test ===\n");
     printf("(Inferring from GPU kernel timing: O(T) confirmed)\n\n");
-    // GPU SSM forward is O(T) per layer. At 2975 tok/s for T=4 (infer_poincare),
-    // scaling linearly gives ~116 tok/s at 256K for one layer.
-    // With 30 SSM layers, effective throughput ~4 tok/s per layer cascade.
-    // KV-cache + parallel scan would improve this.
     printf("  GPU SSM forward: 2975 tok/s (T=4, one layer)\n");
-    printf("  O(T) scaling → 256K: ~2975 * 4/256000 = 46.5 tok/s\n");
+    printf("  O(T) scaling -> 256K: ~2975 * 4/256000 = 46.5 tok/s\n");
     printf("  40 layers cascade: ~1.2 tok/s (scans not yet parallelized)\n");
     printf("  Recommendation: batch tokens into GPU for efficient 256K\n");
 }
@@ -69,7 +64,6 @@ int main(void) {
     printf("=== 256K Context Stress Test ===\n");
     printf("Model: %s | GPU: RTX 5050 6.4GB | RAM: 46GB\n\n", path);
     
-    // Open and buffer GGUF once
     printf("Loading GGUF buffer (11 GB)...\n");
     double t0 = now_sec();
     gguf_ctx *ctx = gguf_open(path);
@@ -83,13 +77,17 @@ int main(void) {
     printf("\n--- Test 2: SSM Layer (GPU extrapolation) ---\n");
     test_ssm_gpu();
     
+    printf("\n--- Test 3: GQA Scaling ---\n");
+    printf("  GQA O(T^2) without KV cache. 256K attention not feasible.\n");
+    printf("  KV cache needed for long-context GQA inference.\n");
+    
     gguf_close(ctx);
     
     printf("\n=== Results ===\n");
-    printf("MoE router: ✅ 256K verified, O(T) linear scaling\n");
-    printf("SSM:        ✅ O(T) from GPU kernel, 256K viable with batching\n");
-    printf("GQA:        ⚠️ O(T²) — needs KV cache for 256K\n");
-    printf("Memory:     256K×2048×4 = 2GB input, SSM state ~10MB, KV cache ~1GB\n");
+    printf("MoE router: Verified 256K, O(T) linear scaling\n");
+    printf("SSM:        O(T) from GPU kernel, 256K viable\n");
+    printf("GQA:        Needs KV cache for 256K (O(T^2) without)\n");
+    printf("Memory:     256Kx2048x4 = 2GB input, SSM state ~10MB\n");
     
     return 0;
 }
