@@ -9,7 +9,6 @@
 #include "wubu_model.h"
 #include "wubu_vision.h"
 #include "cuda_vision.h"
-#include "gguf_reader.h"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <stdio.h>
@@ -34,7 +33,13 @@ int main(int argc, char **argv) {
     printf("=== GPU Vision→Text Pipeline ===\n"); fflush(stdout);
     double t0 = now_sec();
 
-    // 1. Load vision encoder
+    // 1. Load model FIRST (before CUDA init to avoid WSL race)
+    printf("Loading model...\n"); fflush(stdout);
+    wubu_model_t model;
+    if (!wubu_model_init(&model, model_path)) return 1;
+    printf("Model loaded: %.2fs\n", now_sec() - t0); fflush(stdout);
+
+    // 2. Load vision encoder
     printf("Loading vision encoder...\n"); fflush(stdout);
     vision_encoder_t enc;
     if (!vision_encoder_init(&enc, vision_path)) return 1;
@@ -239,12 +244,8 @@ int main(int argc, char **argv) {
     printf("\nVision output: [%.4f, %.4f] NaN=%d tokens=%d\n", min_v, max_v, nan_c, n_merged);
     printf("  [0:4]: %.4f %.4f %.4f %.4f\n", vit_embd[0], vit_embd[1], vit_embd[2], vit_embd[3]);
 
-    // 11. Load model and run text forward
+    // 11. Run text forward on loaded model
     printf("\n--- Text Model Forward ---\n"); fflush(stdout);
-    printf("Loading model from %s...\n", model_path); fflush(stdout);
-    wubu_model_t model;
-    if (!wubu_model_init(&model, model_path)) return 1;
-
     float *logits = (float *)malloc(B * n_merged * model.vocab_size * sizeof(float));
 
     double tt0 = now_sec();
