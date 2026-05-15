@@ -1,14 +1,12 @@
 /**
- * infer_text.c — Full text generation pipeline
+ * infer_text.c — Full text generation pipeline v2
  *
- * Loads tokenizer + model + embeddings from GGUF.
- * Runs autoregressive generation with MoE.
+ * Phase 1 (prefill): full forward over prompt tokens, populate KV caches.
+ * Phase 2 (decode): token-by-token using GQA KV cache + SSM state carry.
+ * Lazy per-expert MoE cache (dequant router + shared expert once).
  *
- * Usage: ./infer_text [gguf_path] ["prompt text"] [max_tokens] [top_k]
- *
- * Env: MOE=1 enable MoE (default: 0)
- *      MOE_LAYERS=N limit MoE to first N layers (0=all)
- *      VERBOSE=1 layer-by-layer timing
+ * Usage: ./infer_text [gguf_path] ["prompt"] [max_tokens] [top_k]
+ * Env:  MOE=1  VERBOSE=1  NOGPU=1
  */
 #include "wubu_model.h"
 #include "wubu_moe.h"
@@ -22,324 +20,959 @@
 #include <math.h>
 #include <time.h>
 #include <signal.h>
+#include <stdbool.h>
 
-// Load token_embd.weight from GGUF
-static float *load_embeddings(gguf_ctx *ctx, int *vocab_size) {
+// ================================================================
+// GQA KV Cache
+// ================================================================
+#define MAX_CACHE_T (262144)
+#define GQA_KV_DIM (GQA_KV_HEADS * GQA_HEAD_DIM) // 512
+
+typedef struct {
+    float *h_k;        // [current_T, kv_dim] post-RMSNorm K
+    float *h_v;        // [current_T, kv_dim] raw V
+    int max_T;
+    int current_T;
+    int kv_dim;
+} kv_cache_t;
+
+static int kv_init(kv_cache_t *c, int max_T, int kv_dim) {
+    memset(c, 0, sizeof(*c));
+    c->max_T = max_T;
+    c->kv_dim = kv_dim;
+    c->current_T = 0;
+    size_t bytes = (size_t)max_T * kv_dim * sizeof(float);
+    c->h_k = (float *)malloc(bytes);
+    c->h_v = (float *)malloc(bytes);
+    if (!c->h_k || !c->h_v) return 0;
+    return 1;
+}
+
+static void kv_append(kv_cache_t *c, const float *k, const float *v, int n) {
+    int off = c->current_T;
+    int nt = off + n;
+    size_t nb = (size_t)n * c->kv_dim * sizeof(float);
+    memcpy(c->h_k + off * c->kv_dim, k, nb);
+    memcpy(c->h_v + off * c->kv_dim, v, nb);
+    c->current_T = nt;
+}
+
+static void kv_free(kv_cache_t *c) {
+    free(c->h_k); free(c->h_v);
+    memset(c, 0, sizeof(*c));
+}
+
+// ================================================================
+// GQA decode: Q for 1 token, attend vs cached K/V
+// ================================================================
+static void gqa_kv_decode(
+    const float *x_step, const gqa_layer_weights *w,
+    kv_cache_t *cache, float *output)
+{
+    int kv_dim = GQA_KV_DIM;
+    int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
+    float q_raw[4096], q_norm[4096], k_raw[512], k_norm[512], v_raw[512];
+
+    // Q proj
+    for (int j = 0; j < q_dim; j++) {
+        double sum = 0.0;
+        for (int i = 0; i < D_MODEL; i++)
+            sum += (double)x_step[i] * (double)w->attn_q_weight[i * (q_dim * 2) + j];
+        q_raw[j] = (float)sum;
+    }
+    memcpy(q_norm, q_raw, q_dim * sizeof(float));
+    wubu_rms_norm(1, GQA_Q_HEADS, GQA_HEAD_DIM, q_norm, w->attn_q_norm_weight, 1e-6f, q_norm);
+
+    // K proj
+    for (int j = 0; j < kv_dim; j++) {
+        double sum = 0.0;
+        for (int i = 0; i < D_MODEL; i++)
+            sum += (double)x_step[i] * (double)w->attn_k_weight[i * kv_dim + j];
+        k_raw[j] = (float)sum;
+    }
+    memcpy(k_norm, k_raw, kv_dim * sizeof(float));
+    wubu_rms_norm(1, GQA_KV_HEADS, GQA_HEAD_DIM, k_norm, w->attn_k_norm_weight, 1e-6f, k_norm);
+
+    // V proj
+    for (int j = 0; j < kv_dim; j++) {
+        double sum = 0.0;
+        for (int i = 0; i < D_MODEL; i++)
+            sum += (double)x_step[i] * (double)w->attn_v_weight[i * kv_dim + j];
+        v_raw[j] = (float)sum;
+    }
+
+    // Append K,V to cache
+    kv_append(cache, k_norm, v_raw, 1);
+    int new_T = cache->current_T;
+
+    // Gate proj
+    float gate[4096];
+    for (int j = 0; j < q_dim; j++) {
+        double sum = 0.0;
+        for (int i = 0; i < D_MODEL; i++)
+            sum += (double)x_step[i] * (double)w->attn_q_weight[i * (q_dim * 2) + (j + q_dim)];
+        gate[j] = (float)sum;
+    }
+
+    // Attention
+    float scale = 1.0f / sqrtf((float)GQA_HEAD_DIM);
+    float *attn_out = (float *)calloc(q_dim, sizeof(float));
+    for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
+        int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
+        const float *q_vec = q_norm + h_q * GQA_HEAD_DIM;
+        float *out = attn_out + h_q * GQA_HEAD_DIM;
+
+        float mx = -1e30f, sum_exp = 0.0f;
+        for (int t = 0; t < new_T; t++) {
+            const float *kv = cache->h_k + t * kv_dim + h_kv * GQA_HEAD_DIM;
+            float s = 0.0f;
+            for (int i = 0; i < GQA_HEAD_DIM; i++) s += q_vec[i] * kv[i];
+            s *= scale;
+            if (t == 0 || s > mx) mx = s;
+        }
+        for (int t = 0; t < new_T; t++) {
+            const float *kv = cache->h_k + t * kv_dim + h_kv * GQA_HEAD_DIM;
+            float s = 0.0f;
+            for (int i = 0; i < GQA_HEAD_DIM; i++) s += q_vec[i] * kv[i];
+            s = expf(s * scale - mx);
+            sum_exp += s;
+        }
+        float inv = 1.0f / (sum_exp + 1e-30f);
+        for (int t = 0; t < new_T; t++) {
+            const float *vv = cache->h_v + t * kv_dim + h_kv * GQA_HEAD_DIM;
+            const float *kv = cache->h_k + t * kv_dim + h_kv * GQA_HEAD_DIM;
+            float s = 0.0f;
+            for (int i = 0; i < GQA_HEAD_DIM; i++) s += q_vec[i] * kv[i];
+            float a = expf(s * scale - mx) * inv;
+            for (int i = 0; i < GQA_HEAD_DIM; i++) out[i] += a * vv[i];
+        }
+    }
+
+    // Gate
+    for (int i = 0; i < q_dim; i++)
+        attn_out[i] *= 1.0f / (1.0f + expf(-gate[i]));
+
+    // Output projection
+    memset(output, 0, D_MODEL * sizeof(float));
+    for (int i = 0; i < q_dim; i++) {
+        float a = attn_out[i];
+        for (int j = 0; j < D_MODEL; j++)
+            output[j] += a * w->attn_output_weight[i * D_MODEL + j];
+    }
+    free(attn_out);
+}
+
+// ================================================================
+// SSM decode: 1 token with state carry
+// ================================================================
+static void ssm_kv_decode(
+    const float *x_step, const ssm_layer_weights *w,
+    float *ssm_state, float *conv_state, float *output)
+{
+    // wubu_ssm_forward with T=1, carrying state in/out
+    wubu_ssm_forward(x_step, 1, 1, w, ssm_state, conv_state, output);
+}
+
+// ================================================================
+// Lazy MoE cache
+// ================================================================
+typedef struct {
+    int eid;
+    float *gate, *up, *down;
+} lexpert_t;
+
+typedef struct {
+    lexpert_t *exps;
+    int n, cap;
+    float *sh_gate, *sh_up, *sh_down, *router;
+    const uint8_t *q_gate, *q_up, *q_down;
+    int64_t raw_sz, raw_sz_d;
+    int ty_ge, ty_gi, ty_gs;
+    bool has;
+} lmoe_t;
+
+static void lmoe_init(lmoe_t *m) { memset(m, 0, sizeof(*m)); }
+static void lmoe_free(lmoe_t *m) {
+    for (int i = 0; i < m->n; i++) { free(m->exps[i].gate); free(m->exps[i].up); free(m->exps[i].down); }
+    free(m->exps); free(m->sh_gate); free(m->sh_up); free(m->sh_down); free(m->router);
+    memset(m, 0, sizeof(*m));
+}
+
+// ================================================================
+// Lazy MoE forward: cache experts across steps, no 3GB temp arrays
+// ================================================================
+// Uses moe_expert_forward directly from cached per-expert arrays.
+// No contiguous 256-expert arrays needed — looks up experts by ID.
+static void moe_expert_forward_lazy(const float *x, const float *gate_w,
+                                     const float *up_w, const float *down_w,
+                                     float *temp, float *output) {
+    // temp: [D_FF * 3] scratch
+    float *gate_out = temp;
+    float *up_out   = temp + D_FF;
+    float *act_out  = temp + D_FF * 2;
+
+    // gate = x @ gate_w  [2048] @ [2048, 512] -> [512]
+    for (int j = 0; j < D_FF; j++) {
+        float sum = 0.0f;
+        for (int k = 0; k < D_MODEL; k++)
+            sum += x[k] * gate_w[k * D_FF + j];
+        gate_out[j] = sum;
+    }
+
+    // up = x @ up_w
+    for (int j = 0; j < D_FF; j++) {
+        float sum = 0.0f;
+        for (int k = 0; k < D_MODEL; k++)
+            sum += x[k] * up_w[k * D_FF + j];
+        up_out[j] = sum;
+    }
+
+    // act = silu(gate) * up
+    for (int j = 0; j < D_FF; j++) {
+        float g = gate_out[j];
+        float silu = (g < -80.0f) ? 0.0f : g / (1.0f + expf(-g));
+        act_out[j] = silu * up_out[j];
+    }
+
+    // out = act @ down_w  [512] @ [512, 2048] -> [2048]
+    for (int j = 0; j < D_MODEL; j++) {
+        float sum = 0.0f;
+        for (int k = 0; k < D_FF; k++)
+            sum += act_out[k] * down_w[k * D_MODEL + j];
+        output[j] = sum;
+    }
+}
+
+// Find cached expert by ID (linear search — small n, typically 8)
+static float* find_cached(lmoe_t *mc, int eid, int which) {
+    // which: 0=gate, 1=up, 2=down
+    for (int i = 0; i < mc->n; i++)
+        if (mc->exps[i].eid == eid)
+            return which == 0 ? mc->exps[i].gate :
+                   which == 1 ? mc->exps[i].up : mc->exps[i].down;
+    return NULL;
+}
+
+static void lazy_moe_decode(
+    const float *x, int B, int T,
+    const uint8_t *q_gate_exps, const uint8_t *q_up_exps, const uint8_t *q_down_exps,
+    lmoe_t *mc, float *output)
+{
+    int N = B * T;
+
+    // Route
+    float scores[256];
+    wubu_moe_router(x, B, T, mc->router, scores);
+
+    int topk_indices[N * N_ACTIVE_EXPTS];
+    float topk_weights[N * N_ACTIVE_EXPTS];
+
+    for (int s = 0; s < N; s++) {
+        float *sc = scores + s * N_EXPERTS;
+        float mx = sc[0];
+        for (int e = 1; e < N_EXPERTS; e++) if (sc[e] > mx) mx = sc[e];
+
+        float sum_exp = 0.0f;
+        for (int e = 0; e < N_EXPERTS; e++) sum_exp += expf(sc[e] - mx);
+        float inv = 1.0f / (sum_exp + 1e-30f);
+
+        float sm[256];
+        for (int e = 0; e < N_EXPERTS; e++) sm[e] = expf(sc[e] - mx) * inv;
+
+        int *is = topk_indices + s * N_ACTIVE_EXPTS;
+        float *ws = topk_weights + s * N_ACTIVE_EXPTS;
+
+        for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+            int best_i = -1; float best_v = -1e30f;
+            for (int e = 0; e < N_EXPERTS; e++) {
+                int used = 0;
+                for (int pk = 0; pk < k; pk++) if (is[pk] == e) { used = 1; break; }
+                if (!used && sm[e] > best_v) { best_v = sm[e]; best_i = e; }
+            }
+            is[k] = best_i; ws[k] = best_v;
+        }
+        float sw = 0; for (int k = 0; k < N_ACTIVE_EXPTS; k++) sw += ws[k];
+        if (sw > 1e-30f) { float iw = 1.0f / sw; for (int k = 0; k < N_ACTIVE_EXPTS; k++) ws[k] *= iw; }
+    }
+
+    // Collect unique expert IDs
+    int unique_ids[N_ACTIVE_EXPTS * N];
+    int n_unique = 0;
+    for (int s = 0; s < N; s++) {
+        int *is = topk_indices + s * N_ACTIVE_EXPTS;
+        for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+            int eid = is[k]; if (eid < 0) continue;
+            int seen = 0;
+            for (int u = 0; u < n_unique; u++) if (unique_ids[u] == eid) { seen = 1; break; }
+            if (!seen) unique_ids[n_unique++] = eid;
+        }
+    }
+
+    // Check if routing changed — need to dequant new experts?
+    int changed = (n_unique != mc->n);
+    if (!changed) {
+        for (int u = 0; u < n_unique; u++)
+            if (unique_ids[u] != mc->exps[u].eid) { changed = 1; break; }
+    }
+
+    // Dequant only if routing changed
+    if (changed) {
+        for (int i = 0; i < mc->n; i++) { free(mc->exps[i].gate); free(mc->exps[i].up); free(mc->exps[i].down); }
+        mc->n = 0;
+        if (!mc->exps || mc->cap < n_unique) {
+            free(mc->exps);
+            mc->exps = (lexpert_t *)malloc(n_unique * sizeof(lexpert_t));
+            mc->cap = n_unique;
+        }
+        for (int u = 0; u < n_unique; u++) {
+            int64_t ne = (int64_t)D_MODEL * D_FF;
+            int64_t nd = (int64_t)D_FF * D_MODEL;
+            int eid = unique_ids[u];
+            mc->exps[u].eid = eid;
+            mc->exps[u].gate = (float *)malloc(ne * sizeof(float));
+            mc->exps[u].up = (float *)malloc(ne * sizeof(float));
+            mc->exps[u].down = (float *)malloc(nd * sizeof(float));
+            gguf_dequantize(q_gate_exps + (int64_t)eid * mc->raw_sz, mc->ty_ge, ne, mc->exps[u].gate);
+            gguf_dequantize(q_up_exps + (int64_t)eid * mc->raw_sz, mc->ty_ge, ne, mc->exps[u].up);
+            gguf_dequantize(q_down_exps + (int64_t)eid * mc->raw_sz_d, mc->ty_ge, nd, mc->exps[u].down);
+        }
+        mc->n = n_unique;
+    }
+
+    // Direct forward: no 3GB temp arrays, lookup per-expert from cache
+    // Scratch for moe_expert_forward_lazy per-token
+    float *scratch = (float *)malloc(D_FF * 3 * sizeof(float));
+
+    for (int s = 0; s < N; s++) {
+        const float *x_s = x + s * D_MODEL;
+        float *out_s = output + s * D_MODEL;
+        int *is = topk_indices + s * N_ACTIVE_EXPTS;
+        float *ws = topk_weights + s * N_ACTIVE_EXPTS;
+
+        // Shared expert
+        if (mc->sh_gate && mc->sh_up && mc->sh_down) {
+            float *sg = scratch;
+            float *su = scratch + D_FF;
+            float *sa = scratch + D_FF * 2;
+            for (int j = 0; j < SHARED_D_FF; j++) {
+                float sum = 0.0f;
+                for (int k = 0; k < D_MODEL; k++)
+                    sum += x_s[k] * mc->sh_gate[k * SHARED_D_FF + j];
+                sg[j] = sum;
+            }
+            for (int j = 0; j < SHARED_D_FF; j++) {
+                float sum = 0.0f;
+                for (int k = 0; k < D_MODEL; k++)
+                    sum += x_s[k] * mc->sh_up[k * SHARED_D_FF + j];
+                su[j] = sum;
+            }
+            for (int j = 0; j < SHARED_D_FF; j++) {
+                float g = sg[j];
+                sa[j] = ((g < -80.0f) ? 0.0f : g / (1.0f + expf(-g))) * su[j];
+            }
+            for (int j = 0; j < D_MODEL; j++) {
+                float sum = 0.0f;
+                for (int k = 0; k < SHARED_D_FF; k++)
+                    sum += sa[k] * mc->sh_down[k * D_MODEL + j];
+                out_s[j] = sum;
+            }
+        } else {
+            memset(out_s, 0, D_MODEL * sizeof(float));
+        }
+
+        // Routed experts
+        for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+            int e = is[k];
+            float wgt = ws[k];
+            if (e < 0 || wgt < 1e-30f) continue;
+
+            float *gate_w = find_cached(mc, e, 0);
+            float *up_w   = find_cached(mc, e, 1);
+            float *down_w = find_cached(mc, e, 2);
+            if (!gate_w || !up_w || !down_w) continue;
+
+            float expert_out[2048];
+            moe_expert_forward_lazy(x_s, gate_w, up_w, down_w, scratch, expert_out);
+
+            for (int j = 0; j < D_MODEL; j++)
+                out_s[j] += wgt * expert_out[j];
+        }
+    }
+
+    free(scratch);
+}
+
+// ================================================================
+// Model loaders
+// ================================================================
+static float *load_embd(gguf_ctx *ctx, int *vocab_sz) {
     gguf_tensor_info *t = gguf_find_tensor(ctx, "token_embd.weight");
-    if (!t) { fprintf(stderr, "token_embd.weight not found\n"); return NULL; }
-    int64_t n_elems = 1;
-    for (int i = 0; i < t->n_dims; i++) n_elems *= t->dims[i];
-    int vs = (int)(n_elems / D_MODEL);
-    float *embd = (float *)malloc(n_elems * sizeof(float));
-    if (!embd) return NULL;
-    if (gguf_read_tensor_f32(ctx, t, embd, n_elems) <= 0) {
-        free(embd); return NULL;
-    }
-    *vocab_size = vs;
-    printf("  Embeddings: %d tokens from GGUF (%ld MB)\n", vs, n_elems * sizeof(float) / (1024*1024));
-    return embd;
+    if (!t) return NULL;
+    int64_t ne = 1;
+    for (int i = 0; i < t->n_dims; i++) ne *= t->dims[i];
+    *vocab_sz = (int)(ne / D_MODEL);
+    float *e = (float *)malloc(ne * sizeof(float));
+    if (!e || gguf_read_tensor_f32(ctx, t, e, ne) <= 0) { free(e); return NULL; }
+    return e;
 }
 
-// Greedy sample: argmax
-static int sample_greedy(const float *logits, int vocab_size) {
-    int best = 0;
-    float best_v = logits[0];
-    for (int i = 1; i < vocab_size; i++) {
-        if (logits[i] > best_v) { best_v = logits[i]; best = i; }
-    }
-    return best;
+static int sample_greedy(const float *logits, int vs) {
+    int b = 0; float bv = logits[0];
+    for (int i = 1; i < vs; i++) if (logits[i] > bv) { bv = logits[i]; b = i; }
+    return b;
 }
 
-// Top-K sample
-static int sample_topk(const float *logits, int vocab_size, int k) {
-    if (k <= 1) return sample_greedy(logits, vocab_size);
-    typedef struct { float val; int idx; } pair_t;
-    pair_t *pairs = (pair_t *)malloc(vocab_size * sizeof(pair_t));
-    for (int i = 0; i < vocab_size; i++) { pairs[i].val = logits[i]; pairs[i].idx = i; }
-    int kk = k < vocab_size ? k : vocab_size;
+static int sample_topk(const float *logits, int vs, int k) {
+    if (k <= 1) return sample_greedy(logits, vs);
+    typedef struct { float v; int i; } p_t;
+    p_t *ps = (p_t *)malloc(vs * sizeof(p_t));
+    for (int i = 0; i < vs; i++) { ps[i].v = logits[i]; ps[i].i = i; }
+    int kk = k < vs ? k : vs;
     for (int i = 0; i < kk; i++) {
-        int best = i;
-        for (int j = i+1; j < vocab_size; j++)
-            if (pairs[j].val > pairs[best].val) best = j;
-        pair_t tmp = pairs[i]; pairs[i] = pairs[best]; pairs[best] = tmp;
+        int b = i;
+        for (int j = i+1; j < vs; j++) if (ps[j].v > ps[b].v) b = j;
+        p_t t = ps[i]; ps[i] = ps[b]; ps[b] = t;
     }
-    float max_v = pairs[0].val;
-    float sum = 0;
-    for (int i = 0; i < kk; i++) sum += (float)exp((double)(pairs[i].val - max_v));
-    float r = (float)rand() / (float)RAND_MAX;
-    float cum = 0;
+    float mv = ps[0].v, sum = 0;
+    for (int i = 0; i < kk; i++) sum += expf(ps[i].v - mv);
+    float r = (float)rand() / RAND_MAX, cum = 0;
     for (int i = 0; i < kk; i++) {
-        cum += (float)exp((double)(pairs[i].val - max_v)) / sum;
-        if (r <= cum) { int idx = pairs[i].idx; free(pairs); return idx; }
+        cum += expf(ps[i].v - mv) / sum;
+        if (r <= cum) { int idx = ps[i].i; free(ps); return idx; }
     }
-    int idx = pairs[kk-1].idx; free(pairs); return idx;
+    int idx = ps[kk-1].i; free(ps); return idx;
 }
 
-static volatile int stop_requested = 0;
-static void sigint_handler(int sig) { (void)sig; stop_requested = 1; }
+static volatile int stop = 0;
+static void handler(int s) { (void)s; stop = 1; }
+
+// ================================================================
+// Main
+// ================================================================
+typedef struct {
+    bool is_gqa;
+    union {
+        gqa_layer_weights gqa;
+        ssm_layer_weights ssm;
+    } w;
+    bool moe;
+    lmoe_t lm;
+    kv_cache_t kv;
+    float *ssm_state, *conv_state; // per-layer SSM state (carried between steps)
+} layer_ctx_t;
 
 int main(int argc, char **argv) {
-    const char *path = (argc > 1 && strlen(argv[1]) > 0) ? argv[1]
+    const char *path = (argc > 1 && strlen(argv[1])) ? argv[1]
         : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *prompt = argc > 2 ? argv[2] : "The meaning of life is";
-    int max_tokens = argc > 3 ? atoi(argv[3]) : 64;
+    int max_tok = argc > 3 ? atoi(argv[3]) : 64;
     int top_k = argc > 4 ? atoi(argv[4]) : 1;
-    int verbose = 0;
-    if (getenv("VERBOSE")) verbose = atoi(getenv("VERBOSE"));
+    int verb = getenv("VERBOSE") ? atoi(getenv("VERBOSE")) : 0;
+    int moe_on = getenv("MOE") ? atoi(getenv("MOE")) : 0;
+    int moe_max_l = getenv("MOE_LAYERS") ? atoi(getenv("MOE_LAYERS")) : 0;
+    int no_gpu = getenv("NOGPU") ? 1 : 0;
 
-    signal(SIGINT, sigint_handler);
+    signal(SIGINT, handler);
+    srand(time(NULL));
 
-    printf("=== WuBuText AI — Text Inference ===\n");
-    printf("Model: %s\n", path);
-    printf("Prompt: \"%s\"\n", prompt);
-    printf("Max tokens: %d | Sampling: %s\n", max_tokens, top_k <= 1 ? "greedy" : "topk-%d");
+    printf("=== infer_text v2 — KV Cache + SSM Carry + Lazy MoE ===\n");
+    printf("Model: %s\nPrompt: \"%s\" | max=%d | topk=%d | MOE=%d\n",
+           path, prompt, max_tok, top_k, moe_on);
 
-    double t_total = now_sec();
+    double T0 = now_sec();
 
-    // ===== 1. Load GGUF =====
+    // ---- GGUF ----
     double t0 = now_sec();
     gguf_ctx *ctx = gguf_open(path);
     if (!ctx) return 1;
     gguf_buffer_data(ctx);
-    printf("GGUF load: %.2f s\n", now_sec() - t0);
+    printf("GGUF: %.2f s\n", now_sec() - t0);
 
-    // ===== 2. Load Tokenizer =====
+    // ---- Tokenizer ----
     t0 = now_sec();
     wubu_tokenizer_t tok;
-    if (!wubu_tokenizer_init(&tok, path)) {
-        fprintf(stderr, "Tokenizer init failed\n"); gguf_close(ctx); return 1;
-    }
-    printf("Tokenizer: %d tokens, %d merges (%.2f s)\n", tok.vocab_size, tok.n_merges, now_sec() - t0);
+    if (!wubu_tokenizer_init(&tok, path)) return 1;
+    printf("Tok: %d voc, %d merg (%.2f s)\n", tok.vocab_size, tok.n_merges, now_sec() - t0);
 
-    // ===== 3. Load Model =====
+    // ---- Model ----
     t0 = now_sec();
-    wubu_model_t model;
-    if (!wubu_model_init(&model, path)) {
-        fprintf(stderr, "Model init failed\n"); wubu_tokenizer_free(&tok); gguf_close(ctx); return 1;
-    }
-    if (model.gguf_ctx) { gguf_close(model.gguf_ctx); }
-    model.gguf_ctx = ctx;
-    printf("Model init: %.2f s\n", now_sec() - t0);
+    wubu_model_t mdl;
+    if (!wubu_model_init(&mdl, path)) return 1;
+    if (mdl.gguf_ctx) gguf_close(mdl.gguf_ctx);
+    mdl.gguf_ctx = ctx;
+    printf("Model: %.2f s | %d layers | %s / %s\n",
+           now_sec() - t0, mdl.n_layers,
+           mdl.layers[0].is_ssm ? "SSM" : "GQA",
+           mdl.layers[mdl.n_layers-1].is_ssm ? "SSM" : "GQA");
 
-    // ===== 4. Load Embeddings =====
+    // ---- Embeddings ----
     t0 = now_sec();
-    int vocab_size;
-    float *token_embd = load_embeddings(ctx, &vocab_size);
-    if (!token_embd) {
-        fprintf(stderr, "Failed to load embeddings\n");
-        wubu_model_free(&model); wubu_tokenizer_free(&tok); return 1;
-    }
-    printf("Embeddings: %.2f s\n", now_sec() - t0);
+    int vs;
+    float *embd = load_embd(ctx, &vs);
+    if (!embd) { fprintf(stderr, "No embeddings\n"); return 1; }
+    printf("Embd: %d tok (%.2f s)\n", vs, now_sec() - t0);
 
-    // ===== 5. GPU init + upload output weight =====
+    // ---- GPU init ----
     t0 = now_sec();
-    cublasHandle_t cublas_h = NULL;
-    cudaStream_t stream = NULL;
-    float *d_output_weight = NULL;
-    float *d_hidden = NULL;
-    float *d_logits_gpu = NULL;
-    int use_gpu_proj = 0;
-    if (model.output_weight && vocab_size > 0) {
-        cublasCreate(&cublas_h);
-        cudaStreamCreate(&stream);
-        d_output_weight = gpu_upload_output_weight(cublas_h, model.output_weight, vocab_size, stream);
-        cudaMalloc((void**)&d_hidden, D_MODEL * sizeof(float));
-        cudaMalloc((void**)&d_logits_gpu, vocab_size * sizeof(float));
-        use_gpu_proj = 1;
-        printf("GPU output projection: %.2f s (weight=%ld MB)\n", now_sec() - t0,
-               (int64_t)D_MODEL * vocab_size * sizeof(float) / (1024*1024));
+    cublasHandle_t ch = NULL;
+    cudaStream_t st = NULL;
+    float *d_out_w = NULL, *d_hid = NULL, *d_log = NULL;
+    int use_gpu = 0;
+    if (!no_gpu && mdl.output_weight) {
+        cublasCreate(&ch); cudaStreamCreate(&st);
+        d_out_w = gpu_upload_output_weight(ch, mdl.output_weight, vs, st);
+        cudaMalloc(&d_hid, D_MODEL * sizeof(float));
+        cudaMalloc(&d_log, vs * sizeof(float));
+        use_gpu = 1;
+        printf("GPU out: %.2f s\n", now_sec() - t0);
     } else {
-        printf("GPU output projection: disabled (no output_weight)\n");
+        printf("GPU out: off\n");
     }
 
-    // ===== 6. MoE quant metadata =====
-    int moe_enabled = 0;
-    if (getenv("MOE")) moe_enabled = atoi(getenv("MOE"));
-    int moe_max_layers = 0;
-    if (getenv("MOE_LAYERS")) moe_max_layers = atoi(getenv("MOE_LAYERS"));
-    typedef struct { bool has_moe; } moe_info_t;
-    moe_info_t *moe_info = NULL;
-    if (moe_enabled) {
-        moe_info = (moe_info_t *)calloc(model.n_layers, sizeof(moe_info_t));
-        if (moe_info) {
-            for (int l = 0; l < model.n_layers; l++) {
-                char name[256];
-                snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp.weight", l);
-                gguf_tensor_info *t = gguf_find_tensor(ctx, name);
-                moe_info[l].has_moe = (t != NULL);
+    // ---- Build per-layer contexts ----
+    layer_ctx_t *lc = (layer_ctx_t *)calloc(mdl.n_layers, sizeof(layer_ctx_t));
+    int n_gqa = 0;
+    for (int l = 0; l < mdl.n_layers; l++) {
+        wubu_layer_t *ly = &mdl.layers[l];
+        if (ly->is_ssm) {
+            lc[l].is_gqa = false;
+            lc[l].w.ssm = ly->ssm;
+            // Allocate SSM states (carried across steps)
+            lc[l].ssm_state = (float *)calloc(SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE, sizeof(float));
+            lc[l].conv_state = (float *)calloc((CONV_KERNEL - 1) * CONV_DIM, sizeof(float));
+        } else {
+            lc[l].is_gqa = true;
+            n_gqa++;
+            lc[l].w.gqa = ly->gqa;
+        }
+        lc[l].moe = false;
+    }
+    printf("GQA: %d / %d layers | SSM: %d layers\n", n_gqa, mdl.n_layers, mdl.n_layers - n_gqa);
+
+    // ---- Init KV caches ----
+    int max_cache = 1024; // start small, grow on demand
+    for (int l = 0; l < mdl.n_layers; l++) {
+        if (lc[l].is_gqa) {
+            if (!kv_init(&lc[l].kv, max_cache, GQA_KV_DIM)) return 1;
+        }
+    }
+
+    // ---- MoE setup ----
+    if (moe_on) printf("MoE setup: %d layers...\n", mdl.n_layers); fflush(stdout);
+    if (moe_on) {
+        for (int l = 0; l < mdl.n_layers; l++) {
+            lmoe_init(&lc[l].lm);
+            char nm[256];
+            snprintf(nm, sizeof(nm), "blk.%d.ffn_gate_inp.weight", l);
+            if (!gguf_find_tensor(ctx, nm)) continue;
+            lc[l].moe = true;
+            snprintf(nm, sizeof(nm), "blk.%d.ffn_gate_exps.weight", l);
+            gguf_tensor_info *t = gguf_find_tensor(ctx, nm);
+            if (!t) { lc[l].moe = false; continue; }
+            lc[l].lm.ty_ge = t->ggml_type;
+            lc[l].lm.raw_sz = gguf_raw_size(t->ggml_type, (int64_t)D_MODEL * D_FF);
+            lc[l].lm.raw_sz_d = gguf_raw_size(t->ggml_type, (int64_t)D_FF * D_MODEL);
+            lc[l].lm.q_gate = (const uint8_t *)ctx->data_blob + t->data_offset;
+
+            snprintf(nm, sizeof(nm), "blk.%d.ffn_up_exps.weight", l);
+            t = gguf_find_tensor(ctx, nm);
+            if (t) lc[l].lm.q_up = (const uint8_t *)ctx->data_blob + t->data_offset;
+
+            snprintf(nm, sizeof(nm), "blk.%d.ffn_down_exps.weight", l);
+            t = gguf_find_tensor(ctx, nm);
+            if (t) lc[l].lm.q_down = (const uint8_t *)ctx->data_blob + t->data_offset;
+
+            snprintf(nm, sizeof(nm), "blk.%d.ffn_gate_inp.weight", l);
+            t = gguf_find_tensor(ctx, nm);
+            lc[l].lm.ty_gi = t->ggml_type;
+            lc[l].lm.router = (float *)malloc(D_MODEL * N_EXPERTS * sizeof(float));
+            gguf_dequantize((const uint8_t *)ctx->data_blob + t->data_offset,
+                            t->ggml_type, D_MODEL * N_EXPERTS, lc[l].lm.router);
+
+            snprintf(nm, sizeof(nm), "blk.%d.ffn_gate_shexp.weight", l);
+            t = gguf_find_tensor(ctx, nm);
+            if (t) {
+                lc[l].lm.ty_gs = t->ggml_type;
+                int64_t sn = (int64_t)D_MODEL * SHARED_D_FF;
+                int64_t sd = (int64_t)SHARED_D_FF * D_MODEL;
+                lc[l].lm.sh_gate = (float *)malloc(sn * sizeof(float));
+                lc[l].lm.sh_up = (float *)malloc(sn * sizeof(float));
+                lc[l].lm.sh_down = (float *)malloc(sd * sizeof(float));
+                gguf_dequantize((const uint8_t *)ctx->data_blob + t->data_offset,
+                                t->ggml_type, sn, lc[l].lm.sh_gate);
+                snprintf(nm, sizeof(nm), "blk.%d.ffn_up_shexp.weight", l);
+                t = gguf_find_tensor(ctx, nm);
+                if (t) gguf_dequantize((const uint8_t *)ctx->data_blob + t->data_offset,
+                                       t->ggml_type, sn, lc[l].lm.sh_up);
+                snprintf(nm, sizeof(nm), "blk.%d.ffn_down_shexp.weight", l);
+                t = gguf_find_tensor(ctx, nm);
+                if (t) gguf_dequantize((const uint8_t *)ctx->data_blob + t->data_offset,
+                                       t->ggml_type, sd, lc[l].lm.sh_down);
             }
         }
     }
 
-    // ===== 6. Encode Prompt =====
-    int prompt_ids[65536];
-    int n_prompt = wubu_tokenizer_encode(&tok, prompt, prompt_ids, 65536);
-    if (n_prompt <= 0) {
-        fprintf(stderr, "Tokenization failed (%d)\n", n_prompt);
-        free(token_embd); free(moe_info);
-        wubu_model_free(&model); wubu_tokenizer_free(&tok); return 1;
+    // ---- Encode ----
+    int pids[65536];
+    int np = wubu_tokenizer_encode(&tok, prompt, pids, 65536);
+    if (np <= 0) return 1;
+    printf("Prompt: %d tok\n", np);
+
+    // ---- Allocate forward buffers ----
+    float *x = (float *)malloc(np * D_MODEL * sizeof(float));
+    float *normed = (float *)malloc(np * D_MODEL * sizeof(float));
+    float *attn = (float *)malloc(np * D_MODEL * sizeof(float));
+    float *residual = (float *)malloc(np * D_MODEL * sizeof(float));
+    float *ffn = (float *)malloc(np * D_MODEL * sizeof(float));
+
+    // ---- Phase 1: Prefill ----
+    printf("\n--- Phase 1: Prefill (%d tok) ---\n", np);
+    fflush(stdout);
+    double t_prefill = now_sec();
+
+    // Embed all prompt tokens
+    for (int i = 0; i < np; i++) {
+        int id = pids[i];
+        if (id >= 0 && id < vs)
+            memcpy(x + i * D_MODEL, embd + id * D_MODEL, D_MODEL * sizeof(float));
+        else
+            memset(x + i * D_MODEL, 0, D_MODEL * sizeof(float));
     }
-    printf("Prompt: %d tokens\n", n_prompt);
+    memcpy(residual, x, np * D_MODEL * sizeof(float));
 
-    // ===== 7. Generation Loop =====
-    int max_buf = n_prompt + max_tokens + 1;
-    int *all_ids = (int *)malloc(max_buf * sizeof(int));
-    memcpy(all_ids, prompt_ids, n_prompt * sizeof(int));
+    for (int l = 0; l < mdl.n_layers; l++) {
+        double tl = now_sec();
+        layer_ctx_t *ly = &lc[l];
 
-    // Print prompt
-    char out_buf[1048576];
-    int out_len = wubu_tokenizer_decode(&tok, all_ids, n_prompt, out_buf, 1048576);
-    if (out_len > 0) { out_buf[out_len] = '\0'; printf("%s", out_buf); fflush(stdout); }
+        // Pre-attention RMSNorm
+        wubu_rms_norm(1, np, D_MODEL, residual, mdl.layers[l].attn_norm_weight, 1e-6f, normed);
 
-    float *logits = (float *)malloc(vocab_size * sizeof(float));
+        if (ly->is_gqa) {
+            // Full GQA forward (computes Q, K, V, attention)
+            // We need K_norm and V for caching, so use forward_save or compute separately
+            int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
+            int kv_dim = GQA_KV_DIM;
 
-    double t_gen_start = now_sec();
-    int gen_tokens = 0;
+            // Compute Q, K, V for all prompt tokens
+            float *Q = (float *)malloc(np * q_dim * sizeof(float));
+            float *K = (float *)malloc(np * kv_dim * sizeof(float));
+            float *V = (float *)malloc(np * kv_dim * sizeof(float));
+            float *K_norm = (float *)malloc(np * kv_dim * sizeof(float));
+            float *gate_buf = (float *)malloc(np * q_dim * sizeof(float));
+            float *attn_out = (float *)calloc(np * q_dim, sizeof(float));
 
-    for (int pos = n_prompt; pos < max_buf - 1; pos++) {
-        if (stop_requested) break;
-
-        int cur_T = pos;  // total tokens in context
-        int N = cur_T;
-
-        // Build embeddings for all tokens in context
-        float *embd_buf = (float *)malloc(N * D_MODEL * sizeof(float));
-        for (int i = 0; i < N; i++) {
-            int tid = all_ids[i];
-            if (tid >= 0 && tid < vocab_size) {
-                memcpy(embd_buf + i * D_MODEL, token_embd + tid * D_MODEL, D_MODEL * sizeof(float));
-            } else {
-                memset(embd_buf + i * D_MODEL, 0, D_MODEL * sizeof(float));
-            }
-        }
-
-        // Reset SSM states for clean forward (sequential inference)
-        memset(model.ssm_states, 0,
-               model.n_layers * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float));
-        memset(model.conv_states, 0,
-               model.n_layers * (CONV_KERNEL - 1) * CONV_DIM * sizeof(float));
-
-        // Allocate forward buffers
-        float *x = (float *)malloc(N * D_MODEL * sizeof(float));
-        float *normed = (float *)malloc(N * D_MODEL * sizeof(float));
-        float *attn_out = (float *)malloc(N * D_MODEL * sizeof(float));
-        float *normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
-        float *ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
-
-        memcpy(x, embd_buf, N * D_MODEL * sizeof(float));
-
-        // Forward pass through all layers
-        for (int l = 0; l < model.n_layers; l++) {
-            wubu_layer_t *layer = &model.layers[l];
-
-            wubu_rms_norm(1, cur_T, D_MODEL, x, layer->attn_norm_weight, 1e-6f, normed);
-
-            if (layer->is_ssm) {
-                float *ss = model.ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
-                float *cs = model.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
-                wubu_ssm_forward(normed, 1, cur_T, &layer->ssm, ss, cs, attn_out);
-            } else {
-                wubu_gqa_forward(normed, 1, cur_T, &layer->gqa, attn_out);
-            }
-
-            // NaN check
-            if (verbose) {
-                int has_nan = 0;
-                for (int i = 0; i < N * D_MODEL; i++)
-                    if (isnan(attn_out[i])) { has_nan = 1; break; }
-                if (has_nan) printf("[L%d NaN] ", l);
-            }
-
-            for (int i = 0; i < N * D_MODEL; i++) x[i] += attn_out[i];
-            wubu_rms_norm(1, cur_T, D_MODEL, x, layer->post_attn_norm_weight, 1e-6f, normed2);
-
-            if (moe_enabled && moe_info && moe_info[l].has_moe &&
-                (moe_max_layers == 0 || l < moe_max_layers)) {
-                if (wubu_moe_load_layer(ctx, l, &layer->moe)) {
-                    wubu_moe_forward(normed2, 1, cur_T, &layer->moe, ffn_out);
-                    wubu_moe_free_layer(&layer->moe);
-                } else {
-                    memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));
+            for (int s = 0; s < np; s++) {
+                const float *xs = normed + s * D_MODEL;
+                // Q
+                for (int j = 0; j < q_dim; j++) {
+                    double sum = 0.0;
+                    for (int i = 0; i < D_MODEL; i++)
+                        sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i * (q_dim * 2) + j];
+                    Q[s * q_dim + j] = (float)sum;
                 }
-            } else {
-                memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));
+                // gate
+                for (int j = 0; j < q_dim; j++) {
+                    double sum = 0.0;
+                    for (int i = 0; i < D_MODEL; i++)
+                        sum += (double)xs[i] * (double)ly->w.gqa.attn_q_weight[i * (q_dim * 2) + (j + q_dim)];
+                    gate_buf[s * q_dim + j] = (float)sum;
+                }
+                // K
+                for (int j = 0; j < kv_dim; j++) {
+                    double sum = 0.0;
+                    for (int i = 0; i < D_MODEL; i++)
+                        sum += (double)xs[i] * (double)ly->w.gqa.attn_k_weight[i * kv_dim + j];
+                    K[s * kv_dim + j] = (float)sum;
+                }
+                // V
+                for (int j = 0; j < kv_dim; j++) {
+                    double sum = 0.0;
+                    for (int i = 0; i < D_MODEL; i++)
+                        sum += (double)xs[i] * (double)ly->w.gqa.attn_v_weight[i * kv_dim + j];
+                    V[s * kv_dim + j] = (float)sum;
+                }
             }
 
-            for (int i = 0; i < N * D_MODEL; i++) x[i] += ffn_out[i];
+            // RMSNorm Q and K
+            memcpy(K_norm, K, np * kv_dim * sizeof(float));
+            wubu_rms_norm(1, np * GQA_Q_HEADS, GQA_HEAD_DIM, Q, ly->w.gqa.attn_q_norm_weight, 1e-6f, Q);
+            wubu_rms_norm(1, np * GQA_KV_HEADS, GQA_HEAD_DIM, K_norm, ly->w.gqa.attn_k_norm_weight, 1e-6f, K_norm);
+
+            // Attention for each position (causal mask)
+            float scale = 1.0f / sqrtf((float)GQA_HEAD_DIM);
+            for (int s = 0; s < np; s++) {
+                for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
+                    int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
+                    const float *qv = Q + s * q_dim + h_q * GQA_HEAD_DIM;
+                    float *out = attn_out + s * q_dim + h_q * GQA_HEAD_DIM;
+
+                    float mx = -1e30f, sum_exp = 0.0f;
+                    for (int t = 0; t <= s; t++) {
+                        const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                        float sc = 0.0f;
+                        for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
+                        sc *= scale;
+                        if (t == 0 || sc > mx) mx = sc;
+                    }
+                    for (int t = 0; t <= s; t++) {
+                        const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                        float sc = 0.0f;
+                        for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
+                        sum_exp += expf(sc * scale - mx);
+                    }
+                    float inv = 1.0f / (sum_exp + 1e-30f);
+                    for (int t = 0; t <= s; t++) {
+                        const float *vv = V + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                        const float *kv = K_norm + t * kv_dim + h_kv * GQA_HEAD_DIM;
+                        float sc = 0.0f;
+                        for (int i = 0; i < GQA_HEAD_DIM; i++) sc += qv[i] * kv[i];
+                        float a = expf(sc * scale - mx) * inv;
+                        for (int i = 0; i < GQA_HEAD_DIM; i++) out[i] += a * vv[i];
+                    }
+                }
+            }
+
+            // Gate
+            for (int i = 0; i < np * q_dim; i++)
+                attn_out[i] *= 1.0f / (1.0f + expf(-gate_buf[i]));
+
+            // Output projection
+            memset(attn, 0, np * D_MODEL * sizeof(float));
+            for (int s = 0; s < np; s++) {
+                const float *in = attn_out + s * q_dim;
+                float *out = attn + s * D_MODEL;
+                for (int i = 0; i < q_dim; i++) {
+                    float a = in[i];
+                    for (int j = 0; j < D_MODEL; j++)
+                        out[j] += a * ly->w.gqa.attn_output_weight[i * D_MODEL + j];
+                }
+            }
+
+            // Populate KV cache with K_norm and V
+            kv_append(&ly->kv, K_norm, V, np);
+
+            free(Q); free(K); free(V); free(K_norm); free(gate_buf); free(attn_out);
+        } else {
+            // SSM forward: full prefill, save final state
+            wubu_ssm_forward(normed, 1, np, &ly->w.ssm,
+                             ly->ssm_state, ly->conv_state, attn);
+        }
+
+        // NaN check
+        if (verb) {
+            int has_nan = 0;
+            for (int i = 0; i < np * D_MODEL; i++)
+                if (isnan(attn[i]) || isinf(attn[i])) { has_nan = 1; break; }
+            if (has_nan) printf("  L%d NaN\n", l);
+        }
+
+        // Residual
+        for (int i = 0; i < np * D_MODEL; i++) residual[i] += attn[i];
+
+        // Post-attention RMSNorm
+        wubu_rms_norm(1, np, D_MODEL, residual, mdl.layers[l].post_attn_norm_weight, 1e-6f, normed);
+
+        // MoE (lazy prefill)
+        if (moe_on && lc[l].moe && (moe_max_l == 0 || l < moe_max_l)) {
+            lazy_moe_decode(normed, 1, np,
+                            lc[l].lm.q_gate, lc[l].lm.q_up, lc[l].lm.q_down,
+                            &lc[l].lm, ffn);
+        } else {
+            memcpy(ffn, normed, np * D_MODEL * sizeof(float));
+        }
+
+        for (int i = 0; i < np * D_MODEL; i++) residual[i] += ffn[i];
+
+        if (verb) printf("  L%d: %.3f ms\n", l, (now_sec() - tl) * 1000);
+    }
+
+    // Final RMSNorm
+    if (mdl.norm_weight) {
+        wubu_rms_norm(1, np, D_MODEL, residual, mdl.norm_weight, 1e-6f, normed);
+        memcpy(residual, normed, np * D_MODEL * sizeof(float));
+    }
+
+    // Output projection for last token
+    const float *h_last = residual + (np - 1) * D_MODEL;
+    float *logits = (float *)malloc(vs * sizeof(float));
+    if (use_gpu) {
+        cudaMemcpyAsync(d_hid, h_last, D_MODEL * sizeof(float), cudaMemcpyHostToDevice, st);
+        gpu_output_projection(ch, st, d_hid, 1, 1, d_out_w, vs, d_log);
+        cudaMemcpyAsync(logits, d_log, vs * sizeof(float), cudaMemcpyDeviceToHost, st);
+        cudaStreamSynchronize(st);
+    } else if (mdl.output_weight) {
+        for (int j = 0; j < vs; j++) {
+            double sum = 0.0;
+            for (int k = 0; k < D_MODEL; k++)
+                sum += (double)h_last[k] * (double)mdl.output_weight[j * D_MODEL + k];
+            logits[j] = (float)sum;
+        }
+    } else {
+        memcpy(logits, h_last, D_MODEL * sizeof(float));
+    }
+
+    // Sample first token
+    int tid = sample_topk(logits, vs, top_k);
+    pids[np] = tid;
+    int n_total = np + 1;
+
+    // Print prompt + first generated token
+    char out_buf[1048576];
+    int prev_out_len = 0;
+    int cur_out_len = wubu_tokenizer_decode(&tok, pids, n_total, out_buf, 1048576);
+    if (cur_out_len > 0) { out_buf[cur_out_len] = '\0'; printf("%s", out_buf); fflush(stdout); }
+    prev_out_len = cur_out_len;
+
+    double prefill_time = now_sec() - t_prefill;
+    printf("\nPrefill: %.2f s (%.0f tok/s)\n", prefill_time, np / prefill_time);
+    printf("--- Phase 2: Decode ---\n");
+
+    // ---- Phase 2: Decode (token-by-token with KV cache) ----
+    int gen = 1; // already generated 1 token
+    double t_gen = now_sec();
+    float *x_step = (float *)malloc(D_MODEL * sizeof(float));
+    float *out_step = (float *)malloc(D_MODEL * sizeof(float));
+
+    // Grow KV caches if needed for full generation
+    if (max_cache < n_total + max_tok) {
+        // Can't grow easily — for now just warn
+        printf("WARN: KV cache may overflow (max=%d, need=%d)\n", max_cache, n_total + max_tok);
+    }
+
+    // Decode loop
+    int last_token = pids[np]; // the first generated token
+    while (gen < max_tok && !stop) {
+        // Embed last generated token
+        int id = last_token;
+        if (id >= 0 && id < vs)
+            memcpy(x_step, embd + id * D_MODEL, D_MODEL * sizeof(float));
+        else
+            memset(x_step, 0, D_MODEL * sizeof(float));
+
+        // We need to track the residual from the last step's output
+        // For the first decode step, x_step IS the residual
+        // For subsequent steps, we carry the residual forward
+        // Actually, we need the full residual chain, not just the new embedding.
+        // This is the tricky part — we need to run the full layer stack for 1 token.
+
+        // For now, use the simple approach: run full forward with all tokens in context
+        // (same as v1, but using KV cache for GQA layers in forward)
+        // Actually, this is getting complex. Let me simplify:
+
+        // Build full input
+        // ... but that's O(T) per step again for embed and norm.
+
+        // The correct approach: run 1 token through all layers, with:
+        // - GQA: uses KV cache (already populated)
+        // - SSM: carries state
+        // - Residual: starts at the new token's embedding
+
+        // But for each layer, the residual input is the output of the previous layer.
+        // For the first layer, residual = new_token_embedding.
+        // For subsequent layers, residual = prev_layer_output.
+        // So we just chain 1 token through all layers.
+
+        memset(residual, 0, D_MODEL * sizeof(float));
+        memcpy(residual, x_step, D_MODEL * sizeof(float));
+
+        for (int l = 0; l < mdl.n_layers; l++) {
+            layer_ctx_t *ly = &lc[l];
+
+            // Pre-attention RMSNorm (1 token)
+            wubu_rms_norm(1, 1, D_MODEL, residual, mdl.layers[l].attn_norm_weight, 1e-6f, normed);
+
+            if (ly->is_gqa) {
+                gqa_kv_decode(normed, &ly->w.gqa, &ly->kv, out_step);
+            } else {
+                ssm_kv_decode(normed, &ly->w.ssm, ly->ssm_state, ly->conv_state, out_step);
+            }
+
+            for (int i = 0; i < D_MODEL; i++) residual[i] += out_step[i];
+
+            // Post-attention RMSNorm
+            wubu_rms_norm(1, 1, D_MODEL, residual, mdl.layers[l].post_attn_norm_weight, 1e-6f, normed);
+
+            // MoE (lazy cache)
+            if (moe_on && lc[l].moe && (moe_max_l == 0 || l < moe_max_l)) {
+                lazy_moe_decode(normed, 1, 1,
+                                lc[l].lm.q_gate, lc[l].lm.q_up, lc[l].lm.q_down,
+                                &lc[l].lm, out_step);
+            } else {
+                memcpy(out_step, normed, D_MODEL * sizeof(float));
+            }
+
+            for (int i = 0; i < D_MODEL; i++) residual[i] += out_step[i];
         }
 
         // Final RMSNorm
-        if (model.norm_weight) {
-            wubu_rms_norm(1, cur_T, D_MODEL, x, model.norm_weight, 1e-6f, normed);
-            memcpy(x, normed, N * D_MODEL * sizeof(float));
+        if (mdl.norm_weight) {
+            wubu_rms_norm(1, 1, D_MODEL, residual, mdl.norm_weight, 1e-6f, normed);
+            memcpy(residual, normed, D_MODEL * sizeof(float));
         }
 
-        // Output projection: last token (GPU accelerated)
-        const float *h_last = x + (cur_T - 1) * D_MODEL;
-        if (use_gpu_proj && d_output_weight) {
-            cudaMemcpyAsync(d_hidden, h_last, D_MODEL * sizeof(float),
-                           cudaMemcpyHostToDevice, stream);
-            gpu_output_projection(cublas_h, stream, d_hidden, 1, 1,
-                                  d_output_weight, vocab_size, d_logits_gpu);
-            cudaMemcpyAsync(logits, d_logits_gpu, vocab_size * sizeof(float),
-                           cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
-        } else if (model.output_weight) {
-            for (int j = 0; j < vocab_size; j++) {
+        // Output projection
+        if (use_gpu) {
+            cudaMemcpyAsync(d_hid, residual, D_MODEL * sizeof(float), cudaMemcpyHostToDevice, st);
+            gpu_output_projection(ch, st, d_hid, 1, 1, d_out_w, vs, d_log);
+            cudaMemcpyAsync(logits, d_log, vs * sizeof(float), cudaMemcpyDeviceToHost, st);
+            cudaStreamSynchronize(st);
+        } else if (mdl.output_weight) {
+            for (int j = 0; j < vs; j++) {
                 double sum = 0.0;
                 for (int k = 0; k < D_MODEL; k++)
-                    sum += (double)h_last[k] * (double)model.output_weight[j * D_MODEL + k];
+                    sum += (double)residual[k] * (double)mdl.output_weight[j * D_MODEL + k];
                 logits[j] = (float)sum;
             }
         } else {
-            memcpy(logits, h_last, D_MODEL * sizeof(float));
+            memcpy(logits, residual, D_MODEL * sizeof(float));
         }
 
         // Sample
-        int next_id = sample_topk(logits, vocab_size, top_k);
-        all_ids[pos] = next_id;
-        gen_tokens++;
+        last_token = sample_topk(logits, vs, top_k);
 
-        // Decode ALL tokens and find the new piece
-        int new_out_len = wubu_tokenizer_decode(&tok, all_ids, pos + 1, out_buf, 1048576);
-        if (new_out_len > out_len) {
-            out_buf[new_out_len] = '\0';
-            printf("%s", out_buf + out_len);
+        // Decode & print
+        pids[n_total] = last_token;
+        n_total++;
+        int new_out = wubu_tokenizer_decode(&tok, pids, n_total, out_buf, 1048576);
+        if (new_out > prev_out_len) {
+            out_buf[new_out] = '\0';
+            printf("%s", out_buf + prev_out_len);
             fflush(stdout);
-            out_len = new_out_len;
+            prev_out_len = new_out;
         }
 
-        free(x); free(normed); free(attn_out); free(normed2); free(ffn_out);
-        free(embd_buf);
+        gen++;
 
-        if (gen_tokens >= max_tokens) break;
-        if (next_id == tok.eos_id && gen_tokens > 1) {
-            printf("\n[EOS]");
-            break;
-        }
+        // EOS
+        if (last_token == tok.eos_id && gen > 1) break;
     }
 
-    double t_gen = now_sec() - t_gen_start;
-    printf("\n\n=== Generation Complete ===\n");
-    printf("Generated %d tokens in %.2f s (%.1f tok/s)\n",
-           gen_tokens, t_gen, gen_tokens / t_gen);
-    printf("Total time: %.2f s\n", now_sec() - t_total);
+    double decode_time = now_sec() - t_gen;
+    printf("\n\n=== Generation ===\n");
+    printf("Prefill: %d tok in %.2f s (%.0f tok/s)\n", np, prefill_time, np / prefill_time);
+    printf("Decode:  %d tok in %.2f s (%.1f tok/s)\n", gen, decode_time, gen / decode_time);
+    printf("Total:   %.2f s\n", now_sec() - T0);
 
-    // ===== 8. Cleanup =====
-    free(token_embd);
-    free(logits);
-    free(all_ids);
-    free(moe_info);
-    if (use_gpu_proj) {
-        gpu_free_output_weight(d_output_weight);
-        cudaFree(d_hidden);
-        cudaFree(d_logits_gpu);
-        cudaStreamDestroy(stream);
-        cublasDestroy(cublas_h);
+    // ---- Cleanup ----
+    free(x); free(normed); free(attn); free(residual); free(ffn);
+    free(x_step); free(out_step);
+    free(logits); free(embd);
+    for (int l = 0; l < mdl.n_layers; l++) {
+        kv_free(&lc[l].kv);
+        free(lc[l].ssm_state);
+        free(lc[l].conv_state);
+        lmoe_free(&lc[l].lm);
     }
-    wubu_model_free(&model);
+    free(lc);
+    if (use_gpu) {
+        gpu_free_output_weight(d_out_w);
+        cudaFree(d_hid); cudaFree(d_log);
+        cudaStreamDestroy(st);
+        cublasDestroy(ch);
+    }
+    wubu_model_free(&mdl);
     wubu_tokenizer_free(&tok);
 
-    printf("=== Text Inference PASS ===\n");
+    printf("=== PASS ===\n");
     return 0;
 }

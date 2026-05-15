@@ -572,7 +572,7 @@ int main(int argc, char **argv) {
             d_Q_full, d_K, d_V,
             d_q_norm_w, d_k_norm_w,
             d_attn_out_w,
-            d_output, d_scratch);
+            d_output, d_scratch, NULL);
 
         cudaStreamSynchronize(stream);
 
