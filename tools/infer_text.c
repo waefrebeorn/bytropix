@@ -29,6 +29,26 @@
 #define MAX_CACHE_T (262144)
 #define GQA_KV_DIM (GQA_KV_HEADS * GQA_HEAD_DIM) // 512
 
+// Debug dump env vars
+#define DUMP_DIR_VAR "DUMP_LAYER_DIR"
+#define DUMP_HIDDEN_VAR "DUMP_HIDDEN_NORM"
+static void maybe_dump_layer(int l, float *residual, int np) {
+    const char *dir = getenv(DUMP_DIR_VAR);
+    if (dir) {
+        char fn[512];
+        snprintf(fn, sizeof(fn), "%s/layer_%02d.bin", dir, l);
+        FILE *f = fopen(fn, "wb");
+        if (f) { fwrite(residual + (np - 1) * D_MODEL, sizeof(float), D_MODEL, f); fclose(f); }
+    }
+}
+static void maybe_dump_hidden(float *residual, int np) {
+    const char *path = getenv(DUMP_HIDDEN_VAR);
+    if (path) {
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite(residual + (np - 1) * D_MODEL, sizeof(float), D_MODEL, f); fclose(f); }
+    }
+}
+
 typedef struct {
     float *h_k;        // [current_T, kv_dim] post-RMSNorm K
     float *h_v;        // [current_T, kv_dim] raw V
@@ -240,7 +260,7 @@ typedef struct {
     float *sh_gate, *sh_up, *sh_down, *router, *sh_gate_proj;
     const uint8_t *q_gate, *q_up, *q_down;
     int64_t raw_sz, raw_sz_d;
-    int ty_ge, ty_gi, ty_gs;
+    int ty_ge, ty_gd, ty_gi, ty_gs;
     bool has;
 } lmoe_t;
 
@@ -256,6 +276,48 @@ static void lmoe_free(lmoe_t *m) {
 // ================================================================
 // Uses moe_expert_forward directly from cached per-expert arrays.
 // No contiguous 256-expert arrays needed — looks up experts by ID.
+
+// Dequant ONE expert from interleaved [D_MODEL, D_FF, N_EXPERTS] tensor.
+// q_full: raw quantized data for ALL experts (interleaved, N_EXPERTS=256)
+// Each block stores 256 elements = 1 (i,j) position for all 256 experts.
+// Total blocks = D_MODEL * D_FF = ne (since block_size = N_EXPERTS = 256).
+// Each block contributes 1 element to expert eid.
+// out must hold ne floats.
+static void dequant_one_expert_interleaved(const uint8_t *q_full, int type, int eid, int64_t ne, float *out) {
+    int block_bytes = (int)gguf_raw_size(type, 256);
+    if (block_bytes <= 0) {
+        fprintf(stderr, "dequant_one_expert: unsupported type %d\n", type);
+        memset(out, 0, ne * sizeof(float));
+        return;
+    }
+    float tmp[256];
+    for (int64_t b = 0; b < ne; b++) {
+        // use gguf_dequantize for dispatching since tmp is 256 elements = 1 block
+        gguf_dequantize(q_full + b * block_bytes, type, 256, tmp);
+        out[b] = tmp[eid];
+    }
+}
+
+// Optimized: dequant each block once, distribute to all active experts.
+// eids: array of expert IDs (0..N_EXPERTS-1)
+// outputs: array of float* buffers, each must hold ne floats
+static void dequant_multi_expert_interleaved(const uint8_t *q_full, int type, int64_t ne,
+                                              const int *eids, int n_eids, float **outputs) {
+    int block_bytes = (int)gguf_raw_size(type, 256);
+    if (block_bytes <= 0) {
+        fprintf(stderr, "dequant_multi_expert: unsupported type %d\n", type);
+        for (int i = 0; i < n_eids; i++) memset(outputs[i], 0, ne * sizeof(float));
+        return;
+    }
+    float tmp[256];
+    for (int64_t b = 0; b < ne; b++) {
+        gguf_dequantize(q_full + b * block_bytes, type, 256, tmp);
+        for (int i = 0; i < n_eids; i++) {
+            outputs[i][b] = tmp[eids[i]];
+        }
+    }
+}
+
 static void moe_expert_forward_lazy(const float *x, const float *gate_w,
                                      const float *up_w, const float *down_w,
                                      float *temp, float *output) {
@@ -375,18 +437,42 @@ static void lazy_moe_decode(
             mc->exps = (lexpert_t *)malloc(n_unique * sizeof(lexpert_t));
             mc->cap = n_unique;
         }
+        // Use optimized multi-expert block-dequant: dequant each block once,
+        // extract all active experts' elements from each block.
+        int64_t ne = (int64_t)D_MODEL * D_FF;
+        int64_t nd = (int64_t)D_FF * D_MODEL;
+        
+        // Allocate per-expert buffers
         for (int u = 0; u < n_unique; u++) {
-            int64_t ne = (int64_t)D_MODEL * D_FF;
-            int64_t nd = (int64_t)D_FF * D_MODEL;
             int eid = unique_ids[u];
             mc->exps[u].eid = eid;
             mc->exps[u].gate = (float *)malloc(ne * sizeof(float));
             mc->exps[u].up = (float *)malloc(ne * sizeof(float));
             mc->exps[u].down = (float *)malloc(nd * sizeof(float));
-            gguf_dequantize(q_gate_exps + (int64_t)eid * mc->raw_sz, mc->ty_ge, ne, mc->exps[u].gate);
-            gguf_dequantize(q_up_exps + (int64_t)eid * mc->raw_sz, mc->ty_ge, ne, mc->exps[u].up);
-            gguf_dequantize(q_down_exps + (int64_t)eid * mc->raw_sz_d, mc->ty_ge, nd, mc->exps[u].down);
         }
+        
+        // Dequant gate_exps, up_exps, down_exps using interleaved block approach
+        // Build arrays of output pointers and eids for batch dequant
+        float **gate_outs = (float **)malloc(n_unique * sizeof(float *));
+        float **up_outs = (float **)malloc(n_unique * sizeof(float *));
+        float **down_outs = (float **)malloc(n_unique * sizeof(float *));
+        for (int u = 0; u < n_unique; u++) {
+            gate_outs[u] = mc->exps[u].gate;
+            up_outs[u] = mc->exps[u].up;
+            down_outs[u] = mc->exps[u].down;
+        }
+        
+        // Fix: down_exps may use a different quant type (e.g., L39 is IQ4_XS)
+        // Use ty_ge for gate/up, ty_gd (or ty_ge fallback) for down
+        int down_type = mc->ty_gd ? mc->ty_gd : mc->ty_ge;
+        
+        dequant_multi_expert_interleaved(q_gate_exps, mc->ty_ge, ne, unique_ids, n_unique, gate_outs);
+        dequant_multi_expert_interleaved(q_up_exps, mc->ty_ge, ne, unique_ids, n_unique, up_outs);
+        dequant_multi_expert_interleaved(q_down_exps, down_type, nd, unique_ids, n_unique, down_outs);
+        
+        free(gate_outs);
+        free(up_outs);
+        free(down_outs);
         mc->n = n_unique;
     }
 
@@ -766,7 +852,10 @@ int main(int argc, char **argv) {
 
             snprintf(nm, sizeof(nm), "blk.%d.ffn_down_exps.weight", l);
             t = gguf_find_tensor(ctx, nm);
-            if (t) lc[l].lm.q_down = (const uint8_t *)ctx->data_blob + t->data_offset;
+            if (t) {
+                lc[l].lm.q_down = (const uint8_t *)ctx->data_blob + t->data_offset;
+                lc[l].lm.ty_gd = t->ggml_type;
+            }
 
             snprintf(nm, sizeof(nm), "blk.%d.ffn_gate_inp.weight", l);
             t = gguf_find_tensor(ctx, nm);
@@ -918,12 +1007,17 @@ int main(int argc, char **argv) {
     }
     printf("  Starting layer loop...\\n"); fflush(stdout);
 
-    for (int l = 0; l < mdl.n_layers; l++) {
+    const char *ml_env = getenv("MAX_LAYERS");
+    int max_layers = ml_env ? atoi(ml_env) : mdl.n_layers;
+    if (max_layers < 1 || max_layers > mdl.n_layers) max_layers = mdl.n_layers;
+    printf("  Running %d / %d layers (MAX_LAYERS=%s)\n", max_layers, mdl.n_layers, ml_env ? ml_env : "all"); fflush(stdout);
+
+    for (int l = 0; l < max_layers; l++) {
         printf("LL %d at %.1f s\n", l, now_sec() - t_prefill); fflush(stdout);
         double tl = now_sec();
         layer_ctx_t *ly = &lc[l];
 
-        // Pre-attention RMSNorm
+        bool is_ssm = mdl.layers[l].is_ssm;
         wubu_rms_norm(1, np, D_MODEL, residual, mdl.layers[l].attn_norm_weight, 1e-6f, normed);
 
         if (ly->is_gqa) {
@@ -1122,6 +1216,9 @@ int main(int argc, char **argv) {
         // Residual
         for (int i = 0; i < np * D_MODEL; i++) residual[i] += attn[i];
 
+        // Per-layer dump
+        maybe_dump_layer(l, residual, np);
+
         // Dump layer 0 residual stats
         if (l == 0) {
             float minv = 1e30, maxv = -1e30, sum = 0, sumsq = 0;
@@ -1164,6 +1261,9 @@ int main(int argc, char **argv) {
         memcpy(residual, normed, np * D_MODEL * sizeof(float));
     }
     printf("  FINAL_NORM_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
+
+    // Dump final hidden state
+    maybe_dump_hidden(residual, np);
 
     // Output projection for last token
     const float *h_last = residual + (np - 1) * D_MODEL;

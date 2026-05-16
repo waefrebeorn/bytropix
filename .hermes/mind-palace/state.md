@@ -1,73 +1,40 @@
-# WuBuText AI — State Dashboard (May 16 PM v13 — HONEST)
+# WuBuText AI — State Dashboard (May 17 AM v14 — HONEST)
 
 ## Ground Truth
-**ALL inference binaries produce garbage output. Q5_K dequant fixed but not root cause.**
-Prompt "The capital of France is": 
-- Our output (MOE=0): `ò` then loops `_tuples` → `ò` → `ò`...
-- Our output (MOE=1): `新项目` then jumps between languages: `judging'i quanto_pass...`
-- **llama.cpp reference**: `Here's a thinking process:\n\n1.`
+**INFERENCE STILL BROKEN.** MoE interleaved dequant FIXED, output projection verified correct, but SSM output cos_sim=0.009 vs reference.
+Prompt "Hello": our top token "incer" (10.38), reference token "Here's a" (reference produces coherent text).
 
-All ✅ statuses mean "compiles and doesn't crash" unless noted.
+## What We Know
+- ✅ MoE expert dequant: interleaved [D_MODEL, D_FF, N_EXPERTS] block-by-block extraction FIXED
+- ✅ MoE type dispatch: down_exps uses ty_gd (per-layer IQ4_XS) — FIXED
+- ✅ Per-layer debug dumps: DUMP_LAYER_DIR, DUMP_HIDDEN_NORM, DUMP_SSM_VAL all working
+- ✅ MAX_LAYERS env var: for single-layer debugging
+- ✅ Q scaling in SSM: 1/sqrt(128) applied matching reference
+- ✅ ssm_a values verified: ALL NEGATIVE (-72 to -0.02) → gate formula IS correct decay
+- ✅ All weight matrix accesses use correct ggml row-major indexing (i + j * ne[0] pattern)
+- ✅ Q5_K, Q6_K dequant functions verified against llama.cpp reference — correct
+- ✅ SSM output projection indexing (i + j * VALUE_DIM) — correct for ggml layout
 
----
+## Divergence Point
+- **SSM VALUE_DIM output cos_sim = 0.009** vs reference → bug is in SSM recurrence or QKV projection, NOT output projection
+- L0 residual RMS ratio ~8× (our larger than ref)
+- Final h_last cos_sim = 0.004
 
-## Inference Engines — Real Status
+## Unchecked Hypotheses
+1. **Conv1d bug**: `kernel[ki + c * k]` access — need to verify conv output element-by-element
+2. **MoE routing at layer 0 shared expert**: may corrupt residual in first MoE step
+3. **lm_head (output.weight) dequant**: type unknown, could be wrong
+4. **wubu_silu ≠ ggml_silu**: slight numerical difference could compound
+5. **SSM state initialization**: zero-initialized matches reference, but state_update_target semantics may differ
+6. **GQA layer at layer 3+**: our 38 SSM layers + 2 GQA layers match reference
 
-| Binary | Claimed | Actual | Notes |
-|--------|---------|--------|-------|
-| `infer_text` v2 | ✅ | ❌ Garbage | Q5_K dequant fix applied. `ò`→`_tuples` loop (MOE=0) or lang-jumping (MOE=1) |
-| `infer_text_gpu` v5 | ✅ 245 tok/s | ❌ Garbage | Same bugs as CPU + GPU output projection |
-| `train_integrated` | ✅ CE 12.42 | ❓ CE measured | No reference baseline |
-| `infer_moe_lazy` | ✅ 37 tok/s | ❓ Speed only | Output never verified |
-| `test_kv_cache` | ✅ max_diff=0.00 | ✅ Verified | Gold standard |
-| `test_256k` | ✅ MoE router 65K | ✅ Verified | Component only |
-| `infer_vision_gpu` | ✅ 99ms | ❓ Moondream3 | Separate model |
-
-## Fixed Bugs (May 16 PM)
-
-| Bug | Fix | Status |
-|-----|-----|--------|
-| Q5_K dequant qh bit-indexing | ✅ Corrected to match llama.cpp reference (qh[l] bit[chunk_id*2+0/1]) | Output changed, still garbage |
-| TGT state wrap removed | ✅ Removed from SSM forward (not in llama.cpp ref) | No effect on short sequences |
-| GQA gate verification | ✅ Already applied in both prefill + decode paths | Was never a bug |
-| EOS detection | ✅ gen>1 check for eos=bos=248044 | Correct |
-| Debug logit dump | ✅ Added top-5 prefill + step-by-step decode | Diagnostic only |
-
-## Known Broken (No Fix Yet)
-
-| Problem | Evidence |
-|---------|----------|
-| MOE=0: loops `ò` (21502) and `_tuples` (86196) | Logits flat (9-11 range for top-5). SSM output mean=2.85 vs embedding mean=0.02 (140×) |
-| MOE=1: jumps languages each token | Different tokens each step but semantically garbage |
-| Causality likely SSM weight scaling | SSM output projection (`ssm_out.weight`) Q5_K dequant may still be wrong, or SSM recurrence formula differs from Qwen3.6 |
-
-## Hidden State Diagnostics
-
-| Metric | Value | Healthy? |
-|--------|-------|----------|
-| Embedding mean | 0.02 | ✅ Normal |
-| Embedding max | 0.20 | ✅ Normal |
-| Layer 0 SSM attn_out mean | 2.85 | ❌ 140× embedding magnitude |
-| Layer 0 SSM attn_out max | 47.9 | ❌ Extreme outlier |
-| Output logits top-5 range | 8.86-10.04 | ❌ Flat (gap <0.5 between positions) |
-
-## What's Verified Working
-- **test_kv_cache**: max_diff=0.00 ✅
-- **test_256k**: MoE router O(T) to 65K ✅
-- **Q4_K dequant**: Matches llama.cpp reference ✅
-- **Q5_K dequant**: Fix aligns with llama.cpp reference ✅ (but output still wrong)
-- **llama.cpp reference**: BUILT at ~/llama.cpp/build/bin/llama-cli ✅
-- **API server sandbox**: 14 tests pass ✅
-- **GQA gate**: Applied correctly in both paths ✅
-- **EOS detection**: Correct logic ✅
-
-## Commits This Session
-- `39aeaa1` — Q5_K dequant qh fix + debug logit dump
-- `4e8a216` — TGT wrap removed from SSM forward
-- `ba4b43b` — Hidden state magnitude debug dump
+## Fixed This Session
+- MoE interleaved expert dequant (block-by-block, per-expert extraction)
+- MoE down_exps type dispatch (ty_gd for IQ4_XS layers)
+- Debug infra: DUMP_LAYER_DIR, DUMP_HIDDEN_NORM, MAX_LAYERS, DUMP_SSM_VAL
+- Misguided output projection "fix" reverted (was already correct)
 
 ## Priorities
-P0 — Fix inference: root cause in SSM weight scaling or dequant of other types
-P1 — Verify layer-by-layer hidden states vs llama.cpp
-P2 — Fix training hyperbolic backward passes
-P3 — GPU acceleration, tailslayer, 256K
+P0 — Find root cause in SSM forward: compare QKV/element-wise with reference
+P1 — Verify conv1d output element-by-element
+P2 — Sanity-check lm_head dequant
