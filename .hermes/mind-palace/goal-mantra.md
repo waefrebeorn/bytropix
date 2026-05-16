@@ -1,49 +1,27 @@
-=== WuBuText AI — GOAL PASTE (May 16 v13 — HONEST) ===
+═══ GOAL PASTE (May 17 PM v16 — HONEST) ═══
+PROJECT: bytropix — Custom Qwen3.6-35B-A3B inference engine
+MODEL: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+REF: /home/wubu/llama.cpp/build/bin/llama-cli
+STATUS: INFERENCE BROKEN — output `<|endoftext|>Hello_vendor` vs ref "Hello Here's a"
 
-HARD TRUTH: ALL inference binaries produce garbage.
-3 bugs fixed this session (Q5_K dequant, TGT wrap, GQA gate verified) but root cause remains.
-Output (MOE=0): loops `ò`(21502)/`_tuples`(86196) — logits flat 9-11.
-Output (MOE=1): jumps languages each step — semantically dead.
-Reference (llama.cpp): "Here's a thinking process:\n\n1."
+=== FIXED ===
+- MoE interleaved dequant FIXED (prior): dequant_block_once + expert_offset = e * D_MODEL * D_FF
+- IQ3_XXS block size 98 (not 104) FIXED (prior): MoE down_exps rms 690k→0.25
+- IQ4_XS support added (prior): type 23 enum + dequant + raw_size
+- IQ1_M dequant FIXED (this session): scale idx ib/4→ib/2, added dl1/dl2 split, removed -1.0f delta shift. Not used in this model.
+- Python `dump_gguf.py` type labels CORRECTED (this session): 18→IQ3_XXS, 23→IQ4_XS, added 22→IQ2_S, 29→IQ1_M
 
-=== WHAT ACTUALLY WORKS ===
-- llama.cpp: BUILT at ~/llama.cpp/build/bin/llama-cli — correct output ✅
-- test_kv_cache: KV cache matches full recompute (max_diff=0.00) ✅
-- test_256k: MoE router O(T) scaling to 65K ✅
-- Q4_K dequant: verified vs llama.cpp reference ✅
-- Q5_K dequant: qh bit-indexing FIXED (matches ref) but not root cause
-- GQA gate: applied in both prefill + decode paths ✅
-- API server: tools/serve.py sandbox (14 tests) ✅
-- EOS detection: correct (gen>1 for eos=bos=248044) ✅
-- NaN in training: FIXED (MoE weight interleaving) ✅
-- Per-expert dequant: 11s/step (16×), 0 NaN all configs ✅
+=== REMAINING ROOT CAUSE ===
+SSM divergence at L0: cos_sim=0.40 vs llama.cpp reference (BEFORE MoE runs).
+NOT a dequant issue. In SSM compute path (conv1d, recurrence, output proj, residual).
 
-=== WHAT'S BROKEN (P0) ===
-- ALL inference binaries produce garbage
-- SSM output mean=2.85 vs embedding mean=0.02 (140× magnitude)
-- Root cause: SSM weight dequant (ssm_out.weight Q5_K) or SSM recurrence formula
-- MOE=0: loops `ò`/`_tuples` (stuck in 2-token attractor)
-- MOE=1: jumps random languages (dequant errors in IQ2_XXS/IQ2_S?)
-- Q5_K dequant fix changed output but didn't fix it
-- TGT wrap removal had no effect on 6-tok sequences
+=== VERIFIED DEQUANTS ===
+IQ2_XXS ✅ | IQ2_S ✅ | IQ3_XXS ✅ | Q6_K ✅
+IQ4_XS ℹ️ untested | IQ1_M ✅ (unused in this model)
 
-=== DIAGNOSTICS ===
-Embedding stats: mean=0.02 max=0.20 — normal
-Layer 0 SSM attn_out: mean=2.85 max=47.9 — 140× embedding magnitude (suspicious)
-Top-5 logits: 8.86-10.04 range — flat (gap <0.5)
-
-=== PRIORITY ===
-P0 — Fix inference by verifying weights layer-by-layer vs llama.cpp
-P1 — Verify all components against reference
-P2 — Hyperbolic backward passes (forward-only = can't train)
-P3 — GPU acceleration, tailslayer, 256K
-
-=== COMMITS THIS SESSION ===
-39aeaa1 — Q5_K dequant qh fix + debug logit dump
-4e8a216 — TGT wrap removed from SSM forward
-ba4b43b — Hidden state magnitude debug dump
-
-TGT: remainder = fmod(x+π, 2π)-π | tgt_safe_expf: clamp [-80,80]
-REFERENCE: ~/llama.cpp/build/bin/llama-cli
-BUILD: make infer_text
-HW: RTX 5050, sm=120
+=== ACTUAL TENSOR TYPES (from GGUF) ===
+down_exps: IQ3_XXS (37/40 layers) + IQ4_XS (3/40: L34,38,39)
+gate/up_exps: IQ2_XXS (all)
+gate_inp: F32
+shexp gate/up: Q5_K | shexp down: Q6_K
+ssm_out: Q6_K | output.weight: Q4_K | token_embd: Q5_K
