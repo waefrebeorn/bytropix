@@ -1,12 +1,17 @@
 /* wubu_ssm_chunked.c — Chunked Gated DeltaNet recurrence
-
-   For B=1, T tokens. Each head processes CS=64 tokens at a time.
-   Intra-chunk: triangular decay mask + matmuls.
-   Inter-chunk: state carry with full chunk decay + kg^T @ v_new.
-
-   Reference: llama.cpp delta-net-base.cpp build_delta_net_chunking lines 265-273
-*/
-
+ *
+ * Matches llama.cpp delta-net-base.cpp build_delta_net_chunking() exactly.
+ *
+ * Per chunk [CS=64 tokens]:
+ *   1. Build decay mask, KB, KQ matrices
+ *   2. Solve (I+L)^T X = -L to get attention matrix A = I+X
+ *   3. intra = A^T @ v_b        [d, CS]
+ *   4. kbd = (k_b*exp(G))^T @ A [d, CS]
+ *   5. v_prime = k_cd^T @ s_t   [CS, d]
+ *   6. v_new = v_t - v_prime
+ *   7. v_attn = v_new^T @ kq + s_t^T @ q_g [d, CS]
+ *   8. state update: s_t *= exp(g_last) + kg^T @ v_new
+ */
 #include "wubu_ssm.h"
 #include <stdlib.h>
 #include <string.h>
@@ -16,16 +21,11 @@
 
 #define CS 64
 
-// Forward substitution: solve L^T @ X = RHS, L unit lower-tri diag=1
-static void solve_tri(int n, const float *L, const float *RHS, float *X) {
-    memset(X, 0, n * n * sizeof(float));
-    for (int i = n - 1; i >= 0; i--)
-        for (int j = 0; j < n; j++) {
-            float s = RHS[i * n + j];
-            for (int k = i + 1; k < n; k++)
-                s -= L[k * n + i] * X[k * n + j];
-            X[i * n + j] = s;
-        }
+static void transpose_mat(int n, const float *src, float *dst)
+{
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            dst[j * n + i] = src[i * n + j];
 }
 
 void wubu_ssm_chunked_recurrence(
@@ -35,127 +35,252 @@ void wubu_ssm_chunked_recurrence(
     float *ssm_state, float *delta_out)
 {
     if (B != 1) { fprintf(stderr, "chunked: only B=1 supported\n"); return; }
-    const int d = SSM_D_STATE;
+    const int d  = SSM_D_STATE;
     const int hk = SSM_K_HEADS;
     const int hv = SSM_V_HEADS;
     const int rf = hv / hk;
-    const int nc = (T + CS - 1) / CS;
+    int pad = (CS - T % CS) % CS;
+    int nt  = T + pad;
+    int nc  = nt / CS;
+
+    size_t sz_t = (size_t)nt * d * sizeof(float);
+    float *qp = (float *)calloc(hk, sz_t);
+    float *kp = (float *)calloc(hk, sz_t);
+    float *vp = (float *)calloc(hv, sz_t);
+    float *bp = (float *)calloc(hv, nt * sizeof(float));
+    float *gp = (float *)calloc(hv, nt * sizeof(float));
+    if (!qp || !kp || !vp || !bp || !gp) goto cleanup;
+
+    for (int h = 0; h < hk; h++)
+        memcpy(qp + (size_t)h * nt * d, q_norm + (size_t)h * T * d, T * d * sizeof(float));
+    for (int h = 0; h < hk; h++)
+        memcpy(kp + (size_t)h * nt * d, k_norm + (size_t)h * T * d, T * d * sizeof(float));
+    for (int h = 0; h < hv; h++) {
+        memcpy(vp + (size_t)h * nt * d, v_conv + (size_t)h * T * d, T * d * sizeof(float));
+        memcpy(bp + (size_t)h * nt, beta_flat + (size_t)h * T, T * sizeof(float));
+        memcpy(gp + (size_t)h * nt, gate_flat  + (size_t)h * T, T * sizeof(float));
+    }
+    memset(delta_out, 0, (size_t)hv * T * d * sizeof(float));
 
     #pragma omp parallel for if(hv > 1)
     for (int vh = 0; vh < hv; vh++) {
-        size_t sz = (size_t)CS * d;
-        size_t sz2 = (size_t)CS * CS;
-        float *scr = (float *)malloc(
-            sz * 6 * sizeof(float) +  // qk,kk,vk,vb,kb,kg
-            sz2 * 4 * sizeof(float) + // M,A2,X,LS
-            (size_t)T * d * sizeof(float) +  // oh
-            (size_t)d * d * sizeof(float));  // kcd
-        if (!scr) continue;
-        float *qk = scr, *kk = qk + sz, *vk = kk + sz;
-        float *vb = vk + sz, *kb = vb + sz, *kg = kb + sz;
-        float *M = kg + sz, *A2 = M + sz2, *X = A2 + sz2, *LS = X + sz2;
-        float *oh = LS + sz2;
-        float *kcd = oh + (size_t)T * d;  // [d, d]
-
         int kh = vh / rf;
-        float *h = ssm_state + vh * d * d;
+        float *h = ssm_state + (size_t)vh * d * d;
+        size_t sz_cs = (size_t)CS * d;
+        size_t sz_cs2 = (size_t)CS * CS;
+        size_t sz_dd = (size_t)d * d;
 
-        // Gather per-head data and pre-scale Q by 1/sqrt(d)
-        float qsc = 1.0f / sqrtf((float)d);
-        for (int t = 0; t < T; t++) {
-            for (int i = 0; i < d; i++)
-                qk[t*d+i] = q_norm[(t * hk + kh) * d + i] * qsc;
-            memcpy(kk + t * d, k_norm + (t * hk + kh) * d, d * sizeof(float));
-            memcpy(vk + t * d, v_conv + (t * hv + vh) * d, d * sizeof(float));
-        }
+        size_t alloc_sz = 13 * sz_cs + 5 * sz_cs2 + 3 * sz_dd + (size_t)CS;
+        float *scr = (float *)malloc(alloc_sz * sizeof(float));
+        if (!scr) continue;
+        float *qc = scr, *kc = qc + sz_cs, *vc = kc + sz_cs;
+        float *v_b = vc + sz_cs, *k_b = v_b + sz_cs;
+        float *kbd = k_b + sz_cs;
+        float *qg = kbd + sz_cs;
+        float *kg = qg + sz_cs;
+        float *intra = kg + sz_cs;
+        float *v_t = intra + sz_cs;
+        float *v_prime = v_t + sz_cs;
+        float *v_new = v_prime + sz_cs;
+        float *v_attn = v_new + sz_cs;
+        float *kb = v_attn + sz_cs;
+        float *kq = kb + sz_cs2;
+        float *mask = kq + sz_cs2;
+        float *lhs = mask + sz_cs2;
+        float *attn = lhs + sz_cs2;
+        float *s_t = attn + sz_cs2;
+        float *kcd = s_t + sz_dd;
+        float *kgv = kcd + sz_dd;
+        float *g_cs = kgv + sz_dd;
 
-        for (int ch = 0; ch < nc; ch++) {
-            int off = ch * CS;
-            int nt = T - off; if (nt > CS) nt = CS;
-            const float *qc = qk + off * d, *kc = kk + off * d, *vc = vk + off * d;
+        transpose_mat(d, h, s_t);
 
-            // Cum gate within chunk
-            float gc[CS];
-            gc[0] = gate_flat[off * hv + vh];
-            for (int i = 1; i < nt; i++) gc[i] = gc[i-1] + gate_flat[(off + i) * hv + vh];
-            float g_last = gc[nt-1];
-            for (int i = nt; i < CS; i++) gc[i] = g_last;
+        for (int c = 0; c < nc; c++) {
+            int off = c * CS;
+            int cur_nt = nt - off;
+            if (cur_nt > CS) cur_nt = CS;
+
+            float *q_s = qp + (size_t)kh * nt * d + (size_t)off * d;
+            float *k_s = kp + (size_t)kh * nt * d + (size_t)off * d;
+            float *v_s = vp + (size_t)vh * nt * d + (size_t)off * d;
+            float *b_s = bp + (size_t)vh * nt + off;
+            float *g_s = gp + (size_t)vh * nt + off;
+
+            // Gather chunk, q pre-scaled
+            float qsc = 1.0f / sqrtf((float)d);
+            for (int i = 0; i < cur_nt; i++) {
+                for (int j = 0; j < d; j++) {
+                    qc[(size_t)i * d + j] = q_s[(size_t)i * d + j] * qsc;
+                    kc[(size_t)i * d + j] = k_s[(size_t)i * d + j];
+                    vc[(size_t)i * d + j] = v_s[(size_t)i * d + j];
+                }
+            }
+            for (int i = cur_nt; i < CS; i++)
+                memset(qc + (size_t)i * d, 0, d * sizeof(float));
+            for (int i = cur_nt; i < CS; i++)
+                memset(kc + (size_t)i * d, 0, d * sizeof(float));
+            for (int i = cur_nt; i < CS; i++)
+                memset(vc + (size_t)i * d, 0, d * sizeof(float));
 
             // v_b = v * beta, k_b = k * beta
             for (int i = 0; i < CS; i++) {
-                float bi = (i < nt) ? beta_flat[(off + i) * hv + vh] : 0.0f;
+                float bi = (i < cur_nt) ? b_s[i] : 0.0f;
                 for (int j = 0; j < d; j++) {
-                    vb[i*d+j] = vc[i*d+j] * bi;
-                    kb[i*d+j] = kc[i*d+j] * bi;
+                    v_b[(size_t)i * d + j] = vc[(size_t)i * d + j] * bi;
+                    k_b[(size_t)i * d + j] = kc[(size_t)i * d + j] * bi;
                 }
             }
 
-            // Decay mask M[i,j] = exp(gc[j]-gc[i]) for j>=i
+            // Cumsum gate
+            g_cs[0] = (off < T) ? g_s[0] : 0.0f;
+            for (int i = 1; i < CS; i++)
+                g_cs[i] = g_cs[i-1] + ((off + i < T) ? g_s[i] : 0.0f);
+            float g_last = g_cs[cur_nt - 1];
+            for (int i = cur_nt; i < CS; i++) g_cs[i] = g_last;
+
+            // Decay mask M[i][j] = exp(G[j]-G[i]) for i >= j (lower tri, causal), else 0
             for (int i = 0; i < CS; i++)
                 for (int j = 0; j < CS; j++)
-                    M[i*CS+j] = (j >= i) ? expf(fminf(gc[j]-gc[i], 80.0f)) : 0.0f;
+                    mask[(size_t)i * CS + j] = (i >= j)
+                        ? expf(fminf(g_cs[j] - g_cs[i], 80.0f)) : 0.0f;
 
-            // Intra-chunk: kb_masked = M * (k_b @ k^T)
+            // KB = mask ⊙ (k^T @ k_b)
             for (int i = 0; i < CS; i++)
                 for (int j = 0; j < CS; j++) {
                     float s = 0;
-                    for (int z = 0; z < d; z++) s += kb[i*d+z] * kc[j*d+z];
-                    A2[i*CS+j] = s * M[i*CS+j];
-                }
-
-            // LHS = I + tri(kb_masked), RHS = tri(kb_masked) with 0 diag
-            memcpy(LS, A2, sz2 * sizeof(float));
-            for (int i = 0; i < CS; i++) LS[i*CS+i] += 1.0f;
-            for (int i = 0; i < CS; i++) A2[i*CS+i] = 0.0f;
-
-            // X = LS^{-T} @ A2, then X += I
-            solve_tri(CS, LS, A2, X);
-            for (int i = 0; i < CS; i++) X[i*CS+i] += 1.0f;
-
-            // Intra-chunk output = X^T @ v_b [CS, d]
-            for (int i = 0; i < CS; i++)
-                for (int j = 0; j < d; j++) {
-                    float s = 0;
-                    for (int z = 0; z < CS; z++) s += X[z*CS+i] * vb[z*d+j];
-                    oh[i*d+j] = s;
-                }
-
-            // State contribution = h^T @ (q * exp(gc))  (q is pre-scaled by 1/sqrt(d))
-            // combined = intra + state_contrib
-            for (int i = 0; i < nt; i++) {
-                float ge = expf(gc[i]);
-                for (int j = 0; j < d; j++) {
-                    float sc = 0;
                     for (int z = 0; z < d; z++)
-                        sc += h[z*d+j] * qc[i*d+z] * ge;
-                    oh[i*d+j] += sc;
+                        s += kc[(size_t)i * d + z] * k_b[(size_t)j * d + z];
+                    kb[(size_t)i * CS + j] = s * mask[(size_t)i * CS + j];
                 }
+
+            // KQ = mask ⊙ (k^T @ q) — lower including diagonal (LOWER_DIAG)
+            for (int i = 0; i < CS; i++)
+                for (int j = 0; j < CS; j++) {
+                    float s = 0;
+                    for (int z = 0; z < d; z++)
+                        s += kc[(size_t)i * d + z] * qc[(size_t)j * d + z];
+                    kq[(size_t)i * CS + j] = s * mask[(size_t)i * CS + j];
+                }
+            // Zero strictly upper (j > i), keeping i >= j
+            for (int i = 0; i < CS; i++)
+                for (int j = i + 1; j < CS; j++)
+                    kq[(size_t)i * CS + j] = 0.0f;
+
+            // L = tri(KB, strict_lower); lhs = I + L
+            for (int i = 0; i < CS; i++)
+                for (int j = i; j < CS; j++)
+                    kb[(size_t)i * CS + j] = 0.0f;
+            for (int i = 0; i < CS; i++) {
+                memcpy(lhs + (size_t)i * CS, kb + (size_t)i * CS, CS * sizeof(float));
+                lhs[(size_t)i * CS + i] = 1.0f;
             }
 
-            // Copy output for real tokens
-            for (int i = 0; i < nt; i++)
-                memcpy(delta_out + ((off + i) * hv + vh) * d, oh + i * d, d * sizeof(float));
-
-            // --- Per-chunk state update: match sequential decay-then-update ---
-            // Sequential: for each t in chunk: h *= exp(g[t]); hk=h@k; diff=v_b-hk; h+=k⊗diff
-            // We can batch this: first decay ALL by exp(g_last), then adjust for each token
-            // But decay is per-token and interleaved with updates, so we must do per-token.
-            
-            // State update with proper decay per token (matches sequential order)
-            for (int i = 0; i < nt; i++) {
-                float gg = expf(fminf(gate_flat[(off + i) * hv + vh], 80.0f));
-                float bg = beta_flat[(off + i) * hv + vh];
-                for (int z = 0; z < d; z++)
-                    for (int w = 0; w < d; w++) h[z*d+w] *= gg;
-                float hk_tmp[128]; memset(hk_tmp, 0, d*sizeof(float));
-                for (int z = 0; z < d; z++)
-                    for (int w = 0; w < d; w++) hk_tmp[z] += h[z*d+w] * kc[i*d+w];
-                for (int z = 0; z < d; z++) {
-                    float df = vc[i*d+z] * bg - hk_tmp[z];
-                    for (int w = 0; w < d; w++) h[z*d+w] += kc[i*d+w] * df;
+            // Solve L^T @ X = -L  (L unit lower, L^T unit upper)
+            // Bottom-up forward sub for L^T upper triangular
+            for (int j = 0; j < CS; j++) {
+                for (int i = CS - 1; i >= 0; i--) {
+                    float b = (i > j) ? -kb[(size_t)i * CS + j] : 0.0f;
+                    float s = b;
+                    for (int k = i + 1; k < CS; k++)
+                        s -= lhs[(size_t)k * CS + i] * attn[(size_t)k * CS + j];
+                    attn[(size_t)i * CS + j] = s;
                 }
             }
+            // A = I + X
+            for (int i = 0; i < CS; i++)
+                attn[(size_t)i * CS + i] += 1.0f;
+
+            // --- intra = A^T @ v_b [d, CS] ---
+            for (int dim = 0; dim < d; dim++)
+                for (int t = 0; t < CS; t++) {
+                    float s = 0;
+                    for (int z = 0; z < CS; z++)
+                        s += attn[(size_t)z * CS + t] * v_b[(size_t)z * d + dim];
+                    intra[(size_t)dim * CS + t] = s;
+                }
+
+            // v_t = intra^T [CS, d]
+            for (int t = 0; t < CS; t++)
+                for (int dim = 0; dim < d; dim++)
+                    v_t[(size_t)t * d + dim] = intra[(size_t)dim * CS + t];
+
+            // --- kbd = (k_b * exp(G))^T @ A [d, CS] ---
+            for (int dim = 0; dim < d; dim++)
+                for (int t = 0; t < CS; t++) {
+                    float s = 0;
+                    for (int z = 0; z < CS; z++) {
+                        float kbg_z = k_b[(size_t)z * d + dim]
+                            * expf(fminf(g_cs[z], 80.0f));
+                        s += kbg_z * attn[(size_t)z * CS + t];
+                    }
+                    kbd[(size_t)dim * CS + t] = s;
+                }
+
+            // --- q_g = q * exp(G) [CS, d] ---
+            for (int t = 0; t < CS; t++) {
+                float ge = expf(fminf(g_cs[t], 80.0f));
+                for (int dim = 0; dim < d; dim++)
+                    qg[(size_t)t * d + dim] = qc[(size_t)t * d + dim] * ge;
+            }
+
+            // --- kg = k * exp(g_last - G) [CS, d] ---
+            for (int t = 0; t < CS; t++) {
+                float gd = expf(fminf(g_last - g_cs[t], 80.0f));
+                for (int dim = 0; dim < d; dim++)
+                    kg[(size_t)t * d + dim] = kc[(size_t)t * d + dim] * gd;
+            }
+
+            // --- v_prime = k_cd^T @ s_t [CS, d] ---
+            for (int t = 0; t < CS; t++)
+                for (int dim = 0; dim < d; dim++) {
+                    float s = 0;
+                    for (int z = 0; z < d; z++)
+                        s += kbd[(size_t)z * CS + t] * s_t[(size_t)z * d + dim];
+                    v_prime[(size_t)t * d + dim] = s;
+                }
+
+            // --- v_new = v_t - v_prime [CS, d] ---
+            for (int t = 0; t < CS; t++)
+                for (int dim = 0; dim < d; dim++)
+                    v_new[(size_t)t * d + dim] = v_t[(size_t)t * d + dim] - v_prime[(size_t)t * d + dim];
+
+            // --- v_attn = v_new^T @ kq + s_t^T @ q_g [d, CS] ---
+            for (int dim = 0; dim < d; dim++)
+                for (int t = 0; t < CS; t++) {
+                    float s = 0;
+                    for (int z = 0; z < CS; z++)
+                        s += v_new[(size_t)z * d + dim] * kq[(size_t)z * CS + t];
+                    for (int z = 0; z < d; z++)
+                        s += s_t[(size_t)z * d + dim] * qg[(size_t)t * d + z];
+                    v_attn[(size_t)dim * CS + t] = s;
+                }
+
+            // Write output for real tokens
+            for (int i = 0; i < cur_nt; i++) {
+                size_t out_off = (size_t)(off + i) * hv * d + (size_t)vh * d;
+                for (int j = 0; j < d; j++)
+                    delta_out[out_off + j] = v_attn[(size_t)j * CS + i];
+            }
+
+            // --- State update: s_t = s_t * exp(g_last) + kg^T @ v_new ---
+            for (int dr = 0; dr < d; dr++)
+                for (int dc = 0; dc < d; dc++) {
+                    float s = 0;
+                    for (int t = 0; t < CS; t++)
+                        s += kg[(size_t)t * d + dr] * v_new[(size_t)t * d + dc];
+                    kgv[(size_t)dr * d + dc] = s;
+                }
+
+            float gl_exp = expf(fminf(g_last, 80.0f));
+            for (int r = 0; r < d; r++)
+                for (int c = 0; c < d; c++)
+                    s_t[(size_t)r * d + c] = s_t[(size_t)r * d + c] * gl_exp + kgv[(size_t)r * d + c];
         }
+
+        transpose_mat(d, s_t, h);
         free(scr);
     }
+
+cleanup:
+    free(qp); free(kp); free(vp); free(bp); free(gp);
 }

@@ -2476,3 +2476,69 @@ void wubu_rms_norm_backward(int B, int T, int d,
             dx[i] += do_h[i] * weight[i] * r - (r3 / d) * inp[i] * (float)inner;
     }
 }
+
+// ============================================================
+// Sequential SSM recurrence (extracted for chunked verification)
+// ============================================================
+void wubu_ssm_sequential_recurrence(int B, int T,
+                                     const float *q_norm,
+                                     const float *k_norm,
+                                     const float *v_conv,
+                                     const float *beta_flat,
+                                     const float *gate_flat,
+                                     float *ssm_state,
+                                     float *delta_out)
+{
+    const int d  = SSM_D_STATE;
+    const int hk = SSM_K_HEADS;
+    const int hv = SSM_V_HEADS;
+    const int rf = hv / hk;
+    const float q_scale = 1.0f / sqrtf((float)d);
+
+    for (int b = 0; b < B; b++) {
+        for (int t = 0; t < T; t++) {
+            int s = b * T + t;
+            const float *beta_s = beta_flat + s * hv;
+            const float *gate_s = gate_flat + s * hv;
+
+            for (int vh = 0; vh < hv; vh++) {
+                int kh = vh / rf;
+                float bg = beta_s[vh];
+                float gg = tgt_safe_expf(gate_s[vh]);
+
+                const float *q_vh = q_norm + (s * hk + kh) * d;
+                const float *k_vh = k_norm + (s * hk + kh) * d;
+                const float *v_vh = v_conv + (s * hv + vh) * d;
+                float *h = ssm_state + (vh * d * d);
+
+                float q_scaled[d];
+                for (int i = 0; i < d; i++)
+                    q_scaled[i] = q_vh[i] * q_scale;
+
+                for (int i = 0; i < d; i++)
+                    for (int j = 0; j < d; j++)
+                        h[i * d + j] *= gg;
+
+                float hk_v[d];
+                memset(hk_v, 0, sizeof(hk_v));
+                for (int i = 0; i < d; i++)
+                    for (int j = 0; j < d; j++)
+                        hk_v[i] += h[i * d + j] * k_vh[j];
+
+                float diff[d];
+                for (int i = 0; i < d; i++)
+                    diff[i] = v_vh[i] - hk_v[i];
+
+                for (int i = 0; i < d; i++)
+                    for (int j = 0; j < d; j++)
+                        h[i * d + j] += k_vh[j] * diff[i] * bg;
+
+                float *out = delta_out + (s * hv + vh) * d;
+                memset(out, 0, d * sizeof(float));
+                for (int i = 0; i < d; i++)
+                    for (int j = 0; j < d; j++)
+                        out[i] += h[i * d + j] * q_scaled[j];
+            }
+        }
+    }
+}
