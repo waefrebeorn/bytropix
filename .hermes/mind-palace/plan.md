@@ -1,33 +1,35 @@
-# bytropix Roadmap — llama.cpp Alignment Plan
+# bytropix Roadmap — DA-Recertified May 16
 
-## Phase 0: Correctness Fixes ✓ DONE
-- [x] **Shared expert gate**: Loaded + sigmoid applied. Verified build clean.
-- [x] **MoE contiguous dequant**: Fixed. Output Chinese→English.
-- [x] **MOE=1 default**: Changed from 0.
-- [x] **MAX_LAYERS=0 clamp**: Fixed.
+## Phase 0: Critical Bug Hunt (NEW — top priority)
+- [ ] P0a: Write Q5_K dequant test — compare single block vs llama.cpp reference
+- [ ] P0b: Write Q4_K (type 12) dequant test — compare output.weight block
+- [ ] P0c: Verify SSM Q scaling factor — check llama.cpp delta-net-base
+- [ ] P0d: Verify RMSNorm epsilon — check llama.cpp default
+- [ ] P0e: Remove TGT wrapping from GQA attention — compare output with/without
+- [ ] P0f: Fix wubu_gqa_forward() weight indexing — i*cols+j → i+j*D_MODEL
 
-## Phase 1: Inference Speed ✓ DONE
-- [x] **P1a — Chunked DeltaNet**: Implemented. NOTE: chunked≠sequential for multi-token chunks (different linear system). Training-only. Not used in inference.
-- [x] **P1b — Fused Gate+Up**: Use existing separate weights (Qwen3.6 stores gate/up separately, not fused).
-- [x] **P1c — Single-Pass Top-K**: O(EK) worst-first queue, replaced O(EK²) bubble sort.
+## Phase 0.5: First-Token Parity
+- [ ] Run layer-0-only inference, dump h_last, compare vs llama.cpp LLAMA_DUMP_LAYER_DIR
+- [ ] Binary search: find first layer where hidden diverges from reference
 
-## Phase 2: GPU Optimization ✓ DONE
-- [x] **P2a — Warp-Level SSM Scan**: Template kernel ssm_warp_scan_kernel<4,128> at 1024 thr/block.
-- [x] **P2b — Conv State Device Kernel**: build_conv_input_kernel + update_conv_state_kernel.
-- [x] **P2c — Conv1d Shared Memory**: Conv weights cached in __shared__ per block. 
-- [x] **TF32 math mode**: cuBLAS with CUBLAS_TF32_TENSOR_OP_MATH.
-- [x] **Block size 512**: Element-wise kernels.
+## Phase 1: Inference Speed ✓ (DA: compiled only, not verified)
+- [ ] P1a Chunked DeltaNet — training-only, not used
+- [ ] P1b Fused Gate+Up — design decision, separate weights fine
+- [ ] P1c Single-Pass Top-K — same algorithm as bubble sort, correct
 
-## Phase 3: Quantized Inference ✓ DONE
-- [x] **P3a — On-the-Fly IQ2_XXS Dot**: dequantize_iq2_xxs_block(), dot_row functions. 4/4 tests pass.
-- [x] **P3b — K-Quant Support**: Q4_K, Q5_K, Q6_K all have raw_size + dequant functions. All 7 model types supported.
+## Phase 2: GPU Optimization ✓ (DA: all compiled only)
+- [ ] P2a Warp CUDA scan — not used in CPU test path
+- [ ] P2b Conv state kernels — not used in CPU test path
+- [ ] P2c Conv1d shared mem — not used in CPU test path
+- [ ] TF32/block 512 — speed only, not correctness
 
-## Phase 4: Architecture Alignment (ON HOLD)
-- [ ] **P4a — Model Graph**: Not needed until operator fusion required. Current sequential execution works.
-- [ ] **P4b — KV Cache Manager**: Not needed until 256K context deployment.
+## Phase 3: Quant ✓ (DA: partially verified)
+- [x] P3a IQ2 on-the-fly dot — 4/4 unit tests pass
+- [ ] P3b K-Quant — raw_size + dequant functions. NEVER verified vs llama.cpp
 
-## Phase 5: Training (FUTURE)
-- [ ] **P5a — Backward Checkpointing**: Not started.
+## Phase 4: Architecture
+- [ ] P4a Model graph — not needed until operator fusion required
+- [ ] P4b KV Cache manager — not needed until 256K context
 
-## Current Issue
-- **"Doug" vs llama "Here"**: Root cause unknown. attn_output_gate already implemented. Possible: tokenizer BOS, embd_norm epsilon, or quantization noise at 2-3 bpw on 35B.
+## Phase 5: Training
+- [ ] P5a Backward checkpointing — not started

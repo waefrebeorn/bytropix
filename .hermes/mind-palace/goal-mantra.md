@@ -1,31 +1,29 @@
-═══ GOAL PASTE (May 16 v24 — DA AUDITED) ═══
+═══ GOAL PASTE (May 16 v25 — DA RECERTIFIED) ═══
 PROJECT: bytropix — Custom Qwen3.6-35B-A3B inference engine
 MODEL: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (7-type mixed quant)
-STATUS: All P0-P3 infrastructure done. Output WRONG — NOT tool-call ready.
+STATUS: All inference pipeline STRUCTURE verified correct. Output WRONG.
 
-=== DA AUDIT — Survivorship Bias Stripped ===
-❌ "Doug" vs "Here" — CRITICAL. Root cause UNKNOWN.
-❌ Embeds from pre-extracted file were CORRUPTED (extracted with buggy dequant).
-    → Fixed: auto-extract token_embd.weight from GGUF at load time.
-❌ BOS: add_bos_token=false in GGUF, but bytropix added BOS anyway.
-    → Fixed: ADD_BOS env var, default off.
-❌ h_last IDENTICAL for "Hello" and "X" prompt — forward pass not using input??
-    → Actually h_last changes for multi-token prompts.
-✓ Metadata epsilon=1e-6 matches bytropix hardcoded value.
-✓ All 7 types (F32, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q4_K) supported.
+=== DA RECERT (all prior ✅ stripped, re-audited) ===
+❌ "Hello" → "Plot" — root cause UNKNOWN, 5 suspects remain.
+❌ All P0-P3 completed at "compiles" level only — ZERO verified against llama.
+❌ Auto-embedding depends on dequant correctness of type 0 (F32) — safe.
+✓ BOS: ADD_BOS off matches add_bos_token=false.
+✓ Weight indexing: infer_text.c uses correct i + j*D_MODEL pattern everywhere.
+✓ RoPE applied in both prefill + decode paths.
+✓ SSM recurrence structure matches delta-net-base.cpp.
+✓ MoE router + shared expert structure correct.
 
-=== ROOT CAUSE STILL UNKNOWN ===
-Likely culprits remaining:
-1. Q5_K dequant correctness (most weights use this type)
-2. Model forward pass has a hidden bug (SSM recurrence, GQA, or residual add)
-3. Output weight type mismatch
-4. MoE layers bypassed (MOE_LAYERS=0 on CPU) → SSM-only path may be wrong
+=== 5 ACTIVE SUSPECTS (ranked) ===
+1. Q5_K dequant (181 tensors) — high impact, easy to verify with test vector
+2. Output weight type 12 Q4_K dequant — corrupts logits directly
+3. SSM Q scaling 1/sqrt(128) — verify llama.cpp applies same
+4. RMSNorm epsilon (1e-6 vs llama.cpp)
+5. TGT wrapping in GQA scores — clips to [-π,π], not in llama.cpp
 
-=== AUTO-EMBEDDING IMPLEMENTED ===
-- wubu_model_init auto-extracts token_embd.weight from GGUF if missing/stale
-- Saves to data/qwen36_embeddings_c.bin.raw for future runs
-- Falls back to file if it exists and is correct size
+=== CRITICAL FIXES NEEDED ===
+- wubu_gqa_forward() weight indexing: uses i*cols+j but should use i+j*D_MODEL
+  (Dead code for inference — only affects deprecated wubu_model_forward_from_embd API)
 
-=== TEST ===
-NOGPU=1 MOE=1 ./infer_text /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Hello" 8 1
-# Still produces "Plot" not "Here" — root cause unfixed
+=== NEXT ===
+Write Q5_K dequant test vector. Compare single-block f32 values vs llama.cpp.
+Then output weight dequant test.
