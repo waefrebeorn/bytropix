@@ -38,7 +38,7 @@ static void maybe_dump_layer(int l, float *residual, int np) {
         char fn[512];
         snprintf(fn, sizeof(fn), "%s/layer_%02d.bin", dir, l);
         FILE *f = fopen(fn, "wb");
-        if (f) { fwrite(residual + (np - 1) * D_MODEL, sizeof(float), D_MODEL, f); fclose(f); }
+        if (f) { fwrite(residual, sizeof(float), np * D_MODEL, f); fclose(f); }
     }
 }
 static void maybe_dump_hidden(float *residual, int np) {
@@ -998,6 +998,7 @@ int main(int argc, char **argv) {
             memset(x + i * D_MODEL, 0, D_MODEL * sizeof(float));
     }
     memcpy(residual, x, np * D_MODEL * sizeof(float));
+    { const char *de = getenv("DUMP_EMBED"); if (de) { FILE *f = fopen(de, "wb"); if (f) { fwrite(residual, sizeof(float), np * D_MODEL, f); fclose(f); } } }
 
     // Debug: embedding stats
     { float esum=0, emax=-1e30, emin=1e30;

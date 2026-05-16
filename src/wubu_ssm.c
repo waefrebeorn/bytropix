@@ -186,12 +186,11 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
     
     const char *dd = getenv("DUMP_SSM_DEBUG");
-    
     // Step 1: Fused QKV projection
     // x[B,T,2048] @ wqkv[2048,8192] -> qkv_all[B,T,8192]
     if (dd && N > 0) {
         FILE *f = fopen("/tmp/dbg_qkv_input.bin", "wb");
-        if (f) { fwrite(x, sizeof(float), D_MODEL, f); fclose(f); }
+        if (f) { fwrite(x, sizeof(float), N * D_MODEL, f); fclose(f); }
     }
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * D_MODEL;
@@ -205,6 +204,10 @@ void wubu_ssm_forward(const float *x, int B, int T,
             qkv_s[j] = sum;
         }
     }
+    if (dd) {
+        FILE *f = fopen("/tmp/dbg_qkv_out.bin", "wb");
+        if (f) { fwrite(qkv_all, sizeof(float), N * C, f); fclose(f); }
+    }
     
     // Step 2: z gate projection
     #pragma omp parallel for
@@ -213,9 +216,8 @@ void wubu_ssm_forward(const float *x, int B, int T,
         float *z_s = z_all + s * VALUE_DIM;
         for (int j = 0; j < VALUE_DIM; j++) {
             float sum = 0.0f;
-            for (int i = 0; i < D_MODEL; i++) {
+            for (int i = 0; i < D_MODEL; i++)
                 sum += x_s[i] * w->attn_gate_weight[i + j * D_MODEL];
-            }
             z_s[j] = sum;
         }
     }
@@ -285,6 +287,10 @@ void wubu_ssm_forward(const float *x, int B, int T,
     
     // SiLU activation on conv output
     wubu_silu(N * C, conv_output, conv_output);
+    if (dd) {
+        FILE *f = fopen("/tmp/dbg_conv_out.bin", "wb");
+        if (f) { fwrite(conv_output, sizeof(float), N * C, f); fclose(f); }
+    }
     
     // Update conv_state: last CONV_KERNEL-1 elements of conv_input
     for (int b = 0; b < B; b++) {
@@ -305,6 +311,13 @@ void wubu_ssm_forward(const float *x, int B, int T,
     // q_conv: [N, SSM_K_HEADS, SSM_D_STATE]
     wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, 1e-12f, q_norm);
     wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, 1e-12f, k_norm);
+    
+    if (dd) {
+        FILE *f = fopen("/tmp/dbg_l2_q.bin", "wb"); if (f) { fwrite(q_norm, sizeof(float), N * KEY_DIM, f); fclose(f); }
+        FILE *g = fopen("/tmp/dbg_l2_k.bin", "wb"); if (g) { fwrite(k_norm, sizeof(float), N * KEY_DIM, g); fclose(g); }
+        FILE *h = fopen("/tmp/dbg_beta.bin", "wb"); if (h) { fwrite(beta_flat, sizeof(float), N * DT_RANK, h); fclose(h); }
+        FILE *i = fopen("/tmp/dbg_gate.bin", "wb"); if (i) { fwrite(gate_flat, sizeof(float), N * DT_RANK, i); fclose(i); }
+    }
     
     // Step 8: Repeat Q/K heads: 16 -> 32 (to match V heads)
     int repeat_factor = SSM_V_HEADS / SSM_K_HEADS;  // 2
@@ -332,6 +345,15 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 const float *q_vh = q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *k_vh = k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *v_vh = v_conv + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
+                if (dd && (vh == 0 || vh == 2)) {
+                    printf("C_DEBUG s=%d vh=%d kh=%d bg=%.6f gg=%.6f\\n", s, vh, kh, bg, gg);
+                    for (int i = 0; i < 5; i++) printf("C_DEBUG q[%d]=%.8f k[%d]=%.8f v[%d]=%.8f\\n",
+                        i, q_vh[i], i, k_vh[i], i, v_vh[i]);
+                    // Also print first 3x3 of state
+                    float *h_debug = ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
+                    for (int ri = 0; ri < 3; ri++) for (int rj = 0; rj < 3; rj++)
+                        printf("C_DEBUG state_before[%d][%d]=%.8f\\n", ri, rj, h_debug[ri * SSM_D_STATE + rj]);
+                }
                 
                 // Scale Q by 1/sqrt(d) (matches llama.cpp reference)
                 float q_scaled[SSM_D_STATE];
@@ -347,8 +369,11 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 
                 // Get state pointer for this V-head
                 float *h = ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
-                
-                // Step 8a: State decay: h = h * exp(gate)
+                if (dd && vh < 4 && s == 0) {
+                    printf("C_DEBUG_PTR vh=%d offset=%ld\n", vh, (long)(vh * SSM_D_STATE * SSM_D_STATE));
+                }
+    
+                // Step 8a: State decay
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     for (int j = 0; j < SSM_D_STATE; j++) {
                         h[i * SSM_D_STATE + j] *= gg;
@@ -358,10 +383,27 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 // Step 8b: Compute h @ k  -> [SSM_D_STATE]
                 float hk[SSM_D_STATE];
                 memset(hk, 0, sizeof(hk));
+                // DEBUG: verify state before hk
+                if (dd && vh == 2 && s == 1) {
+                    double chk_sum = 0;
+                    for (int jj = 0; jj < SSM_D_STATE; jj++) chk_sum += h[jj];
+                    printf("C_DEBUG_HK2 state_sum_col0=%.12f h[0]=%.8f h[1]=%.8f\\n", chk_sum, h[0], h[1]);
+                }
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     for (int j = 0; j < SSM_D_STATE; j++) {
                         hk[i] += h[i * SSM_D_STATE + j] * k_vh[j];
                     }
+                }
+                if (dd && vh == 2 && s == 1) {
+                    printf("C_DEBUG_HK vh=%d s=%d gg=%.8f bg=%.8f\\n", vh, s, gg, bg);
+                    printf("C_DEBUG_HK k[0]=%.8f k[1]=%.8f k[2]=%.8f\\n", k_vh[0], k_vh[1], k_vh[2]);
+                    printf("C_DEBUG_HK h[0][0]=%.8f h[0][1]=%.8f h[0][2]=%.8f\\n",
+                        h[0*SSM_D_STATE+0], h[0*SSM_D_STATE+1], h[0*SSM_D_STATE+2]);
+                    printf("C_DEBUG_HK h_decayed[0][0]=%.8f\\n", h[0*SSM_D_STATE+0]);
+                    // Compute hk[0] manually to verify
+                    double hk0_manual = 0;
+                    for (int jj = 0; jj < 5; jj++) hk0_manual += h[0*SSM_D_STATE+jj] * (double)k_vh[jj];
+                    printf("C_DEBUG_HK hk0_partial(first5)=%.12f\\n", hk0_manual);
                 }
                 
                 // Step 8c: diff = V - hk
@@ -375,6 +417,11 @@ void wubu_ssm_forward(const float *x, int B, int T,
                     for (int j = 0; j < SSM_D_STATE; j++) {
                         h[i * SSM_D_STATE + j] += k_vh[j] * diff[i] * bg;
                     }
+                }
+                if (dd && (vh == 0 || vh == 2)) {
+                    for (int ri = 0; ri < 3; ri++) for (int rj = 0; rj < 3; rj++)
+                        printf("C_DEBUG state_after[%d][%d]=%.8f\\n", ri, rj, h[ri * SSM_D_STATE + rj]);
+                    printf("C_DEBUG hk[0]=%.8f diff[0]=%.8f\\n", hk[0], diff[0]);
                 }
                 
                 // Step 8e: output = h @ q  -> [SSM_D_STATE]
@@ -390,7 +437,23 @@ void wubu_ssm_forward(const float *x, int B, int T,
         }
     }
     
+    if (dd) {
+        FILE *f = fopen("/tmp/dbg_state_after_t0.bin", "wb");
+        if (f) { fwrite(ssm_state, sizeof(float), SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE, f); fclose(f); }
+    }
+    // Dump Q, K, V for head 0 before recurrence (token 0) for debug
+    if (dd) {
+        FILE *f = fopen("/tmp/dbg_q0_q.bin", "wb"); if (f) { fwrite(q_norm, sizeof(float), N * KEY_DIM, f); fclose(f); }
+        FILE *g = fopen("/tmp/dbg_q0_k.bin", "wb"); if (g) { fwrite(k_norm, sizeof(float), N * KEY_DIM, g); fclose(g); }
+        FILE *h = fopen("/tmp/dbg_q0_v.bin", "wb"); if (h) { fwrite(v_conv, sizeof(float), N * VALUE_DIM, h); fclose(h); }
+    }
+    
     // Step 10: Gated normalization
+    if (dd) {
+        FILE *f = fopen("/tmp/dbg_delta_out.bin", "wb");
+        if (f) { fwrite(delta_out, sizeof(float), N * VALUE_DIM, f); fclose(f); }
+    }
+    
     // delta_out: [N, SSM_V_HEADS, SSM_D_STATE] = [N, 32, 128]
     // ssm_norm: [SSM_D_STATE] = [128]
     // z_silu: silu(z_all[VALUE_DIM])
