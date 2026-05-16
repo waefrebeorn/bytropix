@@ -50,6 +50,23 @@ void wubu_moe_forward(const float *x, int B, int T,
 // Returns 1 on success, 0 on failure
 int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe);
 
+// Alternative: load MoE weights in quantized form (keep IQ2_XXS raw data)
+// Memory-efficient: keeps ~10GB of quantized data instead of ~35GB of f32
+// Writes raw_size bytes into gate_q, up_q, down_q
+// Returns raw_size on success, 0 on failure
+int wubu_moe_load_layer_quant(gguf_ctx *ctx, int layer,
+                              uint8_t *gate_q, uint8_t *up_q, uint8_t *down_q,
+                              int64_t *gate_raw_size, int64_t *up_raw_size, int64_t *down_raw_size);
+
+// Compute one expert with on-the-fly IQ2_XXS dequant
+// x: [D_MODEL] input
+// gate_q/up_q/down_q: quantized weight data for one expert
+// temp: [D_FF * 3] scratch
+// output: [D_MODEL]
+void moe_expert_forward_dequant(const float *x,
+                                const uint8_t *gate_q, const uint8_t *up_q, const uint8_t *down_q,
+                                float *temp, float *output);
+
 // Free one layer's MoE weights
 void wubu_moe_free_layer(moe_weights_t *moe);
 

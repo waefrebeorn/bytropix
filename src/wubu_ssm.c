@@ -326,11 +326,11 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
     
     // Step 8: Repeat Q/K heads: 16 -> 32 (to match V heads)
-    int repeat_factor = SSM_V_HEADS / SSM_K_HEADS;  // 2
     
     // Step 9: Gated Delta Net recurrence per head
     // ssm_state: [SSM_V_HEADS, SSM_D_STATE, SSM_D_STATE]
     // We process B batches and T timesteps, updating the state in-place
+    int repeat_factor = SSM_V_HEADS / SSM_K_HEADS;  // 2
     
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {

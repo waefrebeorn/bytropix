@@ -204,6 +204,27 @@ void wubu_poincare_ssm_backward(int B, int T, float R,
     float *d_conv1d_weight, float *d_ssm_out_weight,
     float *d_ssm_norm_weight, float *d_state_init_grad);
 
+// Chunked DeltaNet SSM recurrence (3x prefill speedup)
+// Only supports B=1 currently. Uses chunked algorithm for T >= 64.
+void wubu_ssm_chunked_recurrence(int B, int T,
+                                  const float *q_norm,
+                                  const float *k_norm,
+                                  const float *v_conv,
+                                  const float *beta_flat,
+                                  const float *gate_flat,
+                                  float *ssm_state,
+                                  float *delta_out);
+
+// Sequential SSM recurrence (exact match to original code, extracted for verification)
+void wubu_ssm_sequential_recurrence(int B, int T,
+                                     const float *q_norm,
+                                     const float *k_norm,
+                                     const float *v_conv,
+                                     const float *beta_flat,
+                                     const float *gate_flat,
+                                     float *ssm_state,
+                                     float *delta_out);
+
 // Utility functions
 int wubu_is_ssm_layer(int layer_idx);
 void wubu_softplus(int n, const float *x, float *out);

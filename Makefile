@@ -8,10 +8,10 @@ CUDA_INC = -I/usr/local/cuda-13.1/include
 
 .PHONY: all clean
 
-all: test_ssm test_nested_ssm test_nested_ssm_backward load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated
+all: test_ssm test_nested_ssm test_nested_ssm_backward load_model test_gpu test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated test_chunked_ssm
 
 # Object files
-CORE_OBJ = src/wubu_ssm.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o
+CORE_OBJ = src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o
 RSGD_OBJ = src/rsgd.o
@@ -20,6 +20,12 @@ src/qlearner.o: src/qlearner.c include/qlearner.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_ssm.o: src/wubu_ssm.c include/wubu_ssm.h include/wubu_mobius.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_ssm_chunked.o: src/wubu_ssm_chunked.c include/wubu_ssm.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/qlearner.o: src/qlearner.c include/qlearner.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_nested_ssm.o: src/wubu_nested_ssm.c include/wubu_nested_ssm.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
@@ -82,8 +88,14 @@ src/wubu_tst.o: src/wubu_tst.c include/wubu_tst.h
 src/bench.o: src/bench.c include/bench.h include/cuda_kernels.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) $(CUDA_INC) -c -o $@ $<
 
+src/dequant_iq2_xxs.o: src/dequant_iq2_xxs.c include/gguf_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 # Test binaries
 test_ssm: test_ssm_forward.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_chunked_ssm: test_chunked_ssm.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_decode_path: tools/test_decode_path.c $(MODEL_OBJ)
@@ -250,6 +262,9 @@ test_dequant: tools/test_dequant.c $(MODEL_OBJ)
 check_forward: tools/check_forward.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_iq2_xxs_dot: tools/test_iq2_xxs_dot.c src/gguf_reader.o src/dequant_iq2_xxs.o src/wubu_moe.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 # Test runners
 test: test_ssm
 	./test_ssm
@@ -307,4 +322,4 @@ check_ssm_a: tools/check_ssm_a.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
-	rm -f test_ssm test_nested_ssm test_poincare_ssm test_poincare_gqa load_model test_model test_gpu tokenize_corpus test_moe test_moe_hyperbolic train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache test_tst test_nested_moe_router_backward tailslayer test_iq2_dequant src/*.o tools/*.o
+	rm -f test_ssm test_nested_ssm test_poincare_ssm test_poincare_gqa load_model test_model test_gpu tokenize_corpus test_moe test_moe_hyperbolic train_real bench_e2e verify_iq2s inspect_iq2s inspect_model train_backprop train_gpu test_gpu_poincare test_rsgd test_backward test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache test_tst test_nested_moe_router_backward tailslayer test_iq2_dequant test_iq2_xxs_dot src/*.o tools/*.o

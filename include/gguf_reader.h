@@ -96,6 +96,11 @@ void dequantize_iq1_s_row(const uint8_t *data, float *output, int64_t n_elems);
 void dequantize_iq2_xxs_row(const uint8_t *data, float *output, int64_t n_elems);
 void dequantize_iq2_s_row(const uint8_t *data, float *output, int64_t n_elems);
 
+// IQ2_XXS block-level operations (for on-the-fly dequant dot product)
+void dequantize_iq2_xxs_block(const uint8_t *block, float *output);
+float iq2_xxs_dot_block(const uint8_t *block, const float *x);
+float iq2_xxs_dot_row(const uint8_t *qdata, int n_elems, const float *x);
+
 // Embedding ops
 void wubu_exp_map(const float *input, int dim, float R, float *output);
 void wubu_log_map(const float *input, int dim, float R, float *output);
