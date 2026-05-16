@@ -185,8 +185,14 @@ void wubu_ssm_forward(const float *x, int B, int T,
         return;
     }
     
+    const char *dd = getenv("DUMP_SSM_DEBUG");
+    
     // Step 1: Fused QKV projection
     // x[B,T,2048] @ wqkv[2048,8192] -> qkv_all[B,T,8192]
+    if (dd && N > 0) {
+        FILE *f = fopen("/tmp/dbg_qkv_input.bin", "wb");
+        if (f) { fwrite(x, sizeof(float), D_MODEL, f); fclose(f); }
+    }
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * D_MODEL;
         float *qkv_s = qkv_all + s * C;
@@ -327,6 +333,18 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 const float *k_vh = k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *v_vh = v_conv + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
                 
+                // Scale Q by 1/sqrt(d) (matches llama.cpp reference)
+                float q_scaled[SSM_D_STATE];
+                const float q_scale = 1.0f / sqrtf((float)SSM_D_STATE);
+                for (int i = 0; i < SSM_D_STATE; i++) {
+                    q_scaled[i] = q_vh[i] * q_scale;
+                }
+                
+                #ifdef SSM_DEBUG
+                printf("  SSM_DBG tok=%d vh=%d: bg=%.6f gg=%.6f q[0]=%.6f k[0]=%.6f v[0]=%.6f\n",
+                           s, vh, bg, gg, q_scaled[0], k_vh[0], v_vh[0]);
+                #endif
+                
                 // Get state pointer for this V-head
                 float *h = ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
                 
@@ -365,7 +383,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 memset(out, 0, SSM_D_STATE * sizeof(float));
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     for (int j = 0; j < SSM_D_STATE; j++) {
-                        out[i] += h[i * SSM_D_STATE + j] * q_vh[j];
+                        out[i] += h[i * SSM_D_STATE + j] * q_scaled[j];
                     }
                 }
             }
@@ -398,6 +416,12 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
     
     // Step 11: Output projection
+    const char *dump_val = getenv("DUMP_SSM_VAL");
+    if (dump_val && N > 0) {
+        FILE *f = fopen(dump_val, "wb");
+        if (f) { fwrite(delta_out + 0 * VALUE_DIM, sizeof(float), VALUE_DIM, f); fclose(f); }
+    }
+    
     // Python: final = gated_output @ weights['ssm_out.weight']
     // where weight is [VALUE_DIM, D_MODEL] = [4096, 2048]
     // result[j] = sum_i gated[i] * W[i][j] = sum_i gated[i] * data[j * VALUE_DIM + i] (see matmul pattern)
@@ -628,7 +652,7 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
         for (int j = 0; j < D_MODEL; j++) {
             double sum = 0.0;
             for (int i = 0; i < VALUE_DIM; i++)
-                sum += (double)inp[i] * (double)w->ssm_out_weight[i * D_MODEL + j];
+                sum += (double)inp[i] * (double)w->ssm_out_weight[i + j * VALUE_DIM];
             out[j] = (float)sum;
         }
     }
