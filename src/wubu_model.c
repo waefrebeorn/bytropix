@@ -336,6 +336,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }
         
         // Residual: x = x + attn_out
+        #pragma omp parallel for if(N * D_MODEL > 500000)
         for (int i = 0; i < N * D_MODEL; i++) x[i] += attn_out[i];
         free(attn_out);
         
@@ -359,6 +360,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }
         
         // Residual: x = x + ffn_out
+        #pragma omp parallel for if(N * D_MODEL > 500000)
         for (int i = 0; i < N * D_MODEL; i++) x[i] += ffn_out[i];
         
         free(normed);
@@ -377,10 +379,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // Output projection (into logits space)
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
     if (model->output_weight) {
+        #pragma omp parallel for collapse(2) if(N * model->vocab_size > 100000)
         for (int i = 0; i < N; i++) {
-            const float *h_i = x + i * D_MODEL;
-            float *log_i = logits + i * model->vocab_size;
             for (int j = 0; j < model->vocab_size; j++) {
+                const float *h_i = x + i * D_MODEL;
+                float *log_i = logits + i * model->vocab_size;
                 double sum = 0.0;
                 for (int k = 0; k < D_MODEL; k++)
                     sum += (double)h_i[k] * (double)model->output_weight[j * D_MODEL + k];

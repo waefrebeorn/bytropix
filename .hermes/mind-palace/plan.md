@@ -1,98 +1,87 @@
-# WuBuText AI — Plan (May 16 AM v11)
+# bytropix Roadmap — llama.cpp Alignment Plan
 
-## Purpose
-Serve Qwen3.6-35B-A3B-UD-IQ2_M as a real API. Fix remaining inference bugs, add HTTP server, sandbox for security testing, add proper sampling params. Compare against llama.cpp as reference.
+Study done: llama/ dir has key reference files
 
----
+## Phase 0: Correctness Fixes (NOW)
 
-## Critical Bugs Found & Fixed
+- [ ] **Shared expert gate**: `wubu_moe.c` line 72 sets `ffn_gate_inp_shexp = NULL`. Qwen3.5 shared expert needs sigmoid gate per-token. Load tensor, apply sigmoid, multiply into shared expert output before residual. Reference: `qwen35moe.cpp` lines 409-420.
+- [ ] **Verify top-1 token "Doug" vs llama "Here"**: Run GPU SSM only (MOE=0) and compare layer-by-layer hidden states against CPU reference. If GPU TF32 causes divergence, make TF32 opt-in via env var.
 
-| Bug | Status | Impact |
-|-----|--------|--------|
-| SGEMM ldC=vocab_size instead of ldC=N | ✅ Fixed | All-zero logits |
-| Q5_K dequant high-bit byte indexing | ✅ Fixed (in source) | Block-level constant values |
-| BOS not prepended | ✅ Fixed | Wrong first-token predictions |
-| RoPE missing from CPU GQA path | ✅ Fixed | CPU/GPU divergence |
-| No temperature/top-k/top-p sampling | ✅ Fixed | Only greedy available |
-| CPU GQA gate was applied ✓ | ✅ Verified | Not a bug after all |
-| `MOE=0` = NO FFN (model is MoE-only) | 🔴 Unfixed | **Root cause of garbage output with MOE=0** |
+## Phase 1: Inference Speed (Multi-Token)
 
-## Remaining Issues
+### P1a — Chunked DeltaNet Scan (3× prefill speedup)
+- Implement `build_delta_net_chunking` from `delta-net-base.cpp` lines 60-288
+- CHUNK_SIZE=64, O(T·d²/CS + CS²·d) vs O(T·d²)
+- CPU path first, then GPU
+- Reference: `llama/src/models/delta-net-base.cpp`
 
-### P0 — Model Produces Garbage (Even with MOE=1)
-With MoE on (`MOE=1`), output is still wrong: "The capital of France isiscInset了下去idesiby客的我们都会论usher..."
-Our output vs llama.cpp reference: "Here's a thinking process:"
-Causes could be:
-- **MoE expert dequantization bug** (IQ2_XXS, IQ3_XXS tensors use separate dequant functions)
-- **SSM forward pass bug** (Gated DeltaNet implementation doesn't match reference)
-- **Tokenizer mismatch** (custom tokenizer vs llama.cpp's GGUF-native tokenizer)
-- **Shared expert not routed correctly** (has `ffn_gate_inp_shexp.weight` bias)
-- **Q5_K dequant still wrong** (need to compare float output against llama.cpp)
+### P1b — Fused Gate+Up MoE Projection (2× MoE matmul)
+- Qwen3.5 stores `ffn_gate_up_exps` as fused [D_MODEL, 2*D_FF] weight
+- Load once, matmul once, split output in half → gate_out, up_out
+- Saves one large matmul per active expert per token
+- Reference: `qwen35moe.cpp` line 393
 
-### P0 — llama.cpp Reference Comparison
-Build `~/llama.cpp/build/bin/llama-cli` ✅ Done. Uses GGUF-native tokenizer.
-Need to extract hidden states at each layer from llama.cpp and compare to ours.
+### P1c — Single-Pass Top-K (minor MoE speedup)
+- Replace O(E·K) repeated max with single O(E) selection
+- std::nth_element or max-heap if available, else simple single-pass
 
-### P0 — JSON API Server
-- POST /completions endpoint
-- POST /chat/completions with OpenAI-compatible format
-- SSE streaming
-- Chat template: `<|im_start|>system...<|im_end|><|im_start|>user...<|im_end|><|im_start|>assistant`
-- Rate limiting, error handling, model loading
-- Bind to configurable port (default 8080)
+## Phase 2: GPU Optimization
 
-### P1 — Sandboxed Testing Environment
-- Dedicated test directory: `tests/sandbox/`
-- Fake network interface for security testing
-- Mock user sessions with fake API keys
-- Rate limit testing, malformed request fuzzing
-- Load testing with concurrent requests
-- Memory leak detection per request
+### P2a — Warp-Level Parallel SSM Scan (GPU occupancy)
+- Replace `ssm_parallel_scan_kernel` with warp-level approach from `ssm-scan.cu`
+- Each warp handles `c_factor` state dimensions, `warp_reduce_sum` for output
+- Avoids 128-register `h_row` array, improves occupancy
+- Template kernel for compile-time unrolling
+- Reference: `llama/ggml-cuda/ssm-scan.cu`
 
-### P1 — CPU GQA Decode Path RoPE
-The per-token decode path in infer_text.c also needs RoPE (was only added to prefill path).
+### P2b — Conv State Build as Device Kernel
+- Replace host `for` loop with `cudaMemcpyAsync` per-batch
+- Single kernel copies conv_state + qkv_all → conv_input
+- Also kernel for conv_state update (last k-1 elements)
 
-### P1 — Update Test Suite
-- New golden outputs based on working model
-- CPU vs GPU output parity test
-- Sampling reproducibility test (same seed = same output)
-- Chat template integration test
-- API server integration test (curl sanity check)
+### P2c — Conv1d Kernel with Shared Memory Cache
+- Load CONV_KERNEL × channel block into shared memory
+- Avoids 4× global reads per output element for k=4 conv
+- 32KB fits in 48KB shared memory on Blackwell
 
-### P2 — GPU MoE On-Device Dequant
-Current PCIe upload bottleneck: 67MB/expert × 8 × 40 layers = 21GB/token.
-Need GPU-side dequant (IQ2_XXS → BF16 on GPU).
+## Phase 3: Quantized Inference (Memory)
 
-### P2 — MTP Speculative Decode
-1 MTP head available in model weights. Use for speculative decoding speedup.
+### P3a — On-the-Fly IQ2_XXS Dot Product
+- Replace `gguf_read_tensor_f32` dequant-all-at-load with per-block dequant during matmul
+- Start with IQ2_XXS (primary MoE quant), then IQ3_XXS, IQ4_XS
+- C function: `dequant_and_dot(const uint8_t *blocks, const float *vec, int n_elems, float *out)`
+- Enables running without pre-dequantizing 10.9GB → f32 (saves ~15GB RAM)
 
----
+### P3b — K-Quant Support
+- Add Q4_K, Q5_K, Q6_K dequant + dot-product kernels
+- Required for attention weights (currently dequantized at load)
 
-## 256K Context Roadmap
+## Phase 4: Architecture Alignment
 
-| Step | What | Status |
-|------|------|--------|
-| 1 | GQA KV cache (append-only) | ✅ Done |
-| 2 | SSM state carry | ✅ Done |
-| 3 | Lazy MoE cache | ✅ Done |
-| 4 | GPU forward for GQA/SSM decode | ✅ Kernels exist |
-| 5 | Verify 256K forward pass | ⬜ Not yet |
-| 6 | Single-token generation at 256K | ⬜ Not yet |
-| 7 | Tailslayer spec decode | ⬜ Not yet |
-| 8 | Coherence test with MoE @ 256K | ⬜ Not yet |
+### P4a — Model Graph Approach
+- Consider minimal graph: register ops → dependency analysis → execute
+- Not full ggml, but a lightweight version for bytropix
+- Enables operator fusion (silu+gate, l2_norm+recurrence)
 
-## Files Referenced
+### P4b — KV Cache Manager
+- Replace flat arrays with indexed cache (seq→slot mapping)
+- Support batched inference with different sequence lengths
+- Auto-cache-memory management for 256K context
 
-| File | Purpose |
-|------|---------|
-| `src/gguf_reader.c` | Q5_K, IQ2_XXS, IQ3_XXS, Q6_K dequantization |
-| `tools/infer_text.c` | CPU inference (prefill + decode) |
-| `tools/infer_text_gpu.c` | GPU-accelerated inference v5 |
-|| `tools/serve.py` | HTTP API server (sandbox + production) | ✅ Built |
-|| `tests/test_api.sh` | API sandbox test suite (14 tests) | ✅ Built |
-| `src/wubu_ssm.c` | SSM/Gated DeltaNet forward/backward |
-| `src/wubu_moe.c` | MoE router + expert computation |
-| `src/wubu_tokenizer.c` | BPE tokenizer |
-| `tests/run.sh` | Test harness |
-| `~/llama.cpp/` | Reference implementation (for comparison) |
-| `vault/unsloth-quantization-format.md` | UD GGUF format documentation |
+## Phase 5: Training
+
+### P5a — Backward Checkpointing
+- Replace full-intermediate save (16 mallocs/layer) with recomputation
+- Save states every `checkpoint_chunk_size` timesteps
+- Trade 2× compute for memory reduction from O(T·d²) to O(CS·d²)
+
+## Reference Files in llama/
+| File | What We Learn |
+|------|--------------|
+| `src/models/delta-net-base.cpp` | Chunked DeltaNet algorithm (P1a) |
+| `src/models/qwen35moe.cpp` | Fused gate+up MoE, shared expert gate (P1b, Phase 0) |
+| `src/models/qwen3moe.cpp` | MoE graph builder pattern |
+| `ggml-cpu/ops_ssm_sections.cpp` | CPU SSM conv + scan reference |
+| `ggml-cuda/ssm-scan.cu` | Warp-level parallel scan CUDA (P2a) |
+| `ggml-cpu/quants.c` | Quantized dot-product kernels (P3a, P3b) |
+| `ggml-common.h` | GGUF type IDs, dequant table constants |

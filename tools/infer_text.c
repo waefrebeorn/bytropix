@@ -279,41 +279,46 @@ static void lmoe_free(lmoe_t *m) {
 
 // Dequant ONE expert from interleaved [D_MODEL, D_FF, N_EXPERTS] tensor.
 // q_full: raw quantized data for ALL experts (interleaved, N_EXPERTS=256)
-// Each block stores 256 elements = 1 (i,j) position for all 256 experts.
-// Total blocks = D_MODEL * D_FF = ne (since block_size = N_EXPERTS = 256).
-// Each block contributes 1 element to expert eid.
-// out must hold ne floats.
-static void dequant_one_expert_interleaved(const uint8_t *q_full, int type, int eid, int64_t ne, float *out) {
+// Contiguous-per-expert dequant: each block of 256 elements stores consecutive
+// values WITHIN one expert, NOT across experts.
+// The full tensor for N_EXPERTS experts stores each expert's data contiguously:
+//   expert 0: blocks 0..(ne/256)-1
+//   expert 1: blocks (ne/256)..2*(ne/256)-1
+//   ...
+// Expert eid's data starts at q_full + eid * gguf_raw_size(type, ne).
+static void dequant_one_expert_contiguous(const uint8_t *q_full, int type, int eid, int64_t ne, float *out) {
     int block_bytes = (int)gguf_raw_size(type, 256);
-    if (block_bytes <= 0) {
-        fprintf(stderr, "dequant_one_expert: unsupported type %d\n", type);
+    int64_t raw_per_exp = gguf_raw_size(type, ne);
+    if (block_bytes <= 0 || raw_per_exp <= 0) {
+        fprintf(stderr, "dequant_one_expert_contiguous: unsupported type %d\n", type);
         memset(out, 0, ne * sizeof(float));
         return;
     }
-    float tmp[256];
-    for (int64_t b = 0; b < ne; b++) {
-        // use gguf_dequantize for dispatching since tmp is 256 elements = 1 block
-        gguf_dequantize(q_full + b * block_bytes, type, 256, tmp);
-        out[b] = tmp[eid];
+    const uint8_t *edata = q_full + eid * raw_per_exp;
+    for (int64_t b = 0; b < ne; b += 256) {
+        int64_t nr = ne - b;
+        int64_t nb = (nr > 256) ? 256 : nr;
+        gguf_dequantize(edata + (b/256) * block_bytes, type, nb, out + b);
     }
 }
 
-// Optimized: dequant each block once, distribute to all active experts.
-// eids: array of expert IDs (0..N_EXPERTS-1)
-// outputs: array of float* buffers, each must hold ne floats
-static void dequant_multi_expert_interleaved(const uint8_t *q_full, int type, int64_t ne,
+static void dequant_multi_expert_contiguous(const uint8_t *q_full, int type, int64_t ne,
                                               const int *eids, int n_eids, float **outputs) {
     int block_bytes = (int)gguf_raw_size(type, 256);
-    if (block_bytes <= 0) {
-        fprintf(stderr, "dequant_multi_expert: unsupported type %d\n", type);
+    int64_t raw_per_exp = gguf_raw_size(type, ne);
+    if (block_bytes <= 0 || raw_per_exp <= 0) {
+        fprintf(stderr, "dequant_multi_expert_contiguous: unsupported type %d\n", type);
         for (int i = 0; i < n_eids; i++) memset(outputs[i], 0, ne * sizeof(float));
         return;
     }
-    float tmp[256];
-    for (int64_t b = 0; b < ne; b++) {
-        gguf_dequantize(q_full + b * block_bytes, type, 256, tmp);
-        for (int i = 0; i < n_eids; i++) {
-            outputs[i][b] = tmp[eids[i]];
+    #pragma omp parallel for
+    for (int i = 0; i < n_eids; i++) {
+        int eid = eids[i];
+        const uint8_t *edata = q_full + eid * raw_per_exp;
+        for (int64_t b = 0; b < ne; b += 256) {
+            int64_t nr = ne - b;
+            int64_t nb = (nr > 256) ? 256 : nr;
+            gguf_dequantize(edata + (b/256) * block_bytes, type, nb, outputs[i] + b);
         }
     }
 }
@@ -327,6 +332,7 @@ static void moe_expert_forward_lazy(const float *x, const float *gate_w,
     float *act_out  = temp + D_FF * 2;
 
     // gate = x @ gate_w  [2048] @ [2048, 512] -> [512]
+    #pragma omp parallel for
     for (int j = 0; j < D_FF; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_MODEL; k++)
@@ -335,6 +341,7 @@ static void moe_expert_forward_lazy(const float *x, const float *gate_w,
     }
 
     // up = x @ up_w
+    #pragma omp parallel for
     for (int j = 0; j < D_FF; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_MODEL; k++)
@@ -343,6 +350,7 @@ static void moe_expert_forward_lazy(const float *x, const float *gate_w,
     }
 
     // act = silu(gate) * up
+    #pragma omp parallel for
     for (int j = 0; j < D_FF; j++) {
         float g = gate_out[j];
         float silu = (g < -80.0f) ? 0.0f : g / (1.0f + expf(-g));
@@ -350,6 +358,7 @@ static void moe_expert_forward_lazy(const float *x, const float *gate_w,
     }
 
     // out = act @ down_w  [512] @ [512, 2048] -> [2048]
+    #pragma omp parallel for
     for (int j = 0; j < D_MODEL; j++) {
         float sum = 0.0f;
         for (int k = 0; k < D_FF; k++)
@@ -466,9 +475,9 @@ static void lazy_moe_decode(
         // Use ty_ge for gate/up, ty_gd (or ty_ge fallback) for down
         int down_type = mc->ty_gd ? mc->ty_gd : mc->ty_ge;
         
-        dequant_multi_expert_interleaved(q_gate_exps, mc->ty_ge, ne, unique_ids, n_unique, gate_outs);
-        dequant_multi_expert_interleaved(q_up_exps, mc->ty_ge, ne, unique_ids, n_unique, up_outs);
-        dequant_multi_expert_interleaved(q_down_exps, down_type, nd, unique_ids, n_unique, down_outs);
+        dequant_multi_expert_contiguous(q_gate_exps, mc->ty_ge, ne, unique_ids, n_unique, gate_outs);
+        dequant_multi_expert_contiguous(q_up_exps, mc->ty_ge, ne, unique_ids, n_unique, up_outs);
+        dequant_multi_expert_contiguous(q_down_exps, down_type, nd, unique_ids, n_unique, down_outs);
         
         free(gate_outs);
         free(up_outs);
@@ -491,22 +500,26 @@ static void lazy_moe_decode(
             float *sg = scratch;
             float *su = scratch + D_FF;
             float *sa = scratch + D_FF * 2;
+            #pragma omp parallel for
             for (int j = 0; j < SHARED_D_FF; j++) {
                 float sum = 0.0f;
                 for (int k = 0; k < D_MODEL; k++)
                     sum += x_s[k] * mc->sh_gate[k + j * D_MODEL];
                 sg[j] = sum;
             }
+            #pragma omp parallel for
             for (int j = 0; j < SHARED_D_FF; j++) {
                 float sum = 0.0f;
                 for (int k = 0; k < D_MODEL; k++)
                     sum += x_s[k] * mc->sh_up[k + j * D_MODEL];
                 su[j] = sum;
             }
+            #pragma omp parallel for
             for (int j = 0; j < SHARED_D_FF; j++) {
                 float g = sg[j];
                 sa[j] = ((g < -80.0f) ? 0.0f : g / (1.0f + expf(-g))) * su[j];
             }
+            #pragma omp parallel for
             for (int j = 0; j < D_MODEL; j++) {
                 float sum = 0.0f;
                 for (int k = 0; k < SHARED_D_FF; k++)
@@ -694,7 +707,7 @@ int main(int argc, char **argv) {
     int max_tok = argc > 3 ? atoi(argv[3]) : 64;
     int top_k = argc > 4 ? atoi(argv[4]) : 1;
     int verb = getenv("VERBOSE") ? atoi(getenv("VERBOSE")) : 0;
-    int moe_on = getenv("MOE") ? atoi(getenv("MOE")) : 0;
+    int moe_on = getenv("MOE") ? atoi(getenv("MOE")) : 1;
     int moe_max_l = getenv("MOE_LAYERS") ? atoi(getenv("MOE_LAYERS")) : 0;
     int no_gpu = getenv("NOGPU") ? 1 : 0;
     float temperature = getenv("TEMP") ? atof(getenv("TEMP")) : 1.0f;
@@ -1010,7 +1023,7 @@ int main(int argc, char **argv) {
 
     const char *ml_env = getenv("MAX_LAYERS");
     int max_layers = ml_env ? atoi(ml_env) : mdl.n_layers;
-    if (max_layers < 1 || max_layers > mdl.n_layers) max_layers = mdl.n_layers;
+    if (max_layers < 0 || max_layers > mdl.n_layers) max_layers = mdl.n_layers;
     printf("  Running %d / %d layers (MAX_LAYERS=%s)\n", max_layers, mdl.n_layers, ml_env ? ml_env : "all"); fflush(stdout);
 
     for (int l = 0; l < max_layers; l++) {
@@ -1166,6 +1179,9 @@ int main(int argc, char **argv) {
                     }
                 }
 
+                // DEBUG: dump GQA output before residual add (only L3)
+                { char fn[256]; snprintf(fn,256,"/tmp/debug_gqa_l%d.bin",l);
+                  FILE *f_debug = fopen(fn, "wb"); if(f_debug){fwrite(attn, sizeof(float), np*D_MODEL, f_debug);fclose(f_debug);}}
                 // Populate KV cache with K_norm and V
                 kv_append(&ly->kv, K_norm, V, np);
                 printf("  GQA_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
@@ -1243,7 +1259,7 @@ int main(int argc, char **argv) {
             lazy_moe_decode(normed, 1, np,
                             lc[l].lm.q_gate, lc[l].lm.q_up, lc[l].lm.q_down,
                             &lc[l].lm, ffn);
-        } else {
+         } else {
             printf("  MOE_MEMCPY at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
             memcpy(ffn, normed, np * D_MODEL * sizeof(float));
             printf("  MOE_MEMCPY_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
@@ -1261,7 +1277,13 @@ int main(int argc, char **argv) {
     // Final RMSNorm
     printf("  FINAL_NORM at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
     if (mdl.norm_weight) {
+        // DEBUG: dump residual before norm
+        { FILE *f_debug = fopen("/tmp/debug_res_before_norm.bin", "wb"); if(f_debug){fwrite(residual, sizeof(float), np*D_MODEL, f_debug);fclose(f_debug);}}
+        // DEBUG: dump norm_weight
+        { FILE *f_debug = fopen("/tmp/debug_norm_weight.bin", "wb"); if(f_debug){fwrite(mdl.norm_weight, sizeof(float), D_MODEL, f_debug);fclose(f_debug);}}
         wubu_rms_norm(1, np, D_MODEL, residual, mdl.norm_weight, 1e-6f, normed);
+        // DEBUG: dump normed output
+        { FILE *f_debug = fopen("/tmp/debug_normed.bin", "wb"); if(f_debug){fwrite(normed, sizeof(float), np*D_MODEL, f_debug);fclose(f_debug);}}
         memcpy(residual, normed, np * D_MODEL * sizeof(float));
     }
     printf("  FINAL_NORM_DONE at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
