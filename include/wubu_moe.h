@@ -31,7 +31,7 @@ typedef struct {
     float *ffn_down_shexp;    // [SHARED_D_FF, D_MODEL] = [512, 2048]
     
     // Router bias for shared expert
-    float *ffn_gate_inp_shexp; // [D_MODEL] — not used in forward, kept for completeness
+    float *ffn_gate_inp_shexp; // [D_MODEL] — shared expert output gate (per-token scalar via sigmoid)
     
     // Whether weights are loaded
     bool loaded;

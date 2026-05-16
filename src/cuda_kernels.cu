@@ -325,11 +325,56 @@ void wubu_cuda_split_qkv(int N, int kdim, int vdim,
 // ================================================================
 // 1D Convolution (depthwise, causal) kernel
 // input: [B, T+k-1, C] padded (first k-1 elements are zeros or state)
-// kernel: [k, C] — depthwise: each channel has its own kernel
-// output: [B, T, C]
 // ================================================================
-__global__ void conv1d_kernel(const float *input, const float *kernel,
-                              float *output, int B, int T, int C, int k) {
+// Build conv_input from conv_state + qkv_all (device kernel)
+// Replaces host-side for-loop with cudaMemcpyAsync per batch
+// ================================================================
+__global__ void build_conv_input_kernel(
+    const float *d_conv_state,   // [B, k-1, C]
+    const float *d_qkv_all,      // [B, T, C]
+    float *d_conv_input,         // [B, T+k-1, C]
+    int B, int T, int C, int k_1) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = B * (T + k_1) * C;
+    if (tid >= total) return;
+
+    int c = tid % C;
+    int t_in = (tid / C) % (T + k_1);
+    int b = tid / ((T + k_1) * C);
+
+    if (t_in < k_1) {
+        // First k_1 positions: copy from conv_state
+        d_conv_input[tid] = d_conv_state[(b * k_1 + t_in) * C + c];
+    } else {
+        // Remaining T positions: copy from qkv_all
+        int t_qkv = t_in - k_1;
+        d_conv_input[tid] = d_qkv_all[(b * T + t_qkv) * C + c];
+    }
+}
+
+__global__ void update_conv_state_kernel(
+    const float *d_conv_input,   // [B, T+k-1, C]
+    float *d_conv_state,         // [B, k-1, C]
+    int B, int T, int C, int k_1) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = B * k_1 * C;
+    if (tid >= total) return;
+
+    int c = tid % C;
+    int t_state = (tid / C) % k_1;
+    int b = tid / (k_1 * C);
+
+    // Last k_1 positions of conv_input (starting at T) -> conv_state
+    d_conv_state[tid] = d_conv_input[(b * (T + k_1) + T + t_state) * C + c];
+}
+
+// ================================================================
+// Causal 1D Convolution (depthwise) with shared memory cache
+// ================================================================
+__global__ void conv1d_smem_kernel(const float *input, const float *kernel,
+                                    float *output, int B, int T, int C, int k) {
+    extern __shared__ float s_kernel[];  // [k, blockDim.x worth of channels]
+
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = B * T * C;
     if (idx >= total) return;
@@ -338,10 +383,21 @@ __global__ void conv1d_kernel(const float *input, const float *kernel,
     int t = (idx / C) % T;
     int b = idx / (T * C);
 
-    int inp_offset = (b * (T + k - 1) + t) * C + c;
-    float sum = 0.0f;
+    // Load kernel for our channel range into shared memory
+    int lane = threadIdx.x;
+    int c_batch_size = blockDim.x;  // elements per block
+    int c_start = blockIdx.x * c_batch_size;  // not used, we use per-thread indexing
+
+    // Each thread loads kernel[0:k, c]
     for (int ki = 0; ki < k; ki++) {
-        sum += input[inp_offset + ki * C] * kernel[ki + c * k];
+        s_kernel[ki * blockDim.x + lane] = kernel[ki + c * k];
+    }
+    __syncthreads();
+
+    float sum = 0.0f;
+    int inp_offset = (b * (T + k - 1) + t) * C + c;
+    for (int ki = 0; ki < k; ki++) {
+        sum += input[inp_offset + ki * C] * s_kernel[ki * blockDim.x + lane];
     }
     output[idx] = sum;
 }
@@ -352,7 +408,8 @@ void wubu_cuda_conv1d(int B, int T, int C, int k,
     int total = B * T * C;
     int block = 256;
     int grid = (total + block - 1) / block;
-    conv1d_kernel<<<grid, block, 0, stream>>>(input, kernel, output, B, T, C, k);
+    size_t smem = k * block * sizeof(float);
+    conv1d_smem_kernel<<<grid, block, smem, stream>>>(input, kernel, output, B, T, C, k);
 }
 
 // ================================================================
@@ -649,48 +706,37 @@ void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
     // gate = alpha_softplus * A_log
     wubu_cuda_mul_by_scalar(N, dr, d_alpha_softplus, d_ssm_a, d_gate_final, stream);
 
-    // Step 5: Build conv_input from conv_state + qkv_all
-    // conv_input[b, t_start..t_end, c]
-    // For each batch: first (k-1) elements from conv_state, rest from qkv_all
+    // Step 5: Build conv_input from conv_state + qkv_all (device kernel)
     {
         int k_1 = CONV_KERNEL - 1;  // 3
-        int row_stride = (T + k_1) * C;
-        for (int b = 0; b < B; b++) {
-            // Copy conv_state: d_conv_state[b, :, :] -> conv_input[b, 0:k_1, :]
-            wubu_cuda_to_device(
-                (const float*)((size_t)d_conv_state + b * k_1 * C * sizeof(float)),
-                (float*)((size_t)d_conv_input + b * row_stride * sizeof(float)),
-                k_1 * C * sizeof(float), stream);
-            // Copy qkv_all[b, :, :] -> conv_input[b, k_1:, :]
-            // Use cudaMemcpy2DAsync for 2D copy: each row is C floats
-            // Actually simpler: manual kernel, but let's use cudaMemcpyAsync with offsets
-            size_t src_offset = b * T * C * sizeof(float);
-            size_t dst_offset = b * row_stride * sizeof(float) + k_1 * C * sizeof(float);
-            cudaMemcpyAsync((char*)d_conv_input + dst_offset,
-                          (const char*)d_qkv_all + src_offset,
-                          T * C * sizeof(float),
-                          cudaMemcpyDeviceToDevice, stream);
-        }
+        int total = B * (T + k_1) * C;
+        int block = 256;
+        int grid = (total + block - 1) / block;
+        build_conv_input_kernel<<<grid, block, 0, stream>>>(
+            d_conv_state, d_qkv_all, d_conv_input, B, T, C, k_1);
     }
 
-    // Step 6: Conv1d
-    wubu_cuda_conv1d(B, T, C, CONV_KERNEL, d_conv_input, d_ssm_conv1d, d_conv_output, stream);
+    // Step 6: Conv1d (shared-memory cached kernel)
+    {
+        int total = B * T * C;
+        int block = 256;
+        int grid = (total + block - 1) / block;
+        size_t smem = CONV_KERNEL * block * sizeof(float);  // [k, blockDim.x]
+        conv1d_smem_kernel<<<grid, block, smem, stream>>>(
+            d_conv_input, d_ssm_conv1d, d_conv_output, B, T, C, CONV_KERNEL);
+    }
 
     // Step 7: SiLU on conv output
     wubu_cuda_silu(N * C, d_conv_output, d_conv_output, stream);
 
-    // Step 8: Update conv_state — last k-1 elements of input
+    // Step 8: Update conv_state — last k-1 elements of input (device kernel)
     {
         int k_1 = CONV_KERNEL - 1;
-        int row_stride = (T + k_1) * C;
-        for (int b = 0; b < B; b++) {
-            // conv_input[b, T:, :] -> conv_state[b, :, :]
-            size_t src_offset = b * row_stride * sizeof(float) + T * C * sizeof(float);
-            cudaMemcpyAsync((char*)d_conv_state + b * k_1 * C * sizeof(float),
-                          (const char*)d_conv_input + src_offset,
-                          k_1 * C * sizeof(float),
-                          cudaMemcpyDeviceToDevice, stream);
-        }
+        int total = B * k_1 * C;
+        int block = 256;
+        int grid = (total + block - 1) / block;
+        update_conv_state_kernel<<<grid, block, 0, stream>>>(
+            d_conv_input, d_conv_state, B, T, C, k_1);
     }
 
     // Step 9: Split QKV: conv_output -> q_conv, k_conv, v_conv
