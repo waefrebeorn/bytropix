@@ -1,22 +1,29 @@
-═══ GOAL PASTE (May 17 v22 — HONEST) ═══
+═══ GOAL PASTE (May 16 v23 — HONEST) ═══
 PROJECT: bytropix — Custom Qwen3.6-35B-A3B inference engine
-MODEL: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (mixed quant: IQ2_XXS/IQ3_XXS/Q5_K/Q6_K/F32)
-STATUS: MoE contiguous dequant fixed. Output changed Chinese→English ("Doug").
+MODEL: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (7-type mixed quant)
+STATUS: All P0-P3 infrastructure done. "Doug" vs llama "Here" root cause unknown.
 
-=== FIXED THIS SESSION ===
-- MoE expert weight layout: contiguous-per-expert (was reading garbage via interleaved)
-- MOE default: 0→1
-- MAX_LAYERS=0 clamp: fixed
+=== COMPLETED ===
+- P0-a: Shared expert gate loaded+sigmoid (was NULL)
+- P0: MoE dequant contiguity fix, MOE=1 default, MAX_LAYERS=0 fix
+- P1a: Chunked DeltaNet (training path — != sequential for multi-token)
+- P1c: Single-pass O(EK) top-k router
+- P2a: Warp-level CUDA SSM scan
+- P2b,c: Conv state device kernels + shared memory
+- P3a: On-the-fly IQ2_XXS dot product
+- TF32 math mode, block size 512, OMP on all hot loops
 
-=== REMAINING BUG (from research) ===
-- **attn_output_gate: True** — official Qwen config. bytropix doesn't gate attention outputs with sigmoid(blk.X.attn_gate.weight). This is likely causing "Doug" vs ref "Here".
+=== MODEL TYPE AUDIT ===
+F32(361) Q5_K(181) Q6_K(70) IQ2_XXS(80) IQ3_XXS(37) IQ4_XS(3) Q4_K(1)
+All 7 types supported by gguf_reader.
+Unsloth Dynamic 2.0 = per-layer mixed quant, UD prefix.
 
-=== MODEL RESEARCH ===
-- Architecture: 10x(3x Gated DeltaNet→MoE→1x GQA→MoE). DeltaNet = gated linear attention, NOT Mamba.
-- "IQ2_M" is a label. Actual types: IQ2_XXS for experts, IQ3_XXS for down, Q5_K for attention, Q6_K for proj, F32 for small tensors.
-- Unsloth Dynamic 2.0: selects quant types per-tensor by importance.
+=== REMAINING BUG ===
+"Doug" vs llama "Here" — NOT attn_output_gate (confirmed implemented).
+Possible: tokenizer BOS handling, embd_norm, quantization noise at 2-3 bpw.
 
 === BUILD ===
 cd /home/wubu/bytropix && make infer_text
+
 === TEST ===
 NOGPU=1 MOE=1 MOE_LAYERS=0 ./infer_text /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Hello" 8 1
