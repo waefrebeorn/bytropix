@@ -1,16 +1,20 @@
-# state — May 16
+# state — May 16 yolo session
 
-## GPU optimizations applied
-- TF32 tensor core math (cublasSetMathMode): ~2× matmul speedup
+## Done
+- P0-a: Shared expert gate loaded and applied (was NULL)
+- P1c: Single-pass O(EK) top-k (was O(EK²))
+- P2b: Conv state build + update as device kernels (replaced host loops)
+- P2c: Conv1d kernel with shared memory cache for weights
+- TF32 math mode on all cuBLAS matmuls
 - Block size 256→512 for element-wise CUDA kernels
-- Full 40-layer GPU: prefill 0.27s (no MoE), decode 14 tok/s
 
-## llama.cpp comparison
-- Chunked DeltaNet (llama): 3× prefill speedup — not in bytropix
-- Warp-level parallel scan CUDA — not in bytropix  
-- Fused gate+up MoE weights — not used by bytropix
-- Shared expert gating — BUG: bytropix sets ffn_gate_inp_shexp=NULL
-- Quantized on-the-fly matmul — not implemented
+## Performance
+- CPU: prefill 4.2s, decode 1 tok/s (MOE=1, 40L)
+- GPU: prefill 2.5s, decode 2.4 tok/s (MOE=1, 40L)
+- GPU no-MoE: prefill 0.27s, decode 14 tok/s
 
-## Roadmap written
-Plan in .hermes/mind-palace/plan.md — 5 phases, P0=P1a correctness+speed first
+## Next up
+- P1a: Chunked DeltaNet (3× prefill) — algorithm understood, needs C impl
+- P2a: Warp-level CUDA scan — template kernel from ssm-scan.cu
+- P3a: On-the-fly IQ2_XXS dequant — keep weights quantized
+- P0-b: Verify TF32 vs CPU cos-sim

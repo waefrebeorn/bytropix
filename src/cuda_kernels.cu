@@ -487,23 +487,41 @@ void wubu_cuda_delta_net_step(float *h,
 }
 
 // ================================================================
-// PARALLEL ASSOCIATIVE SCAN — Gated Delta Net Recurrence
+// WARP-LEVEL PARALLEL SSM SCAN — Gated Delta Net Recurrence
 //
-// Processes all T tokens for one V-head in a single kernel.
-// Uses the linear recurrence structure:
-//   h[t] = A[t] * h[t-1] + B[t]
-// where A[t] = exp(gate[t]) (scalar decay)
-//       B[t] = k[t] ⊗ (v[t] * beta[t] - k[t]^T @ h[t-1] * beta[t])
+// Uses warp-level parallelism to reduce register pressure and
+// improve memory coalescing vs the original per-thread-row approach.
 //
-// Phase 1: Token-loop sequential within each head (but all 32 heads in parallel)
-// Phase 2: State materialization for all T tokens (for backprop)
+// Template parameters:
+//   c_factor: state dimensions per warp (d_state / WARP_SIZE)
+//   d_state: total state dimension (128)
+//
+// Block: 32 warps × 32 lanes = 1024 threads, each warp handles c_factor rows
+// Lane in a warp stores 4 column chunks (stride 32), so each thread has
+// c_factor×4 = 16 floats (vs 128 in the original).
+//
+// Shared memory: sh_diff[d_state] only (512 bytes) for cross-warp diff.
+//
+// Reference: llama.cpp ssm_scan_f32_group kernel pattern.
 // ================================================================
 
-// One block per (batch, V-head). Each block has D_STATE=128 threads.
-// Each thread handles one row i of the d×d state matrix h.
-// State is kept in per-thread registers across the T-loop.
-// Only diff[d] needs shared memory for the outer update.
-__global__ void ssm_parallel_scan_kernel(
+#ifndef WARP_SIZE
+#define WARP_SIZE 32
+#endif
+
+// Warp-level reduction: sum across all 32 lanes
+static __device__ __inline__ float warp_reduce_sum(float val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_xor_sync(0xFFFFFFFF, val, offset);
+    }
+    return val;
+}
+
+// c_factor = d_state / WARP_SIZE = 4 (each warp handles 4 state dims/rows)
+// d_state = 128
+template <int c_factor, int d_state>
+__global__ void ssm_warp_scan_kernel(
     const float *q_norm,      // [B, T, K_HEADS, D_STATE] — K-headed Q
     const float *k_norm,      // [B, T, K_HEADS, D_STATE] — K-headed K
     const float *v_conv,      // [B, T, V_HEADS, D_STATE] — V-headed V (raw)
@@ -519,78 +537,123 @@ __global__ void ssm_parallel_scan_kernel(
     int vh = blockIdx.x % n_vheads;
     int kh = vh / repeat_factor;  // which K-head maps to this V-head
 
-    // Shared memory: diff[d] only — d floats = 512 bytes (fits in 48KB default)
     extern __shared__ float sh_diff[];
 
-    // Thread i handles row i of the d×d state matrix
-    int i = threadIdx.x;
-    if (i >= d) return;
+    int warp_id = threadIdx.x / WARP_SIZE;   // 0..31
+    int lane    = threadIdx.x % WARP_SIZE;    // 0..31
 
-    // Load initial state from global — each thread loads its row
+    // Each warp handles c_factor consecutive rows of the state matrix
+    int row_base = warp_id * c_factor;  // 0, 4, 8, ..., 124
+    if (row_base + c_factor > d) return;
+
     float *state_base = h_states + ((b * n_vheads + vh) * d * d);
-    
-    // Local array for the thread's row of the state matrix
-    // Compiler may spill to local memory (L1-cached) which is fine
-    float h_row[128];
-    
-    for (int j = 0; j < d; j++) {
-        h_row[j] = state_base[i * d + j];
+
+    // State storage per lane: state[c][k] = h[row_base + c][lane + k*32]
+    // Each lane holds c_factor rows × (d_state/WARP_SIZE) column chunks = 4×4 = 16 floats
+    // vs 128 floats per thread in the original.
+    float state[c_factor][4];
+
+    // Load initial state: coalesced reads since lane 0..31 read adjacent cols
+    #pragma unroll
+    for (int c = 0; c < c_factor; c++) {
+        int row = row_base + c;
+        #pragma unroll
+        for (int k = 0; k < 4; k++) {
+            int col = lane + k * WARP_SIZE;
+            state[c][k] = state_base[row * d + col];
+        }
     }
 
-    // Token loop — sequential within block (T iterations, each does d² work)
-    // Total work: T * d² = T * 16384 flops per head = ~67Mflops for T=4096
+    // Token loop
     for (int t = 0; t < T; t++) {
-        int s = b * T + t;  // flat index into [N, ...] arrays
+        int s_idx = b * T + t;  // flat index into [N, ...] arrays
 
-        // Load q, k, v for this token and head
-        const float *q_kh = q_norm + (s * n_kheads + kh) * d;
-        const float *k_kh = k_norm + (s * n_kheads + kh) * d;
-        const float *v_vh = v_conv + (s * n_vheads + vh) * d;
+        const float *q_kh = q_norm + (s_idx * n_kheads + kh) * d;
+        const float *k_kh = k_norm + (s_idx * n_kheads + kh) * d;
+        const float *v_vh = v_conv + (s_idx * n_vheads + vh) * d;
 
-        float gate_val = gate[s * DT_RANK + vh];
-        float beta_val = beta[s * DT_RANK + kh];
+        float gate_val = gate[s_idx * DT_RANK + vh];
+        float beta_val = beta[s_idx * DT_RANK + kh];
 
-        // Load q[i], k[i], v[i] for this thread
-        float qi = q_kh[i];
-        float ki = k_kh[i];
-        float vi = v_vh[i];
-
-        // Step 1: Decay state
+        // Step 1: Decay state — element-wise multiply all stored elements
         float egate = tgt_safe_expf(gate_val);
-        for (int j = 0; j < d; j++) {
-            h_row[j] *= egate;
+        #pragma unroll
+        for (int c = 0; c < c_factor; c++) {
+            #pragma unroll
+            for (int k = 0; k < 4; k++) {
+                state[c][k] *= egate;
+            }
         }
 
-        // Step 2: Compute hk[i] = sum_j h[i][j] * k[j]
-        // This is a reduction: thread i computes dot(row_i, k_full)
-        float hk_i = 0.0f;
-        for (int j = 0; j < d; j++) {
-            hk_i += h_row[j] * k_kh[j];
+        // Step 2: Compute hk[row] = sum_j h[row][j] * k[j]
+        // Each lane contributes: sum_{k=0..3} state[c][k] * k_kh[lane + k*32]
+        // Warp shuffle reduction sums across all 32 lanes.
+        // Reads of k_kh are coalesced (lane 0..31 read adjacent words, 4 batches).
+        float hk[c_factor];
+        #pragma unroll
+        for (int c = 0; c < c_factor; c++) {
+            float partial = 0.0f;
+            #pragma unroll
+            for (int k = 0; k < 4; k++) {
+                int col = lane + k * WARP_SIZE;
+                partial += state[c][k] * k_kh[col];
+            }
+            hk[c] = warp_reduce_sum(partial);
         }
 
-        // Step 3: diff[i] = v[i] - hk[i] — share via shmem
-        sh_diff[i] = vi - hk_i;
+        // Step 3: diff[row] = v[row] - hk[row] — write to shared mem for cross-warp
+        // v_vh[row] is accessed by row index; each lane computes diff for its c_factor rows
+        #pragma unroll
+        for (int c = 0; c < c_factor; c++) {
+            int row = row_base + c;
+            sh_diff[row] = v_vh[row] - hk[c];
+        }
         __syncthreads();
 
-        // Step 4: Outer update: h[i][j] += k[i] * diff[j] * beta
-        for (int j = 0; j < d; j++) {
-            h_row[j] += ki * sh_diff[j] * beta_val;
+        // Step 4: Outer product: h[i][j] += k[i] * diff[j] * beta
+        // Each lane: state[c][k] += k[row_base + c] * diff[lane + k*32] * beta_val
+        // Pre-load k values for our rows (coalesced warp read)
+        float k_row[c_factor];
+        #pragma unroll
+        for (int c = 0; c < c_factor; c++) {
+            k_row[c] = k_kh[row_base + c];
+        }
+
+        #pragma unroll
+        for (int c = 0; c < c_factor; c++) {
+            #pragma unroll
+            for (int k = 0; k < 4; k++) {
+                int col = lane + k * WARP_SIZE;
+                state[c][k] += k_row[c] * sh_diff[col] * beta_val;
+            }
         }
         __syncthreads();
 
-        // Step 5: Output = h[i] @ q
-        float out_i = 0.0f;
-        for (int j = 0; j < d; j++) {
-            out_i += h_row[j] * q_kh[j];
+        // Step 5: Output = h @ q for each of our rows
+        // Same pattern as step 2: partial sum per lane + warp reduction
+        #pragma unroll
+        for (int c = 0; c < c_factor; c++) {
+            float partial = 0.0f;
+            #pragma unroll
+            for (int k = 0; k < 4; k++) {
+                int col = lane + k * WARP_SIZE;
+                partial += state[c][k] * q_kh[col];
+            }
+            float out_val = warp_reduce_sum(partial);
+            int row = row_base + c;
+            delta_out[(s_idx * n_vheads + vh) * d + row] = out_val;
         }
-
-        // Write delta_out
-        delta_out[(s * n_vheads + vh) * d + i] = out_i;
     }
 
-    // Write final state back
-    for (int j = 0; j < d; j++) {
-        state_base[i * d + j] = h_row[j];
+    // Write final state back — coalesced store pattern
+    #pragma unroll
+    for (int c = 0; c < c_factor; c++) {
+        int row = row_base + c;
+        #pragma unroll
+        for (int k = 0; k < 4; k++) {
+            int col = lane + k * WARP_SIZE;
+            state_base[row * d + col] = state[c][k];
+        }
     }
 }
 
@@ -605,12 +668,16 @@ void wubu_cuda_ssm_parallel_scan(int B, int T,
     cudaStream_t stream) {
 
     const int d = SSM_D_STATE;  // 128
+    const int warp_per_row = d / WARP_SIZE;  // 4 (c_factor = dims per warp)
     const int n_blocks = B * SSM_V_HEADS;  // one block per (batch, V-head)
+
+    // 32 warps × 32 lanes = 1024 threads per block
+    const int block_size = (d / warp_per_row) * WARP_SIZE;  // (128/4)*32 = 1024
 
     // Shared memory: diff[d] only = 128 floats = 512 bytes << 48KB default
     size_t shared_bytes = d * sizeof(float);
 
-    ssm_parallel_scan_kernel<<<n_blocks, d, shared_bytes, stream>>>(
+    ssm_warp_scan_kernel<d / WARP_SIZE, d><<<n_blocks, block_size, shared_bytes, stream>>>(
         d_q_norm, d_k_norm, d_v_conv, d_gate, d_beta,
         d_h_states, d_delta_out,
         B, T, SSM_K_HEADS, SSM_V_HEADS, d, SSM_V_HEADS / SSM_K_HEADS);

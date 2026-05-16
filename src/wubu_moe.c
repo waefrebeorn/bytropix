@@ -128,6 +128,122 @@ void wubu_moe_router(const float *x, int B, int T,
 }
 
 // ============================================================
+// Quantized MoE Expert Computation (on-the-fly IQ2_XXS dequant)
+// ============================================================
+
+// Load one expert's quantized weights from the GGUF data blob
+// Returns raw_size on success, 0 on failure
+int wubu_moe_load_layer_quant(gguf_ctx *ctx, int layer,
+                              uint8_t *gate_q, uint8_t *up_q, uint8_t *down_q,
+                              int64_t *gate_raw_size, int64_t *up_raw_size, int64_t *down_raw_size) {
+    char name[256];
+
+    // Expert gate — quantized [D_MODEL, D_FF, N_EXPERTS]
+    snprintf(name, sizeof(name), "blk.%d.ffn_gate_exps.weight", layer);
+    gguf_tensor_info *t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE quant load: missing %s\n", name); return 0; }
+    int64_t n_elems = (int64_t)D_MODEL * D_FF;
+    int64_t raw_sz = gguf_raw_size(t->ggml_type, n_elems);
+    if (raw_sz <= 0) { fprintf(stderr, "MoE quant load: unsupported type %d\n", t->ggml_type); return 0; }
+    if (!ctx->data_blob) {
+        fprintf(stderr, "MoE quant load: data blob not buffered; call gguf_buffer_data first\n");
+        return 0;
+    }
+    const uint8_t *src = (const uint8_t *)ctx->data_blob + t->data_offset;
+    memcpy(gate_q, src, raw_sz);  // first expert only (expert 0)
+    if (gate_raw_size) *gate_raw_size = raw_sz;
+
+    // Expert up — quantized [D_MODEL, D_FF, N_EXPERTS]
+    snprintf(name, sizeof(name), "blk.%d.ffn_up_exps.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE quant load: missing %s\n", name); return 0; }
+    raw_sz = gguf_raw_size(t->ggml_type, n_elems);
+    src = (const uint8_t *)ctx->data_blob + t->data_offset;
+    memcpy(up_q, src, raw_sz);
+    if (up_raw_size) *up_raw_size = raw_sz;
+
+    // Expert down — quantized [D_FF, D_MODEL, N_EXPERTS]
+    snprintf(name, sizeof(name), "blk.%d.ffn_down_exps.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) { fprintf(stderr, "MoE quant load: missing %s\n", name); return 0; }
+    n_elems = (int64_t)D_FF * D_MODEL;
+    raw_sz = gguf_raw_size(t->ggml_type, n_elems);
+    src = (const uint8_t *)ctx->data_blob + t->data_offset;
+    memcpy(down_q, src, raw_sz);
+    if (down_raw_size) *down_raw_size = raw_sz;
+
+    return 1;
+}
+
+// Compute one expert with on-the-fly IQ2_XXS dequant dot product
+// gate_q/up_q: quantized weight for one expert [D_MODEL, D_FF], column-major
+// down_q: quantized weight for one expert [D_FF, D_MODEL], column-major
+// temp: [D_FF * 3] scratch
+// output: [D_MODEL]
+//
+// Memory layout of quantized gate/up (D_MODEL=2048, D_FF=512):
+//   Each column of 2048 elements = 8 blocks × 66 bytes = 528 bytes
+//   Total: 512 columns × 528 bytes = 270,336 bytes
+//
+// Memory layout of quantized down (D_FF=512, D_MODEL=2048):
+//   Each column of 512 elements = 2 blocks × 66 bytes = 132 bytes
+//   Total: 2048 columns × 132 bytes = 270,336 bytes
+//
+void moe_expert_forward_dequant(const float *x,
+                                const uint8_t *gate_q, const uint8_t *up_q, const uint8_t *down_q,
+                                float *temp, float *output) {
+    // temp layout: [gate_out(D_FF) | up_out(D_FF) | act(D_FF)]
+    float *gate_out = temp;
+    float *up_out = temp + D_FF;
+    float *act = temp + 2 * D_FF;
+
+    const int blocks_per_col = D_MODEL / 256;  // 8
+    const int gate_col_bytes = blocks_per_col * 66;  // 528 bytes per column
+
+    // gate = x @ gate_q  [D_MODEL] @ [D_MODEL, D_FF] -> [D_FF]
+    // For each output column j: dot over 8 IQ2_XXS blocks
+    for (int j = 0; j < D_FF; j++) {
+        const uint8_t *qcol = gate_q + j * gate_col_bytes;
+        float sum = 0.0f;
+        for (int b = 0; b < blocks_per_col; b++) {
+            sum += iq2_xxs_dot_block(qcol + b * 66, x + b * 256);
+        }
+        gate_out[j] = sum;
+    }
+
+    // up = x @ up_q  [D_MODEL] @ [D_MODEL, D_FF] -> [D_FF]
+    for (int j = 0; j < D_FF; j++) {
+        const uint8_t *qcol = up_q + j * gate_col_bytes;
+        float sum = 0.0f;
+        for (int b = 0; b < blocks_per_col; b++) {
+            sum += iq2_xxs_dot_block(qcol + b * 66, x + b * 256);
+        }
+        up_out[j] = sum;
+    }
+
+    // act = silu(gate) * up
+    for (int j = 0; j < D_FF; j++) {
+        float g = gate_out[j];
+        float silu_g;
+        if (g < -80.0f) silu_g = 0.0f;
+        else silu_g = g / (1.0f + expf(-g));
+        act[j] = silu_g * up_out[j];
+    }
+
+    // output = act @ down_q  [D_FF] @ [D_FF, D_MODEL] -> [D_MODEL]
+    const int blocks_per_down_col = D_FF / 256;  // 2
+    const int down_col_bytes = blocks_per_down_col * 66;  // 132 bytes per column
+    for (int j = 0; j < D_MODEL; j++) {
+        const uint8_t *qcol = down_q + j * down_col_bytes;
+        float sum = 0.0f;
+        for (int b = 0; b < blocks_per_down_col; b++) {
+            sum += iq2_xxs_dot_block(qcol + b * 66, act + b * 256);
+        }
+        output[j] = sum;
+    }
+}
+
+// ============================================================
 // MoE Expert Computation (single expert for one token)
 // ============================================================
 
