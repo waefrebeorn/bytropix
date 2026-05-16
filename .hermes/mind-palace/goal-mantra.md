@@ -1,29 +1,31 @@
-═══ GOAL PASTE (May 16 v23 — HONEST) ═══
+═══ GOAL PASTE (May 16 v24 — DA AUDITED) ═══
 PROJECT: bytropix — Custom Qwen3.6-35B-A3B inference engine
 MODEL: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (7-type mixed quant)
-STATUS: All P0-P3 infrastructure done. "Doug" vs llama "Here" root cause unknown.
+STATUS: All P0-P3 infrastructure done. Output WRONG — NOT tool-call ready.
 
-=== COMPLETED ===
-- P0-a: Shared expert gate loaded+sigmoid (was NULL)
-- P0: MoE dequant contiguity fix, MOE=1 default, MAX_LAYERS=0 fix
-- P1a: Chunked DeltaNet (training path — != sequential for multi-token)
-- P1c: Single-pass O(EK) top-k router
-- P2a: Warp-level CUDA SSM scan
-- P2b,c: Conv state device kernels + shared memory
-- P3a: On-the-fly IQ2_XXS dot product
-- TF32 math mode, block size 512, OMP on all hot loops
+=== DA AUDIT — Survivorship Bias Stripped ===
+❌ "Doug" vs "Here" — CRITICAL. Root cause UNKNOWN.
+❌ Embeds from pre-extracted file were CORRUPTED (extracted with buggy dequant).
+    → Fixed: auto-extract token_embd.weight from GGUF at load time.
+❌ BOS: add_bos_token=false in GGUF, but bytropix added BOS anyway.
+    → Fixed: ADD_BOS env var, default off.
+❌ h_last IDENTICAL for "Hello" and "X" prompt — forward pass not using input??
+    → Actually h_last changes for multi-token prompts.
+✓ Metadata epsilon=1e-6 matches bytropix hardcoded value.
+✓ All 7 types (F32, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q4_K) supported.
 
-=== MODEL TYPE AUDIT ===
-F32(361) Q5_K(181) Q6_K(70) IQ2_XXS(80) IQ3_XXS(37) IQ4_XS(3) Q4_K(1)
-All 7 types supported by gguf_reader.
-Unsloth Dynamic 2.0 = per-layer mixed quant, UD prefix.
+=== ROOT CAUSE STILL UNKNOWN ===
+Likely culprits remaining:
+1. Q5_K dequant correctness (most weights use this type)
+2. Model forward pass has a hidden bug (SSM recurrence, GQA, or residual add)
+3. Output weight type mismatch
+4. MoE layers bypassed (MOE_LAYERS=0 on CPU) → SSM-only path may be wrong
 
-=== REMAINING BUG ===
-"Doug" vs llama "Here" — NOT attn_output_gate (confirmed implemented).
-Possible: tokenizer BOS handling, embd_norm, quantization noise at 2-3 bpw.
-
-=== BUILD ===
-cd /home/wubu/bytropix && make infer_text
+=== AUTO-EMBEDDING IMPLEMENTED ===
+- wubu_model_init auto-extracts token_embd.weight from GGUF if missing/stale
+- Saves to data/qwen36_embeddings_c.bin.raw for future runs
+- Falls back to file if it exists and is correct size
 
 === TEST ===
-NOGPU=1 MOE=1 MOE_LAYERS=0 ./infer_text /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Hello" 8 1
+NOGPU=1 MOE=1 ./infer_text /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Hello" 8 1
+# Still produces "Plot" not "Here" — root cause unfixed

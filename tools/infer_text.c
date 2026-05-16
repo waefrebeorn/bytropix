@@ -985,8 +985,11 @@ int main(int argc, char **argv) {
     } else {
         np = wubu_tokenizer_encode(&tok, prompt, pids+1, 65535);
         if (np <= 0) { fprintf(stderr, "Failed to encode prompt\n"); wubu_tokenizer_free(&tok); return 1; }
-        pids[0] = tok.bos_id; np++;
-        printf("Prompt: %d tok\n", np);
+        // BOS skipped — add_bos_token=false in GGUF metadata. Use env ADD_BOS=1 to force.
+        if (getenv("ADD_BOS")) {
+            pids[0] = tok.bos_id; np++;
+        }
+        printf("Prompt: %d tok (BOS: %s)\n", np, getenv("ADD_BOS")?"yes":"no");
     }
 
     // ---- Allocate forward buffers ----
