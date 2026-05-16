@@ -1,49 +1,47 @@
-═══ WUBUTEXT AI — PRESTIGE RESUME (May 16 v18 — DA AUDITED) ═══
+═══ WUBUTEXT AI — PRESTIGE RESUME (May 16 v19 — DA RECERTIFIED) ═══
 Path: /home/wubu/bytropix | Branch: master
 HW: RTX 5050 6.4GB, -arch=sm_120
 Build: make infer_text | Models: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 
 === RULE ===
-ALL GOALS MUST BE FINISHED. Output must match llama.cpp token-for-token.
-Tool-call parity: function names start from token 1. If token 1 is wrong, tool calls fail.
+Output must match llama.cpp token-for-token. Root cause unknown after 2 fix sessions.
 
-=== COMPLETED (verified) ===
-✅ Auto-embedding: token_embd.weight extracted from GGUF at load time
-✅ BOS handling: ADD_BOS env var, default=off (matches add_bos_token=false)
-✅ Model type audit: 7 types, all supported
-✅ P1a: Chunked DeltaNet (training-only)
-✅ Unsloth Dynamic 2.0 research
+=== DA-AUDITED STATUS (May 16 v3) ===
 
-=== COMPLETED (unverified) ===
-❓ P0-a: Shared expert gate (compiles only)
-❓ P1c: Single-pass top-k (compiles only)
-❓ P2a: Warp CUDA scan (compiles only)
-❓ P3a: IQ2 on-the-fly dot (4/4 tests pass)
-❓ TF32 math mode, block 512, OMP loops
+INFRASTRUCTURE (verified structurally vs llama.cpp):
+✓ infer_text.c weight indexing: CORRECT (i + j*D_MODEL pattern everywhere)
+✓ RoPE in both prefill + decode: CORRECT
+✓ SSM recurrence steps: CORRECT (qkv→β/α→gate→conv→L2norm→delta→norm→out)
+✓ MoE router + shared expert: CORRECT structure
+✓ BOS handling: ADD_BOS env var default off = correct
 
-=== CRITICAL BUG ===
-❌ Output: "Hello" → "Plot" not "Here" or any sensible continuation.
-❌ Root cause: UNKNOWN after fixing:
-   - Embedding file (re-extracted from GGUF)
-   - BOS handling (disabled)
-   - Epsilon verified (1e-6)
-❌ Remaining suspects (order of likelihood):
-   1. Q5_K dequant bug — 181 tensors (most attention weights)
-   2. SSM recurrence formula divergence
-   3. GQA dimension/indexing bug
-   4. Output weight Q4_K dequant bug
+BUGS FOUND:
+❌ wubu_gqa_forward() weight indexing: WRONG (i*cols+j not i+j*D_MODEL)
+→ Dead code for inference (infer_text.c uses inline GQA)
 
-=== DA FINDINGS ===
-- "Noise floor" argument is WRONG for quantized models.
-  Two engines running same quantized GGUF MUST produce same output at temp=0.
-- Embedding file was corrupted from earlier buggy dequant extraction.
-  Fixed by re-extracting from GGUF using current gguf_read_tensor_f32.
-- BOS handling mismatch: bytropix added BOS, llama.cpp doesn't (add_bos=false).
-  Fixed with env var.
-- Output still wrong after both fixes → deeper bug in model computation.
+ROOT CAUSE: narrowed to 5 suspects
+1. Q5_K dequant (181 tensors, most common type)
+2. Output weight type 12 Q4_K dequant
+3. SSM Q scaling factor 1/sqrt(128)
+4. RMSNorm epsilon
+5. TGT wrapping in GQA softmax
 
-=== TO-DO ===
-1. Fix GGUF blob memory: free after tensor loading to allow token_embd + out_weight
-2. Compare layer-0 h_last vs llama.cpp ref_forward
-3. Verify Q5_K dequant against known test vectors
-4. Reach parity with llama.cpp output
+DA FINDINGS:
+- All P0-P3 items completed at "compiles" level only. ZERO verified against llama.
+- System works end-to-end (tokens in → tokens out) but output wrong.
+- Model IS processing input (h_last changes with prompt length).
+- No NaN/inf in any layer outputs (verified with NaN guards).
+
+NEXT STEPS (ordered):
+1. Write Q5_K dequant test vector → compare vs llama.cpp dequant of same block
+2. Write Q4_K dequant test vector → verify output.weight
+3. Compare layer-0 h_last vs llama.cpp ref_forward to binary-search divergence point
+4. Fix wubu_gqa_forward() indexing
+5. Remove TGT wrapping test
+
+=== PREVIOUS FIXES (none verified against llama.cpp output) ===
+- Shared expert gate (P0-a): loaded + sigmoid applied
+- MoE contiguous dequant: fixed expert stride
+- MOE=1: default changed to 1
+- MAX_LAYERS clamp: 0→n_layers
+- Auto-embedding: token_embd auto-extracted from GGUF
