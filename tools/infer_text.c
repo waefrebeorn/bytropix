@@ -1251,6 +1251,9 @@ int main(int argc, char **argv) {
 
         for (int i = 0; i < np * D_MODEL; i++) residual[i] += ffn[i];
 
+        // Post-MoE dump (same naming as reference's post_moe)
+        if (getenv("DUMP_LAYER_DIR")) maybe_dump_layer(100 + l, residual, np);
+
         if (verb) printf("  L%d: %.3f ms\n", l, (now_sec() - tl) * 1000);
         if (l < 5 || l == mdl.n_layers-1) printf("  L%d: %.3f s\n", l, now_sec() - t_prefill);
     }

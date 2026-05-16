@@ -753,7 +753,42 @@ static void dequantize_q5_K_row(const uint8_t *data, float *output, int64_t n_el
     }
 }
 
-// ========== Q6_K Dequantization ==========
+// ========== IQ4_XS Dequantization (4.25 bpw, reference llama.cpp) ==========
+// block_iq4_xs: d(2) + scales_h(2) + scales_l[4] + qs[128] = 136 bytes
+
+static const int8_t kvalues_iq4nl[16] = {
+    -127, -104, -83, -65, -49, -35, -22, -10,
+      1,   13,   25,  38,  53,  69,  89, 113
+};
+
+void dequantize_iq4_xs_row(const uint8_t *data, float *output, int64_t n_elems) {
+    // Reference: llama.cpp ggml-quants.c dequantize_row_iq4_xs()
+    // block layout: d(fp16,2) + scales_h(uint16,2) + scales_l[4] + qs[128] = 136 bytes
+    int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
+    for (int64_t b = 0; b < n_blocks; b++) {
+        const uint8_t *block = data + b * 136;
+        uint16_t d_bits;
+        memcpy(&d_bits, block, 2);
+        float d = f16_to_f32(d_bits);
+        
+        uint16_t scales_h;
+        memcpy(&scales_h, block + 2, 2);
+        const uint8_t *scales_l = block + 4;
+        const uint8_t *qs = block + 8;  // qs starts after d+scales_h+scales_l
+        
+        float *y = output + b * QK_K;
+        for (int ib = 0; ib < QK_K/32; ib++) {
+            int ls = ((scales_l[ib/2] >> 4*(ib%2)) & 0xf) | (((scales_h >> 2*ib) & 3) << 4);
+            float dl = d * (ls - 32);
+            for (int j = 0; j < 16; j++) {
+                y[j+ 0] = dl * kvalues_iq4nl[qs[j] & 0xf];
+                y[j+16] = dl * kvalues_iq4nl[qs[j] >>  4];
+            }
+            y  += 32;
+            qs += 16;
+        }
+    }
+}
 
 #define Q6_K_BLOCK_SIZE 210  // sizeof(block_q6_K): 128+64+16+2
 
@@ -973,6 +1008,7 @@ void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float 
         case GGML_TYPE_IQ2_S: dequantize_iq2_s_row(data, output, n_elems); break;
         case GGML_TYPE_IQ3_S: dequantize_iq3_s_row(data, output, n_elems); break;
         case GGML_TYPE_IQ3_XXS: dequantize_iq3_xxs_row(data, output, n_elems); break;
+        case GGML_TYPE_IQ4_XS: dequantize_iq4_xs_row(data, output, n_elems); break;
         case GGML_TYPE_Q4_K: dequantize_q4_K_row(data, output, n_elems); break;
         default:
             fprintf(stderr, "Dequant: unsupported type %d\n", ggml_type);
@@ -996,7 +1032,8 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_IQ2_XXS: return n_blocks * 66; // d[2] + qs[64] = 66 (NOT 72 — verified empirically)
         case GGML_TYPE_IQ2_S: return n_blocks * 88;    // d[2] + qs[64] + qh[16] + scales[6]
         case GGML_TYPE_IQ3_S: return n_blocks * 116;   // d[2] + qs[96] + qh[12] + scales[6]
-        case GGML_TYPE_IQ3_XXS: return n_blocks * 104; // d[2] + qs[96] + qh[6]
+        case GGML_TYPE_IQ3_XXS: return n_blocks * 98;   // d[2] + qs[96] = 98 bytes (verified vs llama.cpp struct)
+        case GGML_TYPE_IQ4_XS: return n_blocks * 136;  // d[2] + scales_h[2] + scales_l[4] + qs[128]
         case GGML_TYPE_Q4_K:  return n_blocks * 144;  // d[2] + dmin[2] + scales[12] + qs[128]
         default: return -1;
     }
