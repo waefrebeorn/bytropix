@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 450" font-family="monospace">
+  <defs>
+    <linearGradient id="iq3xxs" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#C8E6C9"/><stop offset="100%" stop-color="#A5D6A7"/>
+    </linearGradient>
+    <linearGradient id="iq4xs" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFF9C4"/><stop offset="100%" stop-color="#FFF176"/>
+    </linearGradient>
+    <linearGradient id="iq2xxs" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#C8E6C9"/><stop offset="100%" stop-color="#A5D6A7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="35" text-anchor="middle" font-size="18" font-weight="bold" fill="#333">Down_Exps Tensor Types by Layer (Corrected)</text>
+  <text x="500" y="55" text-anchor="middle" font-size="11" fill="#666">Python dump_gguf.py had WRONG labels. These are actual GGUF type IDs vs llama.cpp enum.</text>
+
+  <!-- Legend -->
+  <rect x="200" y="70" width="16" height="16" rx="2" fill="#A5D6A7"/><text x="222" y="83" font-size="11" fill="#555">IQ3_XXS (type 18) — 37/40 layers</text>
+  <rect x="460" y="70" width="16" height="16" rx="2" fill="#FFF176"/><text x="482" y="83" font-size="11" fill="#555">IQ4_XS (type 23) — 3/40 layers (34, 38, 39)</text>
+
+  <!-- Layer grid: 40 blocks in 4 rows of 10 -->
+  <g transform="translate(100, 100)">
+    <line x1="0" y1="0" x2="800" y2="0" stroke="#CCC" stroke-width="1"/>
+    <text x="-10" y="30" text-anchor="end" font-size="11" fill="#666" font-weight="bold">Layer</text>
+    
+    <!-- Row 1: Layers 0-9 -->
+    <text x="-10" y="27" text-anchor="end" font-size="10" fill="#666">0-9</text>
+    <!-- Row 2: Layers 10-19 -->
+    <text x="-10" y="67" text-anchor="end" font-size="10" fill="#666">10-19</text>
+    <!-- Row 3: Layers 20-29 -->
+    <text x="-10" y="107" text-anchor="end" font-size="10" fill="#666">20-29</text>
+    <!-- Row 4: Layers 30-39 -->
+    <text x="-10" y="147" text-anchor="end" font-size="10" fill="#666">30-39</text>
+
+    <!-- Column labels -->
+    <text x="40" y="-5" text-anchor="middle" font-size="9" fill="#888">0</text>
+    <text x="120" y="-5" text-anchor="middle" font-size="9" fill="#888">1</text>
+    <text x="200" y="-5" text-anchor="middle" font-size="9" fill="#888">2</text>
+    <text x="280" y="-5" text-anchor="middle" font-size="9" fill="#888">3</text>
+    <text x="360" y="-5" text-anchor="middle" font-size="9" fill="#888">4</text>
+    <text x="440" y="-5" text-anchor="middle" font-size="9" fill="#888">5</text>
+    <text x="520" y="-5" text-anchor="middle" font-size="9" fill="#888">6</text>
+    <text x="600" y="-5" text-anchor="middle" font-size="9" fill="#888">7</text>
+    <text x="680" y="-5" text-anchor="middle" font-size="9" fill="#888">8</text>
+    <text x="760" y="-5" text-anchor="middle" font-size="9" fill="#888">9</text>
+
+    <!-- Row 0: layers 0-9 all IQ3_XXS -->
+    <rect x="20" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="50" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="100" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="130" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="180" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="210" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="260" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="290" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="340" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="370" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="420" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="450" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="500" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="530" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="580" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="610" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="660" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="690" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="740" y="15" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="770" y="32" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+
+    <!-- Row 1: layers 10-19 all IQ3_XXS -->
+    <rect x="20" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="50" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="100" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="130" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="180" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="210" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="260" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="290" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="340" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="370" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="420" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="450" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="500" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="530" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="580" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="610" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="660" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="690" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="740" y="55" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="770" y="72" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+
+    <!-- Row 2: layers 20-29 all IQ3_XXS -->
+    <rect x="20" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="50" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="100" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="130" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="180" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="210" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="260" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="290" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="340" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="370" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="420" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="450" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="500" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="530" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="580" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="610" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="660" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="690" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="740" y="95" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="770" y="112" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+
+    <!-- Row 3: layers 30-39 — 30-33 IQ3_XXS, 34 IQ4_XS, 35-37 IQ3_XXS, 38-39 IQ4_XS -->
+    <rect x="20" y="135" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="50" y="152" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="100" y="135" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="130" y="152" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="180" y="135" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="210" y="152" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="260" y="135" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="290" y="152" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="340" y="135" width="60" height="24" rx="3" fill="url(#iq4xs)"/><text x="370" y="152" text-anchor="middle" font-size="8" fill="#E65100">IQ4_XS</text>
+    <rect x="420" y="135" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="450" y="152" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="500" y="135" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="530" y="152" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="580" y="135" width="60" height="24" rx="3" fill="url(#iq3xxs)"/><text x="610" y="152" text-anchor="middle" font-size="8" fill="#2E7D32">IQ3_XXS</text>
+    <rect x="660" y="135" width="60" height="24" rx="3" fill="url(#iq4xs)"/><text x="690" y="152" text-anchor="middle" font-size="8" fill="#E65100">IQ4_XS</text>
+    <rect x="740" y="135" width="60" height="24" rx="3" fill="url(#iq4xs)"/><text x="770" y="152" text-anchor="middle" font-size="8" fill="#E65100">IQ4_XS</text>
+  </g>
+
+  <!-- Arrow + annotation -->
+  <line x1="840" y1="235" x2="840" y2="280" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="840" y="300" text-anchor="middle" font-size="10" fill="#D32F2F" font-weight="bold">DA v9: Python labeled these as "IQ2_S" and "IQ1_M" — WRONG</text>
+
+  <!-- Bug status box -->
+  <rect x="100" y="330" width="800" height="100" rx="8" fill="#F5F5F5" stroke="#DDD"/>
+  <text x="120" y="352" font-size="12" font-weight="bold" fill="#333">Former Claims vs Reality (DA v9 Audit):</text>
+  <text x="120" y="372" font-size="10" fill="#555">❌ "L39 down_exps is IQ4_XS? Was it IQ1_M?" — Python mislabeled type 23 as IQ1_M. It IS IQ4_XS ✓</text>
+  <text x="120" y="390" font-size="10" fill="#555">❌ "down_exps are IQ2_S" — Actually IQ3_XXS (type 18). Python script mapped 18→"IQ2_S" (wrong).</text>
+  <text x="120" y="408" font-size="10" fill="#555">✅ "IQ4_XS fix was addressing non-existent type" — FALSE. IQ4_XS IS real (layers 34,38,39). The fix was correct.</text>
+  <text x="120" y="424" font-size="10" fill="#555">✅ "IQ1_M fix irrelevant" — TRUE. IQ1_M (type 29) does not appear in this GGUF, but fix is correct for future models.</text>
+</svg>

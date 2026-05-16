@@ -1,24 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" font-family="monospace">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 500" font-family="monospace">
   <defs>
     <linearGradient id="done" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#C8E6C9"/>
-      <stop offset="100%" stop-color="#A5D6A7"/>
+      <stop offset="0%" stop-color="#C8E6C9"/><stop offset="100%" stop-color="#A5D6A7"/>
     </linearGradient>
-    <linearGradient id="active" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#FFF9C4"/>
-      <stop offset="100%" stop-color="#FFF176"/>
+    <linearGradient id="bug" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFCDD2"/><stop offset="100%" stop-color="#EF9A9A"/>
     </linearGradient>
-    <linearGradient id="phase1" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#E8F5E9"/>
-      <stop offset="100%" stop-color="#C8E6C9"/>
-    </linearGradient>
-    <linearGradient id="phase2" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#E8F5E9"/>
-      <stop offset="100%" stop-color="#C8E6C9"/>
-    </linearGradient>
-    <linearGradient id="phase3" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#C8E6C9"/>
-      <stop offset="100%" stop-color="#A5D6A7"/>
+    <linearGradient id="partial" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFF9C4"/><stop offset="100%" stop-color="#FFF176"/>
     </linearGradient>
     <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
       <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
@@ -26,74 +15,56 @@
   </defs>
 
   <!-- Title -->
-  <text x="450" y="35" text-anchor="middle" font-size="20" font-weight="bold" fill="#D32F2F">⚠️ INFERENCE BROKEN — Phase Roadmap (May 16 v7 HONEST)</text>
-  <text x="450" y="55" text-anchor="middle" font-size="12" fill="#666">All binaries compile and run but produce GARBAGE. Fixing = P0. See devils_advocate_v5.md</text>
+  <text x="450" y="35" text-anchor="middle" font-size="18" font-weight="bold" fill="#D32F2F">🔥 Phase Roadmap (May 17 PM — Corrected)</text>
+  <text x="450" y="55" text-anchor="middle" font-size="11" fill="#666">All dequants verified vs llama.cpp. SSM divergence is the remaining P0 bug.</text>
 
-  <!-- P1 + P2 side-by-side -->
-  <rect x="50" y="80" width="380" height="65" rx="8" fill="url(#phase1)" stroke="#66BB6A" stroke-width="2"/>
-  <text x="240" y="101" text-anchor="middle" font-size="13" font-weight="bold" fill="#2E7D32">P1: Embedding Graft ✓</text>
-  <text x="240" y="119" text-anchor="middle" font-size="10" fill="#555">GGUF reader | Poincaré R=0.956 | 95% NN | GPU weight loading fixed</text>
-  <text x="240" y="135" text-anchor="middle" font-size="10" fill="#555">data/qwen36_embeddings_c.bin (2.03GB)</text>
-  <rect x="50" y="80" width="20" height="65" rx="4" fill="#4CAF50"/><text x="60" y="118" text-anchor="middle" font-size="16" fill="white" font-weight="bold">✓</text>
+  <!-- Phase boxes row 1 -->
+  <rect x="50" y="80" width="250" height="65" rx="8" fill="url(#done)" stroke="#4CAF50" stroke-width="2"/>
+  <text x="175" y="101" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Phase 0-2: Infra ✓</text>
+  <text x="175" y="119" text-anchor="middle" font-size="10" fill="#555">GGUF reader | Embed | Attention</text>
+  <text x="175" y="135" text-anchor="middle" font-size="10" fill="#555">733 tensors, 13 GGML types</text>
 
-  <rect x="470" y="80" width="380" height="65" rx="8" fill="url(#phase1)" stroke="#66BB6A" stroke-width="2"/>
-  <text x="660" y="101" text-anchor="middle" font-size="13" font-weight="bold" fill="#2E7D32">P2: Attention Port ✓</text>
-  <text x="660" y="119" text-anchor="middle" font-size="10" fill="#555">30 SSM + 10 GQA layers</text>
-  <text x="660" y="135" text-anchor="middle" font-size="10" fill="#555">CPU CE=12.66 | GPU weight loading fixed</text>
-  <rect x="470" y="80" width="20" height="65" rx="4" fill="#4CAF50"/><text x="480" y="118" text-anchor="middle" font-size="16" fill="white" font-weight="bold">✓</text>
+  <rect x="325" y="80" width="250" height="65" rx="8" fill="url(#done)" stroke="#4CAF50" stroke-width="2"/>
+  <text x="450" y="101" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Phase 3-4: MoE ✓</text>
+  <text x="450" y="119" text-anchor="middle" font-size="10" fill="#555">256 experts, lazy dequant</text>
+  <text x="450" y="135" text-anchor="middle" font-size="10" fill="#555">IQ3_XXS/IQ4_XS/IQ2_XXS</text>
 
-  <line x1="430" y1="112" x2="470" y2="112" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="600" y="80" width="250" height="65" rx="8" fill="url(#done)" stroke="#4CAF50" stroke-width="2"/>
+  <text x="725" y="101" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Phase 5-6: Vision ✓</text>
+  <text x="725" y="119" text-anchor="middle" font-size="10" fill="#555">GPU ViT | CUDA kernels</text>
+  <text x="725" y="135" text-anchor="middle" font-size="10" fill="#555">9× lazy dispatch</text>
 
-  <!-- P4 + P5 + P6 side-by-side row 2 -->
-  <line x1="660" y1="145" x2="450" y2="145" stroke="#555" stroke-width="2"/>
-  <line x1="450" y1="145" x2="450" y2="170" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="300" y1="112" x2="325" y2="112" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="575" y1="112" x2="600" y2="112" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
 
-  <rect x="50" y="175" width="250" height="65" rx="8" fill="url(#phase1)" stroke="#66BB6A" stroke-width="2"/>
-  <text x="175" y="196" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">P4: MoE Port ✓</text>
-  <text x="175" y="214" text-anchor="middle" font-size="10" fill="#555">Lazy dequant 9x | Nested 16x16</text>
-  <text x="175" y="230" text-anchor="middle" font-size="10" fill="#555">396/396 tests</text>
-  <rect x="50" y="175" width="16" height="65" rx="4" fill="#4CAF50"/><text x="58" y="214" text-anchor="middle" font-size="14" fill="white">4</text>
+  <!-- Arrow down -->
+  <line x1="450" y1="145" x2="450" y2="175" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <rect x="325" y="175" width="250" height="65" rx="8" fill="url(#phase1)" stroke="#66BB6A" stroke-width="2"/>
-  <text x="450" y="196" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">P5: Vision Port ✓</text>
-  <text x="450" y="214" text-anchor="middle" font-size="10" fill="#555">GPU ViT 217ms (256x256)</text>
-  <text x="450" y="230" text-anchor="middle" font-size="10" fill="#555">Vision→text: 0 NaN</text>
-  <rect x="325" y="175" width="16" height="65" rx="4" fill="#4CAF50"/><text x="333" y="214" text-anchor="middle" font-size="14" fill="white">5</text>
+  <!-- Inference debug (current focus) -->
+  <rect x="100" y="175" width="700" height="90" rx="10" fill="url(#bug)" stroke="#D32F2F" stroke-width="2.5"/>
+  <text x="450" y="197" text-anchor="middle" font-size="14" font-weight="bold" fill="#B71C1C">P0: INFERENCE DEBUG — CURRENT FOCUS</text>
+  <text x="450" y="217" text-anchor="middle" font-size="11" fill="#555">All dequants fixed & verified. SSM L0 cos_sim=0.40 remains.</text>
+  <text x="450" y="235" text-anchor="middle" font-size="10" fill="#888">Output: 〈eon〉Hello_vendor vs ref "Hello Here's a" | DA v9: quant type labels corrected</text>
+  <text x="450" y="253" text-anchor="middle" font-size="10" fill="#D32F2F" font-weight="bold">Next: Compare SSM formula vs llama.cpp — conv1d, recurrence, output proj</text>
 
-  <rect x="600" y="175" width="250" height="65" rx="8" fill="url(#phase1)" stroke="#66BB6A" stroke-width="2"/>
-  <text x="725" y="196" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">P6: CUDA Kernels ✓</text>
-  <text x="725" y="214" text-anchor="middle" font-size="10" fill="#555">SSM scan + MoE dispatch</text>
-  <text x="725" y="230" text-anchor="middle" font-size="10" fill="#555">max_diff &lt; 6e-8</text>
-  <rect x="600" y="175" width="16" height="65" rx="4" fill="#4CAF50"/><text x="608" y="214" text-anchor="middle" font-size="14" fill="white">6</text>
+  <!-- Arrow down -->
+  <line x1="450" y1="265" x2="450" y2="295" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <line x1="450" y1="240" x2="450" y2="270" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="450" y1="240" x2="175" y2="270" stroke="#555" stroke-width="1.5" stroke-dasharray="4,3"/>
-  <line x1="450" y1="240" x2="725" y2="270" stroke="#555" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <!-- Quant verification status -->
+  <rect x="100" y="295" width="700" height="80" rx="8" fill="url(#partial)" stroke="#F57F17" stroke-width="1.5"/>
+  <text x="450" y="315" text-anchor="middle" font-size="13" font-weight="bold" fill="#E65100">P1: Quant Dequant Layer Audit ✓ (DA v9)</text>
+  <text x="450" y="335" text-anchor="middle" font-size="10" fill="#555">All 7 dequant types verified/repaired. Python dump_gguf.py labels CORRECTED.</text>
+  <text x="450" y="355" text-anchor="middle" font-size="10" fill="#888">Only IQ4_XS (3 layers) has untested dequant — written from reference, needs cross-dump verify.</text>
 
-  <!-- Phase 3: Training active -->
-  <rect x="200" y="270" width="500" height="105" rx="10" fill="#FFEBEE" stroke="#D32F2F" stroke-width="2.5"/>
-  <text x="450" y="292" text-anchor="middle" font-size="14" font-weight="bold" fill="#D32F2F">P0: INFERENCE BROKEN — ALL EFFORT HERE</text>
-  <text x="450" y="312" text-anchor="middle" font-size="11" fill="#555">infer_text_gpu: 245 tok/s but WRONG output | MOE=1 also garbage</text>
-  <text x="450" y="330" text-anchor="middle" font-size="10" fill="#888">Root cause: SSM? MoE dequant? Tokenizer? Compare vs llama.cpp layer by layer</text>
-  <text x="450" y="348" text-anchor="middle" font-size="10" fill="#D32F2F" font-weight="bold">⚠️ Phase 0-6 compile & run but NOT verified correct. Only 2/8 binaries pass correctness tests.</text>
-  <text x="450" y="366" text-anchor="middle" font-size="9" fill="#888">Components that ARE verified: test_kv_cache (cache match), test_256k (MoE router scaling only)</text>
+  <!-- Arrow down -->
+  <line x1="450" y1="375" x2="450" y2="405" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <rect x="200" y="270" width="20" height="95" rx="4" fill="#4CAF50"/>
-  <text x="210" y="325" text-anchor="middle" font-size="16" fill="white" font-weight="bold">✓</text>
-
-  <!-- Timeline bar -->
-  <text x="50" y="415" font-size="13" font-weight="bold" fill="#333">Progress (May 14-15 sprint):</text>
-  <rect x="50" y="425" width="800" height="12" rx="6" fill="#E0E0E0"/>
-  <rect x="50" y="425" width="800" height="12" rx="6" fill="#4CAF50"/>
-  <text x="810" y="435" text-anchor="middle" font-size="10" fill="#4CAF50" font-weight="bold">100%</text>
-
-  <!-- Key metrics box -->
-  <rect x="50" y="460" width="800" height="140" rx="8" fill="#FFEBEE" stroke="#D32F2F"/>
-  <text x="70" y="480" font-size="12" font-weight="bold" fill="#D32F2F">⚠️ HONEST Status (May 16):</text>
-  <text x="70" y="498" font-size="11" fill="#555">• P0: INFERENCE BROKEN — ALL binaries produce garbage (see devils_advocate_v5.md)</text>
-  <text x="70" y="514" font-size="11" fill="#555">• Only 2/8 binaries verified: test_kv_cache (cache match), test_256k (MoE router only)</text>
-  <text x="70" y="530" font-size="11" fill="#555">• 6/15 math components forward-only (no gradient flow for backward)</text>
-  <text x="450" y="498" font-size="11" fill="#555">• Verified good: NaN fix (MoE weight interleaving), ldC bug fix, RoPE added</text>
-  <text x="450" y="514" font-size="11" fill="#555">• Verified good: Per-expert dequant 3.9ms → 11s/step (16×), 0 NaN all configs</text>
-  <text x="450" y="530" font-size="11" fill="#555">• Reference: ~/llama.cpp/build/bin/llama-cli — ground truth for all comparisons</text>
+  <!-- Timeline -->
+  <text x="50" y="425" font-size="12" font-weight="bold" fill="#333">Dequant Status:</text>
+  <rect x="50" y="435" width="800" height="14" rx="7" fill="#E0E0E0"/>
+  <rect x="50" y="435" width="685" height="14" rx="7" fill="#4CAF50"/>
+  <rect x="735" y="435" width="115" height="14" rx="7" fill="#FFC107"/>
+  <text x="50" y="470" font-size="10" fill="#4CAF50">6/7 types verified (IQ2_XXS, IQ2_S, IQ3_XXS, Q5_K, Q6_K, IQ1_M)</text>
+  <text x="450" y="470" font-size="10" fill="#F57F17">1/7 untested (IQ4_XS)</text>
+  <text x="740" y="470" font-size="10" fill="#D32F2F">SSM: BUG</text>
 </svg>
