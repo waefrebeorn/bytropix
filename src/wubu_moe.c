@@ -68,8 +68,19 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe) {
     if (!gguf_read_tensor_f32(ctx, t, moe->ffn_down_shexp, SHARED_D_FF * D_MODEL))
         { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
     
-    // ffn_gate_inp_shexp exists but is unused in forward
-    moe->ffn_gate_inp_shexp = NULL;
+    // ffn_gate_inp_shexp — shared expert output gate: sigmoid(x_s @ this) scales output
+    snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp_shexp.weight", layer);
+    t = gguf_find_tensor(ctx, name);
+    if (!t) {
+        // Some models don't have this tensor; gate defaults to 1.0
+        moe->ffn_gate_inp_shexp = NULL;
+        printf("  Layer %d: no shared expert gate (ffn_gate_inp_shexp)\n", layer);
+    } else {
+        moe->ffn_gate_inp_shexp = (float *)malloc(D_MODEL * sizeof(float));
+        if (!gguf_read_tensor_f32(ctx, t, moe->ffn_gate_inp_shexp, D_MODEL))
+            { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
+        printf("  Layer %d: shared expert gate loaded (f32, %d elems)\n", layer, D_MODEL);
+    }
     
     moe->loaded = true;
     return 1;
@@ -223,27 +234,38 @@ void wubu_moe_forward(const float *x, int B, int T,
         for (int e = 0; e < N_EXPERTS; e++)
             softmax_vals[e] = expf(score_s[e] - max_s) * inv_sum;
         
-        // Find top-k indices and values
+        // Find top-k indices — single pass O(E·K) vs old O(E·K²)
         int *indices_s = topk_indices + s * N_ACTIVE_EXPTS;
         float *weights_s = topk_weights + s * N_ACTIVE_EXPTS;
         
-        // Simple: mark k largest by repeated max search
+        // Initialize with first k elements
         for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
-            int best_idx = -1;
-            float best_val = -1e30f;
-            // Skip previously selected
-            for (int e = 0; e < N_EXPERTS; e++) {
-                bool used = false;
-                for (int pk = 0; pk < k; pk++) {
-                    if (indices_s[pk] == e) { used = true; break; }
+            indices_s[k] = k;
+            weights_s[k] = softmax_vals[k];
+        }
+        // Find the k-th largest value to use as threshold
+        // Simple: sort first k to have worst first
+        for (int i = 0; i < N_ACTIVE_EXPTS-1; i++)
+            for (int j = i+1; j < N_ACTIVE_EXPTS; j++)
+                if (weights_s[i] > weights_s[j]) {
+                    float tmp_w = weights_s[i]; weights_s[i] = weights_s[j]; weights_s[j] = tmp_w;
+                    int tmp_i = indices_s[i]; indices_s[i] = indices_s[j]; indices_s[j] = tmp_i;
                 }
-                if (!used && softmax_vals[e] > best_val) {
-                    best_val = softmax_vals[e];
-                    best_idx = e;
+        
+        // Single pass: for each remaining expert, replace worst if better
+        for (int e = N_ACTIVE_EXPTS; e < N_EXPERTS; e++) {
+            float val = softmax_vals[e];
+            if (val > weights_s[0]) {  // better than worst in top-k
+                weights_s[0] = val;
+                indices_s[0] = e;
+                // Bubble down to maintain sorted order (worst first)
+                int pos = 0;
+                while (pos + 1 < N_ACTIVE_EXPTS && weights_s[pos] > weights_s[pos+1]) {
+                    float tw = weights_s[pos]; weights_s[pos] = weights_s[pos+1]; weights_s[pos+1] = tw;
+                    int ti = indices_s[pos]; indices_s[pos] = indices_s[pos+1]; indices_s[pos+1] = ti;
+                    pos++;
                 }
             }
-            indices_s[k] = best_idx;
-            weights_s[k] = best_val;
         }
         
         // Normalize top-k weights to sum to 1
@@ -298,6 +320,17 @@ void wubu_moe_forward(const float *x, int B, int T,
             for (int k = 0; k < SHARED_D_FF; k++)
                 sum += shared_act[k] * w->ffn_down_shexp[k + j * SHARED_D_FF];
             out_s[j] = sum;
+        }
+        
+        // Apply shared expert output gate: sigmoid(x_s @ ffn_gate_inp_shexp)
+        // If weight is NULL, gate defaults to 1.0 (no gating)
+        if (w->ffn_gate_inp_shexp) {
+            float gate_val = 0.0f;
+            for (int k = 0; k < D_MODEL; k++)
+                gate_val += x_s[k] * w->ffn_gate_inp_shexp[k];
+            float gate_sig = 1.0f / (1.0f + expf(-gate_val));
+            for (int j = 0; j < D_MODEL; j++)
+                out_s[j] *= gate_sig;
         }
         
         // Add routed expert contributions
