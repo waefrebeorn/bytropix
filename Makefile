@@ -1,8 +1,8 @@
 CC = gcc
 NVCC = /usr/local/cuda-13.1/bin/nvcc
-CFLAGS = -O2 -Wall -Wextra -Wno-unused-parameter -I include -fopenmp
+CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -fopenmp
 LDFLAGS = -lm -fopenmp
-NVCC_FLAGS = -O2 -I include -arch=sm_120
+NVCC_FLAGS = -O3 -I include -arch=sm_120
 CUDA_LIBS = -lcublas -lcudart
 CUDA_INC = -I/usr/local/cuda-13.1/include
 
@@ -169,7 +169,7 @@ test_cuda_kernels: tools/test_cuda_kernels.c $(CORE_OBJ) $(CUDA_OBJ)
 
 # Training & tools
 train_stub: tools/train_stub.c
-	$(CC) $(CFLAGS) -o $@ $< -lm -O0 -g
+	$(CC) -O0 -g -Wall -Wextra -Wno-unused-parameter -I include -fopenmp -o $@ $< -lm -fopenmp
 
 # Inference engines
 infer_moe: tools/infer_moe.c $(CORE_OBJ)

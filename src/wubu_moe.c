@@ -100,6 +100,7 @@ void wubu_moe_router(const float *x, int B, int T,
     // scores: [B*T, N_EXPERTS] (router logits, pre-softmax)
     int N = B * T;
     
+    #pragma omp parallel for if(N > 1)
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * D_MODEL;
         float *score_s = scores + s * N_EXPERTS;
@@ -186,16 +187,15 @@ void wubu_moe_forward(const float *x, int B, int T,
     float *scores = (float *)malloc(N * N_EXPERTS * sizeof(float));
     int *topk_indices = (int *)malloc(N * N_ACTIVE_EXPTS * sizeof(int));
     float *topk_weights = (float *)malloc(N * N_ACTIVE_EXPTS * sizeof(float));
-    float *expert_temp = (float *)malloc(D_FF * 3 * sizeof(float));  // per-expert scratch
-    float *shared_gate = (float *)malloc(SHARED_D_FF * sizeof(float));
-    float *shared_up = (float *)malloc(SHARED_D_FF * sizeof(float));
-    float *shared_act = (float *)malloc(SHARED_D_FF * sizeof(float));
+    float *shared_gate_all = (float *)malloc(N * SHARED_D_FF * sizeof(float));
+    float *shared_up_all = (float *)malloc(N * SHARED_D_FF * sizeof(float));
+    float *shared_act_all = (float *)malloc(N * SHARED_D_FF * sizeof(float));
+    float *expert_temp_all = (float *)malloc(N * D_FF * 3 * sizeof(float));
     
-    if (!scores || !topk_indices || !topk_weights || !expert_temp ||
-        !shared_gate || !shared_up || !shared_act) {
+    if (!scores || !topk_indices || !topk_weights || !shared_gate_all || !shared_up_all || !shared_act_all || !expert_temp_all) {
         fprintf(stderr, "MoE forward: allocation failed\n");
-        free(scores); free(topk_indices); free(topk_weights); free(expert_temp);
-        free(shared_gate); free(shared_up); free(shared_act);
+        free(scores); free(topk_indices); free(topk_weights);
+        free(shared_gate_all); free(shared_up_all); free(shared_act_all); free(expert_temp_all);
         memcpy(output, x, N * D_MODEL * sizeof(float));
         return;
     }
@@ -255,12 +255,18 @@ void wubu_moe_forward(const float *x, int B, int T,
         }
     }
     
-    // Step 3: Process each token through selected experts + shared expert
+    // Step 3: Process each token through selected experts + shared expert — OMP parallel
+    #pragma omp parallel for if(N > 1)
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * D_MODEL;
         float *out_s = output + s * D_MODEL;
         int *indices_s = topk_indices + s * N_ACTIVE_EXPTS;
         float *weights_s = topk_weights + s * N_ACTIVE_EXPTS;
+        
+        float *shared_gate = shared_gate_all + s * SHARED_D_FF;
+        float *shared_up = shared_up_all + s * SHARED_D_FF;
+        float *shared_act = shared_act_all + s * SHARED_D_FF;
+        float *expert_temp = expert_temp_all + s * D_FF * 3;
         
         // Initialize output with shared expert contribution
         // gate = x @ gate_shexp  [D_MODEL] @ [D_MODEL, 512] -> [512]
@@ -318,8 +324,8 @@ void wubu_moe_forward(const float *x, int B, int T,
     free(scores);
     free(topk_indices);
     free(topk_weights);
-    free(expert_temp);
-    free(shared_gate);
-    free(shared_up);
-    free(shared_act);
+    free(shared_gate_all);
+    free(shared_up_all);
+    free(shared_act_all);
+    free(expert_temp_all);
 }

@@ -14,6 +14,7 @@
 // ============================================================
 
 void wubu_softplus(int n, const float *x, float *out) {
+    #pragma omp parallel for if(n > 100000)
     for (int i = 0; i < n; i++) {
         float v = x[i];
         if (v > 80.0f) out[i] = v;          // linear region
@@ -23,6 +24,7 @@ void wubu_softplus(int n, const float *x, float *out) {
 }
 
 void wubu_silu(int n, const float *x, float *out) {
+    #pragma omp parallel for if(n > 100000)
     for (int i = 0; i < n; i++) {
         float v = x[i];
         if (v < -80.0f) out[i] = 0.0f;
@@ -31,6 +33,7 @@ void wubu_silu(int n, const float *x, float *out) {
 }
 
 void wubu_sigmoid(int n, const float *x, float *out) {
+    #pragma omp parallel for if(n > 100000)
     for (int i = 0; i < n; i++) {
         float v = x[i];
         if (v < -80.0f) out[i] = 0.0f;
@@ -48,6 +51,7 @@ void wubu_l2_norm(int B, int T, int n_heads, int d,
     // x: [B, T, n_heads, d]
     // out: [B, T, n_heads, d]
     int seq_len = B * T;
+    #pragma omp parallel for collapse(2) if(seq_len * n_heads > 100)
     for (int s = 0; s < seq_len; s++) {
         for (int h = 0; h < n_heads; h++) {
             const float *inp = x + (s * n_heads + h) * d;
@@ -67,6 +71,7 @@ void wubu_rms_norm(int B, int T, int d,
     // weight: [d]
     // out: [B, T, d]
     int seq_len = B * T;
+    #pragma omp parallel for if(seq_len > 10)
     for (int s = 0; s < seq_len; s++) {
         const float *inp = x + s * d;
         float *oup = out + s * d;
@@ -110,6 +115,7 @@ void wubu_conv1d(int B, int T, int C, int k,
     // input: [B, T+k-1, C] — already padded with k-1 zeros at start
     // kernel: [k, C]
     // output: [B, T, C]
+    #pragma omp parallel for collapse(2) if(B * T * C * k > 100000)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             for (int c = 0; c < C; c++) {
@@ -334,7 +340,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
             
             // For each V-head (32 heads):
             // For each V-head (32 heads) — fully parallel, each writes non-overlapping state
-            #pragma omp parallel for if(T > 16 || B > 1)
+            #pragma omp parallel for
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
                 int kh = vh / repeat_factor;  // which K-head maps to this V-head
                 

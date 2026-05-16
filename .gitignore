@@ -95,3 +95,6 @@ __pycache__/
 # Misc temp files
 /tmp/
 *.tmp
+
+# llama.cpp reference files
+/llama/

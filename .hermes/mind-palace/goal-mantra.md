@@ -1,27 +1,22 @@
-═══ GOAL PASTE (May 17 PM v16 — HONEST) ═══
+═══ GOAL PASTE (May 17 v22 — HONEST) ═══
 PROJECT: bytropix — Custom Qwen3.6-35B-A3B inference engine
-MODEL: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
-REF: /home/wubu/llama.cpp/build/bin/llama-cli
-STATUS: INFERENCE BROKEN — output `<|endoftext|>Hello_vendor` vs ref "Hello Here's a"
+MODEL: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (mixed quant: IQ2_XXS/IQ3_XXS/Q5_K/Q6_K/F32)
+STATUS: MoE contiguous dequant fixed. Output changed Chinese→English ("Doug").
 
-=== FIXED ===
-- MoE interleaved dequant FIXED (prior): dequant_block_once + expert_offset = e * D_MODEL * D_FF
-- IQ3_XXS block size 98 (not 104) FIXED (prior): MoE down_exps rms 690k→0.25
-- IQ4_XS support added (prior): type 23 enum + dequant + raw_size
-- IQ1_M dequant FIXED (this session): scale idx ib/4→ib/2, added dl1/dl2 split, removed -1.0f delta shift. Not used in this model.
-- Python `dump_gguf.py` type labels CORRECTED (this session): 18→IQ3_XXS, 23→IQ4_XS, added 22→IQ2_S, 29→IQ1_M
+=== FIXED THIS SESSION ===
+- MoE expert weight layout: contiguous-per-expert (was reading garbage via interleaved)
+- MOE default: 0→1
+- MAX_LAYERS=0 clamp: fixed
 
-=== REMAINING ROOT CAUSE ===
-SSM divergence at L0: cos_sim=0.40 vs llama.cpp reference (BEFORE MoE runs).
-NOT a dequant issue. In SSM compute path (conv1d, recurrence, output proj, residual).
+=== REMAINING BUG (from research) ===
+- **attn_output_gate: True** — official Qwen config. bytropix doesn't gate attention outputs with sigmoid(blk.X.attn_gate.weight). This is likely causing "Doug" vs ref "Here".
 
-=== VERIFIED DEQUANTS ===
-IQ2_XXS ✅ | IQ2_S ✅ | IQ3_XXS ✅ | Q6_K ✅
-IQ4_XS ℹ️ untested | IQ1_M ✅ (unused in this model)
+=== MODEL RESEARCH ===
+- Architecture: 10x(3x Gated DeltaNet→MoE→1x GQA→MoE). DeltaNet = gated linear attention, NOT Mamba.
+- "IQ2_M" is a label. Actual types: IQ2_XXS for experts, IQ3_XXS for down, Q5_K for attention, Q6_K for proj, F32 for small tensors.
+- Unsloth Dynamic 2.0: selects quant types per-tensor by importance.
 
-=== ACTUAL TENSOR TYPES (from GGUF) ===
-down_exps: IQ3_XXS (37/40 layers) + IQ4_XS (3/40: L34,38,39)
-gate/up_exps: IQ2_XXS (all)
-gate_inp: F32
-shexp gate/up: Q5_K | shexp down: Q6_K
-ssm_out: Q6_K | output.weight: Q4_K | token_embd: Q5_K
+=== BUILD ===
+cd /home/wubu/bytropix && make infer_text
+=== TEST ===
+NOGPU=1 MOE=1 MOE_LAYERS=0 ./infer_text /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Hello" 8 1

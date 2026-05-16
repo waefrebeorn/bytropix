@@ -75,13 +75,13 @@ __global__ void exp_kernel(const float *x, float *y, int n) {
 }
 
 void wubu_cuda_silu(int n, const float *x, float *y, cudaStream_t stream) {
-    int block = 256;
+    int block = 512;
     int grid = (n + block - 1) / block;
     silu_kernel<<<grid, block, 0, stream>>>(x, y, n);
 }
 
 void wubu_cuda_sigmoid(int n, const float *x, float *y, cudaStream_t stream) {
-    int block = 256;
+    int block = 512;
     int grid = (n + block - 1) / block;
     sigmoid_kernel<<<grid, block, 0, stream>>>(x, y, n);
 }
@@ -99,13 +99,13 @@ __global__ void init_zero_kernel(float *x, int n) {
 }
 
 void wubu_cuda_softplus(int n, const float *x, float *y, cudaStream_t stream) {
-    int block = 256;
+    int block = 512;
     int grid = (n + block - 1) / block;
     softplus_kernel<<<grid, block, 0, stream>>>(x, y, n);
 }
 
 void wubu_cuda_exp(int n, const float *x, float *y, cudaStream_t stream) {
-    int block = 256;
+    int block = 512;
     int grid = (n + block - 1) / block;
     exp_kernel<<<grid, block, 0, stream>>>(x, y, n);
 }
@@ -135,7 +135,7 @@ void wubu_cuda_l2_norm(int B, int T, int n_heads, int d,
                        cudaStream_t stream) {
     int N = B * T;
     int total = N * n_heads;
-    int block = 256;
+    int block = 256;  // bounded by shared mem for l2_norm_kernel
     int grid = (total + block - 1) / block;
     l2_norm_kernel<<<grid, block, 0, stream>>>(x, out, N, n_heads, d, eps);
 }
@@ -750,6 +750,13 @@ bool wubu_cuda_init(cublasHandle_t *handle, cudaStream_t *stream) {
     if (cs != CUBLAS_STATUS_SUCCESS) {
         fprintf(stderr, "CUDA: cublasSetStream failed\n");
         return false;
+    }
+
+    // Enable TF32 tensor cores for ~2x matmul speedup on Ampere+ GPUs
+    cs = cublasSetMathMode(*handle, CUBLAS_TF32_TENSOR_OP_MATH);
+    if (cs != CUBLAS_STATUS_SUCCESS) {
+        fprintf(stderr, "CUDA: cublasSetMathMode(TF32) failed, using default\n");
+        // Non-fatal — TF32 is acceleration, not correctness
     }
 
     return true;
