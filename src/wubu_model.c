@@ -195,16 +195,54 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         printf("  WARNING: output_norm.weight not found\n");
     }
     
-    // Embeddings: use pre-extracted file from Phase 1
+    // Embeddings: auto-extract from GGUF if not available, else load from file
     model->use_embedding_file = true;
-    FILE *emb_f = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
+    const char *emb_path = "data/qwen36_embeddings_c.bin.raw";
+    FILE *emb_f = fopen(emb_path, "rb");
     if (emb_f) {
         fseek(emb_f, 0, SEEK_END);
         long emb_size = ftell(emb_f);
-        fseek(emb_f, 0, SEEK_SET);
-        model->vocab_size = (int)(emb_size / (D_MODEL * sizeof(float)));
-        printf("  Embeddings: %d tokens from file (%ld MB)\n", model->vocab_size, emb_size / (1024*1024));
-        fclose(emb_f);
+        int file_vocab = (int)(emb_size / (D_MODEL * sizeof(float)));
+        if (file_vocab == 248320) {
+            model->vocab_size = file_vocab;
+            printf("  Embeddings: %d tokens from file (%ld MB)\n", model->vocab_size, emb_size / (1024*1024));
+            fclose(emb_f);
+        } else {
+            fclose(emb_f);
+            printf("  Embedding file has wrong size (%d tokens, expected 248320), re-extracting...\n", file_vocab);
+            goto extract_embeddings;
+        }
+    } else {
+        extract_embeddings: {
+            printf("  Extracting token_embd.weight from GGUF...\n");
+            gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
+            if (!t_emb) { fprintf(stderr, "  ERROR: token_embd.weight not found\n"); }
+            else {
+                int64_t n_emb = (int64_t)248320 * D_MODEL;
+                float *temp_emb = (float *)malloc(n_emb * sizeof(float));
+                if (temp_emb && gguf_read_tensor_f32(ctx, t_emb, temp_emb, n_emb) > 0) {
+                    FILE *out = fopen(emb_path, "wb");
+                    if (out) {
+                        fwrite(temp_emb, sizeof(float), n_emb, out);
+                        fclose(out);
+                        printf("  Embeddings saved to %s\n", emb_path);
+                    }
+                    // Use the in-memory copy for this run
+                    model->token_embd = temp_emb;
+                    model->vocab_size = 248320;
+                    model->use_embedding_file = false;
+                    printf("  Token embeddings: %ld MB (in-memory)\n", n_emb * sizeof(float) / (1024*1024));
+                } else {
+                    if (temp_emb) free(temp_emb);
+                    fprintf(stderr, "  Failed to extract embeddings\n");
+                }
+            }
+        }
+    }
+    
+    if (model->use_embedding_file) {
+        // Verify vocab_size was set from file
+        if (model->vocab_size == 0) model->vocab_size = 248320;
     }
     
     // Load output weight for logit projection
@@ -282,6 +320,8 @@ void wubu_model_free(wubu_model_t *model) {
     }
     free(model->layers);
     free(model->norm_weight);
+    free(model->token_embd);
+    free(model->output_weight);
     free(model->ssm_states);
     if (model->gguf_ctx) {
         gguf_close(model->gguf_ctx);
@@ -620,10 +660,17 @@ void wubu_model_backward_from_embd(
 void wubu_model_forward(wubu_model_t *model,
                         const int *token_ids, int B, int T,
                         float *logits) {
-    // Load embeddings from file
+    // Load embeddings
     float *embd = (float *)malloc(B * T * D_MODEL * sizeof(float));
     
-    if (model->use_embedding_file) {
+    if (model->token_embd && !model->use_embedding_file) {
+        // Use GGUF-loaded embeddings (auto-extracted)
+        for (int i = 0; i < B * T; i++) {
+            int id = token_ids[i];
+            if (id < 0 || id >= model->vocab_size) id = 0;
+            memcpy(embd + i * D_MODEL, model->token_embd + id * D_MODEL, D_MODEL * sizeof(float));
+        }
+    } else if (model->use_embedding_file) {
         FILE *f = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
         if (f) {
             for (int i = 0; i < B * T; i++) {
