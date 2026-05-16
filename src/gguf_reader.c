@@ -8,7 +8,6 @@
 // From ggml-common.h — lookup table for 1.5625 bpw dequantization
 #define NGRID_IQ1S 2048
 #define IQ1S_DELTA 0.125f
-#define IQ1M_DELTA 0.125f
 
 static uint64_t iq1s_grid[NGRID_IQ1S] = {
     0xffffffffffffffff, 0xffffffffffffff01, 0xffffffffffff0000, 0xffffffffffff01ff,
@@ -1501,41 +1500,62 @@ void dequantize_iq1_s_row(const uint8_t *data, float *output, int64_t n_elems) {
 // Block: qs[32] + qh[16] + scales[8] = 56 bytes
 // Global fp16 scale packed into high 4 bits of scales[0..3] as uint16_ts
 void dequantize_iq1_m_row(const uint8_t *data, float *output, int64_t n_elems) {
+    // Reference: llama.cpp ggml-quants.c dequantize_row_iq1_m()
+    // block_iq1_m layout (56 bytes):
+    //   qs[32] — grid index low 8 bits
+    //   qh[16] — grid index high 3 bits + delta sign bits
+    //   scales[8] — two 3-bit sub-scales per ib, packed as 4 uint16_t
+    // Global fp16 scale in high 4 bits of each scale uint16_t
     int64_t n_blocks = (n_elems + QK_K - 1) / QK_K;
     for (int64_t b = 0; b < n_blocks; b++) {
         const uint8_t *block = data + b * IQ1_M_BLOCK_SIZE;
-        const uint8_t *qs = block;        // 32 bytes
-        const uint8_t *qh = block + 32;   // 16 bytes
+        const uint8_t *qs = block;                 // 32 bytes
+        const uint8_t *qh = block + 32;            // 16 bytes
         const uint16_t *sc = (const uint16_t *)(block + 48); // 4 uint16_ts = 8 bytes
         
-        // Extract global fp16 scale from high nibbles of 4 scale uint16_ts
+        // Global fp16 scale from high nibbles of 4 scale uint16_ts
         uint16_t scale_bits = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) |
                               ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
-        float global_scale = f16_to_f32(scale_bits);
+        float d = f16_to_f32(scale_bits);
         
-        for (int ib = 0; ib < 8; ib++) {           // 8 sub-blocks of 32 elements each
-            // Sub-scale: 3 bits from scales[ib/4], bits 3*(ib%4)..3*(ib%4)+2
-            int sc_idx = ib / 4;
-            int sc_shift = 3 * (ib % 4);
-            float dl = global_scale * (float)(2 * ((sc[sc_idx] >> sc_shift) & 0x7) + 1);
+        float *y = output + b * QK_K;
+        
+        for (int ib = 0; ib < 8; ib++) {  // 8 sub-blocks of 32 elements each
+            // Two 3-bit sub-scales per ib: dl1 for first 16 elems, dl2 for last 16
+            float dl1 = d * (2.0f * (float)((sc[ib/2] >> (6*(ib%2)+0)) & 0x7) + 1.0f);
+            float dl2 = d * (2.0f * (float)((sc[ib/2] >> (6*(ib%2)+3)) & 0x7) + 1.0f);
             
-            for (int il = 0; il < 4; il++) {       // 4 groups of 8 elements per sub-block
-                int64_t base = b * QK_K + ib * 32 + il * 8;
-                
-                // Delta sign from qh[2*ib+il/2] bit at position (0x08 << 4*(il%2))
-                float delta = (qh[2 * ib + il / 2] & (0x08 << 4 * (il % 2)))
-                              ? -1.0f - IQ1M_DELTA : -1.0f + IQ1M_DELTA;
-                
-                // 11-bit grid index: low 8 bits from qs, high 3 from qh
-                uint16_t idx = qs[4 * ib + il] |
-                    (uint16_t)(((qh[2 * ib + il / 2] >> (4 * (il % 2))) & 7) << 8);
-                
-                uint64_t grid_packed = iq1s_grid[idx];
-                int8_t *grid = (int8_t *)&grid_packed;
-                
-                for (int j = 0; j < 8 && (base + j) < n_elems; j++)
-                    output[base + j] = dl * ((float)grid[j] + delta);
+            // 11-bit grid indices: low 8 bits from qs, high 3 bits from qh
+            uint16_t idx[4];
+            idx[0] = qs[0] | ((uint16_t)(qh[0] << 8) & 0x700);
+            idx[1] = qs[1] | ((uint16_t)(qh[0] << 4) & 0x700);
+            idx[2] = qs[2] | ((uint16_t)(qh[1] << 8) & 0x700);
+            idx[3] = qs[3] | ((uint16_t)(qh[1] << 4) & 0x700);
+            
+            // Delta signs: bit 3 of qh byte for first idx, bit 7 for second
+            float delta[4];
+            delta[0] = (qh[0] & 0x08) ? -IQ1S_DELTA : IQ1S_DELTA;
+            delta[1] = (qh[0] & 0x80) ? -IQ1S_DELTA : IQ1S_DELTA;
+            delta[2] = (qh[1] & 0x08) ? -IQ1S_DELTA : IQ1S_DELTA;
+            delta[3] = (qh[1] & 0x80) ? -IQ1S_DELTA : IQ1S_DELTA;
+            
+            // First two 8-element groups use dl1
+            for (int l = 0; l < 2; l++) {
+                const int8_t *grid = (const int8_t *)(&iq1s_grid[idx[l]]);
+                for (int j = 0; j < 8; j++)
+                    y[j] = dl1 * ((float)grid[j] + delta[l]);
+                y += 8;
             }
+            // Last two 8-element groups use dl2
+            for (int l = 2; l < 4; l++) {
+                const int8_t *grid = (const int8_t *)(&iq1s_grid[idx[l]]);
+                for (int j = 0; j < 8; j++)
+                    y[j] = dl2 * ((float)grid[j] + delta[l]);
+                y += 8;
+            }
+            
+            qs += 4;
+            qh += 2;
         }
     }
 }

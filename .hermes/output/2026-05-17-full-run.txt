@@ -1,0 +1,8 @@
+Full 40-layer inference output (May 17 PM, IQ3_XXS fix applied):
+Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+Prompt: "Hello"
+Prefill: 135.17 s/2 tok (~67.5 tok/s)
+Top-5 tokens: [123511]='的发展和'(11.68) [41067]='escaping'(11.28) [219951]='entwick'(9.61) [165587]=' rozw'(9.24) [103476]='秸'(9.09)
+Output: "Hello发展壮大"
+Decode step 2: top=195666 ' dò'(13.05)
+Decode step 3: top=213876 ' privilégi'(10.11)
