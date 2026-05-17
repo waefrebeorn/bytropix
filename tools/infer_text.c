@@ -88,29 +88,29 @@ static void kv_free(kv_cache_t *c) {
 // ================================================================
 static float *rope_sc = NULL;
 
-// IM-RoPE (Interleaved Multi-Resolution RoPE) for Qwen3.6-35B-A3B.
-// This model is text-only so p_t == p_h == p_w == p for all positions.
-// Frequencies form a continuous geometric progression across ALL 32 pairs:
-//   theta[k] = position * freq_base^(-2k/ROTARY_DIM) for k=0..31
-// Rotation uses NEOX-style split-half pairing: dim[i] with dim[i+ROTARY_DIM/2]
-// Ref: llama.cpp ggml_mrope_cache_init + rotate_pairs for GGML_ROPE_TYPE_IMROPE
+// MRoPE (Multi-Resolution RoPE) for Qwen3.6-35B-A3B.
+// Sections: [11, 11, 10] pairs. Each section restarts frequency.
+// In each section: theta[i] = base^(-2*i / section_dim) for i=0..n_pairs-1
+// where section_dim = 2 * n_pairs (22, 22, 20).
+// Rotation uses split-half pairing: dim[pair*2] with dim[pair*2+1]
+// Ref: llama.cpp ggml_mrope_cache_init for GGML_ROPE_TYPE_MROPE
 
 static int rope_init(void) {
     if (rope_sc) return 1;
     rope_sc = (float *)malloc((size_t)MAX_CACHE_T * ROTARY_DIM * sizeof(float));
     if (!rope_sc) return 0;
-
-    // MRoPE sections: each section restarts frequency from base^(-2*0/ROTARY_DIM)
-    // sections in pairs: [11, 11, 10]
-    static const int sec_pair_offsets[MRoPE_SECTIONS] = {0, MRoPE_SEC0_PAIRS, MRoPE_SEC0_PAIRS + MRoPE_SEC1_PAIRS};
-    static const int sec_lengths[MRoPE_SECTIONS] = {MRoPE_SEC0_PAIRS, MRoPE_SEC1_PAIRS, MRoPE_SEC2_PAIRS};
+    
+    // MRoPE sections: [11, 11, 10] pairs
+    static const int mrope_sections[MRoPE_SECTIONS] = {MRoPE_SEC0_PAIRS, MRoPE_SEC1_PAIRS, MRoPE_SEC2_PAIRS};
 
     for (int p = 0; p < MAX_CACHE_T; p++) {
         int pair_idx = 0;
         for (int s = 0; s < MRoPE_SECTIONS; s++) {
-            for (int i = 0; i < sec_lengths[s]; i++) {
-                float freq = powf(ROPE_THETA, -2.0f * i / ROTARY_DIM); // restart per section
-                float angle = (float)p * freq;
+            int n_pairs = mrope_sections[s];
+            int sec_dim = 2 * n_pairs;  // section dimension (22, 22, or 20)
+            for (int i = 0; i < n_pairs; i++) {
+                float theta = powf(ROPE_THETA, -2.0f * i / sec_dim);
+                float angle = (float)p * theta;
                 rope_sc[p * ROTARY_DIM + pair_idx * 2]     = cosf(angle);
                 rope_sc[p * ROTARY_DIM + pair_idx * 2 + 1] = sinf(angle);
                 pair_idx++;

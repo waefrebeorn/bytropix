@@ -1,47 +1,33 @@
-# state — May 17 v10 — MoE expert layout IS THE BUG (interleaved, not contiguous)
+# state — May 17 v11 — RoPE FIXED (root cause of anti-correlation)
 
 ## Status
-- **Output projection TRANSPOSE** — FIXED in 3 places ✅
-- **MoE expert tensor layout WRONG** — ROOT CAUSE found via DA audit ❌
-  - `blk.0.ffn_gate_exps.weight` dims = [2048, 512, 256]
-  - Expert index (256) = INNERMOST dim, data is interleaved per (i,j) position
-  - `dequant_one_expert_contiguous` reads `eid * raw_per_exp` — treats as contiguous but data is stride-interleaved by expert
-  - Each IQ2_XXS block (66 bytes, 256 values) = ALL experts at ONE (i,j) position
-  - Fix: dequant each block, extract float[eid], store at position b
-  - This affects ALL MoE layers: ffn_gate_exps, ffn_up_exps, ffn_down_exps
-- **Full model output still WRONG** (cos-sim -0.001 after output proj fix) — expected, MoE is still processing wrong weights
-- **Reference extraction tool works** ✅
+- **RoPE formula WRONG** — FIXED ✅
+  - Was using `-2*i/ROTARY_DIM` (i/32) instead of `-2*i/sec_dim` (i/11 or i/10)
+  - cos-sim went from -0.456 to -0.016 (anti-correlation eliminated)
+- **GGUF dims[0] is innermost** (GGML convention) — confirmed
+  - `k + j*D_MODEL` access pattern is CORRECT for all weights
+  - MoE experts ARE contiguous per expert (expert = slowest dim)
+  - My earlier "interleaved stride" theory was WRONG — reverted
+- **Remaining cos-sim -0.016** — likely accumulated FP differences across 40 layers
+  - Each layer's SSM/GQA output has tiny numerical drift vs llama.cpp
+  - Over 40 layers, these compound to produce a different trajectory
+  - MoE output rms≈0.016 (small correction, not the main signal)
 
-## DA Audit: All Components Re-Verified
+## What was ACTUALLY wrong
+1. RoPE frequency formula: `powf(THETA, -2*i/ROTARY_DIM)` → `powf(THETA, -2*i/sec_dim)`
+   - Section dimensions: 22, 22, 20 (not 64)
+   - This was the root cause of the -0.46 cos-sim (anti-correlation)
 
-### What was ACTUALLY verified this session
-1. RMSNorm formula: cos-sim 1.0 vs numpy ✅
-2. llama_get_embeddings_ith: works for hidden state extraction ✅
-3. RoPE CPU formula: correct (MRoPE [11,11,10,0], no 0.25x) ✅
-4. Output projection TRANSPOSE: FOUND and FIXED ✅
+## What I investigated and found CORRECT
+- Output projection: `j * D_MODEL + k` ✓
+- All weight accesses: `k + j*D_MODEL` ✓ (dims[0] innermost in GGML)
+- MoE expert dequant: contiguous per expert ✓ (reverted back from stride)
+- RMSNorm: verified vs numpy ✓
+- Token embedding: reads correctly ✓
+- Type enums: match llama.cpp ✓
 
-### What was WRONGLY claimed as verified (DA findings)
-1. **"MoE expert dequant correct"** — ❌ EXPERT DATA IS INTERLEAVED, contiguous extraction produces garbage
-2. **"Output projection verified"** — ❌ Was TRANSPOSED, only caught now
-3. **"SSM formulas verified correct"** — ❓ Only "reasonable values" in debug dumps, never compared element-by-element vs llama.cpp
-4. **"GQA algorithm verified correct"** — ⚠️ Partly true: `wubu_gqa_forward` verified vs numpy, but infer_text.c's INLINE GQA was never separately verified (though code is similar)
-5. **"Weight layouts verified"** — ❌ MoE expert layout was WRONG (interleaved expert data mistaken for contiguous)
-
-### Tensor Dump Verification Checklist
-- output.weight: [2048, 248320], type=12 (Q4_K) — OK, access pattern now fixed
-- ffn_gate_exps.weight: [2048, 512, 256], type=16 (IQ2_XXS) — INTERLEAVED BUG
-- ffn_up_exps.weight: same dims and type
-- ffn_down_exps.weight: [512, 2048, 256], type=16 (IQ2_XXS) — SAME BUG
-- Shared expert gates: smaller dims, check dequant type
-- ssm_beta, ssm_alpha: F32 tensors, no dequant issue
-
-## Next Steps (after fixing MoE expert layout)
-1. Fix `dequant_one_expert_contiguous` → `dequant_one_expert_stride`
-2. Fix `dequant_multi_expert_contiguous` similarly
-3. Rebuild, re-run, compare logits vs reference
-4. If still wrong, do layer-by-layer comparison
-
-## Build Command
-```bash
-cd /home/wubu/bytropix && make infer_text
-```
+## Next Steps
+- Layer-by-layer comparison needed to find remaining numerical drift
+- Compare SSM forward intermediate values vs llama.cpp reference
+- Compare GQA attention scores vs reference
+- FP precision: our code uses `float` throughout, llama.cpp uses `double` for accumulators
