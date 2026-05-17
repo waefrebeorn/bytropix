@@ -1,109 +1,86 @@
 /**
- * Compare weight loading between our gguf_reader and llama.cpp.
- * Load ssm_beta.weight (F32) from the GGUF using both and compare.
+ * compare_weights.c — Dump quantized weight from both our reader and llama.cpp.
+ * Build: 
+ * gcc -O2 -I include -o compare_weights tools/compare_weights.c \
+ *     src/gguf_reader.o src/wubu_ssm.o src/wubu_mobius.o \
+ *     src/wubu_moe.o src/wubu_tokenizer.o src/qlearner.o \
+ *     src/wubu_model.o src/wubu_ssm_chunked.o src/wubu_nested_ssm.o \
+ *     src/wubu_nested_ssm_backward.o src/wubu_moe_backward.o \
+ *     src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o \
+ *     src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o \
+ *     src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o \
+ *     src/wubu_vision.o src/dequant_iq2_xxs.o src/rsgd.o src/wubu_tst.o \
+ *     -lm -fopenmp -L/usr/local/cuda/lib64 -lcublas -lcudart -lstdc++
+ *
+ * Usage: ./compare_weights model.gguf tensor_name
  */
-#include "llama.h"
+#include "gguf_reader.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-// Our gguf_reader
-#include "gguf_reader.h"
-
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "Usage: %s model.gguf\n", argv[0]); return 1; }
-    const char *model_path = argv[1];
-
-    // ---- Part 1: Load with llama.cpp and get tensor directly ----
-    struct llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = 0;
-    struct llama_model *model = llama_model_load_from_file(model_path, mparams);
-    if (!model) { fprintf(stderr, "Failed llama load\n"); return 1; }
-
-    // We can't easily access raw tensors from llama.cpp public API.
-    // But we can create a context and decode a single token, then check.
-    struct llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx = 64;
-    cparams.n_batch = 64;
-    cparams.embeddings = true;
-    struct llama_context *ctx = llama_init_from_model(model, cparams);
-    if (!ctx) { fprintf(stderr, "Failed ctx\n"); return 1; }
-
-    int n_embd = llama_model_n_embd(model);
-
-    // ---- Part 2: Load with our gguf_reader ----
-    gguf_ctx *gctx = gguf_open(model_path);
-    if (!gctx) { fprintf(stderr, "Failed gguf_open\n"); return 1; }
-
-    // Read ssm_beta.weight from our reader (dims=[2048, 32])
-    gguf_tensor_info *t = gguf_find_tensor(gctx, "blk.0.ssm_beta.weight");
-    if (!t) { fprintf(stderr, "ssm_beta.weight not found\n"); return 1; }
-    
-    float *our_beta = (float *)malloc(2048 * 32 * sizeof(float));
-    int nread = gguf_read_tensor_f32(gctx, t, our_beta, 2048 * 32);
-    if (nread <= 0) { fprintf(stderr, "Failed to read our beta\n"); return 1; }
-    printf("Our ssm_beta: %d elements read\n", nread);
-
-    // ---- Part 3: Now run a single token through both and compare the QKV projection ----
-    // This is the most important test.
-    
-    // Get BOS embedding from both implementations
-    // For ours: read from token_embd.weight directly
-    gguf_tensor_info *te = gguf_find_tensor(gctx, "token_embd.weight");
-    if (!te) { fprintf(stderr, "token_embd not found\n"); return 1; }
-    
-    int bos = 248044;
-    float *our_emb = (float *)malloc(n_embd * sizeof(float));
-    
-    // Read the BOS embedding row. dims=[2048, 248320], row 'bos' starts at bos * n_embd
-    // We need to read through gguf_read_tensor_f32 which dequantizes
-    // But reading the whole embedding (248320*2048 floats) is too big.
-    // Instead, let's read the embedding weight from file offset directly.
-    // Actually, we can read just one row by seeking and reading raw data.
-    
-    // For now, let's just compare the beta weight values (F32, no dequant)
-    printf("\nComparing ssm_beta.weight (first 10 values):\n");
-    printf("Index  Our_Beta\n");
-    for (int i = 0; i < 10; i++) {
-        printf("%5d  %.10f\n", i, our_beta[i]);
+    if (argc < 3) { 
+        fprintf(stderr, "Usage: %s model.gguf tensor_name\n", argv[0]); 
+        return 1; 
     }
     
-    // Also dump beta for comparison by running llama.cpp
-    // Use a single token forward to get embeddings
-    llama_token token = bos;
-    llama_batch batch = llama_batch_get_one(&token, 1);
-    if (llama_decode(ctx, batch) != 0) {
-        fprintf(stderr, "llama_decode failed\n"); return 1;
+    gguf_ctx *ctx = gguf_open(argv[1]);
+    if (!ctx) { fprintf(stderr, "Failed open\n"); return 1; }
+    
+    const char *tensor_name = argv[2];
+    gguf_tensor_info *t = gguf_find_tensor(ctx, tensor_name);
+    if (!t) { fprintf(stderr, "Tensor '%s' not found\n", tensor_name); return 1; }
+    
+    int64_t n_elems = 1;
+    for (int d = 0; d < t->n_dims; d++) n_elems *= t->dims[d];
+    
+    printf("Tensor '%s': dims=%d [", tensor_name, t->n_dims);
+    for (int d = 0; d < t->n_dims; d++) {
+        printf("%lld%s", (long long)t->dims[d], d+1<t->n_dims ? "," : "");
+    }
+    printf("] type=%d\n", t->ggml_type);
+    fflush(stdout);
+    
+    // Read full tensor
+    float *data = (float *)malloc(n_elems * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, data, n_elems)) {
+        fprintf(stderr, "Failed to read tensor (n_elems=%lld)\n", (long long)n_elems);
+        free(data);
+        gguf_close(ctx);
+        return 1;
     }
     
-    float *embeddings = llama_get_embeddings(ctx);
-    if (!embeddings) { fprintf(stderr, "No embeddings\n"); return 1; }
+    printf("Read %lld elements\n", (long long)n_elems);
     
-    // Dump llama.cpp's first embedding values
-    printf("\nllama.cpp final embedding for BOS (after ALL layers):\n");
-    printf("Index  Value\n");
-    for (int i = 0; i < 10; i++) {
-        printf("%5d  %.10f\n", i, embeddings[i]);
+    // Stats
+    double sum=0, sumsq=0;
+    float minv = 1e30f, maxv = -1e30f;
+    for (int64_t i = 0; i < n_elems && i < 10000000; i++) {
+        sum += data[i];
+        sumsq += data[i] * data[i];
+        if (data[i] < minv) minv = data[i];
+        if (data[i] > maxv) maxv = data[i];
     }
+    printf("Stats (first 10M elems): mean=%.6f rms=%.6f min=%.6f max=%.6f\n",
+           (float)(sum/n_elems), (float)sqrt(sumsq/n_elems), minv, maxv);
     
-    // Compare with our beta_raw for the same token
-    // We need to run just the beta projection. This requires loading the full model.
-    // For now, let's just check the token_embd weight entry for token 0
-    printf("\nChecking token 0 embedding from GGUF (our reader):\n");
-    // dims=[2048, 248320], row 0 starts at offset 0
-    // With ne[0]=2048, ne[1]=248320, the data is stored row-major with ne[0] varying fastest
-    // Row t: t * ne[0] = t * 2048
-    // We can read just the first row by reading 2048 floats from the start
-    // But the tensor is quantized (Q5_K = type 13), so we need dequantization
+    // Dump to file
+    char fn[256];
+    snprintf(fn, sizeof(fn), "/tmp/our_%s.bin", tensor_name[0]=='_' ? tensor_name+5 : tensor_name);
+    // Replace dots with underscores
+    for (char *p = fn; *p; p++) if (*p == '.') *p = '_';
+    FILE *f = fopen(fn, "wb");
+    if (f) {
+        // Only dump first 16384 elements to keep file small
+        int64_t dump_n = n_elems < 16384 ? n_elems : 16384;
+        fwrite(data, sizeof(float), dump_n, f);
+        fclose(f);
+    }
+    printf("Saved to %s (first %lld elems)\n", fn, (long long)(n_elems<16384?n_elems:16384));
     
-    // Let's read all of token_embd (slow but works for verification)
-    // Actually, let's just check by computing the embedding for token 0 manually
-    
-    gguf_close(gctx);
-    llama_free(ctx);
-    llama_model_free(model);
-    free(our_beta);
-    free(our_emb);
+    free(data);
+    gguf_close(ctx);
     return 0;
 }
