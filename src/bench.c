@@ -64,8 +64,25 @@ void gpu_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
     const int N = B * T;
     const int qkv_dim = KEY_DIM * 2 + VALUE_DIM; // 8192
 
+    // DEBUG: dump GPU input just before matmul
+    if (N == 1) {
+        float *host_x = (float*)malloc(N * D_MODEL * sizeof(float));
+        cudaMemcpy(host_x, d_x, N * D_MODEL * sizeof(float), cudaMemcpyDeviceToHost);
+        FILE *f = fopen("/tmp/debug_gpu_input.bin", "wb"); if(f){fwrite(host_x, sizeof(float), N * D_MODEL, f); fclose(f);}
+        printf("GPU input RMS=%.6f\\n", sqrtf(host_x[0]*host_x[0]/D_MODEL));
+        free(host_x);
+    }
+
     // ===== Step 1: QKV projection =====
     wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_qkv, qkv_dim, d_qkv, 1.0f, 0.0f);
+
+    // DEBUG: dump qkv for L0
+    if (N == 1) {
+        float *host_qkv = (float*)malloc(N * qkv_dim * sizeof(float));
+        cudaMemcpy(host_qkv, d_qkv, N * qkv_dim * sizeof(float), cudaMemcpyDeviceToHost);
+        FILE *f = fopen("/tmp/debug_gpu_qkv.bin", "wb"); if(f){fwrite(host_qkv, sizeof(float), N * qkv_dim, f); fclose(f);}
+        free(host_qkv);
+    }
 
     // ===== Step 2: z gate projection =====
     wubu_cuda_matmul(cublas_h, d_x, N, D_MODEL, d_attn_gate, VALUE_DIM, d_z, 1.0f, 0.0f);
@@ -113,6 +130,26 @@ void gpu_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
     wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, stream);
     wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, stream);
 
+    // DEBUG: dump L0 Q, K, V, beta, gate
+    if (B == 1 && T == 1) {
+        float *host_q = (float*)malloc(KEY_DIM * sizeof(float));
+        float *host_k = (float*)malloc(KEY_DIM * sizeof(float));
+        float *host_v = (float*)malloc(VALUE_DIM * sizeof(float));
+        float *host_beta = (float*)malloc(DT_RANK * sizeof(float));
+        float *host_gate = (float*)malloc(DT_RANK * sizeof(float));
+        cudaMemcpy(host_q, d_q_norm, KEY_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host_k, d_k_norm, KEY_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host_v, d_v_conv, VALUE_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host_beta, d_beta_sig, DT_RANK * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host_gate, d_gate, DT_RANK * sizeof(float), cudaMemcpyDeviceToHost);
+        FILE *f = fopen("/tmp/debug_gpu_q.bin", "wb"); if(f){fwrite(host_q, sizeof(float), KEY_DIM, f); fclose(f);}
+        f = fopen("/tmp/debug_gpu_k.bin", "wb"); if(f){fwrite(host_k, sizeof(float), KEY_DIM, f); fclose(f);}
+        f = fopen("/tmp/debug_gpu_v.bin", "wb"); if(f){fwrite(host_v, sizeof(float), VALUE_DIM, f); fclose(f);}
+        f = fopen("/tmp/debug_gpu_beta.bin", "wb"); if(f){fwrite(host_beta, sizeof(float), DT_RANK, f); fclose(f);}
+        f = fopen("/tmp/debug_gpu_gate.bin", "wb"); if(f){fwrite(host_gate, sizeof(float), DT_RANK, f); fclose(f);}
+        free(host_q); free(host_k); free(host_v); free(host_beta); free(host_gate);
+    }
+
     // ===== Steps 8-9: Gated Delta Net recurrence =====
     int repeat_factor = SSM_V_HEADS / SSM_K_HEADS;
     
@@ -130,7 +167,7 @@ void gpu_ssm_forward(cublasHandle_t cublas_h, cudaStream_t stream,
             cudaStreamSynchronize(stream);
 
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
-                int kh = vh / repeat_factor;
+                int kh = vh % SSM_K_HEADS;
                 float bg = beta_host[vh];
                 float gg = gate_host[vh];
 
@@ -248,7 +285,7 @@ void gpu_ssm_forward_save(cublasHandle_t cublas_h, cudaStream_t stream,
             cudaStreamSynchronize(stream);
             
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
-                int kh = vh / repeat_factor;
+                int kh = vh % SSM_K_HEADS;
                 float bg = beta_host[vh];
                 float gg = gate_host[vh];
                 
@@ -811,7 +848,8 @@ size_t gpu_ssm_scratch_needed(int B, int T) {
     int N = B * T;
     const int qkv_dim = KEY_DIM * 2 + VALUE_DIM;  // 8192
     size_t total = 0;
-    total += (size_t)N * qkv_dim;           // d_qkv
+    total += (size_t)N * D_MODEL;                 // d_x (input)
+    total += (size_t)N * qkv_dim;                 // d_qkv
     total += (size_t)N * VALUE_DIM;          // d_z
     total += (size_t)N * DT_RANK;            // d_beta
     total += (size_t)N * DT_RANK;            // d_alpha
@@ -850,8 +888,9 @@ void gpu_ssm_prefill(cublasHandle_t cublas_h, cudaStream_t stream,
     const int qkv_dim = KEY_DIM * 2 + VALUE_DIM;  // 8192
 
     // Pointers into scratch buffer
-    float *d_qkv       = d_scratch;
-    float *d_z         = d_scratch + (size_t)N * qkv_dim;
+    float *d_x          = d_scratch;                          // input [N, D_MODEL]
+    float *d_qkv        = d_scratch + (size_t)N * D_MODEL;    // matmul out [N, qkv_dim]
+    float *d_z          = d_qkv     + (size_t)N * qkv_dim;    // z gate [N, vdim]
     float *d_beta      = d_z       + (size_t)N * VALUE_DIM;
     float *d_alpha     = d_beta    + (size_t)N * DT_RANK;
     float *d_beta_sig  = d_alpha   + (size_t)N * DT_RANK;
@@ -868,10 +907,9 @@ void gpu_ssm_prefill(cublasHandle_t cublas_h, cudaStream_t stream,
     float *d_delta_out = d_k_norm     + (size_t)N * KEY_DIM;
     float *d_z_silu    = d_delta_out  + (size_t)N * VALUE_DIM;
 
-    // Upload input
-    cudaMemcpyAsync(d_scratch, h_x, (size_t)N * D_MODEL * sizeof(float),
+    // Upload input to dedicated input buffer (separate from d_qkv to avoid aliasing)
+    cudaMemcpyAsync(d_x, h_x, (size_t)N * D_MODEL * sizeof(float),
                     cudaMemcpyHostToDevice, stream);
-    float *d_x = d_scratch; // reuse head of scratch for input
     cudaStreamSynchronize(stream);
 
     // Call GPU SSM forward

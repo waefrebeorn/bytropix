@@ -34,6 +34,15 @@ extern "C" {
 #define PARTIAL_ROTARY_FACTOR 0.25f     // partial_rotary_factor
 #define ROTARY_DIM          ((int)(GQA_HEAD_DIM * PARTIAL_ROTARY_FACTOR))  // 64
 
+// MRoPE sections (from config: rope.dimension_sections = [11, 11, 10, 0])
+// These define how the 32 frequency pairs are split across text/height/width.
+// For text-only, all positions are equal but frequencies restart per section.
+#define MRoPE_SECTIONS      3
+#define MRoPE_SEC0_PAIRS    11
+#define MRoPE_SEC1_PAIRS    11
+#define MRoPE_SEC2_PAIRS    10
+// Total: 11+11+10 = 32 pairs = 64 dims
+
 // All weights for one SSM layer
 typedef struct {
     // Fused QKV projection: x @ attn_qkv -> [Q(2048), K(2048), V(4096)]

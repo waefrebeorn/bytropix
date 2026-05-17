@@ -88,29 +88,33 @@ static void kv_free(kv_cache_t *c) {
 // ================================================================
 static float *rope_sc = NULL;
 
-// MRoPE sections from config: [11, 11, 10]
-// Each section has independent frequency bands
-#define N_MROPE_SECTIONS 3
-static const int mrope_sections[N_MROPE_SECTIONS] = {11, 11, 10};
+// IM-RoPE (Interleaved Multi-Resolution RoPE) for Qwen3.6-35B-A3B.
+// This model is text-only so p_t == p_h == p_w == p for all positions.
+// Frequencies form a continuous geometric progression across ALL 32 pairs:
+//   theta[k] = position * freq_base^(-2k/ROTARY_DIM) for k=0..31
+// Rotation uses NEOX-style split-half pairing: dim[i] with dim[i+ROTARY_DIM/2]
+// Ref: llama.cpp ggml_mrope_cache_init + rotate_pairs for GGML_ROPE_TYPE_IMROPE
 
 static int rope_init(void) {
     if (rope_sc) return 1;
     rope_sc = (float *)malloc((size_t)MAX_CACHE_T * ROTARY_DIM * sizeof(float));
     if (!rope_sc) return 0;
-    
+
+    // MRoPE sections: each section restarts frequency from base^(-2*0/ROTARY_DIM)
+    // sections in pairs: [11, 11, 10]
+    static const int sec_pair_offsets[MRoPE_SECTIONS] = {0, MRoPE_SEC0_PAIRS, MRoPE_SEC0_PAIRS + MRoPE_SEC1_PAIRS};
+    static const int sec_lengths[MRoPE_SECTIONS] = {MRoPE_SEC0_PAIRS, MRoPE_SEC1_PAIRS, MRoPE_SEC2_PAIRS};
+
     for (int p = 0; p < MAX_CACHE_T; p++) {
-        int pair_offset = 0;
-        for (int s = 0; s < N_MROPE_SECTIONS; s++) {
-            int n_pairs = mrope_sections[s];
-            int dim = 2 * n_pairs;  // section dimension (22, 22, or 20)
-            for (int i = 0; i < n_pairs; i++) {
-                float theta = powf(ROPE_THETA, -2.0f * i / dim);
-                float angle = (float)p * theta;  // NO extra 0.25x factor
-                int idx = (pair_offset + i) * 2;
-                rope_sc[p * ROTARY_DIM + idx]     = cosf(angle);
-                rope_sc[p * ROTARY_DIM + idx + 1] = sinf(angle);
+        int pair_idx = 0;
+        for (int s = 0; s < MRoPE_SECTIONS; s++) {
+            for (int i = 0; i < sec_lengths[s]; i++) {
+                float freq = powf(ROPE_THETA, -2.0f * i / ROTARY_DIM); // restart per section
+                float angle = (float)p * freq;
+                rope_sc[p * ROTARY_DIM + pair_idx * 2]     = cosf(angle);
+                rope_sc[p * ROTARY_DIM + pair_idx * 2 + 1] = sinf(angle);
+                pair_idx++;
             }
-            pair_offset += n_pairs;
         }
     }
     return 1;
@@ -143,6 +147,7 @@ static void gqa_kv_decode(
     float q_raw[4096], q_norm[4096], k_raw[512], k_norm[512], v_raw[512];
 
     // Q proj
+        #pragma omp parallel for
         for (int j = 0; j < q_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
@@ -153,6 +158,7 @@ static void gqa_kv_decode(
     wubu_rms_norm(1, GQA_Q_HEADS, GQA_HEAD_DIM, q_norm, w->attn_q_norm_weight, 1e-6f, q_norm);
 
     // K proj
+        #pragma omp parallel for
         for (int j = 0; j < kv_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
@@ -167,6 +173,7 @@ static void gqa_kv_decode(
     apply_rotary_to_buf(k_norm, GQA_KV_HEADS, cache->current_T, rope_sc);
 
     // V proj
+        #pragma omp parallel for
         for (int j = 0; j < kv_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
@@ -180,6 +187,7 @@ static void gqa_kv_decode(
 
     // Gate proj
     float gate[4096];
+        #pragma omp parallel for
         for (int j = 0; j < q_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
@@ -227,10 +235,12 @@ static void gqa_kv_decode(
 
     // Output projection
     memset(output, 0, D_MODEL * sizeof(float));
-    for (int i = 0; i < q_dim; i++) {
-        float a = attn_out[i];
-        for (int j = 0; j < D_MODEL; j++)
-            output[j] += a * w->attn_output_weight[i + j * q_dim];
+    #pragma omp parallel for
+    for (int j = 0; j < D_MODEL; j++) {
+        double sum = 0.0;
+        for (int i = 0; i < q_dim; i++)
+            sum += (double)attn_out[i] * (double)w->attn_output_weight[i + j * q_dim];
+        output[j] = (float)sum;
     }
     free(attn_out);
 }
@@ -677,6 +687,10 @@ static int sample(float *logits, int vs, float temperature, int top_k, float top
 }
 
 static volatile int stop = 0;
+static void cleanup_gpu(void) {
+    // Force cleanup all CUDA resources — resets the device, freeing all allocations
+    cudaDeviceReset();
+}
 static void handler(int s) { (void)s; stop = 1; }
 
 // ================================================================
@@ -983,10 +997,11 @@ int main(int argc, char **argv) {
             }
         }
     } else {
-        np = wubu_tokenizer_encode(&tok, prompt, pids+1, 65535);
-        if (np <= 0) { fprintf(stderr, "Failed to encode prompt\n"); wubu_tokenizer_free(&tok); return 1; }
+        np = wubu_tokenizer_encode(&tok, prompt, pids, 65536);
+        if (np <= 0) { fprintf(stderr, "Failed to encode prompt\\n"); wubu_tokenizer_free(&tok); return 1; }
         // BOS skipped — add_bos_token=false in GGUF metadata. Use env ADD_BOS=1 to force.
         if (getenv("ADD_BOS")) {
+            memmove(pids + 1, pids, np * sizeof(int));
             pids[0] = tok.bos_id; np++;
         }
         printf("Prompt: %d tok (BOS: %s)\n", np, getenv("ADD_BOS")?"yes":"no");
@@ -1015,6 +1030,8 @@ int main(int argc, char **argv) {
     }
     memcpy(residual, x, np * D_MODEL * sizeof(float));
     { const char *de = getenv("DUMP_EMBED"); if (de) { FILE *f = fopen(de, "wb"); if (f) { fwrite(residual, sizeof(float), np * D_MODEL, f); fclose(f); } } }
+    // DEBUG: always dump embedding for comparison
+    { FILE *f = fopen("/tmp/debug_embed_gpu_mode.bin", "wb"); if (f) { fwrite(residual, sizeof(float), np * D_MODEL, f); fclose(f); } }
 
     // Debug: embedding stats
     { float esum=0, emax=-1e30, emin=1e30;
@@ -1036,6 +1053,13 @@ int main(int argc, char **argv) {
 
         bool is_ssm = mdl.layers[l].is_ssm;
         wubu_rms_norm(1, np, D_MODEL, residual, mdl.layers[l].attn_norm_weight, 1e-6f, normed);
+        // DEBUG: dump normed + weight for layer 0
+        if (l == 0) {
+            FILE *f = fopen("/tmp/debug_layer0_normed.bin", "wb");
+            if (f) { fwrite(normed, sizeof(float), np * D_MODEL, f); fclose(f); }
+            f = fopen("/tmp/debug_layer0_attn_norm_weight.bin", "wb");
+            if (f) { fwrite(mdl.layers[l].attn_norm_weight, sizeof(float), D_MODEL, f); fclose(f); }
+        }
 
         if (ly->is_gqa) {
             printf("L%d GQA start\n", l); fflush(stdout);
@@ -1087,6 +1111,12 @@ int main(int argc, char **argv) {
                 float *attn_out = (float *)calloc(np * q_dim, sizeof(float));
                 printf("L%d alloc done: %p %p %p\n", l, (void*)Q, (void*)K, (void*)V); fflush(stdout);
 
+                    // DEBUG: dump normed input for L3
+                if (l == 3 && np == 1) {
+                    FILE *f = fopen("/tmp/debug_gqa_normed_input.bin", "wb");
+                    if (f) { fwrite(normed, sizeof(float), np * D_MODEL, f); fclose(f); }
+                }
+                #pragma omp parallel for if(np > 1)
                 for (int s = 0; s < np; s++) {
                     const float *xs = normed + s * D_MODEL;
                     // Q
@@ -1118,11 +1148,30 @@ int main(int argc, char **argv) {
                         V[s * kv_dim + j] = (float)sum;
                     }
                 }
+                // DEBUG: dump L3 Q, K, V, gate raw
+                if (l == 3 && np == 1) {
+                    FILE *f;
+                    f = fopen("/tmp/debug_gqa_q_raw.bin", "wb"); if(f){fwrite(Q, sizeof(float), np*q_dim, f); fclose(f);}
+                    f = fopen("/tmp/debug_gqa_k_raw.bin", "wb"); if(f){fwrite(K, sizeof(float), np*kv_dim, f); fclose(f);}
+                    f = fopen("/tmp/debug_gqa_v_raw.bin", "wb"); if(f){fwrite(V, sizeof(float), np*kv_dim, f); fclose(f);}
+                    f = fopen("/tmp/debug_gqa_gate_raw.bin", "wb"); if(f){fwrite(gate_buf, sizeof(float), np*q_dim, f); fclose(f);}
+                }
 
                 // RMSNorm Q and K
+                { float q_raw_sum=0,q_raw_mx=-1e30,q_raw_mn=1e30;
+                  for(int i=0;i<np*q_dim;i++){q_raw_sum+=Q[i];if(Q[i]>q_raw_mx)q_raw_mx=Q[i];if(Q[i]<q_raw_mn)q_raw_mn=Q[i];}
+                  printf("  Q_raw: mean=%.4f range=[%.4f,%.4f]\n",q_raw_sum/(np*q_dim),q_raw_mn,q_raw_mx); }
                 memcpy(K_norm, K, np * kv_dim * sizeof(float));
                 wubu_rms_norm(1, np * GQA_Q_HEADS, GQA_HEAD_DIM, Q, ly->w.gqa.attn_q_norm_weight, 1e-6f, Q);
                 wubu_rms_norm(1, np * GQA_KV_HEADS, GQA_HEAD_DIM, K_norm, ly->w.gqa.attn_k_norm_weight, 1e-6f, K_norm);
+
+                // DEBUG: dump Q/K stats
+                { float q_sum=0,q_mx=-1e30,q_mn=1e30,q_rms_sum=0,k_sum=0,k_mx=-1e30,k_mn=1e30,k_rms_sum=0;
+                  for(int i=0;i<np*q_dim;i++){q_sum+=Q[i];q_rms_sum+=Q[i]*Q[i];if(Q[i]>q_mx)q_mx=Q[i];if(Q[i]<q_mn)q_mn=Q[i];}
+                  for(int i=0;i<np*kv_dim;i++){k_sum+=K_norm[i];k_rms_sum+=K_norm[i]*K_norm[i];if(K_norm[i]>k_mx)k_mx=K_norm[i];if(K_norm[i]<k_mn)k_mn=K_norm[i];}
+                  printf("  Q_norm: mean=%.4f rms=%.4f range=[%.4f,%.4f] | K_norm: mean=%.4f rms=%.4f range=[%.4f,%.4f]\n",
+                         q_sum/(np*q_dim),sqrtf(q_rms_sum/(np*q_dim)),q_mn,q_mx,
+                         k_sum/(np*kv_dim),sqrtf(k_rms_sum/(np*kv_dim)),k_mn,k_mx); }
 
                 // Apply RoPE to Q and K (in-place) for each position
                 for (int s = 0; s < np; s++) {
@@ -1132,6 +1181,7 @@ int main(int argc, char **argv) {
 
                 // Attention for each position (causal mask)
                 float scale = 1.0f / sqrtf((float)GQA_HEAD_DIM);
+                #pragma omp parallel for if(np > 1)
                 for (int s = 0; s < np; s++) {
                     for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
                         int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
@@ -1172,13 +1222,14 @@ int main(int argc, char **argv) {
                 // Output projection
                 memset(attn, 0, np * D_MODEL * sizeof(float));
                 printf("  OUTPROJ START at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
+                #pragma omp parallel for collapse(2)
                 for (int s = 0; s < np; s++) {
-                    const float *in = attn_out + s * q_dim;
-                    float *out = attn + s * D_MODEL;
-                    for (int i = 0; i < q_dim; i++) {
-                        float a = in[i];
-                        for (int j = 0; j < D_MODEL; j++)
-                            out[j] += a * ly->w.gqa.attn_output_weight[i + j * q_dim];
+                    for (int j = 0; j < D_MODEL; j++) {
+                        double sum = 0.0;
+                        const float *in = attn_out + s * q_dim;
+                        for (int i = 0; i < q_dim; i++)
+                            sum += (double)in[i] * (double)ly->w.gqa.attn_output_weight[i + j * q_dim];
+                        attn[s * D_MODEL + j] = (float)sum;
                     }
                 }
 
@@ -1206,11 +1257,21 @@ int main(int argc, char **argv) {
                     attn);
 
                 cudaFree(d_scratch_prefill);
-                printf("L%d SSM_GPU_DONE\n", l); fflush(stdout);
+                // DEBUG: dump GPU SSM output for layer 0
+                if (l == 0) {
+                    FILE *f = fopen("/tmp/debug_gpu_ssm_out.bin", "wb");
+                    if (f) { fwrite(attn, sizeof(float), np * D_MODEL, f); fclose(f); }
+                }
+                printf("L%d SSM_GPU_DONE\\n", l); fflush(stdout);
             } else {
                 wubu_ssm_forward(normed, 1, np, &ly->w.ssm,
                                  ly->ssm_state, ly->conv_state, attn);
-                printf("L%d SSM done\n", l); fflush(stdout);
+                // DEBUG: dump SSM output for layer 0
+                if (l == 0) {
+                    FILE *f = fopen("/tmp/debug_layer0_ssm_out.bin", "wb");
+                    if (f) { fwrite(attn, sizeof(float), np * D_MODEL, f); fclose(f); }
+                }
+                printf("L%d SSM done\\n", l); fflush(stdout);
             }
         }
 
@@ -1262,6 +1323,11 @@ int main(int argc, char **argv) {
             lazy_moe_decode(normed, 1, np,
                             lc[l].lm.q_gate, lc[l].lm.q_up, lc[l].lm.q_down,
                             &lc[l].lm, ffn);
+            // DEBUG: dump MoE output for layer 0
+            if (l == 0) {
+                FILE *f = fopen("/tmp/debug_layer0_moe_out.bin", "wb");
+                if (f) { fwrite(ffn, sizeof(float), np * D_MODEL, f); fclose(f); }
+            }
          } else {
             printf("  MOE_MEMCPY at %.1f s\n", now_sec() - t_prefill); fflush(stdout);
             memcpy(ffn, normed, np * D_MODEL * sizeof(float));
@@ -1654,6 +1720,7 @@ int main(int argc, char **argv) {
         if (d_sincos) cudaFree(d_sincos);
         cudaStreamDestroy(st);
         cublasDestroy(ch);
+        cleanup_gpu();  // force device reset to release all VRAM
     }
     wubu_model_free(&mdl);
     wubu_tokenizer_free(&tok);

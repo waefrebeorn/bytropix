@@ -179,6 +179,13 @@ infer_text_gpu: tools/infer_text_gpu.c $(MODEL_OBJ) src/wubu_tokenizer.o src/ben
 test_cuda_kernels: tools/test_cuda_kernels.c $(CORE_OBJ) $(CUDA_OBJ)
 	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
 
+# Compare our logits vs llama.cpp
+compare_logits: tools/compare_logits.c $(MODEL_OBJ) src/wubu_tokenizer.o
+	g++ -std=c++11 -O2 -I include -I /home/wubu/llama.cpp/include -I /home/wubu/llama.cpp/ggml/include \
+		-o $@ $^ \
+		-L /home/wubu/llama.cpp/build/bin -lllama -lggml-base -lggml-cpu -lggml \
+		-lm -fopenmp -Wl,-rpath,/home/wubu/llama.cpp/build/bin
+
 # Training & tools
 train_stub: tools/train_stub.c
 	$(CC) -O0 -g -Wall -Wextra -Wno-unused-parameter -I include -fopenmp -o $@ $< -lm -fopenmp

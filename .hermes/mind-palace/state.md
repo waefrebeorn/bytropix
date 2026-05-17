@@ -1,41 +1,47 @@
-# state — May 17 v5 — Full investigation: SSM math + TGT/manifold audit + ssm_a dump
+# state — May 17 v10 — MoE expert layout IS THE BUG (interleaved, not contiguous)
 
-## Previous State
-All 14 SSM/GQA math components verified correct. Hidden state still orthogonal (cos-sim 0.0167).
+## Status
+- **Output projection TRANSPOSE** — FIXED in 3 places ✅
+- **MoE expert tensor layout WRONG** — ROOT CAUSE found via DA audit ❌
+  - `blk.0.ffn_gate_exps.weight` dims = [2048, 512, 256]
+  - Expert index (256) = INNERMOST dim, data is interleaved per (i,j) position
+  - `dequant_one_expert_contiguous` reads `eid * raw_per_exp` — treats as contiguous but data is stride-interleaved by expert
+  - Each IQ2_XXS block (66 bytes, 256 values) = ALL experts at ONE (i,j) position
+  - Fix: dequant each block, extract float[eid], store at position b
+  - This affects ALL MoE layers: ffn_gate_exps, ffn_up_exps, ffn_down_exps
+- **Full model output still WRONG** (cos-sim -0.001 after output proj fix) — expected, MoE is still processing wrong weights
+- **Reference extraction tool works** ✅
 
-## What Was Done: TGT & Manifold Audit
-Traced all functions called by `infer_text.c` (the tool used for reference comparison):
+## DA Audit: All Components Re-Verified
 
-### Euclidean SSM path (`wubu_ssm_forward`):
-- **`tgt_safe_expf(gate_s[vh])`** at line 348 — only TGT call in inference path
-- This is just `clamp(x, -80, 80); return expf(x)` — a guard against fp32 overflow
-- **Verified: gate values never approach ±80.** Ran `check_ssm_a` tool on the model:
-  - All 32×30 `ssm_a` values are NEGATIVE (range -72.3 to -0.019)
-  - `gate = softplus(alpha + dt_bias) * ssm_a` is ALWAYS negative
-  - Typical gate range: -0.001 to -10, max extreme: ~-50
-  - `exp(gate)` is always in (0, 1] — no overflow possible
-- **Verdict: tgt_safe_expf is harmless in practice.**
+### What was ACTUALLY verified this session
+1. RMSNorm formula: cos-sim 1.0 vs numpy ✅
+2. llama_get_embeddings_ith: works for hidden state extraction ✅
+3. RoPE CPU formula: correct (MRoPE [11,11,10,0], no 0.25x) ✅
+4. Output projection TRANSPOSE: FOUND and FIXED ✅
 
-### Euclidean GQA path:
-- `gqa_kv_decode` (decode): NO TGT calls, clean attention
-- Inline prefill code: NO TGT calls, clean attention
-- **`wubu_gqa_forward`** has `tgt_wrap(score)` at line 1224 but **infer_text.c never calls it.**
+### What was WRONGLY claimed as verified (DA findings)
+1. **"MoE expert dequant correct"** — ❌ EXPERT DATA IS INTERLEAVED, contiguous extraction produces garbage
+2. **"Output projection verified"** — ❌ Was TRANSPOSED, only caught now
+3. **"SSM formulas verified correct"** — ❓ Only "reasonable values" in debug dumps, never compared element-by-element vs llama.cpp
+4. **"GQA algorithm verified correct"** — ⚠️ Partly true: `wubu_gqa_forward` verified vs numpy, but infer_text.c's INLINE GQA was never separately verified (though code is similar)
+5. **"Weight layouts verified"** — ❌ MoE expert layout was WRONG (interleaved expert data mistaken for contiguous)
 
-### Manifold/Hyperbolic code:
-- `wubu_poincare_ssm_forward` — **NOT called by infer_text.c** (only test files)
-- Zero contamination of the inference path.
+### Tensor Dump Verification Checklist
+- output.weight: [2048, 248320], type=12 (Q4_K) — OK, access pattern now fixed
+- ffn_gate_exps.weight: [2048, 512, 256], type=16 (IQ2_XXS) — INTERLEAVED BUG
+- ffn_up_exps.weight: same dims and type
+- ffn_down_exps.weight: [512, 2048, 256], type=16 (IQ2_XXS) — SAME BUG
+- Shared expert gates: smaller dims, check dequant type
+- ssm_beta, ssm_alpha: F32 tensors, no dequant issue
 
-### ssm_a confirmed correct for DeltaNet formulation
-`gate = softplus(α + dt_bias) * ssm_a` where ssm_a = -A_hat (all negative).
-Decay λ = exp(gate) = exp(-softplus(Δ) * A_hat) ∈ (0, 1]. Correct.
+## Next Steps (after fixing MoE expert layout)
+1. Fix `dequant_one_expert_contiguous` → `dequant_one_expert_stride`
+2. Fix `dequant_multi_expert_contiguous` similarly
+3. Rebuild, re-run, compare logits vs reference
+4. If still wrong, do layer-by-layer comparison
 
-## Conclusion: Not TGT, not Manifold
-The bug is NOT in TGT wrapping or hyperbolic math. Those are cleanly isolated from inference.
-
-## Root Cause Must Be
-1. **Weight data corruption** — a tensor loaded with wrong strides/offsets
-2. **Dequant bug** — one of the 7 quant types (Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q4_K, F32) has wrong dequant for a specific shape
-3. **SOMETHING no amount of code reading can find** — must use layer-by-layer dumps
-
-## NEXT STEP
-Layer-by-layer comparison: build a tool that dumps hidden state after EACH layer from both engines, find first divergence.
+## Build Command
+```bash
+cd /home/wubu/bytropix && make infer_text
+```

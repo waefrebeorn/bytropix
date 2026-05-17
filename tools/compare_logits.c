@@ -8,6 +8,7 @@
 #include "wubu_model.h"     // from bytropix
 #include "gguf_reader.h"    // from bytropix
 #include "wubu_tokenizer.h"
+#include "ggml.h"
 
 static void top5(float *logits, int vs, wubu_tokenizer_t *tok, const char *label) {
     int top[5] = {0}; float tv[5] = {-1e30,-1e30,-1e30,-1e30,-1e30};
@@ -22,15 +23,15 @@ static void top5(float *logits, int vs, wubu_tokenizer_t *tok, const char *label
             }
         }
     }
-    char buf[256];
     printf("%s top-5:\n", label);
     for (int k = 0; k < 5; k++) {
+        char buf[256];
         wubu_tokenizer_decode(tok, top+k, 1, buf, 255);
         printf("  [%d]='%s'(%.2f)\n", top[k], buf, tv[k]);
     }
     
     // Compare with llama's top-1
-    if (k > 0) printf("  gap=%.2f\n", tv[0] - tv[4]);
+    printf("  gap=%.2f\n", tv[0] - tv[4]);
 }
 
 int main() {
@@ -48,14 +49,14 @@ int main() {
     gguf_ctx *ctx = model.gguf_ctx;
     gguf_tensor_info *t = gguf_find_tensor(ctx, "token_embd.weight");
     int vs = (int)(t->dims[0] * t->dims[1] / D_MODEL);
-    float *embd = malloc((int64_t)vs * D_MODEL * sizeof(float));
+    float *embd = (float *)malloc((int64_t)vs * D_MODEL * sizeof(float));
     gguf_read_tensor_f32(ctx, t, embd, (int64_t)vs * D_MODEL);
     
     // Use token 0 as input
     float x[2048];
     memcpy(x, embd, 2048 * sizeof(float));
     
-    float *our_logits = malloc(vs * sizeof(float));
+    float *our_logits = (float *)malloc(vs * sizeof(float));
     wubu_model_forward_from_embd(&model, x, 1, 1, our_logits);
     top5(our_logits, vs, &tok, "Ours");
     
@@ -70,12 +71,12 @@ int main() {
     lctx = NULL; // dummy init to make compiler happy
     
     // Load model
-    lm = llama_load_model_from_file(path, lmp);
+    lm = llama_model_load_from_file(path, lmp);
     if (!lm) { printf("FAIL: llama_load_model\n"); return 1; }
     
     llama_context_params lcp = llama_context_default_params();
     lcp.n_ctx = 512;
-    lctx = llama_new_context_with_model(lm, lcp);
+    lctx = llama_init_from_model(lm, lcp);
     if (!lctx) { printf("FAIL: llama_new_context\n"); return 1; }
     
     // Get vocab
@@ -86,7 +87,7 @@ int main() {
     // Tokenize BOS token
     int n_tok = 1;
     llama_token *tokens = (llama_token*)malloc(n_tok * sizeof(llama_token));
-    tokens[0] = llama_token_bos(lm);
+    tokens[0] = llama_vocab_bos(vocab);
     printf("BOS token: %d\n", tokens[0]);
     
     // Decode
@@ -127,7 +128,7 @@ int main() {
     
     // Cleanup
     llama_free(lctx);
-    llama_free_model(lm);
+    llama_model_free(lm);
     
     free(embd); free(our_logits); free(tokens);
     wubu_tokenizer_free(&tok);
