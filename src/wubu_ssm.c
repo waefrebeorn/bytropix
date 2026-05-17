@@ -342,7 +342,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
             // For each V-head (32 heads) — fully parallel, each writes non-overlapping state
             #pragma omp parallel for
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
-                int kh = vh / repeat_factor;  // which K-head maps to this V-head
+                int kh = vh % SSM_K_HEADS;  // cyclic repeat mapping (matches ggml_repeat)
                 
                 float bg = beta_s[vh];
                 float gg = tgt_safe_expf(gate_s[vh]);  // TGT: safe exp (clamped, no overflow)
@@ -1102,7 +1102,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
         for (int j = 0; j < q_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_q_weight[i * (q_dim * 2) + j];
+                sum += (double)x_s[i] * (double)w->attn_q_weight[i + j * D_MODEL];  // FIXED: was i * (q_dim*2) + j
             Q_full[q_offset + j] = (float)sum;
         }
         // Gate projection (second half of fused weight)
@@ -1110,7 +1110,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
         for (int j = 0; j < q_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_q_weight[i * (q_dim * 2) + (j + q_dim)];
+                sum += (double)x_s[i] * (double)w->attn_q_weight[i + (j + q_dim) * D_MODEL];  // FIXED: i * (q_dim*2) + (j+q_dim)
             Q_full[q_offset + q_dim + j] = (float)sum;
             gate[s * q_dim + j] = (float)sum;  // separate gate buffer for sigmoid
         }
@@ -1123,7 +1123,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     // Check ALL weight values at this column
                     int nan_w = 0, inf_w = 0;
                     for (int i = 0; i < D_MODEL; i++) {
-                        float wv = w->attn_q_weight[i * (q_dim * 2) + j];
+                        float wv = w->attn_q_weight[i + j * D_MODEL];  // FIXED: i * (q_dim*2) + j
                         if (isnan(wv)) nan_w++;
                         if (isinf(wv)) inf_w++;
                     }
@@ -1131,10 +1131,10 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     // Check the dot product manually with printf per i
                     double test_sum = 0.0;
                     for (int i = 0; i < D_MODEL; i++) {
-                        double prod = (double)x_s[i] * (double)w->attn_q_weight[i * (q_dim * 2) + j];
+                        double prod = (double)x_s[i] * (double)w->attn_q_weight[i + j * D_MODEL];  // FIXED: i * (q_dim*2) + j
                         if (isnan(prod) || isinf(prod)) {
                             printf("    NaN/Inf at i=%d: x=%.2e w=%.2e prod=%.2e\n",
-                                   i, (double)x_s[i], (double)w->attn_q_weight[i * (q_dim * 2) + j], prod);
+                                   i, (double)x_s[i], (double)w->attn_q_weight[i + j * D_MODEL], prod);
                         }
                         test_sum += prod;
                     }
@@ -1155,14 +1155,14 @@ void wubu_gqa_forward(const float *x, int B, int T,
         for (int j = 0; j < kv_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_k_weight[i * kv_dim + j];
+                sum += (double)x_s[i] * (double)w->attn_k_weight[i + j * D_MODEL];  // FIXED: was i * kv_dim + j
             K[s * kv_dim + j] = (float)sum;
         }
         #pragma omp parallel for
         for (int j = 0; j < kv_dim; j++) {
             float sum = 0.0f;
             for (int i = 0; i < D_MODEL; i++)
-                sum += x_s[i] * w->attn_v_weight[i * kv_dim + j];
+                sum += x_s[i] * w->attn_v_weight[i + j * D_MODEL];  // FIXED: was i * kv_dim + j
             V[s * kv_dim + j] = sum;
         }
     }
@@ -1290,7 +1290,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
         for (int j = 0; j < D_MODEL; j++) {
             float sum = 0.0f;
             for (int i = 0; i < q_dim; i++)
-                sum += inp[i] * w->attn_output_weight[i * D_MODEL + j];
+                sum += inp[i] * w->attn_output_weight[i + j * q_dim];  // FIXED: was i * D_MODEL + j
             out[j] = sum;
         }
     }
@@ -1337,13 +1337,13 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
         for (int j = 0; j < q_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_q_weight[i * (q_dim * 2) + j];
+                sum += (double)x_s[i] * (double)w->attn_q_weight[i + j * D_MODEL];  // FIXED
             Q_full[q_offset + j] = (float)sum;
         }
         for (int j = 0; j < q_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_q_weight[i * (q_dim * 2) + (j + q_dim)];
+                sum += (double)x_s[i] * (double)w->attn_q_weight[i + (j + q_dim) * D_MODEL];  // FIXED
             Q_full[q_offset + q_dim + j] = (float)sum;
             gate[s * q_dim + j] = (float)sum;
         }
@@ -1355,13 +1355,13 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
         for (int j = 0; j < kv_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_k_weight[i * kv_dim + j];
+                sum += (double)x_s[i] * (double)w->attn_k_weight[i + j * D_MODEL];  // FIXED
             K[s * kv_dim + j] = (float)sum;
         }
         for (int j = 0; j < kv_dim; j++) {
             double sum = 0.0;
             for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_v_weight[i * kv_dim + j];
+                sum += (double)x_s[i] * (double)w->attn_v_weight[i + j * D_MODEL];  // FIXED
             V[s * kv_dim + j] = (float)sum;
         }
     }
@@ -1436,7 +1436,7 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
         for (int j = 0; j < D_MODEL; j++) {
             double sum = 0.0;
             for (int i = 0; i < q_dim; i++)
-                sum += (double)inp[i] * (double)w->attn_output_weight[i * D_MODEL + j];
+                sum += (double)inp[i] * (double)w->attn_output_weight[i + j * q_dim];  // FIXED
             out[j] = (float)sum;
         }
     }

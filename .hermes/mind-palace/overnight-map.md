@@ -1,18 +1,31 @@
-# WuBuText AI — Overnight Navigation Map (May 17 v3 — SSM verified, TGT/manifold cleared)
+# WuBuText AI — Overnight Navigation Map (May 17 v4 — MoE expert layout bug)
 
 ## Where We Are
-All mathematical components verified against llama.cpp. TGT/manifold math is NOT in the inference path. Hidden state is still orthogonal (cos-sim 0.0167). The bug is below the abstraction level of code reading — must dump layer-by-layer.
+MoE expert extraction bug FOUND via Devil's Advocate audit. The output projection transpose fix removed the anti-correlation (cos-sim -0.457→-0.001) but revealed the deeper MoE bug. Expert tensor dims=[2048,512,256] with expert as innermost dim — data interleaved, dequant code reads contiguous.
 
 ## What Changed This Session
-- In-depth comparison of all 14 SSM/GQA/math components vs llama.cpp
-- TGT audit: `tgt_wrap` only in `wubu_gqa_forward` (not called by infer_text.c)
-- Manifold audit: `wubu_poincare_ssm_forward` not in inference path
-- Verified `ssm_a` values: all negative, range -72 to -0.019 — correct for DeltaNet
-- Gate values never approach ±80, so `tgt_safe_expf` clamping never triggers
-- Confirmed layer mapping via llama-simple: layers 3,7,11,15,19,23,27,31,35,39 = GQA
+- Output projection TRANSPOSE found and fixed (weight[j*D_MODEL+k]→weight[k*vocab_size+j])
+- Reference extraction tool: dump_llama_logits now dumps BOTH logits + hidden states
+- MoE expert layout discovered: interleaved, not contiguous per expert
+- DA audit of all claimed verifications → 3 false ✅s identified and stripped
 
 ## Build
-rm -f src/cuda_kernels.o infer_text; make infer_text  # full rebuild
+```bash
+rm -f infer_text; make infer_text
+```
 
 ## Next Step
-Layer-by-layer dump comparison. Build dump points in both engines, find first divergent layer.
+Fix `dequant_one_expert_contiguous` to stride-extract per expert from the interleaved blocks. Each IQ2_XXS block (66 bytes, 256 values) encodes ALL 256 experts' values at ONE (i,j) position. Extract float[eid] from each dequantized block.
+
+## Reference Files
+- Prestige: /home/wubu/bytropix/.hermes/mind-palace/prestige_prompt.md
+- State: /home/wubu/bytropix/.hermes/mind-palace/state.md
+- Goal: /home/wubu/bytropix/.hermes/mind-palace/goal-mantra.md
+- Plan: /home/wubu/bytropix/.hermes/mind-palace/plan.md
+- Skill: ~/.hermes/skills/mlops-inference/bytropix-moe-expert-layout/SKILL.md
+- llama_ref: /home/wubu/llama.cpp/src/models/qwen35moe.cpp, qwen3next.cpp
+
+## Useful Commands
+- Dump tensor: `./dump_tensor_our /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf <tensor_name> /tmp/out.bin`
+- Run inference: `NOGPU=1 MOE=1 MAX_LAYERS=40 DUMP_LOGITS=/tmp/out.bin ./infer_text /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Hello" 1 1`
+- Reference: `./dump_llama_logits /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf /tmp/ref.bin "Hello"`
