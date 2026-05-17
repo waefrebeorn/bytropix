@@ -535,7 +535,7 @@ __global__ void ssm_warp_scan_kernel(
     // Each block: batch=blockIdx.x / n_vheads, vhead=blockIdx.x % n_vheads
     int b = blockIdx.x / n_vheads;
     int vh = blockIdx.x % n_vheads;
-    int kh = vh / repeat_factor;  // which K-head maps to this V-head
+    int kh = vh % SSM_K_HEADS;
 
     extern __shared__ float sh_diff[];
 
@@ -909,18 +909,28 @@ void wubu_cuda_to_host(const float *dev, float *host, size_t n_bytes, cudaStream
 // ================================================================
 
 // Precompute sin/cos for positions 0..T-1, dimension 0..ROTARY_DIM-1
-// Output layout: sincos[pos * ROTARY_DIM + i] = sin(pos * theta_i) for even i, cos for odd i
-// Where theta_i = rope_theta^(-2*floor(i/2)/ROTARY_DIM)
+// MRoPE: sections [11, 11, 10, 0] — frequency resets per section.
+// Output layout: sincos[pos * ROTARY_DIM + i] = sin/cos for that position and dim.
+// For pair (d*2, d*2+1): even=sin, odd=cos. Same freq within a pair.
+// Each section restarts from theta_0 = base^(-2*0/ROTARY_DIM) = 1.
 __global__ void precompute_rotary_kernel(float *sincos, int T) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = T * ROTARY_DIM;
     if (idx >= total) return;
     int pos = idx / ROTARY_DIM;
     int dim = idx % ROTARY_DIM;
-    int half = dim / 2;
-    float theta = powf(ROPE_THETA, -2.0f * half / ROTARY_DIM);
-    float angle = pos * theta;
-    // For each pair (2i, 2i+1): dim%2==0 → sin, dim%2==1 → cos
+    int pair = dim / 2;
+    // Find which MRoPE section this pair belongs to and its offset within that section
+    int offset_in_section; // offset_in_section = pair index within its section
+    if (pair < 11) {
+        offset_in_section = pair;                    // section 0: pairs 0..10
+    } else if (pair < 22) {
+        offset_in_section = pair - 11;               // section 1: pairs 11..21
+    } else {
+        offset_in_section = pair - 22;               // section 2: pairs 22..31
+    }
+    float freq = powf(ROPE_THETA, -2.0f * offset_in_section / ROTARY_DIM);
+    float angle = pos * freq;
     sincos[idx] = (dim % 2 == 0) ? sinf(angle) : cosf(angle);
 }
 
@@ -950,13 +960,14 @@ __global__ void apply_rotary_qk_kernel(float *Q, float *K,
     float *q_base = Q + ((b * T + t) * n_q_heads) * head_dim;
     for (int h = 0; h < n_q_heads; h++) {
         float *qv = q_base + h * head_dim;
-        for (int d = 0; d < ROTARY_DIM; d += 2) {
-            float x0 = qv[d];
-            float x1 = qv[d+1];
-            float sin_val = sp[d];
-            float cos_val = sp[d+1];
-            qv[d]   = x0 * cos_val - x1 * sin_val;
-            qv[d+1] = x0 * sin_val + x1 * cos_val;
+        // Adjacent-pair rotation (Qwen3 MRoPE): pair dim[d*2] with dim[d*2+1]
+        for (int d = 0; d < ROTARY_DIM / 2; d++) {
+            float x0 = qv[d * 2];
+            float x1 = qv[d * 2 + 1];
+            float sin_val = sp[d * 2];      // even → sin
+            float cos_val = sp[d * 2 + 1];  // odd  → cos
+            qv[d * 2]              = x0 * cos_val - x1 * sin_val;
+            qv[d * 2 + 1]          = x0 * sin_val + x1 * cos_val;
         }
         // remaining dims (ROTARY_DIM..head_dim-1) are unchanged
     }
@@ -965,13 +976,13 @@ __global__ void apply_rotary_qk_kernel(float *Q, float *K,
     float *k_base = K + ((b * T + t) * n_kv_heads) * head_dim;
     for (int h = 0; h < n_kv_heads; h++) {
         float *kv = k_base + h * head_dim;
-        for (int d = 0; d < ROTARY_DIM; d += 2) {
-            float x0 = kv[d];
-            float x1 = kv[d+1];
-            float sin_val = sp[d];
-            float cos_val = sp[d+1];
-            kv[d]   = x0 * cos_val - x1 * sin_val;
-            kv[d+1] = x0 * sin_val + x1 * cos_val;
+        for (int d = 0; d < ROTARY_DIM / 2; d++) {
+            float x0 = kv[d * 2];
+            float x1 = kv[d * 2 + 1];
+            float sin_val = sp[d * 2];
+            float cos_val = sp[d * 2 + 1];
+            kv[d * 2]              = x0 * cos_val - x1 * sin_val;
+            kv[d * 2 + 1]          = x0 * sin_val + x1 * cos_val;
         }
     }
 }
