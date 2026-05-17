@@ -22,17 +22,16 @@
 |-----|--------|--------|-----|
 | **Output projection TRANSPOSE** | ✅ Fixed | Cos-sim -0.457→-0.001 | `weight[j*D_MODEL+k]`→`weight[k*vocab_size+j]` |
 | **GQA output proj (inline)** | ✅ Fixed | GQA layers wrong output | `weight[i+j*q_dim]`→`weight[i*D_MODEL+j]` |
-| **MoE expert extraction stride** | 🔴 Active | All 40 layers garbage output | Stride-extract per expert: dequant block→pick[eid] |
+| **MoE expert layout** | ✅ **CONTIGUOUS (correct)** — prev "stride bug" was wrong |
 | GPU RoPE 0.25x factor | 🟡 Suspected | GPU GQA layers | `infer_text_gpu.c:254` |
 | SSM forward vs ref | 🟡 Unverified | 30 SSM layers | Never element-compared vs llama.cpp |
 | VRAM cleanup on SIGINT | 🟡 Missing | GPU memory leak | Add llama.cpp-style cleanup |
 
-**Root Cause:** MoE expert tensor layout is INTERLEAVED, not contiguous.  
-`blk.0.ffn_gate_exps.weight` dims = `[2048, 512, 256]` — expert index (256) is innermost dim.  
-Each IQ2_XXS block = ALL experts at ONE (i,j) position.  
-`dequant_one_expert_contiguous` reads `eid * raw_per_exp` — wrong by 256× stride.
-
-Fix: replace with per-block stride extraction — dequant each block, extract `block_vals[eid]`, store.
+**Root Cause:** MoE expert tensor layout is CONTIGUOUS per expert — this was confirmed correct.
+`blk.0.ffn_gate_exps.weight` dims = `[2048, 512, 256]` — expert index (256) is FASTEST dim in GGUF dim order.
+This means experts ARE contiguous in the raw data: expert eid starts at `eid * raw_per_exp`.
+Our dequant (dequant_multi_expert_contiguous) uses this offset correctly.
+The earlier "stride bug" hypothesis was WRONG — confirmed by cos-sim 1.0 vs gguf_read_tensor_f32.
 
 ---
 
@@ -84,15 +83,16 @@ Each of the 40 layers:
 ### Tensor Layout (GGUF)
 
 ```
-ffn_gate_exps.weight:  [2048, 512, 256]  ← expert=innermost dim!
-ffn_up_exps.weight:    [2048, 512, 256]  ← same layout
-ffn_down_exps.weight:  [512, 2048, 256]  ← same
+ffn_gate_exps.weight:  [2048, 512, 256]  ← dims[0]=D_MODEL (innermost), dims[2]=N_EXPERTS (outermost, contiguous)
+ffn_up_exps.weight:    [2048, 512, 256]  ← same layout, expert eid = e * raw_per_exp
+ffn_down_exps.weight:  [512, 2048, 256]  ← same, expert eid = e * raw_per_exp
 output.weight:         [2048, 248320]    ← D_MODEL × vocab
 ```
 
-**Critical:** MoE expert tensors are 3D with expert index varying FASTEST.  
-This means for each (i,j) position, all 256 experts' values are interleaved.  
-Extracting expert e requires striding by 256, not reading `e * raw_per_exp` bytes.
+**Critical:** MoE expert tensors are 3D with expert index varying SLOWEST (outermost dim).  
+This means for each expert, the (d_model, d_ff) matrix is stored contiguously.  
+Extracting expert e requires reading `e * raw_per_exp` bytes from the raw data blob — exactly what `dequant_multi_expert_contiguous` does.  
+The earlier "interleaved" hypothesis was WRONG — confirmed by cos-sim 1.0 vs ggml matmul.
 
 ---
 

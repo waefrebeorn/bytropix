@@ -1,24 +1,21 @@
-# bytropix Plan — May 17 v17 (MoE cos-sim 1.0, stale data corrected)
+# bytropix Plan — May 17 v17 (DA Audit Complete)
 
 ## STATUS
-- **SSM/GQA path**: ✅ cos-sim 0.994 logits vs reference (MOE=0, needs fresh verification)
-- **MoE path**: ✅ cos-sim 1.000000 internal consistency (no bug found)
-- All previous "divergence" numbers were from stale binary comparisons
-- Model generates plausible output with MoE enabled
+- **MoE**: ✅ cos-sim 1.0 internal consistency (lazy vs library, fresh build)
+- **SSM**: ❌ L2 norm eps 1e-12 vs ~1e-6 (GGUF) — root cause of 0.006 gap
+- **GQA**: ❓ not audited — needs DA pass
+- **README/STATUS/prestige/overnight**: 🔴 all stale — need factual correction
 
-## DONE
-- [x] RoPE MRoPE section dimension fix (22/22/20, was 64)
-- [x] Output projection transpose fix (3 places)
-- [x] Reference extraction tool (run_ref_moe0)
-- [x] RMSNorm verified cos-sim 1.0 vs numpy
-- [x] All dequant types verified exact vs ggml
-- [x] SSM/GQA path verified at cos-sim 0.994 vs reference
-- [x] MoE lazy vs library: cos-sim 1.000000 verified
-- [x] Top-k agreement: identical expert selection
-- [x] Dequant bit-identity: verified across 8 experts
-- [x] Stale binary issue identified — rebuild infer_text before any comparison
+## DA Audit: Phase 2 Pass 1
+- [x] MoE lazy vs library: cos-sim 1.000000 verified on same input
+- [x] Dequant bit-identity: confirmed across 8 top experts
+- [x] Routing: identical top-8 selection
+- [x] SSM recurrence formula: verified vs llama.cpp delta-net-base.cpp
+- [x] L2 norm eps identified: 1e-12 (us) vs ~1e-6 (reference)
 
-## Cleanup
-- [/] Remove stale debug files from /tmp/
-- [/] Commit current state with corrected findings
-- [ ] Decide next direction: fresh SSM/GQA vs reference comparison with rebuilt infer_text?
+## Plan Forward (priority order)
+1. [ ] Fix L2 epsilon: wubu_ssm.c:318-319 — read from GGUF instead of 1e-12f
+2. [ ] Verify MOE=0 cos-sim vs reference after fix
+3. [ ] Enable MOE=1, verify full model output
+4. [ ] GQA path audit (10 layers, unverified)
+5. [ ] Stale markdown cleanup (README, STATUS, prestige, overnight)
