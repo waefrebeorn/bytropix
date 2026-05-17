@@ -1,28 +1,18 @@
-# WuBuText AI — Overnight Navigation Map (May 16 v17 — DA RECERTIFIED)
+# WuBuText AI — Overnight Navigation Map (May 17 v3 — SSM verified, TGT/manifold cleared)
 
 ## Where We Are
-Full component deep dive complete. Inference pipeline STRUCTURE verified correct.
-Output STILL WRONG. Root cause narrowed to 5 suspects.
+All mathematical components verified against llama.cpp. TGT/manifold math is NOT in the inference path. Hidden state is still orthogonal (cos-sim 0.0167). The bug is below the abstraction level of code reading — must dump layer-by-layer.
 
-## What's New This Session
-- Full audit of ALL components vs llama.cpp reference
-- 0% verification rate: all P0-P3 were "compiles only", never runtime-verified
-- wubu_gqa_forward() indexing bug found (dead code)
-- TGT wrapping identified as llama.cpp divergence (clips scores to [-π,π])
-- DA stripped ALL false ✅ from status table
+## What Changed This Session
+- In-depth comparison of all 14 SSM/GQA/math components vs llama.cpp
+- TGT audit: `tgt_wrap` only in `wubu_gqa_forward` (not called by infer_text.c)
+- Manifold audit: `wubu_poincare_ssm_forward` not in inference path
+- Verified `ssm_a` values: all negative, range -72 to -0.019 — correct for DeltaNet
+- Gate values never approach ±80, so `tgt_safe_expf` clamping never triggers
+- Confirmed layer mapping via llama-simple: layers 3,7,11,15,19,23,27,31,35,39 = GQA
 
-## 5 Active Suspects (priority order)
-1. Q5_K dequant (181 tensors)
-2. Output weight Q4_K (type 12) dequant
-3. SSM Q scaling factor
-4. RMSNorm epsilon
-5. TGT wrapping in attention
+## Build
+rm -f src/cuda_kernels.o infer_text; make infer_text  # full rebuild
 
-## Next Session
-1. Write Q5_K dequant test vs llama.cpp reference
-2. Or: run layer-0-only with DUMP_LAYER_DIR and compare h_last directly
-
-## Clean Paths
-- infer_text.c is the right inference path (NOT wubu_model_forward_from_embd)
-- SSM recurrence structure is correct — the math matches delta-net-base
-- Weight loading + dequant pipeline is the most likely failure point
+## Next Step
+Layer-by-layer dump comparison. Build dump points in both engines, find first divergent layer.
