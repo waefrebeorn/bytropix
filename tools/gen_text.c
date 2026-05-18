@@ -13,6 +13,10 @@
 #include "wubu_moe.h"
 #include "wubu_tokenizer.h"
 #include "gguf_reader.h"
+// Optional GPU output projection
+#ifdef __CUDACC__
+#include "gpu_output_proj.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +65,17 @@ int main(int argc, char **argv) {
     wubu_model_t mdl;
     if (!wubu_model_init(&mdl, model_path)) return 1;
     mdl.enable_moe = true;
+#ifdef __CUDACC__
+    // Init GPU output projection
+    if (getenv("GPU")) {
+        if (!gpu_output_init(mdl.output_weight_q, D_MODEL, mdl.vocab_size, mdl.output_weight_type)) {
+            fprintf(stderr, "GPU init failed, falling back to CPU\n");
+        } else {
+            mdl.skip_output_proj = true;
+            fprintf(stderr, "GPU output projection enabled\n");
+        }
+    }
+#endif
 
     // Init tokenizer from model file
     wubu_tokenizer_t tok;
@@ -130,7 +145,19 @@ int main(int argc, char **argv) {
     // Prefill forward
     float *logits = (float *)malloc(n_prompt * vs * sizeof(float));
     double t0 = clock_seconds();
+#ifdef __CUDACC__
+    if (mdl.skip_output_proj) {
+        // Forward returns hidden states, do GPU output projection
+        wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+        for (int i = 0; i < n_prompt; i++) {
+            gpu_output_project(logits + i * vs, logits + i * vs);
+        }
+    } else {
+        wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+    }
+#else
     wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+#endif
     double t_prefill = clock_seconds() - t0;
 
     float *last_logits = logits + (n_prompt - 1) * vs;
@@ -170,7 +197,16 @@ int main(int argc, char **argv) {
         if (!read_embedding(&mdl, next_token, x_next, emb_file))
             memset(x_next, 0, D_MODEL * sizeof(float));
 
+#ifdef __CUDACC__
+        if (mdl.skip_output_proj) {
+            wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
+            gpu_output_project(logits, logits);
+        } else {
+            wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
+        }
+#else
         wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
+#endif
         last_logits = logits;
         generated++;
     }
@@ -189,5 +225,8 @@ int main(int argc, char **argv) {
     if (emb_file) fclose(emb_file);
     wubu_tokenizer_free(&tok);
     wubu_model_free(&mdl);
+#ifdef __CUDACC__
+    gpu_output_cleanup();
+#endif
     return 0;
 }

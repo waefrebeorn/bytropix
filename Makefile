@@ -14,7 +14,7 @@ all: test_ssm test_nested_ssm test_nested_ssm_backward load_model test_gpu test_
 # Object files
 CORE_OBJ = src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
-CUDA_OBJ = src/cuda_kernels.o
+CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o
 RSGD_OBJ = src/rsgd.o
 
 src/qlearner.o: src/qlearner.c include/qlearner.h
@@ -78,6 +78,9 @@ src/wubu_model.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h inclu
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/cuda_kernels.o: src/cuda_kernels.cu include/cuda_kernels.h
+	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+
+src/gpu_output_proj.o: src/gpu_output_proj.cu include/gpu_output_proj.h
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
 
 src/rsgd.o: src/rsgd.c include/rsgd.h include/gguf_reader.h
@@ -158,6 +161,9 @@ test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 
 gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $(filter %.c %.o,$^) $(LDFLAGS)
+
+gen_text_gpu: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ)
+	$(CXX) $(CFLAGS) -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ) $(LDFLAGS) -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart
 
 test_tok_debug: tools/test_tok_debug.c src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
