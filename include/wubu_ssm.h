@@ -66,6 +66,14 @@ typedef struct {
     // Output projection
     float *ssm_out_weight;    // [VALUE_DIM, D_MODEL] = [4096, 2048]
     
+    // Quantized weight pointers (into GGUF data_blob, don't free)
+    const uint8_t *attn_qkv_weight_q;   // raw Q5_K
+    int attn_qkv_weight_type;
+    const uint8_t *attn_gate_weight_q;  // raw Q5_K
+    int attn_gate_weight_type;
+    const uint8_t *ssm_out_weight_q;    // raw Q6_K
+    int ssm_out_weight_type;
+    
     // Pre-attention and post-attention norms
     float *attn_norm_weight;          // [D_MODEL] = [2048]
     float *post_attention_norm_weight; // [D_MODEL] = [2048]
@@ -81,6 +89,16 @@ typedef struct {
     float *attn_v_weight;      // [D_MODEL, GQA_KV_HEADS*GQA_HEAD_DIM] = [2048, 512]
     // Output projection
     float *attn_output_weight; // [GQA_Q_HEADS*GQA_HEAD_DIM, D_MODEL] = [4096, 2048]
+    
+    // Quantized weight pointers (into GGUF data_blob, don't free)
+    const uint8_t *attn_q_weight_q;        // raw Q5_K
+    int attn_q_weight_type;
+    const uint8_t *attn_k_weight_q;        // raw Q5_K
+    int attn_k_weight_type;
+    const uint8_t *attn_v_weight_q;        // raw Q5_K
+    int attn_v_weight_type;
+    const uint8_t *attn_output_weight_q;   // raw Q5_K
+    int attn_output_weight_type;
     
     // Q/K norms
     float *attn_q_norm_weight;  // [GQA_HEAD_DIM] = [256]
@@ -110,6 +128,9 @@ typedef struct {
 // ============================================================
 // Forward pass functions
 // ============================================================
+
+// SSM L2 norm epsilon (global, set from GGUF config)
+extern float g_ssm_l2_eps;
 
 // Single SSM layer forward pass
 // x: [B, T, D_MODEL]

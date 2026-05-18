@@ -36,6 +36,8 @@ typedef struct {
     // Token embedding
     float *token_embd;       // [vocab_size, D_MODEL] or NULL if using embedding file
     float *output_weight;    // [D_MODEL, vocab_size] or NULL
+    const uint8_t *output_weight_q;   // raw Q4_K quantized
+    int output_weight_type;
     
     // Embedding file (from Phase 1)
     bool use_embedding_file;
