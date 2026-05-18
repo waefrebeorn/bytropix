@@ -16,14 +16,14 @@ gen_text coherent (0.6 tok/s decode, 1.4 tok/s prefill).
 - Q4_K output proj: cos-sim 0.99995 vs SGEMM
 - Vault papers read: Qwen3.6 arch, Unsloth UD quant, DA v10 audit
 - **SSSE3/SSE4.1 vec_dot**: Q4_K, Q5_K, Q6_K SSE intrinsics. cos-sim 0.9970 ↑
+- **GQA KV cache**: decode attends to all tokens, not just self (correctness fix) ✓
 
 ## REMAINING GAP
 - cos-sim 0.9970 → 1.0: IQ2_XXS/IQ3_XXS/IQ4_XS still generic (complex lookup)
 - Speed: 0.7 tok/s → target 1+ tok/s
-- KV cache for GQA (~10% speedup)
 
 ## NEXT TASK
-KV cache for GQA decode (~10% speedup).
+GPU decode path (wire existing CUDA kernels into gen_text loop)
 IQ2_XXS/IQ3_XXS/IQ4_XS SSE vec_dot (complex lookup tables, high effort).
 
 ## GROUND TRUTH

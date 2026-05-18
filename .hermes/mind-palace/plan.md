@@ -1,4 +1,4 @@
-# Plan — May 18, 2026 — POST-FIX
+# Plan — May 18, 2026 — DA ALL CLOSED. PHASE 3: SIMD vec_dot
 
 ## Phase 0: CORE INFERENCE FIXED ✓
 ### Achievements:
@@ -56,7 +56,25 @@ IMRoPE for Qwen3.6 with rope.dimension_sections=[11,11,10,0], theta=10M implemen
 - Impact: GQA is only ~10% of time, so max 10% speedup from KV cache alone
 - SKIP — low priority given current bottleneck distribution
 
-## Phase 3: Multi-Token Generation
-- Implement GQA RoPE (needed for T > 1)
-- Verify KV cache correctness
-- Test text generation quality
+## Phase 3: SIMD vec_dot — Close Cos-Sim Gap [DONE ✓]
+
+### Task 3.1-3.3: SSE2/SSSE3/SSE4.1 for Q4_K, Q5_K, Q6_K ✓
+- Q4_K/Q5_K: `_mm_maddubs_epi16` (SSSE3) unsigned×signed byte → int16 → int32
+- Q6_K: `_mm_cvtepi8_epi16` (SSE4.1) signed×signed widen → `_mm_mullo_epi16` → `_mm_madd_epi16`
+- Cos-sim improved: 0.9968 → 0.9970
+- Auto-selected via #ifdef __SSSE3__/__SSE4_1__ guards
+
+### Task 3.4: IQ2_XXS/IQ3_XXS/IQ4_XS vec_dot SIMD [P2 — SKIP for now]
+Complex lookup tables (`iq2xxs_grid`, `ksigns_iq2xs`, `iq3xxs_grid`) make SSE difficult.
+These only affect MoE experts (80+37+3 tensors), not the critical path. Low priority.
+
+### Task 3.5: Profile and measure [P0] ✓
+- Cos-sim: 0.9970 (up from 0.9968, quantization noise floor)
+- Decode: 0.7 tok/s (no improvement — MoE bottleneck, not matmul)
+- Conclusion: Q4_K/Q5_K/Q6_K matmuls were not the bottleneck
+
+## Phase 4: KV Cache for GQA Decode [ACTIVE]
+- Implement K/V cache buffers per GQA layer
+- Append-only: QKV_proj → RoPE → append to cache
+- Attention against ALL cached positions (no recompute)
+- Impact: ~10% decode speedup

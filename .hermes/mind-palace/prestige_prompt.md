@@ -3,7 +3,7 @@
 ## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M
 Cos-sim vs ref: **0.9969** — Phase 2 DONE. All 40 layers > 0.995.
 gen_text coherent: "The capital of France is → the city of Paris..."
-Decode: 0.6 tok/s (2× faster). DA gaps: 8/10 closed.
+Decode: 0.7 tok/s (2.3× faster). DA gaps: **ALL 10 CLOSED**.
 
 ## Architecture (qwen35moe → qwen35moe.cpp)
 40 layers: 30 SSM (Gated DeltaNet) + 10 GQA (full attention)
@@ -31,8 +31,12 @@ Decode: 0.6 tok/s (2× faster). DA gaps: 8/10 closed.
 6. Tokenizer: handle edge-case byte tokens
 
 ## Remaining DA Gaps
-- Gap 7 (chat template): not applied — minor quality impact
+- Gap 7 (chat template): **CLOSED** — CHAT=1 env var ✓
 - Gap 10 (ground truth): CLOSED — cos-sim 0.9969
+
+## Next: Phase 3 — SIMD vec_dot
+Replace generic C dot product loops with SSE2/AVX2 intrinsics.
+Target: cos-sim 0.999+, decode 1+ tok/s.
 
 ## Performance (CPU, 16 threads)
 - Decode: 0.6 tok/s
