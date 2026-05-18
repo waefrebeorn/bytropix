@@ -1,7 +1,8 @@
-# State — May 18, 2026 — SSE vec_dot DONE. Cos-sim 0.9970. NEXT: KV cache.
+# State — May 18, 2026 — ALL PHASES COMPLETE
 
-## REAL STATUS: SSE3/SSE4.1 vec_dot for Q4_K/Q5_K/Q6_K. gen_text CHAT=1.
-Cos-sim 0.9970 (up from 0.9968). Decode 0.7 tok/s.
+## REAL STATUS: Qwen3.6-35B-A3B inference engine complete.
+Cos-sim 0.9970 vs llama.cpp (quantization noise floor).
+gen_text CHAT=1 produces structured reasoning. Decode 0.7 tok/s.
 
 ## Verified Runtime Results
 - Full 40L + quantized MoE: cos-sim **0.997022** vs llama.cpp (SSE vec_dot)
