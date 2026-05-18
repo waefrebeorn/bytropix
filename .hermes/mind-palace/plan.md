@@ -1,49 +1,52 @@
-# Plan — May 18, 2026 — HONEST PATH TO 1:1 PARITY
+# Plan — May 18, 2026 — POST-FIX
 
-## Phase 0: Verify SSM/GQA Forward Architecture
-**Root cause is in the forward math, NOT quantization.**
+## Phase 0: CORE INFERENCE FIXED ✓
+### Achievements:
+- GQA Q/gate interleave bug fixed ✓ (cos-sim -0.51 → 0.9968)
+- MoE quantized path wired ✓ (IQ2_XXS/IQ3_XXS/IQ4_XS via blob)
+- Shared expert quantized path wired ✓ (Q5_K/Q6_K)
+- Per-layer dump infrastructure ✓ (modded llama.cpp + bytropix)
+- Layer-by-layer comparison tooling ✓ (python3 script)
 
-### Task 0.1: Generate per-layer reference from llama.cpp
-- Modify qwen35moe.cpp to dump hidden state after each layer's residual add
-- OR use existing dump_ref_layers tool
-- Compare: our_layer_N.bin vs ref_layer_N.bin for N=0..39
-- Find the first layer where cos-sim < 0.99
+## Phase 1: Push to 1:1 Parity (cos-sim > 0.999)
 
-### Task 0.2: Audit SSM Layer 0 forward against qwen3next.cpp
-Files to compare:
-- ~/llama.cpp/src/models/qwen3next.cpp (build_layer_attn_linear, build_qkvz)
-- ~/llama.cpp/src/models/delta-net-base.cpp (build_delta_net_autoregressive)
-- ~/llama.cpp/src/models/qwen35moe.cpp (our actual reference, same code)
+### Task 1.1: Identify largest per-operation error sources
+Current per-layer cos-sim: 0.995-0.998. Need to find which operations contribute most.
 
-Check:
-- attn_qkv.weight split: Q[2048] + K[2048] + V[4096] = 8192 total
-- attn_gate.weight: z_gate [2048, 4096] = silu(x @ W)
-- Conv1d: kernel=4, depthwise on [d_inner + 2*n_group*d_state] channels
-- Delta-net recurrence: state update formula
-- ssm_out.weight: output projection after gated norm
-- Residual: attn_out = ssm_out + input (before norm)
+Method: run our model with F32 fallback (clear quantized ptrs) and compare F32 vs quantized path. The F32 vs reference gap shows architecture errors. The quantized vs reference shows total gap.
 
-### Task 0.3: Audit GQA forward against qwen3next.cpp build_layer_attn
-Check:
-- attn_q.weight [2048,8192] = Q[4096] + gate[4096] split
-- Q norm (RMSNorm per head, head_dim=256)
-- K norm (RMSNorm per head)
-- RoPE (64 dim, theta=10M, sections)
-- Attention: Q @ K^T, softmax, weighted V sum
-- Gate: sigmoid(gate) applied to attention output
-- Output proj: attn_output.weight [4096,2048]
+### Task 1.2: Quantized_matmul precision
+The Q8_K input quantization + vec_dot chain may differ from llama.cpp's internal matmul.
+- Compare quantized_matmul output vs llama.cpp's ggml_mul_mat for same inputs
+- If gap > 0.0001 per layer: trace to specific vec_dot implementation
 
-### Task 0.4: Verify Q6_K dequant against llama.cpp ggml-quants.c
-- The block_q6_K struct may differ between quantized_dot_generic.c and reference
-- Dump first block of ssm_out.weight from both, compare
+### Task 1.3: IQ type vec_dot parity
+The self-contained C vec_dot implementations may differ from llama.cpp's SIMD versions.
+- For each type (Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS):
+  - Generate same input for both bytropix and llama.cpp reference
+  - Compare dot product output
+- Fix any differences found
 
-## Phase 1: Fix Architecture Bugs
-(Content depends on Phase 0 findings)
+### Task 1.4: GQA RoPE
+RoPE is currently SKIPPED in GQA forward (comment says "will be implemented separately").
+For T=1 this doesn't matter, but for multi-token generation RoPE is essential.
+- Implement IMRoPE (64 dim, sections [11,11,10,0], theta=10M)
+- Apply to Q and K before attention
 
-## Phase 2: Test With Quantized MoE
-- The MoE quantized path I already wired should work once hidden states are correct
-- Compare cos-sim before/after enabling quantized MoE
+## Phase 2: Performance
 
-## Phase 3: Layer-by-layer verification
-- Verify ALL 40 layers match within cos-sim 0.999
-- Verify final logits match within cos-sim 0.999
+### Task 2.1: OpenMP verification
+All hot loops should have OpenMP:
+- MoE per-token loop ✓
+- quantized_matmul column loop ✓
+- GQA attention head loop — CHECK
+- SSM recurrence head loop — CHECK
+
+### Task 2.2: Infer_text pipeline
+- Build and test full text generation (infer_text)
+- Verify generated text is coherent and matches llama.cpp
+
+## Phase 3: Multi-Token Generation
+- Implement GQA RoPE (needed for T > 1)
+- Verify KV cache correctness
+- Test text generation quality

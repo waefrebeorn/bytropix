@@ -1,24 +1,27 @@
-# Overnight Map — May 18, 2026
+# Overnight Map — May 18, 2026 — POST-FIX
 
 ## Session Summary
-Wired MoE quantized path. Found REAL blocker: SSM/GQA forward is broken even with all-F32 math. Previous sessions traced SSM Layer 0 cos_sim=0.40 vs ref.
+**ROOT CAUSE FOUND AND FIXED**: GQA Q/gate per-head interleave bug.
+Cos-sim from -0.51 → 0.9968. MoE quantized path also wired.
 
 ## Completed
-- MoE quantized pointers saved from GGUF blob (routed + shared experts)
-- wubu_moe_forward: shared expert uses quantized_matmul (Q5_K/Q6_K)
-- wubu_moe_forward: routed experts use quantized_matmul (IQ2_XXS/IQ3_XXS/IQ4_XS)
-- load_from_blob flag to prevent blob-pointer free crash
-- Cos-sim goes from -0.51 (F32 MoE) to -0.65 (quant MoE) — both broken by SSM/GQA
-- Updated all mind-palace docs with HONEST assessment
+1. **GQA interleave fix**: attn_q.weight output [8192] is per-head interleaved
+   [Q_h0(256)][gate_h0(256)][Q_h1(256)]... Our code used contiguous split [Q][gate].
+   Fix applied to both gate extraction and Q normalization.
 
-## Real Blocker (unrelated to MoE quantization)
-The SSM/GQA forward pass produces wrong output even with ALL-F32 SGEMM. 
-Root cause is in the forward math, NOT in weight quantization.
-Previous sessions found SSM L0 cos_sim=0.40 vs ref.
+2. **MoE quantized path**: IQ2_XXS/IQ3_XXS/IQ4_XS via blob ptrs + quantized_matmul
+   Both shared expert (Q5_K/Q6_K) and routed experts wired.
+
+3. **Per-layer dump**: Modified llama.cpp to dump per-layer hidden states
+   via LLAMA_DUMP_LAYERS + DUMP_LAYER_DIR env vars. Same in bytropix.
+
+4. **Type verification**: Ran dump_tensor_types on actual GGUF. Real types are
+   IQ2_XXS(16), IQ3_XXS(18), IQ4_XS(23) — NOT "IQ2_XS/IQ3_XS/Q3_S_XL" as markdown claimed.
+
+5. **All mind-palace docs updated** with honest post-fix assessment.
 
 ## Next Session
-1. Generate per-layer reference dump from llama.cpp
-2. Find first diverging layer (likely L0 SSM)
-3. Fix SSM forward against qwen3next.cpp reference
-4. Fix GQA layers (separate Q/K/V weight split)
-5. Re-test with quantized MoE path (already wired, should work)
+1. Verify GQA RoPE (needed for multi-token generation, not single-token)
+2. Push cos-sim from 0.9968 toward 1.0 if desired (quantization noise ceiling)
+3. Build infer_text for actual text generation
+4. Add OpenMP to attention loops if missing

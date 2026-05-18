@@ -10,16 +10,19 @@
 - GQA: 16 Q heads, 2 KV heads, head_dim=256
 - MoE: 256 experts, top-8 routed + 1 shared (activated per token)
 
-## Actual GGML Types (verified May 18 via tensor inspection)
-| Type | GGML Code | Count | Used For |
-|------|-----------|-------|----------|
-| F32  | 0         | 361   | Norms, biases, routers, small proj |
-| Q4_K | 12        | 1     | output.weight ONLY |
-| Q5_K | 13        | 181   | attn_qkv, attn_q/k/v, attn_gate, shared gate/up, token_embd |
-| Q6_K | 14        | 70    | SSM output proj, shared down |
-| IQ2_XS | 16     | 80    | MoE ffn_gate_exps + ffn_up_exps |
-| IQ3_XS | 18     | 37    | MoE ffn_down_exps (all layers except 34,38,39) |
-| Q3_S_XL | 23    | 3     | MoE ffn_down_exps L34, L38, L39 |
+## Actual GGML Types (verified May 18 via tensor inspection — NOT markdown guesses)
+| Type ID | GGML Name | Count | Used For |
+|---------|-----------|-------|----------|
+| 0       | F32       | 361   | Norms, biases, routers, small proj |
+| 12      | Q4_K      | 1     | output.weight ONLY |
+| 13      | Q5_K      | 181   | attn_qkv, attn_q/k/v, attn_gate, shared gate/up, token_embd |
+| 14      | Q6_K      | 70    | SSM output proj, shared down |
+| 16      | IQ2_XXS   | 80    | MoE ffn_gate_exps + ffn_up_exps |
+| 18      | IQ3_XXS   | 37    | MoE ffn_down_exps (all except L34,38,39) |
+| 23      | IQ4_XS    | 3     | MoE ffn_down_exps L34, L38, L39 |
+
+IMPORTANT: Earlier docs claimed "IQ2_XS(type16)", "IQ3_XS(type18)", "Q3_S_XL(type23)".
+THESE ARE WRONG. The actual types are IQ2_XXS, IQ3_XXS, IQ4_XS — matching standard llama.cpp enum.
 
 NOTE: "IQ2_M" in the filename is a LABEL for overall compression level, NOT the tensor type.
 The actual types per tensor vary as defined by Unsloth Dynamic 2.0 quantization.
