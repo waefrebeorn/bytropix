@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 // ========== GGUF Tensor Names ==========
 
@@ -421,6 +422,12 @@ void wubu_model_free(wubu_model_t *model) {
     memset(model, 0, sizeof(*model));
 }
 
+static double wall_time(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+
 // ========== Forward Pass ==========
 
 void wubu_model_forward_from_embd(wubu_model_t *model,
@@ -428,20 +435,22 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                                   float *logits) {
     const int N = B * T;
     
-    // Allocate residual stream
+    // Allocate residual stream + reusable buffers (avoids 160 mallocs per forward)
     float *x = (float *)malloc(N * D_MODEL * sizeof(float));
     memcpy(x, embeddings, N * D_MODEL * sizeof(float));
+    float *normed = (float *)malloc(N * D_MODEL * sizeof(float));
+    float *attn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+    float *normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
+    float *ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
     
     // Layer loop
     for (int l = 0; l < model->n_layers; l++) {
         wubu_layer_t *layer = &model->layers[l];
         
         // Pre-attention RMSNorm
-        float *normed = (float *)malloc(N * D_MODEL * sizeof(float));
         wubu_rms_norm(B, T, D_MODEL, x, layer->attn_norm_weight, 1e-6f, normed);
         
-        // Attention
-        float *attn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+        double t0 = wall_time();
         
         if (layer->is_ssm) {
             float *ssm_state = model->ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
@@ -449,6 +458,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out);
         } else {
             wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out);
+        }
+        
+        double t1 = wall_time();
+        if (getenv("PROFILE") && l < 3) {
+            fprintf(stderr, "  L%d %s attn: %.3fms\n", l, layer->is_ssm ? "SSM" : "GQA", (t1 - t0) * 1000.0);
         }
         
         // NaN check: find exact index of first NaN
@@ -469,14 +483,12 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         // Residual: x = x + attn_out
         #pragma omp parallel for if(N * D_MODEL > 500000)
         for (int i = 0; i < N * D_MODEL; i++) x[i] += attn_out[i];
-        free(attn_out);
         
         // Post-attention RMSNorm
-        float *normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
         wubu_rms_norm(B, T, D_MODEL, x, layer->post_attn_norm_weight, 1e-6f, normed2);
         
         // MoE (FFN) forward — use quantized path when available
-        float *ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+        double t_moe0 = wall_time();
         if (layer->moe.loaded && model->enable_moe &&
             (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Quantized path (saved pointers in wubu_model_init)
@@ -495,6 +507,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));
         }
         
+        double t_moe1 = wall_time();
+        if (getenv("PROFILE") && l < 3) {
+            fprintf(stderr, "  L%d MoE: %.3fms\n", l, (t_moe1 - t_moe0) * 1000.0);
+        }
+        
         // Residual: x = x + ffn_out
         #pragma omp parallel for if(N * D_MODEL > 500000)
         for (int i = 0; i < N * D_MODEL; i++) x[i] += ffn_out[i];
@@ -510,10 +527,6 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                 fclose(df);
             }
         }
-        
-        free(normed);
-        free(normed2);
-        free(ffn_out);
     }
     
     // Final RMSNorm
@@ -526,6 +539,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     
     // Output projection (into logits space)
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
+    double t_out0 = wall_time();
     if (model->output_weight_q && model->output_weight_type != GGML_TYPE_F32) {
         // Q4_K quantized matmul path
         for (int i = 0; i < N; i++) {
@@ -536,7 +550,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                              logits + i * model->vocab_size);
         }
         // Compare against F32 SGEMM when output_weight is also loaded
-        if (model->output_weight) {
+        if (model->output_weight && getenv("VERBOSE_OUTPUT_PROJ")) {
             float *f32_logits = (float *)malloc(N * model->vocab_size * sizeof(float));
             #pragma omp parallel for collapse(2) if(N * model->vocab_size > 100000)
             for (int i = 0; i < N; i++) {
@@ -561,41 +575,20 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                     dot / (sqrt(n1) * sqrt(n2)), max_e);
             free(f32_logits);
         }
-    } else if (model->output_weight) {
-        // F32 SGEMM path (also compute for comparison)
-        float *f32_logits = (float *)malloc(N * model->vocab_size * sizeof(float));
-        #pragma omp parallel for collapse(2) if(N * model->vocab_size > 100000)
-        for (int i = 0; i < N; i++) {
-            for (int j = 0; j < model->vocab_size; j++) {
-                const float *h_i = x + i * D_MODEL;
-                float *log_i = f32_logits + i * model->vocab_size;
-                double sum = 0.0;
-                for (int k = 0; k < D_MODEL; k++)
-                    sum += (double)h_i[k] * (double)model->output_weight[j * D_MODEL + k];
-                log_i[j] = (float)sum;
-            }
+        double t_out1 = wall_time();
+        if (getenv("PROFILE")) {
+            fprintf(stderr, "  Output proj: %.3fms\n", (t_out1 - t_out0) * 1000.0);
         }
-        // Compare Q4_K vs F32
-        if (model->output_weight_q) {
-            double dot=0, n1=0, n2=0, max_e=0;
-            for (int i = 0; i < N * model->vocab_size; i++) {
-                dot += (double)logits[i] * (double)f32_logits[i];
-                n1  += (double)logits[i] * (double)logits[i];
-                n2  += (double)f32_logits[i] * (double)f32_logits[i];
-                double e = fabs((double)logits[i] - (double)f32_logits[i]);
-                if (e > max_e) max_e = e;
-            }
-            fprintf(stderr, "  [output proj] cos-sim Q4K vs F32 = %.10f, max_err=%.6f\n",
-                    dot / (sqrt(n1) * sqrt(n2)), max_e);
-        }
-        memcpy(logits, f32_logits, N * model->vocab_size * sizeof(float));
-        free(f32_logits);
     } else {
         // Fallback: copy hidden states only (no output weight loaded)
         memcpy(logits, x, N * D_MODEL * sizeof(float));
     }
     
     free(x);
+    free(normed);
+    free(attn_out);
+    free(normed2);
+    free(ffn_out);
 }
 
 // ========== Backward Pass ==========

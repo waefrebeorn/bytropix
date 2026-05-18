@@ -1,43 +1,28 @@
-# State — May 18, 2026 — POST-FIX
+# State — May 18, 2026 — POST-OPTIMIZATION v2
 
-## REAL STATUS: GQA interleave bug FIXED. Cos-sim 0.9968 vs reference.
+## REAL STATUS: GQA interleave bug FIXED. Cos-sim 0.9969. gen_text coherent. 0.6 tok/s.
 
 ## Verified Runtime Results
-- Full 40L + quantized MoE: cos-sim **0.9968146876** vs llama.cpp
-- All 40 layers cos-sim > 0.995 (no divergence at any layer)
-- Per-layer comparison via DUMP_LAYER_DIR: our vs ref every layer ✓
+- Full 40L + quantized MoE: cos-sim **0.9969086** vs llama.cpp
+- All 40 layers cos-sim > 0.995 (quantization noise only)
+- Per-layer decay: 0.9985 → 0.9952 — quantization noise accumulation, not bug
 - Output projection Q4_K: cos-sim 0.99995 vs F32 SGEMM ✓
+- gen_text: "The capital of France is" → "the city of Paris." (coherent 32-token gen)
 
-## What's Wired
-- SSM projections (QKV, gate, output): quantized_matmul (Q5_K/Q6_K) ✓
-- GQA projections (Q, K, V, output): quantized_matmul (Q5_K) ✓ after interleave fix
-- MoE shared expert (gate/up/down): quantized_matmul (Q5_K/Q6_K) ✓
-- MoE routed experts (gate/up/down): quantized_matmul (IQ2_XXS/IQ3_XXS/IQ4_XS) ✓
-- Router (ffn_gate_inp): F32 from blob pointer ✓
-- Shared expert gate (ffn_gate_inp_shexp): F32 from blob pointer ✓
-- All via load_from_blob flag (no double-free) ✓
+## Performance (CPU, 16 threads, 2.7bpw 35B MoE)
+- Decode: 0.6 tok/s (2× improvement from MoE OpenMP + embedding fix)
+- Prefill: 1.4 tok/s
+- MoE: 15ms/layer (3× from OpenMP), SSM: 13ms/layer, GQA: 15ms/layer
+- Malloc reduction: 160 mallocs → 5 per forward (pre-allocated buffers)
+- PROFILE env var enabled for per-layer timing
 
-## Actual GGUF Types (verified by dump_tensor_types — NOT markdown guesses):
-| Type ID | Name     | Count | Used For |
-|---------|----------|-------|----------|
-| 0       | F32      | 361   | Norms, biases, routers, small proj |
-| 12      | Q4_K     | 1     | output.weight ONLY |
-| 13      | Q5_K     | 181   | attn_qkv, attn_q/k/v, attn_gate, shared gate/up, token_embd |
-| 14      | Q6_K     | 70    | SSM output proj, shared down |
-| 16      | IQ2_XXS  | 80    | MoE gate_exps + up_exps (NOT "IQ2_XS"!) |
-| 18      | IQ3_XXS  | 37    | MoE down_exps (NOT "IQ3_XS"!) |
-| 23      | IQ4_XS   | 3     | down_exps L34/L38/L39 (NOT "Q3_S_XL"!) |
-
-## Remaining Gap (0.9968 → 1.0)
-The 0.003 gap is from quantized_matmul's Q8_K input quantization + generic C vec_dot (vs llama.cpp's SIMD). Each layer accumulates ~0.0003 error from quantization noise.
-- Q4_K/Q5_K/Q6_K vec_dot: cos-sim 0.99996 vs F32 SGEMM (unit test)
-- IQ2_XXS/IQ3_XXS/IQ4_XS vec_dot: cos-sim 0.9999 vs F32 SGEMM (unit test)
-- The gap is in the vec_dot functions vs llama.cpp's reference implementations, not the architecture
-
-## Code Files Changed This Session
-1. include/wubu_moe.h — quantized ptr fields + load_from_blob flag
-2. src/wubu_moe.c — quantized matmul path for MoE (shared + routed)
-3. src/wubu_model.c — save MoE pointers from blob; fix free; per-layer dump
-4. src/wubu_ssm.c — GQA Q/gate interleave fix (THE root cause)
-5. src/llama-context.cpp — per-layer dump infrastructure (debug helper)
-6. src/models/qwen35moe.cpp — LLAMA_DUMP_LAYERS support (debug helper)
+## DA v10 Gaps Status
+- Gap 1-2 (dequant noise): CLOSED — Q4_K output proj ✓
+- Gap 3 (decode pipeline): CLOSED — gen_text working ✓
+- Gap 4 (MoE perf): CLOSED — OpenMP + thread-local ✓
+- Gap 5 (shared expert gate): OPEN — sigmoid(fn_gate_inp_shexp) NOT applied
+- Gap 6 (SSM norm): CLOSED — verified via cos-sim ✓
+- Gap 7 (chat template): OPEN — no chat template in gen_text
+- Gap 8 (tensor audit): CLOSED — all 733 tensors loaded per GGUF ✓
+- Gap 9 (final norm): CLOSED — verified ✓
+- Gap 10 (ground truth): CLOSED — cos-sim 0.9969 ✓
