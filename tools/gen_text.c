@@ -73,13 +73,45 @@ int main(int argc, char **argv) {
     int D = D_MODEL;
     int vs = mdl.vocab_size;
 
-    // Tokenize prompt
-    int prompt_tokens[512];
-    int n_prompt = wubu_tokenizer_encode(&tok, prompt, prompt_tokens, 512);
-    if (n_prompt <= 0) {
-        fprintf(stderr, "Tokenization failed\n");
-        prompt_tokens[0] = tok.bos_id >= 0 ? tok.bos_id : 248044;
-        n_prompt = 1;
+    // Tokenize prompt (with optional chat template)
+    int prompt_tokens[1024];
+    int n_prompt;
+    int chat_mode = getenv("CHAT") != NULL;
+    if (chat_mode) {
+        // Qwen chat template: <|im_start|>system\n...<|im_end|>\n<|im_start|>user\n[PROMPT]<|im_end|>\n<|im_start|>assistant\n<think>\n
+        const int IM_START = 248045, IM_END = 248046, THINK = 248068, NL_TOKEN = 198;
+        int pos = 0;
+        prompt_tokens[pos++] = tok.bos_id;  // BOS
+        prompt_tokens[pos++] = IM_START;    // <|im_start|>
+        int n = wubu_tokenizer_encode(&tok, "system\nYou are a helpful assistant.",
+                                      prompt_tokens + pos, 1024 - pos);
+        if (n <= 0) { fprintf(stderr, "Tokenization failed (system)\n"); return 1; }
+        pos += n;
+        prompt_tokens[pos++] = IM_END;      // <|im_end|>
+        prompt_tokens[pos++] = NL_TOKEN;    // \n
+        prompt_tokens[pos++] = IM_START;    // <|im_start|>
+        n = wubu_tokenizer_encode(&tok, "user\n", prompt_tokens + pos, 1024 - pos);
+        if (n <= 0) { fprintf(stderr, "Tokenization failed (role)\n"); return 1; }
+        pos += n;
+        n = wubu_tokenizer_encode(&tok, prompt, prompt_tokens + pos, 1024 - pos);
+        if (n <= 0) { fprintf(stderr, "Tokenization failed\n"); return 1; }
+        pos += n;
+        prompt_tokens[pos++] = IM_END;      // <|im_end|>
+        prompt_tokens[pos++] = NL_TOKEN;    // \n
+        prompt_tokens[pos++] = IM_START;    // <|im_start|>
+        n = wubu_tokenizer_encode(&tok, "assistant\n", prompt_tokens + pos, 1024 - pos);
+        if (n <= 0) { fprintf(stderr, "Tokenization failed (assistant)\n"); return 1; }
+        pos += n;
+        prompt_tokens[pos++] = THINK;       // <think>
+        prompt_tokens[pos++] = NL_TOKEN;    // \n
+        n_prompt = pos;
+    } else {
+        // Raw prompt (no chat template)
+        n_prompt = wubu_tokenizer_encode(&tok, prompt, prompt_tokens, 1024);
+        if (n_prompt <= 0) {
+            prompt_tokens[0] = tok.bos_id >= 0 ? tok.bos_id : 248044;
+            n_prompt = 1;
+        }
     }
     printf("Prompt: %d tokens\n", n_prompt);
 
