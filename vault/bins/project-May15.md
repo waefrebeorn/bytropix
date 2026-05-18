@@ -1,39 +1,46 @@
-# WuBuText AI — Project Overview (May 15 PM v6)
+# bytropix — Project Overview (May 18 — Phase 2 Complete)
 
 ## Mission
-Build Qwen3.6-35B-A3B from scratch in pure C + CUDA with WuBu nested hyperbolic geometry.
-**All phases complete.** Training at 11s/step (16× improvement). Zero NaN all configs.
+Build Qwen3.6-35B-A3B inference from scratch in C + CUDA.
+**Phase 2 complete:** 0.6 tok/s decode, cos-sim 0.9968 vs llama.cpp.
 
-## All Phases Complete ✅
+## Components
 
-| Phase | Component | Status | Key Metric |
-|-------|-----------|--------|------------|
-| 0 | GGUF Tensor Layout | ✅ | 733 tensors, 13 types |
-| 1 | Embedding Graft | ✅ | 95% NN preservation, R=0.956 |
-| 2 | Attention Port (SSM+GQA) | ✅ | 30 SSM + 10 GQA layers, CPU/GPU |
-| 3 | Training Loop | ✅ | 11s/step, CE 21.6→18.4, 0 NaN |
-| 4 | MoE Port | ✅ | 256 expert, lazy dequant 9×, persistent buffers |
-| 5 | Vision Port | ✅ | 27-layer 3D ViT, 99ms GPU, 0 NaN |
-| 6 | CUDA Optimization | ✅ | SSM scan + MoE dispatch, cublas proj |
+| Component | Implementation | Status |
+|-----------|---------------|--------|
+| GGUF reader | `gguf_reader.c` — 7 dequant types | ✅ In use |
+| SSM forward | `wubu_ssm.c` — Gated DeltaNet | ✅ Verified |
+| GQA forward | `wubu_ssm.c` — IMRoPE + attention | ✅ Verified |
+| MoE forward | `wubu_moe.c` — router + experts | ✅ Verified |
+| Output proj | `quantized_matmul.c` — Q4_K matmul | ✅ cos-sim 0.99995 |
+| gen_text | `tools/gen_text.c` — full pipeline | ✅ Working |
+| ref_dumper | `tools/ref_dumper.cpp` — libllama.so | ✅ Ground truth |
 
-## Key Achievements
+## Key Achievements (May 18)
 
-- **gguf_raw_size(IQ2_XXS) fix**: 72→66 bytes/block — eliminated NaN cascade
-- **Per-expert IQ2_XXS dequant**: 3.9ms/expert vs 3GB full dequant — **177s→11s/step (16×)**
-- **GPU output projection**: cublasSgemm replaces 2B CPU FMAs (V=248320, D=2048)
-- **7 cold gaps all closed**: Every backward pass verified (Poincaré GQA, Nested SSM K=1/2/3, M⊗, gyration, hyperbolic output proj, MoE 2-level, hyperbolic KV cache)
-- **6 env flags all verified**: TST/RSGD/PGA/NSSM/NMOE/POINCARE_R — individually + combined, 0 NaN
-- **GPU vision**: Full 27-layer 3D ViT at 99ms/128×128, text-pipeline integrated
+- **GQA Q/gate interleave bug FIXED**: cos-sim -0.51 → 0.9968
+- **IMRoPE implemented**: sections [11,11,10,0], theta=10M
+- **MoE OpenMP**: 3× speedup (44ms→15ms per layer)
+- **Buffer reuse**: 160 mallocs → 5 per forward pass
+- **gen_text**: coherent English generation at 0.6 tok/s
+- **DA v10 gaps**: 8/10 closed. Chat template remains.
+
+## Performance
+
+| Metric | Value | Target |
+|--------|-------|--------|
+| Decode | 0.6 tok/s | >1 tok/s |
+| Prefill | 1.0-1.4 tok/s | >5 tok/s |
+| Cos-sim | 0.9968 | 1.0 (requires SIMD vec_dot) |
+| Per-layer | all > 0.995 | all > 0.999 |
 
 ## Remaining
 
-| Issue | Severity |
-|-------|----------|
-| ~11s/step GPU compute bound (40 layers SSM/GQA on RTX 5050) | Performance |
-| PGA loss jump (21.6→69) | Numeric — LR too high for PGA backward |
-| CONV_DIM=8192 vs config 1536 | Possible SSM layernorm/conv discrepancy |
-| MRoPE 3D not implemented | Position encoding degrades at >32K |
-| MTP prediction head missing | 1-layer future token prediction |
-| 12 vaults with unported theory | Python/JAX prototypes waiting for C port |
-| **Tailslayer spec-decode kernel (new May 15)** | Hedged-read CUDA: N drafts, first-valid-wins |
-| Sliding window pair sampling for draft-target alignment | P2 |
+| Issue | Priority | Notes |
+|-------|----------|-------|
+| Chat template | P0 | Quality fix for gen_text |
+| Multi-token verify | P0 | T>1 cos-sim unknown |
+| KV cache | P1 | ~10% decode speedup |
+| SIMD vec_dot | P1 | cos-sim → 1.0 |
+| GPU decode | P2 | 5-10× speedup expected |
+| WuBu geometry | P3 | Research code only |

@@ -1,38 +1,38 @@
-=== WuBuText AI — GOAL PASTE (May 15 PM v10) ===
+=== bytropix — GOAL PASTE (May 18 — Phase 2 Complete) ===
 
-STATE: infer_text_gpu v5 — chunked prefill + persistent KV cache + incremental decode.
-GPU fwd WIRED: GQA via chunked_attn (cuBLAS per-head SGEMM), SSM via gpu_ssm_forward.
-Decode 245 tok/s (2.9× vs v4). Prefill 22 tok/s.
+STATE: gen_text working. Cos-sim 0.9968 vs llama.cpp (quantization noise).
+Decode 0.6 tok/s (2× from MoE OpenMP + buffer reuse). Prefill 1.0-1.4 tok/s.
+DA v10: 8/10 gaps closed. Remaining: chat template (Gap 7).
 
-=== COMPLETED (May 15 PM) ===
-- infer_text_gpu v5: Chunked prefill (CHUNK env, default 256)
-- infer_text_gpu v5: Persistent GPU KV cache per GQA layer [maxT, kv_dim]
-- infer_text_gpu v5: Incremental decode (no full-sequence recompute)
-- infer_text_gpu v5: SSM state carries across chunks and decode
-- infer_text_gpu v5: chunked_attn CUDA kernel (cuBLAS SGEMM + softmax + gate + output proj)
-- infer_text_gpu v5: RoPE table with 4× extrapolation (Qwen2.5-1M formula)
-- infer_text_gpu v5: wubu_cuda_rms_norm_heads kernel (per-head RMSNorm for GQA)
-- infer_text_gpu v5: Verified: output matches v4 (full recompute) exactly
+=== COMPLETED ===
+- GQA Q/gate interleave FIXED: cos-sim -0.51 → 0.9968
+- IMRoPE implemented (sections [11,11,10,0], theta=10M) ✓
+- MoE quantized path wired (IQ2_XXS/IQ3_XXS/IQ4_XS via blob) ✓
+- ref_dumper tool (links libllama.so) ✓
+- gen_text pipeline working ✓ (coherent 32-token gen)
+- Performance: 0.3→0.6 tok/s (2×) — MoE OpenMP, embedding fix, buffer reuse
+- Malloc reduction: 160→5 per forward (pre-allocated buffers)
+- Vault papers read: Qwen3.6 arch, Unsloth UD quant, DA v10, 23 MD files
+- All mind palace, README, STATUS files updated to Phase 2 status
+- MADE_AGENTICALLY_BY_HERMES.md essay written with DA verification
+- status-may18-2026.svg diagram generated
 
 === PENDING ===
-P0 — GPU MoE forward (cuBLAS SGEMM expert dispatch)
-P0 — Chunked attention internal tiling for 256K (score scratch O(C*n_q*T))
-P1 — Tailslayer spec decode (N drafts → longest-valid-prefix)
-P2 — PGA LR tuning (lr_gqa=lr*0.001 or gradient clip)
-P2 — Multi-step convergence (100+ steps)
-P3 — MRoPE 3D
+P0 — Chat template (gen_text improvement)
+P0 — Multi-token cos-sim verification (T>2)
+P1 — KV cache for GQA decode (~10% speedup)
+P1 — SIMD vec_dot for cos-sim → 1.0
+P2 — GPU decode path (~5-10× speedup)
 
-=== 256K CONTEXT ROADMAP ===
-KV cache:  ✅ GPU persistent per-layer (v5)
-SSM carry: ✅ State persists between steps (v5)
-Chunked:   ✅ CHUNK env, multi-chunk verified (v5)
-GPU fwd:   ✅ Wired into prefill + decode (v5)
-MoE GPU:   ❌ CPU lazy MoE still bottleneck (MOE=1: ~3s/token)
-Tailslayer:❌ Not started
+=== GROUND TRUTH ===
+Reference: ~/llama.cpp/src/models/qwen35moe.cpp
+Dumper: ~/bytropix/ref_dumper (links libllama.so)
+Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+Hidden dump: DUMP_LAYER_DIR=/tmp/dump_layers
 
-BUILD: make infer_text | MODEL from GGUF
-HW: RTX 5050, sm=120, NVCC=/usr/local/cuda-13.1/bin/nvcc
+BUILD: make gen_text | MODEL: GGUF
+HW: AMD Ryzen 7950X 16C/32T, 64GB DDR5
 
-TGT: remainder = fmod(x+π, 2π)-π | tgt_safe_expf: clamp [-80,80]
-
-Every fix: compile → run → output → verify. No "should work."
+UNIT TEST:
+make test_full_moe && PROFILE=1 ./test_full_moe
+# Expect: cos-sim 0.9968, MoE 15ms, SSM 13ms

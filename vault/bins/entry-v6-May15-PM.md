@@ -1,77 +1,37 @@
-# WuBuText AI — Entry Point (May 15 PM v6)
-
-## Purpose
-Build commands, hardware spec, quick-start.
-
----
+# bytropix — Quick Start (May 18 — Phase 2 Complete)
 
 ## Hardware
-- **GPU:** NVIDIA RTX 5050, 6.4GB VRAM, sm=120
-- **NVCC:** /usr/local/cuda-13.1/bin/nvcc -arch=sm_120
-- **CPU:** AMD 16+ cores, 25GB RAM
+AMD Ryzen 7950X (16C/32T), 64GB DDR5, RTX 5050 6.4GB
 
-## Run API Server
+## Model
+/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (2.7 bpw, 10.7 GB)
+
+## Build & Run
 ```bash
-# Sandbox mode (no GPU, fake responses, fake keys)
-python3 tools/serve.py --sandbox --port 8080
+# Text generation
+cd ~/bytropix && make gen_text
+./gen_text "The capital of France is" 32
 
-# Production mode (uses real inference)
-python3 tools/serve.py --port 8080 --model /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+# Cos-sim verification vs llama.cpp
+make test_full_moe
+./test_full_moe
 
-# Test the API
-bash tests/test_api.sh              # full suite (14 tests)
-curl http://localhost:8080/v1/models  # list models
-curl http://localhost:8080/health     # health check
+# Per-layer timing
+PROFILE=1 ./test_full_moe
+
+# Reference dumps (requires libllama.so)
+make ref_dumper
+LLAMA_DUMP_LAYERS=1 DUMP_LAYER_DIR=/tmp/ref ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf 248044
 ```
 
-## Build
-```bash
-make train_integrated      # Primary training binary (11s/step)
-make bench_e2e             # Full 40-layer GPU vs CPU benchmark
-make test_gpu              # GPU forward pass test
-make infer_poincare        # Poincaré SSM inference (2835 tok/s)
-make infer_moe_lazy        # Lazy MoE dequant
-make infer_unified         # 40-layer SSM→GQA→MoE
-make test_kv_cache         # GQA KV cache test (256K ctx)
-make infer_vision_gpu      # GPU vision 128×128 in 99ms
-make train_real            # CPU training pipeline (reference)
-make infer_text_gpu        # GPU-accelerated inference v5 (245 tok/s)
-```
+## Current Status
+- Cos-sim: 0.9968 vs llama.cpp (T=1, single token)
+- Decode: 0.6 tok/s (16 threads, CPU)
+- Prefill: 1.0-1.4 tok/s
+- Output: coherent English text
+- All 40 layers > 0.995 cos-sim
 
-## Run Tests
-```bash
-bash tests/run.sh           # 20 tests, all must PASS, ~3 min
-bash tests/run.sh --full    # includes MOE=1 (~8 min)
-```
-
-## Run Training
-```bash
-# Default (no flags)
-./train_integrated /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf data/train_data.bin 10
-
-# With hyperbolic flags
-TST=1 RSGD=1 NESTED_SSM=1 NESTED_MOE=1 POINCARE_R=0.956 ./train_integrated ...
-```
-
-## File Layout
-```
-src/          — Core: ssm, moe, model, gguf_reader, cuda_kernels, vision
-include/      — Headers
-tools/        — train_integrated, train_gpu, infer_*, test_*
-data/         — embeddings, tokenizer, training data
-.hermes/       — Mind palace, vault, research, references
-DIAGRAMS/      — 7 SVG architecture diagrams
-THEORY/        — Papers, math, vault references
-/models/       — GGUF (Qwen3.6-35B-A3B-UD-IQ2_M.gguf)
-```
-
-## External Repos (for reference)
-- `~/HASHMIND/tailslayer/` — Hedged-read C++ library (spec-decode inspiration, P2)
-- `~/HASHMIND/llama-cpp-rotorquant/` — llama.cpp fork with Hamilton encoder CUDA kernels
-- `~/HASHMIND/HAS/` — WuBu research (JAX prototypes, vault originals)
-
-## Key Docs
-- `.hermes/mind-palace/goal-mantra.md` — Prestige paste, full state
-- `.hermes/mind-palace/plan.md` — Priority queue + vault + tailslayer
-- `.hermes/vault/tailslayer/` — Tailslayer findings (May 15)
-- `README.md` — Full project overview
+## Key Config
+- Compiler: gcc/g++ with -O3 -march=native -fopenmp
+- OpenMP threads: 16 (auto-detected)
+- Embedding cache: data/qwen36_embeddings_c.bin.raw (1.9 GB)
