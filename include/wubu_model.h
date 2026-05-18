@@ -64,6 +64,9 @@ typedef struct {
     // Enable MoE during forward (default: false for memory reasons)
     bool enable_moe;
     
+    // Skip output projection in forward (for GPU offload)
+    bool skip_output_proj;
+    
     // MoE test: only load MoE for first N layers (0 = all)
     int moe_max_layers;
 } wubu_model_t;

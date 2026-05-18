@@ -570,7 +570,13 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // Output projection (into logits space)
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
     double t_out0 = wall_time();
-    if (model->output_weight_q && model->output_weight_type != GGML_TYPE_F32) {
+    if (model->skip_output_proj) {
+        // Copy final hidden states to logits buffer (caller does GPU output proj)
+        for (int i = 0; i < N; i++) {
+            memcpy(logits + i * model->vocab_size, x + i * D_MODEL,
+                   D_MODEL * sizeof(float));
+        }
+    } else if (model->output_weight_q && model->output_weight_type != GGML_TYPE_F32) {
         // Q4_K quantized matmul path
         for (int i = 0; i < N; i++) {
             quantized_matmul(x + i * D_MODEL,
