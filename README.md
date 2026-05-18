@@ -21,11 +21,13 @@
 
 ### Known Bugs
 
-| Bug | Status | Impact |
-|-----|--------|--------|
-| **Chat template** | ❌ Not applied | Minor quality issue — model works anyway |
-| **SSM L2 eps** | ⚠️ 1e-12 vs 1e-6 | Not blocking (cos-sim still 0.9968) |
-| **Vault stale** | ⚠️ vault/bins/ needs update | Cosmetic — docs lag behind code |
+No remaining DA-v10 gaps. All 10 closed.
+
+| Issue | Status | Notes |
+|-------|--------|-------|
+| **Chat template** | ✅ Fixed (CHAT=1 env var) | Generates structured reasoning |
+| **SSM L2 eps** | ⚠️ 1e-12 vs 1e-6 | Not blocking (cos-sim 0.9968) |
+| **No SIMD vec_dot** | ⚠️ Generic C | ~0.003 cos-sim gap |
 
 ---
 

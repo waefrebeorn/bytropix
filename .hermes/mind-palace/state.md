@@ -20,9 +20,10 @@
 - Gap 1-2 (dequant noise): CLOSED — Q4_K output proj ✓
 - Gap 3 (decode pipeline): CLOSED — gen_text working ✓
 - Gap 4 (MoE perf): CLOSED — OpenMP + thread-local ✓
-- Gap 5 (shared expert gate): OPEN — sigmoid(fn_gate_inp_shexp) NOT applied
+- Gap 5 (shared expert gate): CLOSED — sigmoid verified ✓
 - Gap 6 (SSM norm): CLOSED — verified via cos-sim ✓
-- Gap 7 (chat template): OPEN — no chat template in gen_text
-- Gap 8 (tensor audit): CLOSED — all 733 tensors loaded per GGUF ✓
+- Gap 7 (chat template): **CLOSED** — CHAT=1 env var ✓
+- Gap 8 (tensor audit): CLOSED — all 733 tensors loaded ✓
 - Gap 9 (final norm): CLOSED — verified ✓
 - Gap 10 (ground truth): CLOSED — cos-sim 0.9969 ✓
+**9/10 closed.**
