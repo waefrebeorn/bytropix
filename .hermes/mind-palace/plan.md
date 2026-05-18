@@ -1,4 +1,4 @@
-# Plan — May 18, 2026 — DA ALL CLOSED. PHASE 3: SIMD vec_dot
+# Plan — May 18, 2026 — PHASE 4 DONE. NEXT: GPU DECODE.
 
 ## Phase 0: CORE INFERENCE FIXED ✓
 ### Achievements:
@@ -73,8 +73,17 @@ These only affect MoE experts (80+37+3 tensors), not the critical path. Low prio
 - Decode: 0.7 tok/s (no improvement — MoE bottleneck, not matmul)
 - Conclusion: Q4_K/Q5_K/Q6_K matmuls were not the bottleneck
 
-## Phase 4: KV Cache for GQA Decode [ACTIVE]
-- Implement K/V cache buffers per GQA layer
-- Append-only: QKV_proj → RoPE → append to cache
-- Attention against ALL cached positions (no recompute)
-- Impact: ~10% decode speedup
+## Phase 4: KV Cache for GQA Decode [DONE ✓]
+- K/V cache buffers per GQA layer [10][4096][512]
+- Append-only: K_norm, V computed per-token, appended to cache
+- Attention attends to ALL cached positions (correctness fix)
+- Impact: decode now attends to all previous tokens
+- cos-sim unchanged for T=1 (cache_len=0 path identical)
+
+## Phase 5: GPU Decode Path [NEXT]
+Wire existing CUDA kernels (gpu_gqa_forward, gpu_ssm_forward, cublas output proj) into gen_text.
+- Keep model weights on GPU where possible (6.4GB VRAM constraint)
+- Offload output projection (2048×248320 = 2B FMAs) to cuBLAS
+- Offload SSM/GQA quantized_matmul to GPU
+- MoE remains on CPU (weights too large for VRAM)
+- Target: 2-5 tok/s decode
