@@ -975,6 +975,69 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
     return (int)n_elems;
 }
 
+// Read a float32 KV pair from the GGUF file by re-opening it (independent of ctx->file)
+float gguf_read_kv_f32(const char *path, const char *key, float default_val) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return default_val;
+    
+    // GGUF header after magic(4): version(4) + n_tensors(8) + n_kv(8)
+    fseek(f, 4, SEEK_SET);
+    uint32_t version = read_u32(f); (void)version;
+    int64_t n_tensors = read_i64(f); (void)n_tensors;
+    int64_t n_kv = read_i64(f);
+    
+    for (int64_t i = 0; i < n_kv; i++) {
+        uint64_t key_len = read_u64(f);
+        char kbuf[256];
+        size_t read_len = key_len < 255 ? key_len : 255;
+        if (fread(kbuf, 1, read_len, f) != read_len) { fclose(f); return default_val; }
+        kbuf[read_len] = '\0';
+        if (read_len < key_len) fseek(f, key_len - read_len, SEEK_CUR);
+        
+        int32_t typ = read_i32(f);
+        
+        if (strcmp(kbuf, key) == 0) {
+            if (typ == 6) { // f32
+                float val;
+                if (fread(&val, sizeof(float), 1, f) == 1) { fclose(f); return val; }
+            }
+            fclose(f);
+            return default_val;
+        } else {
+            // Skip value based on type
+            switch (typ) {
+                case 0: { uint8_t v; fread(&v,1,1,f); break; }
+                case 1: { int8_t v; fread(&v,1,1,f); break; }
+                case 2: { uint16_t v; fread(&v,2,1,f); break; }
+                case 3: { int16_t v; fread(&v,2,1,f); break; }
+                case 4: { uint32_t v; fread(&v,4,1,f); break; }
+                case 5: { int32_t v; fread(&v,4,1,f); break; }
+                case 6: { float v; fread(&v,4,1,f); break; }
+                case 7: { uint64_t v; fread(&v,8,1,f); break; }
+                case 8: { int64_t v; fread(&v,8,1,f); break; }
+                case 9: { double v; fread(&v,8,1,f); break; }
+                case 10: { // bool
+                    uint8_t v;
+                    fread(&v,1,1,f);
+                    break;
+                }
+                default: {
+                    uint64_t arr_len = read_u64(f);
+                    int32_t arr_typ = read_i32(f);
+                    for (uint64_t a = 0; a < arr_len; a++) {
+                        uint8_t discard[8];
+                        fread(discard, 1, 8, f);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    
+    fclose(f);
+    return default_val;
+}
+
 void gguf_close(gguf_ctx *ctx) {
     if (ctx) {
         if (ctx->file) fclose(ctx->file);

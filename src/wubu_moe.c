@@ -456,11 +456,17 @@ void wubu_moe_forward(const float *x, int B, int T,
         }
         
         // ---- Routed expert contributions ----
+        #pragma omp parallel for if(N_ACTIVE_EXPTS > 1)
         for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
             int e = indices_s[k];
             float wgt = weights_s[k];
             
             if (e < 0 || wgt < 1e-30f) continue;
+            
+            // Thread-local scratch (each expert needs its own to avoid race)
+            float gate_out[D_FF];
+            float up_out[D_FF];
+            float act[D_FF];
             
             if (w->ffn_gate_exps_q) {
                 // Quantized path: compute byte offset for this expert
@@ -471,10 +477,6 @@ void wubu_moe_forward(const float *x, int B, int T,
                 const uint8_t *gate_q = w->ffn_gate_exps_q + (int64_t)e * gate_bytes;
                 const uint8_t *up_q   = w->ffn_up_exps_q   + (int64_t)e * up_bytes;
                 const uint8_t *down_q = w->ffn_down_exps_q + (int64_t)e * down_bytes;
-                
-                float *gate_out = expert_temp;
-                float *up_out   = expert_temp + D_FF;
-                float *act      = expert_temp + 2 * D_FF;
                 
                 quantized_matmul(x_s, gate_q, w->ffn_gate_exps_q_type,
                                 D_MODEL, D_FF, 0, gate_out);
@@ -491,6 +493,7 @@ void wubu_moe_forward(const float *x, int B, int T,
                                 D_FF, D_MODEL, 0, expert_out);
                 
                 for (int j = 0; j < D_MODEL; j++)
+                    #pragma omp atomic
                     out_s[j] += wgt * expert_out[j];
             } else {
                 // F32 SGEMM path

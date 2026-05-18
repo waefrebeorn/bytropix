@@ -107,6 +107,28 @@ void wubu_log_map(const float *input, int dim, float R, float *output);
 float wubu_norm(const float *v, int dim);
 float wubu_dot(const float *a, const float *b, int dim);
 
+// IQ block block sizes (256 elements per block)
+#define IQ2_XXS_BLOCK_SIZE 66
+#define IQ3_XXS_BLOCK_SIZE 98
+#define IQ4_XS_BLOCK_SIZE  136
+
+// Block struct for Q8_K (256 elements)
+typedef struct {
+    float   d;               // delta (scale)
+    int8_t  qs[256];         // quants (256 int8 values)
+    int16_t bsums[16];       // sum of quants in groups of 16
+} block_q8_K;
+
+// Quantize F32 values to Q8_K blocks (k must be multiple of 256)
+void quantize_row_q8_K(const float *x, block_q8_K *y, int64_t k);
+
+// Generic Q8_K-based quantized matmul
+void quantized_matmul(const float *x,
+                      const void *W, int weight_type,
+                      int64_t n_rows, int64_t n_cols,
+                      int64_t col_stride_bytes,
+                      float *y);
+
 #ifdef __cplusplus
 }
 #endif

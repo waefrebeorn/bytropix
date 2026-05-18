@@ -1110,7 +1110,52 @@ void wubu_gqa_forward(const float *x, int B, int T,
     // RMSNorm sees [B, T*KV_HEADS, HEAD_DIM] same layout
     wubu_rms_norm(B, T * GQA_KV_HEADS, GQA_HEAD_DIM, K, w->attn_k_norm_weight, 1e-6f, K_norm);
     
-    // Step 4: (RoPE skipped here - will be implemented separately)
+    // Step 4: IMRoPE (Interleaved MultiRoPE)
+    // Qwen3.6: rope.dimension_sections=[11,11,10,0], rope.dimension_count=64, rope.freq_base=10000000.0
+    // For text-only generation: all position IDs equal, reduces to standard RoPE
+    // Apply to first N_ROT=64 dims of each head for both Q and K
+    // N_ROT = 64 = 32 pairs. Standard RoPE: (x_2i, x_{2i+1}) * rotation_matrix(theta_i)
+    // theta_i(t) = t * freq_base^{-2i/N_ROT}
+    {
+        const int n_rot = 64;  // rope.dimension_count
+        const float freq_base = 10000000.0f;
+        const int q_rot_pairs = n_rot / 2;  // 32
+        
+        for (int b = 0; b < B; b++) {
+            for (int t = 0; t < T; t++) {
+                float pos = (float)(b * T + t);
+                
+                // Apply to all 16 Q heads — fully parallel
+                #pragma omp parallel for
+                for (int h = 0; h < GQA_Q_HEADS; h++) {
+                    float *q_h = Q_norm + ((b * T + t) * GQA_Q_HEADS + h) * GQA_HEAD_DIM;
+                    for (int i = 0; i < q_rot_pairs; i++) {
+                        float theta = pos * powf(freq_base, -2.0f * i / (float)n_rot);
+                        float cos_t = cosf(theta);
+                        float sin_t = sinf(theta);
+                        float x0 = q_h[2*i];
+                        float x1 = q_h[2*i+1];
+                        q_h[2*i]   = x0 * cos_t - x1 * sin_t;
+                        q_h[2*i+1] = x0 * sin_t + x1 * cos_t;
+                    }
+                }
+                
+                // Apply to all 2 KV heads
+                for (int h = 0; h < GQA_KV_HEADS; h++) {
+                    float *k_h = K_norm + ((b * T + t) * GQA_KV_HEADS + h) * GQA_HEAD_DIM;
+                    for (int i = 0; i < q_rot_pairs; i++) {
+                        float theta = pos * powf(freq_base, -2.0f * i / (float)n_rot);
+                        float cos_t = cosf(theta);
+                        float sin_t = sinf(theta);
+                        float x0 = k_h[2*i];
+                        float x1 = k_h[2*i+1];
+                        k_h[2*i]   = x0 * cos_t - x1 * sin_t;
+                        k_h[2*i+1] = x0 * sin_t + x1 * cos_t;
+                    }
+                }
+            }
+        }
+    }
     
     // Step 5: GQA Attention
     // 16 Q heads, 2 KV heads. Each KV head serves 8 Q heads.
@@ -1118,7 +1163,9 @@ void wubu_gqa_forward(const float *x, int B, int T,
     
     for (int b = 0; b < B; b++) {
         for (int t_q = 0; t_q < T; t_q++) {
+            #pragma omp parallel for
             for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
+                float attn_weights[4096];  // max T — each thread private
                 int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);  // which KV head serves this Q
                 
                 const float *q_vec = Q_norm + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
@@ -1127,7 +1174,6 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 memset(out_vec, 0, GQA_HEAD_DIM * sizeof(float));
                 
                 // Compute attention over all previous timesteps
-                float attn_weights[4096];  // max T
                 float max_score = -1e30f;
                 
                 // Q @ K^T * scale
