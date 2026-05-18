@@ -29,11 +29,11 @@ Conclusion: No architecture bugs. Gap is generic C vec_dot (no SIMD).
 ✅ Gap 4: MoE perf — CLOSED (3× speedup, thread-local)
 ✅ Gap 5: Shared expert gate — CLOSED (sigmoid applied)
 ✅ Gap 6: SSM norm — CLOSED (cos-sim verified)
-⚠️ Gap 7: Chat template — OPEN (not applied to gen_text)
+✅ Gap 7: Chat template — CLOSED (CHAT=1 env var)
 ✅ Gap 8: Tensor audit — CLOSED
 ✅ Gap 9: Final norm — CLOSED
 ✅ Gap 10: Ground truth — CLOSED (cos-sim 0.9968)
-8/10 closed. 1 open.
+**All 10 gaps closed.**
 
 === NEXT FIX ORDER ===
 1. Add chat template to gen_text (minor quality fix)
