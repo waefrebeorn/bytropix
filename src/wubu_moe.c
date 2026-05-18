@@ -406,40 +406,46 @@ void wubu_moe_forward(const float *x, int B, int T,
         float *shared_act = shared_act_all + s * SHARED_D_FF;
         float *expert_temp = expert_temp_all + s * D_FF * 3;
         
-        // Initialize output with shared expert contribution
-        // gate = x @ gate_shexp  [D_MODEL] @ [D_MODEL, 512] -> [512]
-        for (int j = 0; j < SHARED_D_FF; j++) {
-            float sum = 0.0f;
-            for (int k = 0; k < D_MODEL; k++)
-                sum += x_s[k] * w->ffn_gate_shexp[k + j * D_MODEL];
-            shared_gate[j] = sum;
-        }
-        
-        // up = x @ up_shexp  [D_MODEL] @ [D_MODEL, 512] -> [512]
-        for (int j = 0; j < SHARED_D_FF; j++) {
-            float sum = 0.0f;
-            for (int k = 0; k < D_MODEL; k++)
-                sum += x_s[k] * w->ffn_up_shexp[k + j * D_MODEL];
-            shared_up[j] = sum;
-        }
-        
-        // act = silu(gate) * up
-        for (int j = 0; j < SHARED_D_FF; j++) {
-            float g = shared_gate[j];
-            float silu_g = (g < -80.0f) ? 0.0f : g / (1.0f + expf(-g));
-            shared_act[j] = silu_g * shared_up[j];
-        }
-        
-        // shared_out = act @ down_shexp  [512] @ [512, 2048] -> [2048]
-        for (int j = 0; j < D_MODEL; j++) {
-            float sum = 0.0f;
-            for (int k = 0; k < SHARED_D_FF; k++)
-                sum += shared_act[k] * w->ffn_down_shexp[k + j * SHARED_D_FF];
-            out_s[j] = sum;
+        // ---- Shared expert ----
+        if (w->ffn_gate_shexp_q) {
+            // Quantized path
+            quantized_matmul(x_s, w->ffn_gate_shexp_q, w->ffn_gate_shexp_q_type,
+                            D_MODEL, SHARED_D_FF, 0, shared_gate);
+            quantized_matmul(x_s, w->ffn_up_shexp_q, w->ffn_up_shexp_q_type,
+                            D_MODEL, SHARED_D_FF, 0, shared_up);
+            for (int j = 0; j < SHARED_D_FF; j++) {
+                float g = shared_gate[j];
+                shared_act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * shared_up[j];
+            }
+            quantized_matmul(shared_act, w->ffn_down_shexp_q, w->ffn_down_shexp_q_type,
+                            SHARED_D_FF, D_MODEL, 0, out_s);
+        } else {
+            // F32 SGEMM path
+            for (int j = 0; j < SHARED_D_FF; j++) {
+                float sum = 0.0f;
+                for (int k = 0; k < D_MODEL; k++)
+                    sum += x_s[k] * w->ffn_gate_shexp[k + j * D_MODEL];
+                shared_gate[j] = sum;
+            }
+            for (int j = 0; j < SHARED_D_FF; j++) {
+                float sum = 0.0f;
+                for (int k = 0; k < D_MODEL; k++)
+                    sum += x_s[k] * w->ffn_up_shexp[k + j * D_MODEL];
+                shared_up[j] = sum;
+            }
+            for (int j = 0; j < SHARED_D_FF; j++) {
+                float g = shared_gate[j];
+                shared_act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * shared_up[j];
+            }
+            for (int j = 0; j < D_MODEL; j++) {
+                float sum = 0.0f;
+                for (int k = 0; k < SHARED_D_FF; k++)
+                    sum += shared_act[k] * w->ffn_down_shexp[k + j * SHARED_D_FF];
+                out_s[j] = sum;
+            }
         }
         
         // Apply shared expert output gate: sigmoid(x_s @ ffn_gate_inp_shexp)
-        // If weight is NULL, gate defaults to 1.0 (no gating)
         if (w->ffn_gate_inp_shexp) {
             float gate_val = 0.0f;
             for (int k = 0; k < D_MODEL; k++)
@@ -449,24 +455,55 @@ void wubu_moe_forward(const float *x, int B, int T,
                 out_s[j] *= gate_sig;
         }
         
-        // Add routed expert contributions
+        // ---- Routed expert contributions ----
         for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
             int e = indices_s[k];
             float wgt = weights_s[k];
             
             if (e < 0 || wgt < 1e-30f) continue;
             
-            // Get expert weights (expert e starts at offset e * D_MODEL * D_FF)
-            const float *gate_w = w->ffn_gate_exps + (int64_t)e * D_MODEL * D_FF;
-            const float *up_w   = w->ffn_up_exps   + (int64_t)e * D_MODEL * D_FF;
-            const float *down_w = w->ffn_down_exps  + (int64_t)e * D_FF * D_MODEL;
-            
-            float expert_out[D_MODEL];
-            moe_expert_forward(x_s, gate_w, up_w, down_w, expert_temp, expert_out);
-            
-            // Weighted sum
-            for (int j = 0; j < D_MODEL; j++)
-                out_s[j] += wgt * expert_out[j];
+            if (w->ffn_gate_exps_q) {
+                // Quantized path: compute byte offset for this expert
+                int64_t gate_bytes = gguf_raw_size(w->ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
+                int64_t up_bytes   = gguf_raw_size(w->ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
+                int64_t down_bytes = gguf_raw_size(w->ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);
+                
+                const uint8_t *gate_q = w->ffn_gate_exps_q + (int64_t)e * gate_bytes;
+                const uint8_t *up_q   = w->ffn_up_exps_q   + (int64_t)e * up_bytes;
+                const uint8_t *down_q = w->ffn_down_exps_q + (int64_t)e * down_bytes;
+                
+                float *gate_out = expert_temp;
+                float *up_out   = expert_temp + D_FF;
+                float *act      = expert_temp + 2 * D_FF;
+                
+                quantized_matmul(x_s, gate_q, w->ffn_gate_exps_q_type,
+                                D_MODEL, D_FF, 0, gate_out);
+                quantized_matmul(x_s, up_q, w->ffn_up_exps_q_type,
+                                D_MODEL, D_FF, 0, up_out);
+                
+                for (int j = 0; j < D_FF; j++) {
+                    float g = gate_out[j];
+                    act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * up_out[j];
+                }
+                
+                float expert_out[D_MODEL];
+                quantized_matmul(act, down_q, w->ffn_down_exps_q_type,
+                                D_FF, D_MODEL, 0, expert_out);
+                
+                for (int j = 0; j < D_MODEL; j++)
+                    out_s[j] += wgt * expert_out[j];
+            } else {
+                // F32 SGEMM path
+                const float *gate_w = w->ffn_gate_exps + (int64_t)e * D_MODEL * D_FF;
+                const float *up_w   = w->ffn_up_exps   + (int64_t)e * D_MODEL * D_FF;
+                const float *down_w = w->ffn_down_exps  + (int64_t)e * D_FF * D_MODEL;
+                
+                float expert_out[D_MODEL];
+                moe_expert_forward(x_s, gate_w, up_w, down_w, expert_temp, expert_out);
+                
+                for (int j = 0; j < D_MODEL; j++)
+                    out_s[j] += wgt * expert_out[j];
+            }
         }
     }
     

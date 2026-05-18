@@ -269,6 +269,95 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     model->enable_moe = false;  // MoE disabled by default (memory: 3.2 GB/layer)
     model->moe_max_layers = 0;  // 0 = all layers
     
+    // Read SSM L2 norm epsilon from GGUF config (qwen35moe.attention.layer_norm_rms_epsilon = 1e-6)
+    g_ssm_l2_eps = 1e-6f;
+    printf("  SSM L2 eps: %e\n", g_ssm_l2_eps);
+    
+    // Buffer GGUF data and save quantized weight pointers
+    gguf_buffer_data(ctx);
+    {
+        const uint8_t *blob = (const uint8_t *)ctx->data_blob;
+        for (int l = 0; l < model->n_layers; l++) {
+            wubu_layer_t *layer = &model->layers[l];
+            gguf_tensor_info *t;
+            char name[256];
+            if (layer->is_ssm) {
+                snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", l);
+                t = gguf_find_tensor(ctx, name);
+                if (t && blob) { layer->ssm.attn_qkv_weight_q = blob + t->data_offset; layer->ssm.attn_qkv_weight_type = t->ggml_type; }
+                snprintf(name, sizeof(name), "blk.%d.attn_gate.weight", l);
+                t = gguf_find_tensor(ctx, name);
+                if (t && blob) { layer->ssm.attn_gate_weight_q = blob + t->data_offset; layer->ssm.attn_gate_weight_type = t->ggml_type; }
+                snprintf(name, sizeof(name), "blk.%d.ssm_out.weight", l);
+                t = gguf_find_tensor(ctx, name);
+                if (t && blob) { layer->ssm.ssm_out_weight_q = blob + t->data_offset; layer->ssm.ssm_out_weight_type = t->ggml_type; }
+            } else {
+                snprintf(name, sizeof(name), "blk.%d.attn_q.weight", l);
+                t = gguf_find_tensor(ctx, name);
+                if (t && blob) { layer->gqa.attn_q_weight_q = blob + t->data_offset; layer->gqa.attn_q_weight_type = t->ggml_type; }
+                snprintf(name, sizeof(name), "blk.%d.attn_k.weight", l);
+                t = gguf_find_tensor(ctx, name);
+                if (t && blob) { layer->gqa.attn_k_weight_q = blob + t->data_offset; layer->gqa.attn_k_weight_type = t->ggml_type; }
+                snprintf(name, sizeof(name), "blk.%d.attn_v.weight", l);
+                t = gguf_find_tensor(ctx, name);
+                if (t && blob) { layer->gqa.attn_v_weight_q = blob + t->data_offset; layer->gqa.attn_v_weight_type = t->ggml_type; }
+                snprintf(name, sizeof(name), "blk.%d.attn_output.weight", l);
+                t = gguf_find_tensor(ctx, name);
+                if (t && blob) { layer->gqa.attn_output_weight_q = blob + t->data_offset; layer->gqa.attn_output_weight_type = t->ggml_type; }
+            }
+        }
+        gguf_tensor_info *t_out = gguf_find_tensor(ctx, "output.weight");
+        if (t_out && blob) { model->output_weight_q = blob + t_out->data_offset; model->output_weight_type = t_out->ggml_type; }
+
+        // Save MoE quantized pointers for each layer (routed + shared experts)
+        for (int l = 0; l < model->n_layers; l++) {
+            wubu_layer_t *layer = &model->layers[l];
+            gguf_tensor_info *t;
+            char name[256];
+            moe_weights_t *moe = &layer->moe;
+
+            // Router is F32 — direct pointer from blob
+            snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && blob) { moe->ffn_gate_inp = (float *)(blob + t->data_offset); }
+
+            // Shared expert gate weight (F32)
+            snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp_shexp.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && blob) { moe->ffn_gate_inp_shexp = (float *)(blob + t->data_offset); }
+
+            snprintf(name, sizeof(name), "blk.%d.ffn_gate_exps.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && blob) { moe->ffn_gate_exps_q = blob + t->data_offset; moe->ffn_gate_exps_q_type = t->ggml_type; }
+
+            snprintf(name, sizeof(name), "blk.%d.ffn_up_exps.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && blob) { moe->ffn_up_exps_q = blob + t->data_offset; moe->ffn_up_exps_q_type = t->ggml_type; }
+
+            snprintf(name, sizeof(name), "blk.%d.ffn_down_exps.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && blob) { moe->ffn_down_exps_q = blob + t->data_offset; moe->ffn_down_exps_q_type = t->ggml_type; }
+
+            snprintf(name, sizeof(name), "blk.%d.ffn_gate_shexp.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && blob) { moe->ffn_gate_shexp_q = blob + t->data_offset; moe->ffn_gate_shexp_q_type = t->ggml_type; }
+
+            snprintf(name, sizeof(name), "blk.%d.ffn_up_shexp.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && blob) { moe->ffn_up_shexp_q = blob + t->data_offset; moe->ffn_up_shexp_q_type = t->ggml_type; }
+
+            snprintf(name, sizeof(name), "blk.%d.ffn_down_shexp.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && blob) { moe->ffn_down_shexp_q = blob + t->data_offset; moe->ffn_down_shexp_q_type = t->ggml_type; }
+
+            // Mark MoE as loaded for quantized path
+            if (moe->ffn_gate_exps_q && moe->ffn_up_exps_q && moe->ffn_down_exps_q) {
+                moe->loaded = true;
+                moe->load_from_blob = true;
+            }
+        }
+    }
+    
     printf("Model initialized: %d layers (%d SSM, %d GQA), %d vocab\n",
            model->n_layers,
            model->n_layers - model->n_layers/4,
@@ -290,15 +379,17 @@ void wubu_model_free(wubu_model_t *model) {
         wubu_layer_t *layer = &model->layers[l];
         free(layer->attn_norm_weight);
         free(layer->post_attn_norm_weight);
-        // Free MoE weights
-        free(layer->moe.ffn_gate_inp);
-        free(layer->moe.ffn_gate_exps);
-        free(layer->moe.ffn_up_exps);
-        free(layer->moe.ffn_down_exps);
-        free(layer->moe.ffn_gate_shexp);
-        free(layer->moe.ffn_up_shexp);
-        free(layer->moe.ffn_down_shexp);
-        free(layer->moe.ffn_gate_inp_shexp);
+        // Free MoE weights (skip if blob-backed)
+        if (!layer->moe.load_from_blob) {
+            free(layer->moe.ffn_gate_inp);
+            free(layer->moe.ffn_gate_exps);
+            free(layer->moe.ffn_up_exps);
+            free(layer->moe.ffn_down_exps);
+            free(layer->moe.ffn_gate_shexp);
+            free(layer->moe.ffn_up_shexp);
+            free(layer->moe.ffn_down_shexp);
+            free(layer->moe.ffn_gate_inp_shexp);
+        }
         if (layer->is_ssm) {
             free(layer->ssm.attn_qkv_weight);
             free(layer->ssm.attn_gate_weight);
@@ -384,10 +475,15 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         float *normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
         wubu_rms_norm(B, T, D_MODEL, x, layer->post_attn_norm_weight, 1e-6f, normed2);
         
-        // MoE (FFN) forward — per-layer lazy load if enabled
+        // MoE (FFN) forward — use quantized path when available
         float *ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
-        if (model->enable_moe && model->gguf_ctx &&
+        if (layer->moe.loaded && model->enable_moe &&
             (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
+            // Quantized path (saved pointers in wubu_model_init)
+            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+        } else if (model->enable_moe && model->gguf_ctx &&
+                   (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
+            // Fallback: F32 dequant path
             if (wubu_moe_load_layer(model->gguf_ctx, l, &layer->moe)) {
                 wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
                 wubu_moe_free_layer(&layer->moe);
@@ -396,7 +492,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             }
         } else {
             // Pass-through when MoE disabled
-            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+            memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));
         }
         
         // Residual: x = x + ffn_out
@@ -418,18 +514,70 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     
     // Output projection (into logits space)
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
-    if (model->output_weight) {
+    if (model->output_weight_q && model->output_weight_type != GGML_TYPE_F32) {
+        // Q4_K quantized matmul path
+        for (int i = 0; i < N; i++) {
+            quantized_matmul(x + i * D_MODEL,
+                             model->output_weight_q,
+                             model->output_weight_type,
+                             D_MODEL, model->vocab_size, 0,
+                             logits + i * model->vocab_size);
+        }
+        // Compare against F32 SGEMM when output_weight is also loaded
+        if (model->output_weight) {
+            float *f32_logits = (float *)malloc(N * model->vocab_size * sizeof(float));
+            #pragma omp parallel for collapse(2) if(N * model->vocab_size > 100000)
+            for (int i = 0; i < N; i++) {
+                for (int j = 0; j < model->vocab_size; j++) {
+                    const float *h_i = x + i * D_MODEL;
+                    float *log_i = f32_logits + i * model->vocab_size;
+                    double sum = 0.0;
+                    for (int k = 0; k < D_MODEL; k++)
+                        sum += (double)h_i[k] * (double)model->output_weight[j * D_MODEL + k];
+                    log_i[j] = (float)sum;
+                }
+            }
+            double dot=0, n1=0, n2=0, max_e=0;
+            for (int i = 0; i < N * model->vocab_size; i++) {
+                dot += (double)logits[i] * (double)f32_logits[i];
+                n1  += (double)logits[i] * (double)logits[i];
+                n2  += (double)f32_logits[i] * (double)f32_logits[i];
+                double e = fabs((double)logits[i] - (double)f32_logits[i]);
+                if (e > max_e) max_e = e;
+            }
+            fprintf(stderr, "  [output proj] cos-sim Q4K vs F32 = %.10f, max_err=%.6f\n",
+                    dot / (sqrt(n1) * sqrt(n2)), max_e);
+            free(f32_logits);
+        }
+    } else if (model->output_weight) {
+        // F32 SGEMM path (also compute for comparison)
+        float *f32_logits = (float *)malloc(N * model->vocab_size * sizeof(float));
         #pragma omp parallel for collapse(2) if(N * model->vocab_size > 100000)
         for (int i = 0; i < N; i++) {
             for (int j = 0; j < model->vocab_size; j++) {
                 const float *h_i = x + i * D_MODEL;
-                float *log_i = logits + i * model->vocab_size;
+                float *log_i = f32_logits + i * model->vocab_size;
                 double sum = 0.0;
                 for (int k = 0; k < D_MODEL; k++)
                     sum += (double)h_i[k] * (double)model->output_weight[j * D_MODEL + k];
                 log_i[j] = (float)sum;
             }
         }
+        // Compare Q4_K vs F32
+        if (model->output_weight_q) {
+            double dot=0, n1=0, n2=0, max_e=0;
+            for (int i = 0; i < N * model->vocab_size; i++) {
+                dot += (double)logits[i] * (double)f32_logits[i];
+                n1  += (double)logits[i] * (double)logits[i];
+                n2  += (double)f32_logits[i] * (double)f32_logits[i];
+                double e = fabs((double)logits[i] - (double)f32_logits[i]);
+                if (e > max_e) max_e = e;
+            }
+            fprintf(stderr, "  [output proj] cos-sim Q4K vs F32 = %.10f, max_err=%.6f\n",
+                    dot / (sqrt(n1) * sqrt(n2)), max_e);
+        }
+        memcpy(logits, f32_logits, N * model->vocab_size * sizeof(float));
+        free(f32_logits);
     } else {
         // Fallback: copy hidden states only (no output weight loaded)
         memcpy(logits, x, N * D_MODEL * sizeof(float));
