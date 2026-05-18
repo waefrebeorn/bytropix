@@ -33,8 +33,23 @@ typedef struct {
     // Router bias for shared expert
     float *ffn_gate_inp_shexp; // [D_MODEL] — shared expert output gate (per-token scalar via sigmoid)
     
-    // Whether weights are loaded
+    // Quantized weight pointers (raw GGUF blob, no dequant)
+    const uint8_t *ffn_gate_exps_q;   // gate_exps quantized blob ptr
+    int   ffn_gate_exps_q_type;       // e.g. GGML_TYPE_IQ2_XXS
+    const uint8_t *ffn_up_exps_q;     // up_exps quantized blob ptr
+    int   ffn_up_exps_q_type;
+    const uint8_t *ffn_down_exps_q;   // down_exps quantized blob ptr
+    int   ffn_down_exps_q_type;
+    const uint8_t *ffn_gate_shexp_q;  // shared gate quantized blob ptr
+    int   ffn_gate_shexp_q_type;
+    const uint8_t *ffn_up_shexp_q;    // shared up quantized blob ptr
+    int   ffn_up_shexp_q_type;
+    const uint8_t *ffn_down_shexp_q;  // shared down quantized blob ptr
+    int   ffn_down_shexp_q_type;
+    
+    // Whether weights are loaded (F32 heap-allocated or via quantized blob pointers)
     bool loaded;
+    bool load_from_blob; // true: F32 router pointers point into mmap'd blob, don't free
 } moe_weights_t;
 
 // MoE forward pass for one layer

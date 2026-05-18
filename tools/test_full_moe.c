@@ -1,0 +1,73 @@
+#include "wubu_model.h"
+#include "wubu_ssm.h"
+#include "gguf_reader.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+int main(void) {
+    wubu_model_t mdl;
+    if (!wubu_model_init(&mdl, "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf")) return 1;
+    mdl.enable_moe = true;
+    
+    int D = D_MODEL;
+    int vs = mdl.vocab_size;
+    
+    float *x = (float *)malloc(D * sizeof(float));
+    if (mdl.use_embedding_file) {
+        FILE *f = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
+        if (!f) { printf("ERROR: can't open emb file\n"); return 1; }
+        fseek(f, 248044LL * D * sizeof(float), SEEK_SET);
+        fread(x, sizeof(float), D, f);
+        fclose(f);
+    } else {
+        memcpy(x, mdl.token_embd + 248044LL * D, D * sizeof(float));
+    }
+    
+    float *logits = (float *)malloc(vs * sizeof(float));
+    wubu_model_forward_from_embd(&mdl, x, 1, 1, logits);
+    
+    printf("Top-10 logits:\n");
+    float *cpy = (float *)malloc(vs * sizeof(float));
+    memcpy(cpy, logits, vs * sizeof(float));
+    for (int k = 0; k < 10; k++) {
+        float best = -1e30f; int best_idx = -1;
+        for (int i = 0; i < vs; i++) {
+            if (cpy[i] > best) { best = cpy[i]; best_idx = i; }
+        }
+        cpy[best_idx] = -1e30f;
+        printf("  [%d] val=%.10f\n", best_idx, (double)best);
+    }
+    free(cpy);
+    
+    // Compare vs reference logits
+    float *ref = (float *)malloc(vs * sizeof(float));
+    FILE *f = fopen("/tmp/llama_logits_new.bin", "rb");
+    if (f) {
+        fread(ref, sizeof(float), vs, f);
+        fclose(f);
+        double dot = 0, n_our = 0, n_ref = 0;
+        double max_diff = 0; int max_diff_idx = -1;
+        for (int i = 0; i < vs; i++) {
+            double d = (double)logits[i] - (double)ref[i];
+            if (fabs(d) > max_diff) { max_diff = fabs(d); max_diff_idx = i; }
+            dot += (double)logits[i] * (double)ref[i];
+            n_our += (double)logits[i] * (double)logits[i];
+            n_ref += (double)ref[i] * (double)ref[i];
+        }
+        double cos = dot / (sqrt(n_our) * sqrt(n_ref));
+        printf("cos-sim vs reference: %.10f\n", cos);
+        printf("max diff: %.10f at idx %d\n", max_diff, max_diff_idx);
+        printf("our[0]=%.10f ref[0]=%.10f\n", (double)logits[0], (double)ref[0]);
+        printf("our[max]=%.10f ref[max]=%.10f\n", (double)logits[max_diff_idx], (double)ref[max_diff_idx]);
+    } else {
+        printf("No reference file found at /tmp/llama_logits_new.bin\n");
+    }
+    
+    free(ref);
+    free(logits);
+    free(x);
+    wubu_model_free(&mdl);
+    return 0;
+}
