@@ -365,6 +365,11 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
            model->n_layers/4,
            model->vocab_size);
     
+    // Allocate GQA KV cache (10 GQA layers × 4096 ctx × 512 dim)
+    model->gqa_k_cache = (float *)calloc(10 * GQA_MAX_CTX * GQA_KV_DIM, sizeof(float));
+    model->gqa_v_cache = (float *)calloc(10 * GQA_MAX_CTX * GQA_KV_DIM, sizeof(float));
+    model->gqa_cache_len = 0;
+    
     return true;
     
 fail:
@@ -415,6 +420,8 @@ void wubu_model_free(wubu_model_t *model) {
     free(model->token_embd);
     free(model->output_weight);
     free(model->ssm_states);
+    free(model->gqa_k_cache);
+    free(model->gqa_v_cache);
     if (model->gguf_ctx) {
         gguf_close(model->gguf_ctx);
         model->gguf_ctx = NULL;
@@ -457,7 +464,27 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
             wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out);
         } else {
-            wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out);
+            // GQA forward with KV cache
+            int l_gqa = 0;  // GQA layer index among GQA layers
+            // Count GQA layers up to current to index into cache
+            for (int li = 0; li < l; li++) {
+                if (!model->layers[li].is_ssm) l_gqa++;
+            }
+            float *k_cache = model->gqa_k_cache + l_gqa * GQA_MAX_CTX * GQA_KV_DIM;
+            float *v_cache = model->gqa_v_cache + l_gqa * GQA_MAX_CTX * GQA_KV_DIM;
+            float *k_out = model->gqa_cache_len > 0 ? k_cache + model->gqa_cache_len * GQA_KV_DIM : NULL;
+            float *v_out = model->gqa_cache_len > 0 ? v_cache + model->gqa_cache_len * GQA_KV_DIM : NULL;
+            const float *k_in = model->gqa_cache_len > 0 ? k_cache : NULL;
+            const float *v_in = model->gqa_cache_len > 0 ? v_cache : NULL;
+            // For prefill (T>1 and first call): store to cache position 0
+            if (T > 1 && model->gqa_cache_len == 0) {
+                k_out = k_cache;
+                v_out = v_cache;
+                k_in = NULL; v_in = NULL;
+            }
+            wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out,
+                             k_in, v_in, model->gqa_cache_len,
+                             k_out, v_out);
         }
         
         double t1 = wall_time();
@@ -528,6 +555,9 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             }
         }
     }
+    
+    // Update KV cache length after processing all layers
+    model->gqa_cache_len += T;
     
     // Final RMSNorm
     if (model->norm_weight) {
