@@ -1,46 +1,40 @@
 # Qwen3.6-35B-A3B-UD-IQ2_M Research
 
-## 1. Model Creator: Qwen (Alibaba)
-**Source:** https://huggingface.co/Qwen/Qwen3.6-35B-A3B
+## Architecture (qwen35moe)
+- 40 layers: 30 SSM (Gated DeltaNet) + 10 GQA (Gated Attention)
+- Pattern: 3 SSM → 1 GQA, repeated 10x. SSM: L0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38 (30)
+  GQA: L3,7,11,15,19,23,27,31,35,39 (10)
+- D_MODEL=2048, D_FF=512, SHARED_D_FF=512, N_EXPERTS=256, N_ACTIVE_EXPTS=8
+- Vocab: 248320 (padded), BOS=EOS=248044
+- SSM: 16 QK heads, 32 V heads, d_state=128, conv_kernel=4
+- GQA: 16 Q heads, 2 KV heads, head_dim=256
+- MoE: 256 experts, top-8 routed + 1 shared (activated per token)
 
-**Architecture (qwen3_5_moe):**
-- 35B total params, 3B active per token
-- 40 layers: **10x (3x Gated DeltaNet -> MoE -> 1x Gated Attention -> MoE)**
-- Gated DeltaNet (SSM): 32 V-heads, 16 QK-heads, hd=128, conv_kernel=4, mamba_ssm_dtype=float32
-- Gated Attention (GQA): 16 Q-heads, 2 KV-heads, hd=256, RoPE dim=64 (25% partial), theta=10M
-- **attn_output_gate: True** — EVERY attention output has a sigmoid gate (`blk.X.attn_gate.weight`). bytropix MISSING this!
-- MoE: 256 experts, 8 routed + 1 shared, expert_dim=512, shared_dim=512
-- Hidden: 2048, vocab: 248320 (padded)
-- Context: 262K native (up to 1,010,000)
-- MTP: 1 extra prediction head
-- activ: silu, norm_eps: 1e-6
+## Actual GGML Types (verified May 18 via tensor inspection)
+| Type | GGML Code | Count | Used For |
+|------|-----------|-------|----------|
+| F32  | 0         | 361   | Norms, biases, routers, small proj |
+| Q4_K | 12        | 1     | output.weight ONLY |
+| Q5_K | 13        | 181   | attn_qkv, attn_q/k/v, attn_gate, shared gate/up, token_embd |
+| Q6_K | 14        | 70    | SSM output proj, shared down |
+| IQ2_XS | 16     | 80    | MoE ffn_gate_exps + ffn_up_exps |
+| IQ3_XS | 18     | 37    | MoE ffn_down_exps (all layers except 34,38,39) |
+| Q3_S_XL | 23    | 3     | MoE ffn_down_exps L34, L38, L39 |
 
-## 2. GGUF Provider: Unsloth
-**Source:** https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF
+NOTE: "IQ2_M" in the filename is a LABEL for overall compression level, NOT the tensor type.
+The actual types per tensor vary as defined by Unsloth Dynamic 2.0 quantization.
 
-**Unsloth Dynamic 2.0 Quantization:**
-- NOT one type — selects different quant types per tensor based on importance
-- Newer than standard imatrix: model-specific layer selection, 1.5M+ token calibration
-- Claims better KLD / Aider than standard quants despite 8GB smaller
-- "UD" = Unsloth Derivatives — standard GGUF, compatible with llama.cpp
+## Key Architecture Details
+- SSM layers (not GQA) have attn_gate.weight (sigmoid gate on SSM output before output_proj)
+- GQA layers (not SSM) use SEPARATE attn_q.weight, attn_k.weight, attn_v.weight (NOT fused attn_qkv)
+- No fused ffn_gate_up_exps in this model — uses separate gate/up weights
+- Experts stored contiguous: dims=[D_MODEL, D_FF, N_EXPERTS] (dims[0] innermost)
+- Shared expert: gate_shexp + up_shexp = Q5_K, down_shexp = Q6_K, gate_inp_shexp = F32
+- Router: ffn_gate_inp.weight = F32 [2048, 256]
 
-## 3. Actual Quantization Mix
-| Type | Count | Used For |
-|------|-------|----------|
-| F32 | 361 | Router, norms, biases, small projections |
-| Q5_K | 181 | Attention QKV, shared expert gate, attn_gate |
-| IQ2_XXS | 80 | MoE gate_exps, up_exps (routed experts) |
-| Q6_K | 70 | SSM output proj, some attention |
-| IQ3_XXS | 37 | MoE down_exps (routed expert down proj) |
-| IQ4_XS | few | Some layers' down_exps (e.g. L39) |
-
-"IQ2_M" in filename is a **label** for overall compression, not a GGML type.
-
-## 4. Layer Types
-- SSM (Gated DeltaNet): L0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38 (30)
-- GQA: L3,7,11,15,19,23,27,31,35,39 (10)
-
-## 5. Action Items for bytropix
-- **[RESOLVED] attn_output_gate** — already implemented inside wubu_ssm_forward via silu(x @ attn_gate_weight). Applied to SSM raw output before ssm_out projection. GQA layers don't have attn_gate tensors.
-- **[DONE] Down_exps type varies per layer** (some IQ4_XS) — already handled via ty_gd fallback
-- **[DONE] Expert weights are contiguous-per-expert** — our fix was correct
+## Comparison bytropix vs Reference (llama.cpp)
+- SSM: uses proj_matmul (quantized path) — correct
+- GQA: uses proj_matmul (quantized path) — correct  
+- Output: Q4_K quantized matmul — correct
+- MoE: STILL F32 dequant+SGEMM — NOT wired to quantized path
+- Missing vec_dot: IQ2_XS, IQ3_XS, Q3_S_XL

@@ -1,37 +1,49 @@
-# state — May 17 v17 — DA Audit: SSM L2 eps mismatch = root cause of 0.006 gap
+# State — May 18, 2026 — HONEST ASSESSMENT
 
-## DA VERDICT: 1:1 parity BLOCKED by SSM L2 normalization epsilon
-- **MoE code**: ✅ cos-sim 1.000000 internal consistency (verified fresh build, same input)
-- **SSM/GQA recurrence formulas**: ✅ algebra matches llama.cpp exactly
-- **L2 normalization epsilon**: 🔴 **1e-12 (us) vs ~1e-6 (llama.cpp from model GGUF)** = root cause
-- Previous "cos-sim 0.994 MOE=0" = 0.006 gap from this epsilon difference alone
+## REAL STATUS: SSM/GQA architecture broken. MoE quantized path wired but can't help.
 
-## What We Know (C code to C code, no excuses)
-| Claim | Status | Evidence |
-|-------|--------|----------|
-| MoE lazy vs library output | ✅ cos-sim 1.0 | Fresh build, same input, bit-identical dequant |
-| Routing selects same top-8 | ✅ Identical | verify_topk_agreement confirmed |
-| Per-expert dequant bit-identical | ✅ cos-sim 1.0 | verify_dequant confirmed across 8 experts |
-| SSM recurrence formula | ✅ Algebra matches llama.cpp | delta-net-base.cpp:291-376, same:
-  state *= exp(gate); hk = h@k; diff = v - hk; h += k@diff*bg; out = h@(q/sqrt(d)) |
-| SSM L2 norm eps | ❌ **WRONG: 1e-12 vs ~1e-6** | wubu_ssm.c:318-319 hardcodes 1e-12, llama.cpp reads hparams.f_norm_rms_eps |
-| SSM safe-exp clamp | ✅ Clamp [-80,80] prevents overflow | llama.cpp ggml_exp has no clamp — if anything, our approach is more stable |
-| Head repeat mechanism | ✅ Same cyclic repeat (16→32) | bytropix: vh % 16; llama.cpp: ggml_repeat_4d |
-| Q scaling | ✅ Both use 1/sqrt(128) | Same factor |
-| GQA | ❓ Untested (10 layers) | Subagent didn't analyze GQA path |
-| GPU RoPE factor | ❓ Untested | README mentions infer_text_gpu.c:254 |
-| Output projection | ✅ Fixed (3 transpose fixes) | Verified in earlier session |
+## What Actually Works (verified)
+- Q4_K quantized_matmul: cos-sim 0.99995 vs F32 ✅
+- Output projection (Q4_K): cos-sim 0.99995 vs F32 SGEMM ✅
+- MoE quantized path: wired via blob pointers into quantized_matmul (unused until SSM/GQA fixed) ✅
+- Model loads all 733 tensors from GGUF, no crash ✅
+- Router weight (F32) + shared expert gate (F32) loaded from blob ✅
 
-## Plan Forward to 1:1 Parity
-1. **Fix L2 norm epsilon**: wubu_ssm.c:318-319 — change `1e-12f` to read from model config
-2. **Verify fix**: Run MOE=0 comparison vs reference — expect cos-sim jump 0.994→1.0
-3. **Enable MoE**: Run MOE=1 comparison — expect cos-sim ~1.0 (both paths verified matching)
-4. **Verify GQA**: Status unknown — needs separate audit
-5. **Full model test**: Run 40-layer with MoE, compare logits vs llama-cli
+## What's Broken — THE REAL ROOT CAUSE
+**P0: SSM/GQA forward produces wrong hidden states even with ALL-F32 math.**
+- Test: all F32 fallback (clear quantized ptrs) → cos-sim -0.128
+- Test: no MoE → cos-sim -0.157
+- Test: with F32 MoE (old code) → cos-sim -0.51
+- Root cause is NOT quantization. NOT output proj. NOT MoE.
 
-## Cleanup needed
-- README.md — claims "MoE stride bug ACTIVE" (WRONG — experts ARE contiguous)
-- STATUS.md — references old training metrics, not inference parity
-- prestige_prompt.md — claims "MoE=1 divergence cos-sim 0.337" (STALE DATA)
-- overnight-map.md — same stale claims
-- plan.md — needs DA-informed correction
+## Previous Findings (from session history)
+1. **SSM Layer 0 cos_sim=0.40 vs ref** — divergence starts at layer 0
+2. **Q6_K dequant block layout was wrong** — may still be broken in quantized_dot_generic.c
+3. **GQA layers use separate Q/K/V weights** — `attn_q.weight` [2048,8192] = Q[4096] + gate[4096], not single Q
+4. **GQA forward code may split weights wrong** — needs audit against qwen3next.cpp
+5. **SSM forward (Gated DeltaNet)** — conv1d, recurrence, gating all need cross-check with llama.cpp
+
+## Quantized Matmul Status (vec_dot functions)
+- Q4_K ✓ cos-sim 0.99996 vs F32
+- Q5_K ✓ cos-sim 0.99996 vs F32  
+- Q6_K ✓ cos-sim 0.99996 vs F32 (unit test — but might not match llama.cpp reference)
+- IQ2_XXS (type 16) ✓ cos-sim vs F32 — verified separately
+- IQ3_XXS (type 18) ✓ cos-sim vs F32 — verified separately
+- IQ4_XS (type 23) ✓ cos-sim vs F32 — verified separately
+
+## Actual GGUF Types (verified by file scan, not markdown):
+- F32:     361 tensors
+- Q4_K:     1 tensor  (output.weight)
+- Q5_K:   181 tensors (attn_qkv, attn_q/k/v, shared gate/up, token_embd)
+- Q6_K:    70 tensors (ssm_out, shared down)
+- IQ2_XXS: 80 tensors (ffn_gate_exps + ffn_up_exps) — type 16
+- IQ3_XXS: 37 tensors (ffn_down_exps most layers) — type 18
+- IQ4_XS:   3 tensors (down_exps L34/L38/L39) — type 23
+
+## Code Changes Made This Session
+1. include/wubu_moe.h — added quantized ptr fields + load_from_blob flag
+2. src/wubu_model.c — save MoE quantized + F32 router pointers from blob; fix free
+3. src/wubu_moe.c — added quantized matmul path in wubu_moe_forward (shared + routed experts)
+
+## IMMEDIATE PRIORITY
+The SSM/GQA architecture bug — NOT quantization, NOT MoE. Fix the forward math.
