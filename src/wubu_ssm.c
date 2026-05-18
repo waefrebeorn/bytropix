@@ -1027,7 +1027,9 @@ cleanup_p:
 
 void wubu_gqa_forward(const float *x, int B, int T,
                       const gqa_layer_weights *w,
-                      float *output) {
+                      float *output,
+                      const float *k_cache, const float *v_cache, int cache_len,
+                      float *k_out, float *v_out) {
     const int N = B * T;
     const int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;  // 4096
     const int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;  // 512
@@ -1157,73 +1159,89 @@ void wubu_gqa_forward(const float *x, int B, int T,
         }
     }
     
-    // Step 5: GQA Attention
+    // Step 5: GQA Attention with KV cache
+    // Build combined K_all = [k_cache(cache_len) | K_norm(T)] and V_all similarly
+    int total_kv = cache_len + N;  // total positions to attend over
+    float *K_all = NULL, *V_all = NULL;
+    if (cache_len > 0) {
+        K_all = (float *)malloc(total_kv * kv_dim * sizeof(float));
+        V_all = (float *)malloc(total_kv * kv_dim * sizeof(float));
+        if (!K_all || !V_all) { free(K_all); free(V_all); free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
+        memcpy(K_all, k_cache, cache_len * kv_dim * sizeof(float));
+        memcpy(K_all + cache_len * kv_dim, K_norm, N * kv_dim * sizeof(float));
+        memcpy(V_all, v_cache, cache_len * kv_dim * sizeof(float));
+        memcpy(V_all + cache_len * kv_dim, V, N * kv_dim * sizeof(float));
+    }
+    const float *k_eff = K_all ? K_all : K_norm;
+    const float *v_eff = V_all ? V_all : V;
+    
     // 16 Q heads, 2 KV heads. Each KV head serves 8 Q heads.
     float scale = 1.0f / sqrtf(GQA_HEAD_DIM);
     
     for (int b = 0; b < B; b++) {
         for (int t_q = 0; t_q < T; t_q++) {
+            int global_t = cache_len + b * T + t_q;  // global position including cache
+            int attend_len = global_t + 1;           // attend to all positions up to current
             #pragma omp parallel for
             for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
-                float attn_weights[4096];  // max T — each thread private
-                int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);  // which KV head serves this Q
+                float *attn_weights = (float *)malloc(attend_len * sizeof(float));
+                if (!attn_weights) continue;
+                int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
                 
                 const float *q_vec = Q_norm + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
                 float *out_vec = attn_out + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
                 
                 memset(out_vec, 0, GQA_HEAD_DIM * sizeof(float));
                 
-                // Compute attention over all previous timesteps
+                // Compute attention over ALL positions (cache + current)
                 float max_score = -1e30f;
                 
                 // Q @ K^T * scale
-                for (int t_k = 0; t_k <= t_q; t_k++) {
-                    const float *k_vec = K_norm + ((b * T + t_k) * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
+                for (int t_k = 0; t_k < attend_len; t_k++) {
+                    const float *k_vec = k_eff + (t_k * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
                     float score = 0.0f;
                     for (int i = 0; i < GQA_HEAD_DIM; i++)
                         score += q_vec[i] * k_vec[i];
                     score *= scale;
-                    // TGT: wrap attention score to prevent overflow
                     score = tgt_wrap(score);
                     attn_weights[t_k] = score;
                     if (score > max_score) max_score = score;
                 }
                 
-                // If all scores are valid (at least one exists), do softmax
-                // max_score from -1e30f means at least one score exists
-                
                 // Softmax
                 float sum_exp = 0.0f;
-                for (int t_k = 0; t_k <= t_q; t_k++) {
+                for (int t_k = 0; t_k < attend_len; t_k++) {
                     attn_weights[t_k] = expf(attn_weights[t_k] - max_score);
                     sum_exp += attn_weights[t_k];
                 }
-                for (int t_k = 0; t_k <= t_q; t_k++) {
+                for (int t_k = 0; t_k < attend_len; t_k++) {
                     attn_weights[t_k] /= sum_exp;
                 }
                 
                 // Weighted sum of V
-                for (int t_k = 0; t_k <= t_q; t_k++) {
-                    const float *v_vec = V + ((b * T + t_k) * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
+                for (int t_k = 0; t_k < attend_len; t_k++) {
+                    const float *v_vec = v_eff + (t_k * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
                     float a = attn_weights[t_k];
                     for (int i = 0; i < GQA_HEAD_DIM; i++) {
                         out_vec[i] += a * v_vec[i];
                     }
                 }
                 
+                free(attn_weights);
+                
                 // NaN debug for h_q loop
                 for (int _i = 0; _i < GQA_HEAD_DIM; _i++) {
                     if (isnan(out_vec[_i])) {
-                        // Compute Q norm and KV norms
-                        double q_norm_v = 0, kv_norms[4096];
+                        double q_norm_v = 0, kv_norms_[4096];
                         for (int _k = 0; _k < GQA_HEAD_DIM; _k++) q_norm_v += (double)q_vec[_k] * q_vec[_k];
-                        for (int _tk = 0; _tk <= t_q; _tk++) {
-                            const float *k_v = K_norm + ((b * T + _tk) * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
-                            kv_norms[_tk] = 0;
-                            for (int _k = 0; _k < GQA_HEAD_DIM; _k++) kv_norms[_tk] += (double)k_v[_k] * k_v[_k];
+                        int max_dbg = attend_len < 4 ? attend_len : 4;
+                        for (int _tk = 0; _tk < attend_len && _tk < 4096; _tk++) {
+                            const float *k_v_ = k_eff + (_tk * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
+                            kv_norms_[_tk] = 0;
+                            for (int _k = 0; _k < GQA_HEAD_DIM; _k++) kv_norms_[_tk] += (double)k_v_[_k] * k_v_[_k];
                         }
                         printf("  GQA NaN at h%d t%d: q_norm=%.2f kv_norms=[", h_q, t_q, sqrt(q_norm_v));
-                        for (int _k = 0; _k <= t_q && _k < 4; _k++) printf("%.2f ", sqrt(kv_norms[_k]));
+                        for (int _k = 0; _k < max_dbg; _k++) printf("%.2f ", sqrt(kv_norms_[_k]));
                         printf("] q[0:3]=%.2e %.2e %.2e score=%e\n",
                                (double)q_vec[0], (double)q_vec[1], (double)q_vec[2], (double)attn_weights[0]);
                         break;
@@ -1248,6 +1266,15 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
                     output + s * D_MODEL);
     }
+    
+    // Copy K_norm and V to output buffers for KV cache
+    if (k_out && v_out) {
+        memcpy(k_out, K_norm, N * kv_dim * sizeof(float));
+        memcpy(v_out, V, N * kv_dim * sizeof(float));
+    }
+    
+    free(K_all);
+    free(V_all);
     
     free(Q_full);
     free(gate);

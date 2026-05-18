@@ -29,6 +29,8 @@ typedef struct {
 } wubu_layer_t;
 
 // Complete model
+#define GQA_MAX_CTX 4096  // max cached positions for KV cache
+#define GQA_KV_DIM (GQA_KV_HEADS * GQA_HEAD_DIM)  // 512
 typedef struct {
     int n_layers;
     wubu_layer_t *layers;
@@ -49,6 +51,11 @@ typedef struct {
     // State buffers (reused across calls)
     float *ssm_states;    // [max_layers, SSM_V_HEADS, SSM_D_STATE, SSM_D_STATE]
     float *conv_states;   // [max_layers, B, CONV_KERNEL-1, CONV_DIM]
+    
+    // GQA KV cache (10 GQA layers, max 4096 context)
+    float *gqa_k_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM]
+    float *gqa_v_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM]
+    int gqa_cache_len;   // how many tokens cached per layer (all 10 layers same len)
     
     // GGUF context (for per-layer MoE lazy loading)
     // GGUF context (for per-layer MoE lazy loading)

@@ -175,11 +175,15 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
 
 // Single GQA layer forward pass
 // x: [B, T, D_MODEL]
-// weights: GQA layer weights
-// output: [B, T, D_MODEL]
+// GQA forward with KV cache support
+// k_cache/v_cache: cached K_norm and V from previous decode steps (or NULL for first call)
+// cache_len: number of cached positions (0 for first call)
+// k_out/v_out: output buffers for the NEW K_norm and V (caller can cache these)
 void wubu_gqa_forward(const float *x, int B, int T,
                       const gqa_layer_weights *weights,
-                      float *output);
+                      float *output,
+                      const float *k_cache, const float *v_cache, int cache_len,
+                      float *k_out, float *v_out);
 
 // Saved GQA forward intermediates (for backward pass)
 typedef struct {
