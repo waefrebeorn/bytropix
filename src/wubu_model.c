@@ -499,6 +499,18 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         #pragma omp parallel for if(N * D_MODEL > 500000)
         for (int i = 0; i < N * D_MODEL; i++) x[i] += ffn_out[i];
         
+        // Dump per-layer hidden state (post-MoE residual = next layer's input)
+        const char *dump_dir = getenv("DUMP_LAYER_DIR");
+        if (dump_dir) {
+            char fname[512];
+            snprintf(fname, sizeof(fname), "%s/our_layer_%d.bin", dump_dir, l);
+            FILE *df = fopen(fname, "wb");
+            if (df) {
+                fwrite(x, sizeof(float), N * D_MODEL, df);
+                fclose(df);
+            }
+        }
+        
         free(normed);
         free(normed2);
         free(ffn_out);

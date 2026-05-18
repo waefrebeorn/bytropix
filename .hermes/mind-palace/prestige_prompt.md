@@ -1,23 +1,28 @@
-═══ BYTROPIX — PRESTIGE RESUME (May 17 v6 — DA Audit, L2 eps found) ═══
-Path: /home/wubu/bytropix | HW: RTX 5050 6.4GB, -arch=sm_120
-Build: make infer_text
-Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+# Prestige Prompt — May 18, 2026
 
-=== COMPLETED ===
-1. RoPE MRoPE section dimension fix (22/22/20) — FIXED
-2. Output projection transpose (3 places) — FIXED
-3. All dequant types verified exact vs ggml — VERIFIED
-4. MoE lazy vs library: cos-sim 1.000000 — VERIFIED (internal consistency)
-5. Top-k renormalization matches reference — CONFIRMED
-6. SSM recurrence formula matches llama.cpp — VERIFIED (algebra)
+## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M
 
-=== REMAINING ===
-1. 🔴 L2 norm epsilon: wubu_ssm.c hardcodes 1e-12, should read from GGUF (~1e-6)
-   = root cause of 0.006 cos-sim gap in MOE=0 path
-2. ❓ GQA forward: not audited vs llama.cpp
-3. ❓ Full model MOE=1 vs reference: untested (was stale data)
+### Architecture (qwen35moe → qwen3next.cpp)
+40 layers: 30 SSM (Gated DeltaNet) + 10 GQA (full attention)
+- L0,1,2 → L3 GQA → L4,5,6 → L7 GQA → ... → L39 GQA
+- Hidden: 2048, Vocab: 248320, Expert dim: 512, Shared dim: 512
 
-=== DA AUDIT — Completed v2 ===
-Q1: "What's the actual root cause of SSM gap?" → A: L2 norm eps 1e-12 vs ~1e-6
-Q2: "Is MoE code correct?" → A: ✅ YES, cos-sim 1.0 internal, all dequant bit-identical
-Q3: "Are markdown files correct?" → A: ❌ ALL stale — README, STATUS, prestige, overnight
+### REAL STATUS (not markdown fantasy)
+- F32 fallback (no quantization anywhere): cos-sim -0.128
+- No MoE: cos-sim -0.157
+- F32 MoE: cos-sim -0.51
+- Quantized MoE (just wired): cos-sim -0.65
+- **Root cause is SSM/GQA forward architecture, NOT quantization**
+
+### What Was Actually Verified (unit tests only)
+- Q4_K vec_dot vs F32 SGEMM: cos-sim 0.99995 ✅
+- Q5_K vec_dot vs F32 SGEMM: cos-sim 0.99996 ✅
+- Q6_K vec_dot vs F32 SGEMM: cos-sim 0.99996 (unit test only, NOT vs llama.cpp)
+- IQ2_XXS/IQ3_XXS/IQ4_XS vec_dot: cos-sim 0.9999+ vs F32 SGEMM (unit test)
+- Output projection: Q4_K quantized vs F32 SGEMM: cos-sim 0.99995 ✅
+
+### What Was Wired This Session
+- MoE quantized path: router(F32 blob) + shared expert(Q5_K/Q6_K blob) + routed experts(IQ2_XXS/IQ3_XXS/IQ4_XS blob) all through quantized_matmul
+- load_from_blob flag to prevent double-free
+
+### REAL NEXT: Per-layer reference dump → find first divergence → fix SSM/GQA

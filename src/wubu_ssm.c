@@ -13,6 +13,30 @@
 // Utility: Activation Functions
 // ============================================================
 
+// SSM L2 norm epsilon — read from GGUF config (should be 1e-6 for Qwen3.6)
+float g_ssm_l2_eps = 1e-6f;
+
+// Centralized quantized matmul dispatch for SSM/GQA projections.
+// If quantized weight (W_q) is available and type is not F32, uses quantized_matmul.
+// Otherwise falls back to the provided F32 weight with a column loop.
+// x: [n_rows] input, W_f32: [n_rows*n_cols] F32 or NULL, W_q: quantized or NULL
+// out: [n_cols] output
+static void proj_matmul(const float *x, int64_t n_rows, int64_t n_cols,
+                         const float *W_f32, const uint8_t *W_q, int weight_type,
+                         float *out) {
+    if (W_q && weight_type != GGML_TYPE_F32 && n_cols > 0) {
+        quantized_matmul(x, W_q, weight_type, n_rows, n_cols, 0, out);
+    } else {
+        #pragma omp parallel for if(n_cols > 4)
+        for (int64_t j = 0; j < n_cols; j++) {
+            double sum = 0.0;
+            for (int64_t i = 0; i < n_rows; i++)
+                sum += (double)x[i] * (double)W_f32[j * n_rows + i];
+            out[j] = (float)sum;
+        }
+    }
+}
+
 void wubu_softplus(int n, const float *x, float *out) {
     #pragma omp parallel for if(n > 100000)
     for (int i = 0; i < n; i++) {
@@ -192,40 +216,22 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
     
     const char *dd = getenv("DUMP_SSM_DEBUG");
-    // Step 1: Fused QKV projection
-    // x[B,T,2048] @ wqkv[2048,8192] -> qkv_all[B,T,8192]
-    if (dd && N > 0) {
-        FILE *f = fopen("/tmp/dbg_qkv_input.bin", "wb");
-        if (f) { fwrite(x, sizeof(float), N * D_MODEL, f); fclose(f); }
-    }
+    // Step 1: Fused QKV projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        float *qkv_s = qkv_all + s * C;
-        #pragma omp parallel for
-        for (int j = 0; j < C; j++) {
-            float sum = 0.0f;
-            for (int i = 0; i < D_MODEL; i++) {
-                sum += x_s[i] * w->attn_qkv_weight[i + j * D_MODEL];
-            }
-            qkv_s[j] = sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, C,
+                    w->attn_qkv_weight, w->attn_qkv_weight_q, w->attn_qkv_weight_type,
+                    qkv_all + s * C);
     }
     if (dd) {
         FILE *f = fopen("/tmp/dbg_qkv_out.bin", "wb");
         if (f) { fwrite(qkv_all, sizeof(float), N * C, f); fclose(f); }
     }
     
-    // Step 2: z gate projection
-    #pragma omp parallel for
+    // Step 2: z gate projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        float *z_s = z_all + s * VALUE_DIM;
-        for (int j = 0; j < VALUE_DIM; j++) {
-            float sum = 0.0f;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += x_s[i] * w->attn_gate_weight[i + j * D_MODEL];
-            z_s[j] = sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, VALUE_DIM,
+                    w->attn_gate_weight, w->attn_gate_weight_q, w->attn_gate_weight_type,
+                    z_all + s * VALUE_DIM);
     }
     
     // Step 3: beta/alpha projections
@@ -315,8 +321,8 @@ void wubu_ssm_forward(const float *x, int B, int T,
     
     // Step 7: L2 normalize Q and K
     // q_conv: [N, SSM_K_HEADS, SSM_D_STATE]
-    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, 1e-12f, q_norm);
-    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, 1e-12f, k_norm);
+    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, g_ssm_l2_eps, q_norm);
+    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, g_ssm_l2_eps, k_norm);
     
     if (dd) {
         FILE *f = fopen("/tmp/dbg_l2_q.bin", "wb"); if (f) { fwrite(q_norm, sizeof(float), N * KEY_DIM, f); fclose(f); }
@@ -484,27 +490,11 @@ void wubu_ssm_forward(const float *x, int B, int T,
         }
     }
     
-    // Step 11: Output projection
-    const char *dump_val = getenv("DUMP_SSM_VAL");
-    if (dump_val && N > 0) {
-        FILE *f = fopen(dump_val, "wb");
-        if (f) { fwrite(delta_out + 0 * VALUE_DIM, sizeof(float), VALUE_DIM, f); fclose(f); }
-    }
-    
-    // Python: final = gated_output @ weights['ssm_out.weight']
-    // where weight is [VALUE_DIM, D_MODEL] = [4096, 2048]
-    // result[j] = sum_i gated[i] * W[i][j] = sum_i gated[i] * data[j * VALUE_DIM + i] (see matmul pattern)
+    // Step 11: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *inp = delta_out + s * VALUE_DIM;
-        float *out = output + s * D_MODEL;
-        #pragma omp parallel for
-        for (int j = 0; j < D_MODEL; j++) {
-            float sum = 0.0f;
-            for (int i = 0; i < VALUE_DIM; i++) {
-                sum += inp[i] * w->ssm_out_weight[i + j * VALUE_DIM];
-            }
-            out[j] = sum;
-        }
+        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, D_MODEL,
+                    w->ssm_out_weight, w->ssm_out_weight_q, w->ssm_out_weight_type,
+                    output + s * D_MODEL);
     }
     
 cleanup:
@@ -567,28 +557,18 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
     // === Steps 1-11: Same as wubu_ssm_forward ===
     // (Steps 1-10 are identical, just compute)
     
-    // Step 1: QKV projection
+    // Step 1: QKV projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        float *qkv_s = qkv_all + s * C;
-        for (int j = 0; j < C; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_qkv_weight[i * C + j];
-            qkv_s[j] = (float)sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, C,
+                    w->attn_qkv_weight, w->attn_qkv_weight_q, w->attn_qkv_weight_type,
+                    qkv_all + s * C);
     }
     
-    // Step 2: z gate projection
+    // Step 2: z gate projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        float *z_s = z_all + s * VALUE_DIM;
-        for (int j = 0; j < VALUE_DIM; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_gate_weight[i * VALUE_DIM + j];
-            z_s[j] = (float)sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, VALUE_DIM,
+                    w->attn_gate_weight, w->attn_gate_weight_q, w->attn_gate_weight_type,
+                    z_all + s * VALUE_DIM);
     }
     
     // Step 3: beta/alpha projections
@@ -644,8 +624,8 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
     }
     
     // Step 7: L2 normalize Q and K
-    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, 1e-12f, q_norm);
-    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, 1e-12f, k_norm);
+    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, g_ssm_l2_eps, q_norm);
+    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, g_ssm_l2_eps, k_norm);
     
     // Step 8+9: Delta net recurrence with per-timestep state saving
     int state_sz = SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
@@ -714,16 +694,11 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
         }
     }
     
-    // Step 11: Output projection
+    // Step 11: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *inp = delta_out + s * VALUE_DIM;
-        float *out = output + s * D_MODEL;
-        for (int j = 0; j < D_MODEL; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < VALUE_DIM; i++)
-                sum += (double)inp[i] * (double)w->ssm_out_weight[i + j * VALUE_DIM];
-            out[j] = (float)sum;
-        }
+        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, D_MODEL,
+                    w->ssm_out_weight, w->ssm_out_weight_q, w->ssm_out_weight_type,
+                    output + s * D_MODEL);
     }
     
     // === Save intermediates for backward ===
@@ -816,28 +791,18 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
     
     // ========== Steps 1-8: IDENTICAL to Euclidean ==========
     
-    // Step 1: Fused QKV projection
+    // Step 1: Fused QKV projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        float *qkv_s = qkv_all + s * C;
-        for (int j = 0; j < C; j++) {
-            float sum = 0.0f;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += x_s[i] * w->attn_qkv_weight[i * C + j];
-            qkv_s[j] = sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, C,
+                    w->attn_qkv_weight, w->attn_qkv_weight_q, w->attn_qkv_weight_type,
+                    qkv_all + s * C);
     }
     
-    // Step 2: z gate projection
+    // Step 2: z gate projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        float *z_s = z_all + s * VALUE_DIM;
-        for (int j = 0; j < VALUE_DIM; j++) {
-            float sum = 0.0f;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += x_s[i] * w->attn_gate_weight[i * VALUE_DIM + j];
-            z_s[j] = sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, VALUE_DIM,
+                    w->attn_gate_weight, w->attn_gate_weight_q, w->attn_gate_weight_type,
+                    z_all + s * VALUE_DIM);
     }
     
     // Step 3: beta/alpha projections
@@ -908,8 +873,8 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
         memcpy(v_conv + s * VALUE_DIM, cv + 2 * KEY_DIM, VALUE_DIM * sizeof(float));
     }
     
-    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, 1e-12f, q_norm);
-    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, 1e-12f, k_norm);
+    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, g_ssm_l2_eps, q_norm);
+    wubu_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, g_ssm_l2_eps, k_norm);
     
     // ========== Step 9: POINCARÉ RECURRENCE (differs from Euclidean) ==========
     
@@ -1041,15 +1006,9 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
     }
     
     for (int s = 0; s < N; s++) {
-        const float *inp = delta_out + s * VALUE_DIM;
-        float *out = output + s * D_MODEL;
-        for (int j = 0; j < D_MODEL; j++) {
-            float sum = 0.0f;
-            for (int i = 0; i < VALUE_DIM; i++) {
-                sum += inp[i] * w->ssm_out_weight[i + j * VALUE_DIM];
-            }
-            out[j] = sum;
-        }
+        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, D_MODEL,
+                    w->ssm_out_weight, w->ssm_out_weight_q, w->ssm_out_weight_type,
+                    output + s * D_MODEL);
     }
     
 cleanup_p:
@@ -1090,81 +1049,33 @@ void wubu_gqa_forward(const float *x, int B, int T,
         return;
     }
     
-    // Step 1: Q + gate fused projection
-    // wq: [D_MODEL, GQA_Q_HEADS*GQA_HEAD_DIM*2] = [2048, 8192]
-    // Q_full: [N, q_dim*2] = [N, 8192] — first q_dim=4096 Q, next 4096 gate
-    // (q_dim and kv_dim defined above)
+    // Step 1: Q + gate fused projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        int q_offset = s * q_dim * 2;  // FIXED: was s * q_dim
-        // Q projection (first half of fused weight)
-        #pragma omp parallel for
-        for (int j = 0; j < q_dim; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_q_weight[i + j * D_MODEL];  // FIXED: was i * (q_dim*2) + j
-            Q_full[q_offset + j] = (float)sum;
-        }
-        // Gate projection (second half of fused weight)
-        #pragma omp parallel for
-        for (int j = 0; j < q_dim; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_q_weight[i + (j + q_dim) * D_MODEL];  // FIXED: i * (q_dim*2) + (j+q_dim)
-            Q_full[q_offset + q_dim + j] = (float)sum;
-            gate[s * q_dim + j] = (float)sum;  // separate gate buffer for sigmoid
-        }
-        // NaN check on Q projection (first batch run only)
-        static int gqa_nan_checked = 0;
-        if (!gqa_nan_checked) {
-            for (int j = 0; j < q_dim * 2; j++) {
-                if (isnan(Q_full[s * q_dim * 2 + j]) || isinf(Q_full[s * q_dim * 2 + j])) {
-                    printf("  GQA Q NaN at s=%d j=%d val=%e\n", s, j, (double)Q_full[s * q_dim * 2 + j]);
-                    // Check ALL weight values at this column
-                    int nan_w = 0, inf_w = 0;
-                    for (int i = 0; i < D_MODEL; i++) {
-                        float wv = w->attn_q_weight[i + j * D_MODEL];  // FIXED: i * (q_dim*2) + j
-                        if (isnan(wv)) nan_w++;
-                        if (isinf(wv)) inf_w++;
-                    }
-                    printf("    weight[*,%d]: NaN=%d Inf=%d\n", j, nan_w, inf_w);
-                    // Check the dot product manually with printf per i
-                    double test_sum = 0.0;
-                    for (int i = 0; i < D_MODEL; i++) {
-                        double prod = (double)x_s[i] * (double)w->attn_q_weight[i + j * D_MODEL];  // FIXED: i * (q_dim*2) + j
-                        if (isnan(prod) || isinf(prod)) {
-                            printf("    NaN/Inf at i=%d: x=%.2e w=%.2e prod=%.2e\n",
-                                   i, (double)x_s[i], (double)w->attn_q_weight[i + j * D_MODEL], prod);
-                        }
-                        test_sum += prod;
-                    }
-                    printf("    double sum=%e nan=%d inf=%d\n", test_sum, isnan(test_sum)?1:0, isinf(test_sum)?1:0);
-                    printf("    cast to float: %e\n", (float)test_sum);
-                    gqa_nan_checked = 1;
-                    break;
-                }
+        int q_offset = s * q_dim * 2;
+        proj_matmul(x + s * D_MODEL, D_MODEL, q_dim * 2,
+                    w->attn_q_weight, w->attn_q_weight_q, w->attn_q_weight_type,
+                    Q_full + q_offset);
+        // Extract gate from Q_full — INTERLEAVED per-head layout:
+        // Q_full layout: [Q_h0(256) | gate_h0(256) | Q_h1(256) | gate_h1(256) | ...]
+        // gate[s * q_dim + j] should get all gate values (second 256 per head)
+        for (int h = 0; h < GQA_Q_HEADS; h++) {
+            for (int j = 0; j < GQA_HEAD_DIM; j++) {
+                int qf_idx = q_offset + h * (2 * GQA_HEAD_DIM) + GQA_HEAD_DIM + j;
+                int g_idx  = s * q_dim + h * GQA_HEAD_DIM + j;
+                gate[g_idx] = Q_full[qf_idx];
             }
         }
     }
     
-    // Step 2: K projection [2048, 512]
+    // Steps 2-3: K and V projections
     // (kv_dim defined above)
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        #pragma omp parallel for
-        for (int j = 0; j < kv_dim; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_k_weight[i + j * D_MODEL];  // FIXED: was i * kv_dim + j
-            K[s * kv_dim + j] = (float)sum;
-        }
-        #pragma omp parallel for
-        for (int j = 0; j < kv_dim; j++) {
-            float sum = 0.0f;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += x_s[i] * w->attn_v_weight[i + j * D_MODEL];  // FIXED: was i * kv_dim + j
-            V[s * kv_dim + j] = sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
+                    w->attn_k_weight, w->attn_k_weight_q, w->attn_k_weight_type,
+                    K + s * kv_dim);
+        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
+                    w->attn_v_weight, w->attn_v_weight_q, w->attn_v_weight_type,
+                    V + s * kv_dim);
     }
     
     // NaN guard: replace any NaN/Inf in Q_full, K, V with 0
@@ -1178,13 +1089,19 @@ void wubu_gqa_forward(const float *x, int B, int T,
     }
     
     // Step 4: Q/K RMSNorm
-    // Q_full has [N, q_dim*2] — split Q (first q_dim) from gate (second q_dim)
-    // Q_norm should only normalize the Q portion, not the gate
-    // Strategy: copy Q from Q_full to temp buffer, RMSNorm it, then copy back
+    // Q_full has [N, q_dim*2] = [N, 8192] with INTERLEAVED per-head layout:
+    //   [Q_h0(256) | gate_h0(256) | Q_h1(256) | gate_h1(256) | ...]
+    // Extract Q only (skip the gate values) for normalization
     float *Q_only = (float *)malloc(N * q_dim * sizeof(float));
     if (!Q_only) { free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
-    for (int s = 0; s < N; s++)
-        memcpy(Q_only + s * q_dim, Q_full + s * q_dim * 2, q_dim * sizeof(float));
+    for (int s = 0; s < N; s++) {
+        int q_offset = s * q_dim * 2;
+        for (int h = 0; h < GQA_Q_HEADS; h++) {
+            for (int j = 0; j < GQA_HEAD_DIM; j++) {
+                Q_only[s * q_dim + h * GQA_HEAD_DIM + j] = Q_full[q_offset + h * (2 * GQA_HEAD_DIM) + j];
+            }
+        }
+    }
     wubu_rms_norm(B, T * GQA_Q_HEADS, GQA_HEAD_DIM, Q_only, w->attn_q_norm_weight, 1e-6f, Q_norm);
     free(Q_only);
     
@@ -1279,20 +1196,11 @@ void wubu_gqa_forward(const float *x, int B, int T,
         attn_out[i] *= gate_sig[i];
     }
     
-    // Step 7: Output projection
-    // Python: final = attn_out @ w['attn_output.weight']
-    // weight shape: [q_dim, D_MODEL] = [4096, 2048]
-    // result[j] = sum_i attn_out[i] * W[i][j] = sum_i attn_out[i] * data[j * q_dim + i]
+    // Step 7: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *inp = attn_out + s * q_dim;
-        float *out = output + s * D_MODEL;
-        #pragma omp parallel for
-        for (int j = 0; j < D_MODEL; j++) {
-            float sum = 0.0f;
-            for (int i = 0; i < q_dim; i++)
-                sum += inp[i] * w->attn_output_weight[i + j * q_dim];  // FIXED: was i * D_MODEL + j
-            out[j] = sum;
-        }
+        proj_matmul(attn_out + s * q_dim, q_dim, D_MODEL,
+                    w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
+                    output + s * D_MODEL);
     }
     
     free(Q_full);
@@ -1330,40 +1238,24 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
     
     // === Steps 1-7: Same as wubu_gqa_forward ===
     
-    // Step 1: Q + gate fused projection
+    // Step 1: Q + gate fused projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
         int q_offset = s * q_dim * 2;
-        for (int j = 0; j < q_dim; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_q_weight[i + j * D_MODEL];  // FIXED
-            Q_full[q_offset + j] = (float)sum;
-        }
-        for (int j = 0; j < q_dim; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_q_weight[i + (j + q_dim) * D_MODEL];  // FIXED
-            Q_full[q_offset + q_dim + j] = (float)sum;
-            gate[s * q_dim + j] = (float)sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, q_dim * 2,
+                    w->attn_q_weight, w->attn_q_weight_q, w->attn_q_weight_type,
+                    Q_full + q_offset);
+        for (int j = 0; j < q_dim; j++)
+            gate[s * q_dim + j] = Q_full[q_offset + q_dim + j];
     }
     
-    // Step 2: K projection (kv_dim defined above)
+    // Steps 2-3: K and V projections via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        for (int j = 0; j < kv_dim; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_k_weight[i + j * D_MODEL];  // FIXED
-            K[s * kv_dim + j] = (float)sum;
-        }
-        for (int j = 0; j < kv_dim; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < D_MODEL; i++)
-                sum += (double)x_s[i] * (double)w->attn_v_weight[i + j * D_MODEL];  // FIXED
-            V[s * kv_dim + j] = (float)sum;
-        }
+        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
+                    w->attn_k_weight, w->attn_k_weight_q, w->attn_k_weight_type,
+                    K + s * kv_dim);
+        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
+                    w->attn_v_weight, w->attn_v_weight_q, w->attn_v_weight_type,
+                    V + s * kv_dim);
     }
     
     // Step 3: Q/K RMSNorm
@@ -1429,16 +1321,11 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
     for (int i = 0; i < N * q_dim; i++)
         attn_out[i] *= gate_sig[i];
     
-    // Step 7: Output projection
+    // Step 7: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        const float *inp = attn_out + s * q_dim;
-        float *out = output + s * D_MODEL;
-        for (int j = 0; j < D_MODEL; j++) {
-            double sum = 0.0;
-            for (int i = 0; i < q_dim; i++)
-                sum += (double)inp[i] * (double)w->attn_output_weight[i + j * q_dim];  // FIXED
-            out[j] = (float)sum;
-        }
+        proj_matmul(attn_out + s * q_dim, q_dim, D_MODEL,
+                    w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
+                    output + s * D_MODEL);
     }
     
     // Save intermediates
@@ -2068,8 +1955,8 @@ void wubu_ssm_backward(
                                  d_beta_flat, d_gate_flat, d_ssm_state_init);
     
     // === Step 7: L2 normalization backward for Q and K ===
-    wubu_l2_norm_backward(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, 1e-12f, d_q_norm, d_q_conv);
-    wubu_l2_norm_backward(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, 1e-12f, d_k_norm, d_k_conv);
+    wubu_l2_norm_backward(B, T, SSM_K_HEADS, SSM_D_STATE, q_conv, g_ssm_l2_eps, d_q_norm, d_q_conv);
+    wubu_l2_norm_backward(B, T, SSM_K_HEADS, SSM_D_STATE, k_conv, g_ssm_l2_eps, d_k_norm, d_k_conv);
     
     // === Step 6: Split backward (concatenate Q, K, V gradients) ===
     for (int s = 0; s < N; s++) {
