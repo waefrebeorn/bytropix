@@ -1,34 +1,34 @@
-# Goal Mantra — May 18, 2026 — POST-FIX
+# Goal Mantra — May 18, 2026 — PHASE 2 COMPLETE
 
 ## THE GOAL
-1:1 logit parity with llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.
-Cos-sim 0.9968 achieved. Next: push to 0.999+.
+1:1 inference parity w/ llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.
+cos-sim 0.9969 (quantization noise, arch bugs = 0).
+gen_text coherent (0.6 tok/s decode, 1.4 tok/s prefill).
 
-## ACHIEVED THIS SESSION
-- **GQA Q/gate interleave bug FIXED**: attn_q.weight output [8192] is per-head
-  interleaved as [Q_h0(256)][gate_h0(256)][Q_h1(256)][gate_h1(256)]...
-  Our code split into two contiguous blocks — WRONG. Single fix raised
-  cos-sim -0.51 → 0.9968. This was THE bug blocking inference for weeks.
-
-- **MoE quantized path WIRED**: IQ2_XXS/IQ3_XXS/IQ4_XS vec_dot → blob pointers
-  → quantized_matmul for both shared and routed experts.
-
-- **Per-layer dump INFRASTRUCTURE**: Modified llama.cpp to dump per-layer hidden
-  states via LLAMA_DUMP_LAYERS=1 + DUMP_LAYER_DIR. Same env var works for our model.
+## ACHIEVED
+- GQA Q/gate interleave bug FIXED: cos-sim -0.51 → 0.9968
+- IMRoPE implemented (sections [11,11,10,0], theta=10M) ✓
+- MoE quantized path wired (IQ2_XXS/IQ3_XXS/IQ4_XS via blob) ✓
+- Per-layer dump infrastructure ref_dumper ✓
+- gen_text pipeline working ✓ (coherent 32-token gen)
+- DA v10 gaps: 8/10 closed (Gap 5 already fixed, Gap 7 = chat template)
+- Performance: 0.3→0.6 tok/s (2×): MoE OpenMP, embedding fix, buffer reuse
+- Q4_K output proj: cos-sim 0.99995 vs SGEMM
+- Vault papers read: Qwen3.6 arch, Unsloth UD quant, DA v10 audit
 
 ## REMAINING GAP
-Cos-sim 0.9968 vs 1.0. Source: quantized_matmul's input Q8_K quantization
-+ self-contained C vec_dot differ from llama.cpp's SIMD paths.
-Each layer accumulates ~0.0003 quantization noise. ALL 40 layers > 0.995.
-This is acceptable for IQ2_M (2.7 bpw) quantization level.
+- cos-sim 0.9969 → 1.0: quantization noise from generic C vec_dot (no SIMD)
+- DA Gap 7: chat template not applied to gen_text
+- Speed: 0.6 tok/s (CPU-bound for 35B MoE)
 
 ## GROUND TRUTH
 - Reference: ~/llama.cpp/src/models/qwen35moe.cpp
-- GGUF metadata: arch="qwen35moe", ssm_n_group=16, ssm_dt_rank=32, ssm_d_state=128
-- Reference binary: ~/llama.cpp/build/bin/llama-cli
-- Hidden state per-layer dump: DUMP_LAYER_DIR=/tmp/dump_layers env var
+- Dumper: ~/bytropix/ref_dumper (links libllama.so directly)
+- Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+- Hidden dump: DUMP_LAYER_DIR=/tmp/dump_layers
 
-## REAL VERIFICATION
-1. Run both ref and our model with DUMP_LAYER_DIR set
-2. python3 to compare layer-by-layer cos-sim
-3. All layers must have cos-sim > 0.99 (achieved: > 0.995)
+## UNIT TEST
+```
+make test_full_moe && PROFILE=1 ./test_full_moe
+# Expect: cos-sim 0.9969, per-layer timing
+```

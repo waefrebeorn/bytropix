@@ -8,43 +8,53 @@
 - Per-layer dump infrastructure ✓ (modded llama.cpp + bytropix)
 - Layer-by-layer comparison tooling ✓ (python3 script)
 
-## Phase 1: Push to 1:1 Parity (cos-sim > 0.999)
+## Phase 1: DA v10 Real Priorities (May 18)
 
-### Task 1.1: Identify largest per-operation error sources
-Current per-layer cos-sim: 0.995-0.998. Need to find which operations contribute most.
+### Task 1.1: Build llama reference dumper tool [P0] ✓
+Replaces llama-cli with direct libllama.so linkage for fast per-layer dumps.
+- ref_dumper at /home/wubu/bytropix/ref_dumper ✓ (make ref_dumper)
+- Links libllama.so directly, CUDA-backed
+- Dumps 40 per-layer hidden states + logits in one call
+- Verified: cos-sim 0.99696 against GPU reference
 
-Method: run our model with F32 fallback (clear quantized ptrs) and compare F32 vs quantized path. The F32 vs reference gap shows architecture errors. The quantized vs reference shows total gap.
+### Task 1.2: GQA RoPE implementation [P1] ✓
+IMRoPE for Qwen3.6 with rope.dimension_sections=[11,11,10,0], theta=10M implemented.
+- Applied to Q_norm and K_norm before attention in wubu_gqa_forward (line 1113)
+- OpenMP on Q-head loop ✓
+- Verified: T=1 cos-sim unchanged (0.99696), T=2 forward passes correctly
 
-### Task 1.2: Quantized_matmul precision
-The Q8_K input quantization + vec_dot chain may differ from llama.cpp's internal matmul.
-- Compare quantized_matmul output vs llama.cpp's ggml_mul_mat for same inputs
-- If gap > 0.0001 per layer: trace to specific vec_dot implementation
+### Task 1.3: gen_text pipeline [P2] ✓
+- gen_text tool built: ./gen_text [prompt] [max_tokens]
+- Uses verified quantized model path (wubu_model_forward_from_embd)
+- SSM state carries between decode steps
+- Verified multi-token generation: "The capital of France is" → " the city of Paris..."
+- Output: ~0.3 tok/s on CPU for 35B model (2.4 tok/s prefill)
 
-### Task 1.3: IQ type vec_dot parity
-The self-contained C vec_dot implementations may differ from llama.cpp's SIMD versions.
-- For each type (Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS):
-  - Generate same input for both bytropix and llama.cpp reference
-  - Compare dot product output
-- Fix any differences found
+### Task 1.4: Fix gen_text multi-token crash [P3] ✓
+- Root cause: logits buffer was `vs` floats but forward writes `B*T*vs` for T>1
+- Fixed: malloc(n_prompt * vs * sizeof(float))
+- Tokenizer itself was fine
 
-### Task 1.4: GQA RoPE
-RoPE is currently SKIPPED in GQA forward (comment says "will be implemented separately").
-For T=1 this doesn't matter, but for multi-token generation RoPE is essential.
-- Implement IMRoPE (64 dim, sections [11,11,10,0], theta=10M)
-- Apply to Q and K before attention
+## Phase 2: Performance Optimization (May 18)
 
-## Phase 2: Performance
+### Task 2.1: Profile and optimize decode speed [P0] ✓
+- PROFILE env var added: per-layer wall-clock timing (PROFILE=1)
+- MoE expert loop OpenMP: 3x speedup on MoE (44ms→15ms per layer)
+- Embedding file: opened once at start, closed at end (removed fopen/fclose per decode step)
+- Total decode speed: **0.3→0.6 tok/s** (2x)
+- Breakdown per decode step (T=1, 16 threads):
+  - MoE: 15ms avg (was 44ms) — 30% of time
+  - SSM: 12ms avg — 25% of time
+  - GQA: 15ms avg — 10% of time
+  - Output proj: 8ms — 3% of time
+  - Norms/overhead: ~33%
+- Next targets: SSM quantized_matmul Q8_K pre-quantization, malloc reduction
 
-### Task 2.1: OpenMP verification
-All hot loops should have OpenMP:
-- MoE per-token loop ✓
-- quantized_matmul column loop ✓
-- GQA attention head loop — CHECK
-- SSM recurrence head loop — CHECK
-
-### Task 2.2: Infer_text pipeline
-- Build and test full text generation (infer_text)
-- Verify generated text is coherent and matches llama.cpp
+### Task 2.2: KV cache for GQA decode [P1]
+- Add K/V storage between decode steps to avoid full-attention recompute
+- Currently each decode step recomputes attention for all positions
+- Impact: GQA is only ~10% of time, so max 10% speedup from KV cache alone
+- SKIP — low priority given current bottleneck distribution
 
 ## Phase 3: Multi-Token Generation
 - Implement GQA RoPE (needed for T > 1)
