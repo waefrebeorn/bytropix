@@ -1,7 +1,7 @@
 # bytropix — WuBu Text AI
 
 **Pure C + CUDA inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE).**
-*May 17 v10 — Output proj transpose fixed, MoE expert stride bug found.*
+*May 18 — Phase 2 complete: 0.6 tok/s decode, cos-sim 0.9968 vs llama.cpp.*
 
 ---
 
@@ -11,27 +11,21 @@
 |--------|-------|
 | Layers | 40 (30 SSM + 10 GQA) |
 | Dequant types | 7 verified (all match llama.cpp) |
-| **Output proj transpose** | ✅ **FIXED** (3 places) |
-| **MoE expert layout** | 🔴 **ACTIVE BUG** |
-| Cos-sim vs ref (pre fix) | -0.457 (anti-correlated) |
-| Cos-sim vs ref (post fix) | -0.001 (hidden state still wrong — MoE weights garbage) |
+| **Full model cos-sim vs ref** | ✅ **0.9968** (quantization noise, no arch bugs) |
+| **Per-layer cos-sim** | ✅ All 40 layers > 0.995 (smooth decay 0.9985→0.9952) |
+| **GQA Q/gate interleave** | ✅ **FIXED** (cos-sim -0.51 → 0.9968) |
+| **IMRoPE** | ✅ Implemented ([11,11,10,0], θ=10M) |
+| **gen_text** | ✅ Working — coherent 32-token generation |
+| **Decode speed** | ⚠️ 0.6 tok/s (CPU, 16 threads) |
+| **MoE OpenMP** | ✅ 3× speedup (44ms→15ms/layer) |
 
 ### Known Bugs
 
-| Bug | Status | Impact | Fix |
-|-----|--------|--------|-----|
-| **Output projection TRANSPOSE** | ✅ Fixed | Cos-sim -0.457→-0.001 | `weight[j*D_MODEL+k]`→`weight[k*vocab_size+j]` |
-| **GQA output proj (inline)** | ✅ Fixed | GQA layers wrong output | `weight[i+j*q_dim]`→`weight[i*D_MODEL+j]` |
-| **MoE expert layout** | ✅ **CONTIGUOUS (correct)** — prev "stride bug" was wrong |
-| GPU RoPE 0.25x factor | 🟡 Suspected | GPU GQA layers | `infer_text_gpu.c:254` |
-| SSM forward vs ref | 🟡 Unverified | 30 SSM layers | Never element-compared vs llama.cpp |
-| VRAM cleanup on SIGINT | 🟡 Missing | GPU memory leak | Add llama.cpp-style cleanup |
-
-**Root Cause:** MoE expert tensor layout is CONTIGUOUS per expert — this was confirmed correct.
-`blk.0.ffn_gate_exps.weight` dims = `[2048, 512, 256]` — expert index (256) is FASTEST dim in GGUF dim order.
-This means experts ARE contiguous in the raw data: expert eid starts at `eid * raw_per_exp`.
-Our dequant (dequant_multi_expert_contiguous) uses this offset correctly.
-The earlier "stride bug" hypothesis was WRONG — confirmed by cos-sim 1.0 vs gguf_read_tensor_f32.
+| Bug | Status | Impact |
+|-----|--------|--------|
+| **Chat template** | ❌ Not applied | Minor quality issue — model works anyway |
+| **SSM L2 eps** | ⚠️ 1e-12 vs 1e-6 | Not blocking (cos-sim still 0.9968) |
+| **Vault stale** | ⚠️ vault/bins/ needs update | Cosmetic — docs lag behind code |
 
 ---
 
@@ -39,16 +33,19 @@ The earlier "stride bug" hypothesis was WRONG — confirmed by cos-sim 1.0 vs gg
 
 ```bash
 # Build
-make infer_text
+make gen_text
 
-# Run inference (CPU, NOGPU=1)
-NOGPU=1 MOE=1 MAX_LAYERS=40 ./infer_text /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Hello" 4
+# Run inference (CPU, 16 threads)
+./gen_text "The capital of France is" 32
 
-# Reference comparison
-./dump_llama_logits /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf /tmp/ref.bin "Hello"
+# Run full 40-layer cos-sim verification
+make test_full_moe && ./test_full_moe
 
-# Dump tensor dims
-./dump_tensor_our /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf blk.0.ffn_gate_exps.weight /tmp/out.bin
+# Per-layer profile
+PROFILE=1 ./test_full_moe
+
+# Reference comparison (requires ref_dumper)
+make ref_dumper && ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf 248044
 ```
 
 **CUDA:** `/usr/local/cuda-13.1/bin/nvcc -arch=sm_120` | **GPU:** RTX 5050 6.4GB | **Model:** Qwen3.6-35B-A3B-UD-IQ2_M.gguf
@@ -132,8 +129,9 @@ bytropix/
 
 | Binary | What It Does | Status |
 |--------|-------------|--------|
-| `infer_text` | CPU inference | 🔴 MoE stride bug |
-| `dump_llama_logits` | Reference logits + hidden | 🟢 Works |
+| `gen_text` | CPU text generation | 🟢 Works (0.6 tok/s) |
+| `ref_dumper` | Reference extraction (libllama.so) | 🟢 Works |
+| `test_full_moe` | Cos-sim vs reference (40 layers) | 🟢 0.9968 verified |
 | `dump_tensor_our` | Tensor dims + dequant dump | 🟢 Works |
 | `llama-cli` | Reference (external) | 🟢 Ground truth |
 

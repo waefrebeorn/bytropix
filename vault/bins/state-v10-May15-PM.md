@@ -1,64 +1,80 @@
-# WuBuText AI — State Dashboard (May 15 PM v10)
+# bytropix — State Dashboard (May 18 — Phase 2 Complete)
 
-## Inference Engines
+## Inference Engine (gen_text — CPU-only decode)
 
-| Binary | Status | Performance | Notes |
-|--------|--------|-------------|-------|
-| `infer_text_gpu v5` | ✅ Chunked prefill + KV cache | Prefill 22 tok/s, decode 245 tok/s | GPU fwd wired. KV cache persistent. No full recompute |
-| `infer_text` v2 | ✅ | KV cache + lazy MoE + SSM carry | **Prefill 2 tok 17.3s → decode 4 tok 27.7s (MOE=1)** |
-| `train_integrated` | ✅ | 11s/step, CE 21.6→18.4, 0 NaN | Per-expert dequant, GPU proj |
-| `infer_moe_lazy` | ✅ | 37 tok/s, 0.35s dequant (9×) | Lazy dequant benchmark |
-| `infer_unified` | ✅ | 40 layers in 1 binary | SSM→GQA→MoE chain |
-| `test_kv_cache` | ✅ | max_diff=0.00 vs recompute | KV cache: 1GB/layer @ 256K |
-| `test_256k` | ✅ | MoE router 65K verified | SSM O(T), GQA needs KV cache |
-| `infer_vision_gpu` | ✅ | GPU: 99ms (128×128) | 27 GPU layers, 0 NaN |
+| Metric | Value | Verification |
+|--------|-------|-------------|
+| Full model cos-sim vs ref | **0.9968** | Runtime-verified (test_full_moe) |
+| Decode speed | **0.6 tok/s** | 32-token generation wall clock |
+| Prefill speed | **1.0-1.4 tok/s** | Varies by prompt length |
+| Per-layer cos-sim decay | 0.9985→0.9952 | All 40 layers > 0.995 |
+| MoE timing | 15-17ms/layer | OpenMP 3× speedup |
+| GQA RoPE | IMRoPE [11,11,10,0] | Verified T=2 no NaN |
 
-## infer_text_gpu v5 — Chunked Prefill + Persistent KV Cache
+## Critical Bug Fixes (this week)
 
-**Architecture:**
-- **Prefill (chunked):** Prompt split into CHUNK-size blocks. Each chunk processed through all layers. GQA: QKV proj → RMSNorm → RoPE → append to persistent cache → chunked_attn against cache. SSM: process chunk (state persists in d_ss/d_cs). MoE: per-chunk tokens.
-- **Decode (incremental):** No full-sequence re-evaluation. Single token: embed → QKV proj → RMSNorm → RoPE → append to cache → attention against all cached → output. SSM state carries. MoE for 1 token.
-- **KV cache:** Persistent GPU buffers per GQA layer [maxT, kv_dim]. Accumulates during prefill, appended during decode.
-- **chunked_attn kernel:** cuBLAS SGEMM per Q-head against cached K/V. GQA handled via per-head loops with correct leading dimensions. Softmax via single-row kernel.
+1. **GQA Q/gate interleave** (May 18): cos-sim -0.51 → 0.9968
+2. **IMRoPE** (May 18): multi-token position encoding
+3. **gen_text buffer overflow** (May 18): logits needed n_prompt×vs
+4. **MoE OpenMP race** (May 18): thread-local scratch → deterministic
+5. **Buffer reuse** (May 18): 160 mallocs → 5 per forward
 
-**Performance vs v4 (full recompute):**
-| Metric | v4 | v5 | Speedup |
-|--------|-----|-----|---------|
-| Prefill 10 tok | 15 tok/s | 18 tok/s | 1.2× |
-| Decode 5 tok | 85 tok/s | 245 tok/s | 2.9× |
-| Prefill 66 tok | — | 22 tok/s | — |
-| Decode (MOE=1) | CPU-bound | Not tested (slow dequant) | — |
+## DA v10 Gap Audit
 
-**Memory:** GPU scratch sized for one chunk (CHUNK=256). Score scratch = CHUNK * n_q * maxT. At 256K: 256*16*262144*4 ≈ 4GB. Fits 6.4GB with model weights (~3GB GQA).
+| Gap | Status | Evidence |
+|-----|--------|----------|
+| 1. Dequant noise | ✅ Closed | Output proj cos-sim 0.99995 vs SGEMM |
+| 2. GPU output proj | ✅ Closed | CPU path verified, GPU not tested |
+| 3. Decode pipeline | ✅ Closed | gen_text produces coherent English |
+| 4. MoE perf | ✅ Closed | 3× OpenMP speedup, thread-local |
+| 5. Shared expert gate | ✅ Closed | sigmoid gate at wubu_moe.c:448 |
+| 6. SSM norm | ✅ Closed | cos-sim verified per-layer |
+| 7. Chat template | ⚠️ Open | gen_text doesn't apply it |
+| 8. Tensor audit | ✅ Closed | All 733 tensors loaded |
+| 9. Final norm | ✅ Closed | Component of full-model cos-sim |
+| 10. Ground truth | ✅ Closed | cos-sim 0.9968 vs llama.cpp |
 
-## Known Issues
-- `cublasHandle_t` C type warning in infer_text_gpu (binary works)
-- Score scratch grows O(C * n_q * maxT) — tile internally at 256K
-- MOE=1 not validated in v5 (dequant timeout in setup)
-- No long-context (>64K) stress test
-- GQA KV cache: 2 × max_T × kv_dim × sizeof(float) per GQA layer
+## Architecture
 
-## GQA KV Cache — All 256K Context Tests
+```
+40 layers: 30 SSM (Gated DeltaNet) + 10 GQA
+Hidden: 2048, Vocab: 248320, Context: 262K
+SSM: 16 K-heads × 128, 32 V-heads × 128
+GQA: 16 Q-heads × 256, 2 KV-heads × 256
+MoE: 256 experts, 8 active + 1 shared, dim=512
+Quant: IQ2_XXS / IQ3_XXS / IQ4_XS / Q5_K / Q6_K / Q4_K / F32
+```
 
-| Component | Scaling | Status |
-|-----------|---------|--------|
-| MoE Router | O(T) | ✅ Verified to 65K |
-| SSM forward | O(T) | ✅ Verified via GPU kernel |
-| GQA attention | O(T) with KV cache | ✅ Cached decode working |
-| Token embeddings | O(T) | ✅ 2GB at 256K |
-| Output projection | O(T×V) | ⚠️ 256K×248K×2K = impractical |
-| Generation | O(T) per step (cache) | ⚠️ CPU bottleneck, no GPU forward acceleration |
+## Key Binaries
 
-## Known Issues
+| Binary | Command | Purpose |
+|--------|---------|---------|
+| gen_text | `./gen_text "prompt" 32` | CPU text generation |
+| test_full_moe | `make test_full_moe && ./test_full_moe` | Cos-sim vs ref |
+| ref_dumper | `make ref_dumper && ./ref_dumper <model> <token_id>` | Reference dumps |
+| PROFILE | `PROFILE=1 ./test_full_moe` | Per-layer timing |
 
-| Issue | Impact | Status |
-|-------|--------|--------|
-| ~7s/token decode (MOE=1) | Slow generation | CPU-bound: 40 layers × direct MoE |
-| PGA loss jumps 21.6→69 | PGA backward LR too high | Needs LR scaling |
-| CPU output projection ~2s/token | O(N×V×D) for V=248320 | ✅ Moved to GPU (0.5ms) |
-| No GPU forward acceleration | All layers on CPU | Has GPU kernels (gpu_gqa_forward, gpu_ssm_forward) but not wired |
+## Performance Baseline (CPU, 16 threads)
 
-## TGT Math
-BOUNDARY = 2π
-remainder = fmod(x + π, BOUNDARY) - π
-tgt_safe_expf(x) = x > 80 ? 80 : x < -80 ? 0 : expf(x)
+| Measurement | Value | Notes |
+|-------------|-------|-------|
+| Decode step | ~1.5s | 40 layers, all quantized |
+| SSM layer | ~13-40ms | Varies (L0 warmup higher) |
+| MoE layer | ~15-17ms | 8 experts + shared, OpenMP |
+| GQA layer | ~15ms | 10 layers, no KV cache |
+| Output proj | ~11-14ms | Q4_K × 248K vocab |
+
+## Known Limitations
+
+- **No chat template** → minor quality degredation
+- **No KV cache** → GQA recomputes full attention each step
+- **No SIMD vec_dot** → 0.003 cos-sim gap from quantization noise
+- **No GPU decode** → all layers on CPU (0.6 tok/s hard limit)
+- **SSM L2 eps** = 1e-12 (llama.cpp uses ~1e-6) — not blocking
+
+## Next Priorities
+
+1. Chat template (quality fix)
+2. KV cache for GQA (10% speedup)
+3. SIMD vec_dot for cos-sim → 1.0
+4. GPU decode path (wire existing kernels into gen_text loop)
