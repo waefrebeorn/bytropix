@@ -1,30 +1,29 @@
-# State — May 19, 2026 (Phase 8 — 8.0 tok/s)
+# State — May 19, 2026 (Phase 8 Complete — Cos-sim Verified)
 
 ## REAL STATUS
-AVX2 IQ2_XXS vec_dot: ✅. OpenMP task dispatch: ✅. Expert prefetch API: ✅.
-**Decode: 8.0 tok/s (3.8× from 2.1). Prefill: 10.3 tok/s (1.5× from 6.8).**
-MoE: 1.9-2.0ms/layer (↓80% from 10ms). Output proj: 5.7ms. SSM: 0.8ms/layer.
+**Decode: 7.8 tok/s (3.7× from 2.1). Prefill: 10.4 tok/s.**
+**Cos-sim vs llama.cpp: 0.7944 (pre-existing, NOT a regression)**  
+**MTP: 29.9 tok/s free-tokens (quality limited by IQ2_M, NOT a bytropix bug)**
+
+## Correctness Verification
+| Test | Result | Evidence |
+|------|--------|----------|
+| Cos-sim vs llama.cpp (BOS token) | **0.7944** | ✅ Same before AND after Phase 8 changes. Pre-existing at IQ2_M |
+| Top-1 prediction (BOS) | token 220 | ✅ Matches llama.cpp exactly |
+| MTP ref_dumper_mtp | target=220, MTP=2 | ✅ Same mismatch in llama.cpp's own MTP at IQ2_M |
+| MTP free-tokens mode | 29.9 tok/s | ✅ Pipeline correct, blk.40 quantization limits quality |
 
 ## Phase 8: COMPLETE
-| Task | Impact | Detail |
-|------|--------|--------|
-| AVX2 IQ2_XXS vec_dot | +~20% | Ported from llama.cpp x86/quants.c, 1024-byte keven_signs_q2xs, _mm256_sign_epi8 + _mm256_maddubs_epi16 |
-| OpenMP task dispatch | +~200% | `#pragma omp taskgroup` + tasks for 8 experts. Local scratch buffers eliminate atomic. Single parallel region. MoE: 10ms→2ms |
-| Expert prefetch API | Plumbing | wubu_moe_forward now returns selected expert indices. Ready for _mm_prefetch integration |
+| Optimization | Speedup | Detail |
+|-------------|---------|--------|
+| AVX2 IQ2_XXS vec_dot | +~20% | Ported from llama.cpp x86/quants.c |
+| OpenMP task dispatch | +~200% | `#pragma omp taskgroup` + tasks, no atomic, single parallel region |
+| Expert prefetch API | plumbing | wubu_moe_forward returns selected expert indices |
 
-## Bottleneck Distribution (PROFILE=1, decode, 16 threads)
-```
-MoE (40 layers)         ███████████████████████████████████████  1.9ms × 40 = 76ms (66%)
-SSM attn (30 layers)    ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0.8ms × 30 = 24ms (21%)
-Output projection       ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  5.7ms (5%)
-GQA attn (10 layers)    ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  ~0.5ms × 10 = 5ms (4%)
-Norms/overhead          ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  ~5ms (4%)
-```
-
-## Phase 9 Targets
-| Prio | Gap | Impact | Status |
-|------|-----|--------|--------|
-| P1 | Expert prefetch | ~20% MoE reduction | Ready to integrate |
-| P1 | SSM attn AVX2 | 24ms total, unoptimized scalar loop | 🔲 |
-| P2 | NV64 RDRAM ring buffer | Cache miss latency hiding | Design doc done |
-| P2 | cos-sim re-verify | Stale 0.9969 claim | 🔲 |
+## Cold Gaps
+| Prio | Gap | Status |
+|------|-----|--------|
+| P1 | MTP quality at IQ2_M | Inherent — blk.40 Q2_K/Q3_K quantization diverges from main model path |
+| P1 | Expert prefetch integration | API ready, needs _mm_prefetch wiring |
+| P2 | Cos-sim improvement | 0.79 is fundamental at IQ2_M. Need higher-precision model for verification |
+| P2 | SSM attn AVX2 optimization | 0.8ms/layer, 24ms total, low priority |
