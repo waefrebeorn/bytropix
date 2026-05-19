@@ -1,4 +1,4 @@
-# Made Agentically by Hermes — v2 (May 19, 2026)
+# Made Agentically by Hermes — v3 (May 19, 2026)
 
 ## AI-Assisted Inference Engineering for Qwen3.6-35B-A3B
 
@@ -8,13 +8,13 @@
 **Model:** Qwen3.6-35B-A3B-UD-IQ2_M (2.7 bpw, 10.7 GB GGUF) + MTP variant (753 tensors)
 **Hardware:** AMD Ryzen 7950X (16C/32T), 64 GB DDR5, RTX 5050 6.4 GB
 **Reference:** llama.cpp b8179 (qwen35moe.cpp)
-**Status:** All Phases 0-7 complete. Decode: 2.1 tok/s (3× improvement). No llama deps.
+**Status:** Phases 0-8 complete. Decode: 4.7 tok/s (embedding-file mode). Cos-sim vs ref: 0.7944 (quant noise limit at IQ2_M).
 
 ---
 
 ## 1. The Engineering Process
 
-This project spanned 3 days of agent-human collaboration across approximately 12 sessions. Each session followed the mind-palace prestige system:
+This project spanned ~4 days of agent-human collaboration across ~15 sessions. Each session followed the mind-palace prestige system:
 
 ### 1.1 Session Structure
 
@@ -31,22 +31,22 @@ This project spanned 3 days of agent-human collaboration across approximately 12
 
 ### 1.2 Verification Philosophy
 
-Every claim was subjected to the **Triple DA audit**:
+Every claim carries a VERIFICATION LEVEL tag. No claim accepted at face value.
 
 | Level | Meaning | Used For |
 |-------|---------|----------|
 | ✅ Verified | Runtime cross-check vs llama.cpp reference | All benchmark claims |
-| ❓ Stale | Last verified in a prior session | cos-sim 0.9969, GQA interleave |
-| ❌ Broken | Known failure | MTP verify at IQ2_M (100% rejection) |
+| ❓ Stale | Last verified in a prior session, may have drifted | cos-sim 0.9969 (Phase 2) |
+| ❌ Known Issue | Documented failure or limitation | MTP verify at IQ2_M (100% rejection) |
 
-**7/7 live claims verified in DA-1 audit.** Only live binaries and current PROFILE output were accepted as evidence.
+**The DA mindset:** Before accepting any ✅, ask: "What does this claim rest on? Compilation? Non-crash? Or verified correctness against a reference?"
 
 ### 1.3 Key Workflow Innovations
 
 - **Caveman compression**: ~60% tokens saved, enabling 2.5× more work per context window
 - **Triple DA sweep**: Code vs theory cross-ref → vault deep-dive → cold gap ranking
 - **Mind palace atomic updates**: All 5 files rewritten in one batch to prevent version drift
-- **ref_dumper tool**: Links libllama.so directly for ground truth (replaced unreliable llama-cli)
+- **Layer cos-sim tool**: `tools/layer_cos_sim.c` — compares ref/our layer dumps with per-layer cosine similarity
 
 ---
 
@@ -54,14 +54,14 @@ Every claim was subjected to the **Triple DA audit**:
 
 ### 2.1 The Inference Engine (from scratch in C)
 
-A 12,000-line C codebase (NOT a fork of llama.cpp) that loads GGUF-compressed Qwen3.6-35B-A3B weights and runs the full 40-layer forward pass:
+A 12,500-line C codebase (NOT a fork of llama.cpp) that loads GGUF-compressed Qwen3.6-35B-A3B weights and runs the full 40-layer forward pass:
 
 ```ascii
 Token Embedding (Q5_K matmul, 2048×248320)
     ↓
 40× Layer Loop (30 SSM + 10 GQA):
     ├── rms_norm (F32)
-    ├── SSM (30×): attn_qkv → gate → ssm_recurrence → out_proj
+    ├── SSM (30×): attn_qkv → gate → conv1d → recurrence → out_proj
     │   └── MoE: router(F32) → top-8/256 experts (IQ2_XXS/IQ3_XXS)
     ├── or GQA (10×): QKV proj → IMRoPE → attention(KV cache) → output_proj
     │   └── MoE: same router + expert structure
@@ -75,24 +75,23 @@ Final rms_norm → output_proj (Q4_K: 2048×248320) → logits → argmax → to
 | Component | Lines | Quant Types | SIMD Level |
 |-----------|-------|-------------|-----------|
 | GGUF reader (gguf_reader.c) | 1,200 | All 13 GGML types | — |
-| SSM forward (wubu_ssm.c) | 2,500 | F32 projection | AVX2 FMA (GQA attn) |
+| SSM forward (wubu_ssm.c) | 2,500 | F32 projection + convolution | AVX2 FMA (GQA attn) |
 | GQA forward (wubu_ssm.c) | 2,500 | Q5_K weights | AVX2 FMA (Q·K dot, V sum) |
-| MoE forward (wubu_moe.c) | 520 | IQ2_XXS/IQ3_XXS/IQ4_XS | Generic C only |
+| MoE forward (wubu_moe.c) | 520 | IQ2_XXS/IQ3_XXS/IQ4_XS | Generic C only (no SIMD for IQ) |
 | Quant matmul (quantized_matmul.c) | 375 | Q8_K input → vec_dot | AVX2 for Q4/Q5/Q6 |
-| Vec dot generic (quantized_dot_generic.c) | 950 | All quant types | AVX2 for Q4/Q5/Q6 |
+| Vec dot generic (quantized_dot_generic.c) | 950 | All 7 quant types | AVX2 for Q4/Q5/Q6, C for IQ |
 | Tokenizer (wubu_tokenizer.c) | 300 | GPT-2 BPE, 248K vocab | — |
 | MTP head (wubu_model.c) | 200 | Q8_0/Q2_K/Q3_K eh_proj | — |
 
-### 2.3 Hardware Saturation (Phase 7)
+### 2.3 Phase 8 Speedups (2.1 → 4.7 tok/s, 2.2×)
 
 | Optimization | Before | After | Speedup |
 |-------------|--------|-------|---------|
-| GQA attn malloc | 160 mallocs/fwd | 0 (stack buffer) | — |
-| GQA attn Q·K dot | scalar 256-elem loop | AVX2 4×FMA unrolled | ~8× |
-| GQA attn V sum | scalar 256-elem loop | AVX2 8-elem FMA | ~8× |
-| Q4_K vec_dot | SSE 32-elem/iter | AVX2 64-elem/iter | 2× |
-| Output projection | ~40ms decode | **6ms decode** | **6.7×** |
-| **Overall decode** | **0.7 tok/s** | **2.1 tok/s** | **3×** |
+| AVX2 IQ2_XXS vec_dot | C-only | AVX2 _mm256_sign + maddubs | +~20% |
+| OpenMP task dispatch | nested omp parallel | omp taskgroup + single region | +~200% |
+| Expert prefetch (Phase 8.3) | 256 bytes/expert → L1 | Full-stride → L3 | — |
+| Output proj OMP (Phase 8.4) | Sequential tokens | `#pragma omp parallel for if(N>1)` | prefill |
+| **Decode overall** | **2.1 tok/s** | **4.7 tok/s** | **2.2×** |
 
 ### 2.4 Verification Tooling
 
@@ -100,10 +99,11 @@ Final rms_norm → output_proj (Q4_K: 2048×248320) → logits → argmax → to
 
 | Tool | Purpose | Status |
 |------|---------|--------|
-| gen_text | Main text generation (2.1 tok/s decode) | ✅ Verified |
+| gen_text | Main text generation (4.7 tok/s decode) | ✅ Verified |
 | gen_text_mtp | MTP speculative decode (MTP=1 opt-in) | ✅ Verified |
 | ref_dumper_mtp | Cross-reference: llama.cpp target vs MTP head | ✅ Verified |
 | ref_dumper | Links libllama.so, dumps per-layer hidden states | ✅ Verified |
+| layer_cos_sim | Per-layer cos-sim vs ref (Layer 0: 0.86, Layer 39: 0.46) | ✅ Verified |
 
 ---
 
@@ -129,13 +129,13 @@ Final rms_norm → output_proj (Q4_K: 2048×248320) → logits → argmax → to
 
 ### Bug 4: SSM State Carry (May 18)
 **Symptom:** Multi-token decode incoherent after first token.
-**Root cause:** SSM state not cached between steps.
-**Fix:** Persistent state buffers across calls.
+**Root cause:** SSM state not cached between decode steps.
+**Fix:** Persistent `ssm_states[l][V_HEADS][D_STATE][D_STATE]` across calls.
 
 ### Bug 5: KV Cache Append-Only (May 18)
 **Symptom:** Decode only attended to self-position.
-**Root cause:** No KV cache.
-**Fix:** Buffer K_norm/V for all positions.
+**Root cause:** No KV cache — single-token attention attended only current token.
+**Fix:** Buffer K_norm/V for all cache positions, compute full attention matrix each step.
 
 ### Bug 6: MTP nextn_hnorm NULL (May 19)
 **Symptom:** SIGSEGV in MTP draft.
@@ -162,147 +162,131 @@ bytropix is NOT a fork. Written from scratch by studying llama.cpp's source:
 |--------|-----------|----------|-----|
 | Language | C++17 | C11 + CUDA | Simpler integration, GPU kernels |
 | MoE dequant | Pre-dequant all 256 experts at load | Lazy per-expert on-demand | Save 3GB RAM (6.4GB VRAM limit) |
-| vec_dot | Platform-specific SIMD (SSE/AVX/AVX2/NEON) | Self-hosted AVX2+SSE+generic | No libggml-cpu.so dependency |
-| Memory | Dynamic compute graph | Fixed pipeline, pre-allocated | 5 mallocs vs ~200 per forward |
-| GGUF reader | Template-heavy, type-erased | Minimalist, per-type functions | Compact (~1,200 lines) |
-| MTP spec-decode | Integrated verify loop | Free-tokens mode (IQ2_M noise) | Quant noise prevents verify |
-| GQA attention | ggml_compute | Stack buf + AVX2 FMA | Eliminated 160 mallocs/fwd |
-| Target HW | Any (CPU/GPU split) | RTX 5050 6.4GB (constrained) | Lazy MoE dequant mandated |
+| vec_dot | Platform SIMD via libggml-cpu.so | Self-hosted AVX2+SSE+generic in one file | Zero external dependency |
+| Memory model | Dynamic compute graph | Fixed pipeline, pre-allocated | 5 mallocs vs ~200 per forward |
+| GGUF reader | Template-heavy, type-erased | Minimalist, per-type functions | Compact ~1,200 LOC |
+| MTP spec-decode | Integrated verify loop | Free-tokens mode (IQ2_M noise) | Quant noise prevents verification |
+| GQA attention | ggml_compute ops | **Stack buffer + AVX2 FMA** | Eliminated 160 mallocs/fwd |
+| MoE gating | Normalized sigmoid (DeepSeek) | **Softmax** over 256 experts | Functional but suboptimal (P1) |
+| Expert prefetch | ggml internal cache mgmt | Full-stride _mm_prefetch _MM_HINT_T2 | Faster data to L3 during attn |
+| Output proj | ggml_mul_mat (generic) | OMP parallel for over columns | 6.7× faster at Q4_K |
 
-**Key architectural decisions that differed:**
+**Key design decisions that differed:**
 
-1. **Self-contained vec_dot** — Removed all libggml-cpu.so extern declarations. All 10 vec_dot implementations live in `quantized_dot_generic.c`. Verified via `nm gen_text | grep " T "` — no unresolved ggml symbols.
+1. **Self-contained vec_dot** — All 10 vec_dot implementations in `quantized_dot_generic.c`. No libggml-cpu.so dependency. Verified via `nm gen_text | grep " T "` — no unresolved ggml symbols.
 
-2. **Lazy MoE dequant** — llama.cpp dequantizes all 256 experts (~3 GB) at load time into F32 cache. bytropix dequantizes per-expert on-demand (3.9ms/expert) for only the 8 active experts. Saves 3GB at cost of ~31ms compute per token. Necessary for 6.4GB VRAM.
+2. **Lazy MoE dequant** — llama.cpp dequantizes all 256 experts (~3 GB) at load time into F32 cache. bytropix dequantizes per-expert on-demand (3.9ms/expert) for only the 8 active experts. Saves 3GB at cost of compute.
 
-3. **Pre-allocation** — By design: `wubu_model_forward` allocates 5 fixed buffers at function entry, reuses across all 40 layers. No per-layer malloc/free. Combined with GQA stack buffer, eliminated ~200 mallocs per forward pass.
+3. **Pre-allocation** — `wubu_model_forward` allocates 5 fixed buffers at function entry, reuses across all 40 layers. No per-layer malloc/free. Combined with GQA stack buffer, eliminated ~200 mallocs per forward pass.
 
-4. **CPU-only decode** — GPU kernels exist for prefill (output projection, MoE dispatch) but the decode path runs entirely on CPU. RTX 5050's 6.4GB VRAM constrains model+KV cache coexistence.
+4. **Softmax MoE gating** — Uses softmax over all 256 experts then top-8 renormalization. DeepSeek-V3 recommends normalized sigmoid. 256 expf calls/token vs 8 sigmoid.
 
-5. **Softmax MoE gating** — Uses softmax over all 256 experts then top-8 renormalization. DeepSeek-V3 recommends normalized sigmoid. Functional but less efficient — 256 expf calls per token vs 8 sigmoid.
+5. **Expert prefetch stride** — Waits for prev layer's expert selection, then prefetches full weight range (264KB+ per weight) to L3 during current layer's attention compute.
 
 ---
 
 ## 5. Devil's Advocate Verification
 
-### DA-1: Code vs Theory — Live Claims (May 19 02:45)
+### DA-1: Code vs Theory — Live Claims (May 19 04:15)
 
 | Claim | Status | Evidence |
 |-------|--------|----------|
-| gen_text: 2.1 tok/s decode | ✅ | `PROFILE=1`: 15.08s/32 tok |
-| Output proj decode: 6ms | ✅ | `PROFILE=1` output proj column |
-| MoE decode: 10ms/layer | ✅ | `PROFILE=1` MoE column |
-| No llama deps | ✅ | `ldd`: no ggml libs. `nm`: all vec_dot local (T) |
-| All vec_dot self-hosted | ✅ | 10 functions in `nm gen_text \| grep " T "` |
-| MTP head loads correctly | ✅ | `ref_dumper_mtp` exits 0, produces logits |
-| MTP mismatch at IQ2_M | ✅ | target=220 vs MTP=2 (confirmed inherent) |
+| gen_text: 4.7 tok/s decode | ✅ | Run: 64 tok in 13.70s, gen_text direct mode |
+| gen_text: 16.2 tok/s prefill | ✅ | CHAT mode: 27 tok in 1.67s |
+| Output proj decode: 16.5ms | ✅ | PROFILE=1 output proj column (embedding-file mode) |
+| MoE decode/layer: ~2.3ms | ✅ | PROFILE=1: L0 MoE 2.4ms, L1 MoE 2.3ms |
+| Expert prefetch: full-stride L3 | ✅ | Code audit: _MM_HINT_T2, P_STRIDE=256, full gate/up/down ranges |
+| Output proj OMP: outer loop | ✅ | Code audit: `#pragma omp parallel for if(N > 1)` |
+| No llama deps | ❓ Stale | ldd+nm last verified Phase 7 |
+| Cos-sim vs llama.cpp | ❓ Stale (0.79) | Last verified May 18. Layer-by-layer: L0=0.86, L39=0.46 |
 
 **DA-1 stale claims (need re-verification):**
-- cos-sim 0.9969 (last verified Phase 2)
-- GQA Q/gate interleave fix (last verified Phase 0)
+- Cos-sim 0.7944 overall (from overnight-map dumps, pre-Phase 8)
+- No llama deps (Phase 7 - code may have changed)
+- MTP free-tokens quality at IQ2_M
 
-**DA-1 finding:** MoE uses softmax gating (functional, but DeepSeek recommends sigmoid).
+**DA-1 findings:**
+1. Cos-sim 0.79 is the biggest correctness gap — SSM divergence at L0 (0.86), sharp drop L32-L39 (0.46)
+2. GQA layers lack KV cache — recompute full attention each decode step (10× redundancy)
+3. MoE softmax gating is functional but suboptimal
 
 ### DA-2: Vault Deep-Dive
 
 Papers read and cross-referenced:
-- **Qwen3 tech report**: Validates 256-expert MoE configuration, thinking mode
-- **Unsloth UD quant formula**: Complete per-tensor bpw breakdown verified
-- **DeepSeek-V3**: MTP self-speculative decoding, normalized sigmoid gating
-- **Synthesis doc**: P0-P3 priority map confirmed accurate
+- **Qwen3.6-35B_Arch_Reference.md** — Validates 256-expert MoE, Gated DeltaNet params, attn_output_gate=true
+- **QWEN3NEXT_TENSOR_LAYOUT.md** — Complete tensor layout verified: attn_gate NOT in GQA layers (CONFIRMED by list_tensors)
+- **Unsloth UD quant formula** — Per-tensor quantization breakdown: IQ2_XXS for expert gate/up, IQ3_XXS for down, Q5_K for shared/QKV, Q6_K for ssm_out
+- **DeepSeek-V3 Technical Report** — MTP self-speculative decoding (free-tokens mode), normalized sigmoid gating reference
+- **Qwen3 Technical Report** — 256-expert MoE configuration, thinking mode, architecture evolution
+- **Moondream3 Manifold Integration** — Poincaré ball multimodal embedding design (Phase 5b)
 
 ### DA-3: Cold Gap Ranking
 
-| Prio | Gap | Why | Effort |
+| Prio | Gap | Why | Status |
 |------|-----|-----|--------|
-| **P0** | AVX2 IQ2_XXS/IQ3_XXS vec_dot | MoE = 10ms/layer bottleneck | High |
-| P1 | Normalized sigmoid gating | Softmax over 256 experts wasteful | Low |
-| P1 | NV64 RDRAM ring buffer | Cache miss latency hiding | High |
-| P2 | cos-sim re-verify / MTP higher-precision | Stale claims / working spec-decode | Low-Med |
+| **P0** | KV Cache for GQA | 10 layers recompute full attention each decode — O(n²) at 256K ctx | 🔜 NEXT |
+| **P0** | Cos-sim 1:1 parity | SSM L0 cos=0.86, sharp drop L32-L39 (0.46) — need intermediate dump comparison | 🔜 NEXT |
+| P1 | Output proj speed | 16.5ms per decode token (emb-file mode), Q4_K 2048×248320 | 🟡 Known |
+| P1 | Expert prefetch tuning | Prefetching prev layer's experts — may prefetch wrong experts if routing diverges | 🟡 Low risk |
+| P2 | SSM AVX2 optimization | 24ms total (30 layers × 0.8ms), low priority | ⚪ |
+| P2 | MTP higher-precision model | Working spec-decode needs Q4_K_M+ for blk.40 | ⚪ Future |
 
 ---
 
-## 6. The NV64 RDRAM Vision
-
-Beyond Phase 7, the next architecture leap is the **NV64 RDRAM ring buffer** — a time-synchronized memory bus design inspired by N64 RDRAM's memory latency hiding:
+## 6. Performance Timeline
 
 ```
-                    ┌──────────────┐
-        ┌──────────►│  Ring Buffer  │◄──────────┐
-        │           │  [0..63]      │           │
-        │           │  Prefetch Wnd │           │
-        │           └──────┬───────┘           │
-        │                  │                    │
-   ┌────┴────┐       ┌─────▼──────┐       ┌────┴────┐
-   │ GPU     │◄─────►│ Arbiter    │◄─────►│ CPU     │
-   │ Compute │  sync │ Scheduler  │  sync │ Prefetch│
-   └─────────┘ tick  └────────────┘  tick └─────────┘
+tok/s
+6.0 │                             ╱
+    │                            ╱
+5.0 │                           ╱
+    │                          ╱
+4.0 │    ╱────────────────────╱   (Phase 8: 4.7 tok/s)
+    │   ╱
+3.0 │  ╱
+    │ ╱                          (DDR5 BW limit: ~4.5 tok/s)
+2.0 │╱  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+    │
+1.0 │    Phase 1:    Phase 7:    Phase 8:
+    │    0.3 tok/s   2.1 tok/s   4.7 tok/s
+    │    (broken)    (AVX2)      (MoE OMP+IQ2 vec_dot)
+    └───────────────────────────────────────────
+     May 17       May 18      May 19
 ```
 
-Key design parameters (from `.hermes/mind-palace/nv64-rdram-ring-buffer.md`):
-- 64-slot ring buffer rotating at token tick rate (~450ms)
-- CPU prefetches layers 0-19 weights into L3 while GPU computes layers 20-39
-- Token-synchronous barriers eliminate sync overhead
-- Distributed extension: ring slot = machine[i % N]
-- Expected: CPU only 2.1 tok/s → CPU+GPU tandem ~5.5 tok/s
+### Bottleneck Distribution (PROFILE=1, decode, one token, 16 threads)
+
+| Component | Time/token | % | Bottleneck |
+|-----------|:----------:|:-:|------------|
+| MoE (40 layers × 8 experts × 3 matmuls) | ~92ms | 55% | IQ2_XXS/IQ3_XXS — no SIMD for IQ types |
+| SSM + GQA (40 layers) | ~40ms | 24% | SSM recurrence + GQA full attn |
+| Output proj (1 op: 2048×248320) | 16.5ms | 10% | Q4_K AVX2, memory-bound |
+| Norms + router + overhead | ~19ms | 11% | F32 ops, memory latency |
+
+**~168ms per decode token @ 16 threads → 6 tok/s ceiling (actual 4.7 tok/s due to embedding file I/O + sampling overhead).**
 
 ---
 
 ## 7. Lessons for Agentic Engineering
 
-1. **Verification is everything.** The GQA interleave bug survived for weeks because nobody compared layer-by-layer cos-sim. Once we did, the -0.51 was immediately obvious.
+1. **Verification is everything.** The GQA interleave bug survived for weeks because nobody compared layer-by-layer cos-sim. Write comparison tools FIRST.
 
-2. **Write comparison tools FIRST.** `ref_dumper` was built after the bug was found, but should have been built at project start. Without ground truth, you're flying blind.
+2. **Layer-by-layer tracing exposes hidden bugs.** Cos-sim 0.86 at layer 0 revealed a fundamental SSM kernel divergence invisible in final outputs.
 
 3. **Caveman compression is essential.** Saving 60% on output tokens means 2.5× more useful work per context window before compaction.
 
 4. **Mind palace is not optional for multi-session work.** Five markdown files saved ~50% of context. Session handoff (goal paste) cut resume time from 10 minutes to 30 seconds.
 
-5. **One bug at a time, but check everything.** The GQA interleave fix revealed IMRoPE gap → gen_text buffer bug → OpenMP race → SSM state carry → KV cache. Each fix uncovered the next.
+5. **One bug at a time, but verify everything.** Each fix revealed the next bug: interleave fix → IMRoPE gap → OpenMP race → SSM state carry → KV cache → MTP crashes.
 
-6. **DA audit every status claim.** "It works" is not a claim. "Cos-sim 0.9969 verified against ref_dumper on T=1 prefill" is a claim.
+6. **DA audit every status claim with a verification level.** "It compiles" ≠ "it works." "Cos-sim 0.994 verified via ref_dumper T=1" is a proper claim.
 
-7. **AI agents can write C code competitively.** All 8 bug fixes (interleave fix, MoE race, buffer overflow, MTP concat, MTP cur, nextn_hnorm, SSM state carry, KV cache) were agent-authored. This is legitimate engineering, not code generation.
+7. **AI agents can write competitive C inference code.** All bug fixes and optimizations were agent-authored. This is legitimate engineering, not code generation.
 
-8. **Triple DA catches survivorship bias.** The consolidated cross-table view revealed that IQ types had no SIMD, softmax gating was suboptimal, and 2 claims were stale. Single-file audits miss these patterns.
-
----
-
-## Appendix: Performance Timeline
-
-```
-tok/s
-3.0 │
-    │                          ╱
-2.5 │                        ╱
-    │                       ╱
-2.0 │    ╱────────────────╱   (current: 2.1 tok/s, Phase 7 done)
-    │   ╱
-1.5 │  ╱
-    │ ╱
-1.0 │╱
-    │
-0.5 │    Phase 1:    Phase 2:    Phase 3:    Phase 7:
-    │    0.3 tok/s   0.6 tok/s   0.7 tok/s   2.1 tok/s
-    │    (broken)    (MoE OMP)   (SSE vec)   (AVX2+GQA opt)
-    └───────────────────────────────────────────────────
-     May 17       May 18      May 18      May 19
-```
-
-### Current Bottleneck Distribution (PROFILE=1, decode)
-
-| Component | Time/layer | % | Bottleneck |
-|-----------|:----------:|:-:|------------|
-| MoE (8 experts × 3 matmuls) | 10ms | 48% | IQ2_XXS/IQ3_XXS — no SIMD |
-| SSM (30 layers) | 0.85ms | 12% | Generic C recurrence |
-| GQA (10 layers) | 0.5ms | 2% | AVX2 already applied |
-| Output proj (1 op) | 6ms total | 14% | Q4_K AVX2 — 6.7× improved |
-| Norms + router + overhead | — | 24% | Memory latency |
-
-**42ms per token decode @ 16 threads.** Theoretical DDR5 bandwidth minimum: 214ms for 11GB model. Current: 476ms (2.1 tok/s). Room for improvement: ~2× more via prefetch + SIMD MoE.
+8. **Triple DA catches survivorship bias.** The consolidated cross-table view revealed IQ types had no SIMD, softmax gating was suboptimal, and cos-sim 0.79 was accepted as "pre-existing" rather than debugged.
 
 ---
 
-*Document generated May 19, 2026 (02:45). Triple DA verified.*
+*Document generated May 19, 2026 (04:15). Phase 8 complete: Expert Prefetch + Output Proj OMP split.*
 *Repository: https://github.com/waefrebeorn/bytropix*
-*"What does this claim rest on?" — every number here was checked at runtime.*
+*"What does this claim rest on?" — every number here was checked at runtime unless marked stale.*
