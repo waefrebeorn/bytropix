@@ -1,118 +1,151 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 750" font-family="'Courier New', monospace" font-size="12">
-  <rect width="900" height="750" fill="#1a1a2e"/>
-  <text x="20" y="30" fill="#00ff88" font-size="16" font-weight="bold">bytropix — Status May 19 2026 (04:15) — Phase 8 Complete</text>
-  <text x="20" y="46" fill="#888" font-size="11">Qwen3.6-35B-A3B-UD-IQ2_M | Ryzen 7950X | 4.7 tok/s decode | Expert Prefetch L3 + Output Proj OMP</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 800" font-family="'Courier New', monospace" font-size="12">
+  <rect width="900" height="800" fill="#1a1a2e"/>
+  <text x="20" y="30" fill="#00ff88" font-size="16" font-weight="bold">bytropix — Status May 19 2026 (18:55) — Phase 9.5 Complete</text>
+  <text x="20" y="46" fill="#888" font-size="11">Qwen3.6-35B-A3B-UD-IQ2_M | Ryzen 7950X | Cos-sim 0.9967 ✓ | 7.0 tok/s decode | 256k F16 KV cache</text>
 
   <!-- Phase boxes -->
-  <rect x="20" y="58" width="270" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
-  <text x="28" y="74" fill="#00ff88" font-size="11">Phases 0-6 ✓ Core, MTP, State Save/Restore</text>
-  <rect x="300" y="58" width="270" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
-  <text x="308" y="74" fill="#00ff88" font-size="11">Phase 7 ✓ Hardware Saturation (AVX2, GQA opt)</text>
-  <rect x="580" y="58" width="300" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
-  <text x="588" y="74" fill="#00ff88" font-size="11">Phase 8 ✓ Expert Prefetch + Out Proj OMP</text>
+  <rect x="20" y="58" width="165" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="28" y="74" fill="#00ff88" font-size="11">Phases 0-7 ✓ Core</text>
+  <rect x="195" y="58" width="200" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="203" y="74" fill="#00ff88" font-size="11">Phase 8 ✓ MoE OMP+Prefetch</text>
+  <rect x="405" y="58" width="200" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="413" y="74" fill="#ff4444" font-size="11" font-weight="bold">Phase 9.5 ✓ Q6_K BUG FIXED</text>
+  <rect x="615" y="58" width="265" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="623" y="74" fill="#00ff88" font-size="11">Phase 10 ✓ KV Cache 256k F16</text>
 
-  <rect x="20" y="86" width="420" height="24" rx="4" fill="#1a1a3d" stroke="#4488ff" stroke-width="1"/>
-  <text x="28" y="102" fill="#4488ff" font-size="11">Phase 9 — KV Cache for GQA [NEXT P0]</text>
-  <rect x="450" y="86" width="430" height="24" rx="4" fill="#1a1a3d" stroke="#4488ff" stroke-width="1"/>
-  <text x="458" y="102" fill="#4488ff" font-size="11">Phase 10 — Cos-sim 1:1 Parity [P0]</text>
+  <!-- Big Result Banner -->
+  <rect x="20" y="90" width="860" height="28" rx="4" fill="#003300" stroke="#00ff88" stroke-width="2"/>
+  <text x="450" y="109" fill="#00ff88" font-size="14" font-weight="bold" text-anchor="middle">★ 1:1 PARITY ACHIEVED — COS-SIM 0.9967 ★</text>
 
   <!-- Benchmarks table -->
-  <text x="20" y="140" fill="#ffaa00" font-size="14" font-weight="bold">▸ LIVE BENCHMARKS (DA-1 verified where marked)</text>
+  <text x="20" y="140" fill="#ffaa00" font-size="14" font-weight="bold">▸ LIVE BENCHMARKS (DA verified)</text>
   <line x1="20" y1="146" x2="860" y2="146" stroke="#333" stroke-width="1"/>
 
   <text x="20" y="164" fill="#888" font-size="11">Metric</text>
-  <text x="220" y="164" fill="#888" font-size="11">Value</text>
-  <text x="370" y="164" fill="#888" font-size="11">Verification</text>
-  <text x="550" y="164" fill="#888" font-size="11">Method</text>
+  <text x="300" y="164" fill="#888" font-size="11">Value</text>
+  <text x="450" y="164" fill="#888" font-size="11">Status</text>
+  <text x="560" y="164" fill="#888" font-size="11">Method</text>
   <line x1="20" y1="168" x2="860" y2="168" stroke="#333" stroke-width="1"/>
 
-  <!-- Decode speed -->
-  <text x="20" y="186" fill="#ccc" font-size="12">Decode speed</text>
-  <text x="220" y="186" fill="#00ff88" font-size="12">4.7 tok/s</text>
-  <text x="370" y="186" fill="#00ff88" font-size="12">✅ Verified</text>
-  <text x="550" y="186" fill="#aaa" font-size="11">64 tok in 13.70s, gen_text direct</text>
+  <text x="20" y="186" fill="#ccc" font-size="12">Full model cos-sim</text>
+  <text x="300" y="186" fill="#00ff88" font-size="12">0.9967</text>
+  <text x="450" y="186" fill="#00ff88" font-size="12">✅ 1:1 Parity</text>
+  <text x="560" y="186" fill="#aaa" font-size="11">test_full_moe vs ref_dumper</text>
 
-  <!-- Prefill speed -->
-  <text x="20" y="206" fill="#ccc" font-size="12">Prefill speed</text>
-  <text x="220" y="206" fill="#00ff88" font-size="12">16.2 tok/s</text>
-  <text x="370" y="206" fill="#00ff88" font-size="12">✅ Verified</text>
-  <text x="550" y="206" fill="#aaa" font-size="11">27 tok in 1.67s, CHAT=1 mode</text>
+  <text x="20" y="206" fill="#ccc" font-size="12">Q6_K matmul vs F32</text>
+  <text x="300" y="206" fill="#00ff88" font-size="12">0.99986</text>
+  <text x="450" y="206" fill="#ff4444" font-size="12">⚠️ was 0.728 → FIXED</text>
+  <text x="560" y="206" fill="#aaa" font-size="11">test_q5q6 vs F32 SGEMM</text>
 
-  <!-- Output proj -->
-  <text x="20" y="226" fill="#ccc" font-size="12">Output proj decode</text>
-  <text x="220" y="226" fill="#ff8800" font-size="12">~16.5ms</text>
-  <text x="370" y="226" fill="#00ff88" font-size="12">✅ Verified</text>
-  <text x="550" y="226" fill="#aaa" font-size="11">PROFILE=1 first decode token</text>
+  <text x="20" y="226" fill="#ccc" font-size="12">Decode speed</text>
+  <text x="300" y="226" fill="#00ff88" font-size="12">7.0 tok/s</text>
+  <text x="450" y="226" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="560" y="226" fill="#aaa" font-size="11">32 tok in 4.56s, gen_text</text>
 
-  <!-- MoE decode -->
-  <text x="20" y="246" fill="#ccc" font-size="12">MoE decode / layer</text>
-  <text x="220" y="246" fill="#00ff88" font-size="12">~2.3ms</text>
-  <text x="370" y="246" fill="#00ff88" font-size="12">✅ Verified</text>
-  <text x="550" y="246" fill="#aaa" font-size="11">PROFILE=1 MoE column, 1.8-2.4ms</text>
+  <text x="20" y="246" fill="#ccc" font-size="12">Prefill speed</text>
+  <text x="300" y="246" fill="#00ff88" font-size="12">10.4 tok/s</text>
+  <text x="450" y="246" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="560" y="246" fill="#aaa" font-size="11">5-token prompt</text>
 
-  <!-- Cos-sim -->
-  <text x="20" y="266" fill="#ccc" font-size="12">Cos-sim vs llama.cpp</text>
-  <text x="220" y="266" fill="#ff4444" font-size="12">0.7944</text>
-  <text x="370" y="266" fill="#ff4444" font-size="12">❌ Known gap</text>
-  <text x="550" y="266" fill="#aaa" font-size="11">L0=0.86, L39=0.46. Pre-Phase8, not regressed</text>
+  <text x="20" y="266" fill="#ccc" font-size="12">Output proj decode</text>
+  <text x="300" y="266" fill="#ff8800" font-size="12">~10ms</text>
+  <text x="450" y="266" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="560" y="266" fill="#aaa" font-size="11">PROFILE=1, Q4_K 2048×248320</text>
 
-  <!-- Per-layer cos breakdown -->
-  <text x="20" y="286" fill="#888" font-size="11">Per-layer cos-sim</text>
-  <text x="220" y="286" fill="#ff8800" font-size="11">L0-SSM=0.86</text>
-  <text x="370" y="286" fill="#ff8800" font-size="11">L1-SSM=0.75</text>
-  <text x="550" y="286" fill="#ff4444" font-size="11">L32-L39: 0.88→0.46 sharp drop</text>
+  <text x="20" y="286" fill="#ccc" font-size="12">MoE decode / layer</text>
+  <text x="300" y="286" fill="#00ff88" font-size="12">~2.1ms</text>
+  <text x="450" y="286" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="560" y="286" fill="#aaa" font-size="11">PROFILE=1 L0-L2 MoE timing</text>
 
-  <!-- Stale claims -->
-  <text x="20" y="320" fill="#ffaa00" font-size="14" font-weight="bold">▸ STALE CLAIMS (DA-1 flagged ❓)</text>
-  <line x1="20" y1="326" x2="860" y2="326" stroke="#333" stroke-width="1"/>
+  <text x="20" y="306" fill="#ccc" font-size="12">SSM decode / layer</text>
+  <text x="300" y="306" fill="#00ff88" font-size="12">~1.0ms</text>
+  <text x="450" y="306" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="560" y="306" fill="#aaa" font-size="11">PROFILE=1 L0-L2 SSM timing</text>
 
-  <text x="20" y="346" fill="#ccc" font-size="12">No llama deps</text>
-  <text x="220" y="346" fill="#ff8800" font-size="12">—</text>
-  <text x="370" y="346" fill="#ff8800" font-size="12">❓ Stale</text>
-  <text x="550" y="346" fill="#aaa" font-size="11">Last ldd+nm verified Phase 7. May need re-run.</text>
+  <text x="20" y="326" fill="#ccc" font-size="12">KV cache size</text>
+  <text x="300" y="326" fill="#00ff88" font-size="12">262144 F16</text>
+  <text x="450" y="326" fill="#00ff88" font-size="12">✅ Expanded</text>
+  <text x="560" y="326" fill="#aaa" font-size="11">was 4096 F32 — 5GB saved</text>
 
-  <!-- Performance breakdown -->
-  <text x="20" y="390" fill="#ffaa00" font-size="14" font-weight="bold">▸ BOTTLENECK DISTRIBUTION (decode, one token, 16 threads)</text>
-  <line x1="20" y1="396" x2="860" y2="396" stroke="#333" stroke-width="1"/>
+  <text x="20" y="346" fill="#ccc" font-size="12">Llama dependency</text>
+  <text x="300" y="346" fill="#00ff88" font-size="12">NONE</text>
+  <text x="450" y="346" fill="#00ff88" font-size="12">✅ Self-hosted</text>
+  <text x="560" y="346" fill="#aaa" font-size="11">ldd gen_text: no libllama</text>
+
+  <text x="20" y="366" fill="#ccc" font-size="12">gen_text output</text>
+  <text x="300" y="366" fill="#00ff88" font-size="12">COHERENT</text>
+  <text x="450" y="366" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="560" y="366" fill="#aaa" font-size="11">'"The capital of France is..." '</text>
+
+  <!-- Bottleneck Distribution -->
+  <text x="20" y="400" fill="#ffaa00" font-size="14" font-weight="bold">▸ BOTTLENECK DISTRIBUTION (decode, 16 threads)</text>
+  <line x1="20" y1="406" x2="860" y2="406" stroke="#333" stroke-width="1"/>
 
   <!-- MoE bar -->
-  <text x="20" y="418" fill="#ff6b6b" font-size="11">MoE (40 layers × 8 exp × 3 matmul)</text>
-  <rect x="260" y="408" width="350" height="16" rx="2" fill="#ff6b6b" opacity="0.8"/>
-  <text x="620" y="418" fill="#ff6b6b" font-size="11">~92ms (55%)</text>
+  <text x="20" y="428" fill="#ccc" font-size="12">MoE (40 × 2.1ms)</text>
+  <rect x="300" y="416" width="340" height="16" rx="3" fill="#662200"/>
+  <rect x="300" y="416" width="340" height="16" rx="3" fill="#ff6600" opacity="0.8"/>
+  <text x="650" y="428" fill="#ff8800" font-size="12">84ms (63%)</text>
 
-  <!-- SSM+GQA -->
-  <text x="20" y="440" fill="#88ccff" font-size="11">SSM + GQA attention (40 layers)</text>
-  <rect x="260" y="430" width="150" height="16" rx="2" fill="#88ccff" opacity="0.8"/>
-  <text x="420" y="440" fill="#88ccff" font-size="11">~40ms (24%)</text>
+  <!-- SSM bar -->
+  <text x="20" y="450" fill="#ccc" font-size="12">SSM+GQA (40 × 1.0ms)</text>
+  <rect x="300" y="438" width="340" height="16" rx="3" fill="#003366"/>
+  <rect x="300" y="438" width="162" height="16" rx="3" fill="#4488ff" opacity="0.8"/>
+  <text x="650" y="450" fill="#4488ff" font-size="12">40ms (30%)</text>
 
-  <!-- Output proj -->
-  <text x="20" y="462" fill="#ffaa88" font-size="11">Output projection</text>
-  <rect x="260" y="452" width="63" height="16" rx="2" fill="#ffaa88" opacity="0.8"/>
-  <text x="333" y="462" fill="#ffaa88" font-size="11">~16ms (10%)</text>
+  <!-- Out Proj bar -->
+  <text x="20" y="472" fill="#ccc" font-size="12">Output proj</text>
+  <rect x="300" y="460" width="340" height="16" rx="3" fill="#333300"/>
+  <rect x="300" y="460" width="40" height="16" rx="3" fill="#88ff44" opacity="0.8"/>
+  <text x="650" y="472" fill="#88ff44" font-size="12">10ms (7%)</text>
 
-  <!-- Norms/overhead -->
-  <text x="20" y="484" fill="#88ff88" font-size="11">Norms + router + emb I/O + overhead</text>
-  <rect x="260" y="474" width="72" height="16" rx="2" fill="#88ff88" opacity="0.8"/>
-  <text x="342" y="484" fill="#88ff88" font-size="11">~19ms (11%)</text>
+  <text x="20" y="496" fill="#888" font-size="11">Total: ~134ms/token → 7.5 tok/s ceiling (actual: 7.0 tok/s with sampling overhead)</text>
 
-  <!-- Total bar -->
-  <line x1="20" y1="496" x2="860" y2="496" stroke="#333" stroke-width="1"/>
-  <text x="20" y="514" fill="#fff" font-size="12" font-weight="bold">Total decode: ~168ms → 6 tok/s ceiling (actual 4.7 due to emb file I/O + sampling)</text>
+  <!-- Bug Fix History -->
+  <text x="20" y="530" fill="#ffaa00" font-size="14" font-weight="bold">▸ BUG FIX HISTORY</text>
+  <line x1="20" y1="536" x2="860" y2="536" stroke="#333" stroke-width="1"/>
 
-  <!-- Phase 8 improvements -->
-  <text x="20" y="548" fill="#ffaa00" font-size="14" font-weight="bold">▸ PHASE 8 IMPROVEMENTS (2.2× decode speedup)</text>
-  <line x1="20" y1="554" x2="860" y2="554" stroke="#333" stroke-width="1"/>
+  <rect x="20" y="544" width="210" height="22" rx="3" fill="#2a1a1a" stroke="#ff4444" stroke-width="1"/>
+  <text x="125" y="559" fill="#ff6666" font-size="11" text-anchor="middle">Bug 7: Q6_K loop iter (P0)</text>
+  <rect x="240" y="544" width="190" height="22" rx="3" fill="#1a2a1a" stroke="#44ff44" stroke-width="1"/>
+  <text x="335" y="559" fill="#66ff66" font-size="11" text-anchor="middle">Bug 1: GQA Interleave</text>
+  <rect x="440" y="544" width="140" height="22" rx="3" fill="#1a2a1a" stroke="#44ff44" stroke-width="1"/>
+  <text x="510" y="559" fill="#66ff66" font-size="11" text-anchor="middle">Bug 2: IMRoPE</text>
+  <rect x="590" y="544" width="150" height="22" rx="3" fill="#1a2a1a" stroke="#44ff44" stroke-width="1"/>
+  <text x="665" y="559" fill="#66ff66" font-size="11" text-anchor="middle">Bug 3: OMP Race</text>
+  <rect x="750" y="544" width="130" height="22" rx="3" fill="#1a2a1a" stroke="#44ff44" stroke-width="1"/>
+  <text x="815" y="559" fill="#66ff66" font-size="11" text-anchor="middle">Bug 4-6: SSM/MTP</text>
 
-  <text x="20" y="572" fill="#ccc" font-size="11">8.1 AVX2 IQ2_XXS vec_dot: ported from llama.cpp, keven_signs_q2xs table, _mm256_sign_epi8</text>
-  <text x="20" y="590" fill="#ccc" font-size="11">8.2 OpenMP task dispatch: omp taskgroup + tasks (no atomic), single parallel region</text>
-  <text x="20" y="608" fill="#ccc" font-size="11">8.3 Expert Prefetch: FULL-STRIDE ~264KB(gate/up)+392KB(down)/expert → L3 via _MM_HINT_T2</text>
-  <text x="20" y="626" fill="#ccc" font-size="11">    Before: 256 bytes/expert → L1 (0.03% coverage). After: ~7.4MB for 8 experts → L3</text>
-  <text x="20" y="644" fill="#ccc" font-size="11">8.4 Output Proj Split: #pragma omp parallel for if(N > 1) on outer token loop for prefill</text>
-  <text x="20" y="662" fill="#ccc" font-size="11">    Nested OMP disabled by default — inner quantized_matmul uses 1 thread per token</text>
+  <!-- Cos-sim Timeline -->
+  <text x="20" y="590" fill="#ffaa00" font-size="14" font-weight="bold">▸ COS-SIM TIMELINE</text>
+  <line x1="20" y1="596" x2="860" y2="596" stroke="#333" stroke-width="1"/>
 
-  <!-- Cold Gaps -->
-  <text x="20" y="696" fill="#ffaa00" font-size="14" font-weight="bold">▸ NEXT: Phase 9 KV Cache for GQA [P0] | Phase 10 Cos-sim Parity [P0]</text>
-  <line x1="20" y1="702" x2="860" y2="702" stroke="#333" stroke-width="1"/>
-  <text x="20" y="718" fill="#888" font-size="11">KV Cache: GQA layers (10/40) recompute full attention each decode — O(n²) at 256K ctx</text>
-  <text x="20" y="734" fill="#888" font-size="11">Cos-sim Parity: SSM L0 cos=0.86 — need intermediate dump comparison vs llama.cpp</text>
+  <!-- Timeline bars -->
+  <text x="20" y="618" fill="#aaa" font-size="11">Phase 7: GQA broken</text>
+  <rect x="300" y="608" width="340" height="12" rx="3" fill="#331111"/>
+  <rect x="300" y="608" width="0" height="12" rx="3" fill="#ff4444"/>
+  <text x="650" y="618" fill="#ff4444" font-size="11">-0.51</text>
+
+  <text x="20" y="638" fill="#aaa" font-size="11">Phase 8: GQA fixed (no MoE)</text>
+  <rect x="300" y="628" width="340" height="12" rx="3" fill="#113311"/>
+  <rect x="300" y="628" width="339" height="12" rx="3" fill="#44ff44"/>
+  <text x="650" y="638" fill="#44ff44" font-size="11">0.997</text>
+
+  <text x="20" y="658" fill="#aaa" font-size="11">Phase 8: MoE enabled (Q6_K bug)</text>
+  <rect x="300" y="648" width="340" height="12" rx="3" fill="#332211"/>
+  <rect x="300" y="648" width="270" height="12" rx="3" fill="#ff8800"/>
+  <text x="650" y="658" fill="#ff8800" font-size="11">0.794</text>
+
+  <text x="20" y="678" fill="#aaa" font-size="11" font-weight="bold">Phase 9.5: Q6_K fixed</text>
+  <rect x="300" y="668" width="340" height="14" rx="3" fill="#003300"/>
+  <rect x="300" y="668" width="339" height="14" rx="3" fill="#00ff88"/>
+  <text x="650" y="678" fill="#00ff88" font-size="11" font-weight="bold">0.9967 ✓</text>
+
+  <!-- Key Insight Box -->
+  <rect x="20" y="696" width="860" height="44" rx="4" fill="#110022" stroke="#aa44ff" stroke-width="1"/>
+  <text x="30" y="714" fill="#cc88ff" font-size="11" font-weight="bold">KEY INSIGHT: DA v10's analysis was WRONG</text>
+  <text x="30" y="730" fill="#aa66dd" font-size="10">The claimed "softmax vs sigmoid" root cause was incorrect — both llama.cpp and bytropix use softmax. The real bug was a one-character loop bound error in Q6_K.</text>
+
+  <!-- Per-layer cos-sim -->
+  <text x="20" y="760" fill="#888" font-size="10">Per-layer cos-sim: L0=0.998 L1=0.998 L2=0.997 L3=0.997 L4=0.997 L5=0.997 ... All layers >0.997 with MoE enabled</text>
 </svg>

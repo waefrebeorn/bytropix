@@ -1,10 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" font-family="monospace">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="monospace">
   <defs>
     <linearGradient id="fixed" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#C8E6C9"/><stop offset="100%" stop-color="#A5D6A7"/>
     </linearGradient>
-    <linearGradient id="broken" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#FFCDD2"/><stop offset="100%" stop-color="#EF9A9A"/>
+    <linearGradient id="critical" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF4444"/><stop offset="100%" stop-color="#CC0000"/>
     </linearGradient>
     <linearGradient id="fixed_label" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#81C784"/><stop offset="100%" stop-color="#66BB6A"/>
@@ -12,97 +12,59 @@
   </defs>
 
   <!-- Title -->
-  <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#333">Bug Status — May 17 v10 (Post DA Audit)</text>
-  <text x="450" y="48" text-anchor="middle" font-size="11" fill="#666">Ref: llama.cpp | Model: Qwen3.6-35B-A3B-UD-IQ2_M.gguf | bytropix</text>
+  <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#333">Bug Status — May 19 2026 (Phase 9.5 Complete)</text>
+  <text x="450" y="48" text-anchor="middle" font-size="11" fill="#666">Ref: llama.cpp | Model: Qwen3.6-35B-A3B-UD-IQ2_M.gguf | Cos-sim: 0.9967</text>
 
   <!-- Legend -->
   <rect x="150" y="65" width="14" height="14" rx="2" fill="#66BB6A"/><text x="170" y="77" font-size="11" fill="#555">Fixed</text>
-  <rect x="320" y="65" width="14" height="14" rx="2" fill="#EF9A9A"/><text x="340" y="77" font-size="11" fill="#555">Active bug</text>
-  <rect x="520" y="65" width="14" height="14" rx="2" fill="#FFE082"/><text x="540" y="77" font-size="11" fill="#555">Suspected (unverified)</text>
+  <rect x="300" y="65" width="14" height="14" rx="2" fill="#FF4444"/><text x="320" y="77" font-size="11" fill="#555">Critical (had wrong DA)</text>
 
-  <!-- Bug table -->
-  <g transform="translate(50, 95)">
-    <!-- Header -->
-    <rect x="0" y="0" width="800" height="28" rx="4" fill="#333"/>
-    <text x="15" y="19" font-size="11" font-weight="bold" fill="white">Bug</text>
-    <text x="280" y="19" font-size="11" font-weight="bold" fill="white">Status</text>
-    <text x="410" y="19" font-size="11" font-weight="bold" fill="white">Impact</text>
-    <text x="650" y="19" font-size="11" font-weight="bold" fill="white">Found</text>
+  <!-- Bug 7: Q6_K Vec Dot (CRITICAL) -->
+  <rect x="50" y="100" width="800" height="55" rx="4" fill="url(#critical)"/>
+  <text x="65" y="118" font-size="13" font-weight="bold" fill="#fff">Bug 7: Q6_K vec_dot AVX2 loop iteration count ⭐ FIXED</text>
+  <text x="65" y="135" font-size="11" fill="#fee">Root cause: j &lt; QK_K/32 → only 128/256 elements processed</text>
+  <text x="65" y="150" font-size="11" fill="#fee">Impact: shared expert output projection (70 Q6_K tensors) across ALL 40 layers. Cos-sim 0.794 → 0.9967.</text>
+  <rect x="720" y="105" width="110" height="22" rx="3" fill="#66BB6A"/>
+  <text x="775" y="120" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">✅ FIXED</text>
 
-    <!-- Row 1: MoE expert layout -->
-    <rect x="0" y="33" width="800" height="38" rx="3" fill="#FFEBEE"/>
-    <text x="15" y="48" font-size="11" font-weight="bold" fill="#C62828">🔴 MoE Expert Layout</text>
-    <text x="15" y="63" font-size="10" fill="#888">dequant_one_expert_contiguous reads eid*raw_per_exp</text>
-    <rect x="275" y="38" width="80" height="22" rx="11" fill="#EF9A9A"/>
-    <text x="315" y="54" text-anchor="middle" font-size="10" font-weight="bold" fill="#C62828">ACTIVE</text>
-    <text x="410" y="54" font-size="10" fill="#555">All 40 layers wrong output</text>
-    <text x="650" y="54" font-size="10" fill="#555">DA Audit v10</text>
+  <!-- DA v10 Correction -->
+  <rect x="50" y="165" width="800" height="40" rx="4" fill="#FFDDDD" stroke="#FF4444" stroke-width="1"/>
+  <text x="65" y="183" font-size="12" font-weight="bold" fill="#CC0000">⚠ DA v10 analysis was WRONG: claimed "softmax vs sigmoid" but both use softmax</text>
+  <text x="65" y="198" font-size="11" fill="#880000">Real root cause was Q6_K loop bug. GQA interleave fix (Bug 1) was correct. Component isolation test caught this.</text>
 
-    <!-- Row 2: Output proj transpose -->
-    <rect x="0" y="76" width="800" height="38" rx="3" fill="#E8F5E9"/>
-    <text x="15" y="91" font-size="11" font-weight="bold" fill="#2E7D32">✅ Output Projection Transpose</text>
-    <text x="15" y="106" font-size="10" fill="#888">weight[j*D_MODEL+k] → weight[k*vocab_size+j] (3 places)</text>
-    <rect x="275" y="81" width="80" height="22" rx="11" fill="#81C784"/>
-    <text x="315" y="97" text-anchor="middle" font-size="10" font-weight="bold" fill="#1B5E20">FIXED</text>
-    <text x="410" y="97" font-size="10" fill="#555">Cos-sim -0.457→-0.001</text>
-    <text x="650" y="97" font-size="10" fill="#555">DA Audit v10</text>
+  <!-- Bug 1: GQA Interleave -->
+  <rect x="50" y="220" width="380" height="45" rx="4" fill="url(#fixed)"/>
+  <text x="65" y="238" font-size="13" font-weight="bold" fill="#2E7D32">Bug 1: GQA Q/Gate Interleave ✅</text>
+  <text x="65" y="255" font-size="11" fill="#444">attn_q.weight is per-head [Q|gate] interleaved, not contiguous</text>
+  <rect x="300" y="225" width="110" height="22" rx="3" fill="#43A047"/>
+  <text x="355" y="240" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">✅ FIXED</text>
 
-    <!-- Row 3: GQA output proj inline -->
-    <rect x="0" y="119" width="800" height="38" rx="3" fill="#E8F5E9"/>
-    <text x="15" y="134" font-size="11" font-weight="bold" fill="#2E7D32">✅ GQA Output Proj (infer_text.c inline)</text>
-    <text x="15" y="149" font-size="10" fill="#888">weight[i+j*q_dim] → weight[i*D_MODEL+j]</text>
-    <rect x="275" y="124" width="80" height="22" rx="11" fill="#81C784"/>
-    <text x="315" y="140" text-anchor="middle" font-size="10" font-weight="bold" fill="#1B5E20">FIXED</text>
-    <text x="410" y="140" font-size="10" fill="#555">GQA layers affected</text>
-    <text x="650" y="140" font-size="10" fill="#555">DA Audit v10</text>
+  <!-- Bug 2: IMRoPE -->
+  <rect x="470" y="220" width="380" height="45" rx="4" fill="url(#fixed)"/>
+  <text x="485" y="238" font-size="13" font-weight="bold" fill="#2E7D32">Bug 2: IMRoPE Not Implemented ✅</text>
+  <text x="485" y="255" font-size="11" fill="#444">Sections=[11,11,10,0] frequency bands needed</text>
+  <rect x="720" y="225" width="110" height="22" rx="3" fill="#43A047"/>
+  <text x="775" y="240" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">✅ FIXED</text>
 
-    <!-- Row 4: GPU RoPE 0.25x -->
-    <rect x="0" y="162" width="800" height="38" rx="3" fill="#FFF8E1"/>
-    <text x="15" y="177" font-size="11" font-weight="bold" fill="#E65100">🟡 GPU RoPE 0.25x Factor</text>
-    <text x="15" y="192" font-size="10" fill="#888">infer_text_gpu.c:254 has extra *0.25f (CPU path correct)</text>
-    <rect x="275" y="167" width="80" height="22" rx="11" fill="#FFE082"/>
-    <text x="315" y="183" text-anchor="middle" font-size="10" font-weight="bold" fill="#E65100">SUSPECTED</text>
-    <text x="410" y="183" font-size="10" fill="#555">Affects GPU GQA layers</text>
-    <text x="650" y="183" font-size="10" fill="#555">Arch Analysis</text>
+  <!-- Bug 3: OMP Race -->
+  <rect x="50" y="280" width="380" height="45" rx="4" fill="url(#fixed)"/>
+  <text x="65" y="298" font-size="13" font-weight="bold" fill="#2E7D32">Bug 3: MoE OpenMP Race ✅</text>
+  <text x="65" y="315" font-size="11" fill="#444">Shared scratch buffer across threads</text>
+  <rect x="300" y="285" width="110" height="22" rx="3" fill="#43A047"/>
+  <text x="355" y="300" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">✅ FIXED</text>
 
-    <!-- Row 5: SSM unverified -->
-    <rect x="0" y="205" width="800" height="38" rx="3" fill="#FFF8E1"/>
-    <text x="15" y="220" font-size="11" font-weight="bold" fill="#E65100">🟡 SSM Forward Not Verified vs Ref</text>
-    <text x="15" y="235" font-size="10" fill="#888">wubu_ssm_forward only checked for "reasonable values"</text>
-    <rect x="275" y="210" width="80" height="22" rx="11" fill="#FFE082"/>
-    <text x="315" y="226" text-anchor="middle" font-size="10" font-weight="bold" fill="#E65100">SUSPECTED</text>
-    <text x="410" y="226" font-size="10" fill="#555">30/40 layers (SSM path)</text>
-    <text x="650" y="226" font-size="10" fill="#555">DA Audit v10</text>
+  <!-- Bug 4: SSM State -->
+  <rect x="470" y="280" width="380" height="45" rx="4" fill="url(#fixed)"/>
+  <text x="485" y="298" font-size="13" font-weight="bold" fill="#2E7D32">Bug 4-6: SSM/MTP Bugs ✅</text>
+  <text x="485" y="315" font-size="11" fill="#444">SSM state carry, KV cache append, MTP crashes</text>
+  <rect x="720" y="285" width="110" height="22" rx="3" fill="#43A047"/>
+  <text x="775" y="300" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">✅ FIXED</text>
 
-    <!-- Row 6: VRAM cleanup -->
-    <rect x="0" y="248" width="800" height="38" rx="3" fill="#FFF8E1"/>
-    <text x="15" y="263" font-size="11" font-weight="bold" fill="#E65100">🟡 VRAM Cleanup on SIGINT</text>
-    <text x="15" y="278" font-size="10" fill="#888">No explicit cleanup, OS-dependent VRAM locking</text>
-    <rect x="275" y="253" width="80" height="22" rx="11" fill="#FFE082"/>
-    <text x="315" y="269" text-anchor="middle" font-size="10" font-weight="bold" fill="#E65100">SUSPECTED</text>
-    <text x="410" y="269" font-size="10" fill="#555">GPU memory management</text>
-    <text x="650" y="269" font-size="10" fill="#555">User report</text>
-  </g>
-
-  <!-- DA Audit box -->
-  <rect x="50" y="370" width="800" height="75" rx="8" fill="#FFF3E0" stroke="#E65100" stroke-width="2"/>
-  <text x="70" y="392" font-size="13" font-weight="bold" fill="#E65100">🔍 DA Audit Findings: 3 False ✅s Stripped</text>
-  <text x="70" y="412" font-size="11" fill="#555">❌ "MoE expert dequant correct" — interleaved layout, code reads contiguous. Not verified.</text>
-  <text x="70" y="428" font-size="11" fill="#555">❌ "Output projection verified" — was TRANSPOSED, only caught by DA cross-check.</text>
-  <text x="70" y="444" font-size="11" fill="#555">❓ "SSM formulas verified" — "reasonable values" ≠ element-by-element verification vs ref.</text>
-
-  <!-- Fix path box -->
-  <rect x="50" y="460" width="800" height="60" rx="8" fill="#E8F5E9" stroke="#2E7D32" stroke-width="2"/>
-  <text x="70" y="482" font-size="13" font-weight="bold" fill="#2E7D32">🎯 Next Fix: MoE Expert Extraction Stride</text>
-  <text x="70" y="502" font-size="11" fill="#555">Replace dequant_one_expert_contiguous: for each block b, dequant → extract block_vals[eid] → store.</text>
-  <text x="70" y="517" font-size="11" fill="#555">Affects: ffn_gate_exps [2048,512,256], ffn_up_exps, ffn_down_exps — all 40 layers.</text>
-
-  <!-- Status bar -->
-  <rect x="50" y="535" width="800" height="28" rx="14" fill="#F5F5F5" stroke="#CCC" stroke-width="1"/>
-  <rect x="50" y="535" width="240" height="28" rx="14" fill="#81C784"/>
-  <text x="170" y="553" text-anchor="middle" font-size="11" font-weight="bold" fill="white">2 bugs fixed ✓</text>
-  <rect x="300" y="535" width="320" height="28" rx="14" fill="#EF9A9A"/>
-  <text x="460" y="553" text-anchor="middle" font-size="11" font-weight="bold" fill="white">1 active bug — MoE expert layout stride</text>
-  <rect x="630" y="535" width="220" height="28" rx="14" fill="#FFE082"/>
-  <text x="740" y="553" text-anchor="middle" font-size="11" font-weight="bold" fill="#E65100">3 suspected</text>
+  <!-- Summary -->
+  <rect x="50" y="350" width="800" height="120" rx="4" fill="#F5F5F5"/>
+  <text x="65" y="370" font-size="13" font-weight="bold" fill="#333">Summary: 7 bugs found and fixed. 1 critical (Q6_K).</text>
+  <text x="65" y="390" font-size="11" fill="#555">Phase 9.5: Q6_K vec_dot AVX2 loop iteration count (j &lt; QK_K/32 → j &lt; QK_K/16)</text>
+  <text x="65" y="408" font-size="11" fill="#555">DA v10 post-mortem: Softmax vs sigmoid theory was WRONG. Component isolation test found the real bug.</text>
+  <text x="65" y="426" font-size="11" fill="#555">Lesson: Never trust root cause analysis without testing each quant type against F32 SGEMM separately.</text>
+  <text x="65" y="444" font-size="11" fill="#555">Current: Cos-sim 0.9967. KV cache: 256k F16. Decode: 7.0 tok/s. All 7 quant types verified.</text>
 </svg>

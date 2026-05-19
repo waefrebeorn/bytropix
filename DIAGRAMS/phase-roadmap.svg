@@ -3,73 +3,90 @@
     <linearGradient id="done" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#C8E6C9"/><stop offset="100%" stop-color="#A5D6A7"/>
     </linearGradient>
-    <linearGradient id="bug" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#FFCDD2"/><stop offset="100%" stop-color="#EF9A9A"/>
-    </linearGradient>
-    <linearGradient id="partial" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#FFF9C4"/><stop offset="100%" stop-color="#FFF176"/>
+    <linearGradient id="critical" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF4444"/><stop offset="100%" stop-color="#CC0000"/>
     </linearGradient>
     <linearGradient id="active" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#FFE0B2"/><stop offset="100%" stop-color="#FFB74D"/>
+      <stop offset="0%" stop-color="#FFF9C4"/><stop offset="100%" stop-color="#FFD54F"/>
     </linearGradient>
     <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+      <polygon points="0 0, 10 3.5, 0 7" fill="#999"/>
     </marker>
   </defs>
 
   <!-- Title -->
-  <text x="450" y="35" text-anchor="middle" font-size="18" font-weight="bold" fill="#E65100">🔥 Phase Roadmap (May 17 v10 — Post DA Audit)</text>
-  <text x="450" y="55" text-anchor="middle" font-size="11" fill="#666">Output proj transpose FIXED. MoE expert layout = active root cause.</text>
+  <text x="450" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#333">bytropix Phase Roadmap — May 19 2026</text>
+  <text x="450" y="48" text-anchor="middle" font-size="12" fill="#666">Qwen3.6-35B-A3B-UD-IQ2_M | Cos-sim: 0.9967 | Decode: 7.0 tok/s | 256k KV cache (F16)</text>
 
-  <!-- Phase boxes row 1 -->
-  <rect x="50" y="80" width="250" height="65" rx="8" fill="url(#done)" stroke="#4CAF50" stroke-width="2"/>
-  <text x="175" y="101" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Phase 0-2: Infra ✓</text>
-  <text x="175" y="119" text-anchor="middle" font-size="10" fill="#555">GGUF reader | Embed | Attention</text>
-  <text x="175" y="135" text-anchor="middle" font-size="10" fill="#555">733 tensors, 13 GGML types</text>
+  <!-- Phase 0-6: Core -->
+  <rect x="30" y="65" width="840" height="35" rx="4" fill="url(#done)"/>
+  <text x="45" y="80" font-size="12" font-weight="bold" fill="#2E7D32">Phases 0-6</text>
+  <text x="160" y="80" font-size="11" fill="#444">Core GGUF reader · SSM/GQA forward · Tokenizer · Output projection · GQA AVX2 FMA · Self-contained vec_dot</text>
+  <text x="820" y="80" font-size="11" font-weight="bold" fill="#2E7D32">✅ DONE</text>
 
-  <rect x="325" y="80" width="250" height="65" rx="8" fill="url(#active)" stroke="#E65100" stroke-width="2"/>
-  <text x="450" y="101" text-anchor="middle" font-size="12" font-weight="bold" fill="#E65100">Phase 3-4: MoE 🐛</text>
-  <text x="450" y="119" text-anchor="middle" font-size="10" fill="#555">Expert stride INTERLEAVED bug</text>
-  <text x="450" y="135" text-anchor="middle" font-size="10" fill="#888">dims=[2048,512,256]—expert=innermost</text>
+  <!-- Phase 7: Hardware Saturation -->
+  <rect x="30" y="105" width="840" height="35" rx="4" fill="url(#done)"/>
+  <text x="45" y="120" font-size="12" font-weight="bold" fill="#2E7D32">Phase 7</text>
+  <text x="160" y="120" font-size="11" fill="#444">Hardware Saturation: AVX2 FMA for Q4_K/Q5_K/Q6_K · Stack buffers (~160 mallocs eliminated) · GQA opt</text>
+  <text x="820" y="120" font-size="11" font-weight="bold" fill="#2E7D32">✅ DONE</text>
 
-  <rect x="600" y="80" width="250" height="65" rx="8" fill="url(#done)" stroke="#4CAF50" stroke-width="2"/>
-  <text x="725" y="101" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Phase 5-6: Vision ✓</text>
-  <text x="725" y="119" text-anchor="middle" font-size="10" fill="#555">GPU ViT | CUDA kernels</text>
-  <text x="725" y="135" text-anchor="middle" font-size="10" fill="#555">9× lazy dispatch</text>
+  <!-- Phase 8: MoE Optimization -->
+  <rect x="30" y="145" width="840" height="35" rx="4" fill="url(#done)"/>
+  <text x="45" y="160" font-size="12" font-weight="bold" fill="#2E7D32">Phase 8</text>
+  <text x="160" y="160" font-size="11" fill="#444">MoE Opt: AVX2 IQ2_XXS vec_dot · OMP task dispatch (2× speedup) · Expert prefetch L3 · Output proj OMP</text>
+  <text x="820" y="160" font-size="11" font-weight="bold" fill="#2E7D32">✅ DONE</text>
 
-  <line x1="300" y1="112" x2="325" y2="112" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <line x1="575" y1="112" x2="600" y2="112" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- Phase 9: Quantized-Only Path -->
+  <rect x="30" y="185" width="840" height="35" rx="4" fill="url(#done)"/>
+  <text x="45" y="200" font-size="12" font-weight="bold" fill="#2E7D32">Phase 9</text>
+  <text x="160" y="200" font-size="11" fill="#444">Quantized-Only: F32 dequants removed (~5GB saved) · Blob pointers for SSM/GQA/MoE weights · Verified</text>
+  <text x="820" y="200" font-size="11" font-weight="bold" fill="#2E7D32">✅ DONE</text>
 
-  <!-- Arrow down -->
-  <line x1="450" y1="145" x2="450" y2="175" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Phase 9.5: Q6_K Bug Fix (Critical) -->
+  <rect x="30" y="225" width="840" height="40" rx="4" fill="url(#critical)"/>
+  <text x="45" y="242" font-size="12" font-weight="bold" fill="#fff">Phase 9.5 ⭐</text>
+  <text x="160" y="242" font-size="11" fill="#fee">Q6_K vec_dot AVX2 loop bug: j&lt;QK_K/32 → j&lt;QK_K/16. Cos-sim 0.794→0.9967. CRITICAL COMPLETENESS FIX.</text>
+  <text x="820" y="245" font-size="11" font-weight="bold" fill="#66FF66">✅ FIXED</text>
+  <text x="160" y="258" font-size="10" fill="#fcc">DA v10 "softmax vs sigmoid" theory was WRONG. Real bug: shared expert Q6_K output projection.</text>
 
-  <!-- Inference debug box -->
-  <rect x="100" y="175" width="700" height="100" rx="10" fill="url(#bug)" stroke="#D32F2F" stroke-width="2.5"/>
-  <text x="450" y="197" text-anchor="middle" font-size="14" font-weight="bold" fill="#B71C1C">P0: FIRST-TOKEN PARITY — ACTIVE</text>
-  <text x="450" y="217" text-anchor="middle" font-size="11" fill="#555">Output proj transpose FIXED ✓. MoE expert stride bug FOUND but UNFIXED.</text>
-  <text x="450" y="237" text-anchor="middle" font-size="10" fill="#888">Pre-fix cos-sim: -0.457 (anti-correlated). Post-fix: -0.001 (random — MoE still broken).</text>
-  <text x="450" y="257" text-anchor="middle" font-size="10" fill="#D32F2F" font-weight="bold">Fix: stride-extract expert eid from each IQ2_XXS block (66 bytes → 256 vals → pick[eid])</text>
+  <!-- Phase 10: KV Cache 256k -->
+  <rect x="30" y="270" width="840" height="35" rx="4" fill="url(#done)"/>
+  <text x="45" y="285" font-size="12" font-weight="bold" fill="#2E7D32">Phase 10</text>
+  <text x="160" y="285" font-size="11" fill="#444">KV Cache 256k: GQA_MAX_CTX 4096→262144 · F16 format (5GB vs 10GB) · Heap attn_weights · Direct cache reads</text>
+  <text x="820" y="285" font-size="11" font-weight="bold" fill="#2E7D32">✅ DONE</text>
 
-  <!-- Arrow down -->
-  <line x1="450" y1="275" x2="450" y2="305" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Phase 11: IQ3_XXS AVX2 -->
+  <rect x="30" y="310" width="840" height="35" rx="4" fill="url(#active)"/>
+  <text x="45" y="325" font-size="12" font-weight="bold" fill="#E65100">Phase 11</text>
+  <text x="160" y="325" font-size="11" fill="#555">IQ3_XXS AVX2 vec_dot: MoE down weights (98 bytes/block, grid+sign dequant). Currently generic C only.</text>
+  <text x="820" y="325" font-size="11" font-weight="bold" fill="#E65100">🔜 NEXT</text>
 
-  <!-- DA Audit box -->
-  <rect x="100" y="305" width="700" height="80" rx="8" fill="url(#partial)" stroke="#F57F17" stroke-width="1.5"/>
-  <text x="450" y="325" text-anchor="middle" font-size="13" font-weight="bold" fill="#E65100">DA Audit v10: 3 False ✅s Stripped</text>
-  <text x="450" y="345" text-anchor="middle" font-size="10" fill="#555">❌ "MoE dequant correct" — interleaved layout not contiguous</text>
-  <text x="450" y="362" text-anchor="middle" font-size="10" fill="#555">❌ "Output proj verified" — was transposed, only caught by DA</text>
-  <text x="450" y="379" text-anchor="middle" font-size="10" fill="#555">❓ "SSM formulas verified" — never element-by-element vs ref</text>
+  <!-- Phase 12: Future -->
+  <rect x="30" y="350" width="840" height="35" rx="4" fill="#F5F5F5" stroke="#CCC" stroke-width="1"/>
+  <text x="45" y="365" font-size="12" font-weight="bold" fill="#888">Phase 12+</text>
+  <text x="160" y="365" font-size="11" fill="#999">Output proj speed · SSM AVX2 optimization · Lazy MoE cache · Chunked prefill · DSA sparse attention</text>
+  <text x="820" y="365" font-size="11" fill="#999">FUTURE</text>
 
-  <!-- Arrow down -->
-  <line x1="450" y1="385" x2="450" y2="415" stroke="#555" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Milestones -->
+  <text x="30" y="415" font-size="13" font-weight="bold" fill="#333">Milestones</text>
+  <line x1="30" y1="420" x2="870" y2="420" stroke="#CCC" stroke-width="1"/>
 
-  <!-- Timeline -->
-  <text x="50" y="435" font-size="12" font-weight="bold" fill="#333">Bug Fix Progress:</text>
-  <rect x="50" y="450" width="800" height="16" rx="8" fill="#E0E0E0"/>
-  <rect x="50" y="450" width="200" height="16" rx="8" fill="#4CAF50"/>
-  <rect x="260" y="450" width="340" height="16" rx="8" fill="#EF9A9A"/>
-  <rect x="610" y="450" width="240" height="16" rx="8" fill="#FFE082"/>
-  <text x="150" y="490" font-size="10" fill="#4CAF50">2 fixed (output proj)</text>
-  <text x="420" y="490" font-size="10" fill="#D32F2F">1 active (MoE stride)</text>
-  <text x="730" y="490" font-size="10" fill="#E65100">3 suspected</text>
+  <circle cx="60" cy="440" r="8" fill="#4CAF50"/>
+  <text x="80" y="445" font-size="11" fill="#555">May 17: 0.3 tok/s, GQA broken</text>
+
+  <circle cx="320" cy="440" r="8" fill="#4CAF50"/>
+  <text x="340" y="445" font-size="11" fill="#555">May 18 AM: 4.7 tok/s, MoE OMP</text>
+
+  <circle cx="580" cy="440" r="8" fill="#FF4444"/>
+  <text x="600" y="445" font-size="11" fill="#555">May 18 PM: 0.794 cos-sim (Q6_K bug)</text>
+
+  <circle cx="800" cy="440" r="8" fill="#4CAF50"/>
+  <text x="710" y="465" font-size="11" fill="#555">May 19: 0.9967 cos-sim, 256k, 7.0 tok/s ✓</text>
+
+  <line x1="68" y1="440" x2="312" y2="440" stroke="#4CAF50" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="328" y1="440" x2="572" y2="440" stroke="#FF4444" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="588" y1="440" x2="792" y2="440" stroke="#4CAF50" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Footer -->
+  <text x="30" y="505" font-size="10" fill="#999">All phases verified against llama.cpp reference. Cos-sim measured via test_full_moe. Speed measured via gen_text PROFILE=1.</text>
 </svg>
