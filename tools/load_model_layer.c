@@ -206,7 +206,7 @@ int main(int argc, char **argv) {
         
         // Run Euclidean SSM
         printf("\nRunning Euclidean SSM forward...\n");
-        wubu_ssm_forward(x, B, T, &w, ssm_state, conv_state, output);
+        wubu_ssm_forward(x, B, T, &w, ssm_state, conv_state, output, NULL, NULL);
         
         float min_v = 1e30f, max_v = -1e30f;
         for (int i = 0; i < B * T * D_MODEL; i++) {

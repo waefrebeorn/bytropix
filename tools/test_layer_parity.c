@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
             // SSM forward
             wubu_ssm_forward(normed, 1, 1, &mdl.layers[l].w.ssm,
                              mdl.layers[l].ssm_state,
-                             mdl.layers[l].conv_state, attn);
+                             mdl.layers[l].conv_state, attn, NULL, NULL);
         } else {
             // GQA forward
             wubu_gqa_forward(normed, 1, 1, &mdl.layers[l].w.gqa,

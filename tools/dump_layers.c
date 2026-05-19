@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
         if (mdl.layers[l].is_ssm) {
             wubu_ssm_forward(normed, 1, 1, &mdl.layers[l].w.ssm,
                              mdl.layers[l].ssm_state,
-                             mdl.layers[l].conv_state, attn);
+                             mdl.layers[l].conv_state, attn, NULL, NULL);
         } else {
             wubu_gqa_forward(normed, 1, 1, &mdl.layers[l].w.gqa,
                              mdl.layers[l].kv_cache,

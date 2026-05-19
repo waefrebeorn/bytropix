@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
         if (layer->is_ssm) {
             float *ssm_state = mdl.ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
             float *conv_state = mdl.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
-            wubu_ssm_forward(normed, 1, 1, &layer->ssm, ssm_state, conv_state, attn_out);
+            wubu_ssm_forward(normed, 1, 1, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
         } else {
             wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
         }

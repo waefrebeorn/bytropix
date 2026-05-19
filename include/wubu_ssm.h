@@ -142,7 +142,8 @@ void wubu_ssm_forward(const float *x, int B, int T,
                       const ssm_layer_weights *weights,
                       float *ssm_state,
                       float *conv_state,
-                      float *output);
+                      float *output,
+                      const float *gpu_qkv, const float *gpu_z);
 
 // Saved SSM forward intermediates (for backward pass)
 // All arrays [B*T x dim] unless noted

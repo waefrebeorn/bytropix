@@ -82,7 +82,7 @@ int main() {
         if (l < model.n_layers) {
             if (model.layers[l].type == LAYER_SSM) {
                 wubu_ssm_forward(hidden, B, T, &model.layers[l].weights.ssm,
-                                 model.ssm_states[l]);
+                                 model.ssm_states[l], NULL, NULL);
             } else {
                 wubu_gqa_forward(hidden, B, T, &model.layers[l].weights.gqa);
             }

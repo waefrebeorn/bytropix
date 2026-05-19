@@ -141,7 +141,7 @@ static void gqa_dec(const float *x, const gqa_layer_weights *w, kv_t *c, float *
     free(ao);
 }
 static void ssm_dec(const float *x, const ssm_layer_weights *w, float *ss, float *cs, float *out) {
-    wubu_ssm_forward(x,1,1,w,ss,cs,out);
+    wubu_ssm_forward(x,1,1,w,ss,cs,out, NULL, NULL);
 }
 
 // ============ Helpers ============

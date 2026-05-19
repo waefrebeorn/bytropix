@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
     // ===== CPU reference =====
     printf("\n--- CPU forward pass ---\n");
     double t0 = now_sec();
-    wubu_ssm_forward(x_cpu, B, T, &w_cpu, ssm_state_cpu, conv_state_cpu, output_cpu);
+    wubu_ssm_forward(x_cpu, B, T, &w_cpu, ssm_state_cpu, conv_state_cpu, output_cpu, NULL, NULL);
     double t_cpu = now_sec() - t0;
     printf("CPU: %.3f ms\n", t_cpu * 1000.0);
     

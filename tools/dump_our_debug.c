@@ -52,7 +52,7 @@ int main(int argc, char **argv) {
     memset(ssm_out, 0, D * sizeof(float));
     float *ssm_state = mdl.ssm_states + 0 * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
     float *conv_state = mdl.conv_states + 0 * (CONV_KERNEL - 1) * CONV_DIM;
-    wubu_ssm_forward(normed, 1, 1, &mdl.layers[0].ssm, ssm_state, conv_state, ssm_out);
+    wubu_ssm_forward(normed, 1, 1, &mdl.layers[0].ssm, ssm_state, conv_state, ssm_out, NULL, NULL);
     
     float ssm_mean = 0, ssm_std = 0;
     for (int i = 0; i < D; i++) ssm_mean += ssm_out[i];

@@ -503,7 +503,40 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         if (layer->is_ssm) {
             float *ssm_state = model->ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
-            wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out);
+#ifdef GPU_SUPPORT
+            if (model->gpu_ctx) {
+                // GPU-accelerated SSM projections (quantized matmuls)
+                // For prefill (N>1): token-by-token
+                // qkv_temp and z_temp buffers for GPU results
+                float *gpu_qkv = (float*)malloc(sizeof(float) * N * CONV_DIM);
+                float *gpu_z = (float*)malloc(sizeof(float) * N * VALUE_DIM);
+                if (gpu_qkv && gpu_z) {
+                    if (N == 1) {
+                        wubu_model_gpu_ssm_project(model, l, normed, N,
+                            gpu_qkv, gpu_z, NULL);
+                    } else {
+                        for (int t = 0; t < N; t++) {
+                            wubu_model_gpu_ssm_project(model, l,
+                                normed + t * D_MODEL, 1,
+                                gpu_qkv + t * CONV_DIM,
+                                gpu_z + t * VALUE_DIM, NULL);
+                        }
+                    }
+                    wubu_ssm_forward(normed, B, T, &layer->ssm,
+                        ssm_state, conv_state, attn_out, gpu_qkv, gpu_z);
+                    free(gpu_qkv);
+                    free(gpu_z);
+                } else {
+                    // Allocation failed, fall back to CPU
+                    wubu_ssm_forward(normed, B, T, &layer->ssm,
+                        ssm_state, conv_state, attn_out, NULL, NULL);
+                }
+            } else
+#endif
+            {
+                wubu_ssm_forward(normed, B, T, &layer->ssm,
+                    ssm_state, conv_state, attn_out, NULL, NULL);
+            }
         } else {
 #ifdef GPU_SUPPORT
             if (model->gpu_ctx) {

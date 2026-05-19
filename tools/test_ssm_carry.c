@@ -36,14 +36,14 @@ int main() {
     float *out_extra = (float *)malloc(1 * D_MODEL * sizeof(float));
     
     // Run T=7 (full batch)
-    wubu_ssm_forward(x, 1, T_full, w, ssm_state_full, conv_state_full, out_full);
+    wubu_ssm_forward(x, 1, T_full, w, ssm_state_full, conv_state_full, out_full, NULL, NULL);
     
     // Run T=6 (partial batch)
-    wubu_ssm_forward(x, 1, T_pre, w, ssm_state_part, conv_state_part, out_part_6);
+    wubu_ssm_forward(x, 1, T_pre, w, ssm_state_part, conv_state_part, out_part_6, NULL, NULL);
     
     // Run T=1 (one more token) using the state from T=6
     const float *x_extra = x + T_pre * D_MODEL;
-    wubu_ssm_forward(x_extra, 1, 1, w, ssm_state_part, conv_state_part, out_extra);
+    wubu_ssm_forward(x_extra, 1, 1, w, ssm_state_part, conv_state_part, out_extra, NULL, NULL);
     
     // Compare last-token outputs
     printf("=== SSM State Carry Test ===\n");

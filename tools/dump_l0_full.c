@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
     float *ssm_out = (float *)malloc(D * sizeof(float));
     float *ssm_state = mdl.ssm_states;
     float *conv_state = mdl.conv_states;
-    wubu_ssm_forward(normed, 1, 1, w, ssm_state, conv_state, ssm_out);
+    wubu_ssm_forward(normed, 1, 1, w, ssm_state, conv_state, ssm_out, NULL, NULL);
     
     f = fopen("/tmp/our_l0_ssm_out.bin", "wb");
     fwrite(ssm_out, sizeof(float), D, f);

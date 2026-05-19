@@ -269,7 +269,8 @@ void wubu_ssm_forward(const float *x, int B, int T,
                       const ssm_layer_weights *w,
                       float *ssm_state,
                       float *conv_state,
-                      float *output) {
+                      float *output,
+                      const float *gpu_qkv, const float *gpu_z) {
     // x: [B, T, D_MODEL]
     // output: [B, T, D_MODEL]
     
@@ -306,24 +307,32 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
     
     const char *dd = getenv("DUMP_SSM_DEBUG");
-    // Step 1+2: Fused QKV + gate projection via single Q8_K quantization
-    // Both projections use the same input x[s], so quantize once and reuse
-    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
-    const int q8_buf_size = n_q8_blocks * 292;  // Q8K_BLOCK_SIZE
-    uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
-    if (!ssm_q8_buf) { fprintf(stderr, "SSM forward: q8 alloc failed\n"); goto cleanup; }
-    
-    for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        quantize_row_q8_K(x_s, (block_q8_K *)ssm_q8_buf, D_MODEL);
-        quantized_matmul_from_q8(ssm_q8_buf,
-            w->attn_qkv_weight_q, w->attn_qkv_weight_type,
-            D_MODEL, C, 0, qkv_all + s * C);
-        quantized_matmul_from_q8(ssm_q8_buf,
-            w->attn_gate_weight_q, w->attn_gate_weight_type,
-            D_MODEL, VALUE_DIM, 0, z_all + s * VALUE_DIM);
+    // Step 1+2: QKV + gate projection
+    // If gpu_qkv/gpu_z are provided, skip the CPU quantized matmuls
+    if (gpu_qkv && gpu_z) {
+        memcpy(qkv_all, gpu_qkv, (size_t)N * C * sizeof(float));
+        memcpy(z_all, gpu_z, (size_t)N * VALUE_DIM * sizeof(float));
+        if (dd) printf("  [SSM] Using GPU projections\n");
+    } else {
+        // Fused QKV + gate projection via single Q8_K quantization
+        // Both projections use the same input x[s], so quantize once and reuse
+        const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+        const int q8_buf_size = n_q8_blocks * 292;  // Q8K_BLOCK_SIZE
+        uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
+        if (!ssm_q8_buf) { fprintf(stderr, "SSM forward: q8 alloc failed\\n"); goto cleanup; }
+
+        for (int s = 0; s < N; s++) {
+            const float *x_s = x + s * D_MODEL;
+            quantize_row_q8_K(x_s, (block_q8_K *)ssm_q8_buf, D_MODEL);
+            quantized_matmul_from_q8(ssm_q8_buf,
+                w->attn_qkv_weight_q, w->attn_qkv_weight_type,
+                D_MODEL, C, 0, qkv_all + s * C);
+            quantized_matmul_from_q8(ssm_q8_buf,
+                w->attn_gate_weight_q, w->attn_gate_weight_type,
+                D_MODEL, VALUE_DIM, 0, z_all + s * VALUE_DIM);
+        }
+        free(ssm_q8_buf);
     }
-    free(ssm_q8_buf);
     if (dd) {
         FILE *f = fopen("/tmp/dbg_qkv_out.bin", "wb");
         if (f) { fwrite(qkv_all, sizeof(float), N * C, f); fclose(f); }

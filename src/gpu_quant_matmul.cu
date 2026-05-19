@@ -15,9 +15,14 @@
 static __device__ __inline__ float fp16_to_fp32_dev(uint16_t v) {
     int sign = (v >> 15) & 1, exp = (v >> 10) & 0x1F, mant = v & 0x03FF;
     uint32_t f32;
-    if (exp == 0) f32 = (sign << 31) | ((uint32_t)(127 - 15 + 1) << 23) | (mant << 13);
-    else if (exp == 31) f32 = (sign << 31) | (0xFF << 23) | (mant << 13);
-    else f32 = (sign << 31) | ((uint32_t)(127 - 15 + exp) << 23) | (mant << 13);
+    if (exp == 0) {
+        // F16 denormal: value = mant * 2^(-24). Flush to zero (rare in weights).
+        f32 = (sign << 31);
+    } else if (exp == 31) {
+        f32 = (sign << 31) | (0xFF << 23) | (mant << 13);
+    } else {
+        f32 = (sign << 31) | ((uint32_t)(127 - 15 + exp) << 23) | (mant << 13);
+    }
     float r; __builtin_memcpy(&r, &f32, 4); return r;
 }
 
@@ -110,10 +115,12 @@ __global__ void quant_matmul_q6_k_kernel(const float *x, const uint8_t *W_q,
 // ================================================================
 // Host dispatch
 // ================================================================
+extern "C"
 size_t wubu_cuda_quant_matmul_scratch(int nr, int nc, int qt) {
     (void)nr; (void)nc; (void)qt; return 0;
 }
 
+extern "C"
 int wubu_cuda_quant_matmul(const float *x, const uint8_t *W_q, int qt,
     int nr, int nc, float *y, float *scr, size_t ss, cudaStream_t st) {
     (void)scr; (void)ss;

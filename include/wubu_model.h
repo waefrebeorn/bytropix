@@ -223,6 +223,17 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz);
 int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
                                 const float *h_norm, int C, float *h_attn);
 
+// Run SSM projections (qkv, gate) on GPU via quantized matmul kernels.
+// h_norm: [C, D_MODEL] input
+// C: number of tokens (1 for decode)
+// qkv_out: [C, CONV_DIM] output (host)
+// z_out: [C, VALUE_DIM] output (host)
+// ssm_out_out: unused (future: ssm output projection)
+int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
+                                const float *h_norm, int C,
+                                float *qkv_out, float *z_out,
+                                float *ssm_out_out);
+
 // Free all GPU resources and reset gpu_ctx to NULL.
 void wubu_model_gpu_free(wubu_model_t *model);
 

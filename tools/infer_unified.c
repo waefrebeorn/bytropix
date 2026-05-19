@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
         if (layer->is_ssm) {
             float *ssm_state = model.ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
             float *conv_state = model.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
-            wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out);
+            wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
             total_ssm += now_sec() - t_a;
         } else {
             wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);

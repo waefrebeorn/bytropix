@@ -59,7 +59,7 @@ int main() {
     memcpy(x, embd, D_MODEL * sizeof(float));
     
     // Process through SSM
-    wubu_ssm_forward(x, 1, 1, &w, out);
+    wubu_ssm_forward(x, 1, 1, &w, out, NULL, NULL);
     
     printf("Input embd: mean=%.6f std=%.6f\n", 
            mean_std(embd, D_MODEL).first, mean_std(embd, D_MODEL).second);

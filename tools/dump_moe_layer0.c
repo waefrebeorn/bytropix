@@ -57,7 +57,7 @@ int main(void) {
     float *ssm_state = (float *)calloc(SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE, sizeof(float));
     float *conv_state = (float *)calloc((CONV_KERNEL - 1) * CONV_DIM, sizeof(float));
     float *attn_out = (float *)malloc(D * sizeof(float));
-    wubu_ssm_forward(normed, 1, 1, &layer->ssm, ssm_state, conv_state, attn_out);
+    wubu_ssm_forward(normed, 1, 1, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
     
     // Residual
     for (int i = 0; i < D; i++) x[i] += attn_out[i];

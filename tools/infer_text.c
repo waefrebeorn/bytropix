@@ -253,7 +253,7 @@ static void ssm_kv_decode(
     float *ssm_state, float *conv_state, float *output)
 {
     // wubu_ssm_forward with T=1, carrying state in/out
-    wubu_ssm_forward(x_step, 1, 1, w, ssm_state, conv_state, output);
+    wubu_ssm_forward(x_step, 1, 1, w, ssm_state, conv_state, output, NULL, NULL);
 }
 
 // ================================================================
@@ -1265,7 +1265,7 @@ int main(int argc, char **argv) {
                 printf("L%d SSM_GPU_DONE\\n", l); fflush(stdout);
             } else {
                 wubu_ssm_forward(normed, 1, np, &ly->w.ssm,
-                                 ly->ssm_state, ly->conv_state, attn);
+                                 ly->ssm_state, ly->conv_state, attn, NULL, NULL);
                 // DEBUG: dump SSM output for layer 0
                 if (l == 0) {
                     FILE *f = fopen("/tmp/debug_layer0_ssm_out.bin", "wb");

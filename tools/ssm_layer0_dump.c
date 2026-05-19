@@ -58,7 +58,7 @@ int main(void) {
     float *attn_out = (float *)malloc(D * sizeof(float));
     
     setenv("DUMP_SSM_DEBUG", "1", 1);
-    wubu_ssm_forward(normed, 1, 1, &layer->ssm, ssm_state, conv_state, attn_out);
+    wubu_ssm_forward(normed, 1, 1, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
     unsetenv("DUMP_SSM_DEBUG");
     
     printf("\nSSM output[0..4]: %.6f %.6f %.6f %.6f %.6f\n", 

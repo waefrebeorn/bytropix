@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
     float *ssm_state = (float *)calloc(SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE, sizeof(float));
     float *conv_state = (float *)calloc((CONV_KERNEL - 1) * CONV_DIM, sizeof(float));
     
-    wubu_ssm_forward(normed, 1, 1, &sw, ssm_state, conv_state, attn);
+    wubu_ssm_forward(normed, 1, 1, &sw, ssm_state, conv_state, attn, NULL, NULL);
     printf("SSM attn rms=%.10f\n", sqrtf(1.0f/D * ({double s=0;for(int i=0;i<D;i++)s+=attn[i]*attn[i];s;})));
     
     // Dump SSM output

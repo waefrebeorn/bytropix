@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
     float *conv_state = (float *)calloc((CONV_KERNEL - 1) * CONV_DIM, sizeof(float));
     float *output = (float *)malloc(D_MODEL * sizeof(float));
     
-    wubu_ssm_forward(x, 1, 1, &w, ssm_state, conv_state, output);
+    wubu_ssm_forward(x, 1, 1, &w, ssm_state, conv_state, output, NULL, NULL);
     
     // Dump output to file
     FILE *f = fopen("/tmp/our_ssm_l0.bin", "wb");

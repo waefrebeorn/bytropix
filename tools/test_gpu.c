@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
         float *conv_state_cpu = (float *)calloc((CONV_KERNEL - 1) * CONV_DIM, sizeof(float));
 
         double t0 = now_sec();
-        wubu_ssm_forward(x_cpu, B, T, &w_cpu, ssm_state_cpu, conv_state_cpu, output_cpu);
+        wubu_ssm_forward(x_cpu, B, T, &w_cpu, ssm_state_cpu, conv_state_cpu, output_cpu, NULL, NULL);
         double t_cpu = now_sec() - t0;
         printf("CPU forward pass: %.3f ms\n", t_cpu * 1000.0);
         printf("CPU output[0:8]:");

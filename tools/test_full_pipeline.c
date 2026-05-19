@@ -385,7 +385,7 @@ int main() {
             free(Q); free(K); free(V); free(K_norm); free(gate_buf); free(attn_out);
         } else {
             wubu_ssm_forward(normed, 1, prefill_n, &layers[l].ssm,
-                             ssm_state[l], conv_state[l], attn);
+                             ssm_state[l], conv_state[l], attn, NULL, NULL);
         }
         
         // Residual
@@ -532,7 +532,7 @@ int main() {
             memcpy(attn, attn_dec, D_MODEL * sizeof(float)); // reuse attn as 1-token buffer
         } else {
             wubu_ssm_forward(normed_dec, 1, 1, &layers[l].ssm,
-                             ssm_state[l], conv_state[l], attn);
+                             ssm_state[l], conv_state[l], attn, NULL, NULL);
         }
         
         for (int i = 0; i < D_MODEL; i++) residual_dec[i] += attn[i];

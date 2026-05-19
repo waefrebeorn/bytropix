@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
     float *out_cpu = (float*)malloc(N * D_MODEL * sizeof(float));
 
     t0 = now_sec();
-    wubu_ssm_forward(x, B, T, &w, ssm_state_cpu, conv_state_cpu, out_cpu);
+    wubu_ssm_forward(x, B, T, &w, ssm_state_cpu, conv_state_cpu, out_cpu, NULL, NULL);
     double t_cpu = now_sec() - t0;
 
     // Compare
