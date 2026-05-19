@@ -301,7 +301,8 @@ static void moe_expert_forward(
 
 void wubu_moe_forward(const float *x, int B, int T,
                       const moe_weights_t *w,
-                      float *output) {
+                      float *output,
+                      int *selected_experts) {
     if (!w->loaded) {
         // No MoE weights loaded: pass through
         memcpy(output, x, B * T * D_MODEL * sizeof(float));
@@ -331,6 +332,8 @@ void wubu_moe_forward(const float *x, int B, int T,
     wubu_moe_router(x, B, T, w->ffn_gate_inp, scores);
     
     // Step 2: Softmax and top-k for each token
+    // (Using softmax — the model was trained with softmax routing.
+    //  Sigmoid gating is a training-time optimization for load balancing.)
     for (int s = 0; s < N; s++) {
         float *score_s = scores + s * N_EXPERTS;
         
@@ -350,7 +353,7 @@ void wubu_moe_forward(const float *x, int B, int T,
         for (int e = 0; e < N_EXPERTS; e++)
             softmax_vals[e] = expf(score_s[e] - max_s) * inv_sum;
         
-        // Find top-k indices — single pass O(E·K) vs old O(E·K²)
+        // Find top-k indices — single pass O(E·K)
         int *indices_s = topk_indices + s * N_ACTIVE_EXPTS;
         float *weights_s = topk_weights + s * N_ACTIVE_EXPTS;
         
@@ -359,8 +362,7 @@ void wubu_moe_forward(const float *x, int B, int T,
             indices_s[k] = k;
             weights_s[k] = softmax_vals[k];
         }
-        // Find the k-th largest value to use as threshold
-        // Simple: sort first k to have worst first
+        // Sort first k ascending (worst first)
         for (int i = 0; i < N_ACTIVE_EXPTS-1; i++)
             for (int j = i+1; j < N_ACTIVE_EXPTS; j++)
                 if (weights_s[i] > weights_s[j]) {
@@ -393,119 +395,152 @@ void wubu_moe_forward(const float *x, int B, int T,
         }
     }
     
-    // Step 3: Process each token through selected experts + shared expert — OMP parallel
-    #pragma omp parallel for if(N > 1)
-    for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        float *out_s = output + s * D_MODEL;
-        int *indices_s = topk_indices + s * N_ACTIVE_EXPTS;
-        float *weights_s = topk_weights + s * N_ACTIVE_EXPTS;
-        
-        float *shared_gate = shared_gate_all + s * SHARED_D_FF;
-        float *shared_up = shared_up_all + s * SHARED_D_FF;
-        float *shared_act = shared_act_all + s * SHARED_D_FF;
-        float *expert_temp = expert_temp_all + s * D_FF * 3;
-        
-        // ---- Shared expert ----
-        if (w->ffn_gate_shexp_q) {
-            // Quantized path
-            quantized_matmul(x_s, w->ffn_gate_shexp_q, w->ffn_gate_shexp_q_type,
-                            D_MODEL, SHARED_D_FF, 0, shared_gate);
-            quantized_matmul(x_s, w->ffn_up_shexp_q, w->ffn_up_shexp_q_type,
-                            D_MODEL, SHARED_D_FF, 0, shared_up);
-            for (int j = 0; j < SHARED_D_FF; j++) {
-                float g = shared_gate[j];
-                shared_act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * shared_up[j];
-            }
-            quantized_matmul(shared_act, w->ffn_down_shexp_q, w->ffn_down_shexp_q_type,
-                            SHARED_D_FF, D_MODEL, 0, out_s);
-        } else {
-            // F32 SGEMM path
-            for (int j = 0; j < SHARED_D_FF; j++) {
-                float sum = 0.0f;
-                for (int k = 0; k < D_MODEL; k++)
-                    sum += x_s[k] * w->ffn_gate_shexp[k + j * D_MODEL];
-                shared_gate[j] = sum;
-            }
-            for (int j = 0; j < SHARED_D_FF; j++) {
-                float sum = 0.0f;
-                for (int k = 0; k < D_MODEL; k++)
-                    sum += x_s[k] * w->ffn_up_shexp[k + j * D_MODEL];
-                shared_up[j] = sum;
-            }
-            for (int j = 0; j < SHARED_D_FF; j++) {
-                float g = shared_gate[j];
-                shared_act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * shared_up[j];
-            }
-            for (int j = 0; j < D_MODEL; j++) {
-                float sum = 0.0f;
-                for (int k = 0; k < SHARED_D_FF; k++)
-                    sum += shared_act[k] * w->ffn_down_shexp[k + j * SHARED_D_FF];
-                out_s[j] = sum;
-            }
-        }
-        
-        // Apply shared expert output gate: sigmoid(x_s @ ffn_gate_inp_shexp)
-        if (w->ffn_gate_inp_shexp) {
-            float gate_val = 0.0f;
-            for (int k = 0; k < D_MODEL; k++)
-                gate_val += x_s[k] * w->ffn_gate_inp_shexp[k];
-            float gate_sig = 1.0f / (1.0f + expf(-gate_val));
-            for (int j = 0; j < D_MODEL; j++)
-                out_s[j] *= gate_sig;
-        }
-        
-        // ---- Routed expert contributions ----
-        #pragma omp parallel for if(N_ACTIVE_EXPTS > 1)
-        for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
-            int e = indices_s[k];
-            float wgt = weights_s[k];
+    // Save selected expert indices for prefetch (if caller requested)
+    if (selected_experts) {
+        memcpy(selected_experts, topk_indices, N * N_ACTIVE_EXPTS * sizeof(int));
+    }
+    
+    // Step 3: Process each token through selected experts + shared expert
+    // Single parallel region: uses tasks for expert dispatch (no nested teams)
+    #pragma omp parallel
+    {
+        #pragma omp for nowait
+        for (int s = 0; s < N; s++) {
+            const float *x_s = x + s * D_MODEL;
+            float *out_s = output + s * D_MODEL;
+            int *indices_s = topk_indices + s * N_ACTIVE_EXPTS;
+            float *weights_s = topk_weights + s * N_ACTIVE_EXPTS;
             
-            if (e < 0 || wgt < 1e-30f) continue;
+            // Thread-local buffers (each thread gets its own)
+            float shared_gate[SHARED_D_FF];
+            float shared_up[SHARED_D_FF];
+            float shared_act[SHARED_D_FF];
             
-            // Thread-local scratch (each expert needs its own to avoid race)
-            float gate_out[D_FF];
-            float up_out[D_FF];
-            float act[D_FF];
-            
-            if (w->ffn_gate_exps_q) {
-                // Quantized path: compute byte offset for this expert
-                int64_t gate_bytes = gguf_raw_size(w->ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
-                int64_t up_bytes   = gguf_raw_size(w->ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
-                int64_t down_bytes = gguf_raw_size(w->ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);
-                
-                const uint8_t *gate_q = w->ffn_gate_exps_q + (int64_t)e * gate_bytes;
-                const uint8_t *up_q   = w->ffn_up_exps_q   + (int64_t)e * up_bytes;
-                const uint8_t *down_q = w->ffn_down_exps_q + (int64_t)e * down_bytes;
-                
-                quantized_matmul(x_s, gate_q, w->ffn_gate_exps_q_type,
-                                D_MODEL, D_FF, 0, gate_out);
-                quantized_matmul(x_s, up_q, w->ffn_up_exps_q_type,
-                                D_MODEL, D_FF, 0, up_out);
-                
-                for (int j = 0; j < D_FF; j++) {
-                    float g = gate_out[j];
-                    act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * up_out[j];
+            // ---- Shared expert (sequential per token) ----
+            if (w->ffn_gate_shexp_q) {
+                quantized_matmul(x_s, w->ffn_gate_shexp_q, w->ffn_gate_shexp_q_type,
+                                D_MODEL, SHARED_D_FF, 0, shared_gate);
+                quantized_matmul(x_s, w->ffn_up_shexp_q, w->ffn_up_shexp_q_type,
+                                D_MODEL, SHARED_D_FF, 0, shared_up);
+                for (int j = 0; j < SHARED_D_FF; j++) {
+                    float g = shared_gate[j];
+                    shared_act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * shared_up[j];
                 }
-                
-                float expert_out[D_MODEL];
-                quantized_matmul(act, down_q, w->ffn_down_exps_q_type,
-                                D_FF, D_MODEL, 0, expert_out);
-                
-                for (int j = 0; j < D_MODEL; j++)
-                    #pragma omp atomic
-                    out_s[j] += wgt * expert_out[j];
+                quantized_matmul(shared_act, w->ffn_down_shexp_q, w->ffn_down_shexp_q_type,
+                                SHARED_D_FF, D_MODEL, 0, out_s);
             } else {
-                // F32 SGEMM path
-                const float *gate_w = w->ffn_gate_exps + (int64_t)e * D_MODEL * D_FF;
-                const float *up_w   = w->ffn_up_exps   + (int64_t)e * D_MODEL * D_FF;
-                const float *down_w = w->ffn_down_exps  + (int64_t)e * D_FF * D_MODEL;
-                
-                float expert_out[D_MODEL];
-                moe_expert_forward(x_s, gate_w, up_w, down_w, expert_temp, expert_out);
-                
+                for (int j = 0; j < SHARED_D_FF; j++) {
+                    float sum = 0.0f;
+                    for (int k = 0; k < D_MODEL; k++)
+                        sum += x_s[k] * w->ffn_gate_shexp[k + j * D_MODEL];
+                    shared_gate[j] = sum;
+                }
+                for (int j = 0; j < SHARED_D_FF; j++) {
+                    float sum = 0.0f;
+                    for (int k = 0; k < D_MODEL; k++)
+                        sum += x_s[k] * w->ffn_up_shexp[k + j * D_MODEL];
+                    shared_up[j] = sum;
+                }
+                for (int j = 0; j < SHARED_D_FF; j++) {
+                    float g = shared_gate[j];
+                    shared_act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * shared_up[j];
+                }
+                for (int j = 0; j < D_MODEL; j++) {
+                    float sum = 0.0f;
+                    for (int k = 0; k < SHARED_D_FF; k++)
+                        sum += shared_act[k] * w->ffn_down_shexp[k + j * SHARED_D_FF];
+                    out_s[j] = sum;
+                }
+            }
+            
+            // Apply shared expert output gate: sigmoid(x_s @ ffn_gate_inp_shexp)
+            if (w->ffn_gate_inp_shexp) {
+                float gate_val = 0.0f;
+                for (int k = 0; k < D_MODEL; k++)
+                    gate_val += x_s[k] * w->ffn_gate_inp_shexp[k];
+                float gate_sig = 1.0f / (1.0f + expf(-gate_val));
                 for (int j = 0; j < D_MODEL; j++)
-                    out_s[j] += wgt * expert_out[j];
+                    out_s[j] *= gate_sig;
+            }
+            
+            // ---- Routed expert contributions via OpenMP tasks ----
+            // Tasks avoid nested team creation overhead (~10-50μs)
+            float expert_contribs[N_ACTIVE_EXPTS][D_MODEL];
+            memset(expert_contribs, 0, sizeof(expert_contribs));
+            
+            #pragma omp taskgroup
+            {
+                for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+                    #pragma omp task firstprivate(k) shared(x_s, w, indices_s, weights_s, expert_contribs)
+                    {
+                        int e = indices_s[k];
+                        float wgt = weights_s[k];
+                        float *exp_out = expert_contribs[k];
+                        
+                        if (e < 0 || wgt < 1e-30f) {
+                            memset(exp_out, 0, D_MODEL * sizeof(float));
+                        } else {
+                            float gate_out[D_FF];
+                            float up_out[D_FF];
+                            float act[D_FF];
+                        
+                        if (w->ffn_gate_exps_q) {
+                            int64_t gate_bytes = gguf_raw_size(w->ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
+                            int64_t up_bytes   = gguf_raw_size(w->ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
+                            int64_t down_bytes = gguf_raw_size(w->ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);
+                            
+                            const uint8_t *gate_q = w->ffn_gate_exps_q + (int64_t)e * gate_bytes;
+                            const uint8_t *up_q   = w->ffn_up_exps_q   + (int64_t)e * up_bytes;
+                            const uint8_t *down_q = w->ffn_down_exps_q + (int64_t)e * down_bytes;
+                            
+                            quantized_matmul(x_s, gate_q, w->ffn_gate_exps_q_type, D_MODEL, D_FF, 0, gate_out);
+                            quantized_matmul(x_s, up_q, w->ffn_up_exps_q_type, D_MODEL, D_FF, 0, up_out);
+                            
+                            for (int j = 0; j < D_FF; j++) {
+                                float g = gate_out[j];
+                                act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * up_out[j];
+                            }
+                            
+                            quantized_matmul(act, down_q, w->ffn_down_exps_q_type, D_FF, D_MODEL, 0, exp_out);
+                            
+                            for (int j = 0; j < D_MODEL; j++)
+                                exp_out[j] *= wgt;
+                        } else {
+                            const float *gate_w = w->ffn_gate_exps + (int64_t)e * D_MODEL * D_FF;
+                            const float *up_w   = w->ffn_up_exps   + (int64_t)e * D_MODEL * D_FF;
+                            const float *down_w = w->ffn_down_exps + (int64_t)e * D_FF * D_MODEL;
+                            
+                            for (int j = 0; j < D_FF; j++) {
+                                float sum = 0.0f;
+                                for (int ii = 0; ii < D_MODEL; ii++)
+                                    sum += x_s[ii] * gate_w[ii + j * D_MODEL];
+                                gate_out[j] = sum;
+                            }
+                            for (int j = 0; j < D_FF; j++) {
+                                float sum = 0.0f;
+                                for (int ii = 0; ii < D_MODEL; ii++)
+                                    sum += x_s[ii] * up_w[ii + j * D_MODEL];
+                                up_out[j] = sum;
+                            }
+                            for (int j = 0; j < D_FF; j++) {
+                                float g = gate_out[j];
+                                act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * up_out[j];
+                            }
+                            for (int j = 0; j < D_MODEL; j++) {
+                                float sum = 0.0f;
+                                for (int ii = 0; ii < D_FF; ii++)
+                                    sum += act[ii] * down_w[ii + j * D_FF];
+                                exp_out[j] = sum * wgt;
+                            }
+                        }
+                    }
+                }
+            }
+            }
+            // Accumulate expert contributions (sequential, no atomics needed)
+            for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+                for (int j = 0; j < D_MODEL; j++)
+                    out_s[j] += expert_contribs[k][j];
             }
         }
     }

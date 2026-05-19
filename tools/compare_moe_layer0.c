@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
     moe_weights_t moe_w;
     memset(&moe_w, 0, sizeof(moe_w));
     if (wubu_moe_load_layer(mdl.gguf_ctx, 0, &moe_w)) {
-        wubu_moe_forward(moe_input, 1, 1, &moe_w, lib_out);
+        wubu_moe_forward(moe_input, 1, 1, &moe_w, lib_out, NULL);
         wubu_moe_free_layer(&moe_w);
     } else {
         memcpy(lib_out, moe_input, D_MODEL * sizeof(float));

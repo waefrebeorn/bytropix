@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
 
     // Call our MoE forward
     float our_out[D_MODEL];
-    wubu_moe_forward(x, 1, 1, &moe, our_out);
+    wubu_moe_forward(x, 1, 1, &moe, our_out, NULL);
 
     // Dump for comparison
     FILE *f = fopen("/tmp/moe_layer0_out.bin", "wb");

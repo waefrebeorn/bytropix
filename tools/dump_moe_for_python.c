@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
 
     // 7. Run our full MoE forward and dump output
     float our_out[D_MODEL];
-    wubu_moe_forward(moe_in, 1, 1, &moe, our_out);
+    wubu_moe_forward(moe_in, 1, 1, &moe, our_out, NULL);
     f = fopen("/tmp/moe_our_output.bin", "wb");
     fwrite(our_out, sizeof(float), D_MODEL, f);
     fclose(f);

@@ -539,7 +539,7 @@ int main(int argc, char **argv) {
                 mw.ffn_gate_exps = ge; mw.ffn_up_exps = ue; mw.ffn_down_exps = de;
                 
                 // 6. Run MoE forward
-                wubu_moe_forward(n2, B, T, &mw, ffn_out);
+                wubu_moe_forward(n2, B, T, &mw, ffn_out, NULL);
                 free(ge); free(ue); free(de); free(scores);
                 
                 // 7. Upload MoE output to GPU for residual add

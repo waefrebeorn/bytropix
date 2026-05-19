@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
         float *ffn_out = (float *)malloc(D * sizeof(float));
         if (mdl.enable_moe && mdl.gguf_ctx) {
             if (wubu_moe_load_layer(mdl.gguf_ctx, l, &layer->moe)) {
-                wubu_moe_forward(normed2, 1, 1, &layer->moe, ffn_out);
+                wubu_moe_forward(normed2, 1, 1, &layer->moe, ffn_out, NULL);
                 wubu_moe_free_layer(&layer->moe);
             } else {
                 memcpy(ffn_out, normed2, D * sizeof(float));

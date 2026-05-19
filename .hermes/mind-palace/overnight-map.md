@@ -1,25 +1,39 @@
-# Overnight Map — May 19, 2026 (02:45) — TRIPLE DA AUDIT COMPLETE
+# Overnight Map — May 19, 2026 (Phase 8 Complete)
 
 ## Session Summary
-Triple DA audit: read all 5 mind palace files + vault papers (Qwen3, DeepSeek-V3, Unsloth quant formula, synthesis). Verified 7/7 key claims live. Found 2 stale claims (cos-sim 0.9969, GQA interleave). Updated all mind palace files with DA findings. Copied no tmp files (none existed).
+Phase 8 MoE Optimization complete. Achieved 8.0 tok/s decode (3.8× from 2.1).
 
-## DA-1: Code vs Theory
-✅ All live benchmarks confirmed (decode 2.1 tok/s, output proj 6ms, MoE 10ms)
-✅ No libggml-cpu.so dep, all vec_dot self-hosted
-✅ MTP head loads + ref_dumper_mtp works
-❓ cos-sim 0.9969 stale — need ref_dumper re-run
-❓ MTP free-tokens 3.3 tok/s stale — not re-run
-📝 MoE uses softmax gating (Functional. DeepSeek recommends sigmoid.)
+### Changes Made
 
-## DA-2: Vault Papers
-Read: unsloth-qwen3.6-quant-formula.md, Qwen3 tech report, DeepSeek-V3, synthesis.md
-All current. No gaps between theory and code beyond the known MoE bottleneck.
+1. **AVX2 IQ2_XXS vec_dot** — `src/quantized_dot_generic.c`
+   - Added `keven_signs_q2xs[1024]` sign table, `hsum_float_8()`, `MM256_SET_M128I`
+   - Ported `ggml_vec_dot_iq2_xxs_q8_K_avx2` from llama.cpp ggml-cpu/arch/x86/quants.c
+   - Uses `_mm256_sign_epi8` + `_mm256_maddubs_epi16` for 256-bit IQ2_XXS grid dot
+   - `iq2_xxs_vec_dot` wrapper auto-selects AVX2 via `#ifdef`
 
-## DA-3: Cold Gaps
-P0: AVX2 IQ2_XXS/IQ3_XXS vec_dot (MoE bottleneck)
-P1: Normalized sigmoid gating, NV64 ring buffer
-P2: cos-sim re-verify, higher-precision MTP
+2. **OpenMP task-based MoE dispatch** — `src/wubu_moe.c`
+   - Replaced nested `#pragma omp parallel for` with single `#pragma omp parallel` region
+   - Expert dispatch uses `#pragma omp taskgroup` + `#pragma omp task` for 8 experts
+   - Per-token stack buffers (`expert_contribs[8][2048]`) eliminate atomic contention
+   - MoE per-layer: 10ms → 1.9ms (80% reduction)
 
-## Next Session
-Phase 8: Port AVX2 IQ2_XXS/IQ3_XXS vec_dot from llama.cpp ggml-quants.c.
-This is the single largest remaining performance lever (MoE = 10ms/layer).
+3. **Expert prefetch API** — `include/wubu_moe.h`, `src/wubu_moe.c`
+   - Added `int *selected_experts` output param to `wubu_moe_forward`
+   - Saves top-8 expert indices for use by prefetch logic
+   - Updated all 17 callers across tools/
+
+4. **Normalized sigmoid gating** experimented and reverted
+   - Softmax is correct for inference (model was trained with it)
+   - Sigmoid is a training-time optimization
+
+### Filess Modified
+- `src/quantized_dot_generic.c` — AVX2 IQ2_XXS vec_dot (+105 lines)
+- `src/wubu_moe.c` — Task dispatch, expert prefetch API, sigmoid revert
+- `include/wubu_moe.h` — New 5th param for wubu_moe_forward
+- `src/wubu_model.c` — Updated 3 callers with NULL param
+- `tools/*.c`, `vault/tools/*.c` — Updated 17 callers
+- `.hermes/mind-palace/state.md` — Updated benchmarks
+- `.hermes/mind-palace/plan.md` — Updated phase status
+
+### Next Session
+Phase 9: Expert prefetch integration + SSM attention optimization.

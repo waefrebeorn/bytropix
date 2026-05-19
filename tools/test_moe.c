@@ -157,7 +157,7 @@ int main(void) {
     // Full MoE forward
     float *output = (float *)malloc(N * D_MODEL * sizeof(float));
     t0 = now_sec();
-    wubu_moe_forward(x, B, T, &moe, output);
+    wubu_moe_forward(x, B, T, &moe, output, NULL);
     double t_moe = now_sec() - t0;
     printf("  MoE forward: %.3fms (%.1f tok/s)\n", t_moe * 1000, N / t_moe);
     

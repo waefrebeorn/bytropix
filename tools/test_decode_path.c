@@ -89,7 +89,7 @@ int main() {
         wubu_rms_norm(B, T_full, D_MODEL, x_ref, layer->post_attn_norm_weight, 1e-6f, normed2);
 
         float *ffn_out = (float *)malloc(N_full * D_MODEL * sizeof(float));
-        wubu_moe_forward(normed2, B, T_full, &layer->moe, ffn_out);
+        wubu_moe_forward(normed2, B, T_full, &layer->moe, ffn_out, NULL);
 
         // Residual: x = x + ffn_out
         for (int i = 0; i < N_full * D_MODEL; i++)
@@ -151,7 +151,7 @@ int main() {
         wubu_rms_norm(B, T_pre, D_MODEL, x_dec, layer->post_attn_norm_weight, 1e-6f, normed2);
 
         float *ffn_out = (float *)malloc(N_pre * D_MODEL * sizeof(float));
-        wubu_moe_forward(normed2, B, T_pre, &layer->moe, ffn_out);
+        wubu_moe_forward(normed2, B, T_pre, &layer->moe, ffn_out, NULL);
 
         for (int i = 0; i < N_pre * D_MODEL; i++)
             x_dec[i] += ffn_out[i];
@@ -198,7 +198,7 @@ int main() {
         wubu_rms_norm(1, 1, D_MODEL, x_decode, layer->post_attn_norm_weight, 1e-6f, normed2);
 
         float *ffn_out = (float *)malloc(D_MODEL * sizeof(float));
-        wubu_moe_forward(normed2, 1, 1, &layer->moe, ffn_out);
+        wubu_moe_forward(normed2, 1, 1, &layer->moe, ffn_out, NULL);
 
         // Residual
         for (int i = 0; i < D_MODEL; i++)

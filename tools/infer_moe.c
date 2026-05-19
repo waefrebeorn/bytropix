@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
     int iters = 10;
     for (int i = 0; i < iters; i++) {
         t0 = now_sec();
-        wubu_moe_forward(x, B, T, &moe, output);
+        wubu_moe_forward(x, B, T, &moe, output, NULL);
         total += now_sec() - t0;
     }
     printf("  MoE forward (%d iters): avg %.3f ms (%.0f tok/s)\\n",

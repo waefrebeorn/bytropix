@@ -531,12 +531,12 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         if (layer->moe.loaded && model->enable_moe &&
             (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Quantized path (saved pointers in wubu_model_init)
-            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, NULL);
         } else if (model->enable_moe && model->gguf_ctx &&
                    (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Fallback: F32 dequant path
             if (wubu_moe_load_layer(model->gguf_ctx, l, &layer->moe)) {
-                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, NULL);
                 wubu_moe_free_layer(&layer->moe);
             } else {
                 memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));
@@ -870,7 +870,7 @@ int wubu_mtp_draft_forward(wubu_model_t *model,
         
         // MoE forward
         if (blk40->moe.loaded) {
-            wubu_moe_forward(temp_norm, 1, 1, &blk40->moe, temp_ffn);
+            wubu_moe_forward(temp_norm, 1, 1, &blk40->moe, temp_ffn, NULL);
         } else {
             memcpy(temp_ffn, temp_norm, D_MODEL * sizeof(float));
         }
