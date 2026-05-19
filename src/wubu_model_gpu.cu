@@ -88,6 +88,9 @@ typedef struct {
     float *d_ssm_a[40];         // [DT_RANK]
     float *d_ssm_conv1d[40];    // [CONV_KERNEL, CONV_DIM]
     float *d_ssm_norm[40];      // [SSM_D_STATE]
+    // Pre-allocated SSM output buffers (avoid per-call alloc/free)
+    float *d_ssm_qkv_out;       // [chunk_sz, CONV_DIM]
+    float *d_ssm_z_out;         // [chunk_sz, VALUE_DIM]
 } gpu_ctx_t;
 
 // ================================================================
@@ -371,6 +374,11 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     gpu->initialized = true;
     model->gpu_ctx = (void *)gpu;
 
+    // Allocate SSM output buffers (reused per-layer, sized for max chunk)
+    gpu->d_ssm_qkv_out = wubu_cuda_alloc((size_t)gpu->chunk_sz * CONV_DIM * sizeof(float));
+    gpu->d_ssm_z_out   = wubu_cuda_alloc((size_t)gpu->chunk_sz * VALUE_DIM * sizeof(float));
+    printf("GPU: SSM output buffers: %d x %dx%d floats\n", gpu->chunk_sz, CONV_DIM, VALUE_DIM);
+
     printf("GPU: init complete (%.1f MB GQA weights)\n",
            (double)gpu->n_gqa_layers * (double)(D_MODEL * (q_dim_x2 + kv_dim*2) + q_dim * D_MODEL) * 4.0 / 1048576.0);
     return 1;
@@ -472,6 +480,7 @@ int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
 // ================================================================
 // GPU SSM hybrid forward: 3 quantized matmuls on GPU, rest on CPU.
 // Uploads x, runs Q5_K/Q6_K matmuls, downloads results.
+// Uses pre-allocated d_ssm_qkv_out/d_ssm_z_out buffers.
 // ================================================================
 extern "C"
 int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
@@ -480,51 +489,38 @@ int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
                                 float *ssm_out_out) {
     gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
     if (!gpu || !gpu->initialized) return 0;
+    if (!model->layers[layer_idx].is_ssm) return 0;
+    if (model->layers[layer_idx].ssm.attn_qkv_weight_q == NULL) return 0;
 
     cudaStream_t st = gpu->stream;
 
-    // Upload input to GPU (one token at a time for simplicity)
+    // Upload input to GPU
     cudaMemcpyAsync(gpu->d_x, h_norm, (size_t)C * D_MODEL * sizeof(float),
                     cudaMemcpyHostToDevice, st);
-    cudaStreamSynchronize(st);
 
     // === attn_qkv: quantized matmul ===
-    // x [D=2048] @ W_qkv [D, C_qkv=8192] → qkv_all [8192]
-    {
-        int n_rows = D_MODEL;          // 2048 — input dim
-        int n_cols = CONV_DIM;         // 8192 — qkv dim
-        // Allocate temp output buffer on GPU
-        float *d_qkv = wubu_cuda_alloc((size_t)C * n_cols * sizeof(float));
-        wubu_cuda_quant_matmul(gpu->d_x, gpu->d_attn_qkv_q[layer_idx],
-            gpu->ssm_qkv_type[layer_idx], n_rows, n_cols,
-            d_qkv, NULL, 0, st);
-        cudaStreamSynchronize(st);
-        cudaMemcpyAsync(qkv_out, d_qkv, (size_t)C * n_cols * sizeof(float),
-                        cudaMemcpyDeviceToHost, st);
-        wubu_cuda_free(d_qkv);
-    }
+    // x [D=2048] @ W_qkv [D, C_qkv=8192] → d_qkv [8192]
+    wubu_cuda_quant_matmul(gpu->d_x, gpu->d_attn_qkv_q[layer_idx],
+        gpu->ssm_qkv_type[layer_idx], D_MODEL, CONV_DIM,
+        gpu->d_ssm_qkv_out, NULL, 0, st);
 
     // === attn_gate: quantized matmul ===
-    // x [D=2048] @ W_gate [D, C_gate=4096] → z_all [4096]
-    {
-        int n_rows = D_MODEL;          // 2048
-        int n_cols = VALUE_DIM;        // 4096
-        float *d_z = wubu_cuda_alloc((size_t)C * n_cols * sizeof(float));
-        wubu_cuda_quant_matmul(gpu->d_x, gpu->d_attn_gate_q[layer_idx],
-            gpu->ssm_gate_type[layer_idx], n_rows, n_cols,
-            d_z, NULL, 0, st);
-        cudaStreamSynchronize(st);
-        cudaMemcpyAsync(z_out, d_z, (size_t)C * n_cols * sizeof(float),
-                        cudaMemcpyDeviceToHost, st);
-        wubu_cuda_free(d_z);
-    }
+    // x [D=2048] @ W_gate [D, C_gate=4096] → d_z [4096]
+    wubu_cuda_quant_matmul(gpu->d_x, gpu->d_attn_gate_q[layer_idx],
+        gpu->ssm_gate_type[layer_idx], D_MODEL, VALUE_DIM,
+        gpu->d_ssm_z_out, NULL, 0, st);
 
-    // === ssm_out: quantized matmul (must be AFTER recurrence on CPU) ===
-    // delta [D_delta=4096] @ W_out [D_delta, C_out=2048] → output [2048]
-    // This is called LATER — ssm_out_out is a pre-allocated output buffer
-    // that the caller fills after CPU recurrence.
-    // For now, we just store the weight pointer so the caller can do the matmul.
-    // Actually, let's use a temp buffer approach: download after CPU recurrence.
+    // Both matmuls are enqueued on the same stream, so they run sequentially.
+    // One sync, then download both results.
+    cudaStreamSynchronize(st);
+
+    cudaMemcpyAsync(qkv_out, gpu->d_ssm_qkv_out, (size_t)C * CONV_DIM * sizeof(float),
+                    cudaMemcpyDeviceToHost, st);
+    cudaMemcpyAsync(z_out, gpu->d_ssm_z_out, (size_t)C * VALUE_DIM * sizeof(float),
+                    cudaMemcpyDeviceToHost, st);
+
+    // ssm_out projection not yet implemented on GPU (handled on CPU for now)
+    (void)ssm_out_out;
 
     cudaStreamSynchronize(st);
     return 1;
@@ -607,6 +603,10 @@ void wubu_model_gpu_free(wubu_model_t *model) {
     wubu_cuda_free(gpu->d_gout);
     wubu_cuda_free(gpu->d_score_scr);
     wubu_cuda_free(gpu->d_qtmp);
+
+    // Free SSM output buffers
+    wubu_cuda_free(gpu->d_ssm_qkv_out);
+    wubu_cuda_free(gpu->d_ssm_z_out);
 
     // Destroy CUDA context
     if (gpu->handle) cublasDestroy(gpu->handle);
