@@ -383,6 +383,10 @@ fail:
 
 void wubu_model_free(wubu_model_t *model) {
     if (!model) return;
+    // Free GPU resources first
+#ifdef GPU_SUPPORT
+    wubu_model_gpu_free(model);
+#endif
     for (int l = 0; l < model->n_layers; l++) {
         wubu_layer_t *layer = &model->layers[l];
         free(layer->attn_norm_weight);
@@ -501,7 +505,24 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
             wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out);
         } else {
-            // GQA forward with KV cache
+#ifdef GPU_SUPPORT
+            if (model->gpu_ctx) {
+                // GPU-accelerated GQA
+                if (N == 1) {
+                    wubu_model_gpu_gqa_forward(model, l, normed, N, attn_out);
+                } else {
+                    // Prefill: token-by-token for causality
+                    float *tok_normed = normed;
+                    float *tok_attn = attn_out;
+                    for (int t = 0; t < N; t++) {
+                        wubu_model_gpu_gqa_forward(model, l, tok_normed, 1, tok_attn);
+                        tok_normed += D_MODEL;
+                        tok_attn += D_MODEL;
+                    }
+                }
+            } else
+#endif
+            {  // CPU GQA forward with KV cache
             int l_gqa = 0;  // GQA layer index among GQA layers
             // Count GQA layers up to current to index into cache
             for (int li = 0; li < l; li++) {
@@ -525,7 +546,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out,
                              k_in, v_in, model->gqa_cache_len,
                              k_out, v_out);
-        }
+            }  // close CPU GQA block
+        }  // close else block (non-SSM)
         
         double t1 = wall_time();
         if (getenv("PROFILE") && l < 3) {
@@ -1232,7 +1254,8 @@ void wubu_model_forward(wubu_model_t *model,
                 int id = token_ids[i];
                 if (id < 0 || id >= model->vocab_size) id = 0;
                 fseek(f, id * D_MODEL * sizeof(float), SEEK_SET);
-                fread(embd + i * D_MODEL, sizeof(float), D_MODEL, f);
+                size_t nr = fread(embd + i * D_MODEL, sizeof(float), D_MODEL, f);
+                (void)nr;
             }
             fclose(f);
         } else {

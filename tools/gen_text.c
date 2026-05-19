@@ -29,6 +29,8 @@ static inline bool gpu_output_init(const void *w,int D,int V,int t){(void)w;(voi
 static inline bool gpu_output_project_batch(const float *i,float *o,int T){(void)i;(void)o;(void)T;return false;}
 static inline bool gpu_output_project(const float *i,float *o){(void)i;(void)o;return false;}
 static inline void gpu_output_cleanup(void){}
+inline int wubu_model_gpu_init(wubu_model_t *m,int mc,int cs){(void)m;(void)mc;(void)cs;return 0;}
+inline void wubu_model_gpu_free(wubu_model_t *m){(void)m;}
 #endif
 
 static volatile int g_stop = 0;
@@ -75,8 +77,17 @@ int main(int argc, char **argv) {
     // GPU init (if GPU=1 env var set)
     int use_gpu = getenv("GPU") != NULL;
     if (use_gpu) {
+        // Initialize integrated GPU context: GQA layers, KV cache, chunked attention
+        int max_ctx = getenv("MAX_CTX") ? atoi(getenv("MAX_CTX")) : 262144;
+        int chunk_sz = getenv("GPU_CHUNK") ? atoi(getenv("GPU_CHUNK")) : 256;
+        if (!wubu_model_gpu_init(&mdl, max_ctx, chunk_sz)) {
+            fprintf(stderr, "GPU GQA init failed, falling back to CPU GQA\n");
+        } else {
+            printf("GPU: GQA acceleration active (max_ctx=%d, chunk=%d)\n", max_ctx, chunk_sz);
+        }
+        // Also init GPU output projection (existing quantized Q4_K path)
         if (!gpu_output_init(mdl.output_weight_q, D_MODEL, mdl.vocab_size, mdl.output_weight_type)) {
-            fprintf(stderr, "GPU init failed, falling back to CPU\n");
+            fprintf(stderr, "GPU output proj init failed, falling back to CPU\n");
             use_gpu = 0;
         }
     }

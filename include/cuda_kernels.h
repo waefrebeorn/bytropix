@@ -180,6 +180,16 @@ void wubu_cuda_gqa_gate(float *d_x, const float *d_Q_full,
     int N, int q_dim, cudaStream_t stream);
 
 // ================================================================
+// Fused Q+gate buffer helpers (used by GQA forward path)
+// ================================================================
+// Copy Q from fused [N, qdim*2] buffer to contiguous [N, qdim]
+void wubu_cuda_copy_q_from_fused(float *dst, const float *src,
+    int N, int qdim, cudaStream_t stream);
+// Copy gate from fused [N, qdim*2] buffer to contiguous [N, qdim]
+void wubu_cuda_copy_gate_from_fused(float *dst, const float *src,
+    int N, int qdim, cudaStream_t stream);
+
+// ================================================================
 // Chunked attention with persistent KV cache (256K-capable)
 //
 // Q_chunk [C, N_Q_HEADS * HEAD_DIM] — already RMSNorm'd + RoPE'd

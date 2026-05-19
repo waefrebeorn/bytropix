@@ -182,6 +182,10 @@ typedef struct {
     
     // Last hidden state capture (for MTP: set to a [D_MODEL] buffer before forward)
     float *save_last_hidden;
+
+    // GPU acceleration context (opaque pointer, managed by wubu_model_gpu.cu)
+    // When non-NULL, GQA layers run on GPU via chunked attention.
+    void *gpu_ctx;
 } wubu_model_t;
 
 // Create model, load from GGUF
@@ -199,8 +203,28 @@ void wubu_model_forward(wubu_model_t *model,
 // Forward pass from embeddings (bypass token lookup)
 // Input: embeddings [B, T, D_MODEL], Output: logits [B, T, vocab_size]
 void wubu_model_forward_from_embd(wubu_model_t *model,
-                                  const float *embeddings, int B, int T,
-                                  float *logits);
+                                   const float *embeddings, int B, int T,
+                                   float *logits);
+
+// ================================================================
+// GPU-Accelerated Forward Path (wubu_model_gpu.cu)
+// ================================================================
+
+// Initialize GPU context: upload GQA weights, allocate KV cache + scratch.
+// max_ctx: maximum KV cache positions (e.g. 262144).
+// chunk_sz: max tokens per GPU batch (e.g. 512).
+// Returns 1 on success, 0 on failure.
+// When GPU context is active, wubu_model_forward() automatically uses
+// GPU for GQA attention layers.
+int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz);
+
+// Run one GQA layer on GPU.
+// Internal: called by wubu_model_forward when gpu_ctx != NULL.
+int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
+                                const float *h_norm, int C, float *h_attn);
+
+// Free all GPU resources and reset gpu_ctx to NULL.
+void wubu_model_gpu_free(wubu_model_t *model);
 
 // Model-level backward pass
 // Requires saved layer outputs from forward (normed, attn_out, normed2, ffn_out arrays)

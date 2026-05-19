@@ -1208,6 +1208,23 @@ void wubu_cuda_gqa_gate(float *d_x, const float *d_Q_full,
 }
 
 // ================================================================
+// Fused Q+gate buffer helpers
+// ================================================================
+void wubu_cuda_copy_q_from_fused(float *dst, const float *src,
+    int N, int qdim, cudaStream_t stream) {
+    int block = 256;
+    int grid = (N * qdim + block - 1) / block;
+    copy_q_from_fused_kernel<<<grid, block, 0, stream>>>(dst, src, N, qdim);
+}
+
+void wubu_cuda_copy_gate_from_fused(float *dst, const float *src,
+    int N, int qdim, cudaStream_t stream) {
+    int block = 256;
+    int grid = (N * qdim + block - 1) / block;
+    copy_gate_from_fused_kernel<<<grid, block, 0, stream>>>(dst, src, N, qdim);
+}
+
+// ================================================================
 // Hyperbolic (Poincaré ball) CUDA kernels
 // ================================================================
 
