@@ -1,34 +1,52 @@
-# Plan — May 19, 2026 (Phase 11: IQ3_XXS AVX2 ✅ → Phase 12: Output Proj)
+# Plan — May 19, 2026 Late PM (Phase 14: SSM AVX2 Optimization ✅)
 
-## Phase 0-10: DONE ✅
+## Phase 0-13: DONE ✅
 | Phase | Detail | Status |
 |-------|--------|--------|
-| 0-7 | GQA attn, AVX2 vec_dot, self-contained | ✅ |
-| 8 | MoE optimization (IQ2_XXS, OMP, prefetch) | ✅ |
-| 9 | Quantized-only path (F32 dequants removed) | ✅ |
-| 9.5 | Q6_K vec_dot bug fix (loop iter count) | ✅ FIXED |
-| 10 | KV cache 256k (F16, heap attn_weights) | ✅ |
+| 0-11 | GQA attn, AVX2 vec_dot, self-contained, MoE, quant path, KV cache | ✅ |
+| 12 | MTP Speculative Decode | ✅ MTP broken at UD-IQ2_M |
+| 13 | GPU Output Projection (cuBLAS SGEMM, batched prefill) | ✅ |
 
-## Phase 11: IQ3_XXS AVX2 Vec Dot — DONE ✅
-- 37/40 MoE down weight layers use IQ3_XXS (type 18)
-- Ported from llama.cpp AVX2: _mm256_set_epi32 grid lookup, keven_signs_q2xs
-- 1.8x speedup: 2.05ms → 1.16ms per MoE layer
-- Decode: 7.0 → 9.1 tok/s
-- Prefill: 10.5 → 13.4 tok/s
-- Cos-sim 0.9965 (FMA accumulation jitter, acceptable)
-- 3 layers IQ4_XS still use generic (no AVX2 needed)
+## Phase 14: SSM AVX2 Optimization — DONE ✅
+### Fused Q8_K Quantization
+- SSM: attn_qkv (Q5_K, 8192 cols) + attn_gate (Q5_K, 4096 cols) share Q8_K quant
+- GQA: Q+gate (Q5_K, 8192) + K (Q5_K, 512) + V (Q5_K, 512) share Q8_K quant  
+- New `quantized_matmul_from_q8()` function takes pre-quantized Q8_K buffer
+- Saves 50 Q8_K quantize operations per decode step
 
-## Phase 12: Output Proj Speed [P1 — NEXT]
-Output projection: 2048×248320 Q4_K matmul, currently 10ms per token.
-- The output proj maps hidden[2048] → logits[248320] via quantized_matmul
-- Q4_K type uses generic vec_dot (no AVX2)
-- llama.cpp's Q4_K has multiple AVX2 paths: ggml_vec_dot_q4_K_q8_K_avx2
-- Porting these would cut output proj from 10ms to ~3-4ms
-- Also benefits from blocking/CACHELINE-aware looping
+### AVX2 Selective Scan Inner Loops
+Four helper functions with AVX2 intrinsics added to wubu_ssm.c:
+1. `avx2_state_decay()` — `_mm256_mul_ps` over 16384 elements
+2. `avx2_hk()` — `_mm256_fmadd_ps` + HSUM256 reduction
+3. `avx2_state_update()` — `_mm256_fmadd_ps` outer product
+4. `avx2_hq()` — `_mm256_fmadd_ps` + HSUM256 reduction
+Each processes 8 floats/iteration vs scalar's 1. Verified: max diff 1.85e-3.
 
-## Phase 13: SSM AVX2 Optimization [P2]
-SSM: 1ms/layer × 30 = 30ms total. SSM has:
-- attn_qkv: [2048] @ [2048, 8192] (Q4_K)
-- attn_gate: [2048] @ [2048, 4096] (Q4_K)  
-- Selective scan: 32 heads × 128×128 state (512 dim)
-- ssm_out: [4096] @ [4096, 2048] (Q6_K, already AVX2 fixed)
+### GPU Quantized Output Projection (GPU_QUANTIZED=1)
+- Custom CUDA kernel: one thread per vocab column, dequants Q4_K on-the-fly
+- Uses ~1.9GB VRAM vs F32 mode's 7.6GB
+- Makes GPU output proj viable on 6.5GB VRAM laptops
+- Falls back to CPU if GPU memory insufficient
+
+### NaN Guard Optimization
+- GQA NaN/Inf check gated behind DUMP_GQA_DEBUG env var
+- Saves ~90K isnan() calls per decode
+
+## Phase 15: 256k Context Optimization [P1 — NEXT]
+GQA attention is O(n) per layer at decode time (attending over cache_len positions).
+At 256k context: 2 KV heads × 256k × 256-dim dot ≈ 131M FMA per GQA layer.
+Total: 10 GQA layers × 131M = 1.3B FMA → ~13ms at 100 GFLOPS.
+
+### Options:
+1. **Flash attention**: Tile QK^T computation to reduce memory bandwidth
+2. **KV cache tiering**: Keep most tokens in F16 on GPU, only attend to recent tokens in CPU
+3. **Streaming attention**: Window-based attention with compressed historical context
+4. **GPU GQA attention**: Port the Q@K^T dot product and V weighted sum to CUDA
+
+## Phase 16: MTP Speculative Decode (Unblocked) [P2]
+Requires UD-Q2_K_XL model. Our two-model load, DRAFT_N=2, checkpoint/rollback is correct.
+
+## Phase 17: MoE Router Prefetch + Expert Caching [P3]
+- Expert indices from previous layer prefetch next layer's weights
+- Already partially implemented (stride prefetch to L3)
+- Could cache frequently-used experts' dequant values

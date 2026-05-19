@@ -130,6 +130,13 @@ void quantized_matmul(const float *x,
                       int64_t col_stride_bytes,
                       float *y);
 
+// Quantized matmul with pre-quantized Q8_K input (reuses activation quant)
+void quantized_matmul_from_q8(const void *q8_x,
+                              const void *W, int weight_type,
+                              int64_t n_rows, int64_t n_cols,
+                              int64_t col_stride_bytes,
+                              float *y);
+
 #ifdef __cplusplus
 }
 #endif

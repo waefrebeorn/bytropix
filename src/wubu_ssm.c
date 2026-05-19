@@ -15,6 +15,90 @@
 #include <assert.h>
 #include <stdio.h>
 
+// QK_K = 256 for all K-quant types (must match quantized_matmul.c)
+#ifndef QK_K
+#define QK_K 256
+#endif
+
+// SSM_D_STATE = 128 = 16 × 8 (nice for AVX2 which processes 8 floats at a time)
+#define SSM_STATE_STRIDE 128
+
+// ============================================================
+// AVX2-optimized SSM selective scan helpers
+// ============================================================
+
+// State decay: h[i][j] *= gg for all i,j in [0,SSM_D_STATE)
+// h: [SSM_D_STATE, SSM_D_STATE] row-major = 16384 floats
+// gg: scalar multiplier (exp(gate))
+static inline void avx2_state_decay(float *h, float gg) {
+    const int n = SSM_STATE_STRIDE * SSM_STATE_STRIDE;  // 16384
+    const __m256 v_gg = _mm256_set1_ps(gg);
+    for (int i = 0; i < n; i += 8) {
+        _mm256_storeu_ps(h + i, _mm256_mul_ps(_mm256_loadu_ps(h + i), v_gg));
+    }
+}
+
+// h @ k: hk[i] = sum_j h[i][j] * k[j]
+// h:  [SSM_D_STATE, SSM_D_STATE]
+// k:  [SSM_D_STATE]
+// hk: [SSM_D_STATE] output (must be zeroed before call)
+static inline void avx2_hk(const float *h, const float *k, float *hk) {
+    const int d = SSM_STATE_STRIDE;
+    for (int i = 0; i < d; i++) {
+        const float *h_row = h + i * d;
+        __m256 sum = _mm256_setzero_ps();
+        for (int j = 0; j < d; j += 8) {
+            sum = _mm256_fmadd_ps(_mm256_loadu_ps(h_row + j),
+                                  _mm256_loadu_ps(k + j), sum);
+        }
+        // Horizontal reduction
+        __m128 lo = _mm256_castps256_ps128(sum);
+        __m128 hi = _mm256_extractf128_ps(sum, 1);
+        lo = _mm_add_ps(lo, hi);
+        lo = _mm_hadd_ps(lo, lo);
+        lo = _mm_hadd_ps(lo, lo);
+        hk[i] = _mm_cvtss_f32(lo);
+    }
+}
+
+// State update: h[i][j] += k[j] * diff[i] * bg
+// Equivalent to outer product: h += (diff * bg) ⊗ k
+static inline void avx2_state_update(float *h, const float *k,
+                                      const float *diff, float bg) {
+    const int d = SSM_STATE_STRIDE;
+    const __m256 v_bg = _mm256_set1_ps(bg);
+    for (int i = 0; i < d; i++) {
+        float *h_row = h + i * d;
+        __m256 v_diff_bg = _mm256_mul_ps(_mm256_set1_ps(diff[i]), v_bg);
+        // h_row[j:j+8] += diff*bg * k[j:j+8]
+        for (int j = 0; j < d; j += 8) {
+            _mm256_storeu_ps(h_row + j,
+                _mm256_fmadd_ps(v_diff_bg, _mm256_loadu_ps(k + j),
+                                _mm256_loadu_ps(h_row + j)));
+        }
+    }
+}
+
+// h @ q: out[i] = sum_j h[i][j] * q[j]
+// Same pattern as h @ k
+static inline void avx2_hq(const float *h, const float *q, float *out) {
+    const int d = SSM_STATE_STRIDE;
+    for (int i = 0; i < d; i++) {
+        const float *h_row = h + i * d;
+        __m256 sum = _mm256_setzero_ps();
+        for (int j = 0; j < d; j += 8) {
+            sum = _mm256_fmadd_ps(_mm256_loadu_ps(h_row + j),
+                                  _mm256_loadu_ps(q + j), sum);
+        }
+        __m128 lo = _mm256_castps256_ps128(sum);
+        __m128 hi = _mm256_extractf128_ps(sum, 1);
+        lo = _mm_add_ps(lo, hi);
+        lo = _mm_hadd_ps(lo, lo);
+        lo = _mm_hadd_ps(lo, lo);
+        out[i] = _mm_cvtss_f32(lo);
+    }
+}
+
 // ============================================================
 // Utility: Activation Functions
 // ============================================================
@@ -222,22 +306,27 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
     
     const char *dd = getenv("DUMP_SSM_DEBUG");
-    // Step 1: Fused QKV projection via quantized or F32 matmul
+    // Step 1+2: Fused QKV + gate projection via single Q8_K quantization
+    // Both projections use the same input x[s], so quantize once and reuse
+    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+    const int q8_buf_size = n_q8_blocks * 292;  // Q8K_BLOCK_SIZE
+    uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
+    if (!ssm_q8_buf) { fprintf(stderr, "SSM forward: q8 alloc failed\n"); goto cleanup; }
+    
     for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, C,
-                    w->attn_qkv_weight, w->attn_qkv_weight_q, w->attn_qkv_weight_type,
-                    qkv_all + s * C);
+        const float *x_s = x + s * D_MODEL;
+        quantize_row_q8_K(x_s, (block_q8_K *)ssm_q8_buf, D_MODEL);
+        quantized_matmul_from_q8(ssm_q8_buf,
+            w->attn_qkv_weight_q, w->attn_qkv_weight_type,
+            D_MODEL, C, 0, qkv_all + s * C);
+        quantized_matmul_from_q8(ssm_q8_buf,
+            w->attn_gate_weight_q, w->attn_gate_weight_type,
+            D_MODEL, VALUE_DIM, 0, z_all + s * VALUE_DIM);
     }
+    free(ssm_q8_buf);
     if (dd) {
         FILE *f = fopen("/tmp/dbg_qkv_out.bin", "wb");
         if (f) { fwrite(qkv_all, sizeof(float), N * C, f); fclose(f); }
-    }
-    
-    // Step 2: z gate projection via quantized or F32 matmul
-    for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, VALUE_DIM,
-                    w->attn_gate_weight, w->attn_gate_weight_q, w->attn_gate_weight_type,
-                    z_all + s * VALUE_DIM);
     }
     
     // Step 3: beta/alpha projections
@@ -391,14 +480,10 @@ void wubu_ssm_forward(const float *x, int B, int T,
                     printf("C_DEBUG_PTR vh=%d offset=%ld\n", vh, (long)(vh * SSM_D_STATE * SSM_D_STATE));
                 }
     
-                // Step 8a: State decay
-                for (int i = 0; i < SSM_D_STATE; i++) {
-                    for (int j = 0; j < SSM_D_STATE; j++) {
-                        h[i * SSM_D_STATE + j] *= gg;
-                    }
-                }
+                // Step 8a: State decay (AVX2)
+                avx2_state_decay(h, gg);
                 
-                // Step 8b: Compute h @ k  -> [SSM_D_STATE]
+                // Step 8b: Compute h @ k -> [SSM_D_STATE] (AVX2)
                 float hk[SSM_D_STATE];
                 memset(hk, 0, sizeof(hk));
                 // DEBUG: verify state before hk
@@ -407,11 +492,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
                     for (int jj = 0; jj < SSM_D_STATE; jj++) chk_sum += h[jj];
                     printf("C_DEBUG_HK2 state_sum_col0=%.12f h[0]=%.8f h[1]=%.8f\\n", chk_sum, h[0], h[1]);
                 }
-                for (int i = 0; i < SSM_D_STATE; i++) {
-                    for (int j = 0; j < SSM_D_STATE; j++) {
-                        hk[i] += h[i * SSM_D_STATE + j] * k_vh[j];
-                    }
-                }
+                avx2_hk(h, k_vh, hk);
                 if (dd && vh == 2 && s == 1) {
                     printf("C_DEBUG_HK vh=%d s=%d gg=%.8f bg=%.8f\\n", vh, s, gg, bg);
                     printf("C_DEBUG_HK k[0]=%.8f k[1]=%.8f k[2]=%.8f\\n", k_vh[0], k_vh[1], k_vh[2]);
@@ -430,27 +511,19 @@ void wubu_ssm_forward(const float *x, int B, int T,
                     diff[i] = v_vh[i] - hk[i];
                 }
                 
-                // State update with diff
-                for (int i = 0; i < SSM_D_STATE; i++) {
-                    for (int j = 0; j < SSM_D_STATE; j++) {
-                        h[i * SSM_D_STATE + j] += k_vh[j] * diff[i] * bg;
-                    }
-                }
+                // State update with diff (AVX2)
+                avx2_state_update(h, k_vh, diff, bg);
                 if (dd && (vh == 0 || vh == 2)) {
                     for (int ri = 0; ri < 3; ri++) for (int rj = 0; rj < 3; rj++)
                         printf("C_DEBUG state_after[%d][%d]=%.8f\\n", ri, rj, h[ri * SSM_D_STATE + rj]);
                     printf("C_DEBUG hk[0]=%.8f diff[0]=%.8f\\n", hk[0], diff[0]);
                 }
                 
-                // Step 8e: output = h @ q  -> [SSM_D_STATE]
+                // Step 8e: output = h @ q -> [SSM_D_STATE] (AVX2)
                 // Store in delta_out
                 float *out = delta_out + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
                 memset(out, 0, SSM_D_STATE * sizeof(float));
-                for (int i = 0; i < SSM_D_STATE; i++) {
-                    for (int j = 0; j < SSM_D_STATE; j++) {
-                        out[i] += h[i * SSM_D_STATE + j] * q_scaled[j];
-                    }
-                }
+                avx2_hq(h, q_scaled, out);
             }
         }
     }
@@ -563,19 +636,22 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
     // === Steps 1-11: Same as wubu_ssm_forward ===
     // (Steps 1-10 are identical, just compute)
     
-    // Step 1: QKV projection via quantized or F32 matmul
+    // Step 1+2: Fused QKV + gate projection via single Q8_K quantization
+    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+    const int q8_buf_size = n_q8_blocks * 292;
+    uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
+    if (!ssm_q8_buf) { fprintf(stderr, "SSM save: q8 alloc failed\n"); goto cleanup_save; }
     for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, C,
-                    w->attn_qkv_weight, w->attn_qkv_weight_q, w->attn_qkv_weight_type,
-                    qkv_all + s * C);
+        const float *x_s = x + s * D_MODEL;
+        quantize_row_q8_K(x_s, (block_q8_K *)ssm_q8_buf, D_MODEL);
+        quantized_matmul_from_q8(ssm_q8_buf,
+            w->attn_qkv_weight_q, w->attn_qkv_weight_type,
+            D_MODEL, C, 0, qkv_all + s * C);
+        quantized_matmul_from_q8(ssm_q8_buf,
+            w->attn_gate_weight_q, w->attn_gate_weight_type,
+            D_MODEL, VALUE_DIM, 0, z_all + s * VALUE_DIM);
     }
-    
-    // Step 2: z gate projection via quantized or F32 matmul
-    for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, VALUE_DIM,
-                    w->attn_gate_weight, w->attn_gate_weight_q, w->attn_gate_weight_type,
-                    z_all + s * VALUE_DIM);
-    }
+    free(ssm_q8_buf);
     
     // Step 3: beta/alpha projections
     for (int s = 0; s < N; s++) {
@@ -797,19 +873,28 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
     
     // ========== Steps 1-8: IDENTICAL to Euclidean ==========
     
-    // Step 1: Fused QKV projection via quantized or F32 matmul
-    for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, C,
-                    w->attn_qkv_weight, w->attn_qkv_weight_q, w->attn_qkv_weight_type,
-                    qkv_all + s * C);
-    }
+    // Step 1+2: Fused QKV + gate projection via single Q8_K quantization
+    // Both projections use the same input x[s], so quantize once and reuse
+    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+    const int q8_buf_size = n_q8_blocks * 292;  // Q8K_BLOCK_SIZE
+    uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
+    block_q8_K *ssm_q8 = (block_q8_K *)ssm_q8_buf;
+    if (!ssm_q8_buf) { fprintf(stderr, "SSM forward: q8 alloc failed\n"); goto cleanup_p; }
     
-    // Step 2: z gate projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, VALUE_DIM,
-                    w->attn_gate_weight, w->attn_gate_weight_q, w->attn_gate_weight_type,
-                    z_all + s * VALUE_DIM);
+        const float *x_s = x + s * D_MODEL;
+        // Quantize once
+        quantize_row_q8_K(x_s, ssm_q8, D_MODEL);
+        
+        // Reuse for both projections
+        quantized_matmul_from_q8(ssm_q8_buf,
+            w->attn_qkv_weight_q, w->attn_qkv_weight_type,
+            D_MODEL, C, 0, qkv_all + s * C);
+        quantized_matmul_from_q8(ssm_q8_buf,
+            w->attn_gate_weight_q, w->attn_gate_weight_type,
+            D_MODEL, VALUE_DIM, 0, z_all + s * VALUE_DIM);
     }
+    free(ssm_q8_buf);
     
     // Step 3: beta/alpha projections
     for (int s = 0; s < N; s++) {
@@ -1058,11 +1143,21 @@ void wubu_gqa_forward(const float *x, int B, int T,
     }
     
     // Step 1: Q + gate fused projection via quantized or F32 matmul
+    // Step 2-3: K and V projections — same input x[s], share Q8_K quantization
+    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+    const int q8_buf_size = n_q8_blocks * 292;
+    uint8_t *gqa_q8_buf = (uint8_t *)malloc(q8_buf_size);
+    if (!gqa_q8_buf) { free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
+    
     for (int s = 0; s < N; s++) {
+        const float *x_s = x + s * D_MODEL;
+        quantize_row_q8_K(x_s, (block_q8_K *)gqa_q8_buf, D_MODEL);
+        
+        // Q + gate projection
         int q_offset = s * q_dim * 2;
-        proj_matmul(x + s * D_MODEL, D_MODEL, q_dim * 2,
-                    w->attn_q_weight, w->attn_q_weight_q, w->attn_q_weight_type,
-                    Q_full + q_offset);
+        quantized_matmul_from_q8(gqa_q8_buf,
+            w->attn_q_weight_q, w->attn_q_weight_type,
+            D_MODEL, q_dim * 2, 0, Q_full + q_offset);
         // Extract gate from Q_full — INTERLEAVED per-head layout:
         // Q_full layout: [Q_h0(256) | gate_h0(256) | Q_h1(256) | gate_h1(256) | ...]
         // gate[s * q_dim + j] should get all gate values (second 256 per head)
@@ -1073,27 +1168,30 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 gate[g_idx] = Q_full[qf_idx];
             }
         }
+        
+        // K projection
+        quantized_matmul_from_q8(gqa_q8_buf,
+            w->attn_k_weight_q, w->attn_k_weight_type,
+            D_MODEL, kv_dim, 0, K + s * kv_dim);
+        // V projection
+        quantized_matmul_from_q8(gqa_q8_buf,
+            w->attn_v_weight_q, w->attn_v_weight_type,
+            D_MODEL, kv_dim, 0, V + s * kv_dim);
     }
-    
-    // Steps 2-3: K and V projections
-    // (kv_dim defined above)
-    for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
-                    w->attn_k_weight, w->attn_k_weight_q, w->attn_k_weight_type,
-                    K + s * kv_dim);
-        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
-                    w->attn_v_weight, w->attn_v_weight_q, w->attn_v_weight_type,
-                    V + s * kv_dim);
-    }
+    free(gqa_q8_buf);
     
     // NaN guard: replace any NaN/Inf in Q_full, K, V with 0
-    for (int i = 0; i < N * q_dim * 2; i++)
-        if (isnan(Q_full[i]) || isinf(Q_full[i])) Q_full[i] = 0.0f;
-    for (int i = 0; i < N * q_dim; i++)
-        if (isnan(gate[i]) || isinf(gate[i])) gate[i] = 0.0f;
-    for (int i = 0; i < N * kv_dim; i++) {
-        if (isnan(K[i]) || isinf(K[i])) K[i] = 0.0f;
-        if (isnan(V[i]) || isinf(V[i])) V[i] = 0.0f;
+    // Only check when debug is enabled; normally matmul produces no NaN
+    const char *gqa_dd = getenv("DUMP_GQA_DEBUG");
+    if (gqa_dd) {
+        for (int i = 0; i < N * q_dim * 2; i++)
+            if (isnan(Q_full[i]) || isinf(Q_full[i])) Q_full[i] = 0.0f;
+        for (int i = 0; i < N * q_dim; i++)
+            if (isnan(gate[i]) || isinf(gate[i])) gate[i] = 0.0f;
+        for (int i = 0; i < N * kv_dim; i++) {
+            if (isnan(K[i]) || isinf(K[i])) K[i] = 0.0f;
+            if (isnan(V[i]) || isinf(V[i])) V[i] = 0.0f;
+        }
     }
     
     // Step 4: Q/K RMSNorm
@@ -1187,36 +1285,48 @@ void wubu_gqa_forward(const float *x, int B, int T,
     })
 #endif
     
+    // Tiled GQA attention: for each KV position, read K cache ONCE per KV head,
+    // then compute dot products with all Q heads sharing that KV head.
+    // This reduces K cache reads by 8× at 256k context.
+    // Each tile processes KV head 0 (Q heads 0-7) or KV head 1 (Q heads 8-15).
+    
     for (int b = 0; b < B; b++) {
         for (int t_q = 0; t_q < T; t_q++) {
             int global_t = cache_len + b * T + t_q;
             int attend_len = global_t + 1;
-            #pragma omp parallel for
-            for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
-                float attn_weights[2048];  // stack for moderate sizes, heap for large
-                float *attn_w = (attend_len <= 2048) ? attn_weights : (float *)malloc(attend_len * sizeof(float));
-                int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
+            
+            // Pre-allocate per-Q-head attention weights (always heap for simplicity)
+            // For decode at short context, this is ~2KB; at 256k it's ~16MB
+            float *all_attn_w = (float *)malloc((size_t)GQA_Q_HEADS * attend_len * sizeof(float));
+            if (!all_attn_w) { 
+                fprintf(stderr, "GQA: attn_w alloc failed (%zu)\n", (size_t)GQA_Q_HEADS * attend_len * 4);
+                goto gqa_alloc_fail;
+            }
+            
+            #pragma omp parallel for if(attend_len > 64)
+            for (int t_k = 0; t_k < attend_len; t_k++) {
+                float k_buf0[GQA_HEAD_DIM], k_buf1[GQA_HEAD_DIM];
+                const float *k0, *k1;
                 
-                const float *q_vec = Q_norm + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
-                float *out_vec = attn_out + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
+                // Read K cache for both KV heads (or from new tokens)
+                if (t_k < cache_len) {
+                    int64_t off0 = (int64_t)t_k * GQA_KV_HEADS + 0;
+                    int64_t off1 = (int64_t)t_k * GQA_KV_HEADS + 1;
+                    kv_cache_read_head(k_cache, off0 * GQA_HEAD_DIM, k_buf0, GQA_HEAD_DIM);
+                    kv_cache_read_head(k_cache, off1 * GQA_HEAD_DIM, k_buf1, GQA_HEAD_DIM);
+                    k0 = k_buf0; k1 = k_buf1;
+                } else {
+                    int new_idx = t_k - cache_len;
+                    k0 = K_norm + (new_idx * GQA_KV_HEADS + 0) * GQA_HEAD_DIM;
+                    k1 = K_norm + (new_idx * GQA_KV_HEADS + 1) * GQA_HEAD_DIM;
+                }
                 
-                memset(out_vec, 0, GQA_HEAD_DIM * sizeof(float));
-                
-                float max_score = -1e30f;
-                
-                // Q @ K^T * scale  [AVX2: 4×FMA unrolled for 256-dim heads]
-                for (int t_k = 0; t_k < attend_len; t_k++) {
-                    float k_buf[GQA_HEAD_DIM];
-                    const float *k_vec;
-                    if (t_k < cache_len) {
-                        int64_t off = (int64_t)t_k * GQA_KV_HEADS + h_kv;
-                        kv_cache_read_head(k_cache, off * GQA_HEAD_DIM, k_buf, GQA_HEAD_DIM);
-                        k_vec = k_buf;
-                    } else {
-                        int new_idx = t_k - cache_len;
-                        k_vec = K_norm + (new_idx * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
-                    }
+                // Compute Q·K for all 16 Q heads at this position
+                for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
+                    const float *k_vec = (h_q < 8) ? k0 : k1;
+                    const float *q_vec = Q_norm + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
                     float score;
+                    
 #ifdef __AVX2__
                     __m256 acc0 = _mm256_setzero_ps();
                     __m256 acc1 = _mm256_setzero_ps();
@@ -1237,22 +1347,37 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     score *= scale;
 #endif
                     score = tgt_wrap(score);
-                    attn_w[t_k] = score;
-                    if (score > max_score) max_score = score;
+                    all_attn_w[(size_t)h_q * attend_len + t_k] = score;
+                }
+            }
+            
+            // Now softmax and V weighted sum per Q head
+            #pragma omp parallel for
+            for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
+                int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
+                float *out_vec = attn_out + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
+                memset(out_vec, 0, GQA_HEAD_DIM * sizeof(float));
+                
+                // Find max score for this head
+                float max_score = -1e30f;
+                for (int t_k = 0; t_k < attend_len; t_k++) {
+                    float s = all_attn_w[(size_t)h_q * attend_len + t_k];
+                    if (s > max_score) max_score = s;
                 }
                 
                 // Softmax
                 float sum_exp = 0.0f;
                 for (int t_k = 0; t_k < attend_len; t_k++) {
-                    attn_w[t_k] = expf(attn_w[t_k] - max_score);
-                    sum_exp += attn_w[t_k];
+                    float s = expf(all_attn_w[(size_t)h_q * attend_len + t_k] - max_score);
+                    all_attn_w[(size_t)h_q * attend_len + t_k] = s;
+                    sum_exp += s;
                 }
                 float inv_sum = 1.0f / sum_exp;
                 for (int t_k = 0; t_k < attend_len; t_k++) {
-                    attn_w[t_k] *= inv_sum;
+                    all_attn_w[(size_t)h_q * attend_len + t_k] *= inv_sum;
                 }
                 
-                // Weighted sum of V  [AVX2: FMA]
+                // Weighted sum of V
                 for (int t_k = 0; t_k < attend_len; t_k++) {
                     float v_buf[GQA_HEAD_DIM];
                     const float *v_vec;
@@ -1264,7 +1389,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
                         int new_idx = t_k - cache_len;
                         v_vec = V + (new_idx * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
                     }
-                    float a = attn_w[t_k];
+                    float a = all_attn_w[(size_t)h_q * attend_len + t_k];
 #ifdef __AVX2__
                     __m256 a_v = _mm256_set1_ps(a);
                     for (int i = 0; i < GQA_HEAD_DIM; i += 8) {
@@ -1281,18 +1406,12 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 }
                 
                 // NaN debug (only check first head, rarely triggers)
-                for (int _i = 0; _i < GQA_HEAD_DIM; _i++) {
-                    if (isnan(out_vec[_i])) {
-                        double q_norm_v = 0;
-                        for (int _k = 0; _k < GQA_HEAD_DIM; _k++) q_norm_v += (double)q_vec[_k] * q_vec[_k];
-                        printf("  GQA NaN at h%d t%d: q_norm=%.2f\n",
-                               h_q, t_q, sqrt(q_norm_v));
-                        break;
-                    }
-                }
-                // Free heap-allocated attention weights
-                if (attn_w != attn_weights) free(attn_w);
+                // (q_vec is defined in the tiled Q·K loop above, skip NaN debug for now)
+                
+                // Free per-head attention weights (all stored in all_attn_w)
             }
+            // Free the tiled attention weight buffer
+            free(all_attn_w);
         }
     }
     
@@ -1326,6 +1445,16 @@ void wubu_gqa_forward(const float *x, int B, int T,
     free(K_norm);
     free(attn_out);
     free(gate_sig);
+    return;
+
+gqa_alloc_fail:
+    free(Q_full);
+    free(gate);
+    free(K);
+    free(V);
+    free(Q_norm);
+    free(K_norm);
+    free(attn_out);
 }
 
 // GQA forward with intermediate saving (for backward)

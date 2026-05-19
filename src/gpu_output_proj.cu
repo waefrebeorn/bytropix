@@ -1,13 +1,14 @@
 /**
  * gpu_output_proj.cu — cuBLAS-accelerated output projection for gen_text.
  *
- * The output projection (2048 × 248320) is the single largest matmul.
- * On CPU it takes ~11ms per decode step. On GPU (RTX 5050) it takes ~0.1ms.
+ * Two modes:
+ * 1. F32 mode (default): dequant Q4_K → F32, upload, cuBLAS SGEMM
+ *    - Uses ~7.6GB VRAM for weight. Best for GPUs with >=8GB VRAM.
+ * 2. Quantized mode (GPU_QUANTIZED=1): keep Q4_K on GPU, custom kernel
+ *    - Uses ~1.9GB VRAM for weight. Best for 6.5GB VRAM laptops.
  *
- * Strategy:
- * 1. At init: dequant output.weight Q4_K → F32, upload to GPU, keep resident
- * 2. Per decode step: upload hidden_state [2048], cuBLAS SGEMM, download logits [248320]
- * 3. No per-step dequant or weight transfer needed
+ * The output projection (2048 × 248320) is the single largest matmul.
+ * On CPU it takes ~10ms per decode step. On GPU (RTX 5050) it takes ~0.1ms.
  */
 
 #include <cuda_runtime.h>
@@ -16,72 +17,187 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <math.h>
 
 #include "gguf_reader.h"
 #include "wubu_ssm.h"
+#include "gpu_output_proj.h"
 
 // GPU resources (persistent across decode steps)
 static cublasHandle_t g_cublas = NULL;
 static cudaStream_t   g_stream = NULL;
-static float         *g_d_weight = NULL;  // [V, D] F32 output weight on GPU
-static float         *g_d_x = NULL;       // [1, D] input hidden state
-static float         *g_d_y = NULL;       // [1, V] output logits
+static float         *g_d_weight = NULL;  // [V, D] F32 output weight on GPU (F32 mode)
+static uint8_t       *g_d_weight_q = NULL; // Q4_K weight on GPU (quantized mode)
+static float         *g_d_x = NULL;       // [D_MODEL] or [D_MODEL * T] input buffer
+static float         *g_d_y = NULL;       // [vocab_size] or [vocab_size * T] output buffer
 static int g_vocab_size = 0;
+static int g_max_batch = 0;
 static int g_initialized = 0;
+static int g_quantized_mode = 0;  // 1 = use custom Q4_K kernel instead of cuBLAS
 
-// Dequant Q4_K block to F32 (inline for simplicity)
-// block_q4_K: d(uint16), dmin(uint16), scales[12], qs[128]
-// Each Q4_K block encodes 256 values in 128 bytes (4-bit each)
-static void dequant_block_q4_K_f32(const uint8_t *block, float *out) {
-    const uint16_t d_half = *(const uint16_t*)(block);
-    const uint16_t dmin_half = *(const uint16_t*)(block + 2);
-    // Convert fp16 to fp32 (simple conversion)
-    int sign = (d_half >> 15) & 1;
-    int exp  = (d_half >> 10) & 0x1F;
-    int mant = d_half & 0x3FF;
+// Q4_K block constants
+#define Q4K_BLOCK_SIZE 144   // bytes per block
+#define Q4K_ELEMS_PER_BLOCK 256
+
+// ============================================================
+// CUDA kernel: Q4_K dequant + dot product fused
+//
+// Each thread processes one vocabulary column:
+//   y[col] = sum_i x[i] * deq(W_q[col][i])
+//
+// The weight W_q is [V, D] Q4_K quantized, stored contiguously.
+// Each column has ceil(D/Q4K_ELEMS_PER_BLOCK) Q4_K blocks.
+//
+// We keep the weight on GPU in its native Q4_K format.
+// ============================================================
+
+// Device-side dequant of one Q4_K block (144 bytes → 256 floats)
+__device__ static void dequant_q4_k_block_device(const uint8_t *block, float *out) {
+    // Read d and dmin as fp16
+    uint16_t d_bits = *(const uint16_t *)block;
+    uint16_t dmin_bits = *(const uint16_t *)(block + 2);
+    
+    // F16 to F32 for d
+    uint32_t sign = (d_bits >> 15) & 1;
+    uint32_t exp  = (d_bits >> 10) & 0x1F;
+    uint32_t mant = d_bits & 0x03FF;
+    uint32_t f32;
+    if (exp == 0) f32 = (sign << 31) | ((uint32_t)(127 - 15 + 1) << 23) | (mant << 13);
+    else if (exp == 31) f32 = (sign << 31) | (0xFF << 23) | (mant << 13);
+    else f32 = (sign << 31) | ((uint32_t)(127 - 15 + exp) << 23) | (mant << 13);
     float d;
-    if (exp == 0) d = (float)mant / 1024.0f * 0.000061035f * (sign ? -1.0f : 1.0f);
-    else if (exp == 31) d = sign ? -__builtin_huge_valf() : __builtin_huge_valf();
-    else d = ldexpf(1.0f + (float)mant / 1024.0f, exp - 15) * (sign ? -1.0f : 1.0f);
-
-    sign = (dmin_half >> 15) & 1;
-    exp  = (dmin_half >> 10) & 0x1F;
-    mant = dmin_half & 0x3FF;
+    memcpy(&d, &f32, 4);
+    
+    // F16 to F32 for dmin
+    sign = (dmin_bits >> 15) & 1;
+    exp  = (dmin_bits >> 10) & 0x1F;
+    mant = dmin_bits & 0x03FF;
+    if (exp == 0) f32 = (sign << 31) | ((uint32_t)(127 - 15 + 1) << 23) | (mant << 13);
+    else if (exp == 31) f32 = (sign << 31) | (0xFF << 23) | (mant << 13);
+    else f32 = (sign << 31) | ((uint32_t)(127 - 15 + exp) << 23) | (mant << 13);
     float dmin;
-    if (exp == 0) dmin = (float)mant / 1024.0f * 0.000061035f * (sign ? -1.0f : 1.0f);
-    else if (exp == 31) dmin = sign ? -__builtin_huge_valf() : __builtin_huge_valf();
-    else dmin = ldexpf(1.0f + (float)mant / 1024.0f, exp - 15) * (sign ? -1.0f : 1.0f);
-
-    // Decode scales (simplified - same as decode_scales in quantized_dot_generic.c)
-    const uint8_t *scales_raw = block + 4;
-    uint32_t utmp[4];
-    memcpy(utmp, scales_raw, 12);
-    utmp[3] = ((utmp[2] >> 4) & 0x0f0f0f0f) | (((utmp[1] >> 6) & 0x03030303) << 4);
-    const uint32_t uaux = utmp[1] & 0x3f3f3f3f;
-    utmp[1] = (utmp[2] & 0x0f0f0f0f) | (((utmp[0] >> 6) & 0x03030303) << 4);
-    utmp[2] = uaux;
-    utmp[0] &= 0x3f3f3f3f;
-    const uint8_t *scales = (const uint8_t*)&utmp[0];
-    const uint8_t *mins   = (const uint8_t*)&utmp[2];
-
-    const uint8_t *qs = block + 4 + 12;  // qs starts after scales
-    int idx = 0;
-    for (int j = 0; j < 8; j++) {  // 8 sub-blocks of 32
-        float sc = scales[j];
-        float mn = mins[j/2];
-        for (int k = 0; k < 32; k += 2) {
-            int v0 = qs[idx/2] & 0xF;
-            int v1 = qs[idx/2] >> 4;
-            out[idx] = (v0 * sc - mn) * d;
-            out[idx+1] = (v1 * sc - mn) * d;
-            idx += 2;
+    memcpy(&dmin, &f32, 4);
+    
+    const uint8_t *scales = block + 4;  // 12 bytes
+    const uint8_t *qs = block + 16;     // qs starts after d+dmin+scales = 4+12 = 16
+    
+    int is = 0;
+    for (int j = 0; j < 256; j += 64) {
+        int idx = is;
+        uint8_t sc1, m1, sc2, m2;
+        if (idx < 4) {
+            sc1 = scales[idx] & 63; m1 = scales[idx + 4] & 63;
+        } else {
+            sc1 = (scales[idx+4] & 0xF) | ((scales[idx-4] >> 6) << 4);
+            m1  = (scales[idx+4] >>  4) | ((scales[idx  ] >> 6) << 4);
         }
-        if (j % 2 == 1) qs += 16;  // each pair of sub-blocks uses 16 bytes
+        idx = is + 1;
+        if (idx < 4) {
+            sc2 = scales[idx] & 63; m2 = scales[idx + 4] & 63;
+        } else {
+            sc2 = (scales[idx+4] & 0xF) | ((scales[idx-4] >> 6) << 4);
+            m2  = (scales[idx+4] >>  4) | ((scales[idx  ] >> 6) << 4);
+        }
+        float d1 = d * sc1; float ml1 = dmin * m1;
+        float d2 = d * sc2; float ml2 = dmin * m2;
+        
+        const uint8_t *bq = qs + j/2;
+        for (int l = 0; l < 32; l++) {
+            out[j + l]           = d1 * (bq[l] & 0xF) - ml1;
+            out[j + 32 + l]      = d2 * (bq[l] >> 4) - ml2;
+        }
+        is += 2;
+    }
+}
+
+// Kernel: one thread per vocabulary column
+// y[V] = x[D] @ weight_Q4_K[V, D]
+// x: [D] float32
+// weight_q: [V * blocks_per_col * Q4K_BLOCK_SIZE] uint8_t
+// y: [V] float32 output
+__global__ void quantized_output_proj_kernel(const float *x,
+                                              const uint8_t *weight_q,
+                                              float *y,
+                                              int D, int V,
+                                              int blocks_per_col) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (col >= V) return;
+    
+    float sum = 0.0f;
+    
+    for (int b = 0; b < blocks_per_col; b++) {
+        // Pointer to this block in the quantized weight
+        // Weight layout: [V, D] with Q4_K blocks along D
+        // Each column has `blocks_per_col` consecutive blocks
+        const uint8_t *block = weight_q + (size_t)col * blocks_per_col * Q4K_BLOCK_SIZE + b * Q4K_BLOCK_SIZE;
+        
+        float block_vals[Q4K_ELEMS_PER_BLOCK];
+        dequant_q4_k_block_device(block, block_vals);
+        
+        int base = b * Q4K_ELEMS_PER_BLOCK;
+        int remaining = D - base;
+        if (remaining > Q4K_ELEMS_PER_BLOCK) remaining = Q4K_ELEMS_PER_BLOCK;
+        
+        for (int i = 0; i < remaining; i++) {
+            sum += x[base + i] * block_vals[i];
+        }
+    }
+    
+    y[col] = sum;
+}
+
+// ============================================================
+// Host-side functions
+// ============================================================
+
+// Dequant Q4_K block to F32 (CPU version, used by F32 mode init)
+static void dequant_block_q4_K_f32(const uint8_t *block, float *out) {
+    uint16_t d_bits, dmin_bits;
+    memcpy(&d_bits, block, 2);
+    memcpy(&dmin_bits, block + 2, 2);
+    int s = (d_bits >> 15) & 1, e = (d_bits >> 10) & 0x1F, m = d_bits & 0x3FF;
+    float d = (e == 0) ? ldexpf((float)m / 1024.0f, -14) * (s ? -1.0f : 1.0f)
+            : (e == 31) ? (s ? -__builtin_huge_valf() : __builtin_huge_valf())
+            : ldexpf(1.0f + (float)m / 1024.0f, e - 15) * (s ? -1.0f : 1.0f);
+    s = (dmin_bits >> 15) & 1; e = (dmin_bits >> 10) & 0x1F; m = dmin_bits & 0x3FF;
+    float dmin = (e == 0) ? ldexpf((float)m / 1024.0f, -14) * (s ? -1.0f : 1.0f)
+               : (e == 31) ? (s ? -__builtin_huge_valf() : __builtin_huge_valf())
+               : ldexpf(1.0f + (float)m / 1024.0f, e - 15) * (s ? -1.0f : 1.0f);
+
+    const uint8_t *scales = block + 4;
+    const uint8_t *qs = block + 16;
+
+    int is = 0;
+    for (int j = 0; j < 256; j += 64) {
+        int idx = is;
+        uint8_t sc1, m1, sc2, m2;
+        if (idx < 4) {
+            sc1 = scales[idx] & 63; m1 = scales[idx + 4] & 63;
+        } else {
+            sc1 = (scales[idx+4] & 0xF) | ((scales[idx-4] >> 6) << 4);
+            m1  = (scales[idx+4] >>  4) | ((scales[idx  ] >> 6) << 4);
+        }
+        idx = is + 1;
+        if (idx < 4) {
+            sc2 = scales[idx] & 63; m2 = scales[idx + 4] & 63;
+        } else {
+            sc2 = (scales[idx+4] & 0xF) | ((scales[idx-4] >> 6) << 4);
+            m2  = (scales[idx+4] >>  4) | ((scales[idx  ] >> 6) << 4);
+        }
+        float d1 = d * sc1; float ml1 = dmin * m1;
+        float d2 = d * sc2; float ml2 = dmin * m2;
+
+        const uint8_t *bq = qs + j/2;
+        for (int l = 0; l < 32; l++)
+            out[j + l]      = d1 * (bq[l] & 0xF) - ml1;
+        for (int l = 0; l < 32; l++)
+            out[j + 32 + l] = d2 * (bq[l] >> 4) - ml2;
+        is += 2;
     }
 }
 
 // Initialize GPU output projection
-// Dequants output weight Q4_K → F32 on CPU, uploads to GPU
+// If GPU_QUANTIZED=1 is set, uses Q4_K weight directly on GPU (lower VRAM)
 bool gpu_output_init(const uint8_t *weight_q, int D, int V, int weight_type) {
     if (g_initialized) return true;
     
@@ -89,6 +205,8 @@ bool gpu_output_init(const uint8_t *weight_q, int D, int V, int weight_type) {
         fprintf(stderr, "GPU output proj: expected Q4_K, got %d\n", weight_type);
         return false;
     }
+
+    g_quantized_mode = (getenv("GPU_QUANTIZED") != NULL) ? 1 : 0;
 
     cudaError_t ce;
     cublasStatus_t cs;
@@ -101,69 +219,125 @@ bool gpu_output_init(const uint8_t *weight_q, int D, int V, int weight_type) {
     cs = cublasSetStream(g_cublas, g_stream);
     if (cs != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "cublasSetStream failed\n"); return false; }
 
-    // Dequant Q4_K → F32 on CPU
-    // Q4_K block size: 256 values per block
-    const int QK_K = 256;
-    const int Q4K_BLOCK_BYTES = 4 + 12 + 128;  // d+dmin(4) + scales(12) + qs(128) = 144
-    // Actually: sizeof(block_q4_K) = 2+2+12+128 = 144 bytes
-    const int blk_sz_q4k = 144;
-    int n_blocks = (D * V + QK_K - 1) / QK_K;
-    
-    float *weight_f32 = (float*)malloc((size_t)D * V * sizeof(float));
-    if (!weight_f32) { fprintf(stderr, "Failed to allocate F32 weight (%zu bytes)\n", (size_t)D * V * 4); return false; }
-    
-    // Dequant block by block
-    // Weight layout: [D, V] = [2048, 248320], V is the fast dimension
-    // Q4_K blocks are stored contiguously along the V dimension
-    // n_blocks_per_col = (V + QK_K - 1) / QK_K  -- but V=248320, QK_K=256, so 970 blocks per row
-    for (int i = 0; i < D; i++) {
-        const uint8_t *row_start = weight_q + i * (n_blocks / D) * blk_sz_q4k;
-        // Actually, the layout is: weight[D, V] quantized as Q4_K blocks along V
-        // For each row of D: V elements = ceil(V/256) Q4_K blocks
-        int blocks_per_row = (V + QK_K - 1) / QK_K;  // 970
-        for (int b = 0; b < blocks_per_row; b++) {
-            const uint8_t *block = row_start + b * blk_sz_q4k;
-            float block_out[QK_K];
-            dequant_block_q4_K_f32(block, block_out);
-            int n_vals = (b == blocks_per_row - 1) ? (V - b * QK_K) : QK_K;
-            memcpy(weight_f32 + (size_t)i * V + b * QK_K, block_out, n_vals * sizeof(float));
+    int batch_size = 1;
+    if (getenv("GPU_BATCH")) batch_size = atoi(getenv("GPU_BATCH"));
+    if (batch_size < 1) batch_size = 1;
+    if (batch_size > 64) batch_size = 64;
+    g_max_batch = batch_size;
+
+    if (g_quantized_mode) {
+        // Quantized mode: keep Q4_K on GPU
+        int64_t blocks_per_col = (D + Q4K_ELEMS_PER_BLOCK - 1) / Q4K_ELEMS_PER_BLOCK;
+        size_t weight_bytes = (size_t)V * blocks_per_col * Q4K_BLOCK_SIZE;
+        
+        ce = cudaMalloc(&g_d_weight_q, weight_bytes);
+        if (ce != cudaSuccess) {
+            fprintf(stderr, "GPU output proj: cudaMalloc Q4_K weight failed (%s), falling back to CPU\n",
+                    cudaGetErrorString(ce));
+            g_quantized_mode = 0;
+            // Fall through to try F32 mode
+        } else {
+            ce = cudaMemcpy(g_d_weight_q, weight_q, weight_bytes, cudaMemcpyHostToDevice);
+            if (ce != cudaSuccess) {
+                fprintf(stderr, "GPU output proj: cudaMemcpy Q4_K weight failed\n");
+                cudaFree(g_d_weight_q); g_d_weight_q = NULL;
+                g_quantized_mode = 0;
+            }
         }
     }
 
-    // Allocate GPU memory
-    ce = cudaMalloc(&g_d_weight, (size_t)D * V * sizeof(float));
-    if (ce != cudaSuccess) { free(weight_f32); fprintf(stderr, "cudaMalloc weight: %s\n", cudaGetErrorString(ce)); return false; }
-    ce = cudaMalloc(&g_d_x, (size_t)D * sizeof(float));
-    if (ce != cudaSuccess) { free(weight_f32); fprintf(stderr, "cudaMalloc x: %s\n", cudaGetErrorString(ce)); return false; }
-    ce = cudaMalloc(&g_d_y, (size_t)V * sizeof(float));
-    if (ce != cudaSuccess) { free(weight_f32); fprintf(stderr, "cudaMalloc y: %s\n", cudaGetErrorString(ce)); return false; }
+    if (!g_quantized_mode) {
+        // F32 mode: dequant Q4_K → F32 on CPU, upload to GPU
+        const int QK_K = 256;
+        int64_t n_blocks = (int64_t)D * V / QK_K;
+        
+        float *weight_f32 = (float*)malloc((size_t)D * V * sizeof(float));
+        if (!weight_f32) { fprintf(stderr, "Failed to allocate F32 weight (%zu bytes)\n", (size_t)D * V * 4); return false; }
+        
+        int blocks_per_row = (V + QK_K - 1) / QK_K;
+        for (int i = 0; i < D; i++) {
+            const uint8_t *row_start = weight_q + i * blocks_per_row * Q4K_BLOCK_SIZE;
+            for (int b = 0; b < blocks_per_row; b++) {
+                const uint8_t *block = row_start + b * Q4K_BLOCK_SIZE;
+                float block_out[QK_K];
+                dequant_block_q4_K_f32(block, block_out);
+                int n_vals = (b == blocks_per_row - 1) ? (V - b * QK_K) : QK_K;
+                memcpy(weight_f32 + (size_t)i * V + b * QK_K, block_out, n_vals * sizeof(float));
+            }
+        }
 
-    // Upload weight to GPU
-    // Weight for SGEMM: output = weight^T @ x
-    // weight is [D, V] in row-major, we need [V, D] for column-major cuBLAS
-    // cublasSgemm(A=V, B=D): C[M,N] = A[M,K] @ B[K,N]
-    // We want: logits[1, V] = x[1, D] @ weight^T[D, V]
-    // Or: logits[V, 1] = weight^T[V, D] @ x[D, 1]
-    // cublasSgemm with op(A)=N, op(B)=N:
-    //   C[V, 1] = weight^T[V, D] @ x[D, 1]
-    // But weight is stored as [D, V] in memory (row-major).
-    // For cuBLAS (column-major), [D, V] row-major = [V, D] column-major = weight^T
-    // So: ce = cudaMemcpy(g_d_weight, weight_f32, D*V*sizeof(float), cudaMemcpyHostToDevice);
-    // Then cuBLAS call: CUBLAS_OP_N (use as-is in col-major = row-major transpose)
-    
-    ce = cudaMemcpy(g_d_weight, weight_f32, (size_t)D * V * sizeof(float), cudaMemcpyHostToDevice);
-    free(weight_f32);
-    if (ce != cudaSuccess) { fprintf(stderr, "cudaMemcpy weight: %s\n", cudaGetErrorString(ce)); return false; }
+        ce = cudaMalloc(&g_d_weight, (size_t)D * V * sizeof(float));
+        if (ce != cudaSuccess) { free(weight_f32); fprintf(stderr, "cudaMalloc weight failed (%s)\n", cudaGetErrorString(ce)); return false; }
+        ce = cudaMemcpy(g_d_weight, weight_f32, (size_t)D * V * sizeof(float), cudaMemcpyHostToDevice);
+        free(weight_f32);
+        if (ce != cudaSuccess) { fprintf(stderr, "cudaMemcpy weight: %s\n", cudaGetErrorString(ce)); return false; }
+    }
+
+    // I/O buffers (needed in both modes)
+    ce = cudaMalloc(&g_d_x, (size_t)D * g_max_batch * sizeof(float));
+    if (ce != cudaSuccess) { fprintf(stderr, "cudaMalloc x failed\n"); return false; }
+    ce = cudaMalloc(&g_d_y, (size_t)V * g_max_batch * sizeof(float));
+    if (ce != cudaSuccess) { fprintf(stderr, "cudaMalloc y failed\n"); return false; }
 
     g_vocab_size = V;
     g_initialized = 1;
-    fprintf(stderr, "GPU output proj: initialized (%d×%d, %.1f MB)\n", D, V, (double)D*V*4/1048576);
+    fprintf(stderr, "GPU output proj: initialized (%d×%d, %s mode)\n",
+            D, V, g_quantized_mode ? "Q4_K quantized" : "F32 SGEMM");
     return true;
 }
 
-// Run output projection on GPU
-// input: [D_MODEL] float32 hidden state
-// output: [vocab_size] float32 logits
+// Batched output projection for prefill
+bool gpu_output_project_batch(const float *input, float *output, int T) {
+    if (!g_initialized) { fprintf(stderr, "GPU not initialized\n"); return false; }
+    if (T > g_max_batch) {
+        fprintf(stderr, "GPU batch: T=%d > max=%d, truncating\n", T, g_max_batch);
+        T = g_max_batch;
+    }
+    if (T < 1) return false;
+
+    int D = D_MODEL;
+    int V = g_vocab_size;
+
+    cudaError_t ce = cudaMemcpyAsync(g_d_x, input, (size_t)D * T * sizeof(float),
+                                      cudaMemcpyHostToDevice, g_stream);
+    if (ce != cudaSuccess) return false;
+
+    if (g_quantized_mode) {
+        // Quantized mode: custom kernel for each token
+        int64_t blocks_per_col = (D + Q4K_ELEMS_PER_BLOCK - 1) / Q4K_ELEMS_PER_BLOCK;
+        dim3 block_dim(256);
+        dim3 grid_dim((V + 255) / 256);
+        
+        for (int t = 0; t < T; t++) {
+            quantized_output_proj_kernel<<<grid_dim, block_dim, 0, g_stream>>>(
+                g_d_x + (size_t)t * D,
+                g_d_weight_q,
+                g_d_y + (size_t)t * V,
+                D, V, (int)blocks_per_col);
+        }
+    } else {
+        // F32 mode: batched cuBLAS SGEMM
+        float alpha = 1.0f, beta = 0.0f;
+        cublasStatus_t cs = cublasSgemm(g_cublas,
+            CUBLAS_OP_T, CUBLAS_OP_N,
+            V, T, D,
+            &alpha,
+            g_d_weight, D,
+            g_d_x, D,
+            &beta,
+            g_d_y, V);
+        if (cs != CUBLAS_STATUS_SUCCESS) return false;
+    }
+
+    ce = cudaMemcpyAsync(output, g_d_y, (size_t)V * T * sizeof(float),
+                          cudaMemcpyDeviceToHost, g_stream);
+    if (ce != cudaSuccess) return false;
+
+    cudaStreamSynchronize(g_stream);
+    return true;
+}
+
+// Single-token output projection
 bool gpu_output_project(const float *input, float *output) {
     if (!g_initialized) { fprintf(stderr, "GPU not initialized\n"); return false; }
     
@@ -172,40 +346,49 @@ bool gpu_output_project(const float *input, float *output) {
     
     cudaError_t ce;
     
-    // Upload input
     ce = cudaMemcpyAsync(g_d_x, input, D * sizeof(float), cudaMemcpyHostToDevice, g_stream);
     if (ce != cudaSuccess) { fprintf(stderr, "cudaMemcpyAsync input: %s\n", cudaGetErrorString(ce)); return false; }
     
-    // cuBLAS SGEMM: y[V] = weight^T[V, D] @ x[D]
-    // weight layout in memory: [D, V] row-major
-    // cuBLAS expects column-major, so [D, V] row-major = [V, D] column-major = weight^T
-    // So we can use weight as-is with CUBLAS_OP_N
-    // C = op(A) @ op(B), C[M,N], A[M,K], B[K,N]
-    // We want: y[V,1] = weight^T[V,D] @ x[D,1]
-    // A = weight: [V, D] → op(A)=N, M=V, K=D
-    // B = x: [D, 1] → op(B)=N, K=D, N=1
-    float alpha = 1.0f, beta = 0.0f;
-    cublasStatus_t cs = cublasSgemm(g_cublas,
-        CUBLAS_OP_N, CUBLAS_OP_N,
-        V, 1, D,
-        &alpha,
-        g_d_weight, V,
-        g_d_x, D,
-        &beta,
-        g_d_y, V);
-    if (cs != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "cublasSgemm failed\n"); return false; }
+    if (g_quantized_mode) {
+        int64_t blocks_per_col = (D + Q4K_ELEMS_PER_BLOCK - 1) / Q4K_ELEMS_PER_BLOCK;
+        dim3 block_dim(256);
+        dim3 grid_dim((V + 255) / 256);
+        
+        quantized_output_proj_kernel<<<grid_dim, block_dim, 0, g_stream>>>(
+            g_d_x, g_d_weight_q, g_d_y, D, V, (int)blocks_per_col);
+    } else {
+        float alpha = 1.0f, beta = 0.0f;
+        cublasStatus_t cs = cublasSgemm(g_cublas,
+            CUBLAS_OP_T, CUBLAS_OP_N,
+            V, 1, D,
+            &alpha,
+            g_d_weight, D,
+            g_d_x, D,
+            &beta,
+            g_d_y, V);
+        if (cs != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "cublasSgemm failed\n"); return false; }
+    }
     
-    // Download result
     ce = cudaMemcpyAsync(output, g_d_y, V * sizeof(float), cudaMemcpyDeviceToHost, g_stream);
     if (ce != cudaSuccess) { fprintf(stderr, "cudaMemcpyAsync output: %s\n", cudaGetErrorString(ce)); return false; }
     
     cudaStreamSynchronize(g_stream);
+
+    if (getenv("VERBOSE_OUTPUT_PROJ")) {
+        float gpu_first[10];
+        memcpy(gpu_first, output, 10 * sizeof(float));
+        fprintf(stderr, "GPU logits[0..9]:");
+        for (int i = 0; i < 10; i++) fprintf(stderr, " %.6f", gpu_first[i]);
+        fprintf(stderr, "\n");
+    }
+
     return true;
 }
 
 // Cleanup
 void gpu_output_cleanup() {
     if (g_d_weight) cudaFree(g_d_weight);
+    if (g_d_weight_q) cudaFree(g_d_weight_q);
     if (g_d_x) cudaFree(g_d_x);
     if (g_d_y) cudaFree(g_d_y);
     if (g_cublas) cublasDestroy(g_cublas);

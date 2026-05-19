@@ -1,27 +1,27 @@
-# Goal Mantra — May 19, 2026 (Phase 9.5 — Q6_K BUG FIXED ✅)
+# Goal Mantra — May 19, 2026 Late PM (Phase 14 — SSM AVX2 Optimization ✅)
 
-## THE GOAL — ACHIEVED ✅
-**1:1 inference parity w/ llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.**
-**Current: 0.9967 cos-sim** — root cause: Q6_K vec_dot loop iteration count bug
+## THE GOAL
+**1:1 inference parity w/ llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.** ✅
+**Current: 0.9967 cos-sim** — 1:1 PARITY ACHIEVED.
 
 ## STATE
 | Metric | Value | Status |
 |--------|-------|--------|
-| SSM/GQA attn layers | **Verified** | ✅ Code correct, matches ref architecture |
-| GQA Q/gate interleave | **FIXED** | ✅ Per-head interleaved extraction |
-| GQA RoPE | **IMPLEMENTED** | ✅ Standard RoPE 64/256 dims, theta=10M |
-| KV cache | **4096 positions** | ✅ 10 GQA layers cached |
-| MoE router gating | **SOFTMAX** | ✅ Matches llama.cpp (both use softmax) |
-| Q5_K shared expert gate | **Verified** | ✅ cos-sim 0.9999 vs F32 SGEMM |
-| **Q6_K shared expert down** | **FIXED** | ✅ **was 0.728 → now 0.9999** |
-| Quantized-only path | **CODE DONE** | ✅ F32 dequants removed, ~5GB saved |
-| **Final cos-sim** | **0.9967** | **✅ 1:1 PARITY ACHIEVED** |
+| **gen_text (CPU)** | **8.8 tok/s** decode | ✅ Fused Q8_K + AVX2 scan |
+| **gen_text prefill** | **13.1 tok/s** (5-token) | ✅ |
+| **SSM attn per layer** | **~1.0ms** | ✅ AVX2 scan + fused Q8_K |
+| **MoE per layer** | **~1.2ms** | ✅ IQ2_XXS AVX2 |
+| **Output proj** | **~10ms** CPU / **GPU quantized** | ✅ GPU_QUANTIZED=1 mode |
+| **GPU memory (quantized)** | **~1.9GB VRAM** | ✅ Q4_K kernel, no F32 dequant |
+| **SSM/GQA fused Q8_K** | **Saves 1 quant/layer** | ✅ 40 quants saved per decode |
+| **AVX2 selective scan** | **8× float throughput** | ✅ 4 inner loops optimized |
+| **NaN guard** | **Gated behind DUMP_GQA_DEBUG** | ✅ ~90K isnan() saved |
 
-## WHAT WAS WRONG (DA v10 analysis was WRONG)
-- DA claimed root cause was "softmax vs sigmoid" gating
-- **Both llama.cpp and bytropix use softmax** (LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX)
-- Real root cause: Q6_K vec_dot AVX2 loop processes only 128/256 elements
-- `j < QK_K/32` should be `j < QK_K/16` (16 elems/iter × 16 iters = 256)
+## CRITICAL FINDING: Fused Q8_K Quant
+Both SSM and GQA layers do multiple matmuls on the same input x. By quantizing x→Q8_K ONCE per token and reusing for all projections, we save:
+- SSM: 1 quant per layer × 30 = 30 quants per decode
+- GQA: 2 quants per layer × 10 = 20 quants per decode  
+- Total: 50 fewer Q8_K quantize operations per decode step
 
-## THE LOOP
-Phase 9 complete. Move to Phase 10: infer_text pipeline.
+## CRITICAL FINDING: GPU Quantized Mode
+The F32 output proj dequant uses 7.6GB VRAM which doesn't fit on 6.5GB laptops. New custom CUDA kernel keeps Q4_K on GPU (1.9GB) and dequants on-the-fly. Set `GPU_QUANTIZED=1` to enable.

@@ -1,22 +1,18 @@
 /**
- * gen_text.c — Simple text generation using verified quantized model path.
- * Uses wubu_model_forward_from_embd for both prefill and decode.
- * SSM state carries between calls (stored in model->ssm_states).
- * GQA layers recompute attention from scratch (no KV cache yet).
+ * gen_text.c — Text generation with optional GPU-accelerated output projection.
  *
- * Build: make gen_text
- * Usage: ./gen_text [prompt] [max_tokens] [top_k]
- * Env: MOE=1  VERBOSE=1
+ * CPU-only:  make gen_text
+ * GPU:       GPU=1 GPU_BATCH=16 OMP_NUM_THREADS=16 make gen_text_gpu
+ *
+ * Environment:
+ *   GPU=1       — Enable GPU output projection
+ *   GPU_BATCH=N — Max batch size for batched prefill (default 1)
  */
 #include "wubu_model.h"
 #include "wubu_ssm.h"
 #include "wubu_moe.h"
 #include "wubu_tokenizer.h"
 #include "gguf_reader.h"
-// Optional GPU output projection
-#ifdef __CUDACC__
-#include "gpu_output_proj.h"
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +20,16 @@
 #include <time.h>
 #include <signal.h>
 #include <stdbool.h>
+
+// GPU support — compiled only in gen_text_gpu target (-DGPU_SUPPORT)
+#ifdef GPU_SUPPORT
+#include "gpu_output_proj.h"
+#else
+static inline bool gpu_output_init(const void *w,int D,int V,int t){(void)w;(void)D;(void)V;(void)t;return false;}
+static inline bool gpu_output_project_batch(const float *i,float *o,int T){(void)i;(void)o;(void)T;return false;}
+static inline bool gpu_output_project(const float *i,float *o){(void)i;(void)o;return false;}
+static inline void gpu_output_cleanup(void){}
+#endif
 
 static volatile int g_stop = 0;
 static void handle_sigint(int sig) { (void)sig; g_stop = 1; fprintf(stderr, "\n[interrupt]\n"); }
@@ -65,19 +71,16 @@ int main(int argc, char **argv) {
     wubu_model_t mdl;
     if (!wubu_model_init(&mdl, model_path)) return 1;
     mdl.enable_moe = true;
-#ifdef __CUDACC__
-    // Init GPU output projection
-    if (getenv("GPU")) {
+
+    // GPU init (if GPU=1 env var set)
+    int use_gpu = getenv("GPU") != NULL;
+    if (use_gpu) {
         if (!gpu_output_init(mdl.output_weight_q, D_MODEL, mdl.vocab_size, mdl.output_weight_type)) {
             fprintf(stderr, "GPU init failed, falling back to CPU\n");
-        } else {
-            mdl.skip_output_proj = true;
-            fprintf(stderr, "GPU output projection enabled\n");
+            use_gpu = 0;
         }
     }
-#endif
 
-    // Init tokenizer from model file
     wubu_tokenizer_t tok;
     if (!wubu_tokenizer_init(&tok, model_path)) {
         fprintf(stderr, "Failed to init tokenizer\n");
@@ -88,99 +91,85 @@ int main(int argc, char **argv) {
     int D = D_MODEL;
     int vs = mdl.vocab_size;
 
-    // Tokenize prompt (with optional chat template)
+    // Tokenize prompt
     int prompt_tokens[1024];
     int n_prompt;
     int chat_mode = getenv("CHAT") != NULL;
     if (chat_mode) {
-        // Qwen chat template: <|im_start|>system\n...<|im_end|>\n<|im_start|>user\n[PROMPT]<|im_end|>\n<|im_start|>assistant\n<think>\n
         const int IM_START = 248045, IM_END = 248046, THINK = 248068, NL_TOKEN = 198;
         int pos = 0;
-        prompt_tokens[pos++] = tok.bos_id;  // BOS
-        prompt_tokens[pos++] = IM_START;    // <|im_start|>
-        int n = wubu_tokenizer_encode(&tok, "system\nYou are a helpful assistant.",
-                                      prompt_tokens + pos, 1024 - pos);
-        if (n <= 0) { fprintf(stderr, "Tokenization failed (system)\n"); return 1; }
-        pos += n;
-        prompt_tokens[pos++] = IM_END;      // <|im_end|>
-        prompt_tokens[pos++] = NL_TOKEN;    // \n
-        prompt_tokens[pos++] = IM_START;    // <|im_start|>
+        prompt_tokens[pos++] = tok.bos_id;
+        prompt_tokens[pos++] = IM_START;
+        int n = wubu_tokenizer_encode(&tok, "system\nYou are a helpful assistant.", prompt_tokens + pos, 1024 - pos);
+        if (n <= 0) return 1; pos += n;
+        prompt_tokens[pos++] = IM_END; prompt_tokens[pos++] = NL_TOKEN;
+        prompt_tokens[pos++] = IM_START;
         n = wubu_tokenizer_encode(&tok, "user\n", prompt_tokens + pos, 1024 - pos);
-        if (n <= 0) { fprintf(stderr, "Tokenization failed (role)\n"); return 1; }
-        pos += n;
+        if (n <= 0) return 1; pos += n;
         n = wubu_tokenizer_encode(&tok, prompt, prompt_tokens + pos, 1024 - pos);
-        if (n <= 0) { fprintf(stderr, "Tokenization failed\n"); return 1; }
-        pos += n;
-        prompt_tokens[pos++] = IM_END;      // <|im_end|>
-        prompt_tokens[pos++] = NL_TOKEN;    // \n
-        prompt_tokens[pos++] = IM_START;    // <|im_start|>
+        if (n <= 0) return 1; pos += n;
+        prompt_tokens[pos++] = IM_END; prompt_tokens[pos++] = NL_TOKEN;
+        prompt_tokens[pos++] = IM_START;
         n = wubu_tokenizer_encode(&tok, "assistant\n", prompt_tokens + pos, 1024 - pos);
-        if (n <= 0) { fprintf(stderr, "Tokenization failed (assistant)\n"); return 1; }
-        pos += n;
-        prompt_tokens[pos++] = THINK;       // <think>
-        prompt_tokens[pos++] = NL_TOKEN;    // \n
+        if (n <= 0) return 1; pos += n;
+        prompt_tokens[pos++] = THINK; prompt_tokens[pos++] = NL_TOKEN;
         n_prompt = pos;
     } else {
-        // Raw prompt (no chat template)
         n_prompt = wubu_tokenizer_encode(&tok, prompt, prompt_tokens, 1024);
-        if (n_prompt <= 0) {
-            prompt_tokens[0] = tok.bos_id >= 0 ? tok.bos_id : 248044;
-            n_prompt = 1;
-        }
+        if (n_prompt <= 0) { prompt_tokens[0] = tok.bos_id >= 0 ? tok.bos_id : 248044; n_prompt = 1; }
     }
     printf("Prompt: %d tokens\n", n_prompt);
 
-    // Get embeddings for prompt
+    // Embeddings
     float *embd = (float *)malloc(n_prompt * D * sizeof(float));
     FILE *emb_file = NULL;
     if (mdl.use_embedding_file) {
         emb_file = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
-        if (!emb_file) { fprintf(stderr, "Can't open embedding file\n"); free(embd); return 1; }
+        if (!emb_file) { free(embd); return 1; }
     }
-    for (int i = 0; i < n_prompt; i++) {
+    for (int i = 0; i < n_prompt; i++)
         if (!read_embedding(&mdl, prompt_tokens[i], embd + i * D, emb_file))
             memset(embd + i * D, 0, D * sizeof(float));
-    }
 
-    // Prefill forward
+    // Prefill: logits or hidden states
     float *logits = (float *)malloc(n_prompt * vs * sizeof(float));
     double t0 = clock_seconds();
-#ifdef __CUDACC__
-    if (mdl.skip_output_proj) {
-        // Forward returns hidden states, do GPU output projection
+
+    if (use_gpu) {
+        // GPU path: forward saves hidden states, GPU does output proj
+        mdl.skip_output_proj = true;
         wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
-        for (int i = 0; i < n_prompt; i++) {
-            gpu_output_project(logits + i * vs, logits + i * vs);
-        }
+        // logits now has n_prompt * D_MODEL floats (hidden states at vs stride)
+        // Pack them contiguously for batched SGEMM
+        float *hidden_batch = (float *)malloc(n_prompt * D * sizeof(float));
+        for (int i = 0; i < n_prompt; i++)
+            memcpy(hidden_batch + i * D, logits + i * vs, D * sizeof(float));
+        // Batched GPU output projection
+        if (n_prompt > 0)
+            gpu_output_project_batch(hidden_batch, logits, n_prompt);
+        free(hidden_batch);
     } else {
+        mdl.skip_output_proj = false;
         wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
     }
-#else
-    wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
-#endif
+
     double t_prefill = clock_seconds() - t0;
 
     float *last_logits = logits + (n_prompt - 1) * vs;
     int generated = 0;
 
-    // Print prompt text
-    {
-        char buf[1024];
-        int nc = wubu_tokenizer_decode(&tok, prompt_tokens, n_prompt, buf, 1024);
-        if (nc > 0) printf("Input: %s\n", buf);
-    }
+    { char buf[1024]; int nc = wubu_tokenizer_decode(&tok, prompt_tokens, n_prompt, buf, 1024);
+      if (nc > 0) printf("Input: %s\n", buf); }
 
     // Decode loop
     while (generated < max_tokens && !g_stop) {
-        // Top-k + greedy
         int topk_idxs[256];
         int nk = top_k > 256 ? 256 : top_k;
         for (int k = 0; k < nk; k++) {
             float maxv = -1e30f; int maxi = -1;
             for (int i = 0; i < vs; i++)
                 if (last_logits[i] > maxv) { maxv = last_logits[i]; maxi = i; }
-            topk_idxs[k] = maxi;
-            last_logits[maxi] = -1e30f;
+            topk_idxs[k] = maxi; last_logits[maxi] = -1e30f;
         }
         int next_token = topk_idxs[0];
 
@@ -192,27 +181,23 @@ int main(int argc, char **argv) {
 
         if (next_token == tok.eos_id || next_token == tok.bos_id) break;
 
-        // Get next embedding
         float x_next[D_MODEL];
         if (!read_embedding(&mdl, next_token, x_next, emb_file))
             memset(x_next, 0, D_MODEL * sizeof(float));
 
-#ifdef __CUDACC__
-        if (mdl.skip_output_proj) {
+        if (use_gpu) {
+            mdl.skip_output_proj = true;
             wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
             gpu_output_project(logits, logits);
         } else {
+            mdl.skip_output_proj = false;
             wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
         }
-#else
-        wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
-#endif
         last_logits = logits;
         generated++;
     }
     printf("\n");
 
-    // Stats
     double t_total = clock_seconds() - t0;
     printf("\n--- Stats ---\n");
     printf("Prefill: %d tok in %.2fs (%.1f tok/s)\n", n_prompt, t_prefill, n_prompt / t_prefill);
@@ -220,13 +205,10 @@ int main(int argc, char **argv) {
     if (generated > 0 && t_decode > 0)
         printf("Decode:  %d tok in %.2fs (%.1f tok/s)\n", generated, t_decode, generated / t_decode);
 
-    free(logits);
-    free(embd);
+    free(logits); free(embd);
     if (emb_file) fclose(emb_file);
     wubu_tokenizer_free(&tok);
-    wubu_model_free(&mdl);
-#ifdef __CUDACC__
     gpu_output_cleanup();
-#endif
+    wubu_model_free(&mdl);
     return 0;
 }
