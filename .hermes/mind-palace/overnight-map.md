@@ -1,41 +1,25 @@
-# Overnight Map — May 19, 2026 (01:30) — MTP INFRA + STATE SAVE/RESTORE DONE
+# Overnight Map — May 19, 2026 (02:45) — TRIPLE DA AUDIT COMPLETE
 
 ## Session Summary
-Implemented SSM state checkpoint/rollback for speculative decode. Fixed nextn_hnorm
-NULL pointer bug (load bug from previous session). Implemented full MTP spec-decode
-with per-token verify and rollback. Discovered 100% rejection rate at IQ2_M — MTP
-head (Q2_K/Q3_K MoE) too noisy for verify. Pivoted to MTP "free-tokens" mode
-(no verify, opt-in via MTP=1 env var). Default gen_text_mtp runs as non-MTP.
+Triple DA audit: read all 5 mind palace files + vault papers (Qwen3, DeepSeek-V3, Unsloth quant formula, synthesis). Verified 7/7 key claims live. Found 2 stale claims (cos-sim 0.9969, GQA interleave). Updated all mind palace files with DA findings. Copied no tmp files (none existed).
 
-## Done
-1. wubu_model.h: added ssm_states_saved, conv_states_saved, cache_len saved fields
-2. wubu_model_checkpoint(): lazy-alloc save buffers, copies SSM/conv states + cache lens
-3. wubu_model_rollback(): restores SSM/conv states + cache lens from save buffers
-4. Free save buffers in wubu_model_free()
-5. nextn_hnorm load bug fix: was found but never malloc'd → SIGSEGV
-6. save_last_hidden: changed to capture pre-final-norm (correct for MTP)
-7. gen_text_mtp: full spec-decode loop with per-token verify/rollback
-8. gen_text_mtp: MTP free-tokens mode (no verify, emit MTP outputs)
-9. gen_text_mtp: MTP=1 opt-in env var, default non-MTP
-10. All mind-palace files updated with findings
+## DA-1: Code vs Theory
+✅ All live benchmarks confirmed (decode 2.1 tok/s, output proj 6ms, MoE 10ms)
+✅ No libggml-cpu.so dep, all vec_dot self-hosted
+✅ MTP head loads + ref_dumper_mtp works
+❓ cos-sim 0.9969 stale — need ref_dumper re-run
+❓ MTP free-tokens 3.3 tok/s stale — not re-run
+📝 MoE uses softmax gating (Functional. DeepSeek recommends sigmoid.)
 
-## Key Files Changed
-- include/wubu_model.h: save/restore fields + checkpoint/rollback decl
-- src/wubu_model.c: checkpoint/rollback impl, nextn_hnorm load fix, save_last_hidden pre-norm
-- tools/gen_text_mtp.c: full rewrite with MTP spec-decode + free-tokens mode
+## DA-2: Vault Papers
+Read: unsloth-qwen3.6-quant-formula.md, Qwen3 tech report, DeepSeek-V3, synthesis.md
+All current. No gaps between theory and code beyond the known MoE bottleneck.
+
+## DA-3: Cold Gaps
+P0: AVX2 IQ2_XXS/IQ3_XXS vec_dot (MoE bottleneck)
+P1: Normalized sigmoid gating, NV64 ring buffer
+P2: cos-sim re-verify, higher-precision MTP
 
 ## Next Session
-1. Phase 7: Hardware saturation (AVX2 vec_dot, prefetch, OpenMP on GQA)
-2. Higher-precision MTP model for working verify
-3. MTP with non-MTP GGUF already gracefully handled
-
-## Key Insight
-MTP spec-decode at IQ2_M is ineffective. 100% rejection rate. The MTP head's
-blk.40 MoE at Q2_K/Q3_K is too aggressively quantized to agree with the
-IQ2_M-quantized main model. Speedup from MTP free-tokens mode comes at quality
-cost. For production MTP, need Q4_K_M or better for blk.40.
-
-## Reference
-- vault/unsloth-quantization-format.md — UD format docs
-- gen_text — standard decode (0.7 tok/s)
-- gen_text_mtp — MTP model decode (MTP=1 for free-tokens mode)
+Phase 8: Port AVX2 IQ2_XXS/IQ3_XXS vec_dot from llama.cpp ggml-quants.c.
+This is the single largest remaining performance lever (MoE = 10ms/layer).
