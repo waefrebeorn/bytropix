@@ -2297,3 +2297,164 @@ extern "C" void launch_output_proj_kernel(cudaStream_t stream,
     output_proj_kernel<<<grid, block, 0, stream>>>(d_hidden, D, d_output_weight, V, d_logits);
     cudaStreamSynchronize(stream);
 }
+
+// ================================================================
+// FP16 conversion kernels for FP16 KV cache
+// ================================================================
+__global__ void f32_to_f16_kernel(const float *in, __half *out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = __float2half(in[i]);
+}
+
+__global__ void f16_to_f32_kernel(const __half *in, float *out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = __half2float(in[i]);
+}
+
+// ================================================================
+// FP16 KV cache chunked attention — uses cublasGemmEx with FP16 cache
+// K/V cache stored as __half, Q + scores converted on the fly
+// ================================================================
+void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
+    int C, int T_cache,
+    const float *d_Q_chunk,   // [C, N_Q_HEADS * HEAD_DIM] F32
+    const void   *d_K_cache,  // [T_cache, N_KV_HEADS * HEAD_DIM] __half
+    const void   *d_V_cache,  // [T_cache, N_KV_HEADS * HEAD_DIM] __half
+    const float *d_gate_full, // [C, N_Q_HEADS * HEAD_DIM] raw gate
+    const float *d_output_w,  // [N_Q_HEADS * HEAD_DIM, D_MODEL]
+    float *d_out,             // [C, D_MODEL]
+    float *d_score_scratch,   // scratch for F32 scores [C * n_q * ATTEN_TILE]
+    void *d_scratch_hp)       // FP16 temp: [n_q * hd + ATTEN_TILE * C] __half
+{
+    const int n_q = GQA_Q_HEADS;
+    const int n_kv = GQA_KV_HEADS;
+    const int gs = n_q / n_kv;
+    const int hd = GQA_HEAD_DIM;
+    const int q_dim = n_q * hd;
+    const int kv_dim = n_kv * hd;
+    const float s_scale = 1.0f / sqrtf((float)hd);
+    const float alpha = 1.0f, beta = 0.0f;
+    const __half *d_K_h = (const __half *)d_K_cache;
+    const __half *d_V_h = (const __half *)d_V_cache;
+
+    float *d_attn_out = (float*)d_Q_chunk; // reuse Q buffer for attention output
+
+    // Scratch partitioning
+    __half *d_Q_h = (__half *)d_scratch_hp;  // [n_q * hd] — FP16 Q
+    __half *d_score_h = d_Q_h + n_q * hd;    // [ATTEN_TILE * C] — FP16 scores tile
+
+    float *d_scores_tile = d_score_scratch;  // [C, ATTEN_TILE] F32 scores (from softmax)
+    float *d_M = d_scores_tile + (size_t)C * ATTEN_TILE;
+    float *d_L = d_M + (size_t)C * n_q;
+
+    int block = 256;
+    int grid_q = (n_q * hd + block - 1) / block;
+
+    if (T_cache <= ATTEN_TILE) {
+        // DIRECT: convert Q→FP16, use batched GemmEx for scores and V
+        f32_to_f16_kernel<<<grid_q, block, 0, stream>>>(d_Q_chunk, d_Q_h, n_q * hd);
+
+        for (int h_kv = 0; h_kv < n_kv; h_kv++) {
+            float *score_base = d_scores_tile + (size_t)h_kv * gs * T_cache * C;
+            cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                T_cache, C, hd, &s_scale,
+                d_K_h + h_kv * hd, CUDA_R_16F, kv_dim,
+                d_Q_h + h_kv * gs * hd, CUDA_R_16F, q_dim,
+                &beta, score_base, CUDA_R_32F, n_q * T_cache,
+                CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+        }
+
+        // Softmax in F32
+        for (int i = 0; i < C * n_q; i++)
+            softmax_kernel<<<1, 1, 0, stream>>>(d_scores_tile + (size_t)i * T_cache, 1, T_cache);
+
+        // V-weighted sum: convert scores tile to FP16, then GemmEx
+        for (int h_kv = 0; h_kv < n_kv; h_kv++) {
+            float *score_base = d_scores_tile + (size_t)h_kv * gs * T_cache * C;
+            int grid_sc = (T_cache * C + block - 1) / block;
+            f32_to_f16_kernel<<<grid_sc, block, 0, stream>>>(score_base, d_score_h, T_cache * C);
+            cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                hd, C, T_cache, &alpha,
+                d_V_h + h_kv * hd, CUDA_R_16F, kv_dim,
+                d_score_h, CUDA_R_16F, T_cache * C,
+                &beta, d_attn_out + h_kv * gs * hd, CUDA_R_32F, q_dim,
+                CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+        }
+    } else {
+        // TILED: use ATTEN_TILE chunks
+        float *d_attn_out_f32 = d_attn_out;  // [C, q_dim]
+        int n_ml = C * n_q;
+        {   int grid = (n_ml + block - 1) / block;
+            init_neg_inf<<<grid, block, 0, stream>>>(d_M, n_ml);
+            init_zero_kernel<<<grid, block, 0, stream>>>(d_L, n_ml);
+            init_zero_kernel<<<(C * q_dim + block - 1) / block, block, 0, stream>>>(d_attn_out_f32, C * q_dim);
+        }
+
+        // Convert Q to FP16 once
+        f32_to_f16_kernel<<<grid_q, block, 0, stream>>>(d_Q_chunk, d_Q_h, n_q * hd);
+
+        int n_tiles = (T_cache + ATTEN_TILE - 1) / ATTEN_TILE;
+        float softmax_scale = 1.0f;  // will be c = exp(s - m)
+        for (int ti = 0; ti < n_tiles; ti++) {
+            int t_start = ti * ATTEN_TILE;
+            int t_tile = T_cache - t_start;
+            if (t_tile > ATTEN_TILE) t_tile = ATTEN_TILE;
+
+            // scores tile: Q @ K_tile^T
+            for (int h_kv = 0; h_kv < n_kv; h_kv++) {
+                float *score_base = d_scores_tile + (size_t)h_kv * gs * t_tile * C;
+                cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                    t_tile, C, hd, &s_scale,
+                    d_K_h + (size_t)h_kv * hd + (size_t)t_start * kv_dim, CUDA_R_16F, kv_dim,
+                    d_Q_h + h_kv * gs * hd, CUDA_R_16F, q_dim,
+                    &beta, score_base, CUDA_R_32F, n_q * t_tile,
+                    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+            }
+
+            // Online softmax: for each query head
+            for (int h_q = 0; h_q < n_q; h_q++) {
+                float *s = d_scores_tile + (size_t)h_q * t_tile * C;
+                for (int c = 0; c < C; c++) {
+                    float *s_h = s + c * t_tile;
+                    float *m = d_M + h_q * C + c;
+                    float *l = d_L + h_q * C + c;
+                    float old_m = *m;
+                    float new_m = old_m;
+                    for (int j = 0; j < t_tile; j++) if (s_h[j] > new_m) new_m = s_h[j];
+                    float sum_l = 0.0f;
+                    for (int j = 0; j < t_tile; j++) sum_l += expf(s_h[j] - new_m);
+                    *l = expf(old_m - new_m) * (*l) + sum_l;
+                    *m = new_m;
+                }
+            }
+
+            // V-weighted sum via FP16: convert score tile to FP16, then GemmEx
+            int grid_sc = (t_tile * C + block - 1) / block;
+            for (int h_kv = 0; h_kv < n_kv; h_kv++) {
+                float *score_base = d_scores_tile + (size_t)h_kv * gs * t_tile * C;
+                f32_to_f16_kernel<<<grid_sc, block, 0, stream>>>(score_base, d_score_h, t_tile * C);
+                cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                    hd, C, t_tile, &alpha,
+                    d_V_h + (size_t)h_kv * hd + (size_t)t_start * kv_dim, CUDA_R_16F, kv_dim,
+                    d_score_h, CUDA_R_16F, t_tile * C,
+                    &beta, d_attn_out_f32 + h_kv * gs * hd, CUDA_R_32F, q_dim,
+                    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+            }
+        }  // end tile loop
+
+        // Final rescale: attn_out *= 1/L
+        for (int h_q = 0; h_q < n_q; h_q++) {
+            for (int c = 0; c < C; c++) {
+                float inv_l = 1.0f / d_L[h_q * C + c];
+                for (int j = 0; j < hd; j++)
+                    d_attn_out_f32[h_q * hd + c * q_dim + j] *= inv_l;
+            }
+        }
+    }
+
+    // === Apply gate + output projection (identical to F32 variant) ===
+    wubu_cuda_gqa_gate(d_attn_out, d_gate_full, C, q_dim, stream);
+    // Output projection: [C, q_dim] → [C, D_MODEL]
+    wubu_cuda_matmul(handle, d_attn_out, C, q_dim, d_output_w, D_MODEL, d_out, 1.0f, 0.0f);
+    cudaStreamSynchronize(stream);
+}

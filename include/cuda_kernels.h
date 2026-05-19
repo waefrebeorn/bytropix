@@ -213,6 +213,18 @@ void wubu_cuda_chunked_attn(cublasHandle_t handle, cudaStream_t stream,
     float *d_out,             // [C, D_MODEL]
     float *d_score_scratch);  // [C * N_Q_HEADS * T_cache] or NULL
 
+// FP16 KV cache variant: K/V stored as FP16 to halve VRAM
+void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
+    int C, int T_cache,
+    const float *d_Q_chunk,   // [C, N_Q_HEADS * HEAD_DIM] F32
+    const void   *d_K_cache,  // [T_cache, N_KV_HEADS * HEAD_DIM] FP16
+    const void   *d_V_cache,  // [T_cache, N_KV_HEADS * HEAD_DIM] FP16
+    const float *d_gate_full, // [C, N_Q_HEADS * HEAD_DIM] raw gate
+    const float *d_output_w,  // [N_Q_HEADS * HEAD_DIM, D_MODEL]
+    float *d_out,             // [C, D_MODEL]
+    float *d_score_scratch,   // scratch
+    void *d_scratch_hp);      // [C * N_Q_HEADS * HEAD_DIM] FP16 temp (Q + score tile)
+
 // ================================================================
 // Poincaré ball hyperbolic CUDA kernels
 // ================================================================
