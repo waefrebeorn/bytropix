@@ -12,6 +12,7 @@ Emits 1 main + DRAFT_N(4) MTP tokens per decode step. Speed: 3.3 tok/s decode. Q
 ## Code Changes (this session)
 - include/wubu_model.h: ssm_states_saved, conv_states_saved, gqa_cache_len_saved, mtp_cache_len_saved. checkpoint/rollback decl.
 - src/wubu_model.c: wubu_model_checkpoint + rollback impl. nextn_hnorm load bugfix. save_last_hidden captures pre-final-norm. Free save bufs in free().
+  **MTP concat order BUGFIX**: [h_norm|e_norm] → [e_norm|h_norm] (matches llama.cpp ggml_concat(e_norm, h_norm, 0))
 - tools/gen_text_mtp.c: Full MTP pipeline. Draft generate (4 MTP head calls per step). Verify loop with per-token checkpoint/rollback. Free tokens mode (no verify). MTP=1 opt-in.
 
 ## Performance
