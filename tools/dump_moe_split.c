@@ -145,7 +145,7 @@ int main(void) {
     
     // ===== COMBINED AND STATS =====
     float *full_out = (float *)malloc(D_MODEL * sizeof(float));
-    wubu_moe_forward(normed2, 1, 1, &moe, full_out);
+    wubu_moe_forward(normed2, 1, 1, &moe, full_out, NULL);
     dump("/tmp/dbg_moe_output.bin", full_out, D_MODEL);
     
     {

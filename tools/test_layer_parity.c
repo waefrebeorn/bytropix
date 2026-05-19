@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
                    top_e, top_v, top_v);
 
             // Full MoE forward
-            wubu_moe_forward(normed, 1, 1, mdl.layers[l].moe_weights, ffn);
+            wubu_moe_forward(normed, 1, 1, mdl.layers[l].moe_weights, ffn, NULL);
         } else {
             memcpy(ffn, normed, D_MODEL * sizeof(float));
         }

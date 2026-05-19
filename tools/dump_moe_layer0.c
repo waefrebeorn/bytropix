@@ -138,7 +138,7 @@ int main(void) {
     memcpy(ffn_out, normed2, D * sizeof(float)); // passthrough placeholder
     
     // Actually call the forward function
-    wubu_moe_forward(normed2, 1, 1, &moe, ffn_out);
+    wubu_moe_forward(normed2, 1, 1, &moe, ffn_out, NULL);
     dump_bin("/tmp/dbg_moe_output.bin", ffn_out, D);
     
     printf("MoE output[0..4]: %.6f %.6f %.6f %.6f %.6f\n",

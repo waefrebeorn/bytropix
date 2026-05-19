@@ -298,7 +298,7 @@ int main(int argc, char **argv) {
     double total = 0.0;
     for (int i = 0; i < iters; i++) {
         t0 = now_sec();
-        wubu_moe_forward(x, B, T, &moe_lazy, output);
+        wubu_moe_forward(x, B, T, &moe_lazy, output, NULL);
         total += now_sec() - t0;
     }
     double lazy_forward_time = total / iters * 1000;
@@ -336,7 +336,7 @@ int main(int argc, char **argv) {
     total = 0.0;
     for (int i = 0; i < iters; i++) {
         t0 = now_sec();
-        wubu_moe_forward(x, B, T, &moe_full, output);
+        wubu_moe_forward(x, B, T, &moe_full, output, NULL);
         total += now_sec() - t0;
     }
     double full_forward_time = total / iters * 1000;
@@ -358,7 +358,7 @@ int main(int argc, char **argv) {
 
     // Verify output match
     float *full_output = (float *)malloc(N * D_MODEL * sizeof(float));
-    wubu_moe_forward(x, B, T, &moe_full, full_output);
+    wubu_moe_forward(x, B, T, &moe_full, full_output, NULL);
 
     float max_diff = 0.0f;
     int n_mismatch = 0;

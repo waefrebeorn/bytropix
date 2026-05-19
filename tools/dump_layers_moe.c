@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
         fflush(stderr);
         if (loaded) {
             float moe_out[D_MODEL];
-            wubu_moe_forward(normed2, 1, 1, &moe_w, moe_out);
+            wubu_moe_forward(normed2, 1, 1, &moe_w, moe_out, NULL);
             wubu_moe_free_layer(&moe_w);
             for (int i = 0; i < D_MODEL; i++) residual[i] += moe_out[i];
         } else {

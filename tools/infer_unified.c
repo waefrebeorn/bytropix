@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
 
         if (moe_q[l].has_moe) {
             if (wubu_moe_load_layer(ctx, l, &layer->moe)) {
-                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out);
+                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, NULL);
                 wubu_moe_free_layer(&layer->moe);
             } else {
                 memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));

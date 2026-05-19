@@ -55,9 +55,11 @@ typedef struct {
 // MoE forward pass for one layer
 // x: [B, T, D_MODEL] — input (post-attention normalized)
 // output: [B, T, D_MODEL] — MoE output
+// selected_experts: if non-NULL, filled with [N*N_ACTIVE_EXPTS] expert indices for prefetch
 void wubu_moe_forward(const float *x, int B, int T,
                       const moe_weights_t *w,
-                      float *output);
+                      float *output,
+                      int *selected_experts);
 
 // Load one layer's MoE weights from an open GGUF context
 // Allocates and dequantizes all 3 expert tensors (O(3 GB))
