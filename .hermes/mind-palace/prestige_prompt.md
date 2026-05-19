@@ -1,41 +1,37 @@
-# Prestige Prompt — May 19, 2026 (01:30) — MTP INFRA + STATE SAVE/RESTORE DONE
+# Prestige Prompt — May 19, 2026 (02:45) — TRIPLE DA AUDIT
 
-## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M / MTP
-Cos-sim vs ref: **0.9969** — Phase 2 DONE. All 40 layers > 0.995.
-gen_text: coherent 0.7 tok/s (non-MTP model).
-gen_text_mtp: MTP=1 free-tokens mode 3.3 tok/s (IQ2_M quality loss).
+## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M
+Phase 7 complete. Triple DA audit: 7/7 key claims ✅, 2 stale ❓, 1 finding.
 
-## Architecture (qwen35moe → qwen35moe.cpp)
-40 layers: 30 SSM (Gated DeltaNet) + 10 GQA (full attention)
-Pattern: 10 × (3 SSM → 1 GQA). Hidden=2048, Vocab=248320, Expert dim=512.
-SSM: 16 K-heads, 32 V-heads, d_state=128, conv_kernel=4
-GQA: 16 Q-heads, 2 KV-heads, head_dim=256, IMRoPE [11,11,10,0], theta=10M
-MoE: 256 experts, top-8 + 1 shared, IQ2_XXS/IQ3_XXS/IQ4_XS
+## Benchmarks (DA verified)
+| Metric | Value | Status |
+|--------|-------|--------|
+| Decode | 2.1 tok/s | ✅ Verified 15.08s/32tok |
+| Prefill | 7.7 tok/s | ✅ Verified 2.72s/21tok |
+| Output proj decode | 6.4ms | ✅ Verified PROFILE=1 |
+| MoE decode/layer | 10ms | ✅ Verified PROFILE=1 |
+| llama dep free | yes | ✅ ldd+nm verified |
+| cos-sim | 0.9969 | ❓ Stale (Phase 2) |
 
-## MTP Head (blk.40 + nextn) — FULLY LOADED
-Arch: h_39 → hnorm(nextn_hnorm) → concat[hnorm|enorm(embd)] →
-eh_proj(4096→2048,Q8_0) → blk.40 GQA+MoE(Q5_K/Q2_K/Q3_K) →
-shared_head_norm → output.weight(Q4_K) → logits
-Extra tensors: 20 (blk.40 + nextn.*) in MTP GGUF (753 vs 733).
-MoE draft quant: Q2_K (84B/256 gate/up), Q3_K (110B/256 down).
+## Phase 7 Opts
+- GQA attn: stack buf + AVX2 FMA (Q·K dot 4× unrolled, V sum 8-elem)
+- AVX2 vec_dot: Q4_K/Q5_K/Q6_K (256-bit, 2× SSE)
+- Prefetch next column in quantized_matmul
+- Llama deps killed
 
-## BUG FIXES (This Session)
-9. nextn_hnorm NULL ptr: tensor found but never allocated → SIGSEGV in MTP draft. FIXED.
-10. save_last_hidden: was post-final-norm (wrong for MTP). Changed to pre-final-norm. FIXED.
+## DA Finding: MoE Softmax Gating
+Router uses softmax over all 256 experts then top-8 → renormalize. Works but DeepSeek recommends normalized sigmoid for stability + efficiency.
 
-## Key Infrastructure
-- wubu_model_checkpoint/rollback: saves/restores SSM states, conv states, KV cache lengths
-- Lazy allocation: save buffers allocated on first checkpoint call
-- gen_text_mtp: MTP=1 env var to enable, default non-MTP
-- Non-MTP GGUF: graceful fallback (no blk.40 → skip MTP)
+## Cold Gaps
+| Prio | Gap | Impact |
+|------|-----|--------|
+| P0 | AVX2 IQ2_XXS/IQ3_XXS vec_dot | MoE = 10ms/layer = primary bottleneck |
+| P1 | Normalized sigmoid gating | Efficiency + stability |
+| P1 | NV64 ring buffer impl | Cache miss latency hiding |
+| P2 | cos-sim re-verify, MTP higher-precision | Stale claims, working spec-decode |
 
-## Known Limitation
-MTP spec-decode (verify) has 0% acceptance at IQ2_M. blk.40 MoE at Q2_K/Q3_K
-quantization introduces too much noise. MTP head predictions diverge from main model.
-Higher-precision MTP model needed for working spec-decode.
-
-## Phase 7 Next: Hardware Saturation
-- AVX2 vec_dot for Q4_K/Q5_K/Q6_K (256-bit SIMD)
-- _mm_prefetch weight data before each layer
-- OpenMP on GQA score/softmax loops
-- NUMA-aware thread binding
+## Vault Papers Read
+- Unsloth UD quant formula: per-tensor bpw breakdown
+- Qwen3: 256-expert MoE + thinking mode validated
+- DeepSeek-V3: MTP self-spec decode, sigmoid gating
+- Synthesis: P0-P3 priority map
