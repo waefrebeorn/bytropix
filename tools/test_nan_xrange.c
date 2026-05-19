@@ -41,7 +41,7 @@ int main() {
             float *cs = model.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
             wubu_ssm_forward(normed, B, T, &layer->ssm, ss, cs, attn_out);
         } else {
-            wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out);
+            wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
         }
         for (int i = 0; i < N*D; i++) x[i] += attn_out[i];
 

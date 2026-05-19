@@ -3,6 +3,11 @@
 #include "gguf_reader.h"
 #include "thread_pool.h"
 #include <omp.h>
+#include <immintrin.h>  // AVX2/FMA intrinsics for GQA attention
+// GQA_MAX_CTX from wubu_model.h — max KV cache positions (also used for attn stack buf)
+#ifndef GQA_MAX_CTX
+#define GQA_MAX_CTX 4096
+#endif
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
@@ -1178,14 +1183,27 @@ void wubu_gqa_forward(const float *x, int B, int T,
     // 16 Q heads, 2 KV heads. Each KV head serves 8 Q heads.
     float scale = 1.0f / sqrtf(GQA_HEAD_DIM);
     
+    // AVX2 horizontal sum helper (inlined)
+#ifdef __AVX2__
+    #define HSUM256(v) ({ \
+        __m128 vlow  = _mm256_castps256_ps128(v); \
+        __m128 vhigh = _mm256_extractf128_ps(v, 1); \
+        __m128 s     = _mm_add_ps(vlow, vhigh); \
+        __m128 shuf  = _mm_movehdup_ps(s); \
+        __m128 sum   = _mm_add_ps(s, shuf); \
+        shuf         = _mm_movehl_ps(shuf, sum); \
+        sum          = _mm_add_ss(sum, shuf); \
+        _mm_cvtss_f32(sum); \
+    })
+#endif
+    
     for (int b = 0; b < B; b++) {
         for (int t_q = 0; t_q < T; t_q++) {
-            int global_t = cache_len + b * T + t_q;  // global position including cache
-            int attend_len = global_t + 1;           // attend to all positions up to current
+            int global_t = cache_len + b * T + t_q;
+            int attend_len = global_t + 1;
             #pragma omp parallel for
             for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
-                float *attn_weights = (float *)malloc(attend_len * sizeof(float));
-                if (!attn_weights) continue;
+                float attn_weights[GQA_MAX_CTX];  // stack, no malloc
                 int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
                 
                 const float *q_vec = Q_norm + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
@@ -1193,16 +1211,31 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 
                 memset(out_vec, 0, GQA_HEAD_DIM * sizeof(float));
                 
-                // Compute attention over ALL positions (cache + current)
                 float max_score = -1e30f;
                 
-                // Q @ K^T * scale
+                // Q @ K^T * scale  [AVX2: 4×FMA unrolled for 256-dim heads]
                 for (int t_k = 0; t_k < attend_len; t_k++) {
                     const float *k_vec = k_eff + (t_k * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
-                    float score = 0.0f;
+                    float score;
+#ifdef __AVX2__
+                    __m256 acc0 = _mm256_setzero_ps();
+                    __m256 acc1 = _mm256_setzero_ps();
+                    __m256 acc2 = _mm256_setzero_ps();
+                    __m256 acc3 = _mm256_setzero_ps();
+                    for (int i = 0; i < GQA_HEAD_DIM; i += 32) {
+                        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(q_vec + i),     _mm256_loadu_ps(k_vec + i),     acc0);
+                        acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(q_vec + i + 8), _mm256_loadu_ps(k_vec + i + 8), acc1);
+                        acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(q_vec + i + 16),_mm256_loadu_ps(k_vec + i + 16),acc2);
+                        acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(q_vec + i + 24),_mm256_loadu_ps(k_vec + i + 24),acc3);
+                    }
+                    __m256 tot = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+                    score = HSUM256(tot) * scale;
+#else
+                    score = 0.0f;
                     for (int i = 0; i < GQA_HEAD_DIM; i++)
                         score += q_vec[i] * k_vec[i];
                     score *= scale;
+#endif
                     score = tgt_wrap(score);
                     attn_weights[t_k] = score;
                     if (score > max_score) max_score = score;
@@ -1214,36 +1247,37 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     attn_weights[t_k] = expf(attn_weights[t_k] - max_score);
                     sum_exp += attn_weights[t_k];
                 }
+                float inv_sum = 1.0f / sum_exp;
                 for (int t_k = 0; t_k < attend_len; t_k++) {
-                    attn_weights[t_k] /= sum_exp;
+                    attn_weights[t_k] *= inv_sum;
                 }
                 
-                // Weighted sum of V
+                // Weighted sum of V  [AVX2: FMA]
                 for (int t_k = 0; t_k < attend_len; t_k++) {
                     const float *v_vec = v_eff + (t_k * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
                     float a = attn_weights[t_k];
+#ifdef __AVX2__
+                    __m256 a_v = _mm256_set1_ps(a);
+                    for (int i = 0; i < GQA_HEAD_DIM; i += 8) {
+                        __m256 v = _mm256_loadu_ps(v_vec + i);
+                        __m256 o = _mm256_loadu_ps(out_vec + i);
+                        o = _mm256_fmadd_ps(a_v, v, o);
+                        _mm256_storeu_ps(out_vec + i, o);
+                    }
+#else
                     for (int i = 0; i < GQA_HEAD_DIM; i++) {
                         out_vec[i] += a * v_vec[i];
                     }
+#endif
                 }
                 
-                free(attn_weights);
-                
-                // NaN debug for h_q loop
+                // NaN debug (only check first head, rarely triggers)
                 for (int _i = 0; _i < GQA_HEAD_DIM; _i++) {
                     if (isnan(out_vec[_i])) {
-                        double q_norm_v = 0, kv_norms_[4096];
+                        double q_norm_v = 0;
                         for (int _k = 0; _k < GQA_HEAD_DIM; _k++) q_norm_v += (double)q_vec[_k] * q_vec[_k];
-                        int max_dbg = attend_len < 4 ? attend_len : 4;
-                        for (int _tk = 0; _tk < attend_len && _tk < 4096; _tk++) {
-                            const float *k_v_ = k_eff + (_tk * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
-                            kv_norms_[_tk] = 0;
-                            for (int _k = 0; _k < GQA_HEAD_DIM; _k++) kv_norms_[_tk] += (double)k_v_[_k] * k_v_[_k];
-                        }
-                        printf("  GQA NaN at h%d t%d: q_norm=%.2f kv_norms=[", h_q, t_q, sqrt(q_norm_v));
-                        for (int _k = 0; _k < max_dbg; _k++) printf("%.2f ", sqrt(kv_norms_[_k]));
-                        printf("] q[0:3]=%.2e %.2e %.2e score=%e\n",
-                               (double)q_vec[0], (double)q_vec[1], (double)q_vec[2], (double)attn_weights[0]);
+                        printf("  GQA NaN at h%d t%d: q_norm=%.2f\n",
+                               h_q, t_q, sqrt(q_norm_v));
                         break;
                     }
                 }

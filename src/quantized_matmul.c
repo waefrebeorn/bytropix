@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <assert.h>
+#include <immintrin.h>  // _mm_prefetch
 
 #include "gguf_reader.h"
 #include "wubu_ssm.h"
@@ -307,9 +308,14 @@ void quantized_matmul(const float *x,
     }
     
     // Compute each column using the vec_dot function
+    // Prefetch next column's weight data to L1 while computing current column
     #pragma omp parallel for if(n_cols > 8)
     for (int64_t j = 0; j < n_cols; j++) {
         const void *w_col = (const uint8_t *)W + j * col_stride;
+        // Prefetch next column into L1 cache
+        if (j + 1 < n_cols) {
+            _mm_prefetch((const char *)W + (j + 1) * col_stride, _MM_HINT_T0);
+        }
         dot_fn((int)n_rows, &y[j], 0, w_col, 0, q8_buf, 0, 1);
     }
     

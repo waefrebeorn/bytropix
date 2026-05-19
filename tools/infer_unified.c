@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
             wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out);
             total_ssm += now_sec() - t_a;
         } else {
-            wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out);
+            wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
             total_gqa += now_sec() - t_a;
         }
 

@@ -60,7 +60,7 @@ int main(void) {
     
     // GQA forward
     float *attn_out = (float *)malloc(D * sizeof(float));
-    wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out);
+    wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
     
     printf("GQA output stats: mean=%.6f max=%.6f min=%.6f\n",
            attn_out[0], attn_out[0], attn_out[0]);
