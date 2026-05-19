@@ -22,6 +22,9 @@
 - 32 V-heads, 128 threads per block, state matrix [128][128] in global memory (64KB/head)
 - Shared memory: 2.5KB/block (too large for shared: 64KB state)
 - cos-sim 1.0 vs CPU, max err 1e-6 (FP rounding only)
-- GQA GPU still broken: model uses fused `attn_qkv.weight`, code expects separate Q/K/V
+- GQA GPU: works for prefill (N>1), disabled for decode
+- SSM GPU: SSM matmuls only for N>16, recurrence disabled for decode
+- KV cache: 256k × 512 × 2 × 10 = 10GB — overcommits VRAM. Use MAX_CTX=4096 for testing
+
 ## Committed
-3 commits pushed: `feat(moe): wire GPU MoE into forward pass`, `perf(moe): pre-alloc buffers`, MoE kernel v3 with pre-alloc buffers.
+4 commits pushed: `feat(ssm): GPU SSM recurrence kernel (cos-sim=1.0, 2.4x decode speedup)`

@@ -552,16 +552,15 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             }
         } else {
 #ifdef GPU_SUPPORT
-            if (model->gpu_ctx && N > 1) {
-                // GPU-accelerated GQA (only for prefill, too much overhead for single-token decode)
-                float *tok_normed = normed;
-                float *tok_attn = attn_out;
-                for (int t = 0; t < N; t++) {
-                    wubu_model_gpu_gqa_forward(model, l, tok_normed, 1, tok_attn);
-                    tok_normed += D_MODEL;
-                    tok_attn += D_MODEL;
+            if (model->gpu_ctx) {
+                gpu_ctx_t *gpu_ctx_p = (gpu_ctx_t *)model->gpu_ctx;
+                int use_gpu = (gpu_ctx_p->cache_len[l] > 2048) || (N > 1);
+                if (use_gpu) {
+                    for (int t = 0; t < N; t++)
+                        wubu_model_gpu_gqa_forward(model, l, normed + t * D_MODEL, 1, attn_out + t * D_MODEL);
+                    goto gqa_done;
                 }
-            } else
+            }
 #endif
             {  // CPU GQA forward with KV cache
             int l_gqa = 0;  // GQA layer index among GQA layers
@@ -588,6 +587,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                              k_in, v_in, model->gqa_cache_len,
                              k_out, v_out);
             }  // close CPU GQA block
+        gqa_done:
         }  // close else block (non-SSM)
         
         double t1 = wall_time();

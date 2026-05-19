@@ -1,26 +1,45 @@
-# Overnight Map — May 19, 2026 PM (Phases 15-17 Active, GPU Hybrid)
+# Overnight Map — May 19, 2026 PM (Phase 16 Part 2: GPU SSM Recurrence Done)
 
 ## Active GPU Components
 | Phase | Component | GPU? | Status |
 |-------|-----------|------|--------|
-| 15 | GQA forward (QKV, RoPE, attention) | ✅ Full GPU | shipped |
-| 16 | SSM matmuls (qkv, gate) | ✅ GPU matmul | shipped |
-| 17 | MoE routed expert compute | ✅ GPU IQ2_XXS | shipped |
-| 13 | Output projection (Q4_K) | ✅ GPU | shipped |
-| — | SSM conv, norm, recurrence | ❌ CPU | bottleneck |
-| — | MoE router + shared expert | ❌ CPU | bottleneck |
+| 15 | GQA forward (QKV, RoPE, attention) | 😴 prefill only (N>1) | shipped |
+| 16a | SSM matmuls (qkv, gate) | 😴 prefill only (N>16) | shipped |
+| 16b | SSM recurrence (selective scan) | 🆕 Verify cos-sim=1.0 | shipped |
+| 17 | MoE routed expert compute | 🆕 GPU IQ2_XXS kernel | shipped |
+| 13 | Output projection (Q4_K) | ✅ Full GPU SGEMM | shipped |
+| — | SSM conv, norm, gated norm | ❌ CPU | next target |
+| — | MoE router + shared expert | ❌ CPU | fast enough |
+| — | GQA scores, attention softmax | ❌ CPU | fast enough |
 
-## Decode Speed
-- CPU (gen_text): 6.4 tok/s
-- GPU (gen_text_gpu GPU=1): 3.2 tok/s
-- **GPU speed is 2x slower than CPU** — SSM conv/norm/recurrence still on CPU dominates
+## Decode Speed (first run, no thermal throttle)
+- CPU (gen_text): 7.3 tok/s — all CPU, no GPU
+- GPU (gen_text_gpu with GPU enabled for decode): 6.4 tok/s — GPU only helps prefill
+- **For single-token decode, GPU offload overhead > benefit.** SSM recurrence GPU kernel works (cos-sim=1.0) but transfer/sync overhead dominate.
 
-## Optimizations This Session
-- Pre-allocated MoE GPU buffers (eliminated 320 cudaMalloc/Free per decode)
-- Single per-expert kernel launch (avoids shared memory occupancy issue of batching)
-- Original per-expert approach restored with pre-alloc buffers
+## Key GPU Recurrence Details
+- Kernel: `ssm_recurrence_kernel` in `src/gpu_ssm_recurrence.cu`
+- 32 V-heads × 128 threads, state [128][128] in global memory (64KB/head)
+- Shared memory: 2.5KB/block (q,k,v,hk,diff vectors)
+- Cos-sim 1.0 vs CPU reference, max err 1e-6
+- Each thread manages one row; uses shared mem for dot product diffusion
+- Wired via `w->gpu_ssm_state` check in `wubu_ssm_forward` with `goto gpu_rec_done`
+- GPU init guards: `#ifdef GPU_SUPPORT` in wubu_ssm.c, wubu_moe.c
 
-## Next Direction Options
-1. **Port SSM conv + norm + recurrence to GPU** — biggest potential speedup (target ~6 tok/s)
-2. **Port SSM output projection to GPU** — weights already on GPU
-3. **256k context GQA** — sparse/streaming attention for long context
+## KV Cache Memory Issue
+- 256k context KV cache = 10 GB (10 layers × 2 × 512kB × 256k)
+- RTX 5050: 8151 MB total → overcommits, causes swap degradation
+- Workaround: `MAX_CTX=4096` env var for testing
+- Need: growable KV cache or 256k sparse attention
+
+## GPU GQA Fix
+- Fused `attn_qkv.weight` vs separate Q/K/V issue resolved (was stale binary)
+- Model: GQA on layers 3,7,11,...,39 (every 4th, offset 3)
+- Removed 4 unnecessary `cudaStreamSynchronize` calls
+- N>1 threshold: GPU GQA only for prefill
+
+## Next Direction
+1. **Port SSM conv + norm + gated norm to GPU** — largest potential speedup for prefill
+2. **Growable GPU KV cache** — allocate as needed, not max_ctx upfront
+3. **256k context sparse GQA attention** — needed for long context
+4. **Evaluate unified forward kernel** — fuse SSM steps for single-kernel decode

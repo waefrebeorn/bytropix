@@ -49,10 +49,11 @@ typedef struct {
     gpu_gqa_layer_t *gqa_weights;  // [n_layers], NULL for SSM layers
     int n_layers;
 
-    // Persistent GPU KV cache (one per GQA layer)
-    float **d_k_cache;  // [n_gqa_layers][max_ctx, kv_dim]
-    float **d_v_cache;  // [n_gqa_layers][max_ctx, kv_dim]
+    // Persistent GPU KV cache (one per GQA layer, growable)
+    float **d_k_cache;  // [n_gqa_layers][cache_capacity, kv_dim]
+    float **d_v_cache;
     int *cache_len;     // current fill length per layer
+    int *cache_cap;     // current allocated capacity per layer
     int max_ctx;        // max cached positions
 
     // RoPE sin/cos table
@@ -280,23 +281,29 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     cudaStreamSynchronize(gpu->stream);
     printf("GPU: GQA weights uploaded\n");
 
-    // Allocate persistent GPU KV cache (one per GQA layer)
+    // Allocate persistent GPU KV cache (one per GQA layer, growable)
+    // Start small (KV_CACHE_INIT), grow on demand up to max_ctx
+    const int kv_cache_init = 4096;
     gpu->d_k_cache = (float **)calloc(model->n_layers, sizeof(float *));
     gpu->d_v_cache = (float **)calloc(model->n_layers, sizeof(float *));
     gpu->cache_len = (int *)calloc(model->n_layers, sizeof(int));
-    if (!gpu->d_k_cache || !gpu->d_v_cache || !gpu->cache_len) {
+    gpu->cache_cap = (int *)calloc(model->n_layers, sizeof(int));
+    if (!gpu->d_k_cache || !gpu->d_v_cache || !gpu->cache_len || !gpu->cache_cap) {
         wubu_model_gpu_free(model); return 0;
     }
     for (int l = 0; l < model->n_layers; l++) {
         if (model->layers[l].is_ssm) continue;
-        size_t cache_bytes = (size_t)max_ctx * kv_dim * sizeof(float);
-        gpu->d_k_cache[l] = wubu_cuda_alloc(cache_bytes);
-        gpu->d_v_cache[l] = wubu_cuda_alloc(cache_bytes);
-        cudaMemset(gpu->d_k_cache[l], 0, cache_bytes);
-        cudaMemset(gpu->d_v_cache[l], 0, cache_bytes);
+        int initial = (max_ctx < kv_cache_init) ? max_ctx : kv_cache_init;
+        gpu->cache_cap[l] = initial;
+        size_t cb = (size_t)initial * kv_dim * sizeof(float);
+        gpu->d_k_cache[l] = wubu_cuda_alloc(cb);
+        gpu->d_v_cache[l] = wubu_cuda_alloc(cb);
+        cudaMemset(gpu->d_k_cache[l], 0, cb);
+        cudaMemset(gpu->d_v_cache[l], 0, cb);
         gpu->cache_len[l] = 0;
     }
-    printf("GPU: KV cache allocated (%d layers × %d ctx)\n", gpu->n_gqa_layers, max_ctx);
+    printf("GPU: KV cache allocated (%d layers × %d init, max %d ctx)\\n",
+           gpu->n_gqa_layers, kv_cache_init, max_ctx);
 
     // RoPE sin/cos table (host computed, device stored)
     float *h_sc = (float *)malloc((size_t)max_ctx * ROTARY_DIM * sizeof(float));
@@ -485,6 +492,36 @@ int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
         gpu->d_sincos + (size_t)cache_start * ROTARY_DIM, st);
 
     // === Append K, V to persistent cache ===
+    int total_needed = cache_start + C;
+    if (total_needed > gpu->cache_cap[layer_idx]) {
+        // Grow cache: double capacity up to max_ctx
+        int new_cap = gpu->cache_cap[layer_idx] * 2;
+        if (new_cap > gpu->max_ctx) new_cap = gpu->max_ctx;
+        if (new_cap < total_needed) new_cap = total_needed;
+        size_t new_bytes = (size_t)new_cap * kv_dim * sizeof(float);
+        size_t old_bytes = (size_t)gpu->cache_cap[layer_idx] * kv_dim * sizeof(float);
+        
+        float *new_k = wubu_cuda_alloc(new_bytes);
+        float *new_v = wubu_cuda_alloc(new_bytes);
+        if (!new_k || !new_v) {
+            fprintf(stderr, "GPU: KV cache grow failed for layer %d (%d→%d)\n",
+                    layer_idx, gpu->cache_cap[layer_idx], new_cap);
+            wubu_cuda_free((float*)new_k);
+            wubu_cuda_free((float*)new_v);
+            return 0;
+        }
+        cudaMemcpyAsync(new_k, gpu->d_k_cache[layer_idx], old_bytes,
+                        cudaMemcpyDeviceToDevice, st);
+        cudaMemcpyAsync(new_v, gpu->d_v_cache[layer_idx], old_bytes,
+                        cudaMemcpyDeviceToDevice, st);
+        wubu_cuda_free(gpu->d_k_cache[layer_idx]);
+        wubu_cuda_free(gpu->d_v_cache[layer_idx]);
+        gpu->d_k_cache[layer_idx] = new_k;
+        gpu->d_v_cache[layer_idx] = new_v;
+        gpu->cache_cap[layer_idx] = new_cap;
+        fprintf(stderr, "GPU: KV cache layer %d grew to %d\n", layer_idx, new_cap);
+    }
+    
     cudaMemcpyAsync(gpu->d_k_cache[layer_idx] + (size_t)cache_start * kv_dim,
                     gpu->d_ktmp, (size_t)C * kv_dim * sizeof(float),
                     cudaMemcpyDeviceToDevice, st);
@@ -691,6 +728,7 @@ void wubu_model_gpu_free(wubu_model_t *model) {
         free(gpu->d_v_cache);
     }
     free(gpu->cache_len);
+    free(gpu->cache_cap);
 
     // Free RoPE table
     wubu_cuda_free(gpu->d_sincos);

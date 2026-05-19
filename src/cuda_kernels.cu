@@ -2172,33 +2172,35 @@ void wubu_cuda_chunked_attn(cublasHandle_t handle, cudaStream_t stream,
     float *d_L = d_M + (size_t)C * n_q;
 
     if (T_cache <= ATTEN_TILE) {
-        // === DIRECT: single pass (same as before, no tiling) ===
-        // Step 1: scores via cuBLAS for all heads at once
+        // === DIRECT: strided-batched SGEMM for all Q heads ===
+        // For each KV head: gs Q heads share it
+        // Scores per head: [C, T_cache] column-major, ld = n_q * T_cache, stride = T_cache * C
+        // Q per head: one column of [hd, C], stride hd between heads
         for (int h_kv = 0; h_kv < n_kv; h_kv++) {
-            for (int h_off = 0; h_off < gs; h_off++) {
-                int h_q = h_kv * gs + h_off;
-                float *d_sh = d_scores_tile + (size_t)h_q * T_cache;
-                cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N,
-                    T_cache, C, hd, &s_scale,
-                    d_K_cache + h_kv * hd, kv_dim,
-                    d_Q_chunk + h_q * hd, q_dim, &beta,
-                    d_sh, (size_t)n_q * T_cache);
-            }
+            float *score_base = d_scores_tile + (size_t)h_kv * gs * T_cache * C;
+            cublasSgemmStridedBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                T_cache, C, hd, &s_scale,
+                d_K_cache + h_kv * hd, kv_dim, 0,                 // A: same K (stride=0)
+                d_Q_chunk + (size_t)h_kv * gs * hd, q_dim, hd,     // B: per-head Q
+                &beta,
+                score_base, n_q * T_cache, T_cache * C,             // C: packed scores
+                gs);
         }
-        // Step 2: softmax
+        
+        // Step 2: softmax per query position
         for (int i = 0; i < C * n_q; i++)
             softmax_kernel<<<1, 1, 0, stream>>>(d_scores_tile + (size_t)i * T_cache, 1, T_cache);
-        // Step 3: weighted sum with V
+        
+        // Step 3: weighted sum with V via strided batched SGEMM
         for (int h_kv = 0; h_kv < n_kv; h_kv++) {
-            for (int h_off = 0; h_off < gs; h_off++) {
-                int h_q = h_kv * gs + h_off;
-                float *d_sh = d_scores_tile + (size_t)h_q * T_cache;
-                cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
-                    hd, C, T_cache, &alpha,
-                    d_V_cache + h_kv * hd, kv_dim,
-                    d_sh, (size_t)n_q * T_cache, &beta,
-                    d_attn_out + h_q * hd, q_dim);
-            }
+            float *score_base = d_scores_tile + (size_t)h_kv * gs * T_cache * C;
+            cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                hd, C, T_cache, &alpha,
+                d_V_cache + h_kv * hd, kv_dim, 0,                  // A: same V (stride=0)
+                score_base, n_q * T_cache, T_cache * C,              // B: scores
+                &beta,
+                d_attn_out + (size_t)h_kv * gs * hd, q_dim, hd,    // C: per-head output
+                gs);
         }
     } else {
         // === TILED: process T_cache in ATTEN_TILE chunks ===
