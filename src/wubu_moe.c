@@ -6,6 +6,14 @@
 #include <stdio.h>
 #include <assert.h>
 
+// GPU MoE expert forward (declared in wubu_model_gpu.cu, C linkage)
+// Used when moe_weights_t.gpu_ctx is non-NULL
+void wubu_model_gpu_moe_experts(const moe_weights_t *w,
+    const float *x_s,
+    const int *indices_s, const float *weights_s,
+    float expert_contribs[8][D_MODEL],
+    void *model_ptr);
+
 int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe) {
     char name[256];
     memset(moe, 0, sizeof(*moe));
@@ -468,6 +476,11 @@ void wubu_moe_forward(const float *x, int B, int T,
             float expert_contribs[N_ACTIVE_EXPTS][D_MODEL];
             memset(expert_contribs, 0, sizeof(expert_contribs));
             
+            if (w->gpu_ctx) {
+                // GPU accelerated: all 8 experts in one kernel call
+                wubu_model_gpu_moe_experts(w, x_s, indices_s, weights_s,
+                    expert_contribs, w->gpu_ctx);
+            } else {
             #pragma omp taskgroup
             {
                 for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
@@ -535,6 +548,7 @@ void wubu_moe_forward(const float *x, int B, int T,
                         }
                     }
                 }
+            }
             }
             }
             // Accumulate expert contributions (sequential, no atomics needed)

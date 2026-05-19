@@ -14,6 +14,7 @@
 #include "gguf_reader.h"
 #include "gpu_quant_matmul.h"
 #include "gpu_moe_kernel.h"
+#include "wubu_moe.h"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <stdio.h>
@@ -531,25 +532,25 @@ int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
     return 1;
 }
 
-// ================================================================
-// GPU MoE forward: replace 8 expert matmuls with GPU quantized kernel
+// GPU MoE expert forward: replaces 8 expert matmuls with GPU quantized kernel
 // Input: x_s [D_MODEL], top-8 expert indices + weights
 // Output: expert_contribs [8][D_MODEL] filled with weighted results
 // Shared expert and router remain on CPU.
-// ================================================================
 extern "C"
 void wubu_model_gpu_moe_experts(
-    wubu_model_t *model, int layer_idx,
+    const moe_weights_t *w,
     const float *x_s,
     const int *indices_s,        // [8] expert indices
     const float *weights_s,      // [8] routing weights
-    float expert_contribs[8][D_MODEL])
+    float expert_contribs[8][D_MODEL],
+    void *model_ptr)             // wubu_model_t* for CUDA stream access
 {
+    if (!w->ffn_gate_exps_q) return;
+    // Get CUDA stream from model's GPU context
+    wubu_model_t *model = (wubu_model_t *)model_ptr;
     gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
     if (!gpu || !gpu->initialized) return;
-
-    moe_weights_t *w = &model->layers[layer_idx].moe;
-    if (!w->ffn_gate_exps_q) return;
+    cudaStream_t stream = gpu->stream;
 
     // Compute per-expert byte sizes
     int64_t gate_bytes = gguf_raw_size(w->ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
@@ -586,7 +587,7 @@ void wubu_model_gpu_moe_experts(
         (const uint8_t**)up_q_ptrs, up_bytes,
         (const uint8_t**)down_q_ptrs, down_bytes,
         w->ffn_gate_exps_q_type, w->ffn_up_exps_q_type, w->ffn_down_exps_q_type,
-        wgts, gpu_out, gpu->stream);
+        wgts, gpu_out, stream);
 
     // Distribute output across per-expert contribution buffers
     int active_idx = 0;

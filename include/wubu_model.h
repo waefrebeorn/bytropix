@@ -237,10 +237,11 @@ int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
 // Run GPU MoE experts: replaces the 8 expert quantized matmuls with GPU kernel.
 // Shared expert and router remain on CPU.
 // Called per-token from wubu_moe_forward's expert loop.
-void wubu_model_gpu_moe_experts(wubu_model_t *model, int layer_idx,
+void wubu_model_gpu_moe_experts(const moe_weights_t *w,
     const float *x_s,
     const int *indices_s, const float *weights_s,
-    float expert_contribs[8][D_MODEL]);
+    float expert_contribs[8][D_MODEL],
+    void *model_ptr);
 
 // Free all GPU resources and reset gpu_ctx to NULL.
 void wubu_model_gpu_free(wubu_model_t *model);

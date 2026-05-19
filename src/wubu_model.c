@@ -614,8 +614,18 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         if (layer->moe.loaded && model->enable_moe &&
             (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Quantized path: also save selected expert indices for next-layer prefetch
+#ifdef GPU_SUPPORT
+            if (model->gpu_ctx) {
+                // Enable GPU MoE: store model pointer so the GPU MoE function
+                // can access the CUDA stream from model->gpu_ctx
+                layer->moe.gpu_ctx = (void *)model;
+            }
+#endif
             wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, have_prev_experts ? prev_experts : NULL);
             have_prev_experts = 1;
+#ifdef GPU_SUPPORT
+            layer->moe.gpu_ctx = NULL;  // reset after use
+#endif
         } else if (model->enable_moe && model->gguf_ctx &&
                    (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Fallback: F32 dequant path
