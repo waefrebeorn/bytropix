@@ -844,6 +844,81 @@ void ggml_vec_dot_iq2_xxs_q8_K_avx2(int n, float * GGML_RESTRICT s, size_t bs,
     }
     *s = 0.125f * hsum_float_8(accumf);
 }
+
+// ========================================================================
+// AVX2-accelerated IQ3_XXS × Q8_K vec_dot
+// Each 32-element Q32 block: 8 bytes grid indices + 4 bytes gas
+// Each sub-block (8 elements): 2 grid indices + 1 sign byte
+// Grid values (-3..+3) offset by +3 to make unsigned for maddubs
+// ========================================================================
+void ggml_vec_dot_iq3_xxs_q8_K_avx2(int n, float * GGML_RESTRICT s, size_t bs,
+    const void * GGML_RESTRICT vx, size_t bx,
+    const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0); assert(nrc == 1); UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+    const block_iq3_xxs * GGML_RESTRICT x = vx;
+    const block_q8_K    * GGML_RESTRICT y = vy;
+    const int nb = n / QK_K;
+    uint32_t aux32;
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+        const uint8_t * GGML_RESTRICT q3 = x[i].qs;
+        const uint8_t * GGML_RESTRICT gas = x[i].qs + QK_K/4;
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+        int32_t bsum = 0;
+        for (int ib32 = 0; ib32 < QK_K/32; ++ib32) {
+            memcpy(&aux32, gas, sizeof(uint32_t)); gas += sizeof(uint32_t);
+            const uint32_t ls = 2*(aux32 >> 28) + 1;
+            int32_t sumi = 0;
+            // Process 4 sub-blocks of 8 elements each per Q32 block
+            for (int l = 0; l < 4; ++l) {
+                // Grid values: two uint32_t from iq3xxs_grid, each holding 4 int8
+                uint32_t g1 = *(const uint32_t *)(iq3xxs_grid + q3[2*l+0]);
+                uint32_t g2 = *(const uint32_t *)(iq3xxs_grid + q3[2*l+1]);
+                // Sign byte: 8 bits from ksigns lookup
+                uint8_t sign_byte = ksigns_iq2xs[(aux32 >> (7*l)) & 127];
+                
+                // AVX2 sub-block: 8 elements
+                // Load Q8 values (8 bytes)
+                const int8_t *q8_sb = q8 + l*8;
+                __m128i q8v = _mm_loadl_epi64((const __m128i *)q8_sb);
+                
+                // Build sign mask: bytes 0-7 = -1(0xFF) for negate, +1(0x01) for pass
+                uint64_t sm = 0;
+                for (int j = 0; j < 8; j++) {
+                    sm |= ((sign_byte >> j) & 1) ? (0xFFULL << (j*8)) : (0x01ULL << (j*8));
+                }
+                __m128i sgn = _mm_set1_epi64x((long long)sm);
+                __m128i q8s = _mm_sign_epi8(q8v, sgn);  // apply signs
+                
+                // Grid values: offset by +3 to make unsigned (0..6)
+                __m128i g1v = _mm_cvtsi32_si128((int)g1);     // 4 bytes
+                __m128i g2v = _mm_cvtsi32_si128((int)g2);     // 4 bytes  
+                __m128i g3 = _mm_add_epi8(_mm_set1_epi8(3), g1v);  // grid1 + 3
+                __m128i g4 = _mm_add_epi8(_mm_set1_epi8(3), g2v);  // grid2 + 3
+                // Interleave into 8 bytes: [g1_0..g1_3, g2_0..g2_3]
+                __m128i gp3 = _mm_unpacklo_epi32(g3, g4);
+                
+                // maddubs: unsigned(gp3) × signed(q8s) → 8 pairs of int16
+                __m128i dot_part = _mm_maddubs_epi16(gp3, q8s);  // 8 × int16
+                // Manual sum of all 8 int16 values for correctness
+                int16_t dp[8]; _mm_storeu_si128((__m128i*)dp, dot_part);
+                int32_t dot_total = dp[0] + dp[1] + dp[2] + dp[3] + dp[4] + dp[5] + dp[6] + dp[7];
+                
+                // Correction: subtract 3 * sum(q8s)
+                __m128i q8s_16 = _mm_cvtepi8_epi16(q8s);  // 8 × int16
+                int16_t sq[8]; _mm_storeu_si128((__m128i*)sq, q8s_16);
+                int32_t sum_q8s_val = sq[0] + sq[1] + sq[2] + sq[3] + sq[4] + sq[5] + sq[6] + sq[7];
+                sumi += dot_total - 3 * sum_q8s_val;
+            }
+            q3 += 8;
+            q8 += 32;  // advance by 1 Q32 block (4 sub-blocks × 8 bytes)
+            bsum += sumi * (int32_t)ls;
+        }
+        sumf += d * (float)bsum;
+    }
+    *s = 0.25f * sumf;
+}
 #endif // defined(__AVX2__) || defined(__AVX__)
 
 // ========== IQ Vec-dot Functions ==========

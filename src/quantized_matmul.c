@@ -16,6 +16,7 @@
 #include <math.h>
 #include <assert.h>
 #include <immintrin.h>  // _mm_prefetch
+#include <omp.h>
 
 #include "gguf_reader.h"
 #include "wubu_ssm.h"

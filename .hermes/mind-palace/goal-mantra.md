@@ -1,28 +1,29 @@
-# Goal Mantra — May 19, 2026 (Phase 8 Complete, Cos-sim Audited)
+# Goal Mantra — May 19, 2026 (Phase 8.3-8.4 Complete)
 
 ## THE GOAL
 1:1 inference parity w/ llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.
-**gen_text: 7.8 tok/s decode (3.7×). gen_text_mtp: 29.9 tok/s.**
+**Current: 4.7 tok/s decode (embedding-file mode). Target: 7+ tok/s.**
 
 ## STATE
 | Metric | Value | Status |
 |--------|-------|--------|
-| Decode | **7.8 tok/s** | ✅ Verified |
-| Prefill | **10.4 tok/s** | ✅ Verified |
-| MoE decode/layer | **~2ms** | ✅ (was 10ms) |
-| Cos-sim vs llama.cpp | **0.7944** | ✅ Pre-existing at IQ2_M. NOT a regression |
-| MTP free-tokens | **29.9 tok/s** | ✅ Pipeline correct |
-| MTP blk.40 mismatch | target=220, MTP=2 | ✅ Same in llama.cpp. Inherent at IQ2_M |
+| Decode | **4.7 tok/s** | ✅ Runs (embedding-file mode) |
+| Prefill | **16.2 tok/s** | ✅ Verified |
+| Output proj decode | **~16.5ms** | ⚠️ Bottleneck (Q4_K 2048×248320) |
+| Cos-sim vs llama.cpp | **0.7944** | ⚠️ Pre-existing. SSM L0 cos=0.86 |
+| Expert prefetch | full-stride L3 | ✅ Phase 8.3 done |
+| Output proj OMP | outer loop N>1 | ✅ Phase 8.4 done |
 
-## COLD GAPS
-P1: Expert prefetch (API ready, needs wiring)
-P1: MTP higher-precision model for quality  
-P2: Cos-sim 0.79 — fundamental at IQ2_M quantization
+## COLD GAPS (priority order)
+P0: KV Cache for GQA — 10 layers recompute full attention each decode
+P0: Cos-sim 1:1 parity — SSM divergence at L0 (cos=0.86)
+P1: Output proj speed — 16.5ms per decode token (memory-bound)
+P2: SSM AVX2 optimization — 24ms total, low priority
 
 ## GROUND TRUTH
 - Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 - Reference: /home/wubu/llama.cpp/build/bin/llama-cli
-- Cross-ref: ref_dumper (logits) + ref_dumper_mtp (MTP head)
+- Layer dumps: /tmp/dump_layers_ref/ (llama.cpp), /tmp/dump_layers_our/ (bytropix)
 
 ## THE LOOP
 pick highest undone → execute → compile → run → verify → mark done → report

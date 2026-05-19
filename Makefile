@@ -160,7 +160,10 @@ test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o
-	$(CC) $(CFLAGS) -o $@ $(filter %.c %.o,$^) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
+
+run_bos: tools/run_bos.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -o $@ tools/run_bos.c $(MODEL_OBJ) $(LDFLAGS)
 
 gen_text_mtp: tools/gen_text_mtp.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $(filter %.c %.o,$^) $(LDFLAGS)

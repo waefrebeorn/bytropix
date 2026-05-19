@@ -1,29 +1,27 @@
-# State — May 19, 2026 (Phase 8 Complete — Cos-sim Verified)
+# State — May 19, 2026 (Phase 8.3-8.4 Complete)
 
 ## REAL STATUS
-**Decode: 7.8 tok/s (3.7× from 2.1). Prefill: 10.4 tok/s.**
-**Cos-sim vs llama.cpp: 0.7944 (pre-existing, NOT a regression)**  
-**MTP: 29.9 tok/s free-tokens (quality limited by IQ2_M, NOT a bytropix bug)**
+**Decode: ~4.7 tok/s (embedding-file mode). Output proj: ~16.5ms decode bottleneck.**
+**Cos-sim vs llama.cpp: 0.7944 (pre-existing, NOT a regression)**
+**MTP: 29.9 tok/s free-tokens (quality limited by IQ2_M)**
 
-## Correctness Verification
-| Test | Result | Evidence |
-|------|--------|----------|
-| Cos-sim vs llama.cpp (BOS token) | **0.7944** | ✅ Same before AND after Phase 8 changes. Pre-existing at IQ2_M |
-| Top-1 prediction (BOS) | token 220 | ✅ Matches llama.cpp exactly |
-| MTP ref_dumper_mtp | target=220, MTP=2 | ✅ Same mismatch in llama.cpp's own MTP at IQ2_M |
-| MTP free-tokens mode | 29.9 tok/s | ✅ Pipeline correct, blk.40 quantization limits quality |
+## Phase 8.3: Expert Prefetch — COMPLETE
+| Change | Detail |
+|--------|--------|
+| Full stride prefetch | Was 256 bytes/expert to L1. Now full-stride (~264KB gate/up, ~392KB down) per expert to L3 via _MM_HINT_T2 |
+| Coverage | ~7.4MB for 8 experts — fits L3 (12-20MB on modern CPUs) |
+| Timing | ~1050 prefetches/weight × 3 weights × 8 experts = ~25K prefetches, fits within attn window |
 
-## Phase 8: COMPLETE
-| Optimization | Speedup | Detail |
-|-------------|---------|--------|
-| AVX2 IQ2_XXS vec_dot | +~20% | Ported from llama.cpp x86/quants.c |
-| OpenMP task dispatch | +~200% | `#pragma omp taskgroup` + tasks, no atomic, single parallel region |
-| Expert prefetch API | plumbing | wubu_moe_forward returns selected expert indices |
+## Phase 8.4: Output Proj Split — COMPLETE
+| Change | Detail |
+|--------|--------|
+| OMP outer loop | `#pragma omp parallel for if(N > 1)` on token loop for prefill |
+| Nested OMP safe | Outer OMP disabled for N=1 (decode path unaffected). Inner quantized_matmul uses 1 thread when nested=off |
 
 ## Cold Gaps
 | Prio | Gap | Status |
 |------|-----|--------|
-| P1 | MTP quality at IQ2_M | Inherent — blk.40 Q2_K/Q3_K quantization diverges from main model path |
-| P1 | Expert prefetch integration | API ready, needs _mm_prefetch wiring |
-| P2 | Cos-sim improvement | 0.79 is fundamental at IQ2_M. Need higher-precision model for verification |
-| P2 | SSM attn AVX2 optimization | 0.8ms/layer, 24ms total, low priority |
+| P1 | MTP quality at IQ2_M | Inherent — blk.40 Q2_K/Q3_K quantization diverges |
+| P1 | Cos-sim 0.79 → 1:1 parity | SSM L0 cos=0.86, GQA L3 cos=0.92. Cumulative decay L6-L31, sharp drop L32-L39 (cos=0.46) |
+| P2 | SSM AVX2 optimization | 0.8ms/layer, 24ms total, low priority |
+| P2 | KV cache for GQA decode | Each decode recomputes full attention — major overhead |
