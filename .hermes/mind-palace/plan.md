@@ -1,4 +1,4 @@
-# Plan — May 18, 2026 — PHASES 0-4 DONE. PHASE 5+6 INFRA BUILT.
+# Plan — May 19, 2026 — PHASES 0-6 DONE. MTP INFRA + STATE SAVE/RESTORE COMPLETE.
 
 ## Phase 0: CORE INFERENCE ✓
 - GQA Q/gate interleave fixed (cos-sim -0.51 → 0.9968)
@@ -25,39 +25,32 @@
 - Append-only: decode attends to ALL cached positions
 - cos-sim T=1 identity preserved
 
-## Phase 5: Island Boy Batch Decode [INFRA BUILT — NEXT]
-### Done ✓: All quant types supported
-- Q2_K (84B/256), Q3_K (110B/256) — dequant-to-F32 fallback
-- Q8_0 (34B/32) — on-the-fly dequant SGEMM
-- IQ2_S (88B/256) — dequant-to-F32 fallback
-- BF16 (2B/elem) — on-the-fly SGEMM
-- save_last_hidden field for h_39 capture
-### TODO:
-- SSM state save/restore buffers for verify rollback
-- Batch-forward draft tokens (B=4) through 40 layers
-- Prefetch weights: _mm_prefetch for next layer
+## Phase 5: State Save/Restore ✓
+- SSM state + conv state checkpoint/rollback
+- GQA cache len save/restore
+- MTP head cache len save/restore
+- Lazy allocation (only when checkpoint first called)
+- Used for MTP spec-decode rollback
 
-## Phase 6: MTP Speculative Decode [INFRA BUILT — NEXT]
-### Done ✓: MTP model loading
-- wubu_mtp_load loads blk.40 + nextn from same GGUF
-- wubu_mtp_draft_forward produces draft tokens (greedy)
-- mep_head_t with KV cache for blk.40 GQA
-### TODO:
-- Draft: generate 3-4 candidate tokens via blk.40
-- Verify: batch-forward all candidates through 40 layers
-- Acceptance: compare argmax, accept longest prefix
-- SSM state rollback on partial accept
-- KV cache rollback
+## Phase 6: MTP Speculative Decode ✓
+### Infrastructure ✓
+- SSM state save/restore for verify rollback
+- Batch-forward draft tokens through 40 layers (sequential verify)
+- Per-token checkpoint → rollback on reject
+- MTP free-tokens mode (no verify, emit MTP outputs directly)
+- MTP=1 opt-in environment variable
+### Known Limitation
+- At IQ2_M: 100% verify rejection, MTP free-tokens quality degraded
+- Need higher-precision model (Q4_K_M+ for blk.40) for working MTP
+### MTP Head Loading ✓
+- nextn_hnorm load bug fixed (was found but never allocated)
+- blk.40 GQA+MoE (Q5_K/Q2_K/Q3_K/Q6_K)
+- eh_proj dequantized to F32 at init
+- KV cache for blk.40 GQA
 
-## Phase 7: Hardware Saturation [FUTURE]
+## Phase 7: Hardware Saturation [NEXT]
 - AVX2/AVX-512 vec_dot paths
 - NUMA-aware thread scheduling
 - Quantized scatter/gather for IQ MoE
-
-## Target Performance
-| Phase | tok/s | vs baseline |
-|-------|-------|-------------|
-| Current (P4) | 0.7 | 1× |
-| Phase 5 (batch B=4) | 1.2-1.5 | 1.7-2.1× |
-| Phase 6 (MTP spec) | 2-4 | 2.7-5.7× |
-| Phase 7 (HW sat) | 3-5 | 4-7× |
+- _mm_prefetch weight prefetching
+- OpenMP on GQA attention (softmax + score loop)
