@@ -329,8 +329,8 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     gpu->d_score_scr = wubu_cuda_alloc(score_bytes);
 
     // FP16 scratch for chunked attention (Q + score tile)
-    // q_dim = GQA_Q_HEADS * GQA_HEAD_DIM = 4096, ATTEN_TILE = 4096
-    int hp_scratch_elems = 4096 + 4096 * chunk_sz;
+    // q_dim = GQA_Q_HEADS * GQA_HEAD_DIM = 4096, ATTEN_TILE = 16384
+    int hp_scratch_elems = 4096 + 16384 * chunk_sz;
     gpu->d_hp_scratch = (__half*)wubu_cuda_alloc((size_t)hp_scratch_elems * sizeof(__half));
 
     // Q-contiguous buffer: [chunk_sz, q_dim] floats

@@ -2134,7 +2134,7 @@ __global__ void normalize_attn_kernel(float *O, const float *L, int n_rows, int 
 // For T_cache > T_TILE (4096), tiles internally with online softmax.
 // Score scratch required: C * T_TILE * sizeof(float) (much smaller than old: C*n_q*T_cache)
 // ================================================================
-#define ATTEN_TILE 4096
+#define ATTEN_TILE 16384
 
 size_t wubu_cuda_chunked_attn_query_scratch(int C, int T_max) {
     (void)T_max;

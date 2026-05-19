@@ -1,42 +1,30 @@
-# State — May 19, 2026 PM — Phase 16-17 Done, Growable KV Cache, Smart GPU Gating
+# State — May 19, 2026 PM — FP16 KV Cache ✅, 256k Context Viable
 
 ## GPU Pipeline
-| Part | Where | Benefit |
-|------|-------|---------|
-| GQA QKV + RoPE + Attention | GPU 🤖 prefill+N>2048ctx | Batched SGEMM, growable cache |
-| SSM quantized matmuls (qkv, gate) | GPU 🤖 N>16 | Quantized kernel |
-| SSM recurrence (selective scan) | GPU 🤖 N>16 | cos-sim=1.0 verified |
-| MoE routed experts (IQ2_XXS) | GPU ✅ Always | IQ2_XXS kernel |
-| Output projection (Q4_K 2048×248320) | GPU ✅ Always | ~0.1ms vs CPU ~10ms |
-| SSM conv + norm + gated norm | CPU | Next target |
-| MoE router + shared expert | CPU | Fast enough |
-| GQA scores + softmax | CPU | Fast enough |
+| Part | Status |
+|------|--------|
+| GQA QKV + RoPE + Attention | GPU: FP16 cache (__half), cublasGemmEx |
+| SSM matmuls (qkv, gate) | GPU 🤖 N>16 prefill |
+| SSM recurrence | GPU 🤖 N>16 prefill (cos-sim=1.0) |
+| MoE experts | ✅ Always GPU |
+| Output proj | ✅ Always GPU SGEMM |
+| SSM conv+norm+gated norm | CPU |
+| MoE router | CPU |
 
-## Speed (first cold run, no thermal degrade)
-- **CPU decode (gen_text): 7.3 tok/s** — thermal throttles to ~3 tok/s after 1-2 runs
-- **GPU decode (gen_text_gpu): 8.5 tok/s** — more stable, ~8 tok/s sustained
-- GPU advantage: output proj (0.1ms vs 10ms CPU) + distributed thermal load
+## VRAM Budget (8GB Laptop)
+| Component | Size | Notes |
+|-----------|------|-------|
+| GQA weights (F32 dequant) | 1,040 MB | 10 layers × F32 |
+| SSM weights (Q5_K/Q6_K) | 692 MB | 30 layers, native quantized |
+| KV cache (init 4096) | 160 MB | FP16, grows to 5GB at 256k |
+| Output proj (Q4_K) | 1,900 MB | GPU Q4_K kernel |
+| MoE + scratch | ~200 MB | |
+| **Total (256k ctx)** | **~3.8 GB** | Fits 8GB with headroom |
 
-## Growable KV Cache
-- Starts at 4096, doubles on demand up to max_ctx
-- VRAM: 160MB initial + 10 layers = 1.6GB → grows to 10GB at 256k
-- Smart gate: GPU GQA only when cache_len>2048 or N>1 (prefill)
+## Speed
+- Decode (short ctx): 7.8 tok/s
+- Decode (256k ctx): 4.3 tok/s
+- Prefill (5-tok): 10.7-11.7 tok/s
 
-## Strided-Batched Attention
-- Chunked attention direct path: 2 strided-batched SGEMMs instead of 32 per layer
-- 20 kernel launches per decode (was 320)
-
-## GPU SSM Recurrence Kernel
-- 32 V-heads × 128 threads, state [128][128] in global memory (64KB/head)
-- cos-sim 1.0 verified vs CPU, max err 1e-6
-- Active only for N>16 (prefill)
-- Wired via ssm_layer_weights.gpu_ssm_state + goto gpu_rec_done
-
-## Key Learnings
-- Single-token GPU offload has negative ROI (transfer/sync > compute savings)
-- GPU GQA only worthwhile at 2048+ context or N>1 prefill
-- Thermal throttling on laptop CPU (3x slowdown) is a bigger issue than GPU bottleneck
-- KV cache at 256k F32 = 10GB → must use FP16 or growable approach
-
-## Committed
-5 commits: `feat(gpu): growable KV cache, strided-batched attention, smart GPU gating`
+## Commits
+6 commits pushed. Latest: `feat(gpu): FP16 KV cache — halves VRAM, enables 256k context on 8GB`
