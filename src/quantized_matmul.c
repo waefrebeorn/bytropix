@@ -68,6 +68,10 @@ extern void ggml_vec_dot_q4_K_q8_K(int n, float *s, size_t bs,
 #define Q4K_BLOCK_SIZE 144
 // block_q6_K: ggml_half d (2) + uint8_t ql[128] + uint8_t qh[64] + int8_t scales[16] = 210
 #define Q6K_BLOCK_SIZE 210
+// block_q2_K: scales[16] + qs[64] + ggml_half d (2) + ggml_half dmin (2) = 84
+#define Q2K_BLOCK_SIZE 84
+// block_q3_K: hmask[32] + qs[64] + scales[12] + ggml_half d (2) = 110
+#define Q3K_BLOCK_SIZE 110
 
 // ========================================================================
 // Raw size per type (elements → bytes)
@@ -83,6 +87,9 @@ static int64_t raw_size_for_type(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_Q5_K:     return n_blocks * Q5K_BLOCK_SIZE;
         case GGML_TYPE_Q4_K:     return n_blocks * Q4K_BLOCK_SIZE;
         case GGML_TYPE_Q6_K:     return n_blocks * Q6K_BLOCK_SIZE;
+        case GGML_TYPE_Q2_K:     return n_blocks * Q2K_BLOCK_SIZE;
+        case GGML_TYPE_Q3_K:     return n_blocks * Q3K_BLOCK_SIZE;
+        case GGML_TYPE_BF16:     return n_elems * 2;
         default:
             fprintf(stderr, "quantized_matmul: unsupported type %d\n", ggml_type);
             return 0;
@@ -102,6 +109,9 @@ static int64_t block_size_for_type(int ggml_type) {
         case GGML_TYPE_Q5_K:     return Q5K_BLOCK_SIZE;
         case GGML_TYPE_Q4_K:     return Q4K_BLOCK_SIZE;
         case GGML_TYPE_Q6_K:     return Q6K_BLOCK_SIZE;
+        case GGML_TYPE_Q2_K:     return Q2K_BLOCK_SIZE;
+        case GGML_TYPE_Q3_K:     return Q3K_BLOCK_SIZE;
+        case GGML_TYPE_BF16:     return 2;   // per element
         default:                 return 0;
     }
 }
@@ -171,9 +181,83 @@ void quantized_matmul(const float *x,
         return;
     }
     
-    // Quantized types: use Q8_K activation quantization + ggml_vec_dot
+    // Handle BF16: dequantize to F32, then SGEMM
+    // Also handles type 30 (older BF16 enum value from newer GGUF files)
+    if (weight_type == GGML_TYPE_BF16 || weight_type == 30) {
+        const uint16_t *w = (const uint16_t *)W;
+        int64_t stride_elems = (col_stride_bytes > 0) ? (col_stride_bytes / 2) : n_rows;
+        #pragma omp parallel for if(n_cols > 16)
+        for (int64_t j = 0; j < n_cols; j++) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < n_rows; k++) {
+                uint32_t bits = (uint32_t)w[k + j * stride_elems] << 16;  // BF16 = high 16 bits of F32
+                float val;
+                memcpy(&val, &bits, 4);
+                sum += x[k] * val;
+            }
+            y[j] = sum;
+        }
+        return;
+    }
     
-    // Compute number of Q8_K blocks needed for input
+    // Handle Q8_0: dequant on-the-fly, SGEMM
+    // Block size 32: d(half) [2] + qs[32] = 34 bytes per 32 elements
+    if (weight_type == GGML_TYPE_Q8_0) {
+        const int64_t BLK = 32, BLK_BYTES = 34;
+        int64_t n_blocks_per_col = (n_rows + BLK - 1) / BLK;
+        int64_t stride = (col_stride_bytes > 0) ? col_stride_bytes : n_blocks_per_col * BLK_BYTES;
+        #pragma omp parallel for if(n_cols > 8)
+        for (int64_t j = 0; j < n_cols; j++) {
+            const uint8_t *wj = (const uint8_t *)W + j * stride;
+            float sum = 0.0f;
+            for (int64_t b = 0; b < n_blocks_per_col; b++) {
+                const uint8_t *blk = wj + b * BLK_BYTES;
+                uint16_t d_bits; memcpy(&d_bits, blk, 2);
+                // F16 to F32
+                uint32_t sign = (d_bits >> 15) & 1;
+                uint32_t exp  = (d_bits >> 10) & 0x1F;
+                uint32_t mant = d_bits & 0x03FF;
+                uint32_t f32;
+                if (exp == 0) f32 = (sign << 31) | ((uint32_t)(127 - 15 + 1) << 23) | (mant << 13);
+                else if (exp == 31) f32 = (sign << 31) | (0xFF << 23) | (mant << 13);
+                else f32 = (sign << 31) | ((uint32_t)(127 - 15 + exp) << 23) | (mant << 13);
+                float d; memcpy(&d, &f32, 4);
+                const int8_t *qs = (const int8_t *)(blk + 2);
+                int64_t remaining = n_rows - b * BLK;
+                if (remaining > BLK) remaining = BLK;
+                for (int64_t l = 0; l < remaining; l++) {
+                    sum += x[b * BLK + l] * (d * (float)qs[l]);
+                }
+            }
+            y[j] = sum;
+        }
+        return;
+    }
+    
+    // Handle IQ2_S: dequant via gguf_dequantize helper, then SGEMM
+    if (weight_type == GGML_TYPE_IQ2_S || weight_type == GGML_TYPE_IQ2_XS || 
+        weight_type == GGML_TYPE_IQ1_S || weight_type == GGML_TYPE_IQ1_M ||
+        weight_type == GGML_TYPE_IQ3_S ||
+        weight_type == GGML_TYPE_Q2_K || weight_type == GGML_TYPE_Q3_K) {
+        // These are rare types — dequant entire weight to F32 then SGEMM
+        int64_t total_elems = n_rows * n_cols;
+        float *f32_w = (float *)malloc(total_elems * sizeof(float));
+        if (!f32_w) { fprintf(stderr, "quantized_matmul: alloc %lld failed\n", (long long)total_elems); return; }
+        gguf_dequantize((const uint8_t *)W, weight_type, total_elems, f32_w);
+        // Now do SGEMM
+        #pragma omp parallel for if(n_cols > 8)
+        for (int64_t j = 0; j < n_cols; j++) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < n_rows; k++) {
+                sum += x[k] * f32_w[k + j * n_rows];
+            }
+            y[j] = sum;
+        }
+        free(f32_w);
+        return;
+    }
+    
+    // Quantized types: use Q8_K activation quantization + ggml_vec_dot
     int64_t n_q8_blocks = (n_rows + QK_K - 1) / QK_K;
     int64_t q8_size = n_q8_blocks * Q8K_BLOCK_SIZE;
     

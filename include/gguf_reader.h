@@ -34,6 +34,7 @@ enum ggml_type {
     GGML_TYPE_IQ2_S   = 22,
     GGML_TYPE_IQ4_XS  = 23,
     GGML_TYPE_IQ1_M   = 29,
+    GGML_TYPE_BF16    = 30,  // bfloat16 (IEEE)
 };
 
 // GGUF tensor info

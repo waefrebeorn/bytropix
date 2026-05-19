@@ -31,6 +31,29 @@ typedef struct {
 // Complete model
 #define GQA_MAX_CTX 4096  // max cached positions for KV cache
 #define GQA_KV_DIM (GQA_KV_HEADS * GQA_HEAD_DIM)  // 512
+
+// MTP (Multi-Token Prediction) head for speculative decode
+// Architecture: h_39 → hnorm → concat(hnorm, enorm(embd)) → eh_proj → blk.40 → shared_head_norm → output
+typedef struct {
+    bool loaded;
+    
+    // Nextn norms (F32, all [D_MODEL])
+    float *nextn_hnorm;             // [2048] — hidden state norm
+    float *nextn_enorm;             // [2048] — token embedding norm
+    float *nextn_shared_head_norm;  // [2048] — output norm
+    
+    // eh_proj weight (F32 dequantized): concat([h_norm | e_norm], dim=4096) → [2048]
+    float *nextn_eh_proj_f32;   // [4096, 2048] F32
+    int64_t nextn_eh_proj_dim;         // 4096 (concat dim)
+    
+    // Blk.40 (a full GQA+MoE layer)
+    wubu_layer_t blk40;
+    
+    // KV cache for blk.40's GQA attention
+    float *k_cache;  // [GQA_MAX_CTX * GQA_KV_DIM]
+    float *v_cache;  // [GQA_MAX_CTX * GQA_KV_DIM]
+    int cache_len;
+} mtp_head_t;
 typedef struct {
     int n_layers;
     wubu_layer_t *layers;
@@ -69,6 +92,12 @@ typedef struct {
     
     // MoE test: only load MoE for first N layers (0 = all)
     int moe_max_layers;
+    
+    // MTP (Multi-Token Prediction) head for speculative decode
+    mtp_head_t mtp;
+    
+    // Last hidden state capture (for MTP: set to a [D_MODEL] buffer before forward)
+    float *save_last_hidden;
 } wubu_model_t;
 
 // Create model, load from GGUF
@@ -94,7 +123,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
 // All arrays are [n_layers * B * T * D_MODEL] flattened
 // SSM/GQA intermediates arrays (per layer) — see wubu_ssm_backward / wubu_gqa_backward
 // For MoE: gradient passes through (identity backward)
-// Output: d_embeddings [B, T, D_MODEL]
+// Backward pass from embeddings
 void wubu_model_backward_from_embd(
     const wubu_model_t *model,
     const float *embeddings,
@@ -105,6 +134,26 @@ void wubu_model_backward_from_embd(
     const float *saved_ffn_out,    // [n_layers * N * D_MODEL]
     float *d_embeddings,
     int B, int T);
+
+// MTP: Load MTP head from a separate GGUF model file
+// Must be called AFTER wubu_model_init on the main model
+// Pass the MTP GGUF model path
+bool wubu_mtp_load(mtp_head_t *mtp, const char *mtp_gguf_path,
+                   gguf_ctx *main_ctx, const uint8_t *main_blob);
+
+// MTP: Draft forward — predict next tokens from last hidden state
+// x: [D_MODEL] — last hidden state from main model (layer 39 output, post-residual)
+// token_embd: [B, D_MODEL] — embeddings of candidate continuation tokens
+// B: number of draft candidates to evaluate
+// logits_out: [B, vocab_size] — output logits for each candidate
+// Returns: number of tokens consumed from token_embd (for KV cache tracking)
+int wubu_mtp_draft_forward(wubu_model_t *model,
+                           const float *x,
+                           const float *token_embd, int B,
+                           float *logits_out);
+
+// Free MTP head resources
+void wubu_mtp_free(mtp_head_t *mtp);
 
 #ifdef __cplusplus
 }
