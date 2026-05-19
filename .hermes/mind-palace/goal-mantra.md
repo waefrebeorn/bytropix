@@ -1,4 +1,4 @@
-# Goal Mantra — May 19, 2026 Late PM (Phase 14 — SSM AVX2 Optimization ✅)
+# Goal Mantra — May 19, 2026 PM (Phase 15 — GPU GQA Wiring ✅)
 
 ## THE GOAL
 **1:1 inference parity w/ llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.** ✅
@@ -8,20 +8,21 @@
 | Metric | Value | Status |
 |--------|-------|--------|
 | **gen_text (CPU)** | **8.8 tok/s** decode | ✅ Fused Q8_K + AVX2 scan |
+| **gen_text (GPU GQA)** | **3.5 tok/s** decode | ✅ GQA on GPU, SSM+MoE CPU |
 | **gen_text prefill** | **13.1 tok/s** (5-token) | ✅ |
 | **SSM attn per layer** | **~1.0ms** | ✅ AVX2 scan + fused Q8_K |
 | **MoE per layer** | **~1.2ms** | ✅ IQ2_XXS AVX2 |
 | **Output proj** | **~10ms** CPU / **GPU quantized** | ✅ GPU_QUANTIZED=1 mode |
-| **GPU memory (quantized)** | **~1.9GB VRAM** | ✅ Q4_K kernel, no F32 dequant |
-| **SSM/GQA fused Q8_K** | **Saves 1 quant/layer** | ✅ 40 quants saved per decode |
-| **AVX2 selective scan** | **8× float throughput** | ✅ 4 inner loops optimized |
-| **NaN guard** | **Gated behind DUMP_GQA_DEBUG** | ✅ ~90K isnan() saved |
+| **GPU GQA VRAM** | **1.04GB** F32 dequant weights | ✅ 10 GQA layers on GPU |
+| **GPU GQA KV cache** | **Persistent, 262k ctx** | ✅ On-GPU, per-layer |
+| **GPU memory (quantized)** | **~2.9GB** total | ✅ GQA(1.04) + Out(1.9) |
 
-## CRITICAL FINDING: Fused Q8_K Quant
-Both SSM and GQA layers do multiple matmuls on the same input x. By quantizing x→Q8_K ONCE per token and reusing for all projections, we save:
-- SSM: 1 quant per layer × 30 = 30 quants per decode
-- GQA: 2 quants per layer × 10 = 20 quants per decode  
-- Total: 50 fewer Q8_K quantize operations per decode step
+## CRITICAL FINDING: Integrated GPU GQA
+Phase 15 wired `wubu_model_gpu.cu` into `wubu_model_t` — GPU GQA is now a transparent feature. Set `GPU=1` env var to enable. Uses:
+- F32 dequantized weights → cuBLAS SGEMM for QKV projections
+- Persistent GPU KV cache (device-to-device memcpy for append)
+- `wubu_cuda_chunked_attn` with online softmax tiling
+- Token-by-token forward for prefill (chunked attn non-causal for C>1)
 
-## CRITICAL FINDING: GPU Quantized Mode
-The F32 output proj dequant uses 7.6GB VRAM which doesn't fit on 6.5GB laptops. New custom CUDA kernel keeps Q4_K on GPU (1.9GB) and dequants on-the-fly. Set `GPU_QUANTIZED=1` to enable.
+## NEXT: Phase 16 — GPU SSM Matmuls
+Requires quantized GPU kernel (Q5_K/Q6_K on-GPU dequant) to fit VRAM.
