@@ -1,15 +1,11 @@
 /**
- * gen_text_mtp.c — Multi-Token Prediction inference.
- * Uses MTP head as free extra token generator.
- * Each decode step: 1 main model forward + DRAFT_N MTP head forwards.
- * No verify/rollback — MTP outputs are treated as model's own predictions.
+ * gen_text_mtp.c — MTP multi-token prediction inference.
+ * MTP=1: free-tokens mode (emit 1 main + DRAFT_N MTP per step, opt-in).
+ * Default: non-MTP (coherent, same as gen_text).
  *
- * NOTE: At IQ2_M quantization, MTP head predictions may differ significantly
- * from main model's. This is a known limitation of quantized MTP.
- *
- * Build: make gen_text_mtp
- * Usage: MOE=1 ./gen_text_mtp [prompt] [max_tokens]
- *        NO_MTP=1 ./gen_text_mtp [prompt] [max_tokens]  (disable MTP)
+ * NOTE: At IQ2_M quantization, MTP head predictions diverge from main model
+ * (blk.40 Q2_K/Q3_K MoE too noisy). MTP=1 enables free-tokens mode which
+ * runs faster but degrades output quality. Non-MTP default is recommended.
  */
 #include "wubu_model.h"
 #include "wubu_ssm.h"
@@ -56,7 +52,7 @@ int main(int argc, char **argv) {
     const char *prompt = "The meaning of life is";
     int max_tokens = 32;
     int D = D_MODEL;
-    int use_mtp = getenv("MTP") != NULL;  // opt-in: requires MTP=1
+    int use_mtp = getenv("MTP") != NULL;
 
     if (argc > 1) prompt = argv[1];
     if (argc > 2) max_tokens = atoi(argv[2]);
@@ -68,12 +64,11 @@ int main(int argc, char **argv) {
     mdl.enable_moe = true;
 
     if (use_mtp) {
-        // Load MTP head from same GGUF
         if (!wubu_mtp_load(&mdl.mtp, model_path, mdl.gguf_ctx, (const uint8_t*)mdl.gguf_ctx->data_blob)) {
-            fprintf(stderr, "MTP head not available, falling back to non-MTP\n");
+            fprintf(stderr, "MTP head not available\n");
             use_mtp = 0;
         } else {
-            fprintf(stderr, "MTP head loaded (opt-in mode)\n");
+            fprintf(stderr, "MTP head loaded (opt-in)\n");
         }
     }
 
@@ -86,7 +81,6 @@ int main(int argc, char **argv) {
     if (n_prompt <= 0) { prompt_tokens[0] = tok.bos_id >= 0 ? tok.bos_id : 248044; n_prompt = 1; }
     fprintf(stderr, "Prompt: %d tokens\n", n_prompt);
 
-    // Embeddings for prompt
     float *embd = (float *)malloc(n_prompt * D * sizeof(float));
     FILE *emb_file = NULL;
     if (mdl.use_embedding_file) {
@@ -96,7 +90,6 @@ int main(int argc, char **argv) {
     for (int i = 0; i < n_prompt; i++)
         get_embd(&mdl, prompt_tokens[i], embd + i * D, emb_file);
 
-    // Prefill: get logits + h_39 via save_last_hidden
     float *logits_buf = (float *)malloc(n_prompt * vs * sizeof(float));
     float h_39[D];
     double t0 = wall_clock();
@@ -106,7 +99,6 @@ int main(int argc, char **argv) {
     double t_prefill = wall_clock() - t0;
     fprintf(stderr, "Prefill: %.2fs\n", t_prefill);
 
-    // Print prompt
     { char buf[2048]; int nc = wubu_tokenizer_decode(&tok, prompt_tokens, n_prompt, buf, 2048);
       if (nc > 0) fprintf(stderr, "Input: %s\n", buf); }
 
@@ -116,7 +108,6 @@ int main(int argc, char **argv) {
     float *mtp_logits = (float *)malloc(vs * sizeof(float));
     int total_gen = 0;
 
-    // Use the prefill result
     float *last_logits = logits_buf + (n_prompt - 1) * vs;
     int last_real_token = argmax(last_logits, vs);
     get_embd(&mdl, last_real_token, cur, emb_file);
@@ -154,7 +145,6 @@ int main(int argc, char **argv) {
         }
 
         // Advance main model state by forwarding the last emitted token
-        // This brings KV cache + SSM state in sync with generated text
         mdl.save_last_hidden = h_39;
         wubu_model_forward_from_embd(&mdl, cur, 1, 1, logits_out);
         mdl.save_last_hidden = NULL;
@@ -170,11 +160,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Total: %d tok in %.2fs (%.1f tok/s)\n", total_gen + n_prompt, t_total,
            (total_gen + n_prompt) / t_total);
     fprintf(stderr, "Decode: %d tok in %.2fs (%.1f tok/s)\n", total_gen, t_decode, total_gen / t_decode);
-    if (mdl.mtp.loaded) {
-        int main_forwards = total_gen - (!no_mtp ? (total_gen / (DRAFT_N + 1)) : 0);
-        if (main_forwards < 1) main_forwards = 1;
-        fprintf(stderr, "MTP enabled: ~%d main forwards\n", total_gen / (no_mtp ? 1 : (DRAFT_N + 1)));
-    }
 
     free(embd); free(logits_buf); free(h_next); free(logits_out); free(cur); free(mtp_logits);
     if (emb_file) fclose(emb_file);

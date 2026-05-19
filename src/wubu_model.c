@@ -839,9 +839,9 @@ int wubu_mtp_draft_forward(wubu_model_t *model,
         // Step 2: e_norm = rms_norm(token_embd[b], enorm)
         wubu_rms_norm(1, 1, D_MODEL, embd_b, mtp->nextn_enorm, 1e-6f, e_norm);
         
-        // Step 3: concat = [h_norm | e_norm]
-        memcpy(concat, h_norm, D_MODEL * sizeof(float));
-        memcpy(concat + D_MODEL, e_norm, D_MODEL * sizeof(float));
+        // Step 3: concat = [e_norm | h_norm] (llama.cpp order: ggml_concat(e_norm, h_norm, 0))
+        memcpy(concat, e_norm, D_MODEL * sizeof(float));
+        memcpy(concat + D_MODEL, h_norm, D_MODEL * sizeof(float));
         
         // Step 4: cur = eh_proj @ concat (F32 SGEMM)
         for (int j = 0; j < D_MODEL; j++) {
