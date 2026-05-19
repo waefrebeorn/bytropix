@@ -504,10 +504,10 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             float *ssm_state = model->ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
 #ifdef GPU_SUPPORT
-            if (model->gpu_ctx && N > 16) {
-                // GPU-accelerated SSM projections (only for prefill > 16 tokens, too much overhead for decode)
-                // For prefill (N>1): token-by-token
-                // qkv_temp and z_temp buffers for GPU results
+            if (model->gpu_ctx && N > 1) {
+                // GPU-accelerated SSM projections + recurrence
+                // For prefill (N>1): token-by-token  
+                // GPU recurrence always on via the GPU branch below
                 float *gpu_qkv = (float*)malloc(sizeof(float) * N * CONV_DIM);
                 float *gpu_z = (float*)malloc(sizeof(float) * N * VALUE_DIM);
                 if (gpu_qkv && gpu_z) {
@@ -544,6 +544,21 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                     wubu_ssm_forward(normed, B, T, &layer->ssm,
                         ssm_state, conv_state, attn_out, NULL, NULL);
                 }
+            } else if (model->gpu_ctx) {
+                // GPU recurrence only (matmuls on CPU for decode)
+                gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
+                layer->ssm.gpu_ssm_state = (void*)gpu->d_ssm_state[l];
+                layer->ssm.gpu_q_buf     = (void*)gpu->d_ssm_q_all;
+                layer->ssm.gpu_k_buf     = (void*)gpu->d_ssm_k_all;
+                layer->ssm.gpu_v_buf     = (void*)gpu->d_ssm_v_all;
+                layer->ssm.gpu_beta_buf  = (void*)gpu->d_ssm_beta_arr;
+                layer->ssm.gpu_gate_buf  = (void*)gpu->d_ssm_gate_arr;
+                layer->ssm.gpu_delta_buf = (void*)gpu->d_ssm_delta_out;
+                layer->ssm.gpu_stream    = (void*)gpu->stream;
+                wubu_ssm_forward(normed, B, T, &layer->ssm,
+                    ssm_state, conv_state, attn_out, NULL, NULL);
+                layer->ssm.gpu_ssm_state = NULL;
+                layer->ssm.gpu_stream    = NULL;
             } else
 #endif
             {
