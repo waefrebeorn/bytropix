@@ -1,11 +1,15 @@
 /**
  * gen_text_mtp.c — MTP multi-token prediction inference.
- * MTP=1: free-tokens mode (emit 1 main + DRAFT_N MTP per step, opt-in).
- * Default: non-MTP (coherent, same as gen_text).
+ * MTP=1: free-tokens mode (main prediction + DRAFT_N MTP extra tokens per step).
+ * Default: non-MTP (1 token per decode step, same as gen_text).
  *
- * NOTE: At IQ2_M quantization, MTP head predictions diverge from main model
- * (blk.40 Q2_K/Q3_K MoE too noisy). MTP=1 enables free-tokens mode which
- * runs faster but degrades output quality. Non-MTP default is recommended.
+ * Flow per iteration:
+ *   1. Emit main model's prediction (argmax(last_logits) from prev forward)
+ *   2. Generate MTP extra tokens via blk.40 head (updates cur each step)
+ *   3. Forward last emitted token through main model → new h_39 + logits
+ *
+ * The MTP head predicts: given h_39 (from position P) + token at P, what's next?
+ * First MTP draft = first generated token = should match main model's prediction.
  */
 #include "wubu_model.h"
 #include "wubu_ssm.h"
@@ -81,6 +85,7 @@ int main(int argc, char **argv) {
     if (n_prompt <= 0) { prompt_tokens[0] = tok.bos_id >= 0 ? tok.bos_id : 248044; n_prompt = 1; }
     fprintf(stderr, "Prompt: %d tokens\n", n_prompt);
 
+    // Embeddings for prompt
     float *embd = (float *)malloc(n_prompt * D * sizeof(float));
     FILE *emb_file = NULL;
     if (mdl.use_embedding_file) {
@@ -90,6 +95,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < n_prompt; i++)
         get_embd(&mdl, prompt_tokens[i], embd + i * D, emb_file);
 
+    // Prefill: get logits + h_39 via save_last_hidden
     float *logits_buf = (float *)malloc(n_prompt * vs * sizeof(float));
     float h_39[D];
     double t0 = wall_clock();
@@ -99,6 +105,7 @@ int main(int argc, char **argv) {
     double t_prefill = wall_clock() - t0;
     fprintf(stderr, "Prefill: %.2fs\n", t_prefill);
 
+    // Print prompt
     { char buf[2048]; int nc = wubu_tokenizer_decode(&tok, prompt_tokens, n_prompt, buf, 2048);
       if (nc > 0) fprintf(stderr, "Input: %s\n", buf); }
 
@@ -108,23 +115,41 @@ int main(int argc, char **argv) {
     float *mtp_logits = (float *)malloc(vs * sizeof(float));
     int total_gen = 0;
 
+    // After prefill: last_logits predicts first generated token
+    // cur = embedding of the LAST PROMPT token (for MTP's first draft)
     float *last_logits = logits_buf + (n_prompt - 1) * vs;
-    int last_real_token = argmax(last_logits, vs);
-    get_embd(&mdl, last_real_token, cur, emb_file);
+    get_embd(&mdl, prompt_tokens[n_prompt - 1], cur, emb_file);
 
     while (total_gen < max_tokens && !g_stop) {
-        // Emit main model's prediction
+        // ====== STEP 1: Emit main model's prediction ======
+        int main_token = argmax(last_logits, vs);
         {
             char piece[256];
-            int nc = wubu_tokenizer_decode(&tok, &last_real_token, 1, piece, 256);
-            if (nc > 0) fwrite(piece, 1, nc, stdout); else printf("<%d>", last_real_token);
+            int nc = wubu_tokenizer_decode(&tok, &main_token, 1, piece, 256);
+            if (nc > 0) fwrite(piece, 1, nc, stdout); else printf("<%d>", main_token);
             fflush(stdout);
         }
         total_gen++;
-        if (last_real_token == tok.eos_id || last_real_token == tok.bos_id) break;
+        if (main_token == tok.eos_id || main_token == tok.bos_id) break;
         if (total_gen >= max_tokens || g_stop) break;
 
-        // Generate and emit MTP extra tokens
+        // Update cur to this emitted token's embedding for MTP
+        get_embd(&mdl, main_token, cur, emb_file);
+
+        // VERIFY: MTP head should predict SAME first token as main model
+        // when given h_39 + embd(last_prompt_token)
+        if (use_mtp && mdl.mtp.loaded && total_gen == 1) {
+            float verify_embd[D];
+            get_embd(&mdl, prompt_tokens[n_prompt - 1], verify_embd, emb_file);
+            float verify_logits[vs];
+            mdl.mtp.cache_len = 0;
+            wubu_mtp_draft_forward(&mdl, h_39, verify_embd, 1, verify_logits);
+            int mtp_first = argmax(verify_logits, vs);
+            fprintf(stderr, "\n[MTP-VFY] main predicts=%d MTP predicts=%d %s\n",
+                    main_token, mtp_first, main_token == mtp_first ? "MATCH!" : "MISMATCH");
+        }
+
+        // ====== STEP 2: Generate MTP extra tokens ======
         if (use_mtp && mdl.mtp.loaded) {
             mdl.mtp.cache_len = 0;
             for (int di = 0; di < DRAFT_N; di++) {
@@ -144,12 +169,12 @@ int main(int argc, char **argv) {
             if (total_gen >= max_tokens || g_stop) break;
         }
 
-        // Advance main model state by forwarding the last emitted token
+        // ====== STEP 3: Advance main model state ======
+        // Forward last emitted token through main model → new h_39 + logits
         mdl.save_last_hidden = h_39;
         wubu_model_forward_from_embd(&mdl, cur, 1, 1, logits_out);
         mdl.save_last_hidden = NULL;
-        last_real_token = argmax(logits_out, vs);
-        get_embd(&mdl, last_real_token, cur, emb_file);
+        last_logits = logits_out;
     }
 
     printf("\n");
