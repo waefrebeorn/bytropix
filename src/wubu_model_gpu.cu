@@ -14,6 +14,7 @@
 #include "gguf_reader.h"
 #include "gpu_quant_matmul.h"
 #include "gpu_moe_kernel.h"
+#include "gpu_ssm_recurrence.h"
 #include "wubu_moe.h"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -99,6 +100,15 @@ typedef struct {
     uint8_t *d_moe_down;        // [8][down_bytes_per_expert]
     float   *d_moe_out;         // [8][D_MODEL]
     float   *d_moe_weights;     // [8]
+    // SSM recurrence persistent state (per layer, updated in-place)
+    float **d_ssm_state;        // [n_layers][V_HEADS][D_STATE][D_STATE]
+    // SSM recurrence temp buffers
+    float *d_ssm_q_all;         // [V_HEADS][D_STATE]
+    float *d_ssm_k_all;         // [V_HEADS][D_STATE]
+    float *d_ssm_v_all;         // [V_HEADS][D_STATE]
+    float *d_ssm_beta_arr;      // [V_HEADS]
+    float *d_ssm_gate_arr;      // [V_HEADS]
+    float *d_ssm_delta_out;     // [V_HEADS][D_STATE]
 } gpu_ctx_t;
 
 // ================================================================
@@ -401,6 +411,27 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     printf("GPU: MoE buffers allocated (3x%dKB + %dKB)\\n",
            (int)(8 * moe_bytes / 1024), (int)(8 * D_MODEL * 4 / 1024));
 
+    // Allocate SSM recurrence state: one [V_HEADS][D_STATE][D_STATE] per SSM layer
+    gpu->d_ssm_state = (float**)calloc(gpu->n_layers, sizeof(float*));
+    for (int l = 0; l < gpu->n_layers; l++) {
+        if (model->layers[l].is_ssm) {
+            gpu->d_ssm_state[l] = wubu_cuda_alloc(
+                (size_t)SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float));
+            cudaMemsetAsync(gpu->d_ssm_state[l], 0,
+                (size_t)SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float),
+                gpu->stream);
+        }
+    }
+    // SSM recurrence temp buffers
+    gpu->d_ssm_q_all    = wubu_cuda_alloc((size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float));
+    gpu->d_ssm_k_all    = wubu_cuda_alloc((size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float));
+    gpu->d_ssm_v_all    = wubu_cuda_alloc((size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float));
+    gpu->d_ssm_beta_arr = wubu_cuda_alloc((size_t)SSM_V_HEADS * sizeof(float));
+    gpu->d_ssm_gate_arr = wubu_cuda_alloc((size_t)SSM_V_HEADS * sizeof(float));
+    gpu->d_ssm_delta_out= wubu_cuda_alloc((size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float));
+    printf("GPU: SSM recurrence buffers allocated (%d heads × %d state)\n",
+           SSM_V_HEADS, SSM_D_STATE);
+
     printf("GPU: init complete (%.1f MB GQA weights)\n",
            (double)gpu->n_gqa_layers * (double)(D_MODEL * (q_dim_x2 + kv_dim*2) + q_dim * D_MODEL) * 4.0 / 1048576.0);
     return 1;
@@ -431,65 +462,43 @@ int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
     // Upload normed input to GPU
     cudaMemcpyAsync(gpu->d_x, h_norm, (size_t)C * D_MODEL * sizeof(float),
                     cudaMemcpyHostToDevice, st);
-    cudaStreamSynchronize(st);
 
     // === Q (fused Q+gate), K, V projections via cuBLAS ===
-    // d_scr: [C, q_dim_x2] fused Q+gate
-    // d_ktmp: [C, kv_dim] K
-    // d_vtmp: [C, kv_dim] V
     wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gw->d_attn_q, q_dim_x2, gpu->d_scr, 1.0f, 0.0f);
     wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gw->d_attn_k, kv_dim, gpu->d_ktmp, 1.0f, 0.0f);
     wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gw->d_attn_v, kv_dim, gpu->d_vtmp, 1.0f, 0.0f);
-    cudaStreamSynchronize(st);
 
-    // === Extract Q (strided q_dim_x2) → contiguous d_qtmp (stride q_dim) ===
+    // === Extract Q and gate from fused ===
     wubu_cuda_copy_q_from_fused(gpu->d_qtmp, gpu->d_scr, C, q_dim, st);
-
-    // === Extract gate (strided q_dim_x2) → contiguous in d_scr (overwrite Q part) ===
-    // After Q copy, d_scr's first q_dim/token is free. Write gate contiguously there.
-    // copy_gate_from_fused: dst[s*qdim+j] = src[s*qdim*2+qdim+j]
-    // d_scr[s*8192 + 0..4095] ← d_scr[s*8192 + 4096..8191] — no overlap
     wubu_cuda_copy_gate_from_fused(gpu->d_scr, gpu->d_scr, C, q_dim, st);
 
-    // === RMSNorm Q (contiguous in d_qtmp) ===
+    // === RMSNorm Q and K ===
     wubu_cuda_rms_norm_heads(C * GQA_Q_HEADS, GQA_HEAD_DIM,
         gpu->d_qtmp, gw->d_q_norm_w, 1e-6f, gpu->d_qtmp, st);
-
-    // === RMSNorm K (contiguous in d_ktmp, stride kv_dim) ===
     wubu_cuda_rms_norm_heads(C * GQA_KV_HEADS, GQA_HEAD_DIM,
         gpu->d_ktmp, gw->d_k_norm_w, 1e-6f, gpu->d_ktmp, st);
-    cudaStreamSynchronize(st);
 
-    // === Apply RoPE to Q (d_qtmp) and K (d_ktmp) ===
+    // === Apply RoPE to Q and K ===
     int cache_start = gpu->cache_len[layer_idx];
     wubu_cuda_apply_rotary_to_qk(gpu->d_qtmp, gpu->d_ktmp,
         C, C, GQA_Q_HEADS, GQA_KV_HEADS, GQA_HEAD_DIM,
         gpu->d_sincos + (size_t)cache_start * ROTARY_DIM, st);
-    cudaStreamSynchronize(st);
 
-    // === Append K, V to persistent cache at position cache_start ===
+    // === Append K, V to persistent cache ===
     cudaMemcpyAsync(gpu->d_k_cache[layer_idx] + (size_t)cache_start * kv_dim,
                     gpu->d_ktmp, (size_t)C * kv_dim * sizeof(float),
                     cudaMemcpyDeviceToDevice, st);
     cudaMemcpyAsync(gpu->d_v_cache[layer_idx] + (size_t)cache_start * kv_dim,
                     gpu->d_vtmp, (size_t)C * kv_dim * sizeof(float),
                     cudaMemcpyDeviceToDevice, st);
-    cudaStreamSynchronize(st);
 
     // Update cache length
     gpu->cache_len[layer_idx] = cache_start + C;
 
-    // === Chunked attention: Q (d_qtmp, contiguous) against all cached K,V ===
-    // d_scr now has contiguous gate [C, q_dim] (overwrote Q part from fused buffer)
-    // This is safe: chunked_attn reads d_gate_full at stride q_dim per token
+    // === Chunked attention ===
     wubu_cuda_chunked_attn(ch, st, C, cache_start + C,
-        gpu->d_qtmp,               // Q (RMSNorm'd + RoPE'd, contiguous)
-        gpu->d_k_cache[layer_idx], // K_cache (all past positions)
-        gpu->d_v_cache[layer_idx], // V_cache (all past positions)
-        gpu->d_scr,                // gate (contiguous, stride q_dim)
-        gw->d_attn_out_w,          // output projection weight [q_dim, D_MODEL]
-        gpu->d_gout,               // output [C, D_MODEL]
-        gpu->d_score_scr);         // score scratch
+        gpu->d_qtmp, gpu->d_k_cache[layer_idx], gpu->d_v_cache[layer_idx],
+        gpu->d_scr, gw->d_attn_out_w, gpu->d_gout, gpu->d_score_scr);
 
     // Download output back to CPU
     cudaMemcpyAsync(h_attn, gpu->d_gout, (size_t)C * D_MODEL * sizeof(float),
@@ -705,6 +714,19 @@ void wubu_model_gpu_free(wubu_model_t *model) {
     wubu_cuda_free((float*)gpu->d_moe_down);
     wubu_cuda_free(gpu->d_moe_out);
     wubu_cuda_free(gpu->d_moe_weights);
+
+    // Free SSM recurrence state and temp buffers
+    if (gpu->d_ssm_state) {
+        for (int l = 0; l < gpu->n_layers; l++)
+            wubu_cuda_free(gpu->d_ssm_state[l]);
+        free(gpu->d_ssm_state);
+    }
+    wubu_cuda_free(gpu->d_ssm_q_all);
+    wubu_cuda_free(gpu->d_ssm_k_all);
+    wubu_cuda_free(gpu->d_ssm_v_all);
+    wubu_cuda_free(gpu->d_ssm_beta_arr);
+    wubu_cuda_free(gpu->d_ssm_gate_arr);
+    wubu_cuda_free(gpu->d_ssm_delta_out);
 
     // Destroy CUDA context
     if (gpu->handle) cublasDestroy(gpu->handle);

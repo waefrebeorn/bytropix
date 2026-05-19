@@ -13,6 +13,19 @@
 #include <math.h>
 #include <string.h>
 #include <assert.h>
+#ifdef GPU_SUPPORT
+#include <cuda_runtime.h>
+#endif
+
+// GPU SSM recurrence (declared in gpu_ssm_recurrence.cu, extern C linkage)
+#ifdef GPU_SUPPORT
+void wubu_gpu_ssm_recurrence(
+    float *ssm_state,
+    const float *q, const float *k, const float *v,
+    const float *beta, const float *gate,
+    float *delta_out,
+    void *stream);
+#endif
 #include <stdio.h>
 
 // QK_K = 256 for all K-quant types (must match quantized_matmul.c)
@@ -442,6 +455,49 @@ void wubu_ssm_forward(const float *x, int B, int T,
     // We process B batches and T timesteps, updating the state in-place
     int repeat_factor = SSM_V_HEADS / SSM_K_HEADS;  // 2
     
+    // GPU recurrence path: skip CPU recurrence, set delta_out via GPU kernel
+#ifdef GPU_SUPPORT
+    if (w->gpu_ssm_state && N == 1) {
+        float *d_state = (float*)w->gpu_ssm_state;
+        float *d_q     = (float*)w->gpu_q_buf;
+        float *d_k     = (float*)w->gpu_k_buf;
+        float *d_v     = (float*)w->gpu_v_buf;
+        float *d_beta  = (float*)w->gpu_beta_buf;
+        float *d_gate  = (float*)w->gpu_gate_buf;
+        float *d_delta = (float*)w->gpu_delta_buf;
+        cudaStream_t st = (cudaStream_t)w->gpu_stream;
+        
+        float host_q[SSM_V_HEADS * SSM_D_STATE];
+        float host_k[SSM_V_HEADS * SSM_D_STATE];
+        float host_v[SSM_V_HEADS * SSM_D_STATE];
+        float host_beta[SSM_V_HEADS];
+        float host_gate[SSM_V_HEADS];
+        for (int vh = 0; vh < SSM_V_HEADS; vh++) {
+            int kh = vh % SSM_K_HEADS;
+            for (int i = 0; i < SSM_D_STATE; i++) {
+                host_q[vh * SSM_D_STATE + i] = q_norm[kh * SSM_D_STATE + i];
+                host_k[vh * SSM_D_STATE + i] = k_norm[kh * SSM_D_STATE + i];
+            }
+            memcpy(host_v + vh * SSM_D_STATE,
+                   v_conv + vh * SSM_D_STATE, SSM_D_STATE * sizeof(float));
+            host_beta[vh] = beta_flat[vh];
+            host_gate[vh] = gate_flat[vh];
+        }
+        cudaMemcpyAsync(d_q, host_q, sizeof(host_q), cudaMemcpyHostToDevice, st);
+        cudaMemcpyAsync(d_k, host_k, sizeof(host_k), cudaMemcpyHostToDevice, st);
+        cudaMemcpyAsync(d_v, host_v, sizeof(host_v), cudaMemcpyHostToDevice, st);
+        cudaMemcpyAsync(d_beta, host_beta, sizeof(host_beta), cudaMemcpyHostToDevice, st);
+        cudaMemcpyAsync(d_gate, host_gate, sizeof(host_gate), cudaMemcpyHostToDevice, st);
+        wubu_gpu_ssm_recurrence(d_state, d_q, d_k, d_v, d_beta, d_gate, d_delta, st);
+        cudaMemcpyAsync(delta_out, d_delta,
+            (size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float),
+            cudaMemcpyDeviceToHost, st);
+        cudaStreamSynchronize(st);
+        if (dd) printf("  [SSM] GPU recurrence active\n");
+        goto gpu_rec_done;
+    }
+#endif  // GPU_SUPPORT
+    
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             int s = b * T + t;
@@ -536,6 +592,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
             }
         }
     }
+    gpu_rec_done:
     
     if (dd) {
         FILE *f = fopen("/tmp/dbg_state_after_t0.bin", "wb");

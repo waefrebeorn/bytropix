@@ -504,8 +504,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             float *ssm_state = model->ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
 #ifdef GPU_SUPPORT
-            if (model->gpu_ctx) {
-                // GPU-accelerated SSM projections (quantized matmuls)
+            if (model->gpu_ctx && N > 16) {
+                // GPU-accelerated SSM projections (only for prefill > 16 tokens, too much overhead for decode)
                 // For prefill (N>1): token-by-token
                 // qkv_temp and z_temp buffers for GPU results
                 float *gpu_qkv = (float*)malloc(sizeof(float) * N * CONV_DIM);
@@ -522,8 +522,21 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                                 gpu_z + t * VALUE_DIM, NULL);
                         }
                     }
+                    // Set GPU recurrence pointers so wubu_ssm_forward uses GPU
+                    gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
+                    layer->ssm.gpu_ssm_state = (void*)gpu->d_ssm_state[l];
+                    layer->ssm.gpu_q_buf     = (void*)gpu->d_ssm_q_all;
+                    layer->ssm.gpu_k_buf     = (void*)gpu->d_ssm_k_all;
+                    layer->ssm.gpu_v_buf     = (void*)gpu->d_ssm_v_all;
+                    layer->ssm.gpu_beta_buf  = (void*)gpu->d_ssm_beta_arr;
+                    layer->ssm.gpu_gate_buf  = (void*)gpu->d_ssm_gate_arr;
+                    layer->ssm.gpu_delta_buf = (void*)gpu->d_ssm_delta_out;
+                    layer->ssm.gpu_stream    = (void*)gpu->stream;
                     wubu_ssm_forward(normed, B, T, &layer->ssm,
                         ssm_state, conv_state, attn_out, gpu_qkv, gpu_z);
+                    // Clear GPU pointers to avoid stale state
+                    layer->ssm.gpu_ssm_state = NULL;
+                    layer->ssm.gpu_stream    = NULL;
                     free(gpu_qkv);
                     free(gpu_z);
                 } else {
@@ -539,19 +552,14 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             }
         } else {
 #ifdef GPU_SUPPORT
-            if (model->gpu_ctx) {
-                // GPU-accelerated GQA
-                if (N == 1) {
-                    wubu_model_gpu_gqa_forward(model, l, normed, N, attn_out);
-                } else {
-                    // Prefill: token-by-token for causality
-                    float *tok_normed = normed;
-                    float *tok_attn = attn_out;
-                    for (int t = 0; t < N; t++) {
-                        wubu_model_gpu_gqa_forward(model, l, tok_normed, 1, tok_attn);
-                        tok_normed += D_MODEL;
-                        tok_attn += D_MODEL;
-                    }
+            if (model->gpu_ctx && N > 1) {
+                // GPU-accelerated GQA (only for prefill, too much overhead for single-token decode)
+                float *tok_normed = normed;
+                float *tok_attn = attn_out;
+                for (int t = 0; t < N; t++) {
+                    wubu_model_gpu_gqa_forward(model, l, tok_normed, 1, tok_attn);
+                    tok_normed += D_MODEL;
+                    tok_attn += D_MODEL;
                 }
             } else
 #endif

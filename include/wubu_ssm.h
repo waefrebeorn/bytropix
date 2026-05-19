@@ -77,6 +77,16 @@ typedef struct {
     // Pre-attention and post-attention norms
     float *attn_norm_weight;          // [D_MODEL] = [2048]
     float *post_attention_norm_weight; // [D_MODEL] = [2048]
+    
+    // GPU recurrence state (optional, set by wubu_model.c when GPU active)
+    void *gpu_ssm_state;     // device: [V_HEADS][D_STATE][D_STATE]
+    void *gpu_q_buf;         // device: [V_HEADS][D_STATE]
+    void *gpu_k_buf;         // device: [V_HEADS][D_STATE]
+    void *gpu_v_buf;         // device: [V_HEADS][D_STATE]
+    void *gpu_beta_buf;      // device: [V_HEADS]
+    void *gpu_gate_buf;      // device: [V_HEADS]
+    void *gpu_delta_buf;     // device: [V_HEADS][D_STATE]
+    void *gpu_stream;        // CUDA stream (void* to avoid CUDA dependency in header)
 } ssm_layer_weights;
 
 // All weights for one GQA layer

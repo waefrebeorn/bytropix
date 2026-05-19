@@ -7,12 +7,23 @@
 #include <assert.h>
 
 // GPU MoE expert forward (declared in wubu_model_gpu.cu, C linkage)
-// Used when moe_weights_t.gpu_ctx is non-NULL
+#ifdef GPU_SUPPORT
 void wubu_model_gpu_moe_experts(const moe_weights_t *w,
     const float *x_s,
     const int *indices_s, const float *weights_s,
     float expert_contribs[8][D_MODEL],
     void *model_ptr);
+#endif
+
+#ifdef GPU_SUPPORT
+// GPU SSM recurrence forward
+void wubu_gpu_ssm_recurrence(
+    float *ssm_state,
+    const float *q, const float *k, const float *v,
+    const float *beta, const float *gate,
+    float *delta_out,
+    void *stream);
+#endif
 
 int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe) {
     char name[256];
@@ -477,9 +488,13 @@ void wubu_moe_forward(const float *x, int B, int T,
             memset(expert_contribs, 0, sizeof(expert_contribs));
             
             if (w->gpu_ctx) {
+#ifdef GPU_SUPPORT
                 // GPU accelerated: all 8 experts in one kernel call
                 wubu_model_gpu_moe_experts(w, x_s, indices_s, weights_s,
                     expert_contribs, w->gpu_ctx);
+#else
+                (void)expert_contribs;
+#endif
             } else {
             #pragma omp taskgroup
             {
