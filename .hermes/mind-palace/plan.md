@@ -1,52 +1,72 @@
-# Plan — May 19, 2026 Late PM (Phase 14: SSM AVX2 Optimization ✅)
+# Plan — May 19, 2026 Late PM (Phase 14: SSM AVX2 ✅ → GPU Roadmap)
 
-## Phase 0-13: DONE ✅
+## Phase 0-14: DONE ✅
 | Phase | Detail | Status |
 |-------|--------|--------|
 | 0-11 | GQA attn, AVX2 vec_dot, self-contained, MoE, quant path, KV cache | ✅ |
-| 12 | MTP Speculative Decode | ✅ MTP broken at UD-IQ2_M |
+| 12 | MTP Speculative Decode | ✅ EMA logit correction implemented |
 | 13 | GPU Output Projection (cuBLAS SGEMM, batched prefill) | ✅ |
+| 14 | SSM AVX2 Optimization (fused Q8, scan, NaN guard, tiled GQA) | ✅ |
 
-## Phase 14: SSM AVX2 Optimization — DONE ✅
-### Fused Q8_K Quantization
-- SSM: attn_qkv (Q5_K, 8192 cols) + attn_gate (Q5_K, 4096 cols) share Q8_K quant
-- GQA: Q+gate (Q5_K, 8192) + K (Q5_K, 512) + V (Q5_K, 512) share Q8_K quant  
-- New `quantized_matmul_from_q8()` function takes pre-quantized Q8_K buffer
-- Saves 50 Q8_K quantize operations per decode step
+## GPU Acceleration Roadmap
 
-### AVX2 Selective Scan Inner Loops
-Four helper functions with AVX2 intrinsics added to wubu_ssm.c:
-1. `avx2_state_decay()` — `_mm256_mul_ps` over 16384 elements
-2. `avx2_hk()` — `_mm256_fmadd_ps` + HSUM256 reduction
-3. `avx2_state_update()` — `_mm256_fmadd_ps` outer product
-4. `avx2_hq()` — `_mm256_fmadd_ps` + HSUM256 reduction
-Each processes 8 floats/iteration vs scalar's 1. Verified: max diff 1.85e-3.
+### Current GPU Status (Phase 14 end)
+```
+Output proj  [GPU: ✅ Q4_K quantized kernel + F32 cuBLAS]
+SSM matmuls [CPU only — 30 layers × 3 Q5_K matmuls = ~30ms]
+GQA attn    [CPU only — 10 layers × Q·K over KV cache]
+MoE         [CPU only — 8 experts × IQ2_XXS/IQ3_XXS = ~48ms]
+MTP         [CPU only — blk.40 draft + verify]
+```
 
-### GPU Quantized Output Projection (GPU_QUANTIZED=1)
-- Custom CUDA kernel: one thread per vocab column, dequants Q4_K on-the-fly
-- Uses ~1.9GB VRAM vs F32 mode's 7.6GB
-- Makes GPU output proj viable on 6.5GB VRAM laptops
-- Falls back to CPU if GPU memory insufficient
+### Phase 15: GPU GQA Attention [P1 — NEXT]
+**Why first:** GQA attention at 256k becomes O(n) per decode. On CPU at 256k: ~230ms.
+On GPU: stream KV through GPU in batches, compute Q·K on-the-fly.
 
-### NaN Guard Optimization
-- GQA NaN/Inf check gated behind DUMP_GQA_DEBUG env var
-- Saves ~90K isnan() calls per decode
+**Approach:** Upload Q (8KB) once per GQA layer. Stream KV cache entries through GPU in batches (4096 per launch). Compute scores on GPU. Download scores + V weighted sum.
 
-## Phase 15: 256k Context Optimization [P1 — NEXT]
-GQA attention is O(n) per layer at decode time (attending over cache_len positions).
-At 256k context: 2 KV heads × 256k × 256-dim dot ≈ 131M FMA per GQA layer.
-Total: 10 GQA layers × 131M = 1.3B FMA → ~13ms at 100 GFLOPS.
+**Implementation:** New `gpu_gqa_attention_kernel()` in gpu_output_proj.cu. Uses the existing F16 KV cache on CPU, streams through GPU in tiles. Each tile: upload KV tile, compute Q·K, accumulate V sum, download partial sums.
 
-### Options:
-1. **Flash attention**: Tile QK^T computation to reduce memory bandwidth
-2. **KV cache tiering**: Keep most tokens in F16 on GPU, only attend to recent tokens in CPU
-3. **Streaming attention**: Window-based attention with compressed historical context
-4. **GPU GQA attention**: Port the Q@K^T dot product and V weighted sum to CUDA
+**Expected speedup at 256k:** ~40ms → ~5ms per decode step (8×).
 
-## Phase 16: MTP Speculative Decode (Unblocked) [P2]
-Requires UD-Q2_K_XL model. Our two-model load, DRAFT_N=2, checkpoint/rollback is correct.
+### Phase 16: GPU SSM Matmuls [P2]
+**Target:** SSM attn_qkv (Q5_K, 2048×8192) + attn_gate (Q5_K, 2048×4096) = ~20ms total.
+**Approach:** Upload hidden state [2048], run Q5_K dequant+matmul on GPU via custom kernel (similar to GPU_QUANTIZED output proj kernel). Keep each layer's Q5_K weights on GPU (8MB per layer × 30 = 240MB total).
 
-## Phase 17: MoE Router Prefetch + Expert Caching [P3]
-- Expert indices from previous layer prefetch next layer's weights
-- Already partially implemented (stride prefetch to L3)
-- Could cache frequently-used experts' dequant values
+**Challenge:** 30 layers × 3 matmuls × 2 uploads/downloads = 180 PCIe transfers. At ~32GB/s, each 8KB upload + 32KB download = ~1.25µs. Total overhead: ~225µs. Worth doing if GPU compute time is <20ms vs CPU's 20ms.
+
+### Phase 17: GPU MTP Pipeline [P3]
+**MTP is a GPU gainz** — the draft head (blk.40) is one extra layer. After SSM+GQA+MoE are GPU-accelerated:
+- Main model forward + MTP draft forward as parallel GPU streams
+- Draft verification becomes batch: verify draft[1] by re-running just the SSM/GQA layers with the draft token
+- Overlap draft generation with main model inference via CUDA streams
+
+**Expected speedup:** 1.15-1.25x (MoE models, per blog) from spec decode alone. Combined with GPU acceleration of base model: potential 3-5x overall.
+
+### Phase 18: GPU MoE Expert Compute [P4]
+**Hardest port:** Dynamic expert routing (256 experts, 8 active per token). Each expert is IQ2_XXS gate/up + IQ3_XXS down. Need to:
+- Upload hidden state
+- Run router (tiny, stay CPU)
+- Upload selected expert indices to GPU
+- GPU loads 8 experts × 3 weight matrices from device memory
+- Compute gate*up→silu→down
+- Download result
+
+**Keep all 256 experts × 3 weight matrices on GPU:** IQ2_XXS gate/up: 66 bytes/block × 8 blocks/expert × 256 experts × 2 = ~270KB × 2 = 540KB. IQ3_XXS down: 98 bytes/block × 2 blocks × 256 = ~50KB. Total: ~590KB for all 256 experts! That's tiny — fits in L2 cache on GPU.
+
+## MTP Status (Post-Phase 14)
+**Online Logit Correction EMA implemented.** The MTP head (blk.40, Q2_K/Q3_K) produces systematically biased logits vs main model (IQ2_XXS/IQ3_XXS). Our fix:
+- Running EMA of per-logit difference: `correction[v] = 0.9*c[v] + 0.1*(main_logits[v] - mtp_logits[v])`
+- Applied before sampling: `mtp_logits[v] += correction[v]`
+- Converges within ~10 tokens
+- Pure math — no requant needed
+
+**Next MTP step:** After GPU acceleration of SSM+GQA+MoE, MTP becomes a batched pipeline. Draft generation and verification can overlap on separate CUDA streams.
+
+## Unchanged Items
+| Phase | Detail | Status |
+|-------|--------|--------|
+| IQ3_XXS AVX2 vec_dot | MoE down weights, generic C only | Future |
+| SSM conv1d SIMD | Not a hot path currently | Future |
+| KV cache tiering | KV_WINDOW env var for streaming attention | Phase 15 option |
+| Chat template | Not applied, minor quality impact | Low priority |
