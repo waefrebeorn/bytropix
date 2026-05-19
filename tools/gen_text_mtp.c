@@ -142,6 +142,7 @@ int main(int argc, char **argv) {
     float *logits_out = (float *)malloc(vs * sizeof(float));
     float *cur = (float *)malloc(D * sizeof(float));
     float *mtp_logits = (float *)malloc(vs * sizeof(float));
+    float *logit_correction = (float *)calloc(vs, sizeof(float));  // EMA correction for MTP logits
     float *prev_cur = (float *)malloc(D * sizeof(float));
     int total_gen = 0;
     int total_accepted = 0;
@@ -181,14 +182,42 @@ int main(int argc, char **argv) {
             // Generate draft[0] using prev_cur (token before the one we just predicted)
             // This should predict main_token (same position as last_logits)
             wubu_mtp_draft_forward(&mdl, h_39, prev_cur, 1, mtp_logits);
+            
+            // Save raw MTP logits before correction (for EMA update)
+            float mtp_raw[256];  // Only first 256 logits needed for EMA (practical approximation)
+            int mtp_raw_n = (vs < 256) ? vs : 256;
+            for (int v = 0; v < mtp_raw_n; v++) mtp_raw[v] = mtp_logits[v];
+            
+            // Apply online logit correction to compensate for quantization bias
+            for (int v = 0; v < vs; v++) mtp_logits[v] += logit_correction[v];
+            
             int draft0 = argmax(mtp_logits, vs);
 
             if (draft0 == main_token) {
+                // draft[0] matches main model! Log this and update correction EMA.
+                // Update EMA correction: correction = 0.9*c + 0.1*(main_logits - mtp_raw_logits)
+                // We use corrected mtp_logits here (slower adaptation but simpler code)
+                if (mtp_raw_n > 0) {
+                    for (int v = 0; v < mtp_raw_n; v++) {
+                        float diff = last_logits[v] - mtp_raw[v];
+                        logit_correction[v] = 0.9f * logit_correction[v] + 0.1f * diff;
+                    }
+                }
                 // draft[0] matches main model! Generate draft[1]
                 float mid_cur[D];
                 get_embd(&mdl, main_token, mid_cur, emb_file);
 
+                // Generate draft[1] via MTP head
                 wubu_mtp_draft_forward(&mdl, h_39, mid_cur, 1, mtp_logits);
+                
+                // Save raw MTP logits before correction (for EMA update)
+                float mtp_raw1[256];
+                int mtp_raw1_n = (vs < 256) ? vs : 256;
+                for (int v = 0; v < mtp_raw1_n; v++) mtp_raw1[v] = mtp_logits[v];
+                
+                // Apply logit correction before sampling
+                for (int v = 0; v < vs; v++) mtp_logits[v] += logit_correction[v];
+                
                 int draft1 = argmax(mtp_logits, vs);
 
                 // Checkpoint current model state before verifying draft[1]
@@ -203,6 +232,14 @@ int main(int argc, char **argv) {
                 wubu_model_forward_from_embd(&mdl, mid_cur, 1, 1, logits_out);
                 mdl.save_last_hidden = NULL;
                 int main_next = argmax(logits_out, vs);
+                
+                // Update EMA correction from draft[1] verification
+                if (mtp_raw1_n > 0) {
+                    for (int v = 0; v < mtp_raw1_n; v++) {
+                        float diff = logits_out[v] - mtp_raw1[v];
+                        logit_correction[v] = 0.9f * logit_correction[v] + 0.1f * diff;
+                    }
+                }
 
                 if (main_next == draft1) {
                     // BOTH drafts accepted! We emitted main_token already, now emit draft[1]
@@ -253,7 +290,14 @@ int main(int argc, char **argv) {
                 }
             } else {
                 // draft[0] doesn't match main model — MTP out of sync
-                if (verbose) fprintf(stderr, "\n[MTP] draft[0] mismatch: main=%d draft=%d\n", main_token, draft0);
+                // Still update EMA correction from available logits
+                if (mtp_raw_n > 0) {
+                    for (int v = 0; v < mtp_raw_n; v++) {
+                        float diff = last_logits[v] - mtp_raw[v];
+                        logit_correction[v] = 0.9f * logit_correction[v] + 0.1f * diff;
+                    }
+                }
+                if (verbose) fprintf(stderr, "\\n[MTP] draft[0] mismatch: main=%d draft=%d\\n", main_token, draft0);
                 goto normal_advance;
             }
         } else {
@@ -285,7 +329,7 @@ int main(int argc, char **argv) {
                100.0 * total_accepted / total_attempted, DRAFT_N);
     }
 
-    free(embd); free(logits_buf); free(logits_out); free(cur); free(mtp_logits); free(prev_cur);
+    free(embd); free(logits_buf); free(logits_out); free(cur); free(mtp_logits); free(logit_correction); free(prev_cur);
     if (emb_file) fclose(emb_file);
     if (mtp_ctx) gguf_close(mtp_ctx);
     wubu_tokenizer_free(&tok);
