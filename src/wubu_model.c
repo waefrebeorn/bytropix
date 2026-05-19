@@ -5,6 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <immintrin.h>  // _mm_prefetch for expert prefetch
 
 // ========== GGUF Tensor Names ==========
 
@@ -461,6 +462,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     float *attn_out = (float *)malloc(N * D_MODEL * sizeof(float));
     float *normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
     float *ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+    int *prev_experts = (int *)malloc(N * N_ACTIVE_EXPTS * sizeof(int));
+    int have_prev_experts = 0;
     
     // Layer loop
     for (int l = 0; l < model->n_layers; l++) {
@@ -468,6 +471,37 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         
         // Pre-attention RMSNorm
         wubu_rms_norm(B, T, D_MODEL, x, layer->attn_norm_weight, 1e-6f, normed);
+        
+        // Expert prefetch: if previous layer had MoE, prefetch this layer's expert weights
+        // Uses the previous layer's selected expert indices (experts tend to persist across layers)
+        // Strides through full weight data to L3 cache, not just first 256 bytes to L1
+        if (have_prev_experts && l > 0 && layer->moe.loaded && layer->moe.ffn_gate_exps_q) {
+            wubu_layer_t *prev = &model->layers[l-1];
+            if (prev->moe.loaded) {
+                int64_t gate_bytes = gguf_raw_size(layer->moe.ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
+                int64_t up_bytes   = gguf_raw_size(layer->moe.ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
+                int64_t down_bytes = gguf_raw_size(layer->moe.ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);
+                const int64_t P_STRIDE = 256;  // 4 cache lines per prefetch
+                for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+                    int e = prev_experts[k];
+                    if (e < 0 || e >= N_EXPERTS) continue;
+                    const uint8_t *g = layer->moe.ffn_gate_exps_q + (int64_t)e * gate_bytes;
+                    const uint8_t *u = layer->moe.ffn_up_exps_q   + (int64_t)e * up_bytes;
+                    const uint8_t *d = layer->moe.ffn_down_exps_q + (int64_t)e * down_bytes;
+                    // Stride through full weight: ~264KB per gate/up, ~392KB per down
+                    // Total ~920KB per expert, 7.4MB for 8 experts → L3
+                    for (int64_t off = 0; off < gate_bytes; off += P_STRIDE) {
+                        _mm_prefetch((const char *)g + off, _MM_HINT_T2);
+                    }
+                    for (int64_t off = 0; off < up_bytes; off += P_STRIDE) {
+                        _mm_prefetch((const char *)u + off, _MM_HINT_T2);
+                    }
+                    for (int64_t off = 0; off < down_bytes; off += P_STRIDE) {
+                        _mm_prefetch((const char *)d + off, _MM_HINT_T2);
+                    }
+                }
+            }
+        }
         
         double t0 = wall_time();
         
@@ -530,8 +564,9 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         double t_moe0 = wall_time();
         if (layer->moe.loaded && model->enable_moe &&
             (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
-            // Quantized path (saved pointers in wubu_model_init)
-            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, NULL);
+            // Quantized path: also save selected expert indices for next-layer prefetch
+            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, have_prev_experts ? prev_experts : NULL);
+            have_prev_experts = 1;
         } else if (model->enable_moe && model->gguf_ctx &&
                    (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Fallback: F32 dequant path
@@ -597,6 +632,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }
     } else if (model->output_weight_q && model->output_weight_type != GGML_TYPE_F32) {
         // Q4_K quantized matmul path
+        // For decode (N=1), quantized_matmul internal parallelizes across 248320 cols.
+        // For prefill (N>1), parallelize across tokens (outer loop).
+        // Nested OMP: outer parallel for uses threads for tokens, inner quantized_matmul
+        // uses 1 thread per token when nested=off (default) — correct behavior.
+        #pragma omp parallel for if(N > 1)
         for (int i = 0; i < N; i++) {
             quantized_matmul(x + i * D_MODEL,
                              model->output_weight_q,
@@ -644,6 +684,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     free(attn_out);
     free(normed2);
     free(ffn_out);
+    free(prev_experts);
 }
 
 // ========== MTP Head ==========

@@ -1,37 +1,35 @@
-# Prestige Prompt — May 19, 2026 (02:45) — TRIPLE DA AUDIT
+# Prestige Prompt — May 19, 2026 (04:15) — Phase 8.3-8.4
 
 ## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M
-Phase 7 complete. Triple DA audit: 7/7 key claims ✅, 2 stale ❓, 1 finding.
+Phase 8.3 (Expert Prefetch) and 8.4 (Output Proj Split) complete.
 
-## Benchmarks (DA verified)
-| Metric | Value | Status |
-|--------|-------|--------|
-| Decode | 2.1 tok/s | ✅ Verified 15.08s/32tok |
-| Prefill | 7.7 tok/s | ✅ Verified 2.72s/21tok |
-| Output proj decode | 6.4ms | ✅ Verified PROFILE=1 |
-| MoE decode/layer | 10ms | ✅ Verified PROFILE=1 |
-| llama dep free | yes | ✅ ldd+nm verified |
-| cos-sim | 0.9969 | ❓ Stale (Phase 2) |
+## Phase 8.3: Expert Prefetch
+- **Before:** 256 bytes/expert to L1 (0.03% of weight data)
+- **After:** Full-stride ~264KB(gate/up) + ~392KB(down) = ~920KB/expert → L3 via _MM_HINT_T2
+- 8 experts = ~7.4MB prefetched (fits L3 on modern CPUs)
+- ~25K prefetches issued during attn compute window (~1ms)
 
-## Phase 7 Opts
-- GQA attn: stack buf + AVX2 FMA (Q·K dot 4× unrolled, V sum 8-elem)
-- AVX2 vec_dot: Q4_K/Q5_K/Q6_K (256-bit, 2× SSE)
-- Prefetch next column in quantized_matmul
-- Llama deps killed
+## Phase 8.4: Output Proj Split
+- **Before:** Sequential for N tokens (prefill)
+- **After:** `#pragma omp parallel for if(N > 1)` on outer token loop
+- Nested OMP disabled by default → inner quantized_matmul uses 1 thread per token
+- Decode path (N=1) unaffected
 
-## DA Finding: MoE Softmax Gating
-Router uses softmax over all 256 experts then top-8 → renormalize. Works but DeepSeek recommends normalized sigmoid for stability + efficiency.
+## DA Finding: Cos-sim divergence tracking
+Layer-by-layer comparison (ref vs our):
+- L00-SSM: 0.8598 — divergent from first SSM layer
+- L01-SSM: 0.7464 — worsens immediately
+- L06-L31: 0.97→0.88 gradual decay (amplified quant noise)
+- L32-L39: 0.88→0.46 sharp drop (systematic divergence)
 
-## Cold Gaps
-| Prio | Gap | Impact |
-|------|-----|--------|
-| P0 | AVX2 IQ2_XXS/IQ3_XXS vec_dot | MoE = 10ms/layer = primary bottleneck |
-| P1 | Normalized sigmoid gating | Efficiency + stability |
-| P1 | NV64 ring buffer impl | Cache miss latency hiding |
-| P2 | cos-sim re-verify, MTP higher-precision | Stale claims, working spec-decode |
+Next: Add SSM intermediate dumps to llama.cpp for step-by-step comparison.
+Hypothesis: quantized_matmul path differs from llama.cpp's ggml_mul_mat at sufficient precision to compound through SSM recurrence.
 
-## Vault Papers Read
-- Unsloth UD quant formula: per-tensor bpw breakdown
-- Qwen3: 256-expert MoE + thinking mode validated
-- DeepSeek-V3: MTP self-spec decode, sigmoid gating
-- Synthesis: P0-P3 priority map
+## Next Priority: Phase 9 — KV Cache for GQA
+GQA layers (10 of 40) recompute full softmax attention from scratch each decode. For 256K context, this becomes O(n²) and prohibitive.
+
+## Vault Papers Cross-Referenced
+- Qwen3.6-35B_Arch_Reference.md — architecture confirmed
+- unsloth-qwen3.6-quant-formula.md — per-tensor type breakdown
+- QWEN3NEXT_TENSOR_LAYOUT.md — complete tensor layout verified
+- research_old_20260518.md — attn_gate NOT present in GQA layers (verified by list_tensors)

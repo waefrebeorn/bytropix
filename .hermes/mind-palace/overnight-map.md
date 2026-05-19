@@ -1,39 +1,40 @@
-# Overnight Map — May 19, 2026 (Phase 8 Complete)
+# Overnight Map — Per-Layer Cos-Sim (May 19, 2026)
 
-## Session Summary
-Phase 8 MoE Optimization complete. Achieved 8.0 tok/s decode (3.8× from 2.1).
+## Layer Dump Comparison (BOS token)
+Ran `tools/layer_cos_sim` against existing /tmp/dump_layers_ref/ vs /tmp/dump_layers_our/:
 
-### Changes Made
+```
+L00-SSM: cos=0.8598 max_diff=0.1986
+L01-SSM: cos=0.7464 max_diff=0.1617
+L02-SSM: cos=0.9360 max_diff=0.3460
+L03-GQA: cos=0.9193 max_diff=0.3877
+L04-SSM: cos=0.9160 max_diff=0.4026
+L05-SSM: cos=0.9107 max_diff=0.3880
+L06-SSM: cos=0.9711 max_diff=0.8560
+L07-GQA: cos=0.9693 max_diff=0.8165
+... (gradual 0.97→0.88 through L31)
+L32-SSM: cos=0.8570 max_diff=1.528
+L33-SSM: cos=0.8312 max_diff=1.957
+L34-SSM: cos=0.7894 max_diff=2.650
+L35-GQA: cos=0.7535 max_diff=3.184
+L36-SSM: cos=0.7484 max_diff=3.147
+L37-SSM: cos=0.6301 max_diff=4.743
+L38-SSM: cos=0.4540 max_diff=7.359
+L39-GQA: cos=0.4610 max_diff=6.640
+OVERALL: cos=0.8792
+```
 
-1. **AVX2 IQ2_XXS vec_dot** — `src/quantized_dot_generic.c`
-   - Added `keven_signs_q2xs[1024]` sign table, `hsum_float_8()`, `MM256_SET_M128I`
-   - Ported `ggml_vec_dot_iq2_xxs_q8_K_avx2` from llama.cpp ggml-cpu/arch/x86/quants.c
-   - Uses `_mm256_sign_epi8` + `_mm256_maddubs_epi16` for 256-bit IQ2_XXS grid dot
-   - `iq2_xxs_vec_dot` wrapper auto-selects AVX2 via `#ifdef`
+## Analysis
+1. **SSM divergence starts at L0**: cos=0.86. SSM kernel produces different results.
+2. **GQA also diverges**: L3 cos=0.92. Not as bad as SSM but still significant.
+3. **Gradual decay**: L6-L31 (0.97→0.88) — expected for quant noise amplification.
+4. **Sharp drop L32-L39**: Values diverge massively (max_diff ~7). Something systematic in late layers — could be cumulative from earlier divergence.
 
-2. **OpenMP task-based MoE dispatch** — `src/wubu_moe.c`
-   - Replaced nested `#pragma omp parallel for` with single `#pragma omp parallel` region
-   - Expert dispatch uses `#pragma omp taskgroup` + `#pragma omp task` for 8 experts
-   - Per-token stack buffers (`expert_contribs[8][2048]`) eliminate atomic contention
-   - MoE per-layer: 10ms → 1.9ms (80% reduction)
+## Tool Created
+`tools/layer_cos_sim.c` — compares ref/our layer dumps, computes per-layer cos-sim + max_diff.
 
-3. **Expert prefetch API** — `include/wubu_moe.h`, `src/wubu_moe.c`
-   - Added `int *selected_experts` output param to `wubu_moe_forward`
-   - Saves top-8 expert indices for use by prefetch logic
-   - Updated all 17 callers across tools/
-
-4. **Normalized sigmoid gating** experimented and reverted
-   - Softmax is correct for inference (model was trained with it)
-   - Sigmoid is a training-time optimization
-
-### Filess Modified
-- `src/quantized_dot_generic.c` — AVX2 IQ2_XXS vec_dot (+105 lines)
-- `src/wubu_moe.c` — Task dispatch, expert prefetch API, sigmoid revert
-- `include/wubu_moe.h` — New 5th param for wubu_moe_forward
-- `src/wubu_model.c` — Updated 3 callers with NULL param
-- `tools/*.c`, `vault/tools/*.c` — Updated 17 callers
-- `.hermes/mind-palace/state.md` — Updated benchmarks
-- `.hermes/mind-palace/plan.md` — Updated phase status
-
-### Next Session
-Phase 9: Expert prefetch integration + SSM attention optimization.
+## Next Steps
+1. Add SSM intermediate dump to llama.cpp (Q, K, V, gate, beta, conv_out, state)
+2. Dump same intermediates from bytropix via DUMP_SSM_DEBUG
+3. Compare step-by-step to find exact divergence point
+4. Fix the discrepancy
