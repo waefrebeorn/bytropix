@@ -49,7 +49,11 @@ typedef struct {
     
     // Whether weights are loaded (F32 heap-allocated or via quantized blob pointers)
     bool loaded;
-    bool load_from_blob; // true: F32 router pointers point into mmap'd blob, don't free
+    bool load_from_blob; // true: F32 pointers point into mmap'd blob, don't free
+
+    // GPU context (set by wubu_model.c when GPU is active). If non-NULL,
+    // wubu_moe_forward uses GPU for the 8 expert quantized matmuls.
+    void *gpu_ctx;
 } moe_weights_t;
 
 // MoE forward pass for one layer

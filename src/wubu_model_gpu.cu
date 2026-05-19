@@ -13,6 +13,7 @@
 #include "bench.h"
 #include "gguf_reader.h"
 #include "gpu_quant_matmul.h"
+#include "gpu_moe_kernel.h"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <stdio.h>
@@ -379,6 +380,10 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     gpu->d_ssm_z_out   = wubu_cuda_alloc((size_t)gpu->chunk_sz * VALUE_DIM * sizeof(float));
     printf("GPU: SSM output buffers: %d x %dx%d floats\n", gpu->chunk_sz, CONV_DIM, VALUE_DIM);
 
+    // Initialize GPU MoE lookup tables (IQ2_XXS grid in constant memory)
+    wubu_gpu_moe_init();
+    printf("GPU: MoE lookup tables initialized\n");
+
     printf("GPU: init complete (%.1f MB GQA weights)\n",
            (double)gpu->n_gqa_layers * (double)(D_MODEL * (q_dim_x2 + kv_dim*2) + q_dim * D_MODEL) * 4.0 / 1048576.0);
     return 1;
@@ -527,7 +532,74 @@ int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
 }
 
 // ================================================================
-// Upload normalized input to GPU, run quantized matmul, download result.
+// GPU MoE forward: replace 8 expert matmuls with GPU quantized kernel
+// Input: x_s [D_MODEL], top-8 expert indices + weights
+// Output: expert_contribs [8][D_MODEL] filled with weighted results
+// Shared expert and router remain on CPU.
+// ================================================================
+extern "C"
+void wubu_model_gpu_moe_experts(
+    wubu_model_t *model, int layer_idx,
+    const float *x_s,
+    const int *indices_s,        // [8] expert indices
+    const float *weights_s,      // [8] routing weights
+    float expert_contribs[8][D_MODEL])
+{
+    gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
+    if (!gpu || !gpu->initialized) return;
+
+    moe_weights_t *w = &model->layers[layer_idx].moe;
+    if (!w->ffn_gate_exps_q) return;
+
+    // Compute per-expert byte sizes
+    int64_t gate_bytes = gguf_raw_size(w->ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
+    int64_t up_bytes   = gguf_raw_size(w->ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
+    int64_t down_bytes = gguf_raw_size(w->ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);
+
+    // Prepare 8 expert weight data pointers
+    const uint8_t *gate_q_ptrs[8], *up_q_ptrs[8], *down_q_ptrs[8];
+    float wgts[8];
+    int n_active = 0;
+    for (int k = 0; k < 8; k++) {
+        int e = indices_s[k];
+        if (e < 0 || weights_s[k] < 1e-30f) {
+            memset(expert_contribs[k], 0, D_MODEL * sizeof(float));
+            continue;
+        }
+        gate_q_ptrs[n_active] = w->ffn_gate_exps_q + (int64_t)e * gate_bytes;
+        up_q_ptrs[n_active]   = w->ffn_up_exps_q   + (int64_t)e * up_bytes;
+        down_q_ptrs[n_active] = w->ffn_down_exps_q + (int64_t)e * down_bytes;
+        wgts[n_active] = weights_s[k];
+        n_active++;
+    }
+
+    if (n_active == 0) return;
+
+    // Allocate temp output buffer on host (8 experts × D_MODEL)
+    float *gpu_out = (float*)calloc(8 * D_MODEL, sizeof(float));
+    if (!gpu_out) return;
+
+    // Run GPU MoE — writes each expert's contribution to gpu_out[e*D_MODEL .. (e+1)*D_MODEL-1]
+    wubu_gpu_moe_forward_experts(
+        x_s,
+        (const uint8_t**)gate_q_ptrs, gate_bytes,
+        (const uint8_t**)up_q_ptrs, up_bytes,
+        (const uint8_t**)down_q_ptrs, down_bytes,
+        w->ffn_gate_exps_q_type, w->ffn_up_exps_q_type, w->ffn_down_exps_q_type,
+        wgts, gpu_out, gpu->stream);
+
+    // Distribute output across per-expert contribution buffers
+    int active_idx = 0;
+    for (int k = 0; k < 8; k++) {
+        int e = indices_s[k];
+        if (e < 0 || weights_s[k] < 1e-30f) continue;
+        memcpy(expert_contribs[k], gpu_out + active_idx * D_MODEL,
+               D_MODEL * sizeof(float));
+        active_idx++;
+    }
+
+    free(gpu_out);
+}
 // Used for the first 2 projections (attn_qkv, attn_gate) and
 // separately for the final output projection (ssm_out).
 // ================================================================
