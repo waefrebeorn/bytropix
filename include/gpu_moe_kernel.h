@@ -19,7 +19,8 @@ void wubu_gpu_moe_init(void);
 // gate_bytes/up_bytes/down_bytes: bytes per expert for each weight matrix
 // gate_type/up_type/down_type: GGML quant type (IQ2_XXS or IQ3_XXS)
 // weights: [8] routing weights (host)
-// output: [D_MODEL] output (host, downloaded internally)
+// output: [8][D_MODEL] output (host, downloaded internally)
+// d_gate_buf/d_up_buf/d_down_buf/d_out_buf/d_weights_buf: pre-allocated GPU buffers
 void wubu_gpu_moe_forward_experts(
     const float *x,
     const uint8_t *const *gate_q, const int64_t gate_bytes,
@@ -28,7 +29,9 @@ void wubu_gpu_moe_forward_experts(
     int gate_type, int up_type, int down_type,
     const float *weights,
     float *output,
-    cudaStream_t stream);
+    cudaStream_t stream,
+    uint8_t *d_gate_buf, uint8_t *d_up_buf, uint8_t *d_down_buf,
+    float *d_out_buf, float *d_weights_buf);
 
 #ifdef __cplusplus
 }

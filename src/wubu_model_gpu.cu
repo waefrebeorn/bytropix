@@ -93,6 +93,12 @@ typedef struct {
     // Pre-allocated SSM output buffers (avoid per-call alloc/free)
     float *d_ssm_qkv_out;       // [chunk_sz, CONV_DIM]
     float *d_ssm_z_out;         // [chunk_sz, VALUE_DIM]
+    // Pre-allocated MoE buffers (avoid per-call alloc/free for expert weights)
+    uint8_t *d_moe_gate;        // [8][gate_bytes_per_expert]
+    uint8_t *d_moe_up;          // [8][up_bytes_per_expert]
+    uint8_t *d_moe_down;        // [8][down_bytes_per_expert]
+    float   *d_moe_out;         // [8][D_MODEL]
+    float   *d_moe_weights;     // [8]
 } gpu_ctx_t;
 
 // ================================================================
@@ -385,6 +391,16 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     wubu_gpu_moe_init();
     printf("GPU: MoE lookup tables initialized\n");
 
+    // Allocate MoE persistent buffers (for 8 active experts)
+    const int64_t moe_bytes = 270336;  // IQ2_XXS for D_MODEL*D_FF = 2048*512
+    gpu->d_moe_gate    = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
+    gpu->d_moe_up      = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
+    gpu->d_moe_down    = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
+    gpu->d_moe_out     = wubu_cuda_alloc((size_t)(8 * D_MODEL * sizeof(float)));
+    gpu->d_moe_weights = wubu_cuda_alloc((size_t)(8 * sizeof(float)));
+    printf("GPU: MoE buffers allocated (3x%dKB + %dKB)\\n",
+           (int)(8 * moe_bytes / 1024), (int)(8 * D_MODEL * 4 / 1024));
+
     printf("GPU: init complete (%.1f MB GQA weights)\n",
            (double)gpu->n_gqa_layers * (double)(D_MODEL * (q_dim_x2 + kv_dim*2) + q_dim * D_MODEL) * 4.0 / 1048576.0);
     return 1;
@@ -587,7 +603,9 @@ void wubu_model_gpu_moe_experts(
         (const uint8_t**)up_q_ptrs, up_bytes,
         (const uint8_t**)down_q_ptrs, down_bytes,
         w->ffn_gate_exps_q_type, w->ffn_up_exps_q_type, w->ffn_down_exps_q_type,
-        wgts, gpu_out, stream);
+        wgts, gpu_out, stream,
+        gpu->d_moe_gate, gpu->d_moe_up, gpu->d_moe_down,
+        gpu->d_moe_out, gpu->d_moe_weights);
 
     // Distribute output across per-expert contribution buffers
     int active_idx = 0;
@@ -680,6 +698,13 @@ void wubu_model_gpu_free(wubu_model_t *model) {
     // Free SSM output buffers
     wubu_cuda_free(gpu->d_ssm_qkv_out);
     wubu_cuda_free(gpu->d_ssm_z_out);
+
+    // Free MoE buffers
+    wubu_cuda_free((float*)gpu->d_moe_gate);
+    wubu_cuda_free((float*)gpu->d_moe_up);
+    wubu_cuda_free((float*)gpu->d_moe_down);
+    wubu_cuda_free(gpu->d_moe_out);
+    wubu_cuda_free(gpu->d_moe_weights);
 
     // Destroy CUDA context
     if (gpu->handle) cublasDestroy(gpu->handle);
