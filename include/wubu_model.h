@@ -4,6 +4,8 @@
 #include "wubu_ssm.h"
 #include "wubu_moe.h"
 #include <stdbool.h>
+#include <math.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,8 +31,84 @@ typedef struct {
 } wubu_layer_t;
 
 // Complete model
-#define GQA_MAX_CTX 4096  // max cached positions for KV cache
+#define GQA_MAX_CTX 262144  // max cached positions for KV cache (256k context)
 #define GQA_KV_DIM (GQA_KV_HEADS * GQA_HEAD_DIM)  // 512
+
+// KV cache format: 0=F32, 1=F16 (halves memory at cost of conversion)
+#ifndef KV_CACHE_F16
+#define KV_CACHE_F16 1  // default to F16 for memory efficiency
+#endif
+
+// F16 <-> F32 conversion helpers (used by KV cache)
+static inline float fp16_to_fp32(uint16_t v) {
+    int sign = (v >> 15) & 1;
+    int exp  = (v >> 10) & 0x1F;
+    int mant =  v        & 0x03FF;
+    if (exp == 0) return ldexpf((float)mant / 1024.0f, -14) * (sign ? -1.0f : 1.0f);
+    if (exp == 31) return sign ? -INFINITY : INFINITY;
+    return ldexpf(1.0f + (float)mant / 1024.0f, exp - 15) * (sign ? -1.0f : 1.0f);
+}
+static inline uint16_t fp32_to_fp16(float v) {
+    uint32_t bits; memcpy(&bits, &v, 4);
+    int sign = (bits >> 31) & 1;
+    int exp  = (bits >> 23) & 0xFF;
+    int mant = bits & 0x7FFFFF;
+    uint16_t fp16;
+    if (exp == 0) { fp16 = (sign << 15) | (0) | (mant >> 13); }
+    else if (exp == 0xFF) { fp16 = (sign << 15) | (31 << 10) | (mant >> 13); }
+    else {
+        int newexp = exp - 127 + 15;
+        if (newexp >= 31) fp16 = (sign << 15) | (31 << 10);
+        else if (newexp <= 0) fp16 = (sign << 15);
+        else fp16 = (sign << 15) | (newexp << 10) | (mant >> 13);
+    }
+    return fp16;
+}
+
+// KV cache access helpers
+static inline float kv_cache_read_elem(const void *cache, int64_t idx) {
+#if KV_CACHE_F16
+    return fp16_to_fp32(((const uint16_t *)cache)[idx]);
+#else
+    return ((const float *)cache)[idx];
+#endif
+}
+// KV cache write: store float value into cache
+static inline void kv_cache_write_elem(void *cache, int64_t idx, float val) {
+#if KV_CACHE_F16
+    ((uint16_t *)cache)[idx] = fp32_to_fp16(val);
+#else
+    ((float *)cache)[idx] = val;
+#endif
+}
+// Batch read one head (256 floats) from F16 cache into float buffer
+static inline void kv_cache_read_head(const void *cache, int64_t offset,
+                                       float *buf, int n) {
+#if KV_CACHE_F16
+    const uint16_t *src = (const uint16_t *)cache + offset;
+    for (int i = 0; i < n; i++) buf[i] = fp16_to_fp32(src[i]);
+#else
+    memcpy(buf, (const float *)cache + offset, n * sizeof(float));
+#endif
+}
+// Batch write one head to F16 cache from float buffer
+static inline void kv_cache_write_head(void *cache, int64_t offset,
+                                        const float *buf, int n) {
+#if KV_CACHE_F16
+    uint16_t *dst = (uint16_t *)cache + offset;
+    for (int i = 0; i < n; i++) dst[i] = fp32_to_fp16(buf[i]);
+#else
+    memcpy((float *)cache + offset, buf, n * sizeof(float));
+#endif
+}
+// KV cache allocation: returns number of bytes needed for n_elems
+static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
+#if KV_CACHE_F16
+    return n_elems * (int64_t)sizeof(uint16_t);
+#else
+    return n_elems * (int64_t)sizeof(float);
+#endif
+}
 
 // MTP (Multi-Token Prediction) head for speculative decode
 // Architecture: h_39 → hnorm → concat(hnorm, enorm(embd)) → eh_proj → blk.40 → shared_head_norm → output
@@ -75,9 +153,9 @@ typedef struct {
     float *ssm_states;    // [max_layers, SSM_V_HEADS, SSM_D_STATE, SSM_D_STATE]
     float *conv_states;   // [max_layers, B, CONV_KERNEL-1, CONV_DIM]
     
-    // GQA KV cache (10 GQA layers, max 4096 context)
-    float *gqa_k_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM]
-    float *gqa_v_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM]
+    // GQA KV cache (10 GQA layers, max 256k context)
+    void *gqa_k_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM] F32 or F16
+    void *gqa_v_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM]
     int gqa_cache_len;   // how many tokens cached per layer (all 10 layers same len)
     
     // GGUF context (for per-layer MoE lazy loading)

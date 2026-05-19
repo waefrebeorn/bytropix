@@ -175,3 +175,10 @@ __pycache__/
 
 # llama.cpp reference
 /llama/
+*.o
+debug_*
+test_*
+check_*
+gen_text
+ref_dumper
+ref_get_embd

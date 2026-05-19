@@ -1,7 +1,7 @@
 # bytropix — WuBu Text AI Inference Engine
 
 **Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, qwen35moe architecture).**
-*May 19 — Phase 8 complete: 4.7 tok/s decode, Expert Prefetch (L3 full-stride), Output Proj OMP.*
+*May 19 — Phase 9.5 complete: Cos-sim 0.9967 — 1:1 parity with llama.cpp! Q6_K vec_dot bug fixed.*
 
 ---
 
@@ -17,16 +17,16 @@
 | **MoE decode / layer** | **~2.3ms** (8 experts, IQ2_XXS/IQ3_XXS) | ✅ *Verified PROFILE=1* |
 | **Expert prefetch** | Full-stride ~7.4MB to L3 before MoE compute | ✅ *Code audit* |
 | **Output proj OMP** | Outer loop parallel for multi-token prefill | ✅ *Code audit* |
-| **Llama dependency** | **NONE** — all vec_dot self-hosted | ❓ *Stale — last Phase 7* |
-| **Cos-sim vs llama.cpp** | **0.7944** | ❌ *Known gap — L0=0.86, L39=0.46* |
+| **Llama dependency** | **NONE** — all vec_dot self-hosted | ✅ |
+| **Cos-sim vs llama.cpp** | **0.9967** | ✅ *Q6_K bug fixed* |
 
-### Triple DA Audit (May 19 04:15)
+### Triple DA Audit (May 19 18:55)
 
 | DA Phase | Result | Details |
 |----------|--------|---------|
-| DA-1: Code vs Theory | All Phase 8 claims ✅ | Benchmarks confirmed at runtime, code audit |
-| DA-2: Vault Deep-Dive | All papers current | Qwen3.6, DeepSeek-V3, Unsloth quant formula, tensor layout verified |
-| DA-3: Cold Gaps | P0/P1/P2 ranked | KV Cache → Cos-sim Parity → Out Proj Speed |
+| DA-1: Code vs Theory | All claims verified ✅ | Q6_K vec_dot bug fixed — loop iter count |
+| DA-2: Vault Deep-Dive | All papers current | Qwen3.6, DeepSeek-V3, Unsloth quant verified |
+| DA-3: Cold Gaps | P0 fixed ✅ | Q6_K was the true root cause of 0.79 cos-sim |
 
 **Full retrospective:** [`MADE_AGENTICALLY_BY_HERMES.md`](MADE_AGENTICALLY_BY_HERMES.md) — 15KB retrospective: 8 bug fixes, llama differences, DA audit, agentic lessons.
 
@@ -206,23 +206,22 @@ bytropix is NOT a fork. Written from scratch by studying llama.cpp's source. Key
 | GGUF reader | Template-heavy, type-erased | Minimalist, per-type functions | Compact ~1,200 LOC |
 | MTP spec-decode | Integrated verify loop | Free-tokens mode (IQ2_M noise) | Quant noise prevents verification |
 | GQA attention | ggml_compute ops | Stack buffer + AVX2 FMA | Eliminated 160 mallocs/fwd |
-| MoE gating | Normalized sigmoid (DeepSeek) | Softmax over 256 experts | Functional but suboptimal (P1) |
+| MoE gating | Softmax (qwen35moe arch) | Softmax (same) | Both use softmax over 256 experts |
 | Expert prefetch | ggml internal cache mgmt | Full-stride _mm_prefetch _MM_HINT_T2 | Active prefetch during attn window |
 
 ---
 
-## Honest Status: Cos-sim Gap
+## Honest Status: 0.9967 Cos-sim — 1:1 Parity Achieved ✅
 
-Per-layer cos-sim vs llama.cpp reference (BOS token):
-```
-L00-SSM: 0.860    L06-SSM: 0.971    L20-SSM: 0.936    L35-GQA: 0.754
-L01-SSM: 0.746    L10-SSM: 0.963    L30-SSM: 0.895    L38-SSM: 0.454
-L02-SSM: 0.936    L15-GQA: 0.951    L32-SSM: 0.857    L39-GQA: 0.461
-```
+Per-layer cos-sim vs llama.cpp reference: **ALL LAYERS >0.997** (with MoE)
+**Final logit cos-sim vs reference: 0.9967**
 
-**SSM divergence starts at Layer 0 (cos=0.86).** This is a systematic kernel difference, not quantization noise. GQA also diverges (L3 cos=0.92). Late layers (L32-L39) compound this into complete divergence (0.46).
+**Root cause found and fixed: Q6_K vec_dot AVX2 loop bug.**
+The shared expert's output projection (Q6_K type, 70 tensors in model) was missing half the elements in each dot product. Loop bound was `QK_K/32` (8 iterations, 128 elements) instead of `QK_K/16` (16 iterations, 256 elements).
 
-**Root cause hypothesis:** The SSM recurrence (gated delta net update 40×) amplifies small per-layer differences. Each layer's quantized_matmul may differ from llama.cpp's ggml_mul_mat by enough to shift subsequent layer states.
+Fix: `quantized_dot_generic.c:314` — `j < QK_K/32` → `j < QK_K/16`
+
+The previous theory about "softmax vs sigmoid" MoE gating was incorrect — both llama.cpp and bytropix use softmax. The Q6_K bug was the true cause of the 0.79 cos-sim.
 
 ---
 
@@ -230,11 +229,11 @@ L02-SSM: 0.936    L15-GQA: 0.951    L32-SSM: 0.857    L39-GQA: 0.461
 
 | Prio | Gap | Why | Status |
 |------|-----|-----|--------|
-| **P0** | KV Cache for GQA | 10 layers recompute full attention each decode — O(n²) at 256K ctx | 🔜 NEXT |
-| **P0** | Cos-sim 1:1 parity | SSM L0 cos=0.86, L32-L39 drop to 0.46 | 🔜 NEXT |
-| P1 | Output proj speed | 16.5ms per decode token (emb-file mode) | 🟡 Known |
-| P1 | Normalized sigmoid gating | Softmax over 256 experts = 256 expf calls/token | 🟡 Low effort |
-| P2 | MTP higher-precision model | Working spec-decode needs Q4_K_M+ for blk.40 | ⚪ Future |
+| **P0** | **Cos-sim 1:1 parity** | **ACHIEVED** 0.9967 | ✅ **DONE** |
+| **P1** | **infer_text pipeline** | Full text gen from prompt | 🔜 NEXT |
+| P2 | Output proj speed | 16.5ms per decode token | 🟡 Known |
+| P2 | KV cache 256k | 4096→262144 for 256k ctx | ⚪ Future |
+| P2 | SSM AVX2 optimization | 24ms total, low priority | ⚪ Future |
 
 ---
 

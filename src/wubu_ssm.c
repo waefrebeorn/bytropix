@@ -2,6 +2,7 @@
 #include "wubu_mobius.h"
 #include "gguf_reader.h"
 #include "thread_pool.h"
+#include "wubu_model.h"  // for kv_cache_read_head / kv_cache_write_head
 #include <omp.h>
 #include <immintrin.h>  // AVX2/FMA intrinsics for GQA attention
 // GQA_MAX_CTX from wubu_model.h — max KV cache positions (also used for attn stack buf)
@@ -1033,8 +1034,8 @@ cleanup_p:
 void wubu_gqa_forward(const float *x, int B, int T,
                       const gqa_layer_weights *w,
                       float *output,
-                      const float *k_cache, const float *v_cache, int cache_len,
-                      float *k_out, float *v_out) {
+                      const void *k_cache, const void *v_cache, int cache_len,
+                      void *k_out, void *v_out) {
     const int N = B * T;
     const int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;  // 4096
     const int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;  // 512
@@ -1165,20 +1166,9 @@ void wubu_gqa_forward(const float *x, int B, int T,
     }
     
     // Step 5: GQA Attention with KV cache
-    // Build combined K_all = [k_cache(cache_len) | K_norm(T)] and V_all similarly
+    // Read directly from cache + new tokens — no O(T) copy
     int total_kv = cache_len + N;  // total positions to attend over
-    float *K_all = NULL, *V_all = NULL;
-    if (cache_len > 0) {
-        K_all = (float *)malloc(total_kv * kv_dim * sizeof(float));
-        V_all = (float *)malloc(total_kv * kv_dim * sizeof(float));
-        if (!K_all || !V_all) { free(K_all); free(V_all); free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
-        memcpy(K_all, k_cache, cache_len * kv_dim * sizeof(float));
-        memcpy(K_all + cache_len * kv_dim, K_norm, N * kv_dim * sizeof(float));
-        memcpy(V_all, v_cache, cache_len * kv_dim * sizeof(float));
-        memcpy(V_all + cache_len * kv_dim, V, N * kv_dim * sizeof(float));
-    }
-    const float *k_eff = K_all ? K_all : K_norm;
-    const float *v_eff = V_all ? V_all : V;
+    // attn_weights on heap (too large for stack at 256k context)
     
     // 16 Q heads, 2 KV heads. Each KV head serves 8 Q heads.
     float scale = 1.0f / sqrtf(GQA_HEAD_DIM);
@@ -1203,7 +1193,8 @@ void wubu_gqa_forward(const float *x, int B, int T,
             int attend_len = global_t + 1;
             #pragma omp parallel for
             for (int h_q = 0; h_q < GQA_Q_HEADS; h_q++) {
-                float attn_weights[GQA_MAX_CTX];  // stack, no malloc
+                float attn_weights[2048];  // stack for moderate sizes, heap for large
+                float *attn_w = (attend_len <= 2048) ? attn_weights : (float *)malloc(attend_len * sizeof(float));
                 int h_kv = h_q / (GQA_Q_HEADS / GQA_KV_HEADS);
                 
                 const float *q_vec = Q_norm + ((b * T + t_q) * GQA_Q_HEADS + h_q) * GQA_HEAD_DIM;
@@ -1215,7 +1206,16 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 
                 // Q @ K^T * scale  [AVX2: 4×FMA unrolled for 256-dim heads]
                 for (int t_k = 0; t_k < attend_len; t_k++) {
-                    const float *k_vec = k_eff + (t_k * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
+                    float k_buf[GQA_HEAD_DIM];
+                    const float *k_vec;
+                    if (t_k < cache_len) {
+                        int64_t off = (int64_t)t_k * GQA_KV_HEADS + h_kv;
+                        kv_cache_read_head(k_cache, off * GQA_HEAD_DIM, k_buf, GQA_HEAD_DIM);
+                        k_vec = k_buf;
+                    } else {
+                        int new_idx = t_k - cache_len;
+                        k_vec = K_norm + (new_idx * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
+                    }
                     float score;
 #ifdef __AVX2__
                     __m256 acc0 = _mm256_setzero_ps();
@@ -1237,25 +1237,34 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     score *= scale;
 #endif
                     score = tgt_wrap(score);
-                    attn_weights[t_k] = score;
+                    attn_w[t_k] = score;
                     if (score > max_score) max_score = score;
                 }
                 
                 // Softmax
                 float sum_exp = 0.0f;
                 for (int t_k = 0; t_k < attend_len; t_k++) {
-                    attn_weights[t_k] = expf(attn_weights[t_k] - max_score);
-                    sum_exp += attn_weights[t_k];
+                    attn_w[t_k] = expf(attn_w[t_k] - max_score);
+                    sum_exp += attn_w[t_k];
                 }
                 float inv_sum = 1.0f / sum_exp;
                 for (int t_k = 0; t_k < attend_len; t_k++) {
-                    attn_weights[t_k] *= inv_sum;
+                    attn_w[t_k] *= inv_sum;
                 }
                 
                 // Weighted sum of V  [AVX2: FMA]
                 for (int t_k = 0; t_k < attend_len; t_k++) {
-                    const float *v_vec = v_eff + (t_k * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
-                    float a = attn_weights[t_k];
+                    float v_buf[GQA_HEAD_DIM];
+                    const float *v_vec;
+                    if (t_k < cache_len) {
+                        int64_t off = (int64_t)t_k * GQA_KV_HEADS + h_kv;
+                        kv_cache_read_head(v_cache, off * GQA_HEAD_DIM, v_buf, GQA_HEAD_DIM);
+                        v_vec = v_buf;
+                    } else {
+                        int new_idx = t_k - cache_len;
+                        v_vec = V + (new_idx * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
+                    }
+                    float a = attn_w[t_k];
 #ifdef __AVX2__
                     __m256 a_v = _mm256_set1_ps(a);
                     for (int i = 0; i < GQA_HEAD_DIM; i += 8) {
@@ -1281,6 +1290,8 @@ void wubu_gqa_forward(const float *x, int B, int T,
                         break;
                     }
                 }
+                // Free heap-allocated attention weights
+                if (attn_w != attn_weights) free(attn_w);
             }
         }
     }
@@ -1301,14 +1312,11 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     output + s * D_MODEL);
     }
     
-    // Copy K_norm and V to output buffers for KV cache
+    // Copy K_norm and V to output buffers for KV cache (stored as F16 if enabled)
     if (k_out && v_out) {
-        memcpy(k_out, K_norm, N * kv_dim * sizeof(float));
-        memcpy(v_out, V, N * kv_dim * sizeof(float));
+        kv_cache_write_head(k_out, 0, K_norm, N * kv_dim);
+        kv_cache_write_head(v_out, 0, V, N * kv_dim);
     }
-    
-    free(K_all);
-    free(V_all);
     
     free(Q_full);
     free(gate);

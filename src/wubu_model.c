@@ -83,105 +83,98 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         }
         
         if (layer->is_ssm) {
-            // Load SSM weights — reuses load_ssm_layer logic inline
+            // Load SSM weights — QUANTIZED-ONLY PATH for large weight matrices.
+            // attn_qkv, attn_gate, ssm_out use quantized blob pointers (set later).
+            // Small tensors (norms, a, dt, conv1d) loaded as F32.
             char name[256];
-            int qkv_dim = KEY_DIM * 2 + VALUE_DIM;
             int ok = 1;
             
+            // LARGE: attn_qkv_weight — quantized-only (blob pointer)
+            layer->ssm.attn_qkv_weight = NULL;
             snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->ssm.attn_qkv_weight = (float *)malloc(D_MODEL * qkv_dim * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.attn_qkv_weight, D_MODEL * qkv_dim) > 0);
             
+            // LARGE: attn_gate_weight — quantized-only (blob pointer)
+            layer->ssm.attn_gate_weight = NULL;
             snprintf(name, sizeof(name), "blk.%d.attn_gate.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->ssm.attn_gate_weight = (float *)malloc(D_MODEL * VALUE_DIM * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.attn_gate_weight, D_MODEL * VALUE_DIM) > 0);
             
+            // Small: ssm_beta.weight [2048, 32] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_beta.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             layer->ssm.ssm_beta_weight = (float *)malloc(D_MODEL * DT_RANK * sizeof(float));
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_beta_weight, D_MODEL * DT_RANK) > 0);
             
+            // Small: ssm_alpha.weight [2048, 32] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_alpha.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             layer->ssm.ssm_alpha_weight = (float *)malloc(D_MODEL * DT_RANK * sizeof(float));
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_alpha_weight, D_MODEL * DT_RANK) > 0);
             
+            // Small: ssm_dt.bias [32] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_dt.bias", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             layer->ssm.ssm_dt_bias = (float *)malloc(DT_RANK * sizeof(float));
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_dt_bias, DT_RANK) > 0);
             
+            // Small: ssm_a [32] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_a", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             layer->ssm.ssm_a = (float *)malloc(DT_RANK * sizeof(float));
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_a, DT_RANK) > 0);
             
+            // Small: ssm_conv1d.weight [4, 8192] = 128KB F32
             snprintf(name, sizeof(name), "blk.%d.ssm_conv1d.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             layer->ssm.ssm_conv1d_weight = (float *)malloc(CONV_KERNEL * CONV_DIM * sizeof(float));
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_conv1d_weight, CONV_KERNEL * CONV_DIM) > 0);
             
+            // Small: ssm_norm.weight [128] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_norm.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             layer->ssm.ssm_norm_weight = (float *)malloc(SSM_D_STATE * sizeof(float));
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_norm_weight, SSM_D_STATE) > 0);
             
-            snprintf(name, sizeof(name), "blk.%d.ssm_out.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->ssm.ssm_out_weight = (float *)malloc(VALUE_DIM * D_MODEL * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_out_weight, VALUE_DIM * D_MODEL) > 0);
+            // LARGE: ssm_out.weight — quantized-only (blob pointer)
+            layer->ssm.ssm_out_weight = NULL;
             
             if (!ok) { fprintf(stderr, "Failed to load SSM weights for layer %d\n", l); goto fail; }
-            printf("  Layer %d: SSM loaded\n", l);
+            printf("  Layer %d: SSM loaded (quantized attn_qkv/gate/out)\n", l);
             
         } else {
-            // Load GQA weights
+            // Load GQA weights — QUANTIZED-ONLY PATH for large weight matrices.
+            // attn_q, attn_k, attn_v, attn_output use quantized blob pointers (set later).
             char name[256];
-            int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
-            int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;
             int ok = 1;
             
-            snprintf(name, sizeof(name), "blk.%d.attn_q.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->gqa.attn_q_weight = (float *)malloc(D_MODEL * q_dim * 2 * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_q_weight, D_MODEL * q_dim * 2) > 0);
+            // LARGE: attn_q.weight — quantized-only (blob pointer)
+            layer->gqa.attn_q_weight = NULL;
             
-            snprintf(name, sizeof(name), "blk.%d.attn_k.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->gqa.attn_k_weight = (float *)malloc(D_MODEL * kv_dim * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_k_weight, D_MODEL * kv_dim) > 0);
+            // LARGE: attn_k.weight — quantized-only (blob pointer)
+            layer->gqa.attn_k_weight = NULL;
             
-            snprintf(name, sizeof(name), "blk.%d.attn_v.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->gqa.attn_v_weight = (float *)malloc(D_MODEL * kv_dim * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_v_weight, D_MODEL * kv_dim) > 0);
+            // LARGE: attn_v.weight — quantized-only (blob pointer)
+            layer->gqa.attn_v_weight = NULL;
             
-            snprintf(name, sizeof(name), "blk.%d.attn_output.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->gqa.attn_output_weight = (float *)malloc(q_dim * D_MODEL * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_output_weight, q_dim * D_MODEL) > 0);
+            // LARGE: attn_output.weight — quantized-only (blob pointer)
+            layer->gqa.attn_output_weight = NULL;
             
+            // Small: attn_q_norm.weight [256] F32
             snprintf(name, sizeof(name), "blk.%d.attn_q_norm.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             layer->gqa.attn_q_norm_weight = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_q_norm_weight, GQA_HEAD_DIM) > 0);
             
+            // Small: attn_k_norm.weight [256] F32
             snprintf(name, sizeof(name), "blk.%d.attn_k_norm.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
@@ -189,7 +182,7 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_k_norm_weight, GQA_HEAD_DIM) > 0);
             
             if (!ok) { fprintf(stderr, "Failed to load GQA weights for layer %d\n", l); goto fail; }
-            printf("  Layer %d: GQA loaded\n", l);
+            printf("  Layer %d: GQA loaded (quantized attn_q/k/v/output)\n", l);
         }
         
         // Load MoE (FFN) weights — NOT loaded by default (memory: 3.2 GB/layer)
@@ -257,18 +250,13 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         if (model->vocab_size == 0) model->vocab_size = 248320;
     }
     
-    // Load output weight for logit projection
+    // Load output weight for logit projection — QUANTIZED-ONLY (Q4_K blob pointer)
+    model->output_weight = NULL;
     gguf_tensor_info *t_out = gguf_find_tensor(ctx, "output.weight");
-    if (t_out) {
-        int64_t out_elems = (int64_t)D_MODEL * model->vocab_size;
-        model->output_weight = (float *)malloc(out_elems * sizeof(float));
-        if (gguf_read_tensor_f32(ctx, t_out, model->output_weight, out_elems) > 0)
-            printf("  Output weight loaded: %ld MB\n", out_elems * sizeof(float) / (1024*1024));
-        else
-            { fprintf(stderr, "Failed to load output.weight\n"); free(model->output_weight); model->output_weight = NULL; }
-    } else {
-        printf("  WARNING: output.weight not found\n");
-    }
+    if (!t_out) { fprintf(stderr, "  ERROR: output.weight not found\n"); }
+    
+    // Output weight quantized pointer will be set after gguf_buffer_data() below
+    printf("  Output weight: will use quantized path (Q4_K via blob pointer)\n");
     
     // Allocate state buffers
     int max_s = model->n_layers;
@@ -376,9 +364,12 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
            model->n_layers/4,
            model->vocab_size);
     
-    // Allocate GQA KV cache (10 GQA layers × 4096 ctx × 512 dim)
-    model->gqa_k_cache = (float *)calloc(10 * GQA_MAX_CTX * GQA_KV_DIM, sizeof(float));
-    model->gqa_v_cache = (float *)calloc(10 * GQA_MAX_CTX * GQA_KV_DIM, sizeof(float));
+    // Allocate GQA KV cache (10 GQA layers × 256k context × 512 dim)
+    int64_t cache_elems = (int64_t)10 * GQA_MAX_CTX * GQA_KV_DIM;
+    model->gqa_k_cache = malloc(kv_cache_alloc_size(cache_elems));
+    model->gqa_v_cache = malloc(kv_cache_alloc_size(cache_elems));
+    memset(model->gqa_k_cache, 0, kv_cache_alloc_size(cache_elems));
+    memset(model->gqa_v_cache, 0, kv_cache_alloc_size(cache_elems));
     model->gqa_cache_len = 0;
     
     return true;
@@ -516,12 +507,15 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             for (int li = 0; li < l; li++) {
                 if (!model->layers[li].is_ssm) l_gqa++;
             }
-            float *k_cache = model->gqa_k_cache + l_gqa * GQA_MAX_CTX * GQA_KV_DIM;
-            float *v_cache = model->gqa_v_cache + l_gqa * GQA_MAX_CTX * GQA_KV_DIM;
-            float *k_out = model->gqa_cache_len > 0 ? k_cache + model->gqa_cache_len * GQA_KV_DIM : NULL;
-            float *v_out = model->gqa_cache_len > 0 ? v_cache + model->gqa_cache_len * GQA_KV_DIM : NULL;
-            const float *k_in = model->gqa_cache_len > 0 ? k_cache : NULL;
-            const float *v_in = model->gqa_cache_len > 0 ? v_cache : NULL;
+            int64_t layer_cache_off = (int64_t)l_gqa * GQA_MAX_CTX * GQA_KV_DIM;
+            void *k_cache = (uint8_t *)model->gqa_k_cache + kv_cache_alloc_size(layer_cache_off);
+            void *v_cache = (uint8_t *)model->gqa_v_cache + kv_cache_alloc_size(layer_cache_off);
+            void *k_out = (model->gqa_cache_len > 0) ? 
+                ((uint8_t *)k_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * GQA_KV_DIM)) : NULL;
+            void *v_out = (model->gqa_cache_len > 0) ?
+                ((uint8_t *)v_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * GQA_KV_DIM)) : NULL;
+            const void *k_in = (model->gqa_cache_len > 0) ? k_cache : NULL;
+            const void *v_in = (model->gqa_cache_len > 0) ? v_cache : NULL;
             // For prefill (T>1 and first call): store to cache position 0
             if (T > 1 && model->gqa_cache_len == 0) {
                 k_out = k_cache;

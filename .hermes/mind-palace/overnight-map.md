@@ -1,40 +1,28 @@
-# Overnight Map — Per-Layer Cos-Sim (May 19, 2026)
+# Overnight Map — May 19, 2026
 
-## Layer Dump Comparison (BOS token)
-Ran `tools/layer_cos_sim` against existing /tmp/dump_layers_ref/ vs /tmp/dump_layers_our/:
+## BREAKTHROUGH: Q6_K vec_dot bug fixed — cos-sim 0.9967 ✅
 
-```
-L00-SSM: cos=0.8598 max_diff=0.1986
-L01-SSM: cos=0.7464 max_diff=0.1617
-L02-SSM: cos=0.9360 max_diff=0.3460
-L03-GQA: cos=0.9193 max_diff=0.3877
-L04-SSM: cos=0.9160 max_diff=0.4026
-L05-SSM: cos=0.9107 max_diff=0.3880
-L06-SSM: cos=0.9711 max_diff=0.8560
-L07-GQA: cos=0.9693 max_diff=0.8165
-... (gradual 0.97→0.88 through L31)
-L32-SSM: cos=0.8570 max_diff=1.528
-L33-SSM: cos=0.8312 max_diff=1.957
-L34-SSM: cos=0.7894 max_diff=2.650
-L35-GQA: cos=0.7535 max_diff=3.184
-L36-SSM: cos=0.7484 max_diff=3.147
-L37-SSM: cos=0.6301 max_diff=4.743
-L38-SSM: cos=0.4540 max_diff=7.359
-L39-GQA: cos=0.4610 max_diff=6.640
-OVERALL: cos=0.8792
-```
+### The Bug
+Q6_K shared expert output projection had a loop iteration count error in the AVX2 vec_dot:
+- `quantized_dot_generic.c` line 314: `j < QK_K/32` → should be `j < QK_K/16`
+- Result: only 128/256 elements processed per block (50% coverage)
+- Q6_K matmul cos-sim vs F32: 0.728 → now 0.99986
+- Full model cos-sim: 0.794 → now 0.9967
 
-## Analysis
-1. **SSM divergence starts at L0**: cos=0.86. SSM kernel produces different results.
-2. **GQA also diverges**: L3 cos=0.92. Not as bad as SSM but still significant.
-3. **Gradual decay**: L6-L31 (0.97→0.88) — expected for quant noise amplification.
-4. **Sharp drop L32-L39**: Values diverge massively (max_diff ~7). Something systematic in late layers — could be cumulative from earlier divergence.
+### Post-Mortem on DA v10
+DA v10's analysis was WRONG about the root cause:
+- Claimed: "MoE softmax vs sigmoid gating" 
+- Reality: both llama.cpp and bytropix use softmax
+- The GQA interleave fix (per-head Q/gate interleaved) WAS correct and DID improve attn-only
+- The remaining 0.79 was from the Q6_K bug, not MoE gating
 
-## Tool Created
-`tools/layer_cos_sim.c` — compares ref/our layer dumps, computes per-layer cos-sim + max_diff.
+### Phase 9 Status: QUANTIZED-ONLY PATH — VERIFIED ✅
+- Q5_K verified: cos-sim 0.9999 vs F32
+- Q6_K FIXED: cos-sim 0.99986 vs F32
+- IQ2_XXS verified: max diff 0.002 vs F32
+- All quant types now verified accurate
 
-## Next Steps
-1. Add SSM intermediate dump to llama.cpp (Q, K, V, gate, beta, conv_out, state)
-2. Dump same intermediates from bytropix via DUMP_SSM_DEBUG
-3. Compare step-by-step to find exact divergence point
-4. Fix the discrepancy
+### Next: Phase 10 — infer_text Pipeline
+- tools/infer_text.c exists
+- Needs prob_idx fix and quantized path integration
+- Full text generation from prompt

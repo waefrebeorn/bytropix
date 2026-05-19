@@ -182,8 +182,8 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
 void wubu_gqa_forward(const float *x, int B, int T,
                       const gqa_layer_weights *weights,
                       float *output,
-                      const float *k_cache, const float *v_cache, int cache_len,
-                      float *k_out, float *v_out);
+                      const void *k_cache, const void *v_cache, int cache_len,
+                      void *k_out, void *v_out);
 
 // Saved GQA forward intermediates (for backward pass)
 typedef struct {
