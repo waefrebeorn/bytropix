@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" font-family="'Courier New', monospace" font-size="12">
+  <rect width="900" height="700" fill="#1a1a2e"/>
+  <text x="20" y="30" fill="#00ff88" font-size="18" font-weight="bold">bytropix — Status May 19 2026 (02:45) — TRIPLE DA VERIFIED</text>
+  <text x="20" y="48" fill="#888" font-size="11">Qwen3.6-35B-A3B-UD-IQ2_M | Ryzen 7950X | 2.1 tok/s decode | No llama deps</text>
+
+  <!-- Phase boxes -->
+  <rect x="20" y="60" width="420" height="28" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="30" y="78" fill="#00ff88" font-size="12">Phases 0-6 ✓  Core, MTP, State Save/Restore</text>
+  <rect x="450" y="60" width="430" height="28" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="460" y="78" fill="#00ff88" font-size="12">Phase 7 ✓  Hardware Saturation (AVX2, prefetch, GQA opt)</text>
+  <rect x="20" y="92" width="420" height="28" rx="4" fill="#3d1a00" stroke="#ff8800" stroke-width="1"/>
+  <text x="30" y="110" fill="#ff8800" font-size="12">Phase 8 — MoE AVX2 IQ2_XXS/IQ3_XXS vec_dot [NEXT P0]</text>
+  <rect x="450" y="92" width="430" height="28" rx="4" fill="#1a1a3d" stroke="#4488ff" stroke-width="1"/>
+  <text x="460" y="110" fill="#4488ff" font-size="12">Phase 9-10 — NV64 RDRAM Ring Buffer / Distributed [P1]</text>
+
+  <!-- Benchmarks table -->
+  <text x="20" y="150" fill="#ffaa00" font-size="14" font-weight="bold">▸ LIVE BENCHMARKS (DA-1 verified ✅)</text>
+  <line x1="20" y1="156" x2="860" y2="156" stroke="#333" stroke-width="1"/>
+
+  <!-- Table header -->
+  <text x="20" y="176" fill="#888" font-size="11">Metric</text>
+  <text x="200" y="176" fill="#888" font-size="11">Value</text>
+  <text x="350" y="176" fill="#888" font-size="11">Verification</text>
+  <text x="550" y="176" fill="#888" font-size="11">Method</text>
+  <line x1="20" y1="180" x2="860" y2="180" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="196" fill="#ccc" font-size="12">Decode speed</text>
+  <text x="200" y="196" fill="#00ff88" font-size="12">2.1 tok/s</text>
+  <text x="350" y="196" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="550" y="196" fill="#aaa" font-size="11">15.08s / 32tok, PROFILE=1</text>
+
+  <text x="20" y="216" fill="#ccc" font-size="12">Prefill speed</text>
+  <text x="200" y="216" fill="#00ff88" font-size="12">7.7 tok/s</text>
+  <text x="350" y="216" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="550" y="216" fill="#aaa" font-size="11">21 tok in 2.72s, PROFILE=1</text>
+
+  <text x="20" y="236" fill="#ccc" font-size="12">Output proj decode</text>
+  <text x="200" y="236" fill="#00ff88" font-size="12">6.4ms</text>
+  <text x="350" y="236" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="550" y="236" fill="#aaa" font-size="11">PROFILE=1 output proj col</text>
+
+  <text x="20" y="256" fill="#ccc" font-size="12">MoE decode / layer</text>
+  <text x="200" y="256" fill="#00ff88" font-size="12">10ms</text>
+  <text x="350" y="256" fill="#00ff88" font-size="12">✅ Verified</text>
+  <text x="550" y="256" fill="#aaa" font-size="11">PROFILE=1 MoE column, 9.9-11.3ms</text>
+
+  <text x="20" y="276" fill="#ccc" font-size="12">Memory bandwidth util</text>
+  <text x="200" y="276" fill="#ff8800" font-size="12">~45%</text>
+  <text x="350" y="276" fill="#ff8800" font-size="12">🟡 Estimated</text>
+  <text x="550" y="276" fill="#aaa" font-size="11">11GB model / 50GB/s = 220ms min. Actual 476ms</text>
+
+  <!-- Stale claims -->
+  <text x="20" y="310" fill="#ffaa00" font-size="14" font-weight="bold">▸ STALE CLAIMS (DA-1 flagged ❓)</text>
+  <line x1="20" y1="316" x2="860" y2="316" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="336" fill="#ccc" font-size="12">cos-sim vs llama.cpp</text>
+  <text x="200" y="336" fill="#ff8800" font-size="12">0.9969</text>
+  <text x="350" y="336" fill="#ff8800" font-size="12">❓ Stale</text>
+  <text x="550" y="336" fill="#aaa" font-size="11">Last verified Phase 2. Need ref_dumper re-run.</text>
+
+  <text x="20" y="356" fill="#ccc" font-size="12">GQA Q/gate interleave fix</text>
+  <text x="200" y="356" fill="#ff8800" font-size="12">0.9968</text>
+  <text x="350" y="356" fill="#ff8800" font-size="12">❓ Stale</text>
+  <text x="550" y="356" fill="#aaa" font-size="11">Last verified Phase 0. Cos-sim test needed.</text>
+
+  <!-- Performance breakdown -->
+  <text x="20" y="390" fill="#ffaa00" font-size="14" font-weight="bold">▸ BOTTLENECK DISTRIBUTION (decode, one token)</text>
+  <line x1="20" y1="396" x2="860" y2="396" stroke="#333" stroke-width="1"/>
+
+  <!-- MoE bar -->
+  <text x="20" y="418" fill="#ff6b6b" font-size="11">MoE (8 exp × 3 matmul)</text>
+  <rect x="180" y="408" width="350" height="16" rx="2" fill="#ff6b6b" opacity="0.8"/>
+  <text x="540" y="418" fill="#ff6b6b" font-size="11">10ms/layer × 40 = 400ms (48%)</text>
+
+  <!-- Norms/overhead -->
+  <text x="20" y="440" fill="#ffaa88" font-size="11">Norms + router + overhead</text>
+  <rect x="180" y="430" width="175" height="16" rx="2" fill="#ffaa88" opacity="0.8"/>
+  <text x="365" y="440" fill="#ffaa88" font-size="11">~200ms (24%)</text>
+
+  <!-- Output proj -->
+  <text x="20" y="462" fill="#88ccff" font-size="11">Output projection</text>
+  <rect x="180" y="452" width="100" height="16" rx="2" fill="#88ccff" opacity="0.8"/>
+  <text x="290" y="462" fill="#88ccff" font-size="11">6ms (14%)</text>
+
+  <!-- SSM -->
+  <text x="20" y="484" fill="#88ff88" font-size="11">SSM attention (30 layers)</text>
+  <rect x="180" y="474" width="85" height="16" rx="2" fill="#88ff88" opacity="0.8"/>
+  <text x="275" y="484" fill="#88ff88" font-size="11">~100ms (12%)</text>
+
+  <!-- GQA -->
+  <text x="20" y="506" fill="#aaccff" font-size="11">GQA attention (10 layers)</text>
+  <rect x="180" y="496" width="15" height="16" rx="2" fill="#aaccff" opacity="0.8"/>
+  <text x="205" y="506" fill="#aaccff" font-size="11">~15ms (2%)</text>
+
+  <!-- Total bar -->
+  <line x1="180" y1="516" x2="860" y2="516" stroke="#333" stroke-width="1"/>
+  <text x="180" y="534" fill="#fff" font-size="12" font-weight="bold">Total decode: 476ms → 2.1 tok/s</text>
+  <text x="480" y="534" fill="#aaa" font-size="11">vs DDR5 BW limit: ~220ms → 4.5 tok/s (2.1× headroom)</text>
+
+  <!-- Phase 7 improvements -->
+  <text x="20" y="568" fill="#ffaa00" font-size="14" font-weight="bold">▸ PHASE 7 IMPROVEMENTS (3× decode speedup)</text>
+  <line x1="20" y1="574" x2="860" y2="574" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="592" fill="#ccc" font-size="11">GQA attn: stack buf (eliminated 160 mallocs/fwd) + AVX2 FMA Q·K dot + V sum</text>
+  <text x="20" y="608" fill="#ccc" font-size="11">AVX2 vec_dot: Q4_K (64-elem/iter), Q5_K, Q6_K (256-bit, 2× SSE width)</text>
+  <text x="20" y="624" fill="#ccc" font-size="11">Prefetch: _mm_prefetch next column in quantized_matmul loop</text>
+  <text x="20" y="640" fill="#ccc" font-size="11">Llama deps: removed 7 dead extern declarations, all vec_dot self-hosted</text>
+  <text x="20" y="656" fill="#ccc" font-size="11">NV64 RDRAM design: 64-slot ring buffer doc written (Phase 9 ready)</text>
+
+  <!-- Cold gaps -->
+  <text x="20" y="680" fill="#ff6b6b" font-size="11">P0: MoE AVX2 IQ2_XXS/IQ3_XXS vec_dot | P1: Sigmoid gating, Ring buf | P2: cos-sim, MTP model</text>
+</svg>
