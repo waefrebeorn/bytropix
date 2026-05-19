@@ -166,7 +166,7 @@ static int test_gqa_forward() {
     fclose(f);
 
     float *output = (float *)malloc(N * D * sizeof(float));
-    wubu_gqa_forward(x, B, T, &w, output);
+    wubu_gqa_forward(x, B, T, &w, output, NULL, NULL, 0, NULL, NULL);
 
     float max_diff = 0.0f, sum_diff = 0.0f;
     for (int i = 0; i < N * D; i++) {

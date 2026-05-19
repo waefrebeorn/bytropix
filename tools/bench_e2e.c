@@ -332,7 +332,7 @@ int main(int argc, char **argv) {
             conv_states_cpu[layer] = NULL;
 
             double t0 = now_sec();
-            wubu_gqa_forward(cpu_in, B, T, &w, cpu_out);
+            wubu_gqa_forward(cpu_in, B, T, &w, cpu_out, NULL, NULL, 0, NULL, NULL);
             t_cpu_total += now_sec() - t0;
 
             free(w.attn_q_weight); free(w.attn_k_weight); free(w.attn_v_weight);

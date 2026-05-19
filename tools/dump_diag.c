@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
             float *conv_state = mdl.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
             wubu_ssm_forward(normed, 1, 1, &layer->ssm, ssm_state, conv_state, attn_out);
         } else {
-            wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out);
+            wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
         }
         
         // Print attn output stats
