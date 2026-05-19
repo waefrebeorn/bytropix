@@ -1,7 +1,6 @@
 // src/quantized_dot_generic.c
-// Self-contained generic (non-SIMD) implementations of quantized dot products
-// Extracted from llama.cpp ggml-quants.c to avoid libggml-cpu.so interop issues.
-// Pure C - no SIMD, no library dependencies.
+// Self-contained generic + SIMD implementations of quantized dot products.
+// All vec_dot types self-hosted — no libggml-cpu.so dependency.
 
 #include <stdint.h>
 #include <string.h>
