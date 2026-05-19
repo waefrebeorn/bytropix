@@ -32,14 +32,24 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     // Count layers from tensor names
     // Find max layer index from any blk.N. tensor
     int max_layer = 0;
+    int has_nextn = 0;
     for (int i = 0; i < (int)ctx->n_tensors; i++) {
         const char *name = ctx->tensors[i].name;
         if (strncmp(name, "blk.", 4) == 0) {
             int layer = atoi(name + 4);
             if (layer > max_layer) max_layer = layer;
+            // Check if this is an MTP model (has nextn.* tensors)
+            if (strstr(name, ".nextn.")) has_nextn = 1;
         }
     }
-    model->n_layers = max_layer + 1;  // 40 layers for Qwen3.6
+    // For MTP models, the last layer (blk.40) is the MTP prediction head
+    // Only count regular layers (skip MTP head)
+    if (has_nextn) {
+        model->n_layers = max_layer;  // 40 layers (0..39) for MTP model
+        printf("MTP model detected: %d regular layers + 1 MTP head\n", max_layer);
+    } else {
+        model->n_layers = max_layer + 1;  // 41 layers for MTP, 40 for regular
+    }
     
     // Allocate layers
     model->layers = (wubu_layer_t *)calloc(model->n_layers, sizeof(wubu_layer_t));
@@ -422,6 +432,7 @@ void wubu_model_free(wubu_model_t *model) {
     free(model->ssm_states);
     free(model->gqa_k_cache);
     free(model->gqa_v_cache);
+    wubu_mtp_free(&model->mtp);
     if (model->gguf_ctx) {
         gguf_close(model->gguf_ctx);
         model->gguf_ctx = NULL;
@@ -567,6 +578,12 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         free(final_normed);
     }
     
+    // Save last hidden state for MTP speculative decode (if requested)
+    float *save_h = model->save_last_hidden;
+    if (save_h && N > 0) {
+        memcpy(save_h, x + (N - 1) * D_MODEL, D_MODEL * sizeof(float));
+    }
+    
     // Output projection (into logits space)
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
     double t_out0 = wall_time();
@@ -625,6 +642,281 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     free(attn_out);
     free(normed2);
     free(ffn_out);
+}
+
+// ========== MTP Head ==========
+
+bool wubu_mtp_load(mtp_head_t *mtp, const char *mtp_gguf_path,
+                   gguf_ctx *main_ctx, const uint8_t *main_blob) {
+    memset(mtp, 0, sizeof(*mtp));
+    
+    // Use the already-open main context (same model, same blob)
+    // The MTP model is the same GGUF file as the main model
+    gguf_ctx *ctx = main_ctx;
+    const uint8_t *blob = (const uint8_t *)ctx->data_blob;
+    if (!ctx || !blob) {
+        fprintf(stderr, "MTP: no context or blob available\n");
+        return false;
+    }
+    
+    // Verify this is an MTP model
+    gguf_tensor_info *t = gguf_find_tensor(ctx, "blk.40.nextn.hnorm.weight");
+    if (!t) {
+        fprintf(stderr, "MTP: no nextn tensors in model (not an MTP model?)\n");
+        return false;
+    }
+    
+    t = gguf_find_tensor(ctx, "blk.40.nextn.enorm.weight");
+    if (!t) { fprintf(stderr, "MTP: missing enorm\n"); goto fail; }
+    mtp->nextn_enorm = (float *)malloc(D_MODEL * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, mtp->nextn_enorm, D_MODEL);
+    
+    t = gguf_find_tensor(ctx, "blk.40.nextn.shared_head_norm.weight");
+    if (!t) { fprintf(stderr, "MTP: missing shared_head_norm\n"); goto fail; }
+    mtp->nextn_shared_head_norm = (float *)malloc(D_MODEL * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, mtp->nextn_shared_head_norm, D_MODEL);
+    
+    // eh_proj weight — dequant Q8_0 to F32 during init for fast SGEMM
+    t = gguf_find_tensor(ctx, "blk.40.nextn.eh_proj.weight");
+    if (!t) { fprintf(stderr, "MTP: missing eh_proj\n"); goto fail; }
+    mtp->nextn_eh_proj_dim = (int64_t)t->dims[0];  // 4096
+    int64_t eh_elems = (int64_t)t->dims[0] * (int64_t)t->dims[1];
+    mtp->nextn_eh_proj_f32 = (float *)malloc(eh_elems * sizeof(float));
+    if (!gguf_read_tensor_f32(ctx, t, mtp->nextn_eh_proj_f32, eh_elems)) {
+        fprintf(stderr, "MTP: failed to read eh_proj\n"); goto fail;
+    }
+    printf("MTP: eh_proj dequantized (%lld x %lld = %lld elems)\n",
+           (long long)t->dims[0], (long long)t->dims[1], (long long)eh_elems);
+    
+    printf("MTP: nextn loaded (hnorm+enorm+eh_proj[%lldx%lld]+shared_head_norm)\n",
+           (long long)t->dims[0], (long long)t->dims[1]);
+    
+    // Load blk.40 layer — use the MTP model's GGAUF for tensor offsets
+    // We store pointers into the MTP model's data_blob for MoE and attn weights
+    wubu_layer_t *blk40 = &mtp->blk40;
+    memset(blk40, 0, sizeof(*blk40));
+    blk40->layer_idx = 40;
+    blk40->is_ssm = false;  // blk.40 is GQA (every 4th layer)
+    
+    // Load norms from MTP context (F32)
+    // (blob already set above)
+    
+    t = gguf_find_tensor(ctx, "blk.40.attn_norm.weight");
+    if (!t) { fprintf(stderr, "MTP: missing attn_norm\n"); goto fail; }
+    blk40->attn_norm_weight = (float *)malloc(D_MODEL * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, blk40->attn_norm_weight, D_MODEL);
+    
+    t = gguf_find_tensor(ctx, "blk.40.post_attention_norm.weight");
+    if (!t) { fprintf(stderr, "MTP: missing post_attn_norm\n"); goto fail; }
+    blk40->post_attn_norm_weight = (float *)malloc(D_MODEL * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, blk40->post_attn_norm_weight, D_MODEL);
+    
+    // Load GQA weights (all Q5_K — type 13)
+    // attn_q.weight [2048, 8192] — Q + gate fused
+    t = gguf_find_tensor(ctx, "blk.40.attn_q.weight");
+    if (!t) { fprintf(stderr, "MTP: missing attn_q\n"); goto fail; }
+    blk40->gqa.attn_q_weight_q = blob + t->data_offset;
+    blk40->gqa.attn_q_weight_type = t->ggml_type;
+    
+    t = gguf_find_tensor(ctx, "blk.40.attn_k.weight");
+    if (!t) { fprintf(stderr, "MTP: missing attn_k\n"); goto fail; }
+    blk40->gqa.attn_k_weight_q = blob + t->data_offset;
+    blk40->gqa.attn_k_weight_type = t->ggml_type;
+    
+    t = gguf_find_tensor(ctx, "blk.40.attn_v.weight");
+    if (!t) { fprintf(stderr, "MTP: missing attn_v\n"); goto fail; }
+    blk40->gqa.attn_v_weight_q = blob + t->data_offset;
+    blk40->gqa.attn_v_weight_type = t->ggml_type;
+    
+    t = gguf_find_tensor(ctx, "blk.40.attn_output.weight");
+    if (!t) { fprintf(stderr, "MTP: missing attn_output\n"); goto fail; }
+    blk40->gqa.attn_output_weight_q = blob + t->data_offset;
+    blk40->gqa.attn_output_weight_type = t->ggml_type;
+    
+    // Q/K norms (F32)
+    t = gguf_find_tensor(ctx, "blk.40.attn_q_norm.weight");
+    if (!t) { fprintf(stderr, "MTP: missing attn_q_norm\n"); goto fail; }
+    blk40->gqa.attn_q_norm_weight = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, blk40->gqa.attn_q_norm_weight, GQA_HEAD_DIM);
+    
+    t = gguf_find_tensor(ctx, "blk.40.attn_k_norm.weight");
+    if (!t) { fprintf(stderr, "MTP: missing attn_k_norm\n"); goto fail; }
+    blk40->gqa.attn_k_norm_weight = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, blk40->gqa.attn_k_norm_weight, GQA_HEAD_DIM);
+    
+    // Load MoE weights (quantized pointers into blob)
+    moe_weights_t *moe = &blk40->moe;
+    
+    t = gguf_find_tensor(ctx, "blk.40.ffn_gate_inp.weight");
+    if (t && blob) {
+        // BF16 router — dequant to F32 during init
+        int64_t n_router = (int64_t)t->dims[0] * t->dims[1];
+        moe->ffn_gate_inp = (float *)malloc(n_router * sizeof(float));
+        gguf_read_tensor_f32(ctx, t, moe->ffn_gate_inp, n_router);
+    }
+    
+    t = gguf_find_tensor(ctx, "blk.40.ffn_gate_inp_shexp.weight");
+    if (t && blob) {
+        moe->ffn_gate_inp_shexp = (float *)malloc(D_MODEL * sizeof(float));
+        gguf_read_tensor_f32(ctx, t, moe->ffn_gate_inp_shexp, D_MODEL);
+    }
+    
+    // Routed experts: Q2_K (gate, up), Q3_K (down)
+    t = gguf_find_tensor(ctx, "blk.40.ffn_gate_exps.weight");
+    if (t && blob) { moe->ffn_gate_exps_q = blob + t->data_offset; moe->ffn_gate_exps_q_type = t->ggml_type; }
+    t = gguf_find_tensor(ctx, "blk.40.ffn_up_exps.weight");
+    if (t && blob) { moe->ffn_up_exps_q = blob + t->data_offset; moe->ffn_up_exps_q_type = t->ggml_type; }
+    t = gguf_find_tensor(ctx, "blk.40.ffn_down_exps.weight");
+    if (t && blob) { moe->ffn_down_exps_q = blob + t->data_offset; moe->ffn_down_exps_q_type = t->ggml_type; }
+    
+    // Shared expert: Q5_K (gate, up), Q6_K (down)
+    t = gguf_find_tensor(ctx, "blk.40.ffn_gate_shexp.weight");
+    if (t && blob) { moe->ffn_gate_shexp_q = blob + t->data_offset; moe->ffn_gate_shexp_q_type = t->ggml_type; }
+    t = gguf_find_tensor(ctx, "blk.40.ffn_up_shexp.weight");
+    if (t && blob) { moe->ffn_up_shexp_q = blob + t->data_offset; moe->ffn_up_shexp_q_type = t->ggml_type; }
+    t = gguf_find_tensor(ctx, "blk.40.ffn_down_shexp.weight");
+    if (t && blob) { moe->ffn_down_shexp_q = blob + t->data_offset; moe->ffn_down_shexp_q_type = t->ggml_type; }
+    
+    // Mark MoE as loaded
+    if (moe->ffn_gate_exps_q && moe->ffn_up_exps_q && moe->ffn_down_exps_q) {
+        moe->loaded = true;
+        moe->load_from_blob = true;
+    }
+    
+    printf("MTP: blk.40 loaded (GQA+MoE: Q5_K/Q2_K/Q3_K/Q6_K)\n");
+    
+    // Allocate KV cache for blk.40
+    mtp->k_cache = (float *)calloc(GQA_MAX_CTX * GQA_KV_DIM, sizeof(float));
+    mtp->v_cache = (float *)calloc(GQA_MAX_CTX * GQA_KV_DIM, sizeof(float));
+    mtp->cache_len = 0;
+    
+    mtp->loaded = true;
+    return true;
+    
+fail:
+    wubu_mtp_free(mtp);
+    return false;
+}
+
+int wubu_mtp_draft_forward(wubu_model_t *model,
+                           const float *x,
+                           const float *token_embd, int B,
+                           float *logits_out) {
+    if (!model->mtp.loaded) return 0;
+    
+    mtp_head_t *mtp = &model->mtp;
+    wubu_layer_t *blk40 = &mtp->blk40;
+    const int vs = model->vocab_size;
+    
+    // Per-draft buffers (reuse across B to avoid mallocs)
+    float *h_norm = (float *)malloc(D_MODEL * sizeof(float));
+    float *e_norm = (float *)malloc(D_MODEL * sizeof(float));
+    float *concat = (float *)malloc(2 * D_MODEL * sizeof(float));
+    float *cur = (float *)malloc(D_MODEL * sizeof(float));
+    float *temp_attn = (float *)malloc(D_MODEL * sizeof(float));
+    float *temp_ffn = (float *)malloc(D_MODEL * sizeof(float));
+    float *temp_norm = (float *)malloc(D_MODEL * sizeof(float));
+    
+    if (!h_norm || !e_norm || !concat || !cur || !temp_attn || !temp_ffn || !temp_norm) {
+        fprintf(stderr, "MTP draft: alloc failed\n");
+        free(h_norm); free(e_norm); free(concat); free(cur);
+        free(temp_attn); free(temp_ffn); free(temp_norm);
+        return 0;
+    }
+    
+    // Step 1: h_norm = rms_norm(x, hnorm)
+    wubu_rms_norm(1, 1, D_MODEL, x, mtp->nextn_hnorm, 1e-6f, h_norm);
+    
+    // Process each draft token
+    for (int b = 0; b < B; b++) {
+        const float *embd_b = token_embd + b * D_MODEL;
+        float *logits_b = logits_out + b * vs;
+        
+        // Step 2: e_norm = rms_norm(token_embd[b], enorm)
+        wubu_rms_norm(1, 1, D_MODEL, embd_b, mtp->nextn_enorm, 1e-6f, e_norm);
+        
+        // Step 3: concat = [h_norm | e_norm]
+        memcpy(concat, h_norm, D_MODEL * sizeof(float));
+        memcpy(concat + D_MODEL, e_norm, D_MODEL * sizeof(float));
+        
+        // Step 4: cur = eh_proj @ concat (F32 SGEMM)
+        for (int j = 0; j < D_MODEL; j++) {
+            double sum = 0.0;
+            for (int k = 0; k < mtp->nextn_eh_proj_dim; k++)
+                sum += (double)concat[k] * (double)mtp->nextn_eh_proj_f32[j * mtp->nextn_eh_proj_dim + k];
+            cur[j] = (float)sum;
+        }
+        
+        // Step 5: Forward through blk.40 (GQA+MoE)
+        // Pre-attention RMSNorm
+        wubu_rms_norm(1, 1, D_MODEL, cur, blk40->attn_norm_weight, 1e-6f, temp_norm);
+        
+        // GQA forward with KV cache
+        float *k_out = mtp->k_cache + (mtp->cache_len + b) * GQA_KV_DIM;
+        float *v_out = mtp->v_cache + (mtp->cache_len + b) * GQA_KV_DIM;
+        wubu_gqa_forward(temp_norm, 1, 1, &blk40->gqa, temp_attn,
+                         mtp->k_cache, mtp->v_cache, mtp->cache_len + b,
+                         k_out, v_out);
+        
+        // Residual
+        for (int i = 0; i < D_MODEL; i++) cur[i] += temp_attn[i];
+        
+        // Post-attention RMSNorm
+        wubu_rms_norm(1, 1, D_MODEL, cur, blk40->post_attn_norm_weight, 1e-6f, temp_norm);
+        
+        // MoE forward
+        if (blk40->moe.loaded) {
+            wubu_moe_forward(temp_norm, 1, 1, &blk40->moe, temp_ffn);
+        } else {
+            memcpy(temp_ffn, temp_norm, D_MODEL * sizeof(float));
+        }
+        
+        // Residual
+        for (int i = 0; i < D_MODEL; i++) cur[i] += temp_ffn[i];
+        
+        // Step 6: shared_head_norm
+        wubu_rms_norm(1, 1, D_MODEL, cur, mtp->nextn_shared_head_norm, 1e-6f, temp_norm);
+        
+        // Step 7: output projection (via main model's output.weight)
+        if (model->output_weight_q) {
+            quantized_matmul(temp_norm, model->output_weight_q, model->output_weight_type,
+                            D_MODEL, vs, 0, logits_b);
+        } else {
+            memset(logits_b, 0, vs * sizeof(float));
+        }
+    }
+    
+    // Update cache length
+    mtp->cache_len += B;
+    
+    free(h_norm); free(e_norm); free(concat); free(cur);
+    free(temp_attn); free(temp_ffn); free(temp_norm);
+    
+    return B;
+}
+
+void wubu_mtp_free(mtp_head_t *mtp) {
+    if (!mtp || !mtp->loaded) return;
+    free(mtp->nextn_hnorm);
+    free(mtp->nextn_enorm);
+    free(mtp->nextn_shared_head_norm);
+    free(mtp->nextn_eh_proj_f32);
+    // blk.40 GQA norms
+    free(mtp->blk40.attn_norm_weight);
+    free(mtp->blk40.post_attn_norm_weight);
+    free(mtp->blk40.gqa.attn_q_norm_weight);
+    free(mtp->blk40.gqa.attn_k_norm_weight);
+    // blk.40 MoE (blob-backed so only F32 pointers freed)
+    if (!mtp->blk40.moe.load_from_blob) {
+        free(mtp->blk40.moe.ffn_gate_inp);
+        free(mtp->blk40.moe.ffn_gate_inp_shexp);
+    } else {
+        free(mtp->blk40.moe.ffn_gate_inp);
+        free(mtp->blk40.moe.ffn_gate_inp_shexp);
+    }
+    free(mtp->k_cache);
+    free(mtp->v_cache);
+    memset(mtp, 0, sizeof(*mtp));
 }
 
 // ========== Backward Pass ==========

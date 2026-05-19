@@ -854,6 +854,8 @@ void dequantize_q6_K_row(const uint8_t *data, float *output, int64_t n_elems) {
 
 // Forward declaration for Q4_K dequant function
 static void dequantize_q4_K_row(const uint8_t *data, float *output, int64_t n_elems);
+static void dequantize_q2_K_row(const uint8_t *data, float *output, int64_t n_elems);
+static void dequantize_q3_K_row(const uint8_t *data, float *output, int64_t n_elems);
 
 int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output, int64_t max_elems) {
     // Calculate total elements
@@ -964,6 +966,22 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
     else if (tensor->ggml_type == GGML_TYPE_IQ1_M) {
         dequantize_iq1_m_row(src, output, n_elems);
     }
+    else if (tensor->ggml_type == GGML_TYPE_IQ4_XS) {
+        dequantize_iq4_xs_row(src, output, n_elems);
+    }
+    else if (tensor->ggml_type == GGML_TYPE_Q2_K) {
+        dequantize_q2_K_row(src, output, n_elems);
+    }
+    else if (tensor->ggml_type == GGML_TYPE_Q3_K) {
+        dequantize_q3_K_row(src, output, n_elems);
+    }
+    else if (tensor->ggml_type == 30) {  // BF16
+        const uint16_t *b16 = (const uint16_t *)src;
+        for (int64_t i = 0; i < n_elems; i++) {
+            uint32_t bits = (uint32_t)b16[i] << 16;
+            memcpy(&output[i], &bits, sizeof(float));
+        }
+    }
     else {
         fprintf(stderr, "Error: unsupported GGML type %d for %s\n", tensor->ggml_type, tensor->name);
         if (raw_heap) free(raw_heap);
@@ -1047,7 +1065,79 @@ void gguf_close(gguf_ctx *ctx) {
     }
 }
 
-// Dequantize raw buffer to f32 using the appropriate dequant function
+// ========== Q2_K Dequant (84 bytes/block, 256 elems/block) ==========
+// Block layout: scales[16] + qs[64] + d[2](fp16) + dmin[2](fp16)
+static void dequantize_q2_K_row(const uint8_t *data, float *output, int64_t n_elems) {
+    int nb = (int)((n_elems + 255) / 256);
+    for (int i = 0; i < nb; i++) {
+        const uint8_t *b = data + i * 84;
+        float d = f16_to_f32(*(const uint16_t*)(b + 80));
+        float min = f16_to_f32(*(const uint16_t*)(b + 82));
+        const uint8_t *sc = b;
+        const uint8_t *q = b + 16;
+        int is = 0;
+        for (int n = 0; n < 256; n += 128) {
+            int shift = 0;
+            for (int j = 0; j < 4; j++) {
+                uint8_t sc_byte = sc[is++];
+                float dl = d * (sc_byte & 0xF);
+                float ml = min * (sc_byte >> 4);
+                for (int l = 0; l < 16; l++) *output++ = dl * ((int8_t)((q[l] >> shift) & 3)) - ml;
+                sc_byte = sc[is++];
+                dl = d * (sc_byte & 0xF);
+                ml = min * (sc_byte >> 4);
+                for (int l = 0; l < 16; l++) *output++ = dl * ((int8_t)((q[l+16] >> shift) & 3)) - ml;
+                shift += 2;
+            }
+            q += 32;
+        }
+    }
+}
+
+// ========== Q3_K Dequant (110 bytes/block, 256 elems/block) ==========
+// Block layout: hmask[32] + qs[64] + scales[12] + d[2](fp16)
+static void dequantize_q3_K_row(const uint8_t *data, float *output, int64_t n_elems) {
+    int nb = (int)((n_elems + 255) / 256);
+    const uint32_t kmask1 = 0x03030303;
+    const uint32_t kmask2 = 0x0f0f0f0f;
+    
+    for (int i = 0; i < nb; i++) {
+        const uint8_t *b = data + i * 110;
+        float d_all = f16_to_f32(*(const uint16_t*)(b + 108));
+        const uint8_t *q = b + 32;
+        const uint8_t *hm = b;
+        
+        // Unpack 12 bytes of 6-bit scales into 16 int8 values
+        uint32_t aux[4];
+        memcpy(aux, b + 96, 12);
+        uint32_t tmp = aux[2];
+        aux[2] = ((aux[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+        aux[3] = ((aux[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+        aux[0] = (aux[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        aux[1] = (aux[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+        
+        const int8_t *scales = (const int8_t *)aux;
+        int is = 0;
+        uint8_t m = 1;
+        for (int n = 0; n < 256; n += 128) {
+            int shift = 0;
+            for (int j = 0; j < 4; j++) {
+                float dl = d_all * (scales[is++] - 32);
+                for (int l = 0; l < 16; l++)
+                    *output++ = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+                dl = d_all * (scales[is++] - 32);
+                for (int l = 0; l < 16; l++)
+                    *output++ = dl * ((int8_t)((q[l+16] >> shift) & 3) - ((hm[l+16] & m) ? 0 : 4));
+                shift += 2;
+                m <<= 1;
+            }
+            q += 32;
+            hm += 32;
+        }
+    }
+}
+
+// ========== Tensor Reading ==========
 // data: raw quantized bytes (must be at least gguf_raw_size(type, n_elems) bytes)
 void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float *output) {
     switch (ggml_type) {
@@ -1084,6 +1174,20 @@ void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float 
         case GGML_TYPE_IQ3_XXS: dequantize_iq3_xxs_row(data, output, n_elems); break;
         case GGML_TYPE_IQ4_XS: dequantize_iq4_xs_row(data, output, n_elems); break;
         case GGML_TYPE_Q4_K: dequantize_q4_K_row(data, output, n_elems); break;
+        case GGML_TYPE_BF16: {
+            // bfloat16: upper 16 bits of IEEE float32
+            for (int64_t i = 0; i < n_elems; i++) {
+                uint16_t bits;
+                memcpy(&bits, data + i * 2, 2);
+                uint32_t f32 = (uint32_t)bits << 16;
+                float val;
+                memcpy(&val, &f32, 4);
+                output[i] = val;
+            }
+            break;
+        }
+        case GGML_TYPE_Q2_K: dequantize_q2_K_row(data, output, n_elems); break;
+        case GGML_TYPE_Q3_K: dequantize_q3_K_row(data, output, n_elems); break;
         default:
             fprintf(stderr, "Dequant: unsupported type %d\n", ggml_type);
             memset(output, 0, n_elems * sizeof(float));
@@ -1109,6 +1213,9 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_IQ3_XXS: return n_blocks * 98;   // d[2] + qs[96] = 98 bytes (verified vs llama.cpp struct)
         case GGML_TYPE_IQ4_XS: return n_blocks * 136;  // d[2] + scales_h[2] + scales_l[4] + qs[128]
         case GGML_TYPE_Q4_K:  return n_blocks * 144;  // d[2] + dmin[2] + scales[12] + qs[128]
+        case GGML_TYPE_Q2_K:  return n_blocks * 84;   // scales[16] + qs[64] + d[2] + dmin[2]
+        case GGML_TYPE_Q3_K:  return n_blocks * 110;  // hmask[32] + qs[64] + scales[12] + d[2]
+        case 30:              return n_elems * 2;     // BF16 (bfloat16)
         default: return -1;
     }
 }

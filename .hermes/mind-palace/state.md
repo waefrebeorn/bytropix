@@ -1,34 +1,50 @@
-# State — May 18, 2026 — MTP MODEL FOUND. ISLAND BOY ARCH NEXT.
+# State — May 18, 2026 (23:30) — ALL QUANT TYPES SUPPORTED. MTP INFRA COMPLETE.
 
-## REAL STATUS: Inference engine complete for non-MTP model.
-Cos-sim 0.9970 vs llama.cpp. gen_text CHAT=1 works. Decode 0.7 tok/s.
-**MTP model discovered** at /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf (11.9GB, 753 tensors).
-blk.40 has `nextn.eh_proj`, `nextn.enorm`, `nextn.hnorm`, `nextn.shared_head_norm`.
+## REAL STATUS: gen_text_mtp stable at 0.7 tok/s. MTP spec-decode logic placeholder.
+Phiases: 0-4 DONE (core inference, DA gaps, SIMD vec_dot, KV cache). Phase 5+6: MTP
+model loads, blk.40 + nextn head accessible via wubu_mtp_load/wubu_mtp_draft_forward.
+save_last_hidden captures h_39. Embedding lookup fixed (NaN root cause).
 
-## Critical New Info
-- **Two models in /models/**: non-MTP (733 tensors) and MTP (753 tensors)
-- **MTP head**: blk.40 with GQA + MoE + nextn projections (1 extra layer)
-- **Memory bandwidth is bottleneck**: DDR5 ~50GB/s, 35B model = 10.7GB/step = 214ms min
-- **"Island boy" pattern**: batch tokens through each layer to amortize weight load
-- **5-token startup lag accepted**: prefill KV/SSM caches, then sync speedup
-- **Speculative decode via MTP**: draft 3-4 tokens via blk.40, verify batch-size=4 on full 40L
+## Quant Type Support (quantized_matmul.c dispatch)
+| Type | ID | Strategy | Used By |
+|------|----|----------|---------|
+| F32 | 0 | Direct SGEMM | Norms, routers |
+| Q4_K | 12 | Local vec_dot (q4_K_vec_dot) | output.weight |
+| Q5_K | 13 | Local vec_dot (q5_K_vec_dot) | attn q/k/v, shared gate/up, token_embd |
+| Q6_K | 14 | Local vec_dot (q6_K_vec_dot) | SSM output proj, shared down |
+| IQ2_XXS | 16 | Local vec_dot (iq2_xxs_vec_dot) | MoE gate/up experts |
+| IQ3_XXS | 18 | Local vec_dot (iq3_xxs_vec_dot) | MoE down experts |
+| IQ4_XS | 23 | Local vec_dot (iq4_xs_vec_dot) | MoE down (L34,38,39) |
+| Q8_0 | 8 | On-the-fly dequant+SGEMM | blk.39 shexp, nextn.eh_proj |
+| Q2_K | 10 | Dequant-to-F32+SGEMM | blk.40 MoE gate/up (MTP head) |
+| Q3_K | 11 | Dequant-to-F32+SGEMM | blk.40 MoE down (MTP head) |
+| IQ2_S | 22 | Dequant-to-F32+SGEMM | MTP model some layers |
+| BF16 | 30 | On-the-fly SGEMM | blk.40 router tensors |
 
-## Verified Runtime Results
-- Full 40L + quantized MoE: cos-sim **0.997022** vs llama.cpp (SSE vec_dot)
-- All 40 layers cos-sim > 0.995
-- Q4_K/Q5_K/Q6_K: SSE3 `_mm_maddubs_epi16` + SSE4.1 `_mm_cvtepi8_epi16`
-- IQ2_XXS/IQ3_XXS/IQ4_XS: still generic C (complex lookup tables)
-- Output projection Q4_K: cos-sim 0.99995 vs F32 SGEMM ✓
-- gen_text: "The capital of France is" → coherent English ✓
+## Key Code Changes (this session)
+- include/gguf_reader.h: GGML_TYPE_BF16 = 30 in enum
+- include/wubu_model.h: save_last_hidden field, mtp_head_t restored
+- src/gguf_reader.c: BF16 dequant + raw_size
+- src/quantized_matmul.c: Q8_0 on-fly dequant, Q2_K/Q3_K/IQ2_S/SGM fallback
+- src/wubu_model.c: save_last_hidden capture. MTP load/draft/free intact
+- tools/gen_text_mtp.c: save_last_hidden for h_39. Embedding lookup bugfix.
+- Makefile: gen_text_mtp target
 
-## Performance (CPU, 16 threads, 2.7bpw 35B MoE)
-- Decode: 0.6 tok/s (2× improvement from MoE OpenMP + embedding fix)
-- Prefill: 1.4 tok/s
-- MoE: 15ms/layer (3× from OpenMP), SSM: 13ms/layer, GQA: 15ms/layer
-- Malloc reduction: 160 mallocs → 5 per forward (pre-allocated buffers)
-- PROFILE env var enabled for per-layer timing
+## MTP Model Architecture
+h_39 → rms_norm(nextn.hnorm) → concat[hnorm(h_39) | enorm(embd)] →
+eh_proj(4096→2048, Q8_0) → blk.40 GQA+MoE (Q5_K/Q2_K/Q3_K)→
+rms_norm(nextn.shared_head_norm) → output.weight(Q4_K) → logits
 
-## DA v10 Gaps Status
-- Gap 1-10: **ALL CLOSED** ✓
-- **New: GQA KV cache fixed decode attention** — was only attending to self,
-  now attends to all previous tokens via persistent K/V cache.
+## Performance
+- Prefill: 2.1 s/5tok (2.4 tok/s)
+- Decode: 0.7 tok/s (CPU, 16 threads, 35B MoE)
+- MoE: 15ms/layer, SSM: 13ms/layer, GQA: 15ms/layer
+- Memory bandwidth bottleneck: 10.7GB/step, DDR5 ~50GB/s
+
+## Next: MTP Spec-Decode Implementation
+1. SSM state save/restore arrays (allocate buffers, copy before verify)
+2. KV cache rollback (save/restore gqa_cache_len)
+3. Batch verify: forward draft tokens (B=3-4) through 40 layers
+4. Acceptance: compare verify argmax vs draft tokens per position
+5. Accept longest prefix, rollback rest
+6. Target: 1.5-2.5 tok/s via MTP (~80% acceptance rate predicted)
