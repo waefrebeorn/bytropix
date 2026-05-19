@@ -1,26 +1,23 @@
-# State — May 19, 2026 (01:30) — MTP FULLY IMPLEMENTED. STATE SAVE/RESTORE. BUGFIXES.
+# State — May 19, 2026 (02:15) — LLAMA DEPS KILLED. NV64 RDRAM DESIGN DOC WRITTEN.
 
 ## REAL STATUS
-MTP head loads correctly (nextn_hnorm was missing — BUG FIXED). SSM state checkpoint/rollback implemented. gen_text_mtp: opt-in MTP mode (MTP=1 env var). Non-MTP: 0.6 tok/s coherent. MTP: 3.3 tok/s but output degenerates at IQ2_M (blk.40 Q2_K/Q3_K quantization).
+No libggml-cpu.so dependency. All vec_dot self-contained in quantized_dot_generic.c. gen_text: 2.1 tok/s decode, 7.8 tok/s prefill. NV64 RDRAM ring buffer design ready for Phase 9.
 
-## MTP Verify Discovery (@ IQ2_M)
-100% rejection rate — MTP head predictions NEVER match main model's. Root cause: quantization noise (IQ2_M main model + Q2_K/Q3_K blk.40 MoE). MTP spec-decode cannot work at this quant level. For higher-precision models, verify infrastructure ready (checkpoint/rollback).
+## Phase 7 Complete
+GQA AVX2 + stack buf, AVX2 vec_dot Q4/Q5/Q6, prefetch. Decode 0.7→2.1 tok/s (3×).
 
-## MTP "Free Tokens" Mode (MTP=1)
-Emits 1 main + DRAFT_N(4) MTP tokens per decode step. Speed: 3.3 tok/s decode. Quality: degraded at IQ2_M — MTP head produces degenerating output after 1-2 steps.
+## Cleanup
+- Dead extern declarations removed from quantized_matmul.c
+- libggml-cpu.so refs purged (only ref_dumper* targets still link llama)
+- All vec_dot types self-hosted: Q4_K/Q5_K/Q6_K (AVX2+SSE+generic), IQ2_XXS/IQ3_XXS/IQ4_XS (generic)
 
-## Code Changes (this session)
-- include/wubu_model.h: ssm_states_saved, conv_states_saved, gqa_cache_len_saved, mtp_cache_len_saved. checkpoint/rollback decl.
-- src/wubu_model.c: wubu_model_checkpoint + rollback impl. nextn_hnorm load bugfix. save_last_hidden captures pre-final-norm. Free save bufs in free().
-  **MTP concat order BUGFIX**: [h_norm|e_norm] → [e_norm|h_norm] (matches llama.cpp ggml_concat(e_norm, h_norm, 0))
-- tools/gen_text_mtp.c: Full MTP pipeline. Draft generate (4 MTP head calls per step). Verify loop with per-token checkpoint/rollback. Free tokens mode (no verify). MTP=1 opt-in.
-
-## Performance
-- Non-MTP: 0.6-0.7 tok/s decode, same as gen_text
-- MTP free-tokens: 3.3 tok/s decode (~5×), quality loss at IQ2_M
-- MTP verify: N/A (0% acceptance at IQ2_M)
+## Design
+- `.hermes/mind-palace/nv64-rdram-ring-buffer.md` — full NV64 RDRAM ring buffer architecture
+- 64-slot ring buffer with time-sync token ticks
+- CPU/GPU tandem: split at layer 20, overlapped compute
+- Prefetch agent graduated T2→T1→T0
+- Distributed extension: ring slot = machine[i % N]
 
 ## Next
-- Phase 7: Hardware saturation (AVX2, prefetch, NUMA)
-- Higher-precision MTP model for working spec-decode
-- MTP with non-MTP GGUF (blk.40 not present — graceful fallback works)
+Phase 8: MoE optimization (AVX2 IQ2_XXS/IQ3_XXS vec_dot)
+Phase 9: NV64 ring buffer implementation + GPU tandem

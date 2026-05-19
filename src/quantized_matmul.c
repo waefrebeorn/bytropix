@@ -1,7 +1,7 @@
 /**
  * quantized_matmul.c — Generic Q8_K-based quantized matrix multiplication.
  *
- * Links against libggml-cpu.so for exact 1:1 parity with llama.cpp.
+ * Self-contained: all vec_dot implementations in src/quantized_dot_generic.c.
  * For each output column, quantizes the F32 input to Q8_K then calls
  * the appropriate ggml_vec_dot_{type}_q8_K function.
  *
@@ -19,37 +19,6 @@
 
 #include "gguf_reader.h"
 #include "wubu_ssm.h"
-
-// ========================================================================
-// Forward declarations of libggml-cpu.so functions
-// These are the exact functions llama.cpp uses — guarantees 1:1 parity
-// ========================================================================
-
-// (quantize_row_q8_K is declared in gguf_reader.h)
-
-// IQ2_XXS × Q8_K dot product (routed expert gate/up weights)
-extern void ggml_vec_dot_iq2_xxs_q8_K(int n, float *s, size_t bs,
-    const void *vx, size_t bx, const void *vy, size_t by, int nrc);
-
-// IQ3_XXS × Q8_K dot product (routed expert down weights, most layers)
-extern void ggml_vec_dot_iq3_xxs_q8_K(int n, float *s, size_t bs,
-    const void *vx, size_t bx, const void *vy, size_t by, int nrc);
-
-// IQ4_XS × Q8_K dot product (routed expert down weights, some layers)
-extern void ggml_vec_dot_iq4_xs_q8_K(int n, float *s, size_t bs,
-    const void *vx, size_t bx, const void *vy, size_t by, int nrc);
-
-// Q5_K × Q8_K dot product (shared expert, some attention weights)
-extern void ggml_vec_dot_q5_K_q8_K(int n, float *s, size_t bs,
-    const void *vx, size_t bx, const void *vy, size_t by, int nrc);
-
-// Q6_K × Q8_K dot product (SSM output projection, some attention)
-extern void ggml_vec_dot_q6_K_q8_K(int n, float *s, size_t bs,
-    const void *vx, size_t bx, const void *vy, size_t by, int nrc);
-
-// Q4_K × Q8_K dot product (Unsloth Dynamic model, some weights)
-extern void ggml_vec_dot_q4_K_q8_K(int n, float *s, size_t bs,
-    const void *vx, size_t bx, const void *vy, size_t by, int nrc);
 
 // ========================================================================
 // Block sizes (from ggml-common.h)
