@@ -1,8 +1,9 @@
 /**
  * gpu_moe_kernel.cu — GPU MoE expert compute for IQ2_XXS/IQ3_XXS quantized weights.
  *
- * v3: Per-expert kernel launches with pre-allocated GPU buffers.
- * No cudaMalloc/cudaFree per expert (saves ~320 mallocs/frees per decode).
+ * v4: Multi-type dequant support. Gate/up = IQ2_XXS (or type passed).
+ * Down = IQ2_XXS/IQ3_XXS/IQ4_XS, dispatched by type param at kernel launch.
+ * Pre-allocated GPU buffers avoid cudaMalloc/cudaFree per expert.
  */
 #include "gpu_moe_kernel.h"
 #include "gguf_reader.h"
@@ -16,9 +17,15 @@
 static __constant__ uint64_t d_iq2xxs_grid[256];
 static __constant__ uint8_t  d_ksigns_iq2xs[128];
 static __constant__ uint8_t  d_kmask_iq2xs[8];
+static __constant__ uint32_t d_iq3xxs_grid[256];
 static const uint8_t h_kmask_iq2xs[8] = {1, 2, 4, 8, 16, 32, 64, 128};
 
 #include "iq2xxs_grid_data.inc"
+
+// iq3xxs_grid: 256 entries, each uint32 packs 4 int8 values
+static const uint32_t h_iq3xxs_grid[256] = {
+#include "iq3xxs_grid.inc"
+};
 
 static __device__ __inline__ float d_f16_f32(uint16_t v) {
     int s=(v>>15)&1,e=(v>>10)&0x1F,m=v&0x3FF; uint32_t f;
@@ -52,12 +59,71 @@ static __device__ float iq2_xxs_dot(const uint8_t *block, const float *x) {
     return total;
 }
 
+/**
+ * IQ3_XXS (3.0625 bpw) GPU dot product.
+ * Block layout: d[F16:2] + qs[64] + scales_and_signs[32] = 98 bytes
+ *   qs: 64 uint8 grid indices (64 × 8-bit → 256 positions = QK_K)
+ *   scales_and_signs: 8 × uint32, each:
+ *     upper 4 bits: scale nibble (db = d*(0.5+scale)*0.5)
+ *     lower 28 bits: 4 × 7-bit sign indices → ksigns_iq2xs lookup
+ * Per ib32: 4 groups × 8 elems = 32 elements; 8 ib32 × 32 = 256 total
+ */
+static __device__ float iq3_xxs_dot(const uint8_t *block, const float *x) {
+    float d = d_f16_f32(*(const uint16_t *)block);
+    const uint8_t *qs = block + 2;              // 64 bytes grid indices
+    const uint8_t *scales_and_signs = qs + 64;  // 32 bytes
+    float total = 0.0f;
+    for (int ib32 = 0; ib32 < QK_K/32; ib32++) {
+        // Manual byte load for unaligned access (scales_and_signs offset = 66, not 4-aligned)
+        const uint8_t *ss_src = scales_and_signs + 4*ib32;
+        uint32_t aux32 = ((uint32_t)ss_src[0]) | (((uint32_t)ss_src[1])<<8)
+                       | (((uint32_t)ss_src[2])<<16) | (((uint32_t)ss_src[3])<<24);
+        float db = d * (0.5f + (float)(aux32 >> 28)) * 0.5f;
+        const uint8_t *qs_batch = qs + ib32 * 8;
+        for (int l = 0; l < 4; l++) {
+            uint8_t signs = d_ksigns_iq2xs[(aux32 >> (7*l)) & 127];
+            uint8_t idx1 = qs_batch[2*l+0];
+            uint8_t idx2 = qs_batch[2*l+1];
+            const uint8_t *grid1 = (const uint8_t *)(&d_iq3xxs_grid[idx1]);
+            const uint8_t *grid2 = (const uint8_t *)(&d_iq3xxs_grid[idx2]);
+            int base = ib32 * 32 + l * 8;
+            for (int j = 0; j < 4; j++) {
+                float v1 = db * (float)(int8_t)grid1[j];
+                float v2 = db * (float)(int8_t)grid2[j];
+                if (signs & d_kmask_iq2xs[j+0]) total -= x[base + j+0] * v1;
+                else total += x[base + j+0] * v1;
+                if (signs & d_kmask_iq2xs[j+4]) total -= x[base + j+4] * v2;
+                else total += x[base + j+4] * v2;
+            }
+        }
+    }
+    return total;
+}
+
+/** Block size for a GGML quant type (only IQ2_XXS/IQ3_XXS/IQ4_XS supported). */
+static __host__ __device__ int blk_sz_for_type(int type) {
+    if (type == GGML_TYPE_IQ2_XXS) return 66;
+    if (type == GGML_TYPE_IQ3_XXS) return 98;
+    if (type == GGML_TYPE_IQ4_XS)  return 136;
+    return 66; // default to IQ2_XXS
+}
+
+/** Dot product dispatching to correct IQ dequant function by type. */
+static __device__ float dot_by_type(const uint8_t *block, const float *x, int type) {
+    if (type == GGML_TYPE_IQ2_XXS) return iq2_xxs_dot(block, x);
+    if (type == GGML_TYPE_IQ3_XXS) return iq3_xxs_dot(block, x);
+    // IQ4_XS not yet implemented — return 0
+    return 0.0f;
+}
+
 // Per-expert kernel: 1 block × 512 threads, 10KB shared mem
 __global__ void moe_expert_kernel(
     const float * __restrict__ x,
     const uint8_t * __restrict__ gate_q,
     const uint8_t * __restrict__ up_q,
     const uint8_t * __restrict__ down_q,
+    int gate_blk_sz, int up_blk_sz, int down_blk_sz,
+    int gate_type, int up_type, int down_type,
     float weight,
     float * __restrict__ output)
 {
@@ -71,15 +137,14 @@ __global__ void moe_expert_kernel(
 
     const int D_BPC = (D_MODEL + QK_K - 1) / QK_K;
     const int FF_BPC = (D_FF + QK_K - 1) / QK_K;
-    const int BLK_SZ = 66;
     const int OUTS = 4;
 
     double gs = 0.0, us = 0.0;
-    const uint8_t *gc = gate_q + (int64_t)idx * D_BPC * BLK_SZ;
-    const uint8_t *uc = up_q   + (int64_t)idx * D_BPC * BLK_SZ;
+    const uint8_t *gc = gate_q + (int64_t)idx * D_BPC * gate_blk_sz;
+    const uint8_t *uc = up_q   + (int64_t)idx * D_BPC * up_blk_sz;
     for (int b = 0; b < D_BPC; b++) {
-        gs += (double)iq2_xxs_dot(gc + b * BLK_SZ, s_x + b * QK_K);
-        us += (double)iq2_xxs_dot(uc + b * BLK_SZ, s_x + b * QK_K);
+        gs += (double)dot_by_type(gc + b * gate_blk_sz, s_x + b * QK_K, gate_type);
+        us += (double)dot_by_type(uc + b * up_blk_sz, s_x + b * QK_K, up_type);
     }
     float gv = (float)gs;
     s_act[idx] = (gv < -80.0f ? 0.0f : gv / (1.0f + expf(-gv))) * (float)us;
@@ -88,10 +153,10 @@ __global__ void moe_expert_kernel(
     for (int o = 0; o < OUTS; o++) {
         int col = idx + o * blockDim.x;
         if (col >= D_MODEL) break;
-        const uint8_t *dc = down_q + (int64_t)col * FF_BPC * BLK_SZ;
+        const uint8_t *dc = down_q + (int64_t)col * FF_BPC * down_blk_sz;
         double ds = 0.0;
         for (int b = 0; b < FF_BPC; b++)
-            ds += (double)iq2_xxs_dot(dc + b * BLK_SZ, s_act + b * QK_K);
+            ds += (double)dot_by_type(dc + b * down_blk_sz, s_act + b * QK_K, down_type);
         output[col] = (float)ds * weight;
     }
 }
@@ -100,6 +165,7 @@ void wubu_gpu_moe_init(void) {
     cudaMemcpyToSymbol(d_iq2xxs_grid, h_iq2xxs_grid, sizeof(h_iq2xxs_grid));
     cudaMemcpyToSymbol(d_ksigns_iq2xs, h_ksigns_iq2xs, sizeof(h_ksigns_iq2xs));
     cudaMemcpyToSymbol(d_kmask_iq2xs, h_kmask_iq2xs, sizeof(h_kmask_iq2xs));
+    cudaMemcpyToSymbol(d_iq3xxs_grid, h_iq3xxs_grid, sizeof(h_iq3xxs_grid));
 }
 
 void wubu_gpu_moe_forward_experts(
@@ -116,10 +182,14 @@ void wubu_gpu_moe_forward_experts(
     float *d_out_buf, float *d_weights_buf,
     bool use_gpu_ptrs)       // true: gate_q/up_q/down_q are GPU pointers
 {
-    (void)gate_type; (void)up_type; (void)down_type;
     (void)d_weights_buf;
     const int N_EXPERTS = 8;
     const size_t smem_bytes = (D_FF + D_MODEL) * sizeof(float);
+
+    // Resolve block sizes from types
+    int gate_blk_sz = blk_sz_for_type(gate_type);
+    int up_blk_sz   = blk_sz_for_type(up_type);
+    int down_blk_sz = blk_sz_for_type(down_type);
 
     // Upload x once (to pre-allocated buffer)
     cudaMemcpyAsync(d_x_buf, x, D_MODEL * sizeof(float), cudaMemcpyHostToDevice, stream);
@@ -148,7 +218,10 @@ void wubu_gpu_moe_forward_experts(
         }
 
         moe_expert_kernel<<<1, D_FF, smem_bytes, stream>>>(
-            d_x_buf, d_gate, d_up, d_down, weights[e], d_out_buf);
+            d_x_buf, d_gate, d_up, d_down,
+            gate_blk_sz, up_blk_sz, down_blk_sz,
+            gate_type, up_type, down_type,
+            weights[e], d_out_buf);
 
         cudaMemcpyAsync(output + (int64_t)e * D_MODEL, d_out_buf,
                         D_MODEL * sizeof(float), cudaMemcpyDeviceToHost, stream);

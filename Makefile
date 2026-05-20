@@ -92,7 +92,7 @@ src/gpu_quant_matmul.o: src/gpu_quant_matmul.cu include/gpu_quant_matmul.h inclu
 src/gpu_quant_matmul_row_major.o: src/gpu_quant_matmul_row_major.cu include/gpu_quant_matmul.h include/gguf_reader.h
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
 
-src/gpu_moe_kernel.o: src/gpu_moe_kernel.cu include/gpu_moe_kernel.h include/gguf_reader.h src/iq2xxs_grid_data.inc
+src/gpu_moe_kernel.o: src/gpu_moe_kernel.cu include/gpu_moe_kernel.h include/gguf_reader.h src/iq2xxs_grid_data.inc src/iq3xxs_grid.inc
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
 
 src/gpu_ssm_recurrence.o: src/gpu_ssm_recurrence.cu include/gpu_ssm_recurrence.h

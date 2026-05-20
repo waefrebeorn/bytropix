@@ -597,10 +597,11 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     printf("GPU: MoE lookup tables initialized\n");
 
     // Allocate MoE expert cache (40 layers × 8 experts × 3 weights)
-    // Each expert weight: gate_bytes/up_bytes/down_bytes for IQ2_XXS/IQ3_XXS
+    // Each expert weight: gate_bytes/up_bytes/down_bytes for IQ2_XXS/IQ3_XXS/IQ4_XS
     // The exact sizes vary by layer (down_exps type: IQ3_XXS or IQ4_XS)
     // We allocate the maximum possible to ensure uniform sizing
-    const int64_t moe_max_per_expert = 270336;  // max across all layers
+    // Max per-expert: ceil(D_MODEL*D_FF/256) * IQ4_XS_BLOCK_SIZE = 4096 * 136 = 557056
+    const int64_t moe_max_per_expert = 557056;  // max across all layers
     gpu->moe_cache_eid = (int**)calloc(model->n_layers, sizeof(int*));
     gpu->moe_cache_w = (uint8_t***)calloc(model->n_layers, sizeof(uint8_t**));
     int n_cached = 0;
@@ -618,7 +619,8 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     printf("GPU: MoE expert cache allocated: %d layers × 8 experts × 3 weights\n", n_cached);
 
     // Allocate MoE persistent buffers (for 8 active experts)
-    const int64_t moe_bytes = 270336;  // IQ2_XXS for D_MODEL*D_FF = 2048*512
+    // 557056 = max per-expert raw size (IQ4_XS at 136 bytes/block × 4096 blocks)
+    const int64_t moe_bytes = 557056;
     gpu->d_moe_gate    = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
     gpu->d_moe_up      = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
     gpu->d_moe_down    = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
@@ -894,8 +896,8 @@ void wubu_model_gpu_moe_experts(
     gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
     if (!gpu || !gpu->initialized) return;
     cudaStream_t stream = gpu->stream;
-
-    // Compute per-expert byte sizes
+ 
+     // Compute per-expert byte sizes
     int64_t gate_bytes = gguf_raw_size(w->ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
     int64_t up_bytes   = gguf_raw_size(w->ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
     int64_t down_bytes = gguf_raw_size(w->ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);

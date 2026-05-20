@@ -423,7 +423,6 @@ void gpu_output_cleanup() {
     if (g_d_gqa_sumexp) cudaFree(g_d_gqa_sumexp);
     g_initialized = 0;
     g_gqa_initialized = 0;
-    fprintf(stderr, "GPU output proj: cleaned up\n");
 }
 
 // ================================================================
