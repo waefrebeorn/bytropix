@@ -111,19 +111,19 @@ __global__ void quant_matmul_q6_k_kernel(const float *x, const uint8_t *W_q,
                 uint8_t h = qh[l];
                 if (idx0 < b * QK_K + rem) {
                     int8_t v6 = (int8_t)((l0 & 0xF) | ((h >> 0) & 3) << 4);
-                    sum += (double)x[idx0] * ((double)d * sc[is+0] * v6 - 32.0);
+                    sum += (double)x[idx0] * (double)d * (double)sc[is+0] * (double)(v6 - 32);
                 }
                 if (idx1 < b * QK_K + rem) {
                     int8_t v6 = (int8_t)((l32 & 0xF) | ((h >> 2) & 3) << 4);
-                    sum += (double)x[idx1] * ((double)d * sc[is+2] * v6 - 32.0);
+                    sum += (double)x[idx1] * (double)d * (double)sc[is+2] * (double)(v6 - 32);
                 }
                 if (idx2 < b * QK_K + rem) {
                     int8_t v6 = (int8_t)((l0 >> 4) | ((h >> 4) & 3) << 4);
-                    sum += (double)x[idx2] * ((double)d * sc[is+4] * v6 - 32.0);
+                    sum += (double)x[idx2] * (double)d * (double)sc[is+4] * (double)(v6 - 32);
                 }
                 if (idx3 < b * QK_K + rem) {
                     int8_t v6 = (int8_t)((l32 >> 4) | ((h >> 6) & 3) << 4);
-                    sum += (double)x[idx3] * ((double)d * sc[is+6] * v6 - 32.0);
+                    sum += (double)x[idx3] * (double)d * (double)sc[is+6] * (double)(v6 - 32);
                 }
             }
             ql += 64; qh += 32; sc += 8;
