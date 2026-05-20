@@ -1,36 +1,31 @@
-# Overnight Map — Phase 22: Q4_0 KV Cache + Architecture Discovery
+# Overnight Map — Phase 25
 
-## State: Overall cos-sim 0.9994 (CPU, 5-token). Q4_0 KV cache 4:1. GPU hang pre-existing.
+**Active repo**: /home/wubu/bytropix/
+**Model**: Qwen3.6-35B-A3B-UD-IQ2_M.gguf (qwen35moe arch)
+**Binary**: ./gen_text_gpu (GPU=1, MAX_CTX=262144)
+**Ref binary**: /home/wubu/llama.cpp/build/bin/llama-cli
+**Current rate**: ~8.5 tok/s decode (4K ctx), 4.8 tok/s (256k)
+**VRAM**: ~3.56GB total, fits 6.5GB GPU
 
-Phase 22 complete: **Q4_0 KV cache compression (4:1 vs F16)** and **architecture discovery (3:1 interleaved SSM/GQA)**.
+## Modified files
+- src/gpu_quant_matmul.cu — fused Q5_K + Q6_K matmul (no bv[256] spill)
 
-## Quick Trunk Reference
-- Source: `/home/wubu/bytropix/`
-- Model: `/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf`
-- Build: `make gen_text` (CPU) or `make gen_text_gpu` (GPU)
-- Reference: `DUMP_LAYER_DIR=/tmp/ref_layers ./ref_dumper model.gguf "prompt" 0`
-- Compare: `tools/layer_cos_sim /tmp/ref_layers /tmp/our_layers 40`
-- Intermediates: `DUMP_INTERMEDIATE_DIR=/tmp/ref_int ./ref_dumper model.gguf "prompt" 0`
+## Vault
+- vault/tmp-tools/phase25/ — current source copies
+- vault/deepseek-collection/ — 28 PDFs (V3, V3.2, NSA, MoE, V4, etc.)
+- vault/qwen36-repo/ — Qwen3.6 README
 
-## What Was Done
-- **DUMP_INTERMEDIATE_DIR**: llama.cpp modified to dump 53 tensor types/layer (1997 files)
-- **Architecture discovery**: GGUF tensor enumeration proved 3:1 interleaved pattern
-- **Phase 22: Q4_0 KV cache**: block_q4_0_cache, 4:1 compression, kv_cache_read/write_head fixed
-- **Bug fix**: kv_cache_read_head now handles arbitrary-length reads (not just 2 blocks)
-- **ref_dumper enhancement**: multi-token prompt support, numeric token ID mode
-- **DA audit**: 3 stale docs fixed, all vault claims verified, propagation sweep done
+## Next step
+- Phase 26: Fuse SSM post-matmul ops for N=1 decode (cuBLAS beta/alpha → manual dot, fuse element-wise ops)
 
-## Workstreams (Pick One)
-A — [P0] **Fix gen_text_gpu hang**: Debug pre-existing GPU inference hang. Check GPU init sequence, SSM full forward, or tokenizer fallback.
-B — [P0] **GPU Q4_0 KV cache**: Port Q4_0 quantization to GPU growable cache. Currently FP16 (5.12GB). Saves ~3.7GB VRAM.
-C — [P1] **Unified SSM kernel Phase A**: Fuse conv1d→SiLU→split→norm→beta into 1 kernel.
+## Build
+$ make gen_text_gpu  # Clean build, -arch=sm_120
+$ GPU=1 MAX_CTX=4096 GPU_QUANTIZED=1 ./gen_text_gpu "prompt" N
 
-## Data Not To Re-Derive
-- Architecture: 3:1 interleaved (SSM on layers 0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38; GQA on 3,7,11,15,19,23,27,31,35,39)
-- Q4_0 KV cache format: block_q4_0_cache {uint16_t d, uint8_t qs[16]} with aligned write path
-- Cos-sim: L00-L30=0.998-0.9999, L31=0.9585 (GQA quantization noise), overall=0.9994
-- VRAM with Q4_0: ~6,453 MB at 256k context
-- GPU gen_text_gpu has pre-existing hang (was working before May 19 PM)
-
-## Fallback
-If stuck on GPU hang, do B (GPU Q4_0 KV cache — CPU-only testable) or work on docs/analysis.
+## Env vars
+- GPU=1 — enable GPU inference
+- MAX_CTX=N — max context size
+- GPU_Q4_0_KV=0 — use FP16 KV cache (default Q4_0)
+- GPU_QUANTIZED=1 — Q4_K output proj mode
+- GQA_WINDOW=N — sliding window attention
+- DUMP_INTERMEDIATE_DIR=/tmp/dump — llama.cpp ref tensor dump

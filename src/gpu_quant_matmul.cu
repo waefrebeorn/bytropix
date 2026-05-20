@@ -33,45 +33,11 @@ static __device__ __inline__ void get_scale_min_k4_dev(int j, const uint8_t *q,
            *m = (q[j+4] >> 4) | ((q[j] >> 6) << 4); }
 }
 
-static __device__ void dequant_q5_k_block(const uint8_t *block, float *out, int n) {
-    float d = fp16_to_fp32_dev(*(const uint16_t *)block);
-    float dmin = fp16_to_fp32_dev(*(const uint16_t *)(block + 2));
-    const uint8_t *sc = block + 4, *qh = block + 16, *qs = block + 48;
-    int is = 0;
-    for (int j = 0; j < QK_K && j < n; j += 64) {
-        uint8_t s1, m1, s2, m2;
-        get_scale_min_k4_dev(is+0, sc, &s1, &m1);
-        get_scale_min_k4_dev(is+1, sc, &s2, &m2);
-        float d1 = d*s1, ml1 = dmin*m1, d2 = d*s2, ml2 = dmin*m2;
-        int qb = j/2, ci = j/64;
-        for (int l = 0; l < 32 && j+l < n; l++) {
-            uint8_t lo = qs[qb + l];
-            out[j+l]     = d1 * ((lo & 0x0F) + (((qh[l]>>(ci*2+0))&1)?16:0)) - ml1;
-            out[j+32+l]  = d2 * ((lo >> 4)   + (((qh[l]>>(ci*2+1))&1)?16:0)) - ml2;
-        }
-        is += 2;
-    }
-}
-
-static __device__ void dequant_q6_k_block(const uint8_t *block, float *out, int n) {
-    float d = fp16_to_fp32_dev(*(const uint16_t *)(block + 208));
-    const uint8_t *ql = block, *qh = block + 128;
-    const int8_t *sc = (const int8_t *)(block + 192);
-    for (int ni = 0; ni < QK_K && ni < n; ni += 128) {
-        for (int l = 0; l < 32; l++) {
-            int is = l/16;
-            out[ni+l+0]  = d * sc[is+0] * (int8_t)((ql[l+0]&0xF)|(((qh[l]>>0)&3)<<4))-32;
-            out[ni+l+32] = d * sc[is+2] * (int8_t)((ql[l+32]&0xF)|(((qh[l]>>2)&3)<<4))-32;
-            out[ni+l+64] = d * sc[is+4] * (int8_t)((ql[l+0]>>4)|(((qh[l]>>4)&3)<<4))-32;
-            out[ni+l+96] = d * sc[is+6] * (int8_t)((ql[l+32]>>4)|(((qh[l]>>6)&3)<<4))-32;
-        }
-        ql += 64; qh += 32; sc += 8;
-    }
-}
-
 // ================================================================
-// Q5_K Matmul — column-major: each output column has ceil(D/256) blocks.
-// y[col] = sum_r x[r] * deq(W[col][r])  where W[col] is D elements.
+// Q5_K Matmul — fused dequant+dot, no bv[256] local array spill.
+// y[col] = sum_r x[r] * deq(W[col][r])
+// Each thread handles 1 column. Dequant in 32-element sub-blocks,
+// accumulating dot product immediately (no large stack buffer).
 // ================================================================
 __global__ void quant_matmul_q5_k_kernel(const float *x, const uint8_t *W_q,
                                           float *y, int n_rows, int n_cols) {
@@ -81,18 +47,42 @@ __global__ void quant_matmul_q5_k_kernel(const float *x, const uint8_t *W_q,
     const uint8_t *base = W_q + (int64_t)col * BPC * 176;
     double sum = 0.0;
     for (int b = 0; b < BPC; b++) {
-        float bv[QK_K];
-        dequant_q5_k_block(base + (int64_t)b * 176, bv, QK_K);
+        const uint8_t *block = base + (int64_t)b * 176;
+        float d = fp16_to_fp32_dev(*(const uint16_t *)block);
+        float dmin = fp16_to_fp32_dev(*(const uint16_t *)(block + 2));
+        const uint8_t *sc = block + 4, *qh = block + 16, *qs = block + 48;
         int rem = n_rows - b * QK_K;
         if (rem > QK_K) rem = QK_K;
-        for (int i = 0; i < rem; i++)
-            sum += (double)x[b * QK_K + i] * (double)bv[i];
+        int is = 0;
+        int x_off = b * QK_K;
+        for (int j = 0; j < rem; j += 64) {
+            uint8_t s1, m1, s2, m2;
+            get_scale_min_k4_dev(is+0, sc, &s1, &m1);
+            get_scale_min_k4_dev(is+1, sc, &s2, &m2);
+            float d1 = d*s1, ml1 = dmin*m1, d2 = d*s2, ml2 = dmin*m2;
+            int qb = j/2, ci = j/64;
+            int lim = (j + 32 < rem) ? 32 : rem - j;
+            for (int l = 0; l < lim; l++) {
+                uint8_t lo = qs[qb + l];
+                uint8_t hi0 = (qh[l] >> (ci*2 + 0)) & 1;
+                uint8_t hi1 = (qh[l] >> (ci*2 + 1)) & 1;
+                float v0 = d1 * ((lo & 0x0F) + (hi0 ? 16 : 0)) - ml1;
+                sum += (double)x[x_off + j + l] * (double)v0;
+                if (j + 32 + l < rem) {
+                    float v1 = d2 * ((lo >> 4)   + (hi1 ? 16 : 0)) - ml2;
+                    sum += (double)x[x_off + j + 32 + l] * (double)v1;
+                }
+            }
+            is += 2;
+        }
     }
     y[col] = (float)sum;
 }
 
 // ================================================================
-// Q6_K Matmul — same column-major layout
+// Q6_K Matmul — fused dequant+dot, no bv[256] local array spill.
+// Each thread handles 1 column. Dequant in 32-element sub-groups,
+// accumulating dot product immediately.
 // ================================================================
 __global__ void quant_matmul_q6_k_kernel(const float *x, const uint8_t *W_q,
                                           float *y, int n_rows, int n_cols) {
@@ -102,12 +92,42 @@ __global__ void quant_matmul_q6_k_kernel(const float *x, const uint8_t *W_q,
     const uint8_t *base = W_q + (int64_t)col * BPC * 210;
     double sum = 0.0;
     for (int b = 0; b < BPC; b++) {
-        float bv[QK_K];
-        dequant_q6_k_block(base + (int64_t)b * 210, bv, QK_K);
+        const uint8_t *block = base + (int64_t)b * 210;
+        float d = fp16_to_fp32_dev(*(const uint16_t *)(block + 208));
+        const uint8_t *ql = block, *qh = block + 128;
+        const int8_t *sc = (const int8_t *)(block + 192);
         int rem = n_rows - b * QK_K;
         if (rem > QK_K) rem = QK_K;
-        for (int i = 0; i < rem; i++)
-            sum += (double)x[b * QK_K + i] * (double)bv[i];
+        for (int ni = 0; ni < rem; ni += 128) {
+            // Process 128-element chunk in 32 iterations, each producing 4 vals
+            for (int l = 0; l < 32; l++) {
+                int is = l / 16;  // sc cycle: [0-3] for first half, [4-7] for second
+                int idx0 = b * QK_K + ni + l;
+                int idx1 = b * QK_K + ni + 32 + l;
+                int idx2 = b * QK_K + ni + 64 + l;
+                int idx3 = b * QK_K + ni + 96 + l;
+                uint8_t l0 = ql[l + 0];
+                uint8_t l32 = ql[l + 32];
+                uint8_t h = qh[l];
+                if (idx0 < b * QK_K + rem) {
+                    int8_t v6 = (int8_t)((l0 & 0xF) | ((h >> 0) & 3) << 4);
+                    sum += (double)x[idx0] * ((double)d * sc[is+0] * v6 - 32.0);
+                }
+                if (idx1 < b * QK_K + rem) {
+                    int8_t v6 = (int8_t)((l32 & 0xF) | ((h >> 2) & 3) << 4);
+                    sum += (double)x[idx1] * ((double)d * sc[is+2] * v6 - 32.0);
+                }
+                if (idx2 < b * QK_K + rem) {
+                    int8_t v6 = (int8_t)((l0 >> 4) | ((h >> 4) & 3) << 4);
+                    sum += (double)x[idx2] * ((double)d * sc[is+4] * v6 - 32.0);
+                }
+                if (idx3 < b * QK_K + rem) {
+                    int8_t v6 = (int8_t)((l32 >> 4) | ((h >> 6) & 3) << 4);
+                    sum += (double)x[idx3] * ((double)d * sc[is+6] * v6 - 32.0);
+                }
+            }
+            ql += 64; qh += 32; sc += 8;
+        }
     }
     y[col] = (float)sum;
 }

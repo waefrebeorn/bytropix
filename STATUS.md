@@ -1,35 +1,29 @@
-# STATUS — bytropix Inference Engine (May 19 PM, Phase 22)
+# STATUS — bytropix Inference Engine (May 20 PM, Phase 25)
 
-**Overall cos-sim: 0.9994 vs llama.cpp** | CPU decode: ~9 tok/s | VRAM at 256k: ~6.45 GB
+**GPU decode: 7.6-8.5 tok/s (4K ctx)** | **256k: 4.8 tok/s full, 5.7 tok/s sliding window** | **VRAM: ~3.56 GB**
 
 ## What Works (✅ Verified)
-- CPU `gen_text`: full 40-layer inference, ~11 tok/s prefill, Q4_0 KV cache
-- All 7 quant types: Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q8_0
-- `ref_dumper`: multi-token prompt support, DUMP_INTERMEDIATE_DIR (53 tensor types/layer)
-- Architecture: 3:1 SSM/GQA interleaved (discovered May 19 — GGUF tensor enum)
-- Q4_0 KV cache: 720 MB at 256k, 4:1 compression, cos-sim 0.9994 vs F16
-- GPU pipeline: output proj, GQA attention, SSM recurrence, MoE experts
-- L00-L30 per-layer cos-sim: 0.998-0.9999
-- 13 bugs fixed (see README.md for full history)
+- GPU `gen_text_gpu`: full 40-layer, no hang, Q4_0 KV cache default
+- Q4_0 fused decode attention: 8.1 tok/s (beats FP16 7.6)
+- Fused Q5_K/Q6_K quant matmul: incremental dequant+dot, no local mem spill
+- Fused SSM beta/alpha decode: replaces 2 cuBLAS calls + 4 element-wise kernels
+- Sliding window attention: GQA_WINDOW env var
 
-## What's Broken (❌)
-- `gen_text_gpu`: pre-existing hang after model load (unrelated to Phase 22)
-- MTP speculative decode verify: 100% rejection at IQ2_M
-- L31 cos-sim: 0.9585 (quantization noise through 30 layers — expected but monitored)
+## What's Unverified (❓)
+- ssm_beta_alpha_fused_decode correctness vs old cuBLAS path
+- 256k output cos-sim vs llama.cpp (only verified at small context)
+- Bottleneck profiling data (guesses, not nsight measurements)
 
-## Next (P0)
-1. Debug gen_text_gpu hang
-2. GPU Q4_0 KV cache (saves 3.7 GB VRAM at 256k)
+## What's Pending (P0-P2)
+- P0: Fuse conv1d+SiLU+split+L2 norm into single SSM decode kernel
+- P1: MoE router on GPU (eliminate CPU hop)
+- P1: Systematic nsight profiling of decode bottlenecks
+- P2: Chunked prefill (3-7x at 256k from Qwen2.5-1M paper)
 
 ## Build
 ```bash
 make gen_text      # CPU inference
+make gen_text_gpu  # GPU inference
 make ref_dumper    # Reference comparison
-```
-
-## Quick Verify
-```bash
-DUMP_LAYER_DIR=/tmp/ref ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Your prompt" 0
-DUMP_LAYER_DIR=/tmp/our ./gen_text "Your prompt" 0
-tools/layer_cos_sim /tmp/ref /tmp/our 40
+make clean         # Remove all binaries
 ```

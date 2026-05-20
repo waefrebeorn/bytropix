@@ -4,13 +4,12 @@
 
 **Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, `qwen35moe` arch)**
 
-[![Phase: 22](https://img.shields.io/badge/Phase-22-blueviolet)](https://github.com/waefrebeorn/bytropix)
-[![Cos-sim: 0.9994](https://img.shields.io/badge/Cos--sim-0.9994-success)](https://github.com/waefrebeorn/bytropix)
-[![Gen: CPU 12 tok/s](https://img.shields.io/badge/CPU%20Prefill-12%20tok%2Fs-informational)](https://github.com/waefrebeorn/bytropix)
-[![GPU: HANG](https://img.shields.io/badge/GPU-HANG-red)](https://github.com/waefrebeorn/bytropix)
+[![Phase: 25](https://img.shields.io/badge/Phase-25-blueviolet)](https://github.com/waefrebeorn/bytropix)
+[![GPU Decode: 8.5 tok/s](https://img.shields.io/badge/GPU%20Decode-8.5%20tok%2Fs-informational)](https://github.com/waefrebeorn/bytropix)
+[![KV Cache: Q4_0 4:1](https://img.shields.io/badge/KV%20Cache-Q4%5F0%204%3A1-green)](https://github.com/waefrebeorn/bytropix)
+[![256k VRAM: 3.56 GB](https://img.shields.io/badge/256k%20VRAM-3.56%20GB-success)](https://github.com/waefrebeorn/bytropix)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)](https://opensource.org/licenses/Apache-2.0)
 [![GPU: RTX 5050](https://img.shields.io/badge/GPU-RTX%205050%208GB-critical)](https://github.com/waefrebeorn/bytropix)
-[![VRAM: 6.45 GB at 256k](https://img.shields.io/badge/256k%20VRAM-6.45%20GB-yellow)](https://github.com/waefrebeorn/bytropix)
 
 </div>
 
@@ -22,14 +21,16 @@
 
 | Status | Metric | Detail |
 |:------:|--------|--------|
-| ✅ | **Overall cos-sim** | **0.9994** vs llama.cpp (CPU, 5-token, 40 layers) |
-| ✅ | **Architecture** | 40 layers, **3:1 SSM/GQA interleaved** (discovered May 19 via GGUF tensor enum) |
-| ✅ | **Q4_0 KV cache** | 720 MB at 256k = **4:1 compression** vs F16, cos-sim 0.9994 |
-| ✅ | **Quant types** | 7 self-hosted: Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q8_0 |
-| 🟡 | **L31 cos-sim** | 0.9585 — quantization noise through 30 layers (expected) |
-| ❌ | **gen_text_gpu** | Pre-existing hang after model load |
-| ❌ | **MTP verify** | 100% rejection at IQ2_M quantization |
-| 💤 | **GPU Q4_0 KV cache** | GPU still uses FP16 (5.12 GB), Q4_0 saves 3.7 GB |
+| ✅ | **GPU decode (4K ctx)** | **7.6-8.5 tok/s** — gen_text_gpu, Q4_0 KV cache |
+| ✅ | **GPU decode (256k)** | **4.8 tok/s** — full attention, 5.7 tok/s sliding window 16K |
+| ✅ | **Prefill (4K)** | **22.8 tok/s** — GPU parallel scan |
+| ✅ | **Prefill (256k)** | **23.5 tok/s** — chunked attention |
+| ✅ | **VRAM at 256k** | **~3,562 MB** — fits 6.5-8GB GPU |
+| ✅ | **Q4_0 KV cache** | 1,440 MB at 256k = **4:1 compression** vs FP16 |
+| ✅ | **Fused Q5_K/Q6_K matmul** | Incremental dequant+dot — no local mem spill |
+| ✅ | **Fused SSM beta/alpha decode** | Manual dot + sigmoid/softplus/gate — 1 kernel vs 6 |
+| 🟡 | **External ref speed** | llama.cpp gets **35.4 tok/s** on RTX 4060 Ti (MoE expert offload). Gap ~4-7x needs profiling |
+| 🟡 | **L31 cos-sim** | 0.9585 — expected quant noise through 30 layers |
 
 </div>
 
@@ -38,22 +39,21 @@
 ## 🚀 Quick Start
 
 ```bash
-# Build
-make gen_text                # CPU inference
-make gen_text_gpu            # GPU inference (currently has pre-existing hang)
-make ref_dumper              # Reference comparison tool (links libllama.so)
+# Build GPU inference
+make gen_text_gpu
 
-# Run inference (CPU, AVX2, 16 threads)
+# Run
+GPU=1 MAX_CTX=4096 GPU_QUANTIZED=1 ./gen_text_gpu "The capital of France is" 32
+
+# CPU inference
+make gen_text
 ./gen_text "The capital of France is" 32
 
-# Compare vs reference (per-layer cosine similarity)
+# Reference comparison
+make ref_dumper
 DUMP_LAYER_DIR=/tmp/ref ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Your prompt" 0
 DUMP_LAYER_DIR=/tmp/our ./gen_text "Your prompt" 0
 tools/layer_cos_sim /tmp/ref /tmp/our 40
-
-# Per-operation intermediate tracing (53 tensor types per layer)
-DUMP_INTERMEDIATE_DIR=/tmp/interm ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "prompt" 0
-# Outputs: L0_conv_input.bin, L0_Qcur_full.bin, L0_linear_attn_out.bin, ...
 ```
 
 **Hardware:** AMD Ryzen 7950X (16C/32T) | 64 GB DDR5 | RTX 5050 8GB VRAM | WSL2
@@ -100,92 +100,45 @@ IMRoPE → full attention(KV cache: Q4_0 or F16) → output(Q5_K) → sigmoid(ga
 |-----------|------|--------|
 | GQA weights | 1,040 MB | F32 (cuBLAS SGEMM) |
 | SSM weights (quantized) | 692 MB | Q5_K/Q6_K on GPU |
-| KV cache (CPU: Q4_0) | **720 MB** | 4-bit, 4:1 vs F16 — **Phase 22** |
-| KV cache (GPU: FP16) | 5,120 MB | FP16 — not yet Q4_0 |
+| KV cache (GPU: Q4_0) | **1,440 MB** | **4-bit, 4:1 vs FP16 — Phase 23** |
+| KV cache (GPU: FP16 fallback) | 5,120 MB | FP16 — toggle via `GPU_Q4_0_KV=0` |
 | Output projection | 1,900 MB | Q4_K quantized GPU kernel |
 | MoE + scratch | ~460 MB | IQ2_XXS + temp buffers |
-| **Total (Q4_0 CPU / FP16 GPU)** | **~6,453 MB / ~10,893 MB** | |
+| **Total (Q4_0 GPU)** | **~3,562 MB** | **Fits 6.5-8GB GPU with 3GB headroom** |
 
 ---
 
-## 🔬 Key Tools
+## 🔬 Verification
 
-### Verification Tools
-| Tool | Purpose | Links Against |
-|------|---------|---------------|
-| `ref_dumper` | libllama.so reference dumper | `libllama.so` |
-| `layer_cos_sim` | Per-layer cosine similarity | Binary dump |
-| `classify_layers.py` | Classify SSM vs GQA layers | GGUF tensor names |
-| `analyze_intermediates.py` | Browse DUMP_INTERMEDIATE_DIR | F32 binary files |
+### Tools
+| Tool | Purpose |
+|------|---------|
+| `tools/layer_cos_sim` | Per-layer cosine similarity vs llama.cpp |
+| `tools/analyze_intermediates.py` | Browse `DUMP_INTERMEDIATE_DIR` F32 binaries |
+| `ref_dumper` | llama.cpp reference intermediate dumper |
+| `DUMP_INTERMEDIATE_DIR` | 53 tensor types/layer from llama.cpp |
 
-### DUMP_INTERMEDIATE_DIR (53 tensor types per layer)
-
-Set `DUMP_INTERMEDIATE_DIR=/tmp/dir` before `ref_dumper`:
-
-| Group | Example Files |
-|-------|---------------|
-| SSM conv | `L0_conv_input.bin`, `L0_conv_output_silu.bin`, `L0_conv_states.bin` |
-| GQA proj | `L0_Qcur_full.bin`, `L0_Kcur.bin`, `L0_Vcur.bin` |
-| Gated delta | `L0_beta_sigmoid.bin`, `L0_a_softplus.bin`, `L0_gate.bin` |
-| SSM recur | `L0_linear_attn_out.bin`, `L0_new_state.bin`, `L0_state_predelta.bin` |
-| Attention | `L0_attn_output.bin`, `L0_attn_residual.bin`, `L0_kqv_out.bin` |
-| MoE | `L0_ffn_moe_logits.bin`, `L0_ffn_moe_swiglu.bin`, `L0_ffn_moe_out.bin` |
-| Output | `L0_l_out.bin`, `L0_final_output.bin` |
-| Global | `global_h_pre_norm.bin`, `global_result_norm.bin`, `global_result_output.bin` |
+### DA Audit Status
+| Claim | Status |
+|-------|--------|
+| GPU decode 8.5 tok/s | ✅ Verified (gen_text_gpu at 4K ctx) |
+| Q5_K fused matmul identical | ❓ Not verified against old cuBLAS path |
+| SSM beta/alpha fused kernel | ❓ Not verified against old cuBLAS path |
+| 256k output cos-sim > 0.99 | ❓ Not verified — only tested at small context |
+| MoE expert offload efficiency | ❓ Not profiled — speculative bottleneck claims |
 
 ---
 
-## 💡 Key Innovations
+## 💡 Key Optimizations (Phase 25)
 
-### Q4_0 KV Cache (Phase 22)
-- 4:1 compression: 720 MB vs 2.56 GB at 256k context
-- `block_q4_0_cache {uint16_t d, uint8_t qs[16]}` — 32 elements per block, 18 bytes
-- Aligned bulk write, multi-block read — cos-sim 0.9994 vs F16
-
-### GPU Pipeline (Phases 13-21)
-| Component | GPU | Detail |
-|-----------|-----|--------|
-| Output proj (Q4_K) | ✅ | Custom CUDA kernel, ~0.1ms vs CPU ~10ms |
-| GQA attention | ✅ | FP16 KV, sliding window, ATTEN_TILE=16384 |
-| SSM recurrence | ✅ | 32 blocks × 128 threads |
-| SSM full forward | ✅ | All 15 steps, 2 transfers/layer |
-| MoE experts (IQ2_XXS) | ✅ | Per-expert cache, 259 MB |
-
-### Smart GPU Gating
-- GPU offload only when beneficial (cache_len > 2048 or N > 1)
-- Single-token decode: CPU path (thermal/fallback)
-- Prefill: GPU path (parallel scan, 18.6 tok/s)
-
----
-
-## 🐛 Bug History (Complete)
-
-| # | Bug | Symptom | Fix | Date |
-|---|-----|---------|-----|------|
-| 1 | GQA Q/Gate interleave | Cos-sim -0.51 | Per-head interleaved extraction | May 18 |
-| 2 | IMRoPE not implemented | Wrong multi-token output | sections=[11,11,10,0] | May 18 |
-| 3 | MoE OpenMP race | Non-deterministic output | Thread-local scratch | May 18 |
-| 4 | SSM state not saved | Second token garbage | Persistent state buffer | May 18 |
-| 5 | No KV cache | Self-only attention | Buffer all positions | May 18 |
-| 6 | MTP crash | SIGSEGV | NULL checks + concat fix | May 19 |
-| **7** | **Q6_K loop bound** | **Cos-sim 0.796** | **`j<QK_K/32`→`j<QK_K/16` (one char)** | **May 19** |
-| 8 | DA v10 wrong diagnosis | Misattributed cause | Isolate+test per quant type | May 19 |
-| 9-12 | GPU stride, RoPE, cache, build | GPU garbage | Per-component fixes | May 19 |
-| **13** | **kv_cache_read_head multi-block** | **GPU hang on decode** | **While-loop Q4_0 dequant path** | **May 19** |
-
----
-
-## 🗺️ Roadmap
-
-| Prio | Gap | Status |
-|:----:|-----|:------:|
-| **P0** | **Fix gen_text_gpu hang** | ❌ |
-| **P0** | **GPU Q4_0 cache** | 💤 |
-| P1 | RotorQuant Givens rotation (block-diagonal, 2 FMAs/pair) | 💤 |
-| P1 | TurboQuant WHT (spreads outlier energy) | 💤 |
-| P1 | Hamilton encoder BSP attention for >512k | 💤 |
-| P2 | Unified SSM kernel (fuse conv→SiLU→split→norm) | 💤 |
-| P2 | Chunked prefill (3-7x at 256k) | 💤 |
+| Optimization | File | Gain |
+|-------------|------|------|
+| Fused Q5_K matmul (no bv[256] spill) | `gpu_quant_matmul.cu` | Eliminates local mem spill (~15 vs 256 regs) |
+| Fused Q6_K matmul (same pattern) | `gpu_quant_matmul.cu` | Same |
+| Fused SSM beta/alpha for N=1 | `cuda_kernels.cu` | 1 kernel replaces 2 cuBLAS + 4 element-wise |
+| Q4_0 KV cache (default) | `wubu_model_gpu.cu` | 4:1 compression, 3.68GB saved at 256k |
+| Q4_0 fused decode attn | `cuda_kernels.cu` | 8.1 tok/s vs FP16 7.6 |
+| Sliding window attention | `cuda_kernels.cu` | GQA_WINDOW env, extra 16% at 256k |
 
 ---
 
@@ -193,16 +146,14 @@ Set `DUMP_INTERMEDIATE_DIR=/tmp/dir` before `ref_dumper`:
 
 ```
 bytropix/
-├── src/             # Core C implementation (GGUF, SSM, GQA, MoE, tokenizer, CUDA)
-├── include/         # Headers (model structs, KV cache helpers, MoE, GGUF reader)
-├── tools/           # ~50 binaries: gen_text, ref_dumper, tests, analysis scripts
-├── .hermes/         # Mind palace (state, plan, prestige, vault, DA audits)
-├── DIAGRAMS/        # SVG architecture diagrams (inference pipeline, phase roadmap)
-├── THEORY/          # WuBu Nesting research papers (hyperbolic, Poincaré, TGT)
-├── vault/           # Quantization formula reference, archived docs
-├── data/            # Pre-extracted embeddings, training data
-├── tests/           # Test files
-├── MADE_AGENTICALLY_BY_HERMES.md  # Full agentic project retrospective (v22, 28KB)
+├── src/             # Core C/CUDA implementation
+├── include/         # Headers
+├── tools/           # Scripts + tools
+├── .hermes/         # Mind palace, vault, papers
+├── DIAGRAMS/        # SVG architecture diagrams
+├── THEORY/          # Research papers
+├── vault/           # Archives
+├── data/            # Pre-extracted data
 └── README.md        # This file
 ```
 
@@ -210,25 +161,16 @@ bytropix/
 
 ## 📚 References
 
-- `MADE_AGENTICALLY_BY_HERMES.md` — Complete project retrospective (28 KB)
-- `vault/cache-compression-resources.md` — Q4_0 / TurboQuant+ / RotorQuant / Hamilton encoder comparison
-- `llama/turboquant_plus/` — Google TurboQuant KV cache compression repo
-- `llama/rotorquant/` — RotorQuant block-diagonal Clifford rotors repo
-- `tools/example_rotorquant.py` — Givens rotation + Q4_0 demo
-- `tools/example_turboquant.py` — WHT + Q4_0 demo
-- `tools/example_hamilton_encoder.py` — Hamilton quaternion manifold demo
-- `.hermes/mind-palace/` — State, plan, goal-mantra, prestige, overnight (6 files)
-- `.hermes/vault/qwen-papers/` — Qwen3, Qwen3.6 architecture references
-- `.hermes/vault/deepseek-papers/` — DeepSeek-V3, MoE architecture papers
-- `.hermes/unsloth-qwen3.6-quant-formula.md` — Per-tensor quantization map
+- `.hermes/mind-palace/` — State, plan, goal-mantra, prestige (5 files)
+- `.hermes/vault/deepseek-collection/` — 28 DeepSeek papers (V3, V3.2, V4, MoE, NSA)
+- `.hermes/vault/benchmarks/` — External benchmark data
 - `~/llama.cpp/build/bin/llama-cli` — Ground truth reference binary
-- `/mnt/c/projects/HASHMIND/llama-cpp-rotorquant/llama.cppCOPY/` — Hamilton encoder attention (legacy)
 
 ---
 
 <div align="center">
 
-*Engine: bytropix — from-scratch C inference. Architecture discovered May 19, 2026 via GGUF tensor enumeration.*
-*"What does this claim rest on?" — every number checked at runtime against a reference.*
+*Engine: bytropix — from-scratch C inference for Qwen3.6-35B-A3B. Phase 25: fused quant matmul + SSM beta/alpha decode.*
+*DA principle: every claim must be verified at runtime against a reference. Unverified claims marked ❓*
 
 </div>

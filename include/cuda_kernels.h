@@ -227,6 +227,46 @@ void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
     void *d_scratch_hp,       // [C * N_Q_HEADS * HEAD_DIM] FP16 temp (Q + score tile)
     int attn_window);         // sliding window (0 = full context)
 
+// Q4_0 KV cache variant: K/V stored as 4-bit quantized blocks (4:1 compression vs FP16).
+// On each tile, dequantizes Q4_0 blocks to FP16 scratch then runs FP16 attention.
+// Requires larger d_scratch_hp: [n_q*hd + 2*ATTEN_TILE*kv_dim + ATTEN_TILE*C] __half
+void wubu_cuda_chunked_attn_q4_0(cublasHandle_t handle, cudaStream_t stream,
+    int C, int T_cache,
+    const float *d_Q_chunk,     // [C, N_Q_HEADS * HEAD_DIM] F32
+    const void   *d_K_q4,       // Q4_0 cache blocks
+    const void   *d_V_q4,       // Q4_0 cache blocks
+    const float *d_gate_full,   // [C, N_Q_HEADS * HEAD_DIM] raw gate
+    const float *d_output_w,    // [N_Q_HEADS * HEAD_DIM, D_MODEL]
+    float *d_out,               // [C, D_MODEL]
+    float *d_score_scratch,     // F32 scratch
+    void *d_scratch_hp,       // FP16 scratch (larger: n_q*hd + 2*ATTEN_TILE*kv_dim + ATTEN_TILE*C)
+    int attn_window);           // sliding window (0 = full context)
+
+// Fused Q4_0 decode attention (C=1): scores from Q4_0 directly, bypassing FP16 scratch
+void wubu_cuda_attn_q4_0_decode(cublasHandle_t handle, cudaStream_t stream,
+    const float *d_Q_chunk, const void *d_K_q4, const void *d_V_q4,
+    const float *d_gate_full, const float *d_output_w,
+    float *d_out, float *d_scratch, void *d_hp_scratch,
+    int T_cache, int attn_window);
+
+// Q4_0 KV cache quantize/dequant kernels
+__global__ void dequant_q4_0_cache_kernel(int n_blocks, const uint8_t *blocks, __half *out);
+__global__ void quant_q4_0_cache_kernel(int n, const __half *in, uint8_t *blocks);
+
+// ================================================================
+// Fused SSM beta/alpha for N=1 decode — replaces cuBLAS + element-wise
+// ================================================================
+void ssm_beta_alpha_fused_decode_wrapper(cudaStream_t stream,
+    const float *d_x, const float *d_W_beta, const float *d_W_alpha,
+    const float *d_dt_bias, const float *d_ssm_a,
+    float *d_out_beta, float *d_out_gate, int dr);
+
+// Fused SSM conv1d + SiLU + split for N=1 decode
+void ssm_conv_silu_split_decode_wrapper(cudaStream_t stream,
+    const float *d_conv_state, const float *d_qkv_out, const float *d_conv1d_w,
+    float *d_out_q, float *d_out_k, float *d_out_v,
+    float *d_conv_state_out);
+
 // ================================================================
 // Poincaré ball hyperbolic CUDA kernels
 // ================================================================

@@ -2136,6 +2136,10 @@ __global__ void normalize_attn_kernel(float *O, const float *L, int n_rows, int 
 // ================================================================
 #define ATTEN_TILE 16384
 
+// GQA constants (mirrored from wubu_model.h for GPU kernels)
+#define GQA_KV_DIM (GQA_KV_HEADS * GQA_HEAD_DIM)  // 2 * 256 = 512
+
+
 size_t wubu_cuda_chunked_attn_query_scratch(int C, int T_max) {
     (void)T_max;
     // Much smaller: only need per-tile scores [C, ATTEN_TILE]
@@ -2460,3 +2464,360 @@ void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
     wubu_cuda_matmul(handle, d_attn_out, C, q_dim, d_output_w, D_MODEL, d_out, 1.0f, 0.0f);
     cudaStreamSynchronize(stream);
 }
+
+// ================================================================
+// Q4_0 KV Cache definitions + chunked attention + fused decode kernel
+// Q4_0 KV Cache: block-wise 4-bit quantization for GPU KV cache
+// block_q4_0_cache_gpu {uint16_t d, uint8_t qs[16]} — 32 elements, 18 bytes
+#ifndef QK4_CACHE
+#define QK4_CACHE 32
+typedef struct { uint16_t d; uint8_t qs[16]; } block_q4_0_cache_gpu;
+#else
+typedef block_q4_0_cache block_q4_0_cache_gpu;
+#endif
+
+// Dequantize Q4_0 blocks to FP16
+__global__ void dequant_q4_0_cache_kernel(int n_blocks, const uint8_t *blocks, __half *out) {
+    int bi = blockIdx.x * blockDim.x + threadIdx.x;
+    if (bi >= n_blocks) return;
+    float d = __half2float(*(const uint16_t*)(blocks + (size_t)bi * 18));
+    const uint8_t *qs = blocks + (size_t)bi * 18 + 2;
+    for (int i = 0; i < 4; i++) {
+        int e = threadIdx.x * 4 + i; if (e >= 32) break;
+        int nib = (qs[e/2] >> (4*(e%2))) & 0xF;
+        out[(size_t)bi * 32 + e] = __float2half(((float)nib - 8.0f) * d);
+    }
+}
+
+// Quantize FP16 to Q4_0 blocks
+__global__ void quant_q4_0_cache_kernel(int n, const __half *in, uint8_t *blocks) {
+    int bi = blockIdx.x;
+    extern __shared__ float sv[];
+    for (int i = threadIdx.x; i < 32; i += blockDim.x)
+        sv[i] = __half2float(in[(size_t)bi*32 + i]);
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        float amax = 0;
+        for (int i = 0; i < 32; i++) { float ax = fabsf(sv[i]); if (ax > amax) amax = ax; }
+        uint16_t *ds = (uint16_t*)(blocks + (size_t)bi*18);
+        uint8_t *qs = blocks + (size_t)bi*18 + 2;
+        if (amax == 0) { *ds = 0; memset(qs, 0, 16); return; }
+        float d = amax / 7.0f, id = 1.0f/d;
+        *ds = __float2half(d); memset(qs, 0, 16);
+        for (int i = 0; i < 32; i++) {
+            int q = (int)(sv[i] * id + 8.0f);
+            if (q < 0) q = 0; if (q > 15) q = 15;
+            qs[i/2] |= (uint8_t)(q << (4*(i%2)));
+        }
+    }
+}
+
+// Chunked attention with Q4_0 KV cache (dequant per tile → FP16 attention)
+void wubu_cuda_chunked_attn_q4_0(cublasHandle_t handle, cudaStream_t stream,
+    int C, int T_cache,
+    const float *d_Q_chunk, const void *d_K_q4, const void *d_V_q4,
+    const float *d_gate_full, const float *d_output_w,
+    float *d_out, float *d_score_scratch, void *d_scratch_hp,
+    int attn_window)
+{
+    const int n_q = GQA_Q_HEADS, n_kv = GQA_KV_HEADS, gs = n_q/n_kv;
+    const int hd = GQA_HEAD_DIM, q_dim = n_q*hd, kv_dim = n_kv*hd;
+    const int QK = QK4_CACHE, ATTEN = 16384, block = 256;
+    const float ss = 1.0f/sqrtf((float)hd), alpha=1.0f, beta=0.0f;
+    float *d_O = (float*)d_Q_chunk;
+    const uint8_t *d_Kb = (const uint8_t*)d_K_q4, *d_Vb = (const uint8_t*)d_V_q4;
+    int hp=0;
+    __half *d_Qh=(__half*)d_scratch_hp+hp; hp+=n_q*hd;
+    __half *d_Kh=(__half*)d_scratch_hp+hp; hp+=ATTEN*kv_dim;
+    __half *d_Vh=(__half*)d_scratch_hp+hp; hp+=ATTEN*kv_dim;
+    __half *d_Sh=(__half*)d_scratch_hp+hp;
+    f32_to_f16_kernel<<<(q_dim+block-1)/block,block,0,stream>>>(d_Q_chunk,d_Qh,q_dim);
+    int n_tiles=(T_cache+ATTEN-1)/ATTEN, ti_start=0;
+    if(attn_window>0&&T_cache>attn_window) ti_start=(T_cache-attn_window)/ATTEN;
+    float *d_M=d_score_scratch, *d_L=d_M+(size_t)C*n_q;
+    init_neg_inf<<<(C*n_q+block-1)/block,block,0,stream>>>(d_M,C*n_q);
+    init_zero_kernel<<<(C*n_q+block-1)/block,block,0,stream>>>(d_L,C*n_q);
+    init_zero_kernel<<<(C*q_dim+block-1)/block,block,0,stream>>>(d_O,C*q_dim);
+    for(int ti=ti_start;ti<n_tiles;ti++){
+        int t0=ti*ATTEN, tt=T_cache-t0; if(tt>ATTEN)tt=ATTEN;
+        int te=tt*kv_dim, nq=(te+QK-1)/QK, gdq=(nq+block-1)/block;
+        if(t0>0){int se=t0*kv_dim,nqr=(te+se%QK+QK-1)/QK;
+            dequant_q4_0_cache_kernel<<<gdq,block,0,stream>>>(nqr,d_Kb+(se/QK)*18,d_Kh);
+            dequant_q4_0_cache_kernel<<<gdq,block,0,stream>>>(nqr,d_Vb+(se/QK)*18,d_Vh);
+        }else{
+            dequant_q4_0_cache_kernel<<<gdq,block,0,stream>>>(nq,d_Kb,d_Kh);
+            dequant_q4_0_cache_kernel<<<gdq,block,0,stream>>>(nq,d_Vb,d_Vh);
+        }
+        for(int hk=0;hk<n_kv;hk++){
+            float *sb=d_score_scratch+(size_t)hk*gs*tt*C;
+            cublasGemmEx(handle,CUBLAS_OP_T,CUBLAS_OP_N,tt,C,hd,&ss,
+                d_Kh+hk*hd,CUDA_R_16F,kv_dim,d_Qh+hk*gs*hd,CUDA_R_16F,q_dim,
+                &beta,sb,CUDA_R_32F,n_q*tt,CUBLAS_COMPUTE_32F,CUBLAS_GEMM_DEFAULT);
+        }
+        for(int hq=0;hq<n_q;hq++)for(int c=0;c<C;c++)
+            online_softmax_row_kernel<<<1,1,0,stream>>>(
+                d_score_scratch+(size_t)hq*tt*C+c*tt,tt,1.0f,
+                d_M+(size_t)hq*C+c,d_L+(size_t)hq*C+c,
+                d_O+(size_t)hq*hd+(size_t)c*q_dim,hd);
+        int gs2=(tt*C+block-1)/block;
+        for(int hk=0;hk<n_kv;hk++){
+            float *sb=d_score_scratch+(size_t)hk*gs*tt*C;
+            f32_to_f16_kernel<<<gs2,block,0,stream>>>(sb,d_Sh,tt*C);
+            cublasGemmEx(handle,CUBLAS_OP_N,CUBLAS_OP_N,hd,C,tt,&alpha,
+                d_Vh+hk*hd,CUDA_R_16F,kv_dim,d_Sh,CUDA_R_16F,tt*C,
+                &beta,d_O+hk*gs*hd,CUDA_R_32F,q_dim,
+                CUBLAS_COMPUTE_32F,CUBLAS_GEMM_DEFAULT);
+        }
+    }
+    normalize_attn_kernel<<<(C*n_q+block-1)/block,block,0,stream>>>(d_O,d_L,C*n_q,hd);
+    wubu_cuda_gqa_gate(d_O,d_gate_full,C,q_dim,stream);
+    wubu_cuda_matmul(handle,d_O,C,q_dim,d_output_w,D_MODEL,d_out,1.0f,0.0f);
+    cudaStreamSynchronize(stream);
+}
+
+// Batched online softmax (C=1 decode): one block per Q head, processes all tiles
+// Replaces 256 1x1 kernel launches per layer with n_q blocks
+
+// Forward declaration for V-weighted sum kernel
+__global__ void v_weighted_q4_0_kernel(
+    const float *d_scores, const uint8_t *V_blocks,
+    float *d_out, int T_cache, int attn_window);
+__global__ void batched_online_softmax_kernel(
+    const float *d_scores, float *d_M, float *d_L,
+    int T_cache, int n_tiles, int ti_start)
+{
+    const int qh = blockIdx.x;
+    const int d = threadIdx.x;
+    const float *sc = d_scores + (size_t)qh * T_cache;
+    float m = d_M[qh];
+    float l = d_L[qh];
+    for (int ti = ti_start; ti < n_tiles; ti++) {
+        int t0 = ti * 16384, tt = T_cache - t0;
+        if (tt > 16384) tt = 16384;
+        float m_new = -INFINITY;
+        for (int p = d; p < tt; p += blockDim.x)
+            m_new = fmaxf(m_new, sc[t0 + p]);
+        for (int off = 16; off > 0; off /= 2)
+            m_new = fmaxf(m_new, __shfl_xor_sync(0xFFFFFFFF, m_new, off));
+        float mc = fmaxf(m, m_new);
+        float se = 0.0f;
+        for (int p = d; p < tt; p += blockDim.x)
+            se += expf(sc[t0 + p] - mc);
+        for (int off = 16; off > 0; off /= 2)
+            se += __shfl_xor_sync(0xFFFFFFFF, se, off);
+        l = l * expf(m - mc) + se;
+        m = mc;
+    }
+    if (d == 0) { d_M[qh] = m; d_L[qh] = l; }
+}
+
+// Fused Q4_0 decode attention: Q4_0 K→scores directly (C=1)
+// Grid: (n_kv, n_tiles) Block: hd=256
+__global__ void attn_scores_q4_0_decode_kernel(
+    const __half *Q_hp, const uint8_t *K_blocks, float *scores_out, int T_cache, int attn_window)
+{
+    const int gs=GQA_Q_HEADS/GQA_KV_HEADS, hd=GQA_HEAD_DIM;
+    const int kvh=blockIdx.x, ti=blockIdx.y, d=threadIdx.x, qb=kvh*gs;
+    const float ss=1.0f/sqrtf((float)hd);
+    int t0=ti*16384, tt=T_cache-t0; if(tt>16384)tt=16384;
+    if(attn_window>0&&T_cache>attn_window&&ti<(T_cache-attn_window)/16384)return;
+    __half Qr[8];
+    #pragma unroll
+    for(int qo=0;qo<gs;qo++) Qr[qo]=Q_hp[(size_t)(qb+qo)*hd+d];
+    for(int p=0;p<tt;p++){
+        int ap=t0+p;
+        int fl=(size_t)ap*GQA_KV_DIM+kvh*hd+d, bk=fl/32, el=fl%32;
+        const uint8_t*kp=K_blocks+(size_t)bk*18;
+        float Kv=((float)(((kp[2+el/2]>>(4*(el%2)))&0xF))-8.0f)*__half2float(*(const uint16_t*)kp);
+        float c[8];
+        #pragma unroll
+        for(int qo=0;qo<gs;qo++) c[qo]=__half2float(Qr[qo])*Kv*ss;
+        #pragma unroll
+        for(int qo=0;qo<gs;qo++) for(int o=16;o>0;o/=2) c[qo]+=__shfl_xor_sync(0xFFFFFFFF,c[qo],o);
+        int w=d/32;
+        __shared__ float sp[64];
+        if((d&31)==0) for(int qo=0;qo<gs;qo++) sp[w*gs+qo]=c[qo];
+        __syncthreads();
+        if(w==0){float t[8];
+            for(int qo=0;qo<gs;qo++){t[qo]=0;for(int w2=0;w2<8;w2++)t[qo]+=sp[w2*gs+qo];}
+            for(int qo=0;qo<gs;qo++) scores_out[(size_t)(qb+qo)*T_cache+ap]=t[qo];
+        }
+        __syncthreads();
+    }
+}
+
+// Host wrapper: full Q4_0 decode attention (C=1) — fused K→scores + V-weighted + gate + output
+void wubu_cuda_attn_q4_0_decode(cublasHandle_t handle, cudaStream_t stream,
+    const float *d_Q_chunk, const void *d_K_q4, const void *d_V_q4,
+    const float *d_gate_full, const float *d_output_w,
+    float *d_out, float *d_scratch, void *d_hp_scratch,
+    int T_cache, int attn_window)
+{
+    const int n_q=GQA_Q_HEADS, n_kv=GQA_KV_HEADS, gs=n_q/n_kv;
+    const int hd=GQA_HEAD_DIM, qd=n_q*hd, block=256;
+    const int nt=(T_cache+16384-1)/16384;
+    float *dS=d_scratch, *dM=dS+(size_t)n_q*T_cache, *dL=dM+n_q, *dO=dL+n_q;
+    init_zero_kernel<<<((int64_t)n_q*T_cache+block-1)/block,block,0,stream>>>(dS,(int)((size_t)n_q*T_cache));
+    init_zero_kernel<<<(n_q*hd+block-1)/block,block,0,stream>>>(dO,n_q*hd);
+    init_neg_inf<<<(n_q+block-1)/block,block,0,stream>>>(dM,n_q);
+    init_zero_kernel<<<(n_q+block-1)/block,block,0,stream>>>(dL,n_q);
+    __half *dQh=(__half*)d_hp_scratch;
+    f32_to_f16_kernel<<<(qd+block-1)/block,block,0,stream>>>(d_Q_chunk,dQh,qd);
+    int ts=0; if(attn_window>0&&T_cache>attn_window) ts=(T_cache-attn_window)/16384;
+    dim3 gk(n_kv, nt);
+    attn_scores_q4_0_decode_kernel<<<gk,block,0,stream>>>(dQh,(const uint8_t*)d_K_q4,dS,T_cache,attn_window);
+    // Batched online softmax: one block per Q head, all tiles in one launch
+    if (nt > 0)
+        batched_online_softmax_kernel<<<n_q, block, 0, stream>>>(dS, dM, dL, T_cache, nt, ts);
+    normalize_attn_kernel<<<(n_q*hd+block-1)/block,block,0,stream>>>(dO,dL,n_q*hd,hd);
+    init_zero_kernel<<<(qd+block-1)/block,block,0,stream>>>(dO,qd);
+    // Fused Q4_0 V-weighted sum: reads V from Q4_0 directly, no FP16 scratch
+    if (nt > 0) {
+        dim3 gv(n_kv, nt);
+        v_weighted_q4_0_kernel<<<gv, block, 0, stream>>>(dS, (const uint8_t*)d_V_q4, dO, T_cache, attn_window);
+    }
+    wubu_cuda_gqa_gate(dO,d_gate_full,1,qd,stream);
+    wubu_cuda_matmul(handle,dO,1,qd,d_output_w,D_MODEL,d_out,1.0f,0.0f);
+    cudaStreamSynchronize(stream);
+}
+// Fused Q4_0 V-weighted sum (C=1 decode): reads V from Q4_0 directly
+// Grid: (n_kv, n_tiles) Block: hd=256
+// One block per (KV head, tile): computes sum_p scores[qh,p] * V[p,kvh,d] for each Q head
+__global__ void v_weighted_q4_0_kernel(
+    const float *d_scores, const uint8_t *V_blocks,
+    float *d_out, int T_cache, int attn_window)
+{
+    const int gs=GQA_Q_HEADS/GQA_KV_HEADS, hd=GQA_HEAD_DIM;
+    const int kvh=blockIdx.x, ti=blockIdx.y, d=threadIdx.x;
+    const int qb=kvh*gs;
+    int t0=ti*16384, tt=T_cache-t0; if(tt>16384)tt=16384;
+    if(attn_window>0&&T_cache>attn_window&&ti<(T_cache-attn_window)/16384)return;
+
+    float acc[8];
+    for(int qo=0;qo<gs;qo++) acc[qo]=0.0f;
+
+    for(int p=0;p<tt;p++){
+        int ap=t0+p;
+        float sp[8];
+        for(int qo=0;qo<gs;qo++)
+            sp[qo]=d_scores[(size_t)(qb+qo)*T_cache+ap];
+        int fl=(size_t)ap*GQA_KV_DIM+kvh*hd+d, bk=fl/32, el=fl%32;
+        const uint8_t*vp=V_blocks+(size_t)bk*18;
+        float Vv=((float)(((vp[2+el/2]>>(4*(el%2)))&0xF))-8.0f)*__half2float(*(const uint16_t*)vp);
+        for(int qo=0;qo<gs;qo++) acc[qo]+=sp[qo]*Vv;
+    }
+    for(int qo=0;qo<gs;qo++)
+        atomicAdd(&d_out[(size_t)(qb+qo)*hd+d], acc[qo]);
+}
+
+// ================================================================
+// Fused SSM beta/alpha for N=1 decode
+// Replaces 2 cuBLAS calls + 4 element-wise kernels (sigmoid, add,
+// softplus, mul scalar) with 1 kernel.
+// x: [D_MODEL] GPU
+// W_beta/alpha: [D_MODEL * DT_RANK] F32 (col-major: w[i*dr+j])
+// dt_bias/a: [DT_RANK]
+// out_beta: [DT_RANK] = sigmoid(x @ W_beta)
+// out_gate: [DT_RANK] = softplus(x @ W_alpha + dt_bias) * ssm_a
+// ================================================================
+__global__ void ssm_beta_alpha_fused_decode(const float *x,
+    const float *W_beta, const float *W_alpha,
+    const float *dt_bias, const float *ssm_a,
+    float *out_beta, float *out_gate, int dr) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dr) return;
+    double sum_b = 0.0, sum_a = 0.0;
+    for (int i = 0; i < D_MODEL; i++) {
+        sum_b += (double)x[i] * (double)W_beta[(size_t)i * dr + idx];
+        sum_a += (double)x[i] * (double)W_alpha[(size_t)i * dr + idx];
+    }
+    float beta = (float)sum_b;
+    float alpha = (float)sum_a;
+    // sigmoid(beta)
+    float beta_sig = 1.0f / (1.0f + __expf(-beta));
+    // softplus(alpha + dt_bias) * ssm_a
+    float ab = alpha + dt_bias[idx];
+    float asp = ab > 20.0f ? ab : __logf(1.0f + __expf(ab));
+    out_beta[idx] = beta_sig;
+    out_gate[idx] = asp * ssm_a[idx];
+}
+
+// ================================================================
+// Fused SSM conv1d + SiLU + split for N=1 decode
+// Combines: conv_state copy, conv1d, SiLU, split QKV, conv_state update
+// into 1 kernel. Eliminates 2 D2D memcpys + 5 kernel launches.
+// ================================================================
+// conv_state: [k-1, Cdim] persistent GPU state
+// qkv_out: [Cdim] from quant matmul
+// conv1d_w: [Cdim, CONV_KERNEL] kernel weights (w[channel][tap])
+// out_q: [kdim] = Q split output
+// out_k: [kdim] = K split output
+// out_v: [vdim] = V split output
+// conv_state_out: [k-1, Cdim] = updated conv_state (last k-1 rows shifted)
+__global__ void ssm_conv_silu_split_decode(const float *conv_state,
+    const float *qkv_out, const float *conv1d_w,
+    float *out_q, float *out_k, float *out_v,
+    float *conv_state_out) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int Cdim = CONV_DIM;
+    const int kdim = KEY_DIM;    // = 2048
+    const int vdim = VALUE_DIM;  // = 4096
+    const int k = CONV_KERNEL;   // = 4
+    const int k1 = k - 1;        // = 3
+
+    if (idx >= Cdim) return;
+
+    // Step 1: conv1d — 4-tap depthwise
+    // conv_input rows: row0-2 = conv_state[0..2][c], row3 = qkv_out[c]
+    float s = 0.0f;
+    s += conv_state[0 * Cdim + idx] * conv1d_w[(size_t)idx * k + 0];
+    s += conv_state[1 * Cdim + idx] * conv1d_w[(size_t)idx * k + 1];
+    s += conv_state[2 * Cdim + idx] * conv1d_w[(size_t)idx * k + 2];
+    s += qkv_out[idx] * conv1d_w[(size_t)idx * k + 3];
+
+    // Step 2: SiLU = x * sigmoid(x)
+    float silu = s / (1.0f + __expf(-s));
+
+    // Step 3: Split QKV — Q[0:kdim], K[0:kdim], V[0:vdim]
+    // Q and K split from first 2*kdim elements (each kdim=2048)
+    // V from last vdim elements (4096)
+    if (idx < kdim) {
+        out_q[idx] = silu;
+    } else if (idx < 2 * kdim) {
+        out_k[idx - kdim] = silu;
+    } else if (idx < 2 * kdim + vdim) {
+        out_v[idx - 2 * kdim] = silu;
+    }
+    // idx >= 2*kdim+vdim = 8192: these elements of conv_output are unused
+
+    // Step 4: Update conv_state — shift rows: 1→0, 2→1, qkv_out→2
+    // Each thread handles its channel c across all 3 rows
+    conv_state_out[0 * Cdim + idx] = conv_state[1 * Cdim + idx];
+    conv_state_out[1 * Cdim + idx] = conv_state[2 * Cdim + idx];
+    conv_state_out[2 * Cdim + idx] = qkv_out[idx];
+}
+
+// Wrapper: launch ssm_conv_silu_split_decode kernel
+void ssm_conv_silu_split_decode_wrapper(cudaStream_t stream,
+    const float *d_conv_state, const float *d_qkv_out, const float *d_conv1d_w,
+    float *d_out_q, float *d_out_k, float *d_out_v,
+    float *d_conv_state_out) {
+    int block = 256;
+    int grid = (CONV_DIM + block - 1) / block;
+    ssm_conv_silu_split_decode<<<grid, block, 0, stream>>>(
+        d_conv_state, d_qkv_out, d_conv1d_w,
+        d_out_q, d_out_k, d_out_v, d_conv_state_out);
+}
+
+// Wrapper: launch ssm_beta_alpha_fused_decode kernel
+void ssm_beta_alpha_fused_decode_wrapper(cudaStream_t stream,
+    const float *d_x, const float *d_W_beta, const float *d_W_alpha,
+    const float *d_dt_bias, const float *d_ssm_a,
+    float *d_out_beta, float *d_out_gate, int dr) {
+    dim3 block(32);  // one warp per output element
+    dim3 grid((dr + 31) / 32);
+    ssm_beta_alpha_fused_decode<<<grid, block, 0, stream>>>(
+        d_x, d_W_beta, d_W_alpha, d_dt_bias, d_ssm_a,
+        d_out_beta, d_out_gate, dr);
+}
+

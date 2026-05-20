@@ -21,6 +21,18 @@
 // FP16 conversion kernels (defined in cuda_kernels.cu)
 __global__ void f32_to_f16_kernel(const float *in, __half *out, int n);
 __global__ void f16_to_f32_kernel(const __half *in, float *out, int n);
+// Q4_0 KV cache kernels (defined in cuda_kernels.cu)
+__global__ void dequant_q4_0_cache_kernel(int n_blocks, const uint8_t *blocks, __half *out);
+__global__ void quant_q4_0_cache_kernel(int n, const __half *in, uint8_t *blocks);
+// Fused Q4_0 decode attention (C=1)
+void wubu_cuda_attn_q4_0_decode(cublasHandle_t handle, cudaStream_t stream,
+    const float *d_Q_chunk, const void *d_K_q4, const void *d_V_q4,
+    const float *d_gate_full, const float *d_output_w,
+    float *d_out, float *d_scratch, void *d_hp_scratch,
+    int T_cache, int attn_window);
+// Q4_0 KV cache kernels (defined in cuda_kernels.cu)
+__global__ void dequant_q4_0_cache_kernel(int n_blocks, const uint8_t *blocks, __half *out);
+__global__ void quant_q4_0_cache_kernel(int n, const __half *in, uint8_t *blocks);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -126,6 +138,9 @@ typedef struct {
     size_t  d_ssm_scratch_sz;   // allocation size in bytes
     // FP16 scratch for chunked attention (Q + score tile)
     __half *d_hp_scratch;       // [n_q * hd + ATTEN_TILE * C]
+
+    // Q4_0 KV cache mode flag
+    bool use_q4_0_kv_cache;
 } gpu_ctx_t;
 
 // ================================================================
@@ -196,6 +211,14 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     gpu->max_ctx = max_ctx;
     gpu->chunk_sz = chunk_sz;
     gpu->attn_window = 0;  // 0 = full attention (no sliding window by default), set via env GQA_WINDOW
+
+    // Q4_0 KV cache mode: 4:1 compression. Toggle via GPU_Q4_0_KV=0 for FP16.
+    int use_q4_0 = 1;
+    const char *q4_0_env = getenv("GPU_Q4_0_KV");
+    if (q4_0_env && atoi(q4_0_env) == 0) use_q4_0 = 0;
+    gpu->use_q4_0_kv_cache = (use_q4_0 != 0);
+    printf("GPU: KV cache mode: %s (4:1 compression vs FP16)\n",
+           gpu->use_q4_0_kv_cache ? "Q4_0" : "FP16");
 
     // Count GQA layers
     gpu->gqa_weights = (gpu_gqa_layer_t *)calloc(model->n_layers, sizeof(gpu_gqa_layer_t));
@@ -298,8 +321,10 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     cudaStreamSynchronize(gpu->stream);
     printf("GPU: GQA weights uploaded\n");
 
-    // Allocate persistent GPU KV cache (one per GQA layer, growable, FP16)
-    // Start small (KV_CACHE_INIT), grow on demand up to max_ctx
+    // Persistent GPU KV cache (one per GQA layer, growable, Q4_0)
+    // Each layer: grows from KV_CACHE_INIT up to max_ctx.
+    // Q4_0 format: 18 bytes per 32 elements = 0.5625 bytes/elem
+    // vs FP16: 2 bytes/elem. 4:1 compression.
     const int kv_cache_init = 4096;
     gpu->d_k_cache = (void**)calloc(model->n_layers, sizeof(void*));
     gpu->d_v_cache = (void**)calloc(model->n_layers, sizeof(void*));
@@ -312,15 +337,26 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
         if (model->layers[l].is_ssm) continue;
         int initial = (max_ctx < kv_cache_init) ? max_ctx : kv_cache_init;
         gpu->cache_cap[l] = initial;
-        size_t cb = (size_t)initial * kv_dim * sizeof(__half);
+        size_t cb;
+        if (gpu->use_q4_0_kv_cache) {
+            int64_t n_blocks = ((int64_t)initial * kv_dim + QK4_CACHE - 1) / QK4_CACHE;
+            cb = (size_t)n_blocks * sizeof(block_q4_0_cache);
+        } else {
+            cb = (size_t)initial * kv_dim * sizeof(__half);
+        }
         gpu->d_k_cache[l] = wubu_cuda_alloc(cb);
         gpu->d_v_cache[l] = wubu_cuda_alloc(cb);
         cudaMemset(gpu->d_k_cache[l], 0, cb);
         cudaMemset(gpu->d_v_cache[l], 0, cb);
         gpu->cache_len[l] = 0;
     }
-    printf("GPU: KV cache allocated (%d layers × %d init, max %d ctx)\\n",
-           gpu->n_gqa_layers, kv_cache_init, max_ctx);
+    int64_t fp16_full_bytes = (int64_t)max_ctx * kv_dim * sizeof(__half) * 2 * gpu->n_gqa_layers;
+    int64_t q4_0_full_bytes = ((int64_t)max_ctx * kv_dim + QK4_CACHE - 1) / QK4_CACHE * sizeof(block_q4_0_cache) * 2 * gpu->n_gqa_layers;
+    printf("GPU: KV cache allocated (%d layers x %d init, max %d ctx, %s: %.0f MB vs %.0f MB FP16 full)\n",
+           gpu->n_gqa_layers, kv_cache_init, max_ctx,
+           gpu->use_q4_0_kv_cache ? "Q4_0" : "FP16",
+           (double)q4_0_full_bytes / (1024*1024),
+           (double)fp16_full_bytes / (1024*1024));
 
     // RoPE sin/cos table (host computed, device stored)
     float *h_sc = (float *)malloc((size_t)max_ctx * ROTARY_DIM * sizeof(float));
@@ -341,9 +377,15 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     gpu->d_score_scr = wubu_cuda_alloc(score_bytes);
 
     // FP16 scratch for chunked attention (Q + score tile)
-    // q_dim = GQA_Q_HEADS * GQA_HEAD_DIM = 4096, ATTEN_TILE = 16384
-    int hp_scratch_elems = 4096 + 16384 * chunk_sz;
-    gpu->d_hp_scratch = (__half*)wubu_cuda_alloc((size_t)hp_scratch_elems * sizeof(__half));
+    // Q4_0 mode needs extra space: 2 * ATTEN_TILE * kv_dim for dequantized K/V tiles
+    // FP16 mode only needs: n_q * hd + ATTEN_TILE * C
+    int hp_total;
+    if (gpu->use_q4_0_kv_cache) {
+        hp_total = GQA_Q_HEADS * GQA_HEAD_DIM + 2 * 16384 * kv_dim + 16384 * chunk_sz;
+    } else {
+        hp_total = GQA_Q_HEADS * GQA_HEAD_DIM + 16384 * chunk_sz;
+    }
+    gpu->d_hp_scratch = (__half*)wubu_cuda_alloc((size_t)hp_total * sizeof(__half));
 
     // Q-contiguous buffer: [chunk_sz, q_dim] floats
     gpu->d_qtmp = wubu_cuda_alloc((size_t)chunk_sz * q_dim * sizeof(float));
@@ -631,20 +673,28 @@ int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
         C, C, GQA_Q_HEADS, GQA_KV_HEADS, GQA_HEAD_DIM,
         gpu->d_sincos + (size_t)cache_start * ROTARY_DIM, st);
 
-    // === Append K, V to persistent cache (F32→FP16) ===
+    // === Append K, V to persistent cache (F32→Q4_0 or F32→FP16) ===
     int total_needed = cache_start + C;
     if (total_needed > gpu->cache_cap[layer_idx]) {
         // Grow cache: double capacity up to max_ctx
         int new_cap = gpu->cache_cap[layer_idx] * 2;
         if (new_cap > gpu->max_ctx) new_cap = gpu->max_ctx;
         if (new_cap < total_needed) new_cap = total_needed;
-        size_t new_bytes = (size_t)new_cap * kv_dim * sizeof(__half);
-        size_t old_bytes = (size_t)gpu->cache_cap[layer_idx] * kv_dim * sizeof(__half);
-        
+        size_t new_bytes, old_bytes;
+        if (gpu->use_q4_0_kv_cache) {
+            int64_t n_blocks_new = ((int64_t)new_cap * kv_dim + QK4_CACHE - 1) / QK4_CACHE;
+            int64_t n_blocks_old = ((int64_t)gpu->cache_cap[layer_idx] * kv_dim + QK4_CACHE - 1) / QK4_CACHE;
+            new_bytes = (size_t)n_blocks_new * sizeof(block_q4_0_cache);
+            old_bytes = (size_t)n_blocks_old * sizeof(block_q4_0_cache);
+        } else {
+            new_bytes = (size_t)new_cap * kv_dim * sizeof(__half);
+            old_bytes = (size_t)gpu->cache_cap[layer_idx] * kv_dim * sizeof(__half);
+        }
+
         void *new_k = wubu_cuda_alloc(new_bytes);
         void *new_v = wubu_cuda_alloc(new_bytes);
         if (!new_k || !new_v) {
-            fprintf(stderr, "GPU: KV cache grow failed for layer %d (%d→%d)\\n",
+            fprintf(stderr, "GPU: KV cache grow failed for layer %d (%d->%d)\n",
                     layer_idx, gpu->cache_cap[layer_idx], new_cap);
             wubu_cuda_free((float*)new_k);
             wubu_cuda_free((float*)new_v);
@@ -659,35 +709,73 @@ int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
         gpu->d_k_cache[layer_idx] = new_k;
         gpu->d_v_cache[layer_idx] = new_v;
         gpu->cache_cap[layer_idx] = new_cap;
-        fprintf(stderr, "GPU: KV cache layer %d grew to %d\\n", layer_idx, new_cap);
+        fprintf(stderr, "GPU: KV cache layer %d grew to %d\n", layer_idx, new_cap);
     }
-    
-    // Convert F32 K→FP16, write to cache
-    // d_ktmp has F32 K values; convert in-place via d_score_scr as temp
+
     int n_elems_k = C * kv_dim;
     int block = 256;
-    int grid = (n_elems_k + block - 1) / block;
-    f32_to_f16_kernel<<<grid, block, 0, st>>>(gpu->d_ktmp,
-        (__half*)gpu->d_score_scr, n_elems_k);
-    cudaMemcpyAsync((__half*)gpu->d_k_cache[layer_idx] + (size_t)cache_start * kv_dim,
-                    gpu->d_score_scr, (size_t)n_elems_k * sizeof(__half),
-                    cudaMemcpyDeviceToDevice, st);
-    
-    // Convert F32 V→FP16, write to cache
-    f32_to_f16_kernel<<<grid, block, 0, st>>>(gpu->d_vtmp,
-        (__half*)gpu->d_score_scr, n_elems_k);
-    cudaMemcpyAsync((__half*)gpu->d_v_cache[layer_idx] + (size_t)cache_start * kv_dim,
-                    gpu->d_score_scr, (size_t)n_elems_k * sizeof(__half),
-                    cudaMemcpyDeviceToDevice, st);
 
-    // Update cache length
-    gpu->cache_len[layer_idx] = cache_start + C;
+    if (gpu->use_q4_0_kv_cache) {
+        // Q4_0 path: convert F32 K/V to Q4_0 blocks
+        int n_q4_blocks = (n_elems_k + QK4_CACHE - 1) / QK4_CACHE;
+        int grid_f32 = (n_elems_k + block - 1) / block;
 
-    // === Chunked attention (FP16 KV cache) with optional sliding window ===
-    wubu_cuda_chunked_attn_fp16(ch, st, C, cache_start + C,
-        gpu->d_qtmp, gpu->d_k_cache[layer_idx], gpu->d_v_cache[layer_idx],
-        gpu->d_scr, gw->d_attn_out_w, gpu->d_gout, gpu->d_score_scr,
-        gpu->d_hp_scratch, gpu->attn_window);
+        // Convert F32 K to FP16 temp, then quantize to Q4_0 blocks
+        f32_to_f16_kernel<<<grid_f32, block, 0, st>>>(
+            gpu->d_ktmp, (__half*)gpu->d_score_scr, n_elems_k);
+        quant_q4_0_cache_kernel<<<n_q4_blocks, block, sizeof(float) * QK4_CACHE, st>>>(
+            n_elems_k, (__half*)gpu->d_score_scr,
+            (uint8_t*)gpu->d_k_cache[layer_idx] + (size_t)cache_start * kv_dim / QK4_CACHE * 18);
+
+        // Convert F32 V to FP16 temp, then quantize to Q4_0 blocks
+        f32_to_f16_kernel<<<grid_f32, block, 0, st>>>(
+            gpu->d_vtmp, (__half*)gpu->d_score_scr, n_elems_k);
+        quant_q4_0_cache_kernel<<<n_q4_blocks, block, sizeof(float) * QK4_CACHE, st>>>(
+            n_elems_k, (__half*)gpu->d_score_scr,
+            (uint8_t*)gpu->d_v_cache[layer_idx] + (size_t)cache_start * kv_dim / QK4_CACHE * 18);
+
+        // Update cache length
+        gpu->cache_len[layer_idx] = cache_start + C;
+
+        // === Chunked attention (Q4_0 KV cache) ===
+        if (C == 1) {
+            // Fused decode kernel: Q4_0 K→scores directly, no FP16 scratch
+            wubu_cuda_attn_q4_0_decode(ch, st, gpu->d_qtmp,
+                gpu->d_k_cache[layer_idx], gpu->d_v_cache[layer_idx],
+                gpu->d_scr, gw->d_attn_out_w,
+                gpu->d_gout, gpu->d_score_scr, gpu->d_hp_scratch,
+                cache_start + C, gpu->attn_window);
+        } else {
+            wubu_cuda_chunked_attn_q4_0(ch, st, C, cache_start + C,
+            gpu->d_qtmp, gpu->d_k_cache[layer_idx], gpu->d_v_cache[layer_idx],
+            gpu->d_scr, gw->d_attn_out_w, gpu->d_gout, gpu->d_score_scr,
+            gpu->d_hp_scratch, gpu->attn_window);
+        }
+    } else {
+        // FP16 path: convert F32 K→FP16, write to cache
+        int grid = (n_elems_k + block - 1) / block;
+        f32_to_f16_kernel<<<grid, block, 0, st>>>(gpu->d_ktmp,
+            (__half*)gpu->d_score_scr, n_elems_k);
+        cudaMemcpyAsync((__half*)gpu->d_k_cache[layer_idx] + (size_t)cache_start * kv_dim,
+                        gpu->d_score_scr, (size_t)n_elems_k * sizeof(__half),
+                        cudaMemcpyDeviceToDevice, st);
+
+        // Convert F32 V→FP16, write to cache
+        f32_to_f16_kernel<<<grid, block, 0, st>>>(gpu->d_vtmp,
+            (__half*)gpu->d_score_scr, n_elems_k);
+        cudaMemcpyAsync((__half*)gpu->d_v_cache[layer_idx] + (size_t)cache_start * kv_dim,
+                        gpu->d_score_scr, (size_t)n_elems_k * sizeof(__half),
+                        cudaMemcpyDeviceToDevice, st);
+
+        // Update cache length
+        gpu->cache_len[layer_idx] = cache_start + C;
+
+        // === Chunked attention (FP16 KV cache) with optional sliding window ===
+        wubu_cuda_chunked_attn_fp16(ch, st, C, cache_start + C,
+            gpu->d_qtmp, gpu->d_k_cache[layer_idx], gpu->d_v_cache[layer_idx],
+            gpu->d_scr, gw->d_attn_out_w, gpu->d_gout, gpu->d_score_scr,
+            gpu->d_hp_scratch, gpu->attn_window);
+    }
 
     // Download output back to CPU
     cudaMemcpyAsync(h_attn, gpu->d_gout, (size_t)C * D_MODEL * sizeof(float),
@@ -901,63 +989,80 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
         gpu->ssm_gate_type[layer_idx], D_MODEL, VALUE_DIM,
         gpu->d_ssm_z_out, NULL, 0, st);
 
-    // === Step 3: Beta/Alpha projections via cuBLAS F32 ===
-    // Scratch layout for Step 3-4 intermediates
+    // === Step 3+4: Beta/Alpha + sigmoid/softplus/gate ===
+    // For C==1 decode: use fused kernel (no cuBLAS, no separate element-wise launches)
+    // For C>1 prefill: use cuBLAS + individual kernels
     size_t off = 0;
-    float *d_beta_raw  = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
-    float *d_alpha_raw = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
     float *d_beta_sig  = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
-    float *d_alpha_biased = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
-    float *d_alpha_sp = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
-    float *d_gate_final  = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
+    float *d_gate_final = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
 
-    wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gpu->d_ssm_beta[layer_idx], dr, d_beta_raw, 1.0f, 0.0f);
-    wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gpu->d_ssm_alpha[layer_idx], dr, d_alpha_raw, 1.0f, 0.0f);
+    if (C == 1) {
+        ssm_beta_alpha_fused_decode_wrapper(st,
+            gpu->d_x, gpu->d_ssm_beta[layer_idx], gpu->d_ssm_alpha[layer_idx],
+            gpu->d_ssm_dt_bias[layer_idx], gpu->d_ssm_a[layer_idx],
+            d_beta_sig, d_gate_final, dr);
+    } else {
+        // Original cuBLAS path for prefill (C>1)
+        float *d_beta_raw    = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
+        float *d_alpha_raw   = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
+        float *d_alpha_biased= gpu->d_ssm_scratch + off; off += (size_t)C * dr;
+        float *d_alpha_sp    = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
 
-    // === Step 4: sigmoid(beta), softplus(alpha+dt_bias), gate = softplus*ssm_a ===
-    wubu_cuda_sigmoid(C * dr, d_beta_raw, d_beta_sig, st);
-    wubu_cuda_add_bias(C, dr, d_alpha_raw, gpu->d_ssm_dt_bias[layer_idx], d_alpha_biased, st);
-    wubu_cuda_softplus(C * dr, d_alpha_biased, d_alpha_sp, st);
-    wubu_cuda_mul_by_scalar(C, dr, d_alpha_sp, gpu->d_ssm_a[layer_idx], d_gate_final, st);
+        wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gpu->d_ssm_beta[layer_idx], dr, d_beta_raw, 1.0f, 0.0f);
+        wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gpu->d_ssm_alpha[layer_idx], dr, d_alpha_raw, 1.0f, 0.0f);
+        wubu_cuda_sigmoid(C * dr, d_beta_raw, d_beta_sig, st);
+        wubu_cuda_add_bias(C, dr, d_alpha_raw, gpu->d_ssm_dt_bias[layer_idx], d_alpha_biased, st);
+        wubu_cuda_softplus(C * dr, d_alpha_biased, d_alpha_sp, st);
+        wubu_cuda_mul_by_scalar(C, dr, d_alpha_sp, gpu->d_ssm_a[layer_idx], d_gate_final, st);
+    }
 
-    // === Step 5: Build conv_input from conv_state + qkv_all ===
-    // === Step 5: Build conv_input from GPU conv_state + qkv_all (all D2D) ===
+    // === Step 5-10: For C==1, use fused conv1d+SiLU+split kernel ===
+    // For C>1, use original separate steps
+    float *d_q_conv, *d_k_conv, *d_v_conv, *d_q_norm, *d_k_norm;
+    if (C == 1) {
+        // Fused: no intermediate conv_input/conv_output scratch needed
+        d_q_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
+        d_k_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
+        d_v_conv = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
+        ssm_conv_silu_split_decode_wrapper(st,
+            gpu->d_conv_state[layer_idx], gpu->d_ssm_qkv_out,
+            gpu->d_ssm_conv1d[layer_idx],
+            d_q_conv, d_k_conv, d_v_conv,
+            gpu->d_conv_state[layer_idx]);  // in-place update
+    } else {
+        // Original multistep path for prefill (C>1)
         int k_1 = CONV_KERNEL - 1;
         float *d_conv_input = gpu->d_ssm_scratch + off;
         off += (size_t)(k_1 + C) * Cdim;
-
-        // Read conv_state directly from GPU (persistent, zeroed on init)
         cudaMemcpyAsync(d_conv_input, gpu->d_conv_state[layer_idx],
                         (size_t)k_1 * Cdim * sizeof(float),
                         cudaMemcpyDeviceToDevice, st);
-        // Append qkv_all after conv_state (D2D)
         cudaMemcpyAsync(d_conv_input + (size_t)k_1 * Cdim, gpu->d_ssm_qkv_out,
                         (size_t)C * Cdim * sizeof(float),
                         cudaMemcpyDeviceToDevice, st);
-
-        // === Step 6+7: Conv1d + SiLU ===
+        // Conv1d + SiLU
         float *d_conv_output = gpu->d_ssm_scratch + off; off += (size_t)C * Cdim;
         wubu_cuda_conv1d(1, C, Cdim, CONV_KERNEL, d_conv_input,
                          gpu->d_ssm_conv1d[layer_idx], d_conv_output, st);
         wubu_cuda_silu(C * Cdim, d_conv_output, d_conv_output, st);
-
-        // === Step 8: Update GPU conv_state (D2D) — save last k-1 elements ===
+        // Update conv_state
         float *last = d_conv_input + (size_t)C * Cdim;
         cudaMemcpyAsync(gpu->d_conv_state[layer_idx], last,
                         (size_t)k_1 * Cdim * sizeof(float),
                         cudaMemcpyDeviceToDevice, st);
-
-        // === Step 9-10: Split QKV + L2 norm ===
-        float *d_q_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
-        float *d_k_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
-        float *d_v_conv = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
-        float *d_q_norm = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
-        float *d_k_norm = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
-
+        // Split QKV
+        d_q_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
+        d_k_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
+        d_v_conv = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
         wubu_cuda_split_qkv(C, kdim, vdim, d_conv_output,
                             d_q_conv, d_k_conv, d_v_conv, st);
-        wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, st);
-        wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, st);
+    }
+
+    // L2 norm (needed for both paths)
+    d_q_norm = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
+    d_k_norm = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
+    wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, st);
+    wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, st);
 
         // === Step 11: Recurrence — parallel scan for C>1, token-by-token for C==1 ===
         float *d_delta_out = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
