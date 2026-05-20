@@ -504,9 +504,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             float *ssm_state = model->ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
 #ifdef GPU_SUPPORT
-            fprintf(stderr, "DBG SSM L%d N=%d gpu_ctx=%p\n", l, N, (void*)model->gpu_ctx);
             if (model->gpu_ctx && N > 1) {
-                fprintf(stderr, "DBG calling ssm_forward_full L%d N=%d\n", l, N);
                 // Full GPU SSM forward for prefill (N>1): avoids per-token H2D/D2H
                 int gpu_ok = wubu_model_gpu_ssm_forward_full(model, l, normed, N, attn_out);
                 if (!gpu_ok) {
