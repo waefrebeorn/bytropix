@@ -14,9 +14,10 @@
 
 | Binary | Source | Purpose |
 |--------|--------|---------|
-| `ref_dumper` | `ref_dumper.cpp` | Links libllama.so, dumps per-layer + intermediate tensors |
+| `ref_dumper` | `ref_dumper.cpp` | Links libllama.so: per-layer + intermediate tensor dumps |
 | `ref_dumper_mtp` | `ref_dumper_mtp.cpp` | MTP cross-reference (libllama.so) |
 | `layer_cos_sim` | `layer_cos_sim.c` | Per-layer cosine similarity comparison |
+| `compare_ggml_matmul.cpp` | `compare_ggml_matmul.cpp` | Quantized matmul vs ggml SGEMM |
 
 ## Component Tests
 
@@ -37,6 +38,9 @@
 | `analyze_l31.py` | Deep-dive into L31 GQA attention |
 | `inspect_ref_intermediates.py` | Reference intermediate tensor browser |
 | `unified_ssm_plan.md` | Fusion kernel design document |
+| `example_rotorquant.py` | RotorQuant Givens rotation + Q4_0 demo |
+| `example_turboquant.py` | TurboQuant WHT + Q4_0 demo |
+| `example_hamilton_encoder.py` | Hamilton quaternion manifold demo |
 
 ## Environment Variables
 
@@ -48,3 +52,15 @@
 | `GQA_WINDOW` | Sliding window size for GQA attention |
 | `OMP_NUM_THREADS` | OpenMP thread count |
 | `REF_LOGITS_PATH` | Reference logits output path (used by ref_dumper) |
+
+## Make Targets
+
+```bash
+make gen_text           # CPU inference binary
+make gen_text_gpu       # GPU inference (with CUDA)
+make gen_text_mtp       # MTP speculative decode
+make ref_dumper         # Reference comparison tool
+make test_ssm           # SSM unit test
+make layer_cos_sim      # Cos-sim comparison tool
+make all                # Build all targets (slow)
+```

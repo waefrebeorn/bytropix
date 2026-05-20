@@ -150,7 +150,8 @@ test_hyperbolic_ssm
 *.so
 
 # Data files
-data/
+data/*
+!data/README.md
 *.bin
 *.raw
 *.gz
