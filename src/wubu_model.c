@@ -505,23 +505,25 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
 #ifdef GPU_SUPPORT
             if (model->gpu_ctx && N > 1) {
-                // GPU-accelerated SSM projections + recurrence
-                // For prefill (N>1): token-by-token  
-                // GPU recurrence always on via the GPU branch below
-                float *gpu_qkv = (float*)malloc(sizeof(float) * N * CONV_DIM);
-                float *gpu_z = (float*)malloc(sizeof(float) * N * VALUE_DIM);
-                if (gpu_qkv && gpu_z) {
-                    if (N == 1) {
-                        wubu_model_gpu_ssm_project(model, l, normed, N,
-                            gpu_qkv, gpu_z, NULL);
-                    } else {
-                        for (int t = 0; t < N; t++) {
-                            wubu_model_gpu_ssm_project(model, l,
-                                normed + t * D_MODEL, 1,
-                                gpu_qkv + t * CONV_DIM,
-                                gpu_z + t * VALUE_DIM, NULL);
+                // Full GPU SSM forward for prefill (N>1): avoids per-token H2D/D2H
+                if (wubu_model_gpu_ssm_forward_full(model, l, normed, N, attn_out)) {
+                    // Full GPU path handled everything
+                } else {
+                    // Fallback: GPU projections + CPU conv/norm/recurrence
+                    float *gpu_qkv = (float*)malloc(sizeof(float) * N * CONV_DIM);
+                    float *gpu_z = (float*)malloc(sizeof(float) * N * VALUE_DIM);
+                    if (gpu_qkv && gpu_z) {
+                        if (N == 1) {
+                            wubu_model_gpu_ssm_project(model, l, normed, N,
+                                gpu_qkv, gpu_z, NULL);
+                        } else {
+                            for (int t = 0; t < N; t++) {
+                                wubu_model_gpu_ssm_project(model, l,
+                                    normed + t * D_MODEL, 1,
+                                    gpu_qkv + t * CONV_DIM,
+                                    gpu_z + t * VALUE_DIM, NULL);
+                            }
                         }
-                    }
                     // Set GPU recurrence pointers so wubu_ssm_forward uses GPU
                     gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
                     layer->ssm.gpu_ssm_state = (void*)gpu->d_ssm_state[l];
@@ -545,20 +547,25 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                         ssm_state, conv_state, attn_out, NULL, NULL);
                 }
             } else if (model->gpu_ctx) {
-                // GPU recurrence only (matmuls on CPU for decode)
-                gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
-                layer->ssm.gpu_ssm_state = (void*)gpu->d_ssm_state[l];
-                layer->ssm.gpu_q_buf     = (void*)gpu->d_ssm_q_all;
-                layer->ssm.gpu_k_buf     = (void*)gpu->d_ssm_k_all;
-                layer->ssm.gpu_v_buf     = (void*)gpu->d_ssm_v_all;
-                layer->ssm.gpu_beta_buf  = (void*)gpu->d_ssm_beta_arr;
-                layer->ssm.gpu_gate_buf  = (void*)gpu->d_ssm_gate_arr;
-                layer->ssm.gpu_delta_buf = (void*)gpu->d_ssm_delta_out;
-                layer->ssm.gpu_stream    = (void*)gpu->stream;
-                wubu_ssm_forward(normed, B, T, &layer->ssm,
-                    ssm_state, conv_state, attn_out, NULL, NULL);
-                layer->ssm.gpu_ssm_state = NULL;
-                layer->ssm.gpu_stream    = NULL;
+                // Full GPU SSM forward: quantized matmuls → conv1d → SiLU →
+                // split → L2 norm → recurrence → gated norm → ssm_out.
+                // Single H2D upload + single D2H download per layer.
+                if (!wubu_model_gpu_ssm_forward_full(model, l, normed, N, attn_out)) {
+                    // Fallback to hybrid: GPU recurrence only, CPU matmuls
+                    gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
+                    layer->ssm.gpu_ssm_state = (void*)gpu->d_ssm_state[l];
+                    layer->ssm.gpu_q_buf     = (void*)gpu->d_ssm_q_all;
+                    layer->ssm.gpu_k_buf     = (void*)gpu->d_ssm_k_all;
+                    layer->ssm.gpu_v_buf     = (void*)gpu->d_ssm_v_all;
+                    layer->ssm.gpu_beta_buf  = (void*)gpu->d_ssm_beta_arr;
+                    layer->ssm.gpu_gate_buf  = (void*)gpu->d_ssm_gate_arr;
+                    layer->ssm.gpu_delta_buf = (void*)gpu->d_ssm_delta_out;
+                    layer->ssm.gpu_stream    = (void*)gpu->stream;
+                    wubu_ssm_forward(normed, B, T, &layer->ssm,
+                        ssm_state, conv_state, attn_out, NULL, NULL);
+                    layer->ssm.gpu_ssm_state = NULL;
+                    layer->ssm.gpu_stream    = NULL;
+                }
             } else
 #endif
             {

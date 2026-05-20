@@ -234,7 +234,14 @@ int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
                                 float *qkv_out, float *z_out,
                                 float *ssm_out_out);
 
-// Run GPU MoE experts: replaces the 8 expert quantized matmuls with GPU kernel.
+// Run GPU SSM completely on GPU: quantized matmuls → conv1d → SiLU → split
+// → L2 norm → recurrence → gated norm → ssm_out projection.
+// Returns 1 on success, 0 on fallback to CPU.
+int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
+                                     const float *h_norm, int C,
+                                     float *h_attn_out);
+
+// Run MoE experts via GPU kernel, replacing CPU quantized matmul loop.
 // Shared expert and router remain on CPU.
 // Called per-token from wubu_moe_forward's expert loop.
 void wubu_model_gpu_moe_experts(const moe_weights_t *w,
