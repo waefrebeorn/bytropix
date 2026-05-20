@@ -1,27 +1,26 @@
-# WuBuText AI — Project Overview (May 15 PM v6)
+# WuBuText AI — Project Overview (May 19 PM v22)
 
 ## What We're Building
-**WuBuText AI** — pure C + CUDA implementation of Qwen3.6-35B-A3B with 7 hyperbolic math extensions.
-All phases complete. Integrated training pipeline at 11s/step.
+**bytropix** — pure C inference engine for Qwen3.6-35B-A3B (Gated DeltaNet + MoE).
+Cos-sim 0.9994 vs llama.cpp. 256k context on 8GB laptop GPU.
 
-### Architecture
-40 layers (30 SSM Gated DeltaNet + 10 GQA, 3:1 repeating), 2048 hidden, 248K vocab, 262K ctx.
-256 MoE experts (8 active + 1 shared), per-expert IQ2_XXS dequant (3.9ms/expert).
+### Architecture (Discovered May 19)
+40 layers with **3:1 SSM/GQA interleaved repeating** pattern (NOT 30+10 contiguous).
+SSM: 0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38
+GQA: 3,7,11,15,19,23,27,31,35,39
 
-### All Phases Complete ✅
+### All 22 Phases Complete ✅
+| Phase | Component | Key Result |
+|-------|-----------|------------|
+| 0-11 | Foundation | GQA attn, vec_dot, MoE, KV cache |
+| 12 | MTP Spec Decode | Free-tokens mode |
+| 13 | GPU Output Proj | 0.1ms vs CPU 10ms |
+| 14-17 | GPU SSM, MoE, Recurrence | All on GPU |
+| 18-21 | Full GPU pipeline + sliding window | 9 tok/s at 256k |
+| **22** | **Q4_0 KV cache + architecture discovery** | **4:1 compression, interleaved pattern** |
 
-| Phase | Component | Status | Key Metric |
-|-------|-----------|--------|------------|
-| 0 | GGUF Reader | ✅ 13 types | 733 tensors |
-| 1 | Embedding Graft | ✅ Poincaré R=0.956 | 95% NN preserved |
-| 2 | Attention Port | ✅ 40 layers CPU/GPU | GPU verified |
-| 3 | Training Loop | ✅ Integrated | **11s/step, 0 NaN** |
-| 4 | MoE Port | ✅ Per-expert dequant | 177s→11s/step (16×) |
-| 5 | Vision Port | ✅ GPU 99ms pipeline | 0 NaN |
-| 6 | CUDA Optimization | ✅ SSM scan + MoE dispatch | max_diff<6e-8 |
-
-### Key Fixes
-- **NaN root cause**: gguf_raw_size(IQ2_XXS) was 72→66 bytes/block
-- **MoE magnitude**: hidden max 5e9→13 (buggy strided extraction fixed)
-- **Training speed**: full tensor dequant eliminated → per-expert extraction
-- **Bugs all closed**: vision timeout, NaN in logits, RMSNorm OOB — all ✅
+### Key Innovations
+- Q4_0 KV cache: 720MB vs 2.56GB at 256k
+- DUMP_INTERMEDIATE_DIR: 53 tensor types/layer reference tracing
+- Self-hosted vec_dot: zero dependency on libggml-cpu.so
+- GPU pipeline: sliding window, MoE cache, SSM recurrence

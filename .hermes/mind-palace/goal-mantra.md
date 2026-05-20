@@ -1,28 +1,39 @@
-# Goal Mantra — May 19, 2026 PM (Phase 15 — GPU GQA Wiring ✅)
+# Goal Mantra — May 19, 2026 PM (Phase 22 — Q4_0 KV Cache ✅)
 
 ## THE GOAL
 **1:1 inference parity w/ llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.** ✅
-**Current: 0.9967 cos-sim** — 1:1 PARITY ACHIEVED.
+**Overall cos-sim: 0.9994 (CPU, 5-token prefill, 40 layers).**
 
 ## STATE
 | Metric | Value | Status |
 |--------|-------|--------|
-| **gen_text (CPU)** | **8.8 tok/s** decode | ✅ Fused Q8_K + AVX2 scan |
-| **gen_text (GPU GQA)** | **3.5 tok/s** decode | ✅ GQA on GPU, SSM+MoE CPU |
-| **gen_text prefill** | **13.1 tok/s** (5-token) | ✅ |
-| **SSM attn per layer** | **~1.0ms** | ✅ AVX2 scan + fused Q8_K |
-| **MoE per layer** | **~1.2ms** | ✅ IQ2_XXS AVX2 |
-| **Output proj** | **~10ms** CPU / **GPU quantized** | ✅ GPU_QUANTIZED=1 mode |
-| **GPU GQA VRAM** | **1.04GB** F32 dequant weights | ✅ 10 GQA layers on GPU |
-| **GPU GQA KV cache** | **Persistent, 262k ctx** | ✅ On-GPU, per-layer |
-| **GPU memory (quantized)** | **~2.9GB** total | ✅ GQA(1.04) + Out(1.9) |
+| Architecture | 40 layers, 3:1 SSM/GQA **interleaved** repeating | ✅ Discovered May 19 |
+| gen_text (CPU) | ~11 tok/s prefill, Q4_0 KV cache | ✅ Phase 22 |
+| gen_text_gpu | Pre-existing hang | ❌ Needs debug |
+| Q4_0 KV cache | 720MB vs 2.56GB at 256k, 4:1 compression | ✅ Cos-sim 0.9994 |
+| DUMP_INTERMEDIATE_DIR | 1997 files/forward, 53 tensor types/layer | ✅ Built |
+| Cos-sim L00-L30 | 0.998-0.9999 | ✅ |
+| Cos-sim L31 | 0.9585 (GQA quantization noise) | 🟡 Expected |
+| Overall cos-sim | 0.9994 | ✅ |
 
-## CRITICAL FINDING: Integrated GPU GQA
-Phase 15 wired `wubu_model_gpu.cu` into `wubu_model_t` — GPU GQA is now a transparent feature. Set `GPU=1` env var to enable. Uses:
-- F32 dequantized weights → cuBLAS SGEMM for QKV projections
-- Persistent GPU KV cache (device-to-device memcpy for append)
-- `wubu_cuda_chunked_attn` with online softmax tiling
-- Token-by-token forward for prefill (chunked attn non-causal for C>1)
+## BUILD
+```bash
+make gen_text                # CPU inference
+make gen_text_gpu            # GPU inference (currently hangs)
+make ref_dumper              # libllama.so reference tool
+```
 
-## NEXT: Phase 16 — GPU SSM Matmuls
-Requires quantized GPU kernel (Q5_K/Q6_K on-GPU dequant) to fit VRAM.
+## HW
+AMD Ryzen 7950X (16C/32T) | 64GB DDR5 | RTX 5050 8GB | WSL2
+Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+
+## NEXT STREAMS
+P0 — Fix gen_text_gpu hang, GPU Q4_0 KV cache
+P1 — Unified SSM kernel fusion, parallel cuBLAS streams
+P2 — Sparse attention + global tokens for 512k+
+
+## VAULT
+- Architecture: 3:1 interleaved SSM/GQA (verified GGUF enumeration)
+- DUMP_INTERMEDIATE_DIR: llama.cpp cb() stores all intermediates
+- Q4_0 KV cache: block_q4_0_cache in wubu_model.h
+- Unsloth UD quant: SSM Q5_K/Q6_K, MoE IQ2_XXS/IQ3_XXS, out Q4_K

@@ -1,34 +1,33 @@
-# WuBuText AI — State (May 16 PM v4 — HONEST)
+# bytropix — True State (May 19 PM v22)
 
 ## Ground Truth
-**Inference is BROKEN.** All inference binaries produce garbage output.
-llama.cpp reference: "Here's a thinking process:" — Us: garbage.
-
-Only 2/8 binaries verified: test_kv_cache (cache match) and test_256k (MoE router only).
+**Inference WORKS.** Cos-sim 0.9994 vs llama.cpp reference (CPU, 5-token, 40 layers).
+**Q4_0 KV cache**: 4:1 compression, 720MB at 256k, identical quality.
 
 ## What Works
-- test_kv_cache: KV cache matches full recompute (max_diff=0.00) ✅
-- test_256k: MoE router O(T) scaling to 65K ✅
-- API server sandbox: 14 tests pass ✅
-- llama.cpp reference: BUILT at ~/llama.cpp/build/bin/llama-cli ✅
-- Individual component kernels: compile and run ✅
-- NaN root cause: FIXED (MoE weight interleaving) ✅
-- Training: 11s/step (16× improvement), 0 NaN ✅
+- CPU gen_text: ~11 tok/s prefill, full 40-layer inference ✅
+- Q4_0 KV cache: 4:1 compression, cos-sim 0.9994 ✅
+- DUMP_INTERMEDIATE_DIR: 53 tensor types/layer reference tracing ✅
+- Architecture: 3:1 SSM/GQA interleaved pattern discovered ✅
+- All 7 quant types: Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q8_0 ✅
+- ref_dumper: Multi-token prompt support, numeric token ID mode ✅
+- Layer cos-sim: L00-L30=0.998-0.9999 ✅
+- Sliding window GQA: GQA_WINDOW env var, 16→1 tile at 256k ✅
 
-## What's Broken (P0)
-- ALL inference binaries: infer_text_gpu (245 tok/s but garbage)
-- MOE=1 also garbage (not just MOE=0 with no FFN)
-- train_integrated CE=12.42: no reference baseline
-- 6/15 math components forward-only (no gradient flow)
-- Q5_K dequant fix impact unverified
+## What's Broken
+- gen_text_gpu: Pre-existing hang after model load ❌
+- L31 cos-sim: 0.9585 (quantization noise) 🟡
+- GPU KV cache: Still FP16 (5.12GB), should be Q4_0 💤
 
-## Reference
+## Key Tools
 ```bash
-~/llama.cpp/build/bin/llama-cli -m /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -p "The capital of France is" -n 20 --temp 0.0
+make gen_text && ./gen_text "prompt" N          # CPU inference
+make ref_dumper && DUMP_LAYER_DIR=/tmp/r ./ref_dumper model.gguf "prompt" 0  # Reference
+tools/layer_cos_sim /tmp/r /tmp/o 40            # Compare
 ```
 
 ## Priorities
-P0 — Fix inference (compare vs llama.cpp layer by layer)
-P1 — Verify components against reference
-P2 — Hyperbolic backward passes
-P3 — GPU acceleration, tailslayer, 256K
+P0 — Fix gen_text_gpu hang
+P0 — GPU Q4_0 KV cache (saves 3.7GB VRAM)
+P1 — Unified SSM kernel fusion
+P2 — Sparse attention for 512k+

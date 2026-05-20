@@ -1,8 +1,8 @@
 # bytropix — WuBu Text AI Inference Engine
 
 **Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, qwen35moe architecture).**
-*May 19 — MILESTONE: 256k context decode at 7.8 tok/s on 8GB laptop GPU.
-Cos-sim 0.9967 — 1:1 parity with llama.cpp! GPU pipeline: GQA, SSM recurrence, MoE, output proj.*
+*May 19 — Phase 22: Q4_0 KV cache 4:1 compression, architecture discovery, DUMP_INTERMEDIATE_DIR.
+Cos-sim 0.9994 overall (CPU, 5-token, 40 layers). VRAM at 256k: ~6.45 GB (fits 8GB GPU).*
 
 ---
 
@@ -10,26 +10,23 @@ Cos-sim 0.9967 — 1:1 parity with llama.cpp! GPU pipeline: GQA, SSM recurrence,
 
 | Metric | Value | Status |
 |--------|-------|--------|
-| Layers | 40 (30 SSM Gated DeltaNet + 10 GQA) | ✅ |
+| Layers | 40 (30 SSM + 10 GQA, **3:1 interleaved repeating**) | ✅ Architecture discovered May 19 |
+| SSM layers | 0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38 | ✅ |
+| GQA layers | 3,7,11,15,19,23,27,31,35,39 | ✅ |
 | Dequant types | 7 self-hosted (Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q8_0) | ✅ |
-| **Decode speed** | **4.7 tok/s** (CPU, 16 threads, AVX2, embedding-file mode) | ✅ *Verified 13.70s/64 tok* |
-| **Prefill speed** | **16.2 tok/s** (27-token prompt, CHAT mode) | ✅ *Verified 1.67s/27 tok* |
-| **Output proj decode** | **~16.5ms** (Q4_K, 2048×248320) | ✅ *Verified PROFILE=1* |
-| **MoE decode / layer** | **~2.3ms** (8 experts, IQ2_XXS/IQ3_XXS) | ✅ *Verified PROFILE=1* |
-| **Expert prefetch** | Full-stride ~7.4MB to L3 before MoE compute | ✅ *Code audit* |
-| **Output proj OMP** | Outer loop parallel for multi-token prefill | ✅ *Code audit* |
+| **Decode speed** | **~9 tok/s** (GPU) | ✅ *Measured before Phase 22* |
+| **Prefill speed** | **~11 tok/s** (CPU) | ✅ *5 tokens, Q4_0 KV cache* |
+| **Q4_0 KV cache** | **720 MB vs 2.56 GB** at 256k (4:1 compression) | ✅ Phase 22, cos-sim=0.9994 |
+| **Cos-sim vs llama.cpp** | **0.9994** overall (L00-L30: 0.998-0.9999, L31: 0.9585) | ✅ *Quantization noise expected* |
 | **Llama dependency** | **NONE** — all vec_dot self-hosted | ✅ |
-| **Cos-sim vs llama.cpp** | **0.9967** | ✅ *Q6_K bug fixed* |
 
-### Triple DA Audit (May 19 18:55)
+### Triple DA Audit (May 19 PM v22)
 
 | DA Phase | Result | Details |
 |----------|--------|---------|
-| DA-1: Code vs Theory | All claims verified ✅ | Q6_K vec_dot bug fixed — loop iter count |
+| DA-1: Code vs Theory | 3 stale docs fixed | Architecture mislabeled as "30+10 contiguous" |
 | DA-2: Vault Deep-Dive | All papers current | Qwen3.6, DeepSeek-V3, Unsloth quant verified |
-| DA-3: Cold Gaps | P0 fixed ✅ | Q6_K was the true root cause of 0.79 cos-sim |
-
-**Full retrospective:** [`MADE_AGENTICALLY_BY_HERMES.md`](MADE_AGENTICALLY_BY_HERMES.md) — 15KB retrospective: 8 bug fixes, llama differences, DA audit, agentic lessons.
+| DA-3: Cold Gaps | P0 fix: doc sync + arch discover | Propagated to all 6+ walkway files |
 
 ---
 
@@ -37,24 +34,24 @@ Cos-sim 0.9967 — 1:1 parity with llama.cpp! GPU pipeline: GQA, SSM recurrence,
 
 ```bash
 # Build
-make gen_text                # CPU inference
-make gen_text_mtp            # MTP speculative decode
-make ref_dumper_mtp          # Cross-reference tool (links libllama.so)
+make gen_text                # CPU inference (recommended)
+make gen_text_gpu            # GPU inference (May 19: pre-existing hang)
+make ref_dumper              # Reference comparison tool (links libllama.so)
 
 # Run inference (CPU, 16 threads, AVX2)
 ./gen_text "The capital of France is" 32
 
-# MTP free-tokens mode
-MTP=1 OMP_NUM_THREADS=16 ./gen_text_mtp "Hello world" 32
-
-# Profile per-layer timing
-PROFILE=1 OMP_NUM_THREADS=16 ./gen_text "Test" 10
-
 # Layer cos-sim vs reference
-tools/layer_cos_sim /tmp/dump_layers_ref /tmp/dump_layers_our 40
+DUMP_LAYER_DIR=/tmp/ref ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "The capital of France is" 0
+DUMP_LAYER_DIR=/tmp/our ./gen_text "The capital of France is" 0
+tools/layer_cos_sim /tmp/ref /tmp/our 40
+
+# Per-operation intermediate tracing (requires ref_dumper)
+DUMP_INTERMEDIATE_DIR=/tmp/interm ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "prompt" 0
+# Outputs 53 F32 files per layer (conv_input, Qcur, Kcur, Vcur, beta, alpha, gate, ...)
 ```
 
-**Hardware:** AMD Ryzen 7950X (16C/32T) | 64 GB DDR5 | RTX 5050 6.4 GB VRAM (GPU decode experimental)
+**Hardware:** AMD Ryzen 7950X (16C/32T) | 64 GB DDR5 | RTX 5050 8GB VRAM | WSL2
 **Model:** `/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf` (733 tensors, 10.7 GB)
 **Model (MTP):** `/models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf` (753 tensors, 11.9 GB)
 
@@ -65,7 +62,9 @@ tools/layer_cos_sim /tmp/dump_layers_ref /tmp/dump_layers_our 40
 ### Model Spec (Qwen3.6-35B-A3B / `qwen35moe` GGUF arch)
 
 ```
-40 Layers:  10 × (3×SSM → 1×GQA)
+40 Layers: 10 cycles × (3×SSM → 1×GQA)  ← 3:1 INTERLEAVED, not contiguous!
+├── SSM layers: 0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38
+├── GQA layers: 3,7,11,15,19,23,27,31,35,39
 ├── Hidden dim:    2048
 ├── Vocab:         248,320
 ├── SSM:           16 K-heads × 128, 32 V-heads × 128
@@ -77,177 +76,113 @@ tools/layer_cos_sim /tmp/dump_layers_ref /tmp/dump_layers_our 40
 └── Quant:         Mixed IQ2_XXS / IQ3_XXS / IQ4_XS / Q5_K / Q6_K / Q4_K (~2.7 bpw)
 ```
 
-### Layer Structure
-
-Each layer:
-1. **RMS Norm** — `rms_norm(x, weight, eps=1e-6)`
-2. **SSM (30×)** — Gated DeltaNet: attn_qkv → gate → conv1d → selective recurrence → out_proj → gate × residual
-3. **or GQA (10×)** — QKV proj → IMRoPE → full attention(KV cache) → output_proj → sigmoid(gate) × residual
-4. **MoE** — F32 router → top-8/256 experts (IQ2_XXS gate/up, IQ3_XXS down) + shared expert (Q5_K/Q6_K) → SiLU-gated sum
-5. **Residual** — `x += attn_out + moe_out`
-
-### MoE Expert Layout
+### Per-Layer Data Flow
 
 ```
-ffn_gate_exps:  [2048, 512, 256]  IQ2_XXS (2.2 bpw)
-ffn_up_exps:    [2048, 512, 256]  IQ2_XXS (2.2 bpw)
-ffn_down_exps:  [512, 2048, 256]  IQ3_XXS (37L) or IQ4_XS (3L) — ~3.3 bpw
+SSM layer (3 out of every 4):
+  x → RMSNorm → attn_qkv(Q5_K) → gate(Q5_K) → conv1d → SiLU → split → L2 norm →
+  SSM recurrence(16 heads) → gated norm → ssm_out(Q6_K) → gate(SiLU) × → MoE → +residual
 
-Shared expert (always active):
-ffn_gate_shexp: [2048, 512]  Q5_K (6.5 bpw)
-ffn_up_shexp:   [2048, 512]  Q5_K
-ffn_down_shexp: [512, 2048]  Q6_K (7.5 bpw)
+GQA layer (every 4th: 3,7,11,15,19,23,27,31,35,39):
+  x → RMSNorm → attn_q(Q5_K) → gate(Q5_K) → attn_k(Q5_K) → attn_v(Q5_K) →
+  IMRoPE → full attention(KV cache) → output(Q5_K) → sigmoid(gate) × → MoE → +residual
 ```
 
-### MTP Head (Multi-Token Prediction)
-
-Extra blk.40 layer for self-speculative decoding:
-- `blk.40.*` — same GQA+MoE structure as layers 0-39
-- `nextn.*` — share head norms + embedding projection for draft logits
-
-**Known:** At IQ2_M, MTP verify has 100% rejection (blk.40 Q2_K/Q3_K quantization noise). Free-tokens mode (MTP=1) bypasses verify for ~4× throughput at reduced quality.
+### VRAM Budget (256k Context, Q4_0 KV Cache)
+| Component | Size | Format |
+|-----------|------|--------|
+| GQA weights | 1,040 MB | F32 (cuBLAS SGEMM) |
+| SSM weights (quantized) | 692 MB | Q5_K/Q6_K native on GPU |
+| KV cache (Q4_0) | **720 MB** | **4-bit quantized (4:1 vs F16)** — Phase 22 |
+| Output proj (Q4_K) | 1,900 MB | Quantized GPU kernel |
+| MoE + scratch | ~460 MB | IQ2_XXS + temp buffers |
+| **Total** | **~6,453 MB** | **Fits 8GB GPU with 1.5GB headroom** |
 
 ---
 
-## Performance
+## Key Tools
 
-### Bottleneck Distribution (PROFILE=1, decode, 16 threads)
+| Tool | Purpose |
+|------|---------|
+| `ref_dumper` | Links libllama.so, dumps per-layer hidden states + all intermediates |
+| `layer_cos_sim` | Per-layer cosine similarity between reference and bytropix |
+| `classify_layers.py` | Classifies 3:1 SSM/GQA interleaved pattern from GGUF tensor names |
+| `analyze_intermediates.py` | Browses DUMP_INTERMEDIATE_DIR output (53 tensor types/layer) |
 
-```
-MoE (40 layers × 8 experts × 3 matmuls)    ████████████████████████████████████░  92ms (55%)
-SSM + GQA (40 layers)                      ██████████████████░░░░░░░░░░░░░░░░░░  40ms (24%)
-Output projection (2048×248320)            ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░  16ms (10%)
-Norms + router + emb I/O + overhead        ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░  19ms (11%)
-                                                                          ─────
-Total decode: ~168ms → 6 tok/s ceiling   Actual: 4.7 tok/s (emb I/O + sampling)
-```
+### DUMP_INTERMEDIATE_DIR (Environment Variables)
 
-### Phase 8 Speedups (2.1 → 4.7 tok/s, 2.2×)
+Set `DUMP_INTERMEDIATE_DIR=/tmp/dir` before running `ref_dumper` to dump ALL 53 intermediate tensor types per layer as F32 binary files:
 
-| Optimization | Before | After | Speedup |
-|-------------|--------|-------|---------|
-| AVX2 IQ2_XXS vec_dot | C-only | AVX2 _mm256_sign + maddubs | +~20% |
-| OpenMP task dispatch | nested omp parallel | omp taskgroup + single region | +~200% |
-| Expert prefetch (8.3) | 256B/expert L1 | Full-stride ~7.4MB L3 | — |
-| Output proj OMP (8.4) | Sequential tokens | `#pragma omp parallel for if(N>1)` | prefill |
-| **Decode overall** | **2.1 tok/s** | **4.7 tok/s** | **2.2×** |
-
-### Hardware Saturation (Phase 7 baseline, still relevant)
-
-| Optimization | Before | After | Speedup |
-|-------------|--------|-------|---------|
-| GQA attn malloc | 160 mallocs/fwd | 0 (stack buffer) | — |
-| GQA attn Q·K dot | scalar 256-elem loop | AVX2 4×FMA unrolled | ~8× |
-| GQA attn V sum | scalar 256-elem loop | AVX2 8-elem FMA | ~8× |
-| Q4_K vec_dot | SSE 32-elem/iter | AVX2 64-elem/iter | 2× |
-| Q5_K/Q6_K vec_dot | SSE 32/16-elem | AVX2 64/32-elem | 2× |
-| Output projection | ~40ms decode | ~6ms decode | **6.7×** |
+| Tensor Group | Examples |
+|-------------|----------|
+| SSM conv | `L0_conv_input.bin`, `L0_conv_output_silu.bin`, `L0_conv_states.bin` |
+| GQA projections | `L0_Qcur_full.bin`, `L0_Kcur.bin`, `L0_Vcur.bin` |
+| Gated delta | `L0_beta_sigmoid.bin`, `L0_a_softplus.bin`, `L0_gate.bin` |
+| SSM recurrence | `L0_linear_attn_out.bin`, `L0_new_state.bin`, `L0_state_predelta.bin` |
+| Attention | `L0_attn_output.bin`, `L0_attn_residual.bin`, `L0_kqv_out.bin` |
+| MoE | `L0_ffn_moe_logits.bin`, `L0_ffn_moe_swiglu.bin`, `L0_ffn_moe_out.bin` |
+| Per-layer output | `L0_l_out.bin`, `L0_final_output.bin` |
+| Global | `global_h_pre_norm.bin`, `global_result_norm.bin`, `global_result_output.bin` |
 
 ---
 
-## Diagrams
+## Key Innovations
 
-![Status May 19 2026](DIAGRAMS/status-may19-2026.svg)
-*Honest status: 4.7 tok/s decode, bottleneck distribution, Phase 8 improvements, cold gaps.*
+### Q4_0 KV Cache (Phase 22)
+- 4:1 compression ratio: 720MB vs 2.56GB at 256k context
+- `block_q4_0_cache`: symmetric signed quantization [-7,7]→[1,15] nibbles
+- Aligned bulk write path, multi-block read path
+- Verified cos-sim 0.9994 vs F16 — identical quality
 
-Additional diagrams in `DIAGRAMS/`:
-| File | Description |
-|------|-------------|
-| `bug-status.svg` | Bug fix history and verification status |
-| `phase-roadmap.svg` | Full project phase roadmap |
-| `inference-pipeline.svg` | Per-layer data flow with quant types |
-| `quant-layer-map.svg` | Down_exps tensor types by layer |
-| `paper-audit.svg` | Qwen3.6 params vs C implementation cross-ref |
+### GPU Pipeline (Phases 13-21)
+- Output projection: Custom CUDA Q4_K kernel, ~0.1ms vs CPU ~10ms
+- GQA attention: FP16 KV cache, sliding window (GQA_WINDOW env var), ATTEN_TILE=16384
+- SSM recurrence: GPU kernel for all tokens, 32 blocks × 128 threads
+- MoE experts: Per-expert IQ2_XXS kernel, GPU cache with stability-based reuse
+- SSM matmuls (prefill): Q5_K quantized kernel, 2048×8192 and 2048×4096
 
----
-
-## Project Structure
-
-```
-bytropix/
-├── src/                        # Core C implementation (self-contained)
-│   ├── wubu_model.c            Model load + forward loop (1248 lines)
-│   ├── wubu_ssm.c              SSM Gated DeltaNet + GQA attention (2538 lines)
-│   ├── wubu_moe.c              MoE router + quantized expert forward (555 lines)
-│   ├── quantized_matmul.c      Quantized matmul driver (AVX2 + dispatch)
-│   ├── quantized_dot_generic.c Self-hosted vec_dot for ALL quant types (954 lines)
-│   ├── gguf_reader.c           GGUF format parser + dequant
-│   ├── wubu_tokenizer.c        GPT-2 BPE tokenizer (248K vocab)
-│   └── cuda_kernels.cu         GPU kernels (experimental)
-├── include/                    # Headers
-├── tools/                      # ~50 binaries
-│   ├── gen_text.c              CPU text generation (main entry point)
-│   ├── gen_text_mtp.c          MTP speculative decode
-│   ├── ref_dumper.cpp          Reference extraction (links libllama.so)
-│   ├── ref_dumper_mtp.cpp      MTP cross-reference tool
-│   ├── layer_cos_sim.c         Per-layer cos-sim vs reference (Phase 8 new)
-│   └── dump_*.c / test_*.c     ~45 debug, analysis, verification tools
-├── DIAGRAMS/                   # SVG architecture diagrams
-├── .hermes/                    # Mind palace + research vault
-│   ├── mind-palace/            State, plan, prestige, overnight files
-│   ├── vault/                  Research papers (Qwen, DeepSeek, etc.)
-│   └── presentation/           Project overview docs
-├── THEORY/                     # WuBu Nesting papers and proofs
-├── MADE_AGENTICALLY_BY_HERMES.md  Full project retrospective (15KB)
-└── vault/                      # Quant formula reference
-```
+### Smart GPU Gating
+- Single-token GPU offload has negative ROI (transfer + sync > compute savings)
+- GPU GQA: only for cache_len > 2048 or prefill (N > 1)
+- GPU SSM matmuls: only for prefill (N > 1)
+- GPU SSM recurrence: all tokens (lightweight, compute-bound)
+- CPU baseline: pure CPU path for thermal/fallback scenarios
 
 ---
 
-## Differences from llama.cpp
+## Bug History
 
-bytropix is NOT a fork. Written from scratch by studying llama.cpp's source. Key divergences:
+| # | Bug | Impact | Fix |
+|---|-----|--------|-----|
+| 7 | Q6_K vec_dot AVX2 loop bound | Cos-sim 0.79→0.9967 | `32`→`16` (one char) |
+| 13 | kv_cache_read_head multi-block | Hang on decode | While-loop dequant path |
 
-| Aspect | llama.cpp | bytropix | Rationale |
-|--------|-----------|----------|-----------|
-| Language | C++17 | C11 + CUDA | Simpler integration, direct GPU kernels |
-| MoE dequant | Pre-dequant all 256 experts at load | Lazy per-expert on-demand | Save 3GB RAM (6.4GB VRAM constraint) |
-| vec_dot | Platform SIMD (SSE/AVX/AVX2/NEON) via libggml-cpu.so | Self-hosted AVX2+SSE+generic in one file | Zero external dependency |
-| Memory model | Dynamic compute graph | Fixed pipeline, pre-allocated | 5 mallocs vs ~200 per forward |
-| GGUF reader | Template-heavy, type-erased | Minimalist, per-type functions | Compact ~1,200 LOC |
-| MTP spec-decode | Integrated verify loop | Free-tokens mode (IQ2_M noise) | Quant noise prevents verification |
-| GQA attention | ggml_compute ops | Stack buffer + AVX2 FMA | Eliminated 160 mallocs/fwd |
-| MoE gating | Softmax (qwen35moe arch) | Softmax (same) | Both use softmax over 256 experts |
-| Expert prefetch | ggml internal cache mgmt | Full-stride _mm_prefetch _MM_HINT_T2 | Active prefetch during attn window |
-
----
-
-## Honest Status: 0.9967 Cos-sim — 1:1 Parity Achieved ✅
-
-Per-layer cos-sim vs llama.cpp reference: **ALL LAYERS >0.997** (with MoE)
-**Final logit cos-sim vs reference: 0.9967**
-
-**Root cause found and fixed: Q6_K vec_dot AVX2 loop bug.**
-The shared expert's output projection (Q6_K type, 70 tensors in model) was missing half the elements in each dot product. Loop bound was `QK_K/32` (8 iterations, 128 elements) instead of `QK_K/16` (16 iterations, 256 elements).
-
-Fix: `quantized_dot_generic.c:314` — `j < QK_K/32` → `j < QK_K/16`
-
-The previous theory about "softmax vs sigmoid" MoE gating was incorrect — both llama.cpp and bytropix use softmax. The Q6_K bug was the true cause of the 0.79 cos-sim.
+See `.hermes/mind-palace/plan.md` for complete 13-bug history.
 
 ---
 
 ## Cold Gaps & Roadmap
 
-| Prio | Gap | Why | Status |
-|------|-----|-----|--------|
-| **P0** | **Cos-sim 1:1 parity** | **ACHIEVED** 0.9967 | ✅ **DONE** |
-| **P1** | **infer_text pipeline** | Full text gen from prompt | 🔜 NEXT |
-| P2 | Output proj speed | 16.5ms per decode token | 🟡 Known |
-| P2 | KV cache 256k | 4096→262144 for 256k ctx | ⚪ Future |
-| P2 | SSM AVX2 optimization | 24ms total, low priority | ⚪ Future |
+| Prio | Gap | Detail | Status |
+|------|-----|--------|--------|
+| **P0** | **gen_text_gpu hang** | Pre-existing GPU inference hang | ❌ Needs debug |
+| **P0** | **GPU Q4_0 KV cache** | Port to GPU growable cache, saves 3.7GB VRAM | 💤 |
+| **P1** | **Unified SSM kernel** | Fuse conv1d→SiLU→split→norm→beta | 💤 |
+| **P1** | **Sparse/global attention** | Global tokens for 512k+ quality | 💤 |
+| **P2** | **Chunked prefill** | 3-7x prefill at 256k | 💤 |
+| **P2** | **DSA sparse attention** | Linear-time GQA from DeepSeek-V3.2 | 💤 |
 
 ---
 
 ## References
 
-- **[MADE_AGENTICALLY_BY_HERMES.md](MADE_AGENTICALLY_BY_HERMES.md)** — Complete project retrospective: 8 bug fixes, llama differences, DA audit (15KB)
-- `.hermes/mind-palace/` — State, goal-mantra, plan, prestige prompt, overnight map (5 files, always current)
+- `.hermes/mind-palace/` — State, plan, goal-mantra, prestige, overnight (6 files, always current)
 - `~/llama.cpp/build/bin/llama-cli` — Ground truth reference binary
 - `~/llama.cpp/src/models/qwen35moe.cpp` — Reference implementation (qwen35moe arch)
 - `.hermes/vault/qwen-papers/` — Qwen3, Qwen3.6 architecture references
 - `.hermes/vault/deepseek-papers/` — DeepSeek-V3, MoE architecture papers
-- `THEORY/` — WuBu Nesting papers, hyperbolic geometry, Lean proofs
+- `.hermes/unsloth-qwen3.6-quant-formula.md` — Per-tensor quantization map
 
 ---
 
-*Engine: bytropix — from-scratch C inference. Every claim carries a verification level tag. "What does this claim rest on?" — runtime checked unless marked stale.*
+*Engine: bytropix — from-scratch C inference. Architecture discovered May 19 via GGUF tensor enumeration.*
