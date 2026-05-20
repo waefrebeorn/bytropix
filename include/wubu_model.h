@@ -350,6 +350,19 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
 // gpu_ctx is model->gpu_ctx (void*), ssm is layer->ssm to fill.
 void wubu_gpu_set_ssm_hybrid(void *gpu_ctx, int layer_idx, ssm_layer_weights *ssm);
 
+// Sync CPU SSM state + conv state to GPU before forward_full decode.
+// Call after hybrid prefill path updates CPU state, so subsequent
+// forward_full decode uses the correct accumulated state.
+void wubu_gpu_sync_ssm_state_to_gpu(void *gpu_ctx, int layer_idx,
+                                     const float *cpu_ssm_state,
+                                     const float *cpu_conv_state);
+
+// Sync GPU SSM state + conv state back to CPU after forward_full decode.
+// Ensures CPU state tracks GPU state for next hybrid prefill.
+void wubu_gpu_sync_ssm_state_to_cpu(void *gpu_ctx, int layer_idx,
+                                     float *cpu_ssm_state,
+                                     float *cpu_conv_state);
+
 // Run MoE experts via GPU kernel, replacing CPU quantized matmul loop.
 // Shared expert and router remain on CPU.
 // Called per-token from wubu_moe_forward's expert loop.

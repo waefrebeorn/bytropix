@@ -1234,6 +1234,46 @@ void wubu_gpu_set_ssm_hybrid(void *gpu_ctx_ptr, int layer_idx, ssm_layer_weights
 }
 
 // ================================================================
+// Sync CPU SSM state + conv state to GPU (after hybrid prefill)
+// ================================================================
+extern "C"
+void wubu_gpu_sync_ssm_state_to_gpu(void *gpu_ctx_ptr, int layer_idx,
+                                     const float *cpu_ssm_state,
+                                     const float *cpu_conv_state) {
+    gpu_ctx_t *gpu = (gpu_ctx_t *)gpu_ctx_ptr;
+    if (!gpu || !gpu->initialized) return;
+    cudaStream_t st = gpu->stream;
+    // Copy ssm_state: [V_HEADS, D_STATE, D_STATE] floats
+    cudaMemcpyAsync(gpu->d_ssm_state[layer_idx], cpu_ssm_state,
+        (size_t)SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float),
+        cudaMemcpyHostToDevice, st);
+    // Copy conv_state: [CONV_KERNEL-1, CONV_DIM] floats
+    cudaMemcpyAsync(gpu->d_conv_state[layer_idx], cpu_conv_state,
+        (size_t)(CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
+        cudaMemcpyHostToDevice, st);
+    cudaStreamSynchronize(st);
+}
+
+// ================================================================
+// Sync GPU SSM state + conv state back to CPU (after forward_full decode)
+// ================================================================
+extern "C"
+void wubu_gpu_sync_ssm_state_to_cpu(void *gpu_ctx_ptr, int layer_idx,
+                                     float *cpu_ssm_state,
+                                     float *cpu_conv_state) {
+    gpu_ctx_t *gpu = (gpu_ctx_t *)gpu_ctx_ptr;
+    if (!gpu || !gpu->initialized) return;
+    cudaStream_t st = gpu->stream;
+    cudaMemcpyAsync(cpu_ssm_state, gpu->d_ssm_state[layer_idx],
+        (size_t)SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float),
+        cudaMemcpyDeviceToHost, st);
+    cudaMemcpyAsync(cpu_conv_state, gpu->d_conv_state[layer_idx],
+        (size_t)(CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
+        cudaMemcpyDeviceToHost, st);
+    cudaStreamSynchronize(st);
+}
+
+// ================================================================
 // Free GPU resources
 // ================================================================
 extern "C"

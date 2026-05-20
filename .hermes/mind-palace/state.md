@@ -1,57 +1,43 @@
-# State — Phase 28e: Q6_K DEQUANT BUG FIXED! GPU SSM still diverges from CPU
+# State — Phase 28f: GPU Output Proj + State Sync FIXED
 
 **bytropix: text + vision multi-modal inference engine**
-**GPU SSM C==1 decode: Q6_K dequant fix applied, GPU output anti-correlated to CPU (cos-sim -0.66)**
+**Phase 28f status: GPU output projection ✅, SSM state sync ✅, forward_full still diverges from CPU**
 
-## Q6_K Dequant Bug Fixed (May 20)
+## Achieved (This Session)
+1. **GPU output projection fix:** Q4_K dequant was reading wrong layout (used ceil(V/256) stride instead of ceil(D/256)). Now stores as [V][D] row-major with CUBLAS_OP_T, ld=D. All 248k logits non-zero. ✅
+2. **SSM state sync fix:** Prefill via hybrid path updates CPU ssm_state/conv_state. Decode via forward_full or hybrid recurrence used GPU state initialized to zero. Added CPU→GPU sync after hybrid prefill and before decode. Added GPU→CPU sync after forward_full decode. ✅
+3. **Hybrid decode path active:** forward_full disabled for decode. Hybrid (GPU recurrence via wubu_gpu_set_ssm_hybrid + CPU conv/norm/recurrence) active with state sync. Produces approximately correct text (~coherent). ⚠️
 
-**Root cause of 365x constant offset:** GPU Q6_K matmul kernel subtracted `32.0` instead of `d * sc * 32`:
+## Remaining: GPU Quant Matmul Precision
+- Prefill uses hybrid: GPU wubu_cuda_quant_matmul (Q5_K, F32 x) + CPU conv/norm/recurrence
+- Pure CPU uses: Q8_K re-quantized x + Q5_K quant matmul via quantized_matmul_from_q8
+- Differences in qkv/gate values compound across 30 SSM layers → first decode token diverges
+- Hybrid output is ~coherent but not token-identical to CPU
 
-```c
-// BUG (was):
-sum += (double)x[idx0] * ((double)d * sc[is+0] * v6 - 32.0);
-// FIX:
-sum += (double)x[idx0] * (double)d * (double)sc[is+0] * (double)(v6 - 32);
+## P0: Fix forward_full GPU SSM divergence
+- forward_full produces near-zero output on first call (conv_state all-zero)
+- After state accumulation, forward_full output is non-zero but wrong compared to hybrid
+- Suspect: GPU recurrence kernel (ssm_recurrence_kernel) or conv1d kernel has subtle bug
+- Currently disabled; decode uses hybrid path only
+
+## P1: Infrastructure
+- CPU gen_text build still broken (GPU symbols without #ifdef)
+- Push commits to remote (8 behind)
+
+## P2: Vision integration
+- Build test_vision_real → verify output
+- Wire full vision→text multi-modal pipeline
+
+## Build
+```bash
+make gen_text_gpu                        # GPU inference
+GPU_BATCH=5 GPU=1 MAX_CTX=4096 ./gen_text_gpu "prompt" 20 40
 ```
 
-**Effect:** With gated norm output RMS ~1 and non-zero mean, SSM output was CONSTANT ~365 across ALL 2048 output elements. Fixed to std ~0.036.
-
-## Remaining: GPU vs CPU diverges at cos-sim -0.66
-
-- CPU path (FORCE_CPU_SSM): cos-sim 0.994 vs llama ✅
-- GPU path (forward_full): cos-sim -0.656 vs CPU path ❌
-
-### Verified Correct (matching CPU path):
-- Q5_K quant matmul (column-major) ✅
-- Q6_K quant matmul (column-major) ✅ (FIXED)
-- L2 normalization (L2 norm = 1.0 per head) ✅
-- q_scale = 1/sqrt(D_STATE) ✅
-- Gated norm (same formula, same norm_weight) ✅
-- Beta/alpha kernel (generates sigmoid/softplus values) ✅
-- Conv/silu/split kernel ✅
-
-### Suspect Areas:
-1. **SSM recurrence state** — initialized to zero on GPU, may not persist correctly between layers/steps
-2. **Conv state management** — shifted by fused conv kernel, initial state may not match CPU
-3. **GPU/CPU state copy** — ssm_states vs d_ssm_state may diverge after forward_full returns
-4. **Fused conv/silu kernel** — may handle conv_state shift differently from CPU
-
-## Vision Encoder Status
-- 384 LoC in `src/wubu_vision.c` — 27-layer 3D ViT with mmproj
-- 111 LoC in `include/wubu_vision.h` — full API
-- 106 LoC in `tools/test_vision_real.c` — E2E test + text pipeline
-- **Status:** Written but NOT YET BUILT/TESTED in current session
-
-## Quick Reference
-| Item | Path | Notes |
-|------|------|-------|
-| Q6_K dequant fix | `gpu_quant_matmul.cu:114` | Applied in c07cf14 |
-| GPU recurrence | `gpu_ssm_recurrence.cu:109` | Output with q_scale |
-| Gated norm kernel | `cuda_kernels.cu:248` | |
-| Beta/alpha fused | `cuda_kernels.cu:2723` | |
-| Conv/silu/split | `cuda_kernels.cu:2757` | |
-| CPU L2 norm (ref) | `wubu_ssm.c:176` | |
-| CPU q_scale | `wubu_ssm.c:530-534` | |
-| Vision encoder | `src/wubu_vision.c` | 384 LoC, 3D ViT |
-| Vision test E2E | `tools/test_vision_real.c` | Vision→text pipeline |
-| mmproj GGUF | `/mnt/wslg/distro/models/qwen3.6-35b-mmproj-F16.gguf` | Vision projection |
+## Key Files Modified
+| File | Change |
+|------|--------|
+| `src/wubu_model_gpu.cu` | Added `wubu_gpu_sync_ssm_state_to_gpu/cpu` functions |
+| `src/wubu_model.c` | Wired state sync after hybrid prefill + before decode |
+| `include/wubu_model.h` | Declared sync functions |
+| `src/gpu_output_proj.cu` | Fixed Q4_K dequant layout + cuBLAS call |

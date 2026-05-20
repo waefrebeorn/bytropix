@@ -534,16 +534,24 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                     free(gpu_qkv);
                     free(gpu_z);
                 }
-            } else if (model->gpu_ctx) {
-                // N==1 decode path: GPU SSM forward
-                if (!wubu_model_gpu_ssm_forward_full(model, l, normed, N, attn_out)) {
-                    // Fallback to hybrid: GPU recurrence only, CPU matmuls
-                    wubu_gpu_set_ssm_hybrid(model->gpu_ctx, l, &layer->ssm);
-                    wubu_ssm_forward(normed, B, T, &layer->ssm,
-                        ssm_state, conv_state, attn_out, NULL, NULL);
-                    layer->ssm.gpu_ssm_state = NULL;
-                    layer->ssm.gpu_stream    = NULL;
+                // Sync CPU→GPU state after hybrid prefill, so forward_full
+                // decode uses correct accumulated state for subsequent tokens
+                if (gpu_ok) {
+                    // forward_full succeeded — GPU state already correct, no sync needed
+                } else {
+                    wubu_gpu_sync_ssm_state_to_gpu(model->gpu_ctx, l,
+                        ssm_state, conv_state);
                 }
+            } else if (model->gpu_ctx) {
+                // N==1 decode path: use HYBRID ONLY (GPU quant matmuls + CPU SSM)
+                // Sync CPU state to GPU for hybrid recurrence
+                wubu_gpu_sync_ssm_state_to_gpu(model->gpu_ctx, l,
+                    ssm_state, conv_state);
+                wubu_gpu_set_ssm_hybrid(model->gpu_ctx, l, &layer->ssm);
+                wubu_ssm_forward(normed, B, T, &layer->ssm,
+                    ssm_state, conv_state, attn_out, NULL, NULL);
+                layer->ssm.gpu_ssm_state = NULL;
+                layer->ssm.gpu_stream    = NULL;
             } else
 #endif
             {

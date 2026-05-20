@@ -257,20 +257,20 @@ bool gpu_output_init(const uint8_t *weight_q, int D, int V, int weight_type) {
     if (!g_quantized_mode) {
         // F32 mode: dequant Q4_K → F32 on CPU, upload to GPU
         const int QK_K = 256;
-        int64_t n_blocks = (int64_t)D * V / QK_K;
+        // Q4_K weight stored in GGUF blob as [V][ceil(D/256)*144 bytes]
+        // Dequant to [V][D] row-major, then cuBLAS treats as column-major [D][V] with ld=D
+        float *weight_f32 = (float*)malloc((size_t)V * D * sizeof(float));
+        if (!weight_f32) { fprintf(stderr, "Failed to allocate F32 weight (%zu bytes)\\n", (size_t)V * D * 4); return false; }
         
-        float *weight_f32 = (float*)malloc((size_t)D * V * sizeof(float));
-        if (!weight_f32) { fprintf(stderr, "Failed to allocate F32 weight (%zu bytes)\n", (size_t)D * V * 4); return false; }
-        
-        int blocks_per_row = (V + QK_K - 1) / QK_K;
-        for (int i = 0; i < D; i++) {
-            const uint8_t *row_start = weight_q + i * blocks_per_row * Q4K_BLOCK_SIZE;
+        int blocks_per_row = (D + QK_K - 1) / QK_K;  // = ceil(2048/256) = 8
+        for (int v = 0; v < V; v++) {
+            const uint8_t *vocab_start = weight_q + v * blocks_per_row * Q4K_BLOCK_SIZE;
             for (int b = 0; b < blocks_per_row; b++) {
-                const uint8_t *block = row_start + b * Q4K_BLOCK_SIZE;
+                const uint8_t *block = vocab_start + b * Q4K_BLOCK_SIZE;
                 float block_out[QK_K];
                 dequant_block_q4_K_f32(block, block_out);
-                int n_vals = (b == blocks_per_row - 1) ? (V - b * QK_K) : QK_K;
-                memcpy(weight_f32 + (size_t)i * V + b * QK_K, block_out, n_vals * sizeof(float));
+                int n_vals = (b == blocks_per_row - 1 && (D - b * QK_K) < QK_K) ? (D - b * QK_K) : QK_K;
+                memcpy(weight_f32 + (size_t)v * D + b * QK_K, block_out, n_vals * sizeof(float));
             }
         }
 
@@ -325,6 +325,8 @@ bool gpu_output_project_batch(const float *input, float *output, int T) {
         }
     } else {
         // F32 mode: batched cuBLAS SGEMM
+        // weight stored as [V][D] row-major = column-major [D][V] with ld=D
+        // y[V,T] = weight^T[V,D] * x[D,T]
         float alpha = 1.0f, beta = 0.0f;
         cublasStatus_t cs = cublasSgemm(g_cublas,
             CUBLAS_OP_T, CUBLAS_OP_N,
