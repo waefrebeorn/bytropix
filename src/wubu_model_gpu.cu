@@ -1198,6 +1198,61 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
                     cudaMemcpyDeviceToHost, st);
     cudaStreamSynchronize(st);
 
+    // DEBUG: dump intermediate stages for first few calls
+    {
+        static int call_cnt = 0;
+        if (call_cnt++ < 1) {
+            float *h = (float*)malloc((size_t)CONV_DIM * sizeof(float));
+            
+            // qkv output
+            cudaMemcpy(h, gpu->d_ssm_qkv_out, (size_t)C * CONV_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+            float mx=0; for(int i=0;i<CONV_DIM;i++){float f=fabsf(h[i]);if(f>mx)mx=f;}
+            printf("DBG qkv: max=%.6f [0..3]=%.6f %.6f %.6f %.6f\n", mx, h[0],h[1],h[2],h[3]);
+            
+            // z output
+            cudaMemcpy(h, gpu->d_ssm_z_out, (size_t)C * VALUE_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+            mx=0; for(int i=0;i<VALUE_DIM;i++){float f=fabsf(h[i]);if(f>mx)mx=f;}
+            printf("DBG z: max=%.6f [0..3]=%.6f %.6f %.6f %.6f\n", mx, h[0],h[1],h[2],h[3]);
+            
+            // beta/alpha: scratch[0..31]=beta_sig, scratch[32..63]=gate
+            cudaMemcpy(h, gpu->d_ssm_scratch, (size_t)2 * DT_RANK * sizeof(float), cudaMemcpyDeviceToHost);
+            printf("DBG beta_sig[0..4]: %.6f %.6f %.6f %.6f %.6f\n", h[0],h[1],h[2],h[3],h[4]);
+            printf("DBG gate[0..4]: %.6f %.6f %.6f %.6f %.6f\n", h[32],h[33],h[34],h[35],h[36]);
+            
+            // conv/silu/split outputs at scratch[64], scratch[64+2048], scratch[64+4096]
+            // d_q_conv at scratch[64..2111], d_k_conv at scratch[2112..4159], d_v_conv at scratch[4160..8255]
+            size_t kv_off = (size_t)(2 * C * DT_RANK);
+            cudaMemcpy(h, gpu->d_ssm_scratch + kv_off, (size_t)C * KEY_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+            mx=0; for(int i=0;i<KEY_DIM;i++){float f=fabsf(h[i]);if(f>mx)mx=f;}
+            printf("DBG q_conv: max=%.6f [0..3]=%.6f %.6f %.6f %.6f\n", mx, h[0],h[1],h[2],h[3]);
+            
+            // L2 normed Q at scratch[64+8192..10303]
+            size_t l2_off = kv_off + (size_t)(2 * C * KEY_DIM);
+            cudaMemcpy(h, gpu->d_ssm_scratch + l2_off, (size_t)C * KEY_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+            mx=0; for(int i=0;i<KEY_DIM;i++){float f=fabsf(h[i]);if(f>mx)mx=f;}
+            printf("DBG q_norm: max=%.6f [0..3]=%.6f %.6f %.6f %.6f\n", mx, h[0],h[1],h[2],h[3]);
+            
+            // delta_out at scratch[64+12288..16447]
+            size_t delta_off = l2_off + (size_t)(C * KEY_DIM);
+            cudaMemcpy(h, gpu->d_ssm_scratch + delta_off, (size_t)C * VALUE_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+            mx=0; for(int i=0;i<VALUE_DIM;i++){float f=fabsf(h[i]);if(f>mx)mx=f;}
+            printf("DBG delta_out: max=%.6f [0..3]=%.6f %.6f %.6f %.6f\n", mx, h[0],h[1],h[2],h[3]);
+            
+            // z_silu at scratch[64+16448..20543]
+            size_t zs_off = delta_off + (size_t)(C * VALUE_DIM);
+            cudaMemcpy(h, gpu->d_ssm_scratch + zs_off, (size_t)C * VALUE_DIM * sizeof(float), cudaMemcpyDeviceToHost);
+            mx=0; for(int i=0;i<VALUE_DIM;i++){float f=fabsf(h[i]);if(f>mx)mx=f;}
+            printf("DBG z_silu: max=%.6f [0..3]=%.6f %.6f %.6f %.6f\n", mx, h[0],h[1],h[2],h[3]);
+            
+            // Final output
+            cudaMemcpy(h, gpu->d_gout, (size_t)C * D_MODEL * sizeof(float), cudaMemcpyDeviceToHost);
+            mx=0; for(int i=0;i<D_MODEL;i++){float f=fabsf(h[i]);if(f>mx)mx=f;}
+            printf("DBG gout: max=%.6f [0..3]=%.6f %.6f %.6f %.6f\n", mx, h[0],h[1],h[2],h[3]);
+            
+            free(h);
+        }
+    }
+
     return 1;
 }
 extern "C"
