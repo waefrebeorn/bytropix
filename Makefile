@@ -180,6 +180,15 @@ test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
 
+# CPU-only gen_text (recompiles wubu_model without GPU_SUPPORT)
+gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
+gen_text_cpu: src/wubu_model_cpu.o $(CORE_OBJ) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS_FILTERED) -o $@ tools/gen_text.c src/wubu_model_cpu.o $(CORE_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
+	@echo "gen_text_cpu built (CPU-only, no GPU support)"
+
+src/wubu_model_cpu.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h include/wubu_moe.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -o $@ -c $<
+
 run_bos: tools/run_bos.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ tools/run_bos.c $(MODEL_OBJ) $(LDFLAGS)
 
