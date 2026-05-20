@@ -634,7 +634,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
             }
         }
     }
-    
+
     // Step 11: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
         proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, D_MODEL,

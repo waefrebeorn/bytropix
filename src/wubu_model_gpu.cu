@@ -1039,7 +1039,7 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
         int r2 = wubu_cuda_quant_matmul(d_x_t, gpu->d_attn_gate_q[layer_idx],
             gpu->ssm_gate_type[layer_idx], D_MODEL, VALUE_DIM, d_z_t, NULL, 0, st);
         if (!r1 || !r2) {
-            fprintf(stderr, "GPU SSM: quant_matmul failed (types %d, %d)\\n",
+            fprintf(stderr, "GPU SSM: quant_matmul failed (types %d, %d)\n",
                 gpu->ssm_qkv_type[layer_idx], gpu->ssm_gate_type[layer_idx]);
             return 0;
         }
@@ -1120,10 +1120,8 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
     d_k_norm = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
     wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, st);
     cudaStreamSynchronize(st);
-    cudaError_t cem3 = cudaGetLastError();
     wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, st);
     cudaStreamSynchronize(st);
-    cem3 = cudaGetLastError();
 
         // === Step 11: Recurrence — parallel scan for C>1, token-by-token for C==1 ===
         float *d_delta_out = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
@@ -1167,22 +1165,21 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
         cudaStreamSynchronize(st);
         cudaError_t cem5 = cudaGetLastError();
 
-        // === Step 12-13: z = SiLU(z_all) + Gated norm ===
-        float *d_z_silu = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
-        // Ensure we have enough scratch
-        if ((size_t)off * sizeof(float) > gpu->d_ssm_scratch_sz) {
-            fprintf(stderr, "GPU SSM: scratch overflow (need %zu bytes, have %zu)\n",
-                    (size_t)off * sizeof(float), gpu->d_ssm_scratch_sz);
-            return 0;
-        }
+    // === Step 12-13: z = SiLU(z_all) + Gated norm ===
+    float *d_z_silu = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
+    // Ensure we have enough scratch
+    if ((size_t)off * sizeof(float) > gpu->d_ssm_scratch_sz) {
+        fprintf(stderr, "GPU SSM: scratch overflow (need %zu bytes, have %zu)\\n",
+                (size_t)off * sizeof(float), gpu->d_ssm_scratch_sz);
+        return 0;
+    }
 
-        wubu_cuda_silu(C * vdim, gpu->d_ssm_z_out, d_z_silu, st);
-        cudaStreamSynchronize(st);
-        cudaError_t cem6 = cudaGetLastError();
-        wubu_cuda_gated_norm(1, C, SSM_V_HEADS, SSM_D_STATE,
-                             d_delta_out, gpu->d_ssm_norm[layer_idx], d_z_silu, st);
-        cudaStreamSynchronize(st);
-        cem6 = cudaGetLastError();
+    wubu_cuda_silu(C * vdim, gpu->d_ssm_z_out, d_z_silu, st);
+    cudaStreamSynchronize(st);
+
+    wubu_cuda_gated_norm(1, C, SSM_V_HEADS, SSM_D_STATE,
+                         d_delta_out, gpu->d_ssm_norm[layer_idx], d_z_silu, st);
+    cudaStreamSynchronize(st);
 
         // === Step 14: SSM output projection via quantized matmul (column-major Q6_K) ===
         // d_delta_out [C, vdim] @ ssm_out [vdim, D_MODEL] → gout [C, D_MODEL]

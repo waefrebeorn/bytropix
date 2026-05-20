@@ -35,7 +35,7 @@ static void top5(float *logits, int vs, wubu_tokenizer_t *tok, const char *label
 }
 
 int main() {
-    const char *path = "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
+    const char *path = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     
     // ---- Our engine ----
     printf("=== Our engine ===\n");

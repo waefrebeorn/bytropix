@@ -149,19 +149,30 @@ int main(int argc, char **argv) {
     if (use_gpu) {
         // GPU path: forward saves hidden states, GPU does output proj
         mdl.skip_output_proj = true;
+        mdl.enable_moe = true;
         wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
-        // logits now has n_prompt * D_MODEL floats (hidden states at vs stride)
-        // Pack them contiguously for batched SGEMM
         float *hidden_batch = (float *)malloc(n_prompt * D * sizeof(float));
         for (int i = 0; i < n_prompt; i++)
             memcpy(hidden_batch + i * D, logits + i * vs, D * sizeof(float));
-        // Batched GPU output projection
         if (n_prompt > 0)
             gpu_output_project_batch(hidden_batch, logits, n_prompt);
         free(hidden_batch);
     } else {
         mdl.skip_output_proj = false;
         wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+    }
+
+    // Dump logits if DUMP_LOGITS env var set
+    const char *dump_logits_path = getenv("DUMP_LOGITS");
+    if (dump_logits_path) {
+        FILE *df = fopen(dump_logits_path, "wb");
+        if (df) {
+            // Last token's logits
+            float *last_logits = logits + (n_prompt - 1) * vs;
+            fwrite(last_logits, sizeof(float), vs, df);
+            fclose(df);
+            fprintf(stderr, "Dumped logits to %s\n", dump_logits_path);
+        }
     }
 
     double t_prefill = clock_seconds() - t0;
