@@ -16,8 +16,11 @@ static __device__ __inline__ float fp16_to_fp32_dev(uint16_t v) {
     int sign = (v >> 15) & 1, exp = (v >> 10) & 0x1F, mant = v & 0x03FF;
     uint32_t f32;
     if (exp == 0) {
-        // F16 denormal: value = mant * 2^(-24). Flush to zero (rare in weights).
-        f32 = (sign << 31);
+        // F16 denormal: value = (-1)^sign * mant * 2^(-24).
+        // Match CPU f16_to_f32() — normalize as F32 denorm+1, then subtract 2^-14.
+        uint32_t norm = (sign << 31) | ((1 + 112) << 23) | (mant << 13);
+        float nv; __builtin_memcpy(&nv, &norm, 4);
+        return sign ? nv + 6.103515625e-5f : nv - 6.103515625e-5f;
     } else if (exp == 31) {
         f32 = (sign << 31) | (0xFF << 23) | (mant << 13);
     } else {
