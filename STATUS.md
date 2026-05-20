@@ -9,6 +9,7 @@
 - Fused SSM kernels (beta/alpha, conv/silu/split, L2 norm, recurrence, gated norm, ssm_out)
 - Vision encoder: 384 LoC 3D ViT port + mmproj projection + text model pipeline
 - F32 dequant waste removed (`#if 0`, saved ~2.2 GB VRAM)
+- **API server: `tools/api_server.c` — OpenAI-compatible HTTP API (sandbox verified)**
 
 ## Remaining Bugs
 - ❌ GPU SSM state divergence: cos-sim -0.66 vs CPU path (anti-correlated)
@@ -35,5 +36,5 @@
 ```bash
 make gen_text_gpu       # GPU inference (GPU=1 env var)
 make test_vision_real   # Vision encoder test
-make gen_text           # ❌ BROKEN — needs fix
+make api_server         # OpenAI-compatible API server
 ```

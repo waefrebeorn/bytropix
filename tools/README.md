@@ -28,6 +28,53 @@
 | `test_moe_*` | MoE router, expert weights, quantization |
 | `test_kv_cache` | KV cache match vs full recompute |
 | `compare_*` | Quant types vs F32 SGEMM (Q4_K, Q5_K, Q6_K, IQ2_XXS, etc.) |
+| `api_server` | `api_server.c` | OpenAI-compatible API server | `make api_server` |
+
+## API Server
+
+`api_server` wraps `infer_text_gpu` as an OpenAI-compatible HTTP API for educational and research purposes.
+
+```bash
+# Build
+make api_server
+
+# Run with sandbox mode (no GPU needed)
+./api_server --sandbox --port 8080
+
+# Test
+curl http://localhost:8080/health
+curl http://localhost:8080/v1/models
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":50}'
+
+# Production mode (with real inference binary)
+INFER_BIN=./infer_text_gpu MODEL_PATH=/path/to/model.gguf ./api_server --port 8080 --auth sk-your-key --tls cert.pem key.pem
+```
+
+### Security & Legal Notice
+
+This server is provided as **open-source educational scaffolding**. It is not a
+production-ready deployment — operators are responsible for:
+
+- **API key management** — use `--auth` or `API_AUTH_KEY` env var
+- **TLS encryption** — use `--tls cert.pem key.pem` for HTTPS
+- **Rate limiting** — built-in limiter (60 req/min per IP)
+- **Content filtering** — no built-in content moderation
+- **Regulatory compliance** — GDPR, CCPA, EU AI Act compliance is operator's responsibility
+
+THE AUTHORS ASSUME NO LIABILITY. This software is for educational and research
+use only. Do not expose to the internet without proper security measures.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| GET | `/v1/models` | List available models |
+| POST | `/v1/chat/completions` | OpenAI-compatible chat completions |
+| POST | `/v1/completions` | Text completions |
+
 
 ## Python Analysis (Phase 22)
 
