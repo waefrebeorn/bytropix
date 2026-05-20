@@ -6,7 +6,8 @@
 
 [![Phase: 22](https://img.shields.io/badge/Phase-22-blueviolet)](https://github.com/waefrebeorn/bytropix)
 [![Cos-sim: 0.9994](https://img.shields.io/badge/Cos--sim-0.9994-success)](https://github.com/waefrebeorn/bytropix)
-[![Decode: ~9 tok/s](https://img.shields.io/badge/Decode-~9%20tok%2Fs-informational)](https://github.com/waefrebeorn/bytropix)
+[![Gen: CPU 12 tok/s](https://img.shields.io/badge/CPU%20Prefill-12%20tok%2Fs-informational)](https://github.com/waefrebeorn/bytropix)
+[![GPU: HANG](https://img.shields.io/badge/GPU-HANG-red)](https://github.com/waefrebeorn/bytropix)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)](https://opensource.org/licenses/Apache-2.0)
 [![GPU: RTX 5050](https://img.shields.io/badge/GPU-RTX%205050%208GB-critical)](https://github.com/waefrebeorn/bytropix)
 [![VRAM: 6.45 GB at 256k](https://img.shields.io/badge/256k%20VRAM-6.45%20GB-yellow)](https://github.com/waefrebeorn/bytropix)

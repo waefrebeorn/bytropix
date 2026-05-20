@@ -4,7 +4,8 @@
 
 **bytropix: Pure C inference engine for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, `qwen35moe` arch).**
 Cos-sim 0.9994 overall vs llama.cpp (CPU, 5-token prefill, 40 layers).
-256k context decode at ~9 tok/s on RTX 5050 laptop GPU (~6.5 GB VRAM with Q4_0 KV cache).
+CPU prefill: ~12 tok/s. GPU: ⚠️ gen_text_gpu hangs (pre-existing).
+VRAM with Q4_0 KV cache at 256k: ~6.45 GB (fits 8GB GPU).
 **ARCHITECTURE CORRECTION**: 40 layers with 3:1 SSM/GQA **interleaved repeating** pattern (NOT 30+10 contiguous).
 
 ---

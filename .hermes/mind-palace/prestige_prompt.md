@@ -2,7 +2,7 @@
 
 ## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M
 **Overall cos-sim: 0.9994 vs llama.cpp (CPU, 5-token, 40 layers).**
-**Decode: ~9 tok/s GPU — Prefill: ~11 tok/s CPU — Q4_0 KV cache: 4:1 compression.**
+**CPU prefill: ~12 tok/s. GPU: ⚠️ gen_text_gpu hangs. Q4_0 KV cache: 4:1 compression.**
 
 ## ARCHITECTURE CORRECTION (May 19)
 The true architecture is a **3:1 SSM/GQA interleaved repeating pattern**, NOT the previously assumed "30 SSM + 10 GQA contiguous". Confirmed via:

@@ -1,7 +1,7 @@
 # State — Phase 22: Q4_0 KV Cache + Architecture Discovery (May 19 PM v22)
 
 **bytropix: Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE)**
-**Decode: ~9 tok/s (GPU) — Prefill: ~11 tok/s (CPU) — Q4_0 KV cache: 4:1 compression**
+**CPU: ~12 tok/s prefill — GPU: ⚠️ gen_text_gpu hangs (pre-existing) — Q4_0 KV cache: 4:1 compression**
 
 ## Vault / Research Consumed
 - **Architecture discovery**: GGUF tensor enumeration proved 3:1 SSM/GQA interleaved pattern (NOT 30+10 contiguous). SSM layers: 0,1,2,4,5,6,...(30). GQA: 3,7,11,15,19,23,27,31,35,39(10).
