@@ -414,12 +414,6 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
             gpu->d_qkv_f32[l] = NULL;
             gpu->d_gate_f32[l] = NULL;
             gpu->d_out_f32[l] = NULL;
-            for (int i = 0; i < 40; i++) gpu->d_ssm_beta[i] = NULL;
-            for (int i = 0; i < 40; i++) gpu->d_ssm_alpha[i] = NULL;
-            for (int i = 0; i < 40; i++) gpu->d_ssm_dt_bias[i] = NULL;
-            for (int i = 0; i < 40; i++) gpu->d_ssm_a[i] = NULL;
-            for (int i = 0; i < 40; i++) gpu->d_ssm_conv1d[i] = NULL;
-            for (int i = 0; i < 40; i++) gpu->d_ssm_norm[i] = NULL;
 
             // attn_qkv.weight (Q5_K)
             snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", l);
@@ -1058,10 +1052,19 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
     float *d_gate_final = gpu->d_ssm_scratch + off; off += (size_t)C * dr;
 
     if (C == 1) {
+        if (!gpu->d_ssm_beta[layer_idx] || !gpu->d_ssm_alpha[layer_idx] || !gpu->d_ssm_dt_bias[layer_idx] || !gpu->d_ssm_a[layer_idx]) {
+            fprintf(stderr, "GPU SSM: ssm_beta/alpha/dt_bias/a NULL for layer %d\\n", layer_idx);
+            return 0;
+        }
+        fprintf(stderr, "GPU SSM MARK: beta/alpha kernel start L%d\\n", layer_idx);
         ssm_beta_alpha_fused_decode_wrapper(st,
             gpu->d_x, gpu->d_ssm_beta[layer_idx], gpu->d_ssm_alpha[layer_idx],
             gpu->d_ssm_dt_bias[layer_idx], gpu->d_ssm_a[layer_idx],
             d_beta_sig, d_gate_final, dr);
+        cudaStreamSynchronize(st);
+        cudaError_t cem = cudaGetLastError();
+        if (cem != cudaSuccess) { fprintf(stderr, "GPU SSM MARK: beta/alpha ERR: %s\\n", cudaGetErrorString(cem)); return 0; }
+        fprintf(stderr, "GPU SSM MARK: beta/alpha OK L%d\\n", layer_idx);
     } else {
         fprintf(stderr, "GPU SSM C>1 path not yet working (cuBLAS error 13), falling back\n");
         return 0;
@@ -1075,11 +1078,16 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
         d_q_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
         d_k_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
         d_v_conv = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
+        fprintf(stderr, "GPU SSM MARK: conv/silu/split L%d\\n", layer_idx);
         ssm_conv_silu_split_decode_wrapper(st,
             gpu->d_conv_state[layer_idx], gpu->d_ssm_qkv_out,
             gpu->d_ssm_conv1d[layer_idx],
             d_q_conv, d_k_conv, d_v_conv,
             gpu->d_conv_state[layer_idx]);  // in-place update
+        cudaStreamSynchronize(st);
+        cudaError_t cem2 = cudaGetLastError();
+        if (cem2 != cudaSuccess) { fprintf(stderr, "GPU SSM MARK: conv ERR: %s\\n", cudaGetErrorString(cem2)); return 0; }
+        fprintf(stderr, "GPU SSM MARK: conv/silu/split OK L%d\\n", layer_idx);
     } else {
         // Original multistep path for prefill (C>1)
         int k_1 = CONV_KERNEL - 1;
@@ -1112,12 +1120,21 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
     // L2 norm (needed for both paths)
     d_q_norm = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
     d_k_norm = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
+    fprintf(stderr, "GPU SSM MARK: L2 norm L%d\\n", layer_idx);
     wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, st);
+    cudaStreamSynchronize(st);
+    cudaError_t cem3 = cudaGetLastError();
+    if (cem3 != cudaSuccess) { fprintf(stderr, "GPU SSM MARK: L2_q ERR: %s\\n", cudaGetErrorString(cem3)); return 0; }
     wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, st);
+    cudaStreamSynchronize(st);
+    cem3 = cudaGetLastError();
+    if (cem3 != cudaSuccess) { fprintf(stderr, "GPU SSM MARK: L2_k ERR: %s\\n", cudaGetErrorString(cem3)); return 0; }
+    fprintf(stderr, "GPU SSM MARK: L2 OK L%d\\n", layer_idx);
 
         // === Step 11: Recurrence — parallel scan for C>1, token-by-token for C==1 ===
         float *d_delta_out = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
 
+        fprintf(stderr, "GPU SSM MARK: recurrence L%d\\n", layer_idx);
         if (C > 1) {
             // Batched prefill: process all C tokens in one parallel scan call
             wubu_cuda_ssm_parallel_scan(1, C,
@@ -1139,10 +1156,11 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
                 float *db = d_beta_sig + (size_t)t * dr;
                 float *dg = d_gate_final + (size_t)t * dr;
 
+                fprintf(stderr, "GPU SSM MARK: repeat_kheads L%d\\n", layer_idx);
                 wubu_gpu_repeat_kheads(d_q_t, d_k_t, d_v_t, db, dg,
                     gpu->d_ssm_q_all, gpu->d_ssm_k_all, gpu->d_ssm_v_all,
                     gpu->d_ssm_beta_arr, gpu->d_ssm_gate_arr, st);
-
+                fprintf(stderr, "GPU SSM MARK: ssm_recurrence L%d\\n", layer_idx);
                 wubu_gpu_ssm_recurrence(state,
                     gpu->d_ssm_q_all, gpu->d_ssm_k_all, gpu->d_ssm_v_all,
                     gpu->d_ssm_beta_arr, gpu->d_ssm_gate_arr,
@@ -1151,8 +1169,16 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
                 cudaMemcpyAsync(d_delta_out + (size_t)t * vdim, gpu->d_ssm_delta_out,
                     (size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float),
                     cudaMemcpyDeviceToDevice, st);
+                cudaStreamSynchronize(st);
+                cudaError_t cem4 = cudaGetLastError();
+                if (cem4 != cudaSuccess) { fprintf(stderr, "GPU SSM MARK: recurrence L%d ERR: %s\\n", layer_idx, cudaGetErrorString(cem4)); return 0; }
+                fprintf(stderr, "GPU SSM MARK: recurrence step t=%d done L%d\\n", t, layer_idx);
             }
         }
+        cudaStreamSynchronize(st);
+        cudaError_t cem5 = cudaGetLastError();
+        if (cem5 != cudaSuccess) { fprintf(stderr, "GPU SSM MARK: recurrence ALL ERR: %s\\n", cudaGetErrorString(cem5)); return 0; }
+        fprintf(stderr, "GPU SSM MARK: recurrence done L%d\\n", layer_idx);
 
         // === Step 12-13: z = SiLU(z_all) + Gated norm ===
         float *d_z_silu = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
@@ -1163,9 +1189,18 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
             return 0;
         }
 
+        fprintf(stderr, "GPU SSM MARK: SiLU z L%d\\n", layer_idx);
         wubu_cuda_silu(C * vdim, gpu->d_ssm_z_out, d_z_silu, st);
+        cudaStreamSynchronize(st);
+        cudaError_t cem6 = cudaGetLastError();
+        if (cem6 != cudaSuccess) { fprintf(stderr, "GPU SSM MARK: SiLU z ERR: %s\\n", cudaGetErrorString(cem6)); return 0; }
+        fprintf(stderr, "GPU SSM MARK: gated norm L%d\\n", layer_idx);
         wubu_cuda_gated_norm(1, C, SSM_V_HEADS, SSM_D_STATE,
                              d_delta_out, gpu->d_ssm_norm[layer_idx], d_z_silu, st);
+        cudaStreamSynchronize(st);
+        cem6 = cudaGetLastError();
+        if (cem6 != cudaSuccess) { fprintf(stderr, "GPU SSM MARK: gated norm ERR: %s\\n", cudaGetErrorString(cem6)); return 0; }
+        fprintf(stderr, "GPU SSM MARK: step1213 done L%d\\n", layer_idx);
 
         // === Step 14: SSM output projection via quantized matmul (row-major Q6_K) ===
         // d_delta_out [C, vdim] @ ssm_out [vdim, D_MODEL] → gout [C, D_MODEL]
