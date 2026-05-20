@@ -1,4 +1,4 @@
-# Made Agentically by Hermes — v23 (May 21, 2026 AM)
+# Made Agentically by Hermes — v24 (May 21, 2026 DA Audit)
 
 ## AI-Assisted Inference Engineering for Qwen3.6-35B-A3B
 
@@ -8,12 +8,12 @@
 **Model:** Qwen3.6-35B-A3B-UD-IQ2_M (2.7 bpw, 10.7 GB GGUF)
 **Hardware:** AMD Ryzen 7950X (16C/32T), 64 GB DDR5, RTX 5050 8GB VRAM | WSL2
 **Reference:** llama.cpp (qwen35moe.cpp handler, 733-line model implementation)
-**Status (Phase 25-26):** GPU decode 8.5-9.2 tok/s (4K), 4.8 tok/s (256k). VRAM ~3.56GB.
-**External ref:** 35.4 tok/s on RTX 4060 Ti 8GB (llama.cpp -ncmoe 30). Gap ~4-7x.
+**Status (Phase 28b):** GPU_SUPPORT fixed and live. SSM GPU path active — CORRECTNESS UNVERIFIED.
+**External ref:** 35.4 tok/s on RTX 4060 Ti 8GB (llama.cpp -ncmoe 30).
 
 ---
 
-## 0. DA Verification — What This Document Claims
+## 0. DA Verification — Honest Standard
 
 This document adheres to the Triple Devil's Advocate standard. Every claim carries a verification tag:
 
@@ -22,17 +22,16 @@ This document adheres to the Triple Devil's Advocate standard. Every claim carri
 | ✅ Verified | Cross-checked at runtime against reference (llama.cpp, F32 dequant, or known-correct implementation) |
 | 🟡 Partial | Works with known caveat or limited verification scope |
 | ❓ Unchecked | Believed correct but not measured against reference |
-| ❌ Broken | Known failure, reproducible |
+| 🔴 Broken | Known failure, reproducible |
+| ⚠️ DA Flag | Previously claimed verified — DA audit found the claim rests on insufficient evidence |
 
-The DA standard means: "What does this claim rest on? Compilation? Non-crash? Or verified correctness against a ground truth?"
-
-As of Phase 26, **several fused kernels lack cos-sim verification**. The ssm_beta_alpha_fused_decode and ssm_conv_silu_split_decode kernels were written for speed but never checked against the old cuBLAS-separate-kernel path. The 256k context output has never been cosine-similarity checked against llama.cpp. These are marked ❓ throughout.
+**The DA audit (Phase 28b) downgraded several previously-claimed ✅ items.** The ssm_beta_alpha_fused_decode and ssm_conv_silu_split_decode kernels were compared against the OLD cuBLAS path — which was also DEAD CODE. Both tests compared two UNUSED code paths. Neither was ever run in actual inference. These are now marked 🟡.
 
 ---
 
 ## 1. The Engineering Process
 
-This project spanned ~6 days of agent-human collaboration across ~35 sessions. Each session followed the mind-palace prestige system with triple Devil's Advocate verification.
+This project spanned ~6 days of agent-human collaboration across ~40 sessions. Each session followed the mind-palace prestige system with triple Devil's Advocate verification.
 
 ### 1.1 Session Structure
 
@@ -49,9 +48,7 @@ This project spanned ~6 days of agent-human collaboration across ~35 sessions. E
 10. Update SVG diagrams if state changed materially
 ```
 
-### 1.2 The DA Loop
-
-The core verification loop that caught every bug:
+### 1.2 The DA Loop — What Catches Bugs
 
 ```
 layer_cos_sim ref/ our/ 40
@@ -65,11 +62,11 @@ layer_cos_sim ref/ our/ 40
         └── Fix bug → rebuild → re-verify
 ```
 
-This caught:
-- Q6_K loop bound (one character bug, cos-sim 0.796)
+This caught 14 documented bugs, including:
+- Q6_K loop bound (one character, cos-sim 0.796)
 - GQA Q/Gate interleave (cos-sim -0.51)
 - IMRoPE not implemented
-- All 13 documented bugs
+- GPU quant_matmul column-major stride (wrong, never caught because GPU_SUPPORT was dead code)
 
 ### 1.3 Key Workflow Innovations
 
@@ -77,11 +74,11 @@ This caught:
 |-----------|---------|-------------|
 | **Caveman compression** | ~60% token reduction | 2.5× more work per context window |
 | **Triple DA sweep** | Code → vault → cold gaps | Caught stale docs, phantom PASS, tooling bugs |
-| **Mind palace atomic update** | 5 files batch-written each session | Zero version drift across 35 context windows |
-| **Layer cos-sim debugging** | Per-layer comparison tool | Caught every bug (interleave, RoPE, Q6_K, cache) |
-| **Isolate-then-compare** | Test each quant type vs F32 SGEMM | Found Q6_K bug that DA misdiagnosed |
+| **Mind palace atomic update** | 5 files batch-written each session | Zero version drift across 40+ context windows |
+| **Layer cos-sim debugging** | Per-layer comparison tool | Caught 14 bugs |
+| **Isolate-then-compare** | Test each quant type vs F32 SGEMM | Found Q6_K bug, column-major stride bug |
 | **DUMP_INTERMEDIATE_DIR** (Phase 22) | Per-operation reference tracing | 53 tensor types/layer for 1:1 parity debugging |
-| **ref_dumper** | Single-token llama.cpp embedding/intermediates dumper | Eliminated llama-cli dependency for reference data |
+| **ref_dumper** | Single-token llama.cpp embedding dumper | Eliminated llama-cli dependency for reference data |
 
 ### 1.4 The Caveman Communication Protocol
 
@@ -96,41 +93,43 @@ This reduced output tokens ~60-75%, extending effective context window by 2.5×.
 
 ---
 
-## 2. Architecture Discovery
+## 2. Phase 28: GPU_SUPPORT Fix — A DA Cautionary Tale
 
-The Qwen3.6-35B-A3B architecture was **unknown at project start**. The GGUF file contained 733 tensors with cryptic names. Architecture was discovered incrementally through Phase 22 via systematic tensor enumeration:
+Phase 28 (May 21 PM) fixed GPU_SUPPORT, a critical subsystem that had NEVER compiled. Three pre-existing bugs were found:
 
-### Phase 1-5 (May 14-15): Static Analysis
-- Parsed all 733 tensor names from GGUF
-- Mapped dimensions: D_MODEL=2048, 40 layers
-- Noticed two tensor families: `blk.N.attn_qkv.weight` and `blk.N.attn_q.weight`
-- **Initial hypothesis**: 30 contiguous SSM layers, 10 contiguous GQA layers ❌
+### Bug #15: Brace Nesting in wubu_model.c
+The `#ifdef GPU_SUPPORT` block had malformed brace nesting. The `if (gpu_qkv && gpu_z)` block at line 517 was missing its closing brace. The `} else {` at line 538 was at the wrong indentation level. This was NEVER compiled — Makefile didn't pass `-DGPU_SUPPORT`.
 
-### Phase 6-14 (May 15-17): Implementation
-- Wrote SSM handler for "first 30 layers"
-- Wrote GQA handler for "last 10 layers"
-- Achieved cos-sim 0.9967 but with persistent L31 discrepancy
+**Discovery:** When first trying to compile with `-DGPU_SUPPORT`, gcc reported `expected '}' before 'else'`. The compiler's error message pointed exactly to the malformed code.
 
-### Phase 15-21 (May 17-19): GPU pipeline
-- Q5_K/Q6_K GPU quant matmul (Phase 16)
-- GQA GPU attention (Phase 15)
-- MoE GPU kernels (Phase 17-18)
-- SSM full forward GPU (Phase 18)
-- MoE expert cache (Phase 20)
-- Sliding window attention (Phase 21)
+### Bug #16: gpu_ctx_t Type Inaccessible
+`wubu_model.c` used `gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx` in two places. `gpu_ctx_t` was defined only in the CUDA file `wubu_model_gpu.cu`. A C file (`wubu_model.c`) compiled by gcc couldn't see it.
 
-### Phase 22: Correct Architecture Discovered
-- Looking at `blk.N.ssm_a` vs `blk.N.attn_k` tensor presence
-- Pattern: `ssm_a` present for ALL layers 0-39, `attn_k` only for layers 3,7,11,15...
-- **Correct pattern**: 3:1 SSM/GQA interleaved, NOT contiguous
-- Fixed pipeline → cos-sim 0.9994
+**Fix:** Created `wubu_gpu_set_ssm_hybrid(void* gpu_ctx_ptr, int layer_idx, ssm_layer_weights *ssm)` in the CUDA file, declared in `wubu_model.h`. Both casts replaced with a single function call.
 
-The discovery was later confirmed by reading llama.cpp's `qwen35moe.cpp`:
-```cpp
-hparams.recurrent_layer_arr[i] = (i < n_main) && ((i + 1) % full_attn_interval != 0);
+### Bug #17: Stub Override
+`gen_text.c` had an `inline int wubu_model_gpu_init(...)` stub that returned 0. This was compiled when `-DGPU_SUPPORT` was NOT defined. But the `gen_text_gpu` build target also didn't pass `-DGPU_SUPPORT`, so even the GPU build used the stub.
+
+**Fix:** Added `-DGPU_SUPPORT` to the gen_text_gpu link command in Makefile. Also discovered the `GPU=1` env var guard.
+
+### DA Audit Phase 28b: Three More Issues Found
+
+After GPU_SUPPORT was enabled, the triple DA sweep found:
+
+**1. F32 Dequant SSM Weights Waste ~2.2 GB VRAM (🔴)**
+```c
+// wubu_model_gpu.cu lines 436-504
+// For EACH of 3 weight tensors per SSM layer:
+total_mb += qkv_raw / (1024*1024);     // quantized raw
+total_mb += qkv_n_elems * 4 / (1024*1024);  // F32 dequant (NEVER USED)
 ```
+The "4532 MB" SSM init log is DOUBLE-COUNTED: ~2266 MB quant + ~2266 MB F32 dead weight. The F32 buffers are allocated, uploaded, and NEVER FREED. `forward_full()` uses only quantized weights via the row_major kernel. The F32 arrays are only referenced by `wubu_model_gpu_ssm_project()`, which uses the BROKEN column-major kernel.
 
-Where `full_attn_interval = 4`.
+**2. GPU Memory Leak ~5.5 GB (🔴)**
+`wubu_model_gpu_free()` never frees `d_attn_qkv_q[40]`, `d_attn_gate_q[40]`, `d_ssm_out_q[40]`, or any of the F32 dequant arrays.
+
+**3. Prefill N>1 Fallback Produces Garbage (🔴)**
+`wubu_model_gpu_ssm_project()` calls `wubu_cuda_quant_matmul()` — the OLD column-major kernel with wrong stride. This IS called from the N>1 preill fallback path when `forward_full()` fails.
 
 ---
 
@@ -155,7 +154,7 @@ Where `full_attn_interval = 4`.
 
 ### 3.2 SSM Recurrence Formula
 
-The SSM uses **Gated DeltaNet** (Gated Delta Attention or "linear attention"), confirmed identical between bytropix and llama.cpp's `ggml_gated_delta_net`:
+Same as llama.cpp's `ggml_gated_delta_net`:
 
 ```
 S_t = G_t ⊙ S_{t-1} + k_t ⊗ (β_t ⊙ (v_t - S_{t-1} @ k_t))
@@ -167,18 +166,6 @@ Where:
 - `β_t = sigmoid(beta_raw)` — scalar per V-head
 - `d = 128` (SSM_D_STATE)
 - State shape: [128, 128] per V-head (32 heads)
-
-In C code:
-```c
-// 1. State decay: h *= exp(gate)
-// 2. Predict from decayed state: hk = h @ k
-// 3. Prediction error: diff = v - hk
-// 4. Outer product update: h += k ⊗ (diff * beta)
-// 5. Read from new state: out = h @ q
-// 6. Scale output: out /= sqrt(128)
-```
-
-The only minor implementation difference: bytropix applies 1/sqrt(128) to q *before* recurrence (line 532-534), while llama.cpp applies it to output *after* recurrence (line 10613). Mathematically equivalent since scaling is linear.
 
 ### 3.3 Per-Layer Flow
 
@@ -205,12 +192,13 @@ Both implement **identical mathematical operations**. The differences are implem
 | Feature | bytropix | llama.cpp |
 |---------|----------|-----------|
 | **Engine scope** | Single model (Qwen3.6-35B-A3B) | 100+ architectures |
-| **Codebase** | ~13,400 lines C/CUDA | ~500K+ lines C/C++ |
+| **Codebase** | ~14,000 lines C/CUDA | ~500K+ lines C/C++ |
 | **KV cache** | Q4_0 (4:1, 1440MB at 256k) | F16 only (no per-model quantization) |
 | **MoE loading** | Lazy per-expert blob pointers (saves ~3GB) | Standard weight matrix |
-| **GPU kernels** | Hand-written fused kernels (beta/alpha, conv+silu+split) | Dynamic ggml graph |
+| **GPU kernels** | Hand-written fused kernels | Dynamic ggml graph |
 | **Fused Q5_K/Q6_K matmul** | Incremental dequant+dot on GPU (no bv[256] spill) | Standard ggml dequant + cuBLAS |
 | **Sliding window** | GQA_WINDOW env var | Not standard for qwen35moe |
+| **GPU_SUPPORT path** | Custom SSM GPU pipeline (row_major quant matmul + fused kernels) | Uses ggml-cuda generic matmul |
 | **Verification** | Per-layer cos-sim, 53 intermediates/layer | Self-referential (is the reference) |
 
 ### Where llama.cpp is ahead:
@@ -218,24 +206,47 @@ Both implement **identical mathematical operations**. The differences are implem
 | Feature | llama.cpp | bytropix |
 |---------|-----------|----------|
 | **GPU MoE** | Full GPU expert forward via ggml-cuda | Per-expert cache, CPU router, H2D upload on miss |
-| **Decode speed** | 35.4 tok/s (RTX 4060 Ti, -ncmoe 30) | 8.5 tok/s (RTX 5050) |
+| **Decode speed** | 35.4 tok/s (RTX 4060 Ti, -ncmoe 30) | 8.5 tok/s (RTX 5050) — SSM on CPU |
 | **MoE expert offload** | Industrial -ncmoe N flag controls GPU experts | Fixed 8-expert cache |
 | **Chunked prefill** | Supports arbitrary batch sizes | Limited (batch truncation) |
+| **GPU SSM correctness** | Ground truth reference | SSM GPU path UNVERIFIED end-to-end |
 | **Maintenance** | Active development, thousands of contributors | Solo agent project |
 
-### The 4-7x Speed Gap
+### The Key Distinction: Verification Dependency
 
-| Factor | Impact |
-|--------|--------|
-| **RTX 4060 Ti vs 5050** (~288 vs ~160 GB/s bandwidth) | ~1.8x |
-| **MoE GPU forward** (llama.cpp uses ggml-cuda grouped GEMM; bytropix uses per-expert kernel) | ~1.5-2x |
-| **No nsight profiling** (bottlenecks are guessed) | Unknown — could be 1-2x |
-| **No fused SSM-only kernel** (15+ launches per layer vs ggml fused op) | ~1.2x |
-| **No chunked prefill** (llama.cpp can batch-process 256k tokens) | ~1.5x |
+llama.cpp is the REFERENCE. bytropix is a REIMPLEMENTATION. Every time bytropix diverges from llama.cpp, the bug is in bytropix. The DA verification pipeline (layer_cos_sim, isolate-then-compare) is the ONLY tool for detecting divergence. Without it, the system runs at full speed producing garbage output.
+
+### GPU_SUPPORT Path Architecture (what Phase 28 enabled)
+
+```
+                    CPU only (gen_text)
+                    ┌─────────────────────┐
+                    │ wubu_ssm_forward()    │ ← all 30 SSM layers on CPU
+                    │ (quant_matmul CPU,   │    ~8-9 tok/s
+                    │  recurrence CPU)     │
+                    └─────────────────────┘
+
+                    GPU SSM (gen_text_gpu with GPU=1)
+                    ┌──────────────────────────────────────────────┐
+                    │ wubu_model_gpu_ssm_forward_full()              │ ← NEW: Phase 28
+                    │  ├── row_major quant matmul (GPU)              │   CORRECTNESS
+                    │  ├── ssm_beta_alpha_fused_decode (GPU)         │   UNVERIFIED
+                    │  ├── ssm_conv_silu_split_decode (GPU)         │
+                    │  ├── L2 norm, recurrence, gated norm (GPU)     │
+                    │  └── ssm_out quant matmul (GPU, row_major)    │
+                    └──────────────────────────────────────────────┘
+
+                    Fallback (GPU init failed or forward_full fails)
+                    ┌──────────────────────────────────────────────┐
+                    │ GPU projections (wubu_model_gpu_ssm_project)   │ ← USES BROKEN
+                    │  ├── wubu_cuda_quant_matmul() (COLUMN-MAJOR)  │   COLUMN-MAJOR
+                    │  └── CPU conv/recurrence                     │   KERNEL (🔴)
+                    └──────────────────────────────────────────────┘
+```
 
 ---
 
-## 5. Bug History (Complete)
+## 5. Bug History (Complete, with DA corrections)
 
 | # | Bug | Cos-sim Before | Cos-sim After | Discovery Method |
 |---|-----|:-:|:-:|-----------------|
@@ -250,8 +261,14 @@ Both implement **identical mathematical operations**. The differences are implem
 | 9-12 | GPU stride, RoPE, cache, build | GPU garbage | 0.999 | Per-component test |
 | **13** | **kv_cache_read_head multi-block** | **GPU hang** | **Working** | **MARKER debug** |
 | 14 | L31 quant noise | 0.9585 | 0.9585 | Known limitation |
+| **15** | **GPU_SUPPORT brace nesting** | ❌ Never compiled | ✅ Fixed | **gcc error message** |
+| **16** | **gpu_ctx_t inaccessible** | ❌ Would not compile | ✅ Fixed | **Compilation attempt** |
+| **17** | **Stub wubu_model_gpu_init** | ❌ GPU always disabled | ✅ Fixed | **Strace + disassembly** |
+| **18** | **F32 dequant dead weight** | 🔴 2.2 GB waste | Pending | **DA audit: double-counted MB** |
+| **19** | **GPU memory leak** | 🔴 5.5 GB leak | Pending | **DA audit: missing free()** |
+| **20** | **Prefill N>1 uses broken kernel** | 🔴 Garbage | Pending | **DA audit: column-major stride** |
 
-**Bug #7 (Q6_K loop bound) is the canonical example of why DA works:**
+**Bug #7 (Q6_K loop bound) remains the canonical example of why DA works:**
 - Cos-sim was 0.796 — something wrong but non-obvious
 - Tested each quant type separately vs F32 SGEMM
 - Q6_K had a one-character bug: loop ran `QK_K/32` iterations but should run `QK_K/16`
@@ -260,7 +277,7 @@ Both implement **identical mathematical operations**. The differences are implem
 
 ---
 
-## 6. Key Innovations (Verified)
+## 6. Key Innovations (DA-Corrected Status)
 
 ### 6.1 Q4_0 KV Cache (Phase 22-24) ✅
 - 4:1 compression: 1,440 MB vs 5,120 MB FP16 at 256k
@@ -269,31 +286,35 @@ Both implement **identical mathematical operations**. The differences are implem
 - GPU: Fused Q4_0 decode attention — 8.1 tok/s (beats FP16 7.6)
 - **Unique to bytropix** — llama.cpp doesn't quantize KV cache for this model
 
-### 6.2 Fused Q5_K/Q6_K Quant Matmul (Phase 25) ✅
+### 6.2 Fused Q5_K/Q6_K Quant Matmul (Phase 25) 🟡
 - Incremental dequant+dot without bv[256] local array
 - Eliminates local memory spill (~15 registers vs 256)
-- Verified: same output as old kernel (1.0 cos-sim vs F32 dequant reference)
-- Performance: uncertain — within run-to-run noise
+- Verified: same output vs F32 dequant reference (ISOLATED TEST)
+- **DA audit: never tested in full inference pipeline**
 
-### 6.3 Fused SSM Beta/Alpha Decode (Phase 25) ❓
+### 6.3 Fused SSM Beta/Alpha Decode (Phase 25-26) 🟡 (DOWNGRADED)
 - Manual dot product + sigmoid/softplus/gate for N=1 decode
 - Replaces 2 cuBLAS calls + 4 element-wise launches with 1 kernel
-- **Not verified**: cos-sim vs old cuBLAS path not measured
+- **DA audit: cos-sim was measured vs OLD cuBLAS path — which was also DEAD CODE (column-major stride bug). Both code paths were wrong. The test proved nothing about correctness.**
 - Performance: ~8% improvement (within noise)
 
-### 6.4 Fused SSM Conv+SiLU+Split (Phase 26) ❓
+### 6.4 Fused SSM Conv+SiLU+Split (Phase 26) 🟡 (DOWNGRADED)
 - Combines conv_state copy, conv1d, SiLU, split QKV, conv_state update
 - Eliminates 2 D2D memcpys + 5 kernel launches per SSM layer
-- **Not verified**: cos-sim vs separate-kernel path not measured
-- Performance: ~8% improvement (within noise)
+- **DA audit: same issue — verified vs old path that was also dead code**
 
-### 6.5 Lazy MoE Expert Loading (Phase 17-20) ✅
+### 6.5 GPU_SUPPORT Fix (Phase 28) 🟡
+- Three pre-existing bugs fixed to make GPU_SUPPORT compile and run
+- SSM GPU path active: wubu_model_gpu_ssm_forward_full() called per layer
+- **DA audit: SSM GPU output NEVER compared vs CPU path. Correctness UNKNOWN.**
+
+### 6.6 Lazy MoE Expert Loading (Phase 17-20) ✅
 - Blob-pointer based on-demand loading: only active experts read from GGUF
 - Prefetch hint `_MM_HINT_T2` during attention computation (7.4MB to L3)
 - Saves ~3GB RAM vs pre-dequantized all-256-expert approach
 - Verified: identical output to continuous loading
 
-### 6.6 Sliding Window Attention (Phase 21) ✅
+### 6.7 Sliding Window Attention (Phase 21) ✅
 - GQA_WINDOW env var enables sliding window for 256k context
 - Early-return in K→scores and V-weighted kernels
 - 5.7 tok/s decode vs 4.8 without window at 256k
@@ -302,35 +323,29 @@ Both implement **identical mathematical operations**. The differences are implem
 
 ## 7. Manifold Research Concepts (Not Wired)
 
-The bytropix codebase and vault contain extensive research into **hyperbolic geometry and manifold-based attention**, but **none of these are in the inference path**:
+The bytropix codebase and vault contain extensive research into hyperbolic geometry and manifold-based attention, but **none of these are in the inference path**:
 
-### 7.1 Poincaré SSM (`src/wubu_poincare_ssm.c`)
-Status: **Exists as standalone test** — NOT wired into inference pipeline
+### 7.1 Poincaré SSM
+Status: **Exists as standalone test** — NOT wired into inference
+~500 lines C. Uses Poincaré ball model for SSM recurrence. 5× slower than Euclidean. Value unproven.
 
-Uses the Poincaré ball model of hyperbolic space for the SSM recurrence. Replace Euclidean dot products with Möbius gyrovector operations. Curvature κ < 0 parameter controls hierarchy depth. This would transform the linear state update into a geodesic flow on the hyperbolic manifold.
+### 7.2 Nested SSM
+Status: **Research papers only** — no implementation
+Recursive composition of K Poincaré balls with learnable curvatures.
 
-**Why not wired**: The core recurrence requires Möbius addition, which is 5× more expensive than Euclidean dot. Testing showed 0.1 tok/s CPU decode. The value proposition (hierarchical structure in state representation) hasn't been demonstrated to improve output quality.
-
-### 7.2 Nested SSM (Theory only)
-Status: **Research papers** — no code
-
-Recursive composition of K Poincaré balls with learnable curvatures. Each level learns representations at different hierarchy depths. The nesting is parameterized by curvatures κ₁ > κ₂ > ... > κ_K.
-
-### 7.3 Hamilton Encoder (Legacy `ENCODERS/hamilton-encoder-cpu/`)
+### 7.3 Hamilton Encoder
 Status: **Standalone concept** — NOT integrated
+MLP → 5D quaternion manifold. Enables hyperbolic distance attention, BSP tree retrieval for O(log N) sparse attention, Clifford rotation for KV cache compression (711:1 V-only compression — theoretical).
 
-MLP that maps token embeddings to a 5D quaternion manifold with learnable pseudoscalar angle. The manifold representation enables: (1) Hyperbolic distance attention (Poincaré ball), (2) BSP tree-based retrieval for O(log N) sparse attention at >512k context, (3) Clifford rotation for KV cache compression (711:1 V-only compression).
-
-### 7.4 WuBu Nesting Theory (`THEORY/`)
+### 7.4 WuBu Nesting Theory
 Status: **Research papers only** — never implemented
+Recursively nested hyperbolic spaces with learnable curvatures, SO(n) rotations, golden ratio decomposition.
 
-Recursively nested hyperbolic spaces (H^n ⊃ H^m ⊃ ...) with:
-- Learnable curvatures and scales at each level
-- SO(n) rotations in tangent space between hierarchy levels
-- Golden ratio (φ)-based spatial decomposition (GAAD)
-- Boundary Sub-Manifolds for topological data analysis
+### 7.5 NV64 Ring Buffer
+Status: **Design document** — not implemented
+CPU/GPU tandem pipeline using ring buffer for continuous compute.
 
-### 7.5 Summary: Research vs Reality
+### 7.6 Summary: Research vs Reality
 
 | Concept | Code | Wired? | Status |
 |---------|------|--------|--------|
@@ -343,96 +358,96 @@ Recursively nested hyperbolic spaces (H^n ⊃ H^m ⊃ ...) with:
 
 ---
 
-## 8. Current Honest Status (Phase 25-26)
+## 8. Current Honest Status (Phase 28b DA Audit)
 
-### 8.1 What Works (✅ Verified)
-- GPU gen_text_gpu: full 40-layer, no hang at 256k
+### 8.1 What Works (✅ Verified at runtime)
+- CPU inference (gen_text): full 40-layer, verifiable against llama.cpp
+- GPU GQA attention on GPU
+- GPU output projection (Q4_K kernel)
 - Q4_0 KV cache: 1,440 MB at 256k, cos-sim 0.9994 vs F16
-- Q4_0 fused decode attention: 8.1 tok/s beats FP16 7.6
-- Q5_K/Q6_K GPU quant matmul: identical to old kernel
-- Sliding window attention: functional at 256k
-- Fused SSM beta/alpha decode: runs, perf within expected range
-- Fused SSM conv+SiLU+split: runs, perf within expected range
+- GPU_SUPPORT compiles, links, runs without crash
 - Lazy MoE expert loading: verified correct
-- MoE expert cache: GPU buffer persistent across tokens
-- Per-layer cos-sim comparison tool: operational
+- Sliding window attention: functional at 256k
 
 ### 8.2 What's Unverified (❓)
-- ssm_beta_alpha_fused_decode: cos-sim vs old cuBLAS path NOT measured
-- ssm_conv_silu_split_decode: cos-sim vs separate-kernel path NOT measured
+- SSM GPU path: output NEVER compared vs CPU path (cos-sim = 0 comparisons)
+- Row_major quant matmul: only tested vs F32 dequant, never in full pipeline
+- Phase 26 fused kernels: cos-sim was vs DEAD CODE, not meaningful
 - 256k context: final output cos-sim vs llama.cpp NOT measured
-- Bottleneck analysis: timing is printf-based guesses, not nsight profiling
-- Fused kernel performance gains: within run-to-run noise (±15%)
+- Bottleneck analysis: timing is printf-based guesses
 
-### 8.3 What's Partially Working (🟡)
-- L31 cos-sim: 0.9585 — quantization noise through 30 SSM layers
-- MTP speculative decode: 100% rejection at IQ2_M quantization
-- GPU MoE: works but ~20-40ms per layer vs expected ~1ms
-- GPU decode speed: 4-7x slower than external reference
+### 8.3 What's Broken (🔴)
+- F32 dequant SSM weights: ~2.2 GB VRAM wasted, never freed
+- GPU memory leak: ~5.5 GB of SSM weight arrays never freed
+- Prefill N>1 fallback: uses broken column-major quant_matmul (garbage)
+- gen_text.c: hardcoded 1-token prompt blocks all verification
 
-### 8.4 Performance
+### 8.4 Performance (all data from BEFORE GPU_SUPPORT fix)
 
 | Condition | Prefill | Decode | Verified |
 |-----------|:-:|:-:|:-:|
 | CPU, 4K ctx | 11 tok/s | 8.8 tok/s | ✅ |
-| GPU, 4K ctx | 22.8 tok/s | 8.5-9.2 tok/s | ✅ |
-| GPU, 256k full | 23.5 tok/s | 4.8 tok/s | ✅ |
-| GPU, 256k sw 16K | 21.8 tok/s | 5.7 tok/s | ✅ |
-| External ref (4060 Ti) | — | 35.4 tok/s | (reference, not our hardware) |
+| GPU, 4K ctx (SSM on CPU) | 22.8 tok/s | 8.5-9.2 tok/s | ✅ (old binary, GPU_SUPPORT dead) |
+| GPU, 256k full | 23.5 tok/s | 4.8 tok/s | ✅ (old binary) |
+| GPU, 256k sw 16K | 21.8 tok/s | 5.7 tok/s | ✅ (old binary) |
+| External ref (4060 Ti) | — | 35.4 tok/s | (reference) |
 
-### 8.5 VRAM at 256k
+**Note:** All speed measurements are from before Phase 28. With GPU_SUPPORT live, SSM now uses GPU kernels instead of CPU. Speed with the new path is UNKNOWN. It could be faster, slower, or produce garbage.
 
-| Component | Size |
-|-----------|------|
-| GQA weights (F32) | 1,040 MB |
-| SSM weights (quantized) | 692 MB |
-| KV cache (Q4_0) | 1,440 MB |
-| Output proj (Q4_K) | 1,900 MB |
-| MoE + scratch | ~460 MB |
-| **Total** | **~3,562 MB** |
+### 8.5 VRAM at 256k (DA corrected)
 
-Fits 6.5-8GB GPU with 3GB headroom.
+| Component | Claimed (old) | Actual | Notes |
+|-----------|-------------|--------|-------|
+| GQA weights (F32) | 1,040 MB | 1,040 MB | ✅ Correct |
+| SSM weights (quantized) | 692 MB | ~2,266 MB | Old figure was wrong — includes only quant, not F32 dequant |
+| F32 dequant SSM (DEAD) | (not listed) | ~2,266 MB | 🔴 NEVER USED, never freed |
+| KV cache (Q4_0) | 1,440 MB | 1,440 MB | ✅ |
+| Output proj (Q4_K) | 1,900 MB | 1,900 MB | ✅ |
+| MoE + scratch | ~460 MB | ~460 MB | ✅ |
+| **Claimed Total** | **~3,562 MB** | **~7,372 MB actual** | **Does NOT fit 8GB GPU!** |
+
+**The VRAM budget was WRONG.** The actual GPU allocation with F32 dead weight is ~7.4 GB, dangerously close to the 8GB RTX 5050 limit. This is why the cuBLAS SGEMM path failed with error 13 (out of memory). Removing F32 dequant waste brings it to ~5.1 GB, with 2.9 GB headroom.
 
 ---
 
-## 9. The Generalization Question
-
-### What made this project work across 35 agent sessions?
+## 9. What Makes This Project Work Across 40+ Agent Sessions
 
 1. **Structured memory**: The mind-palace system (5 files, atomic updates) preserved state across context windows. Without it, every session would start from zero.
 
-2. **Caveman compression**: 60-75% token reduction meant 2.5× more work per context window. This was essential for a 35B model project.
+2. **Caveman compression**: 60-75% token reduction meant 2.5× more work per context window. Essential for a 35B model project.
 
 3. **DA verification**: Every bug was found through cos-sim comparison against a reference. The one-character Q6_K bug would never have been found by code review.
 
-4. **The isolate-then-compare pattern**: When a layer fails cos-sim, isolate each component (quant matmul, recurrence, element-wise) and test individually vs F32. This is the only reliable debugging method for quantized inference.
+4. **The isolate-then-compare pattern**: When a layer fails cos-sim, isolate each component and test individually vs F32. The only reliable debugging method for quantized inference.
 
-5. **Human-in-the-loop**: The human (waefrebeorn) corrected wrong DA diagnoses, provided hardware access, and prevented architectural dead-ends. The agent proposed, the human approved.
+5. **DA audit prevents survivorship bias**: The Phase 28b audit found 3 critical issues that were invisible because "it compiles and runs" was mistaken for "it works correctly."
+
+6. **Human-in-the-loop**: The human corrected wrong DA diagnoses, provided hardware access, and prevented architectural dead-ends. The agent proposed, the human approved.
 
 ---
 
-## 10. Roadmap
+## 10. Corrected Roadmap (Post-DA)
 
-### Phase 27 (Next)
-- Verify fused kernels against old-path cos-sim
-- Nsight profiling of full decode pipeline (stop guessing bottlenecks)
-- Target: identify true bottleneck (likely MoE, not SSM)
+### Phase 28b (Immediate — P0)
+- Remove F32 dequant SSM weight upload (save 2.2 GB, fix VRAM budget)
+- Fix wubu_model_gpu_free() memory leak
+- Fix prefill N>1 fallback kernel (use row_major)
+- Fix gen_text.c prompt for proper testing
+- Cos-sim: GPU SSM vs CPU SSM at single layer
 
-### Phase 28
-- MoE router on GPU (remove CPU hop)
-- Expert cache optimization
+### Phase 29 (After verification)
+- CUDA event profiling of GPU SSM pipeline
+- Compare tok/s: GPU SSM vs CPU SSM baseline
+- Profile MoE, GQA, output proj separately
 
-### Phase 29
-- Chunked prefill (3-7x at 256k)
-- 256k end-to-end cos-sim verification
+### Phase 30 (After profiling)
+- 256k end-to-end cos-sim verification vs llama.cpp
+- MoE router on GPU (if CPU MoE is the bottleneck)
+- Chunked prefill (if prefill is the bottleneck)
 
-### Phase 30
-- Tool call accuracy benchmarking at 256k
-- Latency optimization for real-time agent use
-
-### Research (No ETA)
+### Research (No ETA — value must be demonstrated first)
 - Poincaré SSM integration (requires value demonstration)
-- RotorQuant KV cache compression (4-6:1 instead of Q4_0's 4:1)
+- RotorQuant KV cache compression
 - NV64 ring buffer CPU/GPU tandem pipeline
 
 ---
@@ -440,8 +455,8 @@ Fits 6.5-8GB GPU with 3GB headroom.
 <div align="center">
 
 *Engine: bytropix — from-scratch C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE).*
-*13 bugs found and fixed. Phase 25-26: fused quant matmul + SSM decode kernels.*
-*DA principle: every claim verified at runtime against a reference. Unverified claims marked ❓.*
+*14 bugs found and fixed. Phase 28b: GPU_SUPPORT fixed and live, DA audit revealed 3 additional critical issues, 2 existing claims downgraded.*
+*DA principle: every claim must be verified at runtime against a reference. "It compiles" does not mean "it works."*
 *What does this claim rest on?*
 
 </div>

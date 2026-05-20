@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" font-family="'Courier New', monospace" font-size="12">
+  <rect width="900" height="400" fill="#1a1a2e"/>
+  <text x="20" y="30" fill="#ff4444" font-size="16" font-weight="bold">bytropix Phase Roadmap — May 21 2026 (DA corrected)</text>
+  <text x="20" y="46" fill="#888" font-size="11">Phases 0-24: Stable, verified. Phases 25-26: Fused kernels built but never verified end-to-end. Phase 28: GPU_SUPPORT fixed. Phase 28b: DA audit cleanup.</text>
+
+  <!-- Timeline -->
+  <line x1="30" y1="80" x2="870" y2="80" stroke="#333" stroke-width="2"/>
+  <circle cx="60" cy="80" r="6" fill="#00ff88"/>
+  <circle cx="200" cy="80" r="6" fill="#00ff88"/>
+  <circle cx="340" cy="80" r="6" fill="#00ff88"/>
+  <circle cx="480" cy="80" r="6" fill="#ffaa00"/>
+  <circle cx="620" cy="80" r="6" fill="#ff4444" stroke="#ff4444" stroke-width="2"/>
+  <circle cx="760" cy="80" r="8" fill="none" stroke="#ff4444" stroke-width="2" stroke-dasharray="4,2"/>
+
+  <text x="60" y="68" fill="#00ff88" font-size="10" text-anchor="middle">Ph 0-14</text>
+  <text x="200" y="68" fill="#00ff88" font-size="10" text-anchor="middle">Ph 15-22</text>
+  <text x="340" y="68" fill="#00ff88" font-size="10" text-anchor="middle">Ph 23-24 (Q4_0)</text>
+  <text x="480" y="68" fill="#ffaa00" font-size="10" text-anchor="middle">Ph 25-26 (Fused)</text>
+  <text x="620" y="68" fill="#ff4444" font-size="10" text-anchor="middle">Ph 28 (GPU_SUPPORT)</text>
+  <text x="760" y="68" fill="#ff4444" font-size="10" text-anchor="middle">Ph 28b (DA fix)</text>
+
+  <rect x="30" y="90" width="810" height="24" rx="3" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="38" y="106" fill="#00ff88" font-size="10">CPU inference pipeline (SSM + GQA + MoE) | Q4_0 KV cache | GQA GPU attention | MoE GPU experts | Output proj GPU</text>
+
+  <rect x="30" y="120" width="340" height="24" rx="3" fill="#3d3d0d" stroke="#ffaa00" stroke-width="1"/>
+  <text x="38" y="136" fill="#ffaa00" font-size="10">Fused Q5_K/Q6_K matmul | Fused SSM beta/alpha | Fused SSM conv/silu/split 🟡 (verified vs dead code)</text>
+
+  <rect x="380" y="120" width="460" height="30" rx="3" fill="#3d0d0d" stroke="#ff4444" stroke-width="2"/>
+  <text x="388" y="138" fill="#ff4444" font-size="10">GPU_SUPPORT fixed (braces, gpu_ctx_t, Makefile) | SSM GPU path active 🟡 (CORRECTNESS UNVERIFIED)</text>
+
+  <rect x="30" y="160" width="810" height="50" rx="3" fill="#2d0d0d" stroke="#ff4444" stroke-width="2"/>
+  <text x="38" y="178" fill="#ff4444" font-size="11" font-weight="bold">DA Audit Findings (must fix before proceeding):</text>
+  <text x="38" y="194" fill="#ff6644" font-size="10">🔴 F32 dequant waste (~2.2 GB)  🔴 GPU mem leak (~5.5 GB)  🔴 Prefill N>1 broken  🔴 gen_text.c hardcoded prompt</text>
+
+  <rect x="30" y="220" width="810" height="60" rx="3" fill="#1d1d0d" stroke="#ffaa00" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="38" y="238" fill="#ffaa00" font-size="11" font-weight="bold">P0 Fixes — Phase 28b (Immediate):</text>
+  <text x="38" y="254" fill="#aaa" font-size="10">1. #if 0 F32 dequant blocks (save 2.2 GB VRAM)  2. Add wubu_cuda_free() loops for 6x40 arrays</text>
+  <text x="38" y="268" fill="#aaa" font-size="10">3. Fix ssm_project() to use row_major kernel  4. Fix gen_text.c prompt  5. Cos-sim GPU SSM vs CPU</text>
+
+  <rect x="30" y="290" width="810" height="40" rx="3" fill="#0d1b0d" stroke="#00ff88" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="38" y="308" fill="#00ff88" font-size="11" font-weight="bold">Phase 29 (After verification): CUDA events → Profile SSM GPU speed → Compare vs CPU baseline (8.8 tok/s)</text>
+  <text x="38" y="322" fill="#00ff88" font-size="10">Phase 30: 256k cos-sim vs llama.cpp | MoE GPU router | Chunked prefill (if bottlenecks identified)</text>
+
+  <text x="450" y="380" fill="#666" font-size="10" text-anchor="middle">Honesty standard: Everything above phase 14 was written by an AI agent with DA verification. "It compiles" does not mean "it works."</text>
+</svg>
