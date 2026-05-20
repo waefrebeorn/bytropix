@@ -1,63 +1,57 @@
-# State — Phase 28c: GPU SSM PATH RUNS WITHOUT CRASHES
+# State — Phase 28e: Q6_K DEQUANT BUG FIXED! GPU SSM still diverges from CPU
 
-**bytropix: inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE)**
-**GPU SSM C==1 decode path: ALL 30 layers process without errors. Output correctness UNVERIFIED.**
+**bytropix: text + vision multi-modal inference engine**
+**GPU SSM C==1 decode: Q6_K dequant fix applied, GPU output anti-correlated to CPU (cos-sim -0.66)**
 
-## Root Cause Found and Fixed: Catastrophic Init Bug
+## Q6_K Dequant Bug Fixed (May 20)
 
-The pre-existing "illegal memory access" bug was NOT in the fused SSM kernels, but in the weight initialization.
+**Root cause of 365x constant offset:** GPU Q6_K matmul kernel subtracted `32.0` instead of `d * sc * 32`:
 
-**Bug:** `wubu_model_gpu_init()` had 6 `for (int i = 0; i < 40; i++)` NULL-assignment loops INSIDE the per-layer loop (lines 417-422). Every time a new SSM layer was initialized, it would NULL-out ALL 40 layers' small F32 weight pointers (ssm_beta, ssm_alpha, ssm_dt_bias, ssm_a, ssm_conv1d, ssm_norm).
+```c
+// BUG (was):
+sum += (double)x[idx0] * ((double)d * sc[is+0] * v6 - 32.0);
+// FIX:
+sum += (double)x[idx0] * (double)d * (double)sc[is+0] * (double)(v6 - 32);
+```
 
-**Effect:** Only the LAST SSM layer (L38) retained its small F32 weights. All other SSM layers had NULL pointers. When `ssm_beta_alpha_fused_decode` was called, it dereferenced NULL GPU pointers, causing "an illegal memory access was encountered."
+**Effect:** With gated norm output RMS ~1 and non-zero mean, SSM output was CONSTANT ~365 across ALL 2048 output elements. Fixed to std ~0.036.
 
-**Fix:** Removed the per-iteration re-zero loops. The arrays are calloc'd (zero-initialized) at the beginning of wubu_model_gpu_init, so no explicit NULL init is needed per-iteration.
+## Remaining: GPU vs CPU diverges at cos-sim -0.66
 
-## What Changed This Session
+- CPU path (FORCE_CPU_SSM): cos-sim 0.994 vs llama ✅
+- GPU path (forward_full): cos-sim -0.656 vs CPU path ❌
 
-### ✅ Fix 1: F32 dequant SSM weight upload removed
-- Wrapped in `#if 0` — saves ~2.2 GB VRAM
+### Verified Correct (matching CPU path):
+- Q5_K quant matmul (column-major) ✅
+- Q6_K quant matmul (column-major) ✅ (FIXED)
+- L2 normalization (L2 norm = 1.0 per head) ✅
+- q_scale = 1/sqrt(D_STATE) ✅
+- Gated norm (same formula, same norm_weight) ✅
+- Beta/alpha kernel (generates sigmoid/softplus values) ✅
+- Conv/silu/split kernel ✅
 
-### ✅ Fix 2: ssm_project() uses row_major kernel
-- Changed column-major to row_major in prefill N>1 fallback
+### Suspect Areas:
+1. **SSM recurrence state** — initialized to zero on GPU, may not persist correctly between layers/steps
+2. **Conv state management** — shifted by fused conv kernel, initial state may not match CPU
+3. **GPU/CPU state copy** — ssm_states vs d_ssm_state may diverge after forward_full returns
+4. **Fused conv/silu kernel** — may handle conv_state shift differently from CPU
 
-### ✅ Fix 3: SSM small F32 weight init bug fixed
-- Removed per-iteration `for (int i = 0; i < 40; i++) NULL` loops
-- ALL 30 SSM layers now have valid small F32 weights on GPU
-- GPU SSM forward_full C==1 decode path runs without crashes
+## Vision Encoder Status
+- 384 LoC in `src/wubu_vision.c` — 27-layer 3D ViT with mmproj
+- 111 LoC in `include/wubu_vision.h` — full API
+- 106 LoC in `tools/test_vision_real.c` — E2E test + text pipeline
+- **Status:** Written but NOT YET BUILT/TESTED in current session
 
-### ✅ Fix 4: CUDA error checks added
-- After every kernel call in forward_full
-- NULL pointer checks before beta/alpha kernel
-- Faster debugging for future issues
-
-## Current Status
-### Works (verified at runtime)
-- GPU init: ~3.0 GB VRAM (down from ~5.2 GB with F32 waste removed)
-- GQA attention on GPU (F32 cuBLAS)
-- Output projection on GPU (F32 SGEMM)
-- **GPU SSM forward_full C==1 decode: ALL 30 layers pass without any CUDA error**
-- Prefill fallback (ssm_project with row_major)
-
-### Still Broken
-- 🔴 **Model produces garbage output (`<-1>` tokens)** — SSM GPU compute is likely incorrect
-- 🔴 **No cos-sim comparison done** — GPU vs CPU vs llama.cpp never compared
-- 🔴 **Prefill N>1 forward_full bypassed** (C>1 cuBLAS error 13, uses ssm_project fallback)
-- 🔴 **Prefill GPU batch truncation** (gpu_output_project_batch T=5 > max=1)
-
-### DA Assessment
-| Claim | Reality |
-|-------|---------|
-| "F32 waste 2.2 GB" | ✅ FIXED |
-| "Mem leak 5.5 GB" | ❌ STALE (was already fixed) |
-| "ssm_project column-major" | ✅ FIXED (now row_major) |
-| "SSM GPU path runs" | ✅ NOW FIXED (was NULL init bug) |
-| "SSM GPU path correct" | ❓ UNKNOWN — runs without crash, output is garbage |
-| "GPU decode tok/s" | ❓ UNKNOWN — garbage output, not measurable |
-
-## Next Priority
-1. **Fix correctness** — SSM GPU compute produces wrong values. Compare GPU/CPU hidden states.
-2. **Build verification pipeline** — ref_dumper + layer_cos_sim
-3. **Fix prefill N>1** — cuBLAS error 13 in forward_full
-4. **Fix prefill batch truncation** — increase g_max_batch in gpu_output_proj
-5. **Profile after verification**
+## Quick Reference
+| Item | Path | Notes |
+|------|------|-------|
+| Q6_K dequant fix | `gpu_quant_matmul.cu:114` | Applied in c07cf14 |
+| GPU recurrence | `gpu_ssm_recurrence.cu:109` | Output with q_scale |
+| Gated norm kernel | `cuda_kernels.cu:248` | |
+| Beta/alpha fused | `cuda_kernels.cu:2723` | |
+| Conv/silu/split | `cuda_kernels.cu:2757` | |
+| CPU L2 norm (ref) | `wubu_ssm.c:176` | |
+| CPU q_scale | `wubu_ssm.c:530-534` | |
+| Vision encoder | `src/wubu_vision.c` | 384 LoC, 3D ViT |
+| Vision test E2E | `tools/test_vision_real.c` | Vision→text pipeline |
+| mmproj GGUF | `/mnt/wslg/distro/models/qwen3.6-35b-mmproj-F16.gguf` | Vision projection |

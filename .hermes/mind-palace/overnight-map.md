@@ -1,37 +1,35 @@
-# Overnight Map — Phase 28c: GPU SSM Path Fixed, Now Verify Correctness
+# Overnight Map — Phase 28e: Q6_K Dequant Fixed, GPU SSM Still Diverging
 
-**Active repo**: /home/wubu/bytropix/
-**Model**: Qwen3.6-35B-A3B-UD-IQ2_M.gguf (qwen35moe arch)
-**Current state**: GPU SSM C==1 decode path RUNS without illegal access ✅. Output is garbage (`<-1>` tokens) 🔴.
+**Active repo:** /home/wubu/bytropix/
+**Model:** Qwen3.6-35B-A3B-UD-IQ2_M.gguf (qwen35moe arch)
+**Vision model:** /mnt/wslg/distro/models/qwen3.6-35b-mmproj-F16.gguf
+**Current state:** Q6_K dequant FIXED ✅. GPU SSM cos-sim -0.66 vs CPU ❌. Vision encoder ported (384 LoC).
 
-## The Critical Bug That Was Found
-All prior "SSM GPU path never worked" issues traced to ONE bug:
-- Lines 417-422: `for (int i = 0; i < 40; i++) gpu->d_ssm_beta[i] = NULL` etc. INSIDE the per-layer loop
-- Each new layer NULL'd the previous layer's allocations
-- Only L38 (last SSM) had valid small F32 weights
-- `ssm_beta_alpha_fused_decode` crashed on NULL GPU pointer → "illegal memory access"
+## Verifiable Facts (DO NOT RE-DERIVE)
+- Last commit: `c07cf14` — Q6_K dequant offset fix
+- CPU SSM path matches llama at cos-sim 0.994 (proven)
+- GPU SSM produces anti-correlated output (cos-sim -0.66) — suspect state management
+- Remote at `4dc985e` — 8 local commits behind
+- gen_text_gpu binary exists (May 20, 1.6MB)
+- gen_text CPU build broken (GPU symbols without .cu)
+- Vision encoder exists: 27-layer 3D ViT, mmproj→2048, untested
+- F32 waste was a DEAD CLAIM — already removed in a032a8f
+- Memory leak was a FALSE POSITIVE — free() was correct
+- Column-major kernel was CORRECT layout for GGUF
 
-## Changes This Session
-1. `#if 0` wrapped F32 dequant upload (saves ~2.2 GB VRAM)
-2. ssm_project column-major → row_major
-3. **REMOVED** per-iteration NULL re-zero loops (THE BUG)
-4. Added CUDA error checks + NULL checks throughout forward_full
-5. Added debug MARK prints (will clean up)
+## Workstreams (pick one)
+**A [P0] Fix GPU SSM divergence** — highest impact. GPU has working fused kernels but state management bug. Trace recurrence and conv state across layers/steps. Target: cos-sim > 0.99.
 
-## Verified Working
-- All 30 SSM layers through forward_full C==1: beta/alpha kernel ✅, conv/silu/split ✅, L2 norm ✅, recurrence ✅, SiLU/gated norm ✅, ssm_out matmul ✅
-- No illegal memory access, no CUDA errors
+**B [P1] Fix CPU build + push** — gen_text fails at link. 8 critical GPU fixes local-only (no backup).
 
-## What Produces Garbage
-- Output is `<-1><-1><-1>` — token ID -1 from top-k with NaN/-inf logits
-- Possible causes:
-  1. SSM GPU compute path produces wrong hidden states (numerical error)
-  2. Output projection produces NaN/inf logits
-  3. GQA attention also has GPU path that might be wrong
-  4. Residual connections wrong (GPU modifies attn_out only, not x)
+**C [P2] Vision integration** — build test_vision_real, verify E2E pipeline, wire multi-modal.
 
-## Debug Next: Isolate to SSM vs GQA vs Output
-1. Test with CPU-only gen_text (too slow — 120s+)
-2. Use llama.cpp ref_dumper for reference data
-3. Compare GPU vs CPU layer outputs via DUMP_LAYER_DIR
-4. Check if the row_major quant matmul produces correct values (compare vs CPU quantized_matmul)
+## Data You Should Not Re-Derive
+- Q6_K dequant: fixed `d*sc*(v6-32)` not `d*sc*v6 - 32` (commit c07cf14)
+- Column-major is CORRECT for GGUF output-major weight layout
+- F32 waste: already `#if 0`'d in wubu_model_gpu.cu
+- Vision encoder dimensions: V_HIDDEN=1152, V_OUT_HIDDEN=2048, 27 layers, temp_patch=2
+- mmproj: [4608, 4608] → GELU → [4608, 2048] — maps 2 merged image tokens to text space
+
+## Fallback
+If debugging stalls, clean up: fix CPU build, push commits, write DA v11 document.

@@ -1,27 +1,39 @@
-# Goal Mantra — Phase 28 DA: Fix F32 Waste, Verify Correctness
+# Goal Mantra — Phase 28e: Q6_K Dequant Fixed, Fix GPU SSM Divergence
 
-**Target:** 1:1 inference parity with llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.
-**Current:** GPU_SUPPORT live. SSM GPU path compiles and runs — correctness UNVERIFIED.
+**Target:** Fix GPU SSM state management → cos-sim > 0.99 with CPU path.
+**Current:** Q6_K dequant FIXED. GPU still anti-correlated (cos-sim -0.66). Vision encoder ported (384 LoC).
 
-## DA Findings Blocking Progress
-1. 🔴 **F32 dequant SSM weights waste ~2.2 GB VRAM** — never used, never freed
-2. 🔴 **Preill N>1 fallback uses broken column-major kernel** — produces garbage
-3. 🔴 **wubu_model_gpu_free() leaks ~5.5 GB GPU memory** — d_attn_qkv_q etc. never freed
-4. 🟡 **Phase 26 fused kernels: verified alone, never in full pipeline**
-5. 🟡 **gen_text.c hardcoded 1-token prompt** — can't do proper comparison
-6. 🟡 **No cos-sim comparison done yet** — GPU SSM path output vs CPU path
+## STATE
+| Component | Status | Detail |
+|-----------|--------|--------|
+| Q6_K dequant | ✅ FIXED | `d*sc*(v6-32)` vs `32.0` |
+| GPU SSM vs CPU | ❌ cos-sim -0.66 | Anti-correlated output |
+| CPU SSM vs llama | ✅ cos-sim 0.994 | FORCE_CPU_SSM verified |
+| F32 waste removed | ✅ Saved ~2.2 GB | `#if 0` in a032a8f |
+| Vision encoder | ✅ 384 LoC ported | 3D ViT + mmproj pipeline |
+| CPU gen_text build | ❌ BROKEN | GPU symbols in wubu_model.o |
+| Remote push | 🔴 8 behind | All critical GPU fixes local |
 
-## Critical Fix Path
-1. [ ] Remove F32 dequant SSM weight upload (save 2.2 GB)
-2. [ ] Fix wubu_model_gpu_free() — free all quantized + F32 weights
-3. [ ] Fix wubu_model_gpu_ssm_project() — use row_major kernel instead of broken column-major
-4. [ ] Fix gen_text.c — accept prompt from stdin/argv for proper testing
-5. [ ] Cos-sim: GPU SSM vs CPU SSM at single layer, then full 30 layers
-6. [ ] Profile tok/s with GPU SSM vs CPU SSM baseline (~8-9 tok/s CPU)
+## BUILD
+```bash
+make gen_text_gpu       # GPU inference
+GPU=1 MAX_CTX=4096 ./gen_text_gpu "The capital of France is" 20 40
+FORCE_CPU_SSM=1 GPU=1 ./gen_text_gpu "test" 5 40  # CPU fallback
+```
 
-## Verification Strategy (DA-corrected)
-- Compare layer outputs: GPU SSM path vs CPU SSM path via DUMP_LAYER_DIR
-- Use gen_text (CPU) as reference, gen_text_gpu with GPU=1 as test
-- Fix tokenizer first: verify prompt tokenization matches llama.cpp
-- Each layer's cos-sim must be >0.99, final output >0.95
-- Profile AFTER correctness verified — meaningless to profile garbage output
+## P0: Fix GPU SSM divergence
+1. Debug dump at each stage: GPU vs CPU intermediate values
+2. Check recurrence state persistence (layers/steps)
+3. Check conv state init + shifting
+4. Fix → cos-sim > 0.99
+
+## P1: Infrastructure
+5. Fix CPU gen_text build (`#ifdef GPU_SUPPORT`)
+6. Push 8 commits to remote
+7. Re-verify full cos-sim
+
+## P2: Vision integration
+8. Build test_vision_real → verify output
+9. Wire full vision→text multi-modal pipeline
+
+## EVERY FIX: compile → run → checkpoint cos-sim → document

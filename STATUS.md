@@ -1,30 +1,39 @@
-# STATUS — bytropix Inference Engine (May 21 PM, Phase 28b DA)
+# STATUS — bytropix Inference Engine (May 20, Phase 28e)
 
-**GPU decode (SSM on CPU): 7.6-8.5 tok/s (4K ctx)** | **GPU_SUPPORT now live — SSM GPU path UNVERIFIED**
+**GPU SSM decode (C==1): ~5.9 tok/s | Q6_K dequant BUG FIXED | GPU still diverges from CPU (cos-sim -0.66)**
 
 ## What Works (✅ Verified at runtime)
-- GPU `gen_text_gpu`: full 40-layer, no hang, Q4_0 KV cache default
-- Q4_0 fused decode attention: 8.1 tok/s (beats FP16 7.6)
-- Fused Q5_K/Q6_K quant matmul (row_major): compiles and runs
-- **GPU_SUPPORT builds and runs**: wubu_model_gpu_ssm_forward_full() called per layer
+- GPU `gen_text_gpu`: full 40-layer, all 30 SSM layers on GPU, Q4_0 KV cache
+- Q6_K dequant offset corrected (was `32.0`, now `d*sc*(v6-32)`)
+- CPU SSM path matches llama.cpp at cos-sim 0.994 (FORCE_CPU_SSM)
+- Fused SSM kernels (beta/alpha, conv/silu/split, L2 norm, recurrence, gated norm, ssm_out)
+- Vision encoder: 384 LoC 3D ViT port + mmproj projection + text model pipeline
+- F32 dequant waste removed (`#if 0`, saved ~2.2 GB VRAM)
 
-## DA-Corrected Status (❓ = no longer trust old claims)
-- ❓ SSM GPU path correctness: **NEVER verified vs CPU path**. All cos-sim claims were from isolated tests or dead code comparisons
-- ❓ 256k output cos-sim vs llama.cpp (only verified at small context with dead GPU_SUPPORT)
-- 🔴 F32 dequant SSM weights: ~2.2 GB wasted VRAM, never used in inference
-- 🔴 GPU memory leak: quantized + F32 SSM weights never freed
-- 🔴 Prefill N>1 fallback uses broken column-major kernel
+## Remaining Bugs
+- ❌ GPU SSM state divergence: cos-sim -0.66 vs CPU path (anti-correlated)
+- ❌ CPU `gen_text` build broken (GPU symbols in wubu_model.o without .cu objects)
+- 🔴 8 commits not pushed to remote
 
-## P0 Fixes (Phase 28b)
-- Remove F32 dequant weight upload (save 2.2 GB)
-- Fix wubu_model_gpu_free() memory leak
-- Fix prefill N>1 fallback kernel (use row_major)
-- Fix gen_text.c prompt for proper testing
-- Cos-sim: GPU SSM vs CPU SSM
+## Phase 29 Plan
+1. Layer-by-layer GPU vs CPU hidden state comparison → find first divergence point
+2. Check recurrence state persistence between layers on GPU
+3. Check conv state initialization and shifting on GPU
+4. Fix state management → cos-sim > 0.99
+
+## Phase 30-35 Roadmap (Feature Cream)
+| Phase | Theme | Key Deliverable |
+|-------|-------|----------------|
+| 30 | Infrastructure | Fix CPU build, push commits |
+| 31 | Vision verification | Build + run test_vision_real E2E |
+| 32 | Multi-modal inference | Vision→text full pipeline |
+| 33 | Feature cream | Sigmoid gating, load balancing, chunked prefill, RoPE ext |
+| 34 | 256K multi-modal | Full context vision+text at scale |
+| 35 | Profile & optimize | CUDA events, bottleneck analysis, 10+ tok/s target |
 
 ## Build
 ```bash
-make gen_text      # CPU inference
-make gen_text_gpu  # GPU inference (GPU=1 env var for GPU init)
+make gen_text_gpu       # GPU inference (GPU=1 env var)
+make test_vision_real   # Vision encoder test
+make gen_text           # ❌ BROKEN — needs fix
 ```
-

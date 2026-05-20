@@ -1,38 +1,40 @@
 <div align="center">
 
-# ⚡ bytropix — WuBu Text AI Inference Engine
+# ⚡ bytropix — WuBu Text AI Multi-Modal Inference Engine
 
-**Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, `qwen35moe` arch)**
+**Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, `qwen35moe` arch) + Moondream3 Vision (mmproj)**
 
-[![Phase: 28b](https://img.shields.io/badge/Phase-28b--DA-blueviolet)](https://github.com/waefrebeorn/bytropix)
-[![GPU Decode: 8.5 tok/s](https://img.shields.io/badge/GPU%20Decode-8.5%20tok%2Fs-informational)](https://github.com/waefrebeorn/bytropix)
-[![KV Cache: Q4_0 4:1](https://img.shields.io/badge/KV%20Cache-Q4%5F0%204%3A1-green)](https://github.com/waefrebeorn/bytropix)
-[![256k VRAM: 3.56 GB](https://img.shields.io/badge/256k%20VRAM-3.56%20GB-success)](https://github.com/waefrebeorn/bytropix)
+[![Phase: 28e](https://img.shields.io/badge/Phase-28e--Q6K_Fix-blueviolet)](https://github.com/waefrebeorn/bytropix)
+[![GPU SSM Decode: ~5.9 tok/s](https://img.shields.io/badge/GPU_SSM-5.9_tok/s-informational)](https://github.com/waefrebeorn/bytropix)
+[![KV Cache: Q4_0 4:1 / F16 fallback](https://img.shields.io/badge/KV_Cache-Q4_0_4:1-green)](https://github.com/waefrebeorn/bytropix)
+[![Vision: 3D ViT ported](https://img.shields.io/badge/Vision-3D_ViT_384L-success)](https://github.com/waefrebeorn/bytropix)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue)](https://opensource.org/licenses/Apache-2.0)
-[![GPU: RTX 5050](https://img.shields.io/badge/GPU-RTX%205050%208GB-critical)](https://github.com/waefrebeorn/bytropix)
+[![GPU: RTX 5050](https://img.shields.io/badge/GPU-RTX_5050_8GB-critical)](https://github.com/waefrebeorn/bytropix)
 
 </div>
 
 ---
 
-## 📊 Current State
+## 📊 Current State (Phase 28e — May 20)
 
-<div align="center">
+| | Status | Metric | Detail |
+|:------:|--------|--------|--------|
+| ✅ | **GPU decode (4K ctx)** | **~5.9 tok/s** — GPU SSM active, all 30 SSM layers on GPU | |
+| ✅ | **Q6_K dequant fix** | **FIXED** — was `32.0`, now `d*sc*(v6-32)` (was constant ~365 output) | |
+| ❌ | **GPU vs CPU SSM divergence** | **cos-sim -0.66** — output anti-correlated to CPU | |
+| ✅ | **CPU SSM matches llama** | **cos-sim 0.994** — FORCE_CPU_SSM path verified | |
+| ✅ | **Vision encoder** | **384 LoC port** — 27-layer 3D ViT w/ mmproj projection to 2048-dim | |
+| ✅ | **Vision→text pipeline** | **test_vision_real.c** — vision encoder feeds directly into text model | |
+| ❌ | **CPU-only `gen_text` build** | **Broken** — wubu_model.o links GPU symbols without .cu objects | |
+| 🔴 | **Remote behind** | **8 commits not pushed** — all critical GPU fixes local-only | |
 
-|| Status | Metric | Detail |
-||:------:|--------|--------|
-|| ✅ | **GPU decode (4K ctx)** | **7.6-8.5 tok/s** — gen_text_gpu, SSM ON CPU (GPU_SUPPORT was dead code) |
-|| ✅ | **GPU decode (256k)** | **4.8 tok/s** — full attention, 5.7 tok/s sliding window 16K |
-|| ✅ | **GPU_SUPPORT now builds** | Phase 28: fixed 3 pre-existing bugs (braces, gpu_ctx_t, -DGPU_SUPPORT) |
-|| ❓ | **SSM GPU path correctness** | **NEVER VERIFIED** — cos-sim vs CPU path = 0. SSM GPU runs but output quality unknown |
-|| 🔴 | **F32 waste** | ~2.2 GB VRAM wasted on F32 dequant weights never used in inference |
-|| 🔴 | **GPU mem leak** | 5.5 GB of quantized + F32 SSM weights never freed in wubu_model_gpu_free() |
-|| 🔴 | **Prefill N>1 broken** | Fallback path uses column-major quant_matmul (wrong stride) |
-|| 🟡 | **Fused SSM beta/alpha decode** | Verified in isolation (cos-sim 1.0) but never tested in full pipeline |
-|| 🟡 | **L31 cos-sim** | 0.9585 — measured with OLD code (GPU_SUPPORT dead). Need re-measure |
-|| 🟡 | **External ref speed** | llama.cpp gets **35.4 tok/s** on RTX 4060 Ti. Gap unknown after GPU_SUPPORT fix |
-
-</div>
+### What the DA Debunked (Phase 28b claims → reality)
+| Doc Claimed | Reality |
+|-------------|---------|
+| 🔴 F32 waste ~2.2 GB | ✅ Already removed (`a032a8f`) |
+| 🔴 GPU mem leak ~5.5 GB | ❌ **False positive** — free() already freed everything |
+| 🔴 Column-major kernel broken | ❌ **False positive** — it was the CORRECT GGUF layout |
+| 🔴 gen_text.c hardcoded prompt | ❌ **False positive** — accepts argv[1] |
 
 ---
 
@@ -42,22 +44,20 @@
 # Build GPU inference
 make gen_text_gpu
 
-# Run (GPU=1 required for GPU init)
-GPU=1 MAX_CTX=4096 ./gen_text_gpu -m /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -t 0.6 -n 32
+# Run text inference
+GPU=1 MAX_CTX=4096 ./gen_text_gpu "The capital of France is" 20 40
 
-# CPU inference
-make gen_text
-./gen_text -m /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -t 0.6 -n 32
+# Vision encoder test
+make test_vision_real
+./test_vision_real /mnt/wslg/distro/models/qwen3.6-35b-mmproj-F16.gguf /tmp/screen_vision_input.bin
 
-# Reference comparison with llama.cpp
-make ref_dumper
-DUMP_LAYER_DIR=/tmp/ref ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Your prompt" 0
-DUMP_LAYER_DIR=/tmp/our ./gen_text "Your prompt" 0
-tools/layer_cos_sim /tmp/ref /tmp/our 40
+# Compare CPU vs GPU SSM
+FORCE_CPU_SSM=1 GPU=1 MAX_CTX=4096 ./gen_text_gpu "test" 5 40
 ```
 
 **Hardware:** AMD Ryzen 7950X (16C/32T) | 64 GB DDR5 | RTX 5050 8GB VRAM | WSL2
 **Model:** `/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf` (733 tensors, 10.7 GB)
+**Vision Proj:** `/mnt/wslg/distro/models/qwen3.6-35b-mmproj-F16.gguf`
 
 ---
 
@@ -66,7 +66,7 @@ tools/layer_cos_sim /tmp/ref /tmp/our 40
 ### Model Spec (Qwen3.6-35B-A3B / `qwen35moe` GGUF)
 
 ```
-40 Layers: 10 cycles × (3×SSM → 1×GQA)  ← 3:1 INTERLEAVED, not contiguous!
+40 Layers: 10 cycles × (3×SSM → 1×GQA)  ← 3:1 INTERLEAVED!
 ├── SSM layers: 0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38
 ├── GQA layers: 3,7,11,15,19,23,27,31,35,39
 ├── Hidden dim:    2048
@@ -80,70 +80,100 @@ tools/layer_cos_sim /tmp/ref /tmp/our 40
 └── Quant:         Mixed IQ2_XXS / IQ3_XXS / IQ4_XS / Q5_K / Q6_K / Q4_K (~2.7 bpw)
 ```
 
-### Per-Layer Flow
+### Vision Encoder (Moondream3 / 3D ViT in mmproj)
 
-**SSM layer** (3 out of every 4):
 ```
-x → RMSNorm → attn_qkv(Q5_K) → gate(Q5_K) → conv1d → SiLU → split → L2 norm →
-SSM recurrence(16 heads) → gated norm → ssm_out(Q6_K) → gate(SiLU) × → MoE → +residual
+27-layer Vision Transformer
+├── 3D patch embedding: spatial=16×16, temporal=2 frames
+├── Spatial merge: 2×2 grid patch merging (4:1 compression)
+├── Hidden dim: 1152 → 16 heads × 72 head_dim
+├── GQA attention (16 heads)
+├── GELU activation
+├── Post-LN + Merger MLP: 4608 → 2048 (matches text hidden dim)
+└── Output: image tokens in text embedding space
 ```
 
-**GQA layer** (every 4th: indices 3,7,11,15,19,23,27,31,35,39):
+### Multi-Modal Pipeline
+
 ```
-x → RMSNorm → attn_q(Q5_K) → gate(Q5_K) → attn_k(Q5_K) → attn_v(Q5_K) →
-IMRoPE → full attention(KV cache: Q4_0 or F16) → output(Q5_K) → sigmoid(gate) × → MoE → +residual
+Image → Patch Embed → 27×ViT → Spatial Merge → MMProj → Text tokens → 40×Text Model → Output
+                                                      ↑
+                                    Qwen3.6 Text Embedding ← GGUF token embeddings
 ```
 
-### VRAM Budget (256k Context)
+### VRAM Budget (256k Context, Text Only)
 
 | Component | Size | Format |
 |-----------|------|--------|
 | GQA weights | 1,040 MB | F32 (cuBLAS SGEMM) |
 | SSM weights (quantized) | 692 MB | Q5_K/Q6_K on GPU |
-| KV cache (GPU: Q4_0) | **1,440 MB** | **4-bit, 4:1 vs FP16 — Phase 23** |
-| KV cache (GPU: FP16 fallback) | 5,120 MB | FP16 — toggle via `GPU_Q4_0_KV=0` |
+| KV cache (GPU: Q4_0) | **1,440 MB** | **4-bit, 4:1 vs FP16** |
+| KV cache (GPU: FP16 fallback) | 5,120 MB | FP16 via `GPU_Q4_0_KV=0` |
 | Output projection | 1,900 MB | Q4_K quantized GPU kernel |
 | MoE + scratch | ~460 MB | IQ2_XXS + temp buffers |
 | **Total (Q4_0 GPU)** | **~3,562 MB** | **Fits 6.5-8GB GPU with 3GB headroom** |
 
 ---
 
-## 🔬 Verification
+## 🔭 Roadmap — Feature Cream
 
-### Tools
-| Tool | Purpose |
-|------|---------|
-| `tools/layer_cos_sim` | Per-layer cosine similarity vs llama.cpp |
-| `tools/analyze_intermediates.py` | Browse `DUMP_INTERMEDIATE_DIR` F32 binaries |
-| `ref_dumper` | llama.cpp reference intermediate dumper |
-| `DUMP_INTERMEDIATE_DIR` | 53 tensor types/layer from llama.cpp |
+**Phase 29 [NOW]: Fix GPU SSM divergence (cos-sim -0.66)**
+- Trace recurrence state vs conv state persistence across layers
+- Layer-by-layer hidden state compare: GPU path vs CPU path at each SSM stage
+- Fix state management → cos-sim > 0.99
 
-### DA Audit Status (Phase 28b — post-DA correction)
-| Claim | Status | Evidence |
-|-------|--------|---------|
-| GPU decode 8.5 tok/s | ✅ Verified (old code, SSM on CPU) | gen_text_gpu at 4K ctx, GPU_SUPPORT was dead |
-| Q5_K fused matmul identical | ❓ Unverified in pipeline | Only compared vs old cuBLAS path (also unused) |
-| SSM beta/alpha fused kernel | 🟡 Verified in isolation | **cos-sim 1.0 vs old cuBLAS path — NEVER tested in full inference** |
-| SSM conv/SiLU/split fused kernel | 🟡 Verified in isolation | **cos-sim 1.0 vs separated path — NEVER tested in full inference** |
-| GPU_SUPPORT builds and runs | ✅ Phase 28 | wubu_model_gpu_ssm_forward_full() called per layer |
-| SSM GPU path correct | ❓ **NEVER VERIFIED** | Cos-sim vs CPU path: 0 comparisons done |
-| 256k output cos-sim > 0.99 | ❓ Never verified | Only tested at small context, with dead GPU_SUPPORT |
-| MoE expert offload efficiency | ❓ Not profiled | Speculative bottleneck claims — no data |
-| F32 dequant VRAM waste | 🔴 ~2.2 GB | F32 weights uploaded but never used |
-| GPU memory leak | 🔴 ~5.5 GB | d_attn_qkv_q[40] etc. never freed |
+**Phase 30: Build infrastructure**
+- Fix CPU `gen_text` build (wrap GPU symbols in `#ifdef GPU_SUPPORT`)
+- Push 8 pending commits to remote
+- Re-verify cos-sim vs llama.cpp at current code state
+
+**Phase 31: Vision encoder verification**
+- Build and run `test_vision_real` end-to-end
+- Verify vision encoder output statistics (range, NaN, distribution)
+- Compare vision token distribution vs text token embedding distribution
+- Wire mmproj into text model pipeline (already partially done)
+
+**Phase 32: Multi-modal inference**
+- Image → vision encoder → mmproj → text embedding space
+- Concatenate or interleave vision tokens with text tokens
+- Full forward: vision + text through 40-layer model
+- Profile vision+text end-to-end
+
+**Phase 33: Feature cream — cherry-pick from vault synthesis**
+| Feature | Source | Priority |
+|---------|--------|----------|
+| Normalized sigmoid gating | DeepSeekMoE | P0 — MoE correctness |
+| Auxiliary-loss-free load balancing | DeepSeek-V3 | P0 — Training stability |
+| Chunked prefill (256K) | Qwen2.5-1M | P1 — First-token latency |
+| RoPE length extrapolation (4x) | Qwen2.5-1M | P1 — 256K without retrain |
+| DSA sparse attention | DeepSeek-V3.2 | P2 — O(L log L) GQA at scale |
+| MTP self-speculative decode | DeepSeek-V3 | P2 — 2x decode speed |
+| Entropix adaptive sampling | Vault | P3 — Smarter decoding |
+| WuBuSparseAttention | Vault | P3 — Linear attention alternative |
+
+**Phase 34: 256K multi-modal context**
+- Test vision + text at full 256K context
+- Profile VRAM, tok/s, accuracy vs. llama.cpp reference
+- Sliding window / sparse attention for GQA at scale
+
+**Phase 35: Performance profiling & optimization**
+- CUDA events per kernel: SSM, GQA, MoE, output proj
+- Identify true bottlenecks (MoE ~20-40ms hypothesized)
+- Fuse remaining kernels, optimize memory transfers
+- Target: 10+ tok/s at 256K with vision
 
 ---
 
-## 💡 Key Optimizations (Phase 25)
+## 🔬 Verification Tools
 
-| Optimization | File | Gain |
-|-------------|------|------|
-| Fused Q5_K matmul (no bv[256] spill) | `gpu_quant_matmul.cu` | Eliminates local mem spill (~15 vs 256 regs) |
-| Fused Q6_K matmul (same pattern) | `gpu_quant_matmul.cu` | Same |
-| Fused SSM beta/alpha for N=1 | `cuda_kernels.cu` | 1 kernel replaces 2 cuBLAS + 4 element-wise |
-| Q4_0 KV cache (default) | `wubu_model_gpu.cu` | 4:1 compression, 3.68GB saved at 256k |
-| Q4_0 fused decode attn | `cuda_kernels.cu` | 8.1 tok/s vs FP16 7.6 |
-| Sliding window attention | `cuda_kernels.cu` | GQA_WINDOW env, extra 16% at 256k |
+| Tool | Purpose |
+|------|---------|
+| `tools/layer_cos_sim` | Per-layer cosine similarity vs llama.cpp |
+| `tools/test_vision_real` | Vision encoder end-to-end with real image |
+| `tools/compare_logits` | Logit-level comparison vs reference |
+| `DUMP_LAYER_DIR` | Save per-layer hidden states to `.bin` |
+| `DUMP_INTERMEDIATE_DIR` | Save ALL intermediate tensors (53 types/layer) |
+| `PROFILE` | Per-layer timing breakdown |
 
 ---
 
@@ -151,31 +181,30 @@ IMRoPE → full attention(KV cache: Q4_0 or F16) → output(Q5_K) → sigmoid(ga
 
 ```
 bytropix/
-├── src/             # Core C/CUDA implementation
-├── include/         # Headers
-├── tools/           # Scripts + tools
-├── .hermes/         # Mind palace, vault, papers
-├── DIAGRAMS/        # SVG architecture diagrams
-├── THEORY/          # Research papers
-├── vault/           # Archives
-├── data/            # Pre-extracted data
-└── README.md        # This file
+├── src/              # Core C/CUDA (wubu_model, ssm, moe, gqa, vision, gpu)
+├── include/          # Headers (gguf_reader, wubu_model, wubu_vision)
+├── tools/            # 50+ binaries + tests + Python analysis
+├── .hermes/          # Mind palace, vault, DA audits, plans
+├── DIAGRAMS/         # SVG architecture diagrams
+├── data/             # Pre-extracted embeddings, vision configs
+├── vault/            # Unsloth quant format, cache compression refs
+└── tests/            # Regression test harness
 ```
 
 ---
 
 ## 📚 References
 
-- `.hermes/mind-palace/` — State, plan, goal-mantra, prestige (5 files)
-- `.hermes/vault/deepseek-collection/` — 28 DeepSeek papers (V3, V3.2, V4, MoE, NSA)
-- `.hermes/vault/benchmarks/` — External benchmark data
+- `.hermes/mind-palace/` — State, plan, goal-mantra, prestige, overnight map
+- `.hermes/vault/` — Synthesis (architecture), papers (DeepSeek, Qwen, Gemma)
+- `.hermes/vault/synthesis.md` — Complete architectural cross-reference (~19KB)
 - `~/llama.cpp/build/bin/llama-cli` — Ground truth reference binary
 
 ---
 
 <div align="center">
 
-*Engine: bytropix — from-scratch C inference for Qwen3.6-35B-A3B. Phase 28b: GPU_SUPPORT fixed and live, awaiting SSM GPU path verification.*
-*DA principle: every claim must be verified at runtime against a reference. Unverified claims marked ❓ or 🔴.*
+*Engine: bytropix — C inference for Qwen3.6-35B-A3B text + Moondream3 vision. Phase 28e: Q6_K dequant fixed, GPU SSM cos-sim -0.66 under debug. Vision encoder ported (384 LoC). Next: fix state divergence, wire multi-modal pipeline.*
+*DA principle: every claim verified at runtime. Unverified = ❓. Fixed = ✅. Debunked = documented.*
 
 </div>

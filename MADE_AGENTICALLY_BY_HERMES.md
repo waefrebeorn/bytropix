@@ -1,14 +1,17 @@
-# Made Agentically by Hermes — v24 (May 21, 2026 DA Audit)
+# Made Agentically by Hermes — v25 (May 20, 2026 Triple DA)
 
-## AI-Assisted Inference Engineering for Qwen3.6-35B-A3B
+## AI-Assisted Multi-Modal Inference Engineering for Qwen3.6-35B-A3B + Moondream3
 
 **Agent:** Hermes (Nous Research AI Agent)
 **Human:** waefrebeorn (Wubu)
 **Repository:** [waefrebeorn/bytropix](https://github.com/waefrebeorn/bytropix)
-**Model:** Qwen3.6-35B-A3B-UD-IQ2_M (2.7 bpw, 10.7 GB GGUF)
+**Model:** Qwen3.6-35B-A3B-UD-IQ2_M (2.7 bpw, 10.7 GB GGUF) + qwen3.6-35b-mmproj-F16 (vision)
 **Hardware:** AMD Ryzen 7950X (16C/32T), 64 GB DDR5, RTX 5050 8GB VRAM | WSL2
 **Reference:** llama.cpp (qwen35moe.cpp handler, 733-line model implementation)
-**Status (Phase 28b):** GPU_SUPPORT fixed and live. SSM GPU path active — CORRECTNESS UNVERIFIED.
+**Status (Phase 28e):** Q6_K dequant FIXED. GPU SSM diverges (cos-sim -0.66). Vision encoder ported (384 LoC).
+**Phase 28b DA debunked:** F32 waste ✅ removed, mem leak ❌ false positive, column-major ✅ correct kernel.
+**Vision:** 27-layer 3D ViT + mmproj → 2048-text-space. See test_vision_real.c for E2E pipeline.
+**Roadmap:** Fix GPU divergence → vision integration → feature cream (sigmoid gating, chunked prefill, DSA, MTP).
 **External ref:** 35.4 tok/s on RTX 4060 Ti 8GB (llama.cpp -ncmoe 30).
 
 ---
