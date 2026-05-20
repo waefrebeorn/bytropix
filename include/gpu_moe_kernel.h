@@ -31,6 +31,7 @@ void wubu_gpu_moe_forward_experts(
     float *output,
     cudaStream_t stream,
     uint8_t *d_gate_buf, uint8_t *d_up_buf, uint8_t *d_down_buf,
+    float *d_x_buf,
     float *d_out_buf, float *d_weights_buf);
 
 #ifdef __cplusplus

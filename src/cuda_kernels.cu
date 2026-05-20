@@ -2364,9 +2364,8 @@ void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
                 CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
         }
 
-        // Softmax in F32
-        for (int i = 0; i < C * n_q; i++)
-            softmax_kernel<<<1, 1, 0, stream>>>(d_scores_tile + (size_t)i * T_cache, 1, T_cache);
+        // Softmax in F32 via batched GPU kernel
+        softmax_kernel<<<C * n_q, 1, 0, stream>>>(d_scores_tile, C * n_q, T_cache);
 
         // V-weighted sum: convert scores tile to FP16, then GemmEx
         for (int h_kv = 0; h_kv < n_kv; h_kv++) {
@@ -2411,20 +2410,18 @@ void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
                     CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
             }
 
-            // Online softmax: for each query head
+            // Online softmax via GPU kernel (one thread per row)
+            // Replace the host-side loop that reads GPU memory element-by-element
             for (int h_q = 0; h_q < n_q; h_q++) {
-                float *s = d_scores_tile + (size_t)h_q * t_tile * C;
+                float *score_base = d_scores_tile + (size_t)h_q * t_tile * C;
+                float *M_hq = d_M + (size_t)h_q * C;
+                float *L_hq = d_L + (size_t)h_q * C;
+                float *O_hq = d_attn_out_f32 + (size_t)h_q * hd;
                 for (int c = 0; c < C; c++) {
-                    float *s_h = s + c * t_tile;
-                    float *m = d_M + h_q * C + c;
-                    float *l = d_L + h_q * C + c;
-                    float old_m = *m;
-                    float new_m = old_m;
-                    for (int j = 0; j < t_tile; j++) if (s_h[j] > new_m) new_m = s_h[j];
-                    float sum_l = 0.0f;
-                    for (int j = 0; j < t_tile; j++) sum_l += expf(s_h[j] - new_m);
-                    *l = expf(old_m - new_m) * (*l) + sum_l;
-                    *m = new_m;
+                    online_softmax_row_kernel<<<1, 1, 0, stream>>>(
+                        score_base + c * t_tile, t_tile, 1.0f,
+                        M_hq + c, L_hq + c,
+                        O_hq + (size_t)c * q_dim, hd);
                 }
             }
 
@@ -2442,13 +2439,9 @@ void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
             }
         }  // end tile loop
 
-        // Final rescale: attn_out *= 1/L
-        for (int h_q = 0; h_q < n_q; h_q++) {
-            for (int c = 0; c < C; c++) {
-                float inv_l = 1.0f / d_L[h_q * C + c];
-                for (int j = 0; j < hd; j++)
-                    d_attn_out_f32[h_q * hd + c * q_dim + j] *= inv_l;
-            }
+        // Final rescale: attn_out *= 1/L via GPU kernel
+        {   int grid = (n_ml + block - 1) / block;
+            normalize_attn_kernel<<<grid, block, 0, stream>>>(d_attn_out_f32, d_L, n_ml, hd);
         }
     }
 

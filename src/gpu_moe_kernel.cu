@@ -112,6 +112,7 @@ void wubu_gpu_moe_forward_experts(
     float *output,
     cudaStream_t stream,
     uint8_t *d_gate_buf, uint8_t *d_up_buf, uint8_t *d_down_buf,
+    float *d_x_buf,          // [D_MODEL] pre-allocated input buffer
     float *d_out_buf, float *d_weights_buf)
 {
     (void)gate_type; (void)up_type; (void)down_type;
@@ -119,10 +120,8 @@ void wubu_gpu_moe_forward_experts(
     const int N_EXPERTS = 8;
     const size_t smem_bytes = (D_FF + D_MODEL) * sizeof(float);
 
-    // Upload x once
-    float *d_x;
-    cudaMallocAsync((void**)&d_x, D_MODEL * sizeof(float), stream);
-    cudaMemcpyAsync(d_x, x, D_MODEL * sizeof(float), cudaMemcpyHostToDevice, stream);
+    // Upload x once (to pre-allocated buffer)
+    cudaMemcpyAsync(d_x_buf, x, D_MODEL * sizeof(float), cudaMemcpyHostToDevice, stream);
 
     // Per-expert: upload weights, launch kernel, download
     for (int e = 0; e < N_EXPERTS; e++) {
@@ -136,12 +135,11 @@ void wubu_gpu_moe_forward_experts(
         cudaMemcpyAsync(d_down_buf, down_q[e], (size_t)down_bytes, cudaMemcpyHostToDevice, stream);
 
         moe_expert_kernel<<<1, D_FF, smem_bytes, stream>>>(
-            d_x, d_gate_buf, d_up_buf, d_down_buf, weights[e], d_out_buf);
+            d_x_buf, d_gate_buf, d_up_buf, d_down_buf, weights[e], d_out_buf);
 
         cudaMemcpyAsync(output + (int64_t)e * D_MODEL, d_out_buf,
                         D_MODEL * sizeof(float), cudaMemcpyDeviceToHost, stream);
     }
 
     cudaStreamSynchronize(stream);
-    cudaFreeAsync(d_x, stream);
 }

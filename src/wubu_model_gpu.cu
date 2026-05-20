@@ -102,6 +102,7 @@ typedef struct {
     uint8_t *d_moe_gate;        // [8][gate_bytes_per_expert]
     uint8_t *d_moe_up;          // [8][up_bytes_per_expert]
     uint8_t *d_moe_down;        // [8][down_bytes_per_expert]
+    float   *d_moe_x;           // [D_MODEL] pre-allocated MoE input buffer
     float   *d_moe_out;         // [8][D_MODEL]
     float   *d_moe_weights;     // [8]
     // SSM recurrence persistent state (per layer, updated in-place)
@@ -510,6 +511,7 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     gpu->d_moe_gate    = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
     gpu->d_moe_up      = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
     gpu->d_moe_down    = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
+    gpu->d_moe_x       = wubu_cuda_alloc((size_t)D_MODEL * sizeof(float));
     gpu->d_moe_out     = wubu_cuda_alloc((size_t)(8 * D_MODEL * sizeof(float)));
     gpu->d_moe_weights = wubu_cuda_alloc((size_t)(8 * sizeof(float)));
     printf("GPU: MoE buffers allocated (3x%dKB + %dKB)\\n",
@@ -760,7 +762,7 @@ void wubu_model_gpu_moe_experts(
         w->ffn_gate_exps_q_type, w->ffn_up_exps_q_type, w->ffn_down_exps_q_type,
         wgts, gpu_out, stream,
         gpu->d_moe_gate, gpu->d_moe_up, gpu->d_moe_down,
-        gpu->d_moe_out, gpu->d_moe_weights);
+        gpu->d_moe_x, gpu->d_moe_out, gpu->d_moe_weights);
 
     // Distribute output across per-expert contribution buffers
     int active_idx = 0;
@@ -1050,6 +1052,7 @@ void wubu_model_gpu_free(wubu_model_t *model) {
     wubu_cuda_free((float*)gpu->d_moe_gate);
     wubu_cuda_free((float*)gpu->d_moe_up);
     wubu_cuda_free((float*)gpu->d_moe_down);
+    wubu_cuda_free(gpu->d_moe_x);
     wubu_cuda_free(gpu->d_moe_out);
     wubu_cuda_free(gpu->d_moe_weights);
 
