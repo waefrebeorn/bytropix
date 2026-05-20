@@ -7,6 +7,8 @@
  *
  * Each thread manages one row of the state matrix.
  * All 32 V-heads run in parallel (32 blocks).
+ *
+ * New: repeat_k_heads kernel eliminates CPU-based head repetition (16→32).
  */
 #include "gpu_ssm_recurrence.h"
 #include <cuda_runtime.h>
@@ -14,6 +16,45 @@
 
 #define V_HEADS 32
 #define D_STATE 128
+#define K_HEADS 16
+
+// Kernel: repeat K heads 16→32 and pack into [V_HEADS][D_STATE] layout
+// q_in:  [K_HEADS][D_STATE] on GPU
+// k_in:  [K_HEADS][D_STATE] on GPU
+// v_in:  [V_HEADS][D_STATE] on GPU
+// beta_in:[DT_RANK] on GPU
+// gate_in:[DT_RANK] on GPU
+// q_out: [V_HEADS][D_STATE] on GPU (output)
+// k_out: [V_HEADS][D_STATE] on GPU (output)
+// v_out: [V_HEADS][D_STATE] on GPU (output, same as v_in)
+// beta_out:[V_HEADS] on GPU (output, broadcast DT_RANK→V_HEADS)
+// gate_out:[V_HEADS] on GPU (output, broadcast DT_RANK→V_HEADS)
+__global__ void repeat_kheads_kernel(
+    const float * __restrict__ q_in,
+    const float * __restrict__ k_in,
+    const float * __restrict__ v_in,
+    const float * __restrict__ beta_in,
+    const float * __restrict__ gate_in,
+    float * __restrict__ q_out,
+    float * __restrict__ k_out,
+    float * __restrict__ v_out,
+    float * __restrict__ beta_out,
+    float * __restrict__ gate_out)
+{
+    int vh = blockIdx.x;       // 0..31
+    int i  = threadIdx.x;      // 0..127
+    int kh = vh % K_HEADS;     // which K-head to repeat
+    int idx = vh * D_STATE + i;
+
+    q_out[idx] = q_in[kh * D_STATE + i];
+    k_out[idx] = k_in[kh * D_STATE + i];
+    v_out[idx] = v_in[idx];    // passthrough (V already has 32 heads)
+
+    if (i == 0) {
+        beta_out[vh] = beta_in[vh];
+        gate_out[vh] = gate_in[vh];
+    }
+}
 
 // Recurrence for ONE token. State persists in global memory across calls.
 __global__ void ssm_recurrence_kernel(
@@ -66,6 +107,19 @@ __global__ void ssm_recurrence_kernel(
         delta_i += row_i[j] * s_q[j];
 
     delta_out[(int64_t)vh * D_STATE + i] = delta_i * q_scale;
+}
+
+// Host wrapper for repeat_kheads_kernel
+void wubu_gpu_repeat_kheads(
+    const float *q_in, const float *k_in, const float *v_in,
+    const float *beta_in, const float *gate_in,
+    float *q_out, float *k_out, float *v_out,
+    float *beta_out, float *gate_out,
+    cudaStream_t stream)
+{
+    repeat_kheads_kernel<<<V_HEADS, D_STATE, 0, stream>>>(
+        q_in, k_in, v_in, beta_in, gate_in,
+        q_out, k_out, v_out, beta_out, gate_out);
 }
 
 // Host wrapper

@@ -107,6 +107,8 @@ typedef struct {
     float   *d_moe_weights;     // [8]
     // SSM recurrence persistent state (per layer, updated in-place)
     float **d_ssm_state;        // [n_layers][V_HEADS][D_STATE][D_STATE]
+    // SSM conv state on GPU (per layer, updated in-place)
+    float **d_conv_state;       // [n_layers][CONV_KERNEL-1][CONV_DIM]
     // SSM recurrence temp buffers
     float *d_ssm_q_all;         // [V_HEADS][D_STATE]
     float *d_ssm_k_all;         // [V_HEADS][D_STATE]
@@ -519,12 +521,19 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
 
     // Allocate SSM recurrence state: one [V_HEADS][D_STATE][D_STATE] per SSM layer
     gpu->d_ssm_state = (float**)calloc(gpu->n_layers, sizeof(float*));
+    gpu->d_conv_state = (float**)calloc(gpu->n_layers, sizeof(float*));  // may be NULL for GQA layers
     for (int l = 0; l < gpu->n_layers; l++) {
         if (model->layers[l].is_ssm) {
             gpu->d_ssm_state[l] = wubu_cuda_alloc(
                 (size_t)SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float));
             cudaMemsetAsync(gpu->d_ssm_state[l], 0,
                 (size_t)SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float),
+                gpu->stream);
+            // Also allocate GPU conv state
+            gpu->d_conv_state[l] = wubu_cuda_alloc(
+                (size_t)(CONV_KERNEL - 1) * CONV_DIM * sizeof(float));
+            cudaMemsetAsync(gpu->d_conv_state[l], 0,
+                (size_t)(CONV_KERNEL - 1) * CONV_DIM * sizeof(float),
                 gpu->stream);
         }
     }
@@ -831,14 +840,16 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
     wubu_cuda_mul_by_scalar(C, dr, d_alpha_sp, gpu->d_ssm_a[layer_idx], d_gate_final, st);
 
     // === Step 5: Build conv_input from conv_state + qkv_all ===
-    {
+    // === Step 5: Build conv_input from GPU conv_state + qkv_all (all D2D) ===
         int k_1 = CONV_KERNEL - 1;
-        float *conv_state_host = model->conv_states + layer_idx * k_1 * CONV_DIM;
         float *d_conv_input = gpu->d_ssm_scratch + off;
         off += (size_t)(k_1 + C) * Cdim;
 
-        cudaMemcpyAsync(d_conv_input, conv_state_host, (size_t)k_1 * Cdim * sizeof(float),
-                        cudaMemcpyHostToDevice, st);
+        // Read conv_state directly from GPU (persistent, zeroed on init)
+        cudaMemcpyAsync(d_conv_input, gpu->d_conv_state[layer_idx],
+                        (size_t)k_1 * Cdim * sizeof(float),
+                        cudaMemcpyDeviceToDevice, st);
+        // Append qkv_all after conv_state (D2D)
         cudaMemcpyAsync(d_conv_input + (size_t)k_1 * Cdim, gpu->d_ssm_qkv_out,
                         (size_t)C * Cdim * sizeof(float),
                         cudaMemcpyDeviceToDevice, st);
@@ -849,10 +860,11 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
                          gpu->d_ssm_conv1d[layer_idx], d_conv_output, st);
         wubu_cuda_silu(C * Cdim, d_conv_output, d_conv_output, st);
 
-        // === Step 8: Update conv_state ===
+        // === Step 8: Update GPU conv_state (D2D) — save last k-1 elements ===
         float *last = d_conv_input + (size_t)C * Cdim;
-        cudaMemcpyAsync(conv_state_host, last, (size_t)k_1 * Cdim * sizeof(float),
-                        cudaMemcpyDeviceToHost, st);
+        cudaMemcpyAsync(gpu->d_conv_state[layer_idx], last,
+                        (size_t)k_1 * Cdim * sizeof(float),
+                        cudaMemcpyDeviceToDevice, st);
 
         // === Step 9-10: Split QKV + L2 norm ===
         float *d_q_conv = gpu->d_ssm_scratch + off; off += (size_t)C * kdim;
@@ -866,76 +878,34 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
         wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, st);
         wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, st);
 
-        // === Step 11: Token-by-token recurrence on GPU ===
+        // === Step 11: Token-by-token recurrence on GPU (all-GPU path) ===
         float *d_delta_out = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
 
-        // For each token, extract q/k/v/beta/gate from GPU, pack into
-        // [V_HEADS][D_STATE] layout (repeating K heads 16→32), call recurrence kernel
+        // For each token: repeat K heads 16→32 on GPU, then run recurrence kernel
+        // All data stays on GPU — no H2D/D2H for the head repetition
         for (int t = 0; t < C; t++) {
             float *state = gpu->d_ssm_state[layer_idx];
-            float h_q[SSM_V_HEADS * SSM_D_STATE];
-            float h_k[SSM_V_HEADS * SSM_D_STATE];
-            float h_v[SSM_V_HEADS * SSM_D_STATE];
-            float h_beta[SSM_V_HEADS];
-            float h_gate[SSM_V_HEADS];
+            float *d_q_t = d_q_norm + (size_t)t * kdim;     // [16, 128] on GPU
+            float *d_k_t = d_k_norm + (size_t)t * kdim;     // [16, 128] on GPU
+            float *d_v_t = d_v_conv + (size_t)t * vdim;     // [32, 128] on GPU
+            float *db = d_beta_sig + (size_t)t * dr;         // [32] on GPU
+            float *dg = d_gate_final + (size_t)t * dr;       // [32] on GPU
 
-            // Download q_norm[K_HEADS, D_STATE], k_norm[K_HEADS, D_STATE],
-            // v_conv[V_HEADS, D_STATE] from GPU to host
-            float host_q16[SSM_K_HEADS * SSM_D_STATE];
-            float host_k16[SSM_K_HEADS * SSM_D_STATE];
-            float host_v32[SSM_V_HEADS * SSM_D_STATE];
-            float host_beta32[DT_RANK];
-            float host_gate32[DT_RANK];
+            // GPU kernel: repeat K heads 16→32, write to GPU temp buffers
+            wubu_gpu_repeat_kheads(
+                d_q_t, d_k_t, d_v_t, db, dg,
+                gpu->d_ssm_q_all, gpu->d_ssm_k_all, gpu->d_ssm_v_all,
+                gpu->d_ssm_beta_arr, gpu->d_ssm_gate_arr,
+                st);
 
-            cudaMemcpy(host_q16, d_q_norm + (size_t)t * kdim,
-                       (size_t)kdim * sizeof(float), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_k16, d_k_norm + (size_t)t * kdim,
-                       (size_t)kdim * sizeof(float), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_v32, d_v_conv + (size_t)t * vdim,
-                       (size_t)vdim * sizeof(float), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_beta32, d_beta_sig + (size_t)t * dr,
-                       (size_t)dr * sizeof(float), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_gate32, d_gate_final + (size_t)t * dr,
-                       (size_t)dr * sizeof(float), cudaMemcpyDeviceToHost);
-
-            // Repeat K heads 16→32
-            for (int vh = 0; vh < SSM_V_HEADS; vh++) {
-                int kh = vh % SSM_K_HEADS;
-                for (int i = 0; i < SSM_D_STATE; i++) {
-                    h_q[vh * SSM_D_STATE + i] = host_q16[kh * SSM_D_STATE + i];
-                    h_k[vh * SSM_D_STATE + i] = host_k16[kh * SSM_D_STATE + i];
-                }
-                memcpy(h_v + vh * SSM_D_STATE, host_v32 + vh * SSM_D_STATE,
-                       SSM_D_STATE * sizeof(float));
-                h_beta[vh] = (vh < DT_RANK) ? host_beta32[vh] : 0.0f;
-                h_gate[vh] = (vh < DT_RANK) ? host_gate32[vh] : 0.0f;
-            }
-
-            // Upload rearranged vectors to GPU temp buffers
-            cudaMemcpyAsync(gpu->d_ssm_q_all, h_q,
-                (size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float),
-                cudaMemcpyHostToDevice, st);
-            cudaMemcpyAsync(gpu->d_ssm_k_all, h_k,
-                (size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float),
-                cudaMemcpyHostToDevice, st);
-            cudaMemcpyAsync(gpu->d_ssm_v_all, h_v,
-                (size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float),
-                cudaMemcpyHostToDevice, st);
-            cudaMemcpyAsync(gpu->d_ssm_beta_arr, h_beta,
-                (size_t)SSM_V_HEADS * sizeof(float),
-                cudaMemcpyHostToDevice, st);
-            cudaMemcpyAsync(gpu->d_ssm_gate_arr, h_gate,
-                (size_t)SSM_V_HEADS * sizeof(float),
-                cudaMemcpyHostToDevice, st);
-
-            // Launch recurrence kernel
+            // Launch recurrence kernel (reads from d_ssm_q_all etc.)
             wubu_gpu_ssm_recurrence(
                 state,
                 gpu->d_ssm_q_all, gpu->d_ssm_k_all, gpu->d_ssm_v_all,
                 gpu->d_ssm_beta_arr, gpu->d_ssm_gate_arr,
                 gpu->d_ssm_delta_out, st);
 
-            // Copy delta_out to per-token position
+            // Copy delta_out to per-token position (D2D)
             cudaMemcpyAsync(d_delta_out + (size_t)t * vdim, gpu->d_ssm_delta_out,
                 (size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float),
                 cudaMemcpyDeviceToDevice, st);
@@ -965,7 +935,6 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
                         (size_t)C * D_MODEL * sizeof(float),
                         cudaMemcpyDeviceToHost, st);
         cudaStreamSynchronize(st);
-    }
 
     return 1;
 }
@@ -1061,6 +1030,11 @@ void wubu_model_gpu_free(wubu_model_t *model) {
         for (int l = 0; l < gpu->n_layers; l++)
             wubu_cuda_free(gpu->d_ssm_state[l]);
         free(gpu->d_ssm_state);
+    }
+    if (gpu->d_conv_state) {
+        for (int l = 0; l < gpu->n_layers; l++)
+            wubu_cuda_free(gpu->d_conv_state[l]);
+        free(gpu->d_conv_state);
     }
     wubu_cuda_free(gpu->d_ssm_q_all);
     wubu_cuda_free(gpu->d_ssm_k_all);
