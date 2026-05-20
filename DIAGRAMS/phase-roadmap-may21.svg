@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 550" font-family="'Courier New', monospace" font-size="12">
+  <rect width="900" height="550" fill="#1a1a2e"/>
+  <text x="20" y="30" fill="#00ff88" font-size="16" font-weight="bold">bytropix — Phase Roadmap (May 21 2026)</text>
+  <text x="20" y="46" fill="#888" font-size="11">Qwen3.6-35B-A3B-UD-IQ2_M | GPU decode 8.5-9.2 tok/s (4K) | 4.8 tok/s (256k) | VRAM ~3.56GB</text>
+
+  <!-- Title row -->
+  <text x="20" y="70" fill="#ffaa00" font-size="14" font-weight="bold">▸ COMPLETED PHASES</text>
+  <line x1="20" y1="74" x2="860" y2="74" stroke="#333" stroke-width="1"/>
+
+  <!-- Phase timeline -->
+  <rect x="20" y="82" width="120" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="80" y="98" fill="#00ff88" font-size="11" text-anchor="middle">0-7 CPU Core</text>
+  <text x="148" y="98" fill="#666" font-size="10">GGUF reader, SSM recurrence, MoE</text>
+
+  <rect x="20" y="112" width="120" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="80" y="128" fill="#00ff88" font-size="11" text-anchor="middle">8-14 CPU Perf</text>
+  <text x="148" y="128" fill="#666" font-size="10">AVX2, OMP, fused Q8_K, Q6_K bug fix</text>
+
+  <rect x="20" y="142" width="120" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="80" y="158" fill="#00ff88" font-size="11" text-anchor="middle">15-22 GPU Infra</text>
+  <text x="148" y="158" fill="#666" font-size="10">GQA GPU, SSM full GPU, MoE cache, sliding window, Q4_0 KV</text>
+
+  <rect x="20" y="172" width="120" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="80" y="188" fill="#00ff88" font-size="11" text-anchor="middle">23-24 Q4_0 Fuse</text>
+  <text x="148" y="188" fill="#666" font-size="10">Fused Q4_0 decode attn (8.1 tok/s beats FP16), batched softmax, V-weighted sum</text>
+
+  <rect x="20" y="202" width="120" height="24" rx="4" fill="#0d3b0d" stroke="#ffff00" stroke-width="1"/>
+  <text x="80" y="218" fill="#ffff00" font-size="11" text-anchor="middle">25-26 Fuse SSM</text>
+  <text x="148" y="218" fill="#666" font-size="10">Fused Q5_K/Q6_K matmul, SSM beta/alpha fused, conv+SiLU+split fused</text>
+
+  <!-- Next Phase -->
+  <text x="20" y="252" fill="#ffaa00" font-size="14" font-weight="bold">▸ NEXT PHASES</text>
+  <line x1="20" y1="256" x2="860" y2="256" stroke="#333" stroke-width="1"/>
+
+  <rect x="20" y="264" width="120" height="24" rx="4" fill="#1a1a0e" stroke="#ffaa00" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="80" y="280" fill="#ffaa00" font-size="11" text-anchor="middle">27 Profiling</text>
+  <text x="148" y="280" fill="#666" font-size="10">Verify fused kernels (cos-sim vs old path), Nsight profile bottlenecks</text>
+
+  <rect x="20" y="294" width="120" height="24" rx="4" fill="#1a1a0e" stroke="#ffaa00" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="80" y="310" fill="#ffaa00" font-size="11" text-anchor="middle">28 MoE GPU</text>
+  <text x="148" y="310" fill="#666" font-size="10">MoE router on GPU, expert cache optimization (biggest perf lever)</text>
+
+  <rect x="20" y="324" width="120" height="24" rx="4" fill="#1a1a0e" stroke="#ffaa00" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="80" y="340" fill="#ffaa00" font-size="11" text-anchor="middle">29 Prefill</text>
+  <text x="148" y="340" fill="#666" font-size="10">Chunked prefill 3-7x at 256k, 256k cos-sim verification</text>
+
+  <rect x="20" y="354" width="120" height="24" rx="4" fill="#1a1a0e" stroke="#ffaa00" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="80" y="370" fill="#ffaa00" font-size="11" text-anchor="middle">30 Val+Lat</text>
+  <text x="148" y="370" fill="#666" font-size="10">Tool call accuracy at 256k, latency optimization for real-time use</text>
+
+  <!-- Research items -->
+  <text x="20" y="404" fill="#ffaa00" font-size="14" font-weight="bold">▸ RESEARCH (no ETA)</text>
+  <line x1="20" y1="408" x2="860" y2="408" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="424" fill="#666" font-size="11">• Poincaré SSM — 500-line test exists, NOT wired. Hyperbolic recurrence, 0.1 tok/s CPU</text>
+  <text x="20" y="440" fill="#666" font-size="11">• RotorQuant/TurboQuant KV cache — 4-6:1 compression (vs Q4_0's 4:1). External refs only</text>
+  <text x="20" y="456" fill="#666" font-size="11">• Hamilton encoder — MLP→5D quaternion manifold. BSP tree O(log N) attn for >512k. Legacy</text>
+  <text x="20" y="472" fill="#666" font-size="11">• NV64 ring buffer — CPU/GPU tandem pipeline. Design doc only, not implemented</text>
+
+  <!-- Gap analysis -->
+  <text x="20" y="506" fill="#ffaa00" font-size="14" font-weight="bold">▸ GAP: 4-7x SLOWER THAN LLAMA.CPP REFERENCE</text>
+  <line x1="20" y1="510" x2="860" y2="510" stroke="#333" stroke-width="1"/>
+  <text x="20" y="526" fill="#666" font-size="11">RTX 5050 (~160 GB/s) vs RTX 4060 Ti (~288 GB/s) = 1.8x. Software gap ~2-3x. MoE GPU forward suspected primary bottleneck.</text>
+</svg>

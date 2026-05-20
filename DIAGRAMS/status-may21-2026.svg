@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 750" font-family="'Courier New', monospace" font-size="12">
+  <rect width="900" height="750" fill="#1a1a2e"/>
+  <text x="20" y="30" fill="#00ff88" font-size="16" font-weight="bold">bytropix — Status May 21 2026 — Phase 25-26 Complete</text>
+  <text x="20" y="46" fill="#888" font-size="11">Qwen3.6-35B-A3B-UD-IQ2_M | RTX 5050 8GB | GPU decode 8.5-9.2 tok/s | 256k Q4_0 KV cache</text>
+
+  <!-- Phase boxes -->
+  <rect x="20" y="58" width="130" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="28" y="74" fill="#00ff88" font-size="11">Phases 0-14 ✓</text>
+  <rect x="160" y="58" width="130" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="168" y="74" fill="#00ff88" font-size="11">Phases 15-22 ✓</text>
+  <rect x="300" y="58" width="140" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="308" y="74" fill="#00ff88" font-size="11">Phase 23-24 ✓ Q4_0</text>
+  <rect x="450" y="58" width="180" height="24" rx="4" fill="#0d3b0d" stroke="#00ff88" stroke-width="1"/>
+  <text x="458" y="74" fill="#00ff88" font-size="11">Phase 25 ✓ Fused matmul</text>
+  <rect x="640" y="58" width="180" height="24" rx="4" fill="#0d3b0d" stroke="#ffff00" stroke-width="1"/>
+  <text x="648" y="74" fill="#ffff00" font-size="11">Phase 26 ✓ Conv+SiLU fused</text>
+
+  <!-- Phase box for next -->
+  <rect x="20" y="88" width="860" height="24" rx="4" fill="#1a1a0e" stroke="#ffaa00" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="450" y="105" fill="#ffaa00" font-size="12" text-anchor="middle">Phase 27 (Next): Verify fused kernels + Nsight profiling</text>
+
+  <!-- Performance table -->
+  <text x="20" y="130" fill="#ffaa00" font-size="14" font-weight="bold">▸ PERFORMANCE (DA verified — actual measurements)</text>
+  <line x1="20" y1="136" x2="860" y2="136" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="154" fill="#888" font-size="11">Condition</text>
+  <text x="300" y="154" fill="#888" font-size="11">Prefill</text>
+  <text x="420" y="154" fill="#888" font-size="11">Decode</text>
+  <text x="540" y="154" fill="#888" font-size="11">Status</text>
+  <text x="660" y="154" fill="#888" font-size="11">Method</text>
+  <line x1="20" y1="158" x2="860" y2="158" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="176" fill="#ccc" font-size="12">CPU, 4K ctx</text>
+  <text x="300" y="176" fill="#0ff" font-size="12">11</text>
+  <text x="420" y="176" fill="#0ff" font-size="12">8.8</text>
+  <text x="540" y="176" fill="#00ff88" font-size="12">✅</text>
+  <text x="660" y="176" fill="#aaa" font-size="11">gen_text, cpu-only</text>
+
+  <text x="20" y="196" fill="#ccc" font-size="12">GPU, 4K ctx</text>
+  <text x="300" y="196" fill="#0ff" font-size="12">22.8</text>
+  <text x="420" y="196" fill="#0ff" font-size="12">8.5-9.2</text>
+  <text x="540" y="196" fill="#00ff88" font-size="12">✅</text>
+  <text x="660" y="196" fill="#aaa" font-size="11">gen_text_gpu (Q4_0 KV)</text>
+
+  <text x="20" y="216" fill="#ccc" font-size="12">GPU, 256k full attn</text>
+  <text x="300" y="216" fill="#0ff" font-size="12">23.5</text>
+  <text x="420" y="216" fill="#0ff" font-size="12">4.8</text>
+  <text x="540" y="216" fill="#00ff88" font-size="12">✅</text>
+  <text x="660" y="216" fill="#aaa" font-size="11">full attention, Q4_0</text>
+
+  <text x="20" y="236" fill="#ccc" font-size="12">GPU, 256k sw 16K</text>
+  <text x="300" y="236" fill="#0ff" font-size="12">21.8</text>
+  <text x="420" y="236" fill="#0ff" font-size="12">5.7</text>
+  <text x="540" y="236" fill="#00ff88" font-size="12">✅</text>
+  <text x="660" y="236" fill="#aaa" font-size="11">GQA_WINDOW=16384</text>
+
+  <text x="20" y="256" fill="#ccc" font-size="12">RTX 4060 Ti ref</text>
+  <text x="300" y="256" fill="#ff4444" font-size="12">—</text>
+  <text x="420" y="256" fill="#ff4444" font-size="12">35.4</text>
+  <text x="540" y="256" fill="#ffaa00" font-size="12">🟡 ref</text>
+  <text x="660" y="256" fill="#aaa" font-size="11">llama.cpp -ncmoe 30</text>
+
+  <!-- Fused kernels table -->
+  <text x="20" y="286" fill="#ffaa00" font-size="14" font-weight="bold">▸ FUSED KERNELS (Phase 25-26)</text>
+  <line x1="20" y1="292" x2="860" y2="292" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="310" fill="#888" font-size="11">Kernel</text>
+  <text x="260" y="310" fill="#888" font-size="11">Replaces</text>
+  <text x="500" y="310" fill="#888" font-size="11">Verified?</text>
+  <text x="620" y="310" fill="#888" font-size="11">Status</text>
+  <line x1="20" y1="314" x2="860" y2="314" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="332" fill="#ccc" font-size="12">Q5_K fused matmul</text>
+  <text x="260" y="332" fill="#aaa" font-size="11">bv[256] spill → regs</text>
+  <text x="500" y="332" fill="#00ff88" font-size="12">✅ vs F32 ref</text>
+  <text x="620" y="332" fill="#00ff88" font-size="12">Landed</text>
+
+  <text x="20" y="350" fill="#ccc" font-size="12">Q6_K fused matmul</text>
+  <text x="260" y="350" fill="#aaa" font-size="11">bv[256] spill → regs</text>
+  <text x="500" y="350" fill="#00ff88" font-size="12">✅ vs F32 ref</text>
+  <text x="620" y="350" fill="#00ff88" font-size="12">Landed</text>
+
+  <text x="20" y="368" fill="#ccc" font-size="12">SSM beta/alpha fused</text>
+  <text x="260" y="368" fill="#aaa" font-size="11">2 cuBLAS + 4 elem-w</text>
+  <text x="500" y="368" fill="#ff4444" font-size="12">❓ Not vs cuBLAS</text>
+  <text x="620" y="368" fill="#ffff00" font-size="12">⚠️ Untested</text>
+
+  <text x="20" y="386" fill="#ccc" font-size="12">SSM conv+SiLU+split</text>
+  <text x="260" y="386" fill="#aaa" font-size="11">2 D2D + 5 launches</text>
+  <text x="500" y="386" fill="#ff4444" font-size="12">❓ Not vs old path</text>
+  <text x="620" y="386" fill="#ffff00" font-size="12">⚠️ Untested</text>
+
+  <text x="20" y="404" fill="#ccc" font-size="12">Q4_0 decode attn</text>
+  <text x="260" y="404" fill="#aaa" font-size="11">cuBLAS + dequant</text>
+  <text x="500" y="404" fill="#00ff88" font-size="12">✅ Yes</text>
+  <text x="620" y="404" fill="#00ff88" font-size="12">Verified</text>
+
+  <!-- DA Audit Summary -->
+  <text x="20" y="434" fill="#ffaa00" font-size="14" font-weight="bold">▸ DA AUDIT v23 FINDINGS</text>
+  <line x1="20" y1="440" x2="860" y2="440" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="458" fill="#888" font-size="11">#</text>
+  <text x="40" y="458" fill="#888" font-size="11">Finding</text>
+  <text x="600" y="458" fill="#888" font-size="11">Severity</text>
+  <text x="720" y="458" fill="#888" font-size="11">Status</text>
+  <line x1="20" y1="462" x2="860" y2="462" stroke="#333" stroke-width="1"/>
+
+  <text x="20" y="480" fill="#ccc" font-size="12">1</text>
+  <text x="40" y="480" fill="#ccc" font-size="12">README claimed gen_text_gpu hang (FIXED Phase 22)</text>
+  <text x="600" y="480" fill="#ff4444" font-size="12">🔴 False claim</text>
+  <text x="720" y="480" fill="#00ff88" font-size="12">Fixed</text>
+
+  <text x="20" y="498" fill="#ccc" font-size="12">2</text>
+  <text x="40" y="498" fill="#ccc" font-size="12">README said single-token decode: CPU (FALSE, GPU used)</text>
+  <text x="600" y="498" fill="#ff4444" font-size="12">🔴 False claim</text>
+  <text x="720" y="498" fill="#00ff88" font-size="12">Fixed</text>
+
+  <text x="20" y="516" fill="#ccc" font-size="12">3</text>
+  <text x="40" y="516" fill="#ccc" font-size="12">5 mind-palace docs stale (Phase 23-24 claims)</text>
+  <text x="600" y="516" fill="#ffaa00" font-size="12">🟡 Stale</text>
+  <text x="720" y="516" fill="#00ff88" font-size="12">Fixed</text>
+
+  <text x="20" y="534" fill="#ccc" font-size="12">4</text>
+  <text x="40" y="534" fill="#ccc" font-size="12">Fused kernels not verified vs old path</text>
+  <text x="600" y="534" fill="#ff4444" font-size="12">❓ Unverified</text>
+  <text x="720" y="534" fill="#ffff00" font-size="12">Open</text>
+
+  <text x="20" y="552" fill="#ccc" font-size="12">5</text>
+  <text x="40" y="552" fill="#ccc" font-size="12">256k cos-sim vs llama.cpp not measured</text>
+  <text x="600" y="552" fill="#ff4444" font-size="12">❓ Unverified</text>
+  <text x="720" y="552" fill="#ffff00" font-size="12">Open</text>
+
+  <text x="20" y="570" fill="#ccc" font-size="12">6</text>
+  <text x="40" y="570" fill="#ccc" font-size="12">Bottleneck analysis: printf guesses, not nsight</text>
+  <text x="600" y="570" fill="#ff4444" font-size="12">❓ Unverified</text>
+  <text x="720" y="570" fill="#ffff00" font-size="12">Open</text>
+
+  <text x="20" y="588" fill="#ccc" font-size="12">7</text>
+  <text x="40" y="588" fill="#ccc" font-size="12">60+ stale test binaries in root</text>
+  <text x="600" y="588" fill="#aaa" font-size="12">🟢 Cosmetic</text>
+  <text x="720" y="588" fill="#00ff88" font-size="12">.gitignore</text>
+
+  <!-- VRAM bar -->
+  <text x="20" y="618" fill="#ffaa00" font-size="14" font-weight="bold">▸ VRAM AT 256k: 3,562 MB total (fits 6.5-8GB GPUs)</text>
+  <line x1="20" y1="624" x2="860" y2="624" stroke="#333" stroke-width="1"/>
+
+  <rect x="20" y="632" width="165" height="14" rx="2" fill="#00cc66" stroke="#00ff88" stroke-width="1"/>
+  <text x="24" y="643" fill="#000" font-size="10" font-weight="bold">GQA 1040MB</text>
+  <rect x="195" y="632" width="110" height="14" rx="2" fill="#3399ff" stroke="#66bbff" stroke-width="1"/>
+  <text x="199" y="643" fill="#000" font-size="10" font-weight="bold">SSM 692MB</text>
+  <rect x="315" y="632" width="230" height="14" rx="2" fill="#ff6633" stroke="#ff9966" stroke-width="1"/>
+  <text x="319" y="643" fill="#000" font-size="10" font-weight="bold">KV Cache(Q4_0) 1440MB</text>
+  <rect x="555" y="632" width="170" height="14" rx="2" fill="#cc66ff" stroke="#dd99ff" stroke-width="1"/>
+  <text x="559" y="643" fill="#000" font-size="10" font-weight="bold">Output Proj 1900MB</text>
+  <rect x="735" y="632" width="50" height="14" rx="2" fill="#666" stroke="#999" stroke-width="1"/>
+  <text x="739" y="643" fill="#ccc" font-size="10" font-weight="bold">MoE 460</text>
+
+  <!-- Key -->
+  <text x="20" y="668" fill="#888" font-size="11">█ Verified ✅  █ Unverified ❓  █ External ref  █ Partial  █ Broken</text>
+
+  <text x="20" y="700" fill="#555" font-size="10">Engine: bytropix — from-scratch C inference for Qwen3.6-35B-A3B. External ref: 35.4 tok/s on RTX 4060 Ti via llama.cpp -ncmoe 30.</text>
+  <text x="20" y="715" fill="#555" font-size="10">DA principle: every claim carries a verification tag. ❓ = not checked against reference. Last updated: May 21 2026 AM.</text>
+  <text x="20" y="730" fill="#555" font-size="10">13 bugs fixed. Phase 25-26: fused quant matmul + SSM decode kernels (no bv[256] spill, 1 vs 6 kernel launches).</text>
+</svg>
