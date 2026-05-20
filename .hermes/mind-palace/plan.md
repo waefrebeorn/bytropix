@@ -1,43 +1,40 @@
-# Plan — Phase 28b DA: Fix F32 Waste, Verify Correctness, Then Profile
+# Plan — Phase 28b DA: F32 Waste Fixed, Now Fix forward_full Bug
 
-## 🔴 DA Blockers
+## ✅ Completed (this session)
+1. F32 dequant upload removed (`#if 0`) — saves ~2.2 GB VRAM
+2. ssm_project() fallback uses row_major kernel (fixes N>1 prefill path)
+3. CUDA error check on forward_full d_x upload
 
-### P0: Remove F32 dequant SSM weight upload
-File: `src/wubu_model_gpu.cu` lines 436-460, 474-483, 497-504
-- Uploads F32 dequant weights for ALL 3 SSM weight tensors (qkv/gate/out) = ~128 MB/layer × 30 = ~3.8 GB
-- NEVER used: `forward_full()` uses quantized row_major kernel, `ssm_project()` uses broken column-major
-- Fix: comment out or `#if 0` the F32 upload blocks, save 2.2 GB VRAM for context
+## 🔴 P0: Fix forward_full C==1 illegal memory access
+The SSM GPU decode path crashes with "an illegal memory access" on every SSM layer. This blocks ALL verification work.
 
-### P0: Fix wubu_model_gpu_free() memory leak
-File: `src/wubu_model_gpu.cu` in `wubu_model_gpu_free()`
-- Missing free calls for: d_attn_qkv_q[40], d_attn_gate_q[40], d_ssm_out_q[40], d_qkv_f32[40], d_gate_f32[40], d_out_f32[40]
-- Each is a raw uint8_t*/float* per layer — loop over layers and `wubu_cuda_free()`
+**Debug strategy:**
+1. Check row_major quant kernel output buffer sizes — verify d_ssm_qkv_out [256, 8192] fits
+2. Check fused beta/alpha kernel — verify weight access bounds (W_beta/alpha: [2048, 32])
+3. Insert MARK prints before/after each fused kernel in forward_full (C==1 path)
+4. Run with 1-token, read which kernel triggers corruption
+5. Check: are output buffers (d_ssm_q_all, d_ssm_k_all, d_ssm_v_all, d_ssm_beta_arr, etc.) properly allocated?
 
-### P0: Fix prefill N>1 fallback — use row_major kernel
-File: `src/wubu_model_gpu.cu` lines 864, 870 in `wubu_model_gpu_ssm_project()`
-- Currently calls `wubu_cuda_quant_matmul()` (broken column-major)
-- Change to `wubu_cuda_quant_matmul_row_major()` (correct row-major)
+**Files to modify:**
+- `src/cuda_kernels.cu` — fused kernels and ssm recurrence
+- `src/wubu_model_gpu.cu` — forward_full call sites
 
-### P0: Fix gen_text.c prompt for proper testing
-File: `tools/gen_text.c` line 63
-- Hardcoded `const char *prompt = "The meaning of life is"`  
-- Change to read from argv[optind] or stdin
-- This blocks ALL verification work
+## 🟡 P1: Fix forward_full C>1 prefill path
+cuBLAS error 13 on C>1 prefill. Currently falls through to ssm_project (now correct with row_major). Worth fixing after C==1 works.
 
-## 🟡 Verification Phase (after P0 fixes)
-- [ ] Cos-sim: GPU SSM vs CPU SSM at single layer (layer 0)
-- [ ] Cos-sim: full 30-layer SSM path vs CPU
-- [ ] Cos-sim: full 40-layer inference vs llama.cpp reference
-- [ ] Verify prompt tokenization matches llama.cpp
+**Root cause guess:** The code at line 1072-1074 prints "C>1 path not yet working" and returns 0. This was left as a TODO. The cuBLAS error was from the old F32 path (which we removed).
 
-## 🟢 Profile Phase (after verification)
-- [ ] CUDA events: measure SSM GPU time per layer
-- [ ] Compare tok/s: GPU SSM vs CPU SSM baseline
-- [ ] Profile MoE, GQA, output proj separately
-- [ ] Identify true bottlenecks (was: MoE ~20-40ms guess)
+## 🟡 P2: Build verification pipeline
+After forward_full is fixed:
+1. Build ref_dumper (needs llama headers — check /home/wubu/bytropix/llama/llama.h)
+2. Generate reference layer dumps via ref_dumper
+3. Generate our layer dumps via gen_text (CPU path — SLOW but accurate)
+4. Run layer_cos_sim to measure per-layer accuracy
+5. Enable GPU SSM and compare against CPU path
 
-## Next: 256k Context
-- [ ] After correctness verified at 4K, test at 256K
-- [ ] Cos-sim vs llama.cpp at 256K
-- [ ] VRAM headroom check after removing F32 waste
-
+## 🟢 P3: Profile Phase
+After verification:
+1. CUDA events: measure SSM GPU time per layer
+2. Compare tok/s: GPU SSM vs CPU SSM baseline
+3. Profile MoE, GQA, output proj separately
+4. Identify true bottlenecks

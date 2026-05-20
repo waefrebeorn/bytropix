@@ -433,20 +433,31 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
             cudaMemcpyAsync(gpu->d_attn_qkv_q[l], (const uint8_t*)ctx->data_blob + t->data_offset,
                            (size_t)qkv_raw, cudaMemcpyHostToDevice, gpu->stream);
             total_mb += qkv_raw / (1024.0 * 1024.0);
-            // F32 dequant disabled (dead code — forward_full() uses quantized row_major kernel)
-            // Saves ~2.2 GB VRAM. Struct fields d_qkv_f32[] preserved for init/free compatibility.
-#if 0
+            // Also upload F32 dequant for correct cuBLAS matmul
             {
                 float *h_f32 = (float*)malloc((size_t)qkv_n_elems * sizeof(float));
                 int n_read = gguf_read_tensor_f32(ctx, t, h_f32, qkv_n_elems);
                 if (h_f32 && n_read > 0) {
+                    // Check for NaN/Inf
+                    int nan_cnt = 0, inf_cnt = 0;
+                    for (int64_t i = 0; i < qkv_n_elems; i++) {
+                        float v = h_f32[i];
+                        if (v != v) nan_cnt++;  // NaN check
+                        if (v != 0 && (v * 0 != 0)) inf_cnt++;  // Inf check
+                    }
+                    if (nan_cnt || inf_cnt) {
+                        fprintf(stderr, "GPU SSM: qkv F32 has %d NaN %d Inf!\n", nan_cnt, inf_cnt);
+                    }
+                    printf("GPU SSM: qkv F32[0..4]: %.4f %.4f %.4f %.4f %.4f\n",
+                        h_f32[0], h_f32[1], h_f32[2], h_f32[3], h_f32[4]);
                     gpu->d_qkv_f32[l] = wubu_cuda_alloc((size_t)qkv_n_elems * sizeof(float));
                     wubu_cuda_to_device(h_f32, gpu->d_qkv_f32[l], (size_t)qkv_n_elems * sizeof(float), gpu->stream);
                     total_mb += (double)qkv_n_elems * sizeof(float) / (1024.0 * 1024.0);
+                } else {
+                    fprintf(stderr, "GPU SSM: qkv F32 read failed (n_read=%d)\n", n_read);
                 }
                 free(h_f32);
             }
-#endif
 
             // attn_gate.weight (Q5_K)
             snprintf(name, sizeof(name), "blk.%d.attn_gate.weight", l);
@@ -460,8 +471,7 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
             cudaMemcpyAsync(gpu->d_attn_gate_q[l], (const uint8_t*)ctx->data_blob + t->data_offset,
                            (size_t)gate_raw, cudaMemcpyHostToDevice, gpu->stream);
             total_mb += gate_raw / (1024.0 * 1024.0);
-            // F32 dequant disabled (dead code)
-#if 0
+            // F32 dequant for cuBLAS
             {
                 float *hf = (float*)malloc((size_t)gate_n_elems * sizeof(float));
                 if (hf && gguf_read_tensor_f32(ctx, t, hf, gate_n_elems) > 0) {
@@ -471,7 +481,6 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
                 }
                 free(hf);
             }
-#endif
 
             // ssm_out.weight (Q6_K)
             snprintf(name, sizeof(name), "blk.%d.ssm_out.weight", l);
@@ -485,8 +494,7 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
             cudaMemcpyAsync(gpu->d_ssm_out_q[l], (const uint8_t*)ctx->data_blob + t->data_offset,
                            (size_t)out_raw, cudaMemcpyHostToDevice, gpu->stream);
             total_mb += out_raw / (1024.0 * 1024.0);
-            // F32 dequant disabled (dead code)
-#if 0
+            // F32 dequant for cuBLAS
             {
                 float *hf = (float*)malloc((size_t)out_n_elems * sizeof(float));
                 if (hf && gguf_read_tensor_f32(ctx, t, hf, out_n_elems) > 0) {
@@ -496,7 +504,6 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
                 }
                 free(hf);
             }
-#endif
 
             // Upload SSM small F32 weights
             {
@@ -852,17 +859,17 @@ int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
     cudaMemcpyAsync(gpu->d_x, h_norm, (size_t)C * D_MODEL * sizeof(float),
                     cudaMemcpyHostToDevice, st);
 
-    // === attn_qkv: quantized matmul (row_major) ===
+    // === attn_qkv: quantized matmul ===
     // x [D=2048] @ W_qkv [D, C_qkv=8192] → d_qkv [8192]
-    wubu_cuda_quant_matmul_row_major(gpu->d_x, gpu->d_attn_qkv_q[layer_idx],
+    wubu_cuda_quant_matmul(gpu->d_x, gpu->d_attn_qkv_q[layer_idx],
         gpu->ssm_qkv_type[layer_idx], D_MODEL, CONV_DIM,
-        gpu->d_ssm_qkv_out, st);
+        gpu->d_ssm_qkv_out, NULL, 0, st);
 
-    // === attn_gate: quantized matmul (row_major) ===
+    // === attn_gate: quantized matmul ===
     // x [D=2048] @ W_gate [D, C_gate=4096] → d_z [4096]
-    wubu_cuda_quant_matmul_row_major(gpu->d_x, gpu->d_attn_gate_q[layer_idx],
+    wubu_cuda_quant_matmul(gpu->d_x, gpu->d_attn_gate_q[layer_idx],
         gpu->ssm_gate_type[layer_idx], D_MODEL, VALUE_DIM,
-        gpu->d_ssm_z_out, st);
+        gpu->d_ssm_z_out, NULL, 0, st);
 
     // Both matmuls are enqueued on the same stream, so they run sequentially.
     // One sync, then download both results.
@@ -1023,31 +1030,22 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
     const int vdim = VALUE_DIM;
     const int dr = DT_RANK;
 
-    // Upload input to GPU (forward_full)
-    cudaError_t ce = cudaMemcpyAsync(gpu->d_x, h_norm, (size_t)C * D_MODEL * sizeof(float),
+    // Upload input to GPU
+    cudaMemcpyAsync(gpu->d_x, h_norm, (size_t)C * D_MODEL * sizeof(float),
                     cudaMemcpyHostToDevice, st);
-    if (ce != cudaSuccess) { fprintf(stderr, "GPU SSM fwd_full: d_x upload: %s\\n", cudaGetErrorString(ce)); return 0; }
 
-    // === Step 1+2: Quantized matmuls (row-major layout, correct for GGUF) ===
-    // For C=1: each thread handles one row. For C>1: process C tokens via loop.
-    if (!gpu->d_attn_qkv_q[layer_idx]) { fprintf(stderr, "GPU SSM: qkv weights NULL!\n"); return 0; }
-    if (!gpu->d_attn_gate_q[layer_idx]) { fprintf(stderr, "GPU SSM: gate weights NULL!\n"); return 0; }
-    
-    // Process each token individually (row-major kernel handles one input vector)
-    for (int t = 0; t < C; t++) {
-        float *d_x_t = gpu->d_x + (size_t)t * D_MODEL;
-        float *d_qkv_t = gpu->d_ssm_qkv_out + (size_t)t * CONV_DIM;
-        float *d_z_t = gpu->d_ssm_z_out + (size_t)t * VALUE_DIM;
-        
-        int r1 = wubu_cuda_quant_matmul_row_major(d_x_t, gpu->d_attn_qkv_q[layer_idx],
-            gpu->ssm_qkv_type[layer_idx], D_MODEL, CONV_DIM, d_qkv_t, st);
-        int r2 = wubu_cuda_quant_matmul_row_major(d_x_t, gpu->d_attn_gate_q[layer_idx],
-            gpu->ssm_gate_type[layer_idx], D_MODEL, VALUE_DIM, d_z_t, st);
-        if (!r1 || !r2) {
-            fprintf(stderr, "GPU SSM: quant_matmul_row_major failed (types %d, %d)\n",
-                gpu->ssm_qkv_type[layer_idx], gpu->ssm_gate_type[layer_idx]);
-            return 0;
-        }
+    // === Step 1+2: F32 matmuls via cuBLAS (correct row-major layout) ===
+    // x [C, D_MODEL] @ W_qkv [D_MODEL, CONV_DIM] → qkv [C, CONV_DIM]
+    if (!gpu->d_qkv_f32[layer_idx]) { fprintf(stderr, "GPU SSM: d_qkv_f32 NULL!\n"); return 0; }
+    int cs1 = wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gpu->d_qkv_f32[layer_idx], CONV_DIM,
+        gpu->d_ssm_qkv_out, 1.0f, 0.0f);
+    // x [C, D_MODEL] @ W_gate [D_MODEL, VALUE_DIM] → z [C, VALUE_DIM]
+    if (!gpu->d_gate_f32[layer_idx]) { fprintf(stderr, "GPU SSM: d_gate_f32 NULL!\n"); return 0; }
+    int cs2 = wubu_cuda_matmul(ch, gpu->d_x, C, D_MODEL, gpu->d_gate_f32[layer_idx], VALUE_DIM,
+        gpu->d_ssm_z_out, 1.0f, 0.0f);
+    if (cs1 != 0 || cs2 != 0) {
+        fprintf(stderr, "GPU SSM cuBLAS error: cs1=%d cs2=%d\n", cs1, cs2);
+        return 0;
     }
 
     // === Step 3+4: Beta/Alpha + sigmoid/softplus/gate ===
@@ -1167,15 +1165,9 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
         wubu_cuda_gated_norm(1, C, SSM_V_HEADS, SSM_D_STATE,
                              d_delta_out, gpu->d_ssm_norm[layer_idx], d_z_silu, st);
 
-        // === Step 14: SSM output projection via quantized matmul (row-major Q6_K) ===
-        // d_delta_out [C, vdim] @ ssm_out [vdim, D_MODEL] → gout [C, D_MODEL]
-        for (int t = 0; t < C; t++) {
-            float *d_delta_t = d_delta_out + (size_t)t * vdim;
-            float *d_gout_t = gpu->d_gout + (size_t)t * D_MODEL;
-            int r3 = wubu_cuda_quant_matmul_row_major(d_delta_t, gpu->d_ssm_out_q[layer_idx],
-                gpu->ssm_out_type[layer_idx], vdim, D_MODEL, d_gout_t, st);
-            if (!r3) { fprintf(stderr, "GPU SSM: ssm_out matmul failed\n"); return 0; }
-        }
+        // === Step 14: SSM output projection via cuBLAS (F32, correct layout) ===
+        wubu_cuda_matmul(ch, d_delta_out, C, vdim, gpu->d_out_f32[layer_idx], D_MODEL,
+            gpu->d_gout, 1.0f, 0.0f);
 
         // === Step 15: Download final output ===
         cudaStreamSynchronize(st);
@@ -1201,22 +1193,6 @@ int wubu_model_gpu_quant_matmul(const float *x, int n_rows, int n_cols,
     cudaFree(d_x);
     cudaFree(d_y);
     return ret;
-}
-
-// ================================================================
-// Set SSM layer GPU pointers for hybrid (CPU SSM + GPU recurrence) mode
-// ================================================================
-extern "C"
-void wubu_gpu_set_ssm_hybrid(void *gpu_ctx_ptr, int layer_idx, ssm_layer_weights *ssm) {
-    gpu_ctx_t *gpu = (gpu_ctx_t *)gpu_ctx_ptr;
-    ssm->gpu_ssm_state = (void*)gpu->d_ssm_state[layer_idx];
-    ssm->gpu_q_buf     = (void*)gpu->d_ssm_q_all;
-    ssm->gpu_k_buf     = (void*)gpu->d_ssm_k_all;
-    ssm->gpu_v_buf     = (void*)gpu->d_ssm_v_all;
-    ssm->gpu_beta_buf  = (void*)gpu->d_ssm_beta_arr;
-    ssm->gpu_gate_buf  = (void*)gpu->d_ssm_gate_arr;
-    ssm->gpu_delta_buf = (void*)gpu->d_ssm_delta_out;
-    ssm->gpu_stream    = (void*)gpu->stream;
 }
 
 // ================================================================

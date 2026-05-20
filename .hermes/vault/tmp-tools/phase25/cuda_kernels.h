@@ -249,25 +249,9 @@ void wubu_cuda_attn_q4_0_decode(cublasHandle_t handle, cudaStream_t stream,
     float *d_out, float *d_scratch, void *d_hp_scratch,
     int T_cache, int attn_window);
 
-// Q4_0 KV cache quantize/dequant kernels (CUDA-only, __half requires nvcc)
-#ifdef __CUDACC__
+// Q4_0 KV cache quantize/dequant kernels
 __global__ void dequant_q4_0_cache_kernel(int n_blocks, const uint8_t *blocks, __half *out);
 __global__ void quant_q4_0_cache_kernel(int n, const __half *in, uint8_t *blocks);
-#endif
-
-// ================================================================
-// Fused SSM beta/alpha for N=1 decode — replaces cuBLAS + element-wise
-// ================================================================
-void ssm_beta_alpha_fused_decode_wrapper(cudaStream_t stream,
-    const float *d_x, const float *d_W_beta, const float *d_W_alpha,
-    const float *d_dt_bias, const float *d_ssm_a,
-    float *d_out_beta, float *d_out_gate, int dr);
-
-// Fused SSM conv1d + SiLU + split for N=1 decode
-void ssm_conv_silu_split_decode_wrapper(cudaStream_t stream,
-    const float *d_conv_state, const float *d_qkv_out, const float *d_conv1d_w,
-    float *d_out_q, float *d_out_k, float *d_out_v,
-    float *d_conv_state_out);
 
 // ================================================================
 // Poincaré ball hyperbolic CUDA kernels
