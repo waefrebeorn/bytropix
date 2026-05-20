@@ -2324,7 +2324,8 @@ void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
     const float *d_output_w,  // [N_Q_HEADS * HEAD_DIM, D_MODEL]
     float *d_out,             // [C, D_MODEL]
     float *d_score_scratch,   // scratch for F32 scores [C * n_q * ATTEN_TILE]
-    void *d_scratch_hp)       // FP16 temp: [n_q * hd + ATTEN_TILE * C] __half
+    void *d_scratch_hp,
+    int attn_window)          // sliding window (0 = full context)
 {
     const int n_q = GQA_Q_HEADS;
     const int n_kv = GQA_KV_HEADS;
@@ -2393,8 +2394,16 @@ void wubu_cuda_chunked_attn_fp16(cublasHandle_t handle, cudaStream_t stream,
         f32_to_f16_kernel<<<grid_q, block, 0, stream>>>(d_Q_chunk, d_Q_h, n_q * hd);
 
         int n_tiles = (T_cache + ATTEN_TILE - 1) / ATTEN_TILE;
-        float softmax_scale = 1.0f;  // will be c = exp(s - m)
-        for (int ti = 0; ti < n_tiles; ti++) {
+        // Sliding window: skip tiles before the window
+        int ti_start = 0;
+        if (attn_window > 0 && T_cache > attn_window) {
+            ti_start = (T_cache - attn_window) / ATTEN_TILE;
+            int window_tiles = (attn_window + ATTEN_TILE - 1) / ATTEN_TILE;
+            if (ti_start + window_tiles < n_tiles)
+                n_tiles = ti_start + window_tiles;
+        }
+        float softmax_scale = 1.0f;
+        for (int ti = ti_start; ti < n_tiles; ti++) {
             int t_start = ti * ATTEN_TILE;
             int t_tile = T_cache - t_start;
             if (t_tile > ATTEN_TILE) t_tile = ATTEN_TILE;

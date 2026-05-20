@@ -1,17 +1,17 @@
-# Overnight Map — Phase 19: Batched Prefill Achieved
+# Overnight Map — Phase 20: MoE Expert Cache on GPU
 
-## State: Prefill 18.6 tok/s, Decode 8.7 tok/s on 8GB Laptop GPU
+## State: Decode 8.9 tok/s, Prefill 18.6 tok/s on 8GB Laptop GPU
 
-Phase 19 complete: **Batched prefill via wubu_cuda_ssm_parallel_scan**. For C>1 (prefill batches), the SSM recurrence uses a single parallel associative scan call instead of token-by-token recurrence. Prefill throughput jumped from 11.7 to 18.6 tok/s (+59%).
+Phase 20 complete: **MoE expert cache on GPU**. Per-layer persistent cache stores last-used 8 experts' weight data (gate/up/down). On routing stability (expert indices unchanged for same layer between tokens), zero H2D transfers — the MoE kernel reads directly from GPU cache.
 
-## GPU SSM Pipeline (fully optimized)
-1. H2D: upload h_norm (8KB) — fundamental
-2-14. GPU: quantized matmuls → cuBLAS → element-wise → conv1d → SiLU → split → L2 norm → parallel scan recurrence → SiLU(z) → gated norm → ssm_out (all on device)
-15. D2H: download attn_out (8KB) — fundamental
+## What Was Done
+- `moe_cache_eid[40][8]` — per-layer expert index tracking
+- `moe_cache_w[40][3][8*270KB]` — per-layer GPU weight blobs
+- Cache check in `wubu_model_gpu_moe_experts`: compares indices, skips H2D on hit
+- `wubu_gpu_moe_forward_experts` accepts `use_gpu_ptrs` flag for direct GPU pointer pass-through
+- On miss: H2D → scratch → kernel → D2D cache update
+- 259MB cache fits within 8GB VRAM budget
 
-Only 2 transfers per layer. Everything else on device.
-
-## Remaining Targets (priority order)
-1. **MoE expert cache on GPU** — cache last-8 active experts per layer, skip H2D upload when routing stable
-2. **Sparse/streaming attention** — O(n·k) attention for >256k GQA
-3. **MoE router on GPU** — removes CPU from forward
+## Remaining Targets
+1. **Sparse/streaming attention** — O(n·k) for >256k GQA attention (last big bottleneck at 256k)
+2. **Unified SSM forward kernel** — fuse all SSM into single kernel

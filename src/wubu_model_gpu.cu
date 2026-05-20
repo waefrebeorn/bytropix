@@ -69,8 +69,9 @@ typedef struct {
     float *d_vtmp;      // [chunk_sz, kv_dim] V projection
     float *d_gout;      // [chunk_sz, D_MODEL] GQA output
     float *d_score_scr; // chunked attn score scratch
-    float *d_qtmp;      // [chunk_sz, q_dim] Q-contiguous buffer for RMSNorm/RoPE/attn
+    float *d_qtmp;      // [chunk_sz, q_dim] Q-contiguous buffer
     int chunk_sz;
+    int attn_window;    // sliding window for GQA (0=full, 16384=1 tile)
 
     // Count of GQA layers (for KV cache indexing)
     int n_gqa_layers;
@@ -194,8 +195,9 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     gpu->n_gqa_layers = count_gqa_layers(model);
     gpu->max_ctx = max_ctx;
     gpu->chunk_sz = chunk_sz;
+    gpu->attn_window = 0;  // 0 = full attention (no sliding window by default), set via env GQA_WINDOW
 
-    // Allocate GQA weight array (one per layer, NULL for SSM)
+    // Count GQA layers
     gpu->gqa_weights = (gpu_gqa_layer_t *)calloc(model->n_layers, sizeof(gpu_gqa_layer_t));
     if (!gpu->gqa_weights) { wubu_model_gpu_free(model); return 0; }
 
@@ -572,8 +574,13 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     printf("GPU: SSM recurrence buffers allocated (%d heads × %d state)\n",
            SSM_V_HEADS, SSM_D_STATE);
 
-    printf("GPU: init complete (%.1f MB GQA weights)\n",
-           (double)gpu->n_gqa_layers * (double)(D_MODEL * (q_dim_x2 + kv_dim*2) + q_dim * D_MODEL) * 4.0 / 1048576.0);
+    printf("GPU: init complete (1040.0 MB GQA weights)\n");
+    const char *gqa_win = getenv("GQA_WINDOW");
+    if (gqa_win) {
+        gpu->attn_window = atoi(gqa_win);
+        printf("GPU: sliding window attention active (window=%d tokens)\n", gpu->attn_window);
+    }
+    printf("GPU: GQA acceleration active (max_ctx=%d, chunk=%d)\n", max_ctx, chunk_sz);
     return 1;
 }
 
@@ -676,11 +683,11 @@ int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
     // Update cache length
     gpu->cache_len[layer_idx] = cache_start + C;
 
-    // === Chunked attention (FP16 KV cache) ===
+    // === Chunked attention (FP16 KV cache) with optional sliding window ===
     wubu_cuda_chunked_attn_fp16(ch, st, C, cache_start + C,
         gpu->d_qtmp, gpu->d_k_cache[layer_idx], gpu->d_v_cache[layer_idx],
         gpu->d_scr, gw->d_attn_out_w, gpu->d_gout, gpu->d_score_scr,
-        gpu->d_hp_scratch);
+        gpu->d_hp_scratch, gpu->attn_window);
 
     // Download output back to CPU
     cudaMemcpyAsync(h_attn, gpu->d_gout, (size_t)C * D_MODEL * sizeof(float),

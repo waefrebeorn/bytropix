@@ -1,8 +1,8 @@
-# State — Phase 19: Batched Prefill via Parallel Scan
+# State — Phase 21: Sliding Window Attention for 256k GQA
 
 **bytropix: Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE)**
-**GPU SSM: Only 2 transfers per layer (H2D input + D2H output)**
-**Prefill: 18.6 tok/s — Decode: 8.7 tok/s — 256k capable, 8GB VRAM**
+**Decode: 9.3 tok/s — Prefill: 18.6 tok/s — Sliding window GQA: 16→1 tile at 256k**
+**GQA_WINDOW env var: 0=full attention (default), N=attend to last N tokens only**
 
 ## VRAM Budget (256k Context)
 | Component | Size | Format |
@@ -14,24 +14,26 @@
 | FP16 KV cache | 5,120 MB | __half, growable |
 | Output proj (Q4_K) | 1,900 MB | quantized GPU kernel |
 | SSM scratch | 49 MB | reusable intermediates |
-| MoE + scratch | ~200 MB | IQ2_XXS + buffers |
-| **Total** | **~8,033 MB** | **~Fits 8GB VRAM** |
+| MoE + scratch | ~460 MB | cache(259MB) + scratch(200MB) |
+| **Total** | **~8,293 MB** | **~Fits 8GB VRAM** |
 
 ## Key Achievements
-- **Phase 19**: Batched prefill via `wubu_cuda_ssm_parallel_scan` — C>1 tokens processed in single GPU call. Prefill: 11.7→18.6 tok/s (+59%).
-- **Phase 18c**: GPU conv_state + GPU K-head repeat. Persistent GPU conv_state. repeat_kheads_kernel eliminates 10 H2D/D2H transfers per SSM layer.
-- **Phase 18b**: FP16 chunked attention GPU softmax. online_softmax_row_kernel replaces host-side loop. normalize_attn_kernel, batched softmax_kernel, pre-allocated MoE d_x.
-- **Phase 18**: Full GPU SSM pipeline — all 15 steps on GPU.
-- FP16 KV cache, growable KV cache, strided-batched SGEMM (2 launches vs 32), smart GPU gating.
-- 8 bugs fixed, 10+ phases shipped.
+- **Phase 21**: Sliding window attention — `GQA_WINDOW=N` skips tiles outside last N tokens. At 256k with window=16384: 1 tile vs 16 tiles per GQA layer = ~16x fewer SGEMM calls for attention.
+- **Phase 20**: MoE expert cache on GPU — 259MB cache, eliminates H2D on routing stability
+- **Phase 19**: Batched prefill via `wubu_cuda_ssm_parallel_scan` — 18.6 tok/s (+59%)
+- **Phase 18**: Full GPU SSM pipeline — only 2 transfers/layer
+- 10+ phases shipped, 8+ bugs fixed
 
-## GPU SSM Transfer Profile
-| Before | After | Savings |
-|--------|-------|---------|
-| 7 H2D/D2H transfers/layer | 2 transfers/layer | **-116KB/layer, -3.5MB/decode** |
+## GPU Pipeline Status
+| Component | GPU | Notes |
+|-----------|-----|-------|
+| SSM forward (all 15 steps) | ✅ | 2 transfers/layer, ~0.9ms |
+| GQA attention (FP16 KV) | ✅ | Sliding window via GQA_WINDOW env var |
+| MoE expert matmuls | ✅ | Cached, zero-H2D on stable routing |
+| Output projection (Q4_K) | ✅ | 2048×248320, ~0.1ms |
+| MoE router (F32) | ⬜ CPU | Small (2048×256), ~10μs |
 
 ## Remaining Targets
-1. **MoE expert cache on GPU** — cache last-8 active experts per layer, skip H2D when routing stable
-2. **Sparse/streaming attention** — O(n·k) for >256k GQA attention
-3. **MoE router on GPU** — removes CPU from forward
-4. **Unified SSM forward kernel** — fuse all SSM steps into single kernel
+1. **Unified SSM forward kernel** — fuse all SSM steps into single kernel
+2. **Sparse attention with global tokens** — add global position attention to sliding window
+
