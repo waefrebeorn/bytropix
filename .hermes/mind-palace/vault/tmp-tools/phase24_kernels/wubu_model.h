@@ -345,11 +345,6 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
                                      const float *h_norm, int C,
                                      float *h_attn_out);
 
-// Set SSM layer GPU pointers from gpu_ctx for hybrid (CPU SSM + GPU recurrence).
-// Called by wubu_model_forward fallback paths when gpu_ctx exists.
-// gpu_ctx is model->gpu_ctx (void*), ssm is layer->ssm to fill.
-void wubu_gpu_set_ssm_hybrid(void *gpu_ctx, int layer_idx, ssm_layer_weights *ssm);
-
 // Run MoE experts via GPU kernel, replacing CPU quantized matmul loop.
 // Shared expert and router remain on CPU.
 // Called per-token from wubu_moe_forward's expert loop.

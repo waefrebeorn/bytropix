@@ -1,37 +1,43 @@
-# Plan — Phase 25+ Roadmap (May 20 PM)
+# Plan — Phase 28b DA: Fix F32 Waste, Verify Correctness, Then Profile
 
-## Done (Phase 24)
-- Fused Q4_0 K→score decode kernel
-- Fused Q4_0 V-weighted sum kernel  
-- Batched online softmax kernel
-- Sliding window attention (GQA_WINDOW env)
+## 🔴 DA Blockers
 
-## Done (Phase 25)
-- Q5_K fused quant matmul (no bv[256] spill)
-- Q6_K fused quant matmul (no bv[256] spill)
-- SSM beta/alpha fused decode kernel (replaces cuBLAS + element-wise)
-- 28 DeepSeek papers in vault
-- External benchmark reference saved
-- DA audit v23 — all doc staleness mapped
+### P0: Remove F32 dequant SSM weight upload
+File: `src/wubu_model_gpu.cu` lines 436-460, 474-483, 497-504
+- Uploads F32 dequant weights for ALL 3 SSM weight tensors (qkv/gate/out) = ~128 MB/layer × 30 = ~3.8 GB
+- NEVER used: `forward_full()` uses quantized row_major kernel, `ssm_project()` uses broken column-major
+- Fix: comment out or `#if 0` the F32 upload blocks, save 2.2 GB VRAM for context
 
-## Phase 26 — Fuse SSM post-matmul for N=1 decode
-- Fuse: conv1d + SiLU + split + L2 norm → 1 kernel (currently 5 launches)
-- Reduces ~50μs/launch overhead × 30 layers = ~1.5ms per token
-- Post-fusion: verify correctness vs old separate-kernel path
+### P0: Fix wubu_model_gpu_free() memory leak
+File: `src/wubu_model_gpu.cu` in `wubu_model_gpu_free()`
+- Missing free calls for: d_attn_qkv_q[40], d_attn_gate_q[40], d_ssm_out_q[40], d_qkv_f32[40], d_gate_f32[40], d_out_f32[40]
+- Each is a raw uint8_t*/float* per layer — loop over layers and `wubu_cuda_free()`
 
-## Phase 27
-- Nsight profiling of full decode pipeline
-- Identify REAL bottlenecks (stop guessing)
-- Target: find why we're 4-7x slower than external reference
+### P0: Fix prefill N>1 fallback — use row_major kernel
+File: `src/wubu_model_gpu.cu` lines 864, 870 in `wubu_model_gpu_ssm_project()`
+- Currently calls `wubu_cuda_quant_matmul()` (broken column-major)
+- Change to `wubu_cuda_quant_matmul_row_major()` (correct row-major)
 
-## Phase 28
-- MoE router on GPU
-- Reduce CPU ↔ GPU sync for expert selection
+### P0: Fix gen_text.c prompt for proper testing
+File: `tools/gen_text.c` line 63
+- Hardcoded `const char *prompt = "The meaning of life is"`  
+- Change to read from argv[optind] or stdin
+- This blocks ALL verification work
 
-## Phase 29
-- Chunked prefill (from Qwen2.5-1M / Qwen3 paper)
-- 256k cos-sim verification pipeline
+## 🟡 Verification Phase (after P0 fixes)
+- [ ] Cos-sim: GPU SSM vs CPU SSM at single layer (layer 0)
+- [ ] Cos-sim: full 30-layer SSM path vs CPU
+- [ ] Cos-sim: full 40-layer inference vs llama.cpp reference
+- [ ] Verify prompt tokenization matches llama.cpp
 
-## Ongoing
-- Keep docs in sync with code (auto-DA after each commit)
-- Clean up repo binaries (make clean, .gitignore)
+## 🟢 Profile Phase (after verification)
+- [ ] CUDA events: measure SSM GPU time per layer
+- [ ] Compare tok/s: GPU SSM vs CPU SSM baseline
+- [ ] Profile MoE, GQA, output proj separately
+- [ ] Identify true bottlenecks (was: MoE ~20-40ms guess)
+
+## Next: 256k Context
+- [ ] After correctness verified at 4K, test at 256K
+- [ ] Cos-sim vs llama.cpp at 256K
+- [ ] VRAM headroom check after removing F32 waste
+

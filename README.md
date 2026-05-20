@@ -4,7 +4,7 @@
 
 **Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, `qwen35moe` arch)**
 
-[![Phase: 25](https://img.shields.io/badge/Phase-25-blueviolet)](https://github.com/waefrebeorn/bytropix)
+[![Phase: 28b](https://img.shields.io/badge/Phase-28b--DA-blueviolet)](https://github.com/waefrebeorn/bytropix)
 [![GPU Decode: 8.5 tok/s](https://img.shields.io/badge/GPU%20Decode-8.5%20tok%2Fs-informational)](https://github.com/waefrebeorn/bytropix)
 [![KV Cache: Q4_0 4:1](https://img.shields.io/badge/KV%20Cache-Q4%5F0%204%3A1-green)](https://github.com/waefrebeorn/bytropix)
 [![256k VRAM: 3.56 GB](https://img.shields.io/badge/256k%20VRAM-3.56%20GB-success)](https://github.com/waefrebeorn/bytropix)
@@ -19,18 +19,18 @@
 
 <div align="center">
 
-| Status | Metric | Detail |
-|:------:|--------|--------|
-| ✅ | **GPU decode (4K ctx)** | **7.6-8.5 tok/s** — gen_text_gpu, Q4_0 KV cache |
-| ✅ | **GPU decode (256k)** | **4.8 tok/s** — full attention, 5.7 tok/s sliding window 16K |
-| ✅ | **Prefill (4K)** | **22.8 tok/s** — GPU parallel scan |
-| ✅ | **Prefill (256k)** | **23.5 tok/s** — chunked attention |
-| ✅ | **VRAM at 256k** | **~3,562 MB** — fits 6.5-8GB GPU |
-| ✅ | **Q4_0 KV cache** | 1,440 MB at 256k = **4:1 compression** vs FP16 |
-| ✅ | **Fused Q5_K/Q6_K matmul** | Incremental dequant+dot — no local mem spill |
-| ✅ | **Fused SSM beta/alpha decode** | Manual dot + sigmoid/softplus/gate — 1 kernel vs 6 |
-| 🟡 | **External ref speed** | llama.cpp gets **35.4 tok/s** on RTX 4060 Ti (MoE expert offload). Gap ~4-7x needs profiling |
-| 🟡 | **L31 cos-sim** | 0.9585 — expected quant noise through 30 layers |
+|| Status | Metric | Detail |
+||:------:|--------|--------|
+|| ✅ | **GPU decode (4K ctx)** | **7.6-8.5 tok/s** — gen_text_gpu, SSM ON CPU (GPU_SUPPORT was dead code) |
+|| ✅ | **GPU decode (256k)** | **4.8 tok/s** — full attention, 5.7 tok/s sliding window 16K |
+|| ✅ | **GPU_SUPPORT now builds** | Phase 28: fixed 3 pre-existing bugs (braces, gpu_ctx_t, -DGPU_SUPPORT) |
+|| ❓ | **SSM GPU path correctness** | **NEVER VERIFIED** — cos-sim vs CPU path = 0. SSM GPU runs but output quality unknown |
+|| 🔴 | **F32 waste** | ~2.2 GB VRAM wasted on F32 dequant weights never used in inference |
+|| 🔴 | **GPU mem leak** | 5.5 GB of quantized + F32 SSM weights never freed in wubu_model_gpu_free() |
+|| 🔴 | **Prefill N>1 broken** | Fallback path uses column-major quant_matmul (wrong stride) |
+|| 🟡 | **Fused SSM beta/alpha decode** | Verified in isolation (cos-sim 1.0) but never tested in full pipeline |
+|| 🟡 | **L31 cos-sim** | 0.9585 — measured with OLD code (GPU_SUPPORT dead). Need re-measure |
+|| 🟡 | **External ref speed** | llama.cpp gets **35.4 tok/s** on RTX 4060 Ti. Gap unknown after GPU_SUPPORT fix |
 
 </div>
 
@@ -42,14 +42,14 @@
 # Build GPU inference
 make gen_text_gpu
 
-# Run
-GPU=1 MAX_CTX=4096 GPU_QUANTIZED=1 ./gen_text_gpu "The capital of France is" 32
+# Run (GPU=1 required for GPU init)
+GPU=1 MAX_CTX=4096 ./gen_text_gpu -m /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -t 0.6 -n 32
 
 # CPU inference
 make gen_text
-./gen_text "The capital of France is" 32
+./gen_text -m /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -t 0.6 -n 32
 
-# Reference comparison
+# Reference comparison with llama.cpp
 make ref_dumper
 DUMP_LAYER_DIR=/tmp/ref ./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "Your prompt" 0
 DUMP_LAYER_DIR=/tmp/our ./gen_text "Your prompt" 0
@@ -118,14 +118,19 @@ IMRoPE → full attention(KV cache: Q4_0 or F16) → output(Q5_K) → sigmoid(ga
 | `ref_dumper` | llama.cpp reference intermediate dumper |
 | `DUMP_INTERMEDIATE_DIR` | 53 tensor types/layer from llama.cpp |
 
-### DA Audit Status
-| Claim | Status |
-|-------|--------|
-| GPU decode 8.5 tok/s | ✅ Verified (gen_text_gpu at 4K ctx) |
-| Q5_K fused matmul identical | ❓ Not verified against old cuBLAS path |
-| SSM beta/alpha fused kernel | ❓ Not verified against old cuBLAS path |
-| 256k output cos-sim > 0.99 | ❓ Not verified — only tested at small context |
-| MoE expert offload efficiency | ❓ Not profiled — speculative bottleneck claims |
+### DA Audit Status (Phase 28b — post-DA correction)
+| Claim | Status | Evidence |
+|-------|--------|---------|
+| GPU decode 8.5 tok/s | ✅ Verified (old code, SSM on CPU) | gen_text_gpu at 4K ctx, GPU_SUPPORT was dead |
+| Q5_K fused matmul identical | ❓ Unverified in pipeline | Only compared vs old cuBLAS path (also unused) |
+| SSM beta/alpha fused kernel | 🟡 Verified in isolation | **cos-sim 1.0 vs old cuBLAS path — NEVER tested in full inference** |
+| SSM conv/SiLU/split fused kernel | 🟡 Verified in isolation | **cos-sim 1.0 vs separated path — NEVER tested in full inference** |
+| GPU_SUPPORT builds and runs | ✅ Phase 28 | wubu_model_gpu_ssm_forward_full() called per layer |
+| SSM GPU path correct | ❓ **NEVER VERIFIED** | Cos-sim vs CPU path: 0 comparisons done |
+| 256k output cos-sim > 0.99 | ❓ Never verified | Only tested at small context, with dead GPU_SUPPORT |
+| MoE expert offload efficiency | ❓ Not profiled | Speculative bottleneck claims — no data |
+| F32 dequant VRAM waste | 🔴 ~2.2 GB | F32 weights uploaded but never used |
+| GPU memory leak | 🔴 ~5.5 GB | d_attn_qkv_q[40] etc. never freed |
 
 ---
 
@@ -170,7 +175,7 @@ bytropix/
 
 <div align="center">
 
-*Engine: bytropix — from-scratch C inference for Qwen3.6-35B-A3B. Phase 25: fused quant matmul + SSM beta/alpha decode.*
-*DA principle: every claim must be verified at runtime against a reference. Unverified claims marked ❓*
+*Engine: bytropix — from-scratch C inference for Qwen3.6-35B-A3B. Phase 28b: GPU_SUPPORT fixed and live, awaiting SSM GPU path verification.*
+*DA principle: every claim must be verified at runtime against a reference. Unverified claims marked ❓ or 🔴.*
 
 </div>

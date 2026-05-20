@@ -1,29 +1,27 @@
-# Goal Mantra — May 20, 2026 (Phase 25 — Fused Quant Matmul + SSM Beta/Alpha ✅)
+# Goal Mantra — Phase 28 DA: Fix F32 Waste, Verify Correctness
 
-## THE GOAL
-**1:1 inference parity w/ llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.** ✅
-**GPU inference: ✅ working at 256k context, 8.5 tok/s decode.**
+**Target:** 1:1 inference parity with llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.
+**Current:** GPU_SUPPORT live. SSM GPU path compiles and runs — correctness UNVERIFIED.
 
-## STATE
-| Metric | Value | Status |
-|--------|-------|--------|
-| gen_text_gpu | Full 256k, no hang | ✅ (Bug #13 fixed) |
-| GPU Q4_0 KV cache | 1,440MB vs 5,120MB FP16 at 256k | ✅ |
-| Q4_0 decode speed | 8.1 tok/s Q4_0 vs 7.6 FP16 | ✅ Fused decode attn |
-| Q5_K/Q6_K fused matmul | Incremental dequant+dot, no spill | ✅ Phase 25 |
-| SSM beta/alpha fused decode | Manual dot + sigmoid/softplus/gate, 1 vs 6 kernels | ✅ Phase 25 |
-| External ref | 35.4 tok/s on RTX 4060 Ti (llama.cpp -ncmoe 30) | 🟡 4-7x gap |
-| 256k cos-sim vs llama.cpp | Not measured | ❓ Unverified |
-| Bottleneck profiling | Guesses, not nsight | ❓ Needed |
+## DA Findings Blocking Progress
+1. 🔴 **F32 dequant SSM weights waste ~2.2 GB VRAM** — never used, never freed
+2. 🔴 **Preill N>1 fallback uses broken column-major kernel** — produces garbage
+3. 🔴 **wubu_model_gpu_free() leaks ~5.5 GB GPU memory** — d_attn_qkv_q etc. never freed
+4. 🟡 **Phase 26 fused kernels: verified alone, never in full pipeline**
+5. 🟡 **gen_text.c hardcoded 1-token prompt** — can't do proper comparison
+6. 🟡 **No cos-sim comparison done yet** — GPU SSM path output vs CPU path
 
-## BUILD
-```bash
-make gen_text_gpu                # GPU inference (Q4_0 KV default)
-GPU_Q4_0_KV=0 ./gen_text_gpu     # FP16 KV cache fallback
-```
+## Critical Fix Path
+1. [ ] Remove F32 dequant SSM weight upload (save 2.2 GB)
+2. [ ] Fix wubu_model_gpu_free() — free all quantized + F32 weights
+3. [ ] Fix wubu_model_gpu_ssm_project() — use row_major kernel instead of broken column-major
+4. [ ] Fix gen_text.c — accept prompt from stdin/argv for proper testing
+5. [ ] Cos-sim: GPU SSM vs CPU SSM at single layer, then full 30 layers
+6. [ ] Profile tok/s with GPU SSM vs CPU SSM baseline (~8-9 tok/s CPU)
 
-## NEXT
-P0 — Fuse conv1d+SiLU+split+L2 norm into single SSM decode kernel
-P1 — MoE router on GPU
-P1 — Nsight profiling of decode bottlenecks
-P2 — Chunked prefill (3-7x at 256k)
+## Verification Strategy (DA-corrected)
+- Compare layer outputs: GPU SSM path vs CPU SSM path via DUMP_LAYER_DIR
+- Use gen_text (CPU) as reference, gen_text_gpu with GPU=1 as test
+- Fix tokenizer first: verify prompt tokenization matches llama.cpp
+- Each layer's cos-sim must be >0.99, final output >0.95
+- Profile AFTER correctness verified — meaningless to profile garbage output

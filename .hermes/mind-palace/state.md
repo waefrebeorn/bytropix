@@ -1,43 +1,45 @@
-# State — Phase 26: Fused SSM Conv+SiLU+Split (May 21 AM)
+# State — Phase 28 DA: GPU_SUPPORT Live but Unverified, F32 Dead Weight
 
 **bytropix: inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE)**
-**GPU decode: 8.5-9.2 tok/s (4K ctx). VRAM: ~3.56GB.**
+**GPU: GQA accel active. SSM GPU path compiles and runs — correctness UNVERIFIED.**
 
-## Phase 26 Fused Kernel
-- `ssm_conv_silu_split_decode` — combines conv_state copy, conv1d, SiLU, split QKV, conv_state update into 1 kernel
-- Eliminates 2 D2D memcpys + 5 kernel launches per SSM layer
-- Total kernel launches per decode token: ~270 (down from ~450 before Phase 25)
+## DA Audit Findings (May 21, 3-pass)
 
-## Modified Files (Phase 25+26)
-- `src/gpu_quant_matmul.cu` — fused Q5_K + Q6_K matmul
-- `src/cuda_kernels.cu` — ssm_beta_alpha_fused_decode + ssm_conv_silu_split_decode
-- `include/cuda_kernels.h` — wrapper declarations
-- `src/wubu_model_gpu.cu` — conditional fused paths for C==1 decode
-- `README.md`, `STATUS.md` — DA cleanup
-- All 5 mind-palace docs — Phase 25+ accurate
+### ⚠️ Finding 1: F32 dequant weights on GPU waste ~2.2 GB VRAM
+`wubu_model_gpu_init()` uploads BOTH quantized (Q5_K/Q6_K) AND F32 dequantized SSM weights for each layer. The 4532 MB figure is DOUBLE-COUNTED: ~2266 MB quant + ~2266 MB F32 dequant. The F32 weights are referenced only by `wubu_model_gpu_ssm_project()` which uses the OLD broken column-major quant_matmul kernel (dead code). The new `wubu_model_gpu_ssm_forward_full()` uses only the quantized weights via row_major kernel. **The F32 dequant weights are never used and never freed — memory leak.**
 
-## DA Audit v23 Findings
-| # | Finding | Severity |
-|---|---------|----------|
-| 1 | README claimed "gen_text_gpu hang" — FIXED in Phase 22 | 🔴 False claim |
-| 2 | README said "single-token decode: CPU path" — FALSE, GPU used | 🔴 False claim |
-| 3 | goal-mantra/plan/prestige all Phase 23-24 claims | 🟡 Stale |
-| 4 | ssm_beta_alpha_fused_decode NOT verified vs old path | ❓ Unverified |
-| 5 | ssm_conv_silu_split_decode NOT verified vs old path | ❓ Unverified |
-| 6 | 256k output cos-sim vs llama.cpp NOT measured | ❓ Unverified |
-| 7 | Bottleneck claims unprofiled (guesses, not nsight) | ❓ Unverified |
-| 8 | 60+ stale binaries cluttering root | 🟢 Fixed (.gitignore) |
+### ⚠️ Finding 2: Prefill N>1 fallback uses broken quant matmul
+`wubu_model_gpu_ssm_project()` (line 864 in wubu_model_gpu.cu) calls `wubu_cuda_quant_matmul()` — the OLD column-major kernel with wrong stride. This function IS called from the N>1 prefill fallback path (wubu_model.c line 524). The old kernel reads garbage data. **SSM prefill at N>1 produces garbage when forward_full fails.**
 
-## True Bottlenecks (informed guesses, need profiling)
-1. **MoE expert forward**: ~20-40ms per layer (IQ2_XXS dequant + matmul + weight upload on cache miss)
-2. **Q5_K quant matmuls**: ~6ms total for 30 SSM layers
-3. **GQA Q4_0 attention**: ~30ms at 256k context
-4. **Everything else**: ~15ms
+### ⚠️ Finding 3: Quantized SSM weights never freed
+`d_attn_qkv_q[40]`, `d_attn_gate_q[40]`, `d_ssm_out_q[40]`, `d_qkv_f32[40]`, `d_gate_f32[40]`, `d_out_f32[40]` have ZERO free calls in `wubu_model_gpu_free()`. Memory leak: ~5.5 GB of GPU allocations never freed.
 
-## External Reference
-llama.cpp -ncmoe 30: 35.4 tok/s on RTX 4060 Ti 8GB. Hardwae gap ~1.8x (288 vs 160 GB/s). Software gap ~2-3x.
+### ⚠️ Finding 4: Phase 26 fused kernels verified but path untested end-to-end
+The `ssm_beta_alpha_fused_decode` and `ssm_conv_silu_split_decode` kernels are called from `wubu_model_gpu_ssm_forward_full()` (lines 1068, 1085). They pass f32* device pointers. But the ENTIRE forward_full output has NEVER been compared against the CPU path. Verifying individual kernels ≠ verifying the full pipeline.
 
-## Next
-- Verify fused kernels against old path (cos-sim comparison)
-- Add GPU timing instrumentation (nsight)
-- Profile MoE — biggest bottleneck candidate
+### ⚠️ Finding 5: README.md claims are stale
+- "Phase: 25" — actually Phase 28
+- "GPU decode 8.5 tok/s" — measured BEFORE GPU_SUPPORT was live (SSM on CPU). With SSM GPU path active, speed unknown
+- "SSM beta/alpha fused kernel ✅ verified cos-sim 1.0" — verified in isolation, never in full inference
+- SSM weight VRAM budget says "692 MB" but actual upload is 4532 MB (includes F32 dead weight)
+
+## What Works (✅ actually verified at runtime)
+- GPU init completes (GQA 1040 MB, SSM quant 2266 MB, KV cache 1440 MB, MoE ~460 MB) = ~5.2 GB total
+- GQA attention on GPU
+- Output projection on GPU (Q4_K kernel)
+- wubu_gpu_set_ssm_hybrid() helper for hybrid GPU recurrence mode
+- gen_text_gpu builds, runs, exits 0
+
+## What's Broken or Unverified (❓)
+- SSM GPU path output NEVER compared vs CPU path (no cos-sim done)
+- F32 dequant SSM weights wasting ~2.2 GB VRAM, never freed
+- Prefill N>1 fallback uses broken column-major quant_matmul
+- gen_text.c hardcoded 1-token prompt (pre-existing, blocks proper testing)
+- 256k context cos-sim vs llama.cpp: never done
+
+## Verification Priority
+1. **Add `-DNO_F32_UPLOAD` or remove F32 dequant upload** to save 2.2 GB VRAM
+2. **Fix wubu_model_gpu_free** to free d_attn_qkv_q, d_attn_gate_q, d_ssm_out_q, and F32 variants
+3. **Build proper test harness** — modify gen_text.c to accept prompt from stdin or args
+4. **Compare GPU SSM vs CPU SSM** — cos-sim at single layer, then full 30 layers
+5. **Fix prefill N>1 path** — use row_major kernel in wubu_model_gpu_ssm_project() too
