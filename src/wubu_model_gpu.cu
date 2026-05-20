@@ -109,6 +109,10 @@ typedef struct {
     float **d_ssm_state;        // [n_layers][V_HEADS][D_STATE][D_STATE]
     // SSM conv state on GPU (per layer, updated in-place)
     float **d_conv_state;       // [n_layers][CONV_KERNEL-1][CONV_DIM]
+    // MoE expert cache (per layer, last-used 8 experts, avoids H2D on routing stability)
+    int **moe_cache_eid;        // [n_layers][8] expert IDs
+    uint8_t ***moe_cache_w;     // [n_layers][3][8] GPU ptrs for gate/up/down weight blobs
+    // Each cache slot: 8 * expert_raw_size bytes per weight type
     // SSM recurrence temp buffers
     float *d_ssm_q_all;         // [V_HEADS][D_STATE]
     float *d_ssm_k_all;         // [V_HEADS][D_STATE]
@@ -508,6 +512,27 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     wubu_gpu_moe_init();
     printf("GPU: MoE lookup tables initialized\n");
 
+    // Allocate MoE expert cache (40 layers × 8 experts × 3 weights)
+    // Each expert weight: gate_bytes/up_bytes/down_bytes for IQ2_XXS/IQ3_XXS
+    // The exact sizes vary by layer (down_exps type: IQ3_XXS or IQ4_XS)
+    // We allocate the maximum possible to ensure uniform sizing
+    const int64_t moe_max_per_expert = 270336;  // max across all layers
+    gpu->moe_cache_eid = (int**)calloc(model->n_layers, sizeof(int*));
+    gpu->moe_cache_w = (uint8_t***)calloc(model->n_layers, sizeof(uint8_t**));
+    int n_cached = 0;
+    for (int l = 0; l < model->n_layers; l++) {
+        moe_weights_t *moe = &model->layers[l].moe;
+        if (!moe->loaded) continue;
+        gpu->moe_cache_eid[l] = (int*)calloc(8, sizeof(int));
+        for (int k = 0; k < 8; k++) gpu->moe_cache_eid[l][k] = -1;
+        gpu->moe_cache_w[l] = (uint8_t**)calloc(3, sizeof(uint8_t*));
+        gpu->moe_cache_w[l][0] = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_max_per_expert));
+        gpu->moe_cache_w[l][1] = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_max_per_expert));
+        gpu->moe_cache_w[l][2] = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_max_per_expert));
+        n_cached++;
+    }
+    printf("GPU: MoE expert cache allocated: %d layers × 8 experts × 3 weights\n", n_cached);
+
     // Allocate MoE persistent buffers (for 8 active experts)
     const int64_t moe_bytes = 270336;  // IQ2_XXS for D_MODEL*D_FF = 2048*512
     gpu->d_moe_gate    = (uint8_t*)wubu_cuda_alloc((size_t)(8 * moe_bytes));
@@ -716,7 +741,8 @@ int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
 
 // GPU MoE expert forward: replaces 8 expert matmuls with GPU quantized kernel
 // Input: x_s [D_MODEL], top-8 expert indices + weights
-// Output: expert_contribs [8][D_MODEL] filled with weighted results
+// Uses per-layer expert cache: on cache hit, reads weights directly from GPU
+// (no H2D transfer). On cache miss, uploads and updates cache.
 // Shared expert and router remain on CPU.
 extern "C"
 void wubu_model_gpu_moe_experts(
@@ -739,19 +765,49 @@ void wubu_model_gpu_moe_experts(
     int64_t up_bytes   = gguf_raw_size(w->ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
     int64_t down_bytes = gguf_raw_size(w->ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);
 
-    // Prepare 8 expert weight data pointers
+    // Determine current layer index (for cache lookup)
+    // Walk through model->layers to find which layer owns these MoE weights
+    int layer_idx = -1;
+    for (int l = 0; l < model->n_layers; l++) {
+        if (&model->layers[l].moe == w) { layer_idx = l; break; }
+    }
+
+    // Prepare 8 expert weight data pointers (GPU if cached, host if not)
     const uint8_t *gate_q_ptrs[8], *up_q_ptrs[8], *down_q_ptrs[8];
     float wgts[8];
     int n_active = 0;
+    bool use_gpu_ptrs = false;
+
+    // Check if this layer has a cache entry
+    if (layer_idx >= 0 && gpu->moe_cache_eid && gpu->moe_cache_eid[layer_idx]) {
+        int *cached = gpu->moe_cache_eid[layer_idx];
+        bool all_match = true;
+        for (int k = 0; k < 8; k++) {
+            if (cached[k] != indices_s[k]) { all_match = false; break; }
+        }
+        if (all_match && cached[0] != -1) {
+            use_gpu_ptrs = true;  // cache hit: data already on GPU
+        }
+    }
+
     for (int k = 0; k < 8; k++) {
         int e = indices_s[k];
         if (e < 0 || weights_s[k] < 1e-30f) {
             memset(expert_contribs[k], 0, D_MODEL * sizeof(float));
             continue;
         }
-        gate_q_ptrs[n_active] = w->ffn_gate_exps_q + (int64_t)e * gate_bytes;
-        up_q_ptrs[n_active]   = w->ffn_up_exps_q   + (int64_t)e * up_bytes;
-        down_q_ptrs[n_active] = w->ffn_down_exps_q + (int64_t)e * down_bytes;
+        if (use_gpu_ptrs && layer_idx >= 0) {
+            // Cache hit: use GPU pointers directly (no H2D)
+            uint8_t **cache_layer = gpu->moe_cache_w[layer_idx];
+            gate_q_ptrs[n_active] = cache_layer[0] + (size_t)k * gate_bytes;
+            up_q_ptrs[n_active]   = cache_layer[1] + (size_t)k * up_bytes;
+            down_q_ptrs[n_active] = cache_layer[2] + (size_t)k * down_bytes;
+        } else {
+            // Cache miss: use host pointers (will be uploaded by kernel func)
+            gate_q_ptrs[n_active] = w->ffn_gate_exps_q + (int64_t)e * gate_bytes;
+            up_q_ptrs[n_active]   = w->ffn_up_exps_q   + (int64_t)e * up_bytes;
+            down_q_ptrs[n_active] = w->ffn_down_exps_q + (int64_t)e * down_bytes;
+        }
         wgts[n_active] = weights_s[k];
         n_active++;
     }
@@ -762,7 +818,7 @@ void wubu_model_gpu_moe_experts(
     float *gpu_out = (float*)calloc(8 * D_MODEL, sizeof(float));
     if (!gpu_out) return;
 
-    // Run GPU MoE — writes each expert's contribution to gpu_out[e*D_MODEL .. (e+1)*D_MODEL-1]
+    // Run GPU MoE — either with cached GPU pointers or uploaded host pointers
     wubu_gpu_moe_forward_experts(
         x_s,
         (const uint8_t**)gate_q_ptrs, gate_bytes,
@@ -771,7 +827,25 @@ void wubu_model_gpu_moe_experts(
         w->ffn_gate_exps_q_type, w->ffn_up_exps_q_type, w->ffn_down_exps_q_type,
         wgts, gpu_out, stream,
         gpu->d_moe_gate, gpu->d_moe_up, gpu->d_moe_down,
-        gpu->d_moe_x, gpu->d_moe_out, gpu->d_moe_weights);
+        gpu->d_moe_x, gpu->d_moe_out, gpu->d_moe_weights,
+        use_gpu_ptrs);  // TRUE = pointers are GPU, skip H2D
+
+    // On cache miss: update cache from the scratch buffers we just uploaded
+    if (!use_gpu_ptrs && layer_idx >= 0 && gpu->moe_cache_w && gpu->moe_cache_w[layer_idx]) {
+        int *cached = gpu->moe_cache_eid[layer_idx];
+        uint8_t **cache_layer = gpu->moe_cache_w[layer_idx];
+        for (int k = 0; k < 8; k++) {
+            cached[k] = indices_s[k];
+        }
+        // The scratch buffers (d_moe_gate/d_moe_up/d_moe_down) now have the
+        // uploaded data. D2D copy to cache buffers for persistence.
+        cudaMemcpyAsync(cache_layer[0], gpu->d_moe_gate, (size_t)8 * gate_bytes,
+                        cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(cache_layer[1], gpu->d_moe_up, (size_t)8 * up_bytes,
+                        cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync(cache_layer[2], gpu->d_moe_down, (size_t)8 * down_bytes,
+                        cudaMemcpyDeviceToDevice, stream);
+    }
 
     // Distribute output across per-expert contribution buffers
     int active_idx = 0;
@@ -1030,6 +1104,23 @@ void wubu_model_gpu_free(wubu_model_t *model) {
     wubu_cuda_free(gpu->d_moe_x);
     wubu_cuda_free(gpu->d_moe_out);
     wubu_cuda_free(gpu->d_moe_weights);
+
+    // Free MoE expert cache
+    if (gpu->moe_cache_w) {
+        for (int l = 0; l < gpu->n_layers; l++) {
+            if (gpu->moe_cache_w[l]) {
+                wubu_cuda_free((float*)gpu->moe_cache_w[l][0]);
+                wubu_cuda_free((float*)gpu->moe_cache_w[l][1]);
+                wubu_cuda_free((float*)gpu->moe_cache_w[l][2]);
+                free(gpu->moe_cache_w[l]);
+            }
+        }
+        free(gpu->moe_cache_w);
+    }
+    if (gpu->moe_cache_eid) {
+        for (int l = 0; l < gpu->n_layers; l++) free(gpu->moe_cache_eid[l]);
+        free(gpu->moe_cache_eid);
+    }
 
     // Free SSM recurrence state and temp buffers
     if (gpu->d_ssm_state) {

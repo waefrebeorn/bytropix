@@ -113,7 +113,8 @@ void wubu_gpu_moe_forward_experts(
     cudaStream_t stream,
     uint8_t *d_gate_buf, uint8_t *d_up_buf, uint8_t *d_down_buf,
     float *d_x_buf,          // [D_MODEL] pre-allocated input buffer
-    float *d_out_buf, float *d_weights_buf)
+    float *d_out_buf, float *d_weights_buf,
+    bool use_gpu_ptrs)       // true: gate_q/up_q/down_q are GPU pointers
 {
     (void)gate_type; (void)up_type; (void)down_type;
     (void)d_weights_buf;
@@ -123,19 +124,31 @@ void wubu_gpu_moe_forward_experts(
     // Upload x once (to pre-allocated buffer)
     cudaMemcpyAsync(d_x_buf, x, D_MODEL * sizeof(float), cudaMemcpyHostToDevice, stream);
 
-    // Per-expert: upload weights, launch kernel, download
+    // Per-expert: get weights (H2D upload or direct GPU pointers), launch kernel
     for (int e = 0; e < N_EXPERTS; e++) {
         if (weights[e] < 1e-30f) {
             memset(output + (int64_t)e * D_MODEL, 0, D_MODEL * sizeof(float));
             continue;
         }
-        // Upload to pre-allocated per-expert buffer (no malloc)
-        cudaMemcpyAsync(d_gate_buf, gate_q[e], (size_t)gate_bytes, cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_up_buf,   up_q[e],   (size_t)up_bytes,   cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_down_buf, down_q[e], (size_t)down_bytes, cudaMemcpyHostToDevice, stream);
+        // Get the weight data pointers on GPU
+        const uint8_t *d_gate, *d_up, *d_down;
+        if (use_gpu_ptrs) {
+            // Pointers are already on GPU (cache hit) — use directly
+            d_gate = gate_q[e];
+            d_up   = up_q[e];
+            d_down = down_q[e];
+        } else {
+            // Host pointers — upload to scratch buffers first
+            cudaMemcpyAsync(d_gate_buf, gate_q[e], (size_t)gate_bytes, cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(d_up_buf,   up_q[e],   (size_t)up_bytes,   cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(d_down_buf, down_q[e], (size_t)down_bytes, cudaMemcpyHostToDevice, stream);
+            d_gate = d_gate_buf;
+            d_up   = d_up_buf;
+            d_down = d_down_buf;
+        }
 
         moe_expert_kernel<<<1, D_FF, smem_bytes, stream>>>(
-            d_x_buf, d_gate_buf, d_up_buf, d_down_buf, weights[e], d_out_buf);
+            d_x_buf, d_gate, d_up, d_down, weights[e], d_out_buf);
 
         cudaMemcpyAsync(output + (int64_t)e * D_MODEL, d_out_buf,
                         D_MODEL * sizeof(float), cudaMemcpyDeviceToHost, stream);
