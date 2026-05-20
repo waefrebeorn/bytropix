@@ -174,7 +174,12 @@ __pycache__/
 *.bak
 
 # llama.cpp reference
-/llama/
+/llama/*
+!/llama/README.md
+
+# External KV cache compression resources
+/llama/turboquant_plus/
+/llama/rotorquant/
 *.o
 debug_*
 test_*

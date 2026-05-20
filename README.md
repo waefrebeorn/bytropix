@@ -179,11 +179,12 @@ Set `DUMP_INTERMEDIATE_DIR=/tmp/dir` before `ref_dumper`:
 | Prio | Gap | Status |
 |:----:|-----|:------:|
 | **P0** | **Fix gen_text_gpu hang** | ❌ |
-| **P0** | **GPU Q4_0 KV cache (saves 3.7 GB VRAM)** | 💤 |
-| P1 | Unified SSM kernel (fuse conv1d→SiLU→split→norm→beta) | 💤 |
-| P1 | Sparse attention + global tokens for 512k+ | 💤 |
+| **P0** | **GPU Q4_0 cache** | 💤 |
+| P1 | RotorQuant Givens rotation (block-diagonal, 2 FMAs/pair) | 💤 |
+| P1 | TurboQuant WHT (spreads outlier energy) | 💤 |
+| P1 | Hamilton encoder BSP attention for >512k | 💤 |
+| P2 | Unified SSM kernel (fuse conv→SiLU→split→norm) | 💤 |
 | P2 | Chunked prefill (3-7x at 256k) | 💤 |
-| P2 | Normalized sigmoid MoE gating | 💤 |
 
 ---
 
@@ -208,13 +209,19 @@ bytropix/
 
 ## 📚 References
 
-- `MADE_AGENTICALLY_BY_HERMES.md` — Complete project retrospective (28 KB, 13 sections)
-- `.hermes/mind-palace/` — State, plan, goal-mantra, prestige, overnight (6 files, always current)
+- `MADE_AGENTICALLY_BY_HERMES.md` — Complete project retrospective (28 KB)
+- `vault/cache-compression-resources.md` — Q4_0 / TurboQuant+ / RotorQuant / Hamilton encoder comparison
+- `llama/turboquant_plus/` — Google TurboQuant KV cache compression repo
+- `llama/rotorquant/` — RotorQuant block-diagonal Clifford rotors repo
+- `tools/example_rotorquant.py` — Givens rotation + Q4_0 demo
+- `tools/example_turboquant.py` — WHT + Q4_0 demo
+- `tools/example_hamilton_encoder.py` — Hamilton quaternion manifold demo
+- `.hermes/mind-palace/` — State, plan, goal-mantra, prestige, overnight (6 files)
 - `.hermes/vault/qwen-papers/` — Qwen3, Qwen3.6 architecture references
 - `.hermes/vault/deepseek-papers/` — DeepSeek-V3, MoE architecture papers
 - `.hermes/unsloth-qwen3.6-quant-formula.md` — Per-tensor quantization map
 - `~/llama.cpp/build/bin/llama-cli` — Ground truth reference binary
-- `~/llama.cpp/src/models/qwen35moe.cpp` — Reference implementation (`qwen35moe` arch)
+- `/mnt/c/projects/HASHMIND/llama-cpp-rotorquant/llama.cppCOPY/` — Hamilton encoder attention (legacy)
 
 ---
 
