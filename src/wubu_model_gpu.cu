@@ -878,37 +878,43 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
         wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, st);
         wubu_cuda_l2_norm(1, C, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, st);
 
-        // === Step 11: Token-by-token recurrence on GPU (all-GPU path) ===
+        // === Step 11: Recurrence — parallel scan for C>1, token-by-token for C==1 ===
         float *d_delta_out = gpu->d_ssm_scratch + off; off += (size_t)C * vdim;
 
-        // For each token: repeat K heads 16→32 on GPU, then run recurrence kernel
-        // All data stays on GPU — no H2D/D2H for the head repetition
-        for (int t = 0; t < C; t++) {
-            float *state = gpu->d_ssm_state[layer_idx];
-            float *d_q_t = d_q_norm + (size_t)t * kdim;     // [16, 128] on GPU
-            float *d_k_t = d_k_norm + (size_t)t * kdim;     // [16, 128] on GPU
-            float *d_v_t = d_v_conv + (size_t)t * vdim;     // [32, 128] on GPU
-            float *db = d_beta_sig + (size_t)t * dr;         // [32] on GPU
-            float *dg = d_gate_final + (size_t)t * dr;       // [32] on GPU
-
-            // GPU kernel: repeat K heads 16→32, write to GPU temp buffers
-            wubu_gpu_repeat_kheads(
-                d_q_t, d_k_t, d_v_t, db, dg,
-                gpu->d_ssm_q_all, gpu->d_ssm_k_all, gpu->d_ssm_v_all,
-                gpu->d_ssm_beta_arr, gpu->d_ssm_gate_arr,
+        if (C > 1) {
+            // Batched prefill: process all C tokens in one parallel scan call
+            wubu_cuda_ssm_parallel_scan(1, C,
+                d_q_norm,    // [N, 16, 128]
+                d_k_norm,    // [N, 16, 128]
+                d_v_conv,    // [N, 32, 128]
+                d_gate_final,// [N, 32]
+                d_beta_sig,  // [N, 32]
+                gpu->d_ssm_state[layer_idx],  // [1, 32, 128, 128]
+                d_delta_out, // [N, 32, 128]
                 st);
+        } else {
+            // Single-token decode: repeat K heads 16→32 on GPU, run recurrence kernel
+            for (int t = 0; t < C; t++) {
+                float *state = gpu->d_ssm_state[layer_idx];
+                float *d_q_t = d_q_norm + (size_t)t * kdim;
+                float *d_k_t = d_k_norm + (size_t)t * kdim;
+                float *d_v_t = d_v_conv + (size_t)t * vdim;
+                float *db = d_beta_sig + (size_t)t * dr;
+                float *dg = d_gate_final + (size_t)t * dr;
 
-            // Launch recurrence kernel (reads from d_ssm_q_all etc.)
-            wubu_gpu_ssm_recurrence(
-                state,
-                gpu->d_ssm_q_all, gpu->d_ssm_k_all, gpu->d_ssm_v_all,
-                gpu->d_ssm_beta_arr, gpu->d_ssm_gate_arr,
-                gpu->d_ssm_delta_out, st);
+                wubu_gpu_repeat_kheads(d_q_t, d_k_t, d_v_t, db, dg,
+                    gpu->d_ssm_q_all, gpu->d_ssm_k_all, gpu->d_ssm_v_all,
+                    gpu->d_ssm_beta_arr, gpu->d_ssm_gate_arr, st);
 
-            // Copy delta_out to per-token position (D2D)
-            cudaMemcpyAsync(d_delta_out + (size_t)t * vdim, gpu->d_ssm_delta_out,
-                (size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float),
-                cudaMemcpyDeviceToDevice, st);
+                wubu_gpu_ssm_recurrence(state,
+                    gpu->d_ssm_q_all, gpu->d_ssm_k_all, gpu->d_ssm_v_all,
+                    gpu->d_ssm_beta_arr, gpu->d_ssm_gate_arr,
+                    gpu->d_ssm_delta_out, st);
+
+                cudaMemcpyAsync(d_delta_out + (size_t)t * vdim, gpu->d_ssm_delta_out,
+                    (size_t)SSM_V_HEADS * SSM_D_STATE * sizeof(float),
+                    cudaMemcpyDeviceToDevice, st);
+            }
         }
 
         // === Step 12-13: z = SiLU(z_all) + Gated norm ===
