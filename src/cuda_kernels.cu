@@ -1088,35 +1088,43 @@ __global__ void gate_mul_kernel(float *x, const float *gate, int n) {
     x[i] *= s;
 }
 
-// Copy Q from fused Q+gate buffer: dest[s*qdim + j] = src[s*qdim*2 + j]
+// Copy Q from fused Q+gate buffer (INTERLEAVED per-head layout):
+// src = [Q_h0(256)] [gate_h0(256)] [Q_h1(256)] [gate_h1(256)] ...
+// dest = [Q_h0(256)] [Q_h1(256)] ... [Q_h15(256)]
 __global__ void copy_q_from_fused_kernel(float *dst, const float *src,
                                           int N, int qdim) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N * qdim) return;
     int s = i / qdim;
     int j = i % qdim;
-    dst[i] = src[s * qdim * 2 + j];
+    int h = j / GQA_HEAD_DIM;
+    int d = j % GQA_HEAD_DIM;
+    dst[i] = src[s * qdim * 2 + h * (2 * GQA_HEAD_DIM) + d];
 }
 
-// Copy gate from fused Q+gate buffer: dest[s*qdim + j] = src[s*qdim*2 + qdim + j]
+// Copy gate from fused Q+gate buffer (INTERLEAVED per-head layout):
+// src = [Q_h0(256)] [gate_h0(256)] [Q_h1(256)] [gate_h1(256)] ...
+// dest = [gate_h0(256)] [gate_h1(256)] ... [gate_h15(256)]
 __global__ void copy_gate_from_fused_kernel(float *dst, const float *src,
                                              int N, int qdim) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N * qdim) return;
     int s = i / qdim;
     int j = i % qdim;
-    dst[i] = src[s * qdim * 2 + qdim + j];
+    int h = j / GQA_HEAD_DIM;
+    int d = j % GQA_HEAD_DIM;
+    dst[i] = src[s * qdim * 2 + h * (2 * GQA_HEAD_DIM) + GQA_HEAD_DIM + d];
 }
 
-// Gate multiply: x[s*qdim + j] *= sigmoid(Q_full[s*qdim*2 + qdim + j])
-// Reads gate from fused Q+gate layout
-__global__ void gate_mul_fused_kernel(float *x, const float *Q_full,
+// Gate multiply: x[s*qdim + j] *= sigmoid(gate[s*qdim + j])
+// gate was extracted from fused Q+gate by copy_gate_from_fused_kernel
+__global__ void gate_mul_fused_kernel(float *x, const float *gate_buf,
                                        int N, int qdim) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N * qdim) return;
     int s = i / qdim;
     int j = i % qdim;
-    float v = Q_full[s * qdim * 2 + qdim + j];
+    float v = gate_buf[s * qdim + j];
     float sg;
     if (v < -80.0f) sg = 0.0f;
     else if (v > 80.0f) sg = 1.0f;
