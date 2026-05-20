@@ -73,37 +73,141 @@ static inline float kv_cache_read_elem(const void *cache, int64_t idx) {
     return ((const float *)cache)[idx];
 #endif
 }
-// KV cache write: store float value into cache
-static inline void kv_cache_write_elem(void *cache, int64_t idx, float val) {
-#if KV_CACHE_F16
-    ((uint16_t *)cache)[idx] = fp32_to_fp16(val);
-#else
-    ((float *)cache)[idx] = val;
+// KV cache quantization options
+// KV_CACHE_F16: half-precision (default, 2 bytes/elem)
+// KV_CACHE_F32: full precision (4 bytes/elem, fallback)
+// KV_CACHE_Q4_0: 4-bit quantized (0.5 bytes/elem for payload, ~0.56 bytes with scale)
+
+#ifndef KV_CACHE_Q4_0
+#define KV_CACHE_Q4_0 1  // Q4_0 format for KV cache (4:1 compression vs F16)
 #endif
+
+// Q4_0 block: 32 elements, 4-bit each + fp16 scale
+typedef struct {
+    uint16_t d;    // scale factor (fp16)
+    uint8_t qs[16];  // 32 × 4-bit nibbles
+} block_q4_0_cache;
+
+#define QK4_CACHE 32
+
+// Quantize 32 floats to Q4_0 block (symmetric, signed)
+static inline void quantize_q4_0_cache_block(const float *x, block_q4_0_cache *b) {
+    float amax = 0.0f;
+    for (int i = 0; i < QK4_CACHE; i++) {
+        float ax = fabsf(x[i]);
+        if (ax > amax) amax = ax;
+    }
+    if (amax == 0.0f) {
+        b->d = 0;
+        memset(b->qs, 0, sizeof(b->qs));
+        return;
+    }
+    const float d = amax / 7.0f;  // symmetric signed: [-7, 7] → [1, 15]
+    const float id = 1.0f / d;
+    b->d = fp32_to_fp16(d);
+    for (int i = 0; i < QK4_CACHE; i++) {
+        int q = (int)(x[i] * id + 8.0f);
+        if (q < 0) q = 0;
+        if (q > 15) q = 15;
+        b->qs[i / 2] |= (uint8_t)(q << (4 * (i % 2)));
+    }
 }
-// Batch read one head (256 floats) from F16 cache into float buffer
+
+// Dequantize one Q4_0 block
+static inline void dequantize_q4_0_cache_block(const block_q4_0_cache *b, float *x) {
+    const float d = fp16_to_fp32(b->d);
+    for (int i = 0; i < QK4_CACHE; i++) {
+        int q = (b->qs[i / 2] >> (4 * (i % 2))) & 0xF;
+        x[i] = ((float)q - 8.0f) * d;
+    }
+}
+
+// KV cache read: one head (n floats) from Q4_0 cache
 static inline void kv_cache_read_head(const void *cache, int64_t offset,
                                        float *buf, int n) {
-#if KV_CACHE_F16
+#if KV_CACHE_Q4_0
+    // Q4_0: offset is in float indices, convert to block index
+    const int block_n = QK4_CACHE;
+    int start_block = (int)(offset / block_n);
+    int start_elem = (int)(offset % block_n);
+    const block_q4_0_cache *blocks = (const block_q4_0_cache *)cache;
+    
+    int done = 0;
+    while (done < n) {
+        float tmp[QK4_CACHE];
+        dequantize_q4_0_cache_block(&blocks[start_block + (start_elem + done) / block_n], tmp);
+        int blk_off = (start_elem + done) % block_n;
+        int to_copy = n - done;
+        if (to_copy > block_n - blk_off) to_copy = block_n - blk_off;
+        for (int i = 0; i < to_copy; i++) buf[done + i] = tmp[blk_off + i];
+        done += to_copy;
+    }
+#elif KV_CACHE_F16
     const uint16_t *src = (const uint16_t *)cache + offset;
     for (int i = 0; i < n; i++) buf[i] = fp16_to_fp32(src[i]);
 #else
     memcpy(buf, (const float *)cache + offset, n * sizeof(float));
 #endif
 }
-// Batch write one head to F16 cache from float buffer
+
+// Batch write one head to Q4_0 cache
 static inline void kv_cache_write_head(void *cache, int64_t offset,
                                         const float *buf, int n) {
-#if KV_CACHE_F16
+#if KV_CACHE_Q4_0
+    const int block_n = QK4_CACHE;
+    int start_block = (int)(offset / block_n);
+    int start_elem = (int)(offset % block_n);
+    int end_elem = start_elem + n;
+    block_q4_0_cache *blocks = (block_q4_0_cache *)cache;
+    
+    if (start_elem == 0) {
+        // Start is aligned — handle whole blocks fast
+        int n_aligned = n - (end_elem % block_n);
+        if (n_aligned < 0) n_aligned = 0;
+        // Write whole blocks
+        for (int bi = 0; bi < n_aligned / block_n; bi++) {
+            quantize_q4_0_cache_block(buf + bi * block_n, &blocks[start_block + bi]);
+        }
+        // Remaining partial block at the end
+        int rem = n - n_aligned;
+        if (rem > 0) {
+            int bi = n_aligned / block_n;
+            float tmp[QK4_CACHE];
+            dequantize_q4_0_cache_block(&blocks[start_block + bi], tmp);
+            for (int i = 0; i < rem; i++) tmp[i] = buf[n_aligned + i];
+            quantize_q4_0_cache_block(tmp, &blocks[start_block + bi]);
+        }
+    } else {
+        // Misaligned start: handle first partial block + aligned blocks + last partial
+        // First partial block
+        int first_rem = block_n - start_elem;
+        if (first_rem > n) first_rem = n;
+        {
+            float tmp[QK4_CACHE];
+            dequantize_q4_0_cache_block(&blocks[start_block], tmp);
+            for (int i = 0; i < first_rem; i++) tmp[start_elem + i] = buf[i];
+            quantize_q4_0_cache_block(tmp, &blocks[start_block]);
+        }
+        // Aligned bulk
+        int remaining = n - first_rem;
+        if (remaining > 0) {
+            kv_cache_write_head(cache, offset + first_rem, buf + first_rem, remaining);
+        }
+    }
+#elif KV_CACHE_F16
     uint16_t *dst = (uint16_t *)cache + offset;
     for (int i = 0; i < n; i++) dst[i] = fp32_to_fp16(buf[i]);
 #else
     memcpy((float *)cache + offset, buf, n * sizeof(float));
 #endif
 }
+
 // KV cache allocation: returns number of bytes needed for n_elems
 static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
-#if KV_CACHE_F16
+#if KV_CACHE_Q4_0
+    int64_t n_blocks = (n_elems + QK4_CACHE - 1) / QK4_CACHE;
+    return n_blocks * (int64_t)sizeof(block_q4_0_cache);
+#elif KV_CACHE_F16
     return n_elems * (int64_t)sizeof(uint16_t);
 #else
     return n_elems * (int64_t)sizeof(float);
