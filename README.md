@@ -1,7 +1,8 @@
 # bytropix — WuBu Text AI Inference Engine
 
 **Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, qwen35moe architecture).**
-*May 19 — Phase 9.5 complete: Cos-sim 0.9967 — 1:1 parity with llama.cpp! Q6_K vec_dot bug fixed.*
+*May 19 — MILESTONE: 256k context decode at 7.8 tok/s on 8GB laptop GPU.
+Cos-sim 0.9967 — 1:1 parity with llama.cpp! GPU pipeline: GQA, SSM recurrence, MoE, output proj.*
 
 ---
 
