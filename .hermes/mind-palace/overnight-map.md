@@ -1,56 +1,68 @@
-# Overnight Map — Phase 28k: GPU MoE Analysis Complete, P1 MTP Working
+# Overnight Map — Phase 28o: Triple DA Complete, All Markdown Cleaned
 
 **Active repo:** /home/wubu/bytropix/
 **Main model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB, 40 layers)
 **MTP model:** /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf (11.9GB, +blk.40 head)
-**Current commit:** 695fda5 (pushed to origin/master)
+**Current commit:** 473f2b2 (pushed to origin/master)
 
-## Session Summary (May 20-21, 2026)
-8 hours, 100+ tool calls, 3 new tools, 1 new skill, 2 commits pushed.
+## Session Summary (May 21, 2026 — Triple DA Run)
+~200 tool calls, 7 markdown files rewritten, 2 Makefile fixes, 6 sm_120 bugs documented, 10 tools copied to vault, 1 new DA synthesis doc.
 
-### P0: GPU MoE Analysis — COMPLETE
-- **v5 Q8_K kernel** committed (12ad638): int8 quantization of input, matches CPU arithmetic
-- **CUDA sm_120 bugs** found and documented in new skill: 3 workarounds for Blackwell compiler
-- **DA v13**: Root cause identified — 0.9888 per-layer cos-sim is FUNDAMENTAL code-path difference
-- **Pragmatic decision**: Accept hybrid path (GPU SSM/GQA + CPU MoE)
+### What Was Done
 
-### P1: MTP Speculative Decode — WORKING
-- gen_text_mtp built and tested with MTP model
-- Output: "to find your group group and to share your energy with them"
-- 8.5 tok/s decode, MTP acceptance 4% (low from quantized head)
-- Falls back to single-token without MTP=1
+**1. Triple Devil's Advocate Run**
+- DA-1 (Code vs Claims): Read all 8 core mind-palace files + 3 vault papers. Found 7 stale files.
+- DA-2 (Vault Deep Dive): Read DeepSeek-V3, DeepSeek-V3.2, DeepSeekMoE papers. Cross-referenced against plan.md. Found 6 P2 gaps (NSA, sigmoid gating, load balancing, FP8, chunked prefill, RoPE).
+- DA-3 (Hardware): Audited RTX 5050 utilization. Found FP8 Tensor Cores, CUDA Graphs, async H2D, multi-block parallelism all unused.
 
-### Vision Pipeline — VERIFIED (May 21)
-- Full vision→text pipeline works: screenshot→encoder→mmproj→text model→logits
-- 256×256 image: 128 patches × 2048 dim, encoder 63.7s CPU, text 4.77s
-- Logit range [-10.77, 14.09], no NaN/Inf ✅
-- 2 segfault bugs fixed in wubu_vision.c:
-  1. n_patches_total capped at V_MAX_POS (prevent massive alloc)
-  2. scores[2304] stack array → heap-allocated (SIGSEGV on >2304 patches)
+**2. Markdown Files Updated (7 files)**
+| File | What Changed |
+|------|-------------|
+| state.md | Sharpened P2 status, added sm_120 bug table, commit log |
+| goal-mantra.md | Updated priorities to P2 hardware utilization |
+| plan.md | P0-P1 closed, P2 reprioritized with vault references |
+| prestige_prompt.md | Added DA v13 findings, P2 queue, sm_120 bugs |
+| ARCHITECTURE.md | **REWRITE** — May 18→May 21: added GPU, MTP, vision, DA v13, sm_120 bugs, performance tables |
+| testing.md | **REWRITE** — May 16 'broken claims' → accurate CPU works |
+| project.md | **REWRITE** — May 16 'broken inference' → accurate state |
 
-### GQA Batched Prefill Fix (May 21) + GPU Vision Encoder Working (May 21)
-- **Bug fix:** GPU GQA prefill now passes C=N instead of per-token C=1 loop
-- **Batched quant matmul:** Q5_K/Q6_K batched kernels, wired into SSM hybrid + forward_full
-- **GPU vision encoder:** Fixed in-place LN bug (separate residual pointer). GPU ViT: **0.52s** (122x faster than CPU 63.7s). NaN=0, correct output.
-- **infer_vision_text_gpu:** Full pipeline working: ffmpeg screenshot → patch embed → GPU 27 ViT layers → spatial merge → mmproj → text model → logits
+**3. Makefile Fixed** — `gen_text_cpu` target was broken (GPU symbols in CORE_OBJ). Added `src/wubu_moe_cpu.o` as CPU-only wubu_moe variant.
+
+**4. CUDA sm_120 Bugs (6 documented):**
+- Bugs 1-3: Original skill (static __shared__, syncthreads+reduce, extern uint8_t)
+- Bug 4: compute-sanitizer WDDM unavailable
+- Bug 5: WDDM memory/context init (2-5s)
+- Bug 6: Divergent warp primitives
+- Added to cuda-sm120-bugs skill
+
+**5. Tools Copied to Vault (.hermes/vault/tmp-tools/):**
+10 key debug + reference tools with README documenting all env vars
+
+**6. Reference Data Pipeline Verified:**
+```bash
+# 40 hidden states + 1997 intermediate tensors per BOS token
+DUMP_LAYER_DIR=/tmp/ref_layers ./ref_dumper model.gguf  # 40 files, 8KB each
+DUMP_INTERMEDIATE_DIR=/tmp/ref_interm ./ref_dumper model.gguf  # 1997 files
+```
 
 ## What's Blocked
-- **GPU hybrid text inference**: 8-9x slower than CPU-only for small prompts, and GPU init heat throttles CPU for larger batches. CPU-only is the optimal path for this model (11.5GB IQ2_M on RTX 5050 desktop). GPU only benefits vision encoder (pure F32 SGEMM, no quantized weights).
-- CUDA sm_120 compute-sanitizer doesn't work (WDDM debugger not initialized)
-- GPU MoE bit-exact parity would need 3-5 sessions of code porting
+- gen_text still won't build with GPU objects (need libcuda for wubu_model_gpu_*)
+- gen_text_cpu works (verified: coherent text, single BOS token prefill verified)
+- GPU text inference remains net-negative (CPU-only 2-5x faster)
 
 ## Verifiable Facts (DO NOT RE-DERIVE)
-- GPU MoE v5 is committed and correct but 0.9888 cos-sim is fundamental
-- Hybrid path: FORCE_CPU_MOE=1 GPU=1 ./gen_text_gpu → coherent text at 5.5 tok/s
-- MTP: MTP=1 OMP_NUM_THREADS=16 ./gen_text_mtp "prompt" 30
-- CUDA sm_120 bugs: use extern __shared__ float, thread-0 reduce, no static __shared__
-- compare_moe_expert tool: GPU=1 ./compare_moe_expert
-- Vision pipeline: test_vision_real <mmproj.gguf> <pixels.bin> [H] [W] [model.gguf]
-- Build: g++ -DGPU_SUPPORT ... -o test_vision_real tools/test_vision_real.c ... all GPU objs
+- ref_dumper + DUMP_LAYER_DIR = 40 files × 8192 bytes (1 BOS token)
+- ref_dumper + DUMP_INTERMEDIATE_DIR = 1997 intermediate files (~9MB)
+- gen_text_cpu builds with `make gen_text_cpu`
+- layer_cos_sim builds with `make layer_cos_sim`
+- cuda-sm120-bugs skill updated: 6 bugs, build flags, verified configs table
+- sm_120 FP8 Tensor Cores available but unused
+- All markdown files committed at 473f2b2
 
-## Next Session: P2 Feature Cream
-- GPU RMSNorm + SiLU + gated norm kernels
-- Chunked prefill (3-7x speedup)
-- NSA sparse attention
-- RoPE extrapolation 4x
-- GPU vision encoder kernels
+## Next Session: P2 Hardware Utilization
+1. GPU RMSNorm + SiLU kernels (low impact, cleanup)
+2. Chunked prefill (infrastructure exists in wubu_ssm_chunked.c)
+3. RoPE extrapolation 4x (single param)
+4. NSA sparse attention (high impact for 256K)
+5. Sigmoid gating + load balancing (DeepSeekMoE)
+6. FP8 Tensor Cores (sm_120 native, 2x throughput potential)

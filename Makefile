@@ -117,8 +117,8 @@ src/dequant_iq2_xxs.o: src/dequant_iq2_xxs.c include/gguf_reader.h
 test_ssm: test_ssm_forward.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-test_chunked_ssm: test_chunked_ssm.c $(CORE_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+test_chunked_ssm: tools/test_chunked_ssm.c src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ))
+	$(CC) $(CFLAGS) -o $@ tools/test_chunked_ssm.c src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) $(LDFLAGS)
 
 test_decode_path: tools/test_decode_path.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

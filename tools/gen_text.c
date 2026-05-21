@@ -191,14 +191,13 @@ int main(int argc, char **argv) {
             topk_idxs[k] = maxi; last_logits[maxi] = -1e30f;
         }
         int next_token = topk_idxs[0];
+        if (next_token == tok.eos_id || next_token == tok.bos_id) break;
 
         char piece_buf[256];
         int n_chars = wubu_tokenizer_decode(&tok, &next_token, 1, piece_buf, 256);
         if (n_chars > 0) fwrite(piece_buf, 1, n_chars, stdout);
         else printf("<%d>", next_token);
         fflush(stdout);
-
-        if (next_token == tok.eos_id || next_token == tok.bos_id) break;
 
         float x_next[D_MODEL];
         if (!read_embedding(&mdl, next_token, x_next, emb_file))

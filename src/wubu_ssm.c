@@ -1287,11 +1287,17 @@ void wubu_gqa_forward(const float *x, int B, int T,
     // For text-only generation: all position IDs equal, reduces to standard RoPE
     // Apply to first N_ROT=64 dims of each head for both Q and K
     // N_ROT = 64 = 32 pairs. Standard RoPE: (x_2i, x_{2i+1}) * rotation_matrix(theta_i)
-    // theta_i(t) = t * freq_base^{-2i/N_ROT}
+    // theta_i(pos) = pos * freq_base^{-2i/N_ROT}
+    //
+    // RoPE extrapolation (Qwen2.5-1M §3.1):
+    //   ROPE_SCALE_FACTOR=0.25 extends 64K→256K (4x)
+    //   theta_i(pos) = (pos * scale) * freq_base^{-2i/N_ROT}
     {
         const int n_rot = 64;  // rope.dimension_count
         const float freq_base = 10000000.0f;
         const int q_rot_pairs = n_rot / 2;  // 32
+        const char *rope_scale_env = getenv("ROPE_SCALE_FACTOR");
+        const float scale_factor = rope_scale_env ? atof(rope_scale_env) : 1.0f;
         
         for (int b = 0; b < B; b++) {
             for (int t = 0; t < T; t++) {
@@ -1302,7 +1308,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 for (int h = 0; h < GQA_Q_HEADS; h++) {
                     float *q_h = Q_norm + ((b * T + t) * GQA_Q_HEADS + h) * GQA_HEAD_DIM;
                     for (int i = 0; i < q_rot_pairs; i++) {
-                        float theta = pos * powf(freq_base, -2.0f * i / (float)n_rot);
+                        float theta = (pos * scale_factor) * powf(freq_base, -2.0f * i / (float)n_rot);
                         float cos_t = cosf(theta);
                         float sin_t = sinf(theta);
                         float x0 = q_h[2*i];
@@ -1316,7 +1322,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 for (int h = 0; h < GQA_KV_HEADS; h++) {
                     float *k_h = K_norm + ((b * T + t) * GQA_KV_HEADS + h) * GQA_HEAD_DIM;
                     for (int i = 0; i < q_rot_pairs; i++) {
-                        float theta = pos * powf(freq_base, -2.0f * i / (float)n_rot);
+                        float theta = (pos * scale_factor) * powf(freq_base, -2.0f * i / (float)n_rot);
                         float cos_t = cosf(theta);
                         float sin_t = sinf(theta);
                         float x0 = k_h[2*i];
