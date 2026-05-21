@@ -52,13 +52,24 @@ void wubu_ssm_chunked_recurrence(
     if (!qp || !kp || !vp || !bp || !gp) goto cleanup;
 
     for (int h = 0; h < hk; h++)
-        memcpy(qp + (size_t)h * nt * d, q_norm + (size_t)h * T * d, T * d * sizeof(float));
+        for (int t = 0; t < T; t++)
+            memcpy(qp + (size_t)h * nt * d + (size_t)t * d,
+                   q_norm + (size_t)(t * hk + h) * d,
+                   d * sizeof(float));
     for (int h = 0; h < hk; h++)
-        memcpy(kp + (size_t)h * nt * d, k_norm + (size_t)h * T * d, T * d * sizeof(float));
+        for (int t = 0; t < T; t++)
+            memcpy(kp + (size_t)h * nt * d + (size_t)t * d,
+                   k_norm + (size_t)(t * hk + h) * d,
+                   d * sizeof(float));
     for (int h = 0; h < hv; h++) {
-        memcpy(vp + (size_t)h * nt * d, v_conv + (size_t)h * T * d, T * d * sizeof(float));
-        memcpy(bp + (size_t)h * nt, beta_flat + (size_t)h * T, T * sizeof(float));
-        memcpy(gp + (size_t)h * nt, gate_flat  + (size_t)h * T, T * sizeof(float));
+        for (int t = 0; t < T; t++)
+            memcpy(vp + (size_t)h * nt * d + (size_t)t * d,
+                   v_conv + (size_t)(t * hv + h) * d,
+                   d * sizeof(float));
+        for (int t = 0; t < T; t++) {
+            bp[(size_t)h * nt + t] = beta_flat[(size_t)(t * hv + h)];
+            gp[(size_t)h * nt + t] = gate_flat[(size_t)(t * hv + h)];
+        }
     }
     memset(delta_out, 0, (size_t)hv * T * d * sizeof(float));
 
