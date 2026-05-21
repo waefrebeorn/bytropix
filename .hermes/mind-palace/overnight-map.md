@@ -1,33 +1,31 @@
-# Overnight Map — Phase 28u: IQ1_M Model Generated, GPU Path Opens
+# Overnight Map — Phase 29a: IQ1_M + Q4_K GPU Kernels
 
 **Active repo:** /home/wubu/bytropix/  
-**Current commit:** 332bed6 (pushed to origin/master)  
-**Main model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB, 40 layers)  
-**IQ1_M model:** /models/Qwen3.6-35B-A3B-UD-IQ1_M.gguf (7.7GB, 1.90 BPW)  
-**MTP model:** /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf (11.9GB)  
+**Current commit:** c0254c0 (not pushed)  
+**Default model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB)  
+**IQ1_M model:** /models/Qwen3.6-35B-A3B-UD-IQ1_M.gguf (7.7GB, 1.90 BPW, quality degraded)
 
-## Session Summary (May 21, 2026 — IQ1_M Generated, GPU Path Opens)
+## Session Summary (May 21, 2026)
 
 ### What Was Done
-1. **IQ1_M model generated** — 7.7 GB (1.90 BPW), fits in 8GB VRAM
-   - Generated via `llama-quantize` with imatrix from 2 calibration chunks
-   - Imatrix: `/models/qwen_imatrix.gguf`
-2. **Verified bytropix CPU path handles IQ1_M** — coherent output, 8.0 tok/s decode
-   - IQ1_M decode is 43% faster than IQ2_M (8.0 vs 5.6 tok/s)
-   - Same output quality on short test: "the city of Paris. It is the capital"
-3. **CPU path dispatch confirmed** — `quantized_matmul.c` handles IQ1_M via dequant→F32→SGEMM
+1. **GPU IQ1_M quant matmul kernel** — single-token + batched variants with iq1s_grid lookup
+   - Verified exact match vs CPU (max diff 3.3e-7)
+   - Grid table uploaded via `wubu_cuda_quant_matmul_set_iq1s_grid` at GPU init
+2. **GPU Q4_K quant matmul kernel** — single-token + batched (simpler than Q5_K, no qh field)
+3. **CPU `quantized_matmul_from_q8` IQ1_M fallback** — dequant+SGEMM for types without vec_dot
+4. **`MODEL` env var** — `gen_text.c` now reads `MODEL` env var to override model path
 
-### What This Enables
-IQ1_M at 7.7GB fits in RTX 5050 8GB VRAM. Full GPU inference now theoretically possible:
-- Upload all weights to GPU once
-- Run full forward pass on GPU without per-layer CPU↔GPU transfers
-- Eliminate H2D/D2H overhead that made GPU hybrid net-negative
+### GPU Kernel Inventory
+Now supporting 4 quant types on GPU: Q5_K, Q6_K, Q4_K, IQ1_M
+All have single-token and batched (C=N prefill) variants.
 
 ### Remaining GPU Blockers
-1. **GPU dequant kernels for IQ1_M** — `gpu_quant_matmul.cu` only has Q5_K/Q6_K
-2. **GPU MoE divergence** — 0.9888 cos-sim per layer (DA v13)
-3. **GPU quantized_matmul for all weight types** needed by the model
+1. **GPU MoE divergence** (0.9888 cos-sim per layer, DA v13) — fundamental code-path diff
+2. **Q2_K, IQ2_XXS GPU kernels** — needed for token_embd, ffn_down, attn_output weights
+3. **Full GPU inference** — requires all weight types and solving H2D/D2H overhead
 
-### Next Session
-1. Start adding IQ1_M GPU dequant kernel
-2. Or optimize existing CPU path further
+### Next Session Options
+1. Debug IQ1_M model quality — investigate why 1.90 BPW gives garbage with multi-token prompts
+2. Add GPU Q2_K kernel for token_embd.weight (D_MODEL=2048, vocab=248320) and ffn_down weights
+3. Fix the GPU MoE divergence root cause from DA v13
+4. Re-quantize IQ1_M with more imatrix chunks for better quality
