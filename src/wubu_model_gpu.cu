@@ -854,17 +854,17 @@ int wubu_model_gpu_ssm_project(wubu_model_t *model, int layer_idx,
     cudaMemcpyAsync(gpu->d_x, h_norm, (size_t)C * D_MODEL * sizeof(float),
                     cudaMemcpyHostToDevice, st);
 
-    // === attn_qkv: quantized matmul (column-major, correct for GGUF layout) ===
-    // x [D=2048] @ W_qkv [D, C_qkv=8192] → d_qkv [8192]
-    wubu_cuda_quant_matmul(gpu->d_x, gpu->d_attn_qkv_q[layer_idx],
-        gpu->ssm_qkv_type[layer_idx], D_MODEL, CONV_DIM,
-        gpu->d_ssm_qkv_out, NULL, 0, st);
+    // === attn_qkv: quantized matmul (batched) ===
+    // x [C, D_MODEL] @ W_qkv [D_MODEL, CONV_DIM] → d_qkv [C, CONV_DIM]
+    wubu_cuda_quant_matmul_batched(gpu->d_x, C,
+        gpu->d_attn_qkv_q[layer_idx], gpu->ssm_qkv_type[layer_idx],
+        D_MODEL, CONV_DIM, gpu->d_ssm_qkv_out, st);
 
-    // === attn_gate: quantized matmul (column-major) ===
-    // x [D=2048] @ W_gate [D, C_gate=4096] → d_z [4096]
-    wubu_cuda_quant_matmul(gpu->d_x, gpu->d_attn_gate_q[layer_idx],
-        gpu->ssm_gate_type[layer_idx], D_MODEL, VALUE_DIM,
-        gpu->d_ssm_z_out, NULL, 0, st);
+    // === attn_gate: quantized matmul (batched) ===
+    // x [C, D_MODEL] @ W_gate [D_MODEL, VALUE_DIM] → d_z [C, VALUE_DIM]
+    wubu_cuda_quant_matmul_batched(gpu->d_x, C,
+        gpu->d_attn_gate_q[layer_idx], gpu->ssm_gate_type[layer_idx],
+        D_MODEL, VALUE_DIM, gpu->d_ssm_z_out, st);
 
     // Both matmuls are enqueued on the same stream, so they run sequentially.
     // One sync, then download both results.
@@ -1036,27 +1036,22 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
                     cudaMemcpyHostToDevice, st);
     if (ce != cudaSuccess) { fprintf(stderr, "GPU SSM fwd_full: d_x upload: %s\\n", cudaGetErrorString(ce)); return 0; }
 
-    // === Step 1+2: Quantized matmuls (column-major, correct for GGUF layout) ===
+    // === Step 1+2: Quantized matmuls — batched (all C tokens at once) ===
     // x [C, D_MODEL] @ W_qkv [D_MODEL, CONV_DIM] → qkv [C, CONV_DIM]
-    // Each column of W has D_MODEL elements = BPC blocks. Each thread handles one column.
-    if (!gpu->d_attn_qkv_q[layer_idx]) { fprintf(stderr, "GPU SSM: qkv weights NULL!\\n"); return 0; }
-    if (!gpu->d_attn_gate_q[layer_idx]) { fprintf(stderr, "GPU SSM: gate weights NULL!\\n"); return 0; }
+    // x [C, D_MODEL] @ W_gate [D_MODEL, VALUE_DIM] → z [C, VALUE_DIM]
+    if (!gpu->d_attn_qkv_q[layer_idx]) { fprintf(stderr, "GPU SSM: qkv weights NULL!\n"); return 0; }
+    if (!gpu->d_attn_gate_q[layer_idx]) { fprintf(stderr, "GPU SSM: gate weights NULL!\n"); return 0; }
     
-    // Process each token individually
-    for (int t = 0; t < C; t++) {
-        float *d_x_t = gpu->d_x + (size_t)t * D_MODEL;
-        float *d_qkv_t = gpu->d_ssm_qkv_out + (size_t)t * CONV_DIM;
-        float *d_z_t = gpu->d_ssm_z_out + (size_t)t * VALUE_DIM;
-        
-        int r1 = wubu_cuda_quant_matmul(d_x_t, gpu->d_attn_qkv_q[layer_idx],
-            gpu->ssm_qkv_type[layer_idx], D_MODEL, CONV_DIM, d_qkv_t, NULL, 0, st);
-        int r2 = wubu_cuda_quant_matmul(d_x_t, gpu->d_attn_gate_q[layer_idx],
-            gpu->ssm_gate_type[layer_idx], D_MODEL, VALUE_DIM, d_z_t, NULL, 0, st);
-        if (!r1 || !r2) {
-            fprintf(stderr, "GPU SSM: quant_matmul failed (types %d, %d)\n",
-                gpu->ssm_qkv_type[layer_idx], gpu->ssm_gate_type[layer_idx]);
-            return 0;
-        }
+    int r1 = wubu_cuda_quant_matmul_batched(gpu->d_x, C,
+        gpu->d_attn_qkv_q[layer_idx], gpu->ssm_qkv_type[layer_idx],
+        D_MODEL, CONV_DIM, gpu->d_ssm_qkv_out, st);
+    int r2 = wubu_cuda_quant_matmul_batched(gpu->d_x, C,
+        gpu->d_attn_gate_q[layer_idx], gpu->ssm_gate_type[layer_idx],
+        D_MODEL, VALUE_DIM, gpu->d_ssm_z_out, st);
+    if (!r1 || !r2) {
+        fprintf(stderr, "GPU SSM: batched quant_matmul failed (types %d, %d)\n",
+            gpu->ssm_qkv_type[layer_idx], gpu->ssm_gate_type[layer_idx]);
+        return 0;
     }
     cudaStreamSynchronize(st);
 
@@ -1080,8 +1075,11 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
         cudaError_t cem = cudaGetLastError();
         if (cem != cudaSuccess) { fprintf(stderr, "GPU SSM: beta/alpha kernel error: %s\n", cudaGetErrorString(cem)); return 0; }
     } else {
-        // C>1 prefill: not yet optimized — fall back so the hybrid (CPU) path handles it
-        fprintf(stderr, "GPU SSM C>1 path: per-token quant matmul overhead too high, falling back to hybrid\n");
+        // C>1 prefill: forward_full has inherent precision issues vs hybrid.
+        // Fall back so the hybrid (CPU SSM + GPU quant matmuls) path handles it.
+        // Batched quant matmul infrastructure exists (wubu_cuda_quant_matmul_batched)
+        // but forward_full C>1 needs verification against CPU reference first.
+        fprintf(stderr, "GPU SSM C>1: forward_full has accuracy issues, falling back to hybrid\n");
         return 0;
     }
 
@@ -1213,10 +1211,10 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
                     cudaMemcpyDeviceToHost, st);
     cudaStreamSynchronize(st);
 
-    // DEBUG: dump intermediate stages for first few calls
+    // DEBUG: dump intermediate stages for first few calls (only for C==1 to avoid overflow)
     {
         static int call_cnt = 0;
-        if (call_cnt++ < 1) {
+        if (call_cnt++ < 1 && C == 1) {
             float *h = (float*)malloc((size_t)CONV_DIM * sizeof(float));
             
             // qkv output

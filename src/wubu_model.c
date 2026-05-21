@@ -522,12 +522,10 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                     float *gpu_z = (float*)malloc(sizeof(float) * N * VALUE_DIM);
                     int alloc_ok = (gpu_qkv && gpu_z);
                     if (alloc_ok) {
-                        for (int t = 0; t < N; t++) {
-                            wubu_model_gpu_ssm_project(model, l,
-                                normed + t * D_MODEL, 1,
-                                gpu_qkv + t * CONV_DIM,
-                                gpu_z + t * VALUE_DIM, NULL);
-                        }
+                        // Batched SSM projection: all N tokens at once (avoids N*H2D/D2H overhead)
+                        wubu_model_gpu_ssm_project(model, l,
+                            normed, N,
+                            gpu_qkv, gpu_z, NULL);
                         // Set GPU recurrence pointers so wubu_ssm_forward uses GPU
                         wubu_gpu_set_ssm_hybrid(model->gpu_ctx, l, &layer->ssm);
                         wubu_ssm_forward(normed, B, T, &layer->ssm,

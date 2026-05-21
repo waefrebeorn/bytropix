@@ -40,6 +40,8 @@
 - CUDA sm_120 compute-sanitizer doesn't work (WDDM debugger not initialized)
 - GPU MoE bit-exact parity would need 3-5 sessions of code porting
 - Vision encoder CPU-only = 63s for 256×256 (needs GPU kernel for real-time)
+- **SSM forward_full C>1 path**: per-token quant matmul loop (lines 1046-1060) makes batched path slower than hybrid fallback. Need batched cuBLAS SGEMM for quant matmuls before enabling.
+- **GPU hybrid vs CPU paradox**: GPU hybrid (SSM on GPU + CPU fallback) is 4-5x slower than CPU-only for small prompts due to per-token H2D/D2H overhead. CPU-only recommended until batched SSM path works.
 
 ## Verifiable Facts (DO NOT RE-DERIVE)
 - GPU MoE v5 is committed and correct but 0.9888 cos-sim is fundamental

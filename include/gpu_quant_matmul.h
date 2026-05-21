@@ -23,6 +23,15 @@ int wubu_cuda_quant_matmul_row_major(const float *x, const uint8_t *W_q, int qua
     int n_rows, int n_cols,
     float *y, cudaStream_t stream);
 
+// Batched quant matmul — processes C tokens at once.
+// x: [C, n_rows] input tokens, y: [C, n_cols] output tokens.
+// Each token is processed independently, no cross-token sharing.
+// Returns 1 on success, 0 on unknown quant type.
+int wubu_cuda_quant_matmul_batched(const float *x, int C,
+    const uint8_t *W_q, int quant_type,
+    int n_rows, int n_cols,
+    float *y, cudaStream_t stream);
+
 #ifdef __cplusplus
 }
 #endif
