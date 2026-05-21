@@ -40,7 +40,7 @@ For Qwen3.6-35B IQ2_M on RTX 5050:
 | **P2.2** | GPU RMSNorm + SiLU + gated norm kernels — kernels exist, not wired into pipeline | 🔲 Kernels exist | src/cuda_kernels.cu | Low |
 | **P2.3** | **Chunked prefill** — split long prompts into chunks. CS=1 matches sequential exactly (4e-8 diff). CS=64 has FP accumulation error (7e-2 diff) from +2000x more float ops. Data layout bug FIXED (commit c5475af) | ✅ Data layout bug fixed | Qwen2.5-1M §3.3 | Data layout fix = 1 sess |
 | **P2.4** | **RoPE extrapolation 4x** — frequency scaling factor for 64K→256K. `ROPE_SCALE_FACTOR=0.25` env var | ✅ COMPLETE (9b98098) | Qwen2.5-1M §3.1 | Low |
-| **P2.5** | **NSA sparse attention** — O(L log L) for GQA layers at 256K. Local window + global positions | 🔲 Not started | DeepSeek-V3.2 §2.1 | High |
+| **P2.5** | **NSA sparse attention** — O(L log L) for GQA layers at 256K. Local window + global positions. USE_SPARSE_ATTN=1 env var, SPARSE_W/G/MIN config. | ✅ Done (0129f1a) | DeepSeek-V3.2 §2.1 | Implemented 1 sess |
 | **P2.6** | **Sigmoid gating + load balancing** — normalized sigmoid gating + auxiliary-loss-free dynamic bias adjustment | 🔲 Not started | DeepSeekMoE, DeepSeek-V3 §2.3 | Medium |
 | **P2.7** | **FP8 Tensor Cores** — sm_120 FP8 dot product for batched quant matmul. 2x throughput potential | 🔲 Not started | sm_120 ISA | High |
 

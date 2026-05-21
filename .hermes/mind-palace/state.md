@@ -47,10 +47,11 @@ GPU MoE per-layer cos-sim 0.9888 vs CPU is **FUNDAMENTAL** — not a single fixa
 | P2.1 | **Llama.cpp inline hooks** for reference data dumps | 🔲 Not started | 1 session |
 | P2.2 | CUDA sm_120 bug documentation as skill | ✅ Documented in DA v13 | Quick |
 | P2.3 | GPU RMSNorm + SiLU kernels | 🔲 Kernels exist, not wired | Low |
-| P2.4 | **Chunked prefill** — wired into wubu_ssm_forward(). CS=1 exact. CS>1 FP error causes wrong tokens across 30 SSM layers. SSM_CHUNK_MIN env var. FORCE_CPU_SSM_SEQ to disable. | ✅ Wired + committed (501518f) | CS=1 exact, CS>1 FP-limited |
+| P2.4 | **Chunked prefill** — wired into wubu_ssm_forward(). CS=1 exact. CS>1 FP error. SSM_CHUNK_MIN, FORCE_CPU_SSM_SEQ. | ✅ Wired + committed (501518f) | CS=1 exact, CS>1 FP-limited |
 | P2.5 | RoPE extrapolation 4x | ✅ Complete (48dcf5e) | Low |
-| P2.6 | NSA sparse attention (DeepSeek-V3.2) | 🔲 Not started | High |
+| P2.6 | **NSA sparse attention** (DeepSeek-V3.2 DSA) — USE_SPARSE_ATTN=1, SPARSE_W, SPARSE_G | ✅ Implemented (0129f1a) | O(L·(W+G)) for long ctx |
 | P2.7 | Sigmoid gating + load balancing (DeepSeekMoE) | 🔲 Not started | Medium |
+| P2.8 | FP8 Tensor Cores (sm_120) | 🔲 Not started | Needs GPU data-movement |
 
 ## CUDA sm_120 Bugs (RTX 5050 Blackwell)
 1. **static `__shared__` inside loops** → hang on Blackwell
@@ -64,6 +65,7 @@ GPU MoE per-layer cos-sim 0.9888 vs CPU is **FUNDAMENTAL** — not a single fixa
 5. **FP8 Tensor Cores**: Available on sm_120, not used — pure FP32 only
 
 ## COMMITS
+- 0129f1a — feat(gqa): NSA-style sparse attention (DeepSeek-V3.2 DSA pattern)
 - c5475af — fix(ssm): chunked recurrence data layout — token-interleaved heads
 - 695fda5 — DA v13 complete, P1 MTP working, CUDA sm_120 bugs documented
 - f97b483 — GPU MMProj via cuBLAS SGEMM, total vision 15.7s
