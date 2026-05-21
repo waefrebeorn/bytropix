@@ -54,7 +54,7 @@ int main() {
             float *beta_s = beta_flat + s * hv;
             float *gate_s = gate_flat + s * hv;
             for (int vh = 0; vh < hv; vh++) {
-                int kh = vh / rf;
+                int kh = vh % hk;  // cyclic repeat
                 float bg = beta_s[vh];
                 float gg = expf(fminf(gate_s[vh], 80.0f));
                 float q_scaled[d];

@@ -498,6 +498,17 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
 #endif  // GPU_SUPPORT
     
+    // Chunked SSM path for prefill (T >= CS tokens, CS compiled into chunked function)
+    // Falls through to sequential for decode (T=1) or small batches.
+    // Override threshold via SSM_CHUNK_MIN env var (default matches compiled CS).
+    int ssm_chunk_min = getenv("SSM_CHUNK_MIN") ? atoi(getenv("SSM_CHUNK_MIN")) : 2;
+    if (T >= ssm_chunk_min && !getenv("FORCE_CPU_SSM_SEQ")) {
+        wubu_ssm_chunked_recurrence(B, T, q_norm, k_norm, v_conv,
+                                     beta_flat, gate_flat,
+                                     ssm_state, delta_out);
+        goto gpu_rec_done;
+    }
+    
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             int s = b * T + t;

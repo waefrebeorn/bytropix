@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <omp.h>
 
-#define CS 64
+#define CS 2
 
 static void transpose_mat(int n, const float *src, float *dst)
 {
@@ -75,7 +75,7 @@ void wubu_ssm_chunked_recurrence(
 
     #pragma omp parallel for if(hv > 1)
     for (int vh = 0; vh < hv; vh++) {
-        int kh = vh / rf;
+        int kh = vh % SSM_K_HEADS;  // cyclic repeat (matches inline forward)
         float *h = ssm_state + (size_t)vh * d * d;
         size_t sz_cs = (size_t)CS * d;
         size_t sz_cs2 = (size_t)CS * CS;
@@ -108,8 +108,9 @@ void wubu_ssm_chunked_recurrence(
 
         for (int c = 0; c < nc; c++) {
             int off = c * CS;
-            int cur_nt = nt - off;
+            int cur_nt = T - off;
             if (cur_nt > CS) cur_nt = CS;
+            if (cur_nt < 0) cur_nt = 0;
 
             float *q_s = qp + (size_t)kh * nt * d + (size_t)off * d;
             float *k_s = kp + (size_t)kh * nt * d + (size_t)off * d;
