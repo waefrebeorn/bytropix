@@ -1,32 +1,29 @@
-# Goal Mantra — May 21 PM (Phase 29b: DA Sweep)
+# Goal Mantra — May 21 PM (Phase 29d: Token Embedding Root Cause Found)
 
-**Target:** CPU path verified coherent with FORCE_CPU_SSM_SEQ=1. 1:1 C-to-C parity with llama.cpp.
+**Target:** DUMP_EMBEDDING_DIR added. Root cause identified: gguf_read_tensor_f32 produces wrong token embeddings.
 
 ## STATE
 | Component | Status | Detail |
 |-----------|--------|--------|
-| CPU text (sequential) | ✅ 3-4 tok/s | FORCE_CPU_SSM_SEQ=1. "the city of Paris..." |
+| CPU text (sequential) | ✅ 3-4 tok/s | FORCE_CPU_SSM_SEQ=1. Coherent. |
 | CPU text (chunked CS>1) | ❌ Garbled | FP accumulation across 30 layers |
-| GPU vision encoder | ✅ 15.7s total | Only GPU win. 0.52s ViT |
-| MTP spec decode | ✅ 8.5 tok/s | 4% acceptance (quant head) |
-| GPU text hybrid | ⚠️ NET-NEGATIVE | 2-5x slower than CPU |
-| GPU quant matmul | ✅ 4 types | Q5_K, Q6_K, Q4_K, IQ1_M |
+| DUMP_EMBEDDING_DIR | ✅ Built | Dumps token embedding for 1:1 comparison |
+| Root cause found | ✅ | Token embedding cs=0.118. gguf_read_tensor_f32 bug. |
+| Llama.cpp DUMP_INTERMEDIATE_DIR | ✅ Rebuilt | libllama.so + llama-simple |
+| Bytropix DUMP_GQA_DEBUG_DIR | ✅ Built | Per-layer GQA intermediate dumps |
+| gen_text symlink | ✅ DONE | gen_text → gen_text_cpu |
 
-## P0: What's Actually Next
-1. Llama.cpp inline hooks — modify llama.cpp source to dump intermediates via cb() (no llama-cli). Replace ref_dumper libllama.so pattern with direct C++ hooks in llama_decode().
-2. 1:1 parity via intermediate tensor comparison — use DUMP_INTERMEDIATE_DIR to compare bytropix vs reference at every processing stage.
-3. Fix chunked SSM CS>1 — switch to sequential for now, fix later when needed.
+## P0: Corrected Priority
+1. **Fix gguf_read_tensor_f32** for quantized token_embd.weight — need to handle quantization type in GGUF tensor load
+2. **Alternative**: Load pre-extracted F32 embeddings from `data/qwen36_embeddings_c.bin.raw` (already exists)
+3. **Verify**: After fix, cs should be 1.0 for embedding, then re-check L0-L39
+
+## Key Finding
+Token embedding cs=0.118 vs reference. gguf_read_tensor_f32 doesn't handle the quantized format. Reference `global_model.input_embed.bin` has std=1.295, bytropix has std=0.013 (nearly zero). This explains the L0 cs=0.405 and all downstream divergence.
 
 ## BUILD
 ```
 make gen_text_cpu
-FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" N
+FORCE_CPU_SSM_SEQ=1 DUMP_EMBEDDING_DIR=/tmp/e ./gen_text_cpu "Hello" 1
+DUMP_INTERMEDIATE_DIR=/tmp/r ./llama-simple -m /models/... -n 1 "Hello"
 ```
-
-## HARDWARE
-- RTX 5050 Blackwell (sm_120), 6.5-8 GB VRAM
-- 16 GB system RAM, 12 CPU cores
-- CUDA 13.1 toolkit, LLC (libllama.so) at ~/llama.cpp/build/bin/
-
-## EVERY FIX
-compile → run with FORCE_CPU_SSM_SEQ=1 → verify coherent output → commit

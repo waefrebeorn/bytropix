@@ -140,6 +140,21 @@ int main(int argc, char **argv) {
     for (int i = 0; i < n_prompt; i++)
         if (!read_embedding(&mdl, prompt_tokens[i], embd + i * D, emb_file))
             memset(embd + i * D, 0, D * sizeof(float));
+    
+    // DUMP_EMBEDDING_DIR: dump embedding output for 1:1 parity comparison
+    {
+        const char *dump_emb_dir = getenv("DUMP_EMBEDDING_DIR");
+        if (dump_emb_dir && dump_emb_dir[0]) {
+            char fname[512];
+            snprintf(fname, sizeof(fname), "%s/embedding.bin", dump_emb_dir);
+            FILE *fp = fopen(fname, "wb");
+            if (fp) {
+                fwrite(embd, sizeof(float), n_prompt * D, fp);
+                fclose(fp);
+                fprintf(stderr, "DUMP_EMBEDDING_DIR: wrote %d floats to %s\n", n_prompt * D, fname);
+            }
+        }
+    }
 
     // Prefill: logits or hidden states
     float *logits = (float *)malloc(n_prompt * vs * sizeof(float));

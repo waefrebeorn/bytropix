@@ -1,4 +1,4 @@
-# Prestige Prompt — May 21 PM (Phase 29c: DUMP_INTERMEDIATE_DIR Hooks + Divergence Audit)
+# Prestige Prompt — May 21 PM (Phase 29d: Token Embedding Root Cause Found)
 
 ## Project: bytropix — Multi-Modal Inference (Text + Vision)
 
@@ -7,40 +7,23 @@
 
 ## Current State
 - **CPU text WORKS** with `FORCE_CPU_SSM_SEQ=1`. Coherent output verified.
-- **Llama.cpp inline hooks DONE** — `DUMP_INTERMEDIATE_DIR` works in rebuilt `llama-simple` + `libllama.so`. Dumps 1997 intermediates per forward pass.
-- **DUMP_GQA_DEBUG_DIR** added to bytropix `wubu_gqa_forward()` — per-layer GQA intermediate dumps via `DUMP_GQA_LAYER` env var.
-- **Per-layer comparison** shows divergence starts from L0 (cs=0.405), not L31. Both systems produce same output token for "Hello" ("," token 11).
-- **gen_text symlink** created: `gen_text → gen_text_cpu`.
+- **Root cause of 1:1 parity failure found**: Token embedding differs from reference (cs=0.118). `gguf_read_tensor_f32` fails to dequantize quantized `token_embd.weight`. Bytropix embedding has std=0.013 vs reference std=1.295.
+- **DUMP_EMBEDDING_DIR** added to `tools/gen_text.c` for embedding comparison.
+- All debug infrastructure now built: DUMP_INTERMEDIATE_DIR (ref), DUMP_GQA_DEBUG_DIR (bytropix GQA), DUMP_LAYER_DIR (bytropix layers), DUMP_EMBEDDING_DIR (bytropix embedding).
 
-## Root Cause Analysis
-Hidden states diverge from L0 (cs=0.405 across all 2048 dims of first layer output). This is NOT a GQA-specific issue. Likely:
-1. Token embedding lookup differs between bytropix and llama.cpp
-2. L0 SSM computation path differs
-3. Quantization accuracy in early layers compounds through 30 SSM layers
-
-The L31 attention probe (cs=0.471) is cleaner than its neighbors (L30 cs=0.182, L32 cs=0.504). L31 is NOT the primary failure point.
-
-## Debug Tools Built
-| Tool | Env Var | Where |
-|------|---------|-------|
-| Reference intermediate dumps | `DUMP_INTERMEDIATE_DIR` | llama.cpp (rebuilt) |
-| Byropix GQA intermediates | `DUMP_GQA_DEBUG_DIR` + `DUMP_GQA_LAYER` | `src/wubu_ssm.c` |
-| Byropix per-layer hidden | `DUMP_LAYER_DIR` | `src/wubu_model.c` (already existed) |
+## Root Cause Analysis (Complete)
+1. **Token embedding** (P0.1): cs=0.118 — gguf_read_tensor_f32 dequantization bug ← **THIS IS THE ROOT CAUSE**
+2. Secondary: L0-L39 hidden state divergence (cs 0.4→0.18→0.5) — all traced to wrong embedding
+3. Both systems output same token (",") despite wrong embedding — the model is numerically robust
 
 ## Next Session Priority
-1. **Compare token embeddings** between bytropix and llama.cpp — add `DUMP_EMBEDDING` to bytropix `gen_text_cpu` and compare against reference `global_model.input_embed.bin`.
-2. **Trace L0 SSM** — if embeddings match, add SSM intermediate dumps to `wubu_ssm_forward()` to find SSM divergence source.
-3. **Final output parity** — if embedding and L0 match, proceed to deeper layers.
+1. **Fix token embedding** — either use pre-extracted F32 embeddings or fix gguf_read_tensor_f32
+2. **Verify parity** — after fix, embedding should match cs=1.0, then trace L0→L39
+3. **Chunked SSM CS>1** — fix FP accumulation
 
 ## Key Build Commands
 ```
-make gen_text_cpu                               # CPU binary
-FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" N   # coherent path
-DUMP_INTERMEDIATE_DIR=/tmp/ref ./llama-simple -m /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -n 1 "Hello"  # reference dump
-DUMP_LAYER_DIR=/tmp/layers FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "Hello" 1  # bytropix layer dump
+make gen_text_cpu
+FORCE_CPU_SSM_SEQ=1 DUMP_EMBEDDING_DIR=/tmp/e ./gen_text_cpu "Hello" 1
+DUMP_INTERMEDIATE_DIR=/tmp/r ./llama-simple -m /models/... -n 1 "Hello"
 ```
-
-## Known sm_120 Bugs
-1. `static __shared__` inside loops hangs — use `extern __shared__` with manual offsets.
-2. `__syncthreads()` after warp-leader shared-write hangs — use serial reduction by thread 0.
-3. `extern __shared__ uint8_t` with syncthreads in loops causes incorrect codegen — use `float*`.

@@ -1,55 +1,45 @@
-# Plan — May 21 PM (Phase 29c: Corrected Divergence Analysis)
+# Plan — May 21 PM (Phase 29d: Token Embedding Root Cause Found)
 
 ## P0: 1:1 Parity with llama.cpp — Corrected Approach
 
-The per-layer comparison reveals that **divergence starts from L0 (cs=0.405)**. The previous "L31 GQA divergence" theory (0.9585 cos-sim) was based on logit-level comparison — the intermediate hidden states diverge much earlier. Fixing L31 GQA will NOT fix parity.
+The root cause of 1:1 parity failure has been identified: **token embedding** differs between bytropix and llama.cpp (cs=0.118). This explains the L0 divergence cs=0.405, not any GQA or SSM computation bug.
 
-### P0.1: Compare Token Embeddings (New — Highest Priority)
-The first layer output (L0) has cs=0.405 vs reference. Possible causes:
-1. **Token embedding lookup** — bytropix loads `token_embd.weight` but may produce different values than llama.cpp due to different load path or quantization
-2. **Initial RMSNorm** — L0 pre-attention norm differs
+### P0.1: Fix Token Embedding (Highest Priority)
+The `token_embd.weight` tensor in the GGUF file is stored in a quantized format. `gguf_read_tensor_f32()` doesn't properly dequantize it, producing near-zero values (std=0.013 vs expected std=1.295).
+
+**Two approaches:**
+1. **Quick fix** — Use pre-extracted F32 embeddings from `data/qwen36_embeddings_c.bin.raw`. Check if this file exists and has correct values. Set `use_embedding_file=true` via env var.
+2. **Proper fix** — Fix `gguf_read_tensor_f32()` to handle the quantization type of `token_embd.weight`. Check what quantization type is used and add dequantization.
 
 **Action:**
-1. Add `DUMP_EMBEDDING_DIR` to bytropix `wubu_model_forward_from_embd()` — dump `embeddings` right after memcpy
-2. Run both with same 1-token prompt
-3. Compare `global_model.input_embed.bin` (ref) vs bytropix `embedding.bin`
+1. Check if `data/qwen36_embeddings_c.bin.raw` exists and has correct values
+2. If yes, enable `use_embedding_file` and verify cs=1.0 for embedding
+3. If no, fix `gguf_read_tensor_f32` to dequantize properly
 
-### P0.2: Trace L0 SSM (If Embeddings Match)
-If embeddings match but L0 output diverges (cs=0.405), the SSM computation in L0 is the root cause.
-- Add `DUMP_SSM_DEBUG_DIR` to `wubu_ssm_forward()` — dump conv_input, qkv_mixed, alpha, beta, gate, state
-- Compare against reference L0_* intermediates
+### P0.2: Verify Full Parity After Fix
+Once token embedding matches cs=1.0:
+1. Compare L0 output (cs should approach 1.0)
+2. Trace forward layer by layer
+3. Identify remaining divergence sources (SSM accumulation, quantization)
 
-### P0.3: L31 Attention Debugging (De-prioritized)
-L31 shows cs=0.471, which is actually BETTER than surrounding layers (L30=0.182). Not the primary divergence point.
+### P0.3: L31 GQA and Other Layer Debugging (De-prioritized)
+These were secondary effects. Fix embedding first.
 
-## P1: Structural Fixes (De-prioritized until P0 resolved)
-
+## P1: Structural Fixes
 ### P1.1: Chunked SSM CS>1
-Still broken. FP accumulation across 30 SSM layers. Workaround: `FORCE_CPU_SSM_SEQ=1`.
+Still broken. Workaround: `FORCE_CPU_SSM_SEQ=1`.
 
 ### P1.2: gen_text binary naming
-✅ **DONE** — symlink `gen_text → gen_text_cpu` created.
+✅ **DONE** — symlink `gen_text → gen_text_cpu`.
 
-## Per-Layer Cos-Sim (vs llama-simple, "Hello" 1-token, CPU sequential)
+## Root Cause Evidence
+| Metric | Reference | Bytropix |
+|--------|-----------|----------|
+| Embedding mean | 0.011 | 3.1e-5 |
+| Embedding std | 1.295 | 0.013 |
+| Embedding cs | — | 0.118 |
+| L0 hidden cs | — | 0.405 |
+| L30 hidden cs | — | 0.182 |
+| L31 hidden cs | — | 0.471 |
 
-| Layer | Cos-Sim | Layer Type |
-|-------|---------|------------|
-| L0 | 0.405 | SSM |
-| L1 | 0.445 | SSM |
-| L2 | 0.664 | SSM |
-| L3 | 0.568 | GQA |
-| L4-L5 | 0.549-0.627 | SSM |
-| L6 | 0.445 | SSM |
-| L7 | 0.316 | GQA |
-| L8-L10 | 0.310→0.142 | SSM |
-| L10-L30 | 0.142→0.182 | Mixed |
-| L31 | 0.471 | GQA (cleaner than neighbors) |
-| L32-L38 | 0.504→0.710 | Mixed |
-| L39 | 0.496 | GQA |
-
-**Key insight**: Cos-sim drops monotonically through SSM layers (L0→L10: 0.405→0.142), then oscillates. GQA layers consistently show higher cos-sim than neighboring SSM layers. The SSM recurrence is the primary divergence source.
-
-## Known sm_120 Hardware Bugs
-1. `static __shared__` inside loops: hangs on Blackwell. Use `extern __shared__` + manual offset.
-2. `__syncthreads()` after warp-leader shared-write: hangs. Use serial reduction by thread 0.
-3. `extern __shared__ uint8_t` with syncthreads loops: incorrect codegen. Use `float*` instead.
+The embedding is nearly zero but not all-zero, suggesting quantized values are partially loaded but not properly dequantized.
