@@ -42,7 +42,7 @@ src/wubu_mobius.o: src/wubu_mobius.c include/wubu_mobius.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_moe.o: src/wubu_moe.c include/wubu_moe.h include/wubu_ssm.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DGPU_SUPPORT -c -o $@ $<
 
 src/wubu_moe_hyperbolic.o: src/wubu_moe_hyperbolic.c include/wubu_moe_hyperbolic.h include/wubu_moe.h include/wubu_mobius.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) -c -o $@ $<

@@ -1,35 +1,43 @@
-# Overnight Map — Phase 28e: Q6_K Dequant Fixed, GPU SSM Still Diverging
+# Overnight Map — Phase 28j: DA v12 Complete, MoE/GQA Isolation Next
 
 **Active repo:** /home/wubu/bytropix/
-**Model:** Qwen3.6-35B-A3B-UD-IQ2_M.gguf (qwen35moe arch)
+**Main model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB, 40 layers)
+**MTP model:** /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf (11.9GB, +blk.40 head)
 **Vision model:** /mnt/wslg/distro/models/qwen3.6-35b-mmproj-F16.gguf
-**Current state:** Q6_K dequant FIXED ✅. GPU SSM cos-sim -0.66 vs CPU ❌. Vision encoder ported (384 LoC).
+**Current state:** GPU hidden cos-sim -0.0036 — ALL prior "coherent GPU output" claims DEBUNKED.
 
 ## Verifiable Facts (DO NOT RE-DERIVE)
-- Last commit: `c07cf14` — Q6_K dequant offset fix
-- CPU SSM path matches llama at cos-sim 0.994 (proven)
-- GPU SSM produces anti-correlated output (cos-sim -0.66) — suspect state management
-- Remote at `4dc985e` — 8 local commits behind
-- gen_text_gpu binary exists (May 20, 1.6MB)
-- gen_text CPU build broken (GPU symbols without .cu)
-- Vision encoder exists: 27-layer 3D ViT, mmproj→2048, untested
-- F32 waste was a DEAD CLAIM — already removed in a032a8f
-- Memory leak was a FALSE POSITIVE — free() was correct
-- Column-major kernel was CORRECT layout for GGUF
+- DA v12 written: C9 debunked (GPU output was garbage, not coherent)
+- gen_text_cpu works correctly ✅
+- gen_text_gpu produces garbage with ANY GPU acceleration (GQA or MoE)
+- GPU MoE active for both prefill AND decode (no env guard)
+- GPU GQA active for prefill only (N>1), CPU for decode
+- 1-token test also garbage → MoE primarily suspected (GQA is CPU for 1-token decode)
+- gen_text_mtp binary NOT compiled yet (make gen_text_mtp target exists)
+- All 9 commits pushed to origin/master (8ef1ba3)
+- 25+ DeepSeek papers in .hermes/vault/deepseek-collection/
+- Vision encoder: 384 LoC, untested
 
 ## Workstreams (pick one)
-**A [P0] Fix GPU SSM divergence** — highest impact. GPU has working fused kernels but state management bug. Trace recurrence and conv state across layers/steps. Target: cos-sim > 0.99.
+**A [P0] Isolate hidden state corruption** — remove `layer->moe.gpu_ctx` in wubu_model.c:636-639 → rebuild → DUMP_HIDDEN test. If fixed, MoE kernel is buggy. If not, GQA also buggy.
 
-**B [P1] Fix CPU build + push** — gen_text fails at link. 8 critical GPU fixes local-only (no backup).
+**B [P1] MTP binary** — after GPU fix, build gen_text_mtp + test with MTP model. Acceptance rate 83% at 2 drafts.
 
-**C [P2] Vision integration** — build test_vision_real, verify E2E pipeline, wire multi-modal.
+**C [P2] Vision** — build test_vision_real, verify encoder, wire multi-modal.
 
 ## Data You Should Not Re-Derive
-- Q6_K dequant: fixed `d*sc*(v6-32)` not `d*sc*v6 - 32` (commit c07cf14)
-- Column-major is CORRECT for GGUF output-major weight layout
-- F32 waste: already `#if 0`'d in wubu_model_gpu.cu
-- Vision encoder dimensions: V_HIDDEN=1152, V_OUT_HIDDEN=2048, 27 layers, temp_patch=2
-- mmproj: [4608, 4608] → GELU → [4608, 2048] — maps 2 merged image tokens to text space
+- Q5_K denormal fix: `d*sc*(v6-32)` not `d*sc*v6 - 32` (bf573b8)
+- GPU output proj: [V][D] with CUBLAS_OP_T ld=D (08f5f23)
+- SSM state sync: CPU→GPU after hybrid prefill, GPU→CPU after forward_full (08f5f23)
+- MoE dequant dispatch: IQ2_XXS=66B/block, IQ3_XXS=98B, IQ4_XS=136B (9093c61)
+- MTP model path: /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf (~300MB larger = MTP head)
 
-## Fallback
-If debugging stalls, clean up: fix CPU build, push commits, write DA v11 document.
+## Vault Gaps (18 vaults checked, 13 have missing roadmap items)
+See plan.md for full P3-P6 breakdown. Key gaps:
+- hamilton/: quaternion attention + 10× KV cache compression (P2)
+- attention/: WuBuSparseAttention, Topological Sequence Model, Entropix (P3)
+- tailslayer/: N-way hedged speculative decode (P1)
+- optimizers/: Q-Controller + PID Lambda for training (P4)
+- lean-proofs/: formal verification not on roadmap (P6)
+- phase3/+diffusion/+audio/: text-to-image, video, audio (P5 future)
+- encoders/: geometric + topological autoencoders (P5)

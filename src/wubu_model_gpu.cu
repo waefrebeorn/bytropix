@@ -896,6 +896,12 @@ void wubu_model_gpu_moe_experts(
     gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
     if (!gpu || !gpu->initialized) return;
     cudaStream_t stream = gpu->stream;
+
+    static int printed_types = 0;
+    if (!printed_types) { printed_types = 1;
+        fprintf(stderr, "GPU MoE types: gate=%d up=%d down=%d\n",
+                w->ffn_gate_exps_q_type, w->ffn_up_exps_q_type, w->ffn_down_exps_q_type);
+    }
  
      // Compute per-expert byte sizes
     int64_t gate_bytes = gguf_raw_size(w->ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);

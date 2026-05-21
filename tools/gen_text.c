@@ -85,11 +85,8 @@ int main(int argc, char **argv) {
         } else {
             printf("GPU: GQA acceleration active (max_ctx=%d, chunk=%d)\n", max_ctx, chunk_sz);
         }
-        // Also init GPU output projection (existing quantized Q4_K path)
-        if (!gpu_output_init(mdl.output_weight_q, D_MODEL, mdl.vocab_size, mdl.output_weight_type)) {
-            fprintf(stderr, "GPU output proj init failed, falling back to CPU\n");
-            use_gpu = 0;
-        }
+        // GPU output proj disabled for now — use CPU
+        use_gpu = 0;
     }
 
     wubu_tokenizer_t tok;

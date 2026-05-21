@@ -28,10 +28,15 @@ static const uint32_t h_iq3xxs_grid[256] = {
 };
 
 static __device__ __inline__ float d_f16_f32(uint16_t v) {
-    int s=(v>>15)&1,e=(v>>10)&0x1F,m=v&0x3FF; uint32_t f;
-    if(e==0)f=(s<<31);else if(e==31)f=(s<<31)|(0xFF<<23)|(m<<13);
-    else f=(s<<31)|((127-15+e)<<23)|(m<<13);
-    float r; __builtin_memcpy(&r,&f,4); return r;
+    int s=(v>>15)&1,e=(v>>10)&0x1F,m=v&0x3FF;
+    if(e==0){
+        // F16 denormal: (-1)^s * m/1024 * 2^(-14) = (-1)^s * m * 2^(-24)
+        // Encode as F32 directly
+        // Note: F16 denormals (~1e-5) are normal F32 values (>1.18e-38)
+        float r = (float)m * 0x1p-24f;
+        return s ? -r : r;
+    }else if(e==31){uint32_t f=(s<<31)|(0xFF<<23)|(m<<13);float r;__builtin_memcpy(&r,&f,4);return r;}
+    else{uint32_t f=(s<<31)|((127-15+e)<<23)|(m<<13);float r;__builtin_memcpy(&r,&f,4);return r;}
 }
 
 static __device__ float iq2_xxs_dot(const uint8_t *block, const float *x) {

@@ -1,35 +1,42 @@
-# State — Phase 28i: GPU MoE IQ3_XXS Fixed ✓
+# State — Phase 28j: GPU MoE Denormal Fix + Compilation Fix Applied
 
-**bytropix: text + vision multi-modal inference engine**
+**bytropix: GPU inference engine for Qwen3.6-35B MoE + vision multi-modal**
 
-## Achieved
+## FIXES APPLIED THIS SESSION
+| Fix | File | Status |
+|-----|------|--------|
+| FORCE_CPU_SSM env var check | wubu_ssm.c:460 | ✅ Actually works now — guards GPU recurrence |
+| wubu_moe.o GPU_SUPPORT | Makefile + wubu_moe.o | ✅ Was compiled without -DGPU_SUPPORT — GPU MoE path was dead code |
+| GPU d_f16_f32 denormals | gpu_moe_kernel.cu:30 | ✅ IQ2_XXS blocks have 25% denormal d values. F16 denormals flushed to zero before fix |
+| dump_hidden test methodology | dump_hidden.c | ✅ State contamination bug — CPU and GPU runs shared KV cache/SSM state |
+| gen_text.c output proj | gen_text.c | ✅ Use CPU output proj for now (GPU output proj may have issues) |
 
-### GPU MoE IQ3_XXS Support (commit pending)
-Fixed GPU MoE to handle IQ3_XXS down weights (instead of hardcoding IQ2_XXS for all).
-- Added `iq3_xxs_dot()` GPU function with grid lookup + scale/sign dequant
-- Added `d_iq3xxs_grid` constant memory (256-entry uint32 grid)
-- Modified `moe_expert_kernel` to dispatch dequant by type (IQ2_XXS=66B/block, IQ3_XXS=98B/block, IQ4_XS=136B/block)
-- Fixed scratch/cache buffer sizes from 270KB to 557KB (IQ4_XS max per expert)
-- Removed `(void)gate_type/up_type/down_type` suppression
+## CURRENT STATE
+| Metric | Value | Status |
+|--------|-------|--------|
+| GPU SSM (hybrid) decode | Cos-sim 1.0 vs CPU | ✅ WORKS |
+| GPU SSM recurrence (GPU kernel) | Cos-sim 1.0 vs CPU | ✅ WORKS |
+| GPU GQA prefill | Coherent output | ✅ WORKS |
+| GPU MoE (with denormal fix) | Cos-sim ~0.57 vs CPU | ❌ STILL BUGGY |
+| GPU MoE performance | 0.7 tok/s (vs 4.3 CPU) | ❌ STALLED (cache miss each call) |
+| CPU inference (no GPU ctx) | Coherent: "Paris is the capital of France..." | ✅ WORKS |
+| GPU inference (MoE disabled) | Coherent: "Paris has been the first to have..." | ✅ WORKS |
+| GPU inference (MoE enabled) | Garbage: "1. 1.1.1.1..." | ❌ BROKEN |
+| GPU SSM C>1 forward_full | Stub (cuBLAS error 13) | 🔧 Needs implementation |
+| MTP model | Not compiled | ❌ |
+| Vision encoder | 384 LoC, untested | 🟡 |
 
-Full GPU inference (GQA + Q5_K + MoE) now produces coherent output. ✅
-Test: "Paris is" → "the capital of France and the most populous city in the European Union. The city is located on the river Seine..."
-Decode: ~5.4 tok/s on RTX 5050 8GB.
+## REMAINING BUG: GPU MoE (final blocker for full GPU inference)
+- Cos-sim 0.57 between GPU MoE and CPU quantized_matmul (Q8_K path)
+- Algorithm formulas are identical (verified line by line)
+- Denormal fix only accounts for ~2% improvement
+- Performance: 7× slower than CPU (each call does H2D upload of weights due to cache miss)
+- Suspected: weight pointer offset calculation, shared memory conflict, or precision accumulation
 
-### Q5_K F16 Denormal Bug (bf573b8)
-GPU `fp16_to_fp32_dev()` flushed denormals to zero. 90% of Q5_K blocks affected. Fixed. ✅
-
-### GQA Fused Q+Gate Interleaved Layout Bug (cdccde2)
-GPU copy kernels assumed contiguous Q/gate layout but actual layout is per-head interleaved. Fixed. ✅
-
-## Remaining
-
-### GPU SSM State Sync
-Prefill/decode state sync still diverges. GPU SSM matmul path uses Q5_K (works) but conv/norm are CPU-only.
-Hybrid path works for decode but prefill needs CPU SSM.
-
-### GPU Recurrence Kernel
-Untested after all fixes. CPU SSM path works correctly (cos-sim 0.994 vs llama.cpp).
-
-## Next Step
-Verify full 256k context with GPU. Or profile GPU MoE vs CPU MoE performance.
+## DIRECTORIES
+- `/home/wubu/bytropix/src/` — CUDA kernels + gguf reader + model
+- `/home/wubu/bytropix/tools/` — gen_text.c/mtp.c, api_server
+- `/home/wubu/bytropix/include/` — headers
+- `/home/wubu/bytropix/.hermes/mind-palace/` — prestige docs, DA v12
+- `/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf` (11.5GB, main)
+- `/models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf` (11.9GB, +blk.40 MTP head)

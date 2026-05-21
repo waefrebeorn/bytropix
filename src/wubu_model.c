@@ -464,6 +464,15 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     for (int l = 0; l < model->n_layers; l++) {
         wubu_layer_t *layer = &model->layers[l];
         
+        // DEBUG: dump hidden after each layer
+        static int dump_layer = -1;
+        const char *dl_env = getenv("DUMP_LAYER");
+        if (dl_env) dump_layer = atoi(dl_env);
+        if (l == dump_layer) {
+            FILE *f = fopen("/tmp/debug_hidden_before_l.bin", "wb");
+            if (f) { fwrite(x, sizeof(float), N * D_MODEL, f); fclose(f); }
+        }
+        
         // Pre-attention RMSNorm
         wubu_rms_norm(B, T, D_MODEL, x, layer->attn_norm_weight, 1e-6f, normed);
         
@@ -631,10 +640,9 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         if (layer->moe.loaded && model->enable_moe &&
             (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Quantized path: also save selected expert indices for next-layer prefetch
+            // GPU MoE (disabled by FORCE_CPU_MOE env var for debug)
 #ifdef GPU_SUPPORT
-            if (model->gpu_ctx) {
-                // Enable GPU MoE: store model pointer so the GPU MoE function
-                // can access the CUDA stream from model->gpu_ctx
+            if (model->gpu_ctx && !getenv("FORCE_CPU_MOE")) {
                 layer->moe.gpu_ctx = (void *)model;
             }
 #endif

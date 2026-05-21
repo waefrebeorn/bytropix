@@ -457,7 +457,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
     
     // GPU recurrence path: skip CPU recurrence, set delta_out via GPU kernel
 #ifdef GPU_SUPPORT
-    if (w->gpu_ssm_state && N == 1) {
+    if (w->gpu_ssm_state && N == 1 && !getenv("FORCE_CPU_SSM")) {
         float *d_state = (float*)w->gpu_ssm_state;
         float *d_q     = (float*)w->gpu_q_buf;
         float *d_k     = (float*)w->gpu_k_buf;

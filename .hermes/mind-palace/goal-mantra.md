@@ -1,39 +1,46 @@
-# Goal Mantra — Phase 28e: Q6_K Dequant Fixed, Fix GPU SSM Divergence
+# Goal Mantra — Phase 28j: Triple DA Complete, GPU Hidden State Fix Next
 
-**Target:** Fix GPU SSM state management → cos-sim > 0.99 with CPU path.
-**Current:** Q6_K dequant FIXED. GPU still anti-correlated (cos-sim -0.66). Vision encoder ported (384 LoC).
+**Target:** Isolate GPU component corrupting hidden states (MoE or GQA) → fix → cos-sim > 0.99.
+**DA v12 written.** CLAIM C9 DEBUNKED: "coherent GPU output" was false. GPU = random hidden.
 
 ## STATE
 | Component | Status | Detail |
 |-----------|--------|--------|
-| Q6_K dequant | ✅ FIXED | `d*sc*(v6-32)` vs `32.0` |
-| GPU SSM vs CPU | ❌ cos-sim -0.66 | Anti-correlated output |
-| CPU SSM vs llama | ✅ cos-sim 0.994 | FORCE_CPU_SSM verified |
-| F32 waste removed | ✅ Saved ~2.2 GB | `#if 0` in a032a8f |
-| Vision encoder | ✅ 384 LoC ported | 3D ViT + mmproj pipeline |
-| CPU gen_text build | ❌ BROKEN | GPU symbols in wubu_model.o |
-| Remote push | 🔴 8 behind | All critical GPU fixes local |
+| GPU MoE IQ3_XXS | ✅ FIXED | commit 9093c61 |
+| SSM state sync | ✅ FIXED | commit 08f5f23 |
+| Q5_K denormal fix | ✅ FIXED | commit bf573b8 |
+| GQA layout fix | ✅ FIXED | commit cdccde2 |
+| GPU output proj | ✅ FIXED | F32 SGEMM |
+| **GPU hidden states** | ❌ cos-sim -0.0036 | Garbage even with FORCE_CPU_SSM |
+| GPU MoE | ❓ SUSPECT #1 | Active all paths, always |
+| GPU GQA | ❓ SUSPECT #2 | Active prefill (N>1), CPU for decode |
+| MTP spec decode | 🟡 Code exists | gen_text_mtp.c + /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf |
+| Vision encoder | 🟡 Ported 384 LoC | Untested |
+| Commits pushed | ✅ | origin/master at 8ef1ba3 |
 
-## BUILD
-```bash
-make gen_text_gpu       # GPU inference
-GPU=1 MAX_CTX=4096 ./gen_text_gpu "The capital of France is" 20 40
-FORCE_CPU_SSM=1 GPU=1 ./gen_text_gpu "test" 5 40  # CPU fallback
-```
+## DIRECTORIES
+- `/home/wubu/bytropix/src/` — CUDA kernels + gguf reader + model
+- `/home/wubu/bytropix/tools/` — gen_text.c/mtp.c, api_server, scripts
+- `/home/wubu/bytropix/include/` — headers
+- `/home/wubu/bytropix/.hermes/mind-palace/` — prestige docs, DA v12
+- `/home/wubu/bytropix/.hermes/vault/` — 25+ DeepSeek papers, phase archives
+- `/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf` (11.5GB, main)
+- `/models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf` (11.9GB, +blk.40 MTP head)
 
-## P0: Fix GPU SSM divergence
-1. Debug dump at each stage: GPU vs CPU intermediate values
-2. Check recurrence state persistence (layers/steps)
-3. Check conv state init + shifting
-4. Fix → cos-sim > 0.99
+## P0: Isolate GPU hidden state corruption
+1. Remove `layer->moe.gpu_ctx = (void*)model;` in wubu_model.c:636-639
+2. Gen_text_gpu with FORCE_CPU_SSM → if fixed, MoE is the bug
+3. If still broken, set `gqa_use_gpu = 0` (line 566) → test GQA
+4. Fix → cos-sim > 0.99 → gen_text output matches CPU
 
-## P1: Infrastructure
-5. Fix CPU gen_text build (`#ifdef GPU_SUPPORT`)
-6. Push 8 commits to remote
-7. Re-verify full cos-sim
+## P1: After hidden fix
+5. Build gen_text_mtp (make gen_text_mtp) — verify binary compiles
+6. Test MTP spec decode with MTP model
+7. Fix forward_full GPU SSM divergence
+8. Fix GPU SSM C>1 prefill (cuBLAS error 13)
 
-## P2: Vision integration
-8. Build test_vision_real → verify output
-9. Wire full vision→text multi-modal pipeline
+## P2: Vision
+9. Build test_vision_real
+10. Wire multi-modal pipeline
 
-## EVERY FIX: compile → run → checkpoint cos-sim → document
+## EVERY FIX: compile → dump hidden → cos-sim → document → update DA
