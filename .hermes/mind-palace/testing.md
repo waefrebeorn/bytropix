@@ -1,79 +1,91 @@
-# WuBuText AI — Testing Protocol (May 16 v8 — HONEST)
+# WuBuText AI — Testing Protocol (May 21, 2026)
 
-## IMPORTANT
-**INFERENCE IS BROKEN.** Current tests check compilation + non-crash, NOT correctness.
-Reference output (llama.cpp): "Here's a thinking process:" — Our output: garbage.
-All test results should be interpreted as "compiles and doesn't crash" unless verified against llama.cpp.
+## IMPORTANT STATE UPDATE
+**CPU inference is FIXED.** `./gen_text` produces coherent text (verified: "Paris is the capital of France..."). CPU-only cos-sim vs llama.cpp reference: 0.9968 overall. All known bugs fixed.
+
+**GPU text inference is NET-NEGATIVE** — not broken, but slower than CPU. GPU MoE 0.9888 cos-sim is a FUNDAMENTAL code-path difference (DA v13), not a fixable bug.
+
+**GPU vision encoder WORKS** — 0.52s GPU vs 63.7s CPU (122x). Full vision→text pipeline verified at 15.7s.
 
 ---
 
 ## Quick Start
 ```bash
-bash tests/run.sh           # 9 tests, ~3 min
-bash tests/run.sh --full    # includes MOE=1 (~8 min)
+# CPU inference (works correctly)
+./gen_text "The capital of France is" 20
+
+# Compare with reference (CPU)
+./test_full_model
+
+# Vision test
+./test_vision_real <mmproj.gguf> <pixels.bin>
+
+# Per-layer cos-sim verification
+DUMP_LAYER_DIR=/tmp/ref ./ref_dumper model.gguf "prompt" 0
+DUMP_LAYER_DIR=/tmp/our ./gen_text "prompt" 0
+./layer_cos_sim /tmp/ref /tmp/our 40
 ```
-Exit 0 = all PASS (compilation + non-crash). Exit 1 = FAIL found.
 
-## Test Harness: `tests/run.sh`
+## Current Test Categories
 
-| # | Test | What It Checks | Limitation |
-|---|------|----------------|------------|
-| 1 | BUILD | `make infer_text_gpu` compiles | Doesn't verify correctness |
-| 2 | EXISTENCE | Binary + model exist, ELF 64-bit | Basic sanity only |
-| 3 | SMOKE | Runs with 1 token, exit 0, PASS marker | Doesn't check output content |
-| 4 | OUTPUT REGRESSION | Prefill + decode text matches golden `!!!` | Golden is from pre-fix version |
-| 5 | CHUNK SIZE PARITY | CHUNK=256 == CHUNK=64 produce identical text | Both produce garbage |
-| 6 | DECODE SPEED | Benchmark decode + prefill tok/s | Speed real, output wrong |
-| 7 | LONG PROMPT | 48 tok prompt, multi-chunk, completes with PASS | Memory check only |
-| 8 | LAYER CONFIG | 40 layers (30 SSM, 10 GQA) | Weight loading check |
-| 9 | CLEANLINESS | No NaN/Inf/SIGSEGV in output | No garbage detection |
-| 10 | MOE=1 (opt) | Full MOE=1 run with GPU buffers allocated | Output not verified |
+### Correctness Tests (All CPU path)
+| Test | Command | What It Checks | Status |
+|------|---------|----------------|--------|
+| Full model cs | `./test_full_model` | Cos-sim vs llama.cpp reference | ✅ 0.9968 |
+| Layer-by-layer | `./layer_cos_sim /ref /our 40` | Each layer's hidden state vs ref | ✅ 0.9968+ |
+| Per-expert MoE | `./compare_moe_expert` | Single expert cos-sim vs CPU | ✅ ~0.9888 (fundamental) |
+| Output projection | `./compare_outw` | Final logit comparison | ✅ ~0.999 |
+| Text generation | `./gen_text "prompt" 20` | Coherent text output | ✅ Verified |
 
-## What Tests DON'T Catch (Critical Gaps)
+### GPU Tests
+| Test | Command | What It Checks | Status |
+|------|---------|----------------|--------|
+| GPU vision | `./test_vision_real` with GPU_SUPPORT | ViT layer cos-sim vs CPU | ✅ 122x faster, NaN=0 |
+| GPU hybrid | `GPU=1 FORCE_CPU_MOE=1 ./gen_text_gpu` | Full hybrid pipeline | ✅ Coherent text at 5.5 tok/s |
+| GPU GQA prefill | internal test | Batched C=N prefill | ✅ Fixed |
+| GPU quant matmul | internal test | Q5_K/Q6_K batched | ✅ Fixed |
 
-- **No reference comparison**: Never compares output against llama.cpp
-- **No hidden state comparison**: Layer-by-layer numerical comparison missing
-- **No tokenizer verification**: Custom tokenizer never checked against GGUF-native
-- **No logit validation**: Never checks if output logits match reference
-- **GPU vs CPU mismatch**: Different architectures (SSM, RoPE, gates) — no cross-verification
+### MTP Tests
+| Test | Command | What It Checks | Status |
+|------|---------|----------------|--------|
+| MTP load | `./test_mtp_load` | MTP model tensor loading | ✅ blk.40 + nextn.* |
+| MTP draft | `./test_mtp_draft` | Draft token generation | ✅ Working |
+| MTP decode | `MTP=1 ./gen_text_mtp "prompt" 10` | Full speculative decode | ✅ 8.5 tok/s |
 
-## Golden Output Files — DEPRECATED
-```
-tests/golden/prefill_short.txt     — "The meaning of life" → "!" output
-```
-This golden is from a broken inference. Do NOT use as correctness reference.
-Use llama.cpp output as ground truth instead.
+### Performance Tests
+| Test | Command | What It Checks | Status |
+|------|---------|----------------|--------|
+| Decode speed | `PROFILE=1 ./gen_text "hello" 1` | Per-layer timing | ✅ CPU: 8.9 tok/s |
+| Prefill speed | `./gen_text "long prompt" 0` | Prefill throughput | ✅ 17.8 tok/s |
+| GPU vision speed | GPU vision pipeline | End-to-end timing | ✅ 15.7s total |
 
-## Verification Protocol (Manual — until P0 fixed)
-
-### Compare vs llama.cpp
+## Reference Data Protocol
 ```bash
-~/llama.cpp/build/bin/llama-cli -m /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -p "The capital of France is" -n 20 --temp 0.0
-./infer_text_gpu /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "The capital of France is" 20 2>&1
-# Compare outputs — they must MATCH for correctness
+# Generate reference data via libllama.so (NOT llama-cli)
+./ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "prompt" 0
+
+# Environment variables:
+DUMP_LAYER_DIR=/tmp/ref_layers       # Per-layer hidden state dumps
+DUMP_INTERMEDIATE_DIR=/tmp/ref_interm  # Per-layer Q/K/V/attention dumps
+REF_LOGITS_PATH=/tmp/ref_logits.bin   # Final logits
+REF_HIDDEN_PATH=/tmp/ref_hidden.bin    # Final hidden state
+
+# Reference MTP
+./ref_dumper_mtp /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf "prompt"
 ```
-
-### Layer-by-layer hidden state comparison (TODO)
-This is the gold standard fix for P0 — compare SSM hidden states, GQA logits, MoE output against reference.
-
-## What Actually Works (Verified)
-- **test_kv_cache**: `make test_kv_cache` — max_diff=0.00 vs full recompute ✅
-- **test_256k**: MoE router O(T) scaling to 65K ✅
-- **API server**: `bash tests/test_api.sh` — 14 sandbox tests pass ✅
-- **Compilation**: All binaries build cleanly ✅
 
 ## Known Testing Limitations
 
-- Tests check compilation + non-crash, NOT correctness
-- No GPU vs CPU cross-verification
-- No exact logit comparison (text output only)
-- No 256K stress test (48 tok max)
-- MOE=1 test optional (not default)
+- **GPU MoE cos-sim 0.9888** — NOT a bug, fundamental code-path diff (DA v13)
+- **No 256K stress test** — max tested: ~65K tokens
+- **No GPU memory leak detection** — tool exists but not integrated
+- **No automated CI** — manual test runs
+- **MTP acceptance 4%** — low due to quantized IQ2_M MTP head weights
+- **GPU thermal throttling** — GPU init heats CPU, skews CPU benchmark timing
 
-## Future Improvements
+## What Tests DON'T Catch (Future Work)
 
-- Integrate `test_kv_cache` into harness (numerical max_diff)
-- Add llama.cpp reference comparison
-- Add hidden state layer-by-layer comparison
-- Add `train_integrated` CE reference baseline check
-- Add GPU memory leak detection
+- **Precision impact on real tasks**: Does 0.9968 cos-sim affect MMLU/GSM8K scores?
+- **KV cache garbage at 256K**: SSD offload path not tested
+- **Tokenizer correctness**: Not compared against GGUF-native tokenizer
+- **GPU performance under sustained load**: Thermal throttling after 5+ minutes

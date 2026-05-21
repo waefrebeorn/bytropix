@@ -180,13 +180,17 @@ test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
 
-# CPU-only gen_text (recompiles wubu_model without GPU_SUPPORT)
+# CPU-only gen_text (recompiles wubu_model + wubu_moe without GPU_SUPPORT)
 gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
-gen_text_cpu: src/wubu_model_cpu.o $(CORE_OBJ) src/wubu_tokenizer.o
-	$(CC) $(CFLAGS_FILTERED) -o $@ tools/gen_text.c src/wubu_model_cpu.o $(CORE_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
+gen_text_cpu: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS_FILTERED) -o $@ tools/gen_text.c src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o $(LDFLAGS)
 	@echo "gen_text_cpu built (CPU-only, no GPU support)"
 
 src/wubu_model_cpu.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h include/wubu_moe.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -o $@ -c $<
+
+# CPU-only wubu_moe (no GPU_SUPPORT)
+src/wubu_moe_cpu.o: src/wubu_moe.c include/wubu_moe.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) -o $@ -c $<
 
 run_bos: tools/run_bos.c $(MODEL_OBJ)
@@ -258,6 +262,14 @@ compare_logits: tools/compare_logits.c $(MODEL_OBJ) src/wubu_tokenizer.o
 		-o $@ $^ \
 		-L /home/wubu/llama.cpp/build/bin -lllama -lggml-base -lggml-cpu -lggml \
 		-lm -fopenmp -Wl,-rpath,/home/wubu/llama.cpp/build/bin
+
+# Per-layer cos-sim comparison tool
+layer_cos_sim: tools/layer_cos_sim.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+# Hidden state dumper (standalone, no llama deps)
+dump_hidden: tools/dump_hidden.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # Training & tools
 train_stub: tools/train_stub.c

@@ -1,28 +1,33 @@
-# Goal Mantra — Phase 28l: P1 Complete, P2 Up
+# Goal Mantra — Phase 28o: P2 Hardware Utilization
 
-**Target:** Hybrid path (GPU SSM/GQA + CPU MoE) working. MTP + Vision verified. Next: feature cream.
+**Target:** CPU-optimal path (8.9 tok/s decode) stable. GPU vision pipeline accelerated 4.4x (15.7s total). P2 feature cream: hardware utilization, RoPE extrapolation, chunked prefill, sparse attention, sigmoid gating.
 
 ## STATE
 | Component | Status | Detail |
 |-----------|--------|--------|
-| GPU SSM/GQA + CPU MoE | ✅ 5.5 tok/s | Coherent text |
-| MTP spec decode | ✅ 8.5 tok/s | 4% acceptance (quantized head) |
-| Vision→text pipeline | ✅ Verified | 256×256→128 patches→logits, no NaN |
-| Vision encoder | ✅ Verified | 63.7s CPU, 2 segfault bugs fixed |
-| GPU MoE v5 | ✅ COMMITTED | 12ad638, fundamental 0.9888 cos-sim |
-| DA v13 | ✅ Written | Comprehensive analysis |
+| GPU vision pipeline | ✅ 15.7s total | GPU ViT 0.52s + GPU MMProj cuBLAS + CPU text 6.3s |
+| GPU hybrid text | ⚠️ NET-NEGATIVE | CPU-only 2-5x faster. GPU MoE 0.9888 cos-sim is FUNDAMENTAL |
+| MTP spec decode | ✅ 8.5 tok/s | 4% acceptance (quantized head — IQ2_M MTP model) |
+| CPU-only text | ✅ 8.9/17.8 tok/s | Optimal path for all text inference. Stable, coherent |
+| Vision full pipeline | ✅ Verified | No NaN/Inf, logit range [-10.8, 14.1] |
 
-## P0: Complete — GPU MoE analysis done, hybrid path accepted
-1. ✅ Q8_K quantization in GPU kernel (v5)
-2. ✅ CUDA sm_120 workarounds (extern float smem, thread-0 reduce)
-3. ✅ Per-expert comparison tool
-4. ✅ DA v13 root cause analysis
-5. ✅ GPU MoE disabled by default (use FORCE_CPU_MOE to re-enable)
+## P0-P1: Complete
+1. ✅ GPU MoE root cause (DA v13): 0.9888 cos-sim is code-path diff, NOT fixable
+2. ✅ Hybrid path accepted (GPU SSM/GQA + CPU MoE = coherent at 5.5 tok/s)
+3. ✅ GPU MoE disabled by default (FORCE_CPU_MOE)
+4. ✅ MTP spec decode — gen_text_mtp working at 8.5 tok/s
+5. ✅ Vision pipeline — screenshot→encoder→mmproj→text→logits verified
+6. ✅ 2 segfaults fixed in wubu_vision.c
+7. ✅ GPU GQA batched prefill (C=N)
+8. ✅ Batched quant matmul (Q5_K/Q6_K)
 
-## P1: Complete
-1. ✅ MTP spec decode — gen_text_mtp working at 8.5 tok/s
-2. ✅ Vision pipeline — screenshot→encoder→mmproj→text→logits verified
-
-## P2: Feature Cream (up next)
+## P2: Hardware Utilization & Feature Cream
+1. CUDA sm_120 bug documentation → skill
+2. Llama.cpp inline hooks for reference data (replace llama-cli)
+3. GPU RMSNorm + SiLU kernels
+4. Chunked prefill (3-7x speedup, Qwen2.5-1M paper)
+5. RoPE extrapolation 4x (train 64K → infer 256K)
+6. NSA sparse attention (DeepSeek-V3.2)
+7. Sigmoid gating + load balancing (DeepSeekMoE)
 
 ## EVERY FIX: compile → test → document → update DA
