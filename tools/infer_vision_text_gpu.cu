@@ -180,22 +180,33 @@ int main(int argc, char **argv) {
     cudaStreamSynchronize(stream);
     double t_vit_done = now_sec();
     
-    // 9. === CPU: Spatial merge (concatenate 2×2) + MMProj ===
+    // 9. === GPU: Spatial merge (CPU) + MMProj (GPU cuBLAS) ===
     const int V_MERGE_DIM = V_HIDDEN * 4;
     float *vit_embd = (float *)malloc(B * n_merged * V_OUT_HIDDEN * sizeof(float));
+    
+    // Upload mm0 and mm2 weights to GPU once
+    float *d_mm0_w, *d_mm0_b, *d_mm2_w, *d_mm2_b;
+    cudaMalloc(&d_mm0_w, V_MERGE_DIM * V_MERGE_DIM * sizeof(float));
+    cudaMalloc(&d_mm0_b, V_MERGE_DIM * sizeof(float));
+    cudaMalloc(&d_mm2_w, V_MERGE_DIM * V_OUT_HIDDEN * sizeof(float));
+    cudaMalloc(&d_mm2_b, V_OUT_HIDDEN * sizeof(float));
+    cudaMemcpy(d_mm0_w, enc.mm0_weight, V_MERGE_DIM * V_MERGE_DIM * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_mm0_b, enc.mm0_bias, V_MERGE_DIM * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_mm2_w, enc.mm2_weight, V_MERGE_DIM * V_OUT_HIDDEN * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_mm2_b, enc.mm2_bias, V_OUT_HIDDEN * sizeof(float), cudaMemcpyHostToDevice);
 
     for (int b = 0; b < B; b++) {
         const float *batch_vit = h_vit_out + b * n_patches_total * V_HIDDEN;
-        float *batch_merged = (float *)malloc(n_merged * V_MERGE_DIM * sizeof(float));
-        memset(batch_merged, 0, n_merged * V_MERGE_DIM * sizeof(float));
-
-        // Spatial merge: concatenate 2×2 neighbors
+        
+        // CPU spatial merge: concatenate 2×2 neighbors (fast, ~0.1ms)
+        float *merged = (float *)malloc(n_merged * V_MERGE_DIM * sizeof(float));
+        memset(merged, 0, n_merged * V_MERGE_DIM * sizeof(float));
         for (int tp = 0; tp < V_TEMP_PATCH; tp++) {
             int tb = tp * (patch_h * patch_w);
             for (int mh = 0; mh < merged_h; mh++) {
                 for (int mw = 0; mw < merged_w; mw++) {
                     int dst = tp * (merged_h * merged_w) + mh * merged_w + mw;
-                    float *dst_row = batch_merged + dst * V_MERGE_DIM;
+                    float *dst_row = merged + dst * V_MERGE_DIM;
                     for (int dy = 0; dy < 2; dy++) {
                         for (int dx = 0; dx < 2; dx++) {
                             int src = tb + (mh*2+dy) * patch_w + (mw*2+dx);
@@ -209,33 +220,51 @@ int main(int argc, char **argv) {
             }
         }
 
-        // MMProj: mm0 → GELU → mm2 per merged token
-        float *batch_out = vit_embd + b * n_merged * V_OUT_HIDDEN;
-        if (enc.mm0_weight) {
-            for (int i = 0; i < n_merged; i++) {
-                const float *row = batch_merged + i * V_MERGE_DIM;
-                float mm0_buf[4608];
-                for (int j = 0; j < 4608; j++) {
-                    double sum = enc.mm0_bias[j];
-                    for (int k = 0; k < 4608; k++)
-                        sum += (double)row[k] * (double)enc.mm0_weight[k * 4608 + j];
-                    mm0_buf[j] = gelu_tanh((float)sum);
-                }
-                float *out_row = batch_out + i * V_OUT_HIDDEN;
-                for (int j = 0; j < V_OUT_HIDDEN; j++) {
-                    double sum = enc.mm2_bias[j];
-                    for (int k = 0; k < 4608; k++)
-                        sum += (double)mm0_buf[k] * (double)enc.mm2_weight[k * V_OUT_HIDDEN + j];
-                    out_row[j] = (float)sum;
-                }
-            }
-        } else {
-            for (int i = 0; i < n_merged; i++)
-                memcpy(batch_out + i * V_OUT_HIDDEN, batch_merged + i * V_MERGE_DIM,
-                       (V_MERGE_DIM < V_OUT_HIDDEN ? V_MERGE_DIM : V_OUT_HIDDEN) * sizeof(float));
-        }
-        free(batch_merged);
+        // GPU MMProj: mm0 → GELU → mm2 via cuBLAS SGEMM
+        float *d_merged, *d_mm0_out, *d_mm2_out;
+        cudaMalloc(&d_merged, n_merged * V_MERGE_DIM * sizeof(float));
+        cudaMalloc(&d_mm0_out, n_merged * V_MERGE_DIM * sizeof(float));
+        cudaMalloc(&d_mm2_out, n_merged * V_OUT_HIDDEN * sizeof(float));
+
+        cudaMemcpy(d_merged, merged, n_merged * V_MERGE_DIM * sizeof(float), cudaMemcpyHostToDevice);
+        free(merged);
+
+        // mm0: [n_merged, 4608] @ mm0_w[4608, 4608]^T = [n_merged, 4608]
+        // cuBLAS col-major: C[N,M] = B^T[N,K] @ A_col[K,M]
+        // M = n_merged, K = V_MERGE_DIM = 4608, N = V_MERGE_DIM = 4608
+        // A = d_merged [n_merged, 4608] row-major → A_col[4608, n_merged], ld=4608
+        // B = d_mm0_w [4608, 4608] row-major → B_col[4608, 4608], ld=4608
+        // C = d_mm0_out [n_merged, 4608] row-major → C_col[4608, n_merged], ld=4608
+        float alpha = 1.0f, beta = 0.0f;
+        cublasSgemm(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                    V_MERGE_DIM, n_merged, V_MERGE_DIM, &alpha,
+                    d_mm0_w, V_MERGE_DIM,
+                    d_merged, V_MERGE_DIM, &beta,
+                    d_mm0_out, V_MERGE_DIM);
+        // Add mm0 bias per row
+        for (int i = 0; i < n_merged; i++)
+            cublasSaxpy(cublas_h, V_MERGE_DIM, &alpha, d_mm0_b, 1, d_mm0_out + i * V_MERGE_DIM, 1);
+        // GELU
+        int gelu_n = n_merged * V_MERGE_DIM;
+        gelu_kernel<<<(gelu_n + 255) / 256, 256, 0, stream>>>(d_mm0_out, gelu_n);
+
+        // mm2: [n_merged, 4608] @ mm2_w[4608, 2048]^T = [n_merged, 2048]
+        cublasSgemm(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                    V_OUT_HIDDEN, n_merged, V_MERGE_DIM, &alpha,
+                    d_mm2_w, V_MERGE_DIM,
+                    d_mm0_out, V_MERGE_DIM, &beta,
+                    d_mm2_out, V_OUT_HIDDEN);
+        // Add mm2 bias per row
+        for (int i = 0; i < n_merged; i++)
+            cublasSaxpy(cublas_h, V_OUT_HIDDEN, &alpha, d_mm2_b, 1, d_mm2_out + i * V_OUT_HIDDEN, 1);
+
+        cudaStreamSynchronize(stream);
+        cudaMemcpy(vit_embd + b * n_merged * V_OUT_HIDDEN, d_mm2_out,
+                   n_merged * V_OUT_HIDDEN * sizeof(float), cudaMemcpyDeviceToHost);
+
+        cudaFree(d_merged); cudaFree(d_mm0_out); cudaFree(d_mm2_out);
     }
+    cudaFree(d_mm0_w); cudaFree(d_mm0_b); cudaFree(d_mm2_w); cudaFree(d_mm2_b);
 
     // 10. Check vision output
     double t_vision = now_sec();

@@ -27,9 +27,10 @@ Root cause identified (DA v13): 0.9888 per-layer cos-sim is FUNDAMENTAL — not 
 | Feature | Priority | Status |
 |---------|----------|--------|
 | GPU GQA batched prefill fix | High | ✅ Done (C=N, sub-batch fallback) |
-| SSM forward_full C>1 path (batched SSM prefill) | High | ❌ Pre-existing failure, needs beta/alpha step |
-| GPU RMSNorm + SiLU + gated norm kernels | High | 🔲 Kernels exist, not wired into model forward |
-| Chunked prefill (3-7x speedup, Qwen2.5-1M) | High | 🔲 Infrastructure exists (chunked_attn) |
+| **GPU vision encoder kernels** | **High** | **✅ GPU ViT 0.52s (122x faster), NaN=0** |
+| SSM forward_full C>1 path (batched SSM prefill) | High | ❌ Accuracy divergence, needs DA |
+| GPU RMSNorm + SiLU + gated norm kernels | High | 🔲 Kernels exist, not wired |
+| Chunked prefill (3-7x speedup, Qwen2.5-1M) | High | 🔲 Infrastructure exists |
 | RoPE extrapolation 4x | High | Not started |
 | Sparse attention (NSA, DeepSeek V3.2) | High | Not started |
 | Sigmoid gating + load balancing (DeepSeekMoE) | High | Not started |

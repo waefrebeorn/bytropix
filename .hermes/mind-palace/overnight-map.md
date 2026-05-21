@@ -28,13 +28,11 @@
   1. n_patches_total capped at V_MAX_POS (prevent massive alloc)
   2. scores[2304] stack array → heap-allocated (SIGSEGV on >2304 patches)
 
-### GQA Batched Prefill Fix (May 21) — P2 completed
-- **Bug:** GPU GQA prefill processed tokens one-at-a-time (`for t in 0..N: gqa_fwd(C=1)`) causing N×H2D/D2H overhead
-- **Fix:** Pass `C=N` to batched GPU GQA forward (`wubu_model_gpu_gqa_forward(model, l, normed, N, attn_out)`)
-- **Added:** `wubu_model_gpu_chunk_sz()` helper for scratch size check, with N>chunk_sz sub-batching fallback
-- **Added:** `int wubu_model_gpu_chunk_sz(wubu_model_t *model)` declaration in wubu_model.h + implementation in wubu_model_gpu.cu
-- **Impact:** 5x fewer GPU calls for GQA layers during prefill (10 layers × N→1 batched call)
-- **TODO:** Similar batched fix for SSM forward_full C>1 path (currently unused, falls back to per-token)
+### GQA Batched Prefill Fix (May 21) + GPU Vision Encoder Working (May 21)
+- **Bug fix:** GPU GQA prefill now passes C=N instead of per-token C=1 loop
+- **Batched quant matmul:** Q5_K/Q6_K batched kernels, wired into SSM hybrid + forward_full
+- **GPU vision encoder:** Fixed in-place LN bug (separate residual pointer). GPU ViT: **0.52s** (122x faster than CPU 63.7s). NaN=0, correct output.
+- **infer_vision_text_gpu:** Full pipeline working: ffmpeg screenshot → patch embed → GPU 27 ViT layers → spatial merge → mmproj → text model → logits
 
 ## What's Blocked
 - CUDA sm_120 compute-sanitizer doesn't work (WDDM debugger not initialized)
