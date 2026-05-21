@@ -1,89 +1,41 @@
-# Plan — Phase 28j+: Extended Roadmap with Vault Cross-Reference (DA v12+vault)
+# Plan — Phase 28k+: GPU MoE Analysis Complete, P1 Active
 
-## 🔴 P0: Hidden State Divergence (DA C6 — VERIFIED)
-GPU hidden cos-sim -0.0036 vs CPU with FORCE_CPU_SSM.
+## 🔴 P0: GPU MoE Hidden State Divergence — COMPLETE
+Root cause identified (DA v13): 0.9888 per-layer cos-sim is FUNDAMENTAL — not a single bug. Different code paths produce different rounding. Hybrid path accepted.
 
-**Step 1:** Isolate MoE vs GQA
-- `src/wubu_model.c:636-639` — remove `layer->moe.gpu_ctx = (void*)model;`
-- Rebuild gen_text_gpu, run with FORCE_CPU_SSM + DUMP_HIDDEN
-- If hidden fixes → MoE kernel is buggy → debug `gpu_moe_kernel.cu`
-- If still broken → GQA is also buggy → debug `wubu_model_gpu.cu` GQA section
+### What Was Done
+1. ✅ v5 Q8_K kernel: quantize x to Q8_K, use int8 dot product
+2. ✅ CUDA sm_120 bugs: 3 workarounds applied
+3. ✅ Per-expert compare tool: compare_moe_expert
+4. ✅ DA v13: comprehensive root cause analysis
+5. ✅ GPU MoE disabled by default (FORCE_CPU_MOE)
 
-**Step 2:** If MoE — insert expert-level dequant dump, compare gate/up/down outputs
-**Step 3:** If GQA — compare GPU GQA output vs CPU GQA for same input
+### What Was Learned
+- 0.32% running cos-sim error → flips token selection in 240K vocab
+- Hybrid path (GPU SSM/GQA + CPU MoE) produces coherent text at 5.5 tok/s
+- Q8_K quantization is correct but doesn't fix the ~1.1% per-layer error
+- For 1:1 parity, would need CPU quantized_matmul ported to GPU (3-5 sessions)
 
-## 🟡 P1: GPU SSM + MTP + Hedged Spec Decode
-1. Fix forward_full GPU SSM divergence (gpu_ssm_recurrence.cu)
-2. Fix GPU SSM C>1 prefill (cuBLAS error 13)
-3. Build + test gen_text_mtp with MTP model (verify 83% acceptance at 2 drafts)
-4. **N-way hedged speculative decode** (vault/tailslayer/) — parallel draft verification across GPU SMs using tailslayer DRAM-channel hedged-read pattern
+## 🟡 P1: MTP Speculative Decode + Vision
+1. **Build gen_text_mtp** (`make gen_text_mtp`)
+   - Test with regular model (falls back to single-token)
+   - Test with MTP model: /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf
+   - Verify: does acceptance rate match DeepSeek's claimed 83% at 2 drafts?
+   
+2. **Build vision pipeline**
+   - build test_vision_real
+   - Generate test image pixels
+   - Verify 3D ViT encoder → mmproj → text space
 
-## 🟡 P2: Vision Integration + Encoders
-1. Build test_vision_real, verify 3D ViT encoder output
-2. Wire full vision→text multi-modal pipeline
-3. **Hamiltonian KV cache compression** (vault/hamilton/) — 10× compression, 62% compression ratio, ~3% overhead. Already has CPU prototype, needs CUDA port.
-4. **Quaternion/Geodesic attention** (vault/hamilton/) — alternative attention mechanism, partial CUDA port exists
+## 🟡 P2: Feature Cream
+| Feature | Priority | Status |
+|---------|----------|--------|
+| GPU RMSNorm + SiLU + gated norm kernels | High | Not started |
+| Chunked prefill (3-7x speedup, Qwen2.5-1M) | High | Not started |
+| RoPE extrapolation 4x | High | Not started |
+| Sparse attention (NSA, DeepSeek V3.2) | High | Not started |
+| Sigmoid gating + load balancing (DeepSeekMoE) | High | Not started |
+| Hamilton KV cache compression 10x | Mid | Not started |
+| Entropix dynamic sampling | Mid | Not started |
 
-## 🟢 P3: Feature Cream — Vault-Sourced
-| Feature | Vault Source | Priority |
-|---------|-------------|----------|
-| Sigmoid gating + load balancing | deepseek-papers/ (DeepSeekMoE) | High |
-| Chunked prefill (3-7x speedup) | qwen-papers/ (Qwen2.5-1M) | High |
-| RoPE extrapolation 4x | qwen-papers/ | High |
-| Sparse attention (NSA) | deepseek-papers/ (DeepSeek V3.2) | High |
-| GPU RMSNorm + SiLU + gated norm kernels | Engineering (own) | High |
-| **WuBuSparseAttention** (dual-memory RAS, O(n·k)) | vault/attention/ | Mid |
-| **Topological Sequence Model** (Conv1D+Poincaré, O(n)) | vault/attention/ | Mid |
-| **Entropix Sampler** (Dirichlet dynamic sampling) | vault/attention/ | Mid |
-| **Rolling Hash Attention** (SimpleHash C port) | vault/hash-mind/ | Mid |
-| **Tri-Cameral Hyperbolic Attention** | vault/attention/ | Low |
-
-## 🟢 P4: Training Pipeline — Vault-Sourced
-| Feature | Vault Source | Priority |
-|---------|-------------|----------|
-| CUDA training kernels + FSDP + GRPO RL | plan.md (Phase 32 original) | High |
-| **Q-Controller** (Q-learning LR scheduler) | vault/optimizers/ | Mid — directly helps training stability |
-| **PID Lambda Controller** (loss-weight balancing) | vault/optimizers/ | Mid — adaptive loss control |
-| **Pure C training pipeline** reference | vault/c-training/ | Low — demonstrates feasibility |
-| **Dual-Agent Q-Learning Training** | vault/hash-mind/ | Low |
-| **HAKMEM Optimizer** | vault/draftPY/ | Low |
-
-## 🔵 P5: Multi-Modal Expansion — Vault-Sourced
-| Feature | Vault Source | Priority |
-|---------|-------------|----------|
-| **Symmetric Geometric Autoencoder** (image latent) | vault/encoders/ | Mid — complements P2 vision |
-| **Topological Quantum Autoencoder** (3-float compression) | vault/encoders/ | Low |
-| **Text-to-Image Generation** (VQ-VAE + Conductor Transformer) | vault/phase3/, draftPY/, diffusion/ | Future |
-| **Diffusion Models** (HGA-UNet, Funnel Diffusion) | vault/diffusion/ | Future |
-| **Audio Synthesis** (WubuSynth + EnCodec) | vault/audio/ | Future |
-| **GAAD (Golden Aspect Adaptive Decomposition)** | vault/draftPY/ | Future |
-| **Spectral Transformer (SpecTrans)** | vault/draftPY/ | Future |
-| **HypCD/BSFIN Hyperbolic Compression** | vault/draftPY/ | Future |
-
-## 🔵 P6: Infrastructure — Vault-Sourced
-| Feature | Vault Source | Priority |
-|---------|-------------|----------|
-| **Lean 4 Formal Verification** of hyperbolic math | vault/lean-proofs/ | Low — assurance, not product |
-| **ETP (Embedding-to-Physics) Training** | vault/draftPY/ | Future |
-
-## Vault Cross-Reference Summary
-- **18 vault READMEs examined** via subagent
-- **13 vault areas contain capabilities NOT on roadmap**
-- **23 missing items identified** (M1-M23), categorized into P3-P6 above
-- **4 vault areas fully mapped**: deepseek-papers, qwen-papers, synthesis.md, deepmind-2026
-- **1 vault archival**: bins/
-- **1 already implemented**: theory/ (hyperbolic math in C/CUDA)
-
-## Key Vault Directories (for context)
-| Vault | Content | Roadmap Coverage |
-|-------|---------|-----------------|
-| `vault/attention/` | 4 attention variants + Entropix sampler | P3 (partial: sparse attn + hyperbolic) |
-| `vault/hamilton/` | Quaternion attention, KV cache compression | P2 (KV cache comp) + P3 (quaternion attn) |
-| `vault/hash-mind/` | WuBuMind JAX, rolling hash attention | P3 (rolling hash) + P4 (Q-learning) |
-| `vault/optimizers/` | Q-Controller, PID Lambda | P4 (training) |
-| `vault/tailslayer/` | Hedged speculative decode | P1 (MTP complement) |
-| `vault/encoders/` | Geometric + quantum autoencoders | P5 (multi-modal) |
-| `vault/phase3/`, `diffusion/`, `audio/` | Text-to-image, diffusion, audio synth | P5 (future) |
-| `vault/lean-proofs/` | Formal verification | P6 (infrastructure) |
-| `vault/c-training/` | Pure C training reference | P4 (reference) |
-| `vault/draftPY/` | 40+ experimental scripts | P5/P6 (scattered) |
+## P3-P6: Per plan.md (unchanged)
