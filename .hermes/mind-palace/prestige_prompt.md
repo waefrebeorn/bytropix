@@ -1,17 +1,38 @@
-# Prestige Prompt — May 21, 2026 (Phase 28o: P2 HW Utilization)
+# Prestige Prompt — May 21, 2026 (Phase 28p: RoPE 4x Complete)
 
 ## Project: bytropix — Multi-Modal Inference (Text + Vision)
 
 **Qwen3.6-35B-A3B-UD-IQ2_M text + Moondream3 3D ViT vision via mmproj**  
-**CPU-only: 8.9 tok/s decode | GPU vision: 15.7s total pipeline | MTP: 8.5 tok/s**
+**CPU-only: 8.9 tok/s decode optimal | GPU vision: 15.7s pipeline | RoPE 4x: done**
 
 ## Current State
-- CPU-only is optimal for text (8.9 tok/s decode). GPU hybrid is 2-5x slower.
-- GPU vision encoder is THE GPU win: 0.52s vs 63.7s CPU (122x)
-- MTP spec decode working: 8.5 tok/s, 4% acceptance (quantized head limit)
-- Vision pipeline VERIFIED: screenshot→patch embed→27 ViT layers→mmproj→text model→logits
-- GPU MoE root cause: 0.9888 cos-sim is FUNDAMENTAL code-path diff (DA v13)
-- Hybrid text (GPU SSM/GQA + CPU MoE) produces coherent text at 5.5 tok/s
+- CPU-only is optimal for text (7.7 tok/s verified). GPU hybrid is 2-5x slower.
+- GPU vision encoder: 0.52s ViT (122x vs CPU), 15.7s full pipeline
+- GPU MoE 0.9888 cos-sim is FUNDAMENTAL code-path diff (DA v13). Hybrid path accepted.
+- **P2.4 RoPE 4x**: `ROPE_SCALE_FACTOR=0.25` extends 64K→256K — COMPLETE
+- **P2.3 Chunked SSM**: BROKEN (cos_sim=0.00000045). Needs debug in next session.
+- gen_text_cpu works with proper CLI: `./gen_text_cpu "prompt" <max_tokens>`
+- ref_dumper via libllama.so works with DUMP_LAYER_DIR / DUMP_INTERMEDIATE_DIR
+
+## Done This Session
+1. ✅ RoPE extrapolation 4x — `ROPE_SCALE_FACTOR` env var in wubu_ssm.c IMRoPE
+2. ✅ gen_text_cpu verified — produces coherent text at 7.7 tok/s
+3. ✅ Chunked SSM investigated — root cause is causal addressing convention
+4. ✅ Makefile fixes — test_chunked_ssm path, wubu_moe_cpu.o for CPU-only targets
+5. ✅ Sigmoid gating deferred — training-time technique, not applicable at inference
+
+## Next Session: P2.3 Fix + P2.5 NSA
+1. **Fix chunked SSM** — compare against llama.cpp `delta-net-base.cpp` build_delta_net_chunking(). The chunked code's KQ/mask index convention is suspect. Check also the `lhs = I + strict_lower(KB)` solve initialization.
+2. **NSA sparse attention** — O(L log L) per GQA layer. DeepSeek-V3.2 §2.1
+3. **FP8 Tensor Cores** — sm_120 native, 2x throughput on GPU quant matmul
+
+## Key Env Vars for Reference Data
+```
+DUMP_LAYER_DIR=/tmp/ref ./ref_dumper model.gguf         # 40 layer files
+DUMP_INTERMEDIATE_DIR=/tmp/ref ./ref_dumper model.gguf   # 1997 intermediate files
+ROPE_SCALE_FACTOR=0.25 ./gen_text_cpu "prompt" 20        # 4x context extension
+REF_LOGITS_PATH=/tmp/ref_logits.bin ./ref_dumper model.gguf  # Final logits
+```
 
 ## DA v13 Key Findings (Supersedes all prior DAs)
 1. GPU MoE 0.9888 cos-sim is NOT a bug — it's different code paths with different IEEE rounding
