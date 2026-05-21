@@ -39,7 +39,7 @@ For Qwen3.6-35B IQ2_M on RTX 5050:
 | **P2.1** | **Llama.cpp inline hooks** — modify llama.cpp source to dump layer-by-layer hidden states + intermediates. Replace ref_dumper (which uses libllama.so API) with direct C++ hooks inside llama_decode() | 🔲 Not started | ~/llama.cpp/ | 1 session |
 | **P2.2** | **GPU RMSNorm + SiLU + gated norm kernels** — kernels exist, not wired into pipeline | 🔲 Kernels exist | src/cuda_kernels.cu | Low |
 | **P2.3** | **Chunked prefill** — split long prompts into C-sized chunks. 3-7x prefill speedup at 256K. Infrastructure exists (src/wubu_ssm_chunked.c) | 🔲 Infrastructure exists | Qwen2.5-1M §3.3 | Medium |
-| **P2.4** | **RoPE extrapolation 4x** — frequency scaling factor <1 to extend 64K→256K. Single parameter change in attention | 🔲 Not started | Qwen2.5-1M §3.1 | Low |
+| **P2.4** | **RoPE extrapolation 4x** — frequency scaling factor for 64K→256K. `ROPE_SCALE_FACTOR=0.25` env var | ✅ COMPLETE (9b98098) | Qwen2.5-1M §3.1 | Low |
 | **P2.5** | **NSA sparse attention** — O(L log L) for GQA layers at 256K. Local window + global positions | 🔲 Not started | DeepSeek-V3.2 §2.1 | High |
 | **P2.6** | **Sigmoid gating + load balancing** — normalized sigmoid gating + auxiliary-loss-free dynamic bias adjustment | 🔲 Not started | DeepSeekMoE, DeepSeek-V3 §2.3 | Medium |
 | **P2.7** | **FP8 Tensor Cores** — sm_120 FP8 dot product for batched quant matmul. 2x throughput potential | 🔲 Not started | sm_120 ISA | High |

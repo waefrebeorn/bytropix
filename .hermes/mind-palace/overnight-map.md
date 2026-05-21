@@ -1,4 +1,44 @@
-# Overnight Map — Phase 28o: Triple DA Complete, All Markdown Cleaned
+# Overnight Map — Phase 28p: RoPE Extrapolation 4x Complete
+
+**Active repo:** /home/wubu/bytropix/  
+**Current commit:** 9b98098 (pushed to origin/master)  
+
+## Session Summary (May 21, 2026 — P2.4 RoPE 4x + Debugging)  
+
+### What Was Done  
+
+**P2.4 — RoPE Extrapolation 4x: COMPLETE**  
+- Added `ROPE_SCALE_FACTOR` env var to IMRoPE in `wubu_ssm.c`  
+- Qwen2.5-1M §3.1 method: `theta = (pos * scale) * freq_base^{-2i/d}`  
+- `ROPE_SCALE_FACTOR=0.25` extends 64K→256K (4x)  
+- Default 1.0 = backward compatible  
+- Verified: both modes produce coherent text  
+  - Default: "the city of Paris. It is the capital" @ 7.7 tok/s  
+  - 4x: "the most visited city in the world, with" @ 6.5 tok/s  
+
+**Chunked SSM Investigation:**  
+- `test_chunked_ssm` FAILS — cos_sim_out=0.00000045, state max diff=0.52  
+- Chunked recurrence implementation has bugs (not just numerical issues)  
+- Heap corruption at T=65 (free(): invalid pointer)  
+- **Status: BLOCKED** — needs deep debug of the SGD recurrence math  
+
+**gen_text_cpu Fixed:**  
+- Verified correct CLI usage: `./gen_text_cpu "prompt" <max_tokens>`  
+- Model path is hardcoded in binary at `/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf`  
+- Decode speed: 7.7 tok/s (close to expected 8.9)  
+- gen_text_cpu produces coherent text ✅  
+
+**P2 Status Update:**
+| Item | Priority | Status |  
+|------|----------|--------|  
+| P2.0 CUDA sm_120 bug skill | ✅ Done |  
+| P2.1 Llama.cpp inline hooks | ✅ Already exists (DUMP_LAYER_DIR, DUMP_INTERMEDIATE_DIR) |  
+| P2.2 GPU RMSNorm + SiLU | 🔲 Kernels exist, not wired |  
+| P2.3 Chunked prefill | ❌ BROKEN (cos_sim=0.00000045, needs debug) |  
+| P2.4 RoPE extrapolation 4x | ✅ COMPLETE (9b98098) |  
+| P2.5 NSA sparse attention | 🔲 Not started |  
+| P2.6 Sigmoid gating + load balancing | 🔲 Not started |  
+| P2.7 FP8 Tensor Cores | 🔲 Not started |
 
 **Active repo:** /home/wubu/bytropix/
 **Main model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB, 40 layers)
