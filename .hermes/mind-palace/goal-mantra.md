@@ -21,13 +21,13 @@
 7. ✅ GPU GQA batched prefill (C=N)
 8. ✅ Batched quant matmul (Q5_K/Q6_K)
 
-## P2: Hardware Utilization & Feature Cream
-1. CUDA sm_120 bug documentation → skill
-2. Llama.cpp inline hooks for reference data (replace llama-cli)
-3. GPU RMSNorm + SiLU kernels
-4. Chunked prefill (3-7x speedup, Qwen2.5-1M paper)
-5. RoPE extrapolation 4x (train 64K → infer 256K)
-6. NSA sparse attention (DeepSeek-V3.2)
-7. Sigmoid gating + load balancing (DeepSeekMoE)
+## P2: Feature Cream — Chunked SSM Bug Fixed
+1. ✅ CUDA sm_120 bug documentation → skill (in DA v13)
+2. ✅ Chunked prefill data layout bug FIXED (c5475af). CS=1 exact match.
+3. Llama.cpp inline hooks for reference data (replace llama-cli)
+4. GPU RMSNorm + SiLU kernels (exist, not wired)
+5. NSA sparse attention (DeepSeek-V3.2, high effort)
+6. Sigmoid gating + load balancing (DeepSeekMoE)
+7. FP8 Tensor Cores (sm_120 native, 2x throughput)
 
 ## EVERY FIX: compile → test → document → update DA

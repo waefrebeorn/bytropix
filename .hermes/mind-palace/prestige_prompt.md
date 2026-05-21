@@ -56,7 +56,7 @@ REF_LOGITS_PATH=/tmp/ref_logits.bin ./ref_dumper model.gguf  # Final logits
 | **P2.0** | CUDA sm_120 bug skill | Formalize Blackwell workarounds as reusable skill |
 | **P2.1** | Llama.cpp inline hooks | Replace llama-cli ref data with libllama.so hooks. Dump layer-by-layer hidden states, Q/K/V, attention scores |
 | **P2.2** | GPU RMSNorm + SiLU | Kernels exist but not wired. Low impact (<1%) but cleanup |
-| **P2.3** | Chunked prefill | 3-7x speedup at 256K. Infrastructure exists (wubu_ssm_chunked.c) |
+| **P2.3** | **Chunked prefill** | Data layout bug FIXED (c5475af). CS=1 matches exact. CS=64 has FP accumulation (7e-2 diff). Not suitable for exact inference yet. |
 | **P2.4** | RoPE extrapolation 4x | Single frequency scaling param change for 64K→256K |
 | **P2.5** | NSA sparse attention | O(L log L) for GQA at 256K. From DeepSeek-V3.2 |
 | **P2.6** | Sigmoid gating + load balancing | DeepSeekMoE algorithm. F32 router only — no quant matmul needed |

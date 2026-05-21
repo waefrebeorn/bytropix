@@ -45,10 +45,10 @@ GPU MoE per-layer cos-sim 0.9888 vs CPU is **FUNDAMENTAL** — not a single fixa
 | Priority | Item | Status | Effort |
 |----------|------|--------|--------|
 | P2.1 | **Llama.cpp inline hooks** for reference data dumps | 🔲 Not started | 1 session |
-| P2.2 | CUDA sm_120 bug documentation as skill | 🔲 Documented in DA v13 | Quick |
+| P2.2 | CUDA sm_120 bug documentation as skill | ✅ Documented in DA v13 | Quick |
 | P2.3 | GPU RMSNorm + SiLU kernels | 🔲 Kernels exist, not wired | Low |
-| P2.4 | Chunked prefill (3-7x speedup, Qwen2.5-1M) | 🔲 Infrastructure exists | Medium |
-| P2.5 | RoPE extrapolation 4x | 🔲 Not started | Low |
+| P2.4 | Chunked prefill (CS=1 passes exact, CS=64 has FP error) | ✅ Data layout fix committed | Data layout bug fixed |
+| P2.5 | RoPE extrapolation 4x | ✅ Complete (48dcf5e) | Low |
 | P2.6 | NSA sparse attention (DeepSeek-V3.2) | 🔲 Not started | High |
 | P2.7 | Sigmoid gating + load balancing (DeepSeekMoE) | 🔲 Not started | Medium |
 
@@ -64,6 +64,7 @@ GPU MoE per-layer cos-sim 0.9888 vs CPU is **FUNDAMENTAL** — not a single fixa
 5. **FP8 Tensor Cores**: Available on sm_120, not used — pure FP32 only
 
 ## COMMITS
+- c5475af — fix(ssm): chunked recurrence data layout — token-interleaved heads
 - 695fda5 — DA v13 complete, P1 MTP working, CUDA sm_120 bugs documented
 - f97b483 — GPU MMProj via cuBLAS SGEMM, total vision 15.7s
 - 3464940 — GPU vision encoder residual bug (separate d_residual param)
