@@ -47,7 +47,7 @@ GPU MoE per-layer cos-sim 0.9888 vs CPU is **FUNDAMENTAL** — not a single fixa
 | P2.1 | **Llama.cpp inline hooks** for reference data dumps | 🔲 Not started | 1 session |
 | P2.2 | CUDA sm_120 bug documentation as skill | ✅ Documented in DA v13 | Quick |
 | P2.3 | GPU RMSNorm + SiLU kernels | 🔲 Kernels exist, not wired | Low |
-| P2.4 | Chunked prefill (CS=1 passes exact, CS=64 has FP error) | ✅ Data layout fix committed | Data layout bug fixed |
+| P2.4 | **Chunked prefill** — wired into wubu_ssm_forward(). CS=1 exact. CS>1 FP error causes wrong tokens across 30 SSM layers. SSM_CHUNK_MIN env var. FORCE_CPU_SSM_SEQ to disable. | ✅ Wired + committed (501518f) | CS=1 exact, CS>1 FP-limited |
 | P2.5 | RoPE extrapolation 4x | ✅ Complete (48dcf5e) | Low |
 | P2.6 | NSA sparse attention (DeepSeek-V3.2) | 🔲 Not started | High |
 | P2.7 | Sigmoid gating + load balancing (DeepSeekMoE) | 🔲 Not started | Medium |
