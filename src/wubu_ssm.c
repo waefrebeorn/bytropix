@@ -1351,6 +1351,24 @@ void wubu_gqa_forward(const float *x, int B, int T,
     int total_kv = cache_len + N;  // total positions to attend over
     // attn_weights on heap (too large for stack at 256k context)
     
+    // NSA-style sparse attention for long contexts (DSA pattern from DeepSeek-V3.2)
+    // S(i) = {i} ∪ local_window(i, w) ∪ global_positions(i, g)
+    // Reduces O(L²) to O(L·(w+g)) per layer
+    int use_sparse = getenv("USE_SPARSE_ATTN") != NULL;
+    int sparse_w = getenv("SPARSE_W") ? atoi(getenv("SPARSE_W")) : 512;   // local window size
+    int sparse_g = getenv("SPARSE_G") ? atoi(getenv("SPARSE_G")) : 128;   // global positions count
+    int sparse_min_len = getenv("SPARSE_MIN") ? atoi(getenv("SPARSE_MIN")) : 4096;  // min ctx for sparse
+    
+    // Pre-allocate sparse index buffer (reused per query position)
+    int max_sparse = sparse_w + sparse_g + 1;  // window + global + self
+    int *sparse_buf = NULL;
+    if (use_sparse && total_kv >= sparse_min_len) {
+        sparse_buf = (int *)malloc((size_t)max_sparse * sizeof(int));
+        if (!sparse_buf) use_sparse = 0;
+    } else {
+        use_sparse = 0;
+    }
+    
     // 16 Q heads, 2 KV heads. Each KV head serves 8 Q heads.
     float scale = 1.0f / sqrtf(GQA_HEAD_DIM);
     
@@ -1378,16 +1396,42 @@ void wubu_gqa_forward(const float *x, int B, int T,
             int global_t = cache_len + b * T + t_q;
             int attend_len = global_t + 1;
             
-            // Pre-allocate per-Q-head attention weights (always heap for simplicity)
-            // For decode at short context, this is ~2KB; at 256k it's ~16MB
-            float *all_attn_w = (float *)malloc((size_t)GQA_Q_HEADS * attend_len * sizeof(float));
+            // Build sparse attendance set for this query position
+            int sparse_count = attend_len;  // default: full attention
+            if (use_sparse) {
+                // S(i) = local_window(i, w) ∪ global_positions(i, g)
+                // Local window: last sparse_w positions
+                int win_start = global_t - sparse_w + 1;
+                if (win_start < 0) win_start = 0;
+                int win_count = global_t - win_start + 1;
+                // Global positions: uniformly spaced over [0, win_start)
+                int hist_len = win_start;  // positions before window
+                int g_step = (hist_len > sparse_g) ? (hist_len / sparse_g) : 1;
+                if (g_step < 1) g_step = 1;
+                int g_count = hist_len / g_step;
+                if (g_count > sparse_g) g_count = sparse_g;
+                if (sparse_w + g_count + 1 > max_sparse) { /* should not happen */ }
+                sparse_count = 0;
+                // Global positions (evenly spaced from history)
+                for (int i = 0; i < g_count; i++) {
+                    sparse_buf[sparse_count++] = i * g_step;
+                }
+                // Local window positions
+                for (int i = win_start; i <= global_t; i++) {
+                    sparse_buf[sparse_count++] = i;
+                }
+            }
+            
+            // Pre-allocate per-Q-head attention weights (sparse or full)
+            float *all_attn_w = (float *)malloc((size_t)GQA_Q_HEADS * sparse_count * sizeof(float));
             if (!all_attn_w) { 
                 fprintf(stderr, "GQA: attn_w alloc failed (%zu)\n", (size_t)GQA_Q_HEADS * attend_len * 4);
                 goto gqa_alloc_fail;
             }
             
             #pragma omp parallel for if(attend_len > 64)
-            for (int t_k = 0; t_k < attend_len; t_k++) {
+            for (int _tk = 0; _tk < sparse_count; _tk++) {
+                int t_k = use_sparse ? sparse_buf[_tk] : _tk;
                 float k_buf0[GQA_HEAD_DIM], k_buf1[GQA_HEAD_DIM];
                 const float *k0, *k1;
                 
@@ -1430,7 +1474,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
                     score *= scale;
 #endif
                     score = tgt_wrap(score);
-                    all_attn_w[(size_t)h_q * attend_len + t_k] = score;
+                    all_attn_w[(size_t)h_q * sparse_count + _tk] = score;
                 }
             }
             
@@ -1443,25 +1487,26 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 
                 // Find max score for this head
                 float max_score = -1e30f;
-                for (int t_k = 0; t_k < attend_len; t_k++) {
-                    float s = all_attn_w[(size_t)h_q * attend_len + t_k];
+                for (int _tk = 0; _tk < sparse_count; _tk++) {
+                    float s = all_attn_w[(size_t)h_q * sparse_count + _tk];
                     if (s > max_score) max_score = s;
                 }
                 
                 // Softmax
                 float sum_exp = 0.0f;
-                for (int t_k = 0; t_k < attend_len; t_k++) {
-                    float s = expf(all_attn_w[(size_t)h_q * attend_len + t_k] - max_score);
-                    all_attn_w[(size_t)h_q * attend_len + t_k] = s;
+                for (int _tk = 0; _tk < sparse_count; _tk++) {
+                    float s = expf(all_attn_w[(size_t)h_q * sparse_count + _tk] - max_score);
+                    all_attn_w[(size_t)h_q * sparse_count + _tk] = s;
                     sum_exp += s;
                 }
                 float inv_sum = 1.0f / sum_exp;
-                for (int t_k = 0; t_k < attend_len; t_k++) {
-                    all_attn_w[(size_t)h_q * attend_len + t_k] *= inv_sum;
+                for (int _tk = 0; _tk < sparse_count; _tk++) {
+                    all_attn_w[(size_t)h_q * sparse_count + _tk] *= inv_sum;
                 }
                 
                 // Weighted sum of V
-                for (int t_k = 0; t_k < attend_len; t_k++) {
+                for (int _tk = 0; _tk < sparse_count; _tk++) {
+                    int t_k = use_sparse ? sparse_buf[_tk] : _tk;
                     float v_buf[GQA_HEAD_DIM];
                     const float *v_vec;
                     if (t_k < cache_len) {
@@ -1472,7 +1517,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
                         int new_idx = t_k - cache_len;
                         v_vec = V + (new_idx * GQA_KV_HEADS + h_kv) * GQA_HEAD_DIM;
                     }
-                    float a = all_attn_w[(size_t)h_q * attend_len + t_k];
+                    float a = all_attn_w[(size_t)h_q * sparse_count + _tk];
 #ifdef __AVX2__
                     __m256 a_v = _mm256_set1_ps(a);
                     for (int i = 0; i < GQA_HEAD_DIM; i += 8) {
@@ -1528,9 +1573,11 @@ void wubu_gqa_forward(const float *x, int B, int T,
     free(K_norm);
     free(attn_out);
     free(gate_sig);
+    free(sparse_buf);
     return;
 
 gqa_alloc_fail:
+    free(sparse_buf);
     free(Q_full);
     free(gate);
     free(K);
