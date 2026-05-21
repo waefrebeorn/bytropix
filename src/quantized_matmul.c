@@ -362,6 +362,31 @@ void quantized_matmul_from_q8(const void *q8_x,
                               int64_t n_rows, int64_t n_cols,
                               int64_t col_stride_bytes,
                               float *y) {
+    // Handle IQ1_M and other rare types without vec_dot: dequant then SGEMM
+    if (weight_type == GGML_TYPE_IQ1_M || weight_type == GGML_TYPE_IQ1_S ||
+        weight_type == GGML_TYPE_IQ2_S || weight_type == GGML_TYPE_IQ2_XS ||
+        weight_type == GGML_TYPE_IQ3_S ||
+        weight_type == GGML_TYPE_Q2_K || weight_type == GGML_TYPE_Q3_K) {
+        int64_t total_elems = n_rows * n_cols;
+        float *f32_w = (float *)malloc(total_elems * sizeof(float));
+        if (!f32_w) { fprintf(stderr, "quantized_matmul_from_q8: alloc %lld failed\n", (long long)total_elems); return; }
+        gguf_dequantize((const uint8_t *)W, weight_type, total_elems, f32_w);
+        #pragma omp parallel for if(n_cols > 8)
+        for (int64_t j = 0; j < n_cols; j++) {
+            const block_q8_K *q8 = (const block_q8_K *)q8_x;
+            float sum = 0.0f;
+            for (int64_t qb = 0; qb < (n_rows + QK_K - 1) / QK_K; qb++) {
+                float dq = q8[qb].d;
+                for (int l = 0; l < 256 && qb * 256 + l < n_rows; l++) {
+                    sum += dq * (float)q8[qb].qs[l] * f32_w[qb * 256 + l + j * n_rows];
+                }
+            }
+            y[j] = sum;
+        }
+        free(f32_w);
+        return;
+    }
+
     typedef void (*vec_dot_fn)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
     vec_dot_fn dot_fn = NULL;
 

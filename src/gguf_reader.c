@@ -1785,3 +1785,8 @@ void wubu_log_map(const float *input, int dim, float R, float *output) {
         output[i] = factor * input[i];
     }
 }
+
+// Return pointer to IQ1_S grid table (2048 uint64 entries) for GPU upload
+const uint64_t *gguf_get_iq1s_grid(void) {
+    return iq1s_grid;
+}

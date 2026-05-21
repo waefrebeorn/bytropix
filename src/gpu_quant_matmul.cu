@@ -1,5 +1,5 @@
 /**
- * gpu_quant_matmul.cu — Quantized GPU matmul for Q5_K/Q6_K types.
+ * gpu_quant_matmul.cu — Quantized GPU matmul for Q5_K/Q6_K/IQ1_M types.
  *
  * Weight layout: GGUF stores weights with dims[0]=C (output dim, innermost).
  * Each column of D input-dim elements is stored as ceil(D/256) blocks.
@@ -11,6 +11,12 @@
 #include <stdio.h>
 
 #define QK_K 256
+
+// IQ1_S grid table (2048 × uint64) — needed for IQ1_M dequant
+// Matches gguf_reader.c iq1s_grid exactly
+#define NGRID_IQ1S 2048
+#define IQ1S_DELTA 0.125f
+__constant__ uint64_t d_iq1s_grid[NGRID_IQ1S];
 
 static __device__ __inline__ float fp16_to_fp32_dev(uint16_t v) {
     int sign = (v >> 15) & 1, exp = (v >> 10) & 0x1F, mant = v & 0x03FF;
@@ -136,11 +142,128 @@ __global__ void quant_matmul_q6_k_kernel(const float *x, const uint8_t *W_q,
 }
 
 // ================================================================
+// Q4_K Matmul — fused dequant+dot, NO qh field.
+// y[col] = sum_r x[r] * deq(W[col][r])
+// Each thread handles 1 column. 256 elements/block, 144 bytes/block.
+// ================================================================
+__global__ void quant_matmul_q4_k_kernel(const float *x, const uint8_t *W_q,
+                                          float *y, int n_rows, int n_cols) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (col >= n_cols) return;
+    const int BPC = (n_rows + QK_K - 1) / QK_K;
+    const uint8_t *base = W_q + (int64_t)col * BPC * 144;
+    double sum = 0.0;
+    for (int b = 0; b < BPC; b++) {
+        const uint8_t *block = base + (int64_t)b * 144;
+        float d = fp16_to_fp32_dev(*(const uint16_t *)block);
+        float dmin = fp16_to_fp32_dev(*(const uint16_t *)(block + 2));
+        const uint8_t *sc = block + 4;
+        const uint8_t *qs = block + 16;  // no qh field
+        int rem = n_rows - b * QK_K;
+        if (rem > QK_K) rem = QK_K;
+        int is = 0;
+        int x_off = b * QK_K;
+        for (int j = 0; j < rem; j += 64) {
+            uint8_t s1, m1, s2, m2;
+            get_scale_min_k4_dev(is+0, sc, &s1, &m1);
+            get_scale_min_k4_dev(is+1, sc, &s2, &m2);
+            float d1 = d*s1, ml1 = dmin*m1, d2 = d*s2, ml2 = dmin*m2;
+            int qb = j/2;
+            int lim = (j + 32 < rem) ? 32 : rem - j;
+            for (int l = 0; l < lim; l++) {
+                uint8_t lo = qs[qb + l];
+                float v0 = d1 * (lo & 0x0F) - ml1;
+                sum += (double)x[x_off + j + l] * (double)v0;
+                if (j + 32 + l < rem) {
+                    float v1 = d2 * (lo >> 4) - ml2;
+                    sum += (double)x[x_off + j + 32 + l] * (double)v1;
+                }
+            }
+            is += 2;
+        }
+    }
+    y[col] = (float)sum;
+}
+
+// ================================================================
+// IQ1_M Matmul — fused dequant+dot using grid lookup.
+// Block: 56 bytes per 256 elements. qs[32] + qh[16] + scales[8].
+// Each thread handles 1 column. Dequant in 32-element sub-blocks
+// via 8-element grid lookups, accumulating dot product immediately.
+// ================================================================
+__global__ void quant_matmul_iq1_m_kernel(const float *x, const uint8_t *W_q,
+                                           float *y, int n_rows, int n_cols) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (col >= n_cols) return;
+    const int BPC = (n_rows + QK_K - 1) / QK_K;
+    const uint8_t *base = W_q + (int64_t)col * BPC * 56;
+    double sum = 0.0;
+    for (int b = 0; b < BPC; b++) {
+        const uint8_t *block = base + (int64_t)b * 56;
+        const uint8_t *qs = block;                  // 32 bytes
+        const uint8_t *qh_b = block + 32;           // 16 bytes
+        const uint16_t *sc = (const uint16_t *)(block + 48); // 4 uint16_t = 8 bytes
+        // Global fp16 scale from high nibbles
+        uint16_t scale_bits = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) |
+                              ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+        float d = fp16_to_fp32_dev(scale_bits);
+        int rem = n_rows - b * QK_K;
+        if (rem > QK_K) rem = QK_K;
+        int x_off = b * QK_K;
+        for (int ib = 0; ib < 8; ib++) {
+            // Two 3-bit sub-scales per ib
+            float dl1 = d * (2.0f * (float)((sc[ib/2] >> (6*(ib%2)+0)) & 0x7) + 1.0f);
+            float dl2 = d * (2.0f * (float)((sc[ib/2] >> (6*(ib%2)+3)) & 0x7) + 1.0f);
+            // 11-bit grid indices
+            int qs_off = ib * 4;
+            int qh_off = ib;
+            uint8_t qh0 = qh_b[qh_off * 2 + 0];
+            uint8_t qh1 = qh_b[qh_off * 2 + 1];
+            uint16_t idx0 = qs[qs_off + 0] | ((uint16_t)(qh0 << 8) & 0x700);
+            uint16_t idx1 = qs[qs_off + 1] | ((uint16_t)(qh0 << 4) & 0x700);
+            uint16_t idx2 = qs[qs_off + 2] | ((uint16_t)(qh1 << 8) & 0x700);
+            uint16_t idx3 = qs[qs_off + 3] | ((uint16_t)(qh1 << 4) & 0x700);
+            // Delta signs
+            float delta0 = (qh0 & 0x08) ? -IQ1S_DELTA : IQ1S_DELTA;
+            float delta1 = (qh0 & 0x80) ? -IQ1S_DELTA : IQ1S_DELTA;
+            float delta2 = (qh1 & 0x08) ? -IQ1S_DELTA : IQ1S_DELTA;
+            float delta3 = (qh1 & 0x80) ? -IQ1S_DELTA : IQ1S_DELTA;
+            // First two 8-element groups: dl1
+            int eb_off = x_off + ib * 32;
+            if (eb_off + 0 * 8 < b * QK_K + rem) {
+                uint64_t g0 = d_iq1s_grid[idx0], g1 = d_iq1s_grid[idx1];
+                const int8_t *gv0 = (const int8_t *)&g0;
+                const int8_t *gv1 = (const int8_t *)&g1;
+                for (int j = 0; j < 8; j++) {
+                    int idx_off0 = eb_off + j;
+                    if (idx_off0 < b * QK_K + rem)
+                        sum += (double)x[idx_off0] * (double)(dl1 * ((float)gv0[j] + delta0));
+                    int idx_off1 = eb_off + 8 + j;
+                    if (idx_off1 < b * QK_K + rem)
+                        sum += (double)x[idx_off1] * (double)(dl1 * ((float)gv1[j] + delta1));
+                }
+            }
+            // Last two 8-element groups: dl2
+            if (eb_off + 2 * 8 < b * QK_K + rem) {
+                uint64_t g2 = d_iq1s_grid[idx2], g3 = d_iq1s_grid[idx3];
+                const int8_t *gv2 = (const int8_t *)&g2;
+                const int8_t *gv3 = (const int8_t *)&g3;
+                for (int j = 0; j < 8; j++) {
+                    int idx_off2 = eb_off + 16 + j;
+                    if (idx_off2 < b * QK_K + rem)
+                        sum += (double)x[idx_off2] * (double)(dl2 * ((float)gv2[j] + delta2));
+                    int idx_off3 = eb_off + 24 + j;
+                    if (idx_off3 < b * QK_K + rem)
+                        sum += (double)x[idx_off3] * (double)(dl2 * ((float)gv3[j] + delta3));
+                }
+            }
+        }
+    }
+    y[col] = (float)sum;
+}
+// ================================================================
 // Batched quant matmul — processes multiple tokens in parallel
 // x: [C, n_rows], y: [C, n_cols]
-// 2D grid: dim.x = n_cols threads, dim.y = C batch
-// Each (tok, col) combination processed independently.
-// ================================================================
 __global__ void quant_matmul_q5_k_batched(const float *x, const uint8_t *W_q,
                                           float *y, int C, int n_rows, int n_cols) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -238,6 +361,118 @@ __global__ void quant_matmul_q6_k_batched(const float *x, const uint8_t *W_q,
     y_tok[col] = (float)sum;
 }
 
+// Batched Q4_K — processes multiple tokens in parallel
+__global__ void quant_matmul_q4_k_batched(const float *x, const uint8_t *W_q,
+                                           float *y, int C, int n_rows, int n_cols) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int tok = blockIdx.y;
+    if (col >= n_cols || tok >= C) return;
+    const float *x_tok = x + (int64_t)tok * n_rows;
+    float *y_tok = y + (int64_t)tok * n_cols;
+    const int BPC = (n_rows + QK_K - 1) / QK_K;
+    const uint8_t *base = W_q + (int64_t)col * BPC * 144;
+    double sum = 0.0;
+    for (int b = 0; b < BPC; b++) {
+        const uint8_t *block = base + (int64_t)b * 144;
+        float d = fp16_to_fp32_dev(*(const uint16_t *)block);
+        float dmin = fp16_to_fp32_dev(*(const uint16_t *)(block + 2));
+        const uint8_t *sc = block + 4;
+        const uint8_t *qs = block + 16;
+        int rem = n_rows - b * QK_K;
+        if (rem > QK_K) rem = QK_K;
+        int is = 0;
+        int x_off = b * QK_K;
+        for (int j = 0; j < rem; j += 64) {
+            uint8_t s1, m1, s2, m2;
+            get_scale_min_k4_dev(is+0, sc, &s1, &m1);
+            get_scale_min_k4_dev(is+1, sc, &s2, &m2);
+            float d1 = d*s1, ml1 = dmin*m1, d2 = d*s2, ml2 = dmin*m2;
+            int qb = j/2;
+            int lim = (j + 32 < rem) ? 32 : rem - j;
+            for (int l = 0; l < lim; l++) {
+                uint8_t lo = qs[qb + l];
+                float v0 = d1 * (lo & 0x0F) - ml1;
+                sum += (double)x_tok[x_off + j + l] * (double)v0;
+                if (j + 32 + l < rem) {
+                    float v1 = d2 * (lo >> 4) - ml2;
+                    sum += (double)x_tok[x_off + j + 32 + l] * (double)v1;
+                }
+            }
+            is += 2;
+        }
+    }
+    y_tok[col] = (float)sum;
+}
+
+// Batched IQ1_M grid: dim.x = n_cols threads, dim.y = C batch
+__global__ void quant_matmul_iq1_m_batched(const float *x, const uint8_t *W_q,
+                                            float *y, int C, int n_rows, int n_cols) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int tok = blockIdx.y;
+    if (col >= n_cols || tok >= C) return;
+    const float *x_tok = x + (int64_t)tok * n_rows;
+    float *y_tok = y + (int64_t)tok * n_cols;
+    const int BPC = (n_rows + QK_K - 1) / QK_K;
+    const uint8_t *base = W_q + (int64_t)col * BPC * 56;
+    double sum = 0.0;
+    for (int b = 0; b < BPC; b++) {
+        const uint8_t *block = base + (int64_t)b * 56;
+        const uint8_t *qs = block;
+        const uint8_t *qh_b = block + 32;
+        const uint16_t *sc = (const uint16_t *)(block + 48);
+        uint16_t scale_bits = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) |
+                              ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+        float d = fp16_to_fp32_dev(scale_bits);
+        int rem = n_rows - b * QK_K;
+        if (rem > QK_K) rem = QK_K;
+        int x_off = b * QK_K;
+        for (int ib = 0; ib < 8; ib++) {
+            float dl1 = d * (2.0f * (float)((sc[ib/2] >> (6*(ib%2)+0)) & 0x7) + 1.0f);
+            float dl2 = d * (2.0f * (float)((sc[ib/2] >> (6*(ib%2)+3)) & 0x7) + 1.0f);
+            int qs_off = ib * 4;
+            int qh_off = ib;
+            uint8_t qh0 = qh_b[qh_off * 2 + 0];
+            uint8_t qh1 = qh_b[qh_off * 2 + 1];
+            uint16_t idx0 = qs[qs_off + 0] | ((uint16_t)(qh0 << 8) & 0x700);
+            uint16_t idx1 = qs[qs_off + 1] | ((uint16_t)(qh0 << 4) & 0x700);
+            uint16_t idx2 = qs[qs_off + 2] | ((uint16_t)(qh1 << 8) & 0x700);
+            uint16_t idx3 = qs[qs_off + 3] | ((uint16_t)(qh1 << 4) & 0x700);
+            float delta0 = (qh0 & 0x08) ? -IQ1S_DELTA : IQ1S_DELTA;
+            float delta1 = (qh0 & 0x80) ? -IQ1S_DELTA : IQ1S_DELTA;
+            float delta2 = (qh1 & 0x08) ? -IQ1S_DELTA : IQ1S_DELTA;
+            float delta3 = (qh1 & 0x80) ? -IQ1S_DELTA : IQ1S_DELTA;
+            int eb_off = x_off + ib * 32;
+            if (eb_off + 0 * 8 < b * QK_K + rem) {
+                uint64_t g0 = d_iq1s_grid[idx0], g1 = d_iq1s_grid[idx1];
+                const int8_t *gv0 = (const int8_t *)&g0;
+                const int8_t *gv1 = (const int8_t *)&g1;
+                for (int j = 0; j < 8; j++) {
+                    int idx_off0 = eb_off + j;
+                    if (idx_off0 < b * QK_K + rem)
+                        sum += (double)x_tok[idx_off0] * (double)(dl1 * ((float)gv0[j] + delta0));
+                    int idx_off1 = eb_off + 8 + j;
+                    if (idx_off1 < b * QK_K + rem)
+                        sum += (double)x_tok[idx_off1] * (double)(dl1 * ((float)gv1[j] + delta1));
+                }
+            }
+            if (eb_off + 2 * 8 < b * QK_K + rem) {
+                uint64_t g2 = d_iq1s_grid[idx2], g3 = d_iq1s_grid[idx3];
+                const int8_t *gv2 = (const int8_t *)&g2;
+                const int8_t *gv3 = (const int8_t *)&g3;
+                for (int j = 0; j < 8; j++) {
+                    int idx_off2 = eb_off + 16 + j;
+                    if (idx_off2 < b * QK_K + rem)
+                        sum += (double)x_tok[idx_off2] * (double)(dl2 * ((float)gv2[j] + delta2));
+                    int idx_off3 = eb_off + 24 + j;
+                    if (idx_off3 < b * QK_K + rem)
+                        sum += (double)x_tok[idx_off3] * (double)(dl2 * ((float)gv3[j] + delta3));
+                }
+            }
+        }
+    }
+    y_tok[col] = (float)sum;
+}
+
 extern "C"
 int wubu_cuda_quant_matmul_batched(const float *x, int C,
     const uint8_t *W_q, int qt,
@@ -248,8 +483,15 @@ int wubu_cuda_quant_matmul_batched(const float *x, int C,
     switch (qt) {
     case GGML_TYPE_Q5_K: quant_matmul_q5_k_batched<<<grid,block,0,st>>>(x,W_q,y,C,nr,nc); return 1;
     case GGML_TYPE_Q6_K: quant_matmul_q6_k_batched<<<grid,block,0,st>>>(x,W_q,y,C,nr,nc); return 1;
+    case GGML_TYPE_Q4_K: quant_matmul_q4_k_batched<<<grid,block,0,st>>>(x,W_q,y,C,nr,nc); return 1;
+    case GGML_TYPE_IQ1_M: quant_matmul_iq1_m_batched<<<grid,block,0,st>>>(x,W_q,y,C,nr,nc); return 1;
     default: return 0;
     }
+}
+
+// Grid table upload — must be called once before IQ1_M kernels
+extern "C" void wubu_cuda_quant_matmul_set_iq1s_grid(const uint64_t *grid) {
+    cudaMemcpyToSymbol(d_iq1s_grid, grid, NGRID_IQ1S * sizeof(uint64_t));
 }
 
 // ================================================================
@@ -269,6 +511,8 @@ int wubu_cuda_quant_matmul(const float *x, const uint8_t *W_q, int qt,
     switch (qt) {
     case GGML_TYPE_Q5_K: quant_matmul_q5_k_kernel<<<grid,block,0,st>>>(x,W_q,y,nr,nc); return 1;
     case GGML_TYPE_Q6_K: quant_matmul_q6_k_kernel<<<grid,block,0,st>>>(x,W_q,y,nr,nc); return 1;
+    case GGML_TYPE_Q4_K: quant_matmul_q4_k_kernel<<<grid,block,0,st>>>(x,W_q,y,nr,nc); return 1;
+    case GGML_TYPE_IQ1_M: quant_matmul_iq1_m_kernel<<<grid,block,0,st>>>(x,W_q,y,nr,nc); return 1;
     default: return 0;
     }
 }

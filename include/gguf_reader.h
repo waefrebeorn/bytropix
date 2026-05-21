@@ -137,6 +137,9 @@ void quantized_matmul_from_q8(const void *q8_x,
                               int64_t col_stride_bytes,
                               float *y);
 
+// IQ1_S grid table (2048 × uint64) for GPU constant memory upload
+const uint64_t *gguf_get_iq1s_grid(void);
+
 #ifdef __cplusplus
 }
 #endif

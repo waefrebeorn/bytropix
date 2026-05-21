@@ -60,6 +60,8 @@ static int read_embedding(const wubu_model_t *mdl, int token_id, float *out, FIL
 
 int main(int argc, char **argv) {
     const char *model_path = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
+    const char *env_mp = getenv("MODEL");
+    if (env_mp) model_path = env_mp;
     const char *prompt = "The meaning of life is";
     int max_tokens = 32;
     int top_k = 40;

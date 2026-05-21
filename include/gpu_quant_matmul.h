@@ -32,6 +32,10 @@ int wubu_cuda_quant_matmul_batched(const float *x, int C,
     int n_rows, int n_cols,
     float *y, cudaStream_t stream);
 
+// Upload IQ1_S grid table to GPU constant memory. Must be called once
+// before any IQ1_M kernels. grid must be NGRID_IQ1S (2048) uint64 entries.
+void wubu_cuda_quant_matmul_set_iq1s_grid(const uint64_t *grid);
+
 #ifdef __cplusplus
 }
 #endif

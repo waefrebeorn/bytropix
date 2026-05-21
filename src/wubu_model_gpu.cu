@@ -210,6 +210,10 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     // Enable TF32
     cublasSetMathMode(gpu->handle, CUBLAS_TF32_TENSOR_OP_MATH);
 
+    // Upload IQ1_S grid table to GPU constant memory (needed for IQ1_M dequant)
+    const uint64_t *grid = gguf_get_iq1s_grid();
+    if (grid) wubu_cuda_quant_matmul_set_iq1s_grid(grid);
+
     gpu->n_layers = model->n_layers;
     gpu->n_gqa_layers = count_gqa_layers(model);
     gpu->max_ctx = max_ctx;
