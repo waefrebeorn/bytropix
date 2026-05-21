@@ -97,7 +97,7 @@ __global__ void gelu_kernel(float *x, int n) {
 // ================================================================
 // Element-wise add: y = x + y (in-place on y)
 // ================================================================
-__global__ void add_kernel(const float *x, float *y, int n) {
+__global__ void vision_add_kernel(const float *x, float *y, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
     y[idx] += x[idx];
@@ -105,10 +105,13 @@ __global__ void add_kernel(const float *x, float *y, int n) {
 
 // ================================================================
 // Forward one ViT layer on GPU
+// d_x: [n, V_HIDDEN] — input (attention/FFN source)
+// d_residual: [n, V_HIDDEN] — original pre-LN state for residual addition
+// If d_residual is NULL, uses d_x as residual (original buggy behavior)
 // ================================================================
 bool gpu_vision_layer_forward(cublasHandle_t cublas_h, cudaStream_t stream,
                                const gpu_vision_weights_t *w,
-                               const float *d_x, int n,
+                               const float *d_x, const float *d_residual, int n,
                                float *d_out, float *d_scratch) {
     float alpha = 1.0f, beta = 0.0f;
     int d_model = V_HIDDEN;
@@ -149,8 +152,9 @@ bool gpu_vision_layer_forward(cublasHandle_t cublas_h, cudaStream_t stream,
     for (int i = 0; i < n; i++)
         CHECK_CUBLAS(cublasSaxpy(cublas_h, d_model, &alpha, w->d_out_b, 1, d_res + i * d_model, 1));
     
-    // === Step 4: Residual + LayerNorm (in-place on d_res, which is now d_norm) ===
-    add_kernel<<<(n * d_model + 255) / 256, 256, 0, stream>>>(d_x, d_res, n * d_model);
+    // === Step 4: Residual — use d_residual (pre-LN input) if provided, otherwise d_x ===
+    const float *d_res_base = d_residual ? d_residual : d_x;
+    vision_add_kernel<<<(n * d_model + 255) / 256, 256, 0, stream>>>(d_res_base, d_res, n * d_model);
     
     // === Step 5: FFN up projection ===
     // d_qkv[n, d_ffn] = d_res[n, d_model] @ W_up[d_model, d_ffn]^T (note: reusing d_qkv space as ffn buffer)
@@ -177,7 +181,7 @@ bool gpu_vision_layer_forward(cublasHandle_t cublas_h, cudaStream_t stream,
         CHECK_CUBLAS(cublasSaxpy(cublas_h, d_model, &alpha, w->d_ffn_dn_b, 1, d_out + i * d_model, 1));
     
     // === Step 7: Second residual ===
-    add_kernel<<<(n * d_model + 255) / 256, 256, 0, stream>>>(d_res, d_out, n * d_model);
+    vision_add_kernel<<<(n * d_model + 255) / 256, 256, 0, stream>>>(d_res, d_out, n * d_model);
     
     return true;
 }

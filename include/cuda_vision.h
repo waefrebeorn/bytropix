@@ -27,11 +27,13 @@ __global__ void gelu_kernel(float *x, int n);
 __global__ void add_kernel(const float *x, float *y, int n);
 
 // Run one ViT layer on GPU (all linear via cuBLAS, attention via custom kernel)
-// d_x: [n, V_HIDDEN], d_out: [n, V_HIDDEN]
+// d_x: [n, V_HIDDEN] — input (attention/FFN source)
+// d_residual: [n, V_HIDDEN] — original pre-LN state for residual (may equal d_x for pre-LN convention)
+// If d_residual is NULL, uses d_x as residual (maintains backward compat for single-buffer use)
 // scratch: pre-allocated [n * (3*V_HIDDEN + V_HIDDEN*3)] temp buffer
 bool gpu_vision_layer_forward(cublasHandle_t cublas_h, cudaStream_t stream,
                                const gpu_vision_weights_t *w,
-                               const float *d_x, int n,
+                               const float *d_x, const float *d_residual, int n,
                                float *d_out, float *d_scratch);
 
 // Upload one layer weights from CPU to GPU

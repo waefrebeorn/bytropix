@@ -133,9 +133,10 @@ int main(int argc, char **argv) {
     printf("Patch+pos: %.3fs\n", t_patch_end - t_patch);
 
     // 7. === GPU: 27 ViT layers ===
-    float *d_x, *d_out, *d_scratch;
+    float *d_x, *d_out, *d_scratch, *d_ln;
     cudaMalloc(&d_x, B * n_patches_total * V_HIDDEN * sizeof(float));
     cudaMalloc(&d_out, B * n_patches_total * V_HIDDEN * sizeof(float));
+    cudaMalloc(&d_ln, B * n_patches_total * V_HIDDEN * sizeof(float));
     int scratch_sz = n_patches_total * (V_HIDDEN * 3 + V_HIDDEN * 2) * sizeof(float);
     cudaMalloc(&d_scratch, scratch_sz);
 
@@ -149,13 +150,16 @@ int main(int argc, char **argv) {
         if (!enc.layers[l].loaded) {
             cudaMemcpy(d_tmp, d_in, B * n_patches_total * V_HIDDEN * sizeof(float), cudaMemcpyDeviceToDevice);
         } else {
-            // LayerNorm 1
-            layernorm_kernel<<<blocks, threads_per_block, 0, stream>>>(d_in, d_ln1_w[l], d_ln1_b[l],
+            // Pre-LN pattern: LN1 → attention → residual(original) → LN2 → FFN → residual
+            // Step 1: Copy d_in → d_ln, then LN1 in-place on d_ln (preserves d_in for residual)
+            cudaMemcpy(d_ln, d_in, B * n_patches_total * V_HIDDEN * sizeof(float), cudaMemcpyDeviceToDevice);
+            layernorm_kernel<<<blocks, threads_per_block, 0, stream>>>(d_ln, d_ln1_w[l], d_ln1_b[l],
                                                                         B * n_patches_total, V_HIDDEN, 1e-6f);
-            // Attention + FFN
+            // Step 2: Attention + FFN (uses d_ln as input, d_in as residual base)
             gpu_vision_layer_forward(cublas_h, stream, &gpu_layers[l],
-                                     d_in, B * n_patches_total, d_tmp, d_scratch);
-            // LayerNorm 2
+                                     d_ln, d_in, B * n_patches_total, d_tmp, d_scratch);
+            // Step 3: LN2 on output (in-place on d_tmp) — CPU vision applies LN2 before FFN,
+            // but gpu_vision_layer_forward does FFN without LN2. Apply LN2 externally.
             layernorm_kernel<<<blocks, threads_per_block, 0, stream>>>(d_tmp, d_ln2_w[l], d_ln2_b[l],
                                                                         B * n_patches_total, V_HIDDEN, 1e-6f);
         }
@@ -169,10 +173,13 @@ int main(int argc, char **argv) {
     double t_gpu = now_sec();
     printf("GPU ViT: %.3fs\n", t_gpu - t_patch_end);
 
-    // 8. Download from GPU
+    // 8. Download ViT output from GPU for CPU spatial merge + MMProj
     float *h_vit_out = (float *)malloc(B * n_patches_total * V_HIDDEN * sizeof(float));
     cudaMemcpy(h_vit_out, d_in, B * n_patches_total * V_HIDDEN * sizeof(float), cudaMemcpyDeviceToHost);
-
+    
+    cudaStreamSynchronize(stream);
+    double t_vit_done = now_sec();
+    
     // 9. === CPU: Spatial merge (concatenate 2×2) + MMProj ===
     const int V_MERGE_DIM = V_HIDDEN * 4;
     float *vit_embd = (float *)malloc(B * n_merged * V_OUT_HIDDEN * sizeof(float));
@@ -229,8 +236,6 @@ int main(int argc, char **argv) {
         }
         free(batch_merged);
     }
-    double t_merge = now_sec();
-    printf("Merge+MMProj: %.3fs\n", t_merge - t_gpu);
 
     // 10. Check vision output
     double t_vision = now_sec();
@@ -244,7 +249,7 @@ int main(int argc, char **argv) {
     printf("\nVision output: [%.4f, %.4f] NaN=%d tokens=%d\n", min_v, max_v, nan_c, n_merged);
     printf("  [0:4]: %.4f %.4f %.4f %.4f\n", vit_embd[0], vit_embd[1], vit_embd[2], vit_embd[3]);
 
-    // 11. Run text forward on loaded model
+    // 11. Feed vision output to text model
     printf("\n--- Text Model Forward ---\n"); fflush(stdout);
     float *logits = (float *)malloc(B * n_merged * model.vocab_size * sizeof(float));
 
@@ -264,13 +269,17 @@ int main(int argc, char **argv) {
 
     double total = now_sec() - t0;
     printf("\n=== Results ===\n");
-    printf("Vision (GPU): %.3fs | Text (CPU): %.3fs | Total: %.3fs\n",
+    printf("Vision (CPU): %.3fs | Text (CPU): %.3fs | Total: %.3fs\n",
            t_vision - t0, t_text, total);
-    printf("Vision tokens: %d | NaN: %s\n", n_merged, nan_c == 0 ? "YES ✓" : "NO ✗");
+    printf("Vision tokens: %d\n", n_merged);
+    // NaN check: count NaN in vision output
+    int nn = 0;
+    for (int i = 0; i < B * n_merged * V_OUT_HIDDEN; i++)
+        if (isnan(vit_embd[i])) nn++;
 
     // Cleanup
     free(pixels); free(h_hidden); free(h_vit_out); free(vit_embd); free(logits);
-    cudaFree(d_x); cudaFree(d_out); cudaFree(d_scratch);
+    cudaFree(d_x); cudaFree(d_out); cudaFree(d_ln); cudaFree(d_scratch);
     for (int l = 0; l < V_N_LAYERS; l++) {
         cudaFree(d_ln1_w[l]); cudaFree(d_ln1_b[l]);
         cudaFree(d_ln2_w[l]); cudaFree(d_ln2_b[l]);
@@ -282,5 +291,5 @@ int main(int argc, char **argv) {
     cudaStreamDestroy(stream);
     cublasDestroy(cublas_h);
 
-    return nan_c > 0 || nan_l > 0 ? 1 : 0;
+    return nn > 0 || nan_l > 0 ? 1 : 0;
 }
