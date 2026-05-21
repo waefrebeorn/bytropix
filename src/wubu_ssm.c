@@ -1202,6 +1202,22 @@ void wubu_gqa_forward(const float *x, int B, int T,
     const int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;  // 4096
     const int kv_dim = GQA_KV_HEADS * GQA_HEAD_DIM;  // 512
     
+    // DUMP_GQA_DEBUG_DIR: dump function inputs
+    {
+        const char *gqa_dump_dir = getenv("DUMP_GQA_DEBUG_DIR");
+        if (gqa_dump_dir && gqa_dump_dir[0]) {
+            const char *prefix = getenv("DUMP_GQA_PREFIX");
+            if (!prefix) prefix = "";
+            char fname[1024];
+            if (prefix[0])
+                snprintf(fname, sizeof(fname), "%s/%s_input.bin", gqa_dump_dir, prefix);
+            else
+                snprintf(fname, sizeof(fname), "%s/input.bin", gqa_dump_dir);
+            FILE *fp = fopen(fname, "wb");
+            if (fp) { fwrite(x, sizeof(float), N * D_MODEL, fp); fclose(fp); }
+        }
+    }
+    
     // Allocate
     // Q_full: [N, q_dim*2] = [N, 8192] — first q_dim=4096 Q, next 4096 gate
     float *Q_full = (float *)malloc(N * q_dim * 2 * sizeof(float));
@@ -1256,6 +1272,36 @@ void wubu_gqa_forward(const float *x, int B, int T,
             D_MODEL, kv_dim, 0, V + s * kv_dim);
     }
     free(gqa_q8_buf);
+    
+    // DUMP_GQA_DEBUG_DIR: dump Q/K/V projections for 1:1 parity comparison
+    {
+        const char *gqa_dump_dir = getenv("DUMP_GQA_DEBUG_DIR");
+        if (gqa_dump_dir && gqa_dump_dir[0]) {
+            const char *prefix = getenv("DUMP_GQA_PREFIX");
+            if (!prefix) prefix = "";
+            FILE *fp;
+            char fname[1024];
+            if (prefix[0]) {
+                snprintf(fname, sizeof(fname), "%s/%s_Q_full.bin", gqa_dump_dir, prefix);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(Q_full, sizeof(float), N * q_dim * 2, fp); fclose(fp); }
+                snprintf(fname, sizeof(fname), "%s/%s_gate.bin", gqa_dump_dir, prefix);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(gate, sizeof(float), N * q_dim, fp); fclose(fp); }
+                snprintf(fname, sizeof(fname), "%s/%s_K.bin", gqa_dump_dir, prefix);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(K, sizeof(float), N * kv_dim, fp); fclose(fp); }
+                snprintf(fname, sizeof(fname), "%s/%s_V.bin", gqa_dump_dir, prefix);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(V, sizeof(float), N * kv_dim, fp); fclose(fp); }
+            } else {
+                snprintf(fname, sizeof(fname), "%s/Q_full.bin", gqa_dump_dir);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(Q_full, sizeof(float), N * q_dim * 2, fp); fclose(fp); }
+                snprintf(fname, sizeof(fname), "%s/gate.bin", gqa_dump_dir);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(gate, sizeof(float), N * q_dim, fp); fclose(fp); }
+                snprintf(fname, sizeof(fname), "%s/K.bin", gqa_dump_dir);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(K, sizeof(float), N * kv_dim, fp); fclose(fp); }
+                snprintf(fname, sizeof(fname), "%s/V.bin", gqa_dump_dir);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(V, sizeof(float), N * kv_dim, fp); fclose(fp); }
+            }
+        }
+    }
     
     // NaN guard: replace any NaN/Inf in Q_full, K, V with 0
     // Only check when debug is enabled; normally matmul produces no NaN
@@ -1342,6 +1388,28 @@ void wubu_gqa_forward(const float *x, int B, int T,
                         k_h[2*i+1] = x0 * sin_t + x1 * cos_t;
                     }
                 }
+            }
+        }
+    }
+    
+    // DUMP_GQA_DEBUG_DIR: dump Q_norm/K_norm after RoPE
+    {
+        const char *gqa_dump_dir = getenv("DUMP_GQA_DEBUG_DIR");
+        if (gqa_dump_dir && gqa_dump_dir[0]) {
+            const char *prefix = getenv("DUMP_GQA_PREFIX");
+            if (!prefix) prefix = "";
+            FILE *fp;
+            char fname[1024];
+            if (prefix[0]) {
+                snprintf(fname, sizeof(fname), "%s/%s_Q_norm.bin", gqa_dump_dir, prefix);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(Q_norm, sizeof(float), N * q_dim, fp); fclose(fp); }
+                snprintf(fname, sizeof(fname), "%s/%s_K_norm.bin", gqa_dump_dir, prefix);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(K_norm, sizeof(float), N * kv_dim, fp); fclose(fp); }
+            } else {
+                snprintf(fname, sizeof(fname), "%s/Q_norm.bin", gqa_dump_dir);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(Q_norm, sizeof(float), N * q_dim, fp); fclose(fp); }
+                snprintf(fname, sizeof(fname), "%s/K_norm.bin", gqa_dump_dir);
+                fp = fopen(fname, "wb"); if(fp) { fwrite(K_norm, sizeof(float), N * kv_dim, fp); fclose(fp); }
             }
         }
     }
@@ -1544,6 +1612,21 @@ void wubu_gqa_forward(const float *x, int B, int T,
     }
     
     // Step 6: Gate (sigmoid)
+    // DUMP_GQA_DEBUG_DIR: dump attn_out before gating (raw attention)
+    {
+        const char *gqa_dump_dir = getenv("DUMP_GQA_DEBUG_DIR");
+        if (gqa_dump_dir && gqa_dump_dir[0]) {
+            const char *prefix = getenv("DUMP_GQA_PREFIX");
+            if (!prefix) prefix = "";
+            FILE *fp;
+            char fname[1024];
+            if (prefix[0])
+                snprintf(fname, sizeof(fname), "%s/%s_attn_out_pregate.bin", gqa_dump_dir, prefix);
+            else
+                snprintf(fname, sizeof(fname), "%s/attn_out_pregate.bin", gqa_dump_dir);
+            fp = fopen(fname, "wb"); if(fp) { fwrite(attn_out, sizeof(float), N * q_dim, fp); fclose(fp); }
+        }
+    }
     float *gate_sig = (float *)malloc(N * q_dim * sizeof(float));
     if (!gate_sig) { free(gate_sig); free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
     wubu_sigmoid(N * q_dim, gate, gate_sig);
@@ -1552,11 +1635,43 @@ void wubu_gqa_forward(const float *x, int B, int T,
         attn_out[i] *= gate_sig[i];
     }
     
+    // DUMP_GQA_DEBUG_DIR: dump attn_out after gating (before output proj)
+    {
+        const char *gqa_dump_dir = getenv("DUMP_GQA_DEBUG_DIR");
+        if (gqa_dump_dir && gqa_dump_dir[0]) {
+            const char *prefix = getenv("DUMP_GQA_PREFIX");
+            if (!prefix) prefix = "";
+            FILE *fp;
+            char fname[1024];
+            if (prefix[0])
+                snprintf(fname, sizeof(fname), "%s/%s_attn_out_gated.bin", gqa_dump_dir, prefix);
+            else
+                snprintf(fname, sizeof(fname), "%s/attn_out_gated.bin", gqa_dump_dir);
+            fp = fopen(fname, "wb"); if(fp) { fwrite(attn_out, sizeof(float), N * q_dim, fp); fclose(fp); }
+        }
+    }
+    
     // Step 7: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
         proj_matmul(attn_out + s * q_dim, q_dim, D_MODEL,
                     w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
                     output + s * D_MODEL);
+    }
+    
+    // DUMP_GQA_DEBUG_DIR: dump final output after output projection
+    {
+        const char *gqa_dump_dir = getenv("DUMP_GQA_DEBUG_DIR");
+        if (gqa_dump_dir && gqa_dump_dir[0]) {
+            const char *prefix = getenv("DUMP_GQA_PREFIX");
+            if (!prefix) prefix = "";
+            FILE *fp;
+            char fname[1024];
+            if (prefix[0])
+                snprintf(fname, sizeof(fname), "%s/%s_output.bin", gqa_dump_dir, prefix);
+            else
+                snprintf(fname, sizeof(fname), "%s/output.bin", gqa_dump_dir);
+            fp = fopen(fname, "wb"); if(fp) { fwrite(output, sizeof(float), N * D_MODEL, fp); fclose(fp); }
+        }
     }
     
     // Copy K_norm and V to output buffers for KV cache (stored as F16 if enabled)

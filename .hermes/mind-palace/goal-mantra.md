@@ -1,31 +1,32 @@
-# Goal Mantra — Phase 28r: P2.3 Chunked SSM Fixed + Wired
+# Goal Mantra — May 21 PM (Phase 29b: DA Sweep)
 
-**Target:** CPU-optimal path (8.9 tok/s decode) stable. P2.3 chunked SSM data bug fixed, wired into inference. CS=1 exact. CS>1 FP-limited.
+**Target:** CPU path verified coherent with FORCE_CPU_SSM_SEQ=1. 1:1 C-to-C parity with llama.cpp.
 
 ## STATE
 | Component | Status | Detail |
 |-----------|--------|--------|
-| GPU vision pipeline | ✅ 15.7s total | GPU ViT 0.52s + GPU MMProj cuBLAS + CPU text 6.3s |
-| GPU hybrid text | ⚠️ NET-NEGATIVE | CPU-only 2-5x faster |
-| MTP spec decode | ✅ 8.5 tok/s | 4% acceptance |
-| CPU-only text | ✅ 8.9/17.8 tok/s | Optimal path. Stable, coherent |
-| Chunked SSM CS=1 | ✅ Exact | 4e-8 output diff, 3e-7 state diff |
-| Chunked SSM CS>1 | ⚠️ FP-limited | Accumulates across 30 SSM layers → wrong tokens |
+| CPU text (sequential) | ✅ 3-4 tok/s | FORCE_CPU_SSM_SEQ=1. "the city of Paris..." |
+| CPU text (chunked CS>1) | ❌ Garbled | FP accumulation across 30 layers |
+| GPU vision encoder | ✅ 15.7s total | Only GPU win. 0.52s ViT |
+| MTP spec decode | ✅ 8.5 tok/s | 4% acceptance (quant head) |
+| GPU text hybrid | ⚠️ NET-NEGATIVE | 2-5x slower than CPU |
+| GPU quant matmul | ✅ 4 types | Q5_K, Q6_K, Q4_K, IQ1_M |
 
-## P0-P2: Complete
-1. ✅ GPU MoE root cause (DA v13) — fundamental code-path diff
-2. ✅ MTP spec decode — gen_text_mtp at 8.5 tok/s
-3. ✅ Vision pipeline — screenshot→encoder→mmproj→text→logits
-4. ✅ GPU GQA batched prefill (C=N)
-5. ✅ Batched quant matmul (Q5_K/Q6_K)
-6. ✅ RoPE extrapolation 4x — `ROPE_SCALE_FACTOR=0.25`
-7. ✅ Chunked SSM data layout bug FIXED, wired into forward pass
-
-## P2 Remaining
-1. Llama.cpp inline hooks for reference data
-2. NSA sparse attention (DeepSeek-V3.2, high effort)
-3. FP8 Tensor Cores (sm_120 native, needs GPU data-movement solution)
+## P0: What's Actually Next
+1. Llama.cpp inline hooks — modify llama.cpp source to dump intermediates via cb() (no llama-cli). Replace ref_dumper libllama.so pattern with direct C++ hooks in llama_decode().
+2. 1:1 parity via intermediate tensor comparison — use DUMP_INTERMEDIATE_DIR to compare bytropix vs reference at every processing stage.
+3. Fix chunked SSM CS>1 — switch to sequential for now, fix later when needed.
 
 ## BUILD
-`make gen_text_cpu` for CPU-only inference binary
-`FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" N` — sequential path
+```
+make gen_text_cpu
+FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" N
+```
+
+## HARDWARE
+- RTX 5050 Blackwell (sm_120), 6.5-8 GB VRAM
+- 16 GB system RAM, 12 CPU cores
+- CUDA 13.1 toolkit, LLC (libllama.so) at ~/llama.cpp/build/bin/
+
+## EVERY FIX
+compile → run with FORCE_CPU_SSM_SEQ=1 → verify coherent output → commit

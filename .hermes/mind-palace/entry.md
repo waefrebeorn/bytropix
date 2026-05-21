@@ -1,81 +1,65 @@
-# WuBuText AI — Entry Point (May 16 v7)
+# WuBuText AI — Entry Point (May 21 PM v2)
 
-## HONESTY NOTE
-Inference binaries compile and run but produce GARBAGE output.
-See `.hermes/mind-palace/state.md` for real status.
-Reference ground truth: `~/llama.cpp/build/bin/llama-cli`
-
-## Hardware
-
----
+## TRUTH
+**CPU inference WORKS.** Sequential SSM (FORCE_CPU_SSM_SEQ=1) produces coherent text.
+**GPU inference builds** but is net-negative (slower than CPU).
+**GPU vision encoder: 0.52s ViT** (122x vs CPU) — the only GPU win.
 
 ## Hardware
-- **GPU:** NVIDIA RTX 5050, 6.4GB VRAM, sm=120
+- **GPU:** NVIDIA RTX 5050 (Blackwell sm_120), 6.5-8 GB VRAM
 - **NVCC:** /usr/local/cuda-13.1/bin/nvcc -arch=sm_120
-- **CPU:** AMD 16+ cores, 25GB RAM
+- **CPU:** AMD 12+ cores, 16 GB RAM
+- **CUDA toolkit:** 13.1
 
-## Run API Server
+## Build & Run
 ```bash
-# Sandbox mode (no GPU, fake responses, fake keys)
-python3 tools/serve.py --sandbox --port 8080
+# CPU inference (USE THIS — works correctly)
+make gen_text_cpu
+FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "The capital of France is" 20 40
 
-# Production mode (uses real inference)
-python3 tools/serve.py --port 8080 --model /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+# GPU inference (builds, slower than CPU)
+make gen_text_gpu
+GPU=1 FORCE_CPU_MOE=1 ./gen_text_gpu "prompt" 20
 
-# Test the API
-bash tests/test_api.sh              # full suite (14 tests)
-curl http://localhost:8080/v1/models  # list models
-curl http://localhost:8080/health     # health check
+# MTP speculative decode (needs rebuild)
+make gen_text_mtp
+MTP=1 ./gen_text_mtp "prompt" 20
+
+# Compare with reference
+tools/ref_dumper /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf "prompt" 0
+tools/layer_cos_sim /tmp/ref /tmp/our 40
+
+# Vision test
+make test_vision_real
+./test_vision_real <mmproj.gguf> <pixels.bin>
 ```
 
-## Build
-```bash
-make train_integrated      # Primary training binary (11s/step)
-make bench_e2e             # Full 40-layer GPU vs CPU benchmark
-make test_gpu              # GPU forward pass test
-make infer_poincare        # Poincaré SSM inference (2835 tok/s)
-make infer_moe_lazy        # Lazy MoE dequant
-make infer_unified         # 40-layer SSM→GQA→MoE
-make test_kv_cache         # GQA KV cache test (256K ctx)
-make infer_vision_gpu      # GPU vision 128×128 in 99ms
-make train_real            # CPU training pipeline (reference)
-make infer_text_gpu        # GPU-accelerated inference v5 (245 tok/s)
+## Key Env Vars
 ```
-
-## Run Tests
-```bash
-bash tests/run.sh           # 20 tests, all must PASS, ~3 min
-bash tests/run.sh --full    # includes MOE=1 (~8 min)
-```
-
-## Run Training
-```bash
-# Default (no flags)
-./train_integrated /home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf data/train_data.bin 10
-
-# With hyperbolic flags
-TST=1 RSGD=1 NESTED_SSM=1 NESTED_MOE=1 POINCARE_R=0.956 ./train_integrated ...
+FORCE_CPU_SSM_SEQ=1     # Force sequential SSM (coherent output)
+ROPE_SCALE_FACTOR=0.25  # 4x context extension
+USE_SPARSE_ATTN=1        # NSA sparse attention
+SPARSE_W=512 SPARSE_G=128 # Sparse attention params
+MTP=1                    # Enable MTP speculative decode
+GPU=1 FORCE_CPU_MOE=1    # Enable GPU hybrid (SSM/GQA on GPU, MoE on CPU)
 ```
 
 ## File Layout
 ```
-src/          — Core: ssm, moe, model, gguf_reader, cuda_kernels, vision
+src/          — SSM, MoE, model, gguf_reader, CUDA kernels, vision
 include/      — Headers
-tools/        — train_integrated, train_gpu, infer_*, test_*
-data/         — embeddings, tokenizer, training data
-.hermes/       — Mind palace, vault, research, references
-DIAGRAMS/      — 7 SVG architecture diagrams
-THEORY/        — Papers, math, vault references
-/models/       — GGUF (Qwen3.6-35B-A3B-UD-IQ2_M.gguf)
+tools/        — Inference binaries, test harnesses, utilities
+.hermes/       — Mind palace, vault, research
+/models/       — Qwen3.6-35B-A3B-UD-IQ2_M.gguf (only model)
+~/llama.cpp/   — Reference implementation (libllama.so + llama-cli)
 ```
 
-## External Repos (for reference)
-- `~/HASHMIND/tailslayer/` — Hedged-read C++ library (spec-decode inspiration, P2)
-- `~/HASHMIND/llama-cpp-rotorquant/` — llama.cpp fork with Hamilton encoder CUDA kernels
-- `~/HASHMIND/HAS/` — WuBu research (JAX prototypes, vault originals)
+## Related Repos
+- ~/llama.cpp/ — Reference GGUF inference (modify for inline hooks)
+- ~/HASHMIND/tailslayer/ — Hedged-read C++ (spec-decode inspiration)
+- ~/HASHMIND/llama-cpp-rotorquant/ — Hamilton encoder CUDA kernels
 
-## Key Docs
-- `.hermes/mind-palace/goal-mantra.md` — Prestige paste, full state
-- `.hermes/mind-palace/plan.md` — Priority queue + vault + tailslayer
-- `.hermes/vault/tailslayer/` — Tailslayer findings (May 15)
-- `README.md` — Full project overview
+## Known Blockers
+1. **Chunked SSM CS>1**: Must use FORCE_CPU_SSM_SEQ=1
+2. **GPU net-negative**: H2D/D2H overhead
+3. **L31 cos-sim 0.9585**: GQA attention divergence

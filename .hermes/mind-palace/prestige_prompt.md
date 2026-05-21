@@ -1,41 +1,46 @@
-# Prestige Prompt — May 21, 2026 (Phase 28r: P2.3 Chunked SSM Fixed + Wired)
+# Prestige Prompt — May 21 PM (Phase 29c: DUMP_INTERMEDIATE_DIR Hooks + Divergence Audit)
 
 ## Project: bytropix — Multi-Modal Inference (Text + Vision)
 
 **Qwen3.6-35B-A3B-UD-IQ2_M text + Moondream3 3D ViT vision via mmproj**  
-**CPU-only: 8.9 tok/s decode optimal | GPU vision: 15.7s pipeline | RoPE 4x: done**
+**CPU-only: 3-4 tok/s decode (sequential SSM) | GPU vision: 15.7s pipeline**
 
 ## Current State
-- CPU-only is optimal for text (8.9 tok/s verified). GPU hybrid is 2-5x slower.
-- GPU vision encoder: 0.52s ViT (122x vs CPU), 15.7s full pipeline
-- GPU MoE 0.9888 cos-sim is FUNDAMENTAL code-path diff (DA v13). Hybrid path accepted.
-- **P2.3 Chunked SSM**: data layout bug FIXED. CS=1 exact. CS>1 FP-limited. Wired into wubu_ssm_forward().
-- **P2.4 RoPE 4x**: `ROPE_SCALE_FACTOR=0.25` extends 64K→256K — COMPLETE
-- gen_text_cpu works with proper CLI: `./gen_text_cpu "prompt" <max_tokens>`
-- ref_dumper via libllama.so works with DUMP_LAYER_DIR / DUMP_INTERMEDIATE_DIR
+- **CPU text WORKS** with `FORCE_CPU_SSM_SEQ=1`. Coherent output verified.
+- **Llama.cpp inline hooks DONE** — `DUMP_INTERMEDIATE_DIR` works in rebuilt `llama-simple` + `libllama.so`. Dumps 1997 intermediates per forward pass.
+- **DUMP_GQA_DEBUG_DIR** added to bytropix `wubu_gqa_forward()` — per-layer GQA intermediate dumps via `DUMP_GQA_LAYER` env var.
+- **Per-layer comparison** shows divergence starts from L0 (cs=0.405), not L31. Both systems produce same output token for "Hello" ("," token 11).
+- **gen_text symlink** created: `gen_text → gen_text_cpu`.
 
-## Done This Session
-1. ✅ Chunked SSM data layout bug — token-interleaved vs head-contiguous memcpy
-2. ✅ Chunked SSM cyclic repeat mapping (vh % hk, not vh / rf)
-3. ✅ Chunked SSM cur_nt bounds fix (OOB write on last chunk)
-4. ✅ Chunked SSM wired into wubu_ssm_forward() — SSM_CHUNK_MIN, FORCE_CPU_SSM_SEQ
-5. ✅ Verified CS=1 exact match on real model (sequential path unchanged)
-6. ✅ Documented CS>1 FP limitation — 30 SSM layers amplify chunking error
+## Root Cause Analysis
+Hidden states diverge from L0 (cs=0.405 across all 2048 dims of first layer output). This is NOT a GQA-specific issue. Likely:
+1. Token embedding lookup differs between bytropix and llama.cpp
+2. L0 SSM computation path differs
+3. Quantization accuracy in early layers compounds through 30 SSM layers
 
-## Chunked SSM Status
-- **CS=1**: EXACT match (4e-8 diff). Use for verification.
-- **CS=2/8/64**: Produces wrong tokens in real model. FP accumulation across 30 layers.
-- **Cause**: 2000x more float ops per position vs sequential. Rounding amplifies per layer.
-- **Fix**: Only CS=1 is safe. Chunking speedup requires FP64 accumulation or different formula.
+The L31 attention probe (cs=0.471) is cleaner than its neighbors (L30 cs=0.182, L32 cs=0.504). L31 is NOT the primary failure point.
 
-## Next Session: P2.5 NSA Sparse Attention
-1. **NSA sparse attention** — DeepSeek-V3.2 DSA pattern. O(L·(w+g)) for GQA layers.
-2. **FP8 Tensor Cores** — sm_120 native. Low until GPU data-movement solved.
+## Debug Tools Built
+| Tool | Env Var | Where |
+|------|---------|-------|
+| Reference intermediate dumps | `DUMP_INTERMEDIATE_DIR` | llama.cpp (rebuilt) |
+| Byropix GQA intermediates | `DUMP_GQA_DEBUG_DIR` + `DUMP_GQA_LAYER` | `src/wubu_ssm.c` |
+| Byropix per-layer hidden | `DUMP_LAYER_DIR` | `src/wubu_model.c` (already existed) |
 
-## Key Env Vars
+## Next Session Priority
+1. **Compare token embeddings** between bytropix and llama.cpp — add `DUMP_EMBEDDING` to bytropix `gen_text_cpu` and compare against reference `global_model.input_embed.bin`.
+2. **Trace L0 SSM** — if embeddings match, add SSM intermediate dumps to `wubu_ssm_forward()` to find SSM divergence source.
+3. **Final output parity** — if embedding and L0 match, proceed to deeper layers.
+
+## Key Build Commands
 ```
-SSM_CHUNK_MIN=64 ./gen_text_cpu "prompt" N     # min tokens to trigger chunked
-FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" N   # force sequential SSM
-ROPE_SCALE_FACTOR=0.25 ./gen_text_cpu "prompt" 20 # 4x context extension
-DUMP_LAYER_DIR=/tmp/ref ./ref_dumper model.gguf    # 40 layer files
+make gen_text_cpu                               # CPU binary
+FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" N   # coherent path
+DUMP_INTERMEDIATE_DIR=/tmp/ref ./llama-simple -m /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf -n 1 "Hello"  # reference dump
+DUMP_LAYER_DIR=/tmp/layers FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "Hello" 1  # bytropix layer dump
 ```
+
+## Known sm_120 Bugs
+1. `static __shared__` inside loops hangs — use `extern __shared__` with manual offsets.
+2. `__syncthreads()` after warp-leader shared-write hangs — use serial reduction by thread 0.
+3. `extern __shared__ uint8_t` with syncthreads in loops causes incorrect codegen — use `float*`.

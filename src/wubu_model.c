@@ -460,6 +460,12 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     int *prev_experts = (int *)malloc(N * N_ACTIVE_EXPTS * sizeof(int));
     int have_prev_experts = 0;
     
+    // Per-layer GQA debug counter (env var filters which GQA layer to dump)
+    int gqa_debug_layer = -1;
+    const char *gqa_debug_env = getenv("DUMP_GQA_LAYER");
+    if (gqa_debug_env) gqa_debug_layer = atoi(gqa_debug_env);
+    int gqa_layer_idx = 0;  // which GQA layer across the model (0,1,2,...)
+    
     // Layer loop
     for (int l = 0; l < model->n_layers; l++) {
         wubu_layer_t *layer = &model->layers[l];
@@ -598,6 +604,17 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             for (int li = 0; li < l; li++) {
                 if (!model->layers[li].is_ssm) l_gqa++;
             }
+            // Set DUMP_GQA_PREFIX for targeted layer debugging
+            const char *gqa_debug_layer_str = getenv("DUMP_GQA_LAYER");
+            int gqa_debug_target = gqa_debug_layer_str ? atoi(gqa_debug_layer_str) : -1;
+            char prefix_buf[64];
+            int is_debug_layer = (gqa_debug_target >= 0 && l == gqa_debug_target);
+            if (is_debug_layer) {
+                snprintf(prefix_buf, sizeof(prefix_buf), "L%d_gqa%d", l, l_gqa);
+                setenv("DUMP_GQA_PREFIX", prefix_buf, 1);
+            } else {
+                setenv("DUMP_GQA_PREFIX", "", 1);
+            }
             int64_t layer_cache_off = (int64_t)l_gqa * GQA_MAX_CTX * GQA_KV_DIM;
             void *k_cache = (uint8_t *)model->gqa_k_cache + kv_cache_alloc_size(layer_cache_off);
             void *v_cache = (uint8_t *)model->gqa_v_cache + kv_cache_alloc_size(layer_cache_off);
@@ -616,6 +633,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out,
                              k_in, v_in, model->gqa_cache_len,
                              k_out, v_out);
+            gqa_layer_idx++;
             }  // close CPU GQA block
         gqa_done:
         }  // close else block (non-SSM)

@@ -1,68 +1,55 @@
-# Plan — Phase 28o: P2 Hardware Utilization & Feature Cream
+# Plan — May 21 PM (Phase 29c: Corrected Divergence Analysis)
 
-## 🔴 P0: GPU MoE Hidden State Divergence — COMPLETE
-Root cause identified (DA v13): 0.9888 per-layer cos-sim is FUNDAMENTAL — not a single bug. Different code paths produce different IEEE rounding. Hybrid path accepted.
+## P0: 1:1 Parity with llama.cpp — Corrected Approach
 
-### What Was Done
-1. ✅ v5 Q8_K kernel: quantize x to Q8_K, use int8 dot product
-2. ✅ CUDA sm_120 bugs: 3 workarounds applied + documented
-3. ✅ Per-expert compare tool: compare_moe_expert
-4. ✅ DA v13: comprehensive root cause analysis
-5. ✅ GPU MoE disabled by default (FORCE_CPU_MOE)
-6. ✅ Documentation: GPU hybrid net-negative for text, CPU-only optimal
+The per-layer comparison reveals that **divergence starts from L0 (cs=0.405)**. The previous "L31 GQA divergence" theory (0.9585 cos-sim) was based on logit-level comparison — the intermediate hidden states diverge much earlier. Fixing L31 GQA will NOT fix parity.
 
-### What Was Learned
-- 0.32% running cos-sim error → flips token selection in 240K vocab
-- Hybrid path (GPU SSM/GQA + CPU MoE) produces coherent text at 5.5 tok/s
-- Q8_K quantization is correct but doesn't fix the ~1.1% per-layer error
-- For 1:1 parity, would need CPU quantized_matmul ported to GPU (3-5 sessions)
+### P0.1: Compare Token Embeddings (New — Highest Priority)
+The first layer output (L0) has cs=0.405 vs reference. Possible causes:
+1. **Token embedding lookup** — bytropix loads `token_embd.weight` but may produce different values than llama.cpp due to different load path or quantization
+2. **Initial RMSNorm** — L0 pre-attention norm differs
 
-## 🟡 P1: MTP Speculative Decode + Vision — COMPLETE
-1. ✅ **Build gen_text_mtp** — working at 8.5 tok/s, 4% acceptance (quantized head)
-2. ✅ **Vision pipeline** — screenshot→encoder→mmproj→text→logits verified
-   - 2 segfault bugs fixed in wubu_vision.c
-   - 256×256 → 128 patches × 2048, no NaN, logit range [-10.8, 14.1]
-   - test_vision_real builds with GPU_SUPPORT
+**Action:**
+1. Add `DUMP_EMBEDDING_DIR` to bytropix `wubu_model_forward_from_embd()` — dump `embeddings` right after memcpy
+2. Run both with same 1-token prompt
+3. Compare `global_model.input_embed.bin` (ref) vs bytropix `embedding.bin`
 
-## Architectural Finding (P0-P1 Verified)
-For Qwen3.6-35B IQ2_M on RTX 5050:
-- **GPU text inference is net-negative**: H2D/D2H overhead + thermal throttling from GPU init makes hybrid 2-5x slower than CPU-only.
-- **GPU vision encoder is the only GPU win**: Pure F32 SGEMM (cuBLAS) for 27 ViT layers + MMProj. 0.52s GPU vs 63.7s CPU.
-- **CPU-only is optimal for text**: 8.9 tok/s decode, 17.8 tok/s prefill.
+### P0.2: Trace L0 SSM (If Embeddings Match)
+If embeddings match but L0 output diverges (cs=0.405), the SSM computation in L0 is the root cause.
+- Add `DUMP_SSM_DEBUG_DIR` to `wubu_ssm_forward()` — dump conv_input, qkv_mixed, alpha, beta, gate, state
+- Compare against reference L0_* intermediates
 
-## 🟡 P2: Hardware Utilization & Feature Cream
+### P0.3: L31 Attention Debugging (De-prioritized)
+L31 shows cs=0.471, which is actually BETTER than surrounding layers (L30=0.182). Not the primary divergence point.
 
-### P2 Priority
-| Priority | Item | Status | Ref | Effort |
-|----------|------|--------|-----|--------|
-| **P2.0** | CUDA sm_120 bug skill — formalize Blackwell workarounds | ✅ In DA v13 | sm_120 Blackwell | Quick |
-| **P2.1** | **Llama.cpp inline hooks** — modify llama.cpp source to dump layer-by-layer hidden states + intermediates. Replace ref_dumper (which uses libllama.so API) with direct C++ hooks inside llama_decode() | 🔲 Not started | ~/llama.cpp/ | 1 session |
-| **P2.2** | GPU RMSNorm + SiLU + gated norm kernels — kernels exist, not wired into pipeline | 🔲 Kernels exist | src/cuda_kernels.cu | Low |
-| **P2.3** | **Chunked prefill** — split long prompts into chunks. CS=1 matches sequential exactly (4e-8 diff). CS=64 has FP accumulation error (7e-2 diff) from +2000x more float ops. Data layout bug FIXED (commit c5475af) | ✅ Data layout bug fixed | Qwen2.5-1M §3.3 | Data layout fix = 1 sess |
-| **P2.4** | **RoPE extrapolation 4x** — frequency scaling factor for 64K→256K. `ROPE_SCALE_FACTOR=0.25` env var | ✅ COMPLETE (9b98098) | Qwen2.5-1M §3.1 | Low |
-| **P2.5** | **NSA sparse attention** — O(L log L) for GQA layers at 256K. Local window + global positions. USE_SPARSE_ATTN=1 env var, SPARSE_W/G/MIN config. | ✅ Done (0129f1a) | DeepSeek-V3.2 §2.1 | Implemented 1 sess |
-| **P2.6** | **Sigmoid gating + load balancing** — normalized sigmoid gating + auxiliary-loss-free dynamic bias adjustment | 🔲 Not started | DeepSeekMoE, DeepSeek-V3 §2.3 | Medium |
-| **P2.7** | **FP8 Tensor Cores** — sm_120 FP8 dot product for batched quant matmul. 2x throughput potential | 🔲 Not started | sm_120 ISA | High |
+## P1: Structural Fixes (De-prioritized until P0 resolved)
 
-### Architecture Cross-Reference (Vault-Validated)
+### P1.1: Chunked SSM CS>1
+Still broken. FP accumulation across 30 SSM layers. Workaround: `FORCE_CPU_SSM_SEQ=1`.
 
-| P2 Item | Paper/Code | C File | Theory Status |
-|---------|-----------|--------|---------------|
-| Sigmoid gating | DeepSeekMoE §3, DeepSeek-V3 §2 | moe.c | ✅ Verified in papers |
-| Load balancing | DeepSeek-V3 §2.3 | moe.c | ✅ Verified |
-| Chunked prefill | Qwen2.5-1M §3.3 | inference.c | ✅ Infrastructure exists |
-| RoPE extrapolation | Qwen2.5-1M §3.1 | attention.c | ✅ Simple param change |
-| NSA sparse attention | DeepSeek-V3.2 §2.1, vault/attention/ | attention.c | 🟡 Theory exists |
-| MTP spec decode | DeepSeek-V3 §2.4 | speculative.c | ✅ Working (4% accept) |
+### P1.2: gen_text binary naming
+✅ **DONE** — symlink `gen_text → gen_text_cpu` created.
 
-## P3-P6: Vault-Derived Features (unchanged from DA v12)
+## Per-Layer Cos-Sim (vs llama-simple, "Hello" 1-token, CPU sequential)
 
-| Phase | Area | Source | Priority |
-|-------|------|--------|----------|
-| P3 | N-way hedged speculative decode | vault/tailslayer/ | After P2 |
-| P3 | Hamiltonian KV cache (~10× compression) | vault/hamilton/ | After P2 |
-| P3 | WuBuSparseAttention, Topological Seq Model | vault/attention/ | After P2 |
-| P3 | Rolling hash attention | vault/hash-mind/ | After P2 |
-| P4 | Pure C training reference | vault/c-training/ | Training |
-| P5 | Text-to-image (VQ-VAE), diffusion, audio | vault/phase3/, diffusion/, audio/ | Post-training |
-| P6 | Lean 4 formal verification | vault/lean-proofs/ | Research |
+| Layer | Cos-Sim | Layer Type |
+|-------|---------|------------|
+| L0 | 0.405 | SSM |
+| L1 | 0.445 | SSM |
+| L2 | 0.664 | SSM |
+| L3 | 0.568 | GQA |
+| L4-L5 | 0.549-0.627 | SSM |
+| L6 | 0.445 | SSM |
+| L7 | 0.316 | GQA |
+| L8-L10 | 0.310→0.142 | SSM |
+| L10-L30 | 0.142→0.182 | Mixed |
+| L31 | 0.471 | GQA (cleaner than neighbors) |
+| L32-L38 | 0.504→0.710 | Mixed |
+| L39 | 0.496 | GQA |
+
+**Key insight**: Cos-sim drops monotonically through SSM layers (L0→L10: 0.405→0.142), then oscillates. GQA layers consistently show higher cos-sim than neighboring SSM layers. The SSM recurrence is the primary divergence source.
+
+## Known sm_120 Hardware Bugs
+1. `static __shared__` inside loops: hangs on Blackwell. Use `extern __shared__` + manual offset.
+2. `__syncthreads()` after warp-leader shared-write: hangs. Use serial reduction by thread 0.
+3. `extern __shared__ uint8_t` with syncthreads loops: incorrect codegen. Use `float*` instead.

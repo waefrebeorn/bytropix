@@ -1,33 +1,38 @@
-# bytropix — True State (May 19 PM v22)
+# bytropix — True State (May 21 PM v23)
 
 ## Ground Truth
-**Inference WORKS.** Cos-sim 0.9994 vs llama.cpp reference (CPU, 5-token, 40 layers).
-**Q4_0 KV cache**: 4:1 compression, 720MB at 256k, identical quality.
+**CPU inference WORKS with FORCE_CPU_SSM_SEQ=1.** Coherent text produced.
+**CPU inference BROKEN without FORCE_CPU_SSM_SEQ=1** — chunked SSM CS>1 FP accumulation.
 
 ## What Works
-- CPU gen_text: ~11 tok/s prefill, full 40-layer inference ✅
-- Q4_0 KV cache: 4:1 compression, cos-sim 0.9994 ✅
+- CPU gen_text_cpu: 3-4 tok/s decode, sequential SSM, coherent output ✅
+- Q4_0 KV cache: 4:1 compression, 720MB at 256k ✅
 - DUMP_INTERMEDIATE_DIR: 53 tensor types/layer reference tracing ✅
-- Architecture: 3:1 SSM/GQA interleaved pattern discovered ✅
-- All 7 quant types: Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q8_0 ✅
+- Architecture: 3:1 SSM/GQA interleaved pattern ✅
+- All quant types: Q4_K, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q8_0 ✅
 - ref_dumper: Multi-token prompt support, numeric token ID mode ✅
-- Layer cos-sim: L00-L30=0.998-0.9999 ✅
-- Sliding window GQA: GQA_WINDOW env var, 16→1 tile at 256k ✅
+- GPU vision encoder: 0.52s ViT, 15.7s full pipeline ✅
+- MTP spec decode: 8.5 tok/s, 4% acceptance ✅
+- GPU quant matmul: Q5_K, Q6_K, Q4_K, IQ1_M — all single+batched ✅
+- GPU hybrid text: 5.5 tok/s, coherent ✅
 
 ## What's Broken
-- gen_text_gpu: Pre-existing hang after model load ❌
-- L31 cos-sim: 0.9585 (quantization noise) 🟡
-- GPU KV cache: Still FP16 (5.12GB), should be Q4_0 💤
+- Chunked SSM CS>1: FP accumulation across 30 layers ❌
+- GPU net-negative: H2D/D2H overhead makes GPU hybrid slower than CPU ❌
+- gen_text binary: doesn't exist (only gen_text_cpu / gen_text_gpu) ⚠️
+- L31 cos-sim: 0.9585 (quantization noise amplification) 🟡
+- MTP acceptance: 4% due to quantized IQ2_M head 🟡
 
-## Key Tools
+## Key Commands
 ```bash
-make gen_text && ./gen_text "prompt" N          # CPU inference
-make ref_dumper && DUMP_LAYER_DIR=/tmp/r ./ref_dumper model.gguf "prompt" 0  # Reference
-tools/layer_cos_sim /tmp/r /tmp/o 40            # Compare
+FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" 20   # CPU inference (coherent)
+tools/layer_cos_sim /tmp/ref /tmp/our 40           # Per-layer comparison
+tools/ref_dumper model.gguf "prompt" 0              # Reference dumps
 ```
 
 ## Priorities
-P0 — Fix gen_text_gpu hang
-P0 — GPU Q4_0 KV cache (saves 3.7GB VRAM)
-P1 — Unified SSM kernel fusion
-P2 — Sparse attention for 512k+
+P0 — Llama.cpp inline hooks for intermediate debugging
+P0 — Fix chunked SSM CS>1 or accept sequential-only
+P1 — L31 attention divergence investigation
+P2 — GPU KV cache Q4_0 (saves 3.7GB VRAM)
+P3 — Sparse attention, RoPE, MTP improvements

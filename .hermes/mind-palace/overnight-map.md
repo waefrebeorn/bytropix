@@ -1,31 +1,57 @@
-# Overnight Map — Phase 29a: IQ1_M + Q4_K GPU Kernels
+# Overnight Map — May 21 PM (Phase 29c: DUMP_INTERMEDIATE_DIR Hooks + Divergence Audit)
 
 **Active repo:** /home/wubu/bytropix/  
-**Current commit:** c0254c0 (not pushed)  
-**Default model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB)  
-**IQ1_M model:** /models/Qwen3.6-35B-A3B-UD-IQ1_M.gguf (7.7GB, 1.90 BPW, quality degraded)
+**Current commit:** ec58b72 (uncommitted: DUMP_GQA_DEBUG_DIR + gen_text symlink)  
+**Model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB, only model)  
+**Reference:** /home/wubu/llama.cpp/build/bin/llama-simple (fast, no chat template)
 
-## Session Summary (May 21, 2026)
+## Session Summary (Phase 29c)
 
-### What Was Done
-1. **GPU IQ1_M quant matmul kernel** — single-token + batched variants with iq1s_grid lookup
-   - Verified exact match vs CPU (max diff 3.3e-7)
-   - Grid table uploaded via `wubu_cuda_quant_matmul_set_iq1s_grid` at GPU init
-2. **GPU Q4_K quant matmul kernel** — single-token + batched (simpler than Q5_K, no qh field)
-3. **CPU `quantized_matmul_from_q8` IQ1_M fallback** — dequant+SGEMM for types without vec_dot
-4. **`MODEL` env var** — `gen_text.c` now reads `MODEL` env var to override model path
+### New Debug Infrastructure
+| Feature | Files Changed | Description |
+|---------|--------------|-------------|
+| Llama.cpp DUMP_INTERMEDIATE_DIR | Rebuilt libllama.so + llama-simple | Already existed in source, now compiled in. Dumps 1997 intermediates. |
+| DUMP_GQA_DEBUG_DIR | `src/wubu_ssm.c` | Dumps input, Q_full, K, V, Q_norm, K_norm, attn_pre/post-gate, output |
+| DUMP_GQA_PREFIX | `src/wubu_ssm.c` | Per-layer prefix via env var |
+| DUMP_GQA_LAYER | `src/wubu_model.c` | Sets DUMP_GQA_PREFIX only for target layer |
+| gen_text symlink | `gen_text → gen_text_cpu` | Fixes missing `gen_text` binary |
 
-### GPU Kernel Inventory
-Now supporting 4 quant types on GPU: Q5_K, Q6_K, Q4_K, IQ1_M
-All have single-token and batched (C=N prefill) variants.
+### Key Finding
+**Divergence starts at L0 (cs=0.405), not L31.** Per-layer comparison:
+- L0: 0.405 — first layer output already diverged
+- L1-L30: drifts from 0.445 down to 0.182
+- L31: 0.471 — actually CLEANER than neighbors (L30=0.182, L32=0.504)
+- L38-39: improves to 0.710 and 0.496
 
-### Remaining GPU Blockers
-1. **GPU MoE divergence** (0.9888 cos-sim per layer, DA v13) — fundamental code-path diff
-2. **Q2_K, IQ2_XXS GPU kernels** — needed for token_embd, ffn_down, attn_output weights
-3. **Full GPU inference** — requires all weight types and solving H2D/D2H overhead
+Both systems produce the same output token ("," = token 11 for "Hello" prompt). Hidden states diverge but final token is correct.
 
-### Next Session Options
-1. Debug IQ1_M model quality — investigate why 1.90 BPW gives garbage with multi-token prompts
-2. Add GPU Q2_K kernel for token_embd.weight (D_MODEL=2048, vocab=248320) and ffn_down weights
-3. Fix the GPU MoE divergence root cause from DA v13
-4. Re-quantize IQ1_M with more imatrix chunks for better quality
+### Llama.cpp Reference
+- `llama-simple` is fast (~1s for 1-token prefill) and doesn't add chat template tokens
+- `llama-completion` adds ~8 extra chat template tokens (bad for 1:1 comparison)
+- `llama-cli` without `--no-conversation` also wraps in chat template
+
+### Verified Claims
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| CPU text coherent (sequential) | ✅ | "the city of Paris..." |
+| DUMP_INTERMEDIATE_DIR works | ✅ | 1997 files per forward pass |
+| DUMP_GQA_DEBUG_DIR works | ✅ | Per-layer GQA intermediate dumps |
+| gen_text symlink | ✅ | `gen_text → gen_text_cpu` |
+| L31 root cause debunked | ✅ | Divergence starts at L0, not L31 |
+
+## Current Blockers
+1. **1:1 parity**: Hidden states diverge from L0. Need to compare token embeddings first.
+2. **Chunked SSM CS>1**: Must use `FORCE_CPU_SSM_SEQ=1`.
+3. **GPU text net-negative**: H2D/D2H overhead.
+
+## Workstreams (next session)
+**A — Compare token embeddings**: Add `DUMP_EMBEDDING` to bytropix gen_text_cpu, compare against reference `global_model.input_embed.bin`.
+
+**B — Trace L0 SSM**: If embeddings match, add SSM intermediate dumps to `wubu_ssm_forward()` (similar to DUMP_GQA_DEBUG_DIR).
+
+**C — Final logit comparison**: Compare final logits between bytropix and reference.
+
+## Data NOT to Re-Derive
+- L31 GQA is NOT the primary divergence source (cs=0.471, better than neighbors)
+- Per-layer comparison script exists (see session transcript)
+- Both systems output same token for "Hello" (token 11 = ",")
