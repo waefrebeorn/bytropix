@@ -16,22 +16,20 @@ Root cause identified (DA v13): 0.9888 per-layer cos-sim is FUNDAMENTAL — not 
 - Q8_K quantization is correct but doesn't fix the ~1.1% per-layer error
 - For 1:1 parity, would need CPU quantized_matmul ported to GPU (3-5 sessions)
 
-## 🟡 P1: MTP Speculative Decode + Vision
-1. **Build gen_text_mtp** (`make gen_text_mtp`)
-   - Test with regular model (falls back to single-token)
-   - Test with MTP model: /models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf
-   - Verify: does acceptance rate match DeepSeek's claimed 83% at 2 drafts?
-   
-2. **Build vision pipeline**
-   - build test_vision_real
-   - Generate test image pixels
-   - Verify 3D ViT encoder → mmproj → text space
+## 🟡 P1: MTP Speculative Decode + Vision — COMPLETE
+1. ✅ **Build gen_text_mtp** — working at 8.5 tok/s, 4% acceptance (quantized head)
+2. ✅ **Vision pipeline** — screenshot→encoder→mmproj→text→logits verified
+   - 2 segfault bugs fixed in wubu_vision.c
+   - 256×256 → 128 patches × 2048, no NaN, logit range [-10.8, 14.1]
+   - test_vision_real builds with GPU_SUPPORT
 
 ## 🟡 P2: Feature Cream
 | Feature | Priority | Status |
 |---------|----------|--------|
-| GPU RMSNorm + SiLU + gated norm kernels | High | Not started |
-| Chunked prefill (3-7x speedup, Qwen2.5-1M) | High | Not started |
+| GPU GQA batched prefill fix | High | ✅ Done (C=N, sub-batch fallback) |
+| SSM forward_full C>1 path (batched SSM prefill) | High | ❌ Pre-existing failure, needs beta/alpha step |
+| GPU RMSNorm + SiLU + gated norm kernels | High | 🔲 Kernels exist, not wired into model forward |
+| Chunked prefill (3-7x speedup, Qwen2.5-1M) | High | 🔲 Infrastructure exists (chunked_attn) |
 | RoPE extrapolation 4x | High | Not started |
 | Sparse attention (NSA, DeepSeek V3.2) | High | Not started |
 | Sigmoid gating + load balancing (DeepSeekMoE) | High | Not started |

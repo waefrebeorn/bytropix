@@ -1,28 +1,26 @@
-# Goal Mantra — May 19, 2026 (Triple DA v6)
+# Goal Mantra — May 21, 2026 (Phase 28l: P1 Complete, P2 Up)
 
 ## THE GOAL
-1:1 inference parity w/ llama.cpp for Qwen3.6-35B-A3B-UD-IQ2_M.
-
-## TRIPLE DA FINDING
-SSM recurrence math IDENTICAL (verified vs ggml_gated_delta_net source).
-0.79 cos-sim = quantized matmul precision, NOT algorithm bug.
-**Top-1 token matches (220) — functional parity is close.**
+Full GPU inference for Qwen3.6-35B MoE + vision multi-modal.
+Hybrid path (GPU SSM/GQA + CPU MoE) working at 5.5 tok/s.
+Vision→text pipeline verified. MTP spec decode working.
 
 ## STATE
 | Metric | Value | Status |
 |--------|-------|--------|
-| Logit cos-sim vs llama.cpp | **0.7944** | ✅ Pre-existing at IQ2_M |
-| Per-layer cos-sim (avg) | **0.88** | ✅ Verified, range 0.45–0.97 |
-| SSM recurrence | **IDENTICAL** | ✅ 1/sqrt(128), same formula |
-| Top-1 match (BOS) | token **220** | ✅ Both agree |
-| Decode speed | **7.8 tok/s** | ✅ Phase 8 optimize |
-| AVX2 IQ3_XXS vec_dot | **BROKEN** | ❌ _mm_hadd epi16 bug, reverted |
+| GPU SSM/GQA + CPU MoE | Coherent text, 5.5 tok/s | ✅ |
+| MTP spec decode | 8.5 tok/s, 4% acceptance | ✅ |
+| Vision→text pipeline | 256×256→128 patches→logits, no NaN | ✅ Verified |
+| GPU MoE (all 40 layers) | 0.9888 cos-sim → garbage | ❌ Fundamental |
+| Decode speed (hybrid) | 5.5 tok/s | ✅ |
+| Vision encoder | 63.7s CPU (needs GPU) | 🟢 Verified |
 
 ## COLD GAPS
-P0: Quantized matmul dequant precision (port ggml kernels for bit-exact)
-P1: AVX2 IQ3_XXS vec_dot fix
-P1: Output proj split (parallelize Q4_K)
-P2: Expert prefetch
+P2: GPU RMSNorm + SiLU + gated norm kernels
+P2: Chunked prefill (3-7x speedup)
+P2: NSA sparse attention
+P2: RoPE extrapolation 4x
+P2: GPU vision encoder kernels
 
 ## GROUND TRUTH
 - Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf

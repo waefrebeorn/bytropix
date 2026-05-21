@@ -171,7 +171,7 @@ static void vision_layer_forward(
             const float *q_s = q + s * V_HIDDEN + h * V_HEAD_DIM;
             
             // Compute attention scores for all t
-            float scores[2304]; // max n = 2304 patches
+            float *scores = (float *)malloc(n * sizeof(float));
             float max_s = -1e30f;
             for (int t = 0; t < n; t++) {
                 const float *k_t = k + t * V_HIDDEN + h * V_HEAD_DIM;
@@ -197,6 +197,7 @@ static void vision_layer_forward(
                 for (int d = 0; d < V_HEAD_DIM; d++)
                     out_s[d] += wgt * v_t[d];
             }
+            free(scores);
         }
     }
     
@@ -268,6 +269,7 @@ void vision_encoder_forward(const vision_encoder_t *enc,
     
     // Allocate hidden states (pre-merge: n_patches_total = patch_h * patch_w * V_TEMP_PATCH)
     int n_patches_total = patch_h * patch_w * V_TEMP_PATCH;
+    if (n_patches_total > V_MAX_POS) n_patches_total = V_MAX_POS; // cap to position embedding limit
     float *hidden = (float *)malloc(n_patches_total * V_HIDDEN * sizeof(float));
     
     // === Patch embedding (3D convolution) ===

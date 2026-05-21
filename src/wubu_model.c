@@ -574,8 +574,22 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                 int gqa_use_gpu = 0;
                 if (N > 1) gqa_use_gpu = 1;
                 if (gqa_use_gpu) {
-                    for (int t = 0; t < N; t++)
-                        wubu_model_gpu_gqa_forward(model, l, normed + t * D_MODEL, 1, attn_out + t * D_MODEL);
+                    // Batched GQA: process all tokens at once (avoids N*H2D/D2H overhead)
+                    int chunk_sz = wubu_model_gpu_chunk_sz(model);
+                    if (N <= chunk_sz) {
+                        wubu_model_gpu_gqa_forward(model, l, normed, N, attn_out);
+                    } else {
+                        // N exceeds GPU scratch chunk size — process in sub-batches
+                        int remaining = N, offset = 0;
+                        while (remaining > 0) {
+                            int c = remaining < chunk_sz ? remaining : chunk_sz;
+                            wubu_model_gpu_gqa_forward(model, l,
+                                normed + offset * D_MODEL, c,
+                                attn_out + offset * D_MODEL);
+                            offset += c;
+                            remaining -= c;
+                        }
+                    }
                     goto gqa_done;
                 }
             }

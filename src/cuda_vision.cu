@@ -24,8 +24,8 @@ __global__ void attention_kernel(const float *q, const float *k, const float *v,
     const float *q_row = q + row * d + head * head_dim;
     float *out_row = out + row * d + head * head_dim;
     
-    // Registers: scores up to n=1024
-    __shared__ float scores[1024];
+    // Shared scores: use extern shared memory for arbitrary n
+    extern __shared__ float scores[];
     float max_val = -1e30f;
     
     for (int t = 0; t < n; t++) {
@@ -136,7 +136,7 @@ bool gpu_vision_layer_forward(cublasHandle_t cublas_h, cudaStream_t stream,
     float *d_k = d_qkv + n * d_model;
     float *d_v = d_qkv + n * d_model * 2;
     
-    attention_kernel<<<V_N_HEADS, n > 256 ? 256 : n, 0, stream>>>(
+    attention_kernel<<<V_N_HEADS, n > 256 ? 256 : n, n * sizeof(float), stream>>>(
         d_q, d_k, d_v, d_attn, n, d_model, scale);
     
     // === Step 3: Attention output projection ===

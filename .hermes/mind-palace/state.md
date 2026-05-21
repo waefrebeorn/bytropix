@@ -1,4 +1,4 @@
-# State — Phase 28k: GPU MoE Analysis Complete, Moving to P1 (MTP + Vision)
+# State — Phase 28l: Vision Pipeline Verified, P2 Up Next
 
 **bytropix: GPU inference engine for Qwen3.6-35B MoE + vision multi-modal**
 
@@ -11,10 +11,12 @@
 | GPU MoE v5 (Q8_K kernel, single layer) | Cos-sim 0.9888 vs CPU | 🟡 1.1% per-layer error |
 | GPU MoE (all 40 layers) | Running cos-sim 0.9968 → garbage text | ❌ Accumulates to garbage |
 | GPU SSM/GQA + CPU MoE | "Paris has been the first..." (5.5 tok/s) | ✅ Coherent |
-| GPU SSM/GQA + GPU MoE | "inless, the 1000th..." (1.6 tok/s) | ❌ Garbage (Q8_K kernel) |
+| MTP spec decode | 8.5 tok/s, 4% acceptance | ✅ Working |
+| **Vision encoder** | **256×256 → 128 patches × 2048, no NaN** | **✅ VERIFIED** |
+| **Vision→text pipeline** | **Full pipeline: screenshot→logits** | **✅ VERIFIED** |
 | CPU-only | "Paris is the capital of France..." | ✅ |
-| gen_text_mtp | Source exists, NOT compiled | 🟡 |
-| Vision encoder | 384 LoC, untested | 🟡 |
+| gen_text_mtp | 8.5 tok/s, 4% acceptance | ✅ Working |
+| Vision encoder → text | 63.7s CPU, no NaN, logits [-10.8, 14.1] | ✅ Verified |
 
 ## ROOT CAUSE ANALYSIS (DA v13 Complete)
 The 1.1% per-layer GPU MoE error is NOT from any single bug. It is the fundamental result of running a different code implementation:
@@ -25,11 +27,18 @@ The 1.1% per-layer GPU MoE error is NOT from any single bug. It is the fundament
 
 **Verdict:** GPU MoE bit-exact parity is NOT achievable without identical code. Accept hybrid path.
 
-## PRAGMATIC PATH FORWARD
-1. **GPU MoE disabled by default** (FORCE_CPU_MOE env var) — hybrid GPU SSM/GQA + CPU MoE works
-2. **P1: MTP spec decode** — build gen_text_mtp, test with MTP model
-3. **P1: Vision** — build test_vision_real, verify encoder
-4. **Q8_K kernel (v5) committed** as reference for future GPU MoE work
+## COMPLETED P1
+1. ✅ MTP spec decode — gen_text_mtp working at 8.5 tok/s (4% acceptance from quantized head)
+2. ✅ Vision pipeline verified — full screenshot→encoder→mmproj→text model→logits
+3. ✅ 2 segfault bugs fixed in wubu_vision.c (n_patches_total cap, heap scores)
+4. ✅ test_vision_real builds with GPU_SUPPORT
+
+## NEXT: P2 Feature Cream
+- GPU RMSNorm + SiLU + gated norm kernels
+- Chunked prefill (3-7x speedup)
+- NSA sparse attention
+- RoPE extrapolation 4x
+- GPU vision encoder kernels
 
 ## CUDA sm_120 Bugs Documented
 1. static `__shared__` inside loops → hang on Blackwell

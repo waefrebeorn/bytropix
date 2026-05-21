@@ -1,18 +1,18 @@
-# Prestige Prompt — May 19, 2026 (Triple DA v6)
+# Prestige Prompt — May 21, 2026 (Phase 28l: P1 Complete, P2 Up)
 
-## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M
-Triple DA complete. SSM recurrence verified IDENTICAL. 0.79 cos-sim = quantized precision, not algorithm.
+## Project: bytropix — Multi-Modal Inference (Text + Vision)
+P1 complete: MTP spec decode working, vision→text pipeline verified.
+P2: Feature cream (GPU RMSNorm, chunked prefill, sparse attn, RoPE, vision GPU).
 
-## Benchmarks (DA Verified)
+## Benchmarks (Phase 28l Verified)
 | Metric | Value | Status |
 |--------|-------|--------|
-| Decode | 7.8 tok/s | ✅ Phase 8: OMP task dispatch + AVX2 IQ2_XXS |
-| Prefill | 10.4 tok/s | ✅ |
-| Logit cos-sim vs llama | 0.7944 | ✅ Pre-existing at IQ2_M — precision, not bug |
-| Per-layer cos-sim avg | 0.88 | ✅ Range 0.45–0.97 |
-| Top-1 match (BOS) | token 220 | ✅ Both agree |
-| BOS embedding match | cos=1.0 | ✅ File extraction verified |
-| llama dep free | yes | ✅ ldd+nm verified |
+| Decode (hybrid GPU SSM/GQA + CPU MoE) | 5.5 tok/s | ✅ Coherent text |
+| MTP spec decode | 8.5 tok/s, 4% acceptance | ✅ |
+| Vision→text pipeline | 256×256→128 patches→logits, no NaN | ✅ Verified |
+| Vision encoder | 63.7s CPU (27 ViT layers) | ✅ Verified, needs GPU |
+| GPU MoE v5 (single layer cos-sim) | 0.9888 | 🟡 Fundamental path diff |
+| GPU MoE (40 layers) | 0.9968 → garbage | ❌ Accept hybrid |
 
 ## Triple DA Finding #1: SSM Recurrence is IDENTICAL
 Both implement: `h ← h * exp(gate)` → `hk = h · k` → `diff = v - hk` → `h += k · diff · beta` → `out = h · q * (1/sqrt(128))`

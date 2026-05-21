@@ -1,27 +1,33 @@
-# State — May 19, 2026 (Triple DA v6 Complete)
+# State — May 21, 2026 (Phase 28l: P1 Complete, P2 Up)
 
-## TRIPLE DA FINDINGS (May 19)
-```
-DA-1: SSM recurrence math IDENTICAL (1/sqrt(128) scale, exp(gate), same state update)
-DA-2: All vault papers cross-referenced. No theoretical gaps.
-DA-3: Cold gap = quantized matmul precision, NOT algorithm
-```
+## COMPLETED P1
+- ✅ MTP spec decode: gen_text_mtp at 8.5 tok/s (4% acceptance from quantized head)
+- ✅ Vision pipeline verified: screenshot→encoder→mmproj→text→logits, no NaN
+- ✅ 2 segfault bugs fixed in wubu_vision.c (n_patches_total cap, scores heap alloc)
+- ✅ Makefile test_vision_real target fixed (GPU_SUPPORT linkage)
+- ✅ test_vision_real builds and runs from `make test_vision_real`
 
 ## Current Reality
 | Metric | Value | Status | Evidence |
 |--------|-------|--------|----------|
-| Logit cos-sim vs llama.cpp (BOS) | **0.7944** | ✅ Pre-existing at IQ2_M | Verified this session — both agree top-1=220 |
-| Per-layer cos-sim (avg 40) | **0.88** | ✅ New measurement | Range 0.45–0.97, all 40 layers unique |
-| SSM recurrence math | **IDENTICAL** | ✅ Verified vs ggml_gated_delta_net kernel | 1/sqrt(128) scale, same decay/output formula |
-| Top-1 agreement (BOS) | token **220** | ✅ Both implementations agree | bytropix=220, llama.cpp=220 |
-| BOS embedding match | **cos=1.0** | ✅ File vs GGUF-extracted | Two independent bytropix runs identical |
+| Hybrid decode (GPU SSM/GQA + CPU MoE) | 5.5 tok/s | ✅ Coherent text | gen_text_gpu GPU=1 FORCE_CPU_MOE=1 |
+| MTP spec decode | 8.5 tok/s | ✅ Verified | gen_text_mtp "prompt" 30 |
+| Vision→text pipeline | 256×256→logits, no NaN | ✅ Verified | test_vision_real with real screenshot |
+| Vision encoder | 63.7s CPU, 27 ViT layers | ✅ Verified | Real 256×256 screenshot processed |
+| GPU MoE (single layer) | 0.9888 cos-sim vs CPU | 🟡 Fundamental path diff | DA v13 analysis |
 
 ## Infrastructure Built This Session
-1. `/home/wubu/llama.cpp/src/llama-graph.h` — `t_layer_h` vector for per-layer extraction
-2. `/home/wubu/llama.cpp/src/models/qwen35moe.cpp` — `ggml_set_output` + `t_layer_h.push_back`
-3. `/home/wubu/llama.cpp/src/llama-context.cpp` — Deep-copy F32 dump on `DUMP_LAYER_DIR`
-4. `/home/wubu/bytropix/tools/run_bos.c` — Standalone single-token forward pass
-5. `/home/wubu/bytropix/tools/ref_dumper.cpp` — Already existed, uses libllama
+1. `/home/wubu/bytropix/src/wubu_vision.c` — 2 segfault fixes (n_patches_total cap, scores heap)
+2. `/home/wubu/bytropix/Makefile` — test_vision_real target fixed with GPU_SUPPORT
+3. `/tmp/screen_vision_input.bin` — Test pixel data pipeline (ffmpeg→PIL→raw float)
+4. `src/wubu_moe_cpu.o` — CPU-only moe object for GPU-free linking
+
+## Cold Gaps (P2)
+- GPU RMSNorm + SiLU + gated norm kernels
+- Chunked prefill (3-7x speedup)
+- NSA sparse attention
+- RoPE extrapolation 4x
+- GPU vision encoder kernels
 
 ## Critical Knowledge
 - `ggml_set_output()` REQUIRED to prevent scheduler buffer reuse

@@ -279,6 +279,10 @@ infer_vision: tools/infer_vision.c $(CORE_OBJ)
 infer_vision_text: tools/infer_vision_text.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_vision_real: tools/test_vision_real.c $(MODEL_OBJ) $(CUDA_OBJ) src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o
+	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/test_vision_real.c $(MODEL_OBJ) $(CUDA_OBJ) src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o $(LDFLAGS) -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart
+	@echo "test_vision_real built (GPU vision + text)"
+
 infer_vision_text_gpu: tools/infer_vision_text_gpu_nvcc.o $(MODEL_OBJ) src/cuda_vision.o
 	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
 

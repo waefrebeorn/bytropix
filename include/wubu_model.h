@@ -327,6 +327,10 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz);
 int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
                                 const float *h_norm, int C, float *h_attn);
 
+// Get GPU chunk size (max tokens per batched GPU call).
+// Returns 0 if GPU not initialized.
+int wubu_model_gpu_chunk_sz(wubu_model_t *model);
+
 // Run SSM projections (qkv, gate) on GPU via quantized matmul kernels.
 // h_norm: [C, D_MODEL] input
 // C: number of tokens (1 for decode)

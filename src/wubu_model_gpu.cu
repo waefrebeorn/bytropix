@@ -675,6 +675,12 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
 // Also appends K,V to persistent GPU KV cache.
 // ================================================================
 extern "C"
+int wubu_model_gpu_chunk_sz(wubu_model_t *model) {
+    gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
+    return gpu ? gpu->chunk_sz : 0;
+}
+
+extern "C"
 int wubu_model_gpu_gqa_forward(wubu_model_t *model, int layer_idx,
                                 const float *h_norm, int C, float *h_attn) {
     gpu_ctx_t *gpu = (gpu_ctx_t *)model->gpu_ctx;
@@ -1063,7 +1069,7 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
 
     if (C == 1) {
         if (!gpu->d_ssm_beta[layer_idx] || !gpu->d_ssm_alpha[layer_idx] || !gpu->d_ssm_dt_bias[layer_idx] || !gpu->d_ssm_a[layer_idx]) {
-            fprintf(stderr, "GPU SSM: ssm_beta/alpha/dt_bias/a NULL for layer %d\\n", layer_idx);
+            fprintf(stderr, "GPU SSM: ssm_beta/alpha/dt_bias/a NULL for layer %d\n", layer_idx);
             return 0;
         }
         ssm_beta_alpha_fused_decode_wrapper(st,
@@ -1072,9 +1078,10 @@ int wubu_model_gpu_ssm_forward_full(wubu_model_t *model, int layer_idx,
             d_beta_sig, d_gate_final, dr);
         cudaStreamSynchronize(st);
         cudaError_t cem = cudaGetLastError();
-        if (cem != cudaSuccess) { fprintf(stderr, "GPU SSM: beta/alpha kernel error: %s\\n", cudaGetErrorString(cem)); return 0; }
+        if (cem != cudaSuccess) { fprintf(stderr, "GPU SSM: beta/alpha kernel error: %s\n", cudaGetErrorString(cem)); return 0; }
     } else {
-        fprintf(stderr, "GPU SSM C>1 path not yet working (cuBLAS error 13), falling back\n");
+        // C>1 prefill: not yet optimized — fall back so the hybrid (CPU) path handles it
+        fprintf(stderr, "GPU SSM C>1 path: per-token quant matmul overhead too high, falling back to hybrid\n");
         return 0;
     }
 
