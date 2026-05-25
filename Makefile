@@ -2,7 +2,7 @@ CC = gcc
 CXX = g++
 NVCC = /usr/local/cuda-13.1/bin/nvcc
 CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/local/cuda-13.1/include -fopenmp
-LDFLAGS = -lm -fopenmp
+LDFLAGS = -lm -fopenmp -lopenblas
 NVCC_FLAGS = -O3 -I include -arch=sm_120
 CUDA_LIBS = -lcublas -lcudart
 CUDA_INC = -I/usr/local/cuda-13.1/include
