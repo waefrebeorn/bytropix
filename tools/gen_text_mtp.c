@@ -66,6 +66,10 @@ static void get_embd(wubu_model_t *mdl, int token, float *out, FILE *emb_file) {
 int main(int argc, char **argv) {
     const char *main_model = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *mtp_model  = "/models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf";
+    const char *env_mm = getenv("MODEL");
+    const char *env_mtp = getenv("MTP_MODEL");
+    if (env_mm) main_model = env_mm;
+    if (env_mtp) mtp_model = env_mtp;
     const char *prompt = "The meaning of life is";
     int max_tokens = 32;
     int D = D_MODEL;
