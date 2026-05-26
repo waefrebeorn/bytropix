@@ -1,21 +1,34 @@
-# Mind Palace Index — May 26, 2026
+# bytropix Mind Palace — May 26, 2026
 
-## Navigation
-| File | Purpose | Status |
-|------|---------|--------|
-| `prestige_prompt.md` | Full context, done/next, DA summary | ✅ May 26 — Updated |
-| `state.md` | **CPU INFERENCE FIXED** — bugs, benchmarks, verified output | ✅ May 26 — Updated |
-| `plan.md` | Priority queue P0-P3, next actions | ✅ May 26 — Updated |
-| `goal-mantra.md` | Perpetual doctrine, piles | ✅ May 26 — Updated |
-| `project.md` | Mission, constraints, revenue path | ✅ May 26 — Updated |
-| `overnight-map.md` | Phase roadmap | ✅ May 25 |
-| `index.md` | Navigation | ✅ May 26 |
+## Active Branch
+- `cpu-optimize-may26` — CPU optimizations (batching, AVX2 norms/conv1d, OMP fix)
+- Master push-guarded (remote URL = `no-push`)
 
-## State
-**CPU inference now produces coherent text.** Two critical bugs fixed this session:
-1. `tgt_wrap` on GQA attention scores → inverts attention weights (removed)
-2. Chunked SSM FP accumulation (CS=2) → corrupts state through 30 layers (default → 4096)
+## Core Documents
+| Document | Purpose | Status |
+|----------|---------|--------|
+| `state.md` | Current performance state, benchmarks, known bugs | ✅ |
+| `plan.md` | Next steps, priority | ✅ |
+| `prestige_prompt.md` | Session resume prompt | ✅ |
+| `goal-mantra.md` | Goal and operating loop | ✅ |
+| `bytropix-accomplishments-vaulted.md` | All completed work archived | ✅ NEW |
+| `bytropix-300-gap-battleship.md` | 300-gap fresh analysis | ✅ NEW |
 
-Benchmarks: ~2.9 tok/s decode (beats llama.cpp at 2.7), ~1.6 tok/s prefill (needs batching).
+## Optimization Status
+- **Prefill:** 1.1 → 4.3 tok/s (3.9x) — batched projections + AVX2 norms
+- **Decode:** 2.5 → 3.6 tok/s (44% gain) — outer loop in MoE freed cores
+- **Output proj:** 1609ms → 31ms (52x) — nested OMP fix
+- **DRAM refresh:** 7.62µs, 2.4% stalls — negligible impact
 
-Full details: `state.md`
+## Key Paths
+- Models: `~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf` (10.7 GB)
+- Embeddings: `~/bytropix/data/qwen36_embeddings_c.bin.raw` (2 GB)
+- Tokenizer: `~/bytropix/data/vocab.bin` + `~/bytropix/data/merges.bin`
+- Reference: `~/llama.cpp/build/bin/llama-cli` (BLAS-linked)
+- Tailslayer: `~/tailslayer/` (DRAM channel-hedged reads, research only)
+
+## Build
+```bash
+cd ~/bytropix && make gen_text_cpu
+OMP_NUM_THREADS=4 MODEL=~/models/... ./gen_text_cpu "prompt" 100 40
+```
