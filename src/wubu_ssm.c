@@ -500,8 +500,10 @@ void wubu_ssm_forward(const float *x, int B, int T,
     
     // Chunked SSM path for prefill (T >= CS tokens, CS compiled into chunked function)
     // Falls through to sequential for decode (T=1) or small batches.
-    // Override threshold via SSM_CHUNK_MIN env var (default matches compiled CS).
-    int ssm_chunk_min = getenv("SSM_CHUNK_MIN") ? atoi(getenv("SSM_CHUNK_MIN")) : 2;
+    // Override threshold via SSM_CHUNK_MIN env var (default 4096 — only triggers at large context).
+    // NOTE: CS>1 (default 2) causes FP accumulation errors that amplify through 30 SSM layers,
+    // producing wrong token selection. Sequential path is always correct.
+    int ssm_chunk_min = getenv("SSM_CHUNK_MIN") ? atoi(getenv("SSM_CHUNK_MIN")) : 4096;
     if (T >= ssm_chunk_min && !getenv("FORCE_CPU_SSM_SEQ")) {
         wubu_ssm_chunked_recurrence(B, T, q_norm, k_norm, v_conv,
                                      beta_flat, gate_flat,
@@ -1473,7 +1475,6 @@ void wubu_gqa_forward(const float *x, int B, int T,
                         score += q_vec[i] * k_vec[i];
                     score *= scale;
 #endif
-                    score = tgt_wrap(score);
                     all_attn_w[(size_t)h_q * sparse_count + _tk] = score;
                 }
             }
@@ -1660,8 +1661,8 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
                     for (int i = 0; i < GQA_HEAD_DIM; i++)
                         score += q_vec[i] * k_vec[i];
                     score *= scale;
-                    // TGT: wrap attention score to prevent overflow
-                    score = tgt_wrap(score);
+                    // TGT: wrap attention score to prevent overflow — REMOVED: breaks softmax (inverts weights)
+                    //score = tgt_wrap(score);
                     attn_weights[t_k] = score;
                     if (score > max_score) max_score = score;
                 }
