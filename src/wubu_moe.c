@@ -436,11 +436,16 @@ void wubu_moe_forward(const float *x, int B, int T,
             float shared_act[SHARED_D_FF];
             
             // ---- Shared expert (sequential per token) ----
+            // Quantize x_s once, reuse Q8 for gate+up projections
             if (w->ffn_gate_shexp_q) {
-                quantized_matmul(x_s, w->ffn_gate_shexp_q, w->ffn_gate_shexp_q_type,
-                                D_MODEL, SHARED_D_FF, 0, shared_gate);
-                quantized_matmul(x_s, w->ffn_up_shexp_q, w->ffn_up_shexp_q_type,
-                                D_MODEL, SHARED_D_FF, 0, shared_up);
+                uint8_t shexp_q8_buf[4096];
+                quantize_row_q8_K(x_s, (block_q8_K *)shexp_q8_buf, D_MODEL);
+                quantized_matmul_from_q8(shexp_q8_buf,
+                    w->ffn_gate_shexp_q, w->ffn_gate_shexp_q_type,
+                    D_MODEL, SHARED_D_FF, 0, shared_gate);
+                quantized_matmul_from_q8(shexp_q8_buf,
+                    w->ffn_up_shexp_q, w->ffn_up_shexp_q_type,
+                    D_MODEL, SHARED_D_FF, 0, shared_up);
                 for (int j = 0; j < SHARED_D_FF; j++) {
                     float g = shared_gate[j];
                     shared_act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * shared_up[j];
