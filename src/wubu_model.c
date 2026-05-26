@@ -7,6 +7,8 @@
 #include <time.h>
 #include <immintrin.h>  // _mm_prefetch for expert prefetch
 
+#include <omp.h>
+
 // ========== GGUF Tensor Names ==========
 
 static const char *tensor_name_attn_norm(int layer) {
@@ -729,17 +731,18 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     } else if (model->output_weight_q && model->output_weight_type != GGML_TYPE_F32) {
         // Q4_K quantized matmul path
         // For decode (N=1), quantized_matmul internal parallelizes across 248320 cols.
-        // For prefill (N>1), parallelize across tokens (outer loop).
-        // Nested OMP: outer parallel for uses threads for tokens, inner quantized_matmul
-        // uses 1 thread per token when nested=off (default) — correct behavior.
+        // For prefill (N>1), use outer loop parallel with inner single-threaded matmul
+        // to avoid 4x4=16 thread thrash on 4-core i5 (nested OMP oversubscription).
         #pragma omp parallel for if(N > 1)
         for (int i = 0; i < N; i++) {
+            omp_set_num_threads(1);
             quantized_matmul(x + i * D_MODEL,
                              model->output_weight_q,
                              model->output_weight_type,
                              D_MODEL, model->vocab_size, 0,
                              logits + i * model->vocab_size);
         }
+        omp_set_num_threads(omp_get_max_threads());
         // Compare against F32 SGEMM when output_weight is also loaded
         if (model->output_weight && getenv("VERBOSE_OUTPUT_PROJ")) {
             float *f32_logits = (float *)malloc(N * model->vocab_size * sizeof(float));

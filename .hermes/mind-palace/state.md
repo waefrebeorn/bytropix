@@ -16,6 +16,15 @@
 - **Fix:** Removed both `tgt_wrap` calls. Normal Q·K * scale scores passed to softmax.
 - **Symptoms:** Best match → 2% probability, worst match → 76% probability.
 
+### 🔴 P0: AVX2 Conv1d Kernel Broadcast Bug (FIXED May 26 Session 2)
+- **Root cause:** Commit `9d4029c` added AVX2 conv1d using `_mm256_set1_ps(kernel[ki + c * k])` which broadcasts channel-c's kernel value to all 8 vector lanes. Each channel has its OWN kernel values — broadcasting produces wrong output for channels c+1 through c+7.
+- **Fix:** Removed AVX2 conv1d path. Sequential per-channel conv1d always used.
+- **Symptoms:** Same as pre-tgt_wrap-fix: byte-level garbage output ("infi doss！\"..."). Confused with prior bugs — only found by bisecting 066ff74 (working) vs 9d4029c (broken).
+- **Also affecting:** GQA forward projection was per-token; now batched via `quantized_matmul_batched` (same pattern as SSM forward).
+
+## Optimizations Applied This Session
+1. **GQA projection batching** — GQA Q+gate, K, V projections now use `quantized_matmul_batched` (was per-token quantize+matmul). Same batching pattern as SSM forward. Applied to both `wubu_gqa_forward` and `wubu_gqa_forward_save`.
+
 ## Working Configuration
 - **Build:** `make gen_text_cpu`
 - **Run raw:** `MODEL=~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf ./gen_text_cpu "prompt" 100 40`
@@ -23,29 +32,27 @@
 - **Core count:** OMP_NUM_THREADS=4 (4-core i5-8365U)
 
 ## Benchmarks (4 cores, 11GB RAM, raw mode)
-| Metric | bytropix (before) | bytropix (after) | llama.cpp |
-|--------|:-:|:-:|:-:|
-| Prefill 4 tok | 1.1 tok/s | **4.3 tok/s** | — |
-| Prefill 5 tok | 1.6 tok/s | — | 6.3 tok/s |
-| Decode | **2.9 tok/s** | **3.6 tok/s** | 2.7 tok/s |
-| Prefill 27 tok (CHAT) | 2.6 tok/s | — | — |
-| Output proj (prefill) | 1609ms | **31ms** | — |
+| Metric | bytropix (fixed) | llama.cpp |
+|--------|:-:|:-:|
+| Prefill 5 tok | 1.5 tok/s | 6.3 tok/s |
+| Prefill 6 tok | 1.3 tok/s | — |
+| Decode | 2.6-2.8 tok/s | 2.7 tok/s |
 
-Decode beats llama.cpp by 33%. Prefill gap vs llama.cpp (4.3 vs 7.3) reduced from 6x to 1.7x.
+Decode slightly below llama.cpp parity. Prefill gap needs MoE expert prefetch or output proj split.
 
 ## Verified Output
 - **RAW:** "The capital of France is Paris." ✓
-- **CHAT:** "Here's a thinking process: 1. **Analyze User Input:** ..." ✓
+- **RAW:** "Write a poem about AI" → thinking process output ✓
+- **CHAT:** TBD
 
 ## Remaining CPU Opportunities (ordered)
-1. **GQA/SSM projection batching** — Currently projects tokens one-at-a-time in a loop (`for (int s = 0; s < N; s++)`). Use `cblas_sgemm` to batch all N tokens at once for prefill speedup.
-2. **Chunked SSM at CS=1** — CS=1 produces exact match vs sequential but no speedup. Only useful for 256K+ context where T is large enough for parallelism to help.
-3. **MoE expert prefetch** — API exists but not wired (architecture doc says P2).
-4. **Output proj split** — Parallelize Q4_K across threads (architecture doc says P1).
+1. **MoE expert prefetch** — API exists but not wired (arch doc P2). Currently OMP threads wait for next expert in sequential unlock. Should fetch next expert's weight pointer during current expert's F32 down-projection.
+2. **Output proj split** — Parallelize Q4_K across threads (arch doc P1).
+3. **Chunked SSM at CS=1** — Only useful for 256K+ context. No speedup at short lengths.
 
 ## Files Changed (this session)
-- `src/wubu_ssm.c` — tgt_wrap removal + SSM_CHUNK_MIN default 4096
-- `.hermes/skills/mlops/cpu-inference-optimization/SKILL.md` — added chunked SSM pitfall
+- `src/wubu_ssm.c` — Removed buggy AVX2 conv1d; batched GQA projections (Q+gate, K, V)
+- `.hermes/mind-palace/state.md` — Updated with conv1d bug fix + GQA batching
 
 ## Context for Next Agent
 - Model: `~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf` (11.5 GB, 248K vocab)

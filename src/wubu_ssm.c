@@ -292,27 +292,9 @@ void wubu_conv1d(int B, int T, int C, int k,
     #pragma omp parallel for collapse(2) if(B * T * C * k > 100000)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
-            const float *inp_bt = input + b * (T + k - 1) * C + t * C;
-            float *out_bt = output + (b * T + t) * C;
-#ifdef __AVX2__
-            // Process 8 channels at a time with AVX2
-            int c;
-            for (c = 0; c <= C - 8; c += 8) {
-                __m256 sum = _mm256_setzero_ps();
-                for (int ki = 0; ki < k; ki++) {
-                    __m256 inp_v = _mm256_loadu_ps(inp_bt + ki * C + c);
-                    __m256 ker_v = _mm256_set1_ps(kernel[ki + c * k]);
-                    sum = _mm256_fmadd_ps(inp_v, ker_v, sum);
-                }
-                _mm256_storeu_ps(out_bt + c, sum);
-            }
-            for (; c < C; c++) {
-                float sum = 0.0f;
-                for (int ki = 0; ki < k; ki++)
-                    sum += inp_bt[ki * C + c] * kernel[ki + c * k];
-                out_bt[c] = sum;
-            }
-#else
+            // AVX2 conv1d disabled: kernel[ki + c*k] is per-channel.
+            // Broadcasting one channel's kernel to all 8 vector channels
+            // produces wrong output. Sequential path always used.
             for (int c = 0; c < C; c++) {
                 float sum = 0.0f;
                 for (int ki = 0; ki < k; ki++) {
@@ -322,7 +304,6 @@ void wubu_conv1d(int B, int T, int C, int k,
                 }
                 output[(b * T + t) * C + c] = sum;
             }
-#endif
         }
     }
 }
@@ -1300,25 +1281,16 @@ void wubu_gqa_forward(const float *x, int B, int T,
         return;
     }
     
-    // Step 1: Q + gate fused projection via quantized or F32 matmul
-    // Step 2-3: K and V projections — same input x[s], share Q8_K quantization
-    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
-    const int q8_buf_size = n_q8_blocks * 292;
-    uint8_t *gqa_q8_buf = (uint8_t *)malloc(q8_buf_size);
-    if (!gqa_q8_buf) { free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
+    // Step 1: Q + gate fused projection — batched for all N tokens
+    // Weight read ONCE from RAM via quantized_matmul_batched
+    quantized_matmul_batched(x,
+        w->attn_q_weight_q, w->attn_q_weight_type,
+        D_MODEL, q_dim * 2, 0, N, Q_full);
     
+    // Extract gate from Q_full — INTERLEAVED per-head layout:
+    // Q_full layout: [Q_h0(256) | gate_h0(256) | Q_h1(256) | gate_h1(256) | ...]
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        quantize_row_q8_K(x_s, (block_q8_K *)gqa_q8_buf, D_MODEL);
-        
-        // Q + gate projection
         int q_offset = s * q_dim * 2;
-        quantized_matmul_from_q8(gqa_q8_buf,
-            w->attn_q_weight_q, w->attn_q_weight_type,
-            D_MODEL, q_dim * 2, 0, Q_full + q_offset);
-        // Extract gate from Q_full — INTERLEAVED per-head layout:
-        // Q_full layout: [Q_h0(256) | gate_h0(256) | Q_h1(256) | gate_h1(256) | ...]
-        // gate[s * q_dim + j] should get all gate values (second 256 per head)
         for (int h = 0; h < GQA_Q_HEADS; h++) {
             for (int j = 0; j < GQA_HEAD_DIM; j++) {
                 int qf_idx = q_offset + h * (2 * GQA_HEAD_DIM) + GQA_HEAD_DIM + j;
@@ -1326,17 +1298,17 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 gate[g_idx] = Q_full[qf_idx];
             }
         }
-        
-        // K projection
-        quantized_matmul_from_q8(gqa_q8_buf,
-            w->attn_k_weight_q, w->attn_k_weight_type,
-            D_MODEL, kv_dim, 0, K + s * kv_dim);
-        // V projection
-        quantized_matmul_from_q8(gqa_q8_buf,
-            w->attn_v_weight_q, w->attn_v_weight_type,
-            D_MODEL, kv_dim, 0, V + s * kv_dim);
     }
-    free(gqa_q8_buf);
+    
+    // K projection — batched
+    quantized_matmul_batched(x,
+        w->attn_k_weight_q, w->attn_k_weight_type,
+        D_MODEL, kv_dim, 0, N, K);
+    
+    // V projection — batched
+    quantized_matmul_batched(x,
+        w->attn_v_weight_q, w->attn_v_weight_type,
+        D_MODEL, kv_dim, 0, N, V);
     
     // NaN guard: replace any NaN/Inf in Q_full, K, V with 0
     // Only check when debug is enabled; normally matmul produces no NaN
@@ -1692,25 +1664,25 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
     
     // === Steps 1-7: Same as wubu_gqa_forward ===
     
-    // Step 1: Q + gate fused projection via quantized or F32 matmul
+    // Step 1: Q + gate fused projection — batched
+    quantized_matmul_batched(x,
+        w->attn_q_weight_q, w->attn_q_weight_type,
+        D_MODEL, q_dim * 2, 0, N, Q_full);
+    
+    // Extract gate from Q_full
     for (int s = 0; s < N; s++) {
         int q_offset = s * q_dim * 2;
-        proj_matmul(x + s * D_MODEL, D_MODEL, q_dim * 2,
-                    w->attn_q_weight, w->attn_q_weight_q, w->attn_q_weight_type,
-                    Q_full + q_offset);
         for (int j = 0; j < q_dim; j++)
             gate[s * q_dim + j] = Q_full[q_offset + q_dim + j];
     }
     
-    // Steps 2-3: K and V projections via quantized or F32 matmul
-    for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
-                    w->attn_k_weight, w->attn_k_weight_q, w->attn_k_weight_type,
-                    K + s * kv_dim);
-        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
-                    w->attn_v_weight, w->attn_v_weight_q, w->attn_v_weight_type,
-                    V + s * kv_dim);
-    }
+    // Steps 2-3: K and V projections — batched
+    quantized_matmul_batched(x,
+        w->attn_k_weight_q, w->attn_k_weight_type,
+        D_MODEL, kv_dim, 0, N, K);
+    quantized_matmul_batched(x,
+        w->attn_v_weight_q, w->attn_v_weight_type,
+        D_MODEL, kv_dim, 0, N, V);
     
     // Step 3: Q/K RMSNorm
     float *Q_only = (float *)malloc(N * q_dim * sizeof(float));
