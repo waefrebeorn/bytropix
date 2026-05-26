@@ -422,3 +422,99 @@ void quantized_matmul_from_q8(const void *q8_x,
         dot_fn((int)n_rows, &y[j], 0, w_col, 0, q8_x, 0, 1);
     }
 }
+
+
+// ========================================================================
+// Batched quantized matmul: N input vectors through the same weight.
+// x:  [N, D_MODEL] F32 input
+// W:  quantized weight [D_MODEL, n_cols]
+// Key: weight data read ONCE from RAM, shared across all N tokens.
+// Supports: F32, IQ2_XXS, IQ3_XXS, IQ4_XS, Q5_K, Q6_K, Q4_K
+// ========================================================================
+void quantized_matmul_batched(const float *x,
+                              const void *W, int weight_type,
+                              int64_t n_rows, int64_t n_cols,
+                              int64_t col_stride_bytes,
+                              int N,
+                              float *y) {
+    if (n_rows <= 0 || n_cols <= 0 || N <= 0) return;
+
+    if (weight_type == GGML_TYPE_F32) {
+        const float *w = (const float *)W;
+        int64_t stride = (col_stride_bytes > 0) ? (col_stride_bytes / 4) : n_rows;
+        #pragma omp parallel for collapse(2) if(N * n_cols > 64)
+        for (int i = 0; i < N; i++)
+            for (int64_t j = 0; j < n_cols; j++) {
+                float sum = 0.0f;
+                for (int64_t k = 0; k < n_rows; k++)
+                    sum += x[i * n_rows + k] * w[k + j * stride];
+                y[i * n_cols + j] = sum;
+            }
+        return;
+    }
+
+    if (weight_type == GGML_TYPE_F16 || weight_type == GGML_TYPE_BF16 || weight_type == 30 ||
+        weight_type == GGML_TYPE_IQ1_M || weight_type == GGML_TYPE_IQ1_S ||
+        weight_type == GGML_TYPE_IQ2_S || weight_type == GGML_TYPE_IQ2_XS ||
+        weight_type == GGML_TYPE_IQ3_S ||
+        weight_type == GGML_TYPE_Q2_K || weight_type == GGML_TYPE_Q3_K ||
+        weight_type == GGML_TYPE_Q8_0) {
+        for (int i = 0; i < N; i++)
+            quantized_matmul(x + i * n_rows, W, weight_type, n_rows, n_cols, col_stride_bytes, y + i * n_cols);
+        return;
+    }
+
+    int64_t n_q8_blocks = (n_rows + QK_K - 1) / QK_K;
+    int64_t q8_tok_bytes = n_q8_blocks * Q8K_BLOCK_SIZE;
+    int64_t q8_total = N * q8_tok_bytes;
+
+    void *q8_all = NULL;
+    uint8_t stack_buf[16384];
+    if (q8_total <= (int64_t)sizeof(stack_buf))
+        q8_all = stack_buf;
+    else {
+        q8_all = malloc(q8_total);
+        if (!q8_all) return;
+    }
+
+    for (int i = 0; i < N; i++)
+        quantize_row_q8_K(x + i * n_rows, (block_q8_K *)((uint8_t *)q8_all + i * q8_tok_bytes), n_rows);
+
+    typedef void (*vec_dot_fn)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
+    vec_dot_fn dot_fn = NULL;
+    void q4_K_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+    void q5_K_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+    void q6_K_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+    void iq2_xxs_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+    void iq3_xxs_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+    void iq4_xs_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+
+    switch (weight_type) {
+        case GGML_TYPE_IQ2_XXS: dot_fn = (vec_dot_fn)iq2_xxs_vec_dot; break;
+        case GGML_TYPE_IQ3_XXS: dot_fn = (vec_dot_fn)iq3_xxs_vec_dot; break;
+        case GGML_TYPE_IQ4_XS:  dot_fn = (vec_dot_fn)iq4_xs_vec_dot;  break;
+        case GGML_TYPE_Q5_K:    dot_fn = (vec_dot_fn)q5_K_vec_dot;    break;
+        case GGML_TYPE_Q4_K:    dot_fn = (vec_dot_fn)q4_K_vec_dot;    break;
+        case GGML_TYPE_Q6_K:    dot_fn = (vec_dot_fn)q6_K_vec_dot;    break;
+        default:
+            fprintf(stderr, "quantized_matmul_batched: unsupported type %d\n", weight_type);
+            if (q8_all != stack_buf) free(q8_all);
+            return;
+    }
+
+    int64_t blk_sz = block_size_for_type(weight_type);
+    int64_t n_blocks_per_col = (n_rows + QK_K - 1) / QK_K;
+    int64_t col_stride = (col_stride_bytes > 0) ? col_stride_bytes : (n_blocks_per_col * blk_sz);
+
+    #pragma omp parallel for if(n_cols > 32)
+    for (int64_t j = 0; j < n_cols; j++) {
+        const void *w_col = (const uint8_t *)W + j * col_stride;
+        _mm_prefetch((const char *)W + ((j + 1) < n_cols ? (j + 1) : j) * col_stride, _MM_HINT_T0);
+        for (int i = 0; i < N; i++) {
+            const void *q8_i = (const uint8_t *)q8_all + i * q8_tok_bytes;
+            dot_fn((int)n_rows, &y[i * n_cols + j], 0, w_col, 0, q8_i, 0, 1);
+        }
+    }
+
+    if (q8_all != stack_buf) free(q8_all);
+}
