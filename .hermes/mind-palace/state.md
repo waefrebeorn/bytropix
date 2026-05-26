@@ -23,13 +23,15 @@
 - **Core count:** OMP_NUM_THREADS=4 (4-core i5-8365U)
 
 ## Benchmarks (4 cores, 11GB RAM, raw mode)
-| Metric | bytropix | llama.cpp |
-|--------|----------|-----------|
-| Prefill 5 tok | 1.6 tok/s | 6.3 tok/s |
-| Decode | **2.9 tok/s** | 2.7 tok/s |
-| Prefill 27 tok (CHAT) | 2.6 tok/s | — |
+| Metric | bytropix (before) | bytropix (after) | llama.cpp |
+|--------|:-:|:-:|:-:|
+| Prefill 4 tok | 1.1 tok/s | **4.3 tok/s** | — |
+| Prefill 5 tok | 1.6 tok/s | — | 6.3 tok/s |
+| Decode | **2.9 tok/s** | **3.6 tok/s** | 2.7 tok/s |
+| Prefill 27 tok (CHAT) | 2.6 tok/s | — | — |
+| Output proj (prefill) | 1609ms | **31ms** | — |
 
-Decode beats llama.cpp marginally. Prefill needs batching optimization.
+Decode beats llama.cpp by 33%. Prefill gap vs llama.cpp (4.3 vs 7.3) reduced from 6x to 1.7x.
 
 ## Verified Output
 - **RAW:** "The capital of France is Paris." ✓

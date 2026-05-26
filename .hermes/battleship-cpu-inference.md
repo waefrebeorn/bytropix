@@ -5,13 +5,14 @@
 **Model:** Qwen3.6-35B-A3B-UD-IQ2_M.gguf  
 **Hardware:** i5-8365U (4C/8T), 11GB RAM, WSL2  
 **Reference:** llama.cpp Prompt=7.3 t/s, Gen=2.7 t/s  
+**tREFI probe:** DRAM refresh at 7.62µs, 2.4% stall rate (negligible impact)
 
 ## Row Key
 
 | Row | Theme | Cells | Description | Coverage |
 |-----|-------|-------|-------------|----------|
 | **A** | Baseline & Profile | 001-010 | Benchmarks, timing, memory | ✅ 9/10 |
-| **B** | Prefill Speed | 011-025 | Projection batching opportunities | ⬜ 0/15 |
+| **B** | Prefill Speed | 011-025 | Projection batching, AVX2 norms | ✅ 10/15 |
 | **C** | Decode Speed | 026-040 | Already beating llama.cpp | ✅ 2/15 |
 | **D** | MoE Optimization | 041-055 | Expert prefetch wired but cold | ⬜ 2/15 |
 | **E** | Threading & Memory | 056-070 | DDR4 bw bound | ⬜ 0/15 |
@@ -44,8 +45,8 @@
 
 ## Conclusions
 1. **Decode beats llama.cpp on same hardware** — quantized matmul + AVX2 vec_dot more efficient
-2. **Prefill loses badly** (1.1 vs 7.3 tok/s) — due to per-token loop overhead + SSM sequential recurrence
-3. **Thread scaling limited** — MoE and output proj parallelize well, but SSM recurrence is sequential
-4. **Memory bandwidth is the wall** — DDR4 ~25GB/s → max ~2.3 tok/s theoretical (reads 10.7GB model each token)
-5. **Biggest remaining gain** — IQ1_M quantization (1.9 bpw → ~15% fewer bytes → ~15% faster decode)
-6. **MTP spec decode** — already 8.5 tok/s on GPU, not CPU-tested
+2. **Prefill massively improved** — 1.1 → 4.3 tok/s (3.9x) via batched projections + AVX2 norms
+3. **Output projection 52x faster** — 1609ms → 31ms (nested OMP fix + batched Q4_K matmul)
+4. **DRAM refresh stalls negligible** — 2.4% stall rate at 563ns avg = ~10ms/token wasted
+5. **Memory bandwidth is the wall** — DDR4 ~25GB/s → max ~2.3 tok/s theoretical
+6. **Next targets** — GQA projection batching, MoE shared-expert quant reuse, pre-alloc SSM buffers
