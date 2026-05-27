@@ -1084,8 +1084,12 @@ void wubu_mtp_free(mtp_head_t *mtp) {
         free((void*)mtp->blk40.moe.ffn_down_shexp_q);
     }
     // blk.40 GQA weights: free heap copies if not blob-backed
-    if (!mtp->blk40.gqa.attn_q_weight_q || (const uint8_t*)mtp->blk40.gqa.attn_q_weight_q >= (const uint8_t*)&mtp) {
-        // Check if heap-allocated (not in blob). Approximate: blob pointer is in main mmap blob
+    // When load_from_blob is false, all mtp_quant_ptr results were heap-allocated
+    if (!mtp->blk40.moe.load_from_blob) {
+        free((void*)mtp->blk40.gqa.attn_q_weight_q);
+        free((void*)mtp->blk40.gqa.attn_k_weight_q);
+        free((void*)mtp->blk40.gqa.attn_v_weight_q);
+        free((void*)mtp->blk40.gqa.attn_output_weight_q);
     }
     free(mtp->k_cache);
     free(mtp->v_cache);

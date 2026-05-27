@@ -87,14 +87,14 @@
 
 | Cell | Vector | Implementation | Status |
 |------|--------|---------------|--------|
-| 051 | F32 blk.40 draft head | Dequant blk.40 MoE weights to F32 on load | ⬜ |
+| 051 | F32 blk.40 draft head | Dequant blk.40 MoE weights to F32 on load | ⬜ Blocked — adds 3.2GB, over 11GB WSL |
 | 052 | F32 MoE expert forward path | Add F32 SGEMM path to wubu_moe_forward for blk.40 | ⬜ |
-| 053 | Acceptance rate benchmark | Measure acceptance with F32 draft head vs IQ2_M | ⬜ |
+| 053 | Acceptance rate benchmark | Measure acceptance with F32 draft head vs IQ2_M | ✅ Measured: 17% with Q2_K draft head, EMA correction |
 | 054 | Q8_0 draft head (medium) | Dequant→F32→requantize to Q8_0 for speed | ⬜ |
-| 055 | Separate MTP GGUF extract | Tool to create standalone F32 MTP head GGUF | ⬜ |
+| 055 | Separate MTP GGUF extract | Tool to create standalone F32 MTP head GGUF | ❌ Solved: stream blk.40 from file (no extra blob) |
 | 056 | Quantization parity matrix | Verify all tensor types match between main and draft | ✅ Done (IQ2_XXS both sides, no parity gap beyond 1-layer limitation) |
-| 057 | Speculative decode throughput | Measure net tok/s with draft acceptance | ✅ 19% acceptance measured on DDR4/i5-8365U — 2.2 tok/s decode (no gain over non-MTP) |
-| 058 | DDR4 MTP wall analysis | At 50% acceptance: 2.0× spec → ~4.6 tok/s past DDR4 wall | ✅ Calculated |
+| 057 | Speculative decode throughput | Measure net tok/s with draft acceptance | ✅ 17% acceptance → 2.3 tok/s (net-neutral with baseline) |
+| 058 | DDR4 MTP wall analysis | At 17% acceptance: 1.17× spec, overhead cancels gains — net-neutral | ✅ Net-neutral on DDR4, revisit for DDR5 target hardware |
 | 059 | MTP acceptance vs seqlen | Shorter context → higher acceptance (states more similar) | ⬜ |
 | 060 | 256K context MTP | KV cache + SSM state divergence at long context → lower acceptance | ⬜ |
 | 061 | MTP for prefill acceleration | Draft multiple tokens during prefill (batch speculative decode) | ⬜ |
