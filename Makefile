@@ -457,6 +457,15 @@ test_one_ssm_backward: tools/test_one_ssm_backward.c src/wubu_model_cpu.o src/wu
 test_ssm_backward_standalone: tools/test_ssm_backward_standalone.c $(CORE_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+# Backward validation test: load real model, run one SSM layer forward + backward
+# Validates all dequant-on-demand F32 weight fallbacks work end-to-end
+test_one_ssm_backward: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
+test_one_ssm_backward: tools/test_one_ssm_backward.c src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS_FILTERED) -o $@ $^ $(LDFLAGS)
+	@echo "test_one_ssm_backward built (CPU-only, loads real model)"
+
+# Run backward test: MODEL=... OMP_NUM_THREADS=4 ./test_one_ssm_backward
+
 test_bwd_model: tools/test_bwd_model.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
