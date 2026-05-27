@@ -718,7 +718,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                 layer->moe.gpu_ctx = (void *)model;
             }
 #endif
+            // Pass pre-computed expert indices (from n64 router_only) to skip
+            // the full 2048×256 router matmul inside wubu_moe_forward.
+            layer->moe.precomputed_indices = have_prev_experts ? prev_experts : NULL;
             wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, have_prev_experts ? prev_experts : NULL);
+            layer->moe.precomputed_indices = NULL;  // clear after use
             have_prev_experts = 1;
             // Capture expert selections for demoscene profiling
             if (model->expert_recorder && l < model->n_layers && prev_experts) {

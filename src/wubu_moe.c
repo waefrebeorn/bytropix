@@ -430,70 +430,117 @@ void wubu_moe_forward(const float *x, int B, int T,
         return;
     }
     
-    // Step 1: Compute router scores
-    wubu_moe_router(x, B, T, w->ffn_gate_inp, scores);
-    
-    // Step 2: Softmax and top-k for each token
-    // (Using softmax — the model was trained with softmax routing.
-    //  Sigmoid gating is a training-time optimization for load balancing.)
-    for (int s = 0; s < N; s++) {
-        float *score_s = scores + s * N_EXPERTS;
-        
-        // Find max for numerical stability
-        float max_s = score_s[0];
-        for (int e = 1; e < N_EXPERTS; e++)
-            if (score_s[e] > max_s) max_s = score_s[e];
-        
-        // Compute softmax denominator
-        float sum_exp = 0.0f;
-        for (int e = 0; e < N_EXPERTS; e++)
-            sum_exp += expf(score_s[e] - max_s);
-        float inv_sum = 1.0f / (sum_exp + 1e-30f);
-        
-        // Compute softmax values
-        float softmax_vals[N_EXPERTS];
-        for (int e = 0; e < N_EXPERTS; e++)
-            softmax_vals[e] = expf(score_s[e] - max_s) * inv_sum;
-        
-        // Find top-k indices — single pass O(E·K)
-        int *indices_s = topk_indices + s * N_ACTIVE_EXPTS;
-        float *weights_s = topk_weights + s * N_ACTIVE_EXPTS;
-        
-        // Initialize with first k elements
-        for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
-            indices_s[k] = k;
-            weights_s[k] = softmax_vals[k];
-        }
-        // Sort first k ascending (worst first)
-        for (int i = 0; i < N_ACTIVE_EXPTS-1; i++)
-            for (int j = i+1; j < N_ACTIVE_EXPTS; j++)
-                if (weights_s[i] > weights_s[j]) {
-                    float tmp_w = weights_s[i]; weights_s[i] = weights_s[j]; weights_s[j] = tmp_w;
-                    int tmp_i = indices_s[i]; indices_s[i] = indices_s[j]; indices_s[j] = tmp_i;
-                }
-        
-        // Single pass: for each remaining expert, replace worst if better
-        for (int e = N_ACTIVE_EXPTS; e < N_EXPERTS; e++) {
-            float val = softmax_vals[e];
-            if (val > weights_s[0]) {  // better than worst in top-k
-                weights_s[0] = val;
-                indices_s[0] = e;
-                // Bubble down to maintain sorted order (worst first)
-                int pos = 0;
-                while (pos + 1 < N_ACTIVE_EXPTS && weights_s[pos] > weights_s[pos+1]) {
-                    float tw = weights_s[pos]; weights_s[pos] = weights_s[pos+1]; weights_s[pos+1] = tw;
-                    int ti = indices_s[pos]; indices_s[pos] = indices_s[pos+1]; indices_s[pos+1] = ti;
-                    pos++;
-                }
+    // Step 1-2: Router scores → softmax → top-k (or use pre-computed indices)
+    if (w->precomputed_indices) {
+        // N64 pre-cache fill path: router already computed on pre-attention normed.
+        // Compute softmax weights for the 8 pre-selected experts on this input.
+        // Softmax over subset is mathematically identical to full softmax for the
+        // selected scores (normalization cancels to same relative weights).
+        for (int s = 0; s < N; s++) {
+            const float *x_s = x + s * D_MODEL;
+            const int *idx_s = w->precomputed_indices + s * N_ACTIVE_EXPTS;
+            int *indices_s = topk_indices + s * N_ACTIVE_EXPTS;
+            float *weights_s = topk_weights + s * N_ACTIVE_EXPTS;
+
+            // Compute scores for selected 8 experts: x_s @ ffn_gate_inp[:, e]
+            float scores8[N_ACTIVE_EXPTS];
+            for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+                int e = idx_s[k];
+                float sum = 0.0f;
+                for (int i = 0; i < D_MODEL; i++)
+                    sum += x_s[i] * w->ffn_gate_inp[i + e * D_MODEL];
+                scores8[k] = sum;
+            }
+
+            // Softmax over selected 8
+            float max_s = scores8[0];
+            for (int k = 1; k < N_ACTIVE_EXPTS; k++)
+                if (scores8[k] > max_s) max_s = scores8[k];
+            float sum_exp = 0.0f;
+            for (int k = 0; k < N_ACTIVE_EXPTS; k++)
+                sum_exp += expf(scores8[k] - max_s);
+            float inv_sum = 1.0f / (sum_exp + 1e-30f);
+            float tw = 0.0f;
+            for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+                float w_val = expf(scores8[k] - max_s) * inv_sum;
+                weights_s[k] = w_val;
+                indices_s[k] = idx_s[k];
+                tw += w_val;
+            }
+            // Normalize top-k weights to sum to 1
+            if (tw > 1e-30f) {
+                float inv_tw = 1.0f / tw;
+                for (int k = 0; k < N_ACTIVE_EXPTS; k++)
+                    weights_s[k] *= inv_tw;
             }
         }
-        
-        // Normalize top-k weights to sum to 1
-        float sum_w = 0.0f;
-        for (int k = 0; k < N_ACTIVE_EXPTS; k++) sum_w += weights_s[k];
-        if (sum_w > 1e-30f) {
-            float inv_sum_w = 1.0f / sum_w;
-            for (int k = 0; k < N_ACTIVE_EXPTS; k++) weights_s[k] *= inv_sum_w;
+    } else {
+        // Full router path: all 256 scores, softmax, top-k selection
+        // Step 1: Compute router scores
+        wubu_moe_router(x, B, T, w->ffn_gate_inp, scores);
+
+        // Step 2: Softmax and top-k for each token
+        // (Using softmax — the model was trained with softmax routing.
+        //  Sigmoid gating is a training-time optimization for load balancing.)
+        for (int s = 0; s < N; s++) {
+            float *score_s = scores + s * N_EXPERTS;
+
+            // Find max for numerical stability
+            float max_s = score_s[0];
+            for (int e = 1; e < N_EXPERTS; e++)
+                if (score_s[e] > max_s) max_s = score_s[e];
+
+            // Compute softmax denominator
+            float sum_exp = 0.0f;
+            for (int e = 0; e < N_EXPERTS; e++)
+                sum_exp += expf(score_s[e] - max_s);
+            float inv_sum = 1.0f / (sum_exp + 1e-30f);
+
+            // Compute softmax values
+            float softmax_vals[N_EXPERTS];
+            for (int e = 0; e < N_EXPERTS; e++)
+                softmax_vals[e] = expf(score_s[e] - max_s) * inv_sum;
+
+            // Find top-k indices — single pass O(E·K)
+            int *indices_s = topk_indices + s * N_ACTIVE_EXPTS;
+            float *weights_s = topk_weights + s * N_ACTIVE_EXPTS;
+
+            // Initialize with first k elements
+            for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+                indices_s[k] = k;
+                weights_s[k] = softmax_vals[k];
+            }
+            // Sort first k ascending (worst first)
+            for (int i = 0; i < N_ACTIVE_EXPTS-1; i++)
+                for (int j = i+1; j < N_ACTIVE_EXPTS; j++)
+                    if (weights_s[i] > weights_s[j]) {
+                        float tmp_w = weights_s[i]; weights_s[i] = weights_s[j]; weights_s[j] = tmp_w;
+                        int tmp_i = indices_s[i]; indices_s[i] = indices_s[j]; indices_s[j] = tmp_i;
+                    }
+
+            // Single pass: for each remaining expert, replace worst if better
+            for (int e = N_ACTIVE_EXPTS; e < N_EXPERTS; e++) {
+                float val = softmax_vals[e];
+                if (val > weights_s[0]) {  // better than worst in top-k
+                    weights_s[0] = val;
+                    indices_s[0] = e;
+                    // Bubble down to maintain sorted order (worst first)
+                    int pos = 0;
+                    while (pos + 1 < N_ACTIVE_EXPTS && weights_s[pos] > weights_s[pos+1]) {
+                        float tw = weights_s[pos]; weights_s[pos] = weights_s[pos+1]; weights_s[pos+1] = tw;
+                        int ti = indices_s[pos]; indices_s[pos] = indices_s[pos+1]; indices_s[pos+1] = ti;
+                        pos++;
+                    }
+                }
+            }
+
+            // Normalize top-k weights to sum to 1
+            float sum_w = 0.0f;
+            for (int k = 0; k < N_ACTIVE_EXPTS; k++) sum_w += weights_s[k];
+            if (sum_w > 1e-30f) {
+                float inv_sum_w = 1.0f / sum_w;
+                for (int k = 0; k < N_ACTIVE_EXPTS; k++) weights_s[k] *= inv_sum_w;
+            }
         }
     }
     

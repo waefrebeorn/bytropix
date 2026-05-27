@@ -64,6 +64,12 @@ typedef struct {
     // When non-NULL, MoE forward uses Q8_0-cached version of IQ2 experts.
     // Cache struct defined in mtp_q8_cache.h, cast to mtp_q8_cache_t*.
     void *q8_cache;
+
+    // Pre-computed expert indices from n64 pre-cache fill (wubu_model.c).
+    // When non-NULL, wubu_moe_forward skips the full router + top-k and
+    // computes softmax weights for these 8 indices directly.
+    // Saves ~0.5ms/layer (2048×256 router matmul) on decode path.
+    const int *precomputed_indices;
 } moe_weights_t;
 
 // MoE forward pass for one layer

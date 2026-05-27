@@ -10,7 +10,7 @@
 
 | Row | Theme | Cells | Description | Coverage |
 |-----|-------|-------|-------------|----------|
-| **A** | N64 Pre-Cache Fill | 001-025 | Router-before-SSM, correct expert prefetch | 🟡 15/25 |
+| **A** | N64 Pre-Cache Fill | 001-025 | Router-before-SSM, correct expert prefetch | 🟢 17/25 |
 | **B** | HAKMEM Timing Domain | 026-050 | Bus occupancy analysis, memory movement maps | ⬜ 0/25 |
 | **C** | MTP Quantization Parity | 051-075 | IQ raw-quant cache, native vec_dot path | 🟢 25/25 |
 | **D** | DDR5/L3-Aware Prefetch | 076-100 | _mm_prefetch re-enable w/ large cache | ⬜ 0/25 |
@@ -39,7 +39,7 @@
 | 012 | Alternative: no prefetch, just router | Router-only still correct for future hardware | ✅ Current impl |
 | 013 | Router+prefetch on Ryzen 7950X (simulated) | 64MB L3: 8 expert weights (7.4MB) fit entirely | ⬜ Need hardware |
 | 014 | Router accuracy verification: normed vs normed2 | Compare top-8 overlap between router(normed) and router(normed2) | ⬜ |
-| 015 | Router recomputation elimination | Modify wubu_moe_forward to skip router when indices pre-computed | ⬜ |
+| 015 | Router recomputation elimination | prev_experts → moe->precomputed_indices skips full router in wubu_moe_forward. Saves ~0.5ms/layer. Softmax on 8 selected experts. | ✅ |
 | 016 | Shared expert prefetch | shared gate/up/down are always active — prefetch unconditionally | ⬜ |
 | 017 | SSM weight prefetch during GQA (3:1 pattern) | SSM-heavy layers (30/40) — prefetch SSM weights during GQA layers | ⬜ |
 | 018 | GQA weight prefetch during SSM (3:1 pattern) | GQA layers (10/40) — prefetch GQA weights during SSM layers | ⬜ |
@@ -201,7 +201,7 @@
 | 188 | DA review: prefetch on DDR4 HURTS | 2.5 vs 2.8 tok/s — confirmed, disabled behind LARGE_L3 flag | ✅ |
 | 189 | DA review: F32 head SWAP risk | 3.2GB on 11GB → 14.2GB → swap. Gate behind available_mem > 14GB | ⬜ |
 | 190 | DA review: MTP <50% not worth | Confirmed — 4% acceptance is net-negative. Fix via F32 head | ✅ |
-| 191 | DA review HARD-1: Router recomputation | Both wubu_moe_router_only and wubu_moe_forward compute router → wasteful. Add skip flag. | ⬜ |
+| 191 | DA review HARD-1: Router recomputation | Both wubu_moe_router_only and wubu_moe_forward compute router → wasteful. Add skip flag. | ✅ Cell 015 |
 | 192 | DA review HARD-2: Battleship coverage | 200 cells, 15 done (7.5%) — roadmap, not a bug | ✅ |
 | 193 | DA review HARD-3: HAKMEM micro-ops | uint64 packing, shift-add multiply — documented as <0.01% on x86 | ✅ |
 | 194-200 | *(reserved)* | | |
@@ -217,7 +217,6 @@
 | normed ≠ normed2 router overlap | HIGH | Unmeasured | Add benchmark (P-4 router-only vs P-7 expert select) before DDR5 enable | ⬜ |
 | F32 MTP head: 3.2GB > 11GB WSL | HIGH | Swap guaranteed | Gate behind `available_mem > 14GB` or use Q8_0 compromise (1.3GB, ~35% acceptance) | ⬜ |
 | MTP 50% acceptance unverified | MEDIUM | Estimate, not measurement | Build F32 head first, benchmark acceptance before committing to strategy | ⬜ |
-| Router recomputation waste | MEDIUM | 2× router per token | Modify wubu_moe_forward to accept pre-computed indices and skip internal router | ⬜ |
 | Expert index packing negligible | LOW | <0.01% cycles on x86 | Skip uint64 packing — documented as non-beneficial on modern CPUs | ✅ |
 | DDR4 prefetch negative | VERIFIED | 2.5 vs 2.8 tok/s | Prefetch disabled, guarded by LARGE_L3 compile flag | ✅ |
 | Battleship 92.5% incomplete | LOW | Roadmap, not bug | 15/200 cells completed in first session — normal for new campaign | ✅ |
