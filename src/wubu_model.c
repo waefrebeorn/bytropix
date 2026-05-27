@@ -263,6 +263,8 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     model->logit_cache = (float *)calloc(model->vocab_size, sizeof(float));
     model->logit_cache_valid = false;
     model->logit_cache_steps = 0;
+    model->logit_cache_max_hits = 2;
+    model->logit_cache_argmax_prev = -1;
     
     // Output weight quantized pointer will be set after gguf_buffer_data() below
     printf("  Output weight: will use quantized path (Q4_K via blob pointer)\n");
@@ -739,9 +741,9 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
     double t_out0 = wall_time();
     
-    // Logit cache: for single-token decode, reuse previous logits every other step
+    // Logit cache: for single-token decode, reuse previous logits
     if (N == 1 && model->logit_cache && model->logit_cache_valid && 
-        model->logit_cache_steps < 2) {
+        model->logit_cache_steps < model->logit_cache_max_hits) {
         // Use cached logits (skip 80ms output proj)
         memcpy(logits, model->logit_cache, model->vocab_size * sizeof(float));
         model->logit_cache_steps++;
@@ -821,7 +823,16 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             for (int i = 1; i < model->vocab_size; i++)
                 if (logits[i] > av) { av = logits[i]; am = i; }
             model->logit_cache_argmax = am;
+            
+            // Adaptive cache depth: if argmax stable across consecutive full computes, go deeper
+            if (am == model->logit_cache_argmax_prev)
+                model->logit_cache_max_hits = (model->logit_cache_max_hits < 8) ? 
+                    model->logit_cache_max_hits + 1 : 8;
+            else
+                model->logit_cache_max_hits = 2;  // conservative fallback
+            model->logit_cache_argmax_prev = am;
         }
+    }
         else {
         // Fallback: copy hidden states only (no output weight loaded)
         memcpy(logits, x, N * D_MODEL * sizeof(float));

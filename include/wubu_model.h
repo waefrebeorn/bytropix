@@ -302,17 +302,25 @@ typedef struct {
 
     // Expert prefetch history (P3: prompt-aware prefetch matrix)
     // Records which 8 experts each layer selected on the last forward pass.
-    // On subsequent passes with matching prompt, prefetch those experts
-    // during the previous layer's SSM forward (reuses idle memory bus).
+    // Expert prefetch history (P3: prompt-aware prefetch matrix)
+    // Records which 8 experts each layer selected on the last forward pass.
     int expert_history[40][N_ACTIVE_EXPTS];
     uint64_t last_prompt_hash;
     bool expert_history_valid;
+
+    // Fast decode: cache previous token's per-layer hidden states
+    float *prev_hidden;    // [n_layers][D_MODEL] — hidden state at each layer for prev token
+    float *prev_ssm_out;   // [n_layers][D_MODEL] — SSM output at each layer for prev token
+    bool fast_decode;      // enable layer skipping
+    int fast_skip_count;   // how many layers were skipped (for stats)
 
     // Logit cache: stores previous token's full logits + argmax
     float *logit_cache;       // [vocab_size] — full logits from previous forward
     int logit_cache_argmax;   // argmax from cache
     bool logit_cache_valid;
-    int logit_cache_steps;    // count of consecutive cache uses (for adaptive fallback)
+    int logit_cache_steps;    // count of consecutive cache uses
+    int logit_cache_max_hits; // adaptive max consecutive cache hits (default 2)
+    int logit_cache_argmax_prev; // previous forward's argmax (for stability detection)
 } wubu_model_t;
 
 // Create model, load from GGUF
