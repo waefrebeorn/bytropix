@@ -64,8 +64,8 @@ static void get_embd(wubu_model_t *mdl, int token, float *out, FILE *emb_file) {
 }
 
 int main(int argc, char **argv) {
-    const char *main_model = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
-    const char *mtp_model  = "/models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf";
+    const char *main_model = "/home/wubu2/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf";
+    const char *mtp_model  = "/home/wubu2/models/qwen3.6-35b-a3b-MTP-UD-IQ2_M.gguf";
     const char *env_mm = getenv("MODEL");
     const char *env_mtp = getenv("MTP_MODEL");
     if (env_mm) main_model = env_mm;
@@ -88,18 +88,16 @@ int main(int argc, char **argv) {
 
     // ====== Load MTP head from SEPARATE MTP model file ======
     gguf_ctx *mtp_ctx = NULL;
-    const uint8_t *mtp_blob = NULL;
     if (use_mtp) {
         mtp_ctx = gguf_open(mtp_model);
         if (!mtp_ctx) {
             fprintf(stderr, "Failed to open MTP model: %s\n", mtp_model);
             use_mtp = 0;
         } else {
-            fprintf(stderr, "Opened MTP model: %s\n", mtp_model);
-            gguf_buffer_data(mtp_ctx);
-            mtp_blob = (const uint8_t *)mtp_ctx->data_blob;
-
-            if (!wubu_mtp_load(&mdl.mtp, mtp_model, mtp_ctx, mtp_blob)) {
+            fprintf(stderr, "Opened MTP model: %s (no full buffer)\n", mtp_model);
+            // No gguf_buffer_data — 11.9GB would OOM 11GB WSL.
+            // wubu_mtp_load reads tensors individually from file via gguf_read_raw_tensor.
+            if (!wubu_mtp_load(&mdl.mtp, mtp_model, mtp_ctx, NULL)) {
                 fprintf(stderr, "MTP head not available in MTP model file\n");
                 gguf_close(mtp_ctx);
                 mtp_ctx = NULL;
@@ -157,6 +155,33 @@ int main(int argc, char **argv) {
     float *last_logits = logits_buf + (n_prompt - 1) * vs;
     get_embd(&mdl, prompt_tokens[n_prompt - 1], prev_cur, emb_file);
     memcpy(cur, prev_cur, D * sizeof(float));
+
+    // Bootstrap MTP EMA correction using prefill data
+    if (use_mtp && mdl.mtp.loaded && n_prompt > 1) {
+        fprintf(stderr, "Bootstrapping MTP EMA correction...\n");
+        // h_39 is from the LAST prompt token. MTP draft from prev_cur should
+        // predict the same first token as last_logits.
+        float *prefill_logits = logits_buf + (n_prompt - 1) * vs;
+        mdl.mtp.cache_len = 0;
+        wubu_mtp_draft_forward(&mdl, h_39, prev_cur, 1, mtp_logits);
+        int matched = 0;
+        for (int v = 0; v < 256 && v < vs; v++) {
+            float diff = prefill_logits[v] - mtp_logits[v];
+            logit_correction[v] = 0.8f * diff;  // Full initial correction (decayed 0.8)
+            if (fabsf(diff) > 0.1f) matched++;
+        }
+        // Check if draft[0] matches argmax after correction
+        for (int v = 0; v < vs; v++) mtp_logits[v] += logit_correction[v];
+        int bootstrap_draft = 0; float bv = mtp_logits[0];
+        for (int v = 1; v < vs; v++) if (mtp_logits[v] > bv) { bv = mtp_logits[v]; bootstrap_draft = v; }
+        int main_arg = 0; float mv = prefill_logits[0];
+        for (int v = 1; v < vs; v++) if (prefill_logits[v] > mv) { mv = prefill_logits[v]; main_arg = v; }
+        fprintf(stderr, "  Bootstrap: correction_top100_mag=%.2f, draft_match=%s\\n",
+               sqrtf(matched > 0 ? (float)matched / 100.0f : 0),
+               bootstrap_draft == main_arg ? "YES" : "NO");
+        // Reset MTP cache for actual decode loop
+        mdl.mtp.cache_len = 0;
+    }
 
     // ============================================================
     // Main decode loop

@@ -97,6 +97,13 @@ void wubu_moe_router(const float *x, int B, int T,
                      const float *gate_inp,
                      float *scores);
 
+// N64 pre-cache fill: compute router + top-k on pre-attention normed
+// Returns THIS layer's expert indices (NOT prev layer's)
+// indices_out: [B*T, N_ACTIVE_EXPTS] — top-k expert indices per token
+void wubu_moe_router_only(const float *x, int B, int T,
+                          const moe_weights_t *w,
+                          int *indices_out);
+
 // MoE backward pass
 // d_output: [B*T, D_MODEL] — gradient at MoE output (FFN path)
 // normed2: [B*T, D_MODEL] — saved MoE input

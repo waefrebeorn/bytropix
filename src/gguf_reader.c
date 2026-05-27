@@ -1790,3 +1790,22 @@ void wubu_log_map(const float *input, int dim, float R, float *output) {
 const uint64_t *gguf_get_iq1s_grid(void) {
     return iq1s_grid;
 }
+
+int gguf_read_raw_tensor(gguf_ctx *ctx, gguf_tensor_info *tensor, void *output) {
+    int64_t n_elems = 1;
+    for (int d = 0; d < tensor->n_dims; d++) n_elems *= tensor->dims[d];
+    int64_t raw_size = gguf_raw_size(tensor->ggml_type, n_elems);
+    if (raw_size <= 0) return 0;
+
+    if (ctx->data_blob) {
+        memcpy(output, (const uint8_t *)ctx->data_blob + tensor->data_offset, raw_size);
+        return (int)raw_size;
+    }
+
+    // File-based read
+    uint64_t tensor_pos = ctx->data_blob_offset + tensor->data_offset;
+    fseek(ctx->file, tensor_pos, SEEK_SET);
+    size_t n_read = fread(output, 1, raw_size, ctx->file);
+    if (n_read != (size_t)raw_size) return 0;
+    return (int)raw_size;
+}

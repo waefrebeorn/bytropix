@@ -147,6 +147,88 @@ void wubu_moe_router(const float *x, int B, int T,
 }
 
 // ============================================================
+// N64 RDRAM Pre-Cache Fill: Router-Only on Pre-Attention Normed
+// ============================================================
+// Computes router scores + softmax + top-8 on normed (BEFORE SSM/GQA).
+// Gives THIS layer's actual expert indices for prefetch during SSM.
+// The attn_out is typically 10-20% of residual, so expert selection
+// on normed ≈ normed2 — good enough for speculative L3 fill.
+void wubu_moe_router_only(const float *x, int B, int T,
+                          const moe_weights_t *w,
+                          int *indices_out) {
+    int N = B * T;
+    float *scores = (float *)malloc(N * N_EXPERTS * sizeof(float));
+    if (!scores) return;
+
+    // Step 1: Router scores: x_s @ ffn_gate_inp [2048] @ [2048, 256] -> [256]
+    #pragma omp parallel for if(N > 1)
+    for (int s = 0; s < N; s++) {
+        const float *x_s = x + s * D_MODEL;
+        float *score_s = scores + s * N_EXPERTS;
+        for (int e = 0; e < N_EXPERTS; e++) {
+            float sum = 0.0f;
+            for (int k = 0; k < D_MODEL; k++)
+                sum += x_s[k] * w->ffn_gate_inp[k + e * D_MODEL];
+            score_s[e] = sum;
+        }
+    }
+
+    // Step 2: Softmax + top-8 per token
+    for (int s = 0; s < N; s++) {
+        float *score_s = scores + s * N_EXPERTS;
+        int *idx_s = indices_out + s * N_ACTIVE_EXPTS;
+
+        // Softmax with numerical stability
+        float max_s = score_s[0];
+        for (int e = 1; e < N_EXPERTS; e++)
+            if (score_s[e] > max_s) max_s = score_s[e];
+
+        float sum_exp = 0.0f;
+        for (int e = 0; e < N_EXPERTS; e++)
+            sum_exp += expf(score_s[e] - max_s);
+        float inv_sum = 1.0f / (sum_exp + 1e-30f);
+
+        // Top-8 single pass
+        float temp_w[N_ACTIVE_EXPTS];
+        int   temp_i[N_ACTIVE_EXPTS];
+
+        // Initialize with first 8
+        for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+            temp_i[k] = k;
+            temp_w[k] = expf(score_s[k] - max_s) * inv_sum;
+        }
+        // Sort ascending (worst first)
+        for (int i = 0; i < N_ACTIVE_EXPTS-1; i++)
+            for (int j = i+1; j < N_ACTIVE_EXPTS; j++)
+                if (temp_w[i] > temp_w[j]) {
+                    float tw = temp_w[i]; temp_w[i] = temp_w[j]; temp_w[j] = tw;
+                    int ti = temp_i[i]; temp_i[i] = temp_i[j]; temp_i[j] = ti;
+                }
+
+        // Remaining 248 experts: replace worst if better
+        for (int e = N_ACTIVE_EXPTS; e < N_EXPERTS; e++) {
+            float val = expf(score_s[e] - max_s) * inv_sum;
+            if (val > temp_w[0]) {
+                temp_w[0] = val;
+                temp_i[0] = e;
+                int pos = 0;
+                while (pos + 1 < N_ACTIVE_EXPTS && temp_w[pos] > temp_w[pos+1]) {
+                    float tw = temp_w[pos]; temp_w[pos] = temp_w[pos+1]; temp_w[pos+1] = tw;
+                    int ti = temp_i[pos]; temp_i[pos] = temp_i[pos+1]; temp_i[pos+1] = ti;
+                    pos++;
+                }
+            }
+        }
+
+        // Write output
+        for (int k = 0; k < N_ACTIVE_EXPTS; k++)
+            idx_s[k] = temp_i[k];
+    }
+
+    free(scores);
+}
+
+// ============================================================
 // Quantized MoE Expert Computation (on-the-fly IQ2_XXS dequant)
 // ============================================================
 

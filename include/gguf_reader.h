@@ -149,6 +149,12 @@ void quantized_matmul_batched(const float *x,
 // IQ1_S grid table (2048 × uint64) for GPU constant memory upload
 const uint64_t *gguf_get_iq1s_grid(void);
 
+// Read raw quantized bytes from a tensor (no dequantization)
+// Works with or without buffered data_blob. If data_blob is NULL, reads from file.
+// Allocates internal buffer and copies data into 'output' (which must be at least raw_size bytes).
+// Returns the number of bytes read, or 0 on error.
+int gguf_read_raw_tensor(gguf_ctx *ctx, gguf_tensor_info *tensor, void *output);
+
 #ifdef __cplusplus
 }
 #endif
