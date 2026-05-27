@@ -443,7 +443,7 @@ test_regression: tools/test_regression.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUD
 test_gpu_poincare: tools/test_gpu_poincare.c $(CORE_OBJ) $(CUDA_OBJ) src/bench.o
 	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda/lib64 -lstdc++
 
-test_rsgd: tools/test_rsgd.c $(RSGD_OBJ) src/gguf_reader.o
+test_rsgd: tools/test_rsgd.c $(RSGD_OBJ) src/wubu_mobius.o src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_backward: tools/test_backward.c $(CORE_OBJ)

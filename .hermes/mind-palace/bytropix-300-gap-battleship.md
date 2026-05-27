@@ -102,7 +102,7 @@
 || Cell | Area | Gap | Severity |
 ||------|------|-----|----------|
 || 141 | MATH/lean/ | Lean proof directory appears empty | 🟢 Theory/code documentation gap — not a code bug |
-|| 142 | Hyperbolic opt | RSGD (Riemannian SGD) at rsgd.c — basic only | 🟡 Simplified ambient-step+retraction (not true Riemannian exp-map). Functional, upgradeable |
+|| 142 | Hyperbolic opt | RSGD (Riemannian SGD) at rsgd.c — basic only | 🟡 ✅ Upgraded: proper exp_map_w via Möbius addition + fallback for out-of-ball. Tested PASS (1000 vecs, 128-dim) |
 || 143 | Mobius operations | Full gyration backward not implemented | 🟡 ✅ All backward primitives exist (mobius_add_backward, exp_map_backward, log_map_backward, scalar_mul_backward). Gyration operator also implemented. Not a gap |
 || 144 | Poincaré GQA | Attention uses dot product, not Poincaré distance | 🟡 ✅ Already uses wubu_poincare_dist for hyperbolic geodesic distance — not dot product. Full chain: exp_map → distance → softmax → Möbius linear comb → log_map |
 || 145-170 | THEORY→Code | Hyperbolic embeddings, curvature tuning, mixed-curvature | 🟡 |
@@ -254,7 +254,7 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 |||| 174 | CI/GitHub Actions | ✅ .github/workflows/build-and-test.yml — compiles core + test_mobius_linear |
 |||| 055-070 | Vision extensions | 🟢 Peripheral tooling — core encoder complete |
 |||| 102 | train_stub FD gradients | 🟡 Intentional for tiny model |
-|||| 141-143 | Theory gaps (Lean, RSGD, gyration) | 🟢 Gyration exists. RSGD basic. Lean empty |
+|||| 141-143 | Theory gaps (Lean, RSGD, gyration) | 🟢 Gyration exists. RSGD upgraded to proper exp_map_w. Lean empty. |
 |||| 145-170 | Theory→Code | 🟡 Hyperbolic embeddings, curvature tuning |
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
