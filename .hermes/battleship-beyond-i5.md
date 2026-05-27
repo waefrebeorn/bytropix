@@ -10,7 +10,7 @@
 
 | Row | Theme | Cells | Description | Coverage |
 |-----|-------|-------|-------------|----------|
-| **A** | N64 Pre-Cache Fill | 001-025 | Router-before-SSM, correct expert prefetch | 🟢 17/25 |
+| **A** | N64 Pre-Cache Fill | 001-025 | Router-before-SSM, correct expert prefetch | 🟢 18/25 |
 | **B** | HAKMEM Timing Domain | 026-050 | Bus occupancy analysis, memory movement maps | ⬜ 0/25 |
 | **C** | MTP Quantization Parity | 051-075 | IQ raw-quant cache, native vec_dot path | 🟢 25/25 |
 | **D** | DDR5/L3-Aware Prefetch | 076-100 | _mm_prefetch re-enable w/ large cache | ⬜ 0/25 |
@@ -38,7 +38,7 @@
 | 011 | Prefetch bandwidth conflict measured | SSM forward + prefetch → 2.5 tok/s (was 2.7 baseline) | ✅ Confirmed on DDR4 |
 | 012 | Alternative: no prefetch, just router | Router-only still correct for future hardware | ✅ Current impl |
 | 013 | Router+prefetch on Ryzen 7950X (simulated) | 64MB L3: 8 expert weights (7.4MB) fit entirely | ⬜ Need hardware |
-| 014 | Router accuracy verification: normed vs normed2 | Compare top-8 overlap between router(normed) and router(normed2) | ⬜ |
+| 014 | Router accuracy verification: normed vs normed2 | Compare top-8 overlap between router(normed) and router(normed2) | ✅ Measured: ~90% overlap at 10% noise (typical attn_out). Layers 0/20/39 consistent. ~7.2/8 experts match per layer. |
 | 015 | Router recomputation elimination | prev_experts → moe->precomputed_indices skips full router in wubu_moe_forward. Saves ~0.5ms/layer. Softmax on 8 selected experts. | ✅ |
 | 016 | Shared expert prefetch | shared gate/up/down are always active — prefetch unconditionally | ⬜ |
 | 017 | SSM weight prefetch during GQA (3:1 pattern) | SSM-heavy layers (30/40) — prefetch SSM weights during GQA layers | ⬜ |

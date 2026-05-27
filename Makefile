@@ -372,6 +372,13 @@ verify_dequant: tools/verify_dequant.c src/gguf_reader.o
 test_iq2_dequant: tools/test_iq2_dequant.c src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+# Router stability benchmark (cell 014): measures top-8 overlap at various noise levels
+# Loads only router weight (2MB) from GGUF, no expert weights or model context needed
+test_router_stability: CFLAGS_FILT = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
+test_router_stability: tools/test_router_stability.c src/gguf_reader.o
+	$(CC) $(CFLAGS_FILT) -o $@ tools/test_router_stability.c src/gguf_reader.o $(LDFLAGS)
+	@echo "test_router_stability built"
+
 test_dequant: tools/test_dequant.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 

@@ -17,6 +17,7 @@
 | 006 | DDR5 gate: LARGE_L3 compile flag | `#ifdef LARGE_L3` prefetch stride loop for 8 selected experts + shared expert. 256-byte bursts, _MM_HINT_T2. Build: `make gen_text_large_l3` |
 | 015 | Router recomputation skip | `moe->precomputed_indices` skips full 2048×256 router matmul. Softmax on 8 selected experts only. ~0.5ms/layer saved. |
 | 191 | DA HARD-1 resolved | Router recomputation eliminated via precomputed_indices field. |
+| 014 | Router accuracy: normed vs normed2 | Measured ~90% top-8 overlap at 10% noise. Layers 0/20/39 consistent. Architecture validated. |
 
 ## Current Bottleneck
 - Layer forward: ~200ms (82% of 244ms)
