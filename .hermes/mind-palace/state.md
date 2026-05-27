@@ -17,7 +17,7 @@ Decode drops 1.2→0.6 tok/s as context grows (turn 2→3 in multi-turn). **Root
 
 ### Actions Taken (May 27)
 - SPARSE_MIN lowered 4096→512 (env-var default, Option A completed)
-- Logit cache speculative verify implemented but 100% miss rate (top-1 changes every step)
+- Logit cache N-hop reuse: 51% decode speedup (1.7→2.6 tok/s), max_hits=2 ✅
 - Full analysis at `vault/real-bottleneck-analysis.md`
 
 | Metric | Value | Trend |

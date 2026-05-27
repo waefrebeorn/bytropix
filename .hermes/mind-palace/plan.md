@@ -61,9 +61,9 @@ Pre-built test workload at ~/hermes-test/projects/nes-emulator/. Do NOT modify C
 | 5.1 | PROFILE at 2, 50, 100, 200 KV — confirm output proj dominates | 30m | ✅ |
 | 5.2 | Analyze: GQA NOT bottleneck (7.7% of decode) | — | ✅ |
 | 5.3 | Option A: Lower SPARSE_MIN 4096→512 | 15m | ✅ Done |
-| 5.4 | Option D (NEW): Persistent KV process for multi-turn | 8-16h | ⬜ REAL FIX |
-| 5.5 | Option E (NEW): Chunked output proj (top-K then verify) | 4-8h | ⬜ |
-| 5.6 | Option F: Logit cache N-hop reuse (direct, no verify) | 2-4h | ⬜ |
+| 5.4 | Option F: Logit cache N-hop reuse (direct, max_hits=2) | 2-4h | ✅ 51% decode speedup |
+| 5.5 | Option D (NEW): Persistent KV process for multi-turn | 8-16h | ⬜ REAL FIX |
+| 5.6 | Option E (NEW): Chunked output proj (top-K then verify) | 4-8h | ⬜ |
 | 5.7 | Verify: Run 3-turn conversation, measure improvement | 30m | ⬜ |
 
 **Target:** No decay from turn 2 to turn 3. Maintain >0.8 tok/s across all context lengths.

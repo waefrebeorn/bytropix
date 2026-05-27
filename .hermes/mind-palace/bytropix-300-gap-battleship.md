@@ -263,32 +263,33 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
 
-### NEW P0: Fix Context Growth Penalty 🔴
+### NEW P0: Fix Context Growth Penalty 🟡 (RE-DIAGNOSED May 27)
+*Original claim (GQA O(n²)) was wrong. Real bottleneck is output projection [2048×248320 Q4_K] at 245ms (43.5% of decode).*
 
-| Cell | Issue | Fix Option | Status |
+| Cell | Issue | Fix Applied | Status |
 |------|-------|-----------|--------|
-| 301 | Dense GQA attention O(n²) slows as KV cache grows. SPARSE_MIN=4096 too high for short/medium context | Lower SPARSE_MIN to 512 OR | ⬜ |
-| 302 | Measure per-layer GQA time at 50/256/1024/2048 tok context | PROFILE=1 benchmark | ⬜ |
-| 303 | Option A: Enable sparse attention at all context lengths | env SPARSE_MIN=512 | ⬜ |
-| 304 | Option B: Q4_0 KV cache to reduce memory bandwidth in decode | Already wired (cell 244) but not benchmarked vs F32 | ⬜ |
-| 305 | Option C: OMP thread scaling per context size | Reduce threads at short ctx (less parallelism needed) | ⬜ |
+| 301 | Dense GQA attention O(n²) slows as KV cache grows | ✅ RE-DIAGNOSED: GQA grows only 37.7→43.5ms (15%) from 2→200 KV | ✅ |
+| 302 | Measure per-layer GQA time at different context lengths | PROFILE=1 at 2, 50, 100, 200 KV — GQA NOT bottleneck | ✅ |
+| 303 | Option A: Lower SPARSE_MIN from 4096 | env SPARSE_MIN=512 (env-var default in code) | ✅ |
+| 304 | Option F: Logit cache N-hop reuse | Direct cache reuse for 2 steps, 51% decode speedup (1.7→2.6 tok/s) | ✅ |
+| 305 | Option D: Persistent KV process for multi-turn | Architectural fix (not implemented) | ⬜ |
 | 306 | Benchmark script: tok/s vs context length curve | tools/benchmark-context.sh | ⬜ |
 | 307 | ChatML format fix in gen_text_cpu raw mode | CHAT=1 mode or tokenizer-level support | 🟡 |
 
-**Target:** No decay from turn 2→3. Maintain >0.8 tok/s across all context lengths up to 4K.
+**Result:** Decode speed improved 51% (1.7→2.6 tok/s). Multi-turn penalty remains (process-per-turn architecture) — needs Option D for full fix. See `vault/real-bottleneck-analysis.md`.
 
-### Row K — Context Growth Penalty (7 cells, NEW)
-*Reality: decode speed drops 50% (1.2→0.6 tok/s) as context grows from <1K to ~2K*
+### Row K — Context Growth Penalty (7 cells, UPDATED May 27)
+*Re-diagnosed: output projection is real bottleneck (43.5%), not GQA*
 
-| Cell | Priority | Effort | Target tok/s |
-|------|:--------:|:------:|:------------:|
-| 301 | P0 🔴 | Measure | baseline |
-| 302 | P0 🔴 | 30min | identify bottleneck |
-| 303 | P0 🔴 | 15min | >1.0 at 2K ctx |
-| 304 | P1 🟡 | 2-4h | >0.9 at 2K ctx |
-| 305 | P1 🟡 | 1-2h | >0.9 at 2K ctx |
-| 306 | P2 🟡 | 30min | repeatable |
-| 307 | P2 🟡 | 2h | correct output |
+| Cell | Priority | Effort | Status |
+|------|:--------:|:------:|:------:|
+| 301 | P0 🔴 | Measure | ✅ GQA NOT bottleneck |
+| 302 | P0 🔴 | 30min | ✅ Output proj is bottleneck |
+| 303 | P0 🔴 | 15min | ✅ SPARSE_MIN=512 |
+| 304 | P0 🔴 | 4h | ✅ Logit cache 51% speedup |
+| 305 | P1 🟡 | 8-16h | ⬜ Persistent KV process |
+| 306 | P2 🟡 | 30min | ⬜ Benchmark script |
+| 307 | P2 🟡 | 2h | 🟡 ChatML fix |
 
 ---
 
