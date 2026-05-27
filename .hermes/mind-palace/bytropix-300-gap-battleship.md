@@ -126,7 +126,7 @@
 | 201 | 200+ C tools with overlapping purpose | 🟢 |
 | 202 | 50+ dump_* tools generating binary blobs | 🟢 |
 | 203 | No unified inference API (gen_text.c, infer_text.c, infer_unified.c overlap) | 🟢 |
-| 204 | Tokenizer: merges loaded every init (247K entries) | 🟢 |
+| 204 | Tokenizer: merges loaded every init (247K entries) | ✅ Already hash-optimized — `find_token_by_string` uses vocab_hash O(1) lookup (wubu_tokenizer.c:89) |
 | 205 | Heap allocations in SSM hot path (13 malloc per forward) | ✅ |
 | 206-240 | (additional tool duplication) | 🟢 |
 
@@ -193,7 +193,7 @@ All gap claims verified against actual source code on cpu-optimize-may26:
 - `train_stub.c` — confirmed FD gradient only
 - 200+ tools in tools/ — confirmed overlapping dump/check/test utilities
 
-Total verifiable gaps: **271 (300 minus 29 already fixed/complete)**
+Total verifiable gaps: **270 (300 minus 30 already fixed/complete)**
 
 To reach 300: add 24 more from:
 - Each Poincaré backward function file with identity path
