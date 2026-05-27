@@ -41,6 +41,18 @@ void wubu_mobius_add_backward(const float *x, const float *y, int d, float R,
                                float *dx, float *dy);
 
 // ============================================================
+// exp_map: v → z = tanh(||v||/R) * v/||v|| * R
+// Projects tangent vector v onto the Poincaré ball.
+// ============================================================
+void wubu_exp_map(const float *v, int d, float R, float *z);
+
+// ============================================================
+// log_map: x → v = R * artanh(||x||/R) * x/||x||
+// Inverse of exp_map. Maps ball point to tangent space.
+// ============================================================
+void wubu_log_map(const float *x, int d, float R, float *v);
+
+// ============================================================
 // exp_map backward: v → z = tanh(||v||/R) * v/||v|| * R
 // Computes dv given dz.
 // ============================================================

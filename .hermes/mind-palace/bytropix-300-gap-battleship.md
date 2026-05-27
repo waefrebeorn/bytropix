@@ -39,7 +39,7 @@
 | Cell | File | Line | Gap | Severity |
 |------|------|------|-----|----------|
 | 001 | src/wubu_poincare_ssm_backward.c | 99 | "Approximate: identity for recurrence path" | 🔴 ✅ Gyration chain rule implemented: backward through mobius_add, scalar_mul, exp_map/log_map. 3 new backward primitives in wubu_mobius.c |
-| 002 | src/wubu_poincare_ssm_backward.c | 124 | "(copy as identity — approximation)" | 🔴 |
+| 002 | src/wubu_poincare_ssm_backward.c | 124 | "(copy as identity — approximation)" | 🔴 ✅ Replaced with proper RMSNorm Jacobian: d_x = d_y/rms - x·(x·d_y)/(d·rms³) |
 | 003 | src/wubu_poincare_ssm_backward.c | 142 | "SiLU backward (identity in backward)" | 🔴 |
 | 004 | src/wubu_poincare_ssm_backward.c | 196 | "d_normed = d_output (identity through matmuls)" | 🔴 |
 | 005 | src/wubu_poincare_gqa_backward.c | 32 | "exp_map(0) ≈ 0, gradient ≈ identity" | 🔴 |
@@ -233,8 +233,8 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 | Cell | Gap | Status |
 |------|-----|--------|
 | 001 | Poincaré SSM backward gyration chain rule | ✅ Implemented: 3 new backward primitives + wired into step 9 |
-| 002 | Poincaré SSM backward l2_norm identity | 🔴 Next: replace copy-as-identity with proper l2_norm Jacobian |
-| 003 | Poincaré SSM backward SiLU identity | 🔴 |
+| 002 | Poincaré SSM backward l2_norm identity | ✅ Replaced with proper RMSNorm Jacobian |
+| 003 | Poincaré SSM backward SiLU identity | 🔴 Next |
 | 004 | Poincaré SSM backward d_normed identity | 🔴 |
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.

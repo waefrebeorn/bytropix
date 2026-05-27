@@ -101,6 +101,13 @@ void wubu_poincare_ssm_backward(int B, int T, float R,
     //   out[t][i] = Σ_j h[t][i][j] * q[j]
     // Backward: backprop through h@q, then mobius_add, then scalar_mul,
     // then exp_map/log_map chain through the update computation.
+
+    // Allocate gradient buffers for steps 8-5 (need these before step 9
+    // since gyration chain rule accumulates into them)
+    float *d_q_n_conv = (float *)calloc(N * KEY_DIM, sizeof(float));
+    float *d_k_n_conv = (float *)calloc(N * KEY_DIM, sizeof(float));
+    float *d_v = (float *)calloc(N * VALUE_DIM, sizeof(float));
+
     const float *states = saved_states_t;  // [B, T+1, V_HEADS, D_STATE, D_STATE]
     const int hd = SSM_D_STATE;
     const int hk = SSM_K_HEADS;
@@ -120,7 +127,11 @@ void wubu_poincare_ssm_backward(int B, int T, float R,
             for (int vh = 0; vh < hv; vh++) {
                 int kh = vh / rf;
                 float bg = beta_s[vh];
-                float gg = tgt_safe_expf(gate_s[vh]);
+                float gg_val = gate_s[vh];
+                // Clamp exp to avoid float32 overflow
+                if (gg_val > 80.0f) gg_val = 80.0f;
+                if (gg_val < -80.0f) gg_val = -80.0f;
+                float gg = expf(gg_val);
 
                 // State pointers: h_prev = state BEFORE token s, h_curr = state AFTER
                 // saved_states_t layout: [b*(T+1)*hv*hd*hd + (s)*hv*hd*hd + vh*hd*hd + i*hd + j]
@@ -241,17 +252,13 @@ void wubu_poincare_ssm_backward(int B, int T, float R,
 
                     // Step 9c-9b backward: log_map backward for v
                     // d_v arises from: diff_tan[j] = log_map(v) - log_map(h)
-                    // d_v[i] = log_map_backward(v, ...)[i] * d_diff_tan[i]
-                    // Simplified: d_v[i] ≈ d_diff_tan[i] (identity approximation for log_map backward)
-                    // For v gradient: add from d_update_tan chain
                     float d_v_contrib[SSM_D_STATE];
                     memset(d_v_contrib, 0, sizeof(d_v_contrib));
-                    // The contribution through diff_tan → v_tan → v
-                    // d_v[i] = log_map_backward(v)[i] · d_diff_tan[i]
-                    // But d_diff_tan[i] = bg * Σ_j k[j] * d_update_tan[j]
+                    float d_diff_arr[SSM_D_STATE];
                     float d_diff = bg * k_dot_dut;
+                    for (int j = 0; j < hd; j++) d_diff_arr[j] = d_diff;
                     wubu_log_map_backward(v, hd, R_curv, v_tan_approx,
-                                          &d_diff, d_v_contrib);
+                                          d_diff_arr, d_v_contrib);
                     // Accumulate into d_v
                     for (int j = 0; j < hd; j++) {
                         d_v[idx * hv * hd + vh * hd + j] += d_v_contrib[j];
@@ -265,25 +272,41 @@ void wubu_poincare_ssm_backward(int B, int T, float R,
 
     // ===== Steps 8-5 backward: norm → split → conv → silu =====
     // These are IDENTICAL to Euclidean SSM backward.
-    float *d_q_n_conv = (float *)calloc(N * KEY_DIM, sizeof(float));
-    float *d_k_n_conv = (float *)calloc(N * KEY_DIM, sizeof(float));
-    float *d_v = (float *)calloc(N * VALUE_DIM, sizeof(float));
+    // (d_q_n_conv, d_k_n_conv, d_v already allocated above)
 
-    // Step 8-7: l2_norm backward for q and k
-    // q_norm = q_conv / max(norm, eps), d_q_conv = l2_norm_backward(d_q_norm, ...)
-    // Same as Euclidean — call the helper
+    // Step 8-7: l2_norm backward for q and k (proper RMSNorm Jacobian)
+    // q_norm = q_conv / rms(q_conv)  where rms(x) = sqrt(sum(x^2)/d + eps)
+    // d_q_conv = d_q_norm / rms - q_conv * (q_conv · d_q_norm) / (d * rms³)
     for (int s = 0; s < N; s++) {
         for (int kh = 0; kh < SSM_K_HEADS; kh++) {
             int base = (s * SSM_K_HEADS + kh) * SSM_D_STATE;
-            // l2_norm backward: y = x / sqrt(sum(x^2)/d + eps)
-            // dy/dx = (I - x*x^T/(d*rms^2)) / (sqrt(d)*rms)
-            // Simple: d_x = d_y * (1/rms - x*x^T * y/(d*rms^3))
-            // Actually, let's approximate: d_q_conv = d_q_norm * 1/rms (diagonal approx)
-            // True backward requires the full Jacobian.
-            // For now, copy as identity (approximation).
+            const float *q_conv = saved_q_c + base;
+            const float *k_conv = saved_k_c + base;
+
+            // Compute RMS for this head
+            float q_sum2 = 0.0f, k_sum2 = 0.0f;
             for (int d = 0; d < SSM_D_STATE; d++) {
-                d_q_n_conv[base + d] = saved_q_n[base + d];
-                d_k_n_conv[base + d] = saved_k_n[base + d];
+                q_sum2 += q_conv[d] * q_conv[d];
+                k_sum2 += k_conv[d] * k_conv[d];
+            }
+            float q_rms = sqrtf(q_sum2 / SSM_D_STATE + 1e-6f);
+            float k_rms = sqrtf(k_sum2 / SSM_D_STATE + 1e-6f);
+
+            // Compute dot products: x · d_y
+            float q_dot = 0.0f, k_dot = 0.0f;
+            for (int d = 0; d < SSM_D_STATE; d++) {
+                q_dot += q_conv[d] * saved_q_n[base + d];
+                k_dot += k_conv[d] * saved_k_n[base + d];
+            }
+
+            // Apply full Jacobian: d_x = d_y / rms - x * (x·d_y) / (d * rms³)
+            float q_inv_rms = 1.0f / q_rms;
+            float q_factor = -1.0f / (SSM_D_STATE * q_rms * q_rms * q_rms);
+            float k_inv_rms = 1.0f / k_rms;
+            float k_factor = -1.0f / (SSM_D_STATE * k_rms * k_rms * k_rms);
+            for (int d = 0; d < SSM_D_STATE; d++) {
+                d_q_n_conv[base + d] = saved_q_n[base + d] * q_inv_rms + q_conv[d] * q_factor * q_dot;
+                d_k_n_conv[base + d] = saved_k_n[base + d] * k_inv_rms + k_conv[d] * k_factor * k_dot;
             }
         }
     }
