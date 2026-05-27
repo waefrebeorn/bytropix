@@ -366,6 +366,12 @@ tokenize_corpus: tools/tokenize_corpus.c src/wubu_tokenizer.o src/gguf_reader.o
 train_real: tools/train_real.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+# CPU-only train_real (no GPU_SUPPORT, uses wubu_model_cpu.o + wubu_moe_cpu.o)
+train_real_cpu: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
+train_real_cpu: tools/train_real.c src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS_FILTERED) -o $@ tools/train_real.c src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o $(LDFLAGS)
+	@echo "train_real_cpu built (CPU-only, no GPU support)"
+
 train_backprop: tools/train_backprop.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 

@@ -36,6 +36,8 @@ The NES emulator is a pre-built test workload. Do NOT modify its internals.
 13. **IQ1_M test (cell 272)**: tools/test-iq1-m.sh — documents requirements. Low priority (quality loss > memory savings).
 14. **Cell 150 — Backward F32 weights (CRITICAL FIX)**: wubu_ssm_backward crashed because `ssm_out_weight`, `attn_qkv_weight`, `attn_gate_weight` are NULL (quantized-only model). Fixed with dequant-on-demand fallback: `wubu_ssm_backward_output_proj` accepts quantized weight params; `beta_flat`/`gate_flat` computed from raw when NULL; backward matmul steps dequant qkv/gate weights. Test: PASS (gradients valid, non-zero).
 15. **Makefile target**: Added `test_one_ssm_backward` — builds CPU-only backward validation test via `make test_one_ssm_backward`. Runs 1 SSM layer forward + backward on real model.
+16. **Cell 103 — train_real backward wiring (CRITICAL FIX)**: train_real.c now has CPU-only Makefile target (`train_real_cpu`), forward-with-save loop saving intermediates per layer, and backward call via `wubu_model_backward_from_embd`. Backward test: all 8192 grad elements non-zero through all 40 layers (30 SSM + 10 GQA). Backward time: 7.38s (9.8× forward cost).
+17. **GQA backward dequant-on-demand (related to cell 150)**: `wubu_gqa_backward` in `src/wubu_ssm.c` now dequants `attn_q_weight`, `attn_k_weight`, `attn_v_weight` on-demand when F32 pointers are NULL. Uses same `gguf_dequantize` pattern as SSM backward. Previously crashed in `backward_matmul_nt` trying to dereference NULL weight pointers.
 
 ### Branch
 - `cpu-optimize-may26` — all parity fixes (ahead of main, pushed)

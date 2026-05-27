@@ -92,7 +92,7 @@
 |------|------|-----|----------|
 | 101 | various src/ | #if 0 blocks with dead code | — No #if 0 or #ifdef DEAD blocks found in src/ |
 || 102 | tools/train_stub.c | Training stub uses FD gradients not BPTT | 🟡 Intentional for tiny model (1K params) — BPTT tested in backward files |
-| 103 | tools/train_real.c | Forward-only benchmark. `wubu_model_backward_from_embd` exists but train_real.c doesn't call it. GPU link error blocks build. | 🟡 Need CPU-only Makefile target + backward wiring |
+| 103 | tools/train_real.c | Forward-only benchmark. `wubu_model_backward_from_embd` exists but train_real.c doesn't call it. GPU link error blocks build. | 🟡 Now fixed: CPU-only Makefile target (train_real_cpu) + forward-with-save loop + backward call. Backward passes: all 8192 grad elements non-zero through all 40 layers. Backward time: 7.38s (9.8× forward cost). GQA dequant-on-demand also fixed (attn_q/k/v weights NULL in quantized model). |
 || 150 | Backward needs F32 weights | SSM backward functions require F32 `ssm_out_weight` etc., but model loads quantized only. ✅ FIXED: dequant-on-demand fallback in wubu_ssm_backward for ssm_out_weight, attn_qkv_weight, attn_gate_weight + beta_flat/gate_flat compute. Test PASS with real model. | 🔴 ✅ FIXED
 | 103a | tools/train_gpu.c | "scratch allocs omitted for brevity" | 🟢 |
 | 104 | tools/dump_intermediates.c | "(skipped for brevity)" | 🟢 |

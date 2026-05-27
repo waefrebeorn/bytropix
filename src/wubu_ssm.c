@@ -2828,7 +2828,30 @@ void wubu_gqa_backward(
     float *d_K_raw = (float *)calloc(N * kv_dim, sizeof(float));
     float *d_Q_full = (float *)calloc(N * q_dim * 2, sizeof(float));
     // d_Q_full: first q_dim for Q grad, second q_dim for gate grad
-    
+
+    // Dequant-on-demand buffers for quantized-only GQA weights
+    float *dequant_q = NULL;
+    float *dequant_k = NULL;
+    float *dequant_v = NULL;
+    const float *q_weight = w->attn_q_weight;
+    const float *k_weight = w->attn_k_weight;
+    const float *v_weight = w->attn_v_weight;
+    if (!q_weight && w->attn_q_weight_q) {
+        int64_t n = (int64_t)D_MODEL * q_dim * 2;
+        dequant_q = (float *)malloc(n * sizeof(float));
+        if (dequant_q) { gguf_dequantize(w->attn_q_weight_q, w->attn_q_weight_type, n, dequant_q); q_weight = dequant_q; }
+    }
+    if (!k_weight && w->attn_k_weight_q) {
+        int64_t n = (int64_t)D_MODEL * kv_dim;
+        dequant_k = (float *)malloc(n * sizeof(float));
+        if (dequant_k) { gguf_dequantize(w->attn_k_weight_q, w->attn_k_weight_type, n, dequant_k); k_weight = dequant_k; }
+    }
+    if (!v_weight && w->attn_v_weight_q) {
+        int64_t n = (int64_t)D_MODEL * kv_dim;
+        dequant_v = (float *)malloc(n * sizeof(float));
+        if (dequant_v) { gguf_dequantize(w->attn_v_weight_q, w->attn_v_weight_type, n, dequant_v); v_weight = dequant_v; }
+    }
+
     if (!d_attn_out || !d_gate || !d_Q_norm || !d_K_norm || !d_V ||
         !d_Q_raw || !d_K_raw || !d_Q_full) {
         fprintf(stderr, "GQA backward: alloc failed\n");
@@ -2925,18 +2948,19 @@ void wubu_gqa_backward(
     
     // === Steps 1-3: MatMul backward for Q+gate, K, V ===
     backward_matmul_nt(N, D_MODEL, q_dim * 2, x, d_Q_full,
-                       w->attn_q_weight, d_x, d_q_weight);
-    
+                       q_weight, d_x, d_q_weight);
+
     backward_matmul_nt(N, D_MODEL, kv_dim, x, d_K_raw,
-                       w->attn_k_weight, d_x, d_k_weight);
-    
+                       k_weight, d_x, d_k_weight);
+
     backward_matmul_nt(N, D_MODEL, kv_dim, x, d_V,
-                       w->attn_v_weight, d_x, d_v_weight);
+                       v_weight, d_x, d_v_weight);
     
 cleanup_gqa:
     free(d_attn_out); free(d_gate);
     free(d_Q_norm); free(d_K_norm); free(d_V);
     free(d_Q_raw); free(d_K_raw); free(d_Q_full);
+    free(dequant_q); free(dequant_k); free(dequant_v);
 }
 
 // ============================================================
