@@ -34,6 +34,7 @@ The NES emulator is a pre-built test workload. Do NOT modify its internals.
 11. **Consolidation pass**: Cells 054 (vision load diag), 141-144 (RSGD/Lean/gyration/Poincaré GQA) reviewed & marked. All mobius backward primitives exist and gyration operator is implemented.
 12. **RSGD upgrade (cell 142)**: Replaced ambient-step+retraction with proper exp_map_w via Möbius addition. Out-of-ball fallback. Verified: PASS (1000 vecs, 128-dim, no NaN/Inf).
 13. **IQ1_M test (cell 272)**: tools/test-iq1-m.sh — documents requirements. Low priority (quality loss > memory savings).
+14. **Cell 150 — Backward F32 weights (CRITICAL FIX)**: wubu_ssm_backward crashed because `ssm_out_weight`, `attn_qkv_weight`, `attn_gate_weight` are NULL (quantized-only model). Fixed with dequant-on-demand fallback: `wubu_ssm_backward_output_proj` accepts quantized weight params; `beta_flat`/`gate_flat` computed from raw when NULL; backward matmul steps dequant qkv/gate weights. Test: PASS (gradients valid, non-zero).
 
 ### Branch
 - `cpu-optimize-may26` — all parity fixes (ahead of main, pushed)

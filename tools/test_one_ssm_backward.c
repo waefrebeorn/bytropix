@@ -18,7 +18,11 @@
 #include <unistd.h>
 
 static void sigsegv_handler(int sig, siginfo_t *info, void *ctx) {
-    fprintf(stderr, "SIGSEGV at addr=%p\n", info->si_addr);
+    (void)ctx;
+    write(2, "SIGSEGV at addr=", 16);
+    char buf[32];
+    int n = snprintf(buf, sizeof(buf), "%p\n", info->si_addr);
+    write(2, buf, n);
     _exit(1);
 }
 

@@ -2,28 +2,37 @@
 
 ## Root Cause of Backward Crash
 
-The SSM backward function (`wubu_ssm_backward`) crashes because it requires F32 weight pointers (`w->ssm_out_weight`, `w->attn_output_weight`, etc.) which are not loaded by `wubu_model_init`.
+The SSM backward function (`wubu_ssm_backward`) crashed because all F32 weight pointers (`w->ssm_out_weight`, `w->attn_qkv_weight`, `w->attn_gate_weight`) are NULL — the model only loads quantized versions. Additionally, `beta_flat`/`gate_flat` raw-to-computed conversion needed for backward_recurrence.
 
-### Current State
+## Fix Applied (May 27, 2026)
 
-| Weight | F32 ptr | Quant ptr | Forward uses | Backward needs |
-|--------|---------|-----------|--------------|----------------|
-| ssm_out_weight | NULL | valid `_q` + `_type` | quantized path | F32 ptr (crashes) |
-| attn_qkv_weight | NULL | valid | quantized path | F32 ptr |
-| attn_gate_weight | NULL | valid | quantized path | F32 ptr |
-| ssm_beta_weight | ✅ F32 | — | F32 | F32 ✅ |
-| ssm_alpha_weight | ✅ F32 | — | F32 | F32 ✅ |
+Three dequant-on-demand fallbacks added to `wubu_ssm_backward`:
 
-### Options
+1. **ssm_out_weight**: `wubu_ssm_backward_output_proj` now accepts quantized weight params. When F32 weight is NULL, dequantizes via `gguf_dequantize` to temp buffer and frees after.
 
-**Option A: Dequantize on backward** — In `wubu_ssm_backward`, detect NULL F32 pointers and dequantize from the Q variant on-the-fly. Memory-efficient but adds ~200ms per layer for dequant.
+2. **beta_flat/gate_flat**: When NULL, computed from `beta_raw` (sigmoid) and `alpha_raw + dt_bias` (softplus) × `ssm_a`.
 
-**Option B: Load F32 weights during init** — Add F32 weight loading for output weights. Memory cost: ssm_out_weight = 2048*2048*4 = 16MB per layer × 30 = 480MB. Plus GQA equivalents.
+3. **attn_qkv_weight / attn_gate_weight**: In the backward matmul section (steps 1-3), dequantized on-demand before `backward_matmul_nt` calls.
 
-**Option C: Hybrid approach** — Load output weights as F32 (they're needed for gradient), keep attention weights quantized (dequant inside backward if needed).
+Memory overhead: ~128MB peak (32MB ssm_out + 64MB qkv + 32MB gate), freed after each layer's backward.
+
+## Status: Cell 150 RESOLVED ✅
+
+| Weight | F32 ptr | Quant ptr | Forward uses | Backward needs | Status |
+|--------|---------|-----------|--------------|----------------|--------|
+| ssm_out_weight | NULL | valid | quantized path | F32 ptr (dequant fallback) | ✅ |
+| attn_qkv_weight | NULL | valid | quantized path | F32 ptr (dequant fallback) | ✅ |
+| attn_gate_weight | NULL | valid | quantized path | F32 ptr (dequant fallback) | ✅ |
+| ssm_beta_weight | ✅ F32 | — | F32 | F32 ✅ | ✅ |
+| ssm_alpha_weight | ✅ F32 | — | F32 | F32 ✅ | ✅ |
+| ssm_conv1d_weight | ✅ F32 | — | F32 | F32 ✅ | ✅ |
+
+### Fix Applied (May 27)
+
+Dequant-on-demand (Option C) implemented. Forward path unchanged — backward path dequantizes to temp F32 buffers as needed.
 
 ### Next Steps for Training
 
-1. Minimal fix: load `ssm_out_weight` as F32 during model init (Option B for key weights)
-2. Then re-run backward validation test
-3. Then wire per-layer backward into train_real.c
+1. ✅ Cell 150 resolved: `wubu_ssm_backward` passes with real model
+2. Wire per-layer backward into train_real.c
+3. Full training loop with synthetic data validation

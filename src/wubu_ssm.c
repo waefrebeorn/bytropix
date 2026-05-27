@@ -1909,11 +1909,26 @@ int wubu_is_ssm_layer(int layer_idx) {
 void wubu_ssm_backward_output_proj(
     const float *delta_out,      // [N, VALUE_DIM] forward input (for dW)
     const float *d_output,       // [N, D_MODEL] gradient from upstream
-    const float *ssm_out_weight, // [VALUE_DIM, D_MODEL] forward weight
+    const float *ssm_out_weight, // [VALUE_DIM, D_MODEL] forward weight (F32, may be NULL)
+    const uint8_t *ssm_out_weight_q, int ssm_out_weight_type, // quantized fallback
     float *d_delta_out,          // [N, VALUE_DIM] gradient to propagate
     float *d_ssm_out_weight,     // [VALUE_DIM, D_MODEL] weight grad accum (or NULL)
     int N)
 {
+    // Dequant fallback: if F32 weight is NULL but quantized available, dequant on-the-fly
+    float *dequant_buf = NULL;
+    if (!ssm_out_weight && ssm_out_weight_q) {
+        int64_t total = (int64_t)VALUE_DIM * D_MODEL;
+        dequant_buf = (float *)malloc(total * sizeof(float));
+        if (!dequant_buf) {
+            fprintf(stderr, "SSM backward output proj: dequant alloc %lld failed\\n",
+                    (long long)(total * (int64_t)sizeof(float)));
+            memset(d_delta_out, 0, N * VALUE_DIM * sizeof(float));
+            return;
+        }
+        gguf_dequantize(ssm_out_weight_q, ssm_out_weight_type, total, dequant_buf);
+        ssm_out_weight = dequant_buf;
+    }
     // d_delta_out = d_output @ W^T
     for (int s = 0; s < N; s++) {
         for (int i = 0; i < VALUE_DIM; i++) {
@@ -1934,6 +1949,7 @@ void wubu_ssm_backward_output_proj(
             }
         }
     }
+    if (dequant_buf) free(dequant_buf);
 }
 
 // ============================================================
@@ -2461,6 +2477,7 @@ void wubu_ssm_backward(
     
     // === Step 11: Output projection backward ===
     wubu_ssm_backward_output_proj(delta_out, d_output, w->ssm_out_weight,
+                                   w->ssm_out_weight_q, w->ssm_out_weight_type,
                                    d_delta_out, d_ssm_out_weight, N);
     
     // === Step 10: Gated normalization backward ===
@@ -2489,6 +2506,29 @@ void wubu_ssm_backward(
     wubu_silu_backward(N * VALUE_DIM, z_all, z_silu, d_z_silu, d_z_all);
     
     // === Step 9: Delta net recurrence backward ===
+    // Compute beta_flat and gate_flat if not provided
+    float *beta_flat_computed = NULL;
+    float *gate_flat_computed = NULL;
+    if (!beta_flat || !gate_flat) {
+        beta_flat_computed = (float *)malloc(N * DT_RANK * sizeof(float));
+        gate_flat_computed = (float *)malloc(N * DT_RANK * sizeof(float));
+        if (!beta_flat_computed || !gate_flat_computed) {
+            fprintf(stderr, "SSM backward: beta/gate_flat alloc failed\\n");
+            free(beta_flat_computed); free(gate_flat_computed);
+            goto cleanup_bwd;
+        }
+        for (int i = 0; i < N * DT_RANK; i++) {
+            beta_flat_computed[i] = 1.0f / (1.0f + expf(-beta_raw[i]));
+            float biased = alpha_raw[i] + w->ssm_dt_bias[i % DT_RANK];
+            float sp;
+            if (biased > 80.0f) sp = biased;
+            else if (biased < -80.0f) sp = 0.0f;
+            else sp = logf(1.0f + expf(biased));
+            gate_flat_computed[i] = sp * w->ssm_a[i % DT_RANK];
+        }
+        beta_flat = beta_flat_computed;
+        gate_flat = gate_flat_computed;
+    }
     wubu_ssm_backward_recurrence(B, T, ssm_states, q_norm, k_norm, v_conv,
                                  beta_flat, gate_flat, d_delta_out,
                                  d_q_norm, d_k_norm, d_v_conv,
@@ -2602,12 +2642,28 @@ void wubu_ssm_backward(
     }
     
     // === Steps 1-3: MatMul backward for QKV, Z, Beta, Alpha ===
+    // Dequant weights on-demand if F32 is NULL
+    float *dequant_qkv = NULL;
+    float *dequant_gate = NULL;
+    if (!w->attn_qkv_weight && w->attn_qkv_weight_q) {
+        int64_t n = (int64_t)D_MODEL * CONV_DIM;
+        dequant_qkv = (float *)malloc(n * sizeof(float));
+        if (dequant_qkv) gguf_dequantize(w->attn_qkv_weight_q, w->attn_qkv_weight_type, n, dequant_qkv);
+    }
+    if (!w->attn_gate_weight && w->attn_gate_weight_q) {
+        int64_t n = (int64_t)D_MODEL * VALUE_DIM;
+        dequant_gate = (float *)malloc(n * sizeof(float));
+        if (dequant_gate) gguf_dequantize(w->attn_gate_weight_q, w->attn_gate_weight_type, n, dequant_gate);
+    }
+    const float *qkv_w = dequant_qkv ? dequant_qkv : w->attn_qkv_weight;
+    const float *gate_w = dequant_gate ? dequant_gate : w->attn_gate_weight;
+    
     // QKV: x @ W_qkv -> qkv_all [N, D_MODEL] @ [D_MODEL, C] -> [N, C]
-    backward_matmul_nt(N, D_MODEL, C, x, d_conv_out, w->attn_qkv_weight,
+    backward_matmul_nt(N, D_MODEL, C, x, d_conv_out, qkv_w,
                        d_x, d_qkv_weight);
     
     // Z: x @ W_gate -> z_all [N, D_MODEL] @ [D_MODEL, VALUE_DIM] -> [N, VALUE_DIM]
-    backward_matmul_nt(N, D_MODEL, VALUE_DIM, x, d_z_all, w->attn_gate_weight,
+    backward_matmul_nt(N, D_MODEL, VALUE_DIM, x, d_z_all, gate_w,
                        d_x, d_gate_weight);
     
     // Beta: x @ W_beta -> beta_raw [N, D_MODEL] @ [D_MODEL, DT_RANK] -> [N, DT_RANK]
@@ -2627,6 +2683,8 @@ cleanup_bwd:
     free(d_beta_raw); free(d_alpha_raw);
     free(d_alpha_biased); free(d_alpha_softplus);
     free(conv_input_bwd);
+    free(beta_flat_computed); free(gate_flat_computed);
+    free(dequant_qkv); free(dequant_gate);
 }
 
 // ============================================================
@@ -2781,6 +2839,7 @@ void wubu_gqa_backward(
     // Same dims as SSM output proj: [q_dim=4096, D_MODEL=2048]
     // Reuse the SSM function (VALUE_DIM == q_dim)
     wubu_ssm_backward_output_proj(attn_out, d_output, w->attn_output_weight,
+                                   w->attn_output_weight_q, w->attn_output_weight_type,
                                    d_attn_out, d_out_weight, N);
     
     // === Step 6: Gate backward ===

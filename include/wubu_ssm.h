@@ -329,6 +329,7 @@ void wubu_rope(int B, int T, int n_heads, int head_dim,
 void wubu_ssm_backward_output_proj(
     const float *delta_out, const float *d_output,
     const float *ssm_out_weight,
+    const uint8_t *ssm_out_weight_q, int ssm_out_weight_type,
     float *d_delta_out, float *d_ssm_out_weight, int N);
 
 // Backward through gated normalization (Step 10)

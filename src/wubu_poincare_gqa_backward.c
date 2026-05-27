@@ -425,6 +425,7 @@ void wubu_poincare_gqa_backward(
 
     // === Step 7: Output projection backward ===
     wubu_ssm_backward_output_proj(attn_out, d_output, w->attn_output_weight,
+                                   w->attn_output_weight_q, w->attn_output_weight_type,
                                    d_attn_out, d_out_weight, N);
 
     // === Step 6: Gate backward ===
