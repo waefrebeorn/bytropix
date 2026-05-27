@@ -27,6 +27,8 @@ The NES emulator is a pre-built test workload. Do NOT modify its internals.
 4. **sparse_buf malloc → stack**: GQA sparse attention buffer was malloc/free 10× per step. Changed to stack allocation (8KB) with heap fallback for extreme configs.
 5. **Chunked SSM = training-only**: A=(I+L)^{-T} attention matrix mixes intra-chunk tokens (CS=2). Correct for training/GPU but doesn't match sequential inference. Inference uses sequential path (always correct). SSM_CHUNK_MIN=1M enforces this.
 6. **Gyration chain rule (cell 001)**: Poincaré SSM backward step 9 now implements proper gradients through Möbius recurrence: mobius_add_backward → scalar_mul_backward → exp_map_backward → log_map_backward. 3 new backward primitives added to wubu_mobius.c.
+7. **MoE hyperbolic backward (cells 011-012)**: poincare_dist_backward_one has full gyration Jacobian with β/γ/α terms. Router backward uses proper exp_map + Poincaré distance gradients — not Euclidean approximation.
+8. **Nested SSM ball weights (cell 031)**: d_ball_weights_raw parameter added to wubu_nested_ssm_backward with softmax backward gradient computation.
 
 ### Branch
 - `cpu-optimize-may26` — all parity fixes (ahead of main, pushed)

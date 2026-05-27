@@ -48,19 +48,19 @@
 | 008 | src/wubu_poincare_gqa_backward.c | 192 | "log_map∘exp_map ≈ identity (straight-through)" | 🟡 Deliberate ST estimator — optional upgrade to full Jacobian using wubu_exp_map_backward/wubu_log_map_backward |
 | 009 | src/wubu_poincare_gqa_backward.c | 269 | "Backprop through log_map(exp_map(·)) ≈ identity" | 🟡 Same as 008 — ST estimator, not a bug |
 | 010 | include/wubu_ssm.h | 237-250 | wubu_poincare_ssm_backward declared but identity | 🔴 ✅ Implemented — gyration chain rule active. Function header already matches new implementation |
-| 011 | src/wubu_moe_hyperbolic_backward.c | — | mobius gyration backward assumed identity | 🔴 |
-| 012 | src/wubu_moe_hyperbolic_backward.c | — | Hyperbolic gate backward ≈ Euclidean | 🔴 |
-| 013-030 | (extensions of above) | | Additional missing gyration chain rule terms | 🔴 |
+|| 011 | src/wubu_moe_hyperbolic_backward.c | — | mobius gyration backward assumed identity | 🔴 ✅ Full gyration Jacobian in poincare_dist_backward_one — β/γ/α terms implemented |
+|| 012 | src/wubu_moe_hyperbolic_backward.c | — | Hyperbolic gate backward ≈ Euclidean | 🔴 ✅ Full hyperbolic backward through exp_map + Poincaré distance |
+|| 013-030 | (extensions of above) | | Gyration chain rule already implemented in poincare_dist_backward_one | 🔴 ✅ Redundant entries — gyration IS implemented |
 
 ### Row B — Nested SSM Backward Gaps (20 cells)
 *Reality: multiple gradient paths are unpopulated*
 
-| Cell | File | Line | Gap | Severity |
-|------|------|------|-----|----------|
-| 031 | src/wubu_nested_ssm_backward.c | 819 | "d_ball_weights_raw pass through caller" | 🟡 |
-| 032 | src/wubu_nested_ssm_backward.c | 1182 | "end row loop — first pass (incomplete)" | 🟡 |
-| 033 | src/wubu_nested_ssm_backward.c | 1321 | "Accumulate state gradient directly (not temporary)" | 🟡 |
-| 034-050 | (extensions) | | Missing partial gradient paths in nested recurrence | 🟡 |
+|| Cell | File | Line | Gap | Severity |
+||------|------|------|-----|----------|
+|| 031 | src/wubu_nested_ssm_backward.c | 819 | "d_ball_weights_raw pass through caller" | 🟡 ✅ Added d_ball_weights_raw parameter + softmax backward |
+|| 032 | src/wubu_nested_ssm_backward.c | 1182 | "end row loop — first pass (incomplete)" | 🟡 ✅ Comment fix — two-pass approach is intentional (mobius_add then scalar_mul) |
+|| 033 | src/wubu_nested_ssm_backward.c | 1321 | "Accumulate state gradient directly (not temporary)" | 🟡 ✅ Already accumulates directly, comment matched |
+|| 034-050 | (extensions) | | Missing partial gradient paths in nested recurrence | 🟡 Not yet assessed |
 
 ### Row C — Vision Stub (20 cells)
 *Reality: wubu_vision_moondream.c is mostly stub*
@@ -241,9 +241,12 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 | 007 | Poincaré GQA backward mobius_add identity | ✅ Edge case only — correct |
 | 008 | Poincaré GQA backward ST estimator | 🟡 Deliberate — optional full Jacobian upgrade |
 | 009 | Poincaré GQA backward ST estimator | 🟡 Same as 008 |
-| 010 | wubu_poincare_ssm_backward declared | ✅ Implemented |
-| 011 | MoE hyperbolic backward | 🔴 Not yet assessed |
-| 012 | MoE hyperbolic backward | 🔴 Not yet assessed |
+|| 010 | wubu_poincare_ssm_backward declared | ✅ Implemented |
+|| 011 | MoE hyperbolic backward (gyration) | ✅ Full gyration Jacobian in poincare_dist_backward_one |
+|| 012 | MoE hyperbolic backward (Euclidean gate) | ✅ Full hyperbolic routing backward via exp_map |
+|| 031 | Nested SSM d_ball_weights_raw | ✅ Added parameter + softmax backward |
+|| 032 | Nested SSM row loop comment | ✅ Comment fix — two-pass intentional |
+|| 033 | Nested SSM direct state gradient | ✅ Already accumulating directly |
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
 
