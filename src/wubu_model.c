@@ -796,7 +796,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
     double t_out0 = wall_time();
     
-    // Logit cache: for single-token decode, reuse previous logits
+    // Cache disabled: always compute full output projection
+    // NOTE: logit cache was causing repetitive output by reusing stale logits
+    // across decode steps. Disabled pending a proper cache invalidation fix.
+    if (0) { // logit cache disabled
+    // Cache logits for single-token decode to skip 80ms output proj
     if (N == 1 && model->logit_cache && model->logit_cache_valid && 
         model->logit_cache_steps < model->logit_cache_max_hits) {
         // Use cached logits (skip 80ms output proj)
@@ -969,6 +973,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         memcpy(logits, x, N * D_MODEL * sizeof(float));
     }
     }
+    } // end cache-wraith-disable (if 0)
     free(x);
     free(normed);
     free(attn_out);

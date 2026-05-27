@@ -1,8 +1,8 @@
 // dump_ref.c — Dump reference logits and per-layer hidden states from llama.cpp
 // Compile: gcc -o /tmp/dump_ref dump_ref.c -I/home/wubu/llama.cpp -I/home/wubu/llama.cpp/common
 //   -I/home/wubu/llama.cpp/ggml/include -L/home/wubu/llama.cpp/build/bin
-//   -Wl,-rpath,/home/wubu/llama.cpp/build/bin -lggml-cpu
-//   -L/home/wubu/llama.cpp/build -l:libllama.a -lm -lpthread -ldl -lstdc++
+//   -Wl,-rpath,/home/wubu/llama.cpp/build/bin -lggml-cpu -lggml -lllama -lllama-common
+//   -lm -lpthread -ldl -lstdc++
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,7 +12,7 @@
 #define D_MODEL 2048
 
 int main(int argc, char **argv) {
-    const char *model_path = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
+    const char *model_path = argc > 1 ? argv[1] : "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     
     // Initialize llama backend
     llama_backend_init();
@@ -21,8 +21,8 @@ int main(int argc, char **argv) {
     struct llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = 0;
     
-    // Load model
-    struct llama_model *model = llama_load_model_from_file(model_path, model_params);
+    // Load model using new API
+    struct llama_model *model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         fprintf(stderr, "Failed to load model\n");
         return 1;
@@ -33,10 +33,10 @@ int main(int argc, char **argv) {
     ctx_params.n_ctx = 512;
     ctx_params.n_batch = 1;
     
-    struct llama_context *ctx = llama_new_context_with_model(model, ctx_params);
+    struct llama_context *ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "Failed to create context\n");
-        llama_free_model(model);
+        llama_free(model);
         return 1;
     }
     
@@ -48,13 +48,13 @@ int main(int argc, char **argv) {
     if (llama_decode(ctx, batch) != 0) {
         fprintf(stderr, "llama_decode failed\n");
         llama_free(ctx);
-        llama_free_model(model);
+        llama_free(model);
         return 1;
     }
     
     // Get logits
-    float *logits = llama_get_logits(ctx);
-    int n_vocab = llama_n_vocab(model);
+    float *logits = llama_get_logits_ith(ctx, 0);
+    int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     printf("llama.cpp output: n_vocab=%d\n", n_vocab);
     
     // Dump logits
@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
     printf("Skipping per-layer comparison for now.\n");
     
     llama_free(ctx);
-    llama_free_model(model);
+    llama_free(model);
     llama_backend_free();
     return 0;
 }
