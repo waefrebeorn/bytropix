@@ -31,28 +31,33 @@
 - **Run chat:** `CHAT=1 MODEL=~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf ./gen_text_cpu "prompt" 100 40`
 - **Core count:** OMP_NUM_THREADS=4 (4-core i5-8365U)
 
-## Benchmarks (4 cores, 11GB RAM, raw mode)
-| Metric | bytropix (fixed) | llama.cpp |
-|--------|:-:|:-:|
-| Prefill 5 tok | 1.5 tok/s | 6.3 tok/s |
-| Prefill 6 tok | 1.3 tok/s | — |
-| Decode | 2.6-2.8 tok/s | 2.7 tok/s |
+## Optimizations Applied This Session
+1. **GQA projection batching** — GQA Q+gate, K, V projections now use `quantized_matmul_batched` (was per-token quantize+matmul). Same batching pattern as SSM forward. Applied to both `wubu_gqa_forward` and `wubu_gqa_forward_save`.
+2. **MoE shared expert Q8 reuse** — Quantize x_s once per token, use `quantized_matmul_from_q8` for both gate+up projections (was 2 separate quantize+matmul calls).
+3. **MoE routed expert Q8 reuse** — Same pattern inside each OpenMP task: quantize x_s once, use `quantized_matmul_from_q8` for both gate+up of each routed expert (was 2 quantize calls per expert).
 
-Decode slightly below llama.cpp parity. Prefill gap needs MoE expert prefetch or output proj split.
+## Benchmarks (4 cores, 11GB RAM, raw mode)
+| Metric | bytropix (fixed) | llama.cpp | Gain vs Prior |
+|--------|:-:|:-:|:-:|
+| Prefill 5 tok | **3.3 tok/s** | ~6.3 tok/s | **2.4×** (was 1.4) |
+| Decode | **2.7 tok/s** | ~2.7 tok/s | **1.04×** (was 2.6) |
+
+Decode at DDR4 memory bandwidth wall (~2.3 tok/s theoretical). Prefill gap to llama.cpp reduced to ~2×.
 
 ## Verified Output
-- **RAW:** "The capital of France is Paris." ✓
-- **RAW:** "Write a poem about AI" → thinking process output ✓
+- **RAW:** "The capital of France is Paris." ✓ (both prefill and decode)
 - **CHAT:** TBD
 
 ## Remaining CPU Opportunities (ordered)
-1. **MoE expert prefetch** — API exists but not wired (arch doc P2). Currently OMP threads wait for next expert in sequential unlock. Should fetch next expert's weight pointer during current expert's F32 down-projection.
-2. **Output proj split** — Parallelize Q4_K across threads (arch doc P1).
-3. **Chunked SSM at CS=1** — Only useful for 256K+ context. No speedup at short lengths.
+1. **Output proj split** — 92ms/token (25% of decode). Q4_K quantized matmul is already parallelized across threads. At DDR4 memory bandwidth limit, further gains need data reduction (IQ1_M quant → 15% less data) or MTP spec decode.
+2. **Chunked SSM at CS=1** — Only useful for 256K+ context. No speedup at short lengths.
+3. **SSM buffer pre-allocation** — 12 malloc/free per layer (negligible, ~36μs/token).
 
 ## Files Changed (this session)
 - `src/wubu_ssm.c` — Removed buggy AVX2 conv1d; batched GQA projections (Q+gate, K, V)
-- `.hermes/mind-palace/state.md` — Updated with conv1d bug fix + GQA batching
+- `src/wubu_moe.c` — Q8 reuse for shared expert + routed experts (gate+up projections)
+- `src/quantized_matmul.c` — (unrelated fixes)
+- `.hermes/mind-palace/state.md` — Updated with conv1d bug fix + GQA batching + MoE Q8 reuse
 
 ## Context for Next Agent
 - Model: `~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf` (11.5 GB, 248K vocab)

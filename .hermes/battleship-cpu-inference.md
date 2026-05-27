@@ -25,8 +25,8 @@
 
 | Cell | Vector | Measurement | Result | Status |
 |------|--------|-------------|--------|--------|
-| 001 | RAW prefill | 5 tok / 4.56s | **1.1 tok/s** | ✅ |
-| 002 | RAW decode | 100 tok / 36.77s | **2.7 tok/s** | ✅ |
+| 001 | RAW prefill | 5 tok / 1.49s | **3.3 tok/s** | ✅ |
+| 002 | RAW decode | 50 tok / 18.68s | **2.7 tok/s** | ✅ |
 | 003 | CHAT prefill | 27 tok / 10.57s | **2.6 tok/s** | ✅ |
 | 004 | CHAT decode | 50 tok / 16.33s | **3.1 tok/s** | ✅ |
 | 005 | Per-layer (decode) | SSM ~3ms, MoE ~3ms, GQA ~3ms | ~9ms/layer | ✅ |
