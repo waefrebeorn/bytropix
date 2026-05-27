@@ -112,8 +112,8 @@
 
 | Cell | Area | Gap | Severity |
 |------|------|-----|----------|
-| 171 | regression | test_regression.c only checks top-k match | 🟡 |
-| 172 | accuracy | No automated cos-sim validation | 🟡 |
+| 171 | regression | test_regression.c only checks top-k match | ✅ Replaced by tools/test-cos-sim-regression.sh — automated cos-sim comparison against llama.cpp reference on 3 single-token prompts. Threshold: 0.97. |
+| 172 | accuracy | No automated cos-sim validation | ✅ tools/test-cos-sim-regression.sh (3 prompts, threshold 0.97) |
 | 173 | perf | Benchmark automation script | tools/test-512k-suite.sh + tools/test-hermes-headless.sh | ✅ |
 | 174 | CI | No GitHub Actions or test runner | 🟡 |
 | 175 | test | Inference server pytest suite | tests/test_inference.py — 24 tests, 1.16s | ✅ |
