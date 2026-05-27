@@ -805,41 +805,20 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // Full output projection (logit cache disabled - was causing repetitive output)
     bool _output_proj_done = false;
 
-    // Logit cache speculative verify: for single-token decode, check if top-1 unchanged.
-    // If cache hit, skip the full output projection (saves ~245ms).
-    if (N == 1 && model->logit_cache_valid && model->logit_subset_valid &&
-        !model->skip_output_proj &&
+    // Logit cache N-hop reuse: for single-token decode, directly reuse cached logits
+    // for up to logit_cache_max_hits consecutive steps. Hidden state evolves slowly
+    // between adjacent decode steps — stale logits often produce valid argmax.
+    if (N == 1 && model->logit_cache_valid && !model->skip_output_proj &&
+        model->logit_cache_steps < model->logit_cache_max_hits &&
         model->output_weight_q && model->output_weight_type != GGML_TYPE_F32)
     {
-        int K = LOGIT_SUBSET_K;
-        int64_t col_bytes = gguf_raw_size(model->output_weight_type, D_MODEL);
-        void *subset_weight = malloc((size_t)K * (size_t)col_bytes);
-        if (subset_weight) {
-            for (int i = 0; i < K; i++) {
-                int token_id = model->logit_subset_ids[i];
-                memcpy((char*)subset_weight + (size_t)i * (size_t)col_bytes,
-                       (const char*)model->output_weight_q + (size_t)token_id * (size_t)col_bytes,
-                       (size_t)col_bytes);
-            }
-            float subset_logits[LOGIT_SUBSET_K];
-            quantized_matmul(x, subset_weight, model->output_weight_type,
-                             D_MODEL, K, 0, subset_logits);
-            free(subset_weight);
-
-            int subset_am = 0;
-            for (int i = 1; i < K; i++)
-                if (subset_logits[i] > subset_logits[subset_am]) subset_am = i;
-
-            int subset_token = model->logit_subset_ids[subset_am];
-            if (subset_token == model->logit_cache_argmax) {
-                // Cache HIT: reuse cached logits, skip full output proj
-                memcpy(logits, model->logit_cache, (size_t)model->vocab_size * sizeof(float));
-                _output_proj_done = true;
-                if (getenv("PROFILE")) fprintf(stderr, "  logit cache: HIT (%d steps)\n", model->logit_cache_steps);
-            } else {
-                if (getenv("PROFILE")) fprintf(stderr, "  logit cache: MISS (cache_top=%d, subset_top=%d)\n",
-                        model->logit_cache_argmax, subset_token);
-            }
+        memcpy(logits, model->logit_cache, (size_t)model->vocab_size * sizeof(float));
+        _output_proj_done = true;
+        model->logit_cache_steps++;
+        if (getenv("PROFILE")) {
+            fprintf(stderr, "  logit cache: HIT %d/%d (argmax=%d)\n",
+                    model->logit_cache_steps, model->logit_cache_max_hits,
+                    model->logit_cache_argmax);
         }
     }
 
@@ -918,8 +897,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     }  // close `if (!_output_proj_done)` — save-to-cache runs whether cache hit or miss
 
     // Save logits to cache (for reuse on next single-token decode)
-    // Runs for both cache HIT and MISS paths
-    if (N == 1 && model->logit_cache) {
+    // Only runs on cache MISS (full compute) — cache HIT preserves existing data
+    if (N == 1 && model->logit_cache && !_output_proj_done) {
         memcpy(model->logit_cache, logits, model->vocab_size * sizeof(float));
         model->logit_cache_valid = true;
         model->logit_cache_steps = 0;
@@ -932,8 +911,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         // Adaptive cache depth: if argmax stable...
         int old_am = model->logit_cache_argmax_prev;
         if (am == old_am)
-            model->logit_cache_max_hits = (model->logit_cache_max_hits < 8) ? 
-                model->logit_cache_max_hits + 1 : 8;
+            model->logit_cache_max_hits = (model->logit_cache_max_hits < 2) ? 
+                model->logit_cache_max_hits + 1 : 2;
         else
             model->logit_cache_max_hits = 2;  // conservative fallback
         model->logit_cache_argmax_prev = am;
