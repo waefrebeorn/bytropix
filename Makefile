@@ -449,6 +449,14 @@ test_rsgd: tools/test_rsgd.c $(RSGD_OBJ) src/wubu_mobius.o src/gguf_reader.o
 test_backward: tools/test_backward.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_one_ssm_backward: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
+test_one_ssm_backward: tools/test_one_ssm_backward.c src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS_FILTERED) -o $@ $^ $(LDFLAGS)
+
+# One-layer SSM backward validation using ONLY CORE_OBJ (no model load)
+test_ssm_backward_standalone: tools/test_ssm_backward_standalone.c $(CORE_OBJ) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 test_bwd_model: tools/test_bwd_model.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 

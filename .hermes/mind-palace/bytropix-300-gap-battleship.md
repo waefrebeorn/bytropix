@@ -91,7 +91,8 @@
 | Cell | File | Gap | Severity |
 |------|------|-----|----------|
 | 101 | various src/ | #if 0 blocks with dead code | — No #if 0 or #ifdef DEAD blocks found in src/ |
-|| 102 | tools/train_stub.c | Training stub uses FD gradients not BPTT | 🟡 Intentional for tiny test model (1K params) — BPTT tested in backward files |
+|| 102 | tools/train_stub.c | Training stub uses FD gradients not BPTT | 🟡 Intentional for tiny model (1K params) — BPTT tested in backward files |
+|| 150 | Backward needs F32 weights | SSM backward functions require F32 `ssm_out_weight` etc., but model loads quantized only | 🔴 Vaulted: vault/training-backward-gap.md. Need dequant-on-demand or F32 load. Blocks training integration. |
 | 103 | tools/train_gpu.c | "scratch allocs omitted for brevity" | 🟢 |
 | 104 | tools/dump_intermediates.c | "(skipped for brevity)" | 🟢 |
 | 105-140 | (50+ similar stubs in tools/) | Test-only code, dump scripts, validation tools | 🟢 |
@@ -121,7 +122,7 @@
 | 177 | test | Inference server calls local model (NOT proxy) | tools/serve_local.py | ✅ |
 | 178 | test | Hermes custom_providers config wired | ~/.hermes/config.yaml | ✅ |
 | 179 | fix | Logit cache causing repetitive output | src/wubu_model.c:800 — cache reuses stale logits across decode steps. DISABLED | 🔴 FIXED |
-| 180 | bug | IQ2_M output quality degraded (quantization floor) | 2-bit on 2048-dim hidden. Logits valid but flat softmax | 🟡 |
+|| 180 | bug | IQ2_M output quality degraded (quantization floor) | 🟡 Vaulted: vault/iq2m-quality-analysis.md. Logits valid (range 23.5, 6 within 1.0 of max). T=0.7 recommended. Cos-sim 0.974 = IQ2_M floor. Needs Q3_K+/F16 for fix. |
 | 181 | diag | Layer dump workflow established | DUMP_LAYER_DIR=/tmp/layer_dump dumps all 40 layers | ✅ |
 | 182 | diag | Logit dump workflow established | DUMP_LOGITS=/tmp/logits.bin | ✅ |
 | 183 | tool | check_logits.py | Python logit analyzer | ✅ |
