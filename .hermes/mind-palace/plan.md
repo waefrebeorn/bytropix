@@ -39,11 +39,19 @@ Gainz means speed (lower tok/s gap vs llama.cpp).
 | — | ✅ COMPLETE | Our logits now non-zero, cos-sim=0.974 vs ref |
 
 ## NEXT: improve cos-sim from 0.974 to >0.99
-- Check if IQ2_M quantization floor limits precision (diagnostics skill table says 2-bit @ 2048-dim produces flat output)
-- Use T10/T50 model for debug cycles
-- Layer-by-layer cos-sim to find exact divergence point
+- **CONCLUSION: 0.974 is IQ2_M quantization floor** — pure random noise (correl|ref,|diff|=-0.024), unbiased (mean diff=-0.05), 41/50 top-token overlap. Need Q3_K/Q4_K/F16 model to reach >0.99.
+- Try T10/T50 model for debug cycles — NOT AVAILABLE on this machine
+- See `vault/parity-analysis.md` for full analysis
+
+## NEXT TASKS
+- ✅ Output proj fixed
+- ✅ dump_ref working with text prompts
+- ✅ run-harness.sh patched to serve_local.py
+- ⏳ NES emulator PPU: tile/nametable rendering
+- ⏳ test-hermes-headless.sh: update for real local mode
 
 ## BLOCKERS
 
-- `llama_model_load_from_file` runtime error on new llama.cpp API — needs fixing in dump_ref.c
+- `llama_model_load_from_file` runtime error on new llama.cpp API — FIXED
 - llama-cli takes 3+ min to load 11GB model on this machine
+- Only IQ2_M model available (2-bit precision floor limits parity to 0.974)

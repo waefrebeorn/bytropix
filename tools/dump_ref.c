@@ -32,6 +32,7 @@ int main(int argc, char **argv) {
     struct llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 512;
     ctx_params.n_batch = 64;
+    ctx_params.embeddings = true;
     
     struct llama_context *ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
@@ -71,6 +72,16 @@ int main(int argc, char **argv) {
     float *logits = llama_get_logits_ith(ctx, 0);
     int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     printf("llama.cpp output: n_vocab=%d\n", n_vocab);
+    
+    // Dump final hidden state (before output proj)
+    const float *embd = llama_get_embeddings_ith(ctx, 0);
+    if (embd) {
+        FILE *he = fopen("/tmp/ref_final_hidden.bin", "wb");
+        if (he) { fwrite(embd, sizeof(float), D_MODEL, he); fclose(he); }
+        printf("  Hidden state saved to /tmp/ref_final_hidden.bin\n");
+    }
+    
+    // Dump logits
     
     // Dump logits
     FILE *f = fopen("/tmp/llama_logits_new.bin", "wb");

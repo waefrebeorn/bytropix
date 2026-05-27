@@ -796,6 +796,12 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
     double t_out0 = wall_time();
     
+    // Dump final hidden state if DUMP_HIDDEN set
+    if (getenv("DUMP_HIDDEN")) {
+        FILE *hf = fopen("/tmp/our_final_hidden.bin", "wb");
+        if (hf) { fwrite(x, sizeof(float), N * D_MODEL, hf); fclose(hf); }
+    }
+    
     // Full output projection (logit cache disabled - was causing repetitive output)
     if (model->skip_output_proj) {
         // Copy final hidden states to logits buffer (caller does GPU output proj)
