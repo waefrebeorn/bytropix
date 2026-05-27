@@ -136,7 +136,7 @@
 | Cell | Optimization | Potential | Severity |
 |------|-------------|-----------|----------|
 | 241 | SSM buffer pre-allocation (remove 13 malloc/free per layer) | Small-5% | ✅ |
-| 242 | MoE shared expert: quantize x once for gate+up | ~10% MoE speedup | 🟡 |
+| 242 | MoE shared expert: quantize x once for gate+up | ~10% MoE speedup | ✅ |
 | 243 | Q4_K output proj threaded for batch | Already fixed (52x) | ✅ |
 | 244 | KV cache to Q4_0 format (2GB→500MB) | Memory | 🟡 |
 | 245 | Attention sparsity wire for decode | Long-context | 🟢 |
