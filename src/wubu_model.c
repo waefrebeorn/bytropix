@@ -803,6 +803,47 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     }
     
     // Full output projection (logit cache disabled - was causing repetitive output)
+    bool _output_proj_done = false;
+
+    // Logit cache speculative verify: for single-token decode, check if top-1 unchanged.
+    // If cache hit, skip the full output projection (saves ~245ms).
+    if (N == 1 && model->logit_cache_valid && model->logit_subset_valid &&
+        !model->skip_output_proj &&
+        model->output_weight_q && model->output_weight_type != GGML_TYPE_F32)
+    {
+        int K = LOGIT_SUBSET_K;
+        int64_t col_bytes = gguf_raw_size(model->output_weight_type, D_MODEL);
+        void *subset_weight = malloc((size_t)K * (size_t)col_bytes);
+        if (subset_weight) {
+            for (int i = 0; i < K; i++) {
+                int token_id = model->logit_subset_ids[i];
+                memcpy((char*)subset_weight + (size_t)i * (size_t)col_bytes,
+                       (const char*)model->output_weight_q + (size_t)token_id * (size_t)col_bytes,
+                       (size_t)col_bytes);
+            }
+            float subset_logits[LOGIT_SUBSET_K];
+            quantized_matmul(x, subset_weight, model->output_weight_type,
+                             D_MODEL, K, 0, subset_logits);
+            free(subset_weight);
+
+            int subset_am = 0;
+            for (int i = 1; i < K; i++)
+                if (subset_logits[i] > subset_logits[subset_am]) subset_am = i;
+
+            int subset_token = model->logit_subset_ids[subset_am];
+            if (subset_token == model->logit_cache_argmax) {
+                // Cache HIT: reuse cached logits, skip full output proj
+                memcpy(logits, model->logit_cache, (size_t)model->vocab_size * sizeof(float));
+                _output_proj_done = true;
+                if (getenv("PROFILE")) fprintf(stderr, "  logit cache: HIT (%d steps)\n", model->logit_cache_steps);
+            } else {
+                if (getenv("PROFILE")) fprintf(stderr, "  logit cache: MISS (cache_top=%d, subset_top=%d)\n",
+                        model->logit_cache_argmax, subset_token);
+            }
+        }
+    }
+
+    if (!_output_proj_done) {
     if (model->skip_output_proj) {
         // Copy final hidden states to logits buffer (caller does GPU output proj)
         for (int i = 0; i < N; i++) {
@@ -863,71 +904,76 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                     dot / (sqrt(n1) * sqrt(n2)), max_e);
             free(f32_logits);
         }
-        double t_out1 = wall_time();
-        if (getenv("PROFILE")) {
-            fprintf(stderr, "  Output proj: %.3fms\n", (t_out1 - t_out0) * 1000.0);
-        }
-        // Save logits to cache (for reuse on next single-token decode)
-        if (N == 1 && model->logit_cache) {
-            memcpy(model->logit_cache, logits, model->vocab_size * sizeof(float));
-            model->logit_cache_valid = true;
-            model->logit_cache_steps = 0;
-            // Find argmax for quick comparison
-            int am = 0; float av = logits[0];
-            for (int i = 1; i < model->vocab_size; i++)
-                if (logits[i] > av) { av = logits[i]; am = i; }
-            model->logit_cache_argmax = am;
-            
-            // Adaptive cache depth: if argmax stable...
-            int old_am = model->logit_cache_argmax_prev;
-            if (am == old_am)
-                model->logit_cache_max_hits = (model->logit_cache_max_hits < 8) ? 
-                    model->logit_cache_max_hits + 1 : 8;
-            else
-                model->logit_cache_max_hits = 2;  // conservative fallback
-            model->logit_cache_argmax_prev = am;
-            
-            // Save top-K subset for fast refresh (when argmax changed from previous)
-            if (!model->logit_subset_valid || am != old_am) {
-                // Find top-K token IDs (full scan of 248k logits)
-                int temp_ids[LOGIT_SUBSET_K];
-                float temp_vals[LOGIT_SUBSET_K];
-                for (int i = 0; i < LOGIT_SUBSET_K; i++) {
-                    temp_ids[i] = i;
-                    temp_vals[i] = logits[i];
-                }
-                // Bubble sort to find top K (O(K * vocab) = 1000 * 248k = 248M comparisons)
-                // Fast enough: ~30ms on modern CPU
-                for (int v = LOGIT_SUBSET_K; v < model->vocab_size; v++) {
-                    float lv = logits[v];
-                    if (lv > temp_vals[0]) {
-                        temp_vals[0] = lv;
-                        temp_ids[0] = v;
-                        // Bubble down
-                        int pos = 0;
-                        while (pos + 1 < LOGIT_SUBSET_K && temp_vals[pos] > temp_vals[pos+1]) {
-                            float tv = temp_vals[pos]; temp_vals[pos] = temp_vals[pos+1]; temp_vals[pos+1] = tv;
-                            int ti = temp_ids[pos]; temp_ids[pos] = temp_ids[pos+1]; temp_ids[pos+1] = ti;
-                            pos++;
-                        }
-                    }
-                }
-                memcpy(model->logit_subset_ids, temp_ids, LOGIT_SUBSET_K * sizeof(int));
-                // Sort ascending so subset matmul order is stable
-                for (int i = 0; i < LOGIT_SUBSET_K; i++)
-                    for (int j = i+1; j < LOGIT_SUBSET_K; j++)
-                        if (model->logit_subset_ids[j] < model->logit_subset_ids[i]) {
-                            int t = model->logit_subset_ids[i];
-                            model->logit_subset_ids[i] = model->logit_subset_ids[j];
-                            model->logit_subset_ids[j] = t;
-                        }
-                model->logit_subset_valid = true;
+        if (!_output_proj_done) {
+            double t_out1 = wall_time();
+            if (getenv("PROFILE")) {
+                fprintf(stderr, "  Output proj: %.3fms\n", (t_out1 - t_out0) * 1000.0);
             }
         }
-    }
+    }  // close else-if (quantized matmul path)
         else {
         // Fallback: copy hidden states only (no output weight loaded)
         memcpy(logits, x, N * D_MODEL * sizeof(float));
+    }
+    }  // close `if (!_output_proj_done)` — save-to-cache runs whether cache hit or miss
+
+    // Save logits to cache (for reuse on next single-token decode)
+    // Runs for both cache HIT and MISS paths
+    if (N == 1 && model->logit_cache) {
+        memcpy(model->logit_cache, logits, model->vocab_size * sizeof(float));
+        model->logit_cache_valid = true;
+        model->logit_cache_steps = 0;
+        // Find argmax for quick comparison
+        int am = 0; float av = logits[0];
+        for (int i = 1; i < model->vocab_size; i++)
+            if (logits[i] > av) { av = logits[i]; am = i; }
+        model->logit_cache_argmax = am;
+        
+        // Adaptive cache depth: if argmax stable...
+        int old_am = model->logit_cache_argmax_prev;
+        if (am == old_am)
+            model->logit_cache_max_hits = (model->logit_cache_max_hits < 8) ? 
+                model->logit_cache_max_hits + 1 : 8;
+        else
+            model->logit_cache_max_hits = 2;  // conservative fallback
+        model->logit_cache_argmax_prev = am;
+        
+        // Save top-K subset for fast refresh (when argmax changed from previous)
+        if (!model->logit_subset_valid || am != old_am) {
+            // Find top-K token IDs (full scan of 248k logits)
+            int temp_ids[LOGIT_SUBSET_K];
+            float temp_vals[LOGIT_SUBSET_K];
+            for (int i = 0; i < LOGIT_SUBSET_K; i++) {
+                temp_ids[i] = i;
+                temp_vals[i] = logits[i];
+            }
+            // Bubble sort to find top K (O(K * vocab) = 1000 * 248k = 248M comparisons)
+            // Fast enough: ~30ms on modern CPU
+            for (int v = LOGIT_SUBSET_K; v < model->vocab_size; v++) {
+                float lv = logits[v];
+                if (lv > temp_vals[0]) {
+                    temp_vals[0] = lv;
+                    temp_ids[0] = v;
+                    // Bubble down
+                    int pos = 0;
+                    while (pos + 1 < LOGIT_SUBSET_K && temp_vals[pos] > temp_vals[pos+1]) {
+                        float tv = temp_vals[pos]; temp_vals[pos] = temp_vals[pos+1]; temp_vals[pos+1] = tv;
+                        int ti = temp_ids[pos]; temp_ids[pos] = temp_ids[pos+1]; temp_ids[pos+1] = ti;
+                        pos++;
+                    }
+                }
+            }
+            memcpy(model->logit_subset_ids, temp_ids, LOGIT_SUBSET_K * sizeof(int));
+            // Sort ascending so subset matmul order is stable
+            for (int i = 0; i < LOGIT_SUBSET_K; i++)
+                for (int j = i+1; j < LOGIT_SUBSET_K; j++)
+                    if (model->logit_subset_ids[j] < model->logit_subset_ids[i]) {
+                        int t = model->logit_subset_ids[i];
+                        model->logit_subset_ids[i] = model->logit_subset_ids[j];
+                        model->logit_subset_ids[j] = t;
+                    }
+            model->logit_subset_valid = true;
+        }
     }
     free(x);
     free(normed);

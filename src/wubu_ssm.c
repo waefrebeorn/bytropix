@@ -1509,7 +1509,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
     int use_sparse = getenv("USE_SPARSE_ATTN") != NULL;
     int sparse_w = getenv("SPARSE_W") ? atoi(getenv("SPARSE_W")) : 512;   // local window size
     int sparse_g = getenv("SPARSE_G") ? atoi(getenv("SPARSE_G")) : 128;   // global positions count
-    int sparse_min_len = getenv("SPARSE_MIN") ? atoi(getenv("SPARSE_MIN")) : 4096;  // min ctx for sparse
+    int sparse_min_len = getenv("SPARSE_MIN") ? atoi(getenv("SPARSE_MIN")) : 512;  // min ctx for sparse (was 4096, lowered May 27: GQA is not bottleneck, but helps at >2K)
     
     // Pre-allocate sparse index buffer (stack for small, heap for extreme)
     int max_sparse = sparse_w + sparse_g + 1;  // window + global + self

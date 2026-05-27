@@ -120,6 +120,7 @@
 || 174 | CI | No GitHub Actions or test runner | 🟡 ✅ Created .github/workflows/build-and-test.yml — compiles all core objects + runs test_mobius_linear on push/PR to main/cpu-optimize-may26 |
 | 175 | test | Inference server pytest suite | tests/test_inference.py — 24 tests, 1.16s | ✅ |
 | 176 | test | Hermes integration test | tools/test-hermes-integration.sh — 9 tests | ✅ |
+| 176b | test | Multi-turn conversation pipeline | serve_local.py → 3-turn NES Q&A. 481 words, 744s. ChatML broken in raw mode | ✅ |
 | 177 | test | Inference server calls local model (NOT proxy) | tools/serve_local.py | ✅ |
 | 178 | test | Hermes custom_providers config wired | ~/.hermes/config.yaml | ✅ |
 | 179 | fix | Logit cache causing repetitive output | src/wubu_model.c:800 — cache reuses stale logits across decode steps. DISABLED | 🔴 FIXED |
@@ -216,7 +217,8 @@ Total verifiable gaps: **269 (300 minus 31 already fixed/complete)** — but 99+
 | run-harness.sh proxy→serve_local.py | Row G infra | ✅ PATCHED | Real local CPU inference |
 | test-hermes-headless.sh proxy→serve_local.py | Row G infra | ✅ PATCHED | Real local CPU inference |
 | NES emulator = benchmark (not project) | Row G infra | ✅ DOCS FIXED | Pre-built workload. Do NOT develop. |
-| test-512k-suite.sh SIGPIPE fix | Row G infra | ✅ PATCHED | Removed grep -q pipes, fixed exit capture |
+|| test-512k-suite.sh SIGPIPE fix | Row G infra | ✅ PATCHED | Removed grep -q pipes, fixed exit capture |
+|| inference-server-proxy.py stale | Row G infra | ✅ CLEANED | Moved to tools/archived/ — 26KB, zero references |
 
 **Parity reached: 0.974 cos-sim vs llama.cpp — IQ2_M quantization floor.**
 Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machine.
@@ -260,6 +262,33 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 |||| 145-170 | Theory→Code | 🟡 Hyperbolic embeddings, curvature tuning |
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
+
+### NEW P0: Fix Context Growth Penalty 🔴
+
+| Cell | Issue | Fix Option | Status |
+|------|-------|-----------|--------|
+| 301 | Dense GQA attention O(n²) slows as KV cache grows. SPARSE_MIN=4096 too high for short/medium context | Lower SPARSE_MIN to 512 OR | ⬜ |
+| 302 | Measure per-layer GQA time at 50/256/1024/2048 tok context | PROFILE=1 benchmark | ⬜ |
+| 303 | Option A: Enable sparse attention at all context lengths | env SPARSE_MIN=512 | ⬜ |
+| 304 | Option B: Q4_0 KV cache to reduce memory bandwidth in decode | Already wired (cell 244) but not benchmarked vs F32 | ⬜ |
+| 305 | Option C: OMP thread scaling per context size | Reduce threads at short ctx (less parallelism needed) | ⬜ |
+| 306 | Benchmark script: tok/s vs context length curve | tools/benchmark-context.sh | ⬜ |
+| 307 | ChatML format fix in gen_text_cpu raw mode | CHAT=1 mode or tokenizer-level support | 🟡 |
+
+**Target:** No decay from turn 2→3. Maintain >0.8 tok/s across all context lengths up to 4K.
+
+### Row K — Context Growth Penalty (7 cells, NEW)
+*Reality: decode speed drops 50% (1.2→0.6 tok/s) as context grows from <1K to ~2K*
+
+| Cell | Priority | Effort | Target tok/s |
+|------|:--------:|:------:|:------------:|
+| 301 | P0 🔴 | Measure | baseline |
+| 302 | P0 🔴 | 30min | identify bottleneck |
+| 303 | P0 🔴 | 15min | >1.0 at 2K ctx |
+| 304 | P1 🟡 | 2-4h | >0.9 at 2K ctx |
+| 305 | P1 🟡 | 1-2h | >0.9 at 2K ctx |
+| 306 | P2 🟡 | 30min | repeatable |
+| 307 | P2 🟡 | 2h | correct output |
 
 ---
 

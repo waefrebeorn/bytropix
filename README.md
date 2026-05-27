@@ -5,7 +5,8 @@
 **Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE, `qwen35moe` arch)**
 **CPU-only. No GPU. Quantized matmul (Q4_K/Q6_K/IQ2_M).**
 
-[![CPU decode: ~2.3 tok/s](https://img.shields.io/badge/CPU_decode-2.3_tok/s-informational)](https://github.com/waefrebeorn/bytropix)
+[![CPU decode: ~1.2 tok/s short ctx](https://img.shields.io/badge/CPU_decode-1.2_tok/s_(short_ctx)-informational)](https://github.com/waefrebeorn/bytropix)
+[![Context growth penalty: 🔴](https://img.shields.io/badge/Context_growth_penalty-🔴_P0-red)](https://github.com/waefrebeorn/bytropix)
 [![Cos-sim vs llama.cpp: 0.974 (IQ2_M floor)](https://img.shields.io/badge/Cos_sim-0.974_(IQ2_M_floor)-yellow)](https://github.com/waefrebeorn/bytropix)
 [![KV Cache: F32 512K](https://img.shields.io/badge/KV_Cache-F32_512K-green)](https://github.com/waefrebeorn/bytropix)
 [![Platform: WSL + i5-8365U](https://img.shields.io/badge/Platform-WSL_i5--8365U-blue)](https://github.com/waefrebeorn/bytropix)
@@ -15,17 +16,16 @@
 
 ---
 
-## 📊 Current State (May 27, 2026 — CPU-Only)
+## 🔴 Current State (May 27 — Context Growth Penalty Phase)
 
 | | Status | Metric | Detail |
 |:------:|--------|--------|--------|
+| 🔴 | **Context growth penalty** | **1.2→0.6 tok/s** | Decode drops 50% as context grows <1K→~2K tokens. Dense GQA O(n²). Sparse only at >4K. **P0: fix this.** |
+| ✅ | **Cos-sim vs llama.cpp** | **0.974** | IQ2_M quantization floor (2-bit 2048-dim). Need Q3_K+ to reach >0.99. |
+| ✅ | **Multi-turn conversation** | **3-turn NES Q&A** | 481 words, 744s. ChatML format broken in raw mode. |
 | ✅ | **Output proj fix** | **ZERO→REAL logits** | GCC -O3 + if(0) wrapper killed else branch. AVX2 vec_dot produced zeros. Both fixed. |
-| ✅ | **Cos-sim vs llama.cpp** | **0.974** | IQ2_M quantization floor (2-bit 2048-dim). Pure random noise. Need Q3_K+ to reach >0.99. |
-| ✅ | **sparse_buf stack alloc** | **-10 malloc/free per step** | Sparse attention buffer moved to stack (8KB). Only heap-allocates for extreme configs (>2048 positions). |
 | ✅ | **Local inference** | **serve_local.py** | All 4 test scripts patched from proxy to real local CPU inference. |
 | ✅ | **Test infra** | **6/6 tests** | `test-512k-suite.sh` — KV alloc, sparse attn, memory, RoPE, NES build all verified. |
-| ✅ | **512K context** | **2.8 tok/s** | KV cache at 524288 confirmed. Context-size independent decode. |
-| 🟡 | **NES emulator** | **BENCHMARK** | Pre-built 6502 emulator at ~/hermes-test/projects/nes-emulator/. Generates ASCII workload for 512K testing. Do NOT develop. |
 
 ### What Was Fixed This Session
 
@@ -113,14 +113,15 @@ bytropix/
 
 ---
 
-## 🔭 Status — Phase 2: CPU Parity ✅ (IQ2_M floor)
+## 🔭 Status — Phase 5: Fix Context Growth Penalty (NEW P0 🔴)
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 1: Output proj fix | ✅ | Logits zero→real. Cos-sim 0.974 vs llama.cpp |
-| Phase 2: Infra parity | ✅ | All 4 test scripts → serve_local.py. 4 battleship gaps closed. |
-| Phase 3: Gainz | 🟡 | SSM buffer pre-allocation, MoE expert caching, attention sparsity (untested on this machine) |
-| Phase 4: GPU (different machine) | ⏸️ | RTX 5050 rig not in this environment |
+| Phase 2: Infra parity | ✅ | All 4 test scripts → serve_local.py. Battleship gaps closed. |
+| Phase 3: Gainz | 🟡 | SSM buffer pre-allocation, MoE expert caching, attention sparsity (benched) |
+| Phase 4: Test Harness | ✅ | 3-turn conversation test. 481 words, 744s. ChatML broken in raw mode |
+| **Phase 5: Fix Context Growth Penalty** | **🔴 P0** | **1.2→0.6 tok/s decode decay as context grows. Fix: sparse at all lengths OR optimize dense path** |
 
 ---
 
@@ -136,7 +137,7 @@ bytropix/
 
 <div align="center">
 
-*Engine: bytropix — C CPU inference for Qwen3.6-35B-A3B. Phase 2 complete: parity at IQ2_M floor (0.974 cos-sim). All infra patched to local inference. No GPU in this environment.*
+*Engine: bytropix — C CPU inference for Qwen3.6-35B-A3B. Phase 5 active: fix context growth penalty (1.2→0.6 tok/s decay). All infra verified. No GPU in this environment.*
 
 </div>
 

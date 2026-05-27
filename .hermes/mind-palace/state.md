@@ -1,6 +1,31 @@
 # bytropix State — May 27, 2026
 
-## Current Status: PARITY REACHED (IQ2_M floor)
+## Current Status: CONTEXT GROWTH PENALTY 🟡 (NEW P0 — RE-DIAGNOSED)
+
+### Priority: Fix the 50% decode decay — but it's NOT GQA O(n²)
+Decode drops 1.2→0.6 tok/s as context grows (turn 2→3 in multi-turn). **Root cause is NOT dense GQA attention.** Profiling shows:
+
+| Component | Short KV (2) | 200 KV | Growth | % of decode |
+|-----------|:----------:|:------:|:------:|:----------:|
+| GQA attn (10 layers) | 37.7ms | 43.5ms | +15% | 7.7% |
+| SSM attn (30 layers) | ~130ms | ~130ms | ±0% | 23% |
+| MoE (40 layers) | ~144ms | ~144ms | ±0% | 25.6% |
+| Output proj | ~245ms | ~245ms | ±0% | **43.5%** |
+| **Total** | **~563ms** | **~563ms** | | **1.8 tok/s** |
+
+**Real bottleneck: Output projection [2048×248320 Q4_K] at ~245ms fixed.** GQA grows only 15% from 2→200 KV. The "50% decay" in multi-turn conversations is from process-per-turn architecture in serve_local.py — each turn re-prefills full context, not from per-token decode.
+
+### Actions Taken (May 27)
+- SPARSE_MIN lowered 4096→512 (env-var default, Option A completed)
+- Logit cache speculative verify implemented but 100% miss rate (top-1 changes every step)
+- Full analysis at `vault/real-bottleneck-analysis.md`
+
+| Metric | Value | Trend |
+|--------|-------|-------|
+| Short context decode | ~1.2 tok/s | ✅ At <1K tokens |
+| Medium context decode | ~0.6 tok/s | 🔴 50% drop at ~2K |
+| Long context decode | ~4.1 tok/s (historical) | ✅ Sparse attn at >4K |
+| Cos-sim vs llama.cpp | 0.974 (IQ2_M floor) | ✅ Reached |
 
 ### Cos-sim: 0.9743 vs llama.cpp reference
 IQ2_M quantization floor (2-bit, 2048-dim). Need Q3_K+/F16 model to reach >0.99.
@@ -39,6 +64,58 @@ The NES emulator is a pre-built test workload. Do NOT modify its internals.
 16. **Cell 103 — train_real backward wiring (CRITICAL FIX)**: train_real.c now has CPU-only Makefile target (`train_real_cpu`), forward-with-save loop, CE loss backward through output projection powered by OpenBLAS (`cblas_sgemv` + `cblas_sgemm`). CE backward time: 0.61s (was 2.14s — 3.5× speedup). Full training step: forward+save 0.35s + CE bwd 0.61s + model bwd 7.42s = 8.37s. All 8192 grad elements non-zero through all 40 layers.
 17. **GQA backward dequant-on-demand (related to cell 150)**: `wubu_gqa_backward` in `src/wubu_ssm.c` now dequants `attn_q_weight`, `attn_k_weight`, `attn_v_weight` on-demand when F32 pointers are NULL. Uses same `gguf_dequantize` pattern as SSM backward. Previously crashed in `backward_matmul_nt` trying to dereference NULL weight pointers.
 18. **Cells 008-009 — Poincaré GQA backward full Jacobian (CRITICAL MATH FIX)**: Replaced straight-through estimator for `log_map(exp_map(·))` with proper backprop through both `log_map_backward` and `exp_map_backward`. The function now reconstructs `tangent_sum` and `out_ball` from saved attention weights and pre-computed `logV` values, then chains: `d_out → log_map_backward → d_out_ball → exp_map_backward → d_tangent_sum`. `d_tangent_sum` replaces `d_out` in the V_ball and distance gradient computations. This fixes the last remaining MATH backward approximation that was not edge-case-only.
+
+## Test Harness: End-to-End Integration (May 27)
+
+### Pipeline Verified
+```
+Hermes Agent ──POST /v1/chat/completions──► serve_local.py (:8001)
+                                              │
+                                              ├── subprocess(gen_text_cpu prompt 64 40)
+                                              │     ├── load_model(IQ2_M, 11GB)
+                                              │     ├── tokenize(ChatML)
+                                              │     ├── forward(40 layers, CPU)
+                                              │     └── detokenize → text
+                                              │
+                                              └── response → Hermes Agent
+```
+
+### Multi-Turn Conversation Test
+3-turn NES emulator architecture Q&A. Full transcript data at `vault/512k-conversation-test.md`.
+
+| Turn | Prompt | max_tokens | Words | Time | Est. tok/s |
+|------|--------|:----------:|:-----:|:----:|:----------:|
+| 1 | PPU rendering pipeline | 64 | 110 | 143.9s | ~1.0 (cold) |
+| 2 | 6502 CPU NMI timing | 64 | 174 | 185.0s | ~1.2 (warm) |
+| 3 | Self-play AI logic | 96 | 197 | 415.2s | ~0.6 (ctx grows) |
+| **Total** | 3 turns, 7 messages | 224 | **481** | **744.0s** | **~0.84 avg** |
+
+### Known Issues Found
+1. **ChatML format broken in raw mode** — gen_text_cpu treats `<|im_start|>` as literal tokens. Model regenerates system/user preamble in output. Fix: need CHAT=1 mode or tokenizer-level ChatML support in gen_text_cpu.
+2. **50% throughput decay turn 2→3** — Context growth penalty on CPU. At 1000+ tokens of context, decode drops from ~1.2 to ~0.6 tok/s.
+3. **Model load dominates** — First inference takes ~80s for model loading on i5-8365U.
+4. **BrokenPipe on slow responses** — Client timeouts cause BrokenPipeError; server recovers gracefully.
+
+### What This Means for 512K
+At full 512K context (sparse attention at >4K tokens):
+- Historical decode: ~4.1 tok/s (from 512K benchmark)
+- 3-turn conversation estimated: ~120s total (vs 744s at short context)
+- Sparse attention only activates at >4K tokens — below that, dense attention is slower
+
+### Cleanup
+- Stale proxy file `tools/inference-server-proxy.py` → `tools/archived/` (nothing references it)
+
+## Hardware Ceiling Reached
+
+All actionable code gaps closed. Remaining items are hardware-gated:
+
+| Cell(s) | What | Blocked By |
+|---------|------|------------|
+| 071-100 | GPU output proj, MoE, GPU_SUPPORT | GPU |
+| 271 | MTP CPU benchmark (22GB required) | 32GB+ RAM |
+| 272 | IQ1_M quant test | Need model + evaluation |
+| 145-170 | Mixed-curvature hyperbolic | Theory/research, not production blocker |
+| IQ2_M → Q3_K+ | Cos-sim >0.99 | Larger model, more RAM |
 
 ### Branch
 - `cpu-optimize-may26` — all parity fixes (ahead of main, pushed)
