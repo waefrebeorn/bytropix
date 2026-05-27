@@ -60,7 +60,7 @@
 || 031 | src/wubu_nested_ssm_backward.c | 819 | "d_ball_weights_raw pass through caller" | 🟡 ✅ Added d_ball_weights_raw parameter + softmax backward |
 || 032 | src/wubu_nested_ssm_backward.c | 1182 | "end row loop — first pass (incomplete)" | 🟡 ✅ Comment fix — two-pass approach is intentional (mobius_add then scalar_mul) |
 || 033 | src/wubu_nested_ssm_backward.c | 1321 | "Accumulate state gradient directly (not temporary)" | 🟡 ✅ Already accumulates directly, comment matched |
-|| 034-050 | (extensions) | | Missing partial gradient paths in nested recurrence | 🟡 Not yet assessed |
+|| 034-050 | (extensions) | | Missing partial gradient paths in nested recurrence | 🟡 Reviewed — all gradient paths present. Two approximations in gated norm backward (rms_scale=1, combined_ball division reconstruction) affect precision but do not block training |
 
 ### Row C — Vision Stub (20 cells)
 *Reality: wubu_vision_moondream.c is mostly stub*
@@ -69,7 +69,7 @@
 |------|------|------|-----|----------|
 | 051 | src/wubu_vision_moondream.c | 28 | "TODO: parse moondream3_vision_index.json" | ✅ Implemented — JSON parser with json-c |
 | 052 | src/wubu_vision_moondream.c | 32 | "return false; // stub" | ✅ Resolved by cell 051 — vm_init returns true now |
-| 053 | src/wubu_vision_moondream.c | 136 | "placeholder until multi-token support" | 🔴 |
+|| 053 | src/wubu_vision_moondream.c | 136 | "placeholder until multi-token support" | 🔴 ✅ Full multi-token SDPA: vm_attention rewritten for N×N cross-attention with softmax |
 | 054 | src/wubu_vision.c | 102 | "layer %d incomplete" | 🔴 |
 | 055-070 | (extensions) | | Image preprocessing, encoding, decoding stubs | 🔴 |
 
@@ -247,6 +247,8 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 || 031 | Nested SSM d_ball_weights_raw | ✅ Added parameter + softmax backward |
 || 032 | Nested SSM row loop comment | ✅ Comment fix — two-pass intentional |
 || 033 | Nested SSM direct state gradient | ✅ Already accumulating directly |
+|| 034-050 | Nested SSM gradient path completeness | 🟡 All paths present. 2 approximations in gated norm (rms_scale=1, reconstruction) |
+|| 053 | Vision multi-token attention | ✅ Full N×N SDPA with softmax over all 729 patches |
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
 

@@ -280,35 +280,65 @@ void vm_layer_norm(float *x, const float *weight, const float *bias,
 }
 
 void vm_attention(const float *q, const float *k, const float *v,
-                  float *output, int n, int n_heads) {
-    // Scaled dot-product attention (single token, all heads)
-    // q, k, v: [n] where n = n_heads * head_dim
-    // output: [n]
-    // Equivalent to F.scaled_dot_product_attention for B=1, T=1
+                  float *output, float *attn_scratch,
+                  int N, int n_tokens, int n_heads, float head_dim) {
+    // Full scaled dot-product attention: output = softmax(QK^T/√d) V
+    // q, k, v: [n_tokens, D] where D = n_heads * head_dim
+    // output: [n_tokens, D]
+    // attn_scratch: [n_tokens * n_tokens] temp for softmax scores
+    // N: max tokens (for scratch stride), n_tokens: actual tokens this call
+    //
+    // For each head h:
+    //   attn[t][s] = sum_i q[t][h*hd+i] * k[s][h*hd+i] / sqrt(hd)
+    //   attn[t][:] = softmax(attn[t][:])
+    //   output[t][h*hd+i] = sum_s attn[t][s] * v[s][h*hd+i]
 
-    int head_dim = n / n_heads;
-    float scale = 1.0f / sqrtf((float)head_dim);
+    float scale = 1.0f / sqrtf(head_dim);
 
     for (int h = 0; h < n_heads; h++) {
-        int base = h * head_dim;
-        const float *qh = &q[base];
-        const float *kh = &k[base];
-        const float *vh = &v[base];
-        float *out_h = &output[base];
+        int base = (int)(h * head_dim);
+        int D = (int)(n_heads * head_dim);
 
-        // For single-query attention: score = q · k / sqrt(d)
-        float score = 0.0f;
-        for (int i = 0; i < head_dim; i++)
-            score += qh[i] * kh[i];
-        score *= scale;
+        // Compute attention scores: Q @ K^T per head
+        for (int t = 0; t < n_tokens; t++) {
+            for (int s = 0; s < n_tokens; s++) {
+                float score = 0.0f;
+                for (int i = 0; i < (int)head_dim; i++) {
+                    score += q[t * D + base + i] * k[s * D + base + i];
+                }
+                score *= scale;
+                attn_scratch[t * N + s] = score;
+            }
+        }
 
-        // Softmax (single score → 1.0)
-        float attn = 1.0f / (1.0f + expf(-score));  // sigmoid for binary attention
-        // In practice with >1 tokens: full softmax over all KVs
+        // Softmax over last dimension (over s)
+        for (int t = 0; t < n_tokens; t++) {
+            float max_val = attn_scratch[t * N];
+            for (int s = 1; s < n_tokens; s++) {
+                if (attn_scratch[t * N + s] > max_val)
+                    max_val = attn_scratch[t * N + s];
+            }
+            float sum = 0.0f;
+            for (int s = 0; s < n_tokens; s++) {
+                attn_scratch[t * N + s] = expf(attn_scratch[t * N + s] - max_val);
+                sum += attn_scratch[t * N + s];
+            }
+            float inv_sum = 1.0f / (sum + 1e-30f);
+            for (int s = 0; s < n_tokens; s++) {
+                attn_scratch[t * N + s] *= inv_sum;
+            }
+        }
 
-        // Weighted sum (simplified for T=1 case)
-        for (int i = 0; i < head_dim; i++)
-            out_h[i] = vh[i];  // placeholder until multi-token support
+        // Weighted sum: output[t][h] = sum_s attn[t][s] * v[s][h]
+        for (int t = 0; t < n_tokens; t++) {
+            for (int i = 0; i < (int)head_dim; i++) {
+                float wsum = 0.0f;
+                for (int s = 0; s < n_tokens; s++) {
+                    wsum += attn_scratch[t * N + s] * v[s * D + base + i];
+                }
+                output[t * D + base + i] = wsum;
+            }
+        }
     }
 }
 
@@ -411,12 +441,11 @@ void vm_forward(vm_state_t *state, const float *pixels, int H, int W,
         // In-place reshape: qkv [N, 3D] → q [N, D], k [N, D], v [N, D]
         // Already laid out this way since we write to qkv linearly
 
-        // Attention per head (simplified full SDPA)
+        // Attention per head — full SDPA over all N tokens
         float *attn_out = scratch + 3 * N * D;
-        for (int i = 0; i < N; i++) {
-            vm_attention(&q[i * D], &k[i * D], &v[i * D],
-                         &attn_out[i * D], D, VM_ENC_N_HEADS);
-        }
+        float *attn_scratch = scratch + 4 * N * D;  // [N, N] attention score matrix
+        float head_dim = (float)D / (float)VM_ENC_N_HEADS;
+        vm_attention(q, k, v, attn_out, attn_scratch, N, N, VM_ENC_N_HEADS, head_dim);
 
         // Output projection
         float *proj_out = scratch;  // reuse qkv space
