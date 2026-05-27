@@ -642,10 +642,13 @@ void wubu_ssm_forward(const float *x, int B, int T,
     
     // Chunked SSM path for prefill (T >= CS tokens, CS compiled into chunked function)
     // Falls through to sequential for decode (T=1) or small batches.
-    // Override threshold via SSM_CHUNK_MIN env var (default 4096 — only triggers at large context).
+    // Override threshold via SSM_CHUNK_MIN env var (default 1M — sequential always used for correctness).
     // NOTE: CS>1 (default 2) causes FP accumulation errors that amplify through 30 SSM layers,
     // producing wrong token selection. Sequential path is always correct.
-    int ssm_chunk_min = getenv("SSM_CHUNK_MIN") ? atoi(getenv("SSM_CHUNK_MIN")) : 4096;
+    // FIXME: CS>1 numerical stability is a known deep issue — the chunked recurrence produces
+    // fundamentally different results (cos-sim=0.026 at T=4). Fix requires full matrix exponential
+    // reformulation, not just higher precision accumulators.
+    int ssm_chunk_min = getenv("SSM_CHUNK_MIN") ? atoi(getenv("SSM_CHUNK_MIN")) : 1000000;
     if (T >= ssm_chunk_min && !getenv("FORCE_CPU_SSM_SEQ")) {
         wubu_ssm_chunked_recurrence(B, T, q_norm, k_norm, v_conv,
                                      beta_flat, gate_flat,
@@ -1428,7 +1431,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
     // RMSNorm sees [B, T*KV_HEADS, HEAD_DIM] same layout
     wubu_rms_norm(B, T * GQA_KV_HEADS, GQA_HEAD_DIM, K, w->attn_k_norm_weight, 1e-6f, K_norm);
     
-    // Step 4: IMRoPE (Interleaved MultiRoPE)
+    // Step 4: IMRoPE (Interleaved MultiRoPE) with pre-computed theta table
     // Qwen3.6: rope.dimension_sections=[11,11,10,0], rope.dimension_count=64, rope.freq_base=10000000.0
     // For text-only generation: all position IDs equal, reduces to standard RoPE
     // Apply to first N_ROT=64 dims of each head for both Q and K
@@ -1438,6 +1441,8 @@ void wubu_gqa_forward(const float *x, int B, int T,
     // RoPE extrapolation (Qwen2.5-1M §3.1):
     //   ROPE_SCALE_FACTOR=0.25 extends 64K→256K (4x)
     //   theta_i(pos) = (pos * scale) * freq_base^{-2i/N_ROT}
+    //
+    // Optimization: pre-compute theta_i table (static, once) to eliminate powf() calls
     {
         const int n_rot = 64;  // rope.dimension_count
         const float freq_base = 10000000.0f;
@@ -1445,16 +1450,27 @@ void wubu_gqa_forward(const float *x, int B, int T,
         const char *rope_scale_env = getenv("ROPE_SCALE_FACTOR");
         const float scale_factor = rope_scale_env ? atof(rope_scale_env) : 1.0f;
         
+        // Static pre-computed theta_i table (freq_base^{-2i/n_rot})
+        // Computed once, reused across all forward calls
+        static float rope_theta[32];
+        static int rope_theta_ready = 0;
+        if (!rope_theta_ready) {
+            for (int i = 0; i < q_rot_pairs; i++)
+                rope_theta[i] = powf(freq_base, -2.0f * i / (float)n_rot);
+            rope_theta_ready = 1;
+        }
+        
         for (int b = 0; b < B; b++) {
             for (int t = 0; t < T; t++) {
                 float pos = (float)(b * T + t);
+                float pos_scale = pos * scale_factor;
                 
                 // Apply to all 16 Q heads — fully parallel
                 #pragma omp parallel for
                 for (int h = 0; h < GQA_Q_HEADS; h++) {
                     float *q_h = Q_norm + ((b * T + t) * GQA_Q_HEADS + h) * GQA_HEAD_DIM;
                     for (int i = 0; i < q_rot_pairs; i++) {
-                        float theta = (pos * scale_factor) * powf(freq_base, -2.0f * i / (float)n_rot);
+                        float theta = pos_scale * rope_theta[i];
                         float cos_t = cosf(theta);
                         float sin_t = sinf(theta);
                         float x0 = q_h[2*i];
@@ -1468,7 +1484,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 for (int h = 0; h < GQA_KV_HEADS; h++) {
                     float *k_h = K_norm + ((b * T + t) * GQA_KV_HEADS + h) * GQA_HEAD_DIM;
                     for (int i = 0; i < q_rot_pairs; i++) {
-                        float theta = (pos * scale_factor) * powf(freq_base, -2.0f * i / (float)n_rot);
+                        float theta = pos_scale * rope_theta[i];
                         float cos_t = cosf(theta);
                         float sin_t = sinf(theta);
                         float x0 = k_h[2*i];
@@ -1526,6 +1542,17 @@ void wubu_gqa_forward(const float *x, int B, int T,
     // This reduces K cache reads by 8× at 256k context.
     // Each tile processes KV head 0 (Q heads 0-7) or KV head 1 (Q heads 8-15).
     
+    // Pre-allocate attention weight buffer once (removes per-position malloc/free at 512k)
+    int max_attend = use_sparse ? max_sparse : (total_kv < sparse_min_len ? total_kv : max_sparse);
+    float *all_attn_w = NULL;
+    if (max_attend > 0) {
+        all_attn_w = (float *)malloc((size_t)GQA_Q_HEADS * max_attend * sizeof(float));
+        if (!all_attn_w) {
+            fprintf(stderr, "GQA: attn_w pre-alloc failed (%zu)\n", (size_t)GQA_Q_HEADS * max_attend * 4);
+            goto gqa_alloc_fail;
+        }
+    }
+    
     for (int b = 0; b < B; b++) {
         for (int t_q = 0; t_q < T; t_q++) {
             int global_t = cache_len + b * T + t_q;
@@ -1558,11 +1585,8 @@ void wubu_gqa_forward(const float *x, int B, int T,
             }
             
             // Pre-allocate per-Q-head attention weights (sparse or full)
-            float *all_attn_w = (float *)malloc((size_t)GQA_Q_HEADS * sparse_count * sizeof(float));
-            if (!all_attn_w) { 
-                fprintf(stderr, "GQA: attn_w alloc failed (%zu)\n", (size_t)GQA_Q_HEADS * attend_len * 4);
-                goto gqa_alloc_fail;
-            }
+            // Buffer was pre-allocated above the position loop — just use it
+            // (all_attn_w has capacity for max_attend positions)
             
             #pragma omp parallel for if(attend_len > 64)
             for (int _tk = 0; _tk < sparse_count; _tk++) {
@@ -1672,10 +1696,11 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 
                 // Free per-head attention weights (all stored in all_attn_w)
             }
-            // Free the tiled attention weight buffer
-            free(all_attn_w);
         }
     }
+    // Free pre-allocated attention weight buffer
+    free(all_attn_w);
+    all_attn_w = NULL;
     
     // Step 6: Gate (sigmoid)
     float *gate_sig = (float *)malloc(N * q_dim * sizeof(float));
@@ -1711,6 +1736,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
     return;
 
 gqa_alloc_fail:
+    free(all_attn_w);
     free(sparse_buf);
     free(Q_full);
     free(gate);

@@ -81,7 +81,7 @@
 | 071 | tools/gen_text.c | 90 | "GPU output proj disabled for now — use CPU" | 🟡 |
 | 072 | src/wubu_model.c | 269 | "MoE disabled by default (memory: 3.2 GB/layer)" | 🟡 |
 | 073 | src/wubu_model.c | 655 | "GPU MoE (disabled by FORCE_CPU_MOE env var)" | 🟡 |
-| 074 | src/wubu_ssm.c | TBD | "SSM_CHUNK_MIN=4096 (chunked path broken by FP accumulation)" | 🔴 |
+| 074 | src/wubu_ssm.c | 648 | "SSM_CHUNK_MIN=1000000 (chunked path disabled — FP breakage documented)" | 🟡 |
 | 075 | src/wubu_ssm.c | TBD | GPU_SUPPORT #ifdef blocks in ssm_forward | 🟡 |
 | 076-100 | (extensions) | | Unreachable GPU paths, dead #ifdef code | 🟡 |
 
