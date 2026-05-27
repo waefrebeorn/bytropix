@@ -11,7 +11,7 @@
 
 | Row | Theme | Cells | Description | Coverage |
 |-----|-------|-------|-------------|----------|
-| **A** | Baseline & Profile | 001-010 | Benchmarks, timing, memory | ✅ 9/10 |
+| **A** | Baseline & Profile | 001-010 | Benchmarks, timing, memory | ✅ 10/10 |
 | **B** | Prefill Speed | 011-025 | Projection batching, AVX2 norms | ✅ 10/15 |
 | **C** | Decode Speed | 026-040 | Already beating llama.cpp | ✅ 2/15 |
 | **D** | MoE Optimization | 041-055 | Expert prefetch wired but cold | ⬜ 2/15 |
@@ -34,7 +34,7 @@
 | 007 | Reference: llama.cpp gen | — | **2.7 tok/s** | ✅ |
 | 008 | Decode margin vs ref | 2.7-2.9 vs 2.7 | **bytropix wins by 0-7%** | ✅ |
 | 009 | Memory | 10.7GB + 2GB emb + 200MB runtime | 12.9GB virtual (swaps) | ✅ |
-| 010 | Full 40-layer profile | PROFILE=1 caps at L0-2 | Needs code mod | ⬜ |
+| 010 | Full 40-layer profile | PROFILE=1 (all layers now, not just L0-2) | All layers timed | ✅ |
 
 ## Row C — Decode Speed
 

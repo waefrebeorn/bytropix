@@ -687,7 +687,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }  // close else block (non-SSM)
         
         double t1 = wall_time();
-        if (getenv("PROFILE") && l < 3) {
+        if (getenv("PROFILE")) {
             fprintf(stderr, "  L%d %s attn: %.3fms\n", l, layer->is_ssm ? "SSM" : "GQA", (t1 - t0) * 1000.0);
         }
         
@@ -753,7 +753,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }
         
         double t_moe1 = wall_time();
-        if (getenv("PROFILE") && l < 3) {
+        if (getenv("PROFILE")) {
             fprintf(stderr, "  L%d MoE: %.3fms\n", l, (t_moe1 - t_moe0) * 1000.0);
         }
         

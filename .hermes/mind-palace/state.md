@@ -19,6 +19,7 @@
 | 244 | KV cache Q4_0 verified | Already active via default `#define KV_CACHE_Q4_0 1` in wubu_model.h. 4:1 compression vs F16. |
 | 245 | Attention sparsity verified | `USE_SPARSE_ATTN` env var wired, NSA pattern from DeepSeek-V3.2. |
 | 205 | SSM heap allocs resolved | Cell 241 eliminates 17×malloc/layer — covers this gap. |
+| 010 | PROFILE all layers | Removed `l < 3` guard — prints all 40 layers now |
 
 ## Current Bottleneck
 - Layer forward: ~200ms (82% of 244ms) — DDR4 bandwidth bound
