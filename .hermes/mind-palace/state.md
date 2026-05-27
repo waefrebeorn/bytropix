@@ -24,6 +24,7 @@ The NES emulator is a pre-built test workload. Do NOT modify its internals.
 1. **GCC -O3 dead-code elimination**: `if(0){}else{...}` + `#pragma omp parallel for` inside dead block → compiler eliminates entire else branch. Fix: remove wrapper entirely.
 2. **AVX2 vec_dot zeros**: `ggml_vec_dot_q4_K_q8_K_avx2` produces zeros on i5-8365U. Fix: force generic vec_dot.
 3. **IQ2_M precision floor**: 2-bit quantization at 2048-dim cannot reproduce >0.99. Pure random noise (correl=-0.024, bias=-0.05).
+4. **sparse_buf malloc → stack**: GQA sparse attention buffer was malloc/free 10× per step. Changed to stack allocation (8KB) with heap fallback for extreme configs.
 
 ### Branch
 - `cpu-optimize-may26` — all parity fixes (ahead of main, pushed)

@@ -21,6 +21,7 @@
 |:------:|--------|--------|--------|
 | ✅ | **Output proj fix** | **ZERO→REAL logits** | GCC -O3 + if(0) wrapper killed else branch. AVX2 vec_dot produced zeros. Both fixed. |
 | ✅ | **Cos-sim vs llama.cpp** | **0.974** | IQ2_M quantization floor (2-bit 2048-dim). Pure random noise. Need Q3_K+ to reach >0.99. |
+| ✅ | **sparse_buf stack alloc** | **-10 malloc/free per step** | Sparse attention buffer moved to stack (8KB). Only heap-allocates for extreme configs (>2048 positions). |
 | ✅ | **Local inference** | **serve_local.py** | All 4 test scripts patched from proxy to real local CPU inference. |
 | ✅ | **Test infra** | **6/6 tests** | `test-512k-suite.sh` — KV alloc, sparse attn, memory, RoPE, NES build all verified. |
 | ✅ | **512K context** | **2.8 tok/s** | KV cache at 524288 confirmed. Context-size independent decode. |

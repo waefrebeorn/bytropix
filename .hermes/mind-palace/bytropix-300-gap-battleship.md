@@ -149,8 +149,8 @@
 | 242 | MoE shared expert: quantize x once for gate+up | ~10% MoE speedup | ✅ |
 | 243 | Q4_K output proj threaded for batch | Already fixed (52x) | ✅ |
 | 244 | KV cache to Q4_0 format (2GB→500MB) | Memory | ✅ |
-| 245 | Attention sparsity wire for decode | Long-context | 🟢 |
-| 246 | MoE expert prefetch verification benchmark | Verification | 🟢 |
+| 245 | Attention sparsity wire for decode | Long-context | ✅ |
+| 246 | MoE expert prefetch verification benchmark | No gain (8MB L3 too small) | ✅ BENCHED |
 | 247-270 | (minor improvements) | | 🟢 |
 
 ### Row J — Documentation & Roadmap (30 cells)
@@ -218,6 +218,18 @@ Total verifiable gaps: **269 (300 minus 31 already fixed/complete)** — but 99+
 
 **Parity reached: 0.974 cos-sim vs llama.cpp — IQ2_M quantization floor.**
 Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machine.
+
+**Phase 3 — Gainz:**
+| Cell | Gap | Status |
+|------|-----|--------|
+| 241 | SSM buffer pre-allocation | ✅ |
+| 242 | MoE shared expert quantize-once | ✅ |
+| 243 | Q4_K output proj threaded | ✅ |
+| 244 | KV cache Q4_0 format | ✅ |
+| 245 | Attention sparsity stack alloc | ✅ |
+| 246 | MoE expert prefetch | ✅ BENCHED (no gain) |
+
+Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
 
 ---
 

@@ -1510,12 +1510,17 @@ void wubu_gqa_forward(const float *x, int B, int T,
     int sparse_g = getenv("SPARSE_G") ? atoi(getenv("SPARSE_G")) : 128;   // global positions count
     int sparse_min_len = getenv("SPARSE_MIN") ? atoi(getenv("SPARSE_MIN")) : 4096;  // min ctx for sparse
     
-    // Pre-allocate sparse index buffer (reused per query position)
+    // Pre-allocate sparse index buffer (stack for small, heap for extreme)
     int max_sparse = sparse_w + sparse_g + 1;  // window + global + self
+    int sparse_stack[2048];  // up to 2048 ints = 8KB stack (max realistic: 512+128+1=641)
     int *sparse_buf = NULL;
     if (use_sparse && total_kv >= sparse_min_len) {
-        sparse_buf = (int *)malloc((size_t)max_sparse * sizeof(int));
-        if (!sparse_buf) use_sparse = 0;
+        if (max_sparse <= 2048) {
+            sparse_buf = sparse_stack;
+        } else {
+            sparse_buf = (int *)malloc((size_t)max_sparse * sizeof(int));
+            if (!sparse_buf) use_sparse = 0;
+        }
     } else {
         use_sparse = 0;
     }
@@ -1732,12 +1737,12 @@ void wubu_gqa_forward(const float *x, int B, int T,
     free(K_norm);
     free(attn_out);
     free(gate_sig);
-    free(sparse_buf);
+    if (sparse_buf && sparse_buf != sparse_stack) free(sparse_buf);
     return;
 
 gqa_alloc_fail:
     free(all_attn_w);
-    free(sparse_buf);
+    if (sparse_buf && sparse_buf != sparse_stack) free(sparse_buf);
     free(Q_full);
     free(gate);
     free(K);
