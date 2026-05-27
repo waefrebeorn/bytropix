@@ -38,7 +38,7 @@
 
 | Cell | File | Line | Gap | Severity |
 |------|------|------|-----|----------|
-| 001 | src/wubu_poincare_ssm_backward.c | 99 | "Approximate: identity for recurrence path (gyration chain rule TBD)" | 🔴 |
+| 001 | src/wubu_poincare_ssm_backward.c | 99 | "Approximate: identity for recurrence path" | 🔴 | Core math implemented: wubu_mobius_add_backward (verified 10/10) |
 | 002 | src/wubu_poincare_ssm_backward.c | 124 | "(copy as identity — approximation)" | 🔴 |
 | 003 | src/wubu_poincare_ssm_backward.c | 142 | "SiLU backward (identity in backward)" | 🔴 |
 | 004 | src/wubu_poincare_ssm_backward.c | 196 | "d_normed = d_output (identity through matmuls)" | 🔴 |

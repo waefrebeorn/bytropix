@@ -32,6 +32,15 @@
 void wubu_mobius_add(const float *x, const float *y, int d, float R, float *z);
 
 // ============================================================
+// Möbius addition backward (vector-Jacobian product)
+// Computes dx, dy given dz for z = x ⊕ y.
+// Pass NULL for dx or dy to skip that gradient.
+// ============================================================
+void wubu_mobius_add_backward(const float *x, const float *y, int d, float R,
+                               const float *z, const float *dz,
+                               float *dx, float *dy);
+
+// ============================================================
 // Möbius scalar multiplication: z = r ⊗ x
 // Scales a point in the Poincaré ball by scalar r.
 // Implemented as: exp_map(r * log_map(x))
