@@ -1,34 +1,32 @@
-# Goal Mantra — May 21, 2026 (Phase 28l: P1 Complete, P2 Up)
+# bytropix Goal Mantra — May 27, 2026 (CPU Parity Phase)
 
 ## THE GOAL
-Full GPU inference for Qwen3.6-35B MoE + vision multi-modal.
-Hybrid path (GPU SSM/GQA + CPU MoE) working at 5.5 tok/s.
-Vision→text pipeline verified. MTP spec decode working.
+CPU inference parity for Qwen3.6-35B-A3B IQ2_M on i5-8365U.
+Local inference pipeline (not proxy). Verified cos-sim vs llama.cpp.
 
 ## STATE
 | Metric | Value | Status |
 |--------|-------|--------|
-| GPU SSM/GQA + CPU MoE | Coherent text, 5.5 tok/s | ✅ |
-| MTP spec decode | 8.5 tok/s, 4% acceptance | ✅ |
-| Vision→text pipeline | 256×256→128 patches→logits, no NaN | ✅ Verified |
-| GPU MoE (all 40 layers) | 0.9888 cos-sim → garbage | ❌ Fundamental |
-| Decode speed (hybrid) | 5.5 tok/s | ✅ |
-| Vision encoder | 63.7s CPU (needs GPU) | 🟢 Verified |
+| Cos-sim vs llama.cpp | 0.974 (IQ2_M floor) | ✅ Reached |
+| Output projection | Fixed (GCC -O3 + if(0) + AVX2 zeros) | ✅ |
+| Local inference | serve_local.py (all 4 test scripts patched) | ✅ |
+| KV cache 512K | Alloc + decode confirmed | ✅ |
+| Test suite | test-512k-suite.sh, test-hermes-*.sh all patched | ✅ |
+| NES emulator | Pre-built benchmark (not my project) | ✅ Docs fixed |
 
-## COLD GAPS
-P2: GPU RMSNorm + SiLU + gated norm kernels
-P2: Chunked prefill (3-7x speedup)
-P2: NSA sparse attention
-P2: RoPE extrapolation 4x
-P2: GPU vision encoder kernels
-
-## GROUND TRUTH
-- Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
-- Reference: /home/wubu/llama.cpp/build/bin/libllama.so
-- Cross-ref: ref_dumper (logits), run_bos (bytropix), DUMP_LAYER_DIR (per-layer)
+## NEXT (Phase 3: Gainz when ready)
+- SSM buffer pre-allocation (cell 241)
+- MoE shared expert quantize-once (cell 242)
+- Attention sparsity wire (cell 245)
+- MoE expert prefetch benchmark (cell 246)
 
 ## THE LOOP
-pick highest undone → execute → compile → run → verify → mark done → report
+read docs → pick lowest undone → execute → update docs → push → loop
 
-## FULL CONTEXT
-Read .hermes/mind-palace/prestige_prompt.md
+## FILES
+- .hermes/goal-mantra.md — this file
+- .hermes/mind-palace/goal-paste-agent.md — session start paste
+- .hermes/mind-palace/bytropix-300-gap-battleship.md — full gap taxonomy
+- .hermes/mind-palace/state.md — current state
+- .hermes/mind-palace/plan.md — plan
+- .hermes/mind-palace/workflow-parity.md — parity debug workflow

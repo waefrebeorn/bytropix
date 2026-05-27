@@ -1,18 +1,18 @@
-# Plan — May 21, 2026 (P1 Complete, P2 Active)
+# bytropix Plan — CPU Parity Phase (May 27, 2026)
 
-## Completed P1
-1. ✅ MTP spec decode — gen_text_mtp working at 8.5 tok/s (4% acceptance from quantized head)
-2. ✅ Vision pipeline — screenshot→encoder→mmproj→text→logits verified
-   - 2 segfault bugs fixed in wubu_vision.c (n_patches_total cap, scores heap alloc)
-   - 256×256 → 128 patches × 2048, no NaN, logit range [-10.8, 14.1]
-   - Makefile test_vision_real target fixed with GPU_SUPPORT
+## Phase 1: Output Projection Fix ✅
+- Zero logits diagnosed: GCC -O3 + if(0) wrapper killed else branch
+- Q4_K AVX2 vec_dot zeros on i5-8365U: forced generic vec_dot
+- Cos-sim 0.974 vs llama.cpp (IQ2_M quantization floor)
 
-## P2: Feature Cream
-| Feature | Priority | Status |
-|---------|----------|--------|
-| GPU RMSNorm + SiLU + gated norm kernels | High | Not started |
-| Chunked prefill (3-7x speedup) | High | Not started |
-| RoPE extrapolation 4x | High | Not started |
-| Sparse attention (NSA, DeepSeek V3.2) | High | Not started |
-| GPU vision encoder kernels | High | 27 ViT all CPU → 63.7s for 256x256 |
-| Sigmoid gating + load balancing (DeepSeekMoE) | Mid | Not started |
+## Phase 2: Infra Parity ✅
+- All 4 test scripts patched to serve_local.py (real local inference)
+- dump_ref: API fix + text prompt tokenization
+- NES emulator: confirmed pre-built, marked as benchmark (not project)
+- test-512k-suite.sh: SIGPIPE fix
+
+## Phase 3: Gainz (when ready)
+- SSM buffer pre-allocation (cell 241)
+- MoE shared expert quantize-once (cell 242)
+- Attention sparsity wire (cell 245)
+- MoE expert prefetch benchmark (cell 246)

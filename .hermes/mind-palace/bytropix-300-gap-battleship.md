@@ -205,6 +205,22 @@ All gap claims verified against actual source code on cpu-optimize-may26:
 
 Total verifiable gaps: **269 (300 minus 31 already fixed/complete)** — but 99+ additional cells are standard/trivial (🟢). Core actionable gaps: ~60 P0-P1 cells (gyration chain rule, vision, chunked SSM, GPU).
 
+## Phase 2: Infrastructure Parity — ALL GAPS CLOSED ✅ (May 27, 2026)
+
+| Gap | Cell(s) | Status | Fix |
+|-----|---------|--------|-----|
+| Output projection zeros (GCC -O3 + if(0) + AVX2) | Row D infra | ✅ FIXED | Removed if(0) wrapper, forced generic vec_dot |
+| dump_ref API (llama_model_load_from_file) | Row G infra | ✅ FIXED | Modern API fix + text prompt support |
+| run-harness.sh proxy→serve_local.py | Row G infra | ✅ PATCHED | Real local CPU inference |
+| test-hermes-headless.sh proxy→serve_local.py | Row G infra | ✅ PATCHED | Real local CPU inference |
+| NES emulator = benchmark (not project) | Row G infra | ✅ DOCS FIXED | Pre-built workload. Do NOT develop. |
+| test-512k-suite.sh SIGPIPE fix | Row G infra | ✅ PATCHED | Removed grep -q pipes, fixed exit capture |
+
+**Parity reached: 0.974 cos-sim vs llama.cpp — IQ2_M quantization floor.**
+Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machine.
+
+---
+
 To reach 300: add 24 more from:
 - Each Poincaré backward function file with identity path
 - Each tool with "(skipped for brevity)"

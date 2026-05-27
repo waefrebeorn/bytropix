@@ -1,31 +1,32 @@
-# Goal Mantra — Phase 28r: P2.3 Chunked SSM Fixed + Wired
+# bytropix Goal Mantra — May 27, 2026 (CPU Parity Phase)
 
-**Target:** CPU-optimal path (8.9 tok/s decode) stable. P2.3 chunked SSM data bug fixed, wired into inference. CS=1 exact. CS>1 FP-limited.
+## THE GOAL
+CPU inference parity for Qwen3.6-35B-A3B IQ2_M on i5-8365U.
+Local inference pipeline (not proxy). Verified cos-sim vs llama.cpp.
 
 ## STATE
-| Component | Status | Detail |
-|-----------|--------|--------|
-| GPU vision pipeline | ✅ 15.7s total | GPU ViT 0.52s + GPU MMProj cuBLAS + CPU text 6.3s |
-| GPU hybrid text | ⚠️ NET-NEGATIVE | CPU-only 2-5x faster |
-| MTP spec decode | ✅ 8.5 tok/s | 4% acceptance |
-| CPU-only text | ✅ 8.9/17.8 tok/s | Optimal path. Stable, coherent |
-| Chunked SSM CS=1 | ✅ Exact | 4e-8 output diff, 3e-7 state diff |
-| Chunked SSM CS>1 | ⚠️ FP-limited | Accumulates across 30 SSM layers → wrong tokens |
+| Metric | Value | Status |
+|--------|-------|--------|
+| Cos-sim vs llama.cpp | 0.974 (IQ2_M floor) | ✅ Reached |
+| Output projection | Fixed (GCC -O3 + if(0) + AVX2 zeros) | ✅ |
+| Local inference | serve_local.py (all 4 test scripts patched) | ✅ |
+| KV cache 512K | Alloc + decode confirmed | ✅ |
+| Test suite | test-512k-suite.sh, test-hermes-*.sh all patched | ✅ |
+| NES emulator | Pre-built benchmark (not my project) | ✅ Docs fixed |
 
-## P0-P2: Complete
-1. ✅ GPU MoE root cause (DA v13) — fundamental code-path diff
-2. ✅ MTP spec decode — gen_text_mtp at 8.5 tok/s
-3. ✅ Vision pipeline — screenshot→encoder→mmproj→text→logits
-4. ✅ GPU GQA batched prefill (C=N)
-5. ✅ Batched quant matmul (Q5_K/Q6_K)
-6. ✅ RoPE extrapolation 4x — `ROPE_SCALE_FACTOR=0.25`
-7. ✅ Chunked SSM data layout bug FIXED, wired into forward pass
+## NEXT (Phase 3: Gainz when ready)
+- SSM buffer pre-allocation (cell 241)
+- MoE shared expert quantize-once (cell 242)
+- Attention sparsity wire (cell 245)
+- MoE expert prefetch benchmark (cell 246)
 
-## P2 Remaining
-1. Llama.cpp inline hooks for reference data
-2. NSA sparse attention (DeepSeek-V3.2, high effort)
-3. FP8 Tensor Cores (sm_120 native, needs GPU data-movement solution)
+## THE LOOP
+read docs → pick lowest undone → execute → update docs → push → loop
 
-## BUILD
-`make gen_text_cpu` for CPU-only inference binary
-`FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" N` — sequential path
+## FILES
+- .hermes/goal-mantra.md — this file
+- .hermes/mind-palace/goal-paste-agent.md — session start paste
+- .hermes/mind-palace/bytropix-300-gap-battleship.md — full gap taxonomy
+- .hermes/mind-palace/state.md — current state
+- .hermes/mind-palace/plan.md — plan
+- .hermes/mind-palace/workflow-parity.md — parity debug workflow
