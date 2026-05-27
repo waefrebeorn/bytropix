@@ -14,6 +14,7 @@
 ## Cells Completed This Session
 | Cell | Vector | Detail |
 |------|--------|--------|
+| 173 | Benchmark automation | tools/run_benchmark.sh — prefill/decode/PROFILE in one shot. |
 | 241 | SSM buffer pre-allocation | Removed 17× malloc/free per SSM layer. `ssm_workspace_t` pre-allocated once in `wubu_model_forward_from_embd`, reused across 30 SSM layers. 64-byte aligned. |
 | 244 | KV cache Q4_0 verified | Already active via default `#define KV_CACHE_Q4_0 1` in wubu_model.h. 4:1 compression vs F16. |
 | 245 | Attention sparsity verified | `USE_SPARSE_ATTN` env var wired, NSA pattern from DeepSeek-V3.2. |
@@ -30,7 +31,7 @@ DDR4 (25GB/s): layer forward 200ms is the floor. No remaining cells improve this
 ## 300-Gap Battleship
 | Status | Count |
 |--------|-------|
-| ✅ Completed | 28/300 |
+| ✅ Completed | 29/300 |
 | 🔴 P0 Math (gyration, vision) | ~60 |
 | 🟡 P1-P2 Medium | ~60 |
 | 🟢 P3 Low/Docs | ~152 |

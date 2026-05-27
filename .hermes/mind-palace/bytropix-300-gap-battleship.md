@@ -114,7 +114,7 @@
 |------|------|-----|----------|
 | 171 | regression | test_regression.c only checks top-k match | 🟡 |
 | 172 | accuracy | No automated cos-sim validation | 🟡 |
-| 173 | perf | No benchmark automation script | 🟡 |
+| 173 | perf | Benchmark automation script | tools/run_benchmark.sh | ✅ |
 | 174 | CI | No GitHub Actions or test runner | 🟡 |
 | 175-200 | validation | Missing comprehensive test for each kernel | 🟢 |
 
@@ -193,7 +193,7 @@ All gap claims verified against actual source code on cpu-optimize-may26:
 - `train_stub.c` — confirmed FD gradient only
 - 200+ tools in tools/ — confirmed overlapping dump/check/test utilities
 
-Total verifiable gaps: **272 (300 minus 28 already fixed/complete)**
+Total verifiable gaps: **271 (300 minus 29 already fixed/complete)**
 
 To reach 300: add 24 more from:
 - Each Poincaré backward function file with identity path
