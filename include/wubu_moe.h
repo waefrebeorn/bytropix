@@ -54,6 +54,11 @@ typedef struct {
     // GPU context (set by wubu_model.c when GPU is active). If non-NULL,
     // wubu_moe_forward uses GPU for the 8 expert quantized matmuls.
     void *gpu_ctx;
+
+    // Q8_0 lazy dequant cache for MTP draft head (blk.40 only).
+    // When non-NULL, MoE forward uses Q8_0-cached version of IQ2 experts.
+    // Cache struct defined in mtp_q8_cache.h, cast to mtp_q8_cache_t*.
+    void *q8_cache;
 } moe_weights_t;
 
 // MoE forward pass for one layer

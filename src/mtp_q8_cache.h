@@ -5,14 +5,15 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 // Simple 8-slot direct-mapped cache: stores Q8_0-dequantized expert weights.
 // Key = expert_index, Value = 3 Q8_0 weight blobs (gate, up, down) + LRU timestamp.
 // Each Q8_0 blob = Q8_0-block-encoded weights (2048×512 → 1.1MB).
 #define MTP_Q8_CACHE_SLOTS 12  // 8 routed + 1 shared + 3 spare
 
-// Size of one Q8_0-encoded weight matrix: D_MODEL × D_FF × 1.0625
-#define MTP_Q8_WEIGHT_BYTES ((int)((int64_t)D_MODEL * D_FF * 34 / 32))
+// Size of one Q8_0-encoded weight matrix: D_MODEL × D_FF as block_q8_K blocks
+#define MTP_Q8_WEIGHT_BYTES ((int)(((int64_t)D_MODEL * D_FF + 255) / 256 * (int64_t)sizeof(block_q8_K)))
 
 typedef struct {
     int   key;               // expert index (-1 = empty)
@@ -36,13 +37,15 @@ static inline void mtp_q8_cache_init(mtp_q8_cache_t *cache) {
 }
 
 // Find slot for given key, or evict LRU
-static inline mtp_q8_cache_slot_t *mtp_q8_cache_get_slot(mtp_q8_cache_t *cache, int key) {
+// was_miss: set to true if a new slot was allocated (caller must fill)
+static inline mtp_q8_cache_slot_t *mtp_q8_cache_get_slot(mtp_q8_cache_t *cache, int key, bool *was_miss) {
     cache->tick++;
     
     // Check for existing entry
     for (int i = 0; i < MTP_Q8_CACHE_SLOTS; i++) {
         if (cache->slots[i].key == key) {
             cache->slots[i].lru_tick = cache->tick;
+            *was_miss = false;
             return &cache->slots[i];
         }
     }
@@ -60,6 +63,7 @@ static inline mtp_q8_cache_slot_t *mtp_q8_cache_get_slot(mtp_q8_cache_t *cache, 
     mtp_q8_cache_slot_t *slot = &cache->slots[lru_idx];
     slot->key = key;
     slot->lru_tick = cache->tick;
+    *was_miss = true;
     return slot;
 }
 
@@ -72,7 +76,7 @@ static inline void mtp_q8_cache_fill(mtp_q8_cache_slot_t *slot,
         int64_t src_bytes = gguf_raw_size(load_type_gate, D_MODEL * D_FF);
         const uint8_t *src_gate = moe->ffn_gate_exps_q + (int64_t)e * src_bytes;
         float *f32_buf = (float *)malloc((size_t)D_MODEL * D_FF * sizeof(float));
-        gguf_dequantize_k(src_gate, load_type_gate, D_MODEL * D_FF, f32_buf);
+        gguf_dequantize(src_gate, load_type_gate, D_MODEL * D_FF, f32_buf);
         quantize_row_q8_K(f32_buf, (block_q8_K *)slot->gate_q8, D_MODEL * D_FF);
         free(f32_buf);
     }
@@ -82,7 +86,7 @@ static inline void mtp_q8_cache_fill(mtp_q8_cache_slot_t *slot,
         int64_t src_bytes = gguf_raw_size(load_type_up, D_MODEL * D_FF);
         const uint8_t *src_up = moe->ffn_up_exps_q + (int64_t)e * src_bytes;
         float *f32_buf = (float *)malloc((size_t)D_MODEL * D_FF * sizeof(float));
-        gguf_dequantize_k(src_up, load_type_up, D_MODEL * D_FF, f32_buf);
+        gguf_dequantize(src_up, load_type_up, D_MODEL * D_FF, f32_buf);
         quantize_row_q8_K(f32_buf, (block_q8_K *)slot->up_q8, D_MODEL * D_FF);
         free(f32_buf);
     }
@@ -92,7 +96,7 @@ static inline void mtp_q8_cache_fill(mtp_q8_cache_slot_t *slot,
         int64_t src_bytes = gguf_raw_size(load_type_down, D_FF * D_MODEL);
         const uint8_t *src_down = moe->ffn_down_exps_q + (int64_t)e * src_bytes;
         float *f32_buf = (float *)malloc((size_t)D_FF * D_MODEL * sizeof(float));
-        gguf_dequantize_k(src_down, load_type_down, D_FF * D_MODEL, f32_buf);
+        gguf_dequantize(src_down, load_type_down, D_FF * D_MODEL, f32_buf);
         quantize_row_q8_K(f32_buf, (block_q8_K *)slot->down_q8, D_FF * D_MODEL);
         free(f32_buf);
     }

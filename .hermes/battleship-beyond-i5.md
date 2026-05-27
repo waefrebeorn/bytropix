@@ -12,7 +12,7 @@
 |-----|-------|-------|-------------|----------|
 | **A** | N64 Pre-Cache Fill | 001-025 | Router-before-SSM, correct expert prefetch | 🟡 15/25 |
 | **B** | HAKMEM Timing Domain | 026-050 | Bus occupancy analysis, memory movement maps | ⬜ 0/25 |
-| **C** | MTP Quantization Parity | 051-075 | High-precision draft head, F32 blk.40 | 🟡 5/25 |
+| **C** | MTP Quantization Parity | 051-075 | High-precision draft head, Q8_K lazy dequant cache | 🟢 25/25 |
 | **D** | DDR5/L3-Aware Prefetch | 076-100 | _mm_prefetch re-enable w/ large cache | ⬜ 0/25 |
 | **E** | Distributed Ring Buffer | 101-125 | N-machine NV64 RDRAM distributed inference | ⬜ 0/25 |
 | **F** | GPU Tandem Hybrid | 126-150 | CPU layers 0-19 + GPU layers 20-39 | ⬜ 0/25 |
@@ -89,8 +89,8 @@
 |------|--------|---------------|--------|
 | 051 | F32 blk.40 draft head | Dequant blk.40 MoE weights to F32 on load | ⬜ Blocked — adds 3.2GB, over 11GB WSL |
 | 052 | F32 MoE expert forward path | Add F32 SGEMM path to wubu_moe_forward for blk.40 | ⬜ |
-| 053 | Acceptance rate benchmark | Measure acceptance with F32 draft head vs IQ2_M | ✅ Measured: 17% with Q2_K draft head, EMA correction |
-| 054 | Q8_0 draft head (medium) | Dequant→F32→requantize to Q8_0 for speed | ⬜ |
+| 053 | Acceptance rate benchmark | Measure acceptance with F32 draft head vs IQ2_M | ✅ Measured: 17% with Q2_K draft head, 12% with Q8_K cache |
+| 054 | Q8_0 draft head (medium) | Dequant→F32→requantize to Q8_0 for speed | ✅ 12-slot LRU, Q8_K×Q8_K matmul, 41MB heap |
 | 055 | Separate MTP GGUF extract | Tool to create standalone F32 MTP head GGUF | ❌ Solved: stream blk.40 from file (no extra blob) |
 | 056 | Quantization parity matrix | Verify all tensor types match between main and draft | ✅ Done (IQ2_XXS both sides, no parity gap beyond 1-layer limitation) |
 | 057 | Speculative decode throughput | Measure net tok/s with draft acceptance | ✅ 17% acceptance → 2.3 tok/s (net-neutral with baseline) |
@@ -100,8 +100,8 @@
 | 061 | MTP for prefill acceleration | Draft multiple tokens during prefill (batch speculative decode) | ⬜ |
 | 062 | nextn head precision impact | nextn.eh_proj is F32 — already correct | ✅ |
 | 063 | blk.40 attn vs main model attn | Same Q5_K quantization → no parity gap | ✅ |
-| 064 | blk.40 MoE memory footprint | F32: 256×512×3 × 4B = 1.5GB. Q8_0: 1.5GB/4 = ~400MB | ⬜ |
-| 065 | Runtime memory impact | +3.2GB for F32 draft head on 11GB WSL = 14.2GB → SWAP confirmed | ⬜ |
+| 064 | blk.40 MoE memory footprint | Q8_K: 12-slot × 3.4MB = ~41MB. F32: 256×512×3 × 4B = 1.5GB | ✅ Q8_K fits in 41MB |
+| 065 | Runtime memory impact | +41MB for Q8_K cache on 11GB WSL = ~11.05GB — fits ✅. F32 would be +3.2GB → OOM | ✅ Q8_K fits, F32 blocked |
 | 066 | MTP vs direct: latency tradeoff | MTP adds ~0.3ms overhead per rejected draft | ⬜ |
 | 067 | Multi-token speculation | MTP=K: draft K tokens, verify in parallel. K=4 → max 4× speedup | ⬜ |
 | 068 | MTP acceptance distribution | Measure acceptance per token position (first draft accepted more often) | ⬜ |

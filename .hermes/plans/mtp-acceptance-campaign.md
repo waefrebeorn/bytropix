@@ -1,8 +1,21 @@
-# MTP Acceptance Campaign — Gameplan (May 26, 2026)
+# MTP Acceptance Campaign — Gameplan (May 27, 2026)
 
-**Objective**: MTP acceptance >50% within 11GB WSL RAM, using streaming + C voodoo + recursive DA
+**Objective**: MTP acceptance >50% within 11GB WSL RAM
 
-## Core Insight: Streaming Q8_0 Draft Head (NOT F32)
+## Implemented: Q8_0 Lazy Dequant Cache (Phase C ✅)
+
+**Status**: 12% acceptance (measured May 27)
+- 12-slot LRU, ~41MB heap (block_q8_K format: 292 bytes/block, 1.14 MB/slot)
+- Q8_K×Q8_K dot product for expert matmuls (int8 accumulation)
+- Init'd in wubu_mtp_load → wubu_moe_forward cache path when w->q8_cache != NULL
+- Covers blk.40 MoE routed experts only (shared expert unchanged)
+- **Buffer overflow bug fixed**: MTP_Q8_WEIGHT_BYTES was 34/32=1.0625, actual block_q8_K=292/256=1.140625
+
+**Key finding**: Q8_K cache adds ~3% acceptance loss vs pure IQ2_XXS draft head (12% vs 17%). Q8_K×Q8_K dot is less accurate than IQ2 vec_dot for reproducing F32 computation.
+
+**12% acceptance → MTP slower than non-MTP** (2.3 vs 2.9 tok/s). Need >35% for break-even.
+
+## Core Insight: Q8_K Draft Head (Achieved, Below Target)
 
 blk.40's IQ2_XXS weights are ALREADY in the mmap'd GGUF blob (part of 10.7GB). No separate alloc needed.
 
@@ -92,12 +105,12 @@ Each: find if applicable to MTP draft head, wire in if cos-sim improves
 
 ## Acceptance Thresholds
 
-| Phase | Target | Pass | Fail → Next |
-|-------|--------|------|-------------|
-| P1 (F32 lazy dequant) | >15% acceptance | → P2 DA review | → C voodoo + prefetch matrix |
-| P3 (prefetch matrix) | >30% acceptance | → P4 DA review | → Math vault sweep |
-| P5 (C voodoo) | >40% acceptance | → P6 DA review | → Both P3 + P5 combined |
-| P7 (math vault sweep) | >50% acceptance | → Production ready | → New hardware required |
+| Phase | Target | Result | Next |
+|-------|--------|--------|------|
+| P1 (Q8_0 lazy dequant cache) | >15% acceptance | **12% measured** ❌ | → C voodoo + prefetch matrix |
+| P3 (prefetch matrix) | >30% acceptance | ⬜ | → P4 DA review |
+| P5 (C voodoo) | >40% acceptance | ⬜ | → P6 DA review |
+| P7 (math vault sweep) | >50% acceptance | ⬜ | → New hardware required |
 
 ## C Voodoo Targets (specific)
 
