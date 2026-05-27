@@ -2,7 +2,7 @@ CC = gcc
 CXX = g++
 NVCC = /usr/local/cuda-13.1/bin/nvcc
 CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/local/cuda-13.1/include -fopenmp
-LDFLAGS = -lm -fopenmp -lopenblas
+LDFLAGS = -lm -fopenmp -lopenblas -ljson-c
 NVCC_FLAGS = -O3 -I include -arch=sm_120
 CUDA_LIBS = -lcublas -lcudart
 CUDA_INC = -I/usr/local/cuda-13.1/include
@@ -15,7 +15,7 @@ api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -o $@ $< -lssl -lcrypto -lm
 
 # Object files
-CORE_OBJ = src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o
+CORE_OBJ = src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/wubu_vision_moondream.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o
 RSGD_OBJ = src/rsgd.o
@@ -72,6 +72,9 @@ src/wubu_hyperbolic_output_proj.o: src/wubu_hyperbolic_output_proj.c include/wub
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_vision.o: src/wubu_vision.c include/wubu_vision.h include/wubu_ssm.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_vision_moondream.o: src/wubu_vision_moondream.c include/wubu_vision_moondream.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/gguf_reader.o: src/gguf_reader.c include/gguf_reader.h

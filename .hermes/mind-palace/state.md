@@ -20,6 +20,7 @@
 | 245 | Attention sparsity verified | `USE_SPARSE_ATTN` env var wired, NSA pattern from DeepSeek-V3.2. |
 | 205 | SSM heap allocs resolved | Cell 241 eliminates 17×malloc/layer — covers this gap. |
 | 010 | PROFILE all layers | Removed `l < 3` guard — prints all 40 layers now |
+| 051 | Vision moondream weight loader | JSON parser + tensor→struct mapping, all 334 weights load correctly |
 
 ## Current Bottleneck
 - Layer forward: ~200ms (82% of 244ms) — DDR4 bandwidth bound

@@ -67,8 +67,8 @@
 
 | Cell | File | Line | Gap | Severity |
 |------|------|------|-----|----------|
-| 051 | src/wubu_vision_moondream.c | 28 | "TODO: parse moondream3_vision_index.json" | 🔴 |
-| 052 | src/wubu_vision_moondream.c | 32 | "return false; // stub" | 🔴 |
+| 051 | src/wubu_vision_moondream.c | 28 | "TODO: parse moondream3_vision_index.json" | ✅ Implemented — JSON parser with json-c |
+| 052 | src/wubu_vision_moondream.c | 32 | "return false; // stub" | ✅ Resolved by cell 051 — vm_init returns true now |
 | 053 | src/wubu_vision_moondream.c | 136 | "placeholder until multi-token support" | 🔴 |
 | 054 | src/wubu_vision.c | 102 | "layer %d incomplete" | 🔴 |
 | 055-070 | (extensions) | | Image preprocessing, encoding, decoding stubs | 🔴 |
@@ -193,7 +193,7 @@ All gap claims verified against actual source code on cpu-optimize-may26:
 - `train_stub.c` — confirmed FD gradient only
 - 200+ tools in tools/ — confirmed overlapping dump/check/test utilities
 
-Total verifiable gaps: **270 (300 minus 30 already fixed/complete)** — but 99+ additional cells are standard/trivial (🟢). Core actionable gaps: ~60 P0-P1 cells (gyration chain rule, vision, chunked SSM, GPU).
+Total verifiable gaps: **269 (300 minus 31 already fixed/complete)** — but 99+ additional cells are standard/trivial (🟢). Core actionable gaps: ~60 P0-P1 cells (gyration chain rule, vision, chunked SSM, GPU).
 
 To reach 300: add 24 more from:
 - Each Poincaré backward function file with identity path
