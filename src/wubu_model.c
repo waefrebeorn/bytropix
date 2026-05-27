@@ -480,6 +480,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     int *prev_experts = (int *)malloc(N * N_ACTIVE_EXPTS * sizeof(int));
     int have_prev_experts = 0;
     
+    // SSM workspace: pre-allocate all SSM intermediate buffers once,
+    // reuse across all 30 SSM layers (avoids 17 malloc/free per layer).
+    ssm_workspace_t *ssm_ws = wubu_ssm_workspace_alloc(B, T);
+    // If allocation fails, SSM forward will fall back to per-call malloc.
+    
     // Layer loop
     for (int l = 0; l < model->n_layers; l++) {
         wubu_layer_t *layer = &model->layers[l];
@@ -590,14 +595,14 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                         // Set GPU recurrence pointers so wubu_ssm_forward uses GPU
                         wubu_gpu_set_ssm_hybrid(model->gpu_ctx, l, &layer->ssm);
                         wubu_ssm_forward(normed, B, T, &layer->ssm,
-                            ssm_state, conv_state, attn_out, gpu_qkv, gpu_z);
+                            ssm_state, conv_state, attn_out, gpu_qkv, gpu_z, ssm_ws);
                         // Clear GPU pointers to avoid stale state
                         layer->ssm.gpu_ssm_state = NULL;
                         layer->ssm.gpu_stream    = NULL;
                     } else {
                         // Allocation failed, fall back to CPU
                         wubu_ssm_forward(normed, B, T, &layer->ssm,
-                            ssm_state, conv_state, attn_out, NULL, NULL);
+                            ssm_state, conv_state, attn_out, NULL, NULL, ssm_ws);
                     }
                     free(gpu_qkv);
                     free(gpu_z);
@@ -617,14 +622,14 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                     ssm_state, conv_state);
                 wubu_gpu_set_ssm_hybrid(model->gpu_ctx, l, &layer->ssm);
                 wubu_ssm_forward(normed, B, T, &layer->ssm,
-                    ssm_state, conv_state, attn_out, NULL, NULL);
+                    ssm_state, conv_state, attn_out, NULL, NULL, ssm_ws);
                 layer->ssm.gpu_ssm_state = NULL;
                 layer->ssm.gpu_stream    = NULL;
             } else
 #endif
             {
                 wubu_ssm_forward(normed, B, T, &layer->ssm,
-                    ssm_state, conv_state, attn_out, NULL, NULL);
+                    ssm_state, conv_state, attn_out, NULL, NULL, ssm_ws);
             }
         } else {
 #ifdef GPU_SUPPORT
@@ -970,6 +975,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     free(normed2);
     free(ffn_out);
     free(prev_experts);
+    wubu_ssm_workspace_free(ssm_ws);
 }
 
 // ========== MTP Head ==========

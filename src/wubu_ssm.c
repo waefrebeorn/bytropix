@@ -17,6 +17,62 @@
 #include <cuda_runtime.h>
 #endif
 
+// ============================================================
+// SSM Workspace: pre-allocated buffers reused across all layers.
+// All pointers 64-byte aligned via posix_memalign.
+// ============================================================
+ssm_workspace_t *wubu_ssm_workspace_alloc(int B, int T) {
+    const int N = B * T;
+    const int C = CONV_DIM;
+    ssm_workspace_t *ws = (ssm_workspace_t *)malloc(sizeof(ssm_workspace_t));
+    if (!ws) return NULL;
+    memset(ws, 0, sizeof(ssm_workspace_t));
+    ws->B = B; ws->T = T; ws->N = N;
+
+    #define WS_ALLOC(ptr, count) do { \
+        size_t _sz = (size_t)(count) * sizeof(float); \
+        if (_sz > 0 && posix_memalign((void**)&(ptr), 64, _sz)) { \
+            fprintf(stderr, "SSM workspace: " #ptr " alloc failed (%zu bytes)\n", _sz); \
+            wubu_ssm_workspace_free(ws); return NULL; \
+        } \
+    } while(0)
+
+    WS_ALLOC(ws->qkv_all,        (int64_t)N * (KEY_DIM * 2 + VALUE_DIM));
+    WS_ALLOC(ws->z_all,          (int64_t)N * VALUE_DIM);
+    WS_ALLOC(ws->beta_raw,       (int64_t)N * DT_RANK);
+    WS_ALLOC(ws->alpha_raw,      (int64_t)N * DT_RANK);
+    WS_ALLOC(ws->conv_input,     (int64_t)B * (T + CONV_KERNEL - 1) * (int64_t)C);
+    WS_ALLOC(ws->conv_output,    (int64_t)N * C);
+    WS_ALLOC(ws->q_conv,         (int64_t)N * KEY_DIM);
+    WS_ALLOC(ws->k_conv,         (int64_t)N * KEY_DIM);
+    WS_ALLOC(ws->v_conv,         (int64_t)N * VALUE_DIM);
+    WS_ALLOC(ws->q_norm,         (int64_t)N * KEY_DIM);
+    WS_ALLOC(ws->k_norm,         (int64_t)N * KEY_DIM);
+    WS_ALLOC(ws->delta_out,      (int64_t)N * VALUE_DIM);
+    WS_ALLOC(ws->z_silu,         (int64_t)N * VALUE_DIM);
+    WS_ALLOC(ws->beta_flat,      (int64_t)N * DT_RANK);
+    WS_ALLOC(ws->gate_flat,      (int64_t)N * DT_RANK);
+    WS_ALLOC(ws->alpha_biased,   (int64_t)N * DT_RANK);
+    WS_ALLOC(ws->alpha_softplus, (int64_t)N * DT_RANK);
+
+    #undef WS_ALLOC
+    return ws;
+}
+
+void wubu_ssm_workspace_free(ssm_workspace_t *ws) {
+    if (!ws) return;
+    free(ws->qkv_all);        free(ws->z_all);
+    free(ws->beta_raw);       free(ws->alpha_raw);
+    free(ws->conv_input);     free(ws->conv_output);
+    free(ws->q_conv);         free(ws->k_conv);
+    free(ws->v_conv);         free(ws->q_norm);
+    free(ws->k_norm);         free(ws->delta_out);
+    free(ws->z_silu);         free(ws->beta_flat);
+    free(ws->gate_flat);      free(ws->alpha_biased);
+    free(ws->alpha_softplus);
+    free(ws);
+}
+
 // GPU SSM recurrence (declared in gpu_ssm_recurrence.cu, extern C linkage)
 #ifdef GPU_SUPPORT
 void wubu_gpu_ssm_recurrence(
@@ -333,40 +389,64 @@ void wubu_ssm_forward(const float *x, int B, int T,
                       float *ssm_state,
                       float *conv_state,
                       float *output,
-                      const float *gpu_qkv, const float *gpu_z) {
+                      const float *gpu_qkv, const float *gpu_z,
+                      ssm_workspace_t *ws) {
     // x: [B, T, D_MODEL]
     // output: [B, T, D_MODEL]
     
     const int N = B * T;  // total tokens
     const int C = CONV_DIM;  // 8192
     
-    // Allocate temporaries (in production: pre-allocate or use stack for small T)
-    // For T up to 512, these fit on stack (~2-4MB)
-    // For production: use heap
-    float *qkv_all = (float *)malloc(N * (KEY_DIM * 2 + VALUE_DIM) * sizeof(float));
-    float *z_all = (float *)malloc(N * VALUE_DIM * sizeof(float));
-    float *beta_raw = (float *)malloc(N * DT_RANK * sizeof(float));
-    float *alpha_raw = (float *)malloc(N * DT_RANK * sizeof(float));
-    float *conv_input = (float *)malloc(B * (T + CONV_KERNEL - 1) * C * sizeof(float));
-    float *conv_output = (float *)malloc(N * C * sizeof(float));
-    float *q_conv = (float *)malloc(N * KEY_DIM * sizeof(float));
-    float *k_conv = (float *)malloc(N * KEY_DIM * sizeof(float));
-    float *v_conv = (float *)malloc(N * VALUE_DIM * sizeof(float));
-    float *q_norm = (float *)malloc(N * KEY_DIM * sizeof(float));
-    float *k_norm = (float *)malloc(N * KEY_DIM * sizeof(float));
-    float *delta_out = (float *)malloc(N * VALUE_DIM * sizeof(float));
-    float *z_silu = (float *)malloc(N * VALUE_DIM * sizeof(float));
+    // Use pre-allocated workspace when available (avoids 17 malloc/free per layer)
+    // Fall back to per-call allocation for backward compatibility
+    int own_alloc = 0;
+    float *qkv_all, *z_all, *beta_raw, *alpha_raw;
+    float *conv_input, *conv_output;
+    float *q_conv, *k_conv, *v_conv;
+    float *q_norm, *k_norm;
+    float *delta_out, *z_silu;
     
-    if (!qkv_all || !z_all || !beta_raw || !alpha_raw || !conv_input ||
-        !conv_output || !q_conv || !k_conv || !v_conv || !q_norm || !k_norm ||
-        !delta_out || !z_silu) {
-        fprintf(stderr, "SSM forward: allocation failed\n");
-        free(qkv_all); free(z_all); free(beta_raw); free(alpha_raw);
-        free(conv_input); free(conv_output);
-        free(q_conv); free(k_conv); free(v_conv);
-        free(q_norm); free(k_norm);
-        free(delta_out); free(z_silu);
-        return;
+    if (ws && ws->N >= N && ws->B >= B && ws->T >= T) {
+        qkv_all   = ws->qkv_all;
+        z_all     = ws->z_all;
+        beta_raw  = ws->beta_raw;
+        alpha_raw = ws->alpha_raw;
+        conv_input  = ws->conv_input;
+        conv_output = ws->conv_output;
+        q_conv    = ws->q_conv;
+        k_conv    = ws->k_conv;
+        v_conv    = ws->v_conv;
+        q_norm    = ws->q_norm;
+        k_norm    = ws->k_norm;
+        delta_out = ws->delta_out;
+        z_silu    = ws->z_silu;
+    } else {
+        own_alloc = 1;
+        qkv_all = (float *)malloc(N * (KEY_DIM * 2 + VALUE_DIM) * sizeof(float));
+        z_all = (float *)malloc(N * VALUE_DIM * sizeof(float));
+        beta_raw = (float *)malloc(N * DT_RANK * sizeof(float));
+        alpha_raw = (float *)malloc(N * DT_RANK * sizeof(float));
+        conv_input = (float *)malloc(B * (T + CONV_KERNEL - 1) * C * sizeof(float));
+        conv_output = (float *)malloc(N * C * sizeof(float));
+        q_conv = (float *)malloc(N * KEY_DIM * sizeof(float));
+        k_conv = (float *)malloc(N * KEY_DIM * sizeof(float));
+        v_conv = (float *)malloc(N * VALUE_DIM * sizeof(float));
+        q_norm = (float *)malloc(N * KEY_DIM * sizeof(float));
+        k_norm = (float *)malloc(N * KEY_DIM * sizeof(float));
+        delta_out = (float *)malloc(N * VALUE_DIM * sizeof(float));
+        z_silu = (float *)malloc(N * VALUE_DIM * sizeof(float));
+        
+        if (!qkv_all || !z_all || !beta_raw || !alpha_raw || !conv_input ||
+            !conv_output || !q_conv || !k_conv || !v_conv || !q_norm || !k_norm ||
+            !delta_out || !z_silu) {
+            fprintf(stderr, "SSM forward: allocation failed\n");
+            free(qkv_all); free(z_all); free(beta_raw); free(alpha_raw);
+            free(conv_input); free(conv_output);
+            free(q_conv); free(k_conv); free(v_conv);
+            free(q_norm); free(k_norm);
+            free(delta_out); free(z_silu);
+            return;
+        }
     }
     
     const char *dd = getenv("DUMP_SSM_DEBUG");
@@ -424,18 +504,27 @@ void wubu_ssm_forward(const float *x, int B, int T,
     // Step 4: Compute beta and gate (decay)
     // beta = sigmoid(beta_raw)
     // alpha_biased = alpha + ssm_dt_bias -> softplus -> * ssm_a
-    float *beta_flat = (float *)malloc(N * DT_RANK * sizeof(float));
-    float *gate_flat = (float *)malloc(N * DT_RANK * sizeof(float));
-    if (!beta_flat || !gate_flat) {
-        fprintf(stderr, "SSM forward: beta/gate alloc failed\n");
-        goto cleanup;
+    // Beta/gate/alpha buffers: use workspace when available
+    float *beta_flat, *gate_flat, *alpha_biased, *alpha_softplus;
+    if (ws && ws->N >= N && ws->B >= B && ws->T >= T) {
+        beta_flat = ws->beta_flat;
+        gate_flat = ws->gate_flat;
+        alpha_biased = ws->alpha_biased;
+        alpha_softplus = ws->alpha_softplus;
+    } else {
+        beta_flat = (float *)malloc(N * DT_RANK * sizeof(float));
+        gate_flat = (float *)malloc(N * DT_RANK * sizeof(float));
+        if (!beta_flat || !gate_flat) {
+            fprintf(stderr, "SSM forward: beta/gate alloc failed\n");
+            goto cleanup;
+        }
+        
+        alpha_biased = (float *)malloc(N * DT_RANK * sizeof(float));
+        alpha_softplus = (float *)malloc(N * DT_RANK * sizeof(float));
+        if (!alpha_biased || !alpha_softplus) goto cleanup;
     }
     
     wubu_sigmoid(N * DT_RANK, beta_raw, beta_flat);
-    
-    float *alpha_biased = (float *)malloc(N * DT_RANK * sizeof(float));
-    float *alpha_softplus = (float *)malloc(N * DT_RANK * sizeof(float));
-    if (!alpha_biased || !alpha_softplus) goto cleanup;
     
     for (int s = 0; s < N; s++) {
         for (int j = 0; j < DT_RANK; j++) {
@@ -716,23 +805,16 @@ void wubu_ssm_forward(const float *x, int B, int T,
         }
 
     cleanup:
-    free(qkv_all);
-    free(z_all);
-    free(beta_raw);
-    free(alpha_raw);
-    free(conv_input);
-    free(conv_output);
-    free(q_conv);
-    free(k_conv);
-    free(v_conv);
-    free(q_norm);
-    free(k_norm);
-    free(delta_out);
-    free(z_silu);
-    free(beta_flat);
-    free(gate_flat);
-    free(alpha_biased);
-    free(alpha_softplus);
+    if (own_alloc) {
+        free(qkv_all); free(z_all);
+        free(beta_raw); free(alpha_raw);
+        free(conv_input); free(conv_output);
+        free(q_conv); free(k_conv); free(v_conv);
+        free(q_norm); free(k_norm);
+        free(delta_out); free(z_silu);
+        free(beta_flat); free(gate_flat);
+        free(alpha_biased); free(alpha_softplus);
+    }
 }
 
 // SSM forward with intermediate saving (for backward)

@@ -136,6 +136,38 @@ typedef struct {
 } wubu_model;
 
 // ============================================================
+// SSM Workspace: pre-allocate all intermediate buffers once
+// and reuse across layers to eliminate 17 malloc/free per layer.
+// ============================================================
+typedef struct {
+    float *qkv_all;       // [N, KEY_DIM*2+VALUE_DIM]
+    float *z_all;         // [N, VALUE_DIM]
+    float *beta_raw;      // [N, DT_RANK]
+    float *alpha_raw;     // [N, DT_RANK]
+    float *conv_input;    // [B, T+CONV_KERNEL-1, CONV_DIM]
+    float *conv_output;   // [N, CONV_DIM]
+    float *q_conv;        // [N, KEY_DIM]
+    float *k_conv;        // [N, KEY_DIM]
+    float *v_conv;        // [N, VALUE_DIM]
+    float *q_norm;        // [N, KEY_DIM]
+    float *k_norm;        // [N, KEY_DIM]
+    float *delta_out;     // [N, VALUE_DIM]
+    float *z_silu;        // [N, VALUE_DIM]
+    float *beta_flat;     // [N, DT_RANK]
+    float *gate_flat;     // [N, DT_RANK]
+    float *alpha_biased;  // [N, DT_RANK]
+    float *alpha_softplus;// [N, DT_RANK]
+    int B, T, N;          // dimensions used for allocation
+} ssm_workspace_t;
+
+// Allocate SSM workspace for given batch/token dimensions.
+// Returns NULL on allocation failure. All pointers are 64-byte aligned.
+ssm_workspace_t *wubu_ssm_workspace_alloc(int B, int T);
+
+// Free SSM workspace (NULL-safe).
+void wubu_ssm_workspace_free(ssm_workspace_t *ws);
+
+// ============================================================
 // Forward pass functions
 // ============================================================
 
@@ -148,12 +180,14 @@ extern float g_ssm_l2_eps;
 // ssm_state: [SSM_V_HEADS, SSM_D_STATE, SSM_D_STATE] (mutable)
 // conv_state: [CONV_KERNEL-1, CONV_DIM] (mutable)
 // output: [B, T, D_MODEL]
+// ws: pre-allocated workspace (NULL = per-call malloc, backward compat)
 void wubu_ssm_forward(const float *x, int B, int T,
-                      const ssm_layer_weights *weights,
+                      const ssm_layer_weights *w,
                       float *ssm_state,
                       float *conv_state,
                       float *output,
-                      const float *gpu_qkv, const float *gpu_z);
+                      const float *gpu_qkv, const float *gpu_z,
+                      ssm_workspace_t *ws);
 
 // Saved SSM forward intermediates (for backward pass)
 // All arrays [B*T x dim] unless noted
@@ -177,8 +211,9 @@ typedef struct {
 } ssm_fwd_save_t;
 
 // Single SSM + save forward (pass save=NULL for standard forward)
+// Does NOT use workspace (training-only path, called once per training step)
 void wubu_ssm_forward_save(const float *x, int B, int T,
-                           const ssm_layer_weights *weights,
+                           const ssm_layer_weights *w,
                            float *ssm_state,
                            float *conv_state,
                            float *output,
@@ -216,9 +251,9 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
 
 // Single Poincaré SSM layer forward pass (hyperbolic recurrence)
 // Same interface as wubu_ssm_forward but uses Möbius operations
-// for the recurrence step
+// for the recurrence step.
 void wubu_poincare_ssm_forward(const float *x, int B, int T,
-                               const ssm_layer_weights *weights,
+                               const ssm_layer_weights *w,
                                float *ssm_state,
                                float *conv_state,
                                float R,
@@ -291,9 +326,6 @@ void wubu_rope(int B, int T, int n_heads, int head_dim,
 
 // ============================================================
 // Backward Pass Functions (Phase 4)
-// ============================================================
-
-// Backward through SSM output projection (Step 11)
 void wubu_ssm_backward_output_proj(
     const float *delta_out, const float *d_output,
     const float *ssm_out_weight,
