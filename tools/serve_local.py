@@ -68,7 +68,8 @@ class InferenceRunner:
     def generate(self, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS,
                  temperature: float = DEFAULT_TEMPERATURE,
                  top_k: int = DEFAULT_TOP_K,
-                 timeout: int = DEFAULT_TIMEOUT) -> tuple[str, str, float]:
+                 timeout: int = DEFAULT_TIMEOUT,
+                 extra_env: dict = None) -> tuple[str, str, float]:
         """Run inference. Returns (generated_text, full_output, elapsed_seconds)."""
         env = os.environ.copy()
         env["MODEL"] = self.model_path
@@ -77,6 +78,8 @@ class InferenceRunner:
             env["TEMP"] = str(temperature)
         env["TOP_K"] = str(top_k)
         env["MOE"] = "1"
+        if extra_env:
+            env.update(extra_env)
 
         cmd = [self.bin_path, prompt, str(max_tokens), str(top_k)]
 
@@ -263,12 +266,15 @@ class APIHandler(BaseHTTPRequestHandler):
         top_k = int(data.get("top_k", DEFAULT_TOP_K))
         stream = data.get("stream", False)
 
-        # Render prompt
+        # Render prompt as raw user message — gen_text_cpu's CHAT=1 mode
+        # handles proper <|im_start|> tokenization via known token IDs.
         prompt = render_chat(messages)
+        user_msg = messages[-1]["content"] if messages else prompt
 
-        # Run inference
+        # Run inference with CHAT=1 so gen_text_cpu tokenizes ChatML correctly
         text, full, elapsed = APIHandler.inference.generate(
-            prompt, max_tokens=max_tokens, temperature=temperature, top_k=top_k
+            prompt=user_msg, max_tokens=max_tokens, temperature=temperature,
+            top_k=top_k, extra_env={"CHAT": "1"}
         )
 
         if stream:
