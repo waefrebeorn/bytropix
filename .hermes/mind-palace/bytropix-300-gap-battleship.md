@@ -116,7 +116,11 @@
 | 172 | accuracy | No automated cos-sim validation | 🟡 |
 | 173 | perf | Benchmark automation script | tools/test-512k-suite.sh + tools/test-hermes-headless.sh | ✅ |
 | 174 | CI | No GitHub Actions or test runner | 🟡 |
-| 175-200 | validation | Missing comprehensive test for each kernel | 🟢 |
+| 175 | test | Inference server pytest suite | tests/test_inference.py — 24 tests, 1.16s | ✅ |
+| 176 | test | Hermes integration test | tools/test-hermes-integration.sh — 9 tests, runs server+API | ✅ |
+| 177 | test | Inference server calls local model (NOT proxy) | tools/serve_local.py — wraps gen_text_cpu directly | ✅ |
+| 178 | test | Hermes custom_providers config wired | ~/.hermes/config.yaml custom_providers.bytropix | ✅ |
+| 179-200 | validation | Missing comprehensive test for each kernel | 🟢 |
 
 ### Row H — Code Quality (40 cells)
 *Reality: 200+ tools, many duplicated, no unified runner*
