@@ -45,8 +45,8 @@
 | 005 | src/wubu_poincare_gqa_backward.c | 32 | "exp_map(0) ≈ 0, gradient ≈ identity" | 🔴 ✅ Edge case only (v=0) — correct; non-zero case has proper Jacobian |
 | 006 | src/wubu_poincare_gqa_backward.c | 69 | "log_map(0) ≈ 0, gradient ≈ identity" | 🔴 ✅ Edge case only (x=0) — correct; non-zero case has proper Jacobian |
 | 007 | src/wubu_poincare_gqa_backward.c | 124 | "mobius_add ≈ identity" | 🔴 ✅ Edge case only (x≈0 or y≈0) — correct |
-| 008 | src/wubu_poincare_gqa_backward.c | 192 | "log_map∘exp_map ≈ identity (straight-through)" | 🟡 Deliberate ST estimator — optional upgrade to full Jacobian using wubu_exp_map_backward/wubu_log_map_backward |
-| 009 | src/wubu_poincare_gqa_backward.c | 269 | "Backprop through log_map(exp_map(·)) ≈ identity" | 🟡 Same as 008 — ST estimator, not a bug |
+| 008 | src/wubu_poincare_gqa_backward.c | 192 | "log_map∘exp_map ≈ identity (straight-through)" | 🔴 ✅ Upgraded to full Jacobian: reconstructs tangent_sum + out_ball from attn_w/logV, backprops through log_map_backward and exp_map_backward. d_tangent_sum replaces d_out in V_ball/distance backward chain. |
+| 009 | src/wubu_poincare_gqa_backward.c | 269 | "Backprop through log_map(exp_map(·)) ≈ identity" | 🔴 ✅ Same fix as 008 — full Jacobian through log_map_backward + exp_map_backward |
 | 010 | include/wubu_ssm.h | 237-250 | wubu_poincare_ssm_backward declared but identity | 🔴 ✅ Implemented — gyration chain rule active. Function header already matches new implementation |
 || 011 | src/wubu_moe_hyperbolic_backward.c | — | mobius gyration backward assumed identity | 🔴 ✅ Full gyration Jacobian in poincare_dist_backward_one — β/γ/α terms implemented |
 || 012 | src/wubu_moe_hyperbolic_backward.c | — | Hyperbolic gate backward ≈ Euclidean | 🔴 ✅ Full hyperbolic backward through exp_map + Poincaré distance |
@@ -241,8 +241,8 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 | 005 | Poincaré GQA backward exp_map identity | ✅ Edge case only — correct |
 | 006 | Poincaré GQA backward log_map identity | ✅ Edge case only — correct |
 | 007 | Poincaré GQA backward mobius_add identity | ✅ Edge case only — correct |
-| 008 | Poincaré GQA backward ST estimator | 🟡 Deliberate — optional full Jacobian upgrade |
-| 009 | Poincaré GQA backward ST estimator | 🟡 Same as 008 |
+|| 008 | Poincaré GQA backward ST estimator | 🔴 ✅ Full Jacobian: reconstructs tangent_sum + out_ball, backprops through log_map_backward + exp_map_backward |
+|| 009 | Poincaré GQA backward ST estimator | 🔴 ✅ Same fix as 008 — full Jacobian |
 || 010 | wubu_poincare_ssm_backward declared | ✅ Implemented |
 || 011 | MoE hyperbolic backward (gyration) | ✅ Full gyration Jacobian in poincare_dist_backward_one |
 || 012 | MoE hyperbolic backward (Euclidean gate) | ✅ Full hyperbolic routing backward via exp_map |
