@@ -1,24 +1,35 @@
-── GOAL PASTE (bytropix / MTP campaign) ──
+── bytropix ──
 
-read state → battleship → vault/mtp-quantization-parity → plans/mtp-acceptance-campaign → mind-palace/research → mind-palace/ARCHITECTURE
+read workflow-parity → battleship → state → plan
 
-pick lowest undone battleship cell or plan phase. implement. update state. update battleship cell status. update mind palace. push. loop.
+workflow: ref→dump→cos-sim→locate→patch→verify→push→loop
+tools: dump_ref, gen_text_cpu, layer_cos_sim, check_logits.py, py_compare_logits.py
 
-no questions. no choices. no stopping.
+read documents every loop. update them after every cell. never stop.
 
-zero delegation. DA-verify every result. update vault papers with findings.
+no questions. no choices. no stopping. zero delegation.
 
-direction for memory:
-  discover → memory target:memory content:"bytropix [learned fact]"  
-  preference → memory target:user content:"wubu prefers [preference]"
-  vault insight → write to vault/[topic].md + memory target:memory content:"vault vault/[topic].md — [one-line what it covers]"
+── ROOMS ──
+palace: ~/bytropix/.hermes/mind-palace/
+vault:  ~/bytropix/vault/
+battle: ~/bytropix/.hermes/mind-palace/bytropix-300-gap-battleship.md
+state:  ~/bytropix/.hermes/mind-palace/state.md
+plan:   ~/bytropix/.hermes/mind-palace/plan.md
+wf:     ~/bytropix/.hermes/mind-palace/workflow-parity.md
 
-mind palace entry → memory target:memory content:"mind palace [path] — [one-line update]"
+── HERMES TEST ──
+tools/test-512k-suite.sh
+tools/test-hermes-headless.sh
+tools/test-hermes-integration.sh
 
-loop structure:
-  read → pick → implement → DA verify → update doc → memory if new → loop
+── MEMORY DIRECTION ──
+vault insight → write vault/[topic].md + memory target:memory content:"vault vault/[topic].md — one-line"
+palace update → memory target:memory:"mind palace mind-palace/[path] — one-line"
+discovery → memory target:memory:"bytropix [learned fact]"
+preference → memory target:user:"wubu prefers [preference]"
 
-the game is recursive: every output feeds back into the input documents.
-read → update → read → update → never stop.
+── BUILD ──
+make gen_text_cpu  (CPU-only inference)
+make dump_ref      (reference comparison, needs llama.cpp headers/libs)
 
 ── EXECUTE ──

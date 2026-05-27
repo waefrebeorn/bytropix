@@ -117,10 +117,16 @@
 | 173 | perf | Benchmark automation script | tools/test-512k-suite.sh + tools/test-hermes-headless.sh | ✅ |
 | 174 | CI | No GitHub Actions or test runner | 🟡 |
 | 175 | test | Inference server pytest suite | tests/test_inference.py — 24 tests, 1.16s | ✅ |
-| 176 | test | Hermes integration test | tools/test-hermes-integration.sh — 9 tests, runs server+API | ✅ |
-| 177 | test | Inference server calls local model (NOT proxy) | tools/serve_local.py — wraps gen_text_cpu directly | ✅ |
-| 178 | test | Hermes custom_providers config wired | ~/.hermes/config.yaml custom_providers.bytropix | ✅ |
-| 179-200 | validation | Missing comprehensive test for each kernel | 🟢 |
+| 176 | test | Hermes integration test | tools/test-hermes-integration.sh — 9 tests | ✅ |
+| 177 | test | Inference server calls local model (NOT proxy) | tools/serve_local.py | ✅ |
+| 178 | test | Hermes custom_providers config wired | ~/.hermes/config.yaml | ✅ |
+| 179 | fix | Logit cache causing repetitive output | src/wubu_model.c:800 — cache reuses stale logits across decode steps. DISABLED | 🔴 FIXED |
+| 180 | bug | IQ2_M output quality degraded (quantization floor) | 2-bit on 2048-dim hidden. Logits valid but flat softmax | 🟡 |
+| 181 | diag | Layer dump workflow established | DUMP_LAYER_DIR=/tmp/layer_dump dumps all 40 layers | ✅ |
+| 182 | diag | Logit dump workflow established | DUMP_LOGITS=/tmp/logits.bin | ✅ |
+| 183 | tool | check_logits.py | Python logit analyzer | ✅ |
+| 184 | tool | diag_forward.c | Standalone diagnostic forward (WIP) | 🟡 |
+| 185-200 | validation | Missing comprehensive test for each kernel | 🟢 |
 
 ### Row H — Code Quality (40 cells)
 *Reality: 200+ tools, many duplicated, no unified runner*
