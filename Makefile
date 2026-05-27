@@ -201,6 +201,12 @@ gen_text_large_l3: src/wubu_model_large_l3.o src/wubu_moe_cpu.o $(filter-out src
 	$(CC) $(CFLAGS_LARGE_L3) -o $@ tools/gen_text.c src/wubu_model_large_l3.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o $(LDFLAGS)
 	@echo "gen_text_large_l3 built (LARGE_L3 prefetch enabled)"
 
+# Standalone diagnostic forward (per-layer hidden state + logit dump)
+diag_forward: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
+diag_forward: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS_FILTERED) -o $@ tools/diag_forward.c src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o $(LDFLAGS)
+	@echo "diag_forward built. Usage: MODEL=/path/to/model.gguf OMP_NUM_THREADS=4 ./diag_forward [token_id]"
+
 src/wubu_model_cpu.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h include/wubu_moe.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -o $@ -c $<
 

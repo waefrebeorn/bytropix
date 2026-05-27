@@ -125,7 +125,7 @@
 | 181 | diag | Layer dump workflow established | DUMP_LAYER_DIR=/tmp/layer_dump dumps all 40 layers | ✅ |
 | 182 | diag | Logit dump workflow established | DUMP_LOGITS=/tmp/logits.bin | ✅ |
 | 183 | tool | check_logits.py | Python logit analyzer | ✅ |
-| 184 | tool | diag_forward.c | Standalone diagnostic forward (WIP) | 🟡 |
+| 184 | tool | diag_forward.c | ✅ Built, tested, Makefile target added. Use: MODEL=... OMP_NUM_THREADS=4 ./diag_forward [token_id] |
 | 185-200 | validation | Missing comprehensive test for each kernel | 🟢 |
 
 ### Row H — Code Quality (40 cells)
