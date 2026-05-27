@@ -229,6 +229,14 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 | 245 | Attention sparsity stack alloc | ✅ |
 | 246 | MoE expert prefetch | ✅ BENCHED (no gain) |
 
+**Phase 4 — Training Math:**
+| Cell | Gap | Status |
+|------|-----|--------|
+| 001 | Poincaré SSM backward gyration chain rule | ✅ Implemented: 3 new backward primitives + wired into step 9 |
+| 002 | Poincaré SSM backward l2_norm identity | 🔴 Next: replace copy-as-identity with proper l2_norm Jacobian |
+| 003 | Poincaré SSM backward SiLU identity | 🔴 |
+| 004 | Poincaré SSM backward d_normed identity | 🔴 |
+
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
 
 ---
