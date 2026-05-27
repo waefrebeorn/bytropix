@@ -265,6 +265,7 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     model->logit_cache_steps = 0;
     model->logit_cache_max_hits = 2;
     model->logit_cache_argmax_prev = -1;
+    model->logit_subset_valid = false;
     
     // Output weight quantized pointer will be set after gguf_buffer_data() below
     printf("  Output weight: will use quantized path (Q4_K via blob pointer)\n");
@@ -747,6 +748,44 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         // Use cached logits (skip 80ms output proj)
         memcpy(logits, model->logit_cache, model->vocab_size * sizeof(float));
         model->logit_cache_steps++;
+    } else if (N == 1 && model->logit_subset_valid && model->output_weight_q &&
+               model->logit_cache && model->logit_cache_valid &&
+               model->logit_cache_steps >= model->logit_cache_max_hits) {
+        // Subset refresh: compute only top-K logits (fast path when argmax stable)
+        // Uses logit_subset_ids[] from the last full output proj
+        float subset_vals[LOGIT_SUBSET_K];
+        quantized_matmul_subset(x, model->output_weight_q, model->output_weight_type,
+                                D_MODEL, model->logit_subset_ids, LOGIT_SUBSET_K, 0, subset_vals);
+        
+        // Find argmax from subset
+        int best_idx = 0; float best_val = subset_vals[0];
+        for (int i = 1; i < LOGIT_SUBSET_K; i++)
+            if (subset_vals[i] > best_val) { best_val = subset_vals[i]; best_idx = i; }
+        
+        int new_argmax = model->logit_subset_ids[best_idx];
+        
+        // Check if this argmax differs from cached one
+        if (new_argmax != model->logit_cache_argmax) {
+            // Argmax changed — use subset result
+            // Fill logits with -inf, then set subset values
+            #pragma omp parallel for
+            for (int i = 0; i < model->vocab_size; i++)
+                logits[i] = -INFINITY;
+            for (int i = 0; i < LOGIT_SUBSET_K; i++)
+                logits[model->logit_subset_ids[i]] = subset_vals[i];
+            
+            // Update cache with new logits
+            memcpy(model->logit_cache, logits, model->vocab_size * sizeof(float));
+            model->logit_cache_argmax = new_argmax;
+            // Reset adaptive depth since argmax changed
+            model->logit_cache_max_hits = 2;
+            model->logit_cache_steps = 0;
+        } else {
+            // Argmax unchanged — just continue using full cache
+            // But we still need valid logits for downstream usage
+            memcpy(logits, model->logit_cache, model->vocab_size * sizeof(float));
+            model->logit_cache_steps = 0;
+        }
     } else {
         // Compute full output projection
         if (model->skip_output_proj) {
@@ -824,13 +863,51 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                 if (logits[i] > av) { av = logits[i]; am = i; }
             model->logit_cache_argmax = am;
             
-            // Adaptive cache depth: if argmax stable across consecutive full computes, go deeper
-            if (am == model->logit_cache_argmax_prev)
+            // Adaptive cache depth: if argmax stable...
+            int old_am = model->logit_cache_argmax_prev;
+            if (am == old_am)
                 model->logit_cache_max_hits = (model->logit_cache_max_hits < 8) ? 
                     model->logit_cache_max_hits + 1 : 8;
             else
                 model->logit_cache_max_hits = 2;  // conservative fallback
             model->logit_cache_argmax_prev = am;
+            
+            // Save top-K subset for fast refresh (when argmax changed from previous)
+            if (!model->logit_subset_valid || am != old_am) {
+                // Find top-K token IDs (full scan of 248k logits)
+                int temp_ids[LOGIT_SUBSET_K];
+                float temp_vals[LOGIT_SUBSET_K];
+                for (int i = 0; i < LOGIT_SUBSET_K; i++) {
+                    temp_ids[i] = i;
+                    temp_vals[i] = logits[i];
+                }
+                // Bubble sort to find top K (O(K * vocab) = 1000 * 248k = 248M comparisons)
+                // Fast enough: ~30ms on modern CPU
+                for (int v = LOGIT_SUBSET_K; v < model->vocab_size; v++) {
+                    float lv = logits[v];
+                    if (lv > temp_vals[0]) {
+                        temp_vals[0] = lv;
+                        temp_ids[0] = v;
+                        // Bubble down
+                        int pos = 0;
+                        while (pos + 1 < LOGIT_SUBSET_K && temp_vals[pos] > temp_vals[pos+1]) {
+                            float tv = temp_vals[pos]; temp_vals[pos] = temp_vals[pos+1]; temp_vals[pos+1] = tv;
+                            int ti = temp_ids[pos]; temp_ids[pos] = temp_ids[pos+1]; temp_ids[pos+1] = ti;
+                            pos++;
+                        }
+                    }
+                }
+                memcpy(model->logit_subset_ids, temp_ids, LOGIT_SUBSET_K * sizeof(int));
+                // Sort ascending so subset matmul order is stable
+                for (int i = 0; i < LOGIT_SUBSET_K; i++)
+                    for (int j = i+1; j < LOGIT_SUBSET_K; j++)
+                        if (model->logit_subset_ids[j] < model->logit_subset_ids[i]) {
+                            int t = model->logit_subset_ids[i];
+                            model->logit_subset_ids[i] = model->logit_subset_ids[j];
+                            model->logit_subset_ids[j] = t;
+                        }
+                model->logit_subset_valid = true;
+            }
         }
     }
         else {

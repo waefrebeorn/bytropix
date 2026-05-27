@@ -321,6 +321,13 @@ typedef struct {
     int logit_cache_steps;    // count of consecutive cache uses
     int logit_cache_max_hits; // adaptive max consecutive cache hits (default 2)
     int logit_cache_argmax_prev; // previous forward's argmax (for stability detection)
+    
+    // Logit subset cache: top-K token IDs from last full output proj
+    // Used for fast refresh: compute only these K tokens instead of all 248k
+#define LOGIT_SUBSET_K 1000
+    int logit_subset_ids[LOGIT_SUBSET_K];  // token IDs
+    float logit_subset_vals[LOGIT_SUBSET_K]; // cached logit values
+    bool logit_subset_valid;
 } wubu_model_t;
 
 // Create model, load from GGUF
