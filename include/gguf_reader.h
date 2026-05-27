@@ -146,6 +146,16 @@ void quantized_matmul_batched(const float *x,
                               int N,
                               float *y);
 
+// Subset quantized matmul: compute only specified columns
+// col_indices: array of n_cols column indices to compute
+// y: output array [n_cols], one logit per specified column
+void quantized_matmul_subset(const float *x,
+                              const void *W, int weight_type,
+                              int64_t n_rows,
+                              const int *col_indices, int n_cols,
+                              int64_t col_stride_bytes,
+                              float *y);
+
 // IQ1_S grid table (2048 × uint64) for GPU constant memory upload
 const uint64_t *gguf_get_iq1s_grid(void);
 

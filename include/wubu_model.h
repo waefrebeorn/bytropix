@@ -39,6 +39,9 @@ typedef struct {
 #define KV_CACHE_F16 1  // default to F16 for memory efficiency
 #endif
 
+// Expert recorder: max tokens to capture per profiling run
+#define MAX_EXPERT_RECORDER_TOKENS 256
+
 // F16 <-> F32 conversion helpers (used by KV cache)
 static inline float fp16_to_fp32(uint16_t v) {
     int sign = (v >> 15) & 1;
@@ -277,7 +280,13 @@ typedef struct {
     
     // Skip output projection in forward (for GPU offload)
     bool skip_output_proj;
-    
+
+    // Expert selection recorder (for demoscene profiling, P3 prefetch matrix)
+    // Set to a [n_layers * MAX_EXPERT_RECORDER_TOKENS][N_ACTIVE_EXPTS] buffer before forward.
+    // Captured from wubu_moe_forward's selected_experts output parameter.
+    int (*expert_recorder)[N_ACTIVE_EXPTS];
+    int expert_recorder_tokens;  // number of tokens recorded so far
+
     // MoE test: only load MoE for first N layers (0 = all)
     int moe_max_layers;
     

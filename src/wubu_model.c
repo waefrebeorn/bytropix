@@ -660,6 +660,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
 #endif
             wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, have_prev_experts ? prev_experts : NULL);
             have_prev_experts = 1;
+            // Capture expert selections for demoscene profiling
+            if (model->expert_recorder && l < model->n_layers && prev_experts) {
+                int idx = l * MAX_EXPERT_RECORDER_TOKENS + model->expert_recorder_tokens;
+                memcpy(model->expert_recorder[idx], prev_experts, B * T * N_ACTIVE_EXPTS * sizeof(int));
+            }
 #ifdef GPU_SUPPORT
             layer->moe.gpu_ctx = NULL;  // reset after use
 #endif
@@ -1398,4 +1403,8 @@ void wubu_model_forward(wubu_model_t *model,
     
     wubu_model_forward_from_embd(model, embd, B, T, logits);
     free(embd);
+    
+    // Increment expert recorder for next token
+    if (model->expert_recorder)
+        model->expert_recorder_tokens += B * T;
 }

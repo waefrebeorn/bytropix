@@ -518,3 +518,71 @@ void quantized_matmul_batched(const float *x,
 
     if (q8_all != stack_buf) free(q8_all);
 }
+
+// Subset matmul: compute only specified columns (for output proj logit cache)
+// Supports Q5_K, Q4_K, Q6_K (types with vec_dot). Other types fall back to dequant+SGEMM.
+void quantized_matmul_subset(const float *x,
+                              const void *W, int weight_type,
+                              int64_t n_rows,
+                              const int *col_indices, int n_cols,
+                              int64_t col_stride_bytes,
+                              float *y) {
+    if (n_cols <= 0) return;
+    
+    // Handle non-vec_dot types via dequant
+    if (weight_type == GGML_TYPE_IQ1_M || weight_type == GGML_TYPE_IQ1_S ||
+        weight_type == GGML_TYPE_IQ2_S || weight_type == GGML_TYPE_IQ2_XS ||
+        weight_type == GGML_TYPE_IQ3_S ||
+        weight_type == GGML_TYPE_Q2_K || weight_type == GGML_TYPE_Q3_K) {
+        // For these types, just compute each column individually
+        int64_t blk_sz = block_size_for_type(weight_type);
+        int64_t n_blocks = (n_rows + QK_K - 1) / QK_K;
+        int64_t stride = (col_stride_bytes > 0) ? col_stride_bytes : (n_blocks * blk_sz);
+        #pragma omp parallel for if(n_cols > 4)
+        for (int i = 0; i < n_cols; i++) {
+            int64_t j = col_indices[i];
+            const uint8_t *wj = (const uint8_t *)W + j * stride;
+            float *f32_buf = (float *)malloc(n_rows * sizeof(float));
+            gguf_dequantize(wj, weight_type, n_rows, f32_buf);
+            double sum = 0.0;
+            for (int64_t k = 0; k < n_rows; k++)
+                sum += (double)x[k] * f32_buf[k];
+            y[i] = (float)sum;
+            free(f32_buf);
+        }
+        return;
+    }
+    
+    // Vec_dot types: quantize x to Q8_K, then dot per selected column
+    block_q8_K q8_buf[32];  // max 8192/256 = 32 blocks — enough for D_MODEL up to 8192
+    
+    quantize_row_q8_K(x, q8_buf, n_rows);
+    
+    // Declare vec_dot functions (same as quantized_matmul_batched)
+    typedef void (*vec_dot_fn)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
+    vec_dot_fn dot_fn = NULL;
+    
+    void q4_K_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+    void q5_K_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+    void q6_K_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
+    
+    switch (weight_type) {
+        case GGML_TYPE_Q4_K: dot_fn = (vec_dot_fn)q4_K_vec_dot; break;
+        case GGML_TYPE_Q5_K: dot_fn = (vec_dot_fn)q5_K_vec_dot; break;
+        case GGML_TYPE_Q6_K: dot_fn = (vec_dot_fn)q6_K_vec_dot; break;
+        default:
+            fprintf(stderr, "quantized_matmul_subset: unsupported type %d\n", weight_type);
+            return;
+    }
+    
+    int64_t blk_sz = block_size_for_type(weight_type);
+    int64_t n_blocks = (n_rows + QK_K - 1) / QK_K;
+    int64_t stride = (col_stride_bytes > 0) ? col_stride_bytes : (n_blocks * blk_sz);
+    
+    #pragma omp parallel for if(n_cols > 8)
+    for (int i = 0; i < n_cols; i++) {
+        int64_t j = col_indices[i];
+        const void *wj = (const uint8_t *)W + j * stride;
+        dot_fn((int)n_rows, &y[i], 0, wj, 0, q8_buf, 0, 1);
+    }
+}
