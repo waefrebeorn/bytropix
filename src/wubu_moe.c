@@ -526,8 +526,15 @@ void wubu_moe_forward(const float *x, int B, int T,
                             const uint8_t *up_q   = w->ffn_up_exps_q   + (int64_t)e * up_bytes;
                             const uint8_t *down_q = w->ffn_down_exps_q + (int64_t)e * down_bytes;
                             
-                            quantized_matmul(x_s, gate_q, w->ffn_gate_exps_q_type, D_MODEL, D_FF, 0, gate_out);
-                            quantized_matmul(x_s, up_q, w->ffn_up_exps_q_type, D_MODEL, D_FF, 0, up_out);
+                            // Quantize x_s once, reuse for gate+up
+                            uint8_t exp_q8_buf[4096];
+                            quantize_row_q8_K(x_s, (block_q8_K *)exp_q8_buf, D_MODEL);
+                            quantized_matmul_from_q8(exp_q8_buf,
+                                gate_q, w->ffn_gate_exps_q_type,
+                                D_MODEL, D_FF, 0, gate_out);
+                            quantized_matmul_from_q8(exp_q8_buf,
+                                up_q, w->ffn_up_exps_q_type,
+                                D_MODEL, D_FF, 0, up_out);
                             
                             for (int j = 0; j < D_FF; j++) {
                                 float g = gate_out[j];
