@@ -30,6 +30,7 @@ The NES emulator is a pre-built test workload. Do NOT modify its internals.
 7. **MoE hyperbolic backward (cells 011-012)**: poincare_dist_backward_one has full gyration Jacobian with β/γ/α terms. Router backward uses proper exp_map + Poincaré distance gradients — not Euclidean approximation.
 8. **Nested SSM ball weights (cell 031)**: d_ball_weights_raw parameter added to wubu_nested_ssm_backward with softmax backward gradient computation.
 9. **Vision multi-token attention (cell 053)**: vm_attention rewritten from single-token placeholder to full multi-head SDPA with N×N cross-attention and softmax over all 729 patches.
+10. **CI pipeline (cell 174)**: .github/workflows/build-and-test.yml — compiles all core objects, builds test_mobius_linear, runs it, on push/PR to main/cpu-optimize-may26.
 
 ### Branch
 - `cpu-optimize-may26` — all parity fixes (ahead of main, pushed)

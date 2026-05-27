@@ -70,7 +70,7 @@
 | 051 | src/wubu_vision_moondream.c | 28 | "TODO: parse moondream3_vision_index.json" | ✅ Implemented — JSON parser with json-c |
 | 052 | src/wubu_vision_moondream.c | 32 | "return false; // stub" | ✅ Resolved by cell 051 — vm_init returns true now |
 || 053 | src/wubu_vision_moondream.c | 136 | "placeholder until multi-token support" | 🔴 ✅ Full multi-token SDPA: vm_attention rewritten for N×N cross-attention with softmax |
-| 054 | src/wubu_vision.c | 102 | "layer %d incomplete" | 🔴 |
+|| 054 | src/wubu_vision.c | 102 | "layer %d incomplete" | 🔴 ✅ Load-time diagnostic only — forward pass is fully implemented (27 ViT layers, attention, FFN, spatial merge, MMProj) |
 | 055-070 | (extensions) | | Image preprocessing, encoding, decoding stubs | 🔴 |
 
 ### Row D — Disabled Features (30 cells)
@@ -104,7 +104,7 @@
 | 141 | MATH/lean/ | Lean proof directory appears empty | 🟡 |
 | 142 | Hyperbolic opt | RSGD (Riemannian SGD) at rsgd.c — basic only | 🟡 |
 | 143 | Mobius operations | Full gyration backward not implemented | 🟡 |
-| 144 | Poincaré GQA | Attention uses dot product, not Poincaré distance | 🟡 |
+|| 144 | Poincaré GQA | Attention uses dot product, not Poincaré distance | 🟡 ✅ Already uses wubu_poincare_dist for hyperbolic geodesic distance — not dot product. Full chain: exp_map → distance → softmax → Möbius linear comb → log_map |
 | 145-170 | THEORY→Code | Hyperbolic embeddings, curvature tuning, mixed-curvature | 🟡 |
 
 ### Row G — Test & Validation Gaps (30 cells)
@@ -115,7 +115,7 @@
 | 171 | regression | test_regression.c only checks top-k match | ✅ Replaced by tools/test-cos-sim-regression.sh — automated cos-sim comparison against llama.cpp reference on 3 single-token prompts. Threshold: 0.97. |
 | 172 | accuracy | No automated cos-sim validation | ✅ tools/test-cos-sim-regression.sh (3 prompts, threshold 0.97) |
 | 173 | perf | Benchmark automation script | tools/test-512k-suite.sh + tools/test-hermes-headless.sh | ✅ |
-| 174 | CI | No GitHub Actions or test runner | 🟡 |
+|| 174 | CI | No GitHub Actions or test runner | 🟡 ✅ Created .github/workflows/build-and-test.yml — compiles all core objects + runs test_mobius_linear on push/PR to main/cpu-optimize-may26 |
 | 175 | test | Inference server pytest suite | tests/test_inference.py — 24 tests, 1.16s | ✅ |
 | 176 | test | Hermes integration test | tools/test-hermes-integration.sh — 9 tests | ✅ |
 | 177 | test | Inference server calls local model (NOT proxy) | tools/serve_local.py | ✅ |
@@ -248,7 +248,10 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 || 032 | Nested SSM row loop comment | ✅ Comment fix — two-pass intentional |
 || 033 | Nested SSM direct state gradient | ✅ Already accumulating directly |
 || 034-050 | Nested SSM gradient path completeness | 🟡 All paths present. 2 approximations in gated norm (rms_scale=1, reconstruction) |
-|| 053 | Vision multi-token attention | ✅ Full N×N SDPA with softmax over all 729 patches |
+||| 053 | Vision multi-token attention | ✅ Full N×N SDPA with softmax over all 729 patches |
+||| 054 | Vision load diagnostic | ✅ Load-time warning only — forward pass complete |
+||| 144 | Poincaré GQA hyperbolic distance | ✅ Already uses wubu_poincare_dist, not dot product |
+||| 174 | CI/GitHub Actions | ✅ .github/workflows/build-and-test.yml — compiles core + test_mobius_linear |
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
 
