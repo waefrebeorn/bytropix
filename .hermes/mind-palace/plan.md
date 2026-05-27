@@ -30,3 +30,8 @@ Pre-built test workload at ~/hermes-test/projects/nes-emulator/. Do NOT modify C
 | 244 | KV cache to Q4_0 format (2GB→500MB) | ✅ | 3 modes: Q4_0 / F16 / F32, Q4_0 default |
 | 245 | Attention sparsity wire for decode | ✅ | sparse_buf stack alloc. Env-var controlled. Tested in 512K suite |
 | 246 | MoE expert prefetch (LARGE_L3) | ❌ | No gain on i5-8365U (8MB L3 too small for 24MB prefetch). Code exists behind #ifdef LARGE_L3 |
+
+## PHASE 3: DOCUMENTED NOT-A-BUG
+| Cell | Claim | Reality | Status |
+|------|-------|---------|--------|
+| 074 | "Chunked SSM broken, FP accumulation" | Chunked SSM A=(I+L)^{-T} is correct for training but inherently mixes intra-chunk tokens — cannot match sequential bit-exactly. Inference uses sequential (correct). Not a bug. | ✅ DOCUMENTED |

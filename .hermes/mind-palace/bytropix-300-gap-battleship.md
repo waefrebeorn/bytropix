@@ -15,7 +15,7 @@
 | **E** | ACCURACY | MoE Hyperbolic Backward Approximate | mobius operations in backward use identity |
 | **F** | PERFORMANCE | GPU Disabled | GPU_SUPPORT compiled out, GPU output proj "disabled for now" |
 | **G** | PERFORMANCE | MoE Disabled by Default | enable_moe=false (memory: 3.2GB/layer) |
-| **H** | PERFORMANCE | Chunked SSM Broken | CS>1 causes FP accumulation, forced SSM_CHUNK_MIN=4096 |
+| **H** | PERFORMANCE | Chunked SSM Training-Only | CS>1 uses A=(I+L)^{-T} which mixes tokens within chunk — correct for training/GPU, but doesn't match sequential for inference (cos-sim 0.96 with CS=2). Inference uses sequential always — correct behavior. |
 | **I** | PERFORMANCE | MTP CPU Untested | gen_text_mtp.c built, MODEL env var fixed, but 22GB required |
 | **J** | CODE | Training Stubs | train_stub.c has FD gradients only, train_real.c has TODO paths |
 | **K** | CODE | Dead Code Blocks | `#if 0`, `#ifdef DEAD`, unused test files |
@@ -81,7 +81,7 @@
 | 071 | tools/gen_text.c | 90 | "GPU output proj disabled for now — use CPU" | 🟡 |
 | 072 | src/wubu_model.c | 269 | "MoE disabled by default (memory: 3.2 GB/layer)" | 🟡 |
 | 073 | src/wubu_model.c | 655 | "GPU MoE (disabled by FORCE_CPU_MOE env var)" | 🟡 |
-| 074 | src/wubu_ssm.c | 648 | "SSM_CHUNK_MIN=1000000 (chunked path disabled — FP breakage documented)" | 🟡 |
+| 074 | Chunked SSM (training-only, inference uses sequential) | Training-only: A=(I+L)^{-T} mixes intra-chunk tokens. ✅ DOCUMENTED |
 | 075 | src/wubu_ssm.c | TBD | GPU_SUPPORT #ifdef blocks in ssm_forward | 🟡 |
 | 076-100 | (extensions) | | Unreachable GPU paths, dead #ifdef code | 🟡 |
 

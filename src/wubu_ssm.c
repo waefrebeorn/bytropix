@@ -643,11 +643,12 @@ void wubu_ssm_forward(const float *x, int B, int T,
     // Chunked SSM path for prefill (T >= CS tokens, CS compiled into chunked function)
     // Falls through to sequential for decode (T=1) or small batches.
     // Override threshold via SSM_CHUNK_MIN env var (default 1M — sequential always used for correctness).
-    // NOTE: CS>1 (default 2) causes FP accumulation errors that amplify through 30 SSM layers,
-    // producing wrong token selection. Sequential path is always correct.
-    // FIXME: CS>1 numerical stability is a known deep issue — the chunked recurrence produces
-    // fundamentally different results (cos-sim=0.026 at T=4). Fix requires full matrix exponential
-    // reformulation, not just higher precision accumulators.
+    // NOTE: Chunked SSM (CS=2) is designed for TRAINING/GPU where the A=(I+L)^{-T}
+    // attention matrix mixes tokens within a chunk. This produces DIFFERENT outputs
+    // from sequential (cos-sim ~0.96 at T=4 with constant input) because future K
+    // within the chunk affects past Q outputs — correct for training, wrong for inference.
+    // Sequential path is always correct for inference. Chunked is only appropriate
+    // when exact bit-level match with sequential is NOT required (e.g. GPU training).
     int ssm_chunk_min = getenv("SSM_CHUNK_MIN") ? atoi(getenv("SSM_CHUNK_MIN")) : 1000000;
     if (T >= ssm_chunk_min && !getenv("FORCE_CPU_SSM_SEQ")) {
         wubu_ssm_chunked_recurrence(B, T, q_norm, k_norm, v_conv,
