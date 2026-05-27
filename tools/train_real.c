@@ -16,6 +16,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <cblas.h>
 
 static double now_sec(void) {
     struct timespec ts;
@@ -341,63 +342,86 @@ int main(int argc, char **argv) {
     double t_fwd_save = now_sec() - t0;
     printf("  Forward+save: %.3fs (%.1f tok/s)\n", t_fwd_save, N / t_fwd_save);
 
-    // === Backward through output projection: CE loss gradient ===
+    // === Backward through output projection: CE loss gradient (BLAS-accelerated) ===
     // Forward: hidden[i] @ output_weight^T → vocab_logits → softmax → CE
     // Backward: d_hidden = output_weight^T @ (softmax - one_hot)
-    // Scale by 1/D_MODEL to keep gradient magnitudes sane
+    // Uses cblas_sgemv for W @ h and cblas_sgemm for W^T @ softmax
     float *d_logits = (float *)malloc(N * D_MODEL * sizeof(float));
     double total_ce_loss = 0.0;
 
     if (output_weight) {
-        printf("  Computing CE loss backward through output projection (%d vocab)...\n", tok.vocab_size);
+        printf("  Computing CE loss backward through output projection (%d vocab, BLAS)...\n", tok.vocab_size);
         t0 = now_sec();
 
-        for (int i = 0; i < N; i++) {
-            const float *h = logits_bwd + i * D_MODEL;
-            int target = targets[i];
+        // Scratch buffers
+        float *logits_scratch = (float *)malloc(tok.vocab_size * sizeof(float));
+        float *softmax_matrix = (float *)malloc(tok.vocab_size * N * sizeof(float));
+        if (!logits_scratch || !softmax_matrix) {
+            fprintf(stderr, "CE backward scratch alloc failed\n");
+            free(logits_scratch); free(softmax_matrix);
+        } else {
+            // Phase 1: for each token, compute vocab logits + softmax
+            for (int i = 0; i < N; i++) {
+                const float *h = logits_bwd + i * D_MODEL;
+                int target = targets[i];
 
-            // Pass 1: find max logit across vocab
-            double max_l = -1e30;
-            for (int j = 0; j < tok.vocab_size; j++) {
-                double sum = 0.0;
-                const float *w = output_weight + j * D_MODEL;
-                for (int k = 0; k < D_MODEL; k++)
-                    sum += (double)h[k] * (double)w[k];
-                if (sum > max_l) max_l = sum;
+                // BLAS: logits_scratch = output_weight @ h  (W @ h)
+                cblas_sgemv(CblasRowMajor, CblasNoTrans,
+                    tok.vocab_size, D_MODEL, 1.0f,
+                    output_weight, D_MODEL, h, 1, 0.0f,
+                    logits_scratch, 1);
+
+                // Find max logit
+                float max_l = logits_scratch[0];
+                for (int j = 1; j < tok.vocab_size; j++)
+                    if (logits_scratch[j] > max_l) max_l = logits_scratch[j];
+
+                // Compute softmax: exp(logit - max_l) / sum_exp
+                double sum_exp = 0.0;
+                for (int j = 0; j < tok.vocab_size; j++) {
+                    double ev = exp((double)logits_scratch[j] - (double)max_l);
+                    sum_exp += ev;
+                    softmax_matrix[j * N + i] = (float)ev;
+                }
+                double inv_sum_exp = 1.0 / sum_exp;
+                for (int j = 0; j < tok.vocab_size; j++)
+                    softmax_matrix[j * N + i] *= (float)inv_sum_exp;
+
+                // CE loss
+                double target_logit = logits_scratch[target];
+                double ce = -(target_logit - max_l - log(sum_exp));
+                total_ce_loss += ce;
             }
 
-            // Pass 2: compute sum_exp + accumulate softmax-weighted output weight
-            double target_logit = 0.0, sum_exp = 0.0;
-            float *acc = (float *)calloc(D_MODEL, sizeof(float));
+            // Phase 2: d_hidden = output_weight^T @ softmax_matrix  (W^T @ S)
+            // output_weight: [vocab_size, D_MODEL] row-major
+            // softmax_matrix: [vocab_size, N] row-major
+            // d_hidden: [D_MODEL, N] row-major
+            // sgemm: C = alpha * op(A) * op(B) + beta * C
+            // op(A) = W^T: [D_MODEL, vocab_size], lda = D_MODEL
+            // op(B) = S: [vocab_size, N], ldb = N
+            // C = d_hidden: [D_MODEL, N], ldc = N
+            memset(d_logits, 0, N * D_MODEL * sizeof(float));
+            cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                D_MODEL, N, tok.vocab_size,
+                1.0f, output_weight, D_MODEL,
+                softmax_matrix, N,
+                0.0f, d_logits, N);
 
-            for (int j = 0; j < tok.vocab_size; j++) {
-                double sum = 0.0;
-                const float *w = output_weight + j * D_MODEL;
+            // Subtract W[target] from each token's d_hidden column
+            for (int i = 0; i < N; i++) {
+                int target = targets[i];
+                const float *w_target = output_weight + target * D_MODEL;
                 for (int k = 0; k < D_MODEL; k++)
-                    sum += (double)h[k] * (double)w[k];
-                double exp_val = exp(sum - max_l);
-                sum_exp += exp_val;
-                if (j == target) target_logit = sum;
-                // Accumulate: acc[k] += W[j][k] * exp_val
-                for (int k = 0; k < D_MODEL; k++)
-                    acc[k] += (float)((double)w[k] * exp_val);
+                    d_logits[k * N + i] -= w_target[k];
             }
 
-            // Normalize: d_hidden = (acc / sum_exp) - W[target]
-            float inv_sum_exp = 1.0f / (float)sum_exp;
-            for (int k = 0; k < D_MODEL; k++) {
-                float grad = acc[k] * inv_sum_exp - output_weight[target * D_MODEL + k];
-                d_logits[i * D_MODEL + k] = grad;  // d_hidden for this token
-            }
-            free(acc);
-
-            // CE loss for logging
-            double ce = -(target_logit - max_l - log(sum_exp));
-            total_ce_loss += ce;
+            free(logits_scratch);
+            free(softmax_matrix);
         }
 
         double t_ce_bwd = now_sec() - t0;
-        printf("  CE backward through output weight: %.3fs (%.1f tok/s)\n", t_ce_bwd, N / t_ce_bwd);
+        printf("  CE backward (BLAS): %.3fs (%.1f tok/s)\n", t_ce_bwd, N / t_ce_bwd);
     } else {
         // Fallback: quadratic loss gradient (no output weight available)
         printf("  No output weight — using quadratic loss gradient (d_logits = logits)\n");
