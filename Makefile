@@ -186,8 +186,18 @@ gen_text_cpu: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.
 	$(CC) $(CFLAGS_FILTERED) -o $@ tools/gen_text.c src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o $(LDFLAGS)
 	@echo "gen_text_cpu built (CPU-only, no GPU support)"
 
+# CPU-only gen_text with LARGE_L3 prefetch (DDR5/Large L3 systems)
+gen_text_large_l3: CFLAGS_LARGE_L3 = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS)) -DLARGE_L3
+gen_text_large_l3: src/wubu_model_large_l3.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS_LARGE_L3) -o $@ tools/gen_text.c src/wubu_model_large_l3.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o $(LDFLAGS)
+	@echo "gen_text_large_l3 built (LARGE_L3 prefetch enabled)"
+
 src/wubu_model_cpu.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h include/wubu_moe.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -o $@ -c $<
+
+# Large L3 variant: recompiles wubu_model.c with -DLARGE_L3
+src/wubu_model_large_l3.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h include/wubu_moe.h include/gguf_reader.h
+	$(CC) $(CFLAGS_LARGE_L3) -o $@ -c $<
 
 # CPU-only wubu_moe (no GPU_SUPPORT)
 src/wubu_moe_cpu.o: src/wubu_moe.c include/wubu_moe.h include/wubu_ssm.h

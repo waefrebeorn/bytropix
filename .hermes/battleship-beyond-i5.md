@@ -30,7 +30,7 @@
 | 003 | _mm_prefetch disabled on DDR4 | Stride loop present but commented out (L3=6MB < 7.4MB/layer) | ✅ Commented block |
 | 004 | router cost measured | 2048×256 F32 matmul: ~0.5ms decode, ~2.5ms prefill(5tok) | ✅ Trivial vs SSM |
 | 005 | L3 occupancy analysis | 6MB L3 cannot hold 8 expert weights (7.4MB) + SSM weights (27MB) | ✅ Measured |
-| 006 | DDR5 gate: LARGE_L3 compile flag | `#ifdef LARGE_L3` enables prefetch stride loop | ⬜ |
+| 006 | DDR5 gate: LARGE_L3 compile flag | `#ifdef LARGE_L3` enables prefetch stride loop — gate impl + stride loop in wubu_model.c, Makefile target gen_text_large_l3 | ✅ |
 | 007 | Prefetch stride optimization | P_STRIDE=256 (4 cache lines per burst) confirmed optimal | ✅ |
 | 008 | Gate: per-token prefetch vs decode-only | Decode (N=1): 1 token × 8 experts = exact. Prefill: first token only | ✅ |
 | 009 | _MM_HINT_T2 vs T1 vs T0 | T2 = L3 prefetch, correct for this use case | ✅ |

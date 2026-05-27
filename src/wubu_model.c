@@ -515,12 +515,56 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             // Router on pre-attention normed: [N,2048] @ [2048,256] -> [N,256] scores -> top-8
             wubu_moe_router_only(normed, B, T, &layer->moe, prev_experts);
 
-            // N64 pre-cache fill: prefetch THIS layer's expert weights during SSM
-            // Disabled on DDR4 (L3=6MB < 7.4MB/layer, prefetch steals SSM bandwidth).
-            // Enable for DDR5 systems or when compile-time LARGE_L3 is set.
-            // --- Prefetch block (disabled) ---
-            // int64_t gate_bytes = gguf_raw_size...
-            // _mm_prefetch stride loop...
+#ifdef LARGE_L3
+            // N64 pre-cache fill: prefetch selected expert weights into L3
+            // Router computed 8 expert indices above. Prefetch their quantized
+            // gate/up/down weights during SSM forward (~50ms). On DDR5 systems
+            // or when L3 > 7.4MB, data arrives in L3 before MoE needs it.
+            {
+                const int64_t n_elems_gate = (int64_t)D_MODEL * D_FF;
+                const int64_t n_elems_down = (int64_t)D_FF * D_MODEL;
+                const int64_t gate_stride = gguf_raw_size(layer->moe.ffn_gate_exps_q_type, n_elems_gate);
+                const int64_t up_stride   = gguf_raw_size(layer->moe.ffn_up_exps_q_type,   n_elems_gate);
+                const int64_t down_stride = gguf_raw_size(layer->moe.ffn_down_exps_q_type, n_elems_down);
+                const int ntokens = B * T;
+                // Decode: prefetch all 8 selected experts. Prefill: first token only.
+                const int prefetch_tokens = (ntokens > 1) ? 1 : ntokens;
+
+                for (int t = 0; t < prefetch_tokens; t++) {
+                    for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
+                        int e = prev_experts[t * N_ACTIVE_EXPTS + k];
+                        if (e < 0 || e >= N_EXPERTS) continue;
+
+                        const uint8_t *gate_base = layer->moe.ffn_gate_exps_q + e * gate_stride;
+                        const uint8_t *up_base   = layer->moe.ffn_up_exps_q   + e * up_stride;
+                        const uint8_t *down_base = layer->moe.ffn_down_exps_q + e * down_stride;
+
+                        for (int64_t off = 0; off < gate_stride; off += 256)
+                            _mm_prefetch((const char *)gate_base + off, _MM_HINT_T2);
+                        for (int64_t off = 0; off < up_stride; off += 256)
+                            _mm_prefetch((const char *)up_base + off, _MM_HINT_T2);
+                        for (int64_t off = 0; off < down_stride; off += 256)
+                            _mm_prefetch((const char *)down_base + off, _MM_HINT_T2);
+                    }
+                }
+
+                // Shared expert always active — prefetch unconditionally
+                if (layer->moe.ffn_gate_shexp_q) {
+                    const int64_t sh_gate_sz = gguf_raw_size(layer->moe.ffn_gate_shexp_q_type, n_elems_gate);
+                    const int64_t sh_up_sz   = gguf_raw_size(layer->moe.ffn_up_shexp_q_type,   n_elems_gate);
+                    const int64_t sh_down_sz = gguf_raw_size(layer->moe.ffn_down_shexp_q_type, n_elems_down);
+                    for (int64_t off = 0; off < sh_gate_sz; off += 256)
+                        _mm_prefetch((const char *)layer->moe.ffn_gate_shexp_q + off, _MM_HINT_T2);
+                    for (int64_t off = 0; off < sh_up_sz; off += 256)
+                        _mm_prefetch((const char *)layer->moe.ffn_up_shexp_q + off, _MM_HINT_T2);
+                    for (int64_t off = 0; off < sh_down_sz; off += 256)
+                        _mm_prefetch((const char *)layer->moe.ffn_down_shexp_q + off, _MM_HINT_T2);
+                }
+            }
+#else
+            // DDR4 (current): disabled — L3=6MB < 7.4MB/layer, prefetch steals SSM bandwidth
+            (void)0;
+#endif
         }
         
         double t0 = wall_time();
