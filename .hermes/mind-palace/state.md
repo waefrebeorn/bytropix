@@ -33,6 +33,7 @@ The NES emulator is a pre-built test workload. Do NOT modify its internals.
 10. **CI pipeline (cell 174)**: .github/workflows/build-and-test.yml — compiles all core objects, builds test_mobius_linear, runs it, on push/PR to main/cpu-optimize-may26.
 11. **Consolidation pass**: Cells 054 (vision load diag), 141-144 (RSGD/Lean/gyration/Poincaré GQA) reviewed & marked. All mobius backward primitives exist and gyration operator is implemented.
 12. **RSGD upgrade (cell 142)**: Replaced ambient-step+retraction with proper exp_map_w via Möbius addition. Out-of-ball fallback. Verified: PASS (1000 vecs, 128-dim, no NaN/Inf).
+13. **IQ1_M test (cell 272)**: tools/test-iq1-m.sh — documents requirements. Low priority (quality loss > memory savings).
 
 ### Branch
 - `cpu-optimize-may26` — all parity fixes (ahead of main, pushed)

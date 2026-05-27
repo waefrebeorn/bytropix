@@ -159,7 +159,7 @@
 | Cell | Gap | Severity |
 |------|-----|----------|
 | 271 | No MTP CPU benchmark (unable to load dual model on 11GB) | 🟡 |
-| 272 | No IQ1_M quant test (1.9 bpw would cut model to ~7.7GB) | 🟡 |
+|| 272 | No IQ1_M quant test (1.9 bpw would cut model to ~7.7GB) | 🟡 tools/test-iq1-m.sh — documents requirements. Skip (quality loss > memory savings vs IQ2_M on 11GB) |
 | 273 | Cache compression resources doc exists but not implemented | 🟢 |
 | 274 | API server exists (api_server.c) but no usage guide | 🟢 |
 | 275 | ENCODERS/hash-mind/ has custom encoder not documented | 🟢 |
