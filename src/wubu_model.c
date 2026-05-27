@@ -547,24 +547,25 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                             _mm_prefetch((const char *)down_base + off, _MM_HINT_T2);
                     }
                 }
-
-                // Shared expert always active — prefetch unconditionally
-                if (layer->moe.ffn_gate_shexp_q) {
-                    const int64_t sh_gate_sz = gguf_raw_size(layer->moe.ffn_gate_shexp_q_type, n_elems_gate);
-                    const int64_t sh_up_sz   = gguf_raw_size(layer->moe.ffn_up_shexp_q_type,   n_elems_gate);
-                    const int64_t sh_down_sz = gguf_raw_size(layer->moe.ffn_down_shexp_q_type, n_elems_down);
-                    for (int64_t off = 0; off < sh_gate_sz; off += 256)
-                        _mm_prefetch((const char *)layer->moe.ffn_gate_shexp_q + off, _MM_HINT_T2);
-                    for (int64_t off = 0; off < sh_up_sz; off += 256)
-                        _mm_prefetch((const char *)layer->moe.ffn_up_shexp_q + off, _MM_HINT_T2);
-                    for (int64_t off = 0; off < sh_down_sz; off += 256)
-                        _mm_prefetch((const char *)layer->moe.ffn_down_shexp_q + off, _MM_HINT_T2);
-                }
             }
-#else
-            // DDR4 (current): disabled — L3=6MB < 7.4MB/layer, prefetch steals SSM bandwidth
-            (void)0;
-#endif
+#endif // LARGE_L3 — routed expert prefetch ends here
+
+            // Shared expert always-active prefetch (all paths)
+            // Only ~2.4MB total — small enough to prefetch even on DDR4 without
+            // significant bus contention. Always needed (shared expert is always on).
+            if (layer->moe.ffn_gate_shexp_q) {
+                const int64_t n_elems_gate = (int64_t)D_MODEL * SHARED_D_FF;
+                const int64_t n_elems_down = (int64_t)SHARED_D_FF * D_MODEL;
+                const int64_t sh_gate_sz = gguf_raw_size(layer->moe.ffn_gate_shexp_q_type, n_elems_gate);
+                const int64_t sh_up_sz   = gguf_raw_size(layer->moe.ffn_up_shexp_q_type,   n_elems_gate);
+                const int64_t sh_down_sz = gguf_raw_size(layer->moe.ffn_down_shexp_q_type, n_elems_down);
+                for (int64_t off = 0; off < sh_gate_sz; off += 256)
+                    _mm_prefetch((const char *)layer->moe.ffn_gate_shexp_q + off, _MM_HINT_T2);
+                for (int64_t off = 0; off < sh_up_sz; off += 256)
+                    _mm_prefetch((const char *)layer->moe.ffn_up_shexp_q + off, _MM_HINT_T2);
+                for (int64_t off = 0; off < sh_down_sz; off += 256)
+                    _mm_prefetch((const char *)layer->moe.ffn_down_shexp_q + off, _MM_HINT_T2);
+            }
         }
         
         double t0 = wall_time();
