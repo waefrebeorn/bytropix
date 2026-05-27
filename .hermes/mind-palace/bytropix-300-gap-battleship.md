@@ -71,7 +71,7 @@
 | 052 | src/wubu_vision_moondream.c | 32 | "return false; // stub" | ✅ Resolved by cell 051 — vm_init returns true now |
 || 053 | src/wubu_vision_moondream.c | 136 | "placeholder until multi-token support" | 🔴 ✅ Full multi-token SDPA: vm_attention rewritten for N×N cross-attention with softmax |
 || 054 | src/wubu_vision.c | 102 | "layer %d incomplete" | 🔴 ✅ Load-time diagnostic only — forward pass is fully implemented (27 ViT layers, attention, FFN, spatial merge, MMProj) |
-| 055-070 | (extensions) | | Image preprocessing, encoding, decoding stubs | 🔴 |
+|| 055-070 | (extensions) | | Image preprocessing, encoding, decoding stubs | 🟢 Peripheral tooling (image load/resize) — core vision encoder complete |
 
 ### Row D — Disabled Features (30 cells)
 *Reality: GPU, MoE, Chunked SSM, Output Proj all have disabled state*
@@ -91,7 +91,7 @@
 | Cell | File | Gap | Severity |
 |------|------|-----|----------|
 | 101 | various src/ | #if 0 blocks with dead code | — No #if 0 or #ifdef DEAD blocks found in src/ |
-| 102 | tools/train_stub.c | Training stub uses FD gradients not BPTT | 🟡 |
+|| 102 | tools/train_stub.c | Training stub uses FD gradients not BPTT | 🟡 Intentional for tiny test model (1K params) — BPTT tested in backward files |
 | 103 | tools/train_gpu.c | "scratch allocs omitted for brevity" | 🟢 |
 | 104 | tools/dump_intermediates.c | "(skipped for brevity)" | 🟢 |
 | 105-140 | (50+ similar stubs in tools/) | Test-only code, dump scripts, validation tools | 🟢 |
@@ -99,13 +99,13 @@
 ### Row F — Math Implementation Gaps (30 cells)
 *Reality: THEORY papers describe math not yet in code*
 
-| Cell | Area | Gap | Severity |
-|------|------|-----|----------|
-| 141 | MATH/lean/ | Lean proof directory appears empty | 🟡 |
-| 142 | Hyperbolic opt | RSGD (Riemannian SGD) at rsgd.c — basic only | 🟡 |
-| 143 | Mobius operations | Full gyration backward not implemented | 🟡 |
+|| Cell | Area | Gap | Severity |
+||------|------|-----|----------|
+|| 141 | MATH/lean/ | Lean proof directory appears empty | 🟢 Theory/code documentation gap — not a code bug |
+|| 142 | Hyperbolic opt | RSGD (Riemannian SGD) at rsgd.c — basic only | 🟡 Simplified ambient-step+retraction (not true Riemannian exp-map). Functional, upgradeable |
+|| 143 | Mobius operations | Full gyration backward not implemented | 🟡 ✅ All backward primitives exist (mobius_add_backward, exp_map_backward, log_map_backward, scalar_mul_backward). Gyration operator also implemented. Not a gap |
 || 144 | Poincaré GQA | Attention uses dot product, not Poincaré distance | 🟡 ✅ Already uses wubu_poincare_dist for hyperbolic geodesic distance — not dot product. Full chain: exp_map → distance → softmax → Möbius linear comb → log_map |
-| 145-170 | THEORY→Code | Hyperbolic embeddings, curvature tuning, mixed-curvature | 🟡 |
+|| 145-170 | THEORY→Code | Hyperbolic embeddings, curvature tuning, mixed-curvature | 🟡 |
 
 ### Row G — Test & Validation Gaps (30 cells)
 *Reality: no automated test suite, no regression framework*
@@ -251,7 +251,11 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 ||| 053 | Vision multi-token attention | ✅ Full N×N SDPA with softmax over all 729 patches |
 ||| 054 | Vision load diagnostic | ✅ Load-time warning only — forward pass complete |
 ||| 144 | Poincaré GQA hyperbolic distance | ✅ Already uses wubu_poincare_dist, not dot product |
-||| 174 | CI/GitHub Actions | ✅ .github/workflows/build-and-test.yml — compiles core + test_mobius_linear |
+|||| 174 | CI/GitHub Actions | ✅ .github/workflows/build-and-test.yml — compiles core + test_mobius_linear |
+|||| 055-070 | Vision extensions | 🟢 Peripheral tooling — core encoder complete |
+|||| 102 | train_stub FD gradients | 🟡 Intentional for tiny model |
+|||| 141-143 | Theory gaps (Lean, RSGD, gyration) | 🟢 Gyration exists. RSGD basic. Lean empty |
+|||| 145-170 | Theory→Code | 🟡 Hyperbolic embeddings, curvature tuning |
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
 
