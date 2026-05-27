@@ -20,9 +20,20 @@
 | 205 | SSM heap allocs resolved | Cell 241 eliminates 17×malloc/layer — covers this gap. |
 
 ## Current Bottleneck
-- Layer forward: ~200ms (82% of 244ms)
+- Layer forward: ~200ms (82% of 244ms) — DDR4 bandwidth bound
 - Output proj (amortized): ~16ms 
 - Other overhead: ~28ms
+
+## Hardware Frontier
+DDR4 (25GB/s): layer forward 200ms is the floor. No remaining cells improve this. Next breakthrough needs DDR5 (50GB/s, ~100ms/layer) or CUDA GPU.
+
+## 300-Gap Battleship
+| Status | Count |
+|--------|-------|
+| ✅ Completed | 28/300 |
+| 🔴 P0 Math (gyration, vision) | ~60 |
+| 🟡 P1-P2 Medium | ~60 |
+| 🟢 P3 Low/Docs | ~152 |
 
 ## Demoscene Tools Built
 - **`quantized_matmul_subset`**: Compute only specified output columns
