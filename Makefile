@@ -379,6 +379,12 @@ test_router_stability: tools/test_router_stability.c src/gguf_reader.o
 	$(CC) $(CFLAGS_FILT) -o $@ tools/test_router_stability.c src/gguf_reader.o $(LDFLAGS)
 	@echo "test_router_stability built"
 
+# Cache line alignment checker (cell 042)
+check_alignment: CFLAGS_ALIGN = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
+check_alignment: tools/check_alignment.c src/gguf_reader.o
+	$(CC) $(CFLAGS_ALIGN) -o $@ tools/check_alignment.c src/gguf_reader.o $(LDFLAGS)
+	@echo "check_alignment built"
+
 test_dequant: tools/test_dequant.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 

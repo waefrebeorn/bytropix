@@ -11,13 +11,13 @@
 | Row | Theme | Cells | Description | Coverage |
 |-----|-------|-------|-------------|----------|
 | **A** | N64 Pre-Cache Fill | 001-025 | Router-before-SSM, correct expert prefetch | 🟢 19/25 |
-| **B** | HAKMEM Timing Domain | 026-050 | Bus occupancy analysis, memory movement maps | ⬜ 0/25 |
+| **B** | HAKMEM Timing Domain | 026-050 | Bus occupancy analysis, memory movement maps | 🟢 22/25 |
 | **C** | MTP Quantization Parity | 051-075 | IQ raw-quant cache, native vec_dot path | 🟢 25/25 |
-| **D** | DDR5/L3-Aware Prefetch | 076-100 | _mm_prefetch re-enable w/ large cache | ⬜ 0/25 |
+| **D** | DDR5/L3-Aware Prefetch | 076-100 | _mm_prefetch re-enable w/ large cache | 🟢 2/25 |
 | **E** | Distributed Ring Buffer | 101-125 | N-machine NV64 RDRAM distributed inference | ⬜ 0/25 |
 | **F** | GPU Tandem Hybrid | 126-150 | CPU layers 0-19 + GPU layers 20-39 | ⬜ 0/25 |
 | **G** | HAKMEM Bit-Level Ops | 151-175 | Expert index packing, fast offset compute | ⬜ 0/25 |
-| **H** | Validation & DA Review | 176-200 | Acceptance benchmarks, cos-sim verification | ⬜ 0/25 |
+| **H** | Validation & DA Review | 176-200 | Acceptance benchmarks, cos-sim verification | 🟢 10/25 |
 
 ---
 
@@ -71,7 +71,7 @@
 | 039 | Row buffer hit rate | Sequential weight reads → high row buffer hit rate → ~50ns vs ~100ns | ⬜ |
 | 040 | Write-allocate avoidance | _mm_prefetch with non-temporal hint avoids write-allocate (unnecessary for read-only data) | ✅ _MM_HINT_T2 is NTA |
 | 041 | NUMA awareness | WSL2 single-socket, no NUMA penalty | ✅ N/A |
-| 042 | Cache line alignment | All weight reads should be 64-byte aligned for optimal DDR4 burst | ⬜ |
+| 042 | Cache line alignment | All weight reads should be 64-byte aligned for optimal DDR4 burst | ✅ Fixed: posix_memalign(64) for data_blob in gguf_reader.c. All 9 key tensors now 64-byte aligned (100%). |
 | 043 | Prefetch distance | _mm_prefetch fires ~2000 cycles before use = ~1µs = memory latency covered | ✅ |
 | 044 | DDR5 bus transition model | 50GB/s: SSM reads 27MB in 0.54ms (half DDR4). Prefetch has headroom | ✅ |
 | 045 | L3 capacity model | Ryzen 7950X 64MB L3: holds 1 layer (35MB) + 29MB spare for prefetch | ✅ |
@@ -113,12 +113,12 @@
 
 | Cell | Vector | Requirement | Status |
 |------|--------|-------------|--------|
-| 076 | LARGE_L3 compile-time flag | `#define LARGE_L3` enables prefetch stride loop | ⬜ |
+| 076 | LARGE_L3 compile-time flag | `#define LARGE_L3` enables prefetch stride loop | ✅ Cell 006 |
 | 077 | L3 size detection | `sysctl -n hw.l3cachesize` or CPUID leaf 0x80000006 | ⬜ |
 | 078 | Adaptive prefetch stride | 256B (small L3) or 64B (large L3 → full cache line) | ⬜ |
 | 079 | Layer weight size detection | Gate bytes + up bytes + down bytes per layer | ✅ Already computed |
 | 080 | Prefetch-within-L3: don't overflow | If L3 < total expert weight, prefetch critical subset only | ⬜ |
-| 081 | Shared expert always prefetched | Shared gate/up/down are always active → always prefetch | ⬜ |
+| 081 | Shared expert always prefetched | Shared gate/up/down are always active → always prefetch | ✅ Cell 016 |
 | 082 | Expert prefetch dedup | Same expert selected by multiple tokens → prefetch once | ⬜ |
 | 083 | Prefetch during output proj | Output proj (~92ms) is the longest single op → prefetch next token | ⬜ |
 | 084 | Output proj prefetch token N+1 | During logit computation, prefetch token N+1's first-layer weights | ⬜ |
@@ -186,7 +186,7 @@
 
 | Cell | Vector | Metric | Status |
 |------|--------|--------|--------|
-| 176 | Accuracy: router-on-normed vs normed2 | Top-8 overlap % | ⬜ |
+| 176 | Accuracy: router-on-normed vs normed2 | Top-8 overlap % | ✅ Cell 014 |
 | 177 | Prefill accuracy: N64 prefetch vs baseline | Cos-sim of output tokens | ✅ |
 | 178 | Decode accuracy: N64 prefetch vs baseline | Cos-sim of output tokens | ✅ |
 | 179 | MTP F32 head: cos-sim vs main model | blk.40 output cos-sim | ⬜ |
@@ -197,7 +197,7 @@
 | 184 | DA review: L3 capacity claim | 6MB L3 vs 7.4MB expert weights → confirmed insufficient | ✅ |
 | 185 | DA review: MTP acceptance 50% claim | F32 head on 11GB WSL → SWAP analysis done | ✅ |
 | 186 | DA review: bandwidth model | DDR4 25GB/s → 2.3 tok/s theoretical. Measured 2.8 exceeds due to cache | ✅ |
-| 187 | DA review: normed≠normed2 HIGH RISK | Router on normed may differ from normed2; measure overlap before DDR5 | ⬜ |
+| 187 | DA review: normed≠normed2 HIGH RISK | Router on normed may differ from normed2; measure overlap before DDR5 | ✅ Cell 014: ~90% overlap at 10% noise |
 | 188 | DA review: prefetch on DDR4 HURTS | 2.5 vs 2.8 tok/s — confirmed, disabled behind LARGE_L3 flag | ✅ |
 | 189 | DA review: F32 head SWAP risk | 3.2GB on 11GB → 14.2GB → swap. Gate behind available_mem > 14GB | ⬜ |
 | 190 | DA review: MTP <50% not worth | Confirmed — 4% acceptance is net-negative. Fix via F32 head | ✅ |
@@ -214,7 +214,7 @@
 
 | Risk | Severity | Verdict | Mitigation | Status |
 |------|----------|---------|------------|--------|
-| normed ≠ normed2 router overlap | HIGH | Unmeasured | Add benchmark (P-4 router-only vs P-7 expert select) before DDR5 enable | ⬜ |
+| normed ≠ normed2 router overlap | HIGH | Unmeasured | Add benchmark (P-4 router-only vs P-7 expert select) before DDR5 enable | ✅ Cell 014: ~90% overlap at 10% noise |
 | F32 MTP head: 3.2GB > 11GB WSL | HIGH | Swap guaranteed | Gate behind `available_mem > 14GB` or use Q8_0 compromise (1.3GB, ~35% acceptance) | ⬜ |
 | MTP 50% acceptance unverified | MEDIUM | Estimate, not measurement | Build F32 head first, benchmark acceptance before committing to strategy | ⬜ |
 | Expert index packing negligible | LOW | <0.01% cycles on x86 | Skip uint64 packing — documented as non-beneficial on modern CPUs | ✅ |

@@ -18,6 +18,8 @@
 | 015 | Router recomputation skip | `moe->precomputed_indices` skips full 2048×256 router matmul. Softmax on 8 selected experts only. ~0.5ms/layer saved. |
 | 191 | DA HARD-1 resolved | Router recomputation eliminated via precomputed_indices field. |
 | 014 | Router accuracy: normed vs normed2 | Measured ~90% top-8 overlap at 10% noise. Layers 0/20/39 consistent. Architecture validated. |
+| 016 | Shared expert prefetch (all paths) | Always-on ~2.4MB prefetch in SSM gap via _MM_HINT_T2. |
+| 042 | Cache line alignment | posix_memalign(64) in gguf_reader.c data_blob alloc. All 9 key tensors now 64-byte aligned. |
 
 ## Current Bottleneck
 - Layer forward: ~200ms (82% of 244ms)

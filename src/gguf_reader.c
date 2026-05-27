@@ -1234,12 +1234,16 @@ int gguf_buffer_data(gguf_ctx *ctx) {
     uint64_t blob_size = file_size - ctx->data_blob_offset;
     fseek(ctx->file, ctx->data_blob_offset, SEEK_SET);
     
-    ctx->data_blob = malloc(blob_size);
-    if (!ctx->data_blob) {
-        fprintf(stderr, "gguf_buffer_data: failed to allocate %lu bytes\n", (unsigned long)blob_size);
+    // 64-byte aligned allocation for optimal DDR4 burst reads
+    void *blob = NULL;
+    if (posix_memalign(&blob, 64, blob_size) != 0) {
+        fprintf(stderr, "gguf_buffer_data: posix_memalign failed for %lu bytes\n", (unsigned long)blob_size);
+        fclose(ctx->file);
+        ctx->file = NULL;
         return 0;
     }
-    
+    ctx->data_blob = blob;
+
     size_t n_read = fread(ctx->data_blob, 1, blob_size, ctx->file);
     if (n_read != blob_size) {
         fprintf(stderr, "gguf_buffer_data: read %zu/%lu bytes\n", n_read, (unsigned long)blob_size);
