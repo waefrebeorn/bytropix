@@ -127,7 +127,7 @@
 | 202 | 50+ dump_* tools generating binary blobs | 🟢 |
 | 203 | No unified inference API (gen_text.c, infer_text.c, infer_unified.c overlap) | 🟢 |
 | 204 | Tokenizer: merges loaded every init (247K entries) | 🟢 |
-| 205 | Heap allocations in SSM hot path (13 malloc per forward) | 🟡 |
+| 205 | Heap allocations in SSM hot path (13 malloc per forward) | ✅ |
 | 206-240 | (additional tool duplication) | 🟢 |
 
 ### Row I — Performance (30 cells)
@@ -138,7 +138,7 @@
 | 241 | SSM buffer pre-allocation (remove 13 malloc/free per layer) | Small-5% | ✅ |
 | 242 | MoE shared expert: quantize x once for gate+up | ~10% MoE speedup | ✅ |
 | 243 | Q4_K output proj threaded for batch | Already fixed (52x) | ✅ |
-| 244 | KV cache to Q4_0 format (2GB→500MB) | Memory | 🟡 |
+| 244 | KV cache to Q4_0 format (2GB→500MB) | Memory | ✅ |
 | 245 | Attention sparsity wire for decode | Long-context | 🟢 |
 | 246 | MoE expert prefetch verification benchmark | Verification | 🟢 |
 | 247-270 | (minor improvements) | | 🟢 |
@@ -193,7 +193,7 @@ All gap claims verified against actual source code on cpu-optimize-may26:
 - `train_stub.c` — confirmed FD gradient only
 - 200+ tools in tools/ — confirmed overlapping dump/check/test utilities
 
-Total verifiable gaps: **276 (300 minus 24 already fixed/complete)**
+Total verifiable gaps: **272 (300 minus 28 already fixed/complete)**
 
 To reach 300: add 24 more from:
 - Each Poincaré backward function file with identity path

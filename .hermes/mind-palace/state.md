@@ -14,12 +14,10 @@
 ## Cells Completed This Session
 | Cell | Vector | Detail |
 |------|--------|--------|
-| 241 | SSM buffer pre-allocation | Removed 17× malloc/free per SSM layer. `ssm_workspace_t` pre-allocated once in `wubu_model_forward_from_embd`, reused across 30 SSM layers. 64-byte aligned. Backward compatible (NULL=per-call malloc). |
-| 006 | DDR5 gate: LARGE_L3 compile flag | `#ifdef LARGE_L3` prefetch stride loop for 8 selected experts + shared expert. 256-byte bursts, _MM_HINT_T2. Build: `make gen_text_large_l3` |
-| 015 | Router recomputation skip | `moe->precomputed_indices` skips full 2048×256 router matmul. Softmax on 8 selected experts only. ~0.5ms/layer saved. |
-| 014 | Router accuracy: normed vs normed2 | Measured ~90% top-8 overlap at 10% noise. Layers 0/20/39 consistent. Architecture validated. |
-| 016 | Shared expert prefetch (all paths) | Always-on ~2.4MB prefetch in SSM gap via _MM_HINT_T2. |
-| 042 | Cache line alignment | posix_memalign(64) in gguf_reader.c data_blob alloc. All 9 key tensors now 64-byte aligned. |
+| 241 | SSM buffer pre-allocation | Removed 17× malloc/free per SSM layer. `ssm_workspace_t` pre-allocated once in `wubu_model_forward_from_embd`, reused across 30 SSM layers. 64-byte aligned. |
+| 244 | KV cache Q4_0 verified | Already active via default `#define KV_CACHE_Q4_0 1` in wubu_model.h. 4:1 compression vs F16. |
+| 245 | Attention sparsity verified | `USE_SPARSE_ATTN` env var wired, NSA pattern from DeepSeek-V3.2. |
+| 205 | SSM heap allocs resolved | Cell 241 eliminates 17×malloc/layer — covers this gap. |
 
 ## Current Bottleneck
 - Layer forward: ~200ms (82% of 244ms)
