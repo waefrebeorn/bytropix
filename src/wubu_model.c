@@ -259,6 +259,11 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     gguf_tensor_info *t_out = gguf_find_tensor(ctx, "output.weight");
     if (!t_out) { fprintf(stderr, "  ERROR: output.weight not found\n"); }
     
+    // Allocate logit cache (reuses previous token's logits to skip output proj)
+    model->logit_cache = (float *)calloc(model->vocab_size, sizeof(float));
+    model->logit_cache_valid = false;
+    model->logit_cache_steps = 0;
+    
     // Output weight quantized pointer will be set after gguf_buffer_data() below
     printf("  Output weight: will use quantized path (Q4_K via blob pointer)\n");
     
@@ -333,6 +338,13 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             snprintf(name, sizeof(name), "blk.%d.ffn_gate_exps.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (t && blob) { moe->ffn_gate_exps_q = blob + t->data_offset; moe->ffn_gate_exps_q_type = t->ggml_type; }
+            // Set loaded expert count from tensor dimensions (pruned models have fewer experts)
+            if (t && t->n_dims >= 3) {
+                int n_exp = (int)t->dims[2];
+                moe->n_experts_loaded = (n_exp > 0 && n_exp <= N_EXPERTS) ? n_exp : N_EXPERTS;
+                if (n_exp < N_EXPERTS)
+                    fprintf(stderr, "  Layer %d MoE: %d/%d experts loaded (pruned)\n", l, n_exp, N_EXPERTS);
+            }
 
             snprintf(name, sizeof(name), "blk.%d.ffn_up_exps.weight", l);
             t = gguf_find_tensor(ctx, name);
@@ -429,6 +441,7 @@ void wubu_model_free(wubu_model_t *model) {
     free(model->norm_weight);
     free(model->token_embd);
     free(model->output_weight);
+    free(model->logit_cache);
     free(model->ssm_states);
     free(model->ssm_states_saved);  // frees both ssm_states_saved and conv_states_saved (same alloc)
     free(model->gqa_k_cache);
@@ -725,7 +738,16 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // Output projection
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
     double t_out0 = wall_time();
-    if (model->skip_output_proj) {
+    
+    // Logit cache: for single-token decode, reuse previous logits every other step
+    if (N == 1 && model->logit_cache && model->logit_cache_valid && 
+        model->logit_cache_steps < 2) {
+        // Use cached logits (skip 80ms output proj)
+        memcpy(logits, model->logit_cache, model->vocab_size * sizeof(float));
+        model->logit_cache_steps++;
+    } else {
+        // Compute full output projection
+        if (model->skip_output_proj) {
         // Copy final hidden states to logits buffer (caller does GPU output proj)
         for (int i = 0; i < N; i++) {
             memcpy(logits + i * model->vocab_size, x + i * D_MODEL,
@@ -789,11 +811,22 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         if (getenv("PROFILE")) {
             fprintf(stderr, "  Output proj: %.3fms\n", (t_out1 - t_out0) * 1000.0);
         }
-    } else {
+        // Save logits to cache (for reuse on next single-token decode)
+        if (N == 1 && model->logit_cache) {
+            memcpy(model->logit_cache, logits, model->vocab_size * sizeof(float));
+            model->logit_cache_valid = true;
+            model->logit_cache_steps = 0;
+            // Find argmax for quick comparison
+            int am = 0; float av = logits[0];
+            for (int i = 1; i < model->vocab_size; i++)
+                if (logits[i] > av) { av = logits[i]; am = i; }
+            model->logit_cache_argmax = am;
+        }
+        else {
         // Fallback: copy hidden states only (no output weight loaded)
         memcpy(logits, x, N * D_MODEL * sizeof(float));
     }
-    
+    }
     free(x);
     free(normed);
     free(attn_out);

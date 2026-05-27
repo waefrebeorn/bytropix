@@ -55,6 +55,11 @@ typedef struct {
     // wubu_moe_forward uses GPU for the 8 expert quantized matmuls.
     void *gpu_ctx;
 
+    // Number of loaded routed experts (for pruned models where not all 256 are loaded)
+    // 0 means all 256 are loaded (default). When < 256, expert indices from the router 
+    // are clipped to [0, n_experts_loaded-1] in wubu_moe_forward.
+    int n_experts_loaded;
+
     // Q8_0 lazy dequant cache for MTP draft head (blk.40 only).
     // When non-NULL, MoE forward uses Q8_0-cached version of IQ2 experts.
     // Cache struct defined in mtp_q8_cache.h, cast to mtp_q8_cache_t*.

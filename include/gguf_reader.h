@@ -60,6 +60,9 @@ typedef struct {
     // Data blob location in file
     uint64_t data_blob_offset;
     
+    // Tensor info location in file (start of first tensor info entry)
+    uint64_t tensors_offset;
+    
     // File handle
     FILE *file;
     

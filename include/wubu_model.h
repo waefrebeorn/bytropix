@@ -304,9 +304,15 @@ typedef struct {
     // Records which 8 experts each layer selected on the last forward pass.
     // On subsequent passes with matching prompt, prefetch those experts
     // during the previous layer's SSM forward (reuses idle memory bus).
-    int  expert_history[40][N_ACTIVE_EXPTS];  // [layer][0..7]
-    uint64_t last_prompt_hash;                 // simple hash of first 8 token IDs
+    int expert_history[40][N_ACTIVE_EXPTS];
+    uint64_t last_prompt_hash;
     bool expert_history_valid;
+
+    // Logit cache: stores previous token's full logits + argmax
+    float *logit_cache;       // [vocab_size] — full logits from previous forward
+    int logit_cache_argmax;   // argmax from cache
+    bool logit_cache_valid;
+    int logit_cache_steps;    // count of consecutive cache uses (for adaptive fallback)
 } wubu_model_t;
 
 // Create model, load from GGUF

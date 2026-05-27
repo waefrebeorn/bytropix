@@ -654,6 +654,9 @@ gguf_ctx* gguf_open(const char *path) {
         }
     }
     
+    // Record tensor info file offset
+    ctx->tensors_offset = ftell(f);
+    
     // Read tensor info
     ctx->tensors = calloc(ctx->n_tensors, sizeof(gguf_tensor_info));
     for (int64_t i = 0; i < ctx->n_tensors; i++) {

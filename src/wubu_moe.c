@@ -593,6 +593,13 @@ void wubu_moe_forward(const float *x, int B, int T,
                         float wgt = weights_s[k];
                         float *exp_out = expert_contribs[k];
                         
+                        // Clip expert index for pruned models (not all 256 experts loaded)
+                        if (w->n_experts_loaded > 0 && e >= w->n_experts_loaded) {
+                            // Expert not loaded — skip (shared expert still active)
+                            memset(exp_out, 0, D_MODEL * sizeof(float));
+                            continue;
+                        }
+                        
                         if (e < 0 || wgt < 1e-30f) {
                             memset(exp_out, 0, D_MODEL * sizeof(float));
                         } else {
