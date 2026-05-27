@@ -42,12 +42,12 @@
 | 002 | src/wubu_poincare_ssm_backward.c | 124 | "(copy as identity — approximation)" | 🔴 ✅ Replaced with proper RMSNorm Jacobian: d_x = d_y/rms - x·(x·d_y)/(d·rms³) |
 | 003 | src/wubu_poincare_ssm_backward.c | 142 | "SiLU backward (identity in backward)" | 🔴 ✅ Comment fix — code already computes correct silu'(x) derivative |
 | 004 | src/wubu_poincare_ssm_backward.c | 196 | "d_normed = d_output (identity through matmuls)" | 🔴 ✅ Comment fix — code already computes proper d_output @ W_out^T backward |
-| 005 | src/wubu_poincare_gqa_backward.c | 32 | "exp_map(0) ≈ 0, gradient ≈ identity" | 🔴 |
-| 006 | src/wubu_poincare_gqa_backward.c | 69 | "log_map(0) ≈ 0, gradient ≈ identity" | 🔴 |
-| 007 | src/wubu_poincare_gqa_backward.c | 124 | "mobius_add ≈ identity" | 🔴 |
-| 008 | src/wubu_poincare_gqa_backward.c | 192 | "log_map∘exp_map ≈ identity (straight-through)" | 🔴 |
-| 009 | src/wubu_poincare_gqa_backward.c | 269 | "Backprop through log_map(exp_map(·)) ≈ identity" | 🔴 |
-| 010 | include/wubu_ssm.h | 237-250 | wubu_poincare_ssm_backward declared but identity | 🔴 |
+| 005 | src/wubu_poincare_gqa_backward.c | 32 | "exp_map(0) ≈ 0, gradient ≈ identity" | 🔴 ✅ Edge case only (v=0) — correct; non-zero case has proper Jacobian |
+| 006 | src/wubu_poincare_gqa_backward.c | 69 | "log_map(0) ≈ 0, gradient ≈ identity" | 🔴 ✅ Edge case only (x=0) — correct; non-zero case has proper Jacobian |
+| 007 | src/wubu_poincare_gqa_backward.c | 124 | "mobius_add ≈ identity" | 🔴 ✅ Edge case only (x≈0 or y≈0) — correct |
+| 008 | src/wubu_poincare_gqa_backward.c | 192 | "log_map∘exp_map ≈ identity (straight-through)" | 🟡 Deliberate ST estimator — optional upgrade to full Jacobian using wubu_exp_map_backward/wubu_log_map_backward |
+| 009 | src/wubu_poincare_gqa_backward.c | 269 | "Backprop through log_map(exp_map(·)) ≈ identity" | 🟡 Same as 008 — ST estimator, not a bug |
+| 010 | include/wubu_ssm.h | 237-250 | wubu_poincare_ssm_backward declared but identity | 🔴 ✅ Implemented — gyration chain rule active. Function header already matches new implementation |
 | 011 | src/wubu_moe_hyperbolic_backward.c | — | mobius gyration backward assumed identity | 🔴 |
 | 012 | src/wubu_moe_hyperbolic_backward.c | — | Hyperbolic gate backward ≈ Euclidean | 🔴 |
 | 013-030 | (extensions of above) | | Additional missing gyration chain rule terms | 🔴 |
@@ -236,7 +236,14 @@ Need Q3_K+/F16 model to exceed 0.99. Not available on i5-8365U / 16GB RAM machin
 | 002 | Poincaré SSM backward l2_norm identity | ✅ Replaced with proper RMSNorm Jacobian |
 | 003 | Poincaré SSM backward SiLU identity | ✅ Comment fix — code was correct |
 | 004 | Poincaré SSM backward d_normed identity | ✅ Comment fix — code was correct |
-| 005 | Poincaré GQA backward exp_map identity | 🔴 Next |
+| 005 | Poincaré GQA backward exp_map identity | ✅ Edge case only — correct |
+| 006 | Poincaré GQA backward log_map identity | ✅ Edge case only — correct |
+| 007 | Poincaré GQA backward mobius_add identity | ✅ Edge case only — correct |
+| 008 | Poincaré GQA backward ST estimator | 🟡 Deliberate — optional full Jacobian upgrade |
+| 009 | Poincaré GQA backward ST estimator | 🟡 Same as 008 |
+| 010 | wubu_poincare_ssm_backward declared | ✅ Implemented |
+| 011 | MoE hyperbolic backward | 🔴 Not yet assessed |
+| 012 | MoE hyperbolic backward | 🔴 Not yet assessed |
 
 Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOPS). Need faster CPU/GPU for improvement.
 
