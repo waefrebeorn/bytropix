@@ -29,12 +29,12 @@
 DDR4 (25GB/s): layer forward 200ms is the floor. No remaining cells improve this. Next breakthrough needs DDR5 (50GB/s, ~100ms/layer) or CUDA GPU.
 
 ## 300-Gap Battleship
-| Status | Count |
-|--------|-------|
-| ✅ Completed | 29/300 |
-| 🔴 P0 Math (gyration, vision) | ~60 |
-| 🟡 P1-P2 Medium | ~60 |
-| 🟢 P3 Low/Docs | ~152 |
+| Status | Count | Notes |
+|--------|-------|-------|
+| ✅ Completed | 30/300 | Implemented or verified already-fixed |
+| 🟢 Trivial (code quality, docs, minor) | ~150 | Mostly 🟢, low ROI |
+| 🟡🔴 Core gaps | ~60 | Gyration chain rule, vision, chunked SSM, GPU |
+| 🚫 Blocked on hardware | ~60 | Need DDR5 (50GB/s) or CUDA GPU |
 
 ## Demoscene Tools Built
 - **`quantized_matmul_subset`**: Compute only specified output columns
