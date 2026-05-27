@@ -114,7 +114,7 @@
 |------|------|-----|----------|
 | 171 | regression | test_regression.c only checks top-k match | 🟡 |
 | 172 | accuracy | No automated cos-sim validation | 🟡 |
-| 173 | perf | Benchmark automation script | tools/run_benchmark.sh | ✅ |
+| 173 | perf | Benchmark automation script | tools/test-512k-suite.sh + tools/test-hermes-headless.sh | ✅ |
 | 174 | CI | No GitHub Actions or test runner | 🟡 |
 | 175-200 | validation | Missing comprehensive test for each kernel | 🟢 |
 

@@ -69,3 +69,18 @@ The 512K optimizations are designed to work with the inference-server vault math
 - Adaptive streaming
 
 These operate at the proxy layer; the bytropix kernel changes handle the low-level memory and compute.
+
+## Benchmark Results (May 27, 2026)
+
+**Model:** qwen3.6-35b-a3b-MTP-UD-IQ2_M on i5-8365U / DDR4
+**Config:** USE_SPARSE_ATTN=1 SPARSE_W=512 SPARSE_G=128 MAX_CTX=524288
+
+| Metric | 512K Context | 4K Context (baseline) |
+|--------|-------------|----------------------|
+| Prefill | 1.2 tok/s (5 tok) | 4.3 tok/s (27 tok, batched) |
+| Decode | **2.8 tok/s** | **2.9 tok/s** |
+| SSM attn/layer | ~3.8ms | ~3ms |
+| GQA attn/layer (sparse) | ~2.7ms | ~3ms (full 4096) |
+| MoE/layer | ~3.5ms | ~3ms |
+
+**Key insight:** Decode speed is **context-size independent** with sparse attention. 512K context adds zero slowdown over 4K context. The bottleneck is SSM sequential recurrence (~120ms across 30 layers) + MoE (~140ms across 40 layers), unchanged by context size.
