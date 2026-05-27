@@ -32,8 +32,16 @@ Gainz means speed (lower tok/s gap vs llama.cpp).
 |------|--------|-------------|
 | 175-184 | ✅ | Pytest, Hermes integration, logit cache fix, diagnostics |
 | 179 | ✅ FIXED | Logit cache causing repetition — disabled |
-| 180 | 🟡 | IQ2_M output quality — needs ref comparison |
-| — | 🔴 NEXT | Build dump_ref → compare logits → find divergence → patch |
+| 180 | 🟡 | IQ2_M output quality — 0.974 cos-sim vs ref, needs investigation |
+| Output proj | ✅ FIXED | Q4_K output projection was producing zeros (GCC -O3 + if(0) wrapper) |
+| dump_ref | ✅ FIXED | `llama_model_free` API fix + text prompt tokenization |
+| — | ✅ COMPLETE | dump_ref builds, reference logits acquired |
+| — | ✅ COMPLETE | Our logits now non-zero, cos-sim=0.974 vs ref |
+
+## NEXT: improve cos-sim from 0.974 to >0.99
+- Check if IQ2_M quantization floor limits precision (diagnostics skill table says 2-bit @ 2048-dim produces flat output)
+- Use T10/T50 model for debug cycles
+- Layer-by-layer cos-sim to find exact divergence point
 
 ## BLOCKERS
 

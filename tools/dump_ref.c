@@ -31,24 +31,39 @@ int main(int argc, char **argv) {
     // Create context
     struct llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 512;
-    ctx_params.n_batch = 1;
+    ctx_params.n_batch = 64;
     
     struct llama_context *ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "Failed to create context\n");
-        llama_free(model);
+        llama_model_free(model);
         return 1;
     }
     
-    // Prepare input: token 248044
-    llama_token token = 248044;
-    llama_batch batch = llama_batch_get_one(&token, 1);
+    // Prepare input from argv[2] or tokenize default "cat"
+    const char *prompt = argc > 2 ? argv[2] : "cat";
+    llama_token tokens[64];
+    int n_tokens = llama_tokenize(
+        llama_model_get_vocab(model),
+        prompt, (int32_t)strlen(prompt),
+        tokens, 64, false, false);
+    printf("Prompt: %s (%d tokens)\n", prompt, n_tokens);
+    if (n_tokens <= 0) {
+        fprintf(stderr, "Failed to tokenize prompt\n");
+        llama_model_free(model);
+        return 1;
+    }
+    // Print tokens
+    printf("Tokens: ");
+    for (int i = 0; i < n_tokens; i++) printf("%d ", tokens[i]);
+    printf("\n");
+    llama_batch batch = llama_batch_get_one(tokens, n_tokens);
     
     // Run forward pass
     if (llama_decode(ctx, batch) != 0) {
         fprintf(stderr, "llama_decode failed\n");
         llama_free(ctx);
-        llama_free(model);
+        llama_model_free(model);
         return 1;
     }
     
@@ -88,7 +103,7 @@ int main(int argc, char **argv) {
     printf("Skipping per-layer comparison for now.\n");
     
     llama_free(ctx);
-    llama_free(model);
+    llama_model_free(model);
     llama_backend_free();
     return 0;
 }

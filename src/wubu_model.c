@@ -796,57 +796,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // logits[t, v] = sum_k h[t,k] * output_weight[k, v]
     double t_out0 = wall_time();
     
-    // Cache disabled: always compute full output projection
-    // NOTE: logit cache was causing repetitive output by reusing stale logits
-    // across decode steps. Disabled pending a proper cache invalidation fix.
-    if (0) { // logit cache disabled
-    // Cache logits for single-token decode to skip 80ms output proj
-    if (N == 1 && model->logit_cache && model->logit_cache_valid && 
-        model->logit_cache_steps < model->logit_cache_max_hits) {
-        // Use cached logits (skip 80ms output proj)
-        memcpy(logits, model->logit_cache, model->vocab_size * sizeof(float));
-        model->logit_cache_steps++;
-    } else if (N == 1 && model->logit_subset_valid && model->output_weight_q &&
-               model->logit_cache && model->logit_cache_valid &&
-               model->logit_cache_steps >= model->logit_cache_max_hits) {
-        // Subset refresh: compute only top-K logits (fast path when argmax stable)
-        // Uses logit_subset_ids[] from the last full output proj
-        float subset_vals[LOGIT_SUBSET_K];
-        quantized_matmul_subset(x, model->output_weight_q, model->output_weight_type,
-                                D_MODEL, model->logit_subset_ids, LOGIT_SUBSET_K, 0, subset_vals);
-        
-        // Find argmax from subset
-        int best_idx = 0; float best_val = subset_vals[0];
-        for (int i = 1; i < LOGIT_SUBSET_K; i++)
-            if (subset_vals[i] > best_val) { best_val = subset_vals[i]; best_idx = i; }
-        
-        int new_argmax = model->logit_subset_ids[best_idx];
-        
-        // Check if this argmax differs from cached one
-        if (new_argmax != model->logit_cache_argmax) {
-            // Argmax changed — use subset result
-            // Fill logits with -inf, then set subset values
-            #pragma omp parallel for
-            for (int i = 0; i < model->vocab_size; i++)
-                logits[i] = -INFINITY;
-            for (int i = 0; i < LOGIT_SUBSET_K; i++)
-                logits[model->logit_subset_ids[i]] = subset_vals[i];
-            
-            // Update cache with new logits
-            memcpy(model->logit_cache, logits, model->vocab_size * sizeof(float));
-            model->logit_cache_argmax = new_argmax;
-            // Reset adaptive depth since argmax changed
-            model->logit_cache_max_hits = 2;
-            model->logit_cache_steps = 0;
-        } else {
-            // Argmax unchanged — just continue using full cache
-            // But we still need valid logits for downstream usage
-            memcpy(logits, model->logit_cache, model->vocab_size * sizeof(float));
-            model->logit_cache_steps = 0;
-        }
-    } else {
-        // Compute full output projection
-        if (model->skip_output_proj) {
+    // Full output projection (logit cache disabled - was causing repetitive output)
+    if (model->skip_output_proj) {
         // Copy final hidden states to logits buffer (caller does GPU output proj)
         for (int i = 0; i < N; i++) {
             memcpy(logits + i * model->vocab_size, x + i * D_MODEL,
@@ -972,8 +923,6 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         // Fallback: copy hidden states only (no output weight loaded)
         memcpy(logits, x, N * D_MODEL * sizeof(float));
     }
-    }
-    } // end cache-wraith-disable (if 0)
     free(x);
     free(normed);
     free(attn_out);

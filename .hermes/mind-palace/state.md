@@ -7,6 +7,7 @@
 | **Garbage output** | `inference-server.py` on :8001 was a **proxy** to DeepSeek/Nous — never called local model | `tools/serve_local.py` wraps `gen_text_cpu` directly | ✅ |
 | **No real tests** | Only bash scripts existed | `tests/test_inference.py` — 24 pytest tests, 1.16s | ✅ |
 | **No Hermes provider** | No way for Hermes to use bytropix | `custom_providers.bytropix` in `~/.hermes/config.yaml` | ✅ |
+| **Output proj zeros** | `if(0){/*cache*/}else{/*proj*/}` wrapper caused GCC `-O3` to dead-code-eliminate entire output projection. `#pragma omp parallel for` inside dead `if(0)` block confused control flow analysis. All logits were zero, model appeared to work because argmax of zeros = token 0 = "!" | Removed `if(0)` wrapper entirely, output proj runs directly. Also switched Q4_K vec_dot from AVX2 to generic (AVX2 path had bug producing zeros) | ✅ |
 
 ## What Works
 
