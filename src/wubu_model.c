@@ -947,16 +947,16 @@ bool wubu_mtp_load(mtp_head_t *mtp, const char *mtp_gguf_path,
         moe->load_from_blob = (blob != NULL);  // false if heap-copied
     }
     
-    // Initialize Q8_0 lazy dequant cache for blk.40 MoE (MTP draft head only)
-    mtp_q8_cache_t *q8_cache = (mtp_q8_cache_t *)malloc(sizeof(mtp_q8_cache_t));
-    if (q8_cache) {
-        mtp_q8_cache_init(q8_cache);
-        moe->q8_cache = q8_cache;
-        printf("MTP: Q8_0 lazy dequant cache initialized (%zu slots, ~%zu MB)\n",
-               (size_t)MTP_Q8_CACHE_SLOTS,
-               sizeof(mtp_q8_cache_t) / 1048576);
+    // Initialize IQ raw-quant cache for blk.40 MoE (MTP draft head)
+    mtp_iq_cache_t *iq_cache = (mtp_iq_cache_t *)malloc(sizeof(mtp_iq_cache_t));
+    if (iq_cache) {
+        mtp_iq_cache_init(iq_cache);
+        moe->q8_cache = iq_cache;
+        printf("MTP: IQ raw-quant cache initialized (%d slots, ~%zu MB)\n",
+               MTP_IQ_CACHE_SLOTS,
+               sizeof(mtp_iq_cache_t) / 1048576);
     } else {
-        fprintf(stderr, "MTP: WARNING: failed to allocate Q8_0 cache (OOM)\n");
+        fprintf(stderr, "MTP: WARNING: failed to allocate IQ cache (OOM)\n");
         moe->q8_cache = NULL;
     }
     

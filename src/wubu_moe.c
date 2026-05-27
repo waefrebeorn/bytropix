@@ -7,44 +7,6 @@
 #include <stdio.h>
 #include <assert.h>
 
-// QK_K: block size for K-quant formats (256 elements per block)
-#ifndef QK_K
-#define QK_K 256
-#endif
-
-// Q8_K × Q8_K dot product: activation row × weight row, both Q8_K blocks
-static inline float dot_q8_K_row(const uint8_t *q8_x, const uint8_t *q8_w, int64_t n) {
-    const block_q8_K *bx = (const block_q8_K *)q8_x;
-    const block_q8_K *bw = (const block_q8_K *)q8_w;
-    int nblocks = (int)((n + QK_K - 1) / QK_K);
-    double sum = 0.0;
-    for (int b = 0; b < nblocks; b++) {
-        int32_t acc = 0;
-        const int8_t *qs_x = bx[b].qs;
-        const int8_t *qs_w = bw[b].qs;
-        #pragma omp simd reduction(+:acc)
-        for (int j = 0; j < QK_K; j++)
-            acc += (int)qs_x[j] * (int)qs_w[j];
-        sum += (double)acc * bx[b].d * bw[b].d;
-    }
-    return (float)sum;
-}
-
-// Q8_K × Q8_K matmul: y[j] = q8_x @ q8_W[:,j]
-// q8_x: pre-quantized activation (Q8_K blocks, n_rows values)
-// q8_W: weight stored as Q8_K blocks, contiguous per column
-static inline void matmul_q8_K_q8_K(const uint8_t *q8_x, const uint8_t *q8_W,
-                                     int64_t n_rows, int64_t n_cols,
-                                     int64_t col_stride_bytes, float *y) {
-    int64_t blk_sz = (int64_t)sizeof(block_q8_K);
-    int64_t n_blocks_per_col = (n_rows + QK_K - 1) / QK_K;
-    int64_t stride = (col_stride_bytes > 0) ? col_stride_bytes : (n_blocks_per_col * blk_sz);
-    #pragma omp parallel for if(n_cols > 4)
-    for (int64_t j = 0; j < n_cols; j++) {
-        y[j] = dot_q8_K_row(q8_x, q8_W + j * stride, n_rows);
-    }
-}
-
 // GPU MoE expert forward (declared in wubu_model_gpu.cu, C linkage)
 #ifdef GPU_SUPPORT
 void wubu_model_gpu_moe_experts(const moe_weights_t *w,
@@ -641,30 +603,26 @@ void wubu_moe_forward(const float *x, int B, int T,
                         if (w->ffn_gate_exps_q) {
                             // Q8_0 lazy dequant cache path (MTP draft head only)
                             if (w->q8_cache) {
-                                mtp_q8_cache_t *cache = (mtp_q8_cache_t *)w->q8_cache;
+                                mtp_iq_cache_t *cache = (mtp_iq_cache_t *)w->q8_cache;
                                 bool was_miss;
-                                mtp_q8_cache_slot_t *slot = mtp_q8_cache_get_slot(cache, e, &was_miss);
+                                mtp_iq_cache_slot_t *slot = mtp_iq_cache_get_slot(cache, e, &was_miss);
                                 if (was_miss) {
-                                    mtp_q8_cache_fill(slot, w, e,
-                                        w->ffn_gate_exps_q_type,
-                                        w->ffn_up_exps_q_type,
-                                        w->ffn_down_exps_q_type);
+                                    mtp_iq_cache_fill(slot, w, e);
                                 }
-                                // Quantize x_s to Q8_K once, reuse for gate/up/down
+                                // Use original vec_dot path against cached raw quantized bytes
                                 uint8_t exp_q8_buf[4096];
                                 quantize_row_q8_K(x_s, (block_q8_K *)exp_q8_buf, D_MODEL);
-                                matmul_q8_K_q8_K(exp_q8_buf, slot->gate_q8,
+                                quantized_matmul_from_q8(exp_q8_buf,
+                                    slot->gate_q, slot->gate_type,
                                     D_MODEL, D_FF, 0, gate_out);
-                                matmul_q8_K_q8_K(exp_q8_buf, slot->up_q8,
+                                quantized_matmul_from_q8(exp_q8_buf,
+                                    slot->up_q, slot->up_type,
                                     D_MODEL, D_FF, 0, up_out);
                                 for (int j = 0; j < D_FF; j++) {
                                     float g = gate_out[j];
                                     act[j] = (g < -80.0f ? 0.0f : g / (1.0f + expf(-g))) * up_out[j];
                                 }
-                                // Down projection: need Q8_K-quantized activation
-                                uint8_t act_q8_buf[4096];
-                                quantize_row_q8_K(act, (block_q8_K *)act_q8_buf, D_FF);
-                                matmul_q8_K_q8_K(act_q8_buf, slot->down_q8,
+                                quantized_matmul(act, slot->down_q, slot->down_type,
                                     D_FF, D_MODEL, 0, exp_out);
                                 for (int j = 0; j < D_MODEL; j++)
                                     exp_out[j] *= wgt;

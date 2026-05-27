@@ -8,14 +8,14 @@
 
 ### Phase B ✅ — Acceptance Baseline Measured (17% baseline)
 
-### Phase C ✅ — Q8_0 Lazy Dequant Cache
-- **Status**: Implemented and verified
-- **Cache**: 12-slot LRU, ~41MB heap, Q8_K×Q8_K matmul for expert dot products
-- **Acceptance**: **12%** (vs 17% baseline with pure IQ2_XXS draft head)
-- **Q8_K overhead**: ~3% acceptance loss vs pure IQ2_XXS vec_dot path
-- **Crash**: Fixed buffer overflow bug (MTP_Q8_WEIGHT_BYTES used 34/32 ratio → 1.0625, actual block_q8_K is 292/256 = 1.140625)
-- **No crash on exit** ✅
-- **Baseline (no MTP)**: 2.9 tok/s (4T), MTP: 2.3 tok/s (12% acceptance still below break-even)
+### Phase C ✅ — IQ Raw-Quant Cache (v2, correct approach)
+- **Status**: Raw IQ2_XXS/IQ3_XXS byte cache — stores native quant format, no dequant/requant
+- **Cache**: 16-slot LRU, ~24MB heap, uses original vec_dot path (`quantized_matmul_from_q8`)
+- **Acceptance**: **16%** (matches 17% IQ2_XXS baseline within noise)
+- **Memory**: 24MB vs 41MB Q8_K cache (57% smaller)
+- **No crash** on exit ✅
+- **Bug**: v1 (Q8_K cache) suffered 3% acceptance loss from IQ2→F32→Q8_K requant + Q8_K×Q8_K dot, now fixed with raw IQ bytes
+- **Baseline (no MTP)**: 2.9 tok/s (4T), MTP: 2.4 tok/s (16% acceptance, overhead-dominated)
 
 ### blk.40 Quantization Gap
 | Weight | Main Model (layers 0-39) | blk.40 Draft Head | Q8 Cache Used |

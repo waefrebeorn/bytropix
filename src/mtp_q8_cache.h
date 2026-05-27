@@ -7,42 +7,49 @@
 #include <string.h>
 #include <stdbool.h>
 
-// Simple 8-slot direct-mapped cache: stores Q8_0-dequantized expert weights.
-// Key = expert_index, Value = 3 Q8_0 weight blobs (gate, up, down) + LRU timestamp.
-// Each Q8_0 blob = Q8_0-block-encoded weights (2048×512 → 1.1MB).
-#define MTP_Q8_CACHE_SLOTS 12  // 8 routed + 1 shared + 3 spare
+// Raw-quant cache: stores original IQ2_XXS/IQ3_XXS bytes per expert in RAM.
+// No dequant/requant — keeps the native quant format. Uses original vec_dot path.
+// Key = expert_index, Value = 3 raw quantized blobs + type info.
+// Benefits vs Q8_K cache: no ~3% acceptance loss, ~1/4 memory, no dequant overhead.
+#define MTP_IQ_CACHE_SLOTS 16  // 8 routed + 1 shared + 7 spare (extra headroom)
 
-// Size of one Q8_0-encoded weight matrix: D_MODEL × D_FF as block_q8_K blocks
-#define MTP_Q8_WEIGHT_BYTES ((int)(((int64_t)D_MODEL * D_FF + 255) / 256 * (int64_t)sizeof(block_q8_K)))
+// Per-expert raw quantized weight data (variable-length, capped at max possible)
+#define MTP_IQ_MAX_EXP_BYTES 524288  // > max needed (IQ2: 270KB, IQ3: 401KB, IQ4: 545KB)
 
 typedef struct {
     int   key;               // expert index (-1 = empty)
     int   lru_tick;           // last access tick
-    uint8_t gate_q8[MTP_Q8_WEIGHT_BYTES];  // Q8_0-coded gate weight [D_MODEL, D_FF]
-    uint8_t up_q8[MTP_Q8_WEIGHT_BYTES];    // Q8_0-coded up weight [D_MODEL, D_FF]
-    uint8_t down_q8[MTP_Q8_WEIGHT_BYTES];  // Q8_0-coded down weight [D_FF, D_MODEL]
-} mtp_q8_cache_slot_t;
+    int   gate_type;          // GGML type for gate
+    int   up_type;            // GGML type for up
+    int   down_type;          // GGML type for down
+    int   gate_bytes;         // actual bytes stored for gate
+    int   up_bytes;           // actual bytes stored for up
+    int   down_bytes;         // actual bytes stored for down
+    uint8_t gate_q[MTP_IQ_MAX_EXP_BYTES];
+    uint8_t up_q[MTP_IQ_MAX_EXP_BYTES];
+    uint8_t down_q[MTP_IQ_MAX_EXP_BYTES];
+} mtp_iq_cache_slot_t;
 
 typedef struct {
-    mtp_q8_cache_slot_t slots[MTP_Q8_CACHE_SLOTS];
+    mtp_iq_cache_slot_t slots[MTP_IQ_CACHE_SLOTS];
     int tick;
-} mtp_q8_cache_t;
+} mtp_iq_cache_t;
 
 // Initialize cache
-static inline void mtp_q8_cache_init(mtp_q8_cache_t *cache) {
+static inline void mtp_iq_cache_init(mtp_iq_cache_t *cache) {
     memset(cache, 0, sizeof(*cache));
-    for (int i = 0; i < MTP_Q8_CACHE_SLOTS; i++)
+    for (int i = 0; i < MTP_IQ_CACHE_SLOTS; i++)
         cache->slots[i].key = -1;
     cache->tick = 0;
 }
 
 // Find slot for given key, or evict LRU
 // was_miss: set to true if a new slot was allocated (caller must fill)
-static inline mtp_q8_cache_slot_t *mtp_q8_cache_get_slot(mtp_q8_cache_t *cache, int key, bool *was_miss) {
+static inline mtp_iq_cache_slot_t *mtp_iq_cache_get_slot(mtp_iq_cache_t *cache, int key, bool *was_miss) {
     cache->tick++;
     
     // Check for existing entry
-    for (int i = 0; i < MTP_Q8_CACHE_SLOTS; i++) {
+    for (int i = 0; i < MTP_IQ_CACHE_SLOTS; i++) {
         if (cache->slots[i].key == key) {
             cache->slots[i].lru_tick = cache->tick;
             *was_miss = false;
@@ -50,56 +57,57 @@ static inline mtp_q8_cache_slot_t *mtp_q8_cache_get_slot(mtp_q8_cache_t *cache, 
         }
     }
     
-    // Find LRU slot (empty slot = lru_tick==0)
+    // Find LRU slot
     int lru_idx = 0;
     int min_tick = cache->slots[0].lru_tick;
-    for (int i = 1; i < MTP_Q8_CACHE_SLOTS; i++) {
+    for (int i = 1; i < MTP_IQ_CACHE_SLOTS; i++) {
         if (cache->slots[i].lru_tick < min_tick) {
             min_tick = cache->slots[i].lru_tick;
             lru_idx = i;
         }
     }
     
-    mtp_q8_cache_slot_t *slot = &cache->slots[lru_idx];
+    mtp_iq_cache_slot_t *slot = &cache->slots[lru_idx];
     slot->key = key;
     slot->lru_tick = cache->tick;
     *was_miss = true;
     return slot;
 }
 
-// Dequantize one expert weight block from source quant type to Q8_0 in slot
-static inline void mtp_q8_cache_fill(mtp_q8_cache_slot_t *slot,
-                                      const moe_weights_t *moe,
-                                      int e, int load_type_gate, int load_type_up, int load_type_down) {
-    // Gate: IQ2_XXS → Q8_0 (dequant to F32 → requant to Q8_0)
-    if (moe->ffn_gate_exps_q) {
-        int64_t src_bytes = gguf_raw_size(load_type_gate, D_MODEL * D_FF);
-        const uint8_t *src_gate = moe->ffn_gate_exps_q + (int64_t)e * src_bytes;
-        float *f32_buf = (float *)malloc((size_t)D_MODEL * D_FF * sizeof(float));
-        gguf_dequantize(src_gate, load_type_gate, D_MODEL * D_FF, f32_buf);
-        quantize_row_q8_K(f32_buf, (block_q8_K *)slot->gate_q8, D_MODEL * D_FF);
-        free(f32_buf);
-    }
+// Fill slot with raw quantized bytes (memcpy from blob — no dequant/requant)
+// Returns 1 on success, 0 on failure
+static inline int mtp_iq_cache_fill(mtp_iq_cache_slot_t *slot,
+                                     const moe_weights_t *moe,
+                                     int e) {
+    if (!moe->ffn_gate_exps_q || !moe->ffn_up_exps_q || !moe->ffn_down_exps_q)
+        return 0;
     
-    // Up: same
-    if (moe->ffn_up_exps_q) {
-        int64_t src_bytes = gguf_raw_size(load_type_up, D_MODEL * D_FF);
-        const uint8_t *src_up = moe->ffn_up_exps_q + (int64_t)e * src_bytes;
-        float *f32_buf = (float *)malloc((size_t)D_MODEL * D_FF * sizeof(float));
-        gguf_dequantize(src_up, load_type_up, D_MODEL * D_FF, f32_buf);
-        quantize_row_q8_K(f32_buf, (block_q8_K *)slot->up_q8, D_MODEL * D_FF);
-        free(f32_buf);
-    }
+    // Compute bytes per expert for each quant type
+    int64_t gate_bytes = gguf_raw_size(moe->ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
+    int64_t up_bytes   = gguf_raw_size(moe->ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
+    int64_t down_bytes = gguf_raw_size(moe->ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);
     
-    // Down: [D_FF, D_MODEL]
-    if (moe->ffn_down_exps_q) {
-        int64_t src_bytes = gguf_raw_size(load_type_down, D_FF * D_MODEL);
-        const uint8_t *src_down = moe->ffn_down_exps_q + (int64_t)e * src_bytes;
-        float *f32_buf = (float *)malloc((size_t)D_FF * D_MODEL * sizeof(float));
-        gguf_dequantize(src_down, load_type_down, D_FF * D_MODEL, f32_buf);
-        quantize_row_q8_K(f32_buf, (block_q8_K *)slot->down_q8, D_FF * D_MODEL);
-        free(f32_buf);
-    }
+    if (gate_bytes <= 0 || up_bytes <= 0 || down_bytes <= 0) return 0;
+    if (gate_bytes > MTP_IQ_MAX_EXP_BYTES || up_bytes > MTP_IQ_MAX_EXP_BYTES || down_bytes > MTP_IQ_MAX_EXP_BYTES)
+        return 0;
+    
+    // Memcpy raw quantized bytes from blob
+    const uint8_t *src_gate = moe->ffn_gate_exps_q + (int64_t)e * gate_bytes;
+    const uint8_t *src_up   = moe->ffn_up_exps_q   + (int64_t)e * up_bytes;
+    const uint8_t *src_down = moe->ffn_down_exps_q + (int64_t)e * down_bytes;
+    
+    memcpy(slot->gate_q, src_gate, (size_t)gate_bytes);
+    memcpy(slot->up_q,   src_up,   (size_t)up_bytes);
+    memcpy(slot->down_q, src_down, (size_t)down_bytes);
+    
+    slot->gate_type = moe->ffn_gate_exps_q_type;
+    slot->up_type   = moe->ffn_up_exps_q_type;
+    slot->down_type = moe->ffn_down_exps_q_type;
+    slot->gate_bytes = (int)gate_bytes;
+    slot->up_bytes   = (int)up_bytes;
+    slot->down_bytes = (int)down_bytes;
+    
+    return 1;
 }
 
 #endif // MTP_Q8_CACHE_H

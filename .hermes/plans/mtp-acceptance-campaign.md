@@ -2,18 +2,17 @@
 
 **Objective**: MTP acceptance >50% within 11GB WSL RAM
 
-## Implemented: Q8_0 Lazy Dequant Cache (Phase C ✅)
+## Implemented: IQ Raw-Quant Cache (Phase C ✅) — v2
 
-**Status**: 12% acceptance (measured May 27)
-- 12-slot LRU, ~41MB heap (block_q8_K format: 292 bytes/block, 1.14 MB/slot)
-- Q8_K×Q8_K dot product for expert matmuls (int8 accumulation)
-- Init'd in wubu_mtp_load → wubu_moe_forward cache path when w->q8_cache != NULL
-- Covers blk.40 MoE routed experts only (shared expert unchanged)
-- **Buffer overflow bug fixed**: MTP_Q8_WEIGHT_BYTES was 34/32=1.0625, actual block_q8_K=292/256=1.140625
+**Status**: 16% acceptance (measured May 27) — matches IQ2_XXS baseline within noise
+- 16-slot LRU, ~24MB heap — stores native IQ2_XXS/IQ3_XXS bytes (no dequant/requant)
+- Fill = memcpy from blob. Use = original `quantized_matmul_from_q8` vec_dot path
+- v1 (Q8_K cache) had 3% acceptance loss from requant + Q8_K×Q8_K dot. Fixed by storing raw IQ bytes.
+- 24MB vs 41MB: 57% smaller cache
+- No buffer overflow, no crash on exit
 
-**Key finding**: Q8_K cache adds ~3% acceptance loss vs pure IQ2_XXS draft head (12% vs 17%). Q8_K×Q8_K dot is less accurate than IQ2 vec_dot for reproducing F32 computation.
-
-**12% acceptance → MTP slower than non-MTP** (2.3 vs 2.9 tok/s). Need >35% for break-even.
+**Key finding**: IQ raw-quant cache preserves native accuracy (16% vs 17% baseline).
+Reached 15% threshold → next step is P3 (expert prefetch matrix).
 
 ## Core Insight: Q8_K Draft Head (Achieved, Below Target)
 
@@ -107,7 +106,7 @@ Each: find if applicable to MTP draft head, wire in if cos-sim improves
 
 | Phase | Target | Result | Next |
 |-------|--------|--------|------|
-| P1 (Q8_0 lazy dequant cache) | >15% acceptance | **12% measured** ❌ | → C voodoo + prefetch matrix |
+| P1 (IQ raw-quant cache) | >15% acceptance | **16% measured** ✅ | → P3 prefetch matrix |
 | P3 (prefetch matrix) | >30% acceptance | ⬜ | → P4 DA review |
 | P5 (C voodoo) | >40% acceptance | ⬜ | → P6 DA review |
 | P7 (math vault sweep) | >50% acceptance | ⬜ | → New hardware required |

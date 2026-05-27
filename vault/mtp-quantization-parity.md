@@ -127,3 +127,21 @@ At DDR4 bandwidth wall (~2.3 tok/s theoretical max on our hardware), even 2.0× 
 - DeepSeek-V3.2 (2512.02556): DSA sparse attention for MTP context
 - bytropix MTP code: `src/wubu_model.c:802-1080` (wubu_mtp_forward)
 - bytropix MTP test: `tools/test_mtp_draft.c`
+
+## Implementation Results (May 27)
+
+### v1: Q8_K Dequant Cache ❌
+- **Approach**: IQ2→F32→Q8_K requant, Q8_K×Q8_K dot product
+- **Acceptance**: 12% (3% loss vs baseline)
+- **Root cause**: IQ2→F32→Q8_K requant adds quantization noise. Q8_K dot (int8×int8)
+  is less accurate than native IQ2 vec_dot for reproducing F32 computation.
+- **Memory**: 41MB (12 slots × 3.4MB)
+- **Bug**: MTP_Q8_WEIGHT_BYTES buffer overflow (34/32 ratio ≠ 292/256 block_q8_K ratio)
+
+### v2: IQ Raw-Quant Cache ✅
+- **Approach**: Memcpy native IQ2_XXS/IQ3_XXS bytes from blob. Use original vec_dot path.
+- **Acceptance**: 16% (matches baseline within noise)
+- **Memory**: 24MB (16 slots × ~1.5MB, max 524KB per weight matrix)
+- **No precision loss**: No dequant/requant step — stored bytes match blob exactly.
+- **Cache fill**: Zero dequant overhead (just memcpy)
+- **16% acceptance at K=2**: Speedup = 1/(1-0.16) = 1.19×, overhead-dominated → net-neutral

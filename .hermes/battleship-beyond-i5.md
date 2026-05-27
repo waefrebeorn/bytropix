@@ -90,7 +90,7 @@
 | 051 | F32 blk.40 draft head | Dequant blk.40 MoE weights to F32 on load | ⬜ Blocked — adds 3.2GB, over 11GB WSL |
 | 052 | F32 MoE expert forward path | Add F32 SGEMM path to wubu_moe_forward for blk.40 | ⬜ |
 | 053 | Acceptance rate benchmark | Measure acceptance with F32 draft head vs IQ2_M | ✅ Measured: 17% with Q2_K draft head, 12% with Q8_K cache |
-| 054 | Q8_0 draft head (medium) | Dequant→F32→requantize to Q8_0 for speed | ✅ 12-slot LRU, Q8_K×Q8_K matmul, 41MB heap |
+| 054 | IQ raw-quant cache (v2) | Store native IQ2_XXS/IQ3_XXS bytes, use original vec_dot | ✅ 16-slot LRU, 24MB heap, 16% acceptance |
 | 055 | Separate MTP GGUF extract | Tool to create standalone F32 MTP head GGUF | ❌ Solved: stream blk.40 from file (no extra blob) |
 | 056 | Quantization parity matrix | Verify all tensor types match between main and draft | ✅ Done (IQ2_XXS both sides, no parity gap beyond 1-layer limitation) |
 | 057 | Speculative decode throughput | Measure net tok/s with draft acceptance | ✅ 17% acceptance → 2.3 tok/s (net-neutral with baseline) |
