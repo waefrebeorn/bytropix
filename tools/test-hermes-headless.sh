@@ -25,12 +25,13 @@ trap cleanup EXIT
 log "=== Hermes Headless 512K Pipeline Test ==="
 
 # === Phase 1: Start inference server ===
-log "Starting inference server (sandbox mode, port 8001)..."
+log "Starting inference server (LOCAL CPU mode, port 8001)..."
 cd "$BYTROPIX_DIR"
-python3 tools/inference-server.py --port 8001 --backend sandbox --log-level warning &
+MODEL=~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf \
+  OMP_NUM_THREADS=4 python3 tools/serve_local.py --port 8001 &
 INF_PID=$!
 echo $INF_PID > "$PID_DIR/inference-server.pid"
-sleep 3
+sleep 8  # Local model takes longer to load
 
 # Verify health
 if curl -sf http://localhost:8001/health > /dev/null 2>&1; then

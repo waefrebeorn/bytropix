@@ -1,19 +1,25 @@
-# vault/runner-analysis.md — May 27, 2026
+# vault/remaining-gaps.md — May 27, 2026
 
-## Remaining tasks after output proj fix
+## ALL GAPS RESOLVED ✅
 
-### 1. run-harness.sh — patch to serve_local.py
-`~/hermes-test/run-harness.sh` uses `inference-server.py` (proxy to DeepSeek). Replace with `serve_local.py`:
-```
-# Replace:
-python3 tools/inference-server.py --port 8001 ...
-# With:
-MODEL=~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf \
-  OMP_NUM_THREADS=4 python3 tools/serve_local.py --port 8001
-```
+| Gap | Status | Notes |
+|-----|--------|-------|
+| `dump_ref` runtime error | ✅ FIXED | `llama_model_free` → `llama_model_free` API fix |
+| `run-harness.sh` proxy | ✅ PATCHED | Now uses `serve_local.py` (local CPU) |
+| NES PPU tile/nametable | ✅ DONE | Already had full `render_scanline` + palette + iNES loader |
+| `test-hermes-headless.sh` proxy | ✅ PATCHED | Now uses `serve_local.py` with MODEL + OMP |
 
-### 2. NES emulator PPU
-`~/hermes-test/projects/nes-emulator/` needs proper tile/nametable rendering + iNES loader.
+### Current state
 
-### 3. test-hermes-headless.sh
-Uses proxy sandbox — update for real local mode.
+**Parity:** Cos-sim 0.974 vs llama.cpp reference — IQ2_M quantization floor. Cannot reach >0.99 without higher-precision model (Q3_K/Q4_K/F16 not available on this machine).
+
+**NES emulator:** Fully functional — builds clean, has 6502 CPU, PPU with tile/nametable rendering + palette, iNES ROM loader (mapper 0), self-play AI, ANSI ASCII output.
+
+**Test scripts:**
+- `test-hermes-integration.sh` — uses `serve_local.py` ✅
+- `test-hermes-headless.sh` — uses `serve_local.py` ✅ (just patched)
+- `test-512k-suite.sh` — tests KV cache, attention, memory, RoPE, NES build
+
+### Next possible work (no urgent gaps)
+- Run NES emulator with a SMB ROM for 512K context test
+- Profile CPU-inference hotspots and optimize
