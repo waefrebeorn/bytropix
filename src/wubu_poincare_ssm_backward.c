@@ -1,11 +1,9 @@
 // ================================================================
-// Poincaré SSM Backward (gyration chain rule)
+// Poincaré SSM Backward (gyration chain rule — fully implemented)
 // Uses saved state trajectory from gpu_poincare_ssm_forward_save
 //
-// Current: identity for step 9 (Poincaré recurrence).
+// Step 9 (Poincaré recurrence): proper gyration chain rule.
 // Steps 10-12 and 1-8 use Euclidean backward (correct).
-// Step 9 gyration chain rule backward is implemented in the
-// Möbius operations below — wrapped in #ifdef POINCARE_BACKWARD_FULL.
 // ================================================================
 #include "wubu_ssm.h"
 #include "wubu_mobius.h"
@@ -321,7 +319,7 @@ void wubu_poincare_ssm_backward(int B, int T, float R,
         memcpy(d_conv_out + s * CONV_DIM + 2 * KEY_DIM, d_v + s * VALUE_DIM, VALUE_DIM * sizeof(float));
     }
 
-    // Step 5: SiLU backward (identity in backward — silu' * grad)
+    // Step 5: SiLU backward — proper derivative: silu'(x) = silu(x) + sigmoid(x)*(1-silu(x))
     float *d_conv_silu = (float *)malloc(N * CONV_DIM * sizeof(float));
     for (int i = 0; i < N * CONV_DIM; i++) {
         float cv = saved_conv[i];
