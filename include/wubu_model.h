@@ -290,6 +290,14 @@ typedef struct {
     // GPU acceleration context (opaque pointer, managed by wubu_model_gpu.cu)
     // When non-NULL, GQA layers run on GPU via chunked attention.
     void *gpu_ctx;
+
+    // Expert prefetch history (P3: prompt-aware prefetch matrix)
+    // Records which 8 experts each layer selected on the last forward pass.
+    // On subsequent passes with matching prompt, prefetch those experts
+    // during the previous layer's SSM forward (reuses idle memory bus).
+    int  expert_history[40][N_ACTIVE_EXPTS];  // [layer][0..7]
+    uint64_t last_prompt_hash;                 // simple hash of first 8 token IDs
+    bool expert_history_valid;
 } wubu_model_t;
 
 // Create model, load from GGUF

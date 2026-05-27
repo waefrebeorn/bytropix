@@ -12,7 +12,7 @@
 |-----|-------|-------|-------------|----------|
 | **A** | N64 Pre-Cache Fill | 001-025 | Router-before-SSM, correct expert prefetch | 🟡 15/25 |
 | **B** | HAKMEM Timing Domain | 026-050 | Bus occupancy analysis, memory movement maps | ⬜ 0/25 |
-| **C** | MTP Quantization Parity | 051-075 | High-precision draft head, Q8_K lazy dequant cache | 🟢 25/25 |
+| **C** | MTP Quantization Parity | 051-075 | IQ raw-quant cache, native vec_dot path | 🟢 25/25 |
 | **D** | DDR5/L3-Aware Prefetch | 076-100 | _mm_prefetch re-enable w/ large cache | ⬜ 0/25 |
 | **E** | Distributed Ring Buffer | 101-125 | N-machine NV64 RDRAM distributed inference | ⬜ 0/25 |
 | **F** | GPU Tandem Hybrid | 126-150 | CPU layers 0-19 + GPU layers 20-39 | ⬜ 0/25 |
