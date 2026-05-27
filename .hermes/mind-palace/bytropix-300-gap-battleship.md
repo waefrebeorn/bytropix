@@ -273,8 +273,8 @@ Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOP
 | 303 | Option A: Lower SPARSE_MIN from 4096 | env SPARSE_MIN=512 (env-var default in code) | ✅ |
 | 304 | Option F: Logit cache N-hop reuse | Direct cache reuse for 2 steps, 51% decode speedup (1.7→2.6 tok/s) | ✅ |
 | 305 | Option D: Persistent KV process for multi-turn | Architectural fix (not implemented) | ⬜ |
-| 306 | Benchmark script: tok/s vs context length curve | tools/benchmark-context.sh | ⬜ |
-| 307 | ChatML format fix in gen_text_cpu raw mode | CHAT=1 mode or tokenizer-level support | 🟡 |
+| 306 | Benchmark script: tok/s vs context length curve | tools/benchmark-context.sh | ✅ |
+| 307 | ChatML format fix in gen_text_cpu raw mode | serve_local.py passes raw msg + CHAT=1 env var | ✅ |
 
 **Result:** Decode speed improved 51% (1.7→2.6 tok/s). Multi-turn penalty remains (process-per-turn architecture) — needs Option D for full fix. See `vault/real-bottleneck-analysis.md`.
 
@@ -288,8 +288,8 @@ Remaining perf ceiling: output proj 224ms (hardware-bound, 509M FMAs @ 2.3 GFLOP
 | 303 | P0 🔴 | 15min | ✅ SPARSE_MIN=512 |
 | 304 | P0 🔴 | 4h | ✅ Logit cache 51% speedup |
 | 305 | P1 🟡 | 8-16h | ⬜ Persistent KV process |
-| 306 | P2 🟡 | 30min | ⬜ Benchmark script |
-| 307 | P2 🟡 | 2h | 🟡 ChatML fix |
+| 306 | P2 🟡 | 30min | ✅ Benchmark script created |
+| 307 | P2 🟡 | 2h | ✅ ChatML fix (raw msg + CHAT=1 gen) |
 
 ---
 

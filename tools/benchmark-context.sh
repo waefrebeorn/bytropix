@@ -10,6 +10,9 @@
 # Environment:
 #   MODEL       — GGUF model path
 #   OMP_THREADS — OpenMP threads (default: 4)
+#
+# NOTE: Each test spawns a new gen_text_cpu process (model reload ~80s).
+# Total runtime: ~13 minutes for 4 lengths × 2 modes. Run overnight.
 
 set -euo pipefail
 
