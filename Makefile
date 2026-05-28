@@ -1,7 +1,7 @@
 CC = gcc
 CXX = g++
 NVCC = /usr/local/cuda-13.1/bin/nvcc
-CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/local/cuda-13.1/include -fopenmp
+CFLAGS = -O3 -march=native -funroll-loops -ftree-vectorize -fno-fast-math -Wall -Wextra -Wno-unused-parameter -I include -I/usr/local/cuda-13.1/include -fopenmp
 LDFLAGS = -lm -fopenmp -lopenblas -ljson-c
 NVCC_FLAGS = -O3 -I include -arch=sm_120
 CUDA_LIBS = -lcublas -lcudart
@@ -13,6 +13,9 @@ all: test_ssm test_nested_ssm test_nested_ssm_backward load_model test_gpu test_
 
 api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -o $@ $< -lssl -lcrypto -lm
+
+bytropix_server: tools/bytropix_server.c
+	$(CC) -O2 -g -Wall -o $@ $< -ljson-c -lm -lpthread
 
 # Object files
 CORE_OBJ = src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/wubu_vision_moondream.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o
