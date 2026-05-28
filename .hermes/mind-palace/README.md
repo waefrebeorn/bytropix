@@ -1,65 +1,76 @@
-# WuBuText AI — Mind Palace (May 16 PM v7 — HONEST)
+# bytropix Mind Palace — May 28, 2026
 
-Central planning and knowledge structure for the WuBuText AI project.
-
-**HARD TRUTH: Inference is BROKEN.** All binaries produce garbage output.
-Reference (llama.cpp): "Here's a thinking process:" — Us: garbage tokens.
-Everything depends on fixing inference first. See `plans/devils_advocate_v5.md`.
+> **Inference FIXED.** Context growth penalty ELIMINATED. Compilation flags IEEE 754 compliant.
+> Cos-sim 0.976 vs llama.cpp (IQ2_M floor — hardware ceiling reached).
 
 ## Quick Navigation
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `plans/devils_advocate_v5.md` | 🔍 Meta audit — all goals, math, models | **v5 NEW** |
-| `goal-mantra.md` | 🏆 Prestige paste — full state, commands, priorities | **v12 HONEST** |
-| `state.md` | 📊 Binary dashboard, real status, known issues | **v12 HONEST** |
-| `plan.md` | 🗺️ Priority queue P0-P3 | **v11** |
-| `entry.md` | 🔧 Build commands, hardware spec | **v7 HONEST** |
-| `testing.md` | 🧪 Test protocol, known limitations | **v7** |
-| `project.md` | 🎯 Mission, phases, achievements | **v7 HONEST** |
-| `overnight-map.md` | 🌙 Autonomous session navigation | **v7 HONEST** |
-| `fresh_start_prompt.md` | 🚀 Boot prompt for new sessions | **v7 HONEST** |
-| `index.md` | 🗂️ Full index | **v7 HONEST** |
+| `state.md` | Current performance state, benchmarks, known issues | ✅ updated May 28 |
+| `plan.md` | Priority queue — all gaps closed | ✅ updated May 28 |
+| `walkway.md` | Step-by-step path — all steps done | ✅ updated May 28 |
+| `goal-mantra.md` | Goal and operating loop | ✅ updated May 28 |
+| `goal-paste-agent.md` | Session start paste | ✅ NEW vague version May 28 |
+| `index.md` | Full index | ✅ updated May 28 |
+| `bytropix-300-gap-battleship.md` | 300-gap fresh analysis | ✅ updated May 28 |
+| `workflow-parity.md` | Cos-sim parity debug workflow | ✅ accurate |
+| `bytropix-accomplishments-vaulted.md` | All completed work archived | ✅ |
+| `testing.md` | Test protocol | ⬜ stale — needs refresh |
+| `fresh_start_prompt.md` | Boot prompt | ⬜ stale — needs refresh |
+| `project.md` | Mission, phases | ⬜ stale — May 21 |
+| `entry.md` | Build commands | ⬜ stale — May 16 |
 
-## Key Facts (v7 HONEST)
+## Key Facts (May 28)
 
-- **Inference:** BROKEN. Root cause unknown (SSM? MoE dequant? Tokenizer?)
-- **Training:** `make train_integrated`, 11s/step but CE unverified against reference
-- **GPU:** RTX 5050 6.4GB, sm=120, CUDA 13.1
-- **Model:** Qwen3.6-35B-A3B-UD-IQ2_M.gguf (35B total, 3B active)
-- **Only 2/8 binaries verified:** `test_kv_cache` + `test_256k` (MoE router only)
-- **6/15 math components:** Forward-only, no gradient flow (backward passes missing)
-- **llama.cpp reference:** BUILT at ~/llama.cpp/build/bin/llama-cli — ground truth
+- **Context growth penalty: ELIMINATED** by persistent KV (7.9×, per-turn constant ~31s)
+- **Compilation: IEEE 754** — `-ffast-math` removed (was causing FP drift in 30 SSM layers)
+- **Cos-sim vs llama.cpp: 0.976** — IQ2_M quantization floor. Up from 0.974.
+- **Cos-sim regression: 3/3 pass at 0.975 threshold**
+- **Between-builds cos-sim: 0.99975580** — top-5 argmax identical
+- **All 6 test suite tests pass**
+- **All actionable code gaps closed.** Remaining: hardware-gated (GPU, 32GB+ RAM, Q3_K+ model)
+
+## Key Paths
+
+- Models: `~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf` (10.7 GB)
+- Embeddings: `~/bytropix/data/qwen36_embeddings_c.bin.raw` (2 GB)
+- Reference: `~/llama.cpp/build/bin/llama-cli`
+
+## Build
+
+```bash
+cd ~/bytropix && make gen_text_cpu
+OMP_NUM_THREADS=4 MODEL=~/models/... ./gen_text_cpu "prompt" 100 40
+```
 
 ## Structure
 
 ```
 .hermes/
-├── mind-palace/              ← YOU ARE HERE — central navigation
-│   ├── README.md              ← This file (v7 HONEST)
-│   ├── index.md               ← Full index (v7 HONEST)
-│   └── plans/
-│       ├── devils_advocate_v5.md  ← Meta audit (NEW May 16)
-│       └── devils_advocate_v4.md  ← Previous audit
-├── vault/
-│   ├── bins/                  ← Archived old mind palace versions
-│   ├── attention/             ← Sparse attn research
-│   ├── tailslayer/            ← Hedged reads for spec-decode
-│   └── ... (12 more)
-├── DIAGRAMS/                  ← 10 SVG diagrams (need HONEST update)
-└── presentation/              ← Presentation layer
+├── mind-palace/              ← YOU ARE HERE
+│   ├── README.md              ← This file (v8 — May 28)
+│   ├── index.md               ← Full index (updated May 28)
+│   ├── state.md               ← State dashboard (updated May 28)
+│   ├── plan.md                ← Priority queue (updated May 28)
+│   ├── walkway.md             ← Step path (updated May 28)
+│   ├── goal-mantra.md         ← Goal loop (updated May 28)
+│   ├── goal-paste-agent.md    ← Session paste (NEW May 28)
+│   ├── bytropix-300-gap-battleship.md  ← Gap analysis (updated May 28)
+│   ├── workflow-parity.md     ← Parity workflow
+│   ├── testing.md             ← Test protocol (stale)
+│   ├── fresh_start_prompt.md  ← Boot prompt (stale)
+│   ├── project.md             ← Project overview (stale)
+│   ├── entry.md               ← Build commands (stale)
+│   └── plans/                 ← Devil's advocate audits (stale)
+└── vault/
+    ├── README.md              ← Vault index
+    ├── context-growth-penalty.md  ← Full analysis + compilation fix
+    ├── LEGACY.md              ← Legacy index
+    └── bins/                  ← Archived old mind palace versions
 ```
 
-## Reading Order
-
-1. `plans/devils_advocate_v5.md` — Full meta audit (START HERE)
-2. `state.md` (v12) — HONEST state dashboard
-3. `goal-mantra.md` (v12) — HONEST goal paste
-4. `plan.md` — Priority queue
-5. `entry.md` (v7) — Build + API server docs
-6. `fresh_start_prompt.md` (v7) — Session boot
-
-## Vault Versioning
-
-Old mind palace versions archived to `vault/bins/` before overwriting.
-See `vault/bins/README.md` for index.
+## Vault & Memory Direction
+Discovery → write `vault/[topic].md` + `memory target:memory`
+Palace insight → `memory target:memory`
+Preference → `memory target:user`

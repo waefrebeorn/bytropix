@@ -1,28 +1,29 @@
-# bytropix Goal Mantra — May 27, 2026 (Context Growth Penalty Phase)
+# bytropix Goal Mantra — May 28, 2026
 
 ## THE GOAL
-**Fix context growth penalty.** Decode speed drops 50% (1.2→0.6 tok/s) as context grows from ~1K to ~2K tokens. Sparse attention activates at >4K but dense attention O(n²) kills short/medium context. Fix: enable sparse attention at all lengths OR optimize dense path.
+**All gaps closed. Hardware ceiling reached.** Current state:
+- Context growth penalty: ✅ ELIMINATED (persistent KV, 7.9×)
+- Cos-sim vs llama: 0.976 (IQ2_M floor, improved from 0.974)
+- Compilation flags: ✅ `-fno-fast-math` (IEEE 754)
+- Cos-sim regression: ✅ ALL PASS at 0.975 threshold
+- Between-builds (fast/no-fast): cos-sim 0.99975580, top-5 identical
 
 ## STATE
 | Metric | Value | Status |
 |--------|-------|--------|
-| Cos-sim vs llama.cpp | 0.974 (IQ2_M floor) | ✅ Reached |
+| Cos-sim vs llama.cpp | 0.976 (IQ2_M floor) | ✅ Improved from 0.974 |
 | Output projection | Fixed (GCC -O3 + if(0) + AVX2 zeros) | ✅ |
 | Local inference | serve_local.py (real CPU, not proxy) | ✅ |
 | Test suite | 6/6 tests pass (512K, Hermes, integration) | ✅ |
-| Multi-turn conversation | 481 words in 744s, ChatML broken | ✅ Done |
-| **Context growth penalty** | **1.2→0.6 tok/s (turn 2→3)** | **🔴 P0** |
-| Sparse attention | Historical ~4.1 tok/s at 512K | 🟡 Untested at short ctx |
-
-## NEXT (P0: Context Growth Penalty)
-- Measure exactly where dense attention becomes bottleneck
-- Option A: Lower sparse attention threshold (currently >4K)
-- Option B: Optimize dense attention matmul (Q4_K vec_dot)
-- Option C: KV cache format switch impact on decode speed
-- Option D: OMP thread scaling per context size
+| Multi-turn conversation | 94.6s total (7.9× faster), constant ~31s/turn | ✅ |
+| Context growth penalty | ELIMINATED | ✅ |
+| Compilation flags | `-fno-fast-math` (IEEE 754) | ✅ |
+| Cos-sim regression | 3/3 pass at 0.975 | ✅ |
 
 ## THE LOOP
 read docs → pick lowest undone → execute → update docs → push → loop
+no questions. no choices. no stopping. zero delegation.
+every output feeds back into input documents.
 
 ## FILES
 - `.hermes/mind-palace/goal-mantra.md` — this file
@@ -32,4 +33,9 @@ read docs → pick lowest undone → execute → update docs → push → loop
 - `.hermes/mind-palace/state.md` — current state
 - `.hermes/mind-palace/plan.md` — plan
 - `.hermes/mind-palace/workflow-parity.md` — parity debug workflow
-- `vault/context-growth-penalty.md` — penalty analysis
+- `vault/context-growth-penalty.md` — penalty analysis + compilation flags fix
+
+## VAULT & MEMORY DIRECTION
+discover → write vault/[topic].md + memory target:memory content:"vault vault/[topic].md — one-line what it covers"
+palace insight → memory target:memory content:"mind palace mind-palace/[path] — one-line update"
+preference → memory target:user content:"wubu prefers [preference]"

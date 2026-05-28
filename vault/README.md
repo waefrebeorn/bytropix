@@ -6,6 +6,7 @@ Archived mind palace snapshots, quantization formulas, and reference data.
 
 | File | Purpose |
 |------|---------|
+| `context-growth-penalty.md` | Full analysis: persistent KV fix + compilation flags fix |
 | `LEGACY.md` | Legacy documentation index |
 | `api-server.md` | API server sandbox documentation |
 | `unsloth-quantization-format.md` | Unsloth UD quantization format reference |

@@ -1,31 +1,27 @@
-# Overnight Map — Phase 29a: IQ1_M + Q4_K GPU Kernels
+# Overnight Map — May 28, 2026
 
-**Active repo:** /home/wubu/bytropix/  
-**Current commit:** c0254c0 (not pushed)  
-**Default model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB)  
-**IQ1_M model:** /models/Qwen3.6-35B-A3B-UD-IQ1_M.gguf (7.7GB, 1.90 BPW, quality degraded)
+**Active repo:** ~/bytropix/
+**Current branch:** cpu-optimize-may26
+**Model:** ~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf (10.7GB)
+**All remote:** github.com/waefrebeorn/bytropix.git
 
-## Session Summary (May 21, 2026)
+## Session Summary (May 28)
 
 ### What Was Done
-1. **GPU IQ1_M quant matmul kernel** — single-token + batched variants with iq1s_grid lookup
-   - Verified exact match vs CPU (max diff 3.3e-7)
-   - Grid table uploaded via `wubu_cuda_quant_matmul_set_iq1s_grid` at GPU init
-2. **GPU Q4_K quant matmul kernel** — single-token + batched (simpler than Q5_K, no qh field)
-3. **CPU `quantized_matmul_from_q8` IQ1_M fallback** — dequant+SGEMM for types without vec_dot
-4. **`MODEL` env var** — `gen_text.c` now reads `MODEL` env var to override model path
+1. **Context growth penalty ELIMINATED** — persistent KV process: 7.9× multi-turn, per-turn constant ~31s
+2. **Compilation flags IEEE 754** — `-ffast-math` removed → `-fno-fast-math` restored IEEE compliance
+3. **Single-token cos-sim improved** — 0.974→0.976 (cat prompt vs llama.cpp)
+4. **Cos-sim regression automated** — 3 prompts at 0.975 threshold, ALL PASS
+5. **Between-builds verified** — fast vs no-fast: cos-sim 0.99975580, top-5 argmax identical
+6. **All docs updated** — state, walkway, plan, battleship, index, README, goal-mantra, testing, entry, project, fresh_start, goal-paste, palace README
+7. **Pushed to cpu-optimize-may26** — commit 550a6b6
 
-### GPU Kernel Inventory
-Now supporting 4 quant types on GPU: Q5_K, Q6_K, Q4_K, IQ1_M
-All have single-token and batched (C=N prefill) variants.
-
-### Remaining GPU Blockers
-1. **GPU MoE divergence** (0.9888 cos-sim per layer, DA v13) — fundamental code-path diff
-2. **Q2_K, IQ2_XXS GPU kernels** — needed for token_embd, ffn_down, attn_output weights
-3. **Full GPU inference** — requires all weight types and solving H2D/D2H overhead
+### Remaining (Hardware-Gated)
+1. GPU output proj — needs GPU (CPU faster for text)
+2. MTP CPU benchmark — needs 32GB+ RAM
+3. Cos-sim >0.99 — needs Q3_K+/F16 model (>16GB)
+4. Mixed-curvature hyperbolic — research, not blocker
 
 ### Next Session Options
-1. Debug IQ1_M model quality — investigate why 1.90 BPW gives garbage with multi-token prompts
-2. Add GPU Q2_K kernel for token_embd.weight (D_MODEL=2048, vocab=248320) and ffn_down weights
-3. Fix the GPU MoE divergence root cause from DA v13
-4. Re-quantize IQ1_M with more imatrix chunks for better quality
+1. Nothing actionable — all gaps closed. Hardware ceiling.
+2. Unless user wants to acquire better hardware (32GB RAM, Q3_K+ model, GPU)

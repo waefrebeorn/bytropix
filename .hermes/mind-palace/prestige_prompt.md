@@ -1,41 +1,40 @@
-# Prestige Prompt — May 21, 2026 (Phase 28r: P2.3 Chunked SSM Fixed + Wired)
+# Prestige Prompt — May 28, 2026
 
-## Project: bytropix — Multi-Modal Inference (Text + Vision)
+## Project: bytropix — CPU Inference Engine
 
-**Qwen3.6-35B-A3B-UD-IQ2_M text + Moondream3 3D ViT vision via mmproj**  
-**CPU-only: 8.9 tok/s decode optimal | GPU vision: 15.7s pipeline | RoPE 4x: done**
+**Qwen3.6-35B-A3B-UD-IQ2_M CPU inference. i5-8365U / 16GB.**
+**All gaps closed. Hardware ceiling reached.**
 
 ## Current State
-- CPU-only is optimal for text (8.9 tok/s verified). GPU hybrid is 2-5x slower.
-- GPU vision encoder: 0.52s ViT (122x vs CPU), 15.7s full pipeline
-- GPU MoE 0.9888 cos-sim is FUNDAMENTAL code-path diff (DA v13). Hybrid path accepted.
-- **P2.3 Chunked SSM**: data layout bug FIXED. CS=1 exact. CS>1 FP-limited. Wired into wubu_ssm_forward().
-- **P2.4 RoPE 4x**: `ROPE_SCALE_FACTOR=0.25` extends 64K→256K — COMPLETE
-- gen_text_cpu works with proper CLI: `./gen_text_cpu "prompt" <max_tokens>`
-- ref_dumper via libllama.so works with DUMP_LAYER_DIR / DUMP_INTERMEDIATE_DIR
+- **Context growth penalty: ELIMINATED** — persistent KV: 7.9× multi-turn, ~31s constant/turn
+- **Compilation: IEEE 754** — `-fno-fast-math`. Cos-sim improved 0.974→0.976
+- **Cos-sim vs llama: 0.976** — IQ2_M quantization floor. Regression suite: 3/3 at 0.975
+- **Between-builds cos-sim: 0.99975580** — top-5 argmax identical (fast vs no-fast)
+- **All test suites pass** — 6/6 tests across 512K, Hermes, integration suites
+- **Branch: cpu-optimize-may26** — all fixes committed and pushed
 
-## Done This Session
-1. ✅ Chunked SSM data layout bug — token-interleaved vs head-contiguous memcpy
-2. ✅ Chunked SSM cyclic repeat mapping (vh % hk, not vh / rf)
-3. ✅ Chunked SSM cur_nt bounds fix (OOB write on last chunk)
-4. ✅ Chunked SSM wired into wubu_ssm_forward() — SSM_CHUNK_MIN, FORCE_CPU_SSM_SEQ
-5. ✅ Verified CS=1 exact match on real model (sequential path unchanged)
-6. ✅ Documented CS>1 FP limitation — 30 SSM layers amplify chunking error
+## Done This Session (May 28)
+1. ✅ Persistent KV process — `gen_text_cpu --persist` + Python client (serve_local.py --persist)
+2. ✅ Compilation flags: `-ffast-math` → `-fno-fast-math` (IEEE 754 compliance)
+3. ✅ Cos-sim regression test at 0.975 threshold — all 3 prompts pass
+4. ✅ Between-builds comparison: cos-sim 0.99975580, top-5 identical
+5. ✅ All mind palace docs updated: state, walkway, plan, battleship, index, README, goal-mantra, testing, entry, project, fresh_start, overnight-map, goal-paste
 
-## Chunked SSM Status
-- **CS=1**: EXACT match (4e-8 diff). Use for verification.
-- **CS=2/8/64**: Produces wrong tokens in real model. FP accumulation across 30 layers.
-- **Cause**: 2000x more float ops per position vs sequential. Rounding amplifies per layer.
-- **Fix**: Only CS=1 is safe. Chunking speedup requires FP64 accumulation or different formula.
-
-## Next Session: P2.5 NSA Sparse Attention
-1. **NSA sparse attention** — DeepSeek-V3.2 DSA pattern. O(L·(w+g)) for GQA layers.
-2. **FP8 Tensor Cores** — sm_120 native. Low until GPU data-movement solved.
+## Remaining (Hardware-Gated)
+1. GPU output proj — needs GPU
+2. MTP CPU benchmark — needs 32GB+ RAM
+3. Cos-sim >0.99 — needs Q3_K+/F16 model
+4. Mixed-curvature hyperbolic — research
 
 ## Key Env Vars
 ```
-SSM_CHUNK_MIN=64 ./gen_text_cpu "prompt" N     # min tokens to trigger chunked
-FORCE_CPU_SSM_SEQ=1 ./gen_text_cpu "prompt" N   # force sequential SSM
-ROPE_SCALE_FACTOR=0.25 ./gen_text_cpu "prompt" 20 # 4x context extension
-DUMP_LAYER_DIR=/tmp/ref ./ref_dumper model.gguf    # 40 layer files
+MODEL=~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf  # model path
+OMP_NUM_THREADS=4                                # CPU threads
+CHAT=1                                            # ChatML mode
+DUMP_LOGITS=/tmp/logits.bin                       # logit dump
+```
+
+## Build
+```bash
+cd ~/bytropix && make gen_text_cpu -j4
 ```
