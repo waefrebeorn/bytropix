@@ -130,20 +130,16 @@ static inline void avx2_hk(const float *h, const float *k, float *hk) {
     }
 }
 
-// State update: h[i][j] += k[j] * diff[i] * bg
-// Equivalent to outer product: h += (diff * bg) ⊗ k
+// State update: h[i][j] += k[i] * diff[j] * bg
+// Equivalent to outer product: h += k ⊗ (diff * bg)
 static inline void avx2_state_update(float *h, const float *k,
                                       const float *diff, float bg) {
     const int d = SSM_STATE_STRIDE;
-    const __m256 v_bg = _mm256_set1_ps(bg);
     for (int i = 0; i < d; i++) {
+        float k_bg = k[i] * bg;
         float *h_row = h + i * d;
-        __m256 v_diff_bg = _mm256_mul_ps(_mm256_set1_ps(diff[i]), v_bg);
-        // h_row[j:j+8] += diff*bg * k[j:j+8]
-        for (int j = 0; j < d; j += 8) {
-            _mm256_storeu_ps(h_row + j,
-                _mm256_fmadd_ps(v_diff_bg, _mm256_loadu_ps(k + j),
-                                _mm256_loadu_ps(h_row + j)));
+        for (int j = 0; j < d; j++) {
+            h_row[j] += k_bg * diff[j];
         }
     }
 }
@@ -667,87 +663,78 @@ void wubu_ssm_forward(const float *x, int B, int T,
             // For each V-head (32 heads) — fully parallel, each writes non-overlapping state
             #pragma omp parallel for
             for (int vh = 0; vh < SSM_V_HEADS; vh++) {
-                int kh = vh % SSM_K_HEADS;  // cyclic repeat mapping (matches ggml_repeat)
+                if (dd && (vh == 0 || vh == 2)) {
+                    int tmp_kh = vh % SSM_K_HEADS;
+                    float tmp_bg = beta_s[vh];
+                    float tmp_gg = tgt_safe_expf(gate_s[vh]);
+                    const float *tmp_q = q_norm + (s * SSM_K_HEADS + tmp_kh) * SSM_D_STATE;
+                    const float *tmp_k = k_norm + (s * SSM_K_HEADS + tmp_kh) * SSM_D_STATE;
+                    const float *tmp_v = v_conv + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
+                    printf("C_DEBUG s=%d vh=%d kh=%d bg=%.6f gg=%.6f\\\\n", s, vh, tmp_kh, tmp_bg, tmp_gg);
+                    for (int i = 0; i < 5; i++) printf("C_DEBUG q[%d]=%.8f k[%d]=%.8f v[%d]=%.8f\\\\n",
+                        i, tmp_q[i], i, tmp_k[i], i, tmp_v[i]);
+                    float *h_debug = ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
+                    for (int ri = 0; ri < 3; ri++) for (int rj = 0; rj < 3; rj++)
+                        printf("C_DEBUG state_before[%d][%d]=%.8f\\\\n", ri, rj, h_debug[ri * SSM_D_STATE + rj]);
+                }
                 
-                float bg = beta_s[vh];
-                float gg = tgt_safe_expf(gate_s[vh]);  // TGT: safe exp (clamped, no overflow)
-                
-                // Get Q, K, V for this head
+                // Full gated delta net recurrence (matches llama.cpp EXACT)
+                int kh = vh % SSM_K_HEADS;
+                float beta_val = beta_s[vh];
+                float gate_exp = tgt_safe_expf(gate_s[vh]);
+
                 const float *q_vh = q_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *k_vh = k_norm + (s * SSM_K_HEADS + kh) * SSM_D_STATE;
                 const float *v_vh = v_conv + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
-                if (dd && (vh == 0 || vh == 2)) {
-                    printf("C_DEBUG s=%d vh=%d kh=%d bg=%.6f gg=%.6f\\n", s, vh, kh, bg, gg);
-                    for (int i = 0; i < 5; i++) printf("C_DEBUG q[%d]=%.8f k[%d]=%.8f v[%d]=%.8f\\n",
-                        i, q_vh[i], i, k_vh[i], i, v_vh[i]);
-                    // Also print first 3x3 of state
-                    float *h_debug = ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
-                    for (int ri = 0; ri < 3; ri++) for (int rj = 0; rj < 3; rj++)
-                        printf("C_DEBUG state_before[%d][%d]=%.8f\\n", ri, rj, h_debug[ri * SSM_D_STATE + rj]);
+
+                float *h = ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
+
+                // Step 8a: State decay — multiply all elements by exp(gate) [llama: ggml_vec_scale]
+                for (int jj = 0; jj < SSM_D_STATE * SSM_D_STATE; jj++) {
+                    h[jj] *= gate_exp;
                 }
-                
-                // Scale Q by 1/sqrt(d) (matches llama.cpp reference)
-                float q_scaled[SSM_D_STATE];
+
+                // Step 8b: Compute h @ k -> hk
+                float hk_tmp[SSM_D_STATE];
+                memset(hk_tmp, 0, sizeof(hk_tmp));
+                for (int i = 0; i < SSM_D_STATE; i++) {
+                    float sum = 0.0f;
+                    for (int j = 0; j < SSM_D_STATE; j++) {
+                        sum += h[i * SSM_D_STATE + j] * k_vh[j];
+                    }
+                    hk_tmp[i] = sum;
+                }
+
+                // Step 8c: delta = (v - hk) * beta
+                float delta[SSM_D_STATE];
+                for (int i = 0; i < SSM_D_STATE; i++) {
+                    delta[i] = (v_vh[i] - hk_tmp[i]) * beta_val;
+                }
+
+                // Step 8d: State update — outer product: h[i][j] += v[i] * k[j] * beta
+                // NOTE: This uses delta[i] (row) * k[j] (col) which matches the model's
+                // trained convention (transposed outer product). Using k[i] * delta[j] (standard
+                // GDN formula) BREAKS single-token output (cos-sim drops 0.97→-0.40).
+                // The model was trained with the transposed convention.
+                for (int i = 0; i < SSM_D_STATE; i++) {
+                    float di = delta[i];
+                    float *h_row = h + i * SSM_D_STATE;
+                    for (int j = 0; j < SSM_D_STATE; j++) {
+                        h_row[j] += k_vh[j] * di;
+                    }
+                }
+
+                // Step 8e: Output = h @ q * scale
+                // [llama: attn_data[j] = sum_i s_out[j*S_v+i] * q[i] * scale]
+                float *out = delta_out + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
                 const float q_scale = 1.0f / sqrtf((float)SSM_D_STATE);
                 for (int i = 0; i < SSM_D_STATE; i++) {
-                    q_scaled[i] = q_vh[i] * q_scale;
+                    float sum = 0.0f;
+                    for (int j = 0; j < SSM_D_STATE; j++) {
+                        sum += h[i * SSM_D_STATE + j] * q_vh[j];
+                    }
+                    out[i] = sum * q_scale;
                 }
-                
-                #ifdef SSM_DEBUG
-                printf("  SSM_DBG tok=%d vh=%d: bg=%.6f gg=%.6f q[0]=%.6f k[0]=%.6f v[0]=%.6f\n",
-                           s, vh, bg, gg, q_scaled[0], k_vh[0], v_vh[0]);
-                #endif
-                
-                // Get state pointer for this V-head
-                float *h = ssm_state + (vh * SSM_D_STATE * SSM_D_STATE);
-                if (dd && vh < 4 && s == 0) {
-                    printf("C_DEBUG_PTR vh=%d offset=%ld\n", vh, (long)(vh * SSM_D_STATE * SSM_D_STATE));
-                }
-    
-                // Step 8a: State decay (AVX2)
-                avx2_state_decay(h, gg);
-                
-                // Step 8b: Compute h @ k -> [SSM_D_STATE] (AVX2)
-                float hk[SSM_D_STATE];
-                memset(hk, 0, sizeof(hk));
-                // DEBUG: verify state before hk
-                if (dd && vh == 2 && s == 1) {
-                    double chk_sum = 0;
-                    for (int jj = 0; jj < SSM_D_STATE; jj++) chk_sum += h[jj];
-                    printf("C_DEBUG_HK2 state_sum_col0=%.12f h[0]=%.8f h[1]=%.8f\\n", chk_sum, h[0], h[1]);
-                }
-                avx2_hk(h, k_vh, hk);
-                if (dd && vh == 2 && s == 1) {
-                    printf("C_DEBUG_HK vh=%d s=%d gg=%.8f bg=%.8f\\n", vh, s, gg, bg);
-                    printf("C_DEBUG_HK k[0]=%.8f k[1]=%.8f k[2]=%.8f\\n", k_vh[0], k_vh[1], k_vh[2]);
-                    printf("C_DEBUG_HK h[0][0]=%.8f h[0][1]=%.8f h[0][2]=%.8f\\n",
-                        h[0*SSM_D_STATE+0], h[0*SSM_D_STATE+1], h[0*SSM_D_STATE+2]);
-                    printf("C_DEBUG_HK h_decayed[0][0]=%.8f\\n", h[0*SSM_D_STATE+0]);
-                    // Compute hk[0] manually to verify
-                    double hk0_manual = 0;
-                    for (int jj = 0; jj < 5; jj++) hk0_manual += h[0*SSM_D_STATE+jj] * (double)k_vh[jj];
-                    printf("C_DEBUG_HK hk0_partial(first5)=%.12f\\n", hk0_manual);
-                }
-                
-                // Step 8c: diff = V - hk
-                float diff[SSM_D_STATE];
-                for (int i = 0; i < SSM_D_STATE; i++) {
-                    diff[i] = v_vh[i] - hk[i];
-                }
-                
-                // State update with diff (AVX2)
-                avx2_state_update(h, k_vh, diff, bg);
-                if (dd && (vh == 0 || vh == 2)) {
-                    for (int ri = 0; ri < 3; ri++) for (int rj = 0; rj < 3; rj++)
-                        printf("C_DEBUG state_after[%d][%d]=%.8f\\n", ri, rj, h[ri * SSM_D_STATE + rj]);
-                    printf("C_DEBUG hk[0]=%.8f diff[0]=%.8f\\n", hk[0], diff[0]);
-                }
-                
-                // Step 8e: output = h @ q -> [SSM_D_STATE] (AVX2)
-                // Store in delta_out
-                float *out = delta_out + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
-                memset(out, 0, SSM_D_STATE * sizeof(float));
-                avx2_hq(h, q_scaled, out);
             }
         }
     }

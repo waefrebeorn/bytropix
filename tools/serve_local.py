@@ -2,11 +2,15 @@
 """
 bytropix Local Inference Server — OpenAI-compatible HTTP API for gen_text_cpu.
 
-Calls the local CPU inference binary directly. NOT a proxy.
+Two modes:
+  Normal (default):  Spawns gen_text_cpu per request (model reload ~80s each)
+  Persistent:        Spawns gen_text_cpu --persist at boot, keeps KV cache across
+                     requests via binary stdin/stdout protocol. Model loads once.
 
 Usage:
   python3 tools/serve_local.py --port 8001
   python3 tools/serve_local.py --port 8001 --model ~/models/qwen3.6-35b-a3b-UD-IQ2_M.gguf
+  python3 tools/serve_local.py --port 8001 --persist
 
 Endpoints:
   POST /v1/chat/completions  — Chat completions (OpenAI-compatible)
@@ -21,6 +25,8 @@ import json
 import time
 import uuid
 import re
+import struct
+import select
 import logging
 import subprocess
 import threading
@@ -52,12 +58,185 @@ logging.basicConfig(
 )
 log = logging.getLogger("serve_local")
 
+
 # ============================================================
-# Inference Runner — calls gen_text_cpu via subprocess
+# Persistent Inference Runner — single gen_text_cpu --persist
+# ============================================================
+
+class PersistentInferenceRunner:
+    """Keeps one gen_text_cpu --persist process alive across requests.
+
+    Binary protocol (C side in gen_text.c persist_main):
+      Input:  <4-byte LE text_len> <text> <4-byte LE max_tokens> <4-byte LE top_k>
+      Output: <"---BINARY---\\n"> <4-byte LE result_len> <result> <4-byte LE tokens>
+    """
+
+    MARKER = b'---BINARY---\n'
+
+    def __init__(self, bin_path: str, model_path: str,
+                 temperature: float = DEFAULT_TEMPERATURE,
+                 top_k: int = DEFAULT_TOP_K):
+        self.bin_path = os.path.abspath(bin_path)
+        self.model_path = os.path.abspath(model_path)
+        self.workdir = os.path.dirname(self.bin_path)
+        self._lock = threading.Lock()
+        self._temperature = temperature
+        self._default_top_k = top_k
+        self._proc = None
+        self._read_buf = b''
+        self._start()
+
+    def _start(self):
+        """Start the persistent process and wait for ready signal."""
+        env = os.environ.copy()
+        env["MODEL"] = self.model_path
+        env["OMP_NUM_THREADS"] = os.environ.get("OMP_NUM_THREADS", "4")
+        env["MOE"] = "1"
+        env["CHAT"] = "1"  # ChatML tokenization in C
+        env["TEMP"] = str(self._temperature)
+        env["TOP_K"] = str(self._default_top_k)
+
+        self._proc = subprocess.Popen(
+            [self.bin_path, "--persist"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            cwd=self.workdir,
+        )
+        log.info(f"[persist] PID={self._proc.pid}: waiting for ready...")
+
+        # Read stderr until we see "[persist] ready"
+        ready_line = b''
+        while self._proc.poll() is None:
+            ch = self._proc.stderr.read(1)
+            if not ch:
+                raise RuntimeError("Persistent process died before ready signal")
+            ready_line += ch
+            if ch == b'\n':
+                log.info(f"[persist] stderr: {ready_line.decode('utf-8', errors='replace').strip()}")
+                if b'[persist] ready' in ready_line:
+                    log.info("[persist] model loaded, ready for requests")
+                    return
+                ready_line = b''
+
+        raise RuntimeError("Persistent process exited before ready")
+
+    def _read_response(self, timeout: int = DEFAULT_TIMEOUT) -> tuple[str, int]:
+        """Read one response from stdout. Returns (text, tokens_generated)."""
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            # Check if we already have enough data in buffer
+            result = self._try_parse_buffer()
+            if result is not None:
+                return result
+
+            # Read more data from stdout
+            r, _, _ = select.select([self._proc.stdout], [], [], max(0.1, deadline - time.time()))
+            if r:
+                chunk = os.read(self._proc.stdout.fileno(), 65536)
+                if not chunk:
+                    raise RuntimeError("Persistent process stdout closed")
+                self._read_buf += chunk
+            else:
+                if time.time() >= deadline:
+                    raise TimeoutError("Timeout reading persist response")
+
+        raise TimeoutError("Timeout reading persist response")
+
+    def _try_parse_buffer(self) -> Optional[tuple[str, int]]:
+        """Try to parse one response from the current buffer. Returns None if incomplete."""
+        idx = self._read_buf.find(self.MARKER)
+        if idx < 0:
+            return None
+
+        after_marker = self._read_buf[idx + len(self.MARKER):]
+        if len(after_marker) < 8:  # need at least result_len (4) + tokens (4)
+            return None
+
+        result_len = struct.unpack('<I', after_marker[:4])[0]
+        needed = 4 + result_len + 4  # len_field + text + tokens_field
+        if len(after_marker) < needed:
+            return None
+
+        result_bytes = after_marker[4:4 + result_len]
+        tokens_generated = struct.unpack('<I', after_marker[4 + result_len:8 + result_len])[0]
+
+        # Consume parsed data from buffer
+        consumed = idx + len(self.MARKER) + needed
+        self._read_buf = self._read_buf[consumed:]
+
+        text = result_bytes.decode('utf-8', errors='replace')
+        return text, tokens_generated
+
+    def _restart(self):
+        """Kill and restart the persistent process."""
+        log.warning("[persist] restarting...")
+        try:
+            if self._proc:
+                self._proc.kill()
+                self._proc.wait(timeout=10)
+        except Exception:
+            pass
+        self._read_buf = b''
+        self._start()
+
+    def generate(self, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS,
+                 temperature: float = DEFAULT_TEMPERATURE,
+                 top_k: int = DEFAULT_TOP_K,
+                 timeout: int = DEFAULT_TIMEOUT,
+                 extra_env: dict = None) -> tuple[str, str, float]:
+        """Run inference via persistent process. Returns (text, log_output, elapsed)."""
+        _ = extra_env  # Ignored in persist mode — CHAT=1 set at process start
+        start = time.time()
+
+        with self._lock:
+            try:
+                # Check process is alive
+                if self._proc.poll() is not None:
+                    log.warning("[persist] process died, restarting")
+                    self._restart()
+
+                # Build and send request
+                text_bytes = prompt.encode('utf-8')
+                request = (
+                    struct.pack('<I', len(text_bytes))
+                    + text_bytes
+                    + struct.pack('<II', max_tokens, top_k)
+                )
+                self._proc.stdin.write(request)
+                self._proc.stdin.flush()
+
+                text, tokens = self._read_response(timeout)
+                elapsed = time.time() - start
+                return text, f"[persist] {len(text)} chars, {tokens} tok in {elapsed:.1f}s", elapsed
+
+            except (BrokenPipeError, RuntimeError, TimeoutError) as e:
+                elapsed = time.time() - start
+                log.error(f"[persist] error: {e}")
+                try:
+                    self._restart()
+                except Exception as e2:
+                    log.error(f"[persist] restart failed: {e2}")
+                return "", f"Persist error: {e}", elapsed
+
+    def close(self):
+        """Shut down the persistent process."""
+        if self._proc and self._proc.poll() is None:
+            try:
+                self._proc.stdin.close()
+                self._proc.wait(timeout=5)
+            except Exception:
+                self._proc.kill()
+
+
+# ============================================================
+# Normal Inference Runner — spawn gen_text_cpu per request
 # ============================================================
 
 class InferenceRunner:
-    """Runs the local bytropix CPU inference binary."""
+    """Runs the local bytropix CPU inference binary (one subprocess per call)."""
 
     def __init__(self, bin_path: str, model_path: str):
         self.bin_path = os.path.abspath(bin_path)
@@ -93,8 +272,6 @@ class InferenceRunner:
             full = result.stdout + result.stderr
 
             # Extract generated text from gen_text_cpu output
-            # Output format: "--- Stats ---\nPrefill: ... tok in ...s (... tok/s)\nDecode:  ...\n"
-            # Generated text appears on its own line(s) before "--- Stats ---"
             text = self._extract_generated(full)
             return text, full, elapsed
 
@@ -156,10 +333,6 @@ def render_chat(messages: list) -> str:
     return CHAT_TEMPLATE.format(system=system, user=user_text)
 
 
-# ============================================================
-# Chat Template for RAW mode (no chat template)
-# ============================================================
-
 def render_prompt(messages: list) -> str:
     """Render as RAW text — concatenate all messages."""
     parts = []
@@ -176,6 +349,7 @@ class APIHandler(BaseHTTPRequestHandler):
     inference = None  # Set by server
     model_path = None
     server_start = 0
+    use_persist = False
 
     def log_message(self, format, *args):
         log.info(f"{self.client_address[0]} - {format % args}")
@@ -223,6 +397,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 "uptime": time.time() - APIHandler.server_start,
                 "model": self.model_path or "",
                 "backend": "local_cpu",
+                "persist_mode": APIHandler.use_persist,
             })
         elif path == '/v1/models':
             model_name = os.path.basename(self.model_path) if self.model_path else "bytropix-local"
@@ -266,16 +441,27 @@ class APIHandler(BaseHTTPRequestHandler):
         top_k = int(data.get("top_k", DEFAULT_TOP_K))
         stream = data.get("stream", False)
 
-        # Render prompt as raw user message — gen_text_cpu's CHAT=1 mode
-        # handles proper <|im_start|> tokenization via known token IDs.
-        prompt = render_chat(messages)
-        user_msg = messages[-1]["content"] if messages else prompt
+        # In persist mode: send raw user message, CHAT=1 set at process start
+        # In normal mode: render ChatML, pass user msg with CHAT=1 env var
+        if APIHandler.use_persist:
+            # Persistent mode: CHAT=1 already set in process env.
+            # The C code's build_chat_prompt handles proper ChatML tokenization
+            # including the system prompt on first turn.
+            # Send the LAST user message text — the C code adds <|im_start|> wrappers.
+            user_msg = messages[-1]["content"] if messages else ""
+            extra_env = None
+        else:
+            prompt = render_chat(messages)
+            user_msg = messages[-1]["content"] if messages else prompt
+            extra_env = {"CHAT": "1"}
 
-        # Run inference with CHAT=1 so gen_text_cpu tokenizes ChatML correctly
         text, full, elapsed = APIHandler.inference.generate(
             prompt=user_msg, max_tokens=max_tokens, temperature=temperature,
-            top_k=top_k, extra_env={"CHAT": "1"}
+            top_k=top_k, extra_env=extra_env
         )
+
+        if APIHandler.use_persist:
+            log.info(f"[persist] generated {len(text)} chars in {elapsed:.1f}s")
 
         if stream:
             self._send_streaming(text)
@@ -367,6 +553,8 @@ def main():
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="Path to model GGUF file")
     parser.add_argument("--bin", type=str, default=INFER_BIN, help="Path to gen_text_cpu binary")
+    parser.add_argument("--persist", action="store_true",
+                        help="Use persistent process (model loads once, KV cache across requests)")
     args = parser.parse_args()
 
     model_path = os.path.abspath(os.path.expanduser(args.model))
@@ -382,7 +570,18 @@ def main():
         sys.exit(1)
 
     # Set up inference runner
-    APIHandler.inference = InferenceRunner(bin_path, model_path)
+    APIHandler.use_persist = args.persist
+    if args.persist:
+        log.info("Starting in PERSISTENT mode (model loads once)")
+        try:
+            APIHandler.inference = PersistentInferenceRunner(bin_path, model_path)
+        except Exception as e:
+            log.error(f"Failed to start persistent inference: {e}")
+            sys.exit(1)
+    else:
+        log.info("Starting in NORMAL mode (process per request)")
+        APIHandler.inference = InferenceRunner(bin_path, model_path)
+
     APIHandler.model_path = model_path
     APIHandler.server_start = time.time()
 
@@ -396,6 +595,8 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         log.info("Shutting down...")
+        if args.persist and hasattr(APIHandler.inference, 'close'):
+            APIHandler.inference.close()
         server.shutdown()
 
 
