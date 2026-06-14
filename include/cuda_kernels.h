@@ -113,37 +113,44 @@ void wubu_cuda_delta_net_step(float *h,
 
 // ================================================================
 // Parallel associative scan for all heads over all tokens
+// Dynamic dimensions passed at runtime to support multiple model architectures
 // ================================================================
 void wubu_cuda_ssm_parallel_scan(int B, int T,
-    const float *d_q_norm,    // [N, K_HEADS, D_STATE]
-    const float *d_k_norm,    // [N, K_HEADS, D_STATE]
-    const float *d_v_conv,    // [N, V_HEADS, D_STATE]
-    const float *d_gate,      // [N, DT_RANK]
-    const float *d_beta,      // [N, DT_RANK]
-    float *d_h_states,        // [B, V_HEADS, D_STATE, D_STATE]
-    float *d_delta_out,       // [N, V_HEADS, D_STATE]
-    cudaStream_t stream);
+    const float *d_q_norm,
+    const float *d_k_norm,
+    const float *d_v_conv,
+    const float *d_gate,
+    const float *d_beta,
+    float *d_h_states,
+    float *d_delta_out,
+    cudaStream_t stream,
+    int ssm_k_heads, int ssm_d_state, int ssm_v_heads);
 
 // ================================================================
-// Fully fused SSM forward on GPU (single kernel for entire SSM layer)
+// Fully fused SSM layer forward on GPU (single kernel for entire SSM layer)
+// Dynamic dimensions passed at runtime to support multiple model architectures
 // ================================================================
-size_t wubu_cuda_ssm_forward_query_scratch(int B, int T);
+size_t wubu_cuda_ssm_forward_query_scratch(int B, int T,
+    int conv_dim, int value_dim, int dt_rank, int conv_kernel);
 void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
     int B, int T,
     const float *d_x,
-    const float *d_attn_qkv,
-    const float *d_attn_gate,
-    const float *d_ssm_beta,
-    const float *d_ssm_alpha,
-    const float *d_ssm_dt_bias,
-    const float *d_ssm_a,
-    const float *d_ssm_conv1d,
-    const float *d_ssm_norm,
-    const float *d_ssm_out,
-    float *d_h_states,
-    float *d_conv_state,
+    const float *d_attn_qkv,    // [D_MODEL, CONV_DIM]
+    const float *d_attn_gate,   // [D_MODEL, VALUE_DIM]
+    const float *d_ssm_beta,    // [D_MODEL, DT_RANK]
+    const float *d_ssm_alpha,   // [D_MODEL, DT_RANK]
+    const float *d_ssm_dt_bias, // [DT_RANK]
+    const float *d_ssm_a,       // [DT_RANK]
+    const float *d_ssm_conv1d,  // [CONV_KERNEL, CONV_DIM]
+    const float *d_ssm_norm,    // [SSM_D_STATE]
+    const float *d_ssm_out,     // [VALUE_DIM, D_MODEL]
+    float *d_h_states,          // [B, V_HEADS, D_STATE, D_STATE]
+    float *d_conv_state,        // [B, CONV_KERNEL-1, CONV_DIM]
     float *d_output,
-    float *d_scratch);
+    float *d_scratch,
+    int d_model, int conv_dim, int key_dim, int value_dim,
+    int dt_rank, int conv_kernel,
+    int ssm_k_heads, int ssm_d_state, int ssm_v_heads);
 
 // ================================================================
 // GQA Attention kernel (fused: Q/K RMSNorm + causal dot-product + softmax + V weighted sum + gate)
@@ -248,6 +255,19 @@ void wubu_cuda_attn_q4_0_decode(cublasHandle_t handle, cudaStream_t stream,
     const float *d_gate_full, const float *d_output_w,
     float *d_out, float *d_scratch, void *d_hp_scratch,
     int T_cache, int attn_window);
+
+void wubu_cuda_attn_q4_0_decode_opt(cublasHandle_t handle, cudaStream_t stream,
+    const float *d_Q_chunk, const void *d_K_q4, const void *d_V_q4,
+    const float *d_gate_full, const float *d_output_w,
+    float *d_out, float *d_scratch, void *d_hp_scratch,
+    int T_cache, int T_capacity, int attn_window);
+
+// Optimized Q4_0 prefill for contiguous KV cache (llama.cpp fattn-vec style)
+void wubu_cuda_attn_q4_0_prefill_opt_wrapper(cublasHandle_t handle, cudaStream_t stream,
+    const float *d_Q_chunk, const void *d_K_q4, const void *d_V_q4,
+    const float *d_gate_full, const float *d_output_w,
+    float *d_out, float *d_scratch, void *d_hp_scratch,
+    int C, int T_cache, int attn_window);
 
 // Q4_0 KV cache quantize/dequant kernels (CUDA-only, __half requires nvcc)
 #ifdef __CUDACC__
@@ -355,5 +375,39 @@ void wubu_cuda_moe_fwd_1tok(cublasHandle_t handle, cudaStream_t stream,
 #ifdef __cplusplus
 }
 #endif
+
+// ================================================================
+// CUDA-only functions (require nvcc)
+// ================================================================
+#ifdef __CUDACC__
+
+// Q4_0 KV cache quantize/dequant kernels
+__global__ void dequant_q4_0_cache_kernel(int n_blocks, const uint8_t *blocks, __half *out);
+__global__ void quant_q4_0_cache_kernel(int n, const __half *in, uint8_t *blocks);
+
+// Q4_0 -> FP16 dequantization for prefill (standard Flash Attention)
+void launch_dequant_q4_0_to_f16(
+    const uint8_t *q4_cache, __half *f16_out,
+    int num_tokens, int head_dim, int kv_dim,
+    cudaStream_t stream);
+
+void launch_dequant_q2_0_to_f16(
+    const uint8_t *q2_cache, __half *f16_out,
+    int num_tokens, int head_dim, int kv_dim,
+    cudaStream_t stream);
+
+void launch_flash_attn_q4_0_prefill_opt(
+    const __half *Q, const uint8_t *K_pool, const uint8_t *V_pool, __half *O,
+    float softmax_scale, bool causal_mask, int window_size,
+    int B, int Tq, int Tk, int q_tile_size,
+    cudaStream_t stream);
+
+void launch_flash_attn_q4_0_decode_opt(
+    const __half *Q, const int *block_table, const uint8_t *K_pool, const uint8_t *V_pool, __half *O,
+    float softmax_scale, bool causal_mask, int window_size,
+    int B, int Tq, int Tk, int q_tile_size,
+    cudaStream_t stream);
+
+#endif // __CUDACC__
 
 #endif // WUBU_CUDA_KERNELS_H
