@@ -110,3 +110,20 @@ temp_forward_full_block.txt
 
 # ---- Make fragments (generated) ----
 *.mk
+
+# llama.cpp reference checkout (separate project)
+llama/
+
+# Build artifacts (untracked)
+/gen_text_gemma4
+/bench_512k_comprehension
+
+# Patch/orig artifacts
+*.orig
+*.rej
+multimodel.patch
+
+# Temp fix files
+include/cuda_kernels_h_fix.txt
+infer_vision_gpu
+gen_text_cpu
