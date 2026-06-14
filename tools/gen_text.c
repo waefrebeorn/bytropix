@@ -87,8 +87,13 @@ int main(int argc, char **argv) {
         } else {
             printf("GPU: GQA acceleration active (max_ctx=%d, chunk=%d)\n", max_ctx, chunk_sz);
         }
-        // GPU output proj disabled for now — use CPU
-        use_gpu = 0;
+        // Initialize GPU output projection with model's output.weight (Q4_K)
+        if (mdl.output_weight_q && gpu_output_init(mdl.output_weight_q, D_MODEL, mdl.vocab_size, mdl.output_weight_type)) {
+            printf("GPU: Output projection active (Q4_K via cuBLAS)\n");
+        } else {
+            fprintf(stderr, "GPU: Output projection init failed, using CPU\n");
+            use_gpu = 0;
+        }
     }
 
     wubu_tokenizer_t tok;
@@ -165,9 +170,11 @@ int main(int argc, char **argv) {
         mdl.skip_output_proj = true;
         mdl.enable_moe = true;
         wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+        // skip_output_proj=true writes hidden states (D_MODEL per token) to logits buffer
+        // Copy correctly: hidden states are at D_MODEL stride, not vocab_size stride
         float *hidden_batch = (float *)malloc(n_prompt * D * sizeof(float));
         for (int i = 0; i < n_prompt; i++)
-            memcpy(hidden_batch + i * D, logits + i * vs, D * sizeof(float));
+            memcpy(hidden_batch + i * D, logits + i * D, D * sizeof(float));
         if (n_prompt > 0)
             gpu_output_project_batch(hidden_batch, logits, n_prompt);
         free(hidden_batch);
@@ -223,7 +230,12 @@ int main(int argc, char **argv) {
         if (use_gpu) {
             mdl.skip_output_proj = true;
             wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
-            gpu_output_project(logits, logits);
+            // skip_output_proj=true writes hidden state (D_MODEL) to logits[0..D-1]
+            // gpu_output_project reads from input buffer and writes to output buffer
+            // Use separate buffer for hidden state
+            float hidden_state[D_MODEL];
+            memcpy(hidden_state, logits, D_MODEL * sizeof(float));
+            gpu_output_project(hidden_state, logits);
         } else {
             mdl.skip_output_proj = false;
             wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);

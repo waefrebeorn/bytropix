@@ -290,6 +290,30 @@ typedef struct {
     // GPU acceleration context (opaque pointer, managed by wubu_model_gpu.cu)
     // When non-NULL, GQA layers run on GPU via chunked attention.
     void *gpu_ctx;
+
+    // Number of GQA layers (for KV cache sizing)
+    int n_gqa_layers;
+
+    // Dynamic model dimensions (extracted from GGUF, model-adapter aware)
+    int d_model;          // hidden dimension (2048 for Qwen, 2816 for DiffusionGemma)
+    int d_ff;             // expert intermediate dim
+    int n_experts;        // total experts
+    int n_active_experts; // top-k
+    int tensor_naming;    // 0=blk.Qwen 1=model.layers.Gemma 2=pure-GQA
+
+    // Additional dynamic dimensions for GPU and other code
+    int d_inner;          // SSM inner dimension / VALUE_DIM
+    int key_dim;          // KEY_DIM = SSM_D_STATE * SSM_K_HEADS
+    int conv_dim;         // CONV_DIM
+    int conv_kernel;      // CONV_KERNEL (conv1d kernel size, default 4)
+    int dt_rank;          // DT_RANK
+    int ssm_k_heads;      // SSM_K_HEADS
+    int ssm_v_heads;      // SSM_V_HEADS
+    int ssm_d_state;      // SSM_D_STATE
+    int gqa_q_heads;      // GQA_Q_HEADS
+    int gqa_kv_heads;     // GQA_KV_HEADS
+    int gqa_head_dim;     // GQA_HEAD_DIM
+    int rotary_dim;       // ROTARY_DIM (RoPE rotation dim)
 } wubu_model_t;
 
 // Create model, load from GGUF

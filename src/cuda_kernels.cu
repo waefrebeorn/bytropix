@@ -1,6 +1,7 @@
 #include "cuda_kernels.h"
 #include "wubu_ssm.h"
 #include "wubu_moe.h"
+#include "flash_attn_q4_0_opt.cuh"
 #include <stdio.h>
 
 // TGT-safe expf: clamp input to [-80, 80] to prevent overflow/underflow
@@ -573,7 +574,7 @@ __global__ void ssm_warp_scan_kernel(
         const float *v_vh = v_conv + (s_idx * n_vheads + vh) * d;
 
         float gate_val = gate[s_idx * DT_RANK + vh];
-        float beta_val = beta[s_idx * DT_RANK + kh];
+        float beta_val = beta[s_idx * DT_RANK + vh];
 
         // Step 1: Decay state — element-wise multiply all stored elements
         float egate = tgt_safe_expf(gate_val);
@@ -665,16 +666,32 @@ void wubu_cuda_ssm_parallel_scan(int B, int T,
     const float *d_beta,
     float *d_h_states,
     float *d_delta_out,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    int ssm_k_heads, int ssm_d_state, int ssm_v_heads) {
 
-    const int d = SSM_D_STATE;  // 128
-    const int warp_per_row = d / WARP_SIZE;  // 4 (c_factor = dims per warp)
-    const int n_blocks = B * SSM_V_HEADS;  // one block per (batch, V-head)
+    // Kernel template requires compile-time constants matching the model architecture (Qwen3.6-35B)
+    // Verify runtime dimensions match expected values
+    if (ssm_d_state != SSM_D_STATE) {
+        fprintf(stderr, "GPU SSM: ssm_d_state=%d != expected %d, kernel template mismatch\n", ssm_d_state, SSM_D_STATE);
+        return;
+    }
+    if (ssm_v_heads != SSM_V_HEADS) {
+        fprintf(stderr, "GPU SSM: ssm_v_heads=%d != expected %d, kernel template mismatch\n", ssm_v_heads, SSM_V_HEADS);
+        return;
+    }
+    if (ssm_k_heads != SSM_K_HEADS) {
+        fprintf(stderr, "GPU SSM: ssm_k_heads=%d != expected %d, kernel template mismatch\n", ssm_k_heads, SSM_K_HEADS);
+        return;
+    }
+
+    const int d = SSM_D_STATE;
+    const int warp_per_row = d / WARP_SIZE;
+    const int n_blocks = B * SSM_V_HEADS;
 
     // 32 warps × 32 lanes = 1024 threads per block
-    const int block_size = (d / warp_per_row) * WARP_SIZE;  // (128/4)*32 = 1024
+    const int block_size = (d / warp_per_row) * WARP_SIZE;
 
-    // Shared memory: diff[d] only = 128 floats = 512 bytes << 48KB default
+    // Shared memory: diff[d] only
     size_t shared_bytes = d * sizeof(float);
 
     ssm_warp_scan_kernel<d / WARP_SIZE, d><<<n_blocks, block_size, shared_bytes, stream>>>(
@@ -687,22 +704,23 @@ void wubu_cuda_ssm_parallel_scan(int B, int T,
 // Fused SSM layer forward — all steps on GPU, no host loops
 // ================================================================
 
-size_t wubu_cuda_ssm_forward_query_scratch(int B, int T) {
+size_t wubu_cuda_ssm_forward_query_scratch(int B, int T,
+    int conv_dim, int value_dim, int dt_rank, int conv_kernel) {
     const int N = B * T;
     // Largest temps:
-    // qkv_all: [N, CONV_DIM] = N*8192 floats
-    // z_all:   [N, VALUE_DIM] = N*4096 floats
-    // beta_raw/gate: [N, DT_RANK] = N*32 floats each
-    // conv_input: [B, T+3, CONV_DIM] = B*(T+3)*8192
-    // conv_output: [N, CONV_DIM] = N*8192
-    // q/k/v conv/norm: ~ 5 * N*VALUE_DIM = 5*N*4096
-    // delta_out: [N, VALUE_DIM]
-    // z_silu: [N, VALUE_DIM]
-    // alpha_raw, alpha_biased, alpha_softplus: 3*N*32
+    // qkv_all: [N, conv_dim]
+    // z_all:   [N, value_dim]
+    // beta_raw/gate: [N, dt_rank]
+    // conv_input: [B, T+conv_kernel-1, conv_dim]
+    // conv_output: [N, conv_dim]
+    // q/k/v conv/norm: ~ 5 * N*value_dim
+    // delta_out: [N, value_dim]
+    // z_silu: [N, value_dim]
+    // alpha_raw, alpha_biased, alpha_softplus: 3*N*dt_rank
     //
-    // Max is roughly: 3*N*8192 + 5*N*4096 + 3*N*32 ≈ N*(24576+20480+96) ≈ 45K*N
+    // Max is roughly: 3*N*conv_dim + 5*N*value_dim + 3*N*dt_rank
     // Round up generously
-    size_t per_token = (size_t)(CONV_DIM * 3 + VALUE_DIM * 6 + DT_RANK * 10);
+    size_t per_token = (size_t)(conv_dim * 3 + value_dim * 6 + dt_rank * 10);
     return (size_t)N * per_token * sizeof(float) + 1024*1024;  // +1MB padding
 }
 
@@ -721,13 +739,16 @@ void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
     float *d_h_states,          // [B, V_HEADS, D_STATE, D_STATE]
     float *d_conv_state,        // [B, CONV_KERNEL-1, CONV_DIM]
     float *d_output,
-    float *d_scratch) {
+    float *d_scratch,
+    int d_model, int conv_dim, int key_dim, int value_dim,
+    int dt_rank, int conv_kernel,
+    int ssm_k_heads, int ssm_d_state, int ssm_v_heads) {
 
     const int N = B * T;
-    const int C = CONV_DIM;      // 8192
-    const int kdim = KEY_DIM;    // 2048
-    const int vdim = VALUE_DIM;  // 4096
-    const int dr = DT_RANK;      // 32
+    const int C = conv_dim;
+    const int kdim = key_dim;
+    const int vdim = value_dim;
+    const int dr = dt_rank;
 
     // Scratch layout (offsets in floats):
     size_t offset = 0;
@@ -739,7 +760,7 @@ void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
     float *d_gate_final = d_scratch + offset; offset += N * dr;
     float *d_alpha_biased= d_scratch + offset; offset += N * dr;
     float *d_alpha_softplus= d_scratch + offset; offset += N * dr;
-    float *d_conv_input  = d_scratch + offset; offset += B * (T + CONV_KERNEL - 1) * C;
+    float *d_conv_input  = d_scratch + offset; offset += B * (T + conv_kernel - 1) * C;
     float *d_conv_output = d_scratch + offset; offset += N * C;
     float *d_q_conv = d_scratch + offset; offset += N * kdim;
     float *d_k_conv = d_scratch + offset; offset += N * kdim;
@@ -754,16 +775,16 @@ void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
     // Step 1: QKV projection — x @ attn_qkv^T -> qkv_all[N, C]
     // attn_qkv is [D_MODEL, C] stored row-major
     // C[N, C] = A[N, D] @ B[D, C] => matmul(handle, A, N, D, B, C, C, 1, 0)
-    wubu_cuda_matmul(handle, d_x, N, D_MODEL, d_attn_qkv, C, d_qkv_all, 1.0f, 0.0f);
+    wubu_cuda_matmul(handle, d_x, N, d_model, d_attn_qkv, C, d_qkv_all, 1.0f, 0.0f);
 
     // Step 2: Gate projection — x @ attn_gate^T -> z_all[N, vdim]
-    wubu_cuda_matmul(handle, d_x, N, D_MODEL, d_attn_gate, vdim, d_z_all, 1.0f, 0.0f);
+    wubu_cuda_matmul(handle, d_x, N, d_model, d_attn_gate, vdim, d_z_all, 1.0f, 0.0f);
 
     // Step 3: Beta/Alpha projections
     // beta_raw[N, dr] = x[N, D] @ ssm_beta[D, dr]^T
-    wubu_cuda_matmul(handle, d_x, N, D_MODEL, d_ssm_beta, dr, d_beta_raw, 1.0f, 0.0f);
+    wubu_cuda_matmul(handle, d_x, N, d_model, d_ssm_beta, dr, d_beta_raw, 1.0f, 0.0f);
     // alpha_raw[N, dr] = x[N, D] @ ssm_alpha[D, dr]^T
-    wubu_cuda_matmul(handle, d_x, N, D_MODEL, d_ssm_alpha, dr, d_alpha_raw, 1.0f, 0.0f);
+    wubu_cuda_matmul(handle, d_x, N, d_model, d_ssm_alpha, dr, d_alpha_raw, 1.0f, 0.0f);
 
     // Step 4: Compute beta = sigmoid(beta_raw), alpha_biased = alpha + dt_bias
     wubu_cuda_sigmoid(N * dr, d_beta_raw, d_beta_final, stream);
@@ -775,7 +796,7 @@ void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
 
     // Step 5: Build conv_input from conv_state + qkv_all (device kernel)
     {
-        int k_1 = CONV_KERNEL - 1;  // 3
+        int k_1 = conv_kernel - 1;
         int total = B * (T + k_1) * C;
         int block = 256;
         int grid = (total + block - 1) / block;
@@ -788,9 +809,9 @@ void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
         int total = B * T * C;
         int block = 256;
         int grid = (total + block - 1) / block;
-        size_t smem = CONV_KERNEL * block * sizeof(float);  // [k, blockDim.x]
+        size_t smem = conv_kernel * block * sizeof(float);  // [k, blockDim.x]
         conv1d_smem_kernel<<<grid, block, smem, stream>>>(
-            d_conv_input, d_ssm_conv1d, d_conv_output, B, T, C, CONV_KERNEL);
+            d_conv_input, d_ssm_conv1d, d_conv_output, B, T, C, conv_kernel);
     }
 
     // Step 7: SiLU on conv output
@@ -798,7 +819,7 @@ void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
 
     // Step 8: Update conv_state — last k-1 elements of input (device kernel)
     {
-        int k_1 = CONV_KERNEL - 1;
+        int k_1 = conv_kernel - 1;
         int total = B * k_1 * C;
         int block = 256;
         int grid = (total + block - 1) / block;
@@ -810,27 +831,28 @@ void wubu_cuda_ssm_forward(cublasHandle_t handle, cudaStream_t stream,
     wubu_cuda_split_qkv(N, kdim, vdim, d_conv_output, d_q_conv, d_k_conv, d_v_conv, stream);
 
     // Step 10: L2 normalize Q and K
-    wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_q_conv, 1e-12f, d_q_norm, stream);
-    wubu_cuda_l2_norm(B, T, SSM_K_HEADS, SSM_D_STATE, d_k_conv, 1e-12f, d_k_norm, stream);
+    wubu_cuda_l2_norm(B, T, ssm_k_heads, ssm_d_state, d_q_conv, 1e-12f, d_q_norm, stream);
+    wubu_cuda_l2_norm(B, T, ssm_k_heads, ssm_d_state, d_k_conv, 1e-12f, d_k_norm, stream);
 
     // Step 11: Parallel associative scan (replaces host loop)
     wubu_cuda_ssm_parallel_scan(B, T,
         d_q_norm, d_k_norm, d_v_conv,
         d_gate_final, d_beta_final,
         d_h_states, d_delta_out,
-        stream);
+        stream,
+        ssm_k_heads, ssm_d_state, ssm_v_heads);
 
     // Step 12: z = SiLU(z_all)
     wubu_cuda_silu(N * vdim, d_z_all, d_z_silu, stream);
 
     // Step 13: Gated norm: delta_out * rms_norm * z_silu
-    wubu_cuda_gated_norm(B, T, SSM_V_HEADS, SSM_D_STATE,
+    wubu_cuda_gated_norm(B, T, ssm_v_heads, ssm_d_state,
                          d_delta_out, d_ssm_norm, d_z_silu, stream);
 
     // Step 14: Output projection: delta_out[N, vdim] @ ssm_out[vdim, D_MODEL]^T -> output[N, D_MODEL]
     // delta_out is now gated-normalized (same memory, modified in-place)
     // Actually gated_norm modifies delta_out in-place, so it's [N, vdim]
-    wubu_cuda_matmul(handle, d_delta_out, N, vdim, d_ssm_out, D_MODEL, d_output, 1.0f, 0.0f);
+    wubu_cuda_matmul(handle, d_delta_out, N, vdim, d_ssm_out, d_model, d_output, 1.0f, 0.0f);
 }
 
 // ================================================================
@@ -2815,6 +2837,90 @@ void ssm_conv_silu_split_decode_wrapper(cudaStream_t stream,
     ssm_conv_silu_split_decode<<<grid, block, 0, stream>>>(
         d_conv_state, d_qkv_out, d_conv1d_w,
         d_out_q, d_out_k, d_out_v, d_conv_state_out);
+}
+
+// Forward declaration for original non-paged decode
+void launch_flash_attn_q4_0_decode(
+    const __half *Q, const uint8_t *K_blocks, const uint8_t *V_blocks, __half *O,
+    float softmax_scale, bool causal_mask, int window_size,
+    int B, int Tq, int Tk, int q_tile_size,
+    cudaStream_t stream
+);
+
+// Wrapper: use optimized decode for contiguous KV cache (llama.cpp fattn-vec style)
+void wubu_cuda_attn_q4_0_decode_opt(cublasHandle_t handle, cudaStream_t stream,
+    const float *d_Q_chunk, const void *d_K_q4, const void *d_V_q4,
+    const float *d_gate_full, const float *d_output_w,
+    float *d_out, float *d_scratch, void *d_hp_scratch,
+    int T_cache, int T_capacity, int attn_window) {
+    const int n_q = 16, n_kv = 2, head_dim = 256;
+    const int q_heads_per_kv = 8;
+    const int n_q_elems = n_q * head_dim;  // 4096
+
+    // 1. Convert Q from F32 to FP16 into hp_scratch
+    f32_to_f16_kernel<<<(n_q_elems + 255) / 256, 256, 0, stream>>>(
+        d_Q_chunk, (__half*)d_hp_scratch, n_q_elems
+    );
+
+    const __half* Q = (__half*)d_hp_scratch;
+    __half* O = (__half*)d_hp_scratch + n_q_elems;
+    const uint8_t* K_blocks = (const uint8_t*)d_K_q4;
+    const uint8_t* V_blocks = (const uint8_t*)d_V_q4;
+
+    // 2. Call optimized decode kernel (fattn-vec style, single block per KV head)
+    launch_flash_attn_q4_0_decode_opt_contiguous(
+        Q, K_blocks, V_blocks, O,
+        1.0f / sqrtf((float)head_dim), true, attn_window,
+        1, T_cache, T_capacity,
+        stream
+    );
+
+    // 3. Convert output back to F32
+    f16_to_f32_kernel<<<(n_q_elems + 255) / 256, 256, 0, stream>>>(
+        O, d_out, n_q_elems
+    );
+
+    // 4. Apply gate and output projection if needed (handled by caller)
+    (void)d_gate_full; (void)d_output_w; (void)d_scratch; (void)handle;
+}
+
+// Wrapper: optimized prefill for contiguous KV cache (llama.cpp fattn-vec style)
+void wubu_cuda_attn_q4_0_prefill_opt_wrapper(cublasHandle_t handle, cudaStream_t stream,
+    const float *d_Q_chunk, const void *d_K_q4, const void *d_V_q4,
+    const float *d_gate_full, const float *d_output_w,
+    float *d_out, float *d_scratch, void *d_hp_scratch,
+    int C, int T_cache, int attn_window) {
+    const int n_q = 16, n_kv = 2, head_dim = 256;
+    const int q_heads_per_kv = 8;
+    const int q_dim = n_q * head_dim;  // 4096
+    const int n_q_elems = C * q_dim;
+
+    // 1. Convert Q from F32 to FP16 into hp_scratch
+    f32_to_f16_kernel<<<(n_q_elems + 255) / 256, 256, 0, stream>>>(
+        d_Q_chunk, (__half*)d_hp_scratch, n_q_elems
+    );
+
+    const __half* Q = (__half*)d_hp_scratch;
+    __half* O = (__half*)d_hp_scratch + n_q_elems;
+    const uint8_t* K_pool = (const uint8_t*)d_K_q4;
+    const uint8_t* V_pool = (const uint8_t*)d_V_q4;
+
+    // 2. Call optimized prefill kernel
+    const int q_tile_size = 128;
+    launch_flash_attn_q4_0_prefill_opt(
+        Q, K_pool, V_pool, O,
+        1.0f / sqrtf((float)head_dim), true, attn_window,
+        1, C, T_cache, q_tile_size,
+        stream
+    );
+
+    // 3. Convert output back to F32
+    f16_to_f32_kernel<<<(n_q_elems + 255) / 256, 256, 0, stream>>>(
+        O, d_out, n_q_elems
+    );
+
+    // 4. Apply gate and output projection if needed (handled by caller)
+    (void)d_gate_full; (void)d_output_w; (void)d_scratch; (void)handle;
 }
 
 // Wrapper: launch ssm_beta_alpha_fused_decode kernel

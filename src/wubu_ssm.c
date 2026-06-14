@@ -1195,6 +1195,7 @@ cleanup_p:
 
 void wubu_gqa_forward(const float *x, int B, int T,
                       const gqa_layer_weights *w,
+                      int d_model,
                       float *output,
                       const void *k_cache, const void *v_cache, int cache_len,
                       void *k_out, void *v_out) {
@@ -1214,7 +1215,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
             else
                 snprintf(fname, sizeof(fname), "%s/input.bin", gqa_dump_dir);
             FILE *fp = fopen(fname, "wb");
-            if (fp) { fwrite(x, sizeof(float), N * D_MODEL, fp); fclose(fp); }
+            if (fp) { fwrite(x, sizeof(float), N * d_model, fp); fclose(fp); }
         }
     }
     
@@ -1237,20 +1238,20 @@ void wubu_gqa_forward(const float *x, int B, int T,
     
     // Step 1: Q + gate fused projection via quantized or F32 matmul
     // Step 2-3: K and V projections — same input x[s], share Q8_K quantization
-    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+    const int n_q8_blocks = (d_model + QK_K - 1) / QK_K;
     const int q8_buf_size = n_q8_blocks * 292;
     uint8_t *gqa_q8_buf = (uint8_t *)malloc(q8_buf_size);
     if (!gqa_q8_buf) { free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
     
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        quantize_row_q8_K(x_s, (block_q8_K *)gqa_q8_buf, D_MODEL);
+        const float *x_s = x + s * d_model;
+        quantize_row_q8_K(x_s, (block_q8_K *)gqa_q8_buf, d_model);
         
         // Q + gate projection
         int q_offset = s * q_dim * 2;
         quantized_matmul_from_q8(gqa_q8_buf,
             w->attn_q_weight_q, w->attn_q_weight_type,
-            D_MODEL, q_dim * 2, 0, Q_full + q_offset);
+            d_model, q_dim * 2, 0, Q_full + q_offset);
         // Extract gate from Q_full — INTERLEAVED per-head layout:
         // Q_full layout: [Q_h0(256) | gate_h0(256) | Q_h1(256) | gate_h1(256) | ...]
         // gate[s * q_dim + j] should get all gate values (second 256 per head)
@@ -1265,11 +1266,11 @@ void wubu_gqa_forward(const float *x, int B, int T,
         // K projection
         quantized_matmul_from_q8(gqa_q8_buf,
             w->attn_k_weight_q, w->attn_k_weight_type,
-            D_MODEL, kv_dim, 0, K + s * kv_dim);
+            d_model, kv_dim, 0, K + s * kv_dim);
         // V projection
         quantized_matmul_from_q8(gqa_q8_buf,
             w->attn_v_weight_q, w->attn_v_weight_type,
-            D_MODEL, kv_dim, 0, V + s * kv_dim);
+            d_model, kv_dim, 0, V + s * kv_dim);
     }
     free(gqa_q8_buf);
     
@@ -1653,9 +1654,9 @@ void wubu_gqa_forward(const float *x, int B, int T,
     
     // Step 7: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        proj_matmul(attn_out + s * q_dim, q_dim, D_MODEL,
+        proj_matmul(attn_out + s * q_dim, q_dim, d_model,
                     w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
-                    output + s * D_MODEL);
+                    output + s * d_model);
     }
     
     // DUMP_GQA_DEBUG_DIR: dump final output after output projection
@@ -1670,7 +1671,7 @@ void wubu_gqa_forward(const float *x, int B, int T,
                 snprintf(fname, sizeof(fname), "%s/%s_output.bin", gqa_dump_dir, prefix);
             else
                 snprintf(fname, sizeof(fname), "%s/output.bin", gqa_dump_dir);
-            fp = fopen(fname, "wb"); if(fp) { fwrite(output, sizeof(float), N * D_MODEL, fp); fclose(fp); }
+            fp = fopen(fname, "wb"); if(fp) { fwrite(output, sizeof(float), N * d_model, fp); fclose(fp); }
         }
     }
     
@@ -1705,6 +1706,7 @@ gqa_alloc_fail:
 // GQA forward with intermediate saving (for backward)
 void wubu_gqa_forward_save(const float *x, int B, int T,
                            const gqa_layer_weights *w,
+                           int d_model,
                            float *output,
                            gqa_fwd_save_t *save)
 {
@@ -1730,7 +1732,7 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
     // Step 1: Q + gate fused projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
         int q_offset = s * q_dim * 2;
-        proj_matmul(x + s * D_MODEL, D_MODEL, q_dim * 2,
+        proj_matmul(x + s * d_model, d_model, q_dim * 2,
                     w->attn_q_weight, w->attn_q_weight_q, w->attn_q_weight_type,
                     Q_full + q_offset);
         for (int j = 0; j < q_dim; j++)
@@ -1739,10 +1741,10 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
     
     // Steps 2-3: K and V projections via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
+        proj_matmul(x + s * d_model, d_model, kv_dim,
                     w->attn_k_weight, w->attn_k_weight_q, w->attn_k_weight_type,
                     K + s * kv_dim);
-        proj_matmul(x + s * D_MODEL, D_MODEL, kv_dim,
+        proj_matmul(x + s * d_model, d_model, kv_dim,
                     w->attn_v_weight, w->attn_v_weight_q, w->attn_v_weight_type,
                     V + s * kv_dim);
     }
@@ -1812,9 +1814,9 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
     
     // Step 7: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        proj_matmul(attn_out + s * q_dim, q_dim, D_MODEL,
+        proj_matmul(attn_out + s * q_dim, q_dim, d_model,
                     w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
-                    output + s * D_MODEL);
+                    output + s * d_model);
     }
     
     // Save intermediates
@@ -1842,8 +1844,10 @@ cleanup_gqa_save:
 // ============================================================
 
 int wubu_is_ssm_layer(int layer_idx) {
-    // Every 4th layer (index 3, 7, 11, ...) is GQA (full attention)
-    // Rest are SSM layers
+    // For pure GQA models (DiffusionGemma/Gemma4), no SSM layers
+    extern int g_tensor_naming;
+    if (g_tensor_naming == 2) return 0; // pure GQA flag
+    // For Qwen35moe: every 4th layer (index 3, 7, 11, ...) is GQA
     return (layer_idx + 1) % 4 != 0;
 }
 
@@ -2685,7 +2689,8 @@ void wubu_gqa_backward_attention(
 // Full GQA layer backward
 void wubu_gqa_backward(
     int B, int T,
-    const float *x,             // [B, T, D_MODEL] input to forward
+    int d_model,
+    const float *x,             // [B, T, d_model] input to forward
     const float *Q_norm,        // [N, q_dim] post-RMSNorm Q
     const float *Q_raw,         // [N, q_dim] pre-RMSNorm Q (from Q_full first half)
     const float *K_norm,        // [N, kv_dim] post-RMSNorm K
@@ -2694,16 +2699,16 @@ void wubu_gqa_backward(
     const float *gate,          // [N, q_dim] raw gate (pre-sigmoid)
     const float *gate_sig,      // [N, q_dim] sigmoid(gate)
     const float *attn_out,      // [N, q_dim] post-gate attn_out
-    const float *output,        // [B, T, D_MODEL] forward output
-    const float *d_output,      // [B, T, D_MODEL] upstream gradient
+    const float *output,        // [B, T, d_model] forward output
+    const float *d_output,      // [B, T, d_model] upstream gradient
     const gqa_layer_weights *w, // weights
-    float *d_x,                 // [B, T, D_MODEL] gradient to propagate
-    float *d_q_weight,          // [D_MODEL, q_dim*2] fused Q+gate weight grad
-    float *d_k_weight,          // [D_MODEL, kv_dim]
-    float *d_v_weight,          // [D_MODEL, kv_dim]
+    float *d_x,                 // [B, T, d_model] gradient to propagate
+    float *d_q_weight,          // [d_model, q_dim*2] fused Q+gate weight grad
+    float *d_k_weight,          // [d_model, kv_dim]
+    float *d_v_weight,          // [d_model, kv_dim]
     float *d_q_norm_weight,     // [GQA_HEAD_DIM]
     float *d_k_norm_weight,     // [GQA_HEAD_DIM]
-    float *d_out_weight)        // [q_dim, D_MODEL]
+    float *d_out_weight)        // [q_dim, d_model]
 {
     const int N = B * T;
     const int q_dim = GQA_Q_HEADS * GQA_HEAD_DIM;
@@ -2727,7 +2732,7 @@ void wubu_gqa_backward(
     }
     
     // === Step 7: Output projection backward ===
-    // Same dims as SSM output proj: [q_dim=4096, D_MODEL=2048]
+    // Same dims as SSM output proj: [q_dim=4096, d_model=2048]
     // Reuse the SSM function (VALUE_DIM == q_dim)
     wubu_ssm_backward_output_proj(attn_out, d_output, w->attn_output_weight,
                                    d_attn_out, d_out_weight, N);
@@ -2814,13 +2819,13 @@ void wubu_gqa_backward(
     }
     
     // === Steps 1-3: MatMul backward for Q+gate, K, V ===
-    backward_matmul_nt(N, D_MODEL, q_dim * 2, x, d_Q_full,
+    backward_matmul_nt(N, d_model, q_dim * 2, x, d_Q_full,
                        w->attn_q_weight, d_x, d_q_weight);
     
-    backward_matmul_nt(N, D_MODEL, kv_dim, x, d_K_raw,
+    backward_matmul_nt(N, d_model, kv_dim, x, d_K_raw,
                        w->attn_k_weight, d_x, d_k_weight);
     
-    backward_matmul_nt(N, D_MODEL, kv_dim, x, d_V,
+    backward_matmul_nt(N, d_model, kv_dim, x, d_V,
                        w->attn_v_weight, d_x, d_v_weight);
     
 cleanup_gqa:

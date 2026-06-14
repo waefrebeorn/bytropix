@@ -7,6 +7,9 @@
 #include <time.h>
 #include <immintrin.h>  // _mm_prefetch for expert prefetch
 
+// Global tensor naming convention (set during model init)
+int g_tensor_naming = 0;  // 0=blk.Qwen 1=model.layers.Gemma 2=pure-GQA
+
 // ========== GGUF Tensor Names ==========
 
 static const char *tensor_name_attn_norm(int layer) {
@@ -57,7 +60,65 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     if (!model->layers) { gguf_close(ctx); return false; }
     
     printf("Allocating %d layers...\n", model->n_layers);
-    
+
+    // ============================================================
+    // Multi-model dimension extraction from GGUF
+    // ============================================================
+    // Detect tensor naming convention and architecture
+    model->tensor_naming = 0; // default: Qwen (blk.N.*)
+    for (int i = 0; i < (int)ctx->n_tensors; i++) {
+        if (strncmp(ctx->tensors[i].name, "model.layers.", 12) == 0) {
+            model->tensor_naming = 1; // Gemma-style
+            break;
+        }
+    }
+    // Detect pure GQA (no SSM layers) by checking for ssm_beta tensor
+    {
+        const char *ssm_check = (model->tensor_naming == 1) ? "model.layers.0.ssm_beta.weight" : "blk.0.ssm_beta.weight";
+        if (!gguf_find_tensor(ctx, ssm_check)) {
+            model->tensor_naming = 2; // pure GQA (DiffusionGemma/Gemma4)
+        }
+    }
+    g_tensor_naming = model->tensor_naming; // set global for wubu_is_ssm_layer()
+
+    // Extract dynamic dimensions from GGUF tensor shapes
+    int d_model = 0;
+    {
+        const char *norm_name = (model->tensor_naming == 1) ? "model.layers.0.attn_norm.weight" : "blk.0.attn_norm.weight";
+        gguf_tensor_info *nt = gguf_find_tensor(ctx, norm_name);
+        if (nt && nt->n_dims >= 1) d_model = (int)nt->dims[0];
+    }
+    if (d_model == 0) d_model = D_MODEL; // fallback
+    model->d_model = d_model;
+
+    // Extract GQA dimensions from tensor shapes
+    int gqa_head_dim = GQA_HEAD_DIM;
+    {
+        const char *q_norm_name = (model->tensor_naming == 1) ? "model.layers.0.attn_q_norm.weight" : "blk.0.attn_q_norm.weight";
+        gguf_tensor_info *qn = gguf_find_tensor(ctx, q_norm_name);
+        if (qn && qn->n_dims >= 1) gqa_head_dim = (int)qn->dims[0];
+    }
+
+    // Set all dynamic dimensions (use GGUF-extracted or fallback to macros)
+    model->d_inner = SSM_D_STATE * SSM_V_HEADS;  // VALUE_DIM
+    model->key_dim = SSM_D_STATE * SSM_K_HEADS;
+    model->conv_dim = 2 * model->key_dim + model->d_inner;
+    model->conv_kernel = CONV_KERNEL;
+    model->dt_rank = DT_RANK;
+    model->ssm_k_heads = SSM_K_HEADS;
+    model->ssm_v_heads = SSM_V_HEADS;
+    model->ssm_d_state = SSM_D_STATE;
+    model->gqa_q_heads = GQA_Q_HEADS;
+    model->gqa_kv_heads = GQA_KV_HEADS;
+    model->gqa_head_dim = gqa_head_dim;
+    model->rotary_dim = (int)(gqa_head_dim * PARTIAL_ROTARY_FACTOR);
+    model->d_ff = D_FF;
+    model->n_experts = N_EXPERTS;
+    model->n_active_experts = N_ACTIVE_EXPTS;
+
+    printf("  Model dims: d_model=%d, head_dim=%d\n", d_model, gqa_head_dim);
+    printf("  Naming: %s\n", model->tensor_naming == 1 ? "Gemma (model.layers.N.*)" : (model->tensor_naming == 2 ? "Pure-GQA (blk.N.*)" : "Qwen (blk.N.*)"));
+
     // Load layer norms and attention weights
     for (int l = 0; l < model->n_layers; l++) {
         wubu_layer_t *layer = &model->layers[l];
@@ -69,16 +130,16 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         // attn_norm.weight (pre-attention RMSNorm)
         t = gguf_find_tensor(ctx, tensor_name_attn_norm(l));
         if (t) {
-            layer->attn_norm_weight = (float *)malloc(D_MODEL * sizeof(float));
-            if (!gguf_read_tensor_f32(ctx, t, layer->attn_norm_weight, D_MODEL))
+            layer->attn_norm_weight = (float *)malloc(model->d_model * sizeof(float));
+            if (!gguf_read_tensor_f32(ctx, t, layer->attn_norm_weight, model->d_model))
                 { fprintf(stderr, "Failed to load attn_norm[%d]\n", l); goto fail; }
         }
         
         // post_attention_norm.weight
         t = gguf_find_tensor(ctx, tensor_name_post_attn_norm(l));
         if (t) {
-            layer->post_attn_norm_weight = (float *)malloc(D_MODEL * sizeof(float));
-            if (!gguf_read_tensor_f32(ctx, t, layer->post_attn_norm_weight, D_MODEL))
+            layer->post_attn_norm_weight = (float *)malloc(model->d_model * sizeof(float));
+            if (!gguf_read_tensor_f32(ctx, t, layer->post_attn_norm_weight, model->d_model))
                 { fprintf(stderr, "Failed to load post_attn_norm[%d]\n", l); goto fail; }
         }
         
@@ -193,8 +254,8 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     // Load final norm
     gguf_tensor_info *t = gguf_find_tensor(ctx, "output_norm.weight");
     if (t) {
-        model->norm_weight = (float *)malloc(D_MODEL * sizeof(float));
-        gguf_read_tensor_f32(ctx, t, model->norm_weight, D_MODEL);
+        model->norm_weight = (float *)malloc(model->d_model * sizeof(float));
+        gguf_read_tensor_f32(ctx, t, model->norm_weight, model->d_model);
         printf("  Final norm loaded\n");
     } else {
         printf("  WARNING: output_norm.weight not found\n");
@@ -207,7 +268,7 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     if (emb_f) {
         fseek(emb_f, 0, SEEK_END);
         long emb_size = ftell(emb_f);
-        int file_vocab = (int)(emb_size / (D_MODEL * sizeof(float)));
+        int file_vocab = (int)(emb_size / (model->d_model * sizeof(float)));
         if (file_vocab == 248320) {
             model->vocab_size = file_vocab;
             printf("  Embeddings: %d tokens from file (%ld MB)\n", model->vocab_size, emb_size / (1024*1024));
@@ -223,7 +284,7 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
             if (!t_emb) { fprintf(stderr, "  ERROR: token_embd.weight not found\n"); }
             else {
-                int64_t n_emb = (int64_t)248320 * D_MODEL;
+                int64_t n_emb = (int64_t)248320 * model->d_model;
                 float *temp_emb = (float *)malloc(n_emb * sizeof(float));
                 if (temp_emb && gguf_read_tensor_f32(ctx, t_emb, temp_emb, n_emb) > 0) {
                     FILE *out = fopen(emb_path, "wb");
@@ -358,18 +419,33 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         }
     }
     
+    // Count actual SSM and GQA layers
+    int n_ssm_count = 0, n_gqa_count = 0;
+    for (int l = 0; l < model->n_layers; l++) {
+        if (model->layers[l].is_ssm) n_ssm_count++;
+        else n_gqa_count++;
+    }
+    model->n_gqa_layers = n_gqa_count;
     printf("Model initialized: %d layers (%d SSM, %d GQA), %d vocab\n",
-           model->n_layers,
-           model->n_layers - model->n_layers/4,
-           model->n_layers/4,
-           model->vocab_size);
-    
-    // Allocate GQA KV cache (10 GQA layers × 256k context × 512 dim)
-    int64_t cache_elems = (int64_t)10 * GQA_MAX_CTX * GQA_KV_DIM;
-    model->gqa_k_cache = malloc(kv_cache_alloc_size(cache_elems));
-    model->gqa_v_cache = malloc(kv_cache_alloc_size(cache_elems));
-    memset(model->gqa_k_cache, 0, kv_cache_alloc_size(cache_elems));
-    memset(model->gqa_v_cache, 0, kv_cache_alloc_size(cache_elems));
+           model->n_layers, n_ssm_count, n_gqa_count, model->vocab_size);
+
+    // Allocate GQA KV cache: sum over all GQA layers of (max_ctx * layer_kv_dim)
+    int64_t total_cache_elems = 0;
+    for (int l = 0; l < model->n_layers; l++) {
+        if (!model->layers[l].is_ssm) {
+            int kv_dim = model->layers[l].gqa.kv_dim;
+            total_cache_elems += (int64_t)GQA_MAX_CTX * kv_dim;
+        }
+    }
+    int64_t k_cache_bytes = kv_cache_alloc_size(total_cache_elems);
+    model->gqa_k_cache = malloc(k_cache_bytes);
+    model->gqa_v_cache = malloc(k_cache_bytes);
+    if (!model->gqa_k_cache || !model->gqa_v_cache) {
+        fprintf(stderr, "Failed to allocate GQA KV cache (%ld MB)\n", (long)(k_cache_bytes / (1024*1024)));
+        goto fail;
+    }
+    memset(model->gqa_k_cache, 0, k_cache_bytes);
+    memset(model->gqa_v_cache, 0, k_cache_bytes);
     model->gqa_cache_len = 0;
     
     return true;
@@ -451,12 +527,12 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     const int N = B * T;
     
     // Allocate residual stream + reusable buffers (avoids 160 mallocs per forward)
-    float *x = (float *)malloc(N * D_MODEL * sizeof(float));
-    memcpy(x, embeddings, N * D_MODEL * sizeof(float));
-    float *normed = (float *)malloc(N * D_MODEL * sizeof(float));
-    float *attn_out = (float *)malloc(N * D_MODEL * sizeof(float));
-    float *normed2 = (float *)malloc(N * D_MODEL * sizeof(float));
-    float *ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+    float *x = (float *)malloc(N * model->d_model * sizeof(float));
+    memcpy(x, embeddings, N * model->d_model * sizeof(float));
+    float *normed = (float *)malloc(N * model->d_model * sizeof(float));
+    float *attn_out = (float *)malloc(N * model->d_model * sizeof(float));
+    float *normed2 = (float *)malloc(N * model->d_model * sizeof(float));
+    float *ffn_out = (float *)malloc(N * model->d_model * sizeof(float));
     int *prev_experts = (int *)malloc(N * N_ACTIVE_EXPTS * sizeof(int));
     int have_prev_experts = 0;
     
@@ -476,11 +552,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         if (dl_env) dump_layer = atoi(dl_env);
         if (l == dump_layer) {
             FILE *f = fopen("/tmp/debug_hidden_before_l.bin", "wb");
-            if (f) { fwrite(x, sizeof(float), N * D_MODEL, f); fclose(f); }
+            if (f) { fwrite(x, sizeof(float), N * model->d_model, f); fclose(f); }
         }
         
         // Pre-attention RMSNorm
-        wubu_rms_norm(B, T, D_MODEL, x, layer->attn_norm_weight, 1e-6f, normed);
+        wubu_rms_norm(B, T, model->d_model, x, layer->attn_norm_weight, 1e-6f, normed);
         
         // Expert prefetch: if previous layer had MoE, prefetch this layer's expert weights
         // Uses the previous layer's selected expert indices (experts tend to persist across layers)
@@ -488,9 +564,9 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         if (have_prev_experts && l > 0 && layer->moe.loaded && layer->moe.ffn_gate_exps_q) {
             wubu_layer_t *prev = &model->layers[l-1];
             if (prev->moe.loaded) {
-                int64_t gate_bytes = gguf_raw_size(layer->moe.ffn_gate_exps_q_type, (int64_t)D_MODEL * D_FF);
-                int64_t up_bytes   = gguf_raw_size(layer->moe.ffn_up_exps_q_type,   (int64_t)D_MODEL * D_FF);
-                int64_t down_bytes = gguf_raw_size(layer->moe.ffn_down_exps_q_type, (int64_t)D_FF * D_MODEL);
+                int64_t gate_bytes = gguf_raw_size(layer->moe.ffn_gate_exps_q_type, (int64_t)model->d_model * D_FF);
+                int64_t up_bytes   = gguf_raw_size(layer->moe.ffn_up_exps_q_type,   (int64_t)model->d_model * D_FF);
+                int64_t down_bytes = gguf_raw_size(layer->moe.ffn_down_exps_q_type, (int64_t)D_FF * model->d_model);
                 const int64_t P_STRIDE = 256;  // 4 cache lines per prefetch
                 for (int k = 0; k < N_ACTIVE_EXPTS; k++) {
                     int e = prev_experts[k];
@@ -588,8 +664,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                         while (remaining > 0) {
                             int c = remaining < chunk_sz ? remaining : chunk_sz;
                             wubu_model_gpu_gqa_forward(model, l,
-                                normed + offset * D_MODEL, c,
-                                attn_out + offset * D_MODEL);
+                                normed + offset * model->d_model, c,
+                                attn_out + offset * model->d_model);
                             offset += c;
                             remaining -= c;
                         }
@@ -615,13 +691,24 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             } else {
                 setenv("DUMP_GQA_PREFIX", "", 1);
             }
-            int64_t layer_cache_off = (int64_t)l_gqa * GQA_MAX_CTX * GQA_KV_DIM;
+            // Compute per-layer KV cache offset using actual kv_dim for each GQA layer
+            int64_t layer_cache_elems = 0;
+            int gqa_idx2 = 0;
+            for (int li = 0; li < l; li++) {
+                if (!model->layers[li].is_ssm) {
+                    if (gqa_idx2 == l_gqa) break;
+                    layer_cache_elems += (int64_t)GQA_MAX_CTX * model->layers[li].gqa.kv_dim;
+                    gqa_idx2++;
+                }
+            }
+            int kv_dim = layer->gqa.kv_dim;
+            int64_t layer_cache_off = layer_cache_elems;
             void *k_cache = (uint8_t *)model->gqa_k_cache + kv_cache_alloc_size(layer_cache_off);
             void *v_cache = (uint8_t *)model->gqa_v_cache + kv_cache_alloc_size(layer_cache_off);
-            void *k_out = (model->gqa_cache_len > 0) ? 
-                ((uint8_t *)k_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * GQA_KV_DIM)) : NULL;
+            void *k_out = (model->gqa_cache_len > 0) ?
+                ((uint8_t *)k_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * kv_dim)) : NULL;
             void *v_out = (model->gqa_cache_len > 0) ?
-                ((uint8_t *)v_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * GQA_KV_DIM)) : NULL;
+                ((uint8_t *)v_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * kv_dim)) : NULL;
             const void *k_in = (model->gqa_cache_len > 0) ? k_cache : NULL;
             const void *v_in = (model->gqa_cache_len > 0) ? v_cache : NULL;
             // For prefill (T>1 and first call): store to cache position 0
@@ -630,7 +717,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                 v_out = v_cache;
                 k_in = NULL; v_in = NULL;
             }
-            wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out,
+            wubu_gqa_forward(normed, B, T, &layer->gqa, model->d_model, attn_out,
                              k_in, v_in, model->gqa_cache_len,
                              k_out, v_out);
             gqa_layer_idx++;
@@ -645,25 +732,25 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         
         // NaN check: find exact index of first NaN
         int nan_idx = -1;
-        for (int i = 0; i < N * D_MODEL; i++) {
+        for (int i = 0; i < N * model->d_model; i++) {
             if (isnan(attn_out[i])) { nan_idx = i; break; }
         }
         if (nan_idx >= 0) {
-            int t = nan_idx / D_MODEL;
-            int d = nan_idx % D_MODEL;
+            int t = nan_idx / model->d_model;
+            int d = nan_idx % model->d_model;
             printf("  L%d (%s) *** NaN at [t=%d,d=%d] val=%+.4e prev=%+.4e next=%+.4e\n",
                    l, layer->is_ssm ? "SSM" : "GQA",
                    t, d, attn_out[nan_idx],
                    nan_idx > 0 ? (double)attn_out[nan_idx-1] : 0.0,
-                   nan_idx+1 < N*D_MODEL ? (double)attn_out[nan_idx+1] : 0.0);
+                   nan_idx+1 < N*model->d_model ? (double)attn_out[nan_idx+1] : 0.0);
         }
         
         // Residual: x = x + attn_out
-        #pragma omp parallel for if(N * D_MODEL > 500000)
-        for (int i = 0; i < N * D_MODEL; i++) x[i] += attn_out[i];
+        #pragma omp parallel for if(N * model->d_model > 500000)
+        for (int i = 0; i < N * model->d_model; i++) x[i] += attn_out[i];
         
         // Post-attention RMSNorm
-        wubu_rms_norm(B, T, D_MODEL, x, layer->post_attn_norm_weight, 1e-6f, normed2);
+        wubu_rms_norm(B, T, model->d_model, x, layer->post_attn_norm_weight, 1e-6f, normed2);
         
         // MoE (FFN) forward — use quantized path when available
         double t_moe0 = wall_time();
@@ -676,7 +763,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                 layer->moe.gpu_ctx = (void *)model;
             }
 #endif
-            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, have_prev_experts ? prev_experts : NULL);
+            wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, have_prev_experts ? prev_experts : NULL,
+                             model->n_active_experts, model->n_experts, model->d_model, model->d_ff);
             have_prev_experts = 1;
 #ifdef GPU_SUPPORT
             layer->moe.gpu_ctx = NULL;  // reset after use
@@ -684,15 +772,16 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         } else if (model->enable_moe && model->gguf_ctx &&
                    (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Fallback: F32 dequant path
-            if (wubu_moe_load_layer(model->gguf_ctx, l, &layer->moe)) {
-                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, NULL);
+            if (wubu_moe_load_layer(model->gguf_ctx, l, &layer->moe, model->d_model, model->d_ff, model->n_experts)) {
+                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, NULL,
+                                 model->n_active_experts, model->n_experts, model->d_model, model->d_ff);
                 wubu_moe_free_layer(&layer->moe);
             } else {
-                memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));
+                memcpy(ffn_out, normed2, N * model->d_model * sizeof(float));
             }
         } else {
             // Pass-through when MoE disabled
-            memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));
+            memcpy(ffn_out, normed2, N * model->d_model * sizeof(float));
         }
         
         double t_moe1 = wall_time();
@@ -701,8 +790,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }
         
         // Residual: x = x + ffn_out
-        #pragma omp parallel for if(N * D_MODEL > 500000)
-        for (int i = 0; i < N * D_MODEL; i++) x[i] += ffn_out[i];
+        #pragma omp parallel for if(N * model->d_model > 500000)
+        for (int i = 0; i < N * model->d_model; i++) x[i] += ffn_out[i];
         
         // Dump per-layer hidden state (post-MoE residual = next layer's input)
         const char *dump_dir = getenv("DUMP_LAYER_DIR");
@@ -711,7 +800,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             snprintf(fname, sizeof(fname), "%s/our_layer_%d.bin", dump_dir, l);
             FILE *df = fopen(fname, "wb");
             if (df) {
-                fwrite(x, sizeof(float), N * D_MODEL, df);
+                fwrite(x, sizeof(float), N * model->d_model, df);
                 fclose(df);
             }
         }
@@ -724,14 +813,14 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // Captures BEFORE final RMSNorm — MTP head receives raw layer 39 output
     float *save_h = model->save_last_hidden;
     if (save_h && N > 0) {
-        memcpy(save_h, x + (N - 1) * D_MODEL, D_MODEL * sizeof(float));
+        memcpy(save_h, x + (N - 1) * model->d_model, model->d_model * sizeof(float));
     }
 
     // Final RMSNorm
     if (model->norm_weight) {
-        float *final_normed = (float *)malloc(N * D_MODEL * sizeof(float));
-        wubu_rms_norm(B, T, D_MODEL, x, model->norm_weight, 1e-6f, final_normed);
-        memcpy(x, final_normed, N * D_MODEL * sizeof(float));
+        float *final_normed = (float *)malloc(N * model->d_model * sizeof(float));
+        wubu_rms_norm(B, T, model->d_model, x, model->norm_weight, 1e-6f, final_normed);
+        memcpy(x, final_normed, N * model->d_model * sizeof(float));
         free(final_normed);
     }
     
@@ -741,8 +830,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     if (model->skip_output_proj) {
         // Copy final hidden states to logits buffer (caller does GPU output proj)
         for (int i = 0; i < N; i++) {
-            memcpy(logits + i * model->vocab_size, x + i * D_MODEL,
-                   D_MODEL * sizeof(float));
+            memcpy(logits + i * model->vocab_size, x + i * model->d_model,
+                   model->d_model * sizeof(float));
         }
     } else if (model->output_weight_q && model->output_weight_type != GGML_TYPE_F32) {
         // Q4_K quantized matmul path
@@ -752,10 +841,10 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         // uses 1 thread per token when nested=off (default) — correct behavior.
         #pragma omp parallel for if(N > 1)
         for (int i = 0; i < N; i++) {
-            quantized_matmul(x + i * D_MODEL,
+            quantized_matmul(x + i * model->d_model,
                              model->output_weight_q,
                              model->output_weight_type,
-                             D_MODEL, model->vocab_size, 0,
+                             model->d_model, model->vocab_size, 0,
                              logits + i * model->vocab_size);
         }
         // Compare against F32 SGEMM when output_weight is also loaded
@@ -764,11 +853,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             #pragma omp parallel for collapse(2) if(N * model->vocab_size > 100000)
             for (int i = 0; i < N; i++) {
                 for (int j = 0; j < model->vocab_size; j++) {
-                    const float *h_i = x + i * D_MODEL;
+                    const float *h_i = x + i * model->d_model;
                     float *log_i = f32_logits + i * model->vocab_size;
                     double sum = 0.0;
-                    for (int k = 0; k < D_MODEL; k++)
-                        sum += (double)h_i[k] * (double)model->output_weight[j * D_MODEL + k];
+                    for (int k = 0; k < model->d_model; k++)
+                        sum += (double)h_i[k] * (double)model->output_weight[j * model->d_model + k];
                     log_i[j] = (float)sum;
                 }
             }
@@ -790,7 +879,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }
     } else {
         // Fallback: copy hidden states only (no output weight loaded)
-        memcpy(logits, x, N * D_MODEL * sizeof(float));
+        memcpy(logits, x, N * model->d_model * sizeof(float));
     }
     
     free(x);
@@ -799,6 +888,47 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     free(normed2);
     free(ffn_out);
     free(prev_experts);
+}
+
+// ========== Forward Pass from Token IDs ==========
+void wubu_model_forward(wubu_model_t *model,
+                        const int *token_ids, int B, int T,
+                        float *logits) {
+    const int N = B * T;
+    // Simple embedding lookup: use token_embd if available, otherwise use file
+    float *embd = (float *)malloc(N * model->d_model * sizeof(float));
+    if (!embd) { fprintf(stderr, "wubu_model_forward: alloc failed\n"); return; }
+
+    if (model->token_embd) {
+        // In-memory embeddings
+        for (int i = 0; i < N; i++) {
+            int tok = token_ids[i];
+            if (tok < 0 || tok >= model->vocab_size) tok = 0;
+            memcpy(embd + i * model->d_model, model->token_embd + tok * model->d_model,
+                   model->d_model * sizeof(float));
+        }
+    } else if (model->use_embedding_file) {
+        // Read from embedding file
+        const char *emb_path = "data/qwen36_embeddings_c.bin.raw";
+        FILE *emb_f = fopen(emb_path, "rb");
+        if (emb_f) {
+            for (int i = 0; i < N; i++) {
+                int tok = token_ids[i];
+                if (tok < 0 || tok >= model->vocab_size) tok = 0;
+                fseek(emb_f, (long)tok * model->d_model * sizeof(float), SEEK_SET);
+                fread(embd + i * model->d_model, sizeof(float), model->d_model, emb_f);
+            }
+            fclose(emb_f);
+        } else {
+            fprintf(stderr, "wubu_model_forward: cannot open embedding file\n");
+            memset(embd, 0, N * model->d_model * sizeof(float));
+        }
+    } else {
+        memset(embd, 0, N * model->d_model * sizeof(float));
+    }
+
+    wubu_model_forward_from_embd(model, embd, B, T, logits);
+    free(embd);
 }
 
 // ========== MTP Head ==========
@@ -968,13 +1098,13 @@ int wubu_mtp_draft_forward(wubu_model_t *model,
     const int vs = model->vocab_size;
     
     // Per-draft buffers (reuse across B to avoid mallocs)
-    float *h_norm = (float *)malloc(D_MODEL * sizeof(float));
-    float *e_norm = (float *)malloc(D_MODEL * sizeof(float));
-    float *concat = (float *)malloc(2 * D_MODEL * sizeof(float));
-    float *cur = (float *)malloc(D_MODEL * sizeof(float));
-    float *temp_attn = (float *)malloc(D_MODEL * sizeof(float));
-    float *temp_ffn = (float *)malloc(D_MODEL * sizeof(float));
-    float *temp_norm = (float *)malloc(D_MODEL * sizeof(float));
+    float *h_norm = (float *)malloc(model->d_model * sizeof(float));
+    float *e_norm = (float *)malloc(model->d_model * sizeof(float));
+    float *concat = (float *)malloc(2 * model->d_model * sizeof(float));
+    float *cur = (float *)malloc(model->d_model * sizeof(float));
+    float *temp_attn = (float *)malloc(model->d_model * sizeof(float));
+    float *temp_ffn = (float *)malloc(model->d_model * sizeof(float));
+    float *temp_norm = (float *)malloc(model->d_model * sizeof(float));
     
     if (!h_norm || !e_norm || !concat || !cur || !temp_attn || !temp_ffn || !temp_norm) {
         fprintf(stderr, "MTP draft: alloc failed\n");
@@ -984,22 +1114,22 @@ int wubu_mtp_draft_forward(wubu_model_t *model,
     }
     
     // Step 1: h_norm = rms_norm(x, hnorm)
-    wubu_rms_norm(1, 1, D_MODEL, x, mtp->nextn_hnorm, 1e-6f, h_norm);
+    wubu_rms_norm(1, 1, model->d_model, x, mtp->nextn_hnorm, 1e-6f, h_norm);
     
     // Process each draft token
     for (int b = 0; b < B; b++) {
-        const float *embd_b = token_embd + b * D_MODEL;
+        const float *embd_b = token_embd + b * model->d_model;
         float *logits_b = logits_out + b * vs;
         
         // Step 2: e_norm = rms_norm(token_embd[b], enorm)
-        wubu_rms_norm(1, 1, D_MODEL, embd_b, mtp->nextn_enorm, 1e-6f, e_norm);
+        wubu_rms_norm(1, 1, model->d_model, embd_b, mtp->nextn_enorm, 1e-6f, e_norm);
         
         // Step 3: concat = [e_norm | h_norm] (llama.cpp order: ggml_concat(e_norm, h_norm, 0))
-        memcpy(concat, e_norm, D_MODEL * sizeof(float));
-        memcpy(concat + D_MODEL, h_norm, D_MODEL * sizeof(float));
+        memcpy(concat, e_norm, model->d_model * sizeof(float));
+        memcpy(concat + model->d_model, h_norm, model->d_model * sizeof(float));
         
         // Step 4: cur = eh_proj @ concat (F32 SGEMM)
-        for (int j = 0; j < D_MODEL; j++) {
+        for (int j = 0; j < model->d_model; j++) {
             double sum = 0.0;
             for (int k = 0; k < mtp->nextn_eh_proj_dim; k++)
                 sum += (double)concat[k] * (double)mtp->nextn_eh_proj_f32[j * mtp->nextn_eh_proj_dim + k];
@@ -1008,38 +1138,39 @@ int wubu_mtp_draft_forward(wubu_model_t *model,
         
         // Step 5: Forward through blk.40 (GQA+MoE)
         // Pre-attention RMSNorm
-        wubu_rms_norm(1, 1, D_MODEL, cur, blk40->attn_norm_weight, 1e-6f, temp_norm);
+        wubu_rms_norm(1, 1, model->d_model, cur, blk40->attn_norm_weight, 1e-6f, temp_norm);
         
         // GQA forward with KV cache
         float *k_out = mtp->k_cache + (mtp->cache_len + b) * GQA_KV_DIM;
         float *v_out = mtp->v_cache + (mtp->cache_len + b) * GQA_KV_DIM;
-        wubu_gqa_forward(temp_norm, 1, 1, &blk40->gqa, temp_attn,
+        wubu_gqa_forward(temp_norm, 1, 1, &blk40->gqa, model->d_model, temp_attn,
                          mtp->k_cache, mtp->v_cache, mtp->cache_len + b,
                          k_out, v_out);
         
         // Residual
-        for (int i = 0; i < D_MODEL; i++) cur[i] += temp_attn[i];
+        for (int i = 0; i < model->d_model; i++) cur[i] += temp_attn[i];
         
         // Post-attention RMSNorm
-        wubu_rms_norm(1, 1, D_MODEL, cur, blk40->post_attn_norm_weight, 1e-6f, temp_norm);
+        wubu_rms_norm(1, 1, model->d_model, cur, blk40->post_attn_norm_weight, 1e-6f, temp_norm);
         
         // MoE forward
         if (blk40->moe.loaded) {
-            wubu_moe_forward(temp_norm, 1, 1, &blk40->moe, temp_ffn, NULL);
+            wubu_moe_forward(temp_norm, 1, 1, &blk40->moe, temp_ffn, NULL,
+                             model->n_active_experts, model->n_experts, model->d_model, model->d_ff);
         } else {
-            memcpy(temp_ffn, temp_norm, D_MODEL * sizeof(float));
+            memcpy(temp_ffn, temp_norm, model->d_model * sizeof(float));
         }
         
         // Residual
-        for (int i = 0; i < D_MODEL; i++) cur[i] += temp_ffn[i];
+        for (int i = 0; i < model->d_model; i++) cur[i] += temp_ffn[i];
         
         // Step 6: shared_head_norm
-        wubu_rms_norm(1, 1, D_MODEL, cur, mtp->nextn_shared_head_norm, 1e-6f, temp_norm);
+        wubu_rms_norm(1, 1, model->d_model, cur, mtp->nextn_shared_head_norm, 1e-6f, temp_norm);
         
         // Step 7: output projection (via main model's output.weight)
         if (model->output_weight_q) {
             quantized_matmul(temp_norm, model->output_weight_q, model->output_weight_type,
-                            D_MODEL, vs, 0, logits_b);
+                            model->d_model, vs, 0, logits_b);
         } else {
             memset(logits_b, 0, vs * sizeof(float));
         }
@@ -1119,19 +1250,19 @@ void wubu_model_backward_from_embd(
     const wubu_model_t *model,
     const float *embeddings,
     const float *logits, const float *d_logits,
-    const float *saved_normed,     // [n_layers * N * D_MODEL]
-    const float *saved_attn_out,   // [n_layers * N * D_MODEL]
-    const float *saved_normed2,    // [n_layers * N * D_MODEL]
-    const float *saved_ffn_out,    // [n_layers * N * D_MODEL]
+    const float *saved_normed,     // [n_layers * N * model->d_model]
+    const float *saved_attn_out,   // [n_layers * N * model->d_model]
+    const float *saved_normed2,    // [n_layers * N * model->d_model]
+    const float *saved_ffn_out,    // [n_layers * N * model->d_model]
     float *d_embeddings,
     int B, int T)
 {
     const int N = B * T;
     const int n_layers = model->n_layers;
-    const int layer_sz = N * D_MODEL;
+    const int layer_sz = N * model->d_model;
     
-    float *d_x = (float *)malloc(N * D_MODEL * sizeof(float));
-    memcpy(d_x, d_logits, N * D_MODEL * sizeof(float));
+    float *d_x = (float *)malloc(N * model->d_model * sizeof(float));
+    memcpy(d_x, d_logits, N * model->d_model * sizeof(float));
     
     // Per-layer temp state buffers (reused via ssm_states/conv_states in model)
     // For exact backward, we need to re-run the forward with save
@@ -1143,19 +1274,19 @@ void wubu_model_backward_from_embd(
         const float *attn_out = saved_attn_out + l * layer_sz;
         const float *normed2 = saved_normed2 + l * layer_sz;
         
-        float *d_ffn_out = (float *)malloc(N * D_MODEL * sizeof(float));
-        float *d_x_after_attn = (float *)malloc(N * D_MODEL * sizeof(float));
-        float *d_attn_out = (float *)malloc(N * D_MODEL * sizeof(float));
+        float *d_ffn_out = (float *)malloc(N * model->d_model * sizeof(float));
+        float *d_x_after_attn = (float *)malloc(N * model->d_model * sizeof(float));
+        float *d_attn_out = (float *)malloc(N * model->d_model * sizeof(float));
         memcpy(d_ffn_out, d_x, layer_sz);
         memcpy(d_x_after_attn, d_x, layer_sz);
         
         // Post-attention RMSNorm backward
-        wubu_rms_norm_backward(B, T, D_MODEL, normed2, layer->post_attn_norm_weight,
+        wubu_rms_norm_backward(B, T, model->d_model, normed2, layer->post_attn_norm_weight,
                                1e-6f, d_ffn_out, d_x_after_attn);
         memcpy(d_attn_out, d_x_after_attn, layer_sz);
         
         // Layer backward — exact with saved intermediates
-        float *d_normed = (float *)calloc(N * D_MODEL, sizeof(float));
+        float *d_normed = (float *)calloc(N * model->d_model, sizeof(float));
         
         if (layer->is_ssm) {
             // Re-run SSM forward WITH save to capture intermediates for backward
@@ -1222,7 +1353,7 @@ void wubu_model_backward_from_embd(
             memcpy(saved_ssm_state, ssm_state_tmp, state_sz * sizeof(float));
             
             // Run forward with save — attn_out goes to a dummy buffer
-            float *fwd_out = (float *)malloc(N * D_MODEL * sizeof(float));
+            float *fwd_out = (float *)malloc(N * model->d_model * sizeof(float));
             wubu_ssm_forward_save(normed, B, T, &layer->ssm,
                                    ssm_state_tmp, conv_state_tmp,
                                    fwd_out, &save);
@@ -1289,11 +1420,11 @@ void wubu_model_backward_from_embd(
             save.attn_out_pre_gate = attn_pre_gate_b;
             
             // Run forward with save
-            float *fwd_out = (float *)malloc(N * D_MODEL * sizeof(float));
-            wubu_gqa_forward_save(normed, B, T, &layer->gqa, fwd_out, &save);
+            float *fwd_out = (float *)malloc(N * model->d_model * sizeof(float));
+            wubu_gqa_forward_save(normed, B, T, &layer->gqa, model->d_model, fwd_out, &save);
             
             // Run exact backward
-            wubu_gqa_backward(B, T, normed,
+            wubu_gqa_backward(B, T, model->d_model, normed,
                               save.Q_norm, save.Q_raw,
                               save.K_norm, save.K_raw,
                               save.V,
@@ -1310,13 +1441,13 @@ void wubu_model_backward_from_embd(
         }
         
         // Pre-attention RMSNorm backward
-        float *d_x_pre_attn = (float *)malloc(N * D_MODEL * sizeof(float));
+        float *d_x_pre_attn = (float *)malloc(N * model->d_model * sizeof(float));
         memset(d_x_pre_attn, 0, layer_sz);
-        wubu_rms_norm_backward(B, T, D_MODEL, normed, layer->attn_norm_weight,
+        wubu_rms_norm_backward(B, T, model->d_model, normed, layer->attn_norm_weight,
                                1e-6f, d_normed, d_x_pre_attn);
         
         // Residual: x_pre_attn also feeds x_after_attn = x_pre_attn + attn_out
-        for (int i = 0; i < N * D_MODEL; i++)
+        for (int i = 0; i < N * model->d_model; i++)
             d_x_pre_attn[i] += d_x_after_attn[i];
         
         memcpy(d_x, d_x_pre_attn, layer_sz);
@@ -1328,41 +1459,7 @@ void wubu_model_backward_from_embd(
         free(d_x_pre_attn);
     }
     
-    memcpy(d_embeddings, d_x, N * D_MODEL * sizeof(float));
+    memcpy(d_embeddings, d_x, N * model->d_model * sizeof(float));
     free(d_x);
 }
 
-void wubu_model_forward(wubu_model_t *model,
-                        const int *token_ids, int B, int T,
-                        float *logits) {
-    // Load embeddings
-    float *embd = (float *)malloc(B * T * D_MODEL * sizeof(float));
-    
-    if (model->token_embd && !model->use_embedding_file) {
-        // Use GGUF-loaded embeddings (auto-extracted)
-        for (int i = 0; i < B * T; i++) {
-            int id = token_ids[i];
-            if (id < 0 || id >= model->vocab_size) id = 0;
-            memcpy(embd + i * D_MODEL, model->token_embd + id * D_MODEL, D_MODEL * sizeof(float));
-        }
-    } else if (model->use_embedding_file) {
-        FILE *f = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
-        if (f) {
-            for (int i = 0; i < B * T; i++) {
-                int id = token_ids[i];
-                if (id < 0 || id >= model->vocab_size) id = 0;
-                fseek(f, id * D_MODEL * sizeof(float), SEEK_SET);
-                size_t nr = fread(embd + i * D_MODEL, sizeof(float), D_MODEL, f);
-                (void)nr;
-            }
-            fclose(f);
-        } else {
-            memset(embd, 0, B * T * D_MODEL * sizeof(float));
-        }
-    } else {
-        memset(embd, 0, B * T * D_MODEL * sizeof(float));
-    }
-    
-    wubu_model_forward_from_embd(model, embd, B, T, logits);
-    free(embd);
-}

@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
     int loaded_ssm = 0, loaded_gqa = 0;
 
     for (int layer = 0; layer < N_LAYERS; layer++) {
-        int is_ssm = wubu_is_ssm_layer(layer);
+        int is_ssm = wubu_is_ssm_layer_legacy(layer);
 
         if (is_ssm) {
             // [load weights, same as before]
@@ -374,7 +374,7 @@ int main(int argc, char **argv) {
     float **d_ssm_states = (float **)malloc(N_LAYERS * sizeof(float *));
     float **d_conv_states = (float **)malloc(N_LAYERS * sizeof(float *));
     for (int layer = 0; layer < N_LAYERS; layer++) {
-        if (wubu_is_ssm_layer(layer)) {
+        if (wubu_is_ssm_layer_legacy(layer)) {
             d_ssm_states[layer] = wubu_cuda_alloc(SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float));
             d_conv_states[layer] = wubu_cuda_alloc((CONV_KERNEL - 1) * CONV_DIM * sizeof(float));
             cudaMemsetAsync(d_ssm_states[layer], 0, SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float), stream);
@@ -408,7 +408,7 @@ int main(int argc, char **argv) {
     int gpu_ssm_done = 0, gpu_gqa_done = 0;
 
     for (int layer = 0; layer < N_LAYERS; layer++) {
-        int is_ssm = wubu_is_ssm_layer(layer);
+        int is_ssm = wubu_is_ssm_layer_legacy(layer);
 
         if (is_ssm) {
             gpu_ssm_weights w;
@@ -451,7 +451,8 @@ int main(int argc, char **argv) {
                 w.d_attn_q, w.d_attn_k, w.d_attn_v,
                 w.d_attn_out_w, w.d_q_norm_w, w.d_k_norm_w,
                 d_out,
-                gqa_scr.d_Q_full, gqa_scr.d_K, gqa_scr.d_V, gqa_scr.d_scratch);
+                gqa_scr.d_Q_full, gqa_scr.d_K, gqa_scr.d_V, gqa_scr.d_scratch,
+                NULL);
             t_gpu_total += now_sec() - t0;
 
             gpu_free_gqa_weights(&w);
@@ -526,7 +527,7 @@ int main(int argc, char **argv) {
     free(final_gpu);
 
     for (int layer = 0; layer < N_LAYERS; layer++) {
-        if (wubu_is_ssm_layer(layer)) {
+        if (wubu_is_ssm_layer_legacy(layer)) {
             wubu_cuda_free(d_ssm_states[layer]);
             wubu_cuda_free(d_conv_states[layer]);
         }

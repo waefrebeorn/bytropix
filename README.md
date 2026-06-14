@@ -1,16 +1,16 @@
 <div align="center">
 
-# ⚡ bytropix — Multi-Modal Inference Engine
+# ⚡ bytropix — Multi-Model C/CUDA Inference Engine
 
-**Pure C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE) + Moondream3 Vision**
+**Pure C/CUDA inference for DiffusionGemma-26B, Gemma 4 12B QAT, Qwen3.6-35B**
+**🔁 Multi-model adapter: one codebase, three architectures (2026-06-14)**
 
-~30,000 lines C/CUDA | 512 commits | 20 SVG diagrams | 68 Python analysis tools
+~35,000 lines C/CUDA | 550+ commits | 20 SVG diagrams | 68 Python analysis tools
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/licenses/MIT)
 [![GPU: RTX 5050](https://img.shields.io/badge/GPU-RTX_5050_8GB-critical)](https://github.com/waefrebeorn/bytropix)
 [![KV Cache: Q4_0 4:1](https://img.shields.io/badge/KV_Cache-Q4_0_4:1-green)](https://github.com/waefrebeorn/bytropix)
-[![Arch: qwen35moe](https://img.shields.io/badge/Arch-qwen35moe-purple)](https://github.com/waefrebeorn/bytropix)
-[![Vision: 3D ViT](https://img.shields.io/badge/Vision-Moondream3_3D_ViT-success)](https://github.com/waefrebeorn/bytropix)
+[![Arch: multi-model](https://img.shields.io/badge/Arch-Multi--Model-orange)](https://github.com/waefrebeorn/bytropix)
 
 </div>
 
@@ -18,122 +18,120 @@
 
 ## What is bytropix?
 
-bytropix is a **from-scratch C/CUDA inference engine** for Qwen3.6-35B-A3B — a 35B-parameter Gated DeltaNet + Mixture-of-Experts model with 256 experts, and Moondream3's 3D Vision Transformer. It runs entirely on local hardware (RTX 5050 8GB, 64GB RAM) with no framework dependencies.
+bytropix is a **from-scratch C/CUDA inference engine** supporting **three architectures** through a unified model adapter:
 
-The project includes GPU kernels (SSM recurrence, quantized matmul, MoE, attention), a Q4_0 KV cache (~4:1 compression), vision encoder pipeline, and research components spanning hyperbolic geometry, nesting theory, sparse attention, and more.
+| Model | Architecture | Context | VRAM |
+|-------|-------------|---------|------|
+| **DiffusionGemma-26B-A4B-it** | MoE GQA (30 layers, top-8/128 experts) | 512K | ~18GB Q4_K_M |
+| **Gemma 4 12B QAT** | ISWA Dense Transformer (48 layers) | 128K | ~7.3GB Q4_K_XL |
+| **Qwen3.6-35B-A3B** | Gated DeltaNet SSM + GQA + MoE | 256K | ~8GB IQ2_M |
+
+Targets **RTX 5050 8GB** with Q4_0 KV cache (4:1 compression). Runs entirely on local hardware (WSL2) with no framework dependencies.
+
+---
+
+## Model Adapter Architecture
+
+The `wubu_model.c` multi-model adapter automatically detects and configures for each architecture:
+
+```
+Tensor Naming Detection → Dimension Extraction → Layer Config → KV Cache Layout
+        ↓                         ↓                    ↓              ↓
+  blk.%d.* (Qwen)          d_model from           is_ssm per    Dynamic KV
+  model.layers.%d.*        tensor shapes          layer (arch-   offsets per
+  (Gemma/DGemma)           head_dim, n_heads,     aware)        variable kv_dim
+                           n_experts, d_ff
+```
+
+**Naming conventions:**
+- **Qwen**: `blk.{i}.attn_q.weight`, `blk.{i}.ssm_*`, `blk.{i}.gate.weight`
+- **Gemma/DiffusionGemma**: `model.layers.{i}.self_attn.q_proj.weight`, etc.
+
+**Architecture detection:**
+- **Qwen**: Mixed SSM+GQA (3:1 interleaved), 256-MoE experts
+- **Gemma 4**: All GQA ISWA (sliding:full 6:1), dense FFN
+- **DiffusionGemma**: All GQA (30 layers), 128-MoE experts (top-8), heterogeneous head_dim
 
 ---
 
 ## Quick Start
 
 ```bash
-# CPU text inference
-make gen_text
-./gen_text "The capital of France is" 20 40
+# Build
+make gen_text_cpu          # CPU inference binary
+make gen_text_gpu          # GPU inference binary
+make bench_512k_full       # 512K context benchmark
 
-# GPU inference (requires CUDA)
-make gen_text_gpu
-GPU=1 MAX_CTX=4096 ./gen_text_gpu "Explain quantum computing" 50 100
+# Run (any of the 3 models)
+./bench_512k_full /home/wubu/models/DiffusionGemma-26B-Q4_K_M.gguf 4096 1 0
+./bench_512k_full /home/wubu/models/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf 4096 1 0
+./bench_512k_full /home/wubu/models/Qwen3.6-35B-A3B-IQ2_M.gguf 4096 1 0
 
-# Vision encoder test
-make test_vision_real
-./test_vision_real /path/to/mmproj-F16.gguf /tmp/vision_input.bin
-
-# API server (OpenAI-compatible)
-make api_server
-./api_server --sandbox --port 8080
-curl http://localhost:8080/v1/chat/completions \
-  -d '{"messages":[{"role":"user","content":"hello"}],"max_tokens":50}'
+# Environment variables
+MAX_CTX=262144 OMP_NUM_THREADS=16 ./gen_text_cpu "prompt" 20 100
 ```
 
 **Hardware:** AMD Ryzen 7950X (16C/32T) | 64 GB DDR5 | RTX 5050 8GB VRAM | WSL2
 
 ---
 
-## Architecture
+## Model Specs
 
-### Model Spec (Qwen3.6-35B-A3B / `qwen35moe`)
-
-```
-40 Layers: 10 cycles × (3×SSM → 1×GQA)
-├── SSM layers:  30 layers (Gated DeltaNet recurrence)
-├── GQA layers:  10 layers (Grouped Query Attention)
-├── Hidden dim:  2048
-├── Vocab:       248,320 tokens
-├── SSM:         16 K-heads × 128, 32 V-heads × 128
-├── GQA:         16 Q-heads × 256, 2 KV-heads × 256
-├── MoE:         256 experts, 8 active + 1 shared
-├── Expert FFN:  512 | Shared FFN: 512
-├── RoPE:        IMRoPE, sections=[11,11,10,0], θ=10M
-└── Quant:       Mixed IQ2_XXS / IQ3_XXS / IQ4_XS / Q5_K / Q6_K / Q4_K (~2.7 bpw)
-```
-
-### Vision Encoder (Moondream3 / 3D ViT)
+### DiffusionGemma-26B-A4B-it (Q4_K_M)
 
 ```
-27-layer Vision Transformer
-├── 3D patch embedding: spatial 16×16, temporal 2 frames
-├── Spatial merge: 2×2 grid (4:1 compression)
-├── Hidden dim: 1152 → 16 heads × 72 head_dim
-├── GQA attention (16 heads) + GELU activation
-├── Post-LN + Merger MLP: 4608 → 2048 (text hidden dim)
-└── Output: image tokens in text embedding space
+30 Layers GQA MoE (top-8 of 128 experts)
+├── Normal layers (20):  hidden=2816, Q=4096 (16×256), KV=2048 (8×256), FFN=704
+├── LARGE layers  (10):  hidden=2816, Q=8192 (16×512), KV=1048 (2×512),  FFN=704
+├── Vocab:                248,320 tokens
+├── d_model:              2816 (extracted from GGUF, not hardcoded)
+└── Sliding window:       1024
 ```
 
-### Multi-Modal Pipeline
+### Gemma 4 12B QAT (Q4_K_XL)
 
 ```
-Image → Patch Embed → 27×ViT → Spatial Merge → MMProj → Text tokens → 40×Text Model → Output
-                                                           ↑
-                                         Qwen3.6 Text Embedding ← GGUF token embeddings
+48 Layers ISWA (6:1 sliding:full)
+├── Sliding (40):  hidden=3840, Q=4096 (16×256), KV=2048 (8×256), FFN=15360
+├── Full (8):      hidden=3840, KV=512 (1×512 global), θ=1M prop, 25% rotary
+├── Vocab:         262,144 tokens (tied embeddings)
+└── RoPE:           dual (θ=10K default + θ=1M proportional)
 ```
 
-### VRAM Budget (256K Context, Text Only)
+### Qwen3.6-35B-A3B (IQ2_M, legacy)
 
-| Component | Size | Format |
-|-----------|------|--------|
-| SSM weights (quantized) | ~2,266 MB | Mixed quant on GPU |
-| GQA weights | 1,040 MB | F32 (cuBLAS SGEMM) |
-| KV cache (Q4_0) | 1,440 MB | 4-bit, 4:1 vs FP16 |
-| KV cache (FP16) | 5,120 MB | FP16 via `GPU_Q4_0_KV=0` |
-| Output projection | 1,900 MB | Q4_K quantized |
-| MoE + scratch | ~460 MB | IQ2_XXS + temp buffers |
-| **Total (Q4_0 KV)** | **~5,100 MB** | Fits 8GB GPU with ~2.9GB headroom |
+```
+40 Layers (30 SSM + 10 GQA, 3:1 interleaved)
+├── SSM (30):  D=2048, Δ-dim=64, 1024 expert_dim hidden, 256 MoE experts
+├── GQA (10):  layers 3,7,11,15,19,23,27,31,35,39 — Q=4096 (16×256), KV=512 (2×256)
+└── Vocab:     151,936 tokens
+```
 
 ---
 
 ## Features
 
-### Verified (Runtime-Crosschecked)
+### ✅ Verified Working
 
-- **CPU inference** — full 40-layer, verifiable against llama.cpp
-- **GPU GQA attention** — cuBLAS-backed on GPU
-- **GPU output projection** — Q4_K custom kernel
-- **Q4_0 KV cache** — 4:1 compression, cos-sim 0.9994 vs F16 at 256K
+- **Multi-model adapter** — `wubu_model.c` auto-detects Qwen/Gemma/DiffusionGemma naming
+- **Dynamic dimensions** — `d_model`, `head_dim`, `kv_dim`, `n_heads` extracted from GGUF tensor shapes
+- **Dynamic KV cache** — variable `kv_dim` per layer (DiffusionGemma LARGE layers need 2× KV)
+- **CPU inference** — Qwen3.6-35B sequential SSM, coherent output
+- **Q4_0 KV cache** — 4:1 compression, cos-sim 0.9994 vs FP16 at 256K
+- **GQA forward** — `d_model` parameter (GQA functions accept any model's hidden dim)
 - **Lazy MoE expert loading** — blob-pointer on-demand, saves ~3GB RAM
-- **Sliding window attention** — GQA_WINDOW env var for 256K context
-- **Tokenizer** — GPT-2 BPE with 248K vocab, merge-table-based
+- **MTP speculative decode** — Qwen draft model integrated
 
-### In Progress
+### 🔄 In Progress
 
-- **GPU SSM pipeline** — SSM recurrence, conv1d, SiLU, gated norm on GPU
-- **NSA sparse attention** — DeepSeek-V3.2 DSA pattern for O(L log L) GQA
-- **Chunked SSM prefill** — batched recurrence for faster prefill
-- **IQ1_M + Q4_K quant matmul** — GPU kernels for extreme quantization
-- **MTP speculative decode** — multi-token prediction draft model
+- **DiffusionGemma forward pass** — model loads (30 GQA layers), crashes during decode (per-layer head_dim mismatch for LARGE layers)
+- **Gemma 4 GPU inference** — ISWA kernels written, cuBLAS integration pending
+- **GPU SSM pipeline** — recurrence, conv1d, SiLU, gated norm on GPU
 
-### Research Components (Not Wired Into Inference)
+### ❌ Blocked / Not Started
 
-See the research directories: `THEORY/`, `MATH/`, `ENCODERS/`, `AUDIO/`, `DIFFUSION/`, `ATTENTION/`, `OPTIMIZERS/`, `WUBUNEST_V2/`.
-
-| Concept | Code | Status |
-|---------|------|--------|
-| Poincaré SSM | ~500 lines test | Standalone, not wired |
-| Nested SSM (K-ball recursion) | None | Research paper |
-| Hamilton Encoder | ~1,000 lines | Standalone concept |
-| WuBu Nesting Theory | Papers | Theoretical framework |
-| RotorQuant / TurboQuant | References | External refs |
-| NV64 Ring Buffer | Design doc | Not implemented |
+- **DiffusionGemma LARGE layer dims** — head_dim=512 but GQA loading uses fixed 256
+- **Full GPU forward for any model** — all three need end-to-end GPU path
 
 ---
 
@@ -141,66 +139,61 @@ See the research directories: `THEORY/`, `MATH/`, `ENCODERS/`, `AUDIO/`, `DIFFUS
 
 ```
 bytropix/
-├── src/              # Core C/CUDA — SSM, MoE, GQA, vision, GPU kernels
-├── include/          # 26 headers — model structs, GGUF reader, GPU kernels
-├── tools/            # ~50 C binaries + 68 Python analysis scripts + API server
-├── tests/            # Regression test harness
-├── DIAGRAMS/         # 20 SVG architecture diagrams
-├── data/             # Tokenizer data, vision configs, embeddings
-├── vault/            # Unsloth quant format, cache compression refs
-├── .hermes/          # Mind palace, vault, plans, session state
-│
-├── THEORY/           # WuBu Nesting paper, spatio-temporal findings, LaTeX
-├── MATH/             # Lean formal proofs
-├── ENCODERS/         # Hamilton encoder, HashMind, topological AE
-├── AUDIO/            # Audio compressor, WuBuSynth
-├── DIFFUSION/        # Funnel diffusion, GAN-VAE hybrid, HGA U-Net
-├── ATTENTION/        # Entropix sampler, hyperbolic attention, sparse attention
-├── OPTIMIZERS/       # PID controller, Q-controller
-├── WUBUNEST_V2/      # Training scripts (numpy + GPU)
-├── DRAFT/            # Prototypes and legacy scripts
-└── python/           # Tokenizer extraction utilities
+├── src/              # Core C/CUDA — SSM, MoE, GQA, GPU kernels, model adapter
+│   ├── wubu_model.c      # Multi-model adapter (AUTO-detect + dynamic dims)
+│   ├── wubu_ssm.c        # SSM forward/backward + GQA forward (d_model param)
+│   ├── wubu_moe.c        # MoE forward (shared across models)
+│   └── ...
+├── include/          # Headers — model structs, GGUF reader, GPU kernels
+│   ├── wubu_model.h      # wubu_model_t (added: d_model, tensor_naming, n_gqa_layers)
+│   ├── wubu_ssm.h        # GQA functions (added: d_model parameter)
+│   └── ...
+├── tools/            # Benchmark binaries + Python analysis scripts
+│   ├── bench_512k_full.c # 512K context benchmark (tests all 3 models)
+│   └── ...
+├── .hermes/          # Mind palace, plans, session state
+│   └── mind-palace/  # Architecture deep-dives, model specs
+├── llama/            # Upstream llama.cpp (reference, Qwen3.6 + Gemma4 support)
+└── GEMMA4.md         # Gemma 4 12B engine-specific docs
 ```
 
 ---
 
-## Verification Tools
+## Key Code Changes (Multi-Model Adapter)
 
-| Tool | Purpose |
-|------|---------|
-| `layer_cos_sim` | Per-layer cosine similarity vs llama.cpp |
-| `ref_dumper` | Single-token llama.cpp embedding dumper (via libllama.so) |
-| `compare_ggml_matmul` | Quantized matmul vs ggml SGEMM |
-| `test_vision_real` | Vision encoder end-to-end with real image |
-| `DUMP_LAYER_DIR` | Save per-layer hidden states to `.bin` |
-| `DUMP_INTERMEDIATE_DIR` | Save ALL intermediate tensors (53 types/layer) |
-| `DUMP_GQA_DEBUG_DIR` | Per-layer GQA attention debug dumps |
-| `DUMP_EMBEDDING_DIR` | Token embedding debug |
-| `PROFILE` | Per-layer timing breakdown |
-| **Python tools/** | 68 analysis scripts for embedding, layout, dequant verification |
+### `include/wubu_model.h`
+```c
+// Added to wubu_model_t struct:
+int d_model;           // Hidden dim (2048 Qwen, 2816 DiffusionGemma, 3840 Gemma4)
+int head_dim;          // Per-head dim (256 or 512 for DGemma LARGE)
+int n_experts;         // MoE experts (256 Qwen, 128 DiffusionGemma, 0 Gemma4)
+int n_active_experts;  // Top-K (12 Qwen, 8 DiffusionGemma)
+int tensor_naming;     // 0=Qwen, 1=Gemma, 2=pure-GQA
+int n_gqa_layers;      // Actual GQA layer count (not hardcoded)
+```
+
+### `include/wubu_ssm.h`
+```c
+// GQA functions now accept d_model (no more D_MODEL macro dependency):
+void wubu_gqa_forward(float *output, int B, int T, int C, const gqa_layer_weights *w,
+                      float *kv_cache, int kv_dim, int head_dim, int ctx_cur,
+                      float *piece, float norm_eps, int d_model);
+```
+
+### `src/wubu_model.c`
+- `g_tensor_naming` global variable — set during init, read by `wubu_is_ssm_layer()`
+- Dimension extraction from GGUF tensor shapes
+- KV cache dynamically sized: `GQA_MAX_CTX × Σ(layer_kv_dim)` instead of fixed
+- Per-layer KV offsets computed for variable kv_dim
 
 ---
 
 ## Build
 
 ```bash
-# CPU inference
-make gen_text
-
-# GPU inference
-make gen_text_gpu
-
-# MTP speculative decode
-make gen_text_mtp
-
-# API server
-make api_server
-
-# Reference comparison tools
-make ref_dumper layer_cos_sim
-
-# All targets
-make all
+make gen_text          # CPU inference
+make gen_text_gpu      # GPU inference
+make bench_512k_full   # 512K benchmark (all 3 models)
 ```
 
 ### Environment Variables
@@ -208,15 +201,19 @@ make all
 | Variable | Purpose |
 |----------|---------|
 | `GPU=1` | Enable GPU inference path |
-| `FORCE_CPU_SSM=1` | Force SSM on CPU (for debugging) |
+| `FORCE_CPU_SSM_SEQ=1` | Force SSM on CPU (for debugging) |
 | `MAX_CTX=<N>` | Context length (default: 4096, max: 262144) |
-| `GQA_WINDOW=<N>` | Sliding window size for GQA |
-| `GPU_Q4_0_KV=0` | Disable Q4_0 KV cache, use F16 |
-| `ROPE_SCALE_FACTOR=<f>` | RoPE length extrapolation (4x) |
 | `OMP_NUM_THREADS=<N>` | OpenMP thread count |
-| `DUMP_LAYER_DIR=<path>` | Debug: dump hidden states |
-| `DUMP_INTERMEDIATE_DIR=<path>` | Debug: dump all intermediates |
-| `PROFILE=<path>` | Debug: per-layer timing |
+
+---
+
+## Current Benchmark Status
+
+| Model | Load | Forward | Notes |
+|-------|------|---------|-------|
+| Qwen3.6-35B | ✅ | ✅ | 3-4 tok/s CPU, 5.5 tok/s hybrid GPU |
+| Gemma 4 12B QAT | 🔄 | ⏳ | Dedicated Gemma4 engine in `wubu_gemma4.c` |
+| DiffusionGemma-26B | ✅ | ❌ | Model loads (30 GQA), crashes in decode |
 
 ---
 
@@ -228,7 +225,7 @@ MIT License — see [.license](.license).
 
 <div align="center">
 
-*Engine: bytropix — from-scratch C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE) + Moondream3 Vision.*
+*Engine: bytropix — from-scratch C/CUDA inference. Multi-model: DiffusionGemma-26B + Gemma 4 12B QAT + Qwen3.6-35B.*
 
 *[MADE_AGENTICALLY_BY_HERMES.md](MADE_AGENTICALLY_BY_HERMES.md) — full engineering log, bug history, and DA verification methodology.*
 

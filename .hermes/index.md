@@ -1,32 +1,37 @@
-# bytropix Mind Palace Index (May 19 PM v22)
+# bytropix Mind Palace Index (June 14, 2026)
 
 ## Walkway Files (Read Order)
-1. `prestige_prompt.md` — Full resume: mission, architecture, Phase 22, priority queue
+1. `prestige_prompt.md` — Full resume: mission, architecture, priority queue
 2. `goal-mantra.md` — Single pasteable block: STATE, BUILD, NEXT, VAULT
-3. `state.md` — Live status: cos-sim 0.9994, Q4_0 KV cache, VRAM budget
-4. `plan.md` — Triple extended roadmap: 22 phases, bug history, cold gaps, tools vault
-5. `overnight-map.md` — Autonomous session nav: workstreams A-C, data to not re-derive
+3. `state.md` — Live status: model detection, dynamic dims, blocker list
+4. `plan.md` — Roadmap: multi-model adapter, GPU kernels, benchmarks
+
+## Architecture Deep-Dives (Mind Palace)
+
+| File | Model | Content |
+|------|-------|---------|
+| `paradigm-shift-gemma4.md` | Gemma 4 12B | Full architecture map, tensor names, forward pass, ISWA pattern |
+| `diffusiongemma-integration.md` | DiffusionGemma-26B | Integration notes, blockers, dynamic dims |
+| `tier4-validation/13-benchmarks/gemma4-baseline.md` | Gemma 4 12B | Benchmark plan, comparison targets |
 
 ## Supporting Files
 | File | Purpose |
 |------|---------|
-| `./hermes/STATUS.md` | True state: works/broken/priorities |
+| `./hermes/STATUS.md` | True state: works/broken/priorities (Qwen era, outdated) |
 | `./hermes/README.md` | Vault index |
-| `./hermes/vault/synthesis.md` | Full architectural synthesis from 10+ papers |
-| `./hermes/vault/qwen-papers/` | Qwen3, Qwen3.6, Qwen2.5-1M architecture refs |
-| `./hermes/vault/deepseek-papers/` | DeepSeek-V3, MoE, blog posts |
-| `./hermes/unsloth-qwen3.6-quant-formula.md` | Per-tensor quantization map |
-| `./hermes/presentation/` | Project overview, architecture, implementation status |
+| `./hermes/unsloth-qwen3.6-quant-formula.md` | Qwen3.6 per-tensor quantization map |
 
-## Architecture (Critical Update May 19)
-**3:1 SSM/GQA interleaved repeating** — NOT contiguous 30+10.
-SSM layers: 0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38
-GQA layers: 3,7,11,15,19,23,27,31,35,39
-Verified via GGUF `blk.N.ssm_a` vs `blk.N.attn_q.weight` enumeration.
+## Multi-Model Architecture (June 14)
+
+**Three architectures, one codebase:**
+- **DiffusionGemma-26B**: 30 GQA + MoE (128 experts, top-8), d_model=2816, heterogeneous head_dim
+- **Gemma 4 12B**: 48 ISWA (dense), d_model=3840, dual RoPE, QAT quantized
+- **Qwen3.6-35B**: 30 SSM + 10 GQA + MoE (256 experts), D_MODEL=2048
+
+**Adapter pattern**: `wubu_model.c` detects naming convention → extracts dims from GGUF → configures per-layer → allocates dynamic KV cache
 
 ## Key Paths
 - Source: `/home/wubu/bytropix/`
-- Model: `/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf`
+- Models: `/home/wubu/models/` (DiffusionGemma, Gemma4, Qwen3.6)
 - llama.cpp ref: `/home/wubu/llama.cpp/`
-- Intermediates: `/tmp/ref_intermediates/` (1997 files)
-- Per-layer dumps: `/tmp/ref_lay/` (40 files)
+- Benchmark: `./bench_512k_full <model.gguf> 4096 1 0`

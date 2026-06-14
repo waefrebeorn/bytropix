@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
     printf("Model: %s (%d tensors)\n", model_path, (int)ctx->n_tensors);
     
     // Check if SSM or GQA
-    int is_ssm = wubu_is_ssm_layer(layer_idx);
+    int is_ssm = wubu_is_ssm_layer_legacy(layer_idx);
     printf("Layer %d: %s\n\n", layer_idx, is_ssm ? "SSM" : "GQA");
     
     // Generate dummy input (single token)

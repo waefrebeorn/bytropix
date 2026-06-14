@@ -257,22 +257,47 @@ bool gpu_output_init(const uint8_t *weight_q, int D, int V, int weight_type) {
     if (!g_quantized_mode) {
         // F32 mode: dequant Q4_K → F32 on CPU, upload to GPU
         const int QK_K = 256;
-        // Q4_K weight stored in GGUF blob as [V][ceil(D/256)*144 bytes]
-        // Dequant to [V][D] row-major, then cuBLAS treats as column-major [D][V] with ld=D
+        // GGUF stores output.weight as [D_MODEL, vocab_size] = [2048, 248320] row-major
+        // with Q4_K quantization along the vocab_size dimension (inner dimension).
+        // We need [vocab_size, D_MODEL] for output projection. Transpose during dequantization.
         float *weight_f32 = (float*)malloc((size_t)V * D * sizeof(float));
-        if (!weight_f32) { fprintf(stderr, "Failed to allocate F32 weight (%zu bytes)\\n", (size_t)V * D * 4); return false; }
+        if (!weight_f32) { fprintf(stderr, "Failed to allocate F32 weight (%zu bytes)\\\\n", (size_t)V * D * 4); return false; }
         
-        int blocks_per_row = (D + QK_K - 1) / QK_K;  // = ceil(2048/256) = 8
-        for (int v = 0; v < V; v++) {
-            const uint8_t *vocab_start = weight_q + v * blocks_per_row * Q4K_BLOCK_SIZE;
-            for (int b = 0; b < blocks_per_row; b++) {
-                const uint8_t *block = vocab_start + b * Q4K_BLOCK_SIZE;
+        int blocks_per_row = (1 /*D_MODEL*/ + QK_K - 1) / QK_K;  // D_MODEL=2048, not divisible by 256
+        int blocks_per_vocab = (D + QK_K - 1) / QK_K;  // How many blocks per vocab token in transposed layout
+        
+        // Actually, GGUF has [2048, 248320] with quantization along vocab_size.
+        // Each row (2048 rows) has 248320 elements = 970 blocks of 256.
+        // We need to read column by column to get [vocab_size, D_MODEL] output.
+        // This is NOT a simple transpose - we must dequantize fully then transpose.
+        
+        // Simpler approach: fully dequantize to [D_MODEL, vocab_size] then transpose
+        float *weight_D_V = (float*)malloc((size_t)2048 * V * sizeof(float));
+        if (!weight_D_V) { free(weight_f32); fprintf(stderr, "Failed to allocate temp weight\\n"); return false; }
+        
+        // Dequantize each block - GGUF has [2048, 248320] with 970 blocks per row
+        int blocks_per_dmodel = (V + QK_K - 1) / QK_K;  // 248320/256 = 970
+        for (int d = 0; d < 2048; d++) {
+            // Each D_MODEL row has blocks_per_dmodel blocks along vocab_size
+            uint8_t *row_start = (uint8_t*)weight_q + (size_t)d * blocks_per_dmodel * Q4K_BLOCK_SIZE;
+            for (int b = 0; b < blocks_per_dmodel; b++) {
+                const uint8_t *block = row_start + (size_t)b * Q4K_BLOCK_SIZE;
                 float block_out[QK_K];
                 dequant_block_q4_K_f32(block, block_out);
-                int n_vals = (b == blocks_per_row - 1 && (D - b * QK_K) < QK_K) ? (D - b * QK_K) : QK_K;
-                memcpy(weight_f32 + (size_t)v * D + b * QK_K, block_out, n_vals * sizeof(float));
+                int n_vals = (b == blocks_per_dmodel - 1 && (V - b * QK_K) < QK_K) ? (V - b * QK_K) : QK_K;
+                for (int i = 0; i < n_vals; i++) {
+                    weight_D_V[d * V + b * QK_K + i] = block_out[i];
+                }
             }
         }
+        
+        // Transpose [2048, V] -> [V, 2048]
+        for (int v = 0; v < V; v++) {
+            for (int d = 0; d < D; d++) {
+                weight_f32[v * D + d] = weight_D_V[d * V + v];
+            }
+        }
+        free(weight_D_V);
 
         ce = cudaMalloc(&g_d_weight, (size_t)D * V * sizeof(float));
         if (ce != cudaSuccess) { free(weight_f32); fprintf(stderr, "cudaMalloc weight failed (%s)\n", cudaGetErrorString(ce)); return false; }
@@ -349,7 +374,7 @@ bool gpu_output_project_batch(const float *input, float *output, int T) {
 
 // Single-token output projection
 bool gpu_output_project(const float *input, float *output) {
-    if (!g_initialized) { fprintf(stderr, "GPU not initialized\n"); return false; }
+    if (!g_initialized) { fprintf(stderr, "GPU not initialized\\n"); return false; }
     
     int D = D_MODEL;
     int V = g_vocab_size;
@@ -407,20 +432,20 @@ static int g_gqa_initialized = 0;
 
 // Cleanup
 void gpu_output_cleanup() {
-    if (g_d_weight) cudaFree(g_d_weight);
-    if (g_d_weight_q) cudaFree(g_d_weight_q);
-    if (g_d_x) cudaFree(g_d_x);
-    if (g_d_y) cudaFree(g_d_y);
-    if (g_cublas) cublasDestroy(g_cublas);
-    if (g_stream) cudaStreamDestroy(g_stream);
+    if (g_d_weight) { cudaFree(g_d_weight); g_d_weight = NULL; }
+    if (g_d_weight_q) { cudaFree(g_d_weight_q); g_d_weight_q = NULL; }
+    if (g_d_x) { cudaFree(g_d_x); g_d_x = NULL; }
+    if (g_d_y) { cudaFree(g_d_y); g_d_y = NULL; }
+    if (g_cublas) { cublasDestroy(g_cublas); g_cublas = NULL; }
+    if (g_stream) { cudaStreamDestroy(g_stream); g_stream = NULL; }
     // GPU GQA resources (if allocated)
-    if (g_d_gqa_q) cudaFree(g_d_gqa_q);
-    if (g_d_gqa_k) cudaFree(g_d_gqa_k);
-    if (g_d_gqa_v) cudaFree(g_d_gqa_v);
-    if (g_d_gqa_scores) cudaFree(g_d_gqa_scores);
-    if (g_d_gqa_out) cudaFree(g_d_gqa_out);
-    if (g_d_gqa_max) cudaFree(g_d_gqa_max);
-    if (g_d_gqa_sumexp) cudaFree(g_d_gqa_sumexp);
+    if (g_d_gqa_q) { cudaFree(g_d_gqa_q); g_d_gqa_q = NULL; }
+    if (g_d_gqa_k) { cudaFree(g_d_gqa_k); g_d_gqa_k = NULL; }
+    if (g_d_gqa_v) { cudaFree(g_d_gqa_v); g_d_gqa_v = NULL; }
+    if (g_d_gqa_scores) { cudaFree(g_d_gqa_scores); g_d_gqa_scores = NULL; }
+    if (g_d_gqa_out) { cudaFree(g_d_gqa_out); g_d_gqa_out = NULL; }
+    if (g_d_gqa_max) { cudaFree(g_d_gqa_max); g_d_gqa_max = NULL; }
+    if (g_d_gqa_sumexp) { cudaFree(g_d_gqa_sumexp); g_d_gqa_sumexp = NULL; }
     g_initialized = 0;
     g_gqa_initialized = 0;
 }

@@ -176,9 +176,6 @@ int main(int argc, char **argv) {
         if (use_mtp && mdl.mtp.loaded) {
             total_attempted++;
 
-            // Reset MTP KV cache for fresh draft generation
-            mdl.mtp.cache_len = 0;
-
             // Generate draft[0] using prev_cur (token before the one we just predicted)
             // This should predict main_token (same position as last_logits)
             wubu_mtp_draft_forward(&mdl, h_39, prev_cur, 1, mtp_logits);
