@@ -1,8 +1,10 @@
 #include "wubu_model.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include "wubu_core_dumps.h"
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *model_path = argc > 1 ? argv[1] : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     
     printf("Loading model from %s...\n", model_path);

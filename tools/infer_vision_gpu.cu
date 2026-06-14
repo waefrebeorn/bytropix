@@ -13,6 +13,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "wubu_core_dumps.h"
 
 static double now_sec(void) {
     struct timespec ts;
@@ -21,6 +22,7 @@ static double now_sec(void) {
 }
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *path = argc > 1 ? argv[1] : "/models/qwen3.6-35b-mmproj-F16.gguf";
     int H = argc > 2 ? atoi(argv[2]) : 256;
     int W = argc > 3 ? atoi(argv[3]) : 256;
@@ -178,7 +180,7 @@ int main(int argc, char **argv) {
             
             // Attention + FFN
             bool ok = gpu_vision_layer_forward(cublas_h, stream, &gpu_layers[l],
-                                               d_in, n_merged, d_out, d_scratch);
+                                               d_in, NULL, n_merged, d_out, d_scratch);
             if (!ok) { fprintf(stderr, "Layer %d failed\n", l); return 1; }
             
             // LayerNorm 2 (on d_out, in-place)

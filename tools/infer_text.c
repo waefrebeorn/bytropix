@@ -22,6 +22,8 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <omp.h>
+#include <sys/resource.h>
+#include <sys/prctl.h>
 
 // ================================================================
 // GQA KV Cache
@@ -394,7 +396,7 @@ static void lazy_moe_decode(
 {
     int N = B * T;
     float *scores = (float *)malloc(N * N_EXPERTS * sizeof(float));
-    wubu_moe_router(x, B, T, mc->router, scores);
+    wubu_moe_router(x, B, T, mc->router, scores, N_EXPERTS, D_MODEL);
 
     int topk_indices[N * N_ACTIVE_EXPTS];
     float topk_weights[N * N_ACTIVE_EXPTS];
@@ -732,6 +734,13 @@ int main(int argc, char **argv) {
 
     signal(SIGINT, handler);
     srand(time(NULL));
+
+    // Disable core dumps to avoid 16GB+ crash files
+    {
+        struct rlimit rl = {0, 0};
+        setrlimit(RLIMIT_CORE, &rl);
+        prctl(PR_SET_DUMPABLE, 0);
+    }
 
     // Pre-compute RoPE sin/cos table
     if (!rope_init()) { fprintf(stderr, "Failed to allocate RoPE table\n"); return 1; }

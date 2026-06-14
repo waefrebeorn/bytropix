@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
     
     char tn[256];
     for (int l = 0; l < 40; l++) {
-        if (wubu_is_ssm_layer_legacy(l)) continue;
+        if (wubu_is_ssm_layer(l)) continue;
         // Load this GQA layer's weights
         snprintf(tn, sizeof(tn), "blk.%d.attn_q.weight", l);
         gguf_tensor_info *t = gguf_find_tensor(ctx, tn);

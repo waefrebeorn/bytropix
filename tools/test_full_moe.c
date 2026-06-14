@@ -5,8 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "wubu_core_dumps.h"
 
 int main(void) {
+    wubu_disable_core_dumps();
     wubu_model_t mdl;
     if (!wubu_model_init(&mdl, "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf")) return 1;
     mdl.enable_moe = true;

@@ -16,6 +16,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "wubu_core_dumps.h"
 
 static double now_sec(void) {
     struct timespec ts;
@@ -24,6 +25,7 @@ static double now_sec(void) {
 }
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *model_path = argc > 1 ? argv[1] : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *vision_path = argc > 2 ? argv[2] : "/mnt/wslg/distro/models/qwen3.6-35b-mmproj-F16.gguf";
     int H = argc > 3 ? atoi(argv[3]) : 256;

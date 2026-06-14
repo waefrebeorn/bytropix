@@ -345,15 +345,3 @@ void wubu_moe_forward(const float *x, int B, int T,
     free(topk_weights);
     free(scores);
 }
-
-// MoE backward pass (not implemented for dynamic dimensions)
-void wubu_moe_backward(const float *d_output, int B, int T,
-                       const float *x,
-                       const moe_weights_t *w,
-                       float *d_x,
-                       int *selected_experts,
-                       int n_active_experts, int n_experts, int d_model, int d_ff) {
-    // TODO: implement with dynamic dimensions
-    (void)d_output; (void)B; (void)T; (void)x; (void)w; (void)d_x; (void)selected_experts;
-    (void)n_active_experts; (void)n_experts; (void)d_model; (void)d_ff;
-}

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "wubu_core_dumps.h"
 
 static double now_sec(void) {
     struct timespec ts;
@@ -30,6 +31,7 @@ typedef struct {
 } moe_buf_t;
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *path = argc > 1 ? argv[1] : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     int n_layers = 40;
     int layer = argc > 2 ? atoi(argv[2]) : 0;
@@ -135,7 +137,7 @@ int main(int argc, char **argv) {
     int iters = 10;
     for (int i = 0; i < iters; i++) {
         t0 = now_sec();
-        wubu_moe_forward(x, B, T, &moe, output, NULL);
+        wubu_moe_forward(x, B, T, &moe, output, NULL, N_ACTIVE_EXPTS, N_EXPERTS, D_MODEL, D_FF);
         total += now_sec() - t0;
     }
     printf("  MoE forward (%d iters): avg %.3f ms (%.0f tok/s)\\n",

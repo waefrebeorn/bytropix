@@ -25,6 +25,7 @@
 #include <math.h>
 #include <time.h>
 #include <stdbool.h>
+#include "wubu_core_dumps.h"
 
 #define MAX_DRAFTS 16
 #define MAX_CACHE_T 262144
@@ -172,6 +173,7 @@ typedef struct { bool gqa; union{gqa_layer_weights gqa;ssm_layer_weights ssm;}w;
     bool moe; lm_t lm; kv_t kv; float *ss,*cs;} lc_t;
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *path=(argc>1&&strlen(argv[1]))?argv[1]:"/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *prompt=argc>2?argv[2]:"The meaning of life is";
     int max_tok=argc>3?atoi(argv[3]):32;

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "wubu_core_dumps.h"
 
 /**
  * Load Qwen3.6 SSM layer weights from GGUF file.
@@ -164,6 +165,7 @@ void free_gqa_weights(gqa_layer_weights *w) {
 }
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     if (argc < 2) {
         printf("Usage: %s <gguf_model_path> [layer_idx]\n", argv[0]);
         printf("  Runs SSM forward on layer `layer_idx` (default: 0) from the model.\n");
@@ -182,7 +184,7 @@ int main(int argc, char **argv) {
     printf("Model: %s (%d tensors)\n", model_path, (int)ctx->n_tensors);
     
     // Check if SSM or GQA
-    int is_ssm = wubu_is_ssm_layer_legacy(layer_idx);
+    int is_ssm = wubu_is_ssm_layer(layer_idx);
     printf("Layer %d: %s\n\n", layer_idx, is_ssm ? "SSM" : "GQA");
     
     // Generate dummy input (single token)
@@ -251,7 +253,7 @@ int main(int argc, char **argv) {
         float *output = (float *)malloc(B * T * D_MODEL * sizeof(float));
         
         printf("\nRunning GQA forward...\n");
-        wubu_gqa_forward(x, B, T, &w, output, NULL, NULL, 0, NULL, NULL);
+        wubu_gqa_forward(x, B, T, &w, D_MODEL, output, NULL, NULL, 0, NULL, NULL);
         
         float min_v = 1e30f, max_v = -1e30f;
         for (int i = 0; i < B * T * D_MODEL; i++) {

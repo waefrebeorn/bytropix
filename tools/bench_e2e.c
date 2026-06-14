@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
     int loaded_ssm = 0, loaded_gqa = 0;
 
     for (int layer = 0; layer < N_LAYERS; layer++) {
-        int is_ssm = wubu_is_ssm_layer_legacy(layer);
+        int is_ssm = wubu_is_ssm_layer(layer);
 
         if (is_ssm) {
             // [load weights, same as before]
@@ -374,7 +374,7 @@ int main(int argc, char **argv) {
     float **d_ssm_states = (float **)malloc(N_LAYERS * sizeof(float *));
     float **d_conv_states = (float **)malloc(N_LAYERS * sizeof(float *));
     for (int layer = 0; layer < N_LAYERS; layer++) {
-        if (wubu_is_ssm_layer_legacy(layer)) {
+        if (wubu_is_ssm_layer(layer)) {
             d_ssm_states[layer] = wubu_cuda_alloc(SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float));
             d_conv_states[layer] = wubu_cuda_alloc((CONV_KERNEL - 1) * CONV_DIM * sizeof(float));
             cudaMemsetAsync(d_ssm_states[layer], 0, SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE * sizeof(float), stream);
@@ -408,7 +408,7 @@ int main(int argc, char **argv) {
     int gpu_ssm_done = 0, gpu_gqa_done = 0;
 
     for (int layer = 0; layer < N_LAYERS; layer++) {
-        int is_ssm = wubu_is_ssm_layer_legacy(layer);
+        int is_ssm = wubu_is_ssm_layer(layer);
 
         if (is_ssm) {
             gpu_ssm_weights w;
@@ -527,7 +527,7 @@ int main(int argc, char **argv) {
     free(final_gpu);
 
     for (int layer = 0; layer < N_LAYERS; layer++) {
-        if (wubu_is_ssm_layer_legacy(layer)) {
+        if (wubu_is_ssm_layer(layer)) {
             wubu_cuda_free(d_ssm_states[layer]);
             wubu_cuda_free(d_conv_states[layer]);
         }

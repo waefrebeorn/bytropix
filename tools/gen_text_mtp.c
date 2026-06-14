@@ -34,6 +34,7 @@
 #include <math.h>
 #include <time.h>
 #include <signal.h>
+#include "wubu_core_dumps.h"
 
 #define DRAFT_N 2  // Blog: 83% acceptance at 2, 50% at 4. Max 2 recommended.
 
@@ -64,6 +65,7 @@ static void get_embd(wubu_model_t *mdl, int token, float *out, FILE *emb_file) {
 }
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *main_model = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *mtp_model  = "/models/Qwen3.6-35B-A3B-MTP-UD-IQ2_M.gguf";
     const char *prompt = "The meaning of life is";

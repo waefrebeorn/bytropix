@@ -21,6 +21,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "wubu_core_dumps.h"
 
 static double now_sec(void) {
     struct timespec ts;
@@ -38,6 +39,7 @@ typedef struct {
 } expert_scratch_t;
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *path = argc > 1 ? argv[1]
         : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     int layer = argc > 2 ? atoi(argv[2]) : 0;
@@ -145,7 +147,7 @@ int main(int argc, char **argv) {
     // 4. Route to get top-k indices per token
     // ------------------------------------------------------------------
     float *scores = (float *)malloc(N * N_EXPERTS * sizeof(float));
-    wubu_moe_router(x, B, T, moe.ffn_gate_inp, scores);
+    wubu_moe_router(x, B, T, moe.ffn_gate_inp, scores, N_EXPERTS, D_MODEL);
 
     // Softmax + top-k (same as wubu_moe_forward)
     int *topk_indices = (int *)malloc(N * N_ACTIVE_EXPTS * sizeof(int));
@@ -298,7 +300,7 @@ int main(int argc, char **argv) {
     double total = 0.0;
     for (int i = 0; i < iters; i++) {
         t0 = now_sec();
-        wubu_moe_forward(x, B, T, &moe_lazy, output, NULL);
+        wubu_moe_forward(x, B, T, &moe_lazy, output, NULL, N_ACTIVE_EXPTS, N_EXPERTS, D_MODEL, D_FF);
         total += now_sec() - t0;
     }
     double lazy_forward_time = total / iters * 1000;
@@ -336,7 +338,7 @@ int main(int argc, char **argv) {
     total = 0.0;
     for (int i = 0; i < iters; i++) {
         t0 = now_sec();
-        wubu_moe_forward(x, B, T, &moe_full, output, NULL);
+        wubu_moe_forward(x, B, T, &moe_full, output, NULL, N_ACTIVE_EXPTS, N_EXPERTS, D_MODEL, D_FF);
         total += now_sec() - t0;
     }
     double full_forward_time = total / iters * 1000;
@@ -358,7 +360,7 @@ int main(int argc, char **argv) {
 
     // Verify output match
     float *full_output = (float *)malloc(N * D_MODEL * sizeof(float));
-    wubu_moe_forward(x, B, T, &moe_full, full_output, NULL);
+    wubu_moe_forward(x, B, T, &moe_full, full_output, NULL, N_ACTIVE_EXPTS, N_EXPERTS, D_MODEL, D_FF);
 
     float max_diff = 0.0f;
     int n_mismatch = 0;

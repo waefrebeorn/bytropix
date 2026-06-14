@@ -17,6 +17,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "wubu_core_dumps.h"
 
 static double now_sec(void) {
     struct timespec ts;
@@ -32,6 +33,7 @@ typedef struct {
 } moe_quant_t;
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *path = argc > 1 ? argv[1]
         : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     int B = 1, T = argc > 2 ? atoi(argv[2]) : 4;
@@ -134,7 +136,7 @@ int main(int argc, char **argv) {
             wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
             total_ssm += now_sec() - t_a;
         } else {
-            wubu_gqa_forward(normed, B, T, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
+            wubu_gqa_forward(normed, B, T, &layer->gqa, D_MODEL, attn_out, NULL, NULL, 0, NULL, NULL);
             total_gqa += now_sec() - t_a;
         }
 
@@ -163,8 +165,8 @@ int main(int argc, char **argv) {
         int n_unique = 0;
 
         if (moe_q[l].has_moe) {
-            if (wubu_moe_load_layer(ctx, l, &layer->moe)) {
-                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, NULL);
+            if (wubu_moe_load_layer(ctx, l, &layer->moe, D_MODEL, D_FF, N_EXPERTS)) {
+                wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, NULL, N_ACTIVE_EXPTS, N_EXPERTS, D_MODEL, D_FF);
                 wubu_moe_free_layer(&layer->moe);
             } else {
                 memcpy(ffn_out, normed2, N * D_MODEL * sizeof(float));

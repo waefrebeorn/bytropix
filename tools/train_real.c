@@ -14,6 +14,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "wubu_core_dumps.h"
 
 static double now_sec(void) {
     struct timespec ts;
@@ -41,6 +42,7 @@ static float cross_entropy_loss(const float *logits, const int *targets,
 }
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *model_path = argc > 1 ? argv[1]
         : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *corpus_path = argc > 2 ? argv[2] : "data/train_data.bin";

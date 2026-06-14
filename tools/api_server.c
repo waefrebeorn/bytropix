@@ -54,6 +54,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include "wubu_core_dumps.h"
 
 /* OpenSSL for TLS support */
 #include <openssl/ssl.h>
@@ -670,6 +671,7 @@ static void usage(const char *prog) {
 }
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     /* Parse args */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--port") == 0 && i + 1 < argc)

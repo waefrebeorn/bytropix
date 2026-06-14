@@ -24,6 +24,7 @@
 #include <string.h>
 #include <math.h>
 #include <omp.h>
+#include "wubu_core_dumps.h"
 
 static void softmax_inplace(float *x, int n) {
     float mx = x[0]; for (int i=1;i<n;i++) if(x[i]>mx)mx=x[i];
@@ -32,6 +33,7 @@ static void softmax_inplace(float *x, int n) {
 }
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *model_path = argc>1?argv[1]:"/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *corpus_path = argc>2?argv[2]:"data/train_data.bin";
     int n_steps = argc>3?atoi(argv[3]):10;
@@ -481,7 +483,7 @@ int main(int argc, char **argv) {
                     mc->ed[u]=de+(int64_t)eid*D_FF*D_MODEL;
                 }
                 mw.ffn_gate_exps=ge;mw.ffn_up_exps=ue;mw.ffn_down_exps=de;
-                wubu_moe_forward(n2,B,fwd_T,&mw,ffn_out, NULL);
+                wubu_moe_forward(n2,B,fwd_T,&mw,ffn_out, NULL, N_ACTIVE_EXPTS, N_EXPERTS, D_MODEL, D_FF);
                 cudaMemcpyAsync(d_np,ffn_out,fwd_N*D_MODEL*sizeof(float),cudaMemcpyHostToDevice,stream);
             } else {
                 memcpy(saved_ffn_out+l*N*D_MODEL,saved_normed2+l*N*D_MODEL,fwd_N*D_MODEL*sizeof(float));

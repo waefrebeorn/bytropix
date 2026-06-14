@@ -6,8 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "wubu_core_dumps.h"
 
 int main(int argc, char **argv) {
+    wubu_disable_core_dumps();
     const char *model_path = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     int token_id = 248044;
     if (argc > 1) token_id = atoi(argv[1]);

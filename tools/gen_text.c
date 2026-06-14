@@ -20,6 +20,8 @@
 #include <time.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <sys/resource.h>
+#include <sys/prctl.h>
 
 // GPU support — compiled only in gen_text_gpu target (-DGPU_SUPPORT)
 #ifdef GPU_SUPPORT
@@ -71,6 +73,13 @@ int main(int argc, char **argv) {
     if (argc > 3) top_k = atoi(argv[3]);
 
     signal(SIGINT, handle_sigint);
+
+    // Disable core dumps to avoid 16GB+ crash files
+    {
+        struct rlimit rl = {0, 0};
+        setrlimit(RLIMIT_CORE, &rl);
+        prctl(PR_SET_DUMPABLE, 0);
+    }
 
     wubu_model_t mdl;
     if (!wubu_model_init(&mdl, model_path)) return 1;

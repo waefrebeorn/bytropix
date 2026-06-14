@@ -20,6 +20,8 @@
 #include <math.h>
 #include <time.h>
 #include <signal.h>
+#include <sys/resource.h>
+#include <sys/prctl.h>
 
 static double now_s(void) {
     struct timespec ts;
@@ -166,6 +168,14 @@ int main(int argc,char**argv){
     int moe_on=getenv("MOE")?atoi(getenv("MOE")):0;
     int chunk_sz=getenv("CHUNK")?atoi(getenv("CHUNK")):256;
     signal(SIGINT,handler);srand(time(NULL));
+
+    // Disable core dumps to avoid 16GB+ crash files
+    {
+        struct rlimit rl = {0, 0};
+        setrlimit(RLIMIT_CORE, &rl);
+        prctl(PR_SET_DUMPABLE, 0);
+    }
+
     float temperature = getenv("TEMP") ? atof(getenv("TEMP")) : 1.0f;
     int samp_top_k = getenv("TOP_K") ? atoi(getenv("TOP_K")) : 20;
     float top_p = getenv("TOP_P") ? atof(getenv("TOP_P")) : 0.95f;

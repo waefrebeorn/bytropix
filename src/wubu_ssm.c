@@ -3,6 +3,10 @@
 #include "gguf_reader.h"
 #include "thread_pool.h"
 #include "wubu_model.h"  // for kv_cache_read_head / kv_cache_write_head
+
+// Global tensor naming convention (defined here for CORE_OBJ visibility)
+// 0 = Qwen-style "blk.N.*", 1 = Gemma-style "model.layers.N.*", 2 = pure GQA
+int g_tensor_naming = 0;
 #include <omp.h>
 #include <immintrin.h>  // AVX2/FMA intrinsics for GQA attention
 // GQA_MAX_CTX from wubu_model.h — max KV cache positions (also used for attn stack buf)

@@ -8,7 +8,7 @@
 #include <immintrin.h>  // _mm_prefetch for expert prefetch
 
 // Global tensor naming convention (set during model init)
-int g_tensor_naming = 0;  // 0=blk.Qwen 1=model.layers.Gemma 2=pure-GQA
+extern int g_tensor_naming;  // defined in wubu_ssm.c, 0=blk.Qwen 1=model.layers.Gemma 2=pure-GQA
 
 // ========== GGUF Tensor Names ==========
 
