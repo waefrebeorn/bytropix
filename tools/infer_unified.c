@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
             wubu_ssm_forward(normed, B, T, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
             total_ssm += now_sec() - t_a;
         } else {
-            wubu_gqa_forward(normed, B, T, &layer->gqa, D_MODEL, attn_out, NULL, NULL, 0, NULL, NULL);
+            wubu_gqa_forward(normed, B, T, &layer->gqa, D_MODEL, attn_out, NULL, NULL, 0, NULL, NULL, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
             total_gqa += now_sec() - t_a;
         }
 

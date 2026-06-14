@@ -80,7 +80,7 @@ int main(void) {
             void *k_out = (mdl.gqa_cache_len == 0) ? k_cache : NULL;
             void *v_out = k_out;
             wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out,
-                NULL, NULL, 0, k_out, v_out);
+                NULL, NULL, 0, k_out, v_out, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
             mdl.gqa_cache_len++;
         }
         
@@ -159,7 +159,7 @@ int main(void) {
             void *k_out = (mdl.gqa_cache_len == 0) ? k_cache : NULL;
             void *v_out = k_out;
             wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out,
-                NULL, NULL, 0, k_out, v_out);
+                NULL, NULL, 0, k_out, v_out, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
             mdl.gqa_cache_len++;
         }
         

@@ -232,8 +232,9 @@ typedef struct {
     wubu_layer_t blk40;
     
     // KV cache for blk.40's GQA attention
-    float *k_cache;  // [GQA_MAX_CTX * GQA_KV_DIM]
-    float *v_cache;  // [GQA_MAX_CTX * GQA_KV_DIM]
+    float *k_cache;  // [GQA_MAX_CTX * kv_dim]
+    float *v_cache;  // [GQA_MAX_CTX * kv_dim]
+    int kv_dim;      // per-layer KV dim (kv_heads * head_dim)
     int cache_len;
 } mtp_head_t;
 typedef struct {

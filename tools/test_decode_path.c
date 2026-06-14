@@ -74,7 +74,7 @@ int main() {
             float *conv_state = mdl.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
             wubu_ssm_forward(normed, B, T_full, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
         } else {
-            wubu_gqa_forward(normed, B, T_full, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
+            wubu_gqa_forward(normed, B, T_full, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
         }
 
         // Residual: x = x + attn_out
@@ -141,7 +141,7 @@ int main() {
             float *conv_state = mdl.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
             wubu_ssm_forward(normed, B, T_pre, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
         } else {
-            wubu_gqa_forward(normed, B, T_pre, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
+            wubu_gqa_forward(normed, B, T_pre, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
         }
 
         for (int i = 0; i < N_pre * D_MODEL; i++)
@@ -183,7 +183,7 @@ int main() {
             float *conv_state = mdl.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
             wubu_ssm_forward(normed, 1, 1, &layer->ssm, ssm_state, conv_state, attn_out, NULL, NULL);
         } else {
-            wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL);
+            wubu_gqa_forward(normed, 1, 1, &layer->gqa, attn_out, NULL, NULL, 0, NULL, NULL, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
         }
 
         // Residual

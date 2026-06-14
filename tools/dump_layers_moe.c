@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
             float *conv_state = mdl.conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
             wubu_ssm_forward(normed, 1, 1, &mdl.layers[l].ssm, ssm_state, conv_state, attn, NULL, NULL);
         } else {
-            wubu_gqa_forward(normed, 1, 1, &mdl.layers[l].gqa, attn, NULL, NULL, 0, NULL, NULL);
+            wubu_gqa_forward(normed, 1, 1, &mdl.layers[l].gqa, attn, NULL, NULL, 0, NULL, NULL, mdl.layers[l].gqa.head_dim, mdl.layers[l].gqa.q_heads, mdl.layers[l].gqa.kv_heads);
         }
 
         // Residual = x + attn_out

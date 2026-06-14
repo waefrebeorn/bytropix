@@ -228,22 +228,47 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             // LARGE: attn_output.weight — quantized-only (blob pointer)
             layer->gqa.attn_output_weight = NULL;
             
-            // Small: attn_q_norm.weight [256] F32
+            // Small: attn_q_norm.weight [head_dim] F32
             snprintf(name, sizeof(name), "blk.%d.attn_q_norm.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->gqa.attn_q_norm_weight = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_q_norm_weight, GQA_HEAD_DIM) > 0);
+            int layer_head_dim = (t->n_dims >= 1) ? (int)t->dims[0] : GQA_HEAD_DIM;
+            layer->gqa.head_dim = layer_head_dim;
+            layer->gqa.attn_q_norm_weight = (float *)malloc(layer_head_dim * sizeof(float));
+            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_q_norm_weight, layer_head_dim) > 0);
             
-            // Small: attn_k_norm.weight [256] F32
+            // Small: attn_k_norm.weight [head_dim] F32
             snprintf(name, sizeof(name), "blk.%d.attn_k_norm.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->gqa.attn_k_norm_weight = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_k_norm_weight, GQA_HEAD_DIM) > 0);
-            
-            if (!ok) { fprintf(stderr, "Failed to load GQA weights for layer %d\n", l); goto fail; }
-            printf("  Layer %d: GQA loaded (quantized attn_q/k/v/output)\n", l);
+            layer->gqa.attn_k_norm_weight = (float *)malloc(layer_head_dim * sizeof(float));
+            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_k_norm_weight, layer_head_dim) > 0);
+
+            // Extract per-layer dimensions from GGUF tensor shapes
+            // K weight: [d_model, kv_heads * head_dim] => kv_heads from dims
+            snprintf(name, sizeof(name), "blk.%d.attn_k.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && t->n_dims >= 2) {
+                int kv_dim = (int)t->dims[1];  // kv_heads * head_dim
+                layer->gqa.kv_heads = kv_dim / layer_head_dim;
+            } else {
+                layer->gqa.kv_heads = GQA_KV_HEADS;
+            }
+            // Q weight: [d_model, q_heads * head_dim * 2] (fused Q+gate) => q_heads from dims
+            snprintf(name, sizeof(name), "blk.%d.attn_q.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && t->n_dims >= 2) {
+                int q_dim_fused = (int)t->dims[1];  // q_heads * head_dim * 2
+                layer->gqa.q_heads = q_dim_fused / (layer_head_dim * 2);
+            } else {
+                layer->gqa.q_heads = GQA_Q_HEADS;
+            }
+            layer->gqa.kv_dim = layer->gqa.kv_heads * layer_head_dim;
+            layer->gqa.q_dim = layer->gqa.q_heads * layer_head_dim;
+            layer->gqa.is_large = (layer_head_dim == 512) ? 1 : 0;
+
+            printf("  Layer %d: GQA loaded (quantized), head_dim=%d q_heads=%d kv_heads=%d\n",
+                   l, layer_head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
         }
         
         // Load MoE (FFN) weights — NOT loaded by default (memory: 3.2 GB/layer)
@@ -719,7 +744,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             }
             wubu_gqa_forward(normed, B, T, &layer->gqa, model->d_model, attn_out,
                              k_in, v_in, model->gqa_cache_len,
-                             k_out, v_out);
+                             k_out, v_out,
+                             layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
             gqa_layer_idx++;
             }  // close CPU GQA block
         gqa_done:
@@ -1022,16 +1048,22 @@ bool wubu_mtp_load(mtp_head_t *mtp, const char *mtp_gguf_path,
     blk40->gqa.attn_output_weight_q = blob + t->data_offset;
     blk40->gqa.attn_output_weight_type = t->ggml_type;
     
-    // Q/K norms (F32)
+    // Q/K norms (F32) — size from GGUF tensor shape
     t = gguf_find_tensor(ctx, "blk.40.attn_q_norm.weight");
     if (!t) { fprintf(stderr, "MTP: missing attn_q_norm\n"); goto fail; }
-    blk40->gqa.attn_q_norm_weight = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
-    gguf_read_tensor_f32(ctx, t, blk40->gqa.attn_q_norm_weight, GQA_HEAD_DIM);
+    int mtp_head_dim = (t->n_dims >= 1) ? (int)t->dims[0] : GQA_HEAD_DIM;
+    blk40->gqa.head_dim = mtp_head_dim;
+    blk40->gqa.attn_q_norm_weight = (float *)malloc(mtp_head_dim * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, blk40->gqa.attn_q_norm_weight, mtp_head_dim);
     
     t = gguf_find_tensor(ctx, "blk.40.attn_k_norm.weight");
     if (!t) { fprintf(stderr, "MTP: missing attn_k_norm\n"); goto fail; }
-    blk40->gqa.attn_k_norm_weight = (float *)malloc(GQA_HEAD_DIM * sizeof(float));
-    gguf_read_tensor_f32(ctx, t, blk40->gqa.attn_k_norm_weight, GQA_HEAD_DIM);
+    blk40->gqa.attn_k_norm_weight = (float *)malloc(mtp_head_dim * sizeof(float));
+    gguf_read_tensor_f32(ctx, t, blk40->gqa.attn_k_norm_weight, mtp_head_dim);
+    blk40->gqa.q_heads = GQA_Q_HEADS;
+    blk40->gqa.kv_heads = GQA_KV_HEADS;
+    blk40->gqa.q_dim = GQA_Q_HEADS * mtp_head_dim;
+    blk40->gqa.kv_dim = GQA_KV_HEADS * mtp_head_dim;
     
     // Load MoE weights (quantized pointers into blob)
     moe_weights_t *moe = &blk40->moe;
@@ -1074,9 +1106,11 @@ bool wubu_mtp_load(mtp_head_t *mtp, const char *mtp_gguf_path,
     
     printf("MTP: blk.40 loaded (GQA+MoE: Q5_K/Q2_K/Q3_K/Q6_K)\n");
     
-    // Allocate KV cache for blk.40
-    mtp->k_cache = (float *)calloc(GQA_MAX_CTX * GQA_KV_DIM, sizeof(float));
-    mtp->v_cache = (float *)calloc(GQA_MAX_CTX * GQA_KV_DIM, sizeof(float));
+    // Allocate KV cache for blk.40 (per-layer kv_dim)
+    int mtp_kv_dim = blk40->gqa.kv_heads * blk40->gqa.head_dim;
+    mtp->kv_dim = mtp_kv_dim;
+    mtp->k_cache = (float *)calloc((size_t)GQA_MAX_CTX * mtp_kv_dim, sizeof(float));
+    mtp->v_cache = (float *)calloc((size_t)GQA_MAX_CTX * mtp_kv_dim, sizeof(float));
     mtp->cache_len = 0;
     
     mtp->loaded = true;
@@ -1141,11 +1175,12 @@ int wubu_mtp_draft_forward(wubu_model_t *model,
         wubu_rms_norm(1, 1, model->d_model, cur, blk40->attn_norm_weight, 1e-6f, temp_norm);
         
         // GQA forward with KV cache
-        float *k_out = mtp->k_cache + (mtp->cache_len + b) * GQA_KV_DIM;
-        float *v_out = mtp->v_cache + (mtp->cache_len + b) * GQA_KV_DIM;
+        float *k_out = mtp->k_cache + (size_t)(mtp->cache_len + b) * mtp->kv_dim;
+        float *v_out = mtp->v_cache + (size_t)(mtp->cache_len + b) * mtp->kv_dim;
         wubu_gqa_forward(temp_norm, 1, 1, &blk40->gqa, model->d_model, temp_attn,
                          mtp->k_cache, mtp->v_cache, mtp->cache_len + b,
-                         k_out, v_out);
+                         k_out, v_out,
+                         blk40->gqa.head_dim, blk40->gqa.q_heads, blk40->gqa.kv_heads);
         
         // Residual
         for (int i = 0; i < model->d_model; i++) cur[i] += temp_attn[i];
@@ -1421,7 +1456,8 @@ void wubu_model_backward_from_embd(
             
             // Run forward with save
             float *fwd_out = (float *)malloc(N * model->d_model * sizeof(float));
-            wubu_gqa_forward_save(normed, B, T, &layer->gqa, model->d_model, fwd_out, &save);
+            wubu_gqa_forward_save(normed, B, T, &layer->gqa, model->d_model, fwd_out, &save,
+                                   layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
             
             // Run exact backward
             wubu_gqa_backward(B, T, model->d_model, normed,

@@ -511,7 +511,7 @@ int main(int argc, char **argv) {
         float *output_cpu = (float *)calloc(N * D_MODEL, sizeof(float));
         double t0 = now_sec();
         wubu_gqa_forward(x_cpu, B, T, &w_cpu, D_MODEL, output_cpu,
-                          NULL, NULL, 0, NULL, NULL);
+                          NULL, NULL, 0, NULL, NULL, w_cpu.gqa.head_dim, w_cpu.gqa.q_heads, w_cpu.gqa.kv_heads);
         double t_cpu = now_sec() - t0;
         printf("CPU forward pass: %.3f ms\n", t_cpu * 1000.0);
         printf("CPU output[0:8]:");

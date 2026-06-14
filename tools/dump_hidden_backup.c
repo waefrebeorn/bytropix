@@ -63,7 +63,7 @@ int main(void) {
             void *vc = (uint8_t *)mdl.gqa_v_cache + off * sizeof(block_q4_0_cache);
             void *ko = (mdl.gqa_cache_len == 0) ? kc : (uint8_t*)kc + mdl.gqa_cache_len * GQA_KV_DIM * sizeof(block_q4_0_cache);
             void *vo = ko;
-            wubu_gqa_forward(tmp, 1, 1, &layer->gqa, tmp2, NULL, NULL, 0, ko, vo);
+            wubu_gqa_forward(tmp, 1, 1, &layer->gqa, tmp2, NULL, NULL, 0, ko, vo, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
             mdl.gqa_cache_len++;
         }
         for (int i = 0; i < D_MODEL; i++) cpu_x[i] += tmp2[i];
@@ -118,7 +118,7 @@ int main(void) {
             void *vc = (uint8_t *)mdl.gqa_v_cache + off * sizeof(block_q4_0_cache);
             void *ko = (mdl.gqa_cache_len == 0) ? kc : (uint8_t*)kc + mdl.gqa_cache_len * GQA_KV_DIM * sizeof(block_q4_0_cache);
             void *vo = ko;
-            wubu_gqa_forward(tmp, 1, 1, &layer->gqa, tmp2, NULL, NULL, 0, ko, vo);
+            wubu_gqa_forward(tmp, 1, 1, &layer->gqa, tmp2, NULL, NULL, 0, ko, vo, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
             mdl.gqa_cache_len++;
         }
         for (int i = 0; i < D_MODEL; i++) gpu_x[i] += tmp2[i];

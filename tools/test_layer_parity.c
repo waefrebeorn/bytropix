@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
             // GQA forward
             wubu_gqa_forward(normed, 1, 1, &mdl.layers[l].w.gqa,
                              mdl.layers[l].kv_cache,
-                             mdl.layers[l].rope_sc, attn);
+                             mdl.layers[l].rope_sc, attn, mdl.layers[l].w.gqa.head_dim, mdl.layers[l].w.gqa.q_heads, mdl.layers[l].w.gqa.kv_heads);
         }
 
         // SSM/GQA output stats

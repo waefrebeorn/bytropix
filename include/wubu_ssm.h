@@ -204,7 +204,8 @@ void wubu_gqa_forward(const float *x, int B, int T,
                       int d_model,
                       float *output,
                       const void *k_cache, const void *v_cache, int cache_len,
-                      void *k_out, void *v_out);
+                      void *k_out, void *v_out,
+                      int head_dim, int n_q_heads, int n_kv_heads);
 
 // Saved GQA forward intermediates (for backward pass)
 typedef struct {
@@ -223,7 +224,8 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
                            const gqa_layer_weights *weights,
                            int d_model,
                            float *output,
-                           gqa_fwd_save_t *save);
+                           gqa_fwd_save_t *save,
+                           int head_dim, int n_q_heads, int n_kv_heads);
 
 // Single Poincaré SSM layer forward pass (hyperbolic recurrence)
 // Same interface as wubu_ssm_forward but uses Möbius operations
