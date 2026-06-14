@@ -1636,32 +1636,27 @@ void wubu_gqa_forward(const float *x, int B, int T,
     float *gate_sig = (float *)malloc(N * q_dim * sizeof(float));
     if (!gate_sig) { free(gate_sig); free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
     wubu_sigmoid(N * q_dim, gate, gate_sig);
-    
+
     for (int i = 0; i < N * q_dim; i++) {
         attn_out[i] *= gate_sig[i];
     }
-    
-    // DUMP_GQA_DEBUG_DIR: dump attn_out after gating (before output proj)
-    {
-        const char *gqa_dump_dir = getenv("DUMP_GQA_DEBUG_DIR");
-        if (gqa_dump_dir && gqa_dump_dir[0]) {
-            const char *prefix = getenv("DUMP_GQA_PREFIX");
-            if (!prefix) prefix = "";
-            FILE *fp;
-            char fname[1024];
-            if (prefix[0])
-                snprintf(fname, sizeof(fname), "%s/%s_attn_out_gated.bin", gqa_dump_dir, prefix);
-            else
-                snprintf(fname, sizeof(fname), "%s/attn_out_gated.bin", gqa_dump_dir);
-            fp = fopen(fname, "wb"); if(fp) { fwrite(attn_out, sizeof(float), N * q_dim, fp); fclose(fp); }
-        }
-    }
-    
+
     // Step 7: Output projection via quantized or F32 matmul
-    for (int s = 0; s < N; s++) {
-        proj_matmul(attn_out + s * q_dim, q_dim, d_model,
-                    w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
-                    output + s * d_model);
+    // For standard layers (Qwen): out_dim = q_dim, use gated attn_out
+    // For DGemma-style layers: out_dim = q_dim*2, use Q_full directly (gate handled in output proj)
+    {
+        int out_proj_in_dim = q_dim;
+        const float *out_proj_in = attn_out;
+        if (w->out_dim != q_dim && w->out_dim == q_dim * 2) {
+            // DGemma-style: bypass gate, use Q_full as output projection input
+            out_proj_in_dim = q_dim * 2;
+            out_proj_in = Q_full;
+        }
+        for (int s = 0; s < N; s++) {
+            proj_matmul(out_proj_in + s * out_proj_in_dim, out_proj_in_dim, d_model,
+                        w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
+                        output + s * d_model);
+        }
     }
     
     // DUMP_GQA_DEBUG_DIR: dump final output after output projection
@@ -1817,12 +1812,20 @@ void wubu_gqa_forward_save(const float *x, int B, int T,
     
     for (int i = 0; i < N * q_dim; i++)
         attn_out[i] *= gate_sig[i];
-    
+
     // Step 7: Output projection via quantized or F32 matmul
-    for (int s = 0; s < N; s++) {
-        proj_matmul(attn_out + s * q_dim, q_dim, d_model,
-                    w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
-                    output + s * d_model);
+    {
+        int out_proj_in_dim = q_dim;
+        const float *out_proj_in = attn_out;
+        if (w->out_dim != q_dim && w->out_dim == q_dim * 2) {
+            out_proj_in_dim = q_dim * 2;
+            out_proj_in = Q_full;
+        }
+        for (int s = 0; s < N; s++) {
+            proj_matmul(out_proj_in + s * out_proj_in_dim, out_proj_in_dim, d_model,
+                        w->attn_output_weight, w->attn_output_weight_q, w->attn_output_weight_type,
+                        output + s * d_model);
+        }
     }
     
     // Save intermediates

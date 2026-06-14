@@ -267,8 +267,22 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             layer->gqa.q_dim = layer->gqa.q_heads * layer_head_dim;
             layer->gqa.is_large = (layer_head_dim == 512) ? 1 : 0;
 
-            printf("  Layer %d: GQA loaded (quantized), head_dim=%d q_heads=%d kv_heads=%d\n",
-                   l, layer_head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
+            // Extract output projection dim from attn_output.weight tensor
+            // For standard models (Qwen): out_dim = q_dim
+            // For DGemma: out_dim = q_dim * 2 (Q+gate fused into output proj)
+            layer->gqa.out_dim = layer->gqa.q_dim;  // default
+            snprintf(name, sizeof(name), "blk.%d.attn_output.weight", l);
+            t = gguf_find_tensor(ctx, name);
+            if (t && t->n_dims >= 2) {
+                int out_rows = (int)t->dims[0];  // first dim = input features to output proj
+                if (out_rows != layer->gqa.q_dim) {
+                    layer->gqa.out_dim = out_rows;  // e.g., q_dim*2 for DGemma
+                }
+            }
+
+            printf("  Layer %d: GQA loaded, head_dim=%d q_heads=%d kv_heads=%d out_dim=%d%s\n",
+                   l, layer_head_dim, layer->gqa.q_heads, layer->gqa.kv_heads,
+                   layer->gqa.out_dim, layer->gqa.is_large ? " LARGE" : "");
         }
         
         // Load MoE (FFN) weights — NOT loaded by default (memory: 3.2 GB/layer)
@@ -288,19 +302,32 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     
     // Embeddings: auto-extract from GGUF if not available, else load from file
     model->use_embedding_file = true;
+    model->vocab_size = 0;
+    // Get actual vocab size from GGUF embedding tensor
+    {
+        gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
+        if (t_emb && t_emb->n_dims >= 2) {
+            int64_t n_emb = 1;
+            for (int d = 0; d < t_emb->n_dims; d++) n_emb *= t_emb->dims[d];
+            int64_t vocab_from_emb = n_emb / model->d_model;
+            if (vocab_from_emb > 0 && vocab_from_emb < 1000000) {
+                model->vocab_size = (int)vocab_from_emb;
+            }
+        }
+        if (model->vocab_size == 0) model->vocab_size = 248320; // fallback
+    }
     const char *emb_path = "data/qwen36_embeddings_c.bin.raw";
     FILE *emb_f = fopen(emb_path, "rb");
     if (emb_f) {
         fseek(emb_f, 0, SEEK_END);
         long emb_size = ftell(emb_f);
         int file_vocab = (int)(emb_size / (model->d_model * sizeof(float)));
-        if (file_vocab == 248320) {
-            model->vocab_size = file_vocab;
+        if (file_vocab == model->vocab_size) {
             printf("  Embeddings: %d tokens from file (%ld MB)\n", model->vocab_size, emb_size / (1024*1024));
             fclose(emb_f);
         } else {
             fclose(emb_f);
-            printf("  Embedding file has wrong size (%d tokens, expected 248320), re-extracting...\n", file_vocab);
+            printf("  Embedding file has wrong size (%d tokens, expected %d), re-extracting...\n", file_vocab, model->vocab_size);
             goto extract_embeddings;
         }
     } else {
@@ -309,7 +336,14 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
             if (!t_emb) { fprintf(stderr, "  ERROR: token_embd.weight not found\n"); }
             else {
-                int64_t n_emb = (int64_t)248320 * model->d_model;
+                // Use actual tensor dimensions from GGUF (vocab_size may differ per model)
+                int64_t n_emb = 1;
+                for (int d = 0; d < t_emb->n_dims; d++) n_emb *= t_emb->dims[d];
+                int64_t vocab_from_emb = n_emb / model->d_model;
+                if (vocab_from_emb > 0 && vocab_from_emb < 1000000) {
+                    model->vocab_size = (int)vocab_from_emb;
+                }
+                printf("  Embedding tensor: %ld elems => vocab_size=%d\n", (long)n_emb, model->vocab_size);
                 float *temp_emb = (float *)malloc(n_emb * sizeof(float));
                 if (temp_emb && gguf_read_tensor_f32(ctx, t_emb, temp_emb, n_emb) > 0) {
                     FILE *out = fopen(emb_path, "wb");
@@ -386,7 +420,14 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
                 if (t && blob) { layer->gqa.attn_k_weight_q = blob + t->data_offset; layer->gqa.attn_k_weight_type = t->ggml_type; }
                 snprintf(name, sizeof(name), "blk.%d.attn_v.weight", l);
                 t = gguf_find_tensor(ctx, name);
-                if (t && blob) { layer->gqa.attn_v_weight_q = blob + t->data_offset; layer->gqa.attn_v_weight_type = t->ggml_type; }
+                if (t && blob) {
+                    layer->gqa.attn_v_weight_q = blob + t->data_offset;
+                    layer->gqa.attn_v_weight_type = t->ggml_type;
+                } else {
+                    /* LARGE layers: V weight not present, share K weight (V=K) */
+                    layer->gqa.attn_v_weight_q = layer->gqa.attn_k_weight_q;
+                    layer->gqa.attn_v_weight_type = layer->gqa.attn_k_weight_type;
+                }
                 snprintf(name, sizeof(name), "blk.%d.attn_output.weight", l);
                 t = gguf_find_tensor(ctx, name);
                 if (t && blob) { layer->gqa.attn_output_weight_q = blob + t->data_offset; layer->gqa.attn_output_weight_type = t->ggml_type; }
