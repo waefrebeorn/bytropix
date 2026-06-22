@@ -28,7 +28,8 @@ static const char *tensor_name_post_attn_norm(int layer) {
 
 bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     memset(model, 0, sizeof(*model));
-    
+    model->tied_output = false;
+
     // Open GGUF
     gguf_ctx *ctx = gguf_open(gguf_path);
     if (!ctx) { fprintf(stderr, "Failed to open %s\n", gguf_path); return false; }
@@ -316,52 +317,45 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         }
         if (model->vocab_size == 0) model->vocab_size = 248320; // fallback
     }
-    const char *emb_path = "data/qwen36_embeddings_c.bin.raw";
-    FILE *emb_f = fopen(emb_path, "rb");
-    if (emb_f) {
-        fseek(emb_f, 0, SEEK_END);
-        long emb_size = ftell(emb_f);
-        int file_vocab = (int)(emb_size / (model->d_model * sizeof(float)));
-        if (file_vocab == model->vocab_size) {
-            printf("  Embeddings: %d tokens from file (%ld MB)\n", model->vocab_size, emb_size / (1024*1024));
-            fclose(emb_f);
-        } else {
-            fclose(emb_f);
-            printf("  Embedding file has wrong size (%d tokens, expected %d), re-extracting...\n", file_vocab, model->vocab_size);
-            goto extract_embeddings;
-        }
-    } else {
-        extract_embeddings: {
-            printf("  Extracting token_embd.weight from GGUF...\n");
-            gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
-            if (!t_emb) { fprintf(stderr, "  ERROR: token_embd.weight not found\n"); }
-            else {
-                // Use actual tensor dimensions from GGUF (vocab_size may differ per model)
-                int64_t n_emb = 1;
-                for (int d = 0; d < t_emb->n_dims; d++) n_emb *= t_emb->dims[d];
-                int64_t vocab_from_emb = n_emb / model->d_model;
-                if (vocab_from_emb > 0 && vocab_from_emb < 1000000) {
-                    model->vocab_size = (int)vocab_from_emb;
-                }
-                printf("  Embedding tensor: %ld elems => vocab_size=%d\n", (long)n_emb, model->vocab_size);
-                float *temp_emb = (float *)malloc(n_emb * sizeof(float));
-                if (temp_emb && gguf_read_tensor_f32(ctx, t_emb, temp_emb, n_emb) > 0) {
-                    FILE *out = fopen(emb_path, "wb");
-                    if (out) {
-                        fwrite(temp_emb, sizeof(float), n_emb, out);
-                        fclose(out);
-                        printf("  Embeddings saved to %s\n", emb_path);
-                    }
-                    // Use the in-memory copy for this run
-                    model->token_embd = temp_emb;
-                    model->vocab_size = 248320;
-                    model->use_embedding_file = false;
-                    printf("  Token embeddings: %ld MB (in-memory)\n", n_emb * sizeof(float) / (1024*1024));
-                } else {
-                    if (temp_emb) free(temp_emb);
-                    fprintf(stderr, "  Failed to extract embeddings\n");
-                }
+    // For large-vocab models (Gemma, vocab > 131072), skip F32 embedding load.
+    // Use the mmap'd GGUF blob directly for per-token dequant embedding lookup.
+    // For small-vocab models (Qwen), the F32 path is fine.
+    bool large_vocab = (model->vocab_size > 131072);
+    model->use_embedding_file = false;
+    model->token_embd = NULL;
+
+    if (!large_vocab) {
+        // Small vocab: try loading F32 embeddings (original path)
+        const char *emb_path = "data/qwen36_embeddings_c.bin.raw";
+        FILE *emb_f = fopen(emb_path, "rb");
+        if (emb_f) {
+            fseek(emb_f, 0, SEEK_END);
+            long emb_size = ftell(emb_f);
+            int file_vocab = (int)(emb_size / (model->d_model * sizeof(float)));
+            if (file_vocab == model->vocab_size) {
+                printf("  Embeddings: %d tokens from file (%ld MB)\n", model->vocab_size, emb_size / (1024*1024));
+                fclose(emb_f);
+                model->use_embedding_file = true;
+            } else {
+                fclose(emb_f);
+                large_vocab = true;
             }
+        } else {
+            large_vocab = true;
+        }
+    }
+
+    if (large_vocab) {
+        // Large vocab: use mmap'd GGUF blob for per-token dequant
+        printf("  Large vocab (%d tokens): using mmap'd GGUF blob for embedding\n", model->vocab_size);
+        model->use_embedding_file = false;
+        model->token_embd = NULL;
+        // Get quantized token_embd pointer from blob
+        gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
+        if (t_emb && blob) {
+            model->token_embd_q = blob + t_emb->data_offset;
+            model->token_embd_type = t_emb->ggml_type;
+            printf("  token_embd: quantized type=%d, %ld elements\n", t_emb->ggml_type, (long)(t_emb->n_elems));
         }
     }
     
@@ -373,7 +367,20 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     // Load output weight for logit projection — QUANTIZED-ONLY (Q4_K blob pointer)
     model->output_weight = NULL;
     gguf_tensor_info *t_out = gguf_find_tensor(ctx, "output.weight");
-    if (!t_out) { fprintf(stderr, "  ERROR: output.weight not found\n"); }
+    if (!t_out) {
+        // Tied output: use token_embd.weight (common for Gemma, LLaMA, etc.)
+        gguf_tensor_info *t_embd = gguf_find_tensor(ctx, "token_embd.weight");
+        if (t_embd) {
+            model->output_weight_q = t_embd;  // will get blob pointer below
+            model->output_weight_type = t_embd->ggml_type;
+            model->tied_output = true;
+            fprintf(stderr, "  Output weight: TIED to token_embd.weight\n");
+        } else {
+            fprintf(stderr, "  ERROR: neither output.weight nor token_embd.weight found\n");
+        }
+    } else {
+        model->tied_output = false;
+    }
     
     // Output weight quantized pointer will be set after gguf_buffer_data() below
     printf("  Output weight: will use quantized path (Q4_K via blob pointer)\n");
@@ -434,7 +441,18 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             }
         }
         gguf_tensor_info *t_out = gguf_find_tensor(ctx, "output.weight");
-        if (t_out && blob) { model->output_weight_q = blob + t_out->data_offset; model->output_weight_type = t_out->ggml_type; }
+        if (t_out && blob) {
+            model->output_weight_q = blob + t_out->data_offset;
+            model->output_weight_type = t_out->ggml_type;
+            model->tied_output = false;
+        } else if (model->tied_output) {
+            // Tied: output_weight_q was set to token_embd tensor info earlier,
+            // but we need the actual blob pointer
+            gguf_tensor_info *t_embd = gguf_find_tensor(ctx, "token_embd.weight");
+            if (t_embd && blob) {
+                model->output_weight_q = blob + t_embd->data_offset;
+            }
+        }
 
         // Save MoE quantized pointers for each layer (routed + shared experts)
         for (int l = 0; l < model->n_layers; l++) {
@@ -989,6 +1007,23 @@ void wubu_model_forward(wubu_model_t *model,
         } else {
             fprintf(stderr, "wubu_model_forward: cannot open embedding file\n");
             memset(embd, 0, N * model->d_model * sizeof(float));
+        }
+    } else if (model->token_embd_q) {
+        // Large vocab: dequantize per-token from mmap'd GGUF blob
+        gguf_tensor_info *t_emb = gguf_find_tensor(model->gguf_ctx, "token_embd.weight");
+        int bytes_per_token = (int)(model->d_model * sizeof(float));  // default: F32
+        if (t_emb) {
+            int64_t n_elems = 1;
+            for (int d = 0; d < t_emb->n_dims; d++) n_elems *= t_emb->dims[d];
+            int64_t raw = gguf_raw_size(t_emb->ggml_type, n_elems);
+            bytes_per_token = (int)(raw / n_elems * t_emb->dims[1]);
+        }
+        for (int i = 0; i < N; i++) {
+            int tok = token_ids[i];
+            if (tok < 0 || tok >= model->vocab_size) tok = 0;
+            size_t offset = (size_t)tok * bytes_per_token;
+            gguf_dequantize(model->token_embd_q + offset,
+                             model->token_embd_type, model->d_model, embd + i * model->d_model);
         }
     } else {
         memset(embd, 0, N * model->d_model * sizeof(float));

@@ -246,6 +246,9 @@ typedef struct {
     float *output_weight;    // [D_MODEL, vocab_size] or NULL
     const uint8_t *output_weight_q;   // raw Q4_K quantized
     int output_weight_type;
+    bool tied_output;                // true if output_weight_q points to token_embd
+    const uint8_t *token_embd_q;     // raw Q4_K quantized token embeddings (large vocab, mmap'd)
+    int token_embd_type;             // GGML type of token_embd (usually Q4_K)
     
     // Embedding file (from Phase 1)
     bool use_embedding_file;
