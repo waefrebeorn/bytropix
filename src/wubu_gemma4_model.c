@@ -52,6 +52,7 @@ static void qw_load(g4_qweight_t *w, gguf_ctx *ctx, const char *name) {
     w->raw_bytes = gguf_raw_size(t->ggml_type, w->n_elems);
     uint64_t offset = t->data_offset;
     w->data = (const uint8_t *)ctx->data_blob + offset;
+    w->data_owned = 0;
     if (w->data < (const uint8_t *)ctx->data_blob ||
         w->data + w->raw_bytes > (const uint8_t *)ctx->data_blob + ctx->data_blob_size) {
         fprintf(stderr, "[G4] ERROR: tensor %s out of bounds\n", name);
@@ -60,6 +61,7 @@ static void qw_load(g4_qweight_t *w, gguf_ctx *ctx, const char *name) {
 
 static void qw_load_aliased(g4_qweight_t *w, g4_qweight_t *src) {
     memcpy(w, src, sizeof(*w));
+    w->data_owned = 0;  /* alias doesn't own the data */
 }
 
 static float *g4_load_norm_f32(gguf_ctx *ctx, const char *name, int expected) {
@@ -342,7 +344,21 @@ bool g4_model_init(g4_model_t *model, const char *gguf_path) {
     model->data_blob = ctx->data_blob;
     model->data_blob_size = ctx->data_blob_size;
     ctx->data_blob = NULL;
-    gguf_close(ctx);
+
+    /* Save GGUF file handle and tensor info for GPU weight streaming.
+     * We keep the file open so we can read weights directly from disk
+     * during inference, bypassing the mmap'd data blob which causes
+     * cudaMemcpy failures on WSL2 when file > physical RAM. */
+    model->gguf_file = ctx->file;
+    model->gguf_data_offset = ctx->data_blob_offset;
+    model->gguf_n_tensors = (int)ctx->n_tensors;
+    model->gguf_tensor_info = ctx->tensors;
+    ctx->file = NULL;       /* model now owns the file handle */
+    ctx->tensors = NULL;    /* model now owns the tensor info */
+    ctx->data_blob = NULL;  /* already transferred above */
+
+    /* Close the gguf context but NOT the file (model owns it now) */
+    free(ctx);
 
     printf("[G4] %d layers loaded (~%d MB quantized + %.1f MB norms)\n",
            model->n_layers, (int)(model->data_blob_size / 1048576),
@@ -767,4 +783,10 @@ void g4_model_destroy(g4_model_t *model) {
     free(model->buf_ffn_out);
     free(model->buf_scores);
     free(model->buf_row);
+
+    /* Close GGUF file and free tensor info */
+    if (model->gguf_file) {
+        fclose(model->gguf_file);
+    }
+    free(model->gguf_tensor_info);
 }

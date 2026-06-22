@@ -283,13 +283,66 @@ static void dequantize_q4_K_block(const uint8_t *block, float *out) {
 
 /* ============= GPU-native Q4_K matmul (weights stay compressed in VRAM) ============= */
 /*
- * Each thread block handles one output column.
- * Reads Q4_K compressed weights from VRAM, dequantizes in registers, dots with x.
- * No CPU involvement — weights never touch RAM during forward pass.
+ * Each thread handles one output element y[n] = dot(x, W_col_n).
+ * W is stored in Q4_K format: super-blocks of 256 elements, each 144 bytes.
+ * Within each super-block: 4 groups of 64 elements, each group has 2 sub-blocks of 32.
+ * Scale pairs are packed in 12 bytes (6-bit values).
  *
  * Grid: (N,) — one thread per output column
- * Block: 256 threads — each handles K/256 elements
+ * Block: 256 threads
  */
+
+/* Decode 6-bit scale values from the 12-byte scales area.
+ * Layout (from llama.cpp ggml-quants.c):
+ *   scales[0..3]: 4 direct 6-bit values (low 6 bits of each byte)
+ *   scales[4..11]: 4 packed 6-bit values split across byte boundaries
+ * Total: 8 scale values (sc[0..7]) and 8 min values (mn[0..16])... 
+ * Actually: 12 bytes = 96 bits / 6 = 16 values? No.
+ *
+ * From the CPU code: 4 iterations, each reads 2 pairs.
+ * is=0: sc1=scales[0]&63, m1=scales[4]&63, sc2=scales[1]&63, m2=scales[5]&63
+ * is=2: sc1=scales[2]&63, m1=scales[6]&63, sc2=scales[3]&63, m2=scales[7]&63
+ * is=4: sc1=(scales[4]&0xF)|((scales[0]>>6)<<4), m1=(scales[4]>>4)|((scales[0]>>6)<<4)
+ *        ... packed
+ * is=6: similar packing
+ *
+ * The 12 bytes encode 6 scale-min pairs, each 12 bits (6+6):
+ *   pair 0: scales[0][5:0], scales[4][5:0]
+ *   pair 1: scales[1][5:0], scales[5][5:0]
+ *   pair 2: scales[2][5:0], scales[6][5:0]
+ *   pair 3: scales[3][5:0], scales[7][5:0]
+ *   pair 4: scales[4][7:4]|scales[0][7:6]<<4, scales[4][3:0]|scales[0][7:6]<<4  -- wait
+ *
+ * Let me just replicate the CPU logic exactly.
+ */
+
+static __device__ void decode_q4k_scales(const uint8_t *scales, int group_idx,
+                                          float d, float dmin,
+                                          float *d1, float *ml1, float *d2, float *ml2) {
+    /* group_idx: 0..3, selects which group of 64 elements */
+    uint8_t sc1, m1, sc2, m2;
+    int is = group_idx * 2;
+    int idx = is;
+    if (idx < 4) {
+        sc1 = scales[idx] & 63;
+        m1  = scales[idx + 4] & 63;
+    } else {
+        sc1 = (scales[idx+4] & 0xF) | ((scales[idx-4] >> 6) << 4);
+        m1  = (scales[idx+4] >>  4) | ((scales[idx  ] >> 6) << 4);
+    }
+    idx = is + 1;
+    if (idx < 4) {
+        sc2 = scales[idx] & 63;
+        m2  = scales[idx + 4] & 63;
+    } else {
+        sc2 = (scales[idx+4] & 0xF) | ((scales[idx-4] >> 6) << 4);
+        m2  = (scales[idx+4] >>  4) | ((scales[idx  ] >> 6) << 4);
+    }
+    *d1  = d  * (float)sc1;
+    *ml1 = dmin * (float)m1;
+    *d2  = d  * (float)sc2;
+    *ml2 = dmin * (float)m2;
+}
 
 __global__ void gpu_q4k_matmul_kernel(
     const uint8_t *W_q,  /* [N, K/256, 144] compressed weights */
@@ -306,7 +359,7 @@ __global__ void gpu_q4k_matmul_kernel(
     float acc = 0.0f;
 
     for (int bk = 0; bk < n_blocks_k; bk++) {
-        const uint8_t *blk = W_q + col_offset + bk * 144;
+        const uint8_t *blk = W_q + col_offset + (int64_t)bk * 144;
 
         /* Decode d and dmin (fp16) */
         uint16_t d_bits = (uint16_t)blk[0] | ((uint16_t)blk[1] << 8);
@@ -322,34 +375,31 @@ __global__ void gpu_q4k_matmul_kernel(
                    : (e == 31) ? (s ? -__builtin_huge_valf() : __builtin_huge_valf())
                    : ldexpf(1.0f + (float)m / 1024.0f, e - 15) * (s ? -1.0f : 1.0f);
 
-        /* Decode scales (first 16 bytes: d, dmin, 12 scales) */
         const uint8_t *scales = blk + 4;
         const uint8_t *qs = blk + 16;
 
-        /* 4 scale pairs for 256 elements */
-        float d1, ml1, d2, ml2;
-        {
-            uint8_t sc1 = scales[0] & 63;
-            uint8_t m1  = scales[4] & 63;
-            uint8_t sc2 = (scales[4] & 0xF) | ((scales[0] >> 6) << 4);
-            uint8_t m2  = (scales[4] >> 4) | ((scales[0] >> 6) << 4);
-            /* Fix: proper scale decoding */
-            uint8_t sc2_raw = scales[1] & 63;
-            uint8_t m2_raw  = scales[5] & 63;
-            d1  = d * (float)sc1;  ml1 = dmin * (float)m1;
-            d2  = d * (float)sc2_raw; ml2 = dmin * (float)m2_raw;
-        }
-
-        /* Dequantize and dot */
+        /* 4 groups of 64 elements, each with 2 sub-blocks of 32 */
         int k_base = bk * 256;
-        for (int j = 0; j < 256 && k_base + j < K; j++) {
-            int qi = j / 2;
-            int shift = (j & 1) ? 0 : 4;
-            int val = (qs[qi] >> shift) & 0xF;
-            float deq_val;
-            if (j < 32)      deq_val = d1 * (float)val - ml1;
-            else             deq_val = d2 * (float)val - ml2;
-            acc += x[k_base + j] * deq_val;
+        for (int group = 0; group < 4; group++) {
+            float d1, ml1, d2, ml2;
+            decode_q4k_scales(scales, group, d, dmin, &d1, &ml1, &d2, &ml2);
+
+            int group_start = group * 64;
+            const uint8_t *bq = qs + group_start / 2;  /* 64 bytes per group */
+
+            /* Sub-block 0: elements [group_start, group_start+32) */
+            int k0 = k_base + group_start;
+            for (int l = 0; l < 32 && k0 + l < K; l++) {
+                float val = d1 * (float)(bq[l] & 0xF) - ml1;
+                acc += x[k0 + l] * val;
+            }
+
+            /* Sub-block 1: elements [group_start+32, group_start+64) */
+            int k1 = k_base + group_start + 32;
+            for (int l = 0; l < 32 && k1 + l < K; l++) {
+                float val = d2 * (float)(bq[l] >> 4) - ml2;
+                acc += x[k1 + l] * val;
+            }
         }
     }
     y[n] = acc;
@@ -449,95 +499,161 @@ static float *d_rope_freqs[48];
 static uint8_t *d_token_embd = NULL, *d_output_w = NULL;
 static float *d_output_norm = NULL;
 
-/* Double-buffer streams for overlap */
-static cudaStream_t stream_compute;  /* Main compute stream */
-static cudaStream_t stream_transfer; /* Async memcpy stream */
-static cudaEvent_t event_transfer;    /* Signals when transfer is complete */
-
-/* Tile size for streaming (bytes per transfer) */
-#define TILE_BYTES (64 * 1024 * 1024)  /* 64MB tiles */
-
 static int pipeline_initialized = 0;
 static int weights_uploaded = 0;
 
 static void ensure_pipeline_initialized(g4_gpu_ctx_t *ctx) {
     if (pipeline_initialized) return;
-    cudaStreamCreate(&stream_compute);
-    cudaStreamCreate(&stream_transfer);
-    cudaEventCreate(&event_transfer);
     memset(vram_weights, 0, sizeof(vram_weights));
     pipeline_initialized = 1;
 }
 
-/* Upload a layer's weights from mmap'd RAM to VRAM asynchronously */
-static void upload_layer_weights_async(int il, g4_layer_t *l) {
+/* Upload a layer's weights from file to VRAM.
+ * Reads directly from the GGUF file into a staging buffer, then copies to GPU.
+ * This avoids the WSL2 cudaMemcpy-from-mmap issue entirely. */
+static int upload_layer_weights(int il, g4_layer_t *l, g4_model_t *model) {
     layer_weights_t *vw = &vram_weights[il];
-    if (vw->uploaded) return;  /* Already in VRAM */
+    if (vw->uploaded) return 1;  /* Already in VRAM */
 
-    auto alloc_and_copy = [&](const uint8_t *h_data, int nbytes, uint8_t **d_out) {
-        if (!h_data || nbytes <= 0) { *d_out = NULL; return; }
-        cudaMallocAsync(d_out, nbytes, stream_transfer);
-        /* Touch pages to force mmap page-in before async copy */
-        /* madvise(MADV_WILLNEED) should have been called already */
-        cudaMemcpyAsync(*d_out, h_data, nbytes, cudaMemcpyHostToDevice, stream_transfer);
+    /* Staging buffer: try cudaHostAlloc first (pinned, faster DMA), fallback to malloc */
+    const size_t STAGING_SIZE = 64 * 1024 * 1024; /* 64MB staging buffer */
+    uint8_t *staging = NULL;
+    int staging_is_pinned = 0;
+    cudaError_t host_err = cudaHostAlloc((void**)&staging, STAGING_SIZE, cudaHostAllocDefault);
+    if (host_err == cudaSuccess) {
+        staging_is_pinned = 1;
+    } else {
+        staging = (uint8_t*)malloc(STAGING_SIZE);
+    }
+
+    /* Helper: read weight from file into staging buffer, then copy to GPU.
+     * We compute the file offset from the data pointer's position in the mmap blob,
+     * then read directly from the file, bypassing the mmap entirely. */
+    auto copy_from_file = [&](const uint8_t *data_ptr, int nbytes, uint8_t **d_out) -> int {
+        if (!data_ptr || nbytes <= 0) { *d_out = NULL; return 1; }
+        cudaError_t err = cudaMalloc(d_out, (size_t)nbytes);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[G4_GPU] cudaMalloc failed for %d bytes: %s\n", nbytes, cudaGetErrorString(err));
+            *d_out = NULL;
+            return 0;
+        }
+
+        if (nbytes > (int)STAGING_SIZE) {
+            /* Large tensor: allocate temporary big staging buffer */
+            uint8_t *big_staging = (uint8_t*)malloc((size_t)nbytes);
+            if (!big_staging) {
+                fprintf(stderr, "[G4_GPU] malloc failed for %d bytes\n", nbytes);
+                cudaFree(*d_out); *d_out = NULL;
+                return 0;
+            }
+            /* Read from file: compute offset from data pointer position in blob */
+            uint64_t offset_in_blob = (uint64_t)(data_ptr - (const uint8_t*)model->data_blob);
+            uint64_t file_offset = model->gguf_data_offset + offset_in_blob;
+            if (fseek(model->gguf_file, (long)file_offset, SEEK_SET) != 0) {
+                fprintf(stderr, "[G4_GPU] fseek failed for offset %lu\n", (unsigned long)file_offset);
+                free(big_staging); cudaFree(*d_out); *d_out = NULL;
+                return 0;
+            }
+            size_t n_read = fread(big_staging, 1, (size_t)nbytes, model->gguf_file);
+            if (n_read != (size_t)nbytes) {
+                fprintf(stderr, "[G4_GPU] fread failed: %zu/%d bytes\n", n_read, nbytes);
+                free(big_staging); cudaFree(*d_out); *d_out = NULL;
+                return 0;
+            }
+            err = cudaMemcpy(*d_out, big_staging, (size_t)nbytes, cudaMemcpyHostToDevice);
+            free(big_staging);
+        } else {
+            /* Small tensor: use reusable staging buffer */
+            if (staging) {
+                uint64_t offset_in_blob = (uint64_t)(data_ptr - (const uint8_t*)model->data_blob);
+                uint64_t file_offset = model->gguf_data_offset + offset_in_blob;
+                if (fseek(model->gguf_file, (long)file_offset, SEEK_SET) != 0) {
+                    fprintf(stderr, "[G4_GPU] fseek failed for offset %lu\n", (unsigned long)file_offset);
+                    cudaFree(*d_out); *d_out = NULL;
+                    return 0;
+                }
+                size_t n_read = fread(staging, 1, (size_t)nbytes, model->gguf_file);
+                if (n_read != (size_t)nbytes) {
+                    fprintf(stderr, "[G4_GPU] fread failed: %zu/%d bytes\n", n_read, nbytes);
+                    cudaFree(*d_out); *d_out = NULL;
+                    return 0;
+                }
+                err = cudaMemcpy(*d_out, staging, (size_t)nbytes, cudaMemcpyHostToDevice);
+            } else {
+                /* No staging buffer — fallback to direct copy from mmap */
+                err = cudaMemcpy(*d_out, data_ptr, (size_t)nbytes, cudaMemcpyHostToDevice);
+            }
+        }
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[G4_GPU] cudaMemcpy failed for %d bytes: %s\n", nbytes, cudaGetErrorString(err));
+            cudaFree(*d_out);
+            *d_out = NULL;
+            return 0;
+        }
+        return 1;
     };
 
-    alloc_and_copy(l->attn_q.data, l->attn_q.raw_bytes, &vw->d_q);
+    int ok = 1;
+    ok = ok && copy_from_file(l->attn_q.data, l->attn_q.raw_bytes, &vw->d_q);
     vw->q_bytes = l->attn_q.raw_bytes;
 
     if (!l->share_kv) {
-        alloc_and_copy(l->attn_k.data, l->attn_k.raw_bytes, &vw->d_k);
+        ok = ok && copy_from_file(l->attn_k.data, l->attn_k.raw_bytes, &vw->d_k);
         vw->k_bytes = l->attn_k.raw_bytes;
         if (!l->kv_eq) {
-            alloc_and_copy(l->attn_v.data, l->attn_v.raw_bytes, &vw->d_v);
+            ok = ok && copy_from_file(l->attn_v.data, l->attn_v.raw_bytes, &vw->d_v);
             vw->v_bytes = l->attn_v.raw_bytes;
         }
     }
 
-    alloc_and_copy(l->attn_out.data, l->attn_out.raw_bytes, &vw->d_o);
+    ok = ok && copy_from_file(l->attn_out.data, l->attn_out.raw_bytes, &vw->d_o);
     vw->o_bytes = l->attn_out.raw_bytes;
-    alloc_and_copy(l->ffn_gate.data, l->ffn_gate.raw_bytes, &vw->d_g);
+    ok = ok && copy_from_file(l->ffn_gate.data, l->ffn_gate.raw_bytes, &vw->d_g);
     vw->g_bytes = l->ffn_gate.raw_bytes;
-    alloc_and_copy(l->ffn_up.data, l->ffn_up.raw_bytes, &vw->d_u);
+    ok = ok && copy_from_file(l->ffn_up.data, l->ffn_up.raw_bytes, &vw->d_u);
     vw->u_bytes = l->ffn_up.raw_bytes;
-    alloc_and_copy(l->ffn_down.data, l->ffn_down.raw_bytes, &vw->d_d);
+    ok = ok && copy_from_file(l->ffn_down.data, l->ffn_down.raw_bytes, &vw->d_d);
     vw->d_bytes = l->ffn_down.raw_bytes;
 
-    /* Record event — compute stream will wait on this */
-    cudaEventRecord(event_transfer, stream_transfer);
+    /* Free staging buffer */
+    if (staging) {
+        if (staging_is_pinned) cudaFreeHost(staging);
+        else free(staging);
+    }
+
+    if (!ok) {
+        fprintf(stderr, "[G4_GPU] ERROR: layer %d weight upload failed\n", il);
+        return 0;
+    }
+
     vw->uploaded = 1;
+    return 1;
 }
 
 /* Free a layer's weights from VRAM (evict to make room) */
 static void evict_layer_weights(int il) {
     layer_weights_t *vw = &vram_weights[il];
     if (!vw->uploaded) return;
-    cudaFreeAsync(vw->d_q, stream_compute);
-    if (vw->d_k) cudaFreeAsync(vw->d_k, stream_compute);
-    if (vw->d_v) cudaFreeAsync(vw->d_v, stream_compute);
-    cudaFreeAsync(vw->d_o, stream_compute);
-    cudaFreeAsync(vw->d_g, stream_compute);
-    cudaFreeAsync(vw->d_u, stream_compute);
-    cudaFreeAsync(vw->d_d, stream_compute);
+    if (vw->d_q) cudaFree(vw->d_q);
+    if (vw->d_k) cudaFree(vw->d_k);
+    if (vw->d_v) cudaFree(vw->d_v);
+    if (vw->d_o) cudaFree(vw->d_o);
+    if (vw->d_g) cudaFree(vw->d_g);
+    if (vw->d_u) cudaFree(vw->d_u);
+    if (vw->d_d) cudaFree(vw->d_d);
     memset(vw, 0, sizeof(*vw));
-}
-
-/* Ensure weights are on VRAM (wait for async transfer if needed) */
-static void sync_layer_weights(int il) {
-    layer_weights_t *vw = &vram_weights[il];
-    if (!vw->uploaded) return;
-    /* Wait for transfer stream to finish */
-    cudaStreamWaitEvent(stream_compute, event_transfer, 0);
+    fprintf(stderr, "[G4_GPU] Layer %d evicted\n", il);
 }
 
 /* ============= Weight management (tandem pipeline) ============= */
 
-static void ensure_weights_uploaded(g4_gpu_ctx_t *ctx, g4_model_t *model) {
+static int ensure_weights_uploaded(g4_gpu_ctx_t *ctx, g4_model_t *model) {
     /* One-time setup: allocate norm/rope weights (tiny, always resident) */
-    if (weights_uploaded) return;
+    if (weights_uploaded) return 1;
     ensure_pipeline_initialized(ctx);
-    cudaStream_t s = stream_compute;
+    cudaStream_t s = ctx->stream;
 
+    /* First, complete all async norm/rope uploads */
     auto upload_f = [&](const float *h, int n) -> float* {
         if (!h) return NULL;
         float *d; cudaMallocAsync(&d, n * sizeof(float), s);
@@ -560,13 +676,116 @@ static void ensure_weights_uploaded(g4_gpu_ctx_t *ctx, g4_model_t *model) {
         }
     }
 
+    /* Synchronize all async norm/rope uploads before proceeding */
+    cudaError_t err = cudaStreamSynchronize(s);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[G4_GPU] norm/rope upload sync error: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    cudaError_t sync_err = cudaGetLastError();
+    if (sync_err != cudaSuccess) {
+        fprintf(stderr, "[G4_GPU] norm/rope upload sync error: %s\n", cudaGetErrorString(sync_err));
+        return 0;
+    }
+
+    /* Upload token_embd (540MB) - tied to output, needed for LM head.
+     * Read from file in chunks to avoid mmap/GPU issues on WSL2.
+     * Use synchronous cudaMalloc and stream-synchronized copies to avoid context corruption. */
     if (model->token_embd.data) {
-        cudaMallocAsync(&d_token_embd, model->token_embd.raw_bytes, s);
-        cudaMemcpyAsync(d_token_embd, model->token_embd.data, model->token_embd.raw_bytes, cudaMemcpyHostToDevice, s);
+        cudaError_t err = cudaMalloc(&d_token_embd, model->token_embd.raw_bytes);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[G4_GPU] cudaMalloc token_embd failed: %s\n", cudaGetErrorString(err));
+            return 0;
+        }
+        const size_t CHUNK = 4 * 1024 * 1024;
+        uint8_t *h_buf = (uint8_t*)malloc(CHUNK);
+        if (h_buf && model->gguf_file) {
+            uint64_t offset_in_blob = (uint64_t)(model->token_embd.data - (const uint8_t*)model->data_blob);
+            uint64_t file_offset = model->gguf_data_offset + offset_in_blob;
+            if (fseek(model->gguf_file, (long)file_offset, SEEK_SET) != 0) {
+                fprintf(stderr, "[G4_GPU] token_embd fseek failed\n");
+                free(h_buf);
+                return 0;
+            }
+            size_t remaining = model->token_embd.raw_bytes;
+            size_t gpu_offset = 0;
+            while (remaining > 0) {
+                size_t chunk = remaining < CHUNK ? remaining : CHUNK;
+                size_t n_read = fread(h_buf, 1, chunk, model->gguf_file);
+                if (n_read != chunk) {
+                    fprintf(stderr, "[G4_GPU] token_embd fread failed: %zu/%zu\n", n_read, chunk);
+                    break;
+                }
+                cudaError_t err = cudaMemcpy(d_token_embd + gpu_offset, h_buf, chunk, cudaMemcpyHostToDevice);
+                if (err != cudaSuccess) {
+                    fprintf(stderr, "[G4_GPU] token_embd cudaMemcpy failed: %s\n", cudaGetErrorString(err));
+                    break;
+                }
+                gpu_offset += chunk;
+                remaining -= chunk;
+            }
+            free(h_buf);
+            if (remaining > 0) return 0;
+        } else {
+            cudaMemcpy(d_token_embd, model->token_embd.data, model->token_embd.raw_bytes, cudaMemcpyHostToDevice);
+        }
+        /* Synchronize to catch any errors before proceeding */
+        cudaStreamSynchronize(s);
+        cudaError_t sync_err = cudaGetLastError();
+        if (sync_err != cudaSuccess) {
+            fprintf(stderr, "[G4_GPU] token_embd upload sync error: %s\n", cudaGetErrorString(sync_err));
+            return 0;
+        }
     }
     if (!model->tied_output && model->output.data) {
-        cudaMallocAsync(&d_output_w, model->output.raw_bytes, s);
-        cudaMemcpyAsync(d_output_w, model->output.data, model->output.raw_bytes, cudaMemcpyHostToDevice, s);
+        cudaError_t err = cudaMalloc(&d_output_w, model->output.raw_bytes);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[G4_GPU] cudaMalloc output failed: %s\n", cudaGetErrorString(err));
+            return 0;
+        }
+        const size_t CHUNK2 = 4 * 1024 * 1024;
+        uint8_t *h_buf2 = (uint8_t*)malloc(CHUNK2);
+        if (h_buf2 && model->gguf_file) {
+            uint64_t offset_in_blob = (uint64_t)(model->output.data - (const uint8_t*)model->data_blob);
+            uint64_t file_offset = model->gguf_data_offset + offset_in_blob;
+            if (fseek(model->gguf_file, (long)file_offset, SEEK_SET) != 0) {
+                fprintf(stderr, "[G4_GPU] output fseek failed\n");
+                free(h_buf2);
+                return 0;
+            }
+            size_t remaining = model->output.raw_bytes;
+            size_t gpu_offset = 0;
+            while (remaining > 0) {
+                size_t chunk = remaining < CHUNK2 ? remaining : CHUNK2;
+                size_t n_read = fread(h_buf2, 1, chunk, model->gguf_file);
+                if (n_read != chunk) break;
+                cudaError_t err = cudaMemcpy(d_output_w + gpu_offset, h_buf2, chunk, cudaMemcpyHostToDevice);
+                if (err != cudaSuccess) break;
+                gpu_offset += chunk;
+                remaining -= chunk;
+            }
+            free(h_buf2);
+            if (remaining > 0) return 0;
+        } else if (h_buf2) {
+            size_t offset = 0;
+            size_t remaining = model->output.raw_bytes;
+            while (remaining > 0) {
+                size_t chunk = remaining < CHUNK2 ? remaining : CHUNK2;
+                memcpy(h_buf2, model->output.data + offset, chunk);
+                cudaMemcpy(d_output_w + offset, h_buf2, chunk, cudaMemcpyHostToDevice);
+                offset += chunk;
+                remaining -= chunk;
+            }
+            free(h_buf2);
+        } else {
+            cudaMemcpy(d_output_w, model->output.data, model->output.raw_bytes, cudaMemcpyHostToDevice);
+        }
+        cudaStreamSynchronize(s);
+        cudaError_t sync_err = cudaGetLastError();
+        if (sync_err != cudaSuccess) {
+            fprintf(stderr, "[G4_GPU] output upload sync error: %s\n", cudaGetErrorString(sync_err));
+            return 0;
+        }
     }
     cudaMallocAsync(&d_output_norm, G4_HIDDEN * sizeof(float), s);
     cudaMemcpyAsync(d_output_norm, model->output_norm_weight, G4_HIDDEN * sizeof(float), cudaMemcpyHostToDevice, s);
@@ -574,7 +793,8 @@ static void ensure_weights_uploaded(g4_gpu_ctx_t *ctx, g4_model_t *model) {
     cudaStreamSynchronize(s);
     weights_uploaded = 1;
     printf("[G4_GPU] Tandem pipeline initialized. Norms+rope resident in VRAM.\n");
-    printf("[G4_GPU] Weight streaming: SSD→mmap(RAM)→async_copy(VRAM) per layer\n");
+    printf("[G4_GPU] Weight streaming: SSD→file(RAM)→async_copy(VRAM) per layer\n");
+    return 1;
 }
 
 /* ============= Full GPU forward ============= */
@@ -614,11 +834,15 @@ int g4_model_forward_gpu(g4_gpu_ctx_t *ctx, void *model_ptr,
         g4_layer_t *l = &model->layers[il];
         int hd = l->head_dim, qd = l->q_dim, kvd = l->kv_dim, kvh = l->kv_heads;
 
-        /* Tandem pipeline: prefetch next layer's weights while computing current */
-        if (il + 1 < model->n_layers) {
-            upload_layer_weights_async(il + 1, &model->layers[il + 1]);
+        /* Tandem pipeline: evict layer N-2, upload layer N, compute layer N */
+        if (il >= 2) {
+            evict_layer_weights(il - 2);
         }
-        sync_layer_weights(il);
+        if (!upload_layer_weights(il, l, model)) {
+            fprintf(stderr, "[G4_GPU] FATAL: failed to upload layer %d weights\n", il);
+            free(h_x); free(h_pos);
+            return 0;
+        }
 
         uint8_t *d_wq = vram_weights[il].d_q;
         uint8_t *d_wk = vram_weights[il].d_k;
@@ -628,16 +852,23 @@ int g4_model_forward_gpu(g4_gpu_ctx_t *ctx, void *model_ptr,
         uint8_t *d_wu = vram_weights[il].d_u;
         uint8_t *d_wd = vram_weights[il].d_d;
 
-        gpu_rms_norm_kernel<<<N, 256, 0, stream_compute>>>(d_x, d_norm[il], d_n, G4_HIDDEN, N, G4_RMS_EPS);
+        if (!d_wq) {
+            fprintf(stderr, "[G4_GPU] ERROR: layer %d weights not in VRAM (d_wq=NULL, uploaded=%d)\n",
+                    il, vram_weights[il].uploaded);
+            free(h_x); free(h_pos);
+            return 0;
+        }
 
-        gpu_matmul(stream_compute, cublas, d_s, d_wq, d_n, N, qd, G4_HIDDEN, d_q, l->attn_q.data, l->attn_q.ggml_type);
+        gpu_rms_norm_kernel<<<N, 256, 0, ctx->stream>>>(d_x, d_norm[il], d_n, G4_HIDDEN, N, G4_RMS_EPS);
+
+        gpu_matmul(ctx->stream, cublas, d_s, d_wq, d_n, N, qd, G4_HIDDEN, d_q, l->attn_q.data, l->attn_q.ggml_type);
 
         if (!l->share_kv) {
-            gpu_matmul(stream_compute, cublas, d_s, d_wk, d_n, N, kvd, G4_HIDDEN, d_k, l->attn_k.data, l->attn_k.ggml_type);
+            gpu_matmul(ctx->stream, cublas, d_s, d_wk, d_n, N, kvd, G4_HIDDEN, d_k, l->attn_k.data, l->attn_k.ggml_type);
             if (l->kv_eq) {
-                cudaMemcpyAsync(d_v, d_k, (size_t)N * kvd * sizeof(float), cudaMemcpyDeviceToDevice, stream_compute);
+                cudaMemcpyAsync(d_v, d_k, (size_t)N * kvd * sizeof(float), cudaMemcpyDeviceToDevice, ctx->stream);
             } else {
-                gpu_matmul(stream_compute, cublas, d_s, d_wv, d_n, N, kvd, G4_HIDDEN, d_v, l->attn_v.data, l->attn_v.ggml_type);
+                gpu_matmul(ctx->stream, cublas, d_s, d_wv, d_n, N, kvd, G4_HIDDEN, d_v, l->attn_v.data, l->attn_v.ggml_type);
             }
         }
 
@@ -645,14 +876,14 @@ int g4_model_forward_gpu(g4_gpu_ctx_t *ctx, void *model_ptr,
             size_t shm_norm = (size_t)hd * sizeof(float);
 
             dim3 qn_grid(N, G4_HEADS);
-            gpu_rms_norm_q_kernel<<<qn_grid, hd, shm_norm, stream_compute>>>(
+            gpu_rms_norm_q_kernel<<<qn_grid, hd, shm_norm, ctx->stream>>>(
                 d_q, d_qnorm[il], d_q, qd, N, hd, G4_RMS_EPS);
 
             if (!l->share_kv) {
                 dim3 kn_grid(N, kvh);
-                gpu_rms_norm_q_kernel<<<kn_grid, hd, shm_norm, stream_compute>>>(
+                gpu_rms_norm_q_kernel<<<kn_grid, hd, shm_norm, ctx->stream>>>(
                     d_k, d_knorm[il], d_k, kvd, N, hd, G4_RMS_EPS);
-                gpu_rms_norm_kernel<<<N, 256, 0, stream_compute>>>(d_v, NULL, d_v, kvd, N, G4_RMS_EPS);
+                gpu_rms_norm_kernel<<<N, 256, 0, ctx->stream>>>(d_v, NULL, d_v, kvd, N, G4_RMS_EPS);
             }
 
             {
@@ -660,10 +891,10 @@ int g4_model_forward_gpu(g4_gpu_ctx_t *ctx, void *model_ptr,
                 int rope_threads = hd / 2;
                 if (rope_threads > 128) rope_threads = 128;
                 if (!l->share_kv) {
-                    gpu_rope_kernel<<<rope_grid, rope_threads, 0, stream_compute>>>(
+                    gpu_rope_kernel<<<rope_grid, rope_threads, 0, ctx->stream>>>(
                         d_q, d_k, N, hd, qd, ctx->d_positions, l->n_rot, l->rope_base, d_rope_freqs[il], l->is_full);
                 } else {
-                    gpu_rope_kernel<<<rope_grid, rope_threads, 0, stream_compute>>>(
+                    gpu_rope_kernel<<<rope_grid, rope_threads, 0, ctx->stream>>>(
                         d_q, NULL, N, hd, qd, ctx->d_positions, l->n_rot, l->rope_base, d_rope_freqs[il], l->is_full);
                 }
             }
@@ -672,9 +903,9 @@ int g4_model_forward_gpu(g4_gpu_ctx_t *ctx, void *model_ptr,
                 int kv_pos = model->current_pos;
                 size_t kv_off = (size_t)il * ctx->max_ctx * G4_MAX_KV_DIM + (size_t)kv_pos * kvd;
                 cudaMemcpyAsync(ctx->d_k_cache + kv_off, d_k, (size_t)kvd * sizeof(float),
-                               cudaMemcpyDeviceToDevice, stream_compute);
+                               cudaMemcpyDeviceToDevice, ctx->stream);
                 cudaMemcpyAsync(ctx->d_v_cache + kv_off, d_v, (size_t)kvd * sizeof(float),
-                               cudaMemcpyDeviceToDevice, stream_compute);
+                               cudaMemcpyDeviceToDevice, ctx->stream);
             }
 
             static int h_kv_size[48] = {0};
@@ -685,14 +916,14 @@ int g4_model_forward_gpu(g4_gpu_ctx_t *ctx, void *model_ptr,
                 dim3 grid(N, G4_HEADS);
                 size_t shm = (size_t)(kv_size > 0 ? kv_size : 1024) * sizeof(float);
                 int threads = hd < 128 ? hd : 128;
-                gpu_full_attn_kernel<<<grid, threads, shm, stream_compute>>>(
+                gpu_full_attn_kernel<<<grid, threads, shm, ctx->stream>>>(
                     d_q, ctx->d_k_cache, ctx->d_v_cache, d_a,
                     N, G4_HEADS, kvh, hd, ctx->d_positions, kv_size);
             } else {
                 dim3 grid(N, G4_HEADS);
                 size_t shm = (size_t)G4_SLIDING_WINDOW * sizeof(float);
                 int threads = hd < 128 ? hd : 128;
-                gpu_sliding_attn_kernel<<<grid, threads, shm, stream_compute>>>(
+                gpu_sliding_attn_kernel<<<grid, threads, shm, ctx->stream>>>(
                     d_q, ctx->d_k_cache, ctx->d_v_cache, d_a,
                     N, G4_HEADS, kvh, hd, G4_SLIDING_WINDOW, ctx->d_positions, kv_size);
             }
@@ -700,45 +931,43 @@ int g4_model_forward_gpu(g4_gpu_ctx_t *ctx, void *model_ptr,
             h_kv_size[il] = kv_size + N;
         }
 
-        gpu_matmul(stream_compute, cublas, d_s, d_wo, d_a, N, G4_HIDDEN, qd, d_n, l->attn_out.data, l->attn_out.ggml_type);
+        gpu_matmul(ctx->stream, cublas, d_s, d_wo, d_a, N, G4_HIDDEN, qd, d_n, l->attn_out.data, l->attn_out.ggml_type);
 
-        gpu_rms_norm_kernel<<<N, 256, 0, stream_compute>>>(d_n, d_pnorm[il], d_n, G4_HIDDEN, N, G4_RMS_EPS);
-        gpu_add_kernel<<<(N*G4_HIDDEN+255)/256, 256, 0, stream_compute>>>(d_x, d_n, d_x, N*G4_HIDDEN);
+        gpu_rms_norm_kernel<<<N, 256, 0, ctx->stream>>>(d_n, d_pnorm[il], d_n, G4_HIDDEN, N, G4_RMS_EPS);
+        gpu_add_kernel<<<(N*G4_HIDDEN+255)/256, 256, 0, ctx->stream>>>(d_x, d_n, d_x, N*G4_HIDDEN);
 
-        gpu_rms_norm_kernel<<<N, 256, 0, stream_compute>>>(d_x, d_fnorm[il], d_n, G4_HIDDEN, N, G4_RMS_EPS);
-        gpu_matmul(stream_compute, cublas, d_s, d_wg, d_n, N, G4_FFN, G4_HIDDEN, d_g, l->ffn_gate.data, l->ffn_gate.ggml_type);
-        gpu_matmul(stream_compute, cublas, d_s, d_wu, d_n, N, G4_FFN, G4_HIDDEN, d_u, l->ffn_up.data, l->ffn_up.ggml_type);
-        gpu_gelu_kernel<<<(N*G4_FFN+255)/256, 256, 0, stream_compute>>>(d_g, N*G4_FFN);
-        gpu_mul_kernel<<<(N*G4_FFN+255)/256, 256, 0, stream_compute>>>(d_u, d_g, d_u, N*G4_FFN);
-        gpu_matmul(stream_compute, cublas, d_s, d_wd, d_u, N, G4_HIDDEN, G4_FFN, d_n, l->ffn_down.data, l->ffn_down.ggml_type);
+        gpu_rms_norm_kernel<<<N, 256, 0, ctx->stream>>>(d_x, d_fnorm[il], d_n, G4_HIDDEN, N, G4_RMS_EPS);
+        gpu_matmul(ctx->stream, cublas, d_s, d_wg, d_n, N, G4_FFN, G4_HIDDEN, d_g, l->ffn_gate.data, l->ffn_gate.ggml_type);
+        gpu_matmul(ctx->stream, cublas, d_s, d_wu, d_n, N, G4_FFN, G4_HIDDEN, d_u, l->ffn_up.data, l->ffn_up.ggml_type);
+        gpu_gelu_kernel<<<(N*G4_FFN+255)/256, 256, 0, ctx->stream>>>(d_g, N*G4_FFN);
+        gpu_mul_kernel<<<(N*G4_FFN+255)/256, 256, 0, ctx->stream>>>(d_u, d_g, d_u, N*G4_FFN);
+        gpu_matmul(ctx->stream, cublas, d_s, d_wd, d_u, N, G4_HIDDEN, G4_FFN, d_n, l->ffn_down.data, l->ffn_down.ggml_type);
 
-        gpu_rms_norm_kernel<<<N, 256, 0, stream_compute>>>(d_n, d_pfnorm[il], d_n, G4_HIDDEN, N, G4_RMS_EPS);
-        gpu_add_kernel<<<(N*G4_HIDDEN+255)/256, 256, 0, stream_compute>>>(d_x, d_n, d_x, N*G4_HIDDEN);
+        gpu_rms_norm_kernel<<<N, 256, 0, ctx->stream>>>(d_n, d_pfnorm[il], d_n, G4_HIDDEN, N, G4_RMS_EPS);
+        gpu_add_kernel<<<(N*G4_HIDDEN+255)/256, 256, 0, ctx->stream>>>(d_x, d_n, d_x, N*G4_HIDDEN);
 
         if (l->has_out_scale) {
-            gpu_scale_kernel<<<(N*G4_HIDDEN+255)/256, 256, 0, stream_compute>>>(d_x, l->layer_out_scale, N*G4_HIDDEN);
-        }
-
-        /* Evict previous layer's weights from VRAM to make room */
-        if (il > 0) {
-            evict_layer_weights(il - 1);
+            gpu_scale_kernel<<<(N*G4_HIDDEN+255)/256, 256, 0, ctx->stream>>>(d_x, l->layer_out_scale, N*G4_HIDDEN);
         }
     }
-    /* Evict last layer */
-    if (model->n_layers > 0) {
+    /* Evict last 2 layers */
+    if (model->n_layers >= 1) {
         evict_layer_weights(model->n_layers - 1);
     }
+    if (model->n_layers >= 2) {
+        evict_layer_weights(model->n_layers - 2);
+    }
 
-    gpu_rms_norm_kernel<<<N, 256, 0, stream_compute>>>(d_x, d_output_norm, d_n, G4_HIDDEN, N, G4_RMS_EPS);
+    gpu_rms_norm_kernel<<<N, 256, 0, ctx->stream>>>(d_x, d_output_norm, d_n, G4_HIDDEN, N, G4_RMS_EPS);
 
     uint8_t *d_out_w = d_output_w ? d_output_w : d_token_embd;
-    gpu_matmul_q4_0(stream_compute, cublas, d_s, d_out_w, d_n, N, G4_VOCAB, G4_HIDDEN, ctx->d_logits);
+    gpu_matmul_q4_0(ctx->stream, cublas, d_s, d_out_w, d_n, N, G4_VOCAB, G4_HIDDEN, ctx->d_logits);
 
-    gpu_softcap_kernel<<<(N*G4_VOCAB+255)/256, 256, 0, stream_compute>>>(ctx->d_logits, N*G4_VOCAB, G4_SOFTCAP);
+    gpu_softcap_kernel<<<(N*G4_VOCAB+255)/256, 256, 0, ctx->stream>>>(ctx->d_logits, N*G4_VOCAB, G4_SOFTCAP);
 
     cudaMemcpyAsync(logits, ctx->d_logits, (size_t)N * G4_VOCAB * sizeof(float),
-                   cudaMemcpyDeviceToHost, stream_compute);
-    cudaStreamSynchronize(stream_compute);
+                   cudaMemcpyDeviceToHost, ctx->stream);
+    cudaStreamSynchronize(ctx->stream);
 
     model->current_pos += N;
     free(h_x);

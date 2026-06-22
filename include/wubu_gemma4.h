@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -103,6 +104,7 @@ typedef struct {
     int64_t n_elems;
     int ggml_type;
     int64_t raw_bytes;
+    int data_owned;  /* 1 if data was malloc'd and needs free */
 } g4_qweight_t;
 
 /* ---- KV cache entry (per-layer) ---- */
@@ -194,6 +196,14 @@ typedef struct {
     float *buf_row;       /* [max(HIDDEN, FFN, 8192)] */
     float *buf_attn_full; /* [N, 16, 512] full-attn scores (N*16*MAX_CTX = huge — dynamic alloc) */
     int buf_size;
+
+    /* GGUF file handle for streaming weight upload to GPU.
+     * Kept open so we can read weights directly from file during inference,
+     * bypassing the mmap'd data blob which causes issues on WSL2. */
+    FILE *gguf_file;           /* File handle, kept open for weight streaming */
+    uint64_t gguf_data_offset; /* Offset in file where data blob starts */
+    int gguf_n_tensors;        /* Number of tensors */
+    void *gguf_tensor_info;    /* Array of gguf_tensor_info for all tensors */
 } g4_model_t;
 
 /* ---- API ---- */
