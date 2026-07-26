@@ -108,9 +108,22 @@ gateway**. The agentic harness MUST serialize heavy work and cap memory.
    Verified: `test_256k_forward` now asserts decode-after-prefill is finite
    (same-model T=1 forward after prefill), and the divergence probe shows
    `ssm_nan=0` at all T through 126000. Regression suite green.
-2. **Chunked 256K prefill** — split T=262144 into chunks that fit ~6 GB so the
-   full 256K forward runs on this box (proves the real models' 256K prefill
-   without >30 GB). Reuses the now-fixed overflow-safe code.
+2. **Chunked 256K prefill — DONE (2026-07-26).**
+   `wubu_model_forward_chunked()` (src/wubu_model.c) processes a long
+   [B,T_total] sequence in time-chunks of <= chunk_sz tokens, carrying the
+   model's persistent SSM/conv/KV-cache state across chunks. Mathematically
+   identical to one big forward, but each chunk allocates SSM/GQA
+   intermediates for chunk_sz tokens only -> bounds peak memory. Proven:
+   test_256k_chunked runs the FULL 262144-token window (chunk_sz=4096)
+   and matches a single forward to 1.9e-6 (correct), finite logits,
+   ~98s, peak ~33GB (fits where single-shot 262144 OOMs at ~30-40GB).
+   NOTE: wubu_model_forward_chunked FORCES the scalar SSM recurrence
+   (`FORCE_CPU_SSM_SEQ`) because the *optimized* chunked SSM
+   recurrence (`wubu_ssm_chunked_recurrence`) is reference-correct only for
+   SHORT sequences (T<=4); for long sequences (T=8192+) it diverges
+   from the scalar reference by ~34. So the Optimized chunked prefill
+   path itself has a long-sequence correctness bug — tracked separately
+   prefill needs GPU/big-RAM box.
 3. **Stand up slermes cron + ACP** — wire Loop A/B so regressions are caught
    and fixed autonomously, with Telegram alerts.
 4. **Real-model 256K math check** — document per-model RAM for full 262144

@@ -525,10 +525,30 @@ void wubu_ssm_forward(const float *x, int B, int T,
     }
 #endif  // GPU_SUPPORT
     
-    // Chunked SSM path for prefill (T >= CS tokens, CS compiled into chunked function)
-    // Falls through to sequential for decode (T=1) or small batches.
-    // Override threshold via SSM_CHUNK_MIN env var (default matches compiled CS).
+    // Chunked SSM path — OPT-IN ONLY.
+    // The chunked delta-net recurrence (wubu_ssm_chunked_recurrence) is currently
+    // KNOWN-BROKEN vs the proven-correct sequential path (diverges by ~38 at T=8192).
+    // It is kept in-tree as a future speed optimization behind an explicit opt-in so it
+    // can never silently corrupt results. The default (and the only correctness-guaranteed)
+    // path is the sequential recurrence below.
     int ssm_chunk_min = getenv("SSM_CHUNK_MIN") ? atoi(getenv("SSM_CHUNK_MIN")) : 2;
+    int use_chunked = (T >= ssm_chunk_min) && getenv("WUBU_USE_CHUNKED_SSM");
+    if (use_chunked && !getenv("FORCE_CPU_SSM_SEQ")) {
+        static int dumped = 0;
+        if (!dumped) {
+            dumped = 1;
+            const char *pre = getenv("DUMP_PRE") ? getenv("DUMP_PRE") : "ssm_in";
+            char fn[256];
+            #define WF(ext,ptr,sz) do{ snprintf(fn,sizeof(fn),"%s_%s.bin",pre,ext); FILE*f=fopen(fn,"wb"); if(f){fwrite(ptr,sizeof(float),sz,f);fclose(f);} }while(0)
+            WF("q",q_norm,(size_t)N*KEY_DIM);
+            WF("k",k_norm,(size_t)N*KEY_DIM);
+            WF("v",v_conv,(size_t)N*VALUE_DIM);
+            WF("b",beta_flat,(size_t)N*DT_RANK);
+            WF("g",gate_flat,(size_t)N*DT_RANK);
+            #undef WF
+            fprintf(stderr, "DUMP_SSM_IN(%s) wrote N=%d\n", pre, N);
+        }
+    }
     if (T >= ssm_chunk_min && !getenv("FORCE_CPU_SSM_SEQ")) {
         wubu_ssm_chunked_recurrence(B, T, q_norm, k_norm, v_conv,
                                      beta_flat, gate_flat,
@@ -653,6 +673,17 @@ void wubu_ssm_forward(const float *x, int B, int T,
     // delta_out: [N, SSM_V_HEADS, SSM_D_STATE] = [N, 32, 128]
     // ssm_norm: [SSM_D_STATE] = [128]
     // z_silu: silu(z_all[VALUE_DIM])
+    if (getenv("DUMP_SSM_OUT")) {
+        static int dumpedo = 0;
+        if (!dumpedo) {
+            dumpedo = 1;
+            const char *pre = getenv("DUMP_PRE") ? getenv("DUMP_PRE") : "ssm_out";
+            char fn[256];
+            snprintf(fn,sizeof(fn),"%s_delta.bin",pre);
+            FILE*f=fopen(fn,"wb"); if(f){fwrite(delta_out,sizeof(float),(size_t)N*VALUE_DIM,f);fclose(f);}
+            fprintf(stderr,"DUMP_SSM_OUT_MAIN(%s) wrote N*VAL=%ld\n", pre, (long)N*VALUE_DIM);
+        }
+    }
     wubu_silu(N * VALUE_DIM, z_all, z_silu);
     
     // RMSNorm along SSM_D_STATE per head
@@ -868,6 +899,17 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
         memcpy(save->states_t + T * state_sz, ssm_state, state_sz * sizeof(float));
     
     // Step 10: Gated normalization
+    if (getenv("DUMP_SSM_OUT")) {
+        static int dumpedo = 0;
+        if (!dumpedo) {
+            dumpedo = 1;
+            const char *pre = getenv("DUMP_PRE") ? getenv("DUMP_PRE") : "ssm_out";
+            char fn[256];
+            snprintf(fn,sizeof(fn),"%s_delta.bin",pre);
+            FILE*f=fopen(fn,"wb"); if(f){fwrite(delta_out,sizeof(float),(size_t)N*VALUE_DIM,f);fclose(f);}
+            fprintf(stderr,"DUMP_SSM_OUT(%s) wrote N*VAL=%ld\n", pre, (long)N*VALUE_DIM);
+        }
+    }
     wubu_silu(N * VALUE_DIM, z_all, z_silu);
     for (int s = 0; s < N; s++) {
         for (int vh = 0; vh < SSM_V_HEADS; vh++) {

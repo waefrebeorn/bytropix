@@ -208,21 +208,18 @@ void wubu_ssm_chunked_recurrence(
                 lhs[(size_t)i * CS + i] = 1.0f;
             }
 
-            // Solve L^T @ X = -L  (L unit lower, L^T unit upper)
-            // Bottom-up forward sub for L^T upper triangular
+            // Solve A = (I - L)^{-1}  (L = strict_lower(kb), recovered as lhs - I)
+            // Forward substitution for lhs_orig @ A = I, where lhs_orig = I - L:
+            //   A[i][j] = (i==j) + sum_{k<i} L[i][k] * A[k][j]
+            // Note lhs = I + L, so L[i][k] = lhs[i][k] (for k < i, off-diagonal); lhs[i][i] = 1.
             for (int j = 0; j < CS; j++) {
-                for (int i = CS - 1; i >= 0; i--) {
-                    float b = (i > j) ? -kb[(size_t)i * CS + j] : 0.0f;
-                    float s = b;
-                    for (int k = i + 1; k < CS; k++)
-                        s -= lhs[(size_t)k * CS + i] * attn[(size_t)k * CS + j];
+                for (int i = 0; i < CS; i++) {
+                    float s = (i == j) ? 1.0f : 0.0f;
+                    for (int k = 0; k < i; k++)
+                        s += lhs[(size_t)i * CS + k] * attn[(size_t)k * CS + j];
                     attn[(size_t)i * CS + j] = s;
                 }
             }
-            // A = I + X
-            for (int i = 0; i < CS; i++)
-                attn[(size_t)i * CS + i] += 1.0f;
-
             // --- intra = A^T @ v_b [d, CS] ---
             for (int dim = 0; dim < d; dim++)
                 for (int t = 0; t < CS; t++) {
@@ -256,14 +253,17 @@ void wubu_ssm_chunked_recurrence(
                     qg[(size_t)t * d + dim] = qc[(size_t)t * d + dim] * ge;
             }
 
-            // --- kg = k * exp(g_last - G) [CS, d] ---
+            // --- kg = k * exp(g_last - g_cs) [CS, d] ---  (llama.cpp: key_gdiff)
+            // g_last = g_cs[cur_nt - 1];  g_diff = g_last - g_cs[z]  (clamped)
             for (int t = 0; t < CS; t++) {
                 float gd = expf(fminf(g_last - g_cs[t], 80.0f));
                 for (int dim = 0; dim < d; dim++)
                     kg[(size_t)t * d + dim] = kc[(size_t)t * d + dim] * gd;
             }
 
-            // --- v_prime = k_cd^T @ s_t [CS, d] ---
+            // --- v_prime = k_cd^T @ s_t [CS, d] ---  (llama.cpp: v_prime = k_cd @ S)
+            // k_cd = (k_b * exp(G))^T @ A  (already computed as kbd).
+            // v_prime[t] = kbd[:, t]^T @ s_t = sum_z kbd[z, t] * s_t[z, dim]
             for (int t = 0; t < CS; t++)
                 for (int dim = 0; dim < d; dim++) {
                     float s = 0;
@@ -272,12 +272,15 @@ void wubu_ssm_chunked_recurrence(
                     v_prime[(size_t)t * d + dim] = s;
                 }
 
-            // --- v_new = v_t - v_prime [CS, d] ---
+            // --- v_new = v_t - v_prime [CS, d] ---  (llama.cpp: v_t_new = v_t - v_prime)
             for (int t = 0; t < CS; t++)
                 for (int dim = 0; dim < d; dim++)
                     v_new[(size_t)t * d + dim] = v_t[(size_t)t * d + dim] - v_prime[(size_t)t * d + dim];
 
             // --- v_attn = v_new^T @ kq + s_t^T @ q_g [d, CS] ---
+            // llama.cpp:  o_ch = (s @ q_g_exp) + (v_t_new @ kq)
+            //   s_t^T @ q_g : q_g = q * exp(G)   -> term = sum_z s_t[z][dim] * q_g[t][z]
+            //   v_new^T @ kq : kq = decay ⊙ (k^T @ q) -> term = sum_z v_new[z][dim] * kq[z][t]
             for (int dim = 0; dim < d; dim++)
                 for (int t = 0; t < CS; t++) {
                     float s = 0;
@@ -296,6 +299,8 @@ void wubu_ssm_chunked_recurrence(
             }
 
             // --- State update: s_t = s_t * exp(g_last) + kg^T @ v_new ---
+            // llama.cpp:  last_state = last_state * g_last_exp + kg @ v_t_new
+            //   kg = k * exp(g_last - g_cs)   (key_gdiff),  kg^T @ v_new
             for (int dr = 0; dr < d; dr++)
                 for (int dc = 0; dc < d; dc++) {
                     float s = 0;
@@ -315,6 +320,16 @@ void wubu_ssm_chunked_recurrence(
 
         transpose_mat(d, s_t, h);
         free(scr);
+    }
+
+    if (getenv("DUMP_REC_OUT")) {
+        static int dumped = 0;
+        if (!dumped) {
+            dumped = 1;
+            FILE *f = fopen("/tmp/rec_delta.bin", "wb");
+            if (f) { fwrite(delta_out, sizeof(float), (size_t)hv * T * d, f); fclose(f); }
+            fprintf(stderr, "DUMP_REC_OUT wrote %ld\n", (long)hv*T*d);
+        }
     }
 
 cleanup:
