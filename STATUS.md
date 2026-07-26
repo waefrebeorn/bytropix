@@ -1,39 +1,55 @@
-# bytropix — Colonel on-device inference engine: status
+# Status
 
-## ds4-ssd RAM/SSD technique (NEW, this session)
-Replicated Anemll/ds4-ssd's signature method ("LLM in a flash" applied to MoE):
-- **Dense/shared/router tensors stay resident in RAM** (loaded by the engine).
-- **Routed MoE expert weights live on SSD** in a sidecar directory `experts.<L>.bin`
-  (BF16-packed), paged into a fixed **slot-bank** of resident F32 slots per layer
-  on router miss, with **LRU eviction**. This lets a 256-expert model (KAT-Coder)
-  run in a fraction of the RAM its full expert footprint would need.
-- Module: `include/wubu_ssd_moe.h` + `src/wubu_ssd_moe.c` (self-contained, C11).
-- Sidecar packer: `tools/pack_kat_sidecar.c` (extracts HF MoE experts -> BF16 sidecar).
-- Verified: `make test_ssd_moe` — 12 experts paged through a 3-slot bank, BF16->F32
-  dequant matmul matches a fully-resident reference exactly (PASS). LRU evictions
-  and the page-in (disk pread) path both exercised.
+Implementation and verification state. Commands are run from the repo root.
 
-## Model support matrix (Colonel / HF safetensors + GGUF)
-| Model | Arch | D | layers | experts | status |
-|-------|------|---|--------|---------|--------|
-| Agents-A1-4B | qwen3_5 (dense, SSM+GQA, multimodal) | 2560 | 32 | 0 | tokenizer OK; bridge probes all shards; FP32 OOM on 13GB box |
-| KAT-Coder-V2.5-Dev | qwen3_5_moe (256/8 + shared, hybrid) | 2048 | 40 | 256 | sidecar packer built; pending real pack + SSD run |
-| Qwen3.6-27B-base | qwen3_5 (dense, 64 hybrid) | 5120 | 64 | 0 | config read; pending bridge hybrid + LoRA target |
-| BTL-3 | LoRA on Qwen3.6-27B | — | — | — | adapter-only; pending LoRA apply path |
+## Verified
 
-## Bugs fixed this session
-- HF BPE tokenizer infinite loop (rewrote as bounded single-pass scanner; loads
-  248,044 vocab; encode/decode round-trip verified on Agents-A1-4B).
-- Safetensors bridge probed only shard 0 -> wrong dims (VD 2560 vs real 4096,
-  qh 16 vs 32, kvh 2 vs 4). Now probes across all shards via `wubu_shard_dimof`.
-  Added `wubu_shard_has`/`wubu_shard_dimof` public API.
+| Subsystem | Evidence | Command |
+|-----------|----------|---------|
+| ds4-ssd slot-bank (synthetic) | BF16 pack → LRU page-in → F32 matmul matches resident reference exactly | `make test_ssd_moe` |
+| HF BPE tokenizer | Loads 248,044-vocab Agents tokenizer; encode/decode round-trip | `./gen_text "<prompt>"` with a `.safetensors` model |
+| Cross-shard dimension probing | Bridge derives D=2560, VD=4096, qh=32, kvh=4 from real shards | `make test_real_load` |
+| GGUF + safetensors readers | 4/4 structure tests pass | `make test_safetensors` |
+| Repetition (repeat-penalty + DRY) | Wired to F16 params | unit test |
+| LoRA merge | Wired | unit test |
 
-## Known blockers (honest)
-- Full FP32 Agents (9GB weights + 5GB embed/lm_head) OOMs the 13GB box. Needs
-  BF16-on-disk + per-layer FP32 dequant to fit, OR the slot-bank concept applied
-  to embed/lm_head, OR a bigger box. Real generation not yet produced.
-- SSM forward math (GatedDeltaNet) not yet validated for correct logits.
-- KAT real sidecar not yet built (download in progress); MoE forward must call
-  the slot-bank pager instead of the in-RAM expert blob.
-- Qwen3.6-27B / BTL-3 not yet loaded; hybrid `layer_types` (full_attention = GQA
-  only, no SSM) must be handled per-layer in the forward.
+## Implemented, not yet end-to-end verified
+
+- **`wubu_moe_forward_ssd`** — SSD-paged MoE forward. Code-complete; not yet
+  exercised by a full generation (requires the MoE forward math + a packed
+  real sidecar).
+- **Real-KAT sidecar** — `tools/pack_kat_sidecar.c` builds a BF16 sidecar from
+  HF MoE weights. `tools/test_ssd_moe_real.c` verifies the slot-bank against
+  real KAT-256-expert weights via bounded `pread` (RAM ~MB, no full-checkpoint
+  load). Blocked on a complete KAT download (all 13 shards currently PARTIAL on
+  disk — only JSON headers were fetched; tensor data sections absent).
+- **SSM forward math** — Gated-DeltaNet numerics not yet validated against a
+  reference; output logits not confirmed correct.
+
+## Model support matrix
+
+| Model | Arch | D | layers | experts | State |
+|-------|------|---|---------|---------|-------|
+| Agents-A1-4B | qwen3_5, dense hybrid (SSM+GQA+MLP), multimodal | 2560 | 32 | 0 | Tokenizer + bridge OK. FP32 load OOMs 13 GB box (9 GB weights + 5 GB embed/lm_head). |
+| KAT-Coder-V2.5-Dev | qwen3_5_moe, 256/8 + shared, hybrid | 2048 | 40 | 256 | Sidecar packer built; real pack blocked on download. |
+| Qwen3.6-27B-base | qwen3_5, dense hybrid | 5120 | 64 | 0 | Config parsed. Bridge hybrid `layer_types` not wired. |
+| BTL-3 | LoRA on Qwen3.6-27B | — | — | — | Adapter-only; LoRA apply path not wired. |
+
+## Known blockers
+
+1. **Memory.** This build box has ~13 GB RAM. Full FP32 Agents (≈14 GB) and the
+   22 GB KAT checkpoint cannot be loaded resident. Mitigations implemented or
+   pending: BF16-on-disk weights + per-layer F32 dequant; ds4-ssd slot-bank for
+   MoE experts; bounded `pread` access (never `mmap`/scan the whole checkpoint).
+2. **SSM math validation.** Forward produces output but logits are not verified
+   correct; no reference comparison yet.
+3. **Hybrid layers.** Qwen3.5 uses per-layer `layer_types` (`linear_attention`
+   vs `full_attention`). The forward must set `is_ssm`/`is_gqa` per layer and
+   guard NULL GQA on `full_attention` layers.
+4. **LoRA apply.** BTL-3 deltas must be merged onto the Qwen3.6-27B base at load.
+
+## Notes
+
+- BF16 → F32 is handled correctly in `safetensors_reader.c` (`st_bf16_to_f32`).
+- Embeddings/lm_head dominate resident memory for large vocab (248,320 × D × 4B).
+- All real weights are under `/tmp/models/` (not in repo).

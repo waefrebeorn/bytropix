@@ -26,6 +26,9 @@
 | `test_ssm` | SSM unit test vs golden vectors |
 | `test_full_moe` | Full MoE forward verification |
 | `test_moe_*` | MoE router, expert weights, quantization |
+| `test_ssd_moe` | Slot-bank unit test: 12 experts, 3-slot bank, exact matmul |
+| `test_ssd_moe_real` | Slot-bank vs real KAT-256-expert weights (bounded pread) |
+| `pack_kat_sidecar` | Build BF16 sidecar from HF MoE checkpoint |
 | `test_kv_cache` | KV cache match vs full recompute |
 | `compare_*` | Quant types vs F32 SGEMM (Q4_K, Q5_K, Q6_K, IQ2_XXS, etc.) |
 | `api_server` | `api_server.c` | OpenAI-compatible API server | `make api_server` |

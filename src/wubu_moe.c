@@ -219,6 +219,99 @@ void moe_expert_forward_dequant(const float *x,
 // ============================================================
 // Main MoE Forward: Router + Top-K Experts + Shared Expert
 // ============================================================
+void wubu_moe_forward_ssd(const float *x, int B, int T,
+                          const moe_weights_t *w,
+                          wubu_ssd_moe_t *ssd, int layer,
+                          float *output,
+                          int *selected_experts,
+                          int n_active_experts, int n_experts, int d_model, int d_ff) {
+    int N = B * T;
+
+    float *scores = (float *)malloc((size_t)N * n_experts * sizeof(float));
+    wubu_moe_router(x, B, T, w->ffn_gate_inp, scores, n_experts, d_model);
+
+    int *topk_indices = (int *)malloc((size_t)N * n_active_experts * sizeof(int));
+    float *topk_weights = (float *)malloc((size_t)N * n_active_experts * sizeof(float));
+
+    /* softmax + top-k per token (identical to in-RAM path) */
+    for (int s = 0; s < N; s++) {
+        float *score_s = scores + s * n_experts;
+        float max_val = -INFINITY;
+        for (int e = 0; e < n_experts; e++) if (score_s[e] > max_val) max_val = score_s[e];
+        float sum_exp = 0.0f;
+        for (int e = 0; e < n_experts; e++) { score_s[e] = expf(score_s[e] - max_val); sum_exp += score_s[e]; }
+        for (int e = 0; e < n_experts; e++) score_s[e] /= sum_exp;
+        for (int k = 0; k < n_active_experts; k++) {
+            int best_e = -1; float best_w = -1.0f;
+            for (int e = 0; e < n_experts; e++) if (score_s[e] > best_w) { best_w = score_s[e]; best_e = e; }
+            topk_indices[s * n_active_experts + k] = best_e;
+            topk_weights[s * n_active_experts + k] = best_w;
+            score_s[best_e] = -1.0f;
+        }
+    }
+    if (selected_experts) memcpy(selected_experts, topk_indices, (size_t)N * n_active_experts * sizeof(int));
+
+    float *expert_out = (float *)malloc((size_t)N * d_model * sizeof(float));
+    memset(expert_out, 0, (size_t)N * d_model * sizeof(float));
+
+    for (int s = 0; s < N; s++) {
+        const float *x_s = x + s * d_model;
+        float *out_s = expert_out + s * d_model;
+
+        /* Shared expert (always resident in w) */
+        float *gate_shared = (float *)alloca((size_t)d_ff * sizeof(float));
+        float *up_shared   = (float *)alloca((size_t)d_ff * sizeof(float));
+        for (int j = 0; j < d_ff; j++) {
+            float sum_g = 0.0f, sum_u = 0.0f;
+            for (int k = 0; k < d_model; k++) {
+                sum_g += x_s[k] * w->ffn_gate_shexp[j + k * d_ff];
+                sum_u += x_s[k] * w->ffn_up_shexp[j + k * d_ff];
+            }
+            gate_shared[j] = fmaxf(0.0f, sum_g);
+            up_shared[j] = sum_u;
+        }
+        for (int k = 0; k < d_model; k++) {
+            float sum = 0.0f;
+            for (int j = 0; j < d_ff; j++) sum += gate_shared[j] * up_shared[j] * w->ffn_down_shexp[k + j * d_model];
+            out_s[k] = sum;
+        }
+        if (w->ffn_gate_inp_shexp) {
+            float gv = 0.0f;
+            for (int k = 0; k < d_model; k++) gv += x_s[k] * w->ffn_gate_inp_shexp[k];
+            gv = 1.0f / (1.0f + expf(-gv));
+            for (int k = 0; k < d_model; k++) out_s[k] *= gv;
+        }
+
+        /* Routed experts — PAGED from the SSD slot-bank. */
+        for (int ki = 0; ki < n_active_experts; ki++) {
+            int e = topk_indices[s * n_active_experts + ki];
+            float weight = topk_weights[s * n_active_experts + ki];
+            float *exp[3];
+            int r = wubu_ssd_moe_get(ssd, layer, e, exp);
+            if (r < 0) continue;  /* missing expert: skip (defensive) */
+            const float *g = exp[0], *u = exp[1], *d = exp[2];
+            for (int j = 0; j < d_ff; j++) {
+                float sum = 0.0f;
+                for (int k = 0; k < d_model; k++) sum += x_s[k] * g[k + j * d_model];
+                gate_shared[j] = fmaxf(0.0f, sum);
+                sum = 0.0f;
+                for (int k = 0; k < d_model; k++) sum += x_s[k] * u[k + j * d_model];
+                up_shared[j] = sum;
+            }
+            for (int k = 0; k < d_model; k++) {
+                float sum = 0.0f;
+                for (int j = 0; j < d_ff; j++) sum += gate_shared[j] * up_shared[j] * d[k + j * d_model];
+                out_s[k] += weight * sum;
+            }
+        }
+    }
+
+    memcpy(output, expert_out, (size_t)N * d_model * sizeof(float));
+    free(expert_out);
+    free(topk_indices);
+    free(topk_weights);
+    free(scores);
+}
 
 void wubu_moe_forward(const float *x, int B, int T,
                       const moe_weights_t *w,

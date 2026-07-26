@@ -5,6 +5,7 @@
 
 #include "gguf_reader.h"
 #include "wubu_dims.h"
+#include "wubu_ssd_moe.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -108,6 +109,20 @@ void moe_expert_forward_dequant(const float *x,
 
 // Free one layer's MoE weights
 void wubu_moe_free_layer(moe_weights_t *moe);
+
+// ============================================================
+// SSD-paged MoE forward (ds4-ssd slot-bank)
+// Like wubu_moe_forward, but routed-expert weights are NOT resident: each
+// selected expert is paged into RAM from a sidecar via wubu_ssd_moe_get()
+// (LRU slot-bank, disk pread). The router and shared expert stay in-RAM
+// (from w). ssd must be opened with wubu_ssd_moe_open(sidecar_dir, slot_bank).
+// This is what lets a 256-expert model run in a fraction of full-expert RAM.
+void wubu_moe_forward_ssd(const float *x, int B, int T,
+                          const moe_weights_t *w,
+                          wubu_ssd_moe_t *ssd, int layer,
+                          float *output,
+                          int *selected_experts,
+                          int n_active_experts, int n_experts, int d_model, int d_ff);
 
 // Helper: compute router logits and select top-k experts
 // scores: [B*T, N_EXPERTS] — output router logits

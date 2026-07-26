@@ -6,7 +6,9 @@
 |------|-------|---------|
 | `wubu_model.c` | 1,343 | Model init, forward loop, MTP head, KV cache management |
 | `wubu_ssm.c` | 2,741 | SSM Gated DeltaNet + GQA attention + AVX2 selective scan |
-| `wubu_moe.c` | 555 | MoE router, quantized expert forward, shared expert |
+| `wubu_moe.c` | 555 | MoE router, quantized expert forward, shared expert, SSD-paged forward |
+| `wubu_ssd_moe.c` | — | ds4-ssd slot-bank: SSD-paged expert weights (LRU slot-bank, pread) |
+| `wubu_tokenizer_hf.c` | — | HF BPE tokenizer (248K vocab, recursive-descent JSON) |
 | `wubu_mobius.c` | — | Möbius / Poincaré hyperbolic operations (experimental, not wired) |
 | `wubu_nested_ssm.c` | — | Nested SSM variants (experimental, not wired) |
 | `wubu_poincare_gqa.c` | — | Poincaré GQA attention (experimental, not wired) |
