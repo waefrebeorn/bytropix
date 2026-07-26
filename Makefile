@@ -430,6 +430,11 @@ test_256k: tools/test_256k.c $(CORE_OBJ)
 test_256k_context: tools/test_256k_context.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_256k_forward: tools/test_256k_forward.c $(MODEL_OBJ) gen_fixture_safetensors_model
+	$(CC) $(CFLAGS) -o $@ tools/test_256k_forward.c $(MODEL_OBJ) $(LDFLAGS)
+	./gen_fixture_safetensors_model
+	./$@
+
 test_kv_cache: tools/test_kv_cache.c $(CORE_OBJ) $(CUDA_OBJ)
 	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 

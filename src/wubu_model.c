@@ -944,7 +944,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         // Compare against F32 SGEMM when output_weight is also loaded
         if (model->output_weight && getenv("VERBOSE_OUTPUT_PROJ")) {
             float *f32_logits = (float *)malloc(N * model->vocab_size * sizeof(float));
-            #pragma omp parallel for collapse(2) if(N * model->vocab_size > 100000)
+            #pragma omp parallel for collapse(2) if((int64_t)N * model->vocab_size > 100000)
             for (int i = 0; i < N; i++) {
                 for (int j = 0; j < model->vocab_size; j++) {
                     const float *h_i = x + i * model->d_model;
@@ -974,7 +974,7 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     } else if (model->output_weight) {
         // F32 output projection: logits[v] = sum_k x[k] * output_weight[v*d_model + k]
         // (F32 safetensors/HF path: output_weight_q is NULL, output_weight holds plain f32 lm_head)
-        #pragma omp parallel for if(N * model->vocab_size > 100000)
+        #pragma omp parallel for if((int64_t)N * model->vocab_size > 100000)
         for (int i = 0; i < N; i++) {
             const float *h_i = x + i * model->d_model;
             float *log_i = logits + i * model->vocab_size;

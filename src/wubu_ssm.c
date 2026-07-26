@@ -246,7 +246,7 @@ void wubu_conv1d(int B, int T, int C, int k,
     // input: [B, T+k-1, C] — already padded with k-1 zeros at start
     // kernel: [k, C]
     // output: [B, T, C]
-    #pragma omp parallel for collapse(2) if(B * T * C * k > 100000)
+    #pragma omp parallel for collapse(2) if((int64_t)B * T * C * k > 100000)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             for (int c = 0; c < C; c++) {
@@ -276,6 +276,22 @@ static inline float tgt_safe_expf(float x) {
     if (x > 80.0f) x = 80.0f;
     if (x < -80.0f) return 0.0f;
     return expf(x);
+}
+
+// Recurrent-state integrity guard — see wubu_ssm_chunked.c for rationale.
+// Bounds the persistent SSM state so a divergent decay (untrained weights or a
+// transient gate spike) cannot permanently poison model->ssm_states. No-op for
+// trained models, which keep their state well below the clamp threshold.
+#define SSM_STATE_CLAMP 1e3f
+
+static inline void ssm_state_clamp(float *h, int n) {
+    for (int i = 0; i < n; i++) {
+        float v = h[i];
+        if (v > SSM_STATE_CLAMP) h[i] = SSM_STATE_CLAMP;
+        else if (v < -SSM_STATE_CLAMP) h[i] = -SSM_STATE_CLAMP;
+        else if (!(v == v)) h[i] = 0.0f;                 // NaN
+        else if (v != 0.0f && v * 0.5f == v) h[i] = 0.0f; // Inf
+    }
 }
 
 // ============================================================
@@ -600,6 +616,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
                 
                 // State update with diff (AVX2)
                 avx2_state_update(h, k_vh, diff, bg);
+                ssm_state_clamp(h, SSM_D_STATE * SSM_D_STATE);
                 if (dd && (vh == 0 || vh == 2)) {
                     for (int ri = 0; ri < 3; ri++) for (int rj = 0; rj < 3; rj++)
                         printf("C_DEBUG state_after[%d][%d]=%.8f\\n", ri, rj, h[ri * SSM_D_STATE + rj]);
@@ -836,6 +853,7 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
                     for (int j = 0; j < SSM_D_STATE; j++)
                         h[i * SSM_D_STATE + j] += k_vh[j] * diff * bg;
                 }
+                ssm_state_clamp(h, SSM_D_STATE * SSM_D_STATE);
                 
                 float *out = delta_out + (s * SSM_V_HEADS + vh) * SSM_D_STATE;
                 memset(out, 0, SSM_D_STATE * sizeof(float));

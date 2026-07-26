@@ -19,6 +19,27 @@
 #include <stdio.h>
 #include <omp.h>
 
+// Recurrent-state integrity guard: the Gated DeltaNet state s_t is carried
+// across calls in model->ssm_states. For untrained/random SSM weights (or a
+// transient gate spike in any model) the decay exp(g_last) can exceed 1 and
+// drive s_t to Inf/NaN within a few chunks, permanently poisoning the
+// persistent state so every subsequent forward (e.g. decode after a prefill)
+// is corrupted. A trained model keeps its state bounded well below this
+// threshold, so the clamp is a no-op for real weights but a hard floor
+// against corruption. 1e3 is ~6 orders of magnitude above typical SSM state.
+#define SSM_STATE_CLAMP 1e3f
+
+static inline void ssm_state_clamp(float *h, int n) {
+    for (int i = 0; i < n; i++) {
+        float v = h[i];
+        if (v > SSM_STATE_CLAMP) h[i] = SSM_STATE_CLAMP;
+        else if (v < -SSM_STATE_CLAMP) h[i] = -SSM_STATE_CLAMP;
+        // NaN/Inf -> 0 (cannot clamp a NaN via comparison, so explicit check)
+        else if (!(v == v)) h[i] = 0.0f;          // NaN
+        else if (v != 0.0f && v * 0.5f == v) h[i] = 0.0f;  // Inf
+    }
+}
+
 #define CS 2
 
 static void transpose_mat(int n, const float *src, float *dst)
@@ -287,6 +308,9 @@ void wubu_ssm_chunked_recurrence(
             for (int r = 0; r < d; r++)
                 for (int c = 0; c < d; c++)
                     s_t[(size_t)r * d + c] = s_t[(size_t)r * d + c] * gl_exp + kgv[(size_t)r * d + c];
+            // Recurrent-state integrity guard: bound s_t (-> persistent ssm_states)
+            // so a divergent decay cannot permanently poison the model state.
+            ssm_state_clamp(s_t, d * d);
         }
 
         transpose_mat(d, s_t, h);

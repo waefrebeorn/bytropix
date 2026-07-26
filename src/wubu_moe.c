@@ -254,13 +254,17 @@ void wubu_moe_forward_ssd(const float *x, int B, int T,
     float *expert_out = (float *)malloc((size_t)N * d_model * sizeof(float));
     memset(expert_out, 0, (size_t)N * d_model * sizeof(float));
 
+    // Per-token expert scratch buffers (heap, not alloca: alloca grows the
+    // OpenMP worker stack and overflows it under nested parallelism / large
+    // d_ff — a real stack-overflow crash at scale).
+    float *gate_shared = (float *)malloc((size_t)d_ff * sizeof(float));
+    float *up_shared   = (float *)malloc((size_t)d_ff * sizeof(float));
+
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * d_model;
         float *out_s = expert_out + s * d_model;
 
         /* Shared expert (always resident in w) */
-        float *gate_shared = (float *)alloca((size_t)d_ff * sizeof(float));
-        float *up_shared   = (float *)alloca((size_t)d_ff * sizeof(float));
         for (int j = 0; j < d_ff; j++) {
             float sum_g = 0.0f, sum_u = 0.0f;
             for (int k = 0; k < d_model; k++) {
@@ -308,6 +312,8 @@ void wubu_moe_forward_ssd(const float *x, int B, int T,
 
     memcpy(output, expert_out, (size_t)N * d_model * sizeof(float));
     free(expert_out);
+    free(gate_shared);
+    free(up_shared);
     free(topk_indices);
     free(topk_weights);
     free(scores);
@@ -359,6 +365,12 @@ void wubu_moe_forward(const float *x, int B, int T,
     float *expert_out = (float *)malloc((size_t)N * d_model * sizeof(float));
     memset(expert_out, 0, (size_t)N * d_model * sizeof(float));
 
+    // Per-token expert scratch buffers (heap, not alloca: alloca grows the
+    // OpenMP worker stack and overflows it under nested parallelism / large
+    // d_ff — a real stack-overflow crash at scale).
+    float *gate_shared = (float *)malloc((size_t)d_ff * sizeof(float));
+    float *up_shared   = (float *)malloc((size_t)d_ff * sizeof(float));
+
     // Requires Qwen-style layout for quantized weights
     // For DiffusionGemma (different layout), would need adaptation
     #pragma omp parallel for if(N > 1)
@@ -368,8 +380,6 @@ void wubu_moe_forward(const float *x, int B, int T,
 
         // Shared expert: always active (Qwen-style). Skip if absent
         // (dense models without a shared expert have ffn_*_shexp = NULL).
-        float *gate_shared = (float *)alloca((size_t)d_ff * sizeof(float));
-        float *up_shared = (float *)alloca((size_t)d_ff * sizeof(float));
         if (w->ffn_gate_shexp) {
         // gate_proj: x_s @ ffn_gate_shexp^T -> [D_FF], SiLU
         // up_proj: x_s @ ffn_up_shexp^T -> [D_FF]
@@ -437,6 +447,8 @@ void wubu_moe_forward(const float *x, int B, int T,
 
     memcpy(output, expert_out, (size_t)N * d_model * sizeof(float));
     free(expert_out);
+    free(gate_shared);
+    free(up_shared);
     free(topk_indices);
     free(topk_weights);
     free(scores);
