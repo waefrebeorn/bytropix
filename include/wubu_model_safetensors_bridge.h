@@ -41,6 +41,14 @@ extern "C" {
 int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
                                const wubu_adapter_t *ad);
 
+/* Like wubu_model_init_safetensors, but routes routed MoE experts through a
+ * ds4-ssd sidecar (wubu_ssd_moe_t) instead of loading them resident.
+ * sidecar_dir must contain experts.<L>.bin + manifest.json (see docs/ssd_moe.md).
+ * Pass NULL for the standard in-RAM path. Returns 0 on success. */
+int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
+                                    const wubu_adapter_t *ad,
+                                    const char *sidecar_dir);
+
 /* Convenience: open the checkpoint, detect arch via adapter, init. */
 int wubu_model_init_auto(wubu_model_t *m, const char *path);
 

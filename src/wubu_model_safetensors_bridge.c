@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <unistd.h>
 
 /* ---- helpers: load an F32 tensor (optionally transposed) from safetensors ---- */
 static float *st_load_f32(st_ctx *st, const char *name, int64_t *nelems) {
@@ -58,6 +59,12 @@ static int dimof_sc(wubu_shard_ctx_t *sc, const char *n, int i) {
 
 int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
                                const wubu_adapter_t *ad) {
+    return wubu_model_init_safetensors_ssd(m, path, ad, NULL);
+}
+
+int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
+                                   const wubu_adapter_t *ad,
+                                   const char *sidecar_dir) {
     if (!m || !path || !ad) return -1;
     memset(m, 0, sizeof(*m));
 
@@ -68,6 +75,17 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
      * probing below; all weight loads go through `sc`. */
     wubu_shard_ctx_t *sc = wubu_shard_open(path);
     if (!sc) { fprintf(stderr, "bridge: cannot open shard set %s\n", path); st_close(st); return -1; }
+
+    /* ds4-ssd: open the expert sidecar. Routed experts are paged from it at
+     * forward time; the big in-RAM expert blobs are skipped below. */
+    wubu_ssd_moe_t *ssd = NULL;
+    int ssd_slots = sidecar_dir ? (getenv("SSD_SLOTS") ? atoi(getenv("SSD_SLOTS")) : 8) : 0;
+    if (sidecar_dir && ad->n_experts > 0) {
+        ssd = wubu_ssd_moe_open(sidecar_dir, ssd_slots > 0 ? ssd_slots : 8);
+        if (!ssd) { fprintf(stderr, "bridge: cannot open sidecar %s\n", sidecar_dir); st_close(st); wubu_shard_close(sc); return -1; }
+        m->ssd_moe = ssd;
+        m->enable_moe = true;
+    }
 
     /* ---- Derive REAL model dimensions from actual tensor shapes ----
      * Probe across ALL shards (a single shard only holds a subset of the
@@ -174,6 +192,19 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
 
         /* ---- MoE / dense MLP (mlp.*) ---- */
         int nExp = nE > 0 ? nE : 1; /* dense => single-expert MoE */
+        if (ssd) {
+            /* ds4-ssd: routed experts live in the sidecar; do NOT allocate or
+             * load the 3.2 GB/layer resident blobs. Forward pages them. */
+            ly->moe.ffn_gate_exps = NULL;
+            ly->moe.ffn_up_exps   = NULL;
+            ly->moe.ffn_down_exps = NULL;
+            ly->moe.load_from_blob = false;
+            /* Router (still resident) + shared expert below. */
+            if (nE > 0) {
+                tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.gate.weight", l);
+                ly->moe.ffn_gate_inp = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D, nE] */
+            }
+        } else {
         ly->moe.ffn_gate_exps = (float *)calloc((size_t)D * dff * nExp, sizeof(float));
         ly->moe.ffn_up_exps   = (float *)calloc((size_t)D * dff * nExp, sizeof(float));
         ly->moe.ffn_down_exps = (float *)calloc((size_t)dff * D * nExp, sizeof(float));
@@ -198,21 +229,6 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
                 free(g0);
                 tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.gate.weight", l);
                 ly->moe.ffn_gate_inp = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D, nE] */
-                /* Shared expert (always active in Qwen3.5 MoE). */
-                if (m->shared_expert_ff > 0) {
-                    int sh = m->shared_expert_ff;
-                    tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.gate_proj.weight", l);
-                    float *sg = wubu_shard_load_f32_t(sc, nm, D, sh);
-                    tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.up_proj.weight", l);
-                    float *su = wubu_shard_load_f32_t(sc, nm, D, sh);
-                    tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.down_proj.weight", l);
-                    float *sd = wubu_shard_load_f32_t(sc, nm, sh, D);
-                    if (sg) { ly->moe.ffn_gate_shexp = (float*)realloc(ly->moe.ffn_gate_shexp, (size_t)D*sh*sizeof(float)); memcpy(ly->moe.ffn_gate_shexp, sg, (size_t)D*sh*sizeof(float)); free(sg); }
-                    if (su) { ly->moe.ffn_up_shexp   = (float*)realloc(ly->moe.ffn_up_shexp, (size_t)D*sh*sizeof(float)); memcpy(ly->moe.ffn_up_shexp, su, (size_t)D*sh*sizeof(float)); free(su); }
-                    if (sd) { ly->moe.ffn_down_shexp = (float*)realloc(ly->moe.ffn_down_shexp, (size_t)sh*D*sizeof(float)); memcpy(ly->moe.ffn_down_shexp, sd, (size_t)sh*D*sizeof(float)); free(sd); }
-                    tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert_gate.weight", l);
-                    ly->moe.ffn_gate_inp_shexp = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D] */
-                }
             }
         } else {
             /* dense MLP: mlp.{gate,up,down}_proj -> expert 0 */
@@ -226,6 +242,23 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
             if (u) memcpy(ly->moe.ffn_up_exps,   u, (size_t)D * dff * sizeof(float));
             if (d) memcpy(ly->moe.ffn_down_exps, d, (size_t)dff * D * sizeof(float));
             free(g); free(u); free(d);
+        }
+        }
+        /* Shared expert (always active in Qwen3.5 MoE) — loaded resident for
+         * both the in-RAM and ds4-ssd paths. */
+        if (m->shared_expert_ff > 0) {
+            int sh = m->shared_expert_ff;
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.gate_proj.weight", l);
+            float *sg = wubu_shard_load_f32_t(sc, nm, D, sh);
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.up_proj.weight", l);
+            float *su = wubu_shard_load_f32_t(sc, nm, D, sh);
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.down_proj.weight", l);
+            float *sd = wubu_shard_load_f32_t(sc, nm, sh, D);
+            if (sg) { ly->moe.ffn_gate_shexp = (float*)realloc(ly->moe.ffn_gate_shexp, (size_t)D*sh*sizeof(float)); memcpy(ly->moe.ffn_gate_shexp, sg, (size_t)D*sh*sizeof(float)); free(sg); }
+            if (su) { ly->moe.ffn_up_shexp   = (float*)realloc(ly->moe.ffn_up_shexp, (size_t)D*sh*sizeof(float)); memcpy(ly->moe.ffn_up_shexp, su, (size_t)D*sh*sizeof(float)); free(su); }
+            if (sd) { ly->moe.ffn_down_shexp = (float*)realloc(ly->moe.ffn_down_shexp, (size_t)sh*D*sizeof(float)); memcpy(ly->moe.ffn_down_shexp, sd, (size_t)sh*D*sizeof(float)); free(sd); }
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert_gate.weight", l);
+            ly->moe.ffn_gate_inp_shexp = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D] */
         }
     }
 
@@ -283,6 +316,23 @@ int wubu_model_init_auto(wubu_model_t *m, const char *path) {
         wubu_adapter_t ad; memset(&ad, 0, sizeof(ad));
         if (!wubu_adapter_load(&ad, path)) {
             ad.arch = WUBU_ARCH_QWEN_FAMILY; ad.ok = 1;
+        }
+        /* ds4-ssd: if a sidecar dir sits next to the checkpoint (or KAT_SIDECAR
+         * is set), route MoE experts through it instead of resident RAM. */
+        const char *sc = getenv("KAT_SIDECAR");
+        char auto_sc[1024];
+        if (!sc) {
+            /* model dir = parent of the .safetensors file; look for ./sidecar */
+            const char *slash = strrchr(path, '/');
+            size_t dlen = slash ? (size_t)(slash - path) : 0;
+            if (dlen + 8 < sizeof(auto_sc)) {
+                memcpy(auto_sc, path, dlen);
+                strcpy(auto_sc + dlen, "/sidecar");
+                if (access(auto_sc, F_OK) == 0) sc = auto_sc;
+            }
+        }
+        if (sc && ad.n_experts > 0) {
+            return wubu_model_init_safetensors_ssd(m, path, &ad, sc);
         }
         return wubu_model_init_safetensors(m, path, &ad);
     }

@@ -19,6 +19,12 @@ Implementation and verification state. Commands are run from the repo root.
 - **`wubu_moe_forward_ssd`** — SSD-paged MoE forward. Code-complete; not yet
   exercised by a full generation (requires the MoE forward math + a packed
   real sidecar).
+- **ds4-ssd wired into load path** — `wubu_model_init_safetensors_ssd` opens a
+  sidecar (`wubu_ssd_moe_t`), sets `model->ssd_moe`, and the per-layer forward
+  dispatches to `wubu_moe_forward_ssd` (routed experts paged from disk; router +
+  shared expert stay resident). Auto-detected via `<modeldir>/sidecar` or
+  `KAT_SIDECAR` env. When active, the bridge skips the 3.2 GB/layer resident
+  expert blobs. `gen_text` builds with this path.
 - **Real-KAT sidecar** — `tools/pack_kat_sidecar.c` builds a BF16 sidecar from
   HF MoE weights. `tools/test_ssd_moe_real.c` verifies the slot-bank against
   real KAT-256-expert weights via bounded `pread` (RAM ~MB, no full-checkpoint

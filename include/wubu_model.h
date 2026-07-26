@@ -285,6 +285,11 @@ typedef struct {
     
     // MoE test: only load MoE for first N layers (0 = all)
     int moe_max_layers;
+
+    // ds4-ssd slot-bank: when non-NULL, routed MoE experts are paged from a
+    // sidecar on disk (LRU) instead of held resident. Set by the bridge when
+    // a sidecar directory is supplied. Forward uses wubu_moe_forward_ssd.
+    wubu_ssd_moe_t *ssd_moe;
     
     // MTP (Multi-Token Prediction) head for speculative decode
     mtp_head_t mtp;
