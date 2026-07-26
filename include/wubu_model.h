@@ -32,7 +32,8 @@ typedef struct {
 
 // Complete model
 #define GQA_MAX_CTX 262144  // max cached positions for KV cache (256k context)
-#define GQA_KV_DIM (GQA_KV_HEADS * GQA_HEAD_DIM)  // 512
+/* GQA_KV_DIM is provided by wubu_dims.h (WUBU_DIMS.gqa_kv_dim) so it
+ * resolves to the model's real kv dim at load time. */
 
 // KV cache format: 0=F32, 1=F16 (halves memory at cost of conversion)
 #ifndef KV_CACHE_F16

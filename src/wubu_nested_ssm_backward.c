@@ -1009,8 +1009,8 @@ void wubu_nested_ssm_backward(
                 }
 
                 // Accumulate d_q from ball output backward
-                float d_q_local[SSM_D_STATE] = {0};
-                float d_h_after[D_STATE_SZ] = {0}; // [i][j]
+                float d_q_local[SSM_D_STATE]; memset(d_q_local, 0, sizeof(d_q_local));
+                float d_h_after[D_STATE_SZ]; memset(d_h_after, 0, sizeof(d_h_after)); // [i][j]
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     float d_ball_out_i = d_ball_k[i];
                     const float *h_row = h_after_k + i * SSM_D_STATE;
@@ -1037,13 +1037,13 @@ void wubu_nested_ssm_backward(
                 // Plus all intermediate steps 9b-9f.
 
                 // For each row i, backprop through Möbius add + scalar mul
-                float d_upd_ball_i[SSM_D_STATE] = {0}; // accumulates across all rows
+                float d_upd_ball_i[SSM_D_STATE]; memset(d_upd_ball_i, 0, sizeof(d_upd_ball_i)); // accumulates across all rows
 
                 // We also need: d_bg, d_k_vh, d_v_vh, d_gg for this (b,t,vh,k)
                 float d_bg_local = 0.0f;
                 float d_gg_local = 0.0f;
-                float d_k_vh_local[SSM_D_STATE] = {0};
-                float d_v_vh_local[SSM_D_STATE] = {0};
+                float d_k_vh_local[SSM_D_STATE]; memset(d_k_vh_local, 0, sizeof(d_k_vh_local));
+                float d_v_vh_local[SSM_D_STATE]; memset(d_v_vh_local, 0, sizeof(d_v_vh_local));
 
                 for (int i = 0; i < SSM_D_STATE; i++) {
                     const float *h_decayed_row = h_decayed + i * SSM_D_STATE;
@@ -1055,8 +1055,8 @@ void wubu_nested_ssm_backward(
                     // Need d_x, d_y given d_z = d_h_after_row
                     // Use the analytical Jacobian of Möbius addition
 
-                    float d_decayed_row[SSM_D_STATE] = {0};
-                    float d_upd_for_row[SSM_D_STATE] = {0};
+                    float d_decayed_row[SSM_D_STATE]; memset(d_decayed_row, 0, sizeof(d_decayed_row));
+                    float d_upd_for_row[SSM_D_STATE]; memset(d_upd_for_row, 0, sizeof(d_upd_for_row));
                     // wubu_mobius_add(h_decayed_row, upd_ball, SSM_D_STATE, R_k, h_after_row)
 
                     float c = 1.0f / (R_k * R_k);

@@ -1,0 +1,1 @@
+{"architectures":["Qwen3ForCausalLM"],"base_model":"Qwen/Qwen3.6-27B","hidden_size":5120,"num_hidden_layers":64}

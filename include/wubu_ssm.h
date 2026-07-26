@@ -12,36 +12,24 @@ extern "C" {
 // Qwen3.6-35B-A3B Gated Delta Net (SSM) Module
 // ============================================================
 
-// Hyperparameters (fixed for Qwen3.6-35B-A3B qwen35moe architecture)
-#define D_MODEL     2048   // hidden dimension
-#define D_INNER     4096   // SSM inner dimension (value_dim)
-#define SSM_K_HEADS 16     // SSM num_k_heads (ssm_n_group)
-#define SSM_V_HEADS 32     // SSM num_v_heads (ssm_dt_rank)
-#define SSM_D_STATE 128    // SSM state dimension (head_k_dim = head_v_dim)
-#define KEY_DIM     (SSM_D_STATE * SSM_K_HEADS)   // 2048
-#define VALUE_DIM   (SSM_D_STATE * SSM_V_HEADS)   // 4096
-#define CONV_DIM    (KEY_DIM * 2 + VALUE_DIM)     // 8192 = Q(2048)+K(2048)+V(4096)
-#define CONV_KERNEL 4      // conv1d kernel size
-#define DT_RANK     32     // ssm_time_step_rank
+// Hyperparameters -- now runtime via wubu_dims.h (WUBU_DIMS global).
+// bytropix's forward reads D_MODEL / CONV_DIM / VALUE_DIM / etc. which
+// resolve to the model's real dimensions at load time. See wubu_dims.h.
+#include "wubu_dims.h"
 
-// GQA hyperparameters
-#define GQA_Q_HEADS    16
-#define GQA_KV_HEADS   2
-#define GQA_HEAD_DIM   256
-
-// RoPE parameters (from Qwen3.6-35B config.json)
+// GQA / rope hyperparameters that are config-derived (not pure shape):
+// routed through WUBU_DIMS where they are shape-driven; rope params kept
+// as macros for now (set per-model in the loader's rope setup).
 #define ROPE_THETA          10000000.0f  // rope_theta
 #define PARTIAL_ROTARY_FACTOR 0.25f     // partial_rotary_factor
 #define ROTARY_DIM          ((int)(GQA_HEAD_DIM * PARTIAL_ROTARY_FACTOR))  // 64
-
-// MRoPE sections (from config: rope.dimension_sections = [11, 11, 10, 0])
-// These define how the 32 frequency pairs are split across text/height/width.
-// For text-only, all positions are equal but frequencies restart per section.
 #define MRoPE_SECTIONS      3
 #define MRoPE_SEC0_PAIRS    11
 #define MRoPE_SEC1_PAIRS    11
 #define MRoPE_SEC2_PAIRS    10
-// Total: 11+11+10 = 32 pairs = 64 dims
+
+// Gated DeltaNet internal scalar / activation constants
+#define SSM_SILU_THRESHOLD  20.0f
 
 // All weights for one SSM layer
 typedef struct {
@@ -73,7 +61,14 @@ typedef struct {
     int attn_gate_weight_type;
     const uint8_t *ssm_out_weight_q;    // raw Q6_K
     int ssm_out_weight_type;
-    
+
+    // F32 weight sources (safetensors/HF path). When f32_mode != 0 the
+    // forward uses these plain float matrices via matmul_nt instead of the
+    // quantized blob pointers above.
+    float *attn_qkv_weight_f32;  // [D_MODEL, CONV_DIM]
+    float *attn_gate_weight_f32; // [D_MODEL, VALUE_DIM]
+    float *ssm_out_weight_f32;    // [VALUE_DIM, D_MODEL]
+    int f32_mode;    
     // Pre-attention and post-attention norms
     float *attn_norm_weight;          // [D_MODEL] = [2048]
     float *post_attention_norm_weight; // [D_MODEL] = [2048]

@@ -13,6 +13,8 @@
 #include "wubu_moe.h"
 #include "wubu_tokenizer.h"
 #include "gguf_reader.h"
+#include "wubu_repetition.h"
+#include "wubu_model_safetensors_bridge.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,7 +62,29 @@ static int read_embedding(const wubu_model_t *mdl, int token_id, float *out, FIL
     return 0;
 }
 
+/* Load a model checkpoint, dispatching by extension:
+ *   *.safetensors -> Colonel HF model (Qwen3.6 / Agents-A1 / KAT / BTL-3)
+ *                 via the F32 safetensors bridge + adapter detection.
+ *   *.gguf         -> legacy bytropix GGUF path.
+ * Returns 1 on success (model ready), 0 on failure. */
+static int init_model(wubu_model_t *mdl, const char *path) {
+    size_t pl = strlen(path);
+    int is_st = (pl > 13 && strcmp(path + pl - 13, ".safetensors") == 0);
+    if (is_st) {
+        wubu_adapter_t ad; memset(&ad, 0, sizeof(ad));
+        if (!wubu_adapter_load(&ad, path)) {
+            /* adapter parse failed; fall back to generic Qwen-family */
+            ad.arch = WUBU_ARCH_QWEN_FAMILY; ad.d_model = 2048; ad.ok = 1;
+        }
+        if (wubu_model_init_safetensors(mdl, path, &ad) != 0) return 0;
+        return 1;
+    }
+    wubu_dims_default();   /* legacy GGUF builds use the 2048-dim defaults */
+    return wubu_model_init(mdl, path);
+}
+
 int main(int argc, char **argv) {
+
     const char *model_path = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *env_mp = getenv("MODEL");
     if (env_mp) model_path = env_mp;
@@ -82,7 +106,7 @@ int main(int argc, char **argv) {
     }
 
     wubu_model_t mdl;
-    if (!wubu_model_init(&mdl, model_path)) return 1;
+    if (!init_model(&mdl, model_path)) return 1;
     mdl.enable_moe = true;
 
     // GPU init (if GPU=1 env var set)
@@ -110,6 +134,18 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to init tokenizer\n");
         wubu_model_free(&mdl);
         return 1;
+    }
+
+    // --- Repetition suppression (repeat_penalty + DRY) ---
+    // Tuned for the Colonel models on RTX 5070 Ti (see bytropix STATUS.md):
+    //   Q8:  repeat_penalty 1.05, DRY multiplier 0.5
+    //   F16: repeat_penalty 1.1,  DRY multiplier 1.2
+    wubu_rep_state_t *rep = wubu_rep_create(mdl.vocab_size, 256, 2, -1);
+    if (rep) {
+        float rp = getenv("REPEAT_PENALTY") ? (float)atof(getenv("REPEAT_PENALTY")) : 1.05f;
+        float dm = getenv("DRY_MULTIPLIER") ? (float)atof(getenv("DRY_MULTIPLIER")) : 0.5f;
+        float db = getenv("DRY_BASE") ? (float)atof(getenv("DRY_BASE")) : 1.75f;
+        wubu_rep_set_params(rep, rp, dm, db);
     }
 
     int D = D_MODEL;
@@ -215,6 +251,9 @@ int main(int argc, char **argv) {
 
     // Decode loop
     while (generated < max_tokens && !g_stop) {
+        // Suppress repetitions (repeat_penalty + DRY) BEFORE sampling.
+        if (rep) wubu_rep_apply(rep, last_logits);
+
         int topk_idxs[256];
         int nk = top_k > 256 ? 256 : top_k;
         for (int k = 0; k < nk; k++) {
@@ -225,6 +264,9 @@ int main(int argc, char **argv) {
         }
         int next_token = topk_idxs[0];
         if (next_token == tok.eos_id || next_token == tok.bos_id) break;
+
+        // Record the chosen token so future repetitions are penalized.
+        if (rep) wubu_rep_observe(rep, next_token);
 
         char piece_buf[256];
         int n_chars = wubu_tokenizer_decode(&tok, &next_token, 1, piece_buf, 256);
@@ -264,6 +306,7 @@ int main(int argc, char **argv) {
     free(logits); free(embd);
     if (emb_file) fclose(emb_file);
     wubu_tokenizer_free(&tok);
+    if (rep) wubu_rep_free(rep);
     gpu_output_cleanup();
     wubu_model_free(&mdl);
     return 0;

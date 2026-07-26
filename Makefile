@@ -16,11 +16,40 @@ api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -I include -o $@ $< -lssl -lcrypto -lm
 
 # Object files
-CORE_OBJ = src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o
+CORE_OBJ = src/wubu_dims.o src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o
 MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o src/flash_attn_q4_0_opt.o src/flash_attn_q4_0_prefill_opt.o
 GPU_OBJ = src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o
 RSGD_OBJ = src/rsgd.o
+
+# New Colonel-model support (safetensors + LoRA + repetition + adapter)
+NEW_OBJ = src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o \
+          src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o \
+          src/wubu_safetensors_shard.o
+
+src/safetensors_reader.o: src/safetensors_reader.c include/safetensors_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_safetensors_shard.o: src/wubu_safetensors_shard.c include/wubu_safetensors_shard.h include/safetensors_reader.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_dims.o: src/wubu_dims.c include/wubu_dims.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/wubu_model_safetensors_bridge.o: src/wubu_model_safetensors_bridge.c include/wubu_model_safetensors_bridge.h include/wubu_model.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_repetition.o: src/wubu_repetition.c include/wubu_repetition.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_lora.o: src/wubu_lora.c include/wubu_lora.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_model_adapter.o: src/wubu_model_adapter.c include/wubu_model_adapter.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_safetensors_model.o: src/wubu_safetensors_model.c include/wubu_safetensors_model.h include/safetensors_reader.h include/wubu_model_adapter.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/qlearner.o: src/qlearner.c include/qlearner.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -29,9 +58,6 @@ src/wubu_ssm.o: src/wubu_ssm.c include/wubu_ssm.h include/wubu_mobius.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_ssm_chunked.o: src/wubu_ssm_chunked.c include/wubu_ssm.h
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-src/qlearner.o: src/qlearner.c include/qlearner.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_nested_ssm.o: src/wubu_nested_ssm.c include/wubu_nested_ssm.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
@@ -169,6 +195,42 @@ test_poincare_router_backward: tools/test_poincare_router_backward.c $(CORE_OBJ)
 test_nested_moe_router_backward: tools/test_nested_moe_router_backward.c $(CORE_OBJ) src/wubu_moe_hyperbolic_backward.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+# ---- New Colonel-model unit tests ----
+gen_fixture_safetensors: tools/gen_fixture_safetensors.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+test_safetensors: tools/test_safetensors.c src/safetensors_reader.o gen_fixture_safetensors
+	$(CC) $(CFLAGS) -o $@ $< src/safetensors_reader.o $(LDFLAGS)
+	./gen_fixture_safetensors
+	./$@
+
+test_repetition: tools/test_repetition.c src/wubu_repetition.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_lora: tools/test_lora.c src/wubu_lora.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_model_adapter: tools/test_model_adapter.c src/wubu_model_adapter.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_new_models: test_safetensors test_repetition test_lora test_model_adapter test_st_bridge
+	@echo "=== new Colonel-model unit tests PASSED ==="
+
+gen_fixture_safetensors_model: tools/gen_fixture_safetensors_model.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+test_st_bridge: tools/test_st_bridge.c gen_fixture_safetensors_model src/wubu_model_safetensors_bridge.o src/safetensors_reader.o src/wubu_lora.o $(MODEL_OBJ) src/wubu_model_adapter.o
+	$(CC) $(CFLAGS) -o $@ $< src/wubu_model_safetensors_bridge.o src/safetensors_reader.o src/wubu_lora.o $(MODEL_OBJ) src/wubu_model_adapter.o $(LDFLAGS)
+	./gen_fixture_safetensors_model
+	./$@
+
+test_real_load: tools/test_real_load.c src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/safetensors_reader.o $(NEW_OBJ) $(MODEL_OBJ) src/wubu_model_adapter.o
+	$(CC) $(CFLAGS) -o $@ $< src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/safetensors_reader.o src/wubu_lora.o $(MODEL_OBJ) src/wubu_model_adapter.o $(LDFLAGS)
+	./$@
+
 test_tokenizer: tools/test_tokenizer.c src/wubu_tokenizer.o src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -187,9 +249,8 @@ test_full_moe: tools/test_full_moe.c $(MODEL_OBJ)
 test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o
-	$(CC) $(CFLAGS) -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
-
+gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o
+	$(CC) $(CFLAGS) -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o $(LDFLAGS)
 # CPU-only gen_text (recompiles wubu_model + wubu_moe without GPU_SUPPORT)
 gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
 gen_text_cpu: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
@@ -209,7 +270,7 @@ run_bos: tools/run_bos.c $(MODEL_OBJ)
 gen_text_mtp: tools/gen_text_mtp.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $(filter %.c %.o,$^) $(LDFLAGS)
 
-gen_text_gpu: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ) $(GPU_OBJ)
+gen_text_gpu: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o $(CUDA_OBJ) $(GPU_OBJ)
 	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ) $(GPU_OBJ) $(LDFLAGS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lcublas -lcudart
 
 test_tok_debug: tools/test_tok_debug.c src/wubu_tokenizer.o

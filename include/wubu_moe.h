@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "gguf_reader.h"
+#include "wubu_dims.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,7 +26,7 @@ extern "C" {
 #define N_ACTIVE_EXPTS  DEF_N_ACTIVE_EXPTS
 #define D_FF            DEF_D_FF
 #define SHARED_D_FF     DEF_SHARED_D_FF
-#define D_MODEL         DEF_D_MODEL
+#define D_MODEL         WUBU_DIMS.d_model   // runtime; was DEF_D_MODEL (2048)
 
 // MoE weights for one layer (dimensions now dynamic from model)
 typedef struct {

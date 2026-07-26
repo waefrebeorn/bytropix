@@ -352,10 +352,12 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         model->token_embd = NULL;
         // Get quantized token_embd pointer from blob
         gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
-        if (t_emb && blob) {
-            model->token_embd_q = blob + t_emb->data_offset;
+        if (t_emb && ctx->data_blob) {
+            model->token_embd_q = (const uint8_t *)ctx->data_blob + t_emb->data_offset;
             model->token_embd_type = t_emb->ggml_type;
-            printf("  token_embd: quantized type=%d, %ld elements\n", t_emb->ggml_type, (long)(t_emb->n_elems));
+            int64_t emb_elems = 1;
+            for (int d = 0; d < t_emb->n_dims; d++) emb_elems *= t_emb->dims[d];
+            printf("  token_embd: quantized type=%d, %ld elements\n", t_emb->ggml_type, (long)emb_elems);
         }
     }
     

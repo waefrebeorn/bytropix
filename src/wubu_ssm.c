@@ -330,13 +330,20 @@ void wubu_ssm_forward(const float *x, int B, int T,
         memcpy(qkv_all, gpu_qkv, (size_t)N * C * sizeof(float));
         memcpy(z_all, gpu_z, (size_t)N * VALUE_DIM * sizeof(float));
         if (dd) printf("  [SSM] Using GPU projections\n");
+    } else if (w->f32_mode) {
+        // F32 safetensors path: plain matmul, no quantization.
+        for (int s = 0; s < N; s++) {
+            const float *x_s = x + s * D_MODEL;
+            matmul_nt(1, C, D_MODEL, x_s, w->attn_qkv_weight_f32, qkv_all + s * C);
+            matmul_nt(1, VALUE_DIM, D_MODEL, x_s, w->attn_gate_weight_f32, z_all + s * VALUE_DIM);
+        }
     } else {
         // Fused QKV + gate projection via single Q8_K quantization
         // Both projections use the same input x[s], so quantize once and reuse
         const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
         const int q8_buf_size = n_q8_blocks * 292;  // Q8K_BLOCK_SIZE
         uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
-        if (!ssm_q8_buf) { fprintf(stderr, "SSM forward: q8 alloc failed\\n"); goto cleanup; }
+        if (!ssm_q8_buf) { fprintf(stderr, "SSM forward: q8 alloc failed\n"); goto cleanup; }
 
         for (int s = 0; s < N; s++) {
             const float *x_s = x + s * D_MODEL;
