@@ -859,7 +859,8 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
     int64_t n_elems = 1;
     for (int d = 0; d < tensor->n_dims; d++) n_elems *= tensor->dims[d];
     
-    if (n_elems > max_elems) {
+    // max_elems <= 0 means no limit (use the tensor's own size)
+    if (max_elems > 0 && n_elems > max_elems) {
         fprintf(stderr, "Error: tensor too large (%ld elems, max %ld)\n", n_elems, max_elems);
         return 0;
     }

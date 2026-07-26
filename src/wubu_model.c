@@ -163,19 +163,19 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             
-            // Small: ssm_beta.weight [2048, 32] F32
+            // Small: ssm_beta.weight [d_model, DT_RANK] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_beta.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->ssm.ssm_beta_weight = (float *)malloc(D_MODEL * DT_RANK * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_beta_weight, D_MODEL * DT_RANK) > 0);
+            layer->ssm.ssm_beta_weight = (float *)malloc(model->d_model * DT_RANK * sizeof(float));
+            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_beta_weight, (int64_t)model->d_model * DT_RANK) > 0);
             
-            // Small: ssm_alpha.weight [2048, 32] F32
+            // Small: ssm_alpha.weight [d_model, DT_RANK] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_alpha.weight", l);
             t = gguf_find_tensor(ctx, name);
             if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->ssm.ssm_alpha_weight = (float *)malloc(D_MODEL * DT_RANK * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_alpha_weight, D_MODEL * DT_RANK) > 0);
+            layer->ssm.ssm_alpha_weight = (float *)malloc(model->d_model * DT_RANK * sizeof(float));
+            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_alpha_weight, (int64_t)model->d_model * DT_RANK) > 0);
             
             // Small: ssm_dt.bias [32] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_dt.bias", l);
@@ -184,19 +184,19 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             layer->ssm.ssm_dt_bias = (float *)malloc(DT_RANK * sizeof(float));
             ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_dt_bias, DT_RANK) > 0);
             
-            // Small: ssm_a [32] F32
-            snprintf(name, sizeof(name), "blk.%d.ssm_a", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->ssm.ssm_a = (float *)malloc(DT_RANK * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_a, DT_RANK) > 0);
+                        // Small: ssm_a.weight [DT_RANK] F32
+                        snprintf(name, sizeof(name), "blk.%d.ssm_a.weight", l);
+                        t = gguf_find_tensor(ctx, name);
+                        if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
+                        layer->ssm.ssm_a = (float *)malloc(DT_RANK * sizeof(float));
+                        ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_a, DT_RANK) > 0);
             
-            // Small: ssm_conv1d.weight [4, 8192] = 128KB F32
-            snprintf(name, sizeof(name), "blk.%d.ssm_conv1d.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            layer->ssm.ssm_conv1d_weight = (float *)malloc(CONV_KERNEL * CONV_DIM * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_conv1d_weight, CONV_KERNEL * CONV_DIM) > 0);
+                        // Small: ssm_conv1d.weight [CONV_KERNEL, CONV_DIM] F32
+                        snprintf(name, sizeof(name), "blk.%d.ssm_conv1d.weight", l);
+                        t = gguf_find_tensor(ctx, name);
+                        if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
+                        layer->ssm.ssm_conv1d_weight = (float *)malloc(CONV_KERNEL * CONV_DIM * sizeof(float));
+                        ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_conv1d_weight, (int64_t)CONV_KERNEL * CONV_DIM) > 0);
             
             // Small: ssm_norm.weight [128] F32
             snprintf(name, sizeof(name), "blk.%d.ssm_norm.weight", l);
