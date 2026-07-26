@@ -58,6 +58,18 @@ wubu_shard_ctx_t *wubu_shard_open(const char *path_or_dir) {
         /* Treat as directory; also check for a lone file. */
         n = scan_shards(path_or_dir, paths);
     }
+
+    /* Fallback: a single (non-sharded) .safetensors file. This is the
+     * common case for small models and single-shard checkpoints. */
+    if (n == 0 && strstr(path_or_dir, ".safetensors")) {
+        st_ctx *s = st_open(path_or_dir);
+        if (s) {
+            wubu_shard_ctx_t *sc = (wubu_shard_ctx_t *)calloc(1, sizeof(*sc));
+            if (sc) { sc->shards[0] = s; sc->n = 1; return sc; }
+            st_close(s);
+        }
+    }
+
     if (n == 0) return NULL;
 
     wubu_shard_ctx_t *sc = (wubu_shard_ctx_t *)calloc(1, sizeof(*sc));

@@ -5,7 +5,9 @@ CXX = g++
 # (NOT the NVIDIA .run layout /usr/local/cuda-X.Y/targets/...). Auto-detect and
 # fall back to the Debian FHS paths so the same Makefile works on both layouts.
 NVCC = $(or $(shell which nvcc 2>/dev/null),/usr/bin/nvcc)
-CUDA_HOME = $(shell dirname $(dirname $(NVCC)))   # /usr from /usr/bin/nvcc
+# Derive /usr from /usr/bin/nvcc using a single shell command (avoid nesting
+# Make $(...) inside $(shell ...), which Make mis-expands).
+CUDA_HOME = $(shell d=$(NVCC); d=$${d%/*}; d=$${d%/*}; echo $$d)
 CUDA_INC = -I$(CUDA_HOME)/include
 CUDA_LIBDIR = $(shell if [ -d $(CUDA_HOME)/lib/x86_64-linux-gnu ]; then echo $(CUDA_HOME)/lib/x86_64-linux-gnu; else echo $(CUDA_HOME)/lib64; fi)
 CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include $(CUDA_INC) -fopenmp
@@ -235,13 +237,13 @@ test_new_models: test_safetensors test_repetition test_lora test_model_adapter t
 gen_fixture_safetensors_model: tools/gen_fixture_safetensors_model.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-test_st_bridge: tools/test_st_bridge.c gen_fixture_safetensors_model src/wubu_model_safetensors_bridge.o src/safetensors_reader.o src/wubu_lora.o $(MODEL_OBJ) src/wubu_model_adapter.o
-	$(CC) $(CFLAGS) -o $@ $< src/wubu_model_safetensors_bridge.o src/safetensors_reader.o src/wubu_lora.o $(MODEL_OBJ) src/wubu_model_adapter.o $(LDFLAGS)
+test_st_bridge: tools/test_st_bridge.c $(MODEL_OBJ) gen_fixture_safetensors_model
+	$(CC) $(CFLAGS) -o $@ tools/test_st_bridge.c $(MODEL_OBJ) $(LDFLAGS)
 	./gen_fixture_safetensors_model
 	./$@
 
-test_real_load: tools/test_real_load.c src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/safetensors_reader.o $(NEW_OBJ) $(MODEL_OBJ) src/wubu_model_adapter.o
-	$(CC) $(CFLAGS) -o $@ $< src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/safetensors_reader.o src/wubu_lora.o $(MODEL_OBJ) src/wubu_model_adapter.o $(LDFLAGS)
+test_real_load: tools/test_real_load.c src/wubu_model_adapter.o $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
 test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o
