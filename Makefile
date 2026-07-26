@@ -19,7 +19,7 @@ CUDA_LIB = -L$(CUDA_LIBDIR) -lcudart
 
 .PHONY: all clean
 
-all: test_nested_ssm test_nested_ssm_backward load_model test_model test_cpu_timing test_model_adapter infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated test_chunked_ssm api_server
+all: test_nested_ssm test_nested_ssm_backward load_model test_model test_cpu_timing test_model_adapter infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated test_chunked_ssm api_server test_st_bridge test_btl3_lora
 
 api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -I include -o $@ $< -lssl -lcrypto -lm
@@ -237,9 +237,18 @@ test_new_models: test_safetensors test_repetition test_lora test_model_adapter t
 gen_fixture_safetensors_model: tools/gen_fixture_safetensors_model.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
+gen_fixture_btl3_lora: tools/gen_fixture_btl3_lora.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
 test_st_bridge: tools/test_st_bridge.c $(MODEL_OBJ) gen_fixture_safetensors_model
 	$(CC) $(CFLAGS) -o $@ tools/test_st_bridge.c $(MODEL_OBJ) $(LDFLAGS)
 	./gen_fixture_safetensors_model
+	./$@
+
+test_btl3_lora: tools/test_btl3_lora.c $(MODEL_OBJ) gen_fixture_safetensors_model gen_fixture_btl3_lora
+	$(CC) $(CFLAGS) -o $@ tools/test_btl3_lora.c $(MODEL_OBJ) $(LDFLAGS)
+	./gen_fixture_safetensors_model
+	./gen_fixture_btl3_lora
 	./$@
 
 test_real_load: tools/test_real_load.c src/wubu_model_adapter.o $(MODEL_OBJ)

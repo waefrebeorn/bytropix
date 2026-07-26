@@ -127,3 +127,18 @@ multimodel.patch
 include/cuda_kernels_h_fix.txt
 infer_vision_gpu
 gen_text_cpu
+
+# ---- Ad-hoc debug / build artifacts (do not commit) ----
+/api_server
+/infer_moe
+/infer_moe_lazy
+/infer_poincare
+/infer_unified
+/infer_vision
+/load_model
+/tb_asan
+/tb_test
+/gen_fixture_btl3_lora
+/fixture_btl3_lora.safetensors
+/fixture_model.safetensors
+err.log

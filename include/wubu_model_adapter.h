@@ -37,6 +37,8 @@ typedef struct {
     bool  is_moe;
     bool  is_lora;          // true for BTL-3 (needs base + adapter)
     char  base_model[256];  // for LoRA: the base checkpoint id
+    int   lora_r;           // LoRA rank (BTL-3 = 32)
+    int   lora_alpha;       // LoRA alpha (BTL-3 = 64)
     int   d_model;
     int   d_ff;             // expert / FFN intermediate dim
     int   n_experts;        // total routed experts (MoE)

@@ -167,17 +167,36 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
 
     const char *arch = find_str(buf, end, "architectures");
     const char *mt = find_str(buf, end, "model_type");
-    const char *base = find_str(buf, end, "base_model");
-    if (!base) base = find_str(buf, end, "base_model_name_or_path");
+    /* base_model / base_model_name_or_path is a SUBSTRING of the metadata
+     * key. A plain strstr() won't work here: buf is not null-terminated
+     * and the 8-byte safetensors length prefix contains embedded NULs
+     * (e.g. 2073 -> 0x17 0x08 0x00 ...) that terminate strstr at
+     * the prefix before the JSON header is ever reached. Use a
+     * length-bounded search instead. */
+    const char *base = memmem(buf, (size_t)(end - buf), "base_model", 11);
+    if (!base) base = memmem(buf, (size_t)(end - buf), "base_model_name_or_path", 22);
+    if (base) {
+        const char *q = base;
+        while (q < end && *q != ':') q++;
+        if (q < end) {
+            q++;
+            while (q < end && (*q == ' ' || *q == '\t' || *q == '\n')) q++;
+            if (q < end && *q == '"') {
+                const char *vs = q + 1;
+                int bi = 0;
+                while (vs[bi] && vs[bi] != '"' && bi < (int)sizeof(out->base_model) - 1) {
+                    out->base_model[bi] = vs[bi]; bi++;
+                }
+                out->base_model[bi] = '\0';
+            }
+        }
+    }
 
     // Detect LoRA adapter (BTL-3 style: has base_model + adapter fields)
     if (base) {
-        int bi = 0;
-        while (base[bi] && base[bi] != '"' && bi < (int)sizeof(out->base_model) - 1) {
-            out->base_model[bi] = base[bi]; bi++;
-        }
-        out->base_model[bi] = '\0';
         out->is_lora = true;
+        out->lora_r = 32;        // BTL-3 LoRA rank
+        out->lora_alpha = 64;     // BTL-3 LoRA alpha
         out->arch = WUBU_ARCH_BTL3_LORA;
         out->ok = true;
         free(buf);
@@ -208,6 +227,8 @@ bool wubu_adapter_resolve_name(wubu_adapter_t *out, const char *name) {
         out->arch = WUBU_ARCH_BTL3_LORA;
         strncpy(out->base_model, "Qwen/Qwen3.6-27B", sizeof(out->base_model) - 1);
         out->is_lora = true;
+        out->lora_r = 32;        // BTL-3 LoRA rank
+        out->lora_alpha = 64;     // BTL-3 LoRA alpha
         out->d_model = 5120;       // Qwen3.6-27B hidden
         out->n_layers = 64;
         out->gqa_head_dim = 256;

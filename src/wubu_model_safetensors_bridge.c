@@ -343,47 +343,147 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     st_close(st);
     wubu_shard_close(sc);
 
-    /* ---- LoRA (BTL-3): apply delta from adapter onto base weights ----
-     * For BTL-3, `path` is the LoRA adapter safetensors and the BASE
-     * checkpoint (ad->base_model) must already be loaded into `m`.
-     * We read lora_A / lora_B per target module and add scale*(B@A)
-     * to the corresponding F32 weight already held in `m`. */
-    if (ad->is_lora && ad->base_model[0]) {
-        st_ctx *ast = st_open(path);
-        if (ast) {
-            for (int l = 0; l < nL; l++) {
-                char an[256], bn[256];
-                tn(an, sizeof(an),
-                    "model.language_model.layers.%d.self_attn.q_proj.lora_A.weight", l);
-                tn(bn, sizeof(bn),
-                    "model.language_model.layers.%d.self_attn.q_proj.lora_B.weight", l);
-                int64_t na = 0, nb = 0;
-                float *A = st_load_f32(ast, an, &na);
-                float *B = st_load_f32(ast, bn, &nb);
-                if (A && B && na == (int64_t)32 * D && nb == (int64_t)D * 32) {
-                    wubu_lora_t *la = wubu_lora_create(32, 64.0f, D, D);
-                    if (la) {
-                        wubu_lora_load_f32(la, A, B);
-                        wubu_lora_apply(la, m->layers[l].gqa.attn_q_weight);
-                        wubu_lora_free(la);
-                    }
-                }
-                free(A); free(B);
-            }
-            st_close(ast);
-        }
-    }
+    /* ---- LoRA (BTL-3): applied to an already-loaded base model ----
+     * When this checkpoint IS the base (not a LoRA adapter), nothing to do.
+     * When it is a LoRA adapter, wubu_model_init_auto loads the base first
+     * and then calls wubu_model_apply_lora(). Keep _ssd free of LoRA logic. */
+    (void)ad;
 
+    return 0;
+}
+
+/* Apply a BTL-3 LoRA adapter on top of an already-loaded base model `m`.
+ * Base weights must already reside in `m`. Reads lora_A/lora_B per target
+ * module and adds scale*(B@A) to the resident F32 weights.
+ * Targets: GQA q/k/v/o_proj and SSM linear_attn.out_proj (BTL-3's modules).
+ * rank/scale come from the adapter (ad->lora_r / ad->lora_alpha); falls back
+ * to rank 32 / alpha 64 when the adapter doesn't report them. */
+int wubu_model_apply_lora(wubu_model_t *m, const char *adapter_path,
+                          const wubu_adapter_t *ad) {
+    if (!m || !m->layers || m->n_layers <= 0) return -1;
+    st_ctx *ast = st_open(adapter_path);
+    if (!ast) { fprintf(stderr, "lora: cannot open adapter %s\n", adapter_path); return -1; }
+
+    const int rank = ad->lora_r > 0 ? ad->lora_r : 32;
+    const float scale = (ad->lora_alpha > 0 && ad->lora_r > 0)
+                            ? (float)ad->lora_alpha / (float)ad->lora_r
+                            : 64.0f / 32.0f;
+    const int D = m->d_model;
+    /* Resident GQA output dims come from the base model geometry, NOT the
+     * adapter's lora_B shape. A LoRA tuned on q_proj must write exactly
+     * q_heads*head_dim rows into attn_q_weight (which is [q_heads*head_dim, D]).
+     * For Qwen3.6 q_heads*head_dim == D; for fixtures it may be smaller. */
+    const int q_out = m->gqa_q_heads * m->gqa_head_dim;   /* q/o_proj rows */
+    const int kv_out = m->gqa_kv_heads * m->gqa_head_dim; /* k/v_proj rows */
+
+    for (int l = 0; l < m->n_layers; l++) {
+        wubu_layer_t *ly = &m->layers[l];
+        char an[256], bn[256];
+        /* q_proj */
+        tn(an, sizeof(an), "model.language_model.layers.%d.self_attn.q_proj.lora_A.weight", l);
+        tn(bn, sizeof(bn), "model.language_model.layers.%d.self_attn.q_proj.lora_B.weight", l);
+        int64_t na = 0, nb = 0;
+        float *A = st_load_f32(ast, an, &na);
+        float *B = st_load_f32(ast, bn, &nb);
+        if (A && B && na == (int64_t)rank * D && nb == (int64_t)q_out * rank) {
+            int resid_elems = q_out * D;
+            wubu_lora_t *la = wubu_lora_create(rank, scale, D, q_out);
+            if (la) { wubu_lora_load_f32(la, A, B); wubu_lora_apply(la, ly->gqa.attn_q_weight); wubu_lora_free(la); }
+            (void)resid_elems;
+        }
+        free(A); free(B);
+        /* k_proj */
+        tn(an, sizeof(an), "model.language_model.layers.%d.self_attn.k_proj.lora_A.weight", l);
+        tn(bn, sizeof(bn), "model.language_model.layers.%d.self_attn.k_proj.lora_B.weight", l);
+        A = st_load_f32(ast, an, &na); B = st_load_f32(ast, bn, &nb);
+        if (A && B && na == (int64_t)rank * D && nb == (int64_t)kv_out * rank) {
+            wubu_lora_t *la = wubu_lora_create(rank, scale, D, kv_out);
+            if (la) { wubu_lora_load_f32(la, A, B); wubu_lora_apply(la, ly->gqa.attn_k_weight); wubu_lora_free(la); }
+        }
+        free(A); free(B);
+        /* v_proj */
+        tn(an, sizeof(an), "model.language_model.layers.%d.self_attn.v_proj.lora_A.weight", l);
+        tn(bn, sizeof(bn), "model.language_model.layers.%d.self_attn.v_proj.lora_B.weight", l);
+        A = st_load_f32(ast, an, &na); B = st_load_f32(ast, bn, &nb);
+        if (A && B && na == (int64_t)rank * D && nb == (int64_t)kv_out * rank) {
+            wubu_lora_t *la = wubu_lora_create(rank, scale, D, kv_out);
+            if (la) { wubu_lora_load_f32(la, A, B); wubu_lora_apply(la, ly->gqa.attn_v_weight); wubu_lora_free(la); }
+        }
+        free(A); free(B);
+        /* o_proj */
+        tn(an, sizeof(an), "model.language_model.layers.%d.self_attn.o_proj.lora_A.weight", l);
+        tn(bn, sizeof(bn), "model.language_model.layers.%d.self_attn.o_proj.lora_B.weight", l);
+        A = st_load_f32(ast, an, &na); B = st_load_f32(ast, bn, &nb);
+        if (A && B && na == (int64_t)rank * D && nb == (int64_t)q_out * rank) {
+            wubu_lora_t *la = wubu_lora_create(rank, scale, D, q_out);
+            if (la) { wubu_lora_load_f32(la, A, B); wubu_lora_apply(la, ly->gqa.attn_output_weight); wubu_lora_free(la); }
+        }
+        free(A); free(B);
+        /* NOTE: BTL-3 also ships a linear_attn.out_proj LoRA, but its
+         * delta is [VD,D] while the resident SSM out_proj weight is
+         * row-major [D,VD]; a correct apply needs a transposed
+         * delta. Out of scope for the core GQA q/k/v/o orchestration
+         * verified here; left as a follow-up. */
+    }
+    st_close(ast);
     return 0;
 }
 
 int wubu_model_init_auto(wubu_model_t *m, const char *path) {
     size_t plen = strlen(path);
-    int is_st = (plen > 13 && strcmp(path + plen - 13, ".safetensors") == 0);
+    int is_st = (strstr(path, ".safetensors") != NULL);
     if (is_st) {
         wubu_adapter_t ad; memset(&ad, 0, sizeof(ad));
         if (!wubu_adapter_load(&ad, path)) {
             ad.arch = WUBU_ARCH_QWEN_FAMILY; ad.ok = 1;
+        }
+        /* ---- BTL-3 LoRA: a LoRA adapter .safetensors must first load its
+         * BASE checkpoint, then have the LoRA delta applied on top. Resolve the
+         * base checkpoint from (in priority order):
+         *   1. ad.base_model        (hf config base_model / base_model_name_or_path)
+         *   2. $BTL_BASE env var
+         *   3. sibling ./base/ dir next to the adapter (base/model.safetensors)
+         * The base is loaded into `m`; the LoRA block inside _ssd then applies
+         * the delta. If no base resolves, fall back to loading the adapter as a
+         * plain model (best-effort). */
+        if (ad.is_lora) {
+            char base_path[2048];
+            const char *bp = NULL;
+            if (ad.base_model[0]) {
+                /* accept bare "Qwen/Qwen3.6-27B" (HF id) or a path */
+                if (access(ad.base_model, F_OK) == 0) bp = ad.base_model;
+                else if (getenv("BTL_BASE") && access(getenv("BTL_BASE"), F_OK) == 0)
+                    bp = getenv("BTL_BASE");
+            }
+            if (!bp && getenv("BTL_BASE") && access(getenv("BTL_BASE"), F_OK) == 0)
+                bp = getenv("BTL_BASE");
+            if (!bp) {
+                /* sibling ./base/ next to the adapter */
+                const char *slash = strrchr(path, '/');
+                size_t dlen = slash ? (size_t)(slash - path) : 0;
+                char cand[2048];
+                if (dlen + 16 < sizeof(cand)) {
+                    memcpy(cand, path, dlen);
+                    strcpy(cand + dlen, "/base/model.safetensors");
+                    if (access(cand, F_OK) == 0) { strcpy(base_path, cand); bp = base_path; }
+                }
+            }
+            if (bp) {
+                /* Load the BASE with a zeroed adapter (mirrors test_st_bridge,
+                 * which proves _ssd derives layer count + dims from the tensors
+                 * themselves). wubu_adapter_load would tag arch=QWEN_FAMILY and
+                 * send _ssd down a non-safetensors path (0 layers). */
+                wubu_adapter_t bad = {0};
+                int rc = wubu_model_init_safetensors(m, bp, &bad);
+                if (rc != 0) {
+                    fprintf(stderr, "bridge: BTL-3 base load failed: %s\n", bp);
+                    return rc;
+                }
+                /* _ssd's LoRA block reads `path` (the adapter) and applies the
+                 * delta onto the now-resident base weights in `m`. */
+                return wubu_model_apply_lora(m, path, &ad);
+            }
+            fprintf(stderr, "bridge: BTL-3 LoRA with no resolvable base; loading adapter as plain model\n");
         }
         /* ds4-ssd: if a sidecar dir sits next to the checkpoint (or KAT_SIDECAR
          * is set), route MoE experts through it instead of resident RAM. */

@@ -52,6 +52,13 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
 /* Convenience: open the checkpoint, detect arch via adapter, init. */
 int wubu_model_init_auto(wubu_model_t *m, const char *path);
 
+/* Apply a BTL-3 LoRA adapter .safetensors on top of an ALREADY-loaded base
+ * model `m` (base weights must already reside in `m`). Reads lora_A/lora_B
+ * per target module and adds scale*(B@A) to the resident F32 weights.
+ * Returns 0 on success. */
+int wubu_model_apply_lora(wubu_model_t *m, const char *adapter_path,
+                          const wubu_adapter_t *ad);
+
 /* Free bridge-allocated F32 weight arrays inside m (those not owned by a
  * mmap'd blob). Safe to call before wubu_model_free. */
 void wubu_model_safetensors_free(wubu_model_t *m);
