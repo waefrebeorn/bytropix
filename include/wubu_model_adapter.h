@@ -47,8 +47,17 @@ typedef struct {
     int   gqa_head_dim;
     float rope_theta;
     float partial_rotary_factor;
-    int   ssm_v_heads;
-    int   ssm_d_state;
+    int   ssm_v_heads;       // linear_num_value_heads (KAT=32, Qwen27B=48)
+    int   ssm_k_heads;       // linear_num_key_heads (16)
+    int   ssm_value_head_dim;// linear_value_head_dim (128)
+    int   ssm_conv_kernel;   // linear_conv_kernel_dim (4)
+    int   ssm_d_state;       // SSM_D_STATE (128)
+    int   shared_expert_ff;  // shared_expert_intermediate_size (512)
+    int   full_attention_interval; // hybrid: every Nth layer is full_attention
+    bool  attn_output_gate;  // attn_output_gate (true for both)
+    bool  is_hybrid;         // layer_types mixes linear_attention + full_attention
+    int   layer_types[256];  // 0=linear_attention(SSM+GQA), 1=full_attention(GQA only)
+    int   vocab_size;        // from vocab_size (fallback 248320)
     int   tensor_naming;     // 0=blk.Qwen 1=model.layers.Gemma 2=pure-GQA
     bool  ok;
 } wubu_adapter_t;

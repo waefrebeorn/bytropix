@@ -106,16 +106,20 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
 
     wubu_dims_t wd; memset(&wd, 0, sizeof(wd));
     wd.d_model = D; wd.conv_dim = CONVD; wd.value_dim = VD; wd.dt_rank = DT;
-    wd.ssm_d_state = SSMDS; wd.ssm_k_heads = D > 0 ? (CONVD - VD) / 2 / SSMDS : 16;
-    wd.ssm_v_heads = VD / SSMDS; wd.conv_kernel = 4;
+    wd.ssm_d_state = SSMDS;
+    /* Prefer real config dims from the adapter; fall back to shape inference. */
+    wd.ssm_k_heads = ad->ssm_k_heads > 0 ? ad->ssm_k_heads : (D > 0 ? (CONVD - VD) / 2 / SSMDS : 16);
+    wd.ssm_v_heads = ad->ssm_v_heads > 0 ? ad->ssm_v_heads : VD / SSMDS;
+    wd.conv_kernel = ad->ssm_conv_kernel > 0 ? ad->ssm_conv_kernel : 4;
     wd.gqa_q_heads = qh; wd.gqa_kv_heads = kvh; wd.gqa_head_dim = hd;
     wubu_dims_set(&wd);
 
     m->d_model = D;
     m->n_layers = nL;
-    m->vocab_size = 248320;   /* set from embed_tokens shape below if present */
+    m->vocab_size = ad->vocab_size > 0 ? ad->vocab_size : 248320;
     m->n_experts = nE;
     m->n_active_experts = (int)ad->n_active_experts;
+    m->shared_expert_ff = ad->shared_expert_ff > 0 ? ad->shared_expert_ff : 0;
 
     m->layers = (wubu_layer_t *)calloc((size_t)nL, sizeof(wubu_layer_t));
     if (!m->layers) { st_close(st); return -1; }
@@ -123,7 +127,10 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
     char nm[256];
     for (int l = 0; l < nL; l++) {
         wubu_layer_t *ly = &m->layers[l];
-        ly->is_ssm = 1; /* hybrid: runs BOTH SSM (linear_attn) and GQA (self_attn) */
+        /* Hybrid: layer_types[l]==0 -> linear_attention (SSM+GQA),
+         *                    ==1 -> full_attention (GQA only, no SSM). */
+        bool ssm_layer = ad->is_hybrid ? (l < 256 && ad->layer_types[l] == 0) : true;
+        ly->is_ssm = ssm_layer ? 1 : 0;
 
         /* ---- GQA (self_attn.*_proj) ---- */
         tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.q_proj.weight", l);
@@ -139,9 +146,9 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
         ly->gqa.attn_v_weight_q = NULL; ly->gqa.attn_output_weight_q = NULL;
 
         /* ---- SSM (linear_attn.*) -> F32 path ----
-         * HF stores Linear weights [out,in]; bytropix forward reads them
-         * [in,out] row-major, so we transpose qkv/gate on load.
-         * DT/A_log/beta/norm are 1D and copied as-is. */
+         * Only present on linear_attention (SSM) layers. Skipped on
+         * full_attention layers (which have no linear_attn.* tensors). */
+        if (ssm_layer) {
         ly->ssm.f32_mode = 1;
         tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_qkv.weight", l);
         ly->ssm.attn_qkv_weight_f32 = wubu_shard_load_f32_t(sc, nm, D, CONVD); /* [D,CONVD] */
@@ -163,6 +170,7 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
         ly->ssm.ssm_out_weight_f32 = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* HF out_proj [VD,D] == bytropix [VD,D] */
         ly->ssm.attn_qkv_weight_q = NULL; ly->ssm.attn_gate_weight_q = NULL;
         ly->ssm.ssm_out_weight_q = NULL;
+        }
 
         /* ---- MoE / dense MLP (mlp.*) ---- */
         int nExp = nE > 0 ? nE : 1; /* dense => single-expert MoE */
@@ -190,6 +198,21 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
                 free(g0);
                 tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.gate.weight", l);
                 ly->moe.ffn_gate_inp = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D, nE] */
+                /* Shared expert (always active in Qwen3.5 MoE). */
+                if (m->shared_expert_ff > 0) {
+                    int sh = m->shared_expert_ff;
+                    tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.gate_proj.weight", l);
+                    float *sg = wubu_shard_load_f32_t(sc, nm, D, sh);
+                    tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.up_proj.weight", l);
+                    float *su = wubu_shard_load_f32_t(sc, nm, D, sh);
+                    tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert.down_proj.weight", l);
+                    float *sd = wubu_shard_load_f32_t(sc, nm, sh, D);
+                    if (sg) { ly->moe.ffn_gate_shexp = (float*)realloc(ly->moe.ffn_gate_shexp, (size_t)D*sh*sizeof(float)); memcpy(ly->moe.ffn_gate_shexp, sg, (size_t)D*sh*sizeof(float)); free(sg); }
+                    if (su) { ly->moe.ffn_up_shexp   = (float*)realloc(ly->moe.ffn_up_shexp, (size_t)D*sh*sizeof(float)); memcpy(ly->moe.ffn_up_shexp, su, (size_t)D*sh*sizeof(float)); free(su); }
+                    if (sd) { ly->moe.ffn_down_shexp = (float*)realloc(ly->moe.ffn_down_shexp, (size_t)sh*D*sizeof(float)); memcpy(ly->moe.ffn_down_shexp, sd, (size_t)sh*D*sizeof(float)); free(sd); }
+                    tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert_gate.weight", l);
+                    ly->moe.ffn_gate_inp_shexp = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D] */
+                }
             }
         } else {
             /* dense MLP: mlp.{gate,up,down}_proj -> expert 0 */

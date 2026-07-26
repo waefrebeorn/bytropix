@@ -63,18 +63,22 @@ static float find_float(const char *p, const char *end, const char *key, float d
     return (float)i;
 }
 
-static void apply_qwen36_defaults(wubu_adapter_t *a) {
-    // Qwen3.6-35B-A3B derived defaults (bytropix macros).
-    a->tensor_naming = 0;          // blk.Qwen naming for GGUF; but HF uses model.layers.*
-    a->d_model = a->d_model ? a->d_model : 2048;
-    a->gqa_q_heads = a->gqa_q_heads ? a->gqa_q_heads : 16;
-    a->gqa_kv_heads = a->gqa_kv_heads ? a->gqa_kv_heads : 2;
-    a->gqa_head_dim = a->gqa_head_dim ? a->gqa_head_dim : 256;
-    a->rope_theta = a->rope_theta ? a->rope_theta : 10000000.0f;
-    a->partial_rotary_factor = a->partial_rotary_factor ? a->partial_rotary_factor : 0.25f;
-    a->ssm_v_heads = 32;
-    a->ssm_d_state = 128;
-    a->d_ff = a->d_ff ? a->d_ff : 512;   // MoE expert dim default
+/* Parse the layer_types array (list of "linear_attention"/"full_attention"
+ * strings) into out->layer_types[]. Returns count, or 0 if absent. */
+static int parse_layer_types(wubu_adapter_t *out, const char *buf, const char *end) {
+    const char *p = strstr(buf, "\"layer_types\"");
+    if (!p) return 0;
+    p = strchr(p, '[');
+    if (!p) return 0;
+    int n = 0;
+    while (++p < end && *p != ']' && n < 256) {
+        if (*p == '"') {
+            if (strncmp(p + 1, "full_attention", 14) == 0) out->layer_types[n++] = 1;
+            else if (strncmp(p + 1, "linear_attention", 15) == 0) out->layer_types[n++] = 0;
+            while (p < end && *p != '"') p++;
+        }
+    }
+    return n;
 }
 
 bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
@@ -95,6 +99,7 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
     out->d_model = (int)find_int(buf, end, "hidden_size", 0);
     out->n_layers = (int)find_int(buf, end, "num_hidden_layers", 0);
     out->d_ff = (int)find_int(buf, end, "intermediate_size", 0);
+    out->d_ff = out->d_ff ? out->d_ff : (int)find_int(buf, end, "moe_intermediate_size", 0);
     out->n_experts = (int)find_int(buf, end, "num_experts", 0);
     out->n_active_experts = (int)find_int(buf, end, "num_experts_per_tok", 0);
     out->gqa_q_heads = (int)find_int(buf, end, "num_attention_heads", 0);
@@ -102,6 +107,19 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
     out->gqa_head_dim = (int)find_int(buf, end, "head_dim", 0);
     out->rope_theta = find_float(buf, end, "rope_theta", 0.0f);
     out->partial_rotary_factor = find_float(buf, end, "partial_rotary_factor", 0.0f);
+    out->ssm_k_heads = (int)find_int(buf, end, "linear_num_key_heads", 0);
+    out->ssm_v_heads = (int)find_int(buf, end, "linear_num_value_heads", 0);
+    out->ssm_value_head_dim = (int)find_int(buf, end, "linear_value_head_dim", 0);
+    out->ssm_conv_kernel = (int)find_int(buf, end, "linear_conv_kernel_dim", 0);
+    out->ssm_d_state = (int)find_int(buf, end, "ssm_d_state", 0);
+    if (!out->ssm_d_state) out->ssm_d_state = (int)find_int(buf, end, "state_size", 128);
+    out->shared_expert_ff = (int)find_int(buf, end, "shared_expert_intermediate_size", 0);
+    out->full_attention_interval = (int)find_int(buf, end, "full_attention_interval", 0);
+    out->attn_output_gate = find_int(buf, end, "attn_output_gate", 0) != 0;
+    out->vocab_size = (int)find_int(buf, end, "vocab_size", 0);
+
+    int nlt = parse_layer_types(out, buf, end);
+    out->is_hybrid = (nlt > 0);
 
     const char *arch = find_str(buf, end, "architectures");
     const char *mt = find_str(buf, end, "model_type");
@@ -116,7 +134,6 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
         out->base_model[bi] = '\0';
         out->is_lora = true;
         out->arch = WUBU_ARCH_BTL3_LORA;
-        apply_qwen36_defaults(out);
         out->ok = true;
         free(buf);
         return true;
@@ -126,7 +143,6 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
     if (out->n_experts > 0) {
         out->is_moe = true;
         out->arch = WUBU_ARCH_KAT_MOE;
-        apply_qwen36_defaults(out);
         out->ok = true;
         free(buf);
         return true;
@@ -134,7 +150,6 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
 
     // Dense Qwen-family (Qwen3.6 / Agents-A1)
     out->arch = WUBU_ARCH_QWEN_FAMILY;
-    apply_qwen36_defaults(out);
     out->ok = true;
     free(buf);
     return true;
@@ -161,11 +176,23 @@ bool wubu_adapter_resolve_name(wubu_adapter_t *out, const char *name) {
     if (strstr(n, "KAT-Coder")) {
         out->arch = WUBU_ARCH_KAT_MOE;
         out->is_moe = true;
-        out->d_model = 2048;       // Qwen3.6-35B-A3B hidden
-        out->n_experts = 35;        // spec: 35B/3B activated (MoE)
-        out->n_active_experts = 3;
-        out->n_layers = 64;
+        out->d_model = 2048;
+        out->n_experts = 256;        // real KAT-Coder: 256 routed experts
+        out->n_active_experts = 8;   // num_experts_per_tok
+        out->n_layers = 40;          // num_hidden_layers
+        out->d_ff = 512;             // moe_intermediate_size
+        out->gqa_q_heads = 16;
+        out->gqa_kv_heads = 2;
         out->gqa_head_dim = 256;
+        out->ssm_k_heads = 16;
+        out->ssm_v_heads = 32;
+        out->ssm_value_head_dim = 128;
+        out->ssm_conv_kernel = 4;
+        out->ssm_d_state = 128;
+        out->shared_expert_ff = 512;
+        out->full_attention_interval = 4;
+        out->attn_output_gate = true;
+        out->partial_rotary_factor = 0.25f;
         out->ok = true;
         return true;
     }

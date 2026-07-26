@@ -304,6 +304,7 @@ typedef struct {
     int d_ff;             // expert intermediate dim
     int n_experts;        // total experts
     int n_active_experts; // top-k
+    int shared_expert_ff; // shared expert intermediate dim (MoE); 0 if none
     int tensor_naming;    // 0=blk.Qwen 1=model.layers.Gemma 2=pure-GQA
 
     // Additional dynamic dimensions for GPU and other code

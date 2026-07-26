@@ -8,6 +8,7 @@ Implementation and verification state. Commands are run from the repo root.
 |-----------|----------|---------|
 | ds4-ssd slot-bank (synthetic) | BF16 pack → LRU page-in → F32 matmul matches resident reference exactly | `make test_ssd_moe` |
 | HF BPE tokenizer | Loads 248,044-vocab Agents tokenizer; encode/decode round-trip | `./gen_text "<prompt>"` with a `.safetensors` model |
+| **Model config adapter** | Derives REAL KAT (256/8, SSM 16/32, shared 512) + Qwen3.6 (64L, SSM v=48) dims + hybrid `layer_types` from config.json | `make test_model_config` |
 | Cross-shard dimension probing | Bridge derives D=2560, VD=4096, qh=32, kvh=4 from real shards | `make test_real_load` |
 | GGUF + safetensors readers | 4/4 structure tests pass | `make test_safetensors` |
 | Repetition (repeat-penalty + DRY) | Wired to F16 params | unit test |
@@ -30,10 +31,10 @@ Implementation and verification state. Commands are run from the repo root.
 
 | Model | Arch | D | layers | experts | State |
 |-------|------|---|---------|---------|-------|
-| Agents-A1-4B | qwen3_5, dense hybrid (SSM+GQA+MLP), multimodal | 2560 | 32 | 0 | Tokenizer + bridge OK. FP32 load OOMs 13 GB box (9 GB weights + 5 GB embed/lm_head). |
-| KAT-Coder-V2.5-Dev | qwen3_5_moe, 256/8 + shared, hybrid | 2048 | 40 | 256 | Sidecar packer built; real pack blocked on download. |
-| Qwen3.6-27B-base | qwen3_5, dense hybrid | 5120 | 64 | 0 | Config parsed. Bridge hybrid `layer_types` not wired. |
-| BTL-3 | LoRA on Qwen3.6-27B | — | — | — | Adapter-only; LoRA apply path not wired. |
+| Agents-A1-4B | qwen3_5, dense hybrid (SSM+GQA+MLP), multimodal | 2560 | 32 | 0 | Tokenizer + bridge OK. FP32 load OOMs 13GB box (9GB weights + 5GB embed/lm_head). |
+| KAT-Coder-V2.5-Dev | qwen3_5_moe, 256/8 + shared, hybrid | 2048 | 40 | 256 | Adapter derives real dims (verified). Bridge loads shared expert + per-layer SSM/GQA via `layer_types`. Sidecar packer built; full load blocked on complete download + slot-bank wiring. |
+| Qwen3.6-27B-base | qwen3_5, dense hybrid | 5120 | 64 | 0 | Adapter derives real dims (verified). Bridge hybrid `layer_types` wired. Full load blocked on memory (27B dense). |
+| BTL-3 | LoRA on Qwen3.6-27B | — | — | — | Adapter detects base + is_lora. LoRA apply path in bridge (needs base loaded first). |
 
 ## Known blockers
 

@@ -236,6 +236,9 @@ test_real_load: tools/test_real_load.c src/wubu_model_safetensors_bridge.o src/w
 
 test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_model_config: tools/test_model_config.c src/wubu_model_adapter.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
 test_tokenizer: tools/test_tokenizer.c src/wubu_tokenizer.o src/gguf_reader.o
