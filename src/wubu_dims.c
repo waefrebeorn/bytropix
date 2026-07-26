@@ -11,6 +11,7 @@ void wubu_dims_set(const wubu_dims_t *d) {
     if (!d) return;
     WUBU_DIMS = *d;
     wubu_dims_finalize(&WUBU_DIMS);
+    wubu_dims_sync_gpu();   /* mirror to CUDA __constant__ for device kernels */
 }
 
 void wubu_dims_finalize(wubu_dims_t *d) {
@@ -41,4 +42,5 @@ void wubu_dims_default(void) {
     d.gqa_kv_dim = d.gqa_kv_heads * d.gqa_head_dim;       /* 512  */
     d.value_dim = d.ssm_d_state * d.ssm_v_heads;          /* 4096 */
     WUBU_DIMS = d;
+    wubu_dims_sync_gpu();
 }

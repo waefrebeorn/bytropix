@@ -118,12 +118,57 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
     out->attn_output_gate = find_int(buf, end, "attn_output_gate", 0) != 0;
     out->vocab_size = (int)find_int(buf, end, "vocab_size", 0);
 
-    int nlt = parse_layer_types(out, buf, end);
-    out->is_hybrid = (nlt > 0);
+    /* Some HF configs (Qwen3.6, Agents-A1, KAT-Coder) nest all the real
+     * architecture fields inside a "text_config" object. If the top-level
+     * scan yielded nothing, re-scan just the text_config {...} span. */
+    if (out->d_model == 0) {
+        const char *tc = strstr(buf, "\"text_config\"");
+        if (tc && tc < end) {
+            const char *open = strchr(tc, '{');
+            if (open) {
+                int depth = 0; const char *e2 = open;
+                for (; e2 < end; e2++) {
+                    if (*e2 == '{') depth++;
+                    else if (*e2 == '}') { depth--; if (depth == 0) break; }
+                }
+                const char *tc_end = (e2 < end) ? e2 + 1 : end;
+                out->d_model = (int)find_int(open, tc_end, "hidden_size", 0);
+                out->n_layers = (int)find_int(open, tc_end, "num_hidden_layers", 0);
+                out->d_ff = (int)find_int(open, tc_end, "intermediate_size", 0);
+                out->d_ff = out->d_ff ? out->d_ff : (int)find_int(open, tc_end, "moe_intermediate_size", 0);
+                out->n_experts = (int)find_int(open, tc_end, "num_experts", 0);
+                out->n_active_experts = (int)find_int(open, tc_end, "num_experts_per_tok", 0);
+                out->gqa_q_heads = (int)find_int(open, tc_end, "num_attention_heads", 0);
+                out->gqa_kv_heads = (int)find_int(open, tc_end, "num_key_value_heads", 0);
+                out->gqa_head_dim = (int)find_int(open, tc_end, "head_dim", 0);
+                out->rope_theta = find_float(open, tc_end, "rope_theta", 0.0f);
+                out->partial_rotary_factor = find_float(open, tc_end, "partial_rotary_factor", 0.0f);
+                out->ssm_k_heads = (int)find_int(open, tc_end, "linear_num_key_heads", 0);
+                out->ssm_v_heads = (int)find_int(open, tc_end, "linear_num_value_heads", 0);
+                out->ssm_value_head_dim = (int)find_int(open, tc_end, "linear_value_head_dim", 0);
+                out->ssm_conv_kernel = (int)find_int(open, tc_end, "linear_conv_kernel_dim", 0);
+                out->ssm_d_state = (int)find_int(open, tc_end, "ssm_d_state", 0);
+                if (!out->ssm_d_state) out->ssm_d_state = (int)find_int(open, tc_end, "state_size", 128);
+                out->shared_expert_ff = (int)find_int(open, tc_end, "shared_expert_intermediate_size", 0);
+                out->full_attention_interval = (int)find_int(open, tc_end, "full_attention_interval", 0);
+                out->attn_output_gate = find_int(open, tc_end, "attn_output_gate", 0) != 0;
+                out->vocab_size = (int)find_int(open, tc_end, "vocab_size", 0);
+                int nlt = parse_layer_types(out, open, tc_end);
+                if (nlt > 0) out->is_hybrid = true;
+            }
+        }
+    }
+
+    /* Always try to parse hybrid layer_types (top-level or inside text_config). */
+    {
+        int nlt = parse_layer_types(out, buf, end);
+        if (nlt > 0) out->is_hybrid = true;
+    }
 
     const char *arch = find_str(buf, end, "architectures");
     const char *mt = find_str(buf, end, "model_type");
     const char *base = find_str(buf, end, "base_model");
+    if (!base) base = find_str(buf, end, "base_model_name_or_path");
 
     // Detect LoRA adapter (BTL-3 style: has base_model + adapter fields)
     if (base) {

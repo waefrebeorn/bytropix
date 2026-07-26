@@ -408,7 +408,7 @@ void wubu_gpu_sync_ssm_state_to_cpu(void *gpu_ctx, int layer_idx,
 void wubu_model_gpu_moe_experts(const moe_weights_t *w,
     const float *x_s,
     const int *indices_s, const float *weights_s,
-    float expert_contribs[8][D_MODEL],
+    float *expert_contribs,
     void *model_ptr);
 
 // Free all GPU resources and reset gpu_ctx to NULL.

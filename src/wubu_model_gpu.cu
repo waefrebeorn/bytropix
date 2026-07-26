@@ -971,7 +971,7 @@ void wubu_model_gpu_moe_experts(
     const float *x_s,
     const int *indices_s,        // [8] expert indices
     const float *weights_s,      // [8] routing weights
-    float expert_contribs[8][D_MODEL],
+    float *expert_contribs,
     void *model_ptr)             // wubu_model_t* for CUDA stream access
 {
     if (!w->ffn_gate_exps_q) return;
@@ -1020,7 +1020,7 @@ void wubu_model_gpu_moe_experts(
     for (int k = 0; k < 8; k++) {
         int e = indices_s[k];
         if (e < 0 || weights_s[k] < 1e-30f) {
-            memset(expert_contribs[k], 0, D_MODEL * sizeof(float));
+            memset(expert_contribs + (size_t)k * D_MODEL, 0, D_MODEL * sizeof(float));
             continue;
         }
         if (use_gpu_ptrs && layer_idx >= 0) {
@@ -1079,7 +1079,7 @@ void wubu_model_gpu_moe_experts(
     for (int k = 0; k < 8; k++) {
         int e = indices_s[k];
         if (e < 0 || weights_s[k] < 1e-30f) continue;
-        memcpy(expert_contribs[k], gpu_out + active_idx * D_MODEL,
+        memcpy(expert_contribs + (size_t)k * D_MODEL, gpu_out + active_idx * D_MODEL,
                D_MODEL * sizeof(float));
         active_idx++;
     }

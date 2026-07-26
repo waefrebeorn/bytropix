@@ -1,23 +1,30 @@
 CC = gcc
 CXX = g++
-NVCC = /usr/local/cuda-13.3/bin/nvcc
-CUDA_HOME = /usr/local/cuda-13.3
-CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I$(CUDA_HOME)/targets/x86_64-linux/include -fopenmp
-LDFLAGS = -lm -fopenmp
+# CUDA on this WSL box is the Debian nvidia-cuda-toolkit package (V12.0):
+#   nvcc -> /usr/bin/nvcc, headers in /usr/include, libs in /usr/lib/x86_64-linux-gnu
+# (NOT the NVIDIA .run layout /usr/local/cuda-X.Y/targets/...). Auto-detect and
+# fall back to the Debian FHS paths so the same Makefile works on both layouts.
+NVCC = $(or $(shell which nvcc 2>/dev/null),/usr/bin/nvcc)
+CUDA_HOME = $(shell dirname $(dirname $(NVCC)))   # /usr from /usr/bin/nvcc
+CUDA_INC = -I$(CUDA_HOME)/include
+CUDA_LIBDIR = $(shell if [ -d $(CUDA_HOME)/lib/x86_64-linux-gnu ]; then echo $(CUDA_HOME)/lib/x86_64-linux-gnu; else echo $(CUDA_HOME)/lib64; fi)
+CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include $(CUDA_INC) -fopenmp
+LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -lcudart -lcublas
 NVCC_FLAGS = -O3 -I include -arch=sm_86
-CUDA_LIBS = -lcublas -lcudart
-CUDA_INC = -I$(CUDA_HOME)/targets/x86_64-linux/include
+CUDA_INCS = $(CUDA_INC)
+CUDA_LIBS = -L$(CUDA_LIBDIR) -lcublas -lcudart
+CUDA_LIB = -L$(CUDA_LIBDIR) -lcudart
 
 .PHONY: all clean
 
-all: test_nested_ssm test_nested_ssm_backward load_model test_model test_cpu_timing infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated test_chunked_ssm api_server
+all: test_nested_ssm test_nested_ssm_backward load_model test_model test_cpu_timing test_model_adapter infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated test_chunked_ssm api_server
 
 api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -I include -o $@ $< -lssl -lcrypto -lm
 
 # Object files
-CORE_OBJ = src/wubu_dims.o src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o
-MODEL_OBJ = src/wubu_model.o $(CORE_OBJ)
+CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o
+MODEL_OBJ = $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o src/flash_attn_q4_0_opt.o src/flash_attn_q4_0_prefill_opt.o
 GPU_OBJ = src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o
 RSGD_OBJ = src/rsgd.o
@@ -38,6 +45,9 @@ src/wubu_safetensors_shard.o: src/wubu_safetensors_shard.c include/wubu_safetens
 
 src/wubu_dims.o: src/wubu_dims.c include/wubu_dims.h
 	$(CC) $(CFLAGS) -c $< -o $@
+
+src/wubu_dims_gpu.o: src/wubu_dims_gpu.cu include/wubu_dims.h
+	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
 
 src/wubu_model_safetensors_bridge.o: src/wubu_model_safetensors_bridge.c include/wubu_model_safetensors_bridge.h include/wubu_model.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -187,7 +197,7 @@ test_hyperbolic_output_proj: tools/test_hyperbolic_output_proj.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_gpu_layers: tools/test_gpu_layers.c $(CORE_OBJ) $(CUDA_OBJ) src/bench.o
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 test_gyrate: tools/test_gyrate.c src/wubu_mobius.o src/wubu_mobius_gyrate.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -215,7 +225,7 @@ test_lora: tools/test_lora.c src/wubu_lora.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
-test_model_adapter: tools/test_model_adapter.c src/wubu_model_adapter.o
+test_model_adapter: tools/test_model_adapter.c src/wubu_model_adapter.o $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
@@ -268,7 +278,7 @@ gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition
 	                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o \
 	                          src/wubu_tokenizer_hf.o src/wubu_ssd_moe.o $(LDFLAGS)
 # CPU-only gen_text (recompiles wubu_model + wubu_moe without GPU_SUPPORT)
-gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
+gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I$(CUDA_INC),$(CFLAGS))
 gen_text_cpu: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS_FILTERED) -o $@ tools/gen_text.c src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o $(LDFLAGS)
 	@echo "gen_text_cpu built (CPU-only, no GPU support)"
@@ -287,7 +297,7 @@ gen_text_mtp: tools/gen_text_mtp.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $(filter %.c %.o,$^) $(LDFLAGS)
 
 gen_text_gpu: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o $(CUDA_OBJ) $(GPU_OBJ)
-	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ) $(GPU_OBJ) $(LDFLAGS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lcublas -lcudart
+	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ) $(GPU_OBJ) $(LDFLAGS) -L$(CUDA_LIBDIR) -lcublas -lcudart
 
 test_tok_debug: tools/test_tok_debug.c src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -311,37 +321,37 @@ load_model: tools/load_model_layer.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_gpu: tools/test_gpu.c $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 bench_e2e: tools/bench_e2e.c src/bench.o $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 test_parallel_scan: tools/test_parallel_scan.c $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 test_fused: tools/test_fused.c $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 test_fused_vs_old: tools/test_fused_vs_old.c $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 debug_beta_layout: tools/debug_beta_layout.c src/gguf_reader.o src/dequant_iq2_xxs.o src/cuda_kernels.o
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 verify_phase26: tools/verify_phase26_fusions.c $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 train_integrated: tools/train_integrated.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ) src/bench.o $(GPU_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 infer_text: tools/infer_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/bench.o $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 infer_text_gpu: tools/infer_text_gpu.c $(MODEL_OBJ) src/wubu_tokenizer.o src/bench.o $(CUDA_OBJ) $(GPU_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 test_cuda_kernels: tools/test_cuda_kernels.c $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 # Compare our logits vs llama.cpp
 compare_logits: tools/compare_logits.c $(MODEL_OBJ) src/wubu_tokenizer.o
@@ -379,23 +389,23 @@ infer_vision_text: tools/infer_vision_text.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_vision_real: tools/test_vision_real.c $(MODEL_OBJ) $(CUDA_OBJ) $(GPU_OBJ)
-	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/test_vision_real.c $(MODEL_OBJ) $(CUDA_OBJ) $(GPU_OBJ) $(LDFLAGS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lcublas -lcudart
+	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/test_vision_real.c $(MODEL_OBJ) $(CUDA_OBJ) $(GPU_OBJ) $(LDFLAGS) -L$(CUDA_LIBDIR) -lcublas -lcudart
 	@echo "test_vision_real built (GPU vision + text)"
 
 infer_vision_text_gpu: tools/infer_vision_text_gpu_nvcc.o $(MODEL_OBJ) $(CUDA_OBJ) src/cuda_vision.o $(GPU_OBJ)
-	$(CXX) $(CFLAGS) $(CUDA_INC) -DGPU_SUPPORT -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lcublas -lcudart -lstdc++
+	$(CXX) $(CFLAGS) $(CUDA_INC) -DGPU_SUPPORT -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lcublas -lcudart -lstdc++
 
 tools/infer_vision_text_gpu_nvcc.o: tools/infer_vision_text_gpu.cu include/cuda_vision.h include/wubu_vision.h
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
 
 infer_poincare: tools/infer_poincare.c src/bench.o $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 tailslayer: tools/tailslayer.c $(MODEL_OBJ) src/wubu_tokenizer.o src/bench.o $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 infer_vision_gpu: tools/infer_vision_gpu.o $(CORE_OBJ) src/cuda_vision.o
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 tools/infer_vision_gpu.o: tools/infer_vision_gpu.cu include/cuda_vision.h
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
@@ -410,7 +420,7 @@ test_256k_context: tools/test_256k_context.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_kv_cache: tools/test_kv_cache.c $(CORE_OBJ) $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 tokenize_corpus: tools/tokenize_corpus.c src/wubu_tokenizer.o src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -422,7 +432,7 @@ train_backprop: tools/train_backprop.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 train_gpu: tools/train_gpu.c src/bench.o $(MODEL_OBJ) $(CUDA_OBJ) src/wubu_tokenizer.o $(GPU_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 dump_mmproj: tools/dump_mmproj.c src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -474,10 +484,10 @@ train_stub_run: train_stub
 	./train_stub
 
 test_regression: tools/test_regression.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ)
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 test_gpu_poincare: tools/test_gpu_poincare.c $(CORE_OBJ) $(CUDA_OBJ) src/bench.o
-	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lstdc++
+	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 test_rsgd: tools/test_rsgd.c $(RSGD_OBJ) src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -506,7 +516,7 @@ test_gemma4: tools/test_gemma4.c $(MODEL_OBJ) src/wubu_gemma4_model.o
 	$(CC) $(CFLAGS) -o $@ tools/test_gemma4.c $(MODEL_OBJ) src/wubu_gemma4_model.o $(LDFLAGS)
 
 test_gemma4_gpu: tools/test_gemma4.c $(MODEL_OBJ) src/wubu_gemma4_model.o src/gpu_gemma4.o src/gpu_gemma4_forward.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/cuda_kernels.o
-	$(CXX) $(CFLAGS) $(CUDA_INC) -DGPU_SUPPORT -o $@ tools/test_gemma4.c $(MODEL_OBJ) src/wubu_gemma4_model.o src/gpu_gemma4.o src/gpu_gemma4_forward.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/cuda_kernels.o $(LDFLAGS) -L/usr/local/cuda-13.3/targets/x86_64-linux/lib -lcublas -lcudart -lstdc++
+	$(CXX) $(CFLAGS) $(CUDA_INC) -DGPU_SUPPORT -o $@ tools/test_gemma4.c $(MODEL_OBJ) src/wubu_gemma4_model.o src/gpu_gemma4.o src/gpu_gemma4_forward.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/cuda_kernels.o $(LDFLAGS) -L$(CUDA_LIBDIR) -lcublas -lcudart -lstdc++
 
 gen_text_gemma4: tools/gen_text_gemma4.c $(MODEL_OBJ) src/wubu_gemma4_model.o
 	$(CC) $(CFLAGS) -o $@ tools/gen_text_gemma4.c $(MODEL_OBJ) src/wubu_gemma4_model.o $(LDFLAGS)

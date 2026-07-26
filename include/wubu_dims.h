@@ -40,9 +40,22 @@ typedef struct {
     int gqa_kv_dim;   /* kv_heads * head_dim               */
 } wubu_dims_t;
 
-/* The single active dimension set. The loader calls wubu_dims_set()
- * right before loading/running a model. */
+/* The single active dimension set. The loader calls wubu_dims_set() right
+ * before loading/running a model. */
 extern wubu_dims_t WUBU_DIMS;
+
+/* Host-callable: push WUBU_DIMS into CUDA __constant__ memory. Defined in
+ * wubu_dims_gpu.cu (always built, nvcc present). Called from wubu_dims_set
+ * so device kernels always see the active dims. No-op safe if no GPU. */
+void wubu_dims_sync_gpu(void);
+
+/* CUDA device code cannot read the host 'extern WUBU_DIMS' global. For
+ * device kernels we mirror it into a __constant__ symbol and redefine the
+ * macro so the 330+ existing device references compile unchanged. */
+#ifdef __CUDACC__
+extern __constant__ wubu_dims_t WUBU_DIMS_DEV;
+#define WUBU_DIMS WUBU_DIMS_DEV
+#endif
 
 /* Set dims explicitly (loader computes them from real tensor shapes). */
 void wubu_dims_set(const wubu_dims_t *d);
@@ -59,16 +72,31 @@ void wubu_dims_default(void);
 }
 #endif
 
-/* ---- Macro aliases: every forward reads these, now runtime ---- */
+/* ---- Macro aliases ----
+ * Principle: only dims that ACTUALLY VARY between the supported Colonel
+ * models are routed through the runtime global WUBU_DIMS. Dims that are
+ * invariant across every target model (Qwen3.6-27B, Agents-A1-4B,
+ * KAT-Coder, BTL-3) stay as compile-time constants so they remain legal
+ * in CUDA __shared__ arrays and template parameters.
+ *
+ * Invariant (verified from the 4 real config.json files):
+ *   SSM_D_STATE = 128   SSM_K_HEADS = 16   DT_RANK = 32   CONV_KERNEL = 4
+ *   KEY_DIM = SSM_D_STATE*SSM_K_HEADS = 2048   (same for all 4)
+ *
+ * Varying (routed through WUBU_DIMS):
+ *   D_MODEL, VALUE_DIM, SSM_V_HEADS, CONV_DIM(=2*KEY_DIM+VALUE_DIM),
+ *   GQA_Q_HEADS, GQA_KV_HEADS, GQA_HEAD_DIM, GQA_KV_DIM.
+ */
+#define SSM_D_STATE   128
+#define SSM_K_HEADS   16
+#define DT_RANK       32
+#define CONV_KERNEL   4
+#define KEY_DIM       (SSM_D_STATE * SSM_K_HEADS)   /* 2048, invariant */
+
 #define D_MODEL       WUBU_DIMS.d_model
-#define CONV_DIM      WUBU_DIMS.conv_dim
 #define VALUE_DIM     WUBU_DIMS.value_dim
-#define KEY_DIM       WUBU_DIMS.key_dim
-#define DT_RANK       WUBU_DIMS.dt_rank
-#define SSM_D_STATE   WUBU_DIMS.ssm_d_state
-#define SSM_K_HEADS   WUBU_DIMS.ssm_k_heads
 #define SSM_V_HEADS   WUBU_DIMS.ssm_v_heads
-#define CONV_KERNEL   WUBU_DIMS.conv_kernel
+#define CONV_DIM      (KEY_DIM * 2 + VALUE_DIM)     /* varies via VALUE_DIM */
 #define GQA_Q_HEADS   WUBU_DIMS.gqa_q_heads
 #define GQA_KV_HEADS  WUBU_DIMS.gqa_kv_heads
 #define GQA_HEAD_DIM  WUBU_DIMS.gqa_head_dim
