@@ -361,24 +361,26 @@ void wubu_moe_forward(const float *x, int B, int T,
 
     // Requires Qwen-style layout for quantized weights
     // For DiffusionGemma (different layout), would need adaptation
+    #pragma omp parallel for if(N > 1)
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * d_model;
         float *out_s = expert_out + s * d_model;
 
-        // Shared expert: always active
+        // Shared expert: always active (Qwen-style). Skip if absent
+        // (dense models without a shared expert have ffn_*_shexp = NULL).
+        float *gate_shared = (float *)alloca((size_t)d_ff * sizeof(float));
+        float *up_shared = (float *)alloca((size_t)d_ff * sizeof(float));
+        if (w->ffn_gate_shexp) {
         // gate_proj: x_s @ ffn_gate_shexp^T -> [D_FF], SiLU
         // up_proj: x_s @ ffn_up_shexp^T -> [D_FF]
         // down_proj: (gate * up) @ ffn_down_shexp^T -> [D_MODEL]
-        float *gate_shared = (float *)alloca((size_t)d_ff * sizeof(float));
-        float *up_shared = (float *)alloca((size_t)d_ff * sizeof(float));
-
         for (int j = 0; j < d_ff; j++) {
             float sum_g = 0.0f, sum_u = 0.0f;
             for (int k = 0; k < d_model; k++) {
                 sum_g += x_s[k] * w->ffn_gate_shexp[j + k * d_ff];  // [D_FF, D_MODEL] transposed
                 sum_u += x_s[k] * w->ffn_up_shexp[j + k * d_ff];
             }
-            gate_shared[j] = fmaxf(0.0f, sum_g);  // SiLU(x) = x * sigmoid(x) ≈ max(0, x) for rough approx
+            gate_shared[j] = sum_g * (1.0f / (1.0f + expf(-sum_g)));  // exact SiLU: x*sigmoid(x)
             up_shared[j] = sum_u;
         }
 
@@ -400,6 +402,7 @@ void wubu_moe_forward(const float *x, int B, int T,
             gate_val = 1.0f / (1.0f + expf(-gate_val));  // sigmoid
             for (int k = 0; k < d_model; k++) out_s[k] *= gate_val;
         }
+        }  // end shared-expert block (guarded by ffn_gate_shexp)
 
         // Routed experts (top-k)
         for (int ki = 0; ki < n_active_experts; ki++) {
@@ -412,7 +415,7 @@ void wubu_moe_forward(const float *x, int B, int T,
                 for (int k = 0; k < d_model; k++) {
                     sum += x_s[k] * w->ffn_gate_exps[k + j * d_model + e * d_model * d_ff];
                 }
-                gate_shared[j] = fmaxf(0.0f, sum);  // SiLU
+                gate_shared[j] = sum * (1.0f / (1.0f + expf(-sum)));  // exact SiLU: x*sigmoid(x)
                 // Expert up projection
                 sum = 0.0f;
                 for (int k = 0; k < d_model; k++) {

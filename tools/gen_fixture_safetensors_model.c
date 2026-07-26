@@ -1,11 +1,16 @@
 /*
  * gen_fixture_safetensors_model.c -- write a tiny F32 safetensors model
  * using the REAL published HF tensor names (model.language_model.layers.N...)
- * at tiny dims, so test_st_bridge can verify the bridge maps them into
+ * at SSM-VALID dims, so test_st_bridge can verify the bridge maps them into
  * bytropix's SSM/GQA/MoE F32 forward and it RUNS (no stub).
  *
- * D=16, dff=8, nE(dense=1), DT_RANK=4, head_dim=4, kv_heads=2,
- * q_heads=4, VALUE_DIM=16, CONV_DIM=48, n_layers=2, vocab=32.
+ * The SSM recurrence is dimension-locked to the invariant SSM_D_STATE=128,
+ * SSM_K_HEADS=16 (so KEY_DIM = 128*16 = 2048) and requires VALUE_DIM to be a
+ * multiple of 128 (>=1 SSM value head). We therefore use REAL SSM geometry:
+ *   D_MODEL=256, VALUE_DIM=128 (1 v-head), KEY_DIM=2048, CONV_DIM=4192,
+ *   DT_RANK=32, SSM_D_STATE=128, n_layers=2, small GQA heads, vocab=64.
+ * This keeps weights small (~tens of MB) while exercising the actual SSM
+ * forward (not a degenerate v_heads=0 path).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,21 +31,26 @@ static void add0(const char*fmt,int d0,int d1){
 }
 
 int main(void){
-    const int D=16,dff=8,DT=4,hd=4,kv=2,VD=16,CONVD=48,nL=2,vocab=32;
+    const int D=256, dff=512, DT=32, hd=4, kv=2, qh=4;
+    const int SSMDS=128, SSMKH=16, VD=128;          /* SSM invariants (real-model geometry) */
+    const int KD=SSMDS*SSMKH;                        /* KEY_DIM = 2048 (invariant) */
+    const int CONVD=KD*2+VD;                         /* CONV_DIM = 4192 */
+    const int CONV_KERNEL=4;                         /* SSM depthwise conv kernel */
+    const int nL=2, vocab=64;
     for(int l=0;l<nL;l++){
-        add("model.language_model.layers.%d.self_attn.q_proj.weight",l,D,D);
-        add("model.language_model.layers.%d.self_attn.k_proj.weight",l,D,kv*hd);
-        add("model.language_model.layers.%d.self_attn.v_proj.weight",l,D,kv*hd);
+        add("model.language_model.layers.%d.self_attn.q_proj.weight",l,qh*hd,D);
+        add("model.language_model.layers.%d.self_attn.k_proj.weight",l,kv*hd,D);
+        add("model.language_model.layers.%d.self_attn.v_proj.weight",l,kv*hd,D);
         add("model.language_model.layers.%d.self_attn.o_proj.weight",l,D,D);
-        add("model.language_model.layers.%d.linear_attn.in_proj_qkv.weight",l,D,CONVD);
-        add("model.language_model.layers.%d.linear_attn.in_proj_z.weight",l,D,VD);
-        add("model.language_model.layers.%d.linear_attn.in_proj_a.weight",l,D,DT);
-        add("model.language_model.layers.%d.linear_attn.in_proj_b.weight",l,D,DT);
+        add("model.language_model.layers.%d.linear_attn.in_proj_qkv.weight",l,CONVD,D);
+        add("model.language_model.layers.%d.linear_attn.in_proj_z.weight",l,VD,D);
+        add("model.language_model.layers.%d.linear_attn.in_proj_a.weight",l,DT,D);
+        add("model.language_model.layers.%d.linear_attn.in_proj_b.weight",l,DT,D);
         add("model.language_model.layers.%d.linear_attn.A_log.weight",l,DT,0);
         add("model.language_model.layers.%d.linear_attn.dt_bias.weight",l,DT,0);
-        add("model.language_model.layers.%d.linear_attn.convNd.weight",l,CONVD,0);
-        add("model.language_model.layers.%d.linear_attn.norm.weight",l,DT,0);
-        add("model.language_model.layers.%d.linear_attn.out_proj.weight",l,VD,D);
+        add("model.language_model.layers.%d.linear_attn.convNd.weight",l,CONV_KERNEL,CONVD);
+        add("model.language_model.layers.%d.linear_attn.norm.weight",l,SSMDS,0);
+        add("model.language_model.layers.%d.linear_attn.out_proj.weight",l,D,VD);
         add("model.language_model.layers.%d.mlp.gate_proj.weight",l,dff,D);
         add("model.language_model.layers.%d.mlp.up_proj.weight",l,dff,D);
         add("model.language_model.layers.%d.mlp.down_proj.weight",l,D,dff);

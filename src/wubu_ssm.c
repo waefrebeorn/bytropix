@@ -288,8 +288,8 @@ void wubu_ssm_forward(const float *x, int B, int T,
                       float *conv_state,
                       float *output,
                       const float *gpu_qkv, const float *gpu_z) {
-    // x: [B, T, D_MODEL]
-    // output: [B, T, D_MODEL]
+    // x: [B, T, WUBU_DIMS.d_model]
+    // output: [B, T, WUBU_DIMS.d_model]
     
     const int N = B * T;  // total tokens
     const int C = CONV_DIM;  // 8192
@@ -333,27 +333,27 @@ void wubu_ssm_forward(const float *x, int B, int T,
     } else if (w->f32_mode) {
         // F32 safetensors path: plain matmul, no quantization.
         for (int s = 0; s < N; s++) {
-            const float *x_s = x + s * D_MODEL;
-            matmul_nt(1, C, D_MODEL, x_s, w->attn_qkv_weight_f32, qkv_all + s * C);
-            matmul_nt(1, VALUE_DIM, D_MODEL, x_s, w->attn_gate_weight_f32, z_all + s * VALUE_DIM);
+            const float *x_s = x + s * WUBU_DIMS.d_model;
+            matmul_nt(1, C, WUBU_DIMS.d_model, x_s, w->attn_qkv_weight_f32, qkv_all + s * C);
+            matmul_nt(1, VALUE_DIM, WUBU_DIMS.d_model, x_s, w->attn_gate_weight_f32, z_all + s * VALUE_DIM);
         }
     } else {
         // Fused QKV + gate projection via single Q8_K quantization
         // Both projections use the same input x[s], so quantize once and reuse
-        const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+        const int n_q8_blocks = (WUBU_DIMS.d_model + QK_K - 1) / QK_K;
         const int q8_buf_size = n_q8_blocks * 292;  // Q8K_BLOCK_SIZE
         uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
         if (!ssm_q8_buf) { fprintf(stderr, "SSM forward: q8 alloc failed\n"); goto cleanup; }
 
         for (int s = 0; s < N; s++) {
-            const float *x_s = x + s * D_MODEL;
-            quantize_row_q8_K(x_s, (block_q8_K *)ssm_q8_buf, D_MODEL);
+            const float *x_s = x + s * WUBU_DIMS.d_model;
+            quantize_row_q8_K(x_s, (block_q8_K *)ssm_q8_buf, WUBU_DIMS.d_model);
             quantized_matmul_from_q8(ssm_q8_buf,
                 w->attn_qkv_weight_q, w->attn_qkv_weight_type,
-                D_MODEL, C, 0, qkv_all + s * C);
+                WUBU_DIMS.d_model, C, 0, qkv_all + s * C);
             quantized_matmul_from_q8(ssm_q8_buf,
                 w->attn_gate_weight_q, w->attn_gate_weight_type,
-                D_MODEL, VALUE_DIM, 0, z_all + s * VALUE_DIM);
+                WUBU_DIMS.d_model, VALUE_DIM, 0, z_all + s * VALUE_DIM);
         }
         free(ssm_q8_buf);
     }
@@ -365,14 +365,14 @@ void wubu_ssm_forward(const float *x, int B, int T,
     // Step 3: beta/alpha projections
     #pragma omp parallel for
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
+        const float *x_s = x + s * WUBU_DIMS.d_model;
         float *beta_s = beta_raw + s * DT_RANK;
         float *alpha_s = alpha_raw + s * DT_RANK;
         for (int j = 0; j < DT_RANK; j++) {
             float sum_b = 0.0f, sum_a = 0.0f;
-            for (int i = 0; i < D_MODEL; i++) {
-                sum_b += x_s[i] * w->ssm_beta_weight[i + j * D_MODEL];
-                sum_a += x_s[i] * w->ssm_alpha_weight[i + j * D_MODEL];
+            for (int i = 0; i < WUBU_DIMS.d_model; i++) {
+                sum_b += x_s[i] * w->ssm_beta_weight[i + j * WUBU_DIMS.d_model];
+                sum_a += x_s[i] * w->ssm_alpha_weight[i + j * WUBU_DIMS.d_model];
             }
             beta_s[j] = sum_b;
             alpha_s[j] = sum_a;
@@ -659,9 +659,9 @@ void wubu_ssm_forward(const float *x, int B, int T,
 
     // Step 11: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, D_MODEL,
-                    w->ssm_out_weight, w->ssm_out_weight_q, w->ssm_out_weight_type,
-                    output + s * D_MODEL);
+        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, WUBU_DIMS.d_model,
+                    w->ssm_out_weight_f32, w->ssm_out_weight_q, w->ssm_out_weight_type,
+                    output + s * WUBU_DIMS.d_model);
     }
     
 cleanup:
@@ -725,30 +725,30 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
     // (Steps 1-10 are identical, just compute)
     
     // Step 1+2: Fused QKV + gate projection via single Q8_K quantization
-    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+    const int n_q8_blocks = (WUBU_DIMS.d_model + QK_K - 1) / QK_K;
     const int q8_buf_size = n_q8_blocks * 292;
     uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
     if (!ssm_q8_buf) { fprintf(stderr, "SSM save: q8 alloc failed\n"); goto cleanup_save; }
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
-        quantize_row_q8_K(x_s, (block_q8_K *)ssm_q8_buf, D_MODEL);
+        const float *x_s = x + s * WUBU_DIMS.d_model;
+        quantize_row_q8_K(x_s, (block_q8_K *)ssm_q8_buf, WUBU_DIMS.d_model);
         quantized_matmul_from_q8(ssm_q8_buf,
             w->attn_qkv_weight_q, w->attn_qkv_weight_type,
-            D_MODEL, C, 0, qkv_all + s * C);
+            WUBU_DIMS.d_model, C, 0, qkv_all + s * C);
         quantized_matmul_from_q8(ssm_q8_buf,
             w->attn_gate_weight_q, w->attn_gate_weight_type,
-            D_MODEL, VALUE_DIM, 0, z_all + s * VALUE_DIM);
+            WUBU_DIMS.d_model, VALUE_DIM, 0, z_all + s * VALUE_DIM);
     }
     free(ssm_q8_buf);
     
     // Step 3: beta/alpha projections
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
+        const float *x_s = x + s * WUBU_DIMS.d_model;
         float *beta_s = beta_raw + s * DT_RANK;
         float *alpha_s = alpha_raw + s * DT_RANK;
         for (int j = 0; j < DT_RANK; j++) {
             double sum_b = 0.0, sum_a = 0.0;
-            for (int i = 0; i < D_MODEL; i++) {
+            for (int i = 0; i < WUBU_DIMS.d_model; i++) {
                 sum_b += (double)x_s[i] * (double)w->ssm_beta_weight[i * DT_RANK + j];
                 sum_a += (double)x_s[i] * (double)w->ssm_alpha_weight[i * DT_RANK + j];
             }
@@ -866,9 +866,9 @@ void wubu_ssm_forward_save(const float *x, int B, int T,
     
     // Step 11: Output projection via quantized or F32 matmul
     for (int s = 0; s < N; s++) {
-        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, D_MODEL,
-                    w->ssm_out_weight, w->ssm_out_weight_q, w->ssm_out_weight_type,
-                    output + s * D_MODEL);
+        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, WUBU_DIMS.d_model,
+                    w->ssm_out_weight_f32, w->ssm_out_weight_q, w->ssm_out_weight_type,
+                    output + s * WUBU_DIMS.d_model);
     }
     
     // === Save intermediates for backward ===
@@ -963,37 +963,37 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
     
     // Step 1+2: Fused QKV + gate projection via single Q8_K quantization
     // Both projections use the same input x[s], so quantize once and reuse
-    const int n_q8_blocks = (D_MODEL + QK_K - 1) / QK_K;
+    const int n_q8_blocks = (WUBU_DIMS.d_model + QK_K - 1) / QK_K;
     const int q8_buf_size = n_q8_blocks * 292;  // Q8K_BLOCK_SIZE
     uint8_t *ssm_q8_buf = (uint8_t *)malloc(q8_buf_size);
     block_q8_K *ssm_q8 = (block_q8_K *)ssm_q8_buf;
     if (!ssm_q8_buf) { fprintf(stderr, "SSM forward: q8 alloc failed\n"); goto cleanup_p; }
     
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
+        const float *x_s = x + s * WUBU_DIMS.d_model;
         // Quantize once
-        quantize_row_q8_K(x_s, ssm_q8, D_MODEL);
+        quantize_row_q8_K(x_s, ssm_q8, WUBU_DIMS.d_model);
         
         // Reuse for both projections
         quantized_matmul_from_q8(ssm_q8_buf,
             w->attn_qkv_weight_q, w->attn_qkv_weight_type,
-            D_MODEL, C, 0, qkv_all + s * C);
+            WUBU_DIMS.d_model, C, 0, qkv_all + s * C);
         quantized_matmul_from_q8(ssm_q8_buf,
             w->attn_gate_weight_q, w->attn_gate_weight_type,
-            D_MODEL, VALUE_DIM, 0, z_all + s * VALUE_DIM);
+            WUBU_DIMS.d_model, VALUE_DIM, 0, z_all + s * VALUE_DIM);
     }
     free(ssm_q8_buf);
     
     // Step 3: beta/alpha projections
     for (int s = 0; s < N; s++) {
-        const float *x_s = x + s * D_MODEL;
+        const float *x_s = x + s * WUBU_DIMS.d_model;
         float *beta_s = beta_raw + s * DT_RANK;
         float *alpha_s = alpha_raw + s * DT_RANK;
         for (int j = 0; j < DT_RANK; j++) {
             float sum_b = 0.0f, sum_a = 0.0f;
-            for (int i = 0; i < D_MODEL; i++) {
-                sum_b += x_s[i] * w->ssm_beta_weight[i + j * D_MODEL];
-                sum_a += x_s[i] * w->ssm_alpha_weight[i + j * D_MODEL];
+            for (int i = 0; i < WUBU_DIMS.d_model; i++) {
+                sum_b += x_s[i] * w->ssm_beta_weight[i + j * WUBU_DIMS.d_model];
+                sum_a += x_s[i] * w->ssm_alpha_weight[i + j * WUBU_DIMS.d_model];
             }
             beta_s[j] = sum_b;
             alpha_s[j] = sum_a;
@@ -1185,9 +1185,9 @@ void wubu_poincare_ssm_forward(const float *x, int B, int T,
     }
     
     for (int s = 0; s < N; s++) {
-        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, D_MODEL,
-                    w->ssm_out_weight, w->ssm_out_weight_q, w->ssm_out_weight_type,
-                    output + s * D_MODEL);
+        proj_matmul(delta_out + s * VALUE_DIM, VALUE_DIM, WUBU_DIMS.d_model,
+                    w->ssm_out_weight_f32, w->ssm_out_weight_q, w->ssm_out_weight_type,
+                    output + s * WUBU_DIMS.d_model);
     }
     
 cleanup_p:
@@ -1871,35 +1871,35 @@ int wubu_is_ssm_layer(int layer_idx) {
 // Backward Pass — SSM Output Projection (Step 11)
 // ============================================================
 // Forward: output[s,j] = sum_i delta_out[s,i] * W[i,j]
-//          where W = [VALUE_DIM, D_MODEL]
+//          where W = [VALUE_DIM, WUBU_DIMS.d_model]
 // Backward:
 //   d_delta_out += d_output @ W^T   [N,V] = [N,D] @ [D,V]^T
 //   dW += delta_out^T @ d_output   [V,D] = [V,N] @ [N,D]
 void wubu_ssm_backward_output_proj(
     const float *delta_out,      // [N, VALUE_DIM] forward input (for dW)
-    const float *d_output,       // [N, D_MODEL] gradient from upstream
-    const float *ssm_out_weight, // [VALUE_DIM, D_MODEL] forward weight
+    const float *d_output,       // [N, WUBU_DIMS.d_model] gradient from upstream
+    const float *ssm_out_weight, // [VALUE_DIM, WUBU_DIMS.d_model] forward weight
     float *d_delta_out,          // [N, VALUE_DIM] gradient to propagate
-    float *d_ssm_out_weight,     // [VALUE_DIM, D_MODEL] weight grad accum (or NULL)
+    float *d_ssm_out_weight,     // [VALUE_DIM, WUBU_DIMS.d_model] weight grad accum (or NULL)
     int N)
 {
     // d_delta_out = d_output @ W^T
     for (int s = 0; s < N; s++) {
         for (int i = 0; i < VALUE_DIM; i++) {
             double sum = 0.0;
-            for (int j = 0; j < D_MODEL; j++)
-                sum += (double)d_output[s * D_MODEL + j] * (double)ssm_out_weight[i * D_MODEL + j];
+            for (int j = 0; j < WUBU_DIMS.d_model; j++)
+                sum += (double)d_output[s * WUBU_DIMS.d_model + j] * (double)ssm_out_weight[i * WUBU_DIMS.d_model + j];
             d_delta_out[s * VALUE_DIM + i] += (float)sum;
         }
     }
     // dW = delta_out^T @ d_output  (only if weight grad is requested)
     if (d_ssm_out_weight) {
         for (int i = 0; i < VALUE_DIM; i++) {
-            for (int j = 0; j < D_MODEL; j++) {
+            for (int j = 0; j < WUBU_DIMS.d_model; j++) {
                 double sum = 0.0;
                 for (int s = 0; s < N; s++)
-                    sum += (double)delta_out[s * VALUE_DIM + i] * (double)d_output[s * D_MODEL + j];
-                d_ssm_out_weight[i * D_MODEL + j] += (float)sum;
+                    sum += (double)delta_out[s * VALUE_DIM + i] * (double)d_output[s * WUBU_DIMS.d_model + j];
+                d_ssm_out_weight[i * WUBU_DIMS.d_model + j] += (float)sum;
             }
         }
     }
@@ -2362,9 +2362,9 @@ static void backward_conv1d(int B, int T, int C, int k,
 // Requires all intermediate buffers from the forward pass.
 void wubu_ssm_backward(
     int B, int T,
-    const float *x,              // [B, T, D_MODEL] input to forward
-    const float *output,         // [B, T, D_MODEL] output from forward
-    const float *d_output,       // [B, T, D_MODEL] upstream gradient
+    const float *x,              // [B, T, WUBU_DIMS.d_model] input to forward
+    const float *output,         // [B, T, WUBU_DIMS.d_model] output from forward
+    const float *d_output,       // [B, T, WUBU_DIMS.d_model] upstream gradient
     
     // Forward intermediate buffers (must be preserved from forward call)
     const float *qkv_all,        // [N, CONV_DIM] step 1 output
@@ -2388,13 +2388,13 @@ void wubu_ssm_backward(
     const ssm_layer_weights *w,
     
     // Output gradients (accumulated)
-    float *d_x,                  // [B, T, D_MODEL] gradient to propagate
-    float *d_qkv_weight,         // [D_MODEL, CONV_DIM] gradient for attn_qkv_weight
-    float *d_gate_weight,        // [D_MODEL, VALUE_DIM] gradient for attn_gate_weight
-    float *d_beta_weight,        // [D_MODEL, DT_RANK] gradient for ssm_beta_weight
-    float *d_alpha_weight,       // [D_MODEL, DT_RANK] gradient for ssm_alpha_weight
+    float *d_x,                  // [B, T, WUBU_DIMS.d_model] gradient to propagate
+    float *d_qkv_weight,         // [WUBU_DIMS.d_model, CONV_DIM] gradient for attn_qkv_weight
+    float *d_gate_weight,        // [WUBU_DIMS.d_model, VALUE_DIM] gradient for attn_gate_weight
+    float *d_beta_weight,        // [WUBU_DIMS.d_model, DT_RANK] gradient for ssm_beta_weight
+    float *d_alpha_weight,       // [WUBU_DIMS.d_model, DT_RANK] gradient for ssm_alpha_weight
     float *d_conv1d_weight,      // [CONV_KERNEL, CONV_DIM] gradient for ssm_conv1d_weight
-    float *d_ssm_out_weight,     // [VALUE_DIM, D_MODEL] gradient for ssm_out_weight
+    float *d_ssm_out_weight,     // [VALUE_DIM, WUBU_DIMS.d_model] gradient for ssm_out_weight
     float *d_ssm_norm_weight,    // [SSM_D_STATE] gradient for norm weight
     
     // State gradient (for BPTT)
@@ -2571,20 +2571,20 @@ void wubu_ssm_backward(
     }
     
     // === Steps 1-3: MatMul backward for QKV, Z, Beta, Alpha ===
-    // QKV: x @ W_qkv -> qkv_all [N, D_MODEL] @ [D_MODEL, C] -> [N, C]
-    backward_matmul_nt(N, D_MODEL, C, x, d_conv_out, w->attn_qkv_weight,
+    // QKV: x @ W_qkv -> qkv_all [N, WUBU_DIMS.d_model] @ [WUBU_DIMS.d_model, C] -> [N, C]
+    backward_matmul_nt(N, WUBU_DIMS.d_model, C, x, d_conv_out, w->attn_qkv_weight,
                        d_x, d_qkv_weight);
     
-    // Z: x @ W_gate -> z_all [N, D_MODEL] @ [D_MODEL, VALUE_DIM] -> [N, VALUE_DIM]
-    backward_matmul_nt(N, D_MODEL, VALUE_DIM, x, d_z_all, w->attn_gate_weight,
+    // Z: x @ W_gate -> z_all [N, WUBU_DIMS.d_model] @ [WUBU_DIMS.d_model, VALUE_DIM] -> [N, VALUE_DIM]
+    backward_matmul_nt(N, WUBU_DIMS.d_model, VALUE_DIM, x, d_z_all, w->attn_gate_weight,
                        d_x, d_gate_weight);
     
-    // Beta: x @ W_beta -> beta_raw [N, D_MODEL] @ [D_MODEL, DT_RANK] -> [N, DT_RANK]
-    backward_matmul_nt(N, D_MODEL, DT_RANK, x, d_beta_raw, w->ssm_beta_weight,
+    // Beta: x @ W_beta -> beta_raw [N, WUBU_DIMS.d_model] @ [WUBU_DIMS.d_model, DT_RANK] -> [N, DT_RANK]
+    backward_matmul_nt(N, WUBU_DIMS.d_model, DT_RANK, x, d_beta_raw, w->ssm_beta_weight,
                        d_x, d_beta_weight);
     
-    // Alpha: x @ W_alpha -> alpha_raw [N, D_MODEL] @ [D_MODEL, DT_RANK] -> [N, DT_RANK]
-    backward_matmul_nt(N, D_MODEL, DT_RANK, x, d_alpha_raw, w->ssm_alpha_weight,
+    // Alpha: x @ W_alpha -> alpha_raw [N, WUBU_DIMS.d_model] @ [WUBU_DIMS.d_model, DT_RANK] -> [N, DT_RANK]
+    backward_matmul_nt(N, WUBU_DIMS.d_model, DT_RANK, x, d_alpha_raw, w->ssm_alpha_weight,
                        d_x, d_alpha_weight);
     
 cleanup_bwd:

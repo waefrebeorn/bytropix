@@ -134,7 +134,9 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
 
     m->d_model = D;
     m->n_layers = nL;
-    m->vocab_size = ad->vocab_size > 0 ? ad->vocab_size : 248320;
+    m->vocab_size = ad->vocab_size > 0 ? ad->vocab_size
+                      : dimof_sc(sc, "model.language_model.embed_tokens.weight", 0);
+    if (m->vocab_size <= 0) m->vocab_size = 248320; /* last-resort fallback */
     m->n_experts = nE;
     m->n_active_experts = (int)ad->n_active_experts;
     m->shared_expert_ff = ad->shared_expert_ff > 0 ? ad->shared_expert_ff : 0;
@@ -185,7 +187,12 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
         tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.norm.weight", l);
         ly->ssm.ssm_norm_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
         tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.out_proj.weight", l);
-        ly->ssm.ssm_out_weight_f32 = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* HF out_proj [VD,D] == bytropix [VD,D] */
+        ly->ssm.ssm_out_weight_f32 = wubu_shard_load_f32_t(sc, nm, VD, D); /* file [VD,D] -> [D,VD] for proj_matmul(VALUE_DIM,D_MODEL) */
+        if (!ly->ssm.ssm_out_weight_f32) {
+            fprintf(stderr, "bridge: out_proj.weight missing for layer %d (VD=%d D=%d)\n", l, VD, D);
+            wubu_model_safetensors_free(m);
+            return -1;
+        }
         ly->ssm.attn_qkv_weight_q = NULL; ly->ssm.attn_gate_weight_q = NULL;
         ly->ssm.ssm_out_weight_q = NULL;
         }
@@ -260,7 +267,68 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
             tn(nm, sizeof(nm), "model.language_model.layers.%d.mlp.shared_expert_gate.weight", l);
             ly->moe.ffn_gate_inp_shexp = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D] */
         }
+
+        /* ---- RMSNorm weights (wubu_model_forward needs these) ---- */
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.input_layernorm.weight", l);
+        ly->attn_norm_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});     /* [D] */
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.post_attention_layernorm.weight", l);
+        ly->post_attn_norm_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D] */
+
+        /* Per-layer GQA geometry the forward reads (kv_dim/q_dim/out_dim). */
+        ly->gqa.kv_dim = kvh * hd;
+        ly->gqa.q_dim  = qh * hd;
+        ly->gqa.out_dim = qh * hd;
+        /* MoE is resident (dense nE=1 or routed): mark loaded so the FFN
+         * forward runs on the in-RAM expert blobs. */
+        if (ly->moe.ffn_gate_exps || nE > 0) ly->moe.loaded = true;
     }
+
+    /* ---- final RMSNorm ---- */
+    m->norm_weight = wubu_shard_load_f32(sc, "model.language_model.norm.weight", &(int64_t){0}); /* [D] */
+
+    /* ---- Model-level dimensions the forward reads (mirrors wubu_model_init) ----
+     * Only D_MODEL varies between models; the SSM recurrence constants are
+     * compile-time (#define) and the fixture/real models share them. */
+    m->d_inner      = VD;                                       /* VALUE_DIM */
+    m->key_dim      = SSMDS * wd.ssm_k_heads;
+    m->conv_dim     = 2 * m->key_dim + m->d_inner;
+    m->conv_kernel  = wd.conv_kernel;
+    m->dt_rank      = wd.dt_rank;
+    m->ssm_k_heads  = wd.ssm_k_heads;
+    m->ssm_v_heads  = wd.ssm_v_heads;
+    m->ssm_d_state  = SSMDS;
+    m->gqa_q_heads  = qh;
+    m->gqa_kv_heads = kvh;
+    m->gqa_head_dim = hd;
+    m->rotary_dim   = (int)(hd * 0.25f);   /* partial rotary factor 0.25 */
+    m->d_ff         = dff;
+    m->enable_moe   = (nE > 0 || m->shared_expert_ff > 0 || nL > 0) ? true : false;
+    m->moe_max_layers = 0;                 /* 0 => all layers */
+    m->gpu_ctx      = NULL;
+    m->tied_output  = false;
+    m->skip_output_proj = false;
+    m->save_last_hidden = NULL;
+
+    /* ---- SSM recurrent state + conv state (calloc, zero-init) ---- */
+    int ssm_state_size = nL * wd.ssm_v_heads * SSMDS * SSMDS;
+    int conv_state_size = nL * (wd.conv_kernel - 1) * m->conv_dim;
+    m->ssm_states = (float *)calloc((size_t)ssm_state_size + conv_state_size, sizeof(float));
+    m->conv_states = m->ssm_states + ssm_state_size;
+
+    /* ---- GQA KV cache (per GQA layer) ---- */
+    int64_t total_cache_elems = 0;
+    for (int l = 0; l < nL; l++) {
+        if (!m->layers[l].is_ssm) {
+            int kv_dim = m->layers[l].gqa.kv_dim;
+            total_cache_elems += (int64_t)GQA_MAX_CTX * kv_dim;
+        }
+    }
+    int64_t k_cache_bytes = kv_cache_alloc_size(total_cache_elems);
+    m->gqa_k_cache = malloc(k_cache_bytes ? k_cache_bytes : 16);
+    m->gqa_v_cache = malloc(k_cache_bytes ? k_cache_bytes : 16);
+    if (m->gqa_k_cache) memset(m->gqa_k_cache, 0, k_cache_bytes ? k_cache_bytes : 16);
+    if (m->gqa_v_cache) memset(m->gqa_v_cache, 0, k_cache_bytes ? k_cache_bytes : 16);
+    m->gqa_cache_len = 0;
 
     /* ---- embed_tokens / lm_head ---- */
     int64_t ne = 0;
@@ -351,10 +419,11 @@ void wubu_model_safetensors_free(wubu_model_t *m) {
         free(ly->ssm.ssm_a); free(ly->ssm.ssm_dt_bias);
         free(ly->ssm.ssm_conv1d_weight); free(ly->ssm.ssm_norm_weight);
         free(ly->ssm.ssm_out_weight_f32);
+        free(ly->attn_norm_weight); free(ly->post_attn_norm_weight);
         free(ly->moe.ffn_gate_exps); free(ly->moe.ffn_up_exps);
         free(ly->moe.ffn_down_exps); free(ly->moe.ffn_gate_inp);
     }
-    free(m->token_embd); free(m->output_weight);
+    free(m->token_embd); free(m->output_weight); free(m->norm_weight);
     free(m->layers);
     m->layers = NULL;
 }

@@ -971,6 +971,20 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         if (getenv("PROFILE")) {
             fprintf(stderr, "  Output proj: %.3fms\n", (t_out1 - t_out0) * 1000.0);
         }
+    } else if (model->output_weight) {
+        // F32 output projection: logits[v] = sum_k x[k] * output_weight[v*d_model + k]
+        // (F32 safetensors/HF path: output_weight_q is NULL, output_weight holds plain f32 lm_head)
+        #pragma omp parallel for if(N * model->vocab_size > 100000)
+        for (int i = 0; i < N; i++) {
+            const float *h_i = x + i * model->d_model;
+            float *log_i = logits + i * model->vocab_size;
+            for (int v = 0; v < model->vocab_size; v++) {
+                double sum = 0.0;
+                const float *w_v = model->output_weight + (size_t)v * model->d_model;
+                for (int k = 0; k < model->d_model; k++) sum += (double)h_i[k] * (double)w_v[k];
+                log_i[v] = (float)sum;
+            }
+        }
     } else {
         // Fallback: copy hidden states only (no output weight loaded)
         memcpy(logits, x, N * model->d_model * sizeof(float));
