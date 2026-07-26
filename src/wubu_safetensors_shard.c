@@ -143,3 +143,13 @@ void wubu_shard_close(wubu_shard_ctx_t *sc) {
     for (int i = 0; i < sc->n; i++) st_close(sc->shards[i]);
     free(sc);
 }
+
+int wubu_shard_dimof(const wubu_shard_ctx_t *sc, const char *name, int i) {
+    int si = 0;
+    const st_tensor_info *t = find_across(sc, name, &si);
+    return (t && i < t->n_dims) ? (int)t->dims[i] : -1;
+}
+
+int wubu_shard_has(const wubu_shard_ctx_t *sc, const char *name) {
+    return find_across(sc, name, NULL) != NULL;
+}

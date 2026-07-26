@@ -15,6 +15,7 @@
 #include "gguf_reader.h"
 #include "wubu_repetition.h"
 #include "wubu_model_safetensors_bridge.h"
+#include "wubu_tokenizer_hf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,8 +69,7 @@ static int read_embedding(const wubu_model_t *mdl, int token_id, float *out, FIL
  *   *.gguf         -> legacy bytropix GGUF path.
  * Returns 1 on success (model ready), 0 on failure. */
 static int init_model(wubu_model_t *mdl, const char *path) {
-    size_t pl = strlen(path);
-    int is_st = (pl > 13 && strcmp(path + pl - 13, ".safetensors") == 0);
+    int is_st = (strstr(path, ".safetensors") != NULL);
     if (is_st) {
         wubu_adapter_t ad; memset(&ad, 0, sizeof(ad));
         if (!wubu_adapter_load(&ad, path)) {
@@ -130,7 +130,27 @@ int main(int argc, char **argv) {
     }
 
     wubu_tokenizer_t tok;
-    if (!wubu_tokenizer_init(&tok, model_path)) {
+    /* For safetensors/Colonel models, prefer the HF tokenizer.json in the
+     * same directory. Fall back to the GGUF tokenizer otherwise. */
+    wubu_tok_hf_t *hf_tok = NULL;
+    {
+        char hf_path[1024];
+        const char *slash = strrchr(model_path, '/');
+        if (slash) {
+            int n = slash - model_path + 1;
+            snprintf(hf_path, sizeof(hf_path), "%.*s/tokenizer.json", n, model_path);
+        } else {
+            snprintf(hf_path, sizeof(hf_path), "tokenizer.json");
+        }
+        FILE *tf = fopen(hf_path, "rb");
+        if (tf) { fclose(tf); hf_tok = wubu_tok_hf_load(hf_path); }
+    }
+    if (hf_tok) {
+        printf("Using HF tokenizer.json\n");
+        /* minimal wubu_tokenizer_t compatibility shim */
+        tok.bos_id = wubu_tok_hf_bos_id(hf_tok);
+        tok.eos_id = wubu_tok_hf_eos_id(hf_tok);
+    } else if (!wubu_tokenizer_init(&tok, model_path)) {
         fprintf(stderr, "Failed to init tokenizer\n");
         wubu_model_free(&mdl);
         return 1;
@@ -160,22 +180,27 @@ int main(int argc, char **argv) {
         int pos = 0;
         prompt_tokens[pos++] = tok.bos_id;
         prompt_tokens[pos++] = IM_START;
-        int n = wubu_tokenizer_encode(&tok, "system\nYou are a helpful assistant.", prompt_tokens + pos, 1024 - pos);
+        int n = hf_tok ? wubu_tok_hf_encode(hf_tok, "system\nYou are a helpful assistant.", prompt_tokens + pos, 1024 - pos)
+                       : wubu_tokenizer_encode(&tok, "system\nYou are a helpful assistant.", prompt_tokens + pos, 1024 - pos);
         if (n <= 0) return 1; pos += n;
         prompt_tokens[pos++] = IM_END; prompt_tokens[pos++] = NL_TOKEN;
         prompt_tokens[pos++] = IM_START;
-        n = wubu_tokenizer_encode(&tok, "user\n", prompt_tokens + pos, 1024 - pos);
+        n = hf_tok ? wubu_tok_hf_encode(hf_tok, "user\n", prompt_tokens + pos, 1024 - pos)
+                   : wubu_tokenizer_encode(&tok, "user\n", prompt_tokens + pos, 1024 - pos);
         if (n <= 0) return 1; pos += n;
-        n = wubu_tokenizer_encode(&tok, prompt, prompt_tokens + pos, 1024 - pos);
+        n = hf_tok ? wubu_tok_hf_encode(hf_tok, prompt, prompt_tokens + pos, 1024 - pos)
+                   : wubu_tokenizer_encode(&tok, prompt, prompt_tokens + pos, 1024 - pos);
         if (n <= 0) return 1; pos += n;
         prompt_tokens[pos++] = IM_END; prompt_tokens[pos++] = NL_TOKEN;
         prompt_tokens[pos++] = IM_START;
-        n = wubu_tokenizer_encode(&tok, "assistant\n", prompt_tokens + pos, 1024 - pos);
+        n = hf_tok ? wubu_tok_hf_encode(hf_tok, "assistant\n", prompt_tokens + pos, 1024 - pos)
+                   : wubu_tokenizer_encode(&tok, "assistant\n", prompt_tokens + pos, 1024 - pos);
         if (n <= 0) return 1; pos += n;
         prompt_tokens[pos++] = THINK; prompt_tokens[pos++] = NL_TOKEN;
         n_prompt = pos;
     } else {
-        n_prompt = wubu_tokenizer_encode(&tok, prompt, prompt_tokens, 1024);
+        n_prompt = hf_tok ? wubu_tok_hf_encode(hf_tok, prompt, prompt_tokens, 1024)
+                          : wubu_tokenizer_encode(&tok, prompt, prompt_tokens, 1024);
         if (n_prompt <= 0) { prompt_tokens[0] = tok.bos_id >= 0 ? tok.bos_id : 248044; n_prompt = 1; }
     }
     printf("Prompt: %d tokens\n", n_prompt);
@@ -246,8 +271,9 @@ int main(int argc, char **argv) {
     float *last_logits = logits + (n_prompt - 1) * vs;
     int generated = 0;
 
-    { char buf[1024]; int nc = wubu_tokenizer_decode(&tok, prompt_tokens, n_prompt, buf, 1024);
-      if (nc > 0) printf("Input: %s\n", buf); }
+    { char *ibuf = hf_tok ? wubu_tok_hf_decode(hf_tok, prompt_tokens, n_prompt)
+                                : NULL;
+      if (ibuf) { printf("Input: %s\n", ibuf); free(ibuf); } }
 
     // Decode loop
     while (generated < max_tokens && !g_stop) {
@@ -268,11 +294,12 @@ int main(int argc, char **argv) {
         // Record the chosen token so future repetitions are penalized.
         if (rep) wubu_rep_observe(rep, next_token);
 
-        char piece_buf[256];
-        int n_chars = wubu_tokenizer_decode(&tok, &next_token, 1, piece_buf, 256);
-        if (n_chars > 0) fwrite(piece_buf, 1, n_chars, stdout);
+        char *piece = hf_tok ? wubu_tok_hf_decode(hf_tok, &next_token, 1) : NULL;
+        int n_chars = piece ? (int)strlen(piece) : 0;
+        if (n_chars > 0) fwrite(piece, 1, n_chars, stdout);
         else printf("<%d>", next_token);
         fflush(stdout);
+        if (piece) free(piece);
 
         float x_next[D_MODEL];
         if (!read_embedding(&mdl, next_token, x_next, emb_file))
@@ -306,6 +333,7 @@ int main(int argc, char **argv) {
     free(logits); free(embd);
     if (emb_file) fclose(emb_file);
     wubu_tokenizer_free(&tok);
+    if (hf_tok) wubu_tok_hf_free(hf_tok);
     if (rep) wubu_rep_free(rep);
     gpu_output_cleanup();
     wubu_model_free(&mdl);

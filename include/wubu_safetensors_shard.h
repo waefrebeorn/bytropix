@@ -56,6 +56,12 @@ const float *wubu_shard_data_f32(const wubu_shard_ctx_t *sc, const char *name,
 /* Close + free all shards. */
 void wubu_shard_close(wubu_shard_ctx_t *sc);
 
+/* Read dimension `i` of a named tensor (across all shards), or -1 if absent. */
+int wubu_shard_dimof(const wubu_shard_ctx_t *sc, const char *name, int i);
+
+/* Whether a named tensor exists across the shards. */
+int wubu_shard_has(const wubu_shard_ctx_t *sc, const char *name);
+
 #ifdef __cplusplus
 }
 #endif

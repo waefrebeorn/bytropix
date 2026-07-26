@@ -51,11 +51,9 @@ static void tn2(char *out, size_t cap, const char *fmt, int l, int e) {
     snprintf(out, cap, fmt, l, e);
 }
 
-/* Read dim `i` of a tensor by name (or -1 if absent). File-scope helper
- * used by wubu_model_init_safetensors to derive REAL model dimensions. */
-static int dimof(st_ctx *s, const char *n, int i) {
-    const st_tensor_info *t = st_find_tensor(s, n);
-    return (t && i < t->n_dims) ? (int)t->dims[i] : -1;
+/* Read dim `i` of a tensor by name (or -1 if absent), searching ALL shards. */
+static int dimof_sc(wubu_shard_ctx_t *sc, const char *n, int i) {
+    return wubu_shard_dimof(sc, n, i);
 }
 
 int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
@@ -72,30 +70,39 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
     if (!sc) { fprintf(stderr, "bridge: cannot open shard set %s\n", path); st_close(st); return -1; }
 
     /* ---- Derive REAL model dimensions from actual tensor shapes ----
-     * This is the angel-coder fix for bytropix's previously hardcoded
-     * 2048-dim forward: we read the checkpoint's true dims and feed them
-     * to WUBU_DIMS so the forward runs at the model's real size. Falls
-     * back to the adapter values if a shape can't be read. */
-    int D     = dimof(st, "model.language_model.embed_tokens.weight", 1);
-    if (D < 0) D = (int)ad->d_model;
-    int CONVD = dimof(st, "model.language_model.layers.0.linear_attn.in_proj_qkv.weight", 1);
+     * Probe across ALL shards (a single shard only holds a subset of the
+     * tensors, so probing one shard gives wrong/missing dims). */
+    int D     = dimof_sc(sc, "model.language_model.embed_tokens.weight", 1);
+    if (D < 0) D = dimof_sc(sc, "model.language_model.layers.0.linear_attn.in_proj_qkv.weight", 1);
+    int CONVD = dimof_sc(sc, "model.language_model.layers.0.linear_attn.in_proj_qkv.weight", 0);
     if (CONVD < 0) CONVD = D + D + D;
-    int VD    = dimof(st, "model.language_model.layers.0.linear_attn.in_proj_z.weight", 1);
+    int VD    = dimof_sc(sc, "model.language_model.layers.0.linear_attn.in_proj_z.weight", 0);
     if (VD < 0) VD = D;
-    int DT    = dimof(st, "model.language_model.layers.0.linear_attn.in_proj_a.weight", 1);
+    int DT    = dimof_sc(sc, "model.language_model.layers.0.linear_attn.in_proj_a.weight", 0);
     if (DT < 0) DT = 32;
-    int SSMDS = dimof(st, "model.language_model.layers.0.linear_attn.norm.weight", 0);
+    int SSMDS = dimof_sc(sc, "model.language_model.layers.0.linear_attn.norm.weight", 0);
     if (SSMDS < 0) SSMDS = 128;
-    int qdim  = dimof(st, "model.language_model.layers.0.self_attn.q_proj.weight", 1);
-    int kvdim = dimof(st, "model.language_model.layers.0.self_attn.k_proj.weight", 1);
-    int qh = ad->gqa_q_heads > 0 ? (int)ad->gqa_q_heads : 16;
-    int kvh = ad->gqa_kv_heads > 0 ? (int)ad->gqa_kv_heads : 2;
-    int hd = ad->gqa_head_dim > 0 ? (int)ad->gqa_head_dim : 256;
-    if (qdim > 0 && hd > 0) qh = qdim / hd;
-    if (kvdim > 0 && hd > 0) kvh = kvdim / hd;
-    int nL = (int)ad->n_layers;
-    int nE = (int)ad->n_experts;
-    int dff = (int)ad->d_ff > 0 ? (int)ad->d_ff : (D * 4);
+    int qdim  = dimof_sc(sc, "model.language_model.layers.0.self_attn.q_proj.weight", 0);
+    int kvdim = dimof_sc(sc, "model.language_model.layers.0.self_attn.k_proj.weight", 0);
+    int hd    = ad->gqa_head_dim > 0 ? (int)ad->gqa_head_dim : 256;
+    int qh = (qdim > 0 && hd > 0) ? qdim / hd : (ad->gqa_q_heads > 0 ? (int)ad->gqa_q_heads : 32);
+    int kvh = (kvdim > 0 && hd > 0) ? kvdim / hd : (ad->gqa_kv_heads > 0 ? (int)ad->gqa_kv_heads : 4);
+    int dff   = dimof_sc(sc, "model.language_model.layers.0.mlp.gate_proj.weight", 0);
+    if (dff < 0) dff = (int)ad->d_ff > 0 ? (int)ad->d_ff : (D * 4);
+
+    /* Count real layers by probing across shards (robust to adapter quirks). */
+    int nL = 0;
+    for (int l = 0; l < 512; l++) {
+        char qn[256];
+        tn(qn, sizeof(qn), "model.language_model.layers.%d.linear_attn.in_proj_qkv.weight", l);
+        if (!wubu_shard_has(sc, qn)) break;
+        nL = l + 1;
+    }
+    if (nL <= 0) nL = (int)ad->n_layers;
+    /* Smoke-test / memory cap: load only the first MAX_LAYERS layers. */
+    int maxl = getenv("MAX_LAYERS") ? atoi(getenv("MAX_LAYERS")) : 0;
+    if (maxl > 0 && maxl < nL) nL = maxl;
+    int nE = (int)ad->n_experts;   /* 0 => dense MLP modelled as 1 expert */
 
     wubu_dims_t wd; memset(&wd, 0, sizeof(wd));
     wd.d_model = D; wd.conv_dim = CONVD; wd.value_dim = VD; wd.dt_rank = DT;

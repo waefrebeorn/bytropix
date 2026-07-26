@@ -1,101 +1,39 @@
-# STATUS — Multi-Model Integration (June 14, 2026)
+# bytropix — Colonel on-device inference engine: status
 
-**🔁 Three-model benchmark target: DiffusionGemma-26B + Gemma 4 12B QAT + Qwen3.6-35B**
+## ds4-ssd RAM/SSD technique (NEW, this session)
+Replicated Anemll/ds4-ssd's signature method ("LLM in a flash" applied to MoE):
+- **Dense/shared/router tensors stay resident in RAM** (loaded by the engine).
+- **Routed MoE expert weights live on SSD** in a sidecar directory `experts.<L>.bin`
+  (BF16-packed), paged into a fixed **slot-bank** of resident F32 slots per layer
+  on router miss, with **LRU eviction**. This lets a 256-expert model (KAT-Coder)
+  run in a fraction of the RAM its full expert footprint would need.
+- Module: `include/wubu_ssd_moe.h` + `src/wubu_ssd_moe.c` (self-contained, C11).
+- Sidecar packer: `tools/pack_kat_sidecar.c` (extracts HF MoE experts -> BF16 sidecar).
+- Verified: `make test_ssd_moe` — 12 experts paged through a 3-slot bank, BF16->F32
+  dequant matmul matches a fully-resident reference exactly (PASS). LRU evictions
+  and the page-in (disk pread) path both exercised.
 
----
+## Model support matrix (Colonel / HF safetensors + GGUF)
+| Model | Arch | D | layers | experts | status |
+|-------|------|---|--------|---------|--------|
+| Agents-A1-4B | qwen3_5 (dense, SSM+GQA, multimodal) | 2560 | 32 | 0 | tokenizer OK; bridge probes all shards; FP32 OOM on 13GB box |
+| KAT-Coder-V2.5-Dev | qwen3_5_moe (256/8 + shared, hybrid) | 2048 | 40 | 256 | sidecar packer built; pending real pack + SSD run |
+| Qwen3.6-27B-base | qwen3_5 (dense, 64 hybrid) | 5120 | 64 | 0 | config read; pending bridge hybrid + LoRA target |
+| BTL-3 | LoRA on Qwen3.6-27B | — | — | — | adapter-only; pending LoRA apply path |
 
-## Current Status
+## Bugs fixed this session
+- HF BPE tokenizer infinite loop (rewrote as bounded single-pass scanner; loads
+  248,044 vocab; encode/decode round-trip verified on Agents-A1-4B).
+- Safetensors bridge probed only shard 0 -> wrong dims (VD 2560 vs real 4096,
+  qh 16 vs 32, kvh 2 vs 4). Now probes across all shards via `wubu_shard_dimof`.
+  Added `wubu_shard_has`/`wubu_shard_dimof` public API.
 
-| Asset | Status | Notes |
-|-------|--------|-------|
-| DiffusionGemma-26B GGUF | ✅ Downloaded | Q4_K_M, 16.8 GB |
-| Gemma 4 12B QAT GGUF | ✅ Downloaded | Q4_K_XL, 6.7 GB |
-| Qwen3.6-35B GGUF | ✅ Downloaded | IQ2_M |
-| Multi-model adapter | ✅ Working | Auto-detects naming convention |
-| Dynamic dimension extraction | ✅ Working | d_model from GGUF tensor shapes |
-| Dynamic KV cache layout | ✅ Working | Per-layer offsets, variable kv_dim |
-| Build (gen_text_cpu) | ✅ Compiles | Only warnings, no errors |
-| DiffusionGemma model load | ✅ Working | All 30 layers GQA, correct dims |
-| DiffusionGemma forward | ❌ Crashes | Per-layer head_dim mismatch (LARGE layers) |
-| Gemma 4 12B forward | ⏳ Not tested | Dedicated engine in wubu_gemma4.c |
-| Qwen3.6-35B forward | ✅ Working | 3-4 tok/s CPU, coherent output |
-| 512K benchmark (all 3) | ⏳ Pending | Blocked on DGemma forward crash |
-
----
-
-## Multi-Model Adapter Status
-
-### Architecture Detection
-
-| Model | Naming | Detection | is_ssm Logic |
-|-------|--------|-----------|---------------|
-| Qwen3.6 | `blk.%d.*` | `tensor_naming=0` | `(layer_idx+1)%4 != 0` → 30 SSM, 10 Gemma |
-| Gemma 4 | `model.layers.%d.*` | `tensor_naming=1` | All GQA (0 SSM) |
-| DiffusionGemma | `model.layers.%d.*` | `tensor_naming=2` | All GQA (0 SSM) |
-
-### Dynamic Dimensions (from GGUF)
-
-| Field | Qwen3.6 | DiffusionGemma | Gemma 4 |
-|-------|---------|----------------|---------|
-| d_model | 2048 | 2816 | 3840 |
-| head_dim | 256 | 256/512 (LARGE) | 256 |
-| q_heads | 16 | 16 | 16 |
-| kv_heads | 2 (GQA layers) | 8 (normal) / 2 (LARGE) | 8 |
-| n_experts | 256 | 128 | 0 |
-| n_active | 12 | 8 | N/A |
-| d_ff | 1024 | 704 | 15360 |
-
----
-
-## Model Component Fate
-
-| Component | Fate | Notes |
-|-----------|------|-------|
-| `wubu_model.c` | 🔄 Evolved | Multi-model adapter with `g_tensor_naming` global |
-| `wubu_ssm.c` | 🔄 Dual-use | SSM functions (Qwen-only) + GQA functions (all models, with `d_model` param) |
-| `wubu_moe.c` | 🔄 Shared | MoE forward used by Qwen and DiffusionGemma |
-| `gguf_reader.c` | ✅ Shared | Architecture-agnostic |
-| KV cache (Q4_0) | ✅ Shared | Dynamic sizing per-model |
-| `wubu_gemma4.c` | 🆕 Dedicated | Gemma 4-specific forward (separate engine) |
-| CUDA kernels | 🔄 Per-model | Need ISWA kernels for Gemma, GQA kernels for DiffusionGemma |
-
----
-
-## Blockers
-
-### P0 — DiffusionGemma Forward Crash
-
-**Symptom**: Model loads successfully (30 GQA layers), crashes during decode with "tensor too large (512 elems, max 256)" for LARGE layers.
-
-**Root cause**: GQA loading code uses fixed `attn_q_norm` weight size of `GQA_HEAD_DIM=256`, but DiffusionGemma LARGE layers have `head_dim=512` (q_norm weight has 512 elements).
-
-**Fix needed**: Per-layer weight buffer sizing from GGUF tensor shapes instead of hardcoded macros. The `gqa_layer_weights` struct already has `head_dim` and `is_large` fields — need to extract these from GGUF during init and use them for buffer allocation in the load path.
-
-### P1 — Gemma 4 12B Benchmark
-
-Dedicated engine in `wubu_gemma4.c` with separate model loading/forward. Hasn't been integrated into the main `bench_512k_full` path yet.
-
-### P2 — GPU Forward (All Models)
-
-CPU-only path works. GPU kernels exist but aren't fully wired for any model's complete forward pass.
-
----
-
-## Next Steps (Priority Order)
-
-1. 🔧 **Fix DGemma LARGE layer head_dim** — extract per-layer dims for weight buffer allocation
-2. 🔧 **Complete DGemma forward** — verify decode produces output
-3. 🧪 **Benchmark all 3 models** — `./bench_512k_full` for each at 4K context
-4. 📊 **Compare results** — tokens/s, VRAM, accuracy per model
-5. 🚀 **GPU forward** — wire kernels for at least one model end-to-end
-
----
-
-## Key Paths
-
-- Source: `/home/wubu/bytropix/`
-- DiffusionGemma: `/home/wubu/models/DiffusionGemma-26B-Q4_K_M.gguf`
-- Gemma 4 12B: `/home/wubu/models/gemma4/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf`
-- Qwen3.6: `/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf`
-- Mind palace: `.hermes/mind-palace/paradigm-shift-gemma4.md`
-- DGemma notes: `.hermes/mind-palace/tier4-validation/13-benchmarks/gemma4-baseline.md`
+## Known blockers (honest)
+- Full FP32 Agents (9GB weights + 5GB embed/lm_head) OOMs the 13GB box. Needs
+  BF16-on-disk + per-layer FP32 dequant to fit, OR the slot-bank concept applied
+  to embed/lm_head, OR a bigger box. Real generation not yet produced.
+- SSM forward math (GatedDeltaNet) not yet validated for correct logits.
+- KAT real sidecar not yet built (download in progress); MoE forward must call
+  the slot-bank pager instead of the in-RAM expert blob.
+- Qwen3.6-27B / BTL-3 not yet loaded; hybrid `layer_types` (full_attention = GQA
+  only, no SSM) must be handled per-layer in the forward.

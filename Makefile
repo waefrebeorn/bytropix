@@ -25,7 +25,10 @@ RSGD_OBJ = src/rsgd.o
 # New Colonel-model support (safetensors + LoRA + repetition + adapter)
 NEW_OBJ = src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o \
           src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o \
-          src/wubu_safetensors_shard.o
+          src/wubu_safetensors_shard.o src/wubu_ssd_moe.o
+
+src/wubu_ssd_moe.o: src/wubu_ssd_moe.c include/wubu_ssd_moe.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/safetensors_reader.o: src/safetensors_reader.c include/safetensors_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -231,6 +234,10 @@ test_real_load: tools/test_real_load.c src/wubu_model_safetensors_bridge.o src/w
 	$(CC) $(CFLAGS) -o $@ $< src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/safetensors_reader.o src/wubu_lora.o $(MODEL_OBJ) src/wubu_model_adapter.o $(LDFLAGS)
 	./$@
 
+test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 test_tokenizer: tools/test_tokenizer.c src/wubu_tokenizer.o src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -251,10 +258,12 @@ test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 
 gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o \
                           src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o \
-                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o
+                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o \
+                          src/wubu_tokenizer_hf.o
 	$(CC) $(CFLAGS) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o \
-                          src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o \
-                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o $(LDFLAGS)
+	                          src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o \
+	                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o \
+	                          src/wubu_tokenizer_hf.o $(LDFLAGS)
 # CPU-only gen_text (recompiles wubu_model + wubu_moe without GPU_SUPPORT)
 gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
 gen_text_cpu: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
