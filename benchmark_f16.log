@@ -1,0 +1,7 @@
+GGUF v3, 426 tensors, 36 KV pairs
+Tensor info end at offset 10968739, aligned to 10968768 (pad=29, alignment=32)
+Error: tensor too large (81920 elems, max 65536)
+Failed to load SSM weights for layer 0
+Allocating 32 layers...
+  Model dims: d_model=2560, head_dim=256
+  Naming: Qwen (blk.N.*)

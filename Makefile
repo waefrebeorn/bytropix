@@ -249,8 +249,12 @@ test_full_moe: tools/test_full_moe.c $(MODEL_OBJ)
 test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o
-	$(CC) $(CFLAGS) -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o $(LDFLAGS)
+gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o \
+                          src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o \
+                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o
+	$(CC) $(CFLAGS) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o \
+                          src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o \
+                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o $(LDFLAGS)
 # CPU-only gen_text (recompiles wubu_model + wubu_moe without GPU_SUPPORT)
 gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I/usr/local/cuda-13.1/include,$(CFLAGS))
 gen_text_cpu: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o

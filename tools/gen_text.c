@@ -139,14 +139,14 @@ int main(int argc, char **argv) {
     // --- Repetition suppression (repeat_penalty + DRY) ---
     // Tuned for the Colonel models on RTX 5070 Ti (see bytropix STATUS.md):
     //   Q8:  repeat_penalty 1.05, DRY multiplier 0.5
-    //   F16: repeat_penalty 1.1,  DRY multiplier 1.2
-    wubu_rep_state_t *rep = wubu_rep_create(mdl.vocab_size, 256, 2, -1);
-    if (rep) {
-        float rp = getenv("REPEAT_PENALTY") ? (float)atof(getenv("REPEAT_PENALTY")) : 1.05f;
-        float dm = getenv("DRY_MULTIPLIER") ? (float)atof(getenv("DRY_MULTIPLIER")) : 0.5f;
-        float db = getenv("DRY_BASE") ? (float)atof(getenv("DRY_BASE")) : 1.75f;
-        wubu_rep_set_params(rep, rp, dm, db);
-    }
+    //   F16: repeat_penalty 1.1,  DRY multiplier 1.2 (Agents-A1-4B F16 exact)
+        wubu_rep_state_t *rep = wubu_rep_create(mdl.vocab_size, 256, 2, -1);
+        if (rep) {
+            float rp = getenv("REPEAT_PENALTY") ? (float)atof(getenv("REPEAT_PENALTY")) : 1.1f;
+            float dm = getenv("DRY_MULTIPLIER") ? (float)atof(getenv("DRY_MULTIPLIER")) : 1.2f;
+            float db = getenv("DRY_BASE") ? (float)atof(getenv("DRY_BASE")) : 1.75f;
+            wubu_rep_set_params(rep, rp, dm, db);
+        }
 
     int D = D_MODEL;
     int vs = mdl.vocab_size;
