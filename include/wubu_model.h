@@ -345,6 +345,17 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                                    const float *embeddings, int B, int T,
                                    float *logits);
 
+// Chunked forward: process a long [B, T_total] sequence in time-chunks of
+// <= chunk_sz tokens, carrying the model's persistent SSM/conv/KV-cache state
+// across chunks. Mathematically identical to a single forward, but bounds peak
+// memory: each chunk allocates intermediates for chunk_sz tokens only. The
+// final chunk's logits (positions [T_total-chunk_sz, T_total)) are written to
+// `logits` (sized B*chunk_sz*vocab_size). Use this to run the full 256K context
+// on a memory-limited box.
+void wubu_model_forward_chunked(wubu_model_t *model,
+                                const int *token_ids, int B, int T_total,
+                                int chunk_sz, float *logits);
+
 // ================================================================
 // GPU-Accelerated Forward Path (wubu_model_gpu.cu)
 // ================================================================

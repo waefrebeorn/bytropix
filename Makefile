@@ -435,6 +435,11 @@ test_256k_forward: tools/test_256k_forward.c $(MODEL_OBJ) gen_fixture_safetensor
 	./gen_fixture_safetensors_model
 	./$@
 
+# Chunked 256K prefill proof: builds the binary; run explicitly (heavy 256K).
+test_256k_chunked: tools/test_256k_chunked.c $(MODEL_OBJ) gen_fixture_safetensors_model
+	$(CC) $(CFLAGS) -o $@ tools/test_256k_chunked.c $(MODEL_OBJ) $(LDFLAGS)
+	./gen_fixture_safetensors_model
+
 test_kv_cache: tools/test_kv_cache.c $(CORE_OBJ) $(CUDA_OBJ)
 	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
