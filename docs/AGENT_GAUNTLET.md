@@ -14,12 +14,25 @@ produces that evidence.
 - `tools/agent_gauntlet/test_gauntlet.c` — regression gate
 
 ## The four Colonel models
+On-disk checkpoints live **persistently** under `/home/wubu/models/<Name>/`
+(multi-shard safetensors + tokenizer.json + config.json). `wubu_model_init_auto`
+accepts the **directory** (dense/moe) or the **adapter file** (BTL-3, with
+`BTL_BASE` = the Qwen3.6-27B base dir). The canonical, exact-dim inventory is
+stored on HuggingFace:
+**https://huggingface.co/datasets/WaefreBeorn/bytropix-colonel-registry**
+(`registry.json` + card).
+
 | codename        | kind | on-disk checkpoint (resolved at runtime) |
 |-----------------|------|------------------------------------------|
-| Qwen3.6-27B     | dense hybrid | `/home/wubu/models/Qwen3.6-27B/model.safetensors` |
-| Agents-A1-4B    | dense hybrid | `/home/wubu/models/Agents-A1-4B/model.safetensors` |
-| KAT-Coder-V2.5  | MoE 256/8    | `/home/wubu/models/KAT-Coder-V2.5-Dev/model.safetensors` |
-| BTL-3           | LoRA on Qwen3.6-27B | `/home/wubu/models/BTL-3/adapter_model.safetensors` |
+| Qwen3.6-27B     | dense (BTL-3 base) | `/home/wubu/models/Qwen3.6-27B/` (15 shards) |
+| Agents-A1-4B    | dense hybrid | `/home/wubu/models/Agents-A1-4B/` (2 shards) |
+| KAT-Coder-V2.5  | MoE 256/8    | `/home/wubu/models/KAT-Coder-V2.5-Dev/` (13 shards) |
+| BTL-3           | LoRA on Qwen3.6-27B | `/home/wubu/models/BTL-3/adapter_model.safetensors` (+ `BTL_BASE`) |
+
+Exact dims (hidden/layers/heads/experts) are in the HF registry, not hardcoded
+here. Agents-A1-4B carries the verified repetition/DRY tuning
+(rp 1.05/1.1, dry 0.5/1.2, dry-base 1.75, ctx 131072, ub 2048) wired into
+`gen_text` defaults.
 
 Missing/oversized checkpoints **fall back to `fixture_model.safetensors`** so the
 harness always runs + verifies on this box (13 GB RAM). When the real 9 GB+
