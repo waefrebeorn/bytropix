@@ -11,6 +11,7 @@
 #include "wubu_model_safetensors_bridge.h"
 #include "wubu_dims.h"
 #include "wubu_safetensors_shard.h"
+#include "safetensors_reader.h"
 #include "wubu_lora.h"
 #include <stdlib.h>
 #include <string.h>
@@ -59,6 +60,29 @@ static int dimof_sc(wubu_shard_ctx_t *sc, const char *n, int i) {
     return wubu_shard_dimof(sc, n, i);
 }
 
+/* Load a named tensor as F32, trying the name as given and (if absent) with a
+ * ".weight" suffix appended. HF checkpoints are inconsistent about whether
+ * scalar/norm-like SSM params (A_log, dt_bias) carry a ".weight" suffix.
+ * Returns a freshly malloc'd F32 buffer or NULL if neither form exists. */
+static float *load_f32_try2(wubu_shard_ctx_t *sc, const char *name, int64_t *n_elems) {
+    float *p = wubu_shard_load_f32(sc, name, n_elems);
+    if (p) return p;
+    char alt[512];
+    snprintf(alt, sizeof(alt), "%s.weight", name);
+    return wubu_shard_load_f32(sc, alt, n_elems);
+}
+
+/* Load a named tensor as F32 and transpose [rows,cols]->[cols,rows], trying
+ * the name as given then with ".weight" appended. NULL if neither exists. */
+static float *load_f32_try2_t(wubu_shard_ctx_t *sc, const char *name,
+                              int rows, int cols) {
+    float *p = wubu_shard_load_f32_t(sc, name, rows, cols);
+    if (p) return p;
+    char alt[512];
+    snprintf(alt, sizeof(alt), "%s.weight", name);
+    return wubu_shard_load_f32_t(sc, alt, rows, cols);
+}
+
 int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
                                const wubu_adapter_t *ad) {
     return wubu_model_init_safetensors_ssd(m, path, ad, NULL);
@@ -71,7 +95,16 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     memset(m, 0, sizeof(*m));
 
     st_ctx *st = st_open(path);
-    if (!st) { fprintf(stderr, "bridge: cannot open safetensors %s\n", path); return -1; }
+    if (!st) {
+        /* A bare checkpoint DIRECTORY (model-NNN-of-MMM shards) is not itself
+         * a safetensors file, so st_open fails; that's expected — we derive
+         * dims from the shard set via wubu_shard_open below, which globs the
+         * directory. Only treat a single-file open failure as fatal. */
+        struct stat _pst;
+        int is_dir = (stat(path, &_pst) == 0 && S_ISDIR(_pst.st_mode));
+        if (!is_dir) { fprintf(stderr, "bridge: cannot open safetensors %s\n", path); return -1; }
+        st = NULL;
+    }
     /* Shard ctx handles single-file OR multi-shard (model-NNNNN-of-NNNNN)
      * checkpoints transparently. `st` (shard 0) is used only for shape
      * probing below; all weight loads go through `sc`. */
@@ -172,24 +205,29 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
          * full_attention layers (which have no linear_attn.* tensors). */
         if (ssm_layer) {
         ly->ssm.f32_mode = 1;
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_qkv.weight", l);
-        ly->ssm.attn_qkv_weight_f32 = wubu_shard_load_f32_t(sc, nm, D, CONVD); /* [D,CONVD] */
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_z.weight", l);
-        ly->ssm.attn_gate_weight_f32 = wubu_shard_load_f32_t(sc, nm, D, VD); /* [D,VD] */
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_a.weight", l);
-        ly->ssm.ssm_alpha_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_b.weight", l);
-        ly->ssm.ssm_beta_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.A_log.weight", l);
-        ly->ssm.ssm_a = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.dt_bias.weight", l);
-        ly->ssm.ssm_dt_bias = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.convNd.weight", l);
-        ly->ssm.ssm_conv1d_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.norm.weight", l);
-        ly->ssm.ssm_norm_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.out_proj.weight", l);
-        ly->ssm.ssm_out_weight_f32 = wubu_shard_load_f32_t(sc, nm, VD, D); /* file [VD,D] -> [D,VD] for proj_matmul(VALUE_DIM,D_MODEL) */
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_qkv", l);
+        ly->ssm.attn_qkv_weight_f32 = load_f32_try2_t(sc, nm, D, CONVD); /* [D,CONVD] */
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_z", l);
+        ly->ssm.attn_gate_weight_f32 = load_f32_try2_t(sc, nm, D, VD); /* [D,VD] */
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_a", l);
+        ly->ssm.ssm_alpha_weight = load_f32_try2(sc, nm, &(int64_t){0});
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_b", l);
+        ly->ssm.ssm_beta_weight = load_f32_try2(sc, nm, &(int64_t){0});
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.A_log", l);
+        ly->ssm.ssm_a = load_f32_try2(sc, nm, &(int64_t){0});
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.dt_bias", l);
+        ly->ssm.ssm_dt_bias = load_f32_try2(sc, nm, &(int64_t){0});
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.conv1d", l);
+        ly->ssm.ssm_conv1d_weight = load_f32_try2(sc, nm, &(int64_t){0});
+        if (!ly->ssm.ssm_conv1d_weight) {
+            /* Fixtures/old checkpoints may use convNd instead of conv1d. */
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.convNd", l);
+            ly->ssm.ssm_conv1d_weight = load_f32_try2(sc, nm, &(int64_t){0});
+        }
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.norm", l);
+        ly->ssm.ssm_norm_weight = load_f32_try2(sc, nm, &(int64_t){0});
+        tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.out_proj", l);
+        ly->ssm.ssm_out_weight_f32 = load_f32_try2_t(sc, nm, VD, D); /* file [VD,D] -> [D,VD] for proj_matmul(VALUE_DIM,D_MODEL) */
         if (!ly->ssm.ssm_out_weight_f32) {
             fprintf(stderr, "bridge: out_proj.weight missing for layer %d (VD=%d D=%d)\n", l, VD, D);
             wubu_model_safetensors_free(m);
@@ -332,15 +370,44 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     if (m->gqa_v_cache) memset(m->gqa_v_cache, 0, k_cache_bytes ? k_cache_bytes : 16);
     m->gqa_cache_len = 0;
 
-    /* ---- embed_tokens / lm_head ---- */
-    int64_t ne = 0;
-    m->token_embd = wubu_shard_load_f32(sc, "model.language_model.embed_tokens.weight", &ne);
-    int64_t no = 0;
-    m->output_weight = wubu_shard_load_f32(sc, "lm_head.weight", &no);
-    if (!m->output_weight) /* some models name it language_model.lm_head */
-        m->output_weight = wubu_shard_load_f32(sc, "model.language_model.lm_head.weight", &no);
+    /* ---- embed_tokens / lm_head ----
+     * ZERO-COPY for the safetensors path: embed_tokens / lm_head are huge
+     * (5.1 GB each for 27B-class BF16 models). Instead of malloc+F32-copying
+     * them, keep the raw (mapped) bytes and dequantize ONE ROW on demand at
+     * embedding-lookup / output-projection time. This is what makes a real
+     * Qwen3.6-27B forward fit in a 13 GB box. F32 falls back to the old
+     * eager copy (small models / when no mmap). */
+    int emb_dtype = 0; int64_t emb_row = 0;
+    const uint8_t *emb_raw = wubu_shard_raw(sc, "model.language_model.embed_tokens.weight",
+                                           &emb_dtype, &emb_row);
+    if (emb_raw && (emb_dtype == ST_DTYPE_BF16 || emb_dtype == ST_DTYPE_F16)) {
+        m->lazy_embd_raw = emb_raw; m->lazy_embd_dtype = emb_dtype; m->lazy_embd_row = emb_row;
+        m->token_embd = NULL;
+    } else {
+        int64_t ne = 0;
+        m->token_embd = wubu_shard_load_f32(sc, "model.language_model.embed_tokens.weight", &ne);
+    }
+
+    int lm_dtype = 0; int64_t lm_row = 0;
+    const uint8_t *lm_raw = NULL;
+    lm_raw = wubu_shard_raw(sc, "lm_head.weight", &lm_dtype, &lm_row);
+    if (!lm_raw) lm_raw = wubu_shard_raw(sc, "model.language_model.lm_head.weight", &lm_dtype, &lm_row);
+    if (lm_raw && (lm_dtype == ST_DTYPE_BF16 || lm_dtype == ST_DTYPE_F16)) {
+        m->lazy_lmhead_raw = lm_raw; m->lazy_lmhead_dtype = lm_dtype; m->lazy_lmhead_row = lm_row;
+        m->output_weight = NULL;
+    } else {
+        int64_t no = 0;
+        m->output_weight = wubu_shard_load_f32(sc, "lm_head.weight", &no);
+        if (!m->output_weight)
+            m->output_weight = wubu_shard_load_f32(sc, "model.language_model.lm_head.weight", &no);
+    }
     m->token_embd_q = NULL; m->output_weight_q = NULL;
     m->use_embedding_file = false;
+    
+    /* Keep the shard context alive for lazy embed/lm_head mmap access.
+     * Store in model; wubu_model_free will close it. */
+    m->shard_ctx = sc;
+    sc = NULL;
 
     st_close(st);
     wubu_shard_close(sc);

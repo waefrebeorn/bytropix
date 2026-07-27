@@ -12,6 +12,10 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
 /* ---- dtype string -> enum ---- */
 static st_dtype_t st_dtype_from_str(const char *s) {
@@ -113,7 +117,7 @@ static int st_json_shape(const char **pp, const char *end, int64_t *dims, int ca
 }
 
 /* ---- F16 / BF16 -> F32 (used by st_read_tensor_f32) ---- */
-static float st_f16_to_f32(uint16_t v) {
+float st_f16_to_f32(uint16_t v) {
     int sign = (v >> 15) & 1;
     int exp  = (v >> 10) & 0x1F;
     int mant = v & 0x03FF;
@@ -126,7 +130,7 @@ static float st_f16_to_f32(uint16_t v) {
     return ldexpf(1.0f + (float)mant / 1024.0f, exp - 15) * s;
 }
 
-static float st_bf16_to_f32(uint16_t v) {
+float st_bf16_to_f32(uint16_t v) {
     uint32_t bits = (uint32_t)v << 16;   // bf16 is the top 16 bits of f32
     float f;
     memcpy(&f, &bits, 4);
@@ -135,14 +139,18 @@ static float st_bf16_to_f32(uint16_t v) {
 
 /* ---- opaque context ---- */
 struct st_ctx {
-    FILE    *file;
+    FILE    *file;           // NULL when mmap'd
     uint8_t *blob;          // mmap or malloc'd header+pad+raw
-    int       blob_owned;     // 1 if we malloc'd
+    int       blob_owned;     // 1 if we malloc'd (fallback); 0 if mmap'd
     uint64_t header_len;     // JSON length (from first 8 bytes)
     uint64_t raw_off;        // byte offset of raw tensor data = 8 + align8(8+header_len)
     uint8_t *raw;           // pointer to raw data start
     int64_t  n_tensors;
     st_tensor_info *tensors; // heap array
+    /* mmap bookkeeping (zero-copy load path) */
+    int       fd;            // -1 if not mmap'd
+    uint8_t  *map_base;      // MAP_FAILED if not mmap'd
+    uint64_t  map_size;      // total mapped bytes
 };
 
 int64_t st_n_tensors(const st_ctx *ctx) { return ctx ? ctx->n_tensors : 0; }
@@ -191,9 +199,32 @@ st_ctx *st_open(const char *path) {
     fseek(f, 0, SEEK_SET);
     if (raw_off > file_sz) { fclose(f); return NULL; }
 
-    uint8_t *blob = (uint8_t *)malloc(file_sz);
-    if (!blob) { fclose(f); return NULL; }
-    if (fread(blob, 1, file_sz, f) != file_sz) { free(blob); fclose(f); return NULL; }
+    /* Zero-copy path: mmap the whole file read-only. The header + raw tensor
+     * bytes stay in the page cache (shared, demand-paged) — we never copy the
+     * 55 GB of shards into a malloc'd buffer. Per-tensor dequant still happens
+     * into caller buffers, but big tensors (embed_tokens / lm_head) can be
+     * accessed directly from the map via st_tensor_raw_ptr() for lazy use. */
+    uint8_t *blob = NULL;
+    int   fd = -1;
+    int   blob_owned = 0;
+    uint8_t *map_base = MAP_FAILED;
+
+    fd = open(path, O_RDONLY);
+    if (fd >= 0) {
+        map_base = mmap(NULL, (size_t)file_sz, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (map_base != MAP_FAILED) {
+            blob = map_base;
+        } else {
+            close(fd); fd = -1;
+        }
+    }
+    if (blob == NULL) {
+        /* Fallback: buffered read (small shards / mmap unavailable). */
+        blob = (uint8_t *)malloc(file_sz);
+        if (!blob) { fclose(f); return NULL; }
+        blob_owned = 1;
+        if (fread(blob, 1, file_sz, f) != file_sz) { free(blob); fclose(f); return NULL; }
+    }
     fclose(f);
 
     const char *json = (const char *)(blob + 8);
@@ -314,15 +345,23 @@ st_ctx *st_open(const char *path) {
     }
 
     st_ctx *ctx = (st_ctx *)calloc(1, sizeof(st_ctx));
-    if (!ctx) { free(tensors); free(blob); return NULL; }
+    if (!ctx) {
+        if (map_base != MAP_FAILED) munmap(map_base, (size_t)file_sz);
+        if (fd >= 0) close(fd);
+        if (blob_owned) free(blob);
+        return NULL;
+    }
     ctx->file = NULL;
     ctx->blob = blob;
-    ctx->blob_owned = 1;
+    ctx->blob_owned = (map_base == MAP_FAILED) ? 1 : 0;
     ctx->header_len = header_len;
     ctx->raw_off = raw_off;
     ctx->raw = blob + raw_off;
     ctx->n_tensors = filled;
     ctx->tensors = tensors;
+    ctx->fd = (map_base != MAP_FAILED) ? fd : -1;
+    ctx->map_base = map_base;
+    ctx->map_size = (map_base != MAP_FAILED) ? file_sz : 0;
     return ctx;
 }
 
@@ -370,9 +409,48 @@ int64_t st_read_tensor_raw(const st_ctx *ctx, const st_tensor_info *info,
     return (int64_t)want;
 }
 
+const uint8_t *st_tensor_raw_ptr(const st_ctx *ctx, const st_tensor_info *info) {
+    if (!ctx || !info) return NULL;
+    return ctx->raw + info->data_begin;
+}
+
+int st_dequant_row(const st_tensor_info *info, const uint8_t *raw_base,
+                   int64_t row, float *out) {
+    if (!info || !raw_base || !out || row < 0) return 0;
+    if (info->n_dims < 2) return 0;
+    int64_t row_elems = 1;
+    for (int d = 1; d < info->n_dims; d++) row_elems *= info->dims[d];
+    if (row_elems <= 0 || row >= info->dims[0]) return 0;
+    int esz = st_dtype_size(info->dtype);
+    if (esz == 0) return 0;
+    const uint8_t *src = raw_base + (size_t)row * (size_t)row_elems * esz;
+    switch (info->dtype) {
+        case ST_DTYPE_F32:
+            memcpy(out, src, (size_t)row_elems * 4);
+            return 1;
+        case ST_DTYPE_F16: {
+            const uint16_t *s = (const uint16_t *)src;
+            for (int64_t i = 0; i < row_elems; i++) out[i] = st_f16_to_f32(s[i]);
+            return 1;
+        }
+        case ST_DTYPE_BF16: {
+            const uint16_t *s = (const uint16_t *)src;
+            for (int64_t i = 0; i < row_elems; i++) out[i] = st_bf16_to_f32(s[i]);
+            return 1;
+        }
+        default:
+            return 0;  /* integer/unknown: unsupported for lazy dequant */
+    }
+}
+
 void st_close(st_ctx *ctx) {
     if (!ctx) return;
-    if (ctx->blob_owned && ctx->blob) free(ctx->blob);
+    if (ctx->map_base != MAP_FAILED && ctx->map_size > 0) {
+        munmap(ctx->map_base, (size_t)ctx->map_size);
+        if (ctx->fd >= 0) close(ctx->fd);
+    } else if (ctx->blob_owned && ctx->blob) {
+        free(ctx->blob);
+    }
     if (ctx->tensors) free(ctx->tensors);
     free(ctx);
 }

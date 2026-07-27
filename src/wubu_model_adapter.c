@@ -12,6 +12,7 @@
 #include "wubu_model_adapter.h"
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <stdio.h>
 
 /* ---- minimal JSON scalar reader (matches "key" : value) ---- */
@@ -84,6 +85,16 @@ static int parse_layer_types(wubu_adapter_t *out, const char *buf, const char *e
 bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
     if (!out || !path) return false;
     memset(out, 0, sizeof(*out));
+    /* A bare checkpoint DIRECTORY: resolve to its config.json. The model dir
+     * (model-NNN-of-MMM shards) carries config.json; opening the dir directly
+     * with fopen() succeeds on Linux but ftell() returns garbage -> giant alloc. */
+    char cfg_path[2048];
+    cfg_path[0] = 0;
+    struct stat pst;
+    if (stat(path, &pst) == 0 && S_ISDIR(pst.st_mode)) {
+        snprintf(cfg_path, sizeof(cfg_path), "%s/config.json", path);
+        path = cfg_path;
+    }
     FILE *f = fopen(path, "rb");
     if (!f) return false;
     fseek(f, 0, SEEK_END);

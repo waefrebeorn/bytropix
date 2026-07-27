@@ -62,6 +62,15 @@ int wubu_shard_dimof(const wubu_shard_ctx_t *sc, const char *name, int i);
 /* Whether a named tensor exists across the shards. */
 int wubu_shard_has(const wubu_shard_ctx_t *sc, const char *name);
 
+/* Zero-copy raw accessor: returns a pointer to a tensor's still-encoded bytes
+ * (in-place in the mmap'd file) plus its dtype + row stride in bytes. The
+ * caller dequantizes only the rows it needs (e.g. one embedding row / one
+ * lm_head row). Returns the pointer, or NULL if absent. `out_dtype`/`out_row`
+ * (row length in elements) let the caller dequantize a single row cheaply.
+ * The pointer is owned by the shard; do NOT free it. */
+const uint8_t *wubu_shard_raw(const wubu_shard_ctx_t *sc, const char *name,
+                              int *out_dtype, int64_t *out_row);
+
 #ifdef __cplusplus
 }
 #endif

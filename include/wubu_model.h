@@ -3,6 +3,7 @@
 
 #include "wubu_ssm.h"
 #include "wubu_moe.h"
+#include "wubu_safetensors_shard.h"
 #include <stdbool.h>
 #include <math.h>
 #include <string.h>
@@ -250,7 +251,20 @@ typedef struct {
     bool tied_output;                // true if output_weight_q points to token_embd
     const uint8_t *token_embd_q;     // raw Q4_K quantized token embeddings (large vocab, mmap'd)
     int token_embd_type;             // GGML type of token_embd (usually Q4_K)
-    
+    // Lazy, zero-copy embedding / lm_head (safetensors BF16 path). When set,
+    // token_embd / output_weight are NOT copied to F32; the row is dequantized
+    // on demand from the mmap'd shard. Saves ~10 GB for 27B-class models.
+    const uint8_t *lazy_embd_raw;     // raw bytes of embed_tokens (row-major)
+    int            lazy_embd_dtype;   // ST_DTYPE_*
+    int64_t        lazy_embd_row;     // elems per embedding row (= D_MODEL)
+    const uint8_t *lazy_lmhead_raw;   // raw bytes of lm_head.weight [vocab, D]
+    int            lazy_lmhead_dtype;
+    int64_t        lazy_lmhead_row;   // elems per lm_head row (= D_MODEL)
+
+    /* Persistent shard context for lazy embed/lm_head mmap access.
+     * Must stay alive for the lifetime of the model. */
+    struct wubu_shard_ctx *shard_ctx;
+
     // Embedding file (from Phase 1)
     bool use_embedding_file;
     int vocab_size;
@@ -266,7 +280,7 @@ typedef struct {
     void *gqa_k_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM] F32 or F16
     void *gqa_v_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM]
     int gqa_cache_len;   // how many tokens cached per layer (all 10 layers same len)
-    
+
     // GGUF context (for per-layer MoE lazy loading)
     // Model state save/restore (for speculative decode rollback)
     float *ssm_states_saved;    // same size as ssm_states

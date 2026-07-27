@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -70,14 +71,12 @@ static int read_embedding(const wubu_model_t *mdl, int token_id, float *out, FIL
  * Returns 1 on success (model ready), 0 on failure. */
 static int init_model(wubu_model_t *mdl, const char *path) {
     int is_st = (strstr(path, ".safetensors") != NULL);
+    struct stat _st;
+    if (!is_st && stat(path, &_st) == 0 && S_ISDIR(_st.st_mode)) is_st = 1; /* dir of shards */
     if (is_st) {
-        wubu_adapter_t ad; memset(&ad, 0, sizeof(ad));
-        if (!wubu_adapter_load(&ad, path)) {
-            /* adapter parse failed; fall back to generic Qwen-family */
-            ad.arch = WUBU_ARCH_QWEN_FAMILY; ad.d_model = 2048; ad.ok = 1;
-        }
-        if (wubu_model_init_safetensors(mdl, path, &ad) != 0) return 0;
-        return 1;
+        /* wubu_model_init_auto handles both a .safetensors file AND a directory
+         * holding model-NNN-of-MMM shards (and BTL-3 LoRA + ds4-ssd sidecar). */
+        return wubu_model_init_auto(mdl, path) == 0 ? 1 : 0;
     }
     wubu_dims_default();   /* legacy GGUF builds use the 2048-dim defaults */
     return wubu_model_init(mdl, path);
@@ -339,3 +338,5 @@ int main(int argc, char **argv) {
     wubu_model_free(&mdl);
     return 0;
 }
+
+#include <sys/stat.h>

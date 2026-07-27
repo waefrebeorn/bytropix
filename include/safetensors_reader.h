@@ -66,8 +66,12 @@ const st_tensor_info *st_tensor_info_by_index(const st_ctx *ctx, int64_t idx);
 // Find a tensor by name. Returns NULL if not present.
 const st_tensor_info *st_find_tensor(const st_ctx *ctx, const char *name);
 
-// Bytes per element for a dtype (0 for unknown).
+// Return number of bytes per element for a dtype (0 for unknown).
 int st_dtype_size(st_dtype_t dt);
+
+// F16 / BF16 -> F32 conversion helpers (also used by lazy embed/lm_head).
+float st_f16_to_f32(uint16_t v);
+float st_bf16_to_f32(uint16_t v);
 
 // Dequantize one tensor's raw bytes to F32 into caller buffer.
 // output must hold at least info->n_elems floats.
@@ -79,6 +83,17 @@ int st_read_tensor_f32(const st_ctx *ctx, const st_tensor_info *info,
 // Returns bytes copied, or 0 on error.
 int64_t st_read_tensor_raw(const st_ctx *ctx, const st_tensor_info *info,
                            void *output, int64_t max_bytes);
+
+// Zero-copy access to a tensor's still-encoded bytes, in-place in the
+// (possibly mmap'd) file. Caller must NOT free. NULL if absent. Use for big
+// tensors (embed_tokens / lm_head): dequantize only the rows you need.
+const uint8_t *st_tensor_raw_ptr(const st_ctx *ctx, const st_tensor_info *info);
+
+// Dequantize a single row [row] (length info->dims[1..]) of an F32/F16/BF16
+// tensor into a caller F32 buffer. Returns 1 on success, 0 if dtype/row bad.
+// Used for lazy, per-row embedding / lm_head access (no full-tensor copy).
+int st_dequant_row(const st_tensor_info *info, const uint8_t *raw_base,
+                   int64_t row, float *out);
 
 // Close and free.
 void st_close(st_ctx *ctx);

@@ -142,3 +142,6 @@ gen_text_cpu
 /fixture_btl3_lora.safetensors
 /fixture_model.safetensors
 err.log
+
+# live download log
+tools/agent_gauntlet/download_colonels.out

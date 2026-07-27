@@ -1,5 +1,6 @@
 #include "wubu_model.h"
 #include "gguf_reader.h"
+#include "safetensors_reader.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -587,6 +588,12 @@ void wubu_model_free(wubu_model_t *model) {
     free(model->norm_weight);
     free(model->token_embd);
     free(model->output_weight);
+    /* lazy_embd_raw / lazy_lmhead_raw are raw mmap pointers owned by the
+     * shard context — do NOT free them. Close the shard context instead. */
+    if (model->shard_ctx) {
+        wubu_shard_close(model->shard_ctx);
+        model->shard_ctx = NULL;
+    }
     free(model->ssm_states);
     free(model->ssm_states_saved);  // frees both ssm_states_saved and conv_states_saved (same alloc)
     free(model->gqa_k_cache);
@@ -985,6 +992,29 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                 log_i[v] = (float)sum;
             }
         }
+    } else if (model->lazy_lmhead_raw) {
+        /* Zero-copy BF16/F16 lm_head: dequantize one lm_head ROW (= D elems)
+         * per vocab entry on demand. logits[v] = sum_k h[k]*W[v,k]. Avoids
+         * copying the 5.1 GB lm_head table into F32. */
+        #pragma omp parallel for if((int64_t)N * model->vocab_size > 100000)
+        for (int i = 0; i < N; i++) {
+            const float *h_i = x + i * model->d_model;
+            float *log_i = logits + i * model->vocab_size;
+            for (int v = 0; v < model->vocab_size; v++) {
+                const uint16_t *s = (const uint16_t *)model->lazy_lmhead_raw
+                                   + (size_t)v * model->lazy_lmhead_row;
+                double sum = 0.0;
+                if (model->lazy_lmhead_dtype == ST_DTYPE_BF16) {
+                    for (int k = 0; k < model->d_model; k++) sum += (double)h_i[k] * st_bf16_to_f32(s[k]);
+                } else if (model->lazy_lmhead_dtype == ST_DTYPE_F16) {
+                    for (int k = 0; k < model->d_model; k++) sum += (double)h_i[k] * st_f16_to_f32(s[k]);
+                } else {
+                    const float *w_v = (const float *)s;
+                    for (int k = 0; k < model->d_model; k++) sum += (double)h_i[k] * (double)w_v[k];
+                }
+                log_i[v] = (float)sum;
+            }
+        }
     } else {
         // Fallback: copy hidden states only (no output weight loaded)
         memcpy(logits, x, N * model->d_model * sizeof(float));
@@ -1014,6 +1044,26 @@ void wubu_model_forward(wubu_model_t *model,
             if (tok < 0 || tok >= model->vocab_size) tok = 0;
             memcpy(embd + i * model->d_model, model->token_embd + tok * model->d_model,
                    model->d_model * sizeof(float));
+        }
+    } else if (model->lazy_embd_raw) {
+        /* Zero-copy BF16/F16 embedding: dequantize ONE row per token from the
+         * mmap'd shard. Saves copying the whole 5.1 GB embed table. */
+        for (int i = 0; i < N; i++) {
+            int tok = token_ids[i];
+            if (tok < 0 || tok >= model->vocab_size) tok = 0;
+            float *row = embd + i * model->d_model;
+            if (model->lazy_embd_dtype == ST_DTYPE_BF16) {
+                const uint16_t *s = (const uint16_t *)model->lazy_embd_raw
+                                   + (size_t)tok * model->lazy_embd_row;
+                for (int k = 0; k < model->d_model; k++) row[k] = st_bf16_to_f32(s[k]);
+            } else if (model->lazy_embd_dtype == ST_DTYPE_F16) {
+                const uint16_t *s = (const uint16_t *)model->lazy_embd_raw
+                                   + (size_t)tok * model->lazy_embd_row;
+                for (int k = 0; k < model->d_model; k++) row[k] = st_f16_to_f32(s[k]);
+            } else {
+                memcpy(row, model->lazy_embd_raw + (size_t)tok * model->lazy_embd_row * 4,
+                       model->d_model * sizeof(float));
+            }
         }
     } else if (model->use_embedding_file) {
         // Read from embedding file

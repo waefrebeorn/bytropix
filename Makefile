@@ -314,14 +314,8 @@ test_full_moe: tools/test_full_moe.c $(MODEL_OBJ)
 test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o \
-                          src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o \
-                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o \
-                          src/wubu_tokenizer_hf.o src/wubu_ssd_moe.o
-	$(CC) $(CFLAGS) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o \
-	                          src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o \
-	                          src/safetensors_reader.o src/wubu_model_adapter.o src/wubu_lora.o \
-	                          src/wubu_tokenizer_hf.o src/wubu_ssd_moe.o $(LDFLAGS)
+gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o
+	$(CC) $(CFLAGS) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDFLAGS)
 # CPU-only gen_text (recompiles wubu_model + wubu_moe without GPU_SUPPORT)
 gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I$(CUDA_INC),$(CFLAGS))
 gen_text_cpu: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
@@ -337,6 +331,22 @@ src/wubu_moe_cpu.o: src/wubu_moe.c include/wubu_moe.h include/wubu_ssm.h
 
 run_bos: tools/run_bos.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ tools/run_bos.c $(MODEL_OBJ) $(LDFLAGS)
+
+# Debug build (gdb/ASAN). Compiles gen_text + model objects with -g -O0,
+# no GPU_SUPPORT, single-file objects (no _cpu variant clash).
+gen_text_dbg: CFLAGS_DBG = -g -O0 -I include $(CUDA_INC) -fopenmp -Wall
+gen_text_dbg: tools/gen_text.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS_DBG) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDFLAGS)
+
+# Probe: load real Qwen3.6-27B (MAX_LAYERS=1) and print layer-0 weight
+# pointers + state buffers, to diagnose SSM forward crashes.
+test_probe_qwen: tools/test_probe_qwen.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
+
+# ASAN variant for pinning SSM-forward heap bugs.
+test_probe_qwen_asan: CFLAGS_ASAN = -O1 -g -fsanitize=address -mavx2 -mfma -I include $(CUDA_INC) -fopenmp
+test_probe_qwen_asan: tools/test_probe_qwen.c $(MODEL_OBJ) src/wubu_tokenizer.o
+	$(CC) $(CFLAGS_ASAN) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
 
 gen_text_mtp: tools/gen_text_mtp.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $(filter %.c %.o,$^) $(LDFLAGS)

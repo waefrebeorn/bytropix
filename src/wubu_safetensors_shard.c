@@ -165,3 +165,18 @@ int wubu_shard_dimof(const wubu_shard_ctx_t *sc, const char *name, int i) {
 int wubu_shard_has(const wubu_shard_ctx_t *sc, const char *name) {
     return find_across(sc, name, NULL) != NULL;
 }
+
+const uint8_t *wubu_shard_raw(const wubu_shard_ctx_t *sc, const char *name,
+                             int *out_dtype, int64_t *out_row) {
+    if (!sc) return NULL;
+    int si = 0;
+    const st_tensor_info *t = find_across(sc, name, &si);
+    if (!t) return NULL;
+    if (out_dtype) *out_dtype = (int)t->dtype;
+    int64_t row = 0;
+    /* row length = product of all dims except the first (outer) one */
+    for (int d = 1; d < t->n_dims; d++) row *= t->dims[d];
+    if (row == 0 && t->n_dims >= 1) row = t->n_elems / t->dims[0];
+    if (out_row) *out_row = row;
+    return st_tensor_raw_ptr(sc->shards[si], t);
+}
