@@ -343,6 +343,10 @@ gen_text_dbg: tools/gen_text.c $(MODEL_OBJ)
 test_probe_qwen: tools/test_probe_qwen.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
 
+# Build ds4-ssd MoE sidecar from a KAT-Coder-style checkpoint.
+pack_kat_sidecar: tools/pack_kat_sidecar.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
+
 # ASAN variant for pinning SSM-forward heap bugs.
 test_probe_qwen_asan: CFLAGS_ASAN = -O1 -g -fsanitize=address -mavx2 -mfma -I include $(CUDA_INC) -fopenmp
 test_probe_qwen_asan: tools/test_probe_qwen.c $(MODEL_OBJ) src/wubu_tokenizer.o

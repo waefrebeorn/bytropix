@@ -68,8 +68,20 @@ typedef struct {
     float *attn_qkv_weight_f32;  // [D_MODEL, CONV_DIM]
     float *attn_gate_weight_f32; // [D_MODEL, VALUE_DIM]
     float *ssm_out_weight_f32;    // [VALUE_DIM, D_MODEL]
-    int f32_mode;    
-    // Pre-attention and post-attention norms
+    int f32_mode;
+
+    // LAZY BF16 sources (zero-copy). When set, the F32 weight above is NOT
+    // resident; it is dequantized per-call from these raw mmap'd bytes.
+    // This is what makes a real Qwen3.6-27B (F32 + BF16 mix) forward fit in
+    // a 13 GB box: only the active layer's weights are materialized to F32.
+    const uint8_t *attn_qkv_weight_raw;  // mmap'd BF16 [CONVD, D_MODEL]
+    const uint8_t *attn_gate_weight_raw; // mmap'd BF16 [VALUE_DIM, D_MODEL]
+    const uint8_t *ssm_out_weight_raw;   // mmap'd BF16 [D_MODEL, VALUE_DIM]
+    int            lazy_dtype;            // ST_DTYPE_BF16 / ST_DTYPE_F16
+    // Materialized-F32 cache (allocated lazily on first forward). When
+    // *_raw is set but *_f32 is NULL, wubu_ssm_ensure_f32() fills *_f32.
+    int            lazy_f32_done;         // 1 once materialized for this layer
+
     float *attn_norm_weight;          // [D_MODEL] = [2048]
     float *post_attention_norm_weight; // [D_MODEL] = [2048]
     
@@ -109,6 +121,15 @@ typedef struct {
     float *attn_q_norm_weight;  // [GQA_HEAD_DIM] = [256]
     float *attn_k_norm_weight;  // [GQA_HEAD_DIM] = [256]
     
+    // LAZY BF16 sources (zero-copy) — mirror of ssm_layer_weights.lazy_*.
+    // Per-call materialization keeps dense GQA layers out of RAM until active.
+    const uint8_t *attn_q_weight_raw;     // mmap'd BF16 [GQA_Q_DIM, D_MODEL]
+    const uint8_t *attn_k_weight_raw;     // mmap'd BF16 [GQA_KV_DIM, D_MODEL]
+    const uint8_t *attn_v_weight_raw;     // mmap'd BF16 [GQA_KV_DIM, D_MODEL]
+    const uint8_t *attn_output_weight_raw;// mmap'd BF16 [D_MODEL, GQA_Q_DIM]
+    int            lazy_dtype;            // ST_DTYPE_BF16 / ST_DTYPE_F16
+    int            lazy_f32_done;         // 1 once materialized for this layer
+
     // Pre/post norms
     float *attn_norm_weight;          // [D_MODEL]
     float *post_attention_norm_weight; // [D_MODEL]
@@ -145,6 +166,14 @@ typedef struct {
 
 // SSM L2 norm epsilon (global, set from GGUF config)
 extern float g_ssm_l2_eps;
+
+// Materialize lazy BF16 SSM proj matrices into F32 (once). Call before
+// wubu_ssm_forward for layers loaded via the zero-copy BF16 path.
+void wubu_ssm_ensure_f32(ssm_layer_weights *w, int d_model, int conv_dim, int value_dim);
+
+// Materialize lazy BF16 GQA proj matrices into F32 (once). Call before
+// wubu_gqa_forward / wubu_poincare_gqa_forward for layers on the zero-copy path.
+void wubu_gqa_ensure_f32(gqa_layer_weights *w, int d_model);
 
 // Single SSM layer forward pass
 // x: [B, T, D_MODEL]

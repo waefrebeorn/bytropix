@@ -1,4 +1,5 @@
 #include "wubu_ssm.h"
+#include "safetensors_reader.h"
 #include "wubu_mobius.h"
 #include "gguf_reader.h"
 #include "thread_pool.h"
@@ -295,6 +296,46 @@ static inline void ssm_state_clamp(float *h, int n) {
 }
 
 // ============================================================
+// Lazy BF16 materialization (zero-copy weights -> F32 on first use)
+// ============================================================
+
+/* Materialize the LAZY BF16 SSM proj matrices into their F32 counterparts.
+ * Called once per layer (guarded by lazy_f32_done). The file stores the
+ * matrices row-major [OUT, IN]; the forward expects [IN, OUT] (column-major
+ * for matmul_nt), so we transpose during dequant — matching load_f32_try2_t. */
+static void dequant_transpose(const uint8_t *raw, int rows, int cols,
+                              int dtype, float *out /* [cols, rows] */) {
+    const uint16_t *b = (const uint16_t *)raw;
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            float v = (dtype == ST_DTYPE_F16) ? st_f16_to_f32(b[r*cols + c])
+                                              : st_bf16_to_f32(b[r*cols + c]);
+            out[(size_t)c * rows + r] = v;   /* transpose: out[cols, rows] */
+        }
+    }
+}
+
+void wubu_ssm_ensure_f32(ssm_layer_weights *w, int d_model, int conv_dim, int value_dim) {
+    if (!w || w->lazy_f32_done) return;
+    if (w->attn_qkv_weight_raw && !w->attn_qkv_weight_f32) {
+        size_t n = (size_t)conv_dim * d_model;
+        w->attn_qkv_weight_f32 = (float *)malloc(n * sizeof(float));
+        dequant_transpose(w->attn_qkv_weight_raw, conv_dim, d_model, w->lazy_dtype, w->attn_qkv_weight_f32);
+    }
+    if (w->attn_gate_weight_raw && !w->attn_gate_weight_f32) {
+        size_t n = (size_t)value_dim * d_model;
+        w->attn_gate_weight_f32 = (float *)malloc(n * sizeof(float));
+        dequant_transpose(w->attn_gate_weight_raw, value_dim, d_model, w->lazy_dtype, w->attn_gate_weight_f32);
+    }
+    if (w->ssm_out_weight_raw && !w->ssm_out_weight_f32) {
+        size_t n = (size_t)d_model * value_dim;
+        w->ssm_out_weight_f32 = (float *)malloc(n * sizeof(float));
+        dequant_transpose(w->ssm_out_weight_raw, d_model, value_dim, w->lazy_dtype, w->ssm_out_weight_f32);
+    }
+    w->lazy_f32_done = 1;
+}
+
+// ============================================================
 // SSM Layer Forward Pass (Euclidean)
 // ============================================================
 
@@ -304,6 +345,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
                       float *conv_state,
                       float *output,
                       const float *gpu_qkv, const float *gpu_z) {
+
     // x: [B, T, WUBU_DIMS.d_model]
     // output: [B, T, WUBU_DIMS.d_model]
     

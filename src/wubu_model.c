@@ -231,20 +231,30 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             layer->gqa.attn_output_weight = NULL;
             
             // Small: attn_q_norm.weight [head_dim] F32
+            // Optional: some GGUFs (Qwen-style / Pure-GQA without per-head
+            // norms, e.g. nanbeige) omit blk.N.attn_q_norm.weight entirely.
+            // Treat absence as identity (RMSNorm with all-ones weight).
             snprintf(name, sizeof(name), "blk.%d.attn_q_norm.weight", l);
             t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            int layer_head_dim = (t->n_dims >= 1) ? (int)t->dims[0] : GQA_HEAD_DIM;
+            int layer_head_dim = GQA_HEAD_DIM;
+            if (t && t->n_dims >= 1) layer_head_dim = (int)t->dims[0];
             layer->gqa.head_dim = layer_head_dim;
             layer->gqa.attn_q_norm_weight = (float *)malloc(layer_head_dim * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_q_norm_weight, layer_head_dim) > 0);
-            
-            // Small: attn_k_norm.weight [head_dim] F32
+            if (t) {
+                ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_q_norm_weight, layer_head_dim) > 0);
+            } else {
+                for (int i = 0; i < layer_head_dim; i++) layer->gqa.attn_q_norm_weight[i] = 1.0f;
+            }
+
+            // Small: attn_k_norm.weight [head_dim] F32 (optional, see above)
             snprintf(name, sizeof(name), "blk.%d.attn_k_norm.weight", l);
             t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
             layer->gqa.attn_k_norm_weight = (float *)malloc(layer_head_dim * sizeof(float));
-            ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_k_norm_weight, layer_head_dim) > 0);
+            if (t) {
+                ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_k_norm_weight, layer_head_dim) > 0);
+            } else {
+                for (int i = 0; i < layer_head_dim; i++) layer->gqa.attn_k_norm_weight[i] = 1.0f;
+            }
 
             // Extract per-layer dimensions from GGUF tensor shapes
             // K weight: [d_model, kv_heads * head_dim] => kv_heads from dims
@@ -685,6 +695,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         double t0 = wall_time();
         
         if (layer->is_ssm) {
+            /* Materialize lazy BF16 SSM proj matrices to F32 on first use. */
+            wubu_ssm_ensure_f32(&layer->ssm, model->d_model, CONV_DIM, VALUE_DIM);
             float *ssm_state = model->ssm_states + l * SSM_V_HEADS * SSM_D_STATE * SSM_D_STATE;
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
 #ifdef GPU_SUPPORT
@@ -741,6 +753,8 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
                     ssm_state, conv_state, attn_out, NULL, NULL);
             }
         } else {
+            /* Materialize lazy BF16 GQA proj matrices to F32 on first use. */
+            wubu_gqa_ensure_f32(&layer->gqa, model->d_model);
 #ifdef GPU_SUPPORT
             if (model->gpu_ctx) {
                 // Use cached GQA layer index to check if GPU attention is beneficial

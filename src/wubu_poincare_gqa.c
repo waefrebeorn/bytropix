@@ -1,10 +1,48 @@
 #include "wubu_poincare_gqa.h"
 #include "wubu_mobius.h"
 #include "gguf_reader.h"
+#include "safetensors_reader.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+/* Dequant a [rows, cols] BF16/F16 matrix into F32 [cols, rows] (transposed),
+ * matching the forward's [IN, OUT] column-major layout. */
+static void gqa_dequant_t(const uint8_t *raw, int rows, int cols, int dtype, float *out) {
+    const uint16_t *b = (const uint16_t *)raw;
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++) {
+            float v = (dtype == ST_DTYPE_F16) ? st_f16_to_f32(b[r*cols + c])
+                                              : st_bf16_to_f32(b[r*cols + c]);
+            out[(size_t)c * rows + r] = v;
+        }
+}
+
+/* Materialize lazy BF16 GQA proj matrices to F32 (once). Forward expects
+ * [D_MODEL, proj_dim] (transposed from the file's [proj_dim, D_MODEL]). */
+void wubu_gqa_ensure_f32(gqa_layer_weights *w, int d_model) {
+    if (!w || w->lazy_f32_done) return;
+    int q_dim = w->q_heads * w->head_dim;
+    int kv_dim = w->kv_heads * w->head_dim;
+    if (w->attn_q_weight_raw && !w->attn_q_weight) {
+        w->attn_q_weight = (float *)malloc((size_t)d_model * q_dim * 2 * sizeof(float));
+        gqa_dequant_t(w->attn_q_weight_raw, q_dim * 2, d_model, w->lazy_dtype, w->attn_q_weight);
+    }
+    if (w->attn_k_weight_raw && !w->attn_k_weight) {
+        w->attn_k_weight = (float *)malloc((size_t)d_model * kv_dim * sizeof(float));
+        gqa_dequant_t(w->attn_k_weight_raw, kv_dim, d_model, w->lazy_dtype, w->attn_k_weight);
+    }
+    if (w->attn_v_weight_raw && !w->attn_v_weight) {
+        w->attn_v_weight = (float *)malloc((size_t)d_model * kv_dim * sizeof(float));
+        gqa_dequant_t(w->attn_v_weight_raw, kv_dim, d_model, w->lazy_dtype, w->attn_v_weight);
+    }
+    if (w->attn_output_weight_raw && !w->attn_output_weight) {
+        w->attn_output_weight = (float *)malloc((size_t)q_dim * d_model * sizeof(float));
+        gqa_dequant_t(w->attn_output_weight_raw, d_model, q_dim, w->lazy_dtype, w->attn_output_weight);
+    }
+    w->lazy_f32_done = 1;
+}
 
 // ============================================================
 // Poincaré GQA Forward Pass
