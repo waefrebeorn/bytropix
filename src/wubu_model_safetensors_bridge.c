@@ -17,6 +17,8 @@
 #include <stdio.h>
 #include <math.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 /* ---- helpers: load an F32 tensor (optionally transposed) from safetensors ---- */
 static float *st_load_f32(st_ctx *st, const char *name, int64_t *nelems) {
@@ -431,7 +433,16 @@ int wubu_model_apply_lora(wubu_model_t *m, const char *adapter_path,
 
 int wubu_model_init_auto(wubu_model_t *m, const char *path) {
     size_t plen = strlen(path);
-    int is_st = (strstr(path, ".safetensors") != NULL);
+    /* A path is a safetensors source if it names a .safetensors file OR is a
+     * directory holding shards (model-NNN-of-MMM.safetensors). wubu_shard_open
+     * globs the directory, so a bare dir is the natural way to point at a
+     * multi-shard checkpoint. A LoRA adapter is still passed as its
+     * adapter_model.safetensors file path (detected via the .safetensors
+     * substring below). */
+    int is_dir = 0;
+    struct stat _st;
+    if (stat(path, &_st) == 0 && S_ISDIR(_st.st_mode)) is_dir = 1;
+    int is_st = (strstr(path, ".safetensors") != NULL) || is_dir;
     if (is_st) {
         wubu_adapter_t ad; memset(&ad, 0, sizeof(ad));
         if (!wubu_adapter_load(&ad, path)) {

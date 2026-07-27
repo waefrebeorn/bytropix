@@ -25,8 +25,10 @@ extern "C" {
 
 typedef struct {
     const char *name;       /* Colonel codename */
-    const char *path;       /* on-disk checkpoint (safetensors/gguf) */
+    const char *path;       /* on-disk checkpoint: dir (dense/moe) or adapter file (lora) */
+    const char *tok_path;   /* tokenizer.json (NULL = none / synthetic fallback) */
     const char *kind;       /* "dense" | "moe" | "lora" | "fixture" */
+    const char *base;       /* BTL_BASE for lora, else NULL */
     wubu_model_t model;     /* zeroed at start; filled by gauntlet_load_models */
     int          loaded;    /* 1 if model->loaded */
 } GauntletModel;

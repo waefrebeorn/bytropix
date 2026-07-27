@@ -17,16 +17,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
 
 /* Fixture used when a Colonel checkpoint is absent or too large for this box. */
 const char *GAUNTLET_FIXTURE = "fixture_model.safetensors";
 
-/* The four Colonel models (paths resolved at runtime). */
+/* The four Colonel models. Dense/MoE point at their checkpoint DIRECTORY
+ * (wubu_model_init_auto globs model-NNN-of-MMM.safetensors inside). BTL-3 is a
+ * LoRA adapter passed as its adapter_model.safetensors file, with BTL_BASE
+ * pointing at the Qwen3.6-27B base. Missing/oversized checkpoints fall back to
+ * the fixture so the harness always runs + verifies. */
 GauntletModel g_models[G_N_MODELS] = {
-    { "Qwen3.6-27B",   "/home/wubu/models/Qwen3.6-27B/model.safetensors",        "dense", {0}, 0 },
-    { "Agents-A1-4B",  "/home/wubu/models/Agents-A1-4B/model.safetensors",       "dense", {0}, 0 },
-    { "KAT-Coder-V2.5","/home/wubu/models/KAT-Coder-V2.5-Dev/model.safetensors", "moe",   {0}, 0 },
-    { "BTL-3",         "/home/wubu/models/BTL-3/adapter_model.safetensors",       "lora",  {0}, 0 },
+    { "Qwen3.6-27B",    "/home/wubu/models/Qwen3.6-27B",
+      "/home/wubu/models/Qwen3.6-27B/tokenizer.json", "dense", NULL, {0}, 0 },
+    { "Agents-A1-4B",   "/home/wubu/models/Agents-A1-4B",
+      "/home/wubu/models/Agents-A1-4B/tokenizer.json", "dense", NULL, {0}, 0 },
+    { "KAT-Coder-V2.5", "/home/wubu/models/KAT-Coder-V2.5-Dev",
+      "/home/wubu/models/KAT-Coder-V2.5-Dev/tokenizer.json", "moe", NULL, {0}, 0 },
+    { "BTL-3",          "/home/wubu/models/BTL-3/adapter_model.safetensors",
+      "/home/wubu/models/Qwen3.6-27B/tokenizer.json", "lora",
+      "/home/wubu/models/Qwen3.6-27B", {0}, 0 },
 };
 
 /* ---- EDR wiring -------------------------------------------------------- */
@@ -64,7 +74,15 @@ int gauntlet_load_models(void) {
     for (int i = 0; i < G_N_MODELS; i++) {
         GauntletModel *gm = &g_models[i];
         int ok = 0;
-        if (gm->path && file_exists(gm->path)) {
+        /* A directory checkpoint (dense/moe) "exists" if it has any shard;
+         * a LoRA adapter path is the adapter file itself. */
+        int exists = 0;
+        if (gm->path) {
+            struct stat st;
+            if (stat(gm->path, &st) == 0) exists = 1;
+        }
+        if (exists) {
+            if (gm->base) setenv("BTL_BASE", gm->base, 1);  /* LoRA base */
             wubu_adapter_t ad = {0};
             if (wubu_model_init_auto(&gm->model, gm->path) == 0) {
                 gm->loaded = 1; ok = 1; loaded++;
@@ -72,6 +90,7 @@ int gauntlet_load_models(void) {
             } else {
                 printf("  [load] %-16s FAILED at %s\n", gm->name, gm->path);
             }
+            if (gm->base) unsetenv("BTL_BASE");
         }
         if (!ok) {
             /* Fall back to the fixture so the gauntlet always runs + verifies. */
@@ -128,10 +147,11 @@ static int run_one(GauntletModel *gm, int task, GauntletScore *sc) {
     sc->model_idx = (int)(gm - g_models);
     sc->task = task;
 
-    /* Tokenize the prompt with the HF tokenizer if present, else feed ids. */
+    /* Tokenize the prompt with the model's HF tokenizer if present, else
+     * feed synthetic ids (fixture has no tokenizer.json). */
     int prompt_ids[256];
     int np = 0;
-    wubu_tok_hf_t *tok = wubu_tok_hf_load("tokenizer.json");
+    wubu_tok_hf_t *tok = gm->tok_path ? wubu_tok_hf_load(gm->tok_path) : NULL;
     if (tok) {
         np = wubu_tok_hf_encode(tok, g_task_prompt[task], prompt_ids, 256);
     }
