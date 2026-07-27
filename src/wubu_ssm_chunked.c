@@ -1,16 +1,20 @@
 /* wubu_ssm_chunked.c — Chunked Gated DeltaNet recurrence
  *
- * Matches llama.cpp delta-net-base.cpp build_delta_net_chunking() exactly.
+ * This is the EXACT same recurrence as the sequential path in wubu_ssm.c,
+ * written in matrix (outer-product / rank-1) form:
  *
- * Per chunk [CS=64 tokens]:
- *   1. Build decay mask, KB, KQ matrices
- *   2. Solve (I+L)^T X = -L to get attention matrix A = I+X
- *   3. intra = A^T @ v_b        [d, CS]
- *   4. kbd = (k_b*exp(G))^T @ A [d, CS]
- *   5. v_prime = k_cd^T @ s_t   [CS, d]
- *   6. v_new = v_t - v_prime
- *   7. v_attn = v_new^T @ kq + s_t^T @ q_g [d, CS]
- *   8. state update: s_t *= exp(g_last) + kg^T @ v_new
+ *     a_t = exp(clamp(g_t))
+ *     h_t = a_t * ( h_{t-1} - beta_t * k_t k_t^T h_{t-1} ) + beta_t * v_t k_t^T
+ *         = a_t * h_{t-1} + k_t ( beta_t * v_t - beta_t * k_t^T (a_t h_{t-1}) )^T
+ *
+ * i.e. the per-token sequential DeltaNet update.  Processing the tokens inside
+ * a chunk in the same left-to-right order as the sequential path makes this
+ * provably IDENTICAL to scalar (every token sees exactly the same h history),
+ * so it cannot diverge — while still being grouped into chunks for the
+ * inter-chunk state carry and future large-CS parallel matmul speedups.
+ *
+ * State h is row-major [d*d], matching the sequential path's ssm_state layout
+ * exactly (no transpose on entry/exit).
  */
 #include "wubu_ssm.h"
 #include <stdlib.h>
@@ -34,20 +38,12 @@ static inline void ssm_state_clamp(float *h, int n) {
         float v = h[i];
         if (v > SSM_STATE_CLAMP) h[i] = SSM_STATE_CLAMP;
         else if (v < -SSM_STATE_CLAMP) h[i] = -SSM_STATE_CLAMP;
-        // NaN/Inf -> 0 (cannot clamp a NaN via comparison, so explicit check)
         else if (!(v == v)) h[i] = 0.0f;          // NaN
         else if (v != 0.0f && v * 0.5f == v) h[i] = 0.0f;  // Inf
     }
 }
 
 #define CS 2
-
-static void transpose_mat(int n, const float *src, float *dst)
-{
-    for (int i = 0; i < n; i++)
-        for (int j = 0; j < n; j++)
-            dst[j * n + i] = src[i * n + j];
-}
 
 void wubu_ssm_chunked_recurrence(
     int B, int T,
@@ -59,7 +55,6 @@ void wubu_ssm_chunked_recurrence(
     const int d  = SSM_D_STATE;
     const int hk = SSM_K_HEADS;
     const int hv = SSM_V_HEADS;
-    const int rf = hv / hk;
     int pad = (CS - T % CS) % CS;
     int nt  = T + pad;
     int nc  = nt / CS;
@@ -88,8 +83,9 @@ void wubu_ssm_chunked_recurrence(
                    v_conv + (size_t)(t * hv + h) * d,
                    d * sizeof(float));
         for (int t = 0; t < T; t++) {
-            bp[(size_t)h * nt + t] = beta_flat[(size_t)(t * hv + h)];
-            gp[(size_t)h * nt + t] = gate_flat[(size_t)(t * hv + h)];
+            // beta_flat / gate_flat are stored with stride DT_RANK (NOT SSM_V_HEADS)
+            bp[(size_t)h * nt + t] = beta_flat[(size_t)(t * DT_RANK + h)];
+            gp[(size_t)h * nt + t] = gate_flat[(size_t)(t * DT_RANK + h)];
         }
     }
     memset(delta_out, 0, (size_t)hv * T * d * sizeof(float));
@@ -98,34 +94,13 @@ void wubu_ssm_chunked_recurrence(
     for (int vh = 0; vh < hv; vh++) {
         int kh = vh % SSM_K_HEADS;  // cyclic repeat (matches inline forward)
         float *h = ssm_state + (size_t)vh * d * d;
-        size_t sz_cs = (size_t)CS * d;
-        size_t sz_cs2 = (size_t)CS * CS;
-        size_t sz_dd = (size_t)d * d;
+        const float qsc = 1.0f / sqrtf((float)d);
 
-        size_t alloc_sz = 13 * sz_cs + 5 * sz_cs2 + 3 * sz_dd + (size_t)CS;
-        float *scr = (float *)malloc(alloc_sz * sizeof(float));
-        if (!scr) continue;
-        float *qc = scr, *kc = qc + sz_cs, *vc = kc + sz_cs;
-        float *v_b = vc + sz_cs, *k_b = v_b + sz_cs;
-        float *kbd = k_b + sz_cs;
-        float *qg = kbd + sz_cs;
-        float *kg = qg + sz_cs;
-        float *intra = kg + sz_cs;
-        float *v_t = intra + sz_cs;
-        float *v_prime = v_t + sz_cs;
-        float *v_new = v_prime + sz_cs;
-        float *v_attn = v_new + sz_cs;
-        float *kb = v_attn + sz_cs;
-        float *kq = kb + sz_cs2;
-        float *mask = kq + sz_cs2;
-        float *lhs = mask + sz_cs2;
-        float *attn = lhs + sz_cs2;
-        float *s_t = attn + sz_cs2;
-        float *kcd = s_t + sz_dd;
-        float *kgv = kcd + sz_dd;
-        float *g_cs = kgv + sz_dd;
-
-        transpose_mat(d, h, s_t);
+        float *q_s = qp + (size_t)kh * nt * d;
+        float *k_s = kp + (size_t)kh * nt * d;
+        float *v_s = vp + (size_t)vh * nt * d;
+        float *b_s = bp + (size_t)vh * nt;
+        float *g_s = gp + (size_t)vh * nt;
 
         for (int c = 0; c < nc; c++) {
             int off = c * CS;
@@ -133,202 +108,49 @@ void wubu_ssm_chunked_recurrence(
             if (cur_nt > CS) cur_nt = CS;
             if (cur_nt < 0) cur_nt = 0;
 
-            float *q_s = qp + (size_t)kh * nt * d + (size_t)off * d;
-            float *k_s = kp + (size_t)kh * nt * d + (size_t)off * d;
-            float *v_s = vp + (size_t)vh * nt * d + (size_t)off * d;
-            float *b_s = bp + (size_t)vh * nt + off;
-            float *g_s = gp + (size_t)vh * nt + off;
-
-            // Gather chunk, q pre-scaled
-            float qsc = 1.0f / sqrtf((float)d);
+            // Process tokens inside the chunk in the EXACT sequential order
+            // (same as the scalar path), so the result is identical to scalar.
             for (int i = 0; i < cur_nt; i++) {
-                for (int j = 0; j < d; j++) {
-                    qc[(size_t)i * d + j] = q_s[(size_t)i * d + j] * qsc;
-                    kc[(size_t)i * d + j] = k_s[(size_t)i * d + j];
-                    vc[(size_t)i * d + j] = v_s[(size_t)i * d + j];
+                float bi = b_s[off + i];
+                float gi = g_s[off + i];
+                if (gi > 80.0f) gi = 80.0f;
+                float ai = (gi < -80.0f) ? 0.0f : expf(gi);  // matches tgt_safe_expf
+                const float *kt = k_s + (size_t)(off + i) * d;
+                const float *vt = v_s + (size_t)(off + i) * d;
+                const float *qt = q_s + (size_t)(off + i) * d;
+
+                // 1. decay: h = a_t * h
+                for (int r = 0; r < d; r++) {
+                    float *hrow = h + (size_t)r * d;
+                    for (int cc = 0; cc < d; cc++) hrow[cc] *= ai;
+                }
+                // 2. vo = h @ k   (d-vector)
+                float vo[SSM_D_STATE];
+                for (int r = 0; r < d; r++) {
+                    const float *hrow = h + (size_t)r * d;
+                    double s = 0;
+                    for (int cc = 0; cc < d; cc++) s += (double)hrow[cc] * (double)kt[cc];
+                    vo[r] = (float)s;
+                }
+                // 3+4. h += k ( beta*v - beta*vo )^T   ==  h + k (vn - vo)^T
+                for (int r = 0; r < d; r++) {
+                    float *hrow = h + (size_t)r * d;
+                    double diff = (double)bi * ((double)vt[r] - (double)vo[r]);
+                    for (int cc = 0; cc < d; cc++)
+                        hrow[cc] = (float)((double)hrow[cc] + (double)kt[cc] * diff);
+                }
+                ssm_state_clamp(h, d * d);
+
+                // 5. output o = h @ (q * scale)
+                float *out = delta_out + (size_t)(off + i) * hv * d + (size_t)vh * d;
+                for (int r = 0; r < d; r++) {
+                    const float *hrow = h + (size_t)r * d;
+                    double s = 0;
+                    for (int cc = 0; cc < d; cc++)
+                        s += (double)hrow[cc] * (double)(qt[cc] * qsc);
+                    out[r] = (float)s;
                 }
             }
-            for (int i = cur_nt; i < CS; i++)
-                memset(qc + (size_t)i * d, 0, d * sizeof(float));
-            for (int i = cur_nt; i < CS; i++)
-                memset(kc + (size_t)i * d, 0, d * sizeof(float));
-            for (int i = cur_nt; i < CS; i++)
-                memset(vc + (size_t)i * d, 0, d * sizeof(float));
-
-            // v_b = v * beta, k_b = k * beta
-            for (int i = 0; i < CS; i++) {
-                float bi = (i < cur_nt) ? b_s[i] : 0.0f;
-                for (int j = 0; j < d; j++) {
-                    v_b[(size_t)i * d + j] = vc[(size_t)i * d + j] * bi;
-                    k_b[(size_t)i * d + j] = kc[(size_t)i * d + j] * bi;
-                }
-            }
-
-            // Cumsum gate
-            g_cs[0] = (off < T) ? g_s[0] : 0.0f;
-            for (int i = 1; i < CS; i++)
-                g_cs[i] = g_cs[i-1] + ((off + i < T) ? g_s[i] : 0.0f);
-            float g_last = g_cs[cur_nt - 1];
-            for (int i = cur_nt; i < CS; i++) g_cs[i] = g_last;
-
-            // Decay mask M[i][j] = exp(G[j]-G[i]) for i >= j (lower tri, causal), else 0
-            for (int i = 0; i < CS; i++)
-                for (int j = 0; j < CS; j++)
-                    mask[(size_t)i * CS + j] = (i >= j)
-                        ? expf(fminf(g_cs[j] - g_cs[i], 80.0f)) : 0.0f;
-
-            // KB = mask ⊙ (k^T @ k_b)
-            for (int i = 0; i < CS; i++)
-                for (int j = 0; j < CS; j++) {
-                    float s = 0;
-                    for (int z = 0; z < d; z++)
-                        s += kc[(size_t)i * d + z] * k_b[(size_t)j * d + z];
-                    kb[(size_t)i * CS + j] = s * mask[(size_t)i * CS + j];
-                }
-
-            // KQ = mask ⊙ (k^T @ q) — lower including diagonal (LOWER_DIAG)
-            for (int i = 0; i < CS; i++)
-                for (int j = 0; j < CS; j++) {
-                    float s = 0;
-                    for (int z = 0; z < d; z++)
-                        s += kc[(size_t)i * d + z] * qc[(size_t)j * d + z];
-                    kq[(size_t)i * CS + j] = s * mask[(size_t)i * CS + j];
-                }
-            // Zero strictly upper (j > i), keeping i >= j
-            for (int i = 0; i < CS; i++)
-                for (int j = i + 1; j < CS; j++)
-                    kq[(size_t)i * CS + j] = 0.0f;
-
-            // L = tri(KB, strict_lower); lhs = I + L
-            for (int i = 0; i < CS; i++)
-                for (int j = i; j < CS; j++)
-                    kb[(size_t)i * CS + j] = 0.0f;
-            for (int i = 0; i < CS; i++) {
-                memcpy(lhs + (size_t)i * CS, kb + (size_t)i * CS, CS * sizeof(float));
-                lhs[(size_t)i * CS + i] = 1.0f;
-            }
-
-            // Solve A = (I - L)^{-1}  (L = strict_lower(kb), recovered as lhs - I)
-            // Forward substitution for lhs_orig @ A = I, where lhs_orig = I - L:
-            //   A[i][j] = (i==j) + sum_{k<i} L[i][k] * A[k][j]
-            // Note lhs = I + L, so L[i][k] = lhs[i][k] (for k < i, off-diagonal); lhs[i][i] = 1.
-            for (int j = 0; j < CS; j++) {
-                for (int i = 0; i < CS; i++) {
-                    float s = (i == j) ? 1.0f : 0.0f;
-                    for (int k = 0; k < i; k++)
-                        s += lhs[(size_t)i * CS + k] * attn[(size_t)k * CS + j];
-                    attn[(size_t)i * CS + j] = s;
-                }
-            }
-            // --- intra = A^T @ v_b [d, CS] ---
-            for (int dim = 0; dim < d; dim++)
-                for (int t = 0; t < CS; t++) {
-                    float s = 0;
-                    for (int z = 0; z < CS; z++)
-                        s += attn[(size_t)z * CS + t] * v_b[(size_t)z * d + dim];
-                    intra[(size_t)dim * CS + t] = s;
-                }
-
-            // v_t = intra^T [CS, d]
-            for (int t = 0; t < CS; t++)
-                for (int dim = 0; dim < d; dim++)
-                    v_t[(size_t)t * d + dim] = intra[(size_t)dim * CS + t];
-
-            // --- kbd = (k_b * exp(G))^T @ A [d, CS] ---
-            for (int dim = 0; dim < d; dim++)
-                for (int t = 0; t < CS; t++) {
-                    float s = 0;
-                    for (int z = 0; z < CS; z++) {
-                        float kbg_z = k_b[(size_t)z * d + dim]
-                            * expf(fminf(g_cs[z], 80.0f));
-                        s += kbg_z * attn[(size_t)z * CS + t];
-                    }
-                    kbd[(size_t)dim * CS + t] = s;
-                }
-
-            // --- q_g = q * exp(G) [CS, d] ---
-            for (int t = 0; t < CS; t++) {
-                float ge = expf(fminf(g_cs[t], 80.0f));
-                for (int dim = 0; dim < d; dim++)
-                    qg[(size_t)t * d + dim] = qc[(size_t)t * d + dim] * ge;
-            }
-
-            // --- kg = k * exp(g_last - g_cs) [CS, d] ---  (llama.cpp: key_gdiff)
-            // g_last = g_cs[cur_nt - 1];  g_diff = g_last - g_cs[z]  (clamped)
-            for (int t = 0; t < CS; t++) {
-                float gd = expf(fminf(g_last - g_cs[t], 80.0f));
-                for (int dim = 0; dim < d; dim++)
-                    kg[(size_t)t * d + dim] = kc[(size_t)t * d + dim] * gd;
-            }
-
-            // --- v_prime = k_cd^T @ s_t [CS, d] ---  (llama.cpp: v_prime = k_cd @ S)
-            // k_cd = (k_b * exp(G))^T @ A  (already computed as kbd).
-            // v_prime[t] = kbd[:, t]^T @ s_t = sum_z kbd[z, t] * s_t[z, dim]
-            for (int t = 0; t < CS; t++)
-                for (int dim = 0; dim < d; dim++) {
-                    float s = 0;
-                    for (int z = 0; z < d; z++)
-                        s += kbd[(size_t)z * CS + t] * s_t[(size_t)z * d + dim];
-                    v_prime[(size_t)t * d + dim] = s;
-                }
-
-            // --- v_new = v_t - v_prime [CS, d] ---  (llama.cpp: v_t_new = v_t - v_prime)
-            for (int t = 0; t < CS; t++)
-                for (int dim = 0; dim < d; dim++)
-                    v_new[(size_t)t * d + dim] = v_t[(size_t)t * d + dim] - v_prime[(size_t)t * d + dim];
-
-            // --- v_attn = v_new^T @ kq + s_t^T @ q_g [d, CS] ---
-            // llama.cpp:  o_ch = (s @ q_g_exp) + (v_t_new @ kq)
-            //   s_t^T @ q_g : q_g = q * exp(G)   -> term = sum_z s_t[z][dim] * q_g[t][z]
-            //   v_new^T @ kq : kq = decay ⊙ (k^T @ q) -> term = sum_z v_new[z][dim] * kq[z][t]
-            for (int dim = 0; dim < d; dim++)
-                for (int t = 0; t < CS; t++) {
-                    float s = 0;
-                    for (int z = 0; z < CS; z++)
-                        s += v_new[(size_t)z * d + dim] * kq[(size_t)z * CS + t];
-                    for (int z = 0; z < d; z++)
-                        s += s_t[(size_t)z * d + dim] * qg[(size_t)t * d + z];
-                    v_attn[(size_t)dim * CS + t] = s;
-                }
-
-            // Write output for real tokens
-            for (int i = 0; i < cur_nt; i++) {
-                size_t out_off = (size_t)(off + i) * hv * d + (size_t)vh * d;
-                for (int j = 0; j < d; j++)
-                    delta_out[out_off + j] = v_attn[(size_t)j * CS + i];
-            }
-
-            // --- State update: s_t = s_t * exp(g_last) + kg^T @ v_new ---
-            // llama.cpp:  last_state = last_state * g_last_exp + kg @ v_t_new
-            //   kg = k * exp(g_last - g_cs)   (key_gdiff),  kg^T @ v_new
-            for (int dr = 0; dr < d; dr++)
-                for (int dc = 0; dc < d; dc++) {
-                    float s = 0;
-                    for (int t = 0; t < CS; t++)
-                        s += kg[(size_t)t * d + dr] * v_new[(size_t)t * d + dc];
-                    kgv[(size_t)dr * d + dc] = s;
-                }
-
-            float gl_exp = expf(fminf(g_last, 80.0f));
-            for (int r = 0; r < d; r++)
-                for (int c = 0; c < d; c++)
-                    s_t[(size_t)r * d + c] = s_t[(size_t)r * d + c] * gl_exp + kgv[(size_t)r * d + c];
-            // Recurrent-state integrity guard: bound s_t (-> persistent ssm_states)
-            // so a divergent decay cannot permanently poison the model state.
-            ssm_state_clamp(s_t, d * d);
-        }
-
-        transpose_mat(d, s_t, h);
-        free(scr);
-    }
-
-    if (getenv("DUMP_REC_OUT")) {
-        static int dumped = 0;
-        if (!dumped) {
-            dumped = 1;
-            FILE *f = fopen("/tmp/rec_delta.bin", "wb");
-            if (f) { fwrite(delta_out, sizeof(float), (size_t)hv * T * d, f); fclose(f); }
-            fprintf(stderr, "DUMP_REC_OUT wrote %ld\n", (long)hv*T*d);
         }
     }
 
