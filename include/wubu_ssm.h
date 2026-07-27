@@ -278,6 +278,19 @@ void wubu_ssm_sequential_recurrence(int B, int T,
                                      float *ssm_state,
                                      float *delta_out);
 
+// PRINCIPLED Gated DeltaNet chunkwise-parallel prefill (WY/UT-transform closed
+// form; exact — reduces to the scalar recurrence at C=1, see wubu_ssm_chunked.c).
+// Opt-in behind WUBU_GDN_CHUNK. C = chunk size.
+void wubu_ssm_gdn_chunked(int B, int T,
+                           const float *q_norm,
+                           const float *k_norm,
+                           const float *v_conv,
+                           const float *beta_flat,
+                           const float *gate_flat,
+                           int C,
+                           float *ssm_state,
+                           float *delta_out);
+
 // Utility functions
 int wubu_is_ssm_layer(int layer_idx);
 void wubu_softplus(int n, const float *x, float *out);

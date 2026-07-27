@@ -534,6 +534,18 @@ void wubu_ssm_forward(const float *x, int B, int T,
     // FORCE_CPU_SSM_SEQ=1 (used by the 256K chunked-prefill harness).
     int ssm_chunk_min = getenv("SSM_CHUNK_MIN") ? atoi(getenv("SSM_CHUNK_MIN")) : 2;
     if (T >= ssm_chunk_min && !getenv("FORCE_CPU_SSM_SEQ")) {
+        if (getenv("WUBU_GDN_CHUNK")) {
+            /* PRINCIPLED Gated DeltaNet chunkwise-parallel prefill (WY/UT
+             * closed form). Mathematically identical to the scalar
+             * recurrence at every chunk size (verified by test_gdn_chunk:
+             * 0.0 diff at C=1..64). Opt-in; the scalar-outer-product path
+             * below stays the default. GDN_C sets the chunk size. */
+            int gdn_c = getenv("GDN_C") ? atoi(getenv("GDN_C")) : 64;
+            wubu_ssm_gdn_chunked(B, T, q_norm, k_norm, v_conv,
+                                 beta_flat, gate_flat, gdn_c,
+                                 ssm_state, delta_out);
+            goto gpu_rec_done;
+        }
         if (getenv("DUMP_SSM_IN")) {
             static int dumped = 0;
             if (!dumped) {

@@ -296,6 +296,12 @@ test_gauntlet: tools/agent_gauntlet/agent_gauntlet.c tools/agent_gauntlet/test_g
 		src/wubu_tokenizer_hf.o src/wubu_tokenizer.o $(LDFLAGS) -lpthread
 	./$@
 
+# Verify the principled GDN chunkwise-parallel recurrence vs the sequential
+# scalar reference (must match to ~1e-2 at every chunk size C).
+test_gdn_chunk: tools/agent_gauntlet/test_gdn_chunk.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 test_moe: tools/test_moe.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
