@@ -832,7 +832,14 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             }  // close CPU GQA block
         gqa_done:
         }  // close else block (non-SSM)
-        
+
+        /* Streaming free: release the materialized F32 weights for this layer
+         * so only the active layer is resident. Raw BF16 mmap stays valid for
+         * the next layer's materialization. This is what lets the full 64-layer
+         * Qwen3.6-27B forward fit in 13 GB — one layer's F32 at a time. */
+        wubu_ssm_release_f32(&layer->ssm);
+        wubu_gqa_release_f32(&layer->gqa);
+
         double t1 = wall_time();
         if (getenv("PROFILE") && l < 3) {
             fprintf(stderr, "  L%d %s attn: %.3fms\n", l, layer->is_ssm ? "SSM" : "GQA", (t1 - t0) * 1000.0);

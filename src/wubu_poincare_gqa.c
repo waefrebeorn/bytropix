@@ -44,6 +44,18 @@ void wubu_gqa_ensure_f32(gqa_layer_weights *w, int d_model) {
     w->lazy_f32_done = 1;
 }
 
+/* Inverse of wubu_gqa_ensure_f32: free materialized F32 proj matrices. Only
+ * frees when materialized from lazy BF16 (attn_q_weight_raw != NULL); layers
+ * loaded as resident F32 keep their buffer. */
+void wubu_gqa_release_f32(gqa_layer_weights *w) {
+    if (!w) return;
+    if (w->attn_q_weight_raw)     { free(w->attn_q_weight);     w->attn_q_weight = NULL; }
+    if (w->attn_k_weight_raw)     { free(w->attn_k_weight);     w->attn_k_weight = NULL; }
+    if (w->attn_v_weight_raw)     { free(w->attn_v_weight);     w->attn_v_weight = NULL; }
+    if (w->attn_output_weight_raw) { free(w->attn_output_weight); w->attn_output_weight = NULL; }
+    w->lazy_f32_done = 0;
+}
+
 // ============================================================
 // Poincaré GQA Forward Pass
 //

@@ -335,6 +335,20 @@ void wubu_ssm_ensure_f32(ssm_layer_weights *w, int d_model, int conv_dim, int va
     w->lazy_f32_done = 1;
 }
 
+/* Inverse of wubu_ssm_ensure_f32: free the materialized F32 buffers so the
+ * layer's weights return to zero-copy BF16. Call after the layer's forward to
+ * keep only the active layer resident (streaming). Only frees when the layer
+ * was actually materialized from lazy BF16 (attn_qkv_weight_raw != NULL) —
+ * layers loaded as resident F32 keep their buffer. The raw BF16 mmap stays
+ * valid for the next materialization. */
+void wubu_ssm_release_f32(ssm_layer_weights *w) {
+    if (!w) return;
+    if (w->attn_qkv_weight_raw) { free(w->attn_qkv_weight_f32); w->attn_qkv_weight_f32 = NULL; }
+    if (w->attn_gate_weight_raw) { free(w->attn_gate_weight_f32); w->attn_gate_weight_f32 = NULL; }
+    if (w->ssm_out_weight_raw)  { free(w->ssm_out_weight_f32);  w->ssm_out_weight_f32 = NULL; }
+    w->lazy_f32_done = 0;
+}
+
 // ============================================================
 // SSM Layer Forward Pass (Euclidean)
 // ============================================================

@@ -171,9 +171,16 @@ extern float g_ssm_l2_eps;
 // wubu_ssm_forward for layers loaded via the zero-copy BF16 path.
 void wubu_ssm_ensure_f32(ssm_layer_weights *w, int d_model, int conv_dim, int value_dim);
 
+// Inverse: free the materialized F32 buffers (streaming — keep only active
+// layer resident). Call after wubu_ssm_forward.
+void wubu_ssm_release_f32(ssm_layer_weights *w);
+
 // Materialize lazy BF16 GQA proj matrices into F32 (once). Call before
 // wubu_gqa_forward / wubu_poincare_gqa_forward for layers on the zero-copy path.
 void wubu_gqa_ensure_f32(gqa_layer_weights *w, int d_model);
+
+// Inverse: free the materialized F32 GQA proj matrices.
+void wubu_gqa_release_f32(gqa_layer_weights *w);
 
 // Single SSM layer forward pass
 // x: [B, T, D_MODEL]
