@@ -108,19 +108,23 @@ int main(int argc, char **argv) {
         up   = (float *)malloc((size_t)g_n_experts * n * sizeof(float));
         down = (float *)malloc((size_t)g_n_experts * n * sizeof(float));
         if (!gate || !up || !down) { fprintf(stderr, "alloc fail layer %d\n", L); break; }
+        int ok = 1;
         for (int e = 0; e < g_n_experts; e++) {
             float *eg, *eu, *ed;
             if (load_expert(sc, L, e, &eg, &eu, &ed) != 0) {
-                fprintf(stderr, "expert %d/%d load fail\n", L, e); break;
+                fprintf(stderr, "  layer %d expert %d absent (incomplete checkpoint) — skip layer\n", L, e);
+                ok = 0; break;
             }
             memcpy(gate + (size_t)e*n, eg, n*sizeof(float));
             memcpy(up   + (size_t)e*n, eu, n*sizeof(float));
             memcpy(down + (size_t)e*n, ed, n*sizeof(float));
             free(eg); free(eu); free(ed);
         }
-        wubu_ssd_moe_pack_layer(sidecar, L, g_n_experts, d_model, d_ff, gate, up, down);
+        if (ok) {
+            wubu_ssd_moe_pack_layer(sidecar, L, g_n_experts, d_model, d_ff, gate, up, down);
+            printf("  packed layer %d (%d experts)\n", L, g_n_experts);
+        }
         free(gate); free(up); free(down);
-        printf("  packed layer %d (%d experts)\n", L, g_n_experts);
     }
 
     wubu_ssd_moe_write_manifest(sidecar, g_n_layers, g_n_experts, d_model, d_ff, 8, 16);
