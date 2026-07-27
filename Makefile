@@ -36,6 +36,16 @@ NEW_OBJ = src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o \
           src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o \
           src/wubu_safetensors_shard.o src/wubu_ssd_moe.o
 
+# WuBuOS EDR layer (linked directly into the agent gauntlet; no daemon).
+# Path to the WuBuOS checkout; override on the command line if checked out elsewhere.
+WUBUOS ?= /home/wubu/wubuos
+EDR_INC = -I$(WUBUOS)/src/runtime -I$(WUBUOS)/src/runtime/edr
+EDR_SRC  = $(WUBUOS)/src/runtime/wubu_edr.c \
+           $(WUBUOS)/src/runtime/edr/edr_core.c \
+           $(WUBUOS)/src/runtime/edr/edr_proc_pin.c \
+           $(WUBUOS)/src/runtime/edr/edr_fanotify.c \
+           $(WUBUOS)/src/runtime/edr/edr_poller.c
+
 src/wubu_ssd_moe.o: src/wubu_ssd_moe.c include/wubu_ssd_moe.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -267,6 +277,24 @@ test_tokenizer: tools/test_tokenizer.c src/wubu_tokenizer.o src/gguf_reader.o
 
 test_model: tools/test_model.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+# ── Agent tool gauntlet (4 Colonel models × 3 tools, EDR fan-out) ──────────
+# Links the bytropix engine + WuBuOS EDR layer. The EDR sources are
+# standalone (lock-free ring + worker thread); no daemon required.
+gauntlet: tools/agent_gauntlet/agent_gauntlet.c tools/agent_gauntlet/gauntlet_run.c \
+          tools/agent_gauntlet/agent_gauntlet.h $(MODEL_OBJ) $(EDR_SRC) \
+          src/wubu_tokenizer_hf.o src/wubu_tokenizer.o
+	$(CC) $(CFLAGS) $(EDR_INC) -o $@ tools/agent_gauntlet/agent_gauntlet.c \
+		tools/agent_gauntlet/gauntlet_run.c $(MODEL_OBJ) $(EDR_SRC) \
+		src/wubu_tokenizer_hf.o src/wubu_tokenizer.o $(LDFLAGS) -lpthread
+
+test_gauntlet: tools/agent_gauntlet/agent_gauntlet.c tools/agent_gauntlet/test_gauntlet.c \
+               tools/agent_gauntlet/agent_gauntlet.h $(MODEL_OBJ) $(EDR_SRC) \
+               src/wubu_tokenizer_hf.o src/wubu_tokenizer.o
+	$(CC) $(CFLAGS) $(EDR_INC) -o $@ tools/agent_gauntlet/agent_gauntlet.c \
+		tools/agent_gauntlet/test_gauntlet.c $(MODEL_OBJ) $(EDR_SRC) \
+		src/wubu_tokenizer_hf.o src/wubu_tokenizer.o $(LDFLAGS) -lpthread
+	./$@
 
 test_moe: tools/test_moe.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
