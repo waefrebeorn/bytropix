@@ -58,6 +58,7 @@ wubu_compress_target_t wubu_roofline_advise(const wubu_roofline_cfg_t *c,
 /* Estimated TPOT (ms) = (W + K) / beta_eff. */
 double wubu_roofline_tpot_ms(const wubu_roofline_cfg_t *c, double P_params,
                              int B, int s) {
+    if (c->beta_eff_tb_s <= 0) return 0;   /* DA: div-by-zero guard */
     double W, K;
     wubu_roofline_io(c, P_params, B, s, &W, &K);
     double bytes = (W + K) * 1e9;                 /* back to bytes */

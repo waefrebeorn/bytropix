@@ -22,6 +22,7 @@ struct wubu_cache_advice {
 };
 
 wubu_cache_advice_t *wubu_cache_advice_create(int cap) {
+    if (cap <= 0) return NULL;   /* DA: cap==0 -> malloc(0) OOB guard */
     wubu_cache_advice_t *a = (wubu_cache_advice_t *)calloc(1, sizeof(*a));
     if (!a) return NULL;
     a->cap = cap;
@@ -30,6 +31,10 @@ wubu_cache_advice_t *wubu_cache_advice_create(int cap) {
     a->recency = (float *)calloc(cap, sizeof(float));
     a->value = (float *)calloc(cap, sizeof(float));
     a->last_used = (int *)calloc(cap, sizeof(int));
+    if (!a->block_id || !a->freq || !a->recency || !a->value || !a->last_used) {
+        wubu_cache_advice_free(a);   /* DA: NULL one of the arrays before free */
+        return NULL;
+    }
     return a;
 }
 void wubu_cache_advice_free(wubu_cache_advice_t *a) {

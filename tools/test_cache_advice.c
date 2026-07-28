@@ -22,6 +22,12 @@ int main(void) {
     printf("hot block 1 retained under pressure: OK (count=%d)\n", wubu_cache_advice_count(a));
 
     wubu_cache_advice_free(a);
+
+    /* DA edge case: cap==0 must return NULL, not crash on malloc(0). */
+    wubu_cache_advice_t *z = wubu_cache_advice_create(0);
+    printf("create(0) -> %s (expect NULL)\n", z ? "non-NULL" : "NULL");
+    assert(z == NULL);
+
     printf("ALL CACHE-ADVICE TESTS PASSED\n");
     return 0;
 }

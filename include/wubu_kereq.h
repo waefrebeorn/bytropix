@@ -7,10 +7,23 @@
 extern "C" {
 #endif
 
-/* Prove two clamp(scale*x+bias) kernels equal over [x_lo, x_hi].
- * Returns 1 = proven equal (UNSAT), 0 = divergence found (SAT, *cx = counterexample). */
-int wubu_kereq_prove_eq(float x_lo, float x_hi, float scale, float bias,
-                        float clamp_lo, float clamp_hi, int buggy, float *cx);
+/* An affine+clamp kernel: y = clamp(scale*x + bias, lo, hi). */
+typedef struct {
+    float scale;
+    float bias;
+    float lo;   /* clamp lower bound */
+    float hi;   /* clamp upper bound */
+} wubu_affine_clamp_t;
+
+/* Prove equivalence of ref vs cand over input range [xlo, xhi] by abstract
+ * interpretation (interval arithmetic, sound).
+ * Returns:
+ *   1 = proven EQUAL (UNSAT)
+ *   0 = proven DIVERGENT (SAT); *cx = counterexample output value
+ *   2 = UNKNOWN (intervals overlap, inconclusive) */
+int wubu_kereq_prove_eq(const wubu_affine_clamp_t *ref,
+                        const wubu_affine_clamp_t *cand,
+                        float xlo, float xhi, float *cx);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,7 @@
 /* Test: wubu_roofline (Round-2 #101 — B*-crossover auto-tuner). */
 #include "wubu_roofline.h"
 #include <stdio.h>
+#include <math.h>
 #include <assert.h>
 
 int main(void) {
@@ -27,6 +28,12 @@ int main(void) {
     double tpot = wubu_roofline_tpot_ms(&c, P, 32, 4096);
     printf("TPOT(B=32,s=4k) = %.1f ms (expect ~68)\n", tpot);
     assert(fabs(tpot - 68.0) < 8.0);
+
+    /* DA: zero-bandwidth config must not divide-by-zero / produce inf. */
+    wubu_roofline_cfg_t cz = c; cz.beta_eff_tb_s = 0;
+    double tpot0 = wubu_roofline_tpot_ms(&cz, P, 32, 4096);
+    printf("TPOT(zero-BW) = %.1f (expect 0, no inf/nan)\n", tpot0);
+    assert(tpot0 == 0.0 && !isinf(tpot0) && !isnan(tpot0));
 
     printf("ALL ROOFLINE TESTS PASSED\n");
     return 0;

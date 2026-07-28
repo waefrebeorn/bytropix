@@ -1,6 +1,7 @@
 /* Test: wubu_pd_split (Round-2 #131 — PD disaggregation planner). */
 #include "wubu_pd_split.h"
 #include <stdio.h>
+#include <math.h>
 #include <assert.h>
 
 int main(void) {
@@ -27,6 +28,13 @@ int main(void) {
     /* Transfer mode: decode-heavy -> read-mode (1). */
     assert(wubu_pd_transfer_mode(s, 0.3, 0.9) == 1);
     assert(wubu_pd_transfer_mode(s, 0.9, 0.3) == 0);
+
+    /* DA: zero-bandwidth config must not divide-by-zero / produce inf. */
+    wubu_pd_split_t *zb = wubu_pd_split_create(1, 1, 0.0);
+    double ms0 = wubu_pd_kv_transfer_ms(zb, 4096, 80, 8, 128, 16);
+    printf("KV transfer(zero-BW) = %.1f (expect 0, no inf/nan)\n", ms0);
+    assert(ms0 == 0.0 && !isinf(ms0) && !isnan(ms0));
+    wubu_pd_split_free(zb);
 
     wubu_pd_split_free(s); wubu_pd_split_free(nv);
     printf("ALL PD-SPLIT TESTS PASSED\n");

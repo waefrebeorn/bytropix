@@ -29,6 +29,7 @@ void wubu_pd_split_free(wubu_pd_split_t *s) { free(s); }
  * `kv_heads` GQA heads, `head_dim`, `kv_bits`. */
 double wubu_pd_kv_transfer_ms(const wubu_pd_split_t *s, int s_tokens,
                               int layers, int kv_heads, int head_dim, int kv_bits) {
+    if (s->rdma_tb_s <= 0) return 0;   /* DA: div-by-zero guard */
     double bytes = (double)s_tokens * layers * 2.0 * kv_heads * head_dim * (kv_bits/8.0);
     double sec = bytes / (s->rdma_tb_s * 1e12);
     return sec * 1000.0;
