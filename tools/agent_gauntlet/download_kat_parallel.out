@@ -1,0 +1,291 @@
+DONE config.json
+DONE tokenizer_config.json
+DONE generation_config.json
+DONE chat_template.jinja
+DONE merges.txt
+DONE model.safetensors.index.json
+DONE vocab.json
+DONE tokenizer.json
+curl: (92) HTTP/2 stream 1 was not closed cleanly: CANCEL (err 8)
+RETRY(1) model-00003-of-00013.safetensors
+curl: (92) HTTP/2 stream 1 was not closed cleanly: CANCEL (err 8)
+RETRY(1) model-00004-of-00013.safetensors
+curl: (92) HTTP/2 stream 1 was not closed cleanly: CANCEL (err 8)
+RETRY(1) model-00000-of-00013.safetensors
+curl: (92) HTTP/2 stream 1 was not closed cleanly: CANCEL (err 8)
+RETRY(1) model-00002-of-00013.safetensors
+curl: (92) HTTP/2 stream 1 was not closed cleanly: CANCEL (err 8)
+RETRY(1) model-00001-of-00013.safetensors
+curl: (92) HTTP/2 stream 1 was not closed cleanly: CANCEL (err 8)
+RETRY(2) model-00004-of-00013.safetensors
+curl: (92) HTTP/2 stream 1 was not closed cleanly: CANCEL (err 8)
+RETRY(2) model-00001-of-00013.safetensors
+DONE model-00002-of-00013.safetensors
+DONE model-00001-of-00013.safetensors
+DONE model-00003-of-00013.safetensors
+DONE model-00000-of-00013.safetensors
+DONE model-00004-of-00013.safetensors
+ccccuruluu:rrr ll(:l:5:  6 (()(55 5666R)))e  c RRveeR ccefvvc  afvfiaa liiufllruauerire:le: u: Cr CoeCon:onn nneCencocetntcinitooiennoc  nttt iiitmmeioedmn deo  duot tuo
+itum
+te
+d out
+RETRY(1) model-00009-of-00013.safetensors
+RETRY(1) model-00006-of-00013.safetensors
+RETRY(1) model-00008-of-00013.safetensors
+RETRY(1) model-00007-of-00013.safetensors
+cccuuurrrll:l: :(  (6()6 )6C o)Cu olduC londou tl nrdoets o nlrvoeets ho olrsvetes: o hlhouvgsegt i:hn gofhsauctge:g.ci onh
+gufgagcei.ncgof
+ace.co
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrlll:::   (((666)) ) C CooCuulolddu  lnnodot t  rnreoesstool lvvree e hhsoososttl:: v hheuug ggghiinonggsffatacc:ee. .cchoo
+u
+ggicngufracle:. c(o
+6) Could not resolve host: huggingface.co
+cccuuurrlrl::lc  ((u:66)r)  lC (o:Cu6l od)(u n6l od)tC   ronCeouostlou dllrv deen  shonootlosv tte:r   ehrhusoegsgsotionl:lg vfvhaeecu e g.hhcgoooi
+snstg:fta c:heu .gchgoui
+ngggfiancge.fcaoc
+e.co
+cccuuurrrlll:::  (( 66()) 6 CC)oou ullCdd o nnouotl tcrd eus roernlsvlooel: thv oes( t 6:rh o)hesu gstgC:iono lghfuvuagcleeg. dich on
+ognfsoatcte: . crohe
+usgoglivneg fhaocset.:c oh
+uggingface.co
+cccuuurrrlll:::  ( (6(6)6) ) C oCCououluldld d n nonoto ttr  ersreoelsvsoeol lvhvoese t :hh ohosustgt:g: i hnhuuggggfgiaincngegf.facacoc
+ee..ccoo
+
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrlll:c: :(  6u(()6 r6)C )loCu ol:Cudol  dnu( olnt6do ) tr e nsrCooetlso ovulrevl eehs doohs lton:sv toeh: u thhg ugorgisgenitgsn:fgo afhcaluecg.vecg.eoic
+on 
+ghfoaces.cto:
+ huggingface.co
+RETRY(2) model-00006-of-00013.safetensors
+RETRY(2) model-00009-of-00013.safetensors
+RETRY(2) model-00008-of-00013.safetensors
+RETRY(2) model-00007-of-00013.safetensors
+curl: c(u6r)l : C(o6u)l dCo unlodt  nrocteu srroells:vo le(v 6eh) o hsCotos:ut l:hd  unhgougtcg irgnueigsrnoflgalvfce:ae c .heoc(s.ot6c
+:o )h
+ ugCgionuglfadc e.ncoot
+ resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurrll::  ((66))  CCoouulldd  nnoott  rreessoollvvee  hhoosstt::  hhuuggggiinnggffaaccee..ccoo
+
+curl: (6) Could not resolve host: huggingface.co
+ccuurlr:l (:6 )( 6C)o uClodu ldno tn roets orlevseo lvheo shto:s th:ug ghiunggfgaicne.gcfco
+uarlc: e(6.) cCoou
+ld not resolve hosct:u hrulg:gi n(g6fa)c e.Ccoo
+uld not resolve host: huggingface.co
+ccccuuuurrrlrl:ll:  ::((  66())( 6 C6)oC )uoC luodlCu donl odutn  lorntdo  tr neroseotsl overlesve oehls vooheso lths:vot seh:u  tghh:gu ogihgsnuigtgnfg:gaif cnagehcf.uaecc.geoc.g
+cooi
+
+ngface.co
+ccccuuuurrrlrll:l:: : (  (6(()666 ))) C  oCCuoColuoudlul dld ndno  otnnt oo rttre  esrrsoeeolslsvoveole lvh voeheso  tshh:too :ss hthut:gu:g g ighhniuugnggfggafgicaiencn.eggc.ffocaa
+occ
+ee..ccoo
+
+ccurulr:l c(: u6(r)c6 l):Cu or Cul(ol:6ud )l ( nd6oC t)on  uorClteods uo rllnevdeso  othnlo osvrtte:e   shrhuoegolgssivontegl:f va hceheo .uschgoto
+g:si tnh:gu fghagucigeng.gicfnoag
+cfea.cceo.
+co
+RETRY(3) model-00008-of-00013.safetensors
+RETRY(3) model-00006-of-00013.safetensors
+RETRY(3) model-00009-of-00013.safetensors
+RETRY(3) model-00007-of-00013.safetensors
+ccuurrll::  ((6)6 )C oCcourull:u d( 6n)lo dtC o urnledos tno orlte vsroeels voehl ovheso stht:o: s hhtu:ug ghguiggnggiifnnaggcfefa.caceoc
+e..coc
+o
+curl: (6) Could not resolve host: huggingface.co
+ccccuuuurrrrllll::::    ((((666)6)) )  C oCCuCoolouudll udndlo  tdnn  oroentts  oorrlteev sser oohellovvsseeto  :lhh vohousesgtt g::ih  nohhgsufuagtgcgg:eii. ncnhogg
+uffaagccgeei..nccgoo
+
+face.co
+ccccuuruurlrrl:ll: (:: 6 ( )(6 (C)6o6 u))Cl o du CCnloootd uure llsonddlv  eo nnhotoosttt :   rhurreggeesinssogfoolalclvev.veceoe 
+  hhhoosotss:tt::   hhhuuugggggiginingngfgafcfaeac.cceoe.
+.ccoo
+
+ccccuuuurrrllr:l:l  ::((  66())( 6 C6)Co)o uul CdlC odno ouutnl lordtde  s ornnleovosetto   lhrrvoeesesst oo:hl lovhvsueetg  :ghh ioohnssugttgf::ag  cihhenuu.gggcfggoaii
+cnnegg.ffcaaocc
+ee..ccoo
+
+ccuurlr:l :(6 )( C6o)ul d Cnooutl drc esnuoolrvtle  :rh eo(sst6o:)l hv uegCg oihnugolfsadct e:.nc ooh
+tu grgeisnoglfvaec eh.ocsot
+: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrlll:::   (((666) ))C  oCuColoud lundlo tdn  roetns oortlev esr ohlovset:  hhousggti:n ghfuacgeg.icnog
+face.co
+esolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+RETRY(4) model-00008-of-00013.safetensors
+RETRY(4) model-00007-of-00013.safetensors
+RETRY(4) model-00009-of-00013.safetensors
+RETRY(4) model-00006-of-00013.safetensors
+ccuurrll::  ((66))  CCoouulldd  nnoott  rreessoollvvee  hhoosstt::  hhuuggggiinnggffaaccee..ccoo
+
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrll:l: :( 6( )6( )6C )oC uloCdu onluodlt  dren sonoltov et r heorsseto:s lohuvlgevgi enh gfohascoets.c:to :
+h uhguggignignfgafcaec.ec.oc
+o
+curl: (6) Could not resolve host: huggingface.co
+cccuurulr:rl l:(:6 ) ( (C6o6)u)l d C Cnoooutu lrldeds o nlnvoeot th o rsrte:es shouolglvgveien g hfhoaoscset.t:c:o 
+ hhuuggggiinnggffaaccee..ccoo
+
+curl: (6) Could not resolve host: huggingface.co
+curl: (56) Recv failure: No route to host
+RETRY(1) model-00005-of-00013.safetensors
+cccuuurrlrl:l: : ( (6(6)6) ) C CoCououluldld d n nonotot t r reresesosololvlveve e h hohosostst:t: : h huhuguggggiginingngfgfafacacece.e.c.coco
+o
+
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not rescoulrvle:  h(o6s)ctu :rC loh:uu l(gdg6 in)no gtCf oarucelesd. ocnloovt
+ er ehsooslvte:  hhoustg:g ihnugggfiancgef.acceo.
+co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+RETRY(5) model-00006-of-00013.safetensors
+curl: (6) Could not resolve host: huggingface.co
+ccurul:r (l6:)  C(ou6l)d  nCoot urlesdo lvneo hto str:e hsuogglivngef acheo.csot
+: huggingface.co
+RETRY(5) model-00009-of-00013.safetensors
+RETRY(5) model-00007-of-00013.safetensors
+RETRY(5) model-00008-of-00013.safetensors
+FAILED model-00006-of-00013.safetensors
+FAILED model-00009-of-00013.safetensors
+FAILED model-00007-of-00013.safetensors
+FAILED model-00008-of-00013.safetensors
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurrll:: ( 6() 6C)ou lCd onuotl dre snolovte  hroesst:o lhuvgegi nhgfoascet.:co 
+huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurlr:l :( 6()6 )C oCuoludl dn onto tr erseoslovlev eh ohsots:t :h uhguggignignfgafcaec.ec.oc
+o
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+RETRY(2) model-00005-of-00013.safetensors
+cccuuurrlrl:l: : ( 6(()6 6)C) o uCClooduu llnddo  tn norotets  orrleveses oohllovvseet  :hh oohssutgtg::i  nhhguufggaggciei.nncggoff
+aaccee..ccoo
+
+curl: (6) Could not resolve host: huggingface.co
+cccuururlrl:l: : ( (6(6)6) ) C CoCououluldld d n nonotot t r reresesosololvlveve e h hohosostst:t: : h huhuguggggiginingngfgfafacacece.e.c.coco
+o
+
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrlll:::   (((666)) ) C CoCouoluudll ddn  onnto ortte  srroeeslsovoell vvheeo s htho:os sthtu::g  ghhiuunggggfgaiicnnegg.fcfaoac
+cee..ccoo
+
+RETRY(1) model-00011-of-00013.safetensors
+RETRY(1) model-00012-of-00013.safetensors
+RETRY(1) model-00010-of-00013.safetensors
+curl: (6) Could not resolve host: huggingface.co
+ccuucrrllu::r  l((:66 ))(  C6Co)ou ludCl odnu olntdo  trn eosrotel svroe elhsvoosetl :vh eho ushgtgo:is nthg:fu gahgucigeng.gicfnoag
+cfea.cceo.
+co
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrlll:::   (((666)))   CCoCuooluudll dndo  tnn oortet  sorleves ohlovset:  hhousgtg:i nghfuagcreg.eicsnoog
+lfvaec eh.ocsot
+: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurlr:l :( 6()6 )C oCuoludl dn onto tr erseoslovlev eh ohsots:t :h uhguggignignfgafcaec.ec.oc
+o
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+RETRY(3) model-00005-of-00013.safetensors
+cccuuurrrlll:::   (((666)))   CCoCuooluudl lnddo  t nnrooetts o lrrveees shooollsvtve:e   hhuhogosgsitnt:g: f hahuceug.ggcgioin
+nggffaaccee..ccoo
+
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrlll:::  ( (6()66 )C)o  uClCdoo unuolltd dr  ensnoooltvte   rhroeesssto:o llhvuvgeeg i nhhgofoassctet.::c o 
+hhuuggggiinnggffaaccee..ccoo
+
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrlrl:l: : ( (6(6)6) ) C CooCuuolluddl  dnn oontto  trr eersseoosllovvleev  ehh oohssotts::t : h huhuguggggiginingngfgfafacacece.e.c.coco
+o
+
+RETRY(2) model-00010-of-00013.safetensors
+RETRY(2) model-00011-of-00013.safetensors
+RETRY(2) model-00012-of-00013.safetensors
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could cnuorlt:  (r6e) sCooullvd en ohto srets:ol vhe uhgosgti: nhgugfgaincgefa.cce.oc
+o
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+cccurlu: r(l6u):  rC(lo6:u) l (d C6no)ou tl Crdoe usnololdtv e n rohetos sortle:v sheou lghgvoiens gthf:oa cseht.u:cg ogh
+iungggfiancgef.accoe
+.co
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrlrl:: l (:(6 6)()  6CCo)ou ullCdd o nunoltod t r nersoeostlo vlreve esh oohslotsv:te :h  uhhguggoigsnitgn:fg afcaech.ec.uoc
+go
+gingface.co
+curl: (6) Could not resolve host: huggingface.co
+RETRY(4) model-00005-of-00013.safetensors
+cccuuurrlrl:: l (:(6 6)() 6 C)Co ouCuloldud l ndno ton tor ter seroselosvloevl evh eoh sohtso:ts :th :uh guhgguiggniggnifgnafgcafeca.ecc.eoc.
+oc
+o
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrlll:::  (( 66)()  C6oC)uol udC lnodo tu nrloetsdo  lrvneeos tho olsrvtee:s  ohhlousvtge:g  inhhguofgasgcient.gc:fo
+a che.ucgog
+ingface.co
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrlrl:l: : ( (6(6)6) ) C CoCououluldld d n nonotot t r reresesosololvlveve e h hohosostst:t: : h huhuguggggiginingngfgfafacacece.e.c.coco
+o
+
+RETRY(3) model-00010-of-00013.safetensors
+RETRY(3) model-00011-of-00013.safetensors
+RETRY(3) model-00012-of-00013.safetensors
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurlr:l :( 6()6 )C ouClodu lndo tn orte sroelsvoel vheo shto:s th:u ghguignggifnagcfea.cceo.
+co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurlr:l :( 6()6 )C oCuoludl dn noott  rreessoollvvee h ohsots: th:u ghgiungggfiancgef.acco
+e.co
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+RETRY(5) model-00005-of-00013.safetensors
+ccuurlr:l :( 6()6 )C oCuoludl dn onto tr erseoslovlev eh ohsots:t :h uhguggigcnignufgraflca:ec .e(c.6oc)
+o 
+Could not resolve host: huggingface.co
+FAILED model-00005-of-00013.safetensors
+cccuuurrllr::l  ((:66) )  (CCo6uol)ud l ndCo tn ooruetsl odrl veneso ohtlo vster: e hshuooglsgvitne:g  fhhuaogcsgei.tcnog
+:fa ceh.ucgo
+gingface.co
+cccuuurrlrl:l: : ( (6(6)6) ) C CoCououluldld d n nonotot t r reresesosololvlveve e h hohosostst:t: : h huhuguggggiginingngfgfafacacece.e.c.coco
+o
+
+RETRY(4) model-00011-of-00013.safetensors
+RETRY(4) model-00010-of-00013.safetensors
+RETRY(4) model-00012-of-00013.safetensors
+ccuurrll:: ( 6() 6C)ou ldC onoutl rde snoolvte  hroests:o hluvggei nghfoacset.c:o 
+huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurrl:l :(6 )( C6o)ul d Cnootu lreds olnvoe th osrte: shouglgvineg fahcoe.scto
+: huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurrll:: ( 6() 6C)ou ldC onuotl dre snolovte  hrosets: ohlugvgein ghfaocse.tc:o
+ huggingface.co
+curl: (6) Could not resolve host: huggingface.co
+cccuuurrrlll:: : ( (6(6)6 )) C oCCuoluodlu dnl odnt o ntro ertse osrolelvsveeo  lhhvoseot s:ht :oh suhtugg:gg iihnngugffgaagcciee.n.cgcof
+aoc
+e.co
+curl: (6) Could not resolve host: huggingface.co
+ccuurlr:l :( 6()6 )C oCuoludl dn onto tr erseoslovlev eh ohsots:t :h uhguggignignfgafcaec.ec.oc
+o
+curl: (6) Could not resolve host: huggingface.co
+curl: (6) Couldc unrolt:  r(e6s)o lCvoeu lhdo snto:t  hruggingface.co
+esolve host: huggingface.co
+RETRY(5) model-00010-of-00013.safetensors
+RETRY(5) model-00012-of-00013.safetensors
+RETRY(5) model-00011-of-00013.safetensors
+FAILED model-00010-of-00013.safetensors
+FAILED model-00011-of-00013.safetensors
+FAILED model-00012-of-00013.safetensors
+ALL XARGS JOBS FINISHED

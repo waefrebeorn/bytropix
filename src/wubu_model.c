@@ -881,9 +881,18 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         // Post-attention RMSNorm
         wubu_rms_norm(B, T, model->d_model, x, layer->post_attn_norm_weight, 1e-6f, normed2);
         
-        // MoE (FFN) forward — use quantized path when available
+        // MoE (FFN) forward — ds4-ssd slot-bank takes precedence (page experts
+        // from the checkpoint shards; the resident blobs are intentionally NULL
+        // in this path, so it MUST be checked before the resident `loaded` path).
         double t_moe0 = wall_time();
-        if (layer->moe.loaded && model->enable_moe &&
+        if (model->enable_moe && model->ssd_moe && layer->moe.loaded >= 0 &&
+            (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
+            // ds4-ssd slot-bank: page routed experts from the on-disk checkpoint.
+            wubu_moe_forward_ssd(normed2, B, T, &layer->moe, model->ssd_moe, l,
+                                 ffn_out, have_prev_experts ? prev_experts : NULL,
+                                 model->n_active_experts, model->n_experts, model->d_model, model->d_ff);
+            have_prev_experts = 1;
+        } else if (layer->moe.loaded && model->enable_moe &&
             (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Quantized path: also save selected expert indices for next-layer prefetch
             // GPU MoE (disabled by FORCE_CPU_MOE env var for debug)
@@ -908,13 +917,6 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             } else {
                 memcpy(ffn_out, normed2, N * model->d_model * sizeof(float));
             }
-        } else if (layer->moe.loaded && model->enable_moe && model->ssd_moe &&
-                   (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
-            // ds4-ssd slot-bank: page routed experts from the on-disk sidecar.
-            wubu_moe_forward_ssd(normed2, B, T, &layer->moe, model->ssd_moe, l,
-                                 ffn_out, have_prev_experts ? prev_experts : NULL,
-                                 model->n_active_experts, model->n_experts, model->d_model, model->d_ff);
-            have_prev_experts = 1;
         } else {
             // Pass-through when MoE disabled
             memcpy(ffn_out, normed2, N * model->d_model * sizeof(float));

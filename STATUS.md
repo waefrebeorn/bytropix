@@ -8,7 +8,7 @@ All real weights live under `/home/wubu/models/<Name>/` (persistent, 772 GB free
 | Subsystem | Evidence | Command |
 |-----------|----------|---------|
 | ds4-ssd slot-bank (synthetic) | BF16 pack → LRU page-in → F32 matmul matches resident reference exactly | `make test_ssd_moe` |
-| ds4-ssd decode-bank (REAL KAT weights) | `pack_kat_sidecar` streams 256 experts/layer to BF16 sidecar; `test_kat_decode_bank` pages real KAT-Coder expert weights from disk (39 paged, all finite) | `./test_kat_decode_bank <sidecar> 16` |
+| ds4-ssd decode-bank (REAL KAT weights) | `test_kat_decode_bank` pages 256 experts/layer **directly from the source checkpoint shards** (no sidecar, no 256 GB duplicate); all finite | `./test_kat_decode_bank /home/wubu/models/KAT-Coder-V2.5-Dev 16` |
 | HF BPE tokenizer | Loads 248,044-vocab Qwen tokenizer; encode/decode round-trip | `./gen_text "<prompt>"` with a `.safetensors` model |
 | **Model config adapter** | Derives REAL KAT (256/8, SSM 16/32, shared 512) + Qwen3.6 (64L, SSM v=48) + Agents-A1 (2560/32/32) dims + hybrid `layer_types` from config.json | `make test_model_config` |
 | Cross-shard dimension probing | Bridge derives D=2560, VD=4096, qh=32, kvh=4 from real shards | `make test_real_load` (SKIPs cleanly if weights absent) |
@@ -22,22 +22,25 @@ All real weights live under `/home/wubu/models/<Name>/` (persistent, 772 GB free
 ## Implemented, not yet end-to-end verified
 
 - **`wubu_moe_forward_ssd`** — SSD-paged MoE forward (router + top-k + resident
-  shared expert + paged routed experts). Code-complete; exercised by
-  `test_kat_decode_bank` (weight paging) but not yet by a full multi-layer
-  generation on the complete KAT checkpoint (needs all 13 shards resident-sidecar).
+  shared expert + paged routed experts). VERIFIED: pages real KAT experts
+  directly from the source checkpoint shards (no sidecar) via
+  `test_kat_decode_bank`, and runs a real multi-layer KAT forward through
+  `gen_text` (MAX_LAYERS) without the 256 GB sidecar.
 - **KAT full-load + generation** — bridge loads KAT hybrid layers (SSM+GQA+MoE);
-  full 40-layer forward needs the complete 13-shard checkpoint (download in
-  progress) + ds4-ssd sidecar for the 256-expert MoE (packer now streams, OOM fixed).
-- **Agents-A1-4B full generation** — adapter + bridge wired; checkpoint downloading.
+  ds4-ssd slot-bank pages the 256-expert MoE **straight from the checkpoint**
+  (bloat-killed: the redundant 256 GB sidecar is gone). Full 40-layer decode is
+  memory-gated on this 13 GB box (runs at MAX_LAYERS=N for verification).
+- **Agents-A1-4B full generation** — adapter + bridge wired; checkpoint present
+  (`/home/wubu/models/Agents-A1-4B`, 2/2 shards).
 - **BTL-3 LoRA end-to-end** — adapter applies onto Qwen3.6-27B base; needs both
-  weights on disk (Qwen3.6-27B present, BTL-3 adapter downloading).
+  weights on disk (Qwen3.6-27B present; BTL-3 adapter downloading).
 
 ## Model support matrix
 
 | Model | Arch | D | layers | experts | State |
 |-------|------|---|---------|---------|-------|
 | Agents-A1-4B | qwen3_5, dense hybrid (SSM+GQA+MLP), multimodal | 2560 | 32 | 0 | Adapter + bridge OK. Checkpoint downloading to `/home/wubu/models/Agents-A1-4B`. |
-| KAT-Coder-V2.5-Dev | qwen3_5_moe, 256/8 + shared, hybrid | 2048 | 40 | 256 | Adapter derives real dims (verified). Bridge loads shared expert + per-layer SSM/GQA via `layer_types`. Shards 10-12 downloading; sidecar packer streams (OOM fixed). |
+| KAT-Coder-V2.5-Dev | qwen3_5_moe, 256/8 + shared, hybrid | 2048 | 40 | 256 | Adapter derives real dims (verified). Bridge loads shared expert + per-layer SSM/GQA via `layer_types`. All 13 shards present. ds4-ssd slot-bank pages the 256-expert MoE **directly from the checkpoint shards** (no sidecar, bloat killed). |
 | Qwen3.6-27B-base | qwen3_5, dense hybrid | 5120 | 64 | 0 | Adapter derives real dims (verified). Bridge hybrid `layer_types` wired. **Real SSM forward validated** (finite logits). index.json now on disk. |
 | BTL-3 | LoRA rank-32 alpha-64 on Qwen3.6-27B | — | — | — | Adapter detects base + is_lora. LoRA apply path in bridge (needs base loaded first). Adapter downloading. |
 

@@ -1,0 +1,94 @@
+Terminated
+RETRY(1) model-00010-of-00013.safetensors
+Terminated
+RETRY(2) model-00010-of-00013.safetensors
+Terminated
+RETRY(3) model-00010-of-00013.safetensors
+tools/download_all_colonels.sh: line 22:  5132 Killed                  curl -sSL -C - --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$f" "$url"
+RETRY(4) model-00010-of-00013.safetensors
+tools/download_all_colonels.sh: line 22:  5170 Killed                  curl -sSL -C - --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$f" "$url"
+RETRY(5) model-00010-of-00013.safetensors
+DONE model-00010-of-00013.safetensors
+partial model-00011-of-00013.safetensors (1796812800 < 2000000000) — re-downloading
+tools/download_all_colonels.sh: line 22:  5474 Killed                  curl -sSL -C - --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$f" "$url"
+RETRY(1) model-00011-of-00013.safetensors
+ls/download_all_colonels.sh: line 22:  5168 Killed                  curl -sSL -C - --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$f" "$url"
+RETRY(2) model-00011-of-00013.safetensors
+tools/download_all_colonels.sh: line 32:  5207 Killed                  curl -sSL -C - --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$f" "$url"
+RETRY(1) model-00010-of-00013.safetensors
+DONE model-00010-of-00013.safetensors
+downloading model-00011-of-00013.safetensors (expect 5369066072 bytes)
+tools/download_all_colonels.sh: line 32:  5484 Killed                  curl -sSL -C - --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$f" "$url"
+RETRY(1) model-00011-of-00013.safetensors
+tools/download_all_colonels.sh: line 22:  5464 Killed                  curl -sSL -C - --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$f" "$url"
+RETRY(3) model-00011-of-00013.safetensors
+tools/download_all_colonels.sh: line 32:  5308 Killed                  curl -sSL -C - --retry 5 --retry-delay 5 --retry-all-errors -o "$dir/$f" "$url"
+RETRY(1) model-00010-of-00013.safetensors
+[watchdog 23:03:58] detached worker started pid=5822
+[watchdog 23:03:58] run #0
+downloading model-00000-of-00013.safetensors (expect 5368997288 bytes)
+DONE model-00000-of-00013.safetensors
+downloading model-00001-of-00013.safetensors (expect 5369063800 bytes)
+[watchdog 23:14:17] detached worker started pid=6539
+[watchdog 23:14:17] run #0
+skip (complete 5368997288/5368997288) model-00000-of-00013.safetensors
+stale/wrong model-00001-of-00013.safetensors (51658752 != 5369063800) — removing + re-downloading
+downloading model-00001-of-00013.safetensors (expect 5369063800 bytes)
+DONE model-00001-of-00013.safetensors
+downloading model-00002-of-00013.safetensors (expect 5369063512 bytes)
+DONE model-00002-of-00013.safetensors
+downloading model-00003-of-00013.safetensors (expect 5369065752 bytes)
+DONE model-00003-of-00013.safetensors
+skip (complete 5369066360/5369066360) model-00004-of-00013.safetensors
+downloading model-00005-of-00013.safetensors (expect 5369066072 bytes)
+DONE model-00005-of-00013.safetensors
+downloading model-00006-of-00013.safetensors (expect 5369066240 bytes)
+DONE model-00006-of-00013.safetensors
+downloading model-00007-of-00013.safetensors (expect 5369066360 bytes)
+DONE model-00007-of-00013.safetensors
+downloading model-00008-of-00013.safetensors (expect 5369066072 bytes)
+DONE model-00008-of-00013.safetensors
+downloading model-00009-of-00013.safetensors (expect 5369066240 bytes)
+DONE model-00009-of-00013.safetensors
+stale/wrong model-00010-of-00013.safetensors (217800704 != 5369066360) — removing + re-downloading
+downloading model-00010-of-00013.safetensors (expect 5369066360 bytes)
+DONE model-00010-of-00013.safetensors
+stale/wrong model-00011-of-00013.safetensors (288382976 != 5369066072) — removing + re-downloading
+downloading model-00011-of-00013.safetensors (expect 5369066072 bytes)
+DONE model-00011-of-00013.safetensors
+downloading model-00012-of-00013.safetensors (expect 4896861568 bytes)
+curl: (56) Recv failure: Connection reset by peer
+DONE model-00012-of-00013.safetensors
+skip (complete 3307579/3307579) model.safetensors.index.json
+skip (complete 112216/112216) model.safetensors.index.json
+downloading config.json (expect 3161 bytes)
+DONE config.json
+downloading generation_config.json (expect 15 bytes)
+DONE generation_config.json
+downloading tokenizer.json (expect 19989343 bytes)
+DONE tokenizer.json
+downloading tokenizer_config.json (expect 17948 bytes)
+DONE tokenizer_config.json
+downloading vocab.json (expect 15 bytes)
+DONE vocab.json
+downloading merges.txt (expect 15 bytes)
+DONE merges.txt
+downloading chat_template.jinja (expect 8979 bytes)
+DONE chat_template.jinja
+downloading model.safetensors.index.json (expect 66201 bytes)
+DONE model.safetensors.index.json
+downloading model-00000-of-00002.safetensors (expect 5363484352 bytes)
+curl: (56) Recv failure: Connection reset by peer
+DONE model-00000-of-00002.safetensors
+downloading model-00001-of-00002.safetensors (expect 3715136104 bytes)
+DONE model-00001-of-00002.safetensors
+downloading adapter_model.safetensors (expect 933974032 bytes)
+DONE adapter_model.safetensors
+downloading adapter_config.json (expect 1571 bytes)
+DONE adapter_config.json
+downloading README.md (expect 6442 bytes)
+DONE README.md
+ALL_DOWNLOADS_FINISHED
+[watchdog 01:22:05] run #0 exited rc=0
+[watchdog] ALL DOWNLOADS DONE
+[watchdog] finished (cycles=0)

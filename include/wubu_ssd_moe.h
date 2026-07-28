@@ -3,24 +3,19 @@
  *
  * Replicates Anemll ds4-ssd's signature technique (Apple "LLM in a flash"):
  *   - dense/shared tensors stay resident in RAM (loaded by the caller);
- *   - routed MoE expert weights live on disk (SSD) in a sidecar directory;
+ *   - routed MoE expert weights are PAGED ON DEMAND straight from the SOURCE
+ *     CHECKPOINT shards (the very *.safetensors the model already loads) —
+ *     NO redundant sidecar copy. The checkpoint is already mmap'd / readable
+ *     via wubu_shard_raw, so each expert's BF16 gate/up/down tensors are read
+ *     straight from disk. Zero extra disk footprint, zero weight duplication.
  *   - a fixed POOL of expert "slots" per layer is kept resident in RAM;
- *   - on a router miss, the selected expert is paged in from disk (pread)
- *     and the least-recently-used slot is evicted.
+ *   - on a router miss, the selected expert is paged in (BF16 -> F32) and the
+ *     least-recently-used slot is evicted.
  * This lets a 256-expert model (e.g. KAT-Coder) run in a fraction of the
- * RAM its full expert footprint would require.
+ * RAM its full expert footprint would require, WITHOUT a 256 GB sidecar.
  *
  * Self-contained: only depends on wubu_safetensors_shard for raw reads and
  * the C stdlib. No god headers. C11, opaque ctx.
- *
- * Sidecar layout (one file per layer):
- *   <root>/experts.<LAYER>.bin
- *      packed: [expert 0: gate(up to d_ff*d_model) | up | down] ... [expert N-1]
- *      each expert's three matrices stored BF16 (2 bytes/elem) to keep the
- *      cold footprint small on disk; dequantized to F32 into the slot on page-in.
- *   <root>/manifest.json
- *      { "n_layers":L, "n_experts":E, "d_model":D, "d_ff":F,
- *        "n_active":K, "slot_bank":S, "expert_bytes":B, "fmt":"bf16" }
  */
 #ifndef WUBU_SSD_MOE_H
 #define WUBU_SSD_MOE_H
@@ -28,15 +23,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* The slot-bank pages experts directly from the source checkpoint shards. */
+typedef struct wubu_shard_ctx wubu_shard_ctx_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct wubu_ssd_moe wubu_ssd_moe_t;
 
-/* Open a sidecar directory. slot_bank = resident expert slots kept per layer
- * (ds4-ssd's --moe-slot-bank; e.g. 8..64). Returns NULL on failure. */
-wubu_ssd_moe_t *wubu_ssd_moe_open(const char *sidecar_dir, int slot_bank);
+/* Open the slot-bank over a checkpoint DIRECTORY (the same *.safetensors the
+ * model loads — NO redundant sidecar). slot_bank = resident expert slots kept
+ * per layer (ds4-ssd's --moe-slot-bank; e.g. 8..64). Returns NULL on failure. */
+wubu_ssd_moe_t *wubu_ssd_moe_open(const char *checkpoint_dir, int slot_bank);
+
+/* Open from an already-built shard ctx (bridge passes its own sc). */
+wubu_ssd_moe_t *wubu_ssd_moe_open_from_shards(wubu_shard_ctx_t *sc, int slot_bank);
 
 /* Number of layers / experts this sidecar describes. */
 int  wubu_ssd_moe_n_layers(const wubu_ssd_moe_t *m);

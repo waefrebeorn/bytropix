@@ -111,13 +111,14 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     wubu_shard_ctx_t *sc = wubu_shard_open(path);
     if (!sc) { fprintf(stderr, "bridge: cannot open shard set %s\n", path); st_close(st); return -1; }
 
-    /* ds4-ssd: open the expert sidecar. Routed experts are paged from it at
-     * forward time; the big in-RAM expert blobs are skipped below. */
+    /* ds4-ssd: route MoE experts through the slot-bank paged DIRECTLY from the
+     * source checkpoint shards (no redundant sidecar). Routed experts are
+     * paged on demand; the big in-RAM expert blobs are skipped below. */
     wubu_ssd_moe_t *ssd = NULL;
-    int ssd_slots = sidecar_dir ? (getenv("SSD_SLOTS") ? atoi(getenv("SSD_SLOTS")) : 8) : 0;
-    if (sidecar_dir && ad->n_experts > 0) {
-        ssd = wubu_ssd_moe_open(sidecar_dir, ssd_slots > 0 ? ssd_slots : 8);
-        if (!ssd) { fprintf(stderr, "bridge: cannot open sidecar %s\n", sidecar_dir); st_close(st); wubu_shard_close(sc); return -1; }
+    int ssd_slots = ad->n_experts > 0 ? (getenv("SSD_SLOTS") ? atoi(getenv("SSD_SLOTS")) : 8) : 0;
+    if (ad->n_experts > 0) {
+        ssd = wubu_ssd_moe_open_from_shards(sc, ssd_slots > 0 ? ssd_slots : 8);
+        if (!ssd) { fprintf(stderr, "bridge: cannot open ssd slot-bank over checkpoint shards\n"); st_close(st); wubu_shard_close(sc); return -1; }
         m->ssd_moe = ssd;
         m->enable_moe = true;
     }
@@ -140,7 +141,8 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     int hd    = ad->gqa_head_dim > 0 ? (int)ad->gqa_head_dim : 256;
     int qh = (qdim > 0 && hd > 0) ? qdim / hd : (ad->gqa_q_heads > 0 ? (int)ad->gqa_q_heads : 32);
     int kvh = (kvdim > 0 && hd > 0) ? kvdim / hd : (ad->gqa_kv_heads > 0 ? (int)ad->gqa_kv_heads : 4);
-    int dff   = dimof_sc(sc, "model.language_model.layers.0.mlp.gate_proj.weight", 0);
+    int dff   = dimof_sc(sc, "model.language_model.layers.0.mlp.experts.0.gate_proj.weight", 0);
+    if (dff < 0) dff = dimof_sc(sc, "model.language_model.layers.0.mlp.gate_proj.weight", 0);
     if (dff < 0) dff = (int)ad->d_ff > 0 ? (int)ad->d_ff : (D * 4);
 
     /* Count real layers by probing across shards (robust to adapter quirks). */
@@ -613,22 +615,12 @@ int wubu_model_init_auto(wubu_model_t *m, const char *path) {
             }
             fprintf(stderr, "bridge: BTL-3 LoRA with no resolvable base; loading adapter as plain model\n");
         }
-        /* ds4-ssd: if a sidecar dir sits next to the checkpoint (or KAT_SIDECAR
-         * is set), route MoE experts through it instead of resident RAM. */
-        const char *sc = getenv("KAT_SIDECAR");
-        char auto_sc[1024];
-        if (!sc) {
-            /* model dir = parent of the .safetensors file; look for ./sidecar */
-            const char *slash = strrchr(path, '/');
-            size_t dlen = slash ? (size_t)(slash - path) : 0;
-            if (dlen + 8 < sizeof(auto_sc)) {
-                memcpy(auto_sc, path, dlen);
-                strcpy(auto_sc + dlen, "/sidecar");
-                if (access(auto_sc, F_OK) == 0) sc = auto_sc;
-            }
-        }
-        if (sc && ad.n_experts > 0) {
-            return wubu_model_init_safetensors_ssd(m, path, &ad, sc);
+        /* ds4-ssd: for any MoE model, route experts through the slot-bank
+         * paged DIRECTLY from the checkpoint shards (no redundant sidecar copy,
+         * no KAT_SIDECAR env, no 256 GB duplicate). The bridge opens the bank
+         * over the same shards it already loads. */
+        if (ad.n_experts > 0) {
+            return wubu_model_init_safetensors_ssd(m, path, &ad, NULL);
         }
         return wubu_model_init_safetensors(m, path, &ad);
     }

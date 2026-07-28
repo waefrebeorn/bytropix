@@ -56,8 +56,19 @@ void wubu_ssd_moe_pack_layer(dir, layer, E, D, F, gate, up, down);
 void wubu_ssd_moe_write_manifest(dir, n_layers, E, D, F, n_active, slot_bank);
 ```
 
-`wubu_ssd_moe_get` returns `1` on slot hit, `0` on page-in (disk `pread` +
-BF16→F32 dequant into the evicted slot), `-1` on error.
+`wubu_ssd_moe_get` returns `1` on slot hit, `0` on page-in (BF16→F32 dequant
+from the checkpoint shards into the evicted slot), `-1` on error.
+
+## No-sidecar design (bloat killed)
+
+Experts are **paged directly from the source checkpoint shards** the model
+already loads — NOT a redundant sidecar copy. The old design duplicated every
+KAT expert weight into a `experts.<L>.bin` sidecar (~256 GB, 3.7× the 68 GB
+checkpoint itself, 100% redundant). The checkpoint is already mmap'd / readable
+via `wubu_shard_raw`, so `read_expert_mat()` reads each expert's BF16
+gate/up/down tensors straight from disk. Zero extra disk footprint, zero weight
+duplication. `wubu_ssd_moe_open(checkpoint_dir, slots)` opens the bank over the
+checkpoint; no `pack_kat_sidecar` step, no `KAT_SIDECAR` env, no manifest.
 
 ## Forward integration
 
@@ -69,23 +80,14 @@ indexing an in-RAM blob. Router and shared expert remain in-RAM (from
 ## Build / verify
 
 ```bash
-make test_ssd_moe          # synthetic: 12 experts, 3-slot bank, exact matmul
+make test_ssd_moe              # synthetic: 12 experts, 3-slot bank, exact matmul (no sidecar)
+make test_kat_decode_bank     # REAL KAT-Coder: pages 256 experts/layer from the checkpoint
+./test_kat_decode_bank /home/wubu/models/KAT-Coder-V2.5-Dev 16
 ```
 
-Real weights (KAT-Coder, 256 experts):
-
-```bash
-# 1. pack the sidecar from the HF checkpoint (bounded, one expert at a time)
-gcc -O2 -Iinclude -o pack_kat_sidecar tools/pack_kat_sidecar.c \
-    src/wubu_safetensors_shard.c src/safetensors_reader.c src/wubu_ssd_moe.c -lm
-./pack_kat_sidecar /path/to/KAT-Coder-V2.5-Dev /path/to/sidecar 8
-
-# 2. run generation with ssd_moe enabled for MoE layers
-```
-
-`tools/test_ssd_moe_real.c` reads each expert by direct `pread` offset (never
-loads the checkpoint resident) and confirms the paged BF16 expert equals the
-checkpoint's expert within BF16 tolerance.
+`tools/test_kat_decode_bank.c` pages each real KAT expert from the checkpoint
+shards and confirms the paged BF16 expert equals finite, correct weights — with
+no sidecar file present on disk.
 
 ## Memory discipline
 

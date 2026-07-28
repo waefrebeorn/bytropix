@@ -1,6 +1,6 @@
 /* test_kat_decode_bank.c -- verify the ds4-ssd MoE decode bank pages
- * real KAT-Coder 256-expert weights from the sidecar built by
- * pack_kat_sidecar, and that the LRU slot bank keeps only `SLOTS` experts
+ * real KAT-Coder 256-expert weights directly from the source checkpoint
+ * shards (no sidecar), and that the LRU slot bank keeps only `SLOTS` experts
  * resident (proving the 256-expert MoE stays out of RAM).
  *
  * Usage:
@@ -24,14 +24,17 @@ static int is_finite_vec(const float *v, size_t n) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <sidecar_dir> [slots]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <checkpoint_dir> [slots]\n"
+                        "  e.g. %s /home/wubu/models/KAT-Coder-V2.5-Dev 16\n",
+                argv[0], argv[0]);
         return 1;
     }
-    const char *sidecar = argv[1];
+    const char *ckpt = argv[1];
     int slots = argc > 2 ? atoi(argv[2]) : 16;
 
-    wubu_ssd_moe_t *m = wubu_ssd_moe_open(sidecar, slots);
-    if (!m) { fprintf(stderr, "open failed: %s\n", sidecar); return 1; }
+    /* Page experts DIRECTLY from the source checkpoint shards (no sidecar). */
+    wubu_ssd_moe_t *m = wubu_ssd_moe_open(ckpt, slots);
+    if (!m) { fprintf(stderr, "open failed: %s\n", ckpt); return 1; }
 
     printf("decode-bank: layers=%d experts=%d d_model=%d d_ff=%d slots=%d\n",
            wubu_ssd_moe_n_layers(m), wubu_ssd_moe_n_experts(m),

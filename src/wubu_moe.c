@@ -227,6 +227,15 @@ void wubu_moe_forward_ssd(const float *x, int B, int T,
                           int n_active_experts, int n_experts, int d_model, int d_ff) {
     int N = B * T;
 
+    /* Defensive: a MoE layer may be configured without a resident router
+     * (e.g. if the checkpoint's gate tensor wasn't mapped). Without a router
+     * there is nothing to dispatch — pass the input through untouched rather
+     * than dereferencing NULL and SEGVing. */
+    if (!w->ffn_gate_inp) {
+        memcpy(output, x, (size_t)N * d_model * sizeof(float));
+        return;
+    }
+
     float *scores = (float *)malloc((size_t)N * n_experts * sizeof(float));
     wubu_moe_router(x, B, T, w->ffn_gate_inp, scores, n_experts, d_model);
 
@@ -264,7 +273,10 @@ void wubu_moe_forward_ssd(const float *x, int B, int T,
         const float *x_s = x + s * d_model;
         float *out_s = expert_out + s * d_model;
 
-        /* Shared expert (always resident in w) */
+        /* Shared expert (always resident in w). Guarded: some MoE checkpoints
+         * (e.g. KAT-Coder) have NO shared expert, so these pointers are NULL —
+         * dereferencing them is the SEGV. Skip cleanly when absent. */
+        if (w->ffn_gate_shexp && w->ffn_up_shexp && w->ffn_down_shexp) {
         for (int j = 0; j < d_ff; j++) {
             float sum_g = 0.0f, sum_u = 0.0f;
             for (int k = 0; k < d_model; k++) {
@@ -278,6 +290,7 @@ void wubu_moe_forward_ssd(const float *x, int B, int T,
             float sum = 0.0f;
             for (int j = 0; j < d_ff; j++) sum += gate_shared[j] * up_shared[j] * w->ffn_down_shexp[k + j * d_model];
             out_s[k] = sum;
+        }
         }
         if (w->ffn_gate_inp_shexp) {
             float gv = 0.0f;

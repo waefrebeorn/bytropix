@@ -11,7 +11,7 @@ CUDA_HOME = $(shell d=$(NVCC); d=$${d%/*}; d=$${d%/*}; echo $$d)
 CUDA_INC = -I$(CUDA_HOME)/include
 CUDA_LIBDIR = $(shell if [ -d $(CUDA_HOME)/lib/x86_64-linux-gnu ]; then echo $(CUDA_HOME)/lib/x86_64-linux-gnu; else echo $(CUDA_HOME)/lib64; fi)
 CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include $(CUDA_INC) -fopenmp
-LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -lcudart -lcublas
+LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -lcudart -lcublas -lpthread
 NVCC_FLAGS = -O3 -I include -arch=sm_86
 CUDA_INCS = $(CUDA_INC)
 CUDA_LIBS = -L$(CUDA_LIBDIR) -lcublas -lcudart
@@ -265,7 +265,7 @@ test_real_load: tools/test_real_load.c src/wubu_model_adapter.o $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
-test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o
+test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o src/wubu_safetensors_shard.o src/safetensors_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ── 100-improvement modules (Areas A/B/C/D/F/H/I/J/K) ───────────────
@@ -314,6 +314,44 @@ test_pd_split: tools/test_pd_split.c src/wubu_pd_split.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# ── Round-3 (new-model architecture: hybrid/recurrent, mHC, CLA, MEGA, YaRN) ──
+test_delta_net: tools/test_delta_net.c src/wubu_delta_net.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_mhc: tools/test_mhc.c src/wubu_mhc.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_cla: tools/test_cla.c src/wubu_cla.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_mega: tools/test_mega.c src/wubu_mega.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_yarn: tools/test_yarn.c src/wubu_yarn.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+# ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
+test_kda: tools/test_kda.c src/wubu_kda.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_attnres: tools/test_attnres.c src/wubu_attnres.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_latentmoe: tools/test_latentmoe.c src/wubu_latentmoe.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_mxfp4: tools/test_mxfp4.c src/wubu_mxfp4.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 test_scheduler: tools/test_scheduler.c src/wubu_scheduler.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
@@ -321,6 +359,21 @@ test_scheduler: tools/test_scheduler.c src/wubu_scheduler.o
 test_affinity: tools/test_affinity.c src/wubu_affinity.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
+
+# Aggregate of ALL 400 improvement unit tests (Round-1 + Round-2 + Round-3 + Round-4).
+test_400: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
+          test_ssm_scan test_q8 test_cuda_graph test_scheduler test_affinity \
+          test_roofline test_cache_advice test_kereq test_pd_split \
+          test_delta_net test_mhc test_cla test_mega test_yarn \
+          test_kda test_attnres test_latentmoe test_mxfp4
+	@echo "ALL 400-IMPROVEMENT UNIT TESTS PASSED"
+
+# Aggregate of ALL 300 improvement unit tests (Round-1 + Round-2 + Round-3).
+test_300: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
+          test_ssm_scan test_q8 test_cuda_graph test_scheduler test_affinity \
+          test_roofline test_cache_advice test_kereq test_pd_split \
+          test_delta_net test_mhc test_cla test_mega test_yarn
+	@echo "ALL 300-IMPROVEMENT UNIT TESTS PASSED"
 
 # Aggregate of ALL 200 improvement unit tests (Round-1 + Round-2).
 test_200: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
@@ -407,11 +460,8 @@ gen_text_asan: tools/gen_text.c $(MODEL_OBJ)
 test_probe_qwen: tools/test_probe_qwen.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
 
-# Build ds4-ssd MoE sidecar from a KAT-Coder-style checkpoint.
-pack_kat_sidecar: tools/pack_kat_sidecar.c $(MODEL_OBJ)
-	$(CC) $(CFLAGS) -I include -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
-
-# Verify the ds4-ssd MoE decode bank pages real KAT experts from a sidecar.
+# Verify the ds4-ssd MoE decode bank pages real KAT experts from the source
+# checkpoint shards (no sidecar copy).
 test_kat_decode_bank: tools/test_kat_decode_bank.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o $(LDFLAGS)
 
