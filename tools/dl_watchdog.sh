@@ -3,7 +3,7 @@
 # Self-detaches via setsid on first invocation so the worker survives even
 # if the Hermes-tracked parent shell is reaped. Uses a lockfile so only ONE
 # downloader ever runs (prevents concurrent writers corrupting shards).
-export HF_TOKEN="${HF_TOKEN:-***REMOVED***}"
+export HF_TOKEN="${HF_TOKEN:-}"
 cd /home/wubu/bytropix
 LOG=/home/wubu/bytropix/logs/dl_all_curl.log
 PIDF=/home/wubu/bytropix/logs/dl_pid.txt

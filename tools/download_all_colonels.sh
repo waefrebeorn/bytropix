@@ -8,7 +8,7 @@
 #   BTL-3              : LoRA adapter (adapter_model.safetensors + config)
 # Never deletes existing weights.
 set -u
-export HF_TOKEN="${HF_TOKEN:-***REMOVED***}"
+export HF_TOKEN="${HF_TOKEN:-}"
 M=/home/wubu/models
 
 dl() { # dl <repo> <file> <local_dir>
