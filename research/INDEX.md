@@ -62,13 +62,35 @@ attacks bytes moved.
 - G03 Lookahead / n-gram fallback ..................... `open` (cheap; ties to 012)
 
 ## THEME H — Prefill kernel / compute-bound phase
-- H01 FlashAttention-style fused prefill (tile+softmax) . `open` (ties to 001/003)
+| H01 FlashAttention-style fused prefill (tile+softmax) . `open` (ties to 001/003)
 - H02 Warp/thread specialization analog for CPU ......... `open` (ties to 007)
 - H03 Incoherent FP8 processing (Hadamard) ............ `open` (HW-gated)
+- H04 FlashDecoding parallel KV-load decode attn ..... `open` → doc 015
+- H05 QuaRot/SpinQuant Hadamard 4-bit W+A+KV ..... `open` → doc 013
+- H06 Sub-4-bit KV vector quant (CommVQ/TurboQuant) `open` → doc 014
+
+## THEME I — Game-console hardware discipline (the "game-design our inference" ask)
+- I01 Arena allocator for per-request + KV buffers .... `open` → doc 006
+- I02 SoA activation/state tensors (vs AoS malloc) .... `open` (ties to 006)
+- I03 Cache-line packing of KV pages (64B aligned) ..... `open` (ties to 006)
+- I04 Fixed-timestep / deterministic decode step ....... `open` (ties to 007)
+- I05 NUMA/thread-affinity pinning (+19-21% thru) ... `wired` → doc 016
+- I06 Hot/cold split (compute vs metadata) ............. `open` (ties to 006)
+
+## THEME J — Adaptive compute (skip layers / early exit)
+- J01 Mixture-of-Depths dynamic layer skip ............ `open` (ties to 008)
+- J02 GateSkip/LayerSkip token-wise gate skip ........ `open` → doc 017
+- J03 Early-exit + self-speculative verify ........... `open` (ties to 017/012)
+
+## THEME K — Cascade speculative (small drafter + large verifier)
+- K01 n-gram cascade drafter (no 3rd-party) ........ `open` → doc 018
+- K02 Self-cascade (small local Colonel drafts) ...... `open` (ties to 018)
+- K03 CAS-Spec adaptive deferral rule ............... `open` (ties to 018)
 
 ## Cross-cutting convergence statement
-A/B/C all reduce *bytes per token*. D/E/F/G/H are about *amortizing* those bytes
-across requests (D), matching the *model's own* structure (E), *proving* the
-fast path is correct (F), and *guessing* tokens to skip the matmul (G). The
-game-console lessons (C) are the implementation discipline that makes A/B land
-on real silicon instead of in malloc churn.
+A/B/C all reduce *bytes per token*. D/E/F/G/H/I/J/K are about *amortizing*
+those bytes across requests (D), matching the *model's own* structure (E/J),
+*proving* the fast path is correct (F), *guessing* tokens to skip the
+matmul (G/K), and *landing on real silicon* via console-game hardware
+discipline (I: arena/SoA/NUMA/cache-line). The 013/014/015 wins are
+the next halvings on top of shipped B01/B02/A01/A02.
