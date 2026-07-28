@@ -20,12 +20,14 @@ dl() { # dl <repo> <file> <local_dir>
   [ -z "$exp" ] && exp=0
   if [ -f "$dir/$f" ]; then
     local sz; sz=$(stat -c%s "$dir/$f" 2>/dev/null || echo 0)
-    # Complete if within 0.1% of expected (or expected unknown and >=2GB safety).
+    # If expected known and file is wrong size (truncated OR corrupt/oversized),
+    # DELETE it and re-download cleanly (never resume a corrupt file).
     if [ "$exp" -gt 0 ]; then
-      if [ "$sz" -ge $((exp - 8192)) ]; then echo "skip (complete $sz/$exp) $f"; return 0; fi
-      echo "partial $f ($sz < $exp) — resuming"; 
+      if [ "$sz" -eq "$exp" ]; then echo "skip (complete $sz/$exp) $f"; return 0; fi
+      echo "stale/wrong $f ($sz != $exp) — removing + re-downloading"
+      rm -f "$dir/$f"
     elif [ "$sz" -ge 2000000000 ]; then
-      echo "skip (complete? $sz) $f"; return 0
+      echo "skip (assume complete $sz) $f"; return 0
     fi
   fi
   echo "downloading $f (expect ${exp:-?} bytes)"
@@ -36,9 +38,9 @@ dl() { # dl <repo> <file> <local_dir>
   echo "FAILED $f"; return 1
 }
 
-# --- KAT ---
+# --- KAT --- (all 13; corrupt/truncated ones get re-fetched via CDN size check)
 K=$M/KAT-Coder-V2.5-Dev
-for i in 10 11 12; do dl Kwaipilot/KAT-Coder-V2.5-Dev "model-000${i}-of-00013.safetensors" "$K"; done
+for i in $(seq -w 0 12); do dl Kwaipilot/KAT-Coder-V2.5-Dev "model-000${i}-of-00013.safetensors" "$K"; done
 dl Kwaipilot/KAT-Coder-V2.5-Dev model.safetensors.index.json "$K"
 
 # --- Qwen ---
