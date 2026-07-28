@@ -67,7 +67,7 @@ attacks bytes moved.
 - H03 Incoherent FP8 processing (Hadamard) ............ `open` (HW-gated)
 - H04 FlashDecoding parallel KV-load decode attn ..... `wired` → doc 015
 - H05 QuaRot/SpinQuant Hadamard 4-bit W+A+KV ..... `wired` → doc 013
-- H06 Sub-4-bit KV vector quant (CommVQ/TurboQuant) `open` → doc 014
+- H06 Sub-4-bit KV vector quant (CommVQ/TurboQuant) `wired*` → doc 014
 
 ## THEME I — Game-console hardware discipline (the "game-design our inference" ask)
 - I01 Arena allocator for per-request + KV buffers .... `open` → doc 006

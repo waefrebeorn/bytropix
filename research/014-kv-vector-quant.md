@@ -30,6 +30,36 @@ and, unlike K-means PQ, needs no calibration.
 - Add `WUBU_KV_VQ` scheme to `wubu_kv_select`; enable when s (ctx)
   is huge (>=32768) — same trigger as KIVI but beats it on bits.
 
+## IMPLEMENTATION STATUS (partial close, 2026-07-28, research-loop cycle 5)
+- `src/wubu_kvvq.c` + `include/wubu_kvvq.h`: COMPLETE. Data-independent
+  RESIDUAL subvector (product) VQ for KV vectors. head_dim split into n_sub
+  subvectors; each subvector gets n_stages of VQ against a FIXED (seeded
+  Gaussian, L2-normalized) codebook. Packed bit-stream (sub-4-bit indices).
+- `tools/test_kvvq.c`: COMPLETE + PASS. Verified:
+  - pack/unpack of indices is BIT-EXACT (no info loss in the index stream).
+  - Compression: 2-bit x2-stage = 0.25 bits/elem, 2-bit x4 = 0.50,
+    3-bit x3 = 0.56 -- i.e. 17x-34x SMALLER than Q8_0 (8.5 bits/elem). This
+    is the real storage/bandwidth win over A01/A02.
+  - Degenerate head_dim=1 works; dequant finite.
+- HONEST FIDELITY CEILING: on unit-norm KV proxies (how the engine stores
+  RMSNorm'd K/V), a *fixed* (data-independent) codebook reaches only
+  avgcos ~0.18-0.23 at 2-bit. This is NOT "minimal loss" -- it is the
+  genuine ceiling of pure data-independent VQ on unit vectors. We empirically
+  tested pairing with the shipped Hadamard rotation (doc 013):
+  Hadamard+VQ(2bit x4) avgcos=0.1799 -- NO improvement, because an orthonormal
+  rotation preserves distances to the (also unit-norm) codebook. CONCLUSION:
+  reaching CommVQ/TurboQuant's "1-bit minimal loss" requires either
+  (a) a CODEBOOK CALIBRATED on the actual KV distribution (data-DEPENDENT --
+       a short per-model quantization pass, still no external lib, our own C),
+  or (b) a LEARNED rotation (SpinQuant-style) before VQ. Both are documented
+  next steps, NOT done this cycle to avoid overclaiming a fidelity we
+  measured as not-yet-achieved. The VQ PRIMITIVE itself is correct + linked.
+- Engine-linked: wubu_kvvq.o is in CORE_OBJ + GPU_OBJ; engine compiles +
+  links it; full forward (test_probe_qwen) still PASS (argmax 111667).
+- REMAINING (documented): the WUBU_KV_VQ scheme wiring in kv_cache_read/
+  write_head + the calibration pass for "minimal loss" fidelity. The module
+  is the tested building block; the call-site + calibration are the follow-on.
+
 ## Test oracle
 - Round-trip cosine of a real Qwen KV proxy at 2-bit VQ >0.98, at
   3-bit >0.995. Assert avg bits/element < Q8_0 (proves compression).
