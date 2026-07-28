@@ -114,9 +114,21 @@ void quantized_matmul(const float *x,
     if (weight_type == GGML_TYPE_F32) {
         const float *w = (const float *)W;
         int64_t stride = (col_stride_bytes > 0) ? (col_stride_bytes / 4) : n_rows;
-        /* Roofline-tuned GEMV: pick int8 (half weight traffic) when the
-         * tuner says BW-bound + amortized, else tiled fp32. */
+        /* Roofline-tuned GEMV: int4 (quarter traffic) > int8 (half) > fp32.
+         * Precedence from wubu_gemv_autotune(): set when BW-bound + amortized. */
         wubu_gemv_tile_t tile = wubu_gemv_autotune((int)n_cols, (int)n_rows, 0.0);
+        if (tile.use_int4) {
+            int8_t *q4 = (int8_t *)malloc((size_t)n_cols * ((n_rows + 1) / 2));
+            float  *sc = (float *)malloc((size_t)n_cols * sizeof(float));
+            if (q4 && sc) {
+                wubu_gemv_quantize_i4(w, q4, sc, (int)n_cols, (int)n_rows);
+                wubu_gemv_i4(q4, sc, x, y, (int)n_cols, (int)n_rows);
+                free(q4); free(sc);
+                return;
+            }
+            free(q4); free(sc);
+            /* fall through to int8 on alloc failure */
+        }
         if (tile.use_int8) {
             int8_t *wq = (int8_t *)malloc((size_t)n_rows * n_cols);
             float *sc = (float *)malloc((size_t)n_cols * sizeof(float));

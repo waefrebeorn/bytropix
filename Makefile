@@ -133,7 +133,7 @@ src/gguf_reader.o: src/gguf_reader.c include/gguf_reader.h
 src/wubu_model.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h include/wubu_moe.h include/gguf_reader.h include/wubu_kv_select.h include/wubu_kv_runtime.h
 src/wubu_gemm.o: src/wubu_gemm.c include/wubu_gemm.h
 src/wubu_gemv_tune.o: src/wubu_gemv_tune.c include/wubu_gemv_tune.h include/wubu_roofline.h
-src/quantized_matmul.o: src/quantized_matmul.c include/wubu_gemm.h include/wubu_gemv_tune.h include/gguf_reader.h include/wubu_ssm.h
+src/quantized_matmul.o: src/quantized_matmul.c include/wubu_gemm.h include/wubu_gemv_tune.h include/gguf_reader.h include/wubu_ssm.h include/wubu_safetensors_shard.h
 src/wubu_kv_runtime.o: src/wubu_kv_runtime.c include/wubu_kv_runtime.h include/wubu_kv_select.h include/wubu_roofline.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -453,6 +453,11 @@ test_kv_cache_kivi: tools/test_kv_cache_integration.c $(CPU_OBJ) src/wubu_kv_sel
 # KV-cache quant unit test (Q8_0 + KIVI K!=V axes). Round-trip + edge.
 # Roofline-driven GEMV auto-tuner: tiled fp32 + int8 variants vs scalar oracle
 # + tuner sanity. Real Qwen weight used for one probe (skip-safe if absent).
+# B03: int4 weight GEMV vs fp32 oracle + autotune precedence
+test_gemv_int4: tools/test_gemv_int4.c $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
 test_gemv_tune: tools/test_gemv_tune.c $(CPU_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
 	./$@
