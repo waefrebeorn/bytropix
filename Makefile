@@ -427,6 +427,14 @@ test_kernel_dispatch: tools/test_kernel_dispatch.c src/wubu_gemm.o
 
 bench_gemm_run: bench_gemm
 
+# Projection accuracy: quantized_matmul GEMV vs unambiguous scalar oracle
+# on REAL Qwen layer-0 gate_proj weights. Catches the transpose-layout bug.
+# CPU-only link (exclude CUDA/GPU objects that need -lcuda).
+CPU_OBJ = $(filter-out src/wubu_dims_gpu.o src/cuda_kernels.o src/gpu_output_proj.o src/flash_attn_q4_0_opt.o src/flash_attn_q4_0_prefill_opt.o src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o,$(CORE_OBJ)) src/wubu_dims_gpu_stub.o
+test_proj_accuracy: tools/test_proj_accuracy.c $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
 test_moe: tools/test_moe.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 

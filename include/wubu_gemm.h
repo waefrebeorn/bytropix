@@ -36,6 +36,11 @@ void wubu_gemm_f32_backend(wubu_gemm_backend_t b,
                            const float *A, const float *B, float *C,
                            int M, int K, int N);
 
+/* Matrix-vector product: y[m] = sum_k A[m*K + k] * x[k], A row-major [M x K].
+ * The engine's per-token decode path. Parallel over M (output rows) with
+ * SIMD-FMA; uses the registered device backend if present. */
+void wubu_gemv_f32(const float *A, const float *x, float *y, int M, int K);
+
 /* Register a device backend. Returns 0 if accepted+available, <0 otherwise.
  * A device backend is a function with the same signature as wubu_gemm_f32.
  * (CUDA/Metal/Vulkan ports call this at init time; see wubu_kernel.h.) */

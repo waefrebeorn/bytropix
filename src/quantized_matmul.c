@@ -113,9 +113,13 @@ void quantized_matmul(const float *x,
     if (weight_type == GGML_TYPE_F32) {
         const float *w = (const float *)W;
         int64_t stride = (col_stride_bytes > 0) ? (col_stride_bytes / 4) : n_rows;
-        /* X is a single row [1 x n_rows] (this call computes one token's
-         * projection). GEMM: Y[1,n_cols] = X[1,n_rows] * W[n_rows,n_cols]. */
-        wubu_gemm_f32(x, w, y, 1, n_rows, n_cols);
+        /* X is a single row [1 x n_rows] (one token's activations). The
+         * weight W is stored row-major [out=n_cols, in=n_rows], so the
+         * projection is y = W . x (a matrix-vector product, GEMV), NOT
+         * x . W^T. y[m] = sum_k W[m*n_rows + k] * x[k]. Earlier code passed
+         * (x, W, ...) to the GEMM which read W transposed — correct only for
+         * square mats and silently wrong for every non-square MLP proj. */
+        wubu_gemv_f32(w, x, y, n_cols, n_rows);
         (void)stride;
         return;
     }
@@ -124,8 +128,9 @@ void quantized_matmul(const float *x,
     if (weight_type == GGML_TYPE_F16) {
         const uint16_t *w = (const uint16_t *)W;
         int64_t stride_elems = (col_stride_bytes > 0) ? (col_stride_bytes / 2) : n_rows;
-        /* Materialize the F16 column into a contiguous F32 row-major matrix
-         * via a temp buffer, then call the GEMM kernel once. */
+        /* Materialize F16 weights into a contiguous F32 row-major matrix
+         * [in=n_rows, out=n_cols] via w32[k + j*n_rows], then Y = W . x
+         * (Y as column): C[n_cols,1] = A[n_cols,n_rows] . B[n_rows,1]. */
         float *w32 = (float *)malloc((size_t)n_rows * n_cols * sizeof(float));
         if (!w32) { fprintf(stderr, "quantized_matmul: F16 alloc failed\n"); return; }
         for (int64_t j = 0; j < n_cols; j++)
@@ -138,7 +143,7 @@ void quantized_matmul(const float *x,
                 else f32 = (sign<<31)|((uint32_t)(127-15+exp)<<23)|(mant<<13);
                 memcpy(&w32[k + j*n_rows], &f32, 4);
             }
-        wubu_gemm_f32(x, w32, y, 1, n_rows, n_cols);
+        wubu_gemv_f32(w32, x, y, n_cols, n_rows);
         free(w32);
         return;
     }
@@ -156,7 +161,7 @@ void quantized_matmul(const float *x,
                 float val; memcpy(&val, &bits, 4);
                 w32[k + j*n_rows] = val;
             }
-        wubu_gemm_f32(x, w32, y, 1, n_rows, n_cols);
+        wubu_gemv_f32(w32, x, y, n_cols, n_rows);
         free(w32);
         return;
     }

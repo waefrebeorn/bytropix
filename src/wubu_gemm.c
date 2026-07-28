@@ -304,6 +304,38 @@ void wubu_gemm_f32(const float *A, const float *B, float *C,
     wubu_gemm_f32_backend(g_backend, A, B, C, M, K, N);
 }
 
+/* ------------------------------------------------------------------ */
+/* GEMV: y[m] = sum_k A[m*K + k] * x[k], for the engine's per-token     */
+/* decode path (one row of activations x, weight A). Parallel over the   */
+/* M output rows, each a SIMD-FMA dot product. This is the real hot      */
+/* path — the engine calls quantized_matmul per token (N=1), so a full   */
+/* GEMM would collapse to scalar. GEMV uses the hardware properly.       */
+/*   y = A * x   where A is [M x K] row-major, x is [K], y is [M].        */
+/* ------------------------------------------------------------------ */
+void wubu_gemv_f32(const float *A, const float *x, float *y, int M, int K) {
+    #pragma omp parallel for schedule(dynamic, 64)
+    for (int m = 0; m < M; m++) {
+        const float *ar = A + (size_t)m * K;
+#if WUBU_HAVE_AVX2
+        __m256 acc = _mm256_setzero_ps();
+        int k = 0;
+        for (; k + 8 <= K; k += 8) {
+            __m256 xv = _mm256_loadu_ps(x + k);
+            __m256 av = _mm256_loadu_ps(ar + k);
+            acc = _mm256_fmadd_ps(av, xv, acc);
+        }
+        float t[8]; _mm256_storeu_ps(t, acc);
+        float s = t[0]+t[1]+t[2]+t[3]+t[4]+t[5]+t[6]+t[7];
+        for (; k < K; k++) s += ar[k] * x[k];
+        y[m] = s;
+#else
+        float s = 0.0f;
+        for (int k = 0; k < K; k++) s += ar[k] * x[k];
+        y[m] = s;
+#endif
+    }
+}
+
 int wubu_gemm_register_device(wubu_gemm_fn fn, const char *name) {
     if (!fn) return -1;
     g_device_fn = fn;
