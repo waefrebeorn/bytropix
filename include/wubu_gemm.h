@@ -14,6 +14,7 @@
 #define WUBU_GEMM_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +41,22 @@ void wubu_gemm_f32_backend(wubu_gemm_backend_t b,
  * The engine's per-token decode path. Parallel over M (output rows) with
  * SIMD-FMA; uses the registered device backend if present. */
 void wubu_gemv_f32(const float *A, const float *x, float *y, int M, int K);
+
+/* Tile-aware GEMV honoring a roofline-chosen k_unroll (8 AVX2 / 16 AVX512).
+ * Same math as wubu_gemv_f32, used when the tuner wants a specific unroll. */
+void wubu_gemv_f32_tiled(const float *A, const float *x, float *y,
+                         int M, int K, int k_unroll);
+
+/* int8-weight GEMV: A is quantized per-row to int8 with per-row absmax scale
+ * (scales[0..M-1]); accumulation is int32 then dequantized. Halves weight
+ * traffic vs fp32 -- the Roofline bandwidth-bound decode lever. Caller passes
+ * the pre-quantized int8 matrix (q[M*K]) and scales; if q==NULL a fresh
+ * quantize is done internally (slower setup, same result). */
+void wubu_gemv_i8(const int8_t *q, const float *scale,
+                 const float *x, float *y, int M, int K);
+
+/* Quantize an fp32 [M x K] matrix to int8 row-wise (absmax per row). */
+void wubu_gemv_quantize_i8(const float *A, int8_t *q, float *scale, int M, int K);
 
 /* Register a device backend. Returns 0 if accepted+available, <0 otherwise.
  * A device backend is a function with the same signature as wubu_gemm_f32.

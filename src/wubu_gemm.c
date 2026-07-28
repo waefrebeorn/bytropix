@@ -313,26 +313,105 @@ void wubu_gemm_f32(const float *A, const float *B, float *C,
 /*   y = A * x   where A is [M x K] row-major, x is [K], y is [M].        */
 /* ------------------------------------------------------------------ */
 void wubu_gemv_f32(const float *A, const float *x, float *y, int M, int K) {
+    int unroll = cpu_has_avx512() ? 16 : 8;
+    wubu_gemv_f32_tiled(A, x, y, M, K, unroll);
+}
+
+void wubu_gemv_f32_tiled(const float *A, const float *x, float *y,
+                         int M, int K, int k_unroll) {
+    /* k_unroll must be a multiple of the SIMD lane count; clamp to 8/16. */
+    if (k_unroll < 8) k_unroll = 8;
+    if (k_unroll > 16) k_unroll = 16;
     #pragma omp parallel for schedule(dynamic, 64)
     for (int m = 0; m < M; m++) {
         const float *ar = A + (size_t)m * K;
-#if WUBU_HAVE_AVX2
-        __m256 acc = _mm256_setzero_ps();
+        float s = 0.0f;
         int k = 0;
-        for (; k + 8 <= K; k += 8) {
-            __m256 xv = _mm256_loadu_ps(x + k);
-            __m256 av = _mm256_loadu_ps(ar + k);
-            acc = _mm256_fmadd_ps(av, xv, acc);
+#if WUBU_HAVE_AVX2
+        if (k_unroll >= 16 && cpu_has_avx512()) {
+            __m512 acc = _mm512_setzero_ps();
+            for (; k + 16 <= K; k += 16) {
+                __m512 xv = _mm512_loadu_ps(x + k);
+                __m512 av = _mm512_loadu_ps(ar + k);
+                acc = _mm512_fmadd_ps(av, xv, acc);
+            }
+            float t[16]; _mm512_storeu_ps(t, acc);
+            for (int i = 0; i < 16; i++) s += t[i];
+        } else {
+            __m256 acc = _mm256_setzero_ps();
+            for (; k + 8 <= K; k += 8) {
+                __m256 xv = _mm256_loadu_ps(x + k);
+                __m256 av = _mm256_loadu_ps(ar + k);
+                acc = _mm256_fmadd_ps(av, xv, acc);
+            }
+            float t[8]; _mm256_storeu_ps(t, acc);
+            for (int i = 0; i < 8; i++) s += t[i];
         }
-        float t[8]; _mm256_storeu_ps(t, acc);
-        float s = t[0]+t[1]+t[2]+t[3]+t[4]+t[5]+t[6]+t[7];
+#else
+        (void)k_unroll;
+#endif
         for (; k < K; k++) s += ar[k] * x[k];
         y[m] = s;
+    }
+}
+
+void wubu_gemv_quantize_i8(const float *A, int8_t *q, float *scale, int M, int K) {
+    for (int m = 0; m < M; m++) {
+        const float *ar = A + (size_t)m * K;
+        float maxabs = 1e-12f;
+        for (int k = 0; k < K; k++) {
+            float a = fabsf(ar[k]);
+            if (a > maxabs) maxabs = a;
+        }
+        float s = maxabs / 127.0f;
+        scale[m] = s;
+        float inv = (s > 0.0f) ? (1.0f / s) : 0.0f;
+        for (int k = 0; k < K; k++) {
+            int v = (int)(ar[k] * inv);
+            if (v > 127) v = 127; if (v < -128) v = -128;
+            q[(size_t)m * K + k] = (int8_t)v;
+        }
+    }
+}
+
+void wubu_gemv_i8(const int8_t *q, const float *scale,
+                 const float *x, float *y, int M, int K) {
+    /* q must be non-NULL (caller quantizes A via wubu_gemv_quantize_i8 first,
+     * so the requant cost is amortized across tokens). Accumulate int32 over
+     * the K-reduction, then dequant by the per-row absmax scale:
+     *   y[m] = scale[m] * sum_k q[m,k] * x[k]
+     * (weights were q = round(A/scale), so A ≈ scale*q.) */
+    if (!q) { for (int m = 0; m < M; m++) y[m] = 0.0f; return; }
+    #pragma omp parallel for schedule(dynamic, 64)
+    for (int m = 0; m < M; m++) {
+        const int8_t *qr = q + (size_t)m * K;
+        /* The bandwidth win is the int8 QUANTIZED WEIGHTS (half the
+         * weight traffic), which is the Roofline lever -- not the accumulator.
+         * Accumulate in float for simplicity/correctness. */
+        int k = 0;
+#if WUBU_HAVE_AVX2
+        /* Process 16 at a time: expand two int8 lanes to int32, FMA against x.
+         * We accumulate in float (not int32) to avoid overflow and keep it
+         * simple; the bandwidth win is the int8 QUANTIZED WEIGHTS (half the
+         * weight traffic), which is the Roofline lever -- not the accumulator. */
+        __m256 facc = _mm256_setzero_ps();
+        for (; k + 16 <= K; k += 16) {
+            __m256i e0 = _mm256_cvtepi8_epi32(_mm_loadu_si128((const __m128i*)(qr + k)));
+            __m256i e1 = _mm256_cvtepi8_epi32(_mm_loadu_si128((const __m128i*)(qr + k + 8)));
+            __m256 xv = _mm256_loadu_ps(x + k);
+            __m256 qf = _mm256_cvtepi32_ps(e0);
+            __m256 qf1 = _mm256_cvtepi32_ps(e1);
+            facc = _mm256_fmadd_ps(qf, xv, facc);
+            __m256 xv1 = _mm256_loadu_ps(x + k + 8);
+            facc = _mm256_fmadd_ps(qf1, xv1, facc);
+        }
+        float t[8]; _mm256_storeu_ps(t, facc);
+        float s = t[0]+t[1]+t[2]+t[3]+t[4]+t[5]+t[6]+t[7];
 #else
         float s = 0.0f;
-        for (int k = 0; k < K; k++) s += ar[k] * x[k];
-        y[m] = s;
 #endif
+        for (; k < K; k++) s += (float)qr[k] * x[k];
+        y[m] = s * scale[m];
     }
 }
 
