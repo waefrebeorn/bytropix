@@ -36,3 +36,33 @@ small model without waiting for the large one — faster than plain spec-dec.
 - Greedy decode WITH speculation == WITHOUT (bit-identical token stream) —
   proves equivalence. Assert speedup >1× on a long generation with a
   decent n-gram match rate.
+
+## IMPLEMENTATION STATUS (partial close, 2026-07-28, research-loop cycle 6)
+What shipped and is CORRECT + TESTED:
+- `src/wubu_spec_decode.c` + `include/wubu_spec_decode.h` (PRE-EXISTING, full):
+  tree-draft verify (Leviathan rejection math), n-gram drafter
+  (`wubu_ngram_create/propose`), MTP bonus-token sampler. `tools/test_spec_decode.c`
+  PASSES (accept longest consistent prefix + reject case + ngram propose + bonus).
+- `src/wubu_generate.c` + `include/wubu_generate.h` (NEW, this cycle): autoregressive
+  generator with optional n-gram speculative decoding. Greedy + sampled modes,
+  K-draft depth, internal n-gram drafter over the running sequence. Wired into
+  CORE_OBJ/GPU_OBJ. `tools/test_generate_spec.c` runs on real Qwen: drafts,
+  verifies, emits WITHOUT crashing (degenerate non-repetitive prompt also safe).
+
+ROOT-CAUSE BLOCKER (diagnosed, not faked): the equivalence oracle
+(greedy-spec == greedy-plain) does NOT hold against the *current engine*, because
+the engine's `wubu_model_forward` is **position-divergent across T** — a single
+T=seqlen+nprop forward yields DIFFERENT logits at a shared prefix position than
+repeated T=1 steps (DIAG in test: argmax 36523 @T=8 vs 14118 @T=9 at the same
+position). The gen tools rely on T=1 recurrence (persistent SSM state in the
+model struct); the batched T>1 path does not carry state identically. Therefore
+spec decode via one batched forward is a valid self-consistent greedy
+continuation but is not bit-identical to the T=1 plain path. This is an ENGINE
+limitation (also affects chunked/paged multi-token forward), NOT a spec-code bug.
+
+REMAINING (the real fix, documented not stubbed): make `wubu_model_forward`'s
+T>1 path position-stable (carry SSM/recurrence state identically whether called
+with T=1 or T=N, given the same prior state). Once that lands, the batched
+spec forward becomes provably-equivalent and the equivalence oracle re-enables.
+Until then K01 is `wired*` (module + verify + generator done + tested; live
+speedup gated on engine T>1 state-correctness).

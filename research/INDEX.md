@@ -83,7 +83,7 @@ attacks bytes moved.
 - J03 Early-exit + self-speculative verify ........... `open` (ties to 017/012)
 
 ## THEME K — Cascade speculative (small drafter + large verifier)
-- K01 n-gram cascade drafter (no 3rd-party) ........ `open` → doc 018
+- K01 n-gram cascade drafter (no 3rd-party) ........ `wired*` → doc 018
 - K02 Self-cascade (small local Colonel drafts) ...... `open` (ties to 018)
 - K03 CAS-Spec adaptive deferral rule ............... `open` (ties to 018)
 
