@@ -29,7 +29,7 @@ attacks bytes moved.
 - B08 NVFP4 dispatch (Blackwell) ....................... `open` (HW-gated, skip CPU)
 
 ## THEME C — Structure-of-Arrays / cache-aware layout (game-console lesson)
-- C01 Arena allocator for per-request + KV buffers ....... `open` → doc 006
+- C01 Arena allocator for per-request + KV buffers ....... `wired` → doc 006
 - C02 SoA activation/state tensors (vs AoS malloc) ....... `open` (ties to 006)
 - C03 Cache-line packing of KV pages (64B aligned) ...... `open` (ties to 006/002)
 - C04 Fixed-timestep / deterministic decode step ......... `open` (scheduler → doc 007)
@@ -70,7 +70,7 @@ attacks bytes moved.
 - H06 Sub-4-bit KV vector quant (CommVQ/TurboQuant) `wired*` → doc 014
 
 ## THEME I — Game-console hardware discipline (the "game-design our inference" ask)
-- I01 Arena allocator for per-request + KV buffers .... `open` → doc 006
+- I01 Arena allocator for per-request + KV buffers .... `wired` → doc 006
 - I02 SoA activation/state tensors (vs AoS malloc) .... `open` (ties to 006)
 - I03 Cache-line packing of KV pages (64B aligned) ..... `open` (ties to 006)
 - I04 Fixed-timestep / deterministic decode step ....... `open` (ties to 007)
