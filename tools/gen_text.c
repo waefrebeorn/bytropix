@@ -50,18 +50,127 @@ static double clock_seconds(void) {
 
 static int read_embedding(const wubu_model_t *mdl, int token_id, float *out, FILE *emb_file) {
     int D = D_MODEL;
-    if (mdl->use_embedding_file) {
-        if (token_id >= 0 && token_id < mdl->vocab_size) {
-            fseek(emb_file, (long long)token_id * D * sizeof(float), SEEK_SET);
-            size_t nread = fread(out, sizeof(float), D, emb_file);
-            return nread == (size_t)D ? 1 : 0;
+    if (token_id < 0 || token_id >= mdl->vocab_size) token_id = 0;
+    if (mdl->lazy_embd_raw) {
+        /* Zero-copy BF16/F16 embedding: dequant ONE row per token from the
+         * mmap'd shard (Colonel safetensors models use this). Mirrors the
+         * forward's embedding read so decode gets real vectors. */
+        const uint8_t *base = mdl->lazy_embd_raw + (size_t)token_id * (size_t)mdl->lazy_embd_row * 2;
+        if (mdl->lazy_embd_dtype == ST_DTYPE_BF16) {
+            const uint16_t *s = (const uint16_t *)base;
+            for (int k = 0; k < D; k++) out[k] = st_bf16_to_f32(s[k]);
+        } else if (mdl->lazy_embd_dtype == ST_DTYPE_F16) {
+            const uint16_t *s = (const uint16_t *)base;
+            for (int k = 0; k < D; k++) out[k] = st_f16_to_f32(s[k]);
+        } else {
+            memcpy(out, base, D * sizeof(float));
         }
-        return 0;
-    } else if (mdl->token_embd && token_id >= 0 && token_id < mdl->vocab_size) {
+        return 1;
+    } else if (mdl->use_embedding_file && emb_file) {
+        fseek(emb_file, (long long)token_id * D * sizeof(float), SEEK_SET);
+        size_t nread = fread(out, sizeof(float), D, emb_file);
+        return nread == (size_t)D ? 1 : 0;
+    } else if (mdl->token_embd) {
         memcpy(out, mdl->token_embd + (long long)token_id * D, D * sizeof(float));
+        return 1;
+    } else if (mdl->token_embd_q) {
+        /* Large-vocab GGUF: dequantize one row. */
+        gguf_tensor_info *t_emb = gguf_find_tensor(mdl->gguf_ctx, "token_embd.weight");
+        int bytes_per_token = (int)(D * sizeof(float));
+        if (t_emb) {
+            int64_t n_elems = 1;
+            for (int d = 0; d < t_emb->n_dims; d++) n_elems *= t_emb->dims[d];
+            int64_t raw = gguf_raw_size(t_emb->ggml_type, n_elems);
+            bytes_per_token = (int)(raw / n_elems * t_emb->dims[1]);
+        }
+        gguf_dequantize(mdl->token_embd_q + (size_t)token_id * bytes_per_token,
+                        mdl->token_embd_type, D, out);
         return 1;
     }
     return 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * Sampler: temperature + top-p (nucleus) + top-k, with a seeded PRNG.
+ * Defaults match the Colonel tuning for Agents-A1-4B / Qwen3.6 on RTX 5070 Ti
+ * (temp 0.6 / top_p 0.95 / top_k 20). All overridable via env.
+ * Uses XORO-128+ (deterministic, no libc-RNG global state). */
+typedef struct { uint64_t s[2]; } xrng_t;
+static uint64_t xrng_next(xrng_t *r) {
+    uint64_t s0 = r->s[0], s1 = r->s[1];
+    uint64_t res = s0 + s1;
+    r->s[0] = s1;
+    s1 ^= s1 << 23; s1 ^= s1 >> 18; s1 ^= s0 ^ (s0 >> 5);
+    r->s[1] = s1;
+    return res + ((res >> 27) ^ s1);  // xoroshiro128+ output mix
+}
+static float xrng_f32(xrng_t *r) { return (float)(xrng_next(r) >> 11) * (1.0f / 9007199254740992.0f); }
+
+/* Sort helper for top-k indices by descending logit (insertion, small k). */
+static int sample_token(xrng_t *rng, const float *logits, int vocab,
+                        float temp, float top_p, int top_k) {
+    if (temp <= 0.0f) {  /* greedy */
+        int best = 0; float bv = logits[0];
+        for (int i = 1; i < vocab; i++) if (logits[i] > bv) { bv = logits[i]; best = i; }
+        return best;
+    }
+    /* 1. temperature */
+    float *z = (float *)malloc((size_t)vocab * sizeof(float));
+    float maxl = logits[0];
+    for (int i = 1; i < vocab; i++) if (logits[i] > maxl) maxl = logits[i];
+    double inv_t = 1.0 / (double)temp;
+    double sum = 0.0;
+    for (int i = 0; i < vocab; i++) {
+        float v = (logits[i] - maxl) * (float)inv_t;
+        z[i] = (float)expf(v);
+        sum += z[i];
+    }
+    /* 2. top-k truncation (cap candidates) */
+    if (top_k > 0 && top_k < vocab) {
+        /* find the k-th largest via partial selection */
+        float kth = -1e30f;
+        for (int c = 0; c < top_k; c++) {
+            int bi = 0; float bv = -1e30f;
+            for (int i = 0; i < vocab; i++) if (z[i] > bv) { bv = z[i]; bi = i; }
+            if (c == top_k - 1) { kth = bv; break; }
+            z[bi] = -1e30f;  /* remove from further consideration */
+        }
+        for (int i = 0; i < vocab; i++) if (z[i] < kth) z[i] = 0.0f;
+    }
+    /* 3. top-p nucleus: keep the smallest set of top tokens whose cumulative
+     *    probability mass reaches top_p; mask the rest to 0. */
+    double cum = 0.0;
+    const double tp = (double)top_p;
+    for (int c = 0; c < vocab; c++) {
+        /* pick the still-active (positive) max */
+        int bi = 0; float bv = -1.0f;
+        for (int i = 0; i < vocab; i++) if (z[i] > bv) { bv = z[i]; bi = i; }
+        if (bv <= 0.0f) break;
+        cum += bv;
+        z[bi] = -1.0f;               /* mark as visited (kept) */
+        if (cum >= tp) {             /* threshold reached: cut all smaller */
+            for (int i = 0; i < vocab; i++) if (z[i] > 0.0f) z[i] = 0.0f;
+            break;
+        }
+    }
+    /* renormalize kept mass */
+    double tot = 0.0;
+    for (int i = 0; i < vocab; i++) tot += z[i];
+    if (tot <= 0.0) {  /* degenerate: fall back to argmax */
+        free(z);
+        int best = 0; float bv = logits[0];
+        for (int i = 1; i < vocab; i++) if (logits[i] > bv) { bv = logits[i]; best = i; }
+        return best;
+    }
+    double r = xrng_f32(rng) * tot;
+    double acc = 0.0;
+    int chosen = 0;
+    for (int i = 0; i < vocab; i++) {
+        acc += z[i];
+        if (r <= acc) { chosen = i; break; }
+    }
+    free(z);
+    return chosen;
 }
 
 /* Load a model checkpoint, dispatching by extension:
@@ -89,11 +198,14 @@ int main(int argc, char **argv) {
     if (env_mp) model_path = env_mp;
     const char *prompt = "The meaning of life is";
     int max_tokens = 32;
-    int top_k = 40;
+    /* Colonel tuning: Agents-A1-4B / Qwen3.6 on RTX 5070 Ti (16GB).
+     * temp 0.6 / top_p 0.95 / top_k 20. Env-overridable. */
+    float gen_temp   = getenv("TEMP")      ? (float)atof(getenv("TEMP"))      : 0.6f;
+    float gen_top_p  = getenv("TOP_P")     ? (float)atof(getenv("TOP_P"))     : 0.95f;
+    int   gen_top_k  = getenv("TOP_K")     ? atoi(getenv("TOP_K"))            : 20;
 
     if (argc > 1) prompt = argv[1];
     if (argc > 2) max_tokens = atoi(argv[2]);
-    if (argc > 3) top_k = atoi(argv[3]);
 
     signal(SIGINT, handle_sigint);
 
@@ -275,19 +387,14 @@ int main(int argc, char **argv) {
       if (ibuf) { printf("Input: %s\n", ibuf); free(ibuf); } }
 
     // Decode loop
+    xrng_t rng = { { 0x9E3779B97F4A7C15ULL, 0xD1B54A32D192ED03ULL } };
+    if (getenv("SEED")) { uint64_t s = (uint64_t)atoll(getenv("SEED")); rng.s[0] ^= s; rng.s[1] ^= s * 0x9E3779B97F4A7C15ULL; }
     while (generated < max_tokens && !g_stop) {
         // Suppress repetitions (repeat_penalty + DRY) BEFORE sampling.
         if (rep) wubu_rep_apply(rep, last_logits);
 
-        int topk_idxs[256];
-        int nk = top_k > 256 ? 256 : top_k;
-        for (int k = 0; k < nk; k++) {
-            float maxv = -1e30f; int maxi = -1;
-            for (int i = 0; i < vs; i++)
-                if (last_logits[i] > maxv) { maxv = last_logits[i]; maxi = i; }
-            topk_idxs[k] = maxi; last_logits[maxi] = -1e30f;
-        }
-        int next_token = topk_idxs[0];
+        int next_token = sample_token(&rng, last_logits, vs,
+                                       gen_temp, gen_top_p, gen_top_k);
         if (next_token == tok.eos_id || next_token == tok.bos_id) break;
 
         // Record the chosen token so future repetitions are penalized.

@@ -128,7 +128,8 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         layer->is_ssm = wubu_is_ssm_layer(l);
         
         gguf_tensor_info *t;
-        
+        char name[256];
+
         // attn_norm.weight (pre-attention RMSNorm)
         t = gguf_find_tensor(ctx, tensor_name_attn_norm(l));
         if (t) {
@@ -137,19 +138,27 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
                 { fprintf(stderr, "Failed to load attn_norm[%d]\n", l); goto fail; }
         }
         
-        // post_attention_norm.weight
+        // post_attention_norm.weight (optional — Qwen3-style).
+        // Fallbacks: ffn_norm.weight (Qwen2/nanbeige), then attn_norm.weight.
         t = gguf_find_tensor(ctx, tensor_name_post_attn_norm(l));
+        if (!t) {
+            snprintf(name, sizeof(name), "blk.%d.ffn_norm.weight", l);
+            t = gguf_find_tensor(ctx, name);
+        }
         if (t) {
             layer->post_attn_norm_weight = (float *)malloc(model->d_model * sizeof(float));
             if (!gguf_read_tensor_f32(ctx, t, layer->post_attn_norm_weight, model->d_model))
                 { fprintf(stderr, "Failed to load post_attn_norm[%d]\n", l); goto fail; }
+        } else if (layer->attn_norm_weight) {
+            // No dedicated post-attn norm: reuse pre-attn norm (identity-ish RMSNorm).
+            layer->post_attn_norm_weight = (float *)malloc(model->d_model * sizeof(float));
+            memcpy(layer->post_attn_norm_weight, layer->attn_norm_weight, model->d_model * sizeof(float));
         }
         
         if (layer->is_ssm) {
             // Load SSM weights — QUANTIZED-ONLY PATH for large weight matrices.
             // attn_qkv, attn_gate, ssm_out use quantized blob pointers (set later).
             // Small tensors (norms, a, dt, conv1d) loaded as F32.
-            char name[256];
             int ok = 1;
             
             // LARGE: attn_qkv_weight — quantized-only (blob pointer)
@@ -659,6 +668,11 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }
         
         // Pre-attention RMSNorm
+        if (!layer->attn_norm_weight) {
+            fprintf(stderr, "BUG: layer %d attn_norm_weight NULL (naming=%d is_ssm=%d)\n",
+                    l, model->tensor_naming, layer->is_ssm);
+            return;
+        }
         wubu_rms_norm(B, T, model->d_model, x, layer->attn_norm_weight, 1e-6f, normed);
         
         // Expert prefetch: if previous layer had MoE, prefetch this layer's expert weights

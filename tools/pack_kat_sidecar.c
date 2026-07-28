@@ -21,13 +21,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
-static int g_d_model, g_d_ff, g_n_experts, g_n_layers;
+static uint16_t f32_to_bf16_local(float v) {
+    uint32_t bits; memcpy(&bits, &v, 4);
+    return (uint16_t)(bits >> 16);
+}
 
 /* Load one expert's three matrices (F32, transposed to [OUT,IN] layout the
  * packer expects: gate/up [d_ff,d_model], down [d_model,d_ff]) from the
  * shards. Returns 0 on success. */
-static int load_expert(wubu_shard_ctx_t *sc, int L, int e,
+static int load_expert(wubu_shard_ctx_t *sc, int L, int e, int d_model, int d_ff,
                        float **gate, float **up, float **down) {
     char nm[256];
     int dt = 0; int64_t row = 0;
@@ -41,8 +46,8 @@ static int load_expert(wubu_shard_ctx_t *sc, int L, int e,
     d_raw = wubu_shard_raw(sc, nm, &dt, &row);
     if (!g_raw || !u_raw || !d_raw) return -1;
 
-    size_t ng = (size_t)g_d_ff * g_d_model;
-    size_t nd = (size_t)g_d_model * g_d_ff;
+    size_t ng = (size_t)d_ff * d_model;
+    size_t nd = (size_t)d_model * d_ff;
     *gate = (float *)malloc(ng * sizeof(float));
     *up   = (float *)malloc(ng * sizeof(float));
     *down = (float *)malloc(nd * sizeof(float));
@@ -55,6 +60,36 @@ static int load_expert(wubu_shard_ctx_t *sc, int L, int e,
     for (size_t i = 0; i < ng; i++) (*up)[i]   = st_bf16_to_f32(ub[i]);
     for (size_t i = 0; i < nd; i++) (*down)[i] = st_bf16_to_f32(db[i]);
     return 0;
+}
+
+/* Pack ONE expert (gate/up/down, already F32) as BF16 into the sidecar file
+ * for `layer` at absolute expert index `e`. Streams to disk — never buffers
+ * more than a single expert's matrices in RAM. */
+static void pack_one_expert(const char *sidecar, int layer, int e,
+                            int n_experts, int d_model, int d_ff,
+                            const float *gate, const float *up, const float *down) {
+    (void)n_experts;
+    char path[1200];
+    snprintf(path, sizeof(path), "%s/experts.%d.bin", sidecar, layer);
+    int fd = open(path, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) return;
+    int64_t n = (int64_t)d_model * d_ff;
+    int64_t per_expert = n * 3 * 2; /* gate|up|down, BF16 */
+    uint8_t *raw = (uint8_t *)malloc((size_t)per_expert);
+    if (!raw) { close(fd); return; }
+    uint16_t *b = (uint16_t *)raw;
+    for (int64_t i = 0; i < n; i++) b[i]     = f32_to_bf16_local(gate[i]);
+    for (int64_t i = 0; i < n; i++) b[n + i] = f32_to_bf16_local(up[i]);
+    for (int64_t i = 0; i < n; i++) b[2*n + i] = f32_to_bf16_local(down[i]);
+    size_t off = (size_t)e * (size_t)per_expert;
+    size_t done = 0;
+    while (done < (size_t)per_expert) {
+        ssize_t w = pwrite(fd, raw + done, (size_t)per_expert - done, (off_t)(off + done));
+        if (w <= 0) break;
+        done += (size_t)w;
+    }
+    free(raw);
+    close(fd);
 }
 
 int main(int argc, char **argv) {
@@ -77,58 +112,51 @@ int main(int argc, char **argv) {
     if (!raw) { fprintf(stderr, "no expert tensors found\n"); wubu_shard_close(sc); return 1; }
     /* gate_proj shape [d_ff, d_model] => row = d_ff, dims[1] = d_model. */
     int d_ff = (int)row;
-    /* grab d_model from tensor info */
     int d_model = wubu_shard_dimof(sc, nm, 1);
     if (d_model <= 0) d_model = 2048;
-    g_d_model = d_model; g_d_ff = d_ff;
 
     /* Count layers + experts. */
-    g_n_layers = 0;
+    int n_layers = 0;
     for (int L = 0; L < 256; L++) {
         snprintf(nm, sizeof(nm), "model.language_model.layers.%d.mlp.experts.0.gate_proj.weight", L);
         if (!wubu_shard_has(sc, nm)) break;
-        g_n_layers = L + 1;
+        n_layers = L + 1;
     }
-    g_n_experts = 0;
+    int n_experts = 0;
     for (int e = 0; e < 512; e++) {
         snprintf(nm, sizeof(nm), "model.language_model.layers.0.mlp.experts.%d.gate_proj.weight", e);
         if (!wubu_shard_has(sc, nm)) break;
-        g_n_experts = e + 1;
+        n_experts = e + 1;
     }
-    if (max_layers > 0 && max_layers < g_n_layers) g_n_layers = max_layers;
+    if (max_layers > 0 && max_layers < n_layers) n_layers = max_layers;
 
     printf("KAT sidecar: layers=%d experts=%d d_model=%d d_ff=%d\n",
-           g_n_layers, g_n_experts, d_model, d_ff);
+           n_layers, n_experts, d_model, d_ff);
+    fflush(stdout);
 
     mkdir(sidecar, 0755);
-    for (int L = 0; L < g_n_layers; L++) {
-        float *gate = NULL, *up = NULL, *down = NULL;
-        size_t n = (size_t)d_ff * d_model;
-        gate = (float *)malloc((size_t)g_n_experts * n * sizeof(float));
-        up   = (float *)malloc((size_t)g_n_experts * n * sizeof(float));
-        down = (float *)malloc((size_t)g_n_experts * n * sizeof(float));
-        if (!gate || !up || !down) { fprintf(stderr, "alloc fail layer %d\n", L); break; }
-        int ok = 1;
-        for (int e = 0; e < g_n_experts; e++) {
+    for (int L = 0; L < n_layers; L++) {
+        /* One expert at a time: load F32, pack BF16, free. Keeps RAM tiny. */
+        int packed = 0;
+        for (int e = 0; e < n_experts; e++) {
             float *eg, *eu, *ed;
-            if (load_expert(sc, L, e, &eg, &eu, &ed) != 0) {
-                fprintf(stderr, "  layer %d expert %d absent (incomplete checkpoint) — skip layer\n", L, e);
-                ok = 0; break;
+            if (load_expert(sc, L, e, d_model, d_ff, &eg, &eu, &ed) != 0) {
+                fprintf(stderr, "  layer %d expert %d absent (incomplete checkpoint) — stop layer at %d experts\n",
+                        L, e, packed);
+                break;
             }
-            memcpy(gate + (size_t)e*n, eg, n*sizeof(float));
-            memcpy(up   + (size_t)e*n, eu, n*sizeof(float));
-            memcpy(down + (size_t)e*n, ed, n*sizeof(float));
+            pack_one_expert(sidecar, L, e, n_experts, d_model, d_ff, eg, eu, ed);
             free(eg); free(eu); free(ed);
+            packed++;
         }
-        if (ok) {
-            wubu_ssd_moe_pack_layer(sidecar, L, g_n_experts, d_model, d_ff, gate, up, down);
-            printf("  packed layer %d (%d experts)\n", L, g_n_experts);
-        }
-        free(gate); free(up); free(down);
+        if (packed == n_experts)
+            printf("  packed layer %d (%d experts)\n", L, n_experts);
+        fflush(stdout);
     }
 
-    wubu_ssd_moe_write_manifest(sidecar, g_n_layers, g_n_experts, d_model, d_ff, 8, 16);
+    wubu_ssd_moe_write_manifest(sidecar, n_layers, n_experts, d_model, d_ff, 8, 16);
     printf("manifest written: %s/manifest.json\n", sidecar);
+    fflush(stdout);
 
     wubu_shard_close(sc);
     return 0;

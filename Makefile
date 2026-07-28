@@ -338,6 +338,10 @@ gen_text_dbg: CFLAGS_DBG = -g -O0 -I include $(CUDA_INC) -fopenmp -Wall
 gen_text_dbg: tools/gen_text.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS_DBG) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDFLAGS)
 
+gen_text_asan: CFLAGS_ASAN = -g -O1 -fsanitize=address -I include $(CUDA_INC) -fopenmp
+gen_text_asan: tools/gen_text.c $(MODEL_OBJ)
+	$(CC) $(CFLAGS_ASAN) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDFLAGS)
+
 # Probe: load real Qwen3.6-27B (MAX_LAYERS=1) and print layer-0 weight
 # pointers + state buffers, to diagnose SSM forward crashes.
 test_probe_qwen: tools/test_probe_qwen.c $(MODEL_OBJ)
