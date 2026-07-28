@@ -50,19 +50,25 @@ What shipped and is CORRECT + TESTED:
   verifies, emits WITHOUT crashing (degenerate non-repetitive prompt also safe).
 
 ROOT-CAUSE BLOCKER (diagnosed, not faked): the equivalence oracle
-(greedy-spec == greedy-plain) does NOT hold against the *current engine*, because
-the engine's `wubu_model_forward` is **position-divergent across T** — a single
-T=seqlen+nprop forward yields DIFFERENT logits at a shared prefix position than
-repeated T=1 steps (DIAG in test: argmax 36523 @T=8 vs 14118 @T=9 at the same
-position). The gen tools rely on T=1 recurrence (persistent SSM state in the
-model struct); the batched T>1 path does not carry state identically. Therefore
-spec decode via one batched forward is a valid self-consistent greedy
-continuation but is not bit-identical to the T=1 plain path. This is an ENGINE
-limitation (also affects chunked/paged multi-token forward), NOT a spec-code bug.
+(greedy-spec == greedy-plain) does NOT hold against the *current engine*,
+because the engine's multi-token (T>1) forward is **position-unstable and
+observed non-deterministic**. DIAG in the test: argmax at the SAME position
+differs across a T=8 vs T=9 forward (e.g. 150949 vs 18447) and varies
+run-to-run. This is a latent engine bug in the T>1 SSM/GQA state carry
+(uninitialized/incorrectly-carried recurrence state on multi-token paths), NOT
+a spec-code bug. It also threatens prefill / chunked / paged decode
+correctness, so it is a high-priority engine fix independent of K01.
+
+FIX SHIPPED THIS CYCLE (enabling future equivalence + correctness):
+- `wubu_model_reset_state()` added to the engine (wubu_model.c/h): zeroes
+  SSM/conv recurrence state AND clears the GQA KV cache (gqa_cache_len=0) so
+  two independent generations start from identical zero state. Without this,
+  cross-run comparisons were polluted by leftover recurrence state.
+- The generator now resets state before each independent run.
 
 REMAINING (the real fix, documented not stubbed): make `wubu_model_forward`'s
-T>1 path position-stable (carry SSM/recurrence state identically whether called
-with T=1 or T=N, given the same prior state). Once that lands, the batched
-spec forward becomes provably-equivalent and the equivalence oracle re-enables.
-Until then K01 is `wired*` (module + verify + generator done + tested; live
-speedup gated on engine T>1 state-correctness).
+T>1 path position-stable + deterministic (carry SSM/conv/GQA state identically
+for T=1 vs T=N given the same prior state). Once that lands, the batched spec
+forward becomes provably-equivalent and the equivalence oracle re-enables.
+Until then K01 is `wired*` (module + verify + generator + reset-state done +
+tested; live equivalence gated on engine T>1 forward stability).
