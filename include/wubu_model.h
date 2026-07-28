@@ -5,6 +5,8 @@
 #include "wubu_moe.h"
 #include "wubu_safetensors_shard.h"
 #include "wubu_kvcache_quant.h"
+#include "wubu_kv_select.h"
+#include "wubu_kv_runtime.h"
 #include <stdbool.h>
 #include <math.h>
 #include <string.h>
@@ -146,15 +148,35 @@ static inline void dequantize_q4_0_cache_block(const block_q4_0_cache *b, float 
 }
 
 // KV cache read: one head (n floats) from Q4_0 cache
+// KV cache read: one head (n floats). DISPATCHES on the runtime g_kv_scheme
+// (set at model load by the Roofline auto-selector) instead of a compile-time
+// #if, so the engine picks precision per-model. Per-scheme bodies below.
+extern int g_kv_scheme;            /* defined in wubu_kv_runtime.c */
+extern void wubu_kv_set_scheme(int);
+static inline void kv_cache_read_head_q4(const void *cache, int64_t offset, float *buf, int n);
+static inline void kv_cache_read_head_q8(const void *cache, int64_t offset, float *buf, int n);
+static inline void kv_cache_read_head_kivi(const void *cache, int64_t offset, float *buf, int n);
+static inline void kv_cache_read_head_f16(const void *cache, int64_t offset, float *buf, int n);
+static inline void kv_cache_read_head_f32(const void *cache, int64_t offset, float *buf, int n);
+
 static inline void kv_cache_read_head(const void *cache, int64_t offset,
                                        float *buf, int n) {
-#if KV_CACHE_Q4_0
+    switch (g_kv_scheme) {
+        case WUBU_KV_Q4_0: kv_cache_read_head_q4(cache, offset, buf, n); break;
+        case WUBU_KV_Q8:   kv_cache_read_head_q8(cache, offset, buf, n); break;
+        case WUBU_KV_KIVI: kv_cache_read_head_kivi(cache, offset, buf, n); break;
+        case WUBU_KV_F16:  kv_cache_read_head_f16(cache, offset, buf, n); break;
+        default:           kv_cache_read_head_f32(cache, offset, buf, n); break;
+    }
+}
+
+static inline void kv_cache_read_head_q4(const void *cache, int64_t offset,
+                                         float *buf, int n) {
     // Q4_0: offset is in float indices, convert to block index
     const int block_n = QK4_CACHE;
     int start_block = (int)(offset / block_n);
     int start_elem = (int)(offset % block_n);
     const block_q4_0_cache *blocks = (const block_q4_0_cache *)cache;
-    
     int done = 0;
     while (done < n) {
         float tmp[QK4_CACHE];
@@ -165,7 +187,10 @@ static inline void kv_cache_read_head(const void *cache, int64_t offset,
         for (int i = 0; i < to_copy; i++) buf[done + i] = tmp[blk_off + i];
         done += to_copy;
     }
-#elif KV_CACHE_OUR_Q8
+}
+
+static inline void kv_cache_read_head_q8(const void *cache, int64_t offset,
+                                         float *buf, int n) {
     // Our Q8_0 block-32 (near-lossless, routes to wubu_kvcache_quant).
     const int block_n = QK8_CACHE;
     int start_block = (int)(offset / block_n);
@@ -183,7 +208,10 @@ static inline void kv_cache_read_head(const void *cache, int64_t offset,
         for (int i = 0; i < to_copy; i++) buf[done + i] = tmp[blk_off + i];
         done += to_copy;
     }
-#elif KV_CACHE_KIVI
+}
+
+static inline void kv_cache_read_head_kivi(const void *cache, int64_t offset,
+                                           float *buf, int n) {
     // KIVI per-token V, ELEMENT-indexed. token = offset/head_dim, in-token
     // position p = offset%head_dim. Read the whole token, copy slice [p,p+n).
     int hd = n;  // per-token call: n == head_dim
@@ -195,33 +223,49 @@ static inline void kv_cache_read_head(const void *cache, int64_t offset,
     if (hd > 512) hd = 512;
     wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, hd);
     for (int i = 0; i < n; i++) buf[i] = tmp[p0 + i];
-#elif KV_CACHE_F16
-    const uint16_t *src = (const uint16_t *)cache + offset;
-    for (int i = 0; i < n; i++) buf[i] = fp16_to_fp32(src[i]);
-#else
-    memcpy(buf, (const float *)cache + offset, n * sizeof(float));
-#endif
 }
 
-// Batch write one head to Q4_0 cache
+static inline void kv_cache_read_head_f16(const void *cache, int64_t offset,
+                                          float *buf, int n) {
+    const uint16_t *src = (const uint16_t *)cache + offset;
+    for (int i = 0; i < n; i++) buf[i] = fp16_to_fp32(src[i]);
+}
+
+static inline void kv_cache_read_head_f32(const void *cache, int64_t offset,
+                                          float *buf, int n) {
+    memcpy(buf, (const float *)cache + offset, n * sizeof(float));
+}
+
+// Batch write one head to KV cache (runtime dispatch).
+static inline void kv_cache_write_head_q4(void *cache, int64_t offset, const float *buf, int n);
+static inline void kv_cache_write_head_q8(void *cache, int64_t offset, const float *buf, int n);
+static inline void kv_cache_write_head_kivi(void *cache, int64_t offset, const float *buf, int n);
+static inline void kv_cache_write_head_f16(void *cache, int64_t offset, const float *buf, int n);
+static inline void kv_cache_write_head_f32(void *cache, int64_t offset, const float *buf, int n);
 static inline void kv_cache_write_head(void *cache, int64_t offset,
                                         const float *buf, int n) {
-#if KV_CACHE_Q4_0
+    switch (g_kv_scheme) {
+        case WUBU_KV_Q4_0: kv_cache_write_head_q4(cache, offset, buf, n); break;
+        case WUBU_KV_Q8:   kv_cache_write_head_q8(cache, offset, buf, n); break;
+        case WUBU_KV_KIVI: kv_cache_write_head_kivi(cache, offset, buf, n); break;
+        case WUBU_KV_F16:  kv_cache_write_head_f16(cache, offset, buf, n); break;
+        default:           kv_cache_write_head_f32(cache, offset, buf, n); break;
+    }
+}
+
+static inline void kv_cache_write_head_q4(void *cache, int64_t offset,
+                                           const float *buf, int n) {
     const int block_n = QK4_CACHE;
     int start_block = (int)(offset / block_n);
     int start_elem = (int)(offset % block_n);
     int end_elem = start_elem + n;
     block_q4_0_cache *blocks = (block_q4_0_cache *)cache;
-    
     if (start_elem == 0) {
-        // Start is aligned — handle whole blocks fast
         int n_aligned = n - (end_elem % block_n);
         if (n_aligned < 0) n_aligned = 0;
-        // Write whole blocks
         for (int bi = 0; bi < n_aligned / block_n; bi++) {
             quantize_q4_0_cache_block(buf + bi * block_n, &blocks[start_block + bi]);
         }
-        // Remaining partial block at the end
         int rem = n - n_aligned;
         if (rem > 0) {
             int bi = n_aligned / block_n;
@@ -231,8 +275,6 @@ static inline void kv_cache_write_head(void *cache, int64_t offset,
             quantize_q4_0_cache_block(tmp, &blocks[start_block + bi]);
         }
     } else {
-        // Misaligned start: handle first partial block + aligned blocks + last partial
-        // First partial block
         int first_rem = block_n - start_elem;
         if (first_rem > n) first_rem = n;
         {
@@ -241,14 +283,15 @@ static inline void kv_cache_write_head(void *cache, int64_t offset,
             for (int i = 0; i < first_rem; i++) tmp[start_elem + i] = buf[i];
             quantize_q4_0_cache_block(tmp, &blocks[start_block]);
         }
-        // Aligned bulk
         int remaining = n - first_rem;
         if (remaining > 0) {
-            kv_cache_write_head(cache, offset + first_rem, buf + first_rem, remaining);
+            kv_cache_write_head_q4(cache, offset + first_rem, buf + first_rem, remaining);
         }
     }
-#elif KV_CACHE_OUR_Q8
-    // Our Q8_0 block-32.
+}
+
+static inline void kv_cache_write_head_q8(void *cache, int64_t offset,
+                                          const float *buf, int n) {
     const int block_n = QK8_CACHE;
     int start_block = (int)(offset / block_n);
     int start_elem = (int)(offset % block_n);
@@ -261,7 +304,6 @@ static inline void kv_cache_write_head(void *cache, int64_t offset,
         if (bn == block_n) {
             wubu_kvq_q8_quant(buf + done, blocks[blk].qs, &blocks[blk].d, block_n);
         } else {
-            // partial: dequant existing, overwrite the slice, re-quant
             float tmp[QK8_CACHE];
             wubu_kvq_q8_dequant(blocks[blk].qs, blocks[blk].d, tmp, block_n);
             int blk_off = (start_elem + done) % block_n;
@@ -270,13 +312,10 @@ static inline void kv_cache_write_head(void *cache, int64_t offset,
         }
         done += bn;
     }
-#elif KV_CACHE_KIVI
-    // KIVI per-token V, ELEMENT-indexed like the other schemes. Element e lives
-    // in token t=e/head_dim at in-token position p=e%head_dim. Token t's block
-    // is head_dim int8 + 1 fp32 scale at byte t*(head_dim+4). We reconstruct the
-    // whole token, overwrite slice [p,p+n), re-quant. head_dim == n for a
-    // per-token call; for a whole-layer call (n=N*head_dim, offset=0) this still
-    // works because we loop over the n elements element-by-element.
+}
+
+static inline void kv_cache_write_head_kivi(void *cache, int64_t offset,
+                                            const float *buf, int n) {
     int hd = n;  // per-token call: n == head_dim
     int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
     uint8_t *base = (uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
@@ -288,31 +327,39 @@ static inline void kv_cache_write_head(void *cache, int64_t offset,
     for (int i = 0; i < n; i++) tmp[p0 + i] = buf[i];
     wubu_kvq_kivi_quant_V(tmp, q, &scale, 1, hd);
     *(float *)(base + hd) = scale;
-#elif KV_CACHE_F16
-    uint16_t *dst = (uint16_t *)cache + offset;
-    for (int i = 0; i < n; i++) dst[i] = fp32_to_fp16(buf[i]);
-#else
-    memcpy((float *)cache + offset, buf, n * sizeof(float));
-#endif
 }
 
-// KV cache allocation: returns number of bytes needed for n_elems
+static inline void kv_cache_write_head_f16(void *cache, int64_t offset,
+                                           const float *buf, int n) {
+    uint16_t *dst = (uint16_t *)cache + offset;
+    for (int i = 0; i < n; i++) dst[i] = fp32_to_fp16(buf[i]);
+}
+
+static inline void kv_cache_write_head_f32(void *cache, int64_t offset,
+                                           const float *buf, int n) {
+    memcpy((float *)cache + offset, buf, n * sizeof(float));
+}
+
+// KV cache allocation: returns number of bytes needed for n_elems (runtime dispatch).
 static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
-#if KV_CACHE_Q4_0
-    int64_t n_blocks = (n_elems + QK4_CACHE - 1) / QK4_CACHE;
-    return n_blocks * (int64_t)sizeof(block_q4_0_cache);
-#elif KV_CACHE_OUR_Q8
-    int64_t n_blocks = (n_elems + QK8_CACHE - 1) / QK8_CACHE;
-    return n_blocks * (int64_t)sizeof(block_q8_0_cache);
-#elif KV_CACHE_KIVI
-    // per-token: n_elems int8 + 1 fp32 scale per token; tokens = n_elems/HEADDIM
-    int64_t tokens = (n_elems + KV_KIVI_HEADDIM - 1) / KV_KIVI_HEADDIM;
-    return n_elems * (int64_t)sizeof(int8_t) + tokens * (int64_t)sizeof(float);
-#elif KV_CACHE_F16
-    return n_elems * (int64_t)sizeof(uint16_t);
-#else
-    return n_elems * (int64_t)sizeof(float);
-#endif
+    switch (g_kv_scheme) {
+        case WUBU_KV_Q4_0: {
+            int64_t n_blocks = (n_elems + QK4_CACHE - 1) / QK4_CACHE;
+            return n_blocks * (int64_t)sizeof(block_q4_0_cache);
+        }
+        case WUBU_KV_Q8: {
+            int64_t n_blocks = (n_elems + QK8_CACHE - 1) / QK8_CACHE;
+            return n_blocks * (int64_t)sizeof(block_q8_0_cache);
+        }
+        case WUBU_KV_KIVI: {
+            int64_t tokens = (n_elems + KV_KIVI_HEADDIM - 1) / KV_KIVI_HEADDIM;
+            return n_elems * (int64_t)sizeof(int8_t) + tokens * (int64_t)sizeof(float);
+        }
+        case WUBU_KV_F16:
+            return n_elems * (int64_t)sizeof(uint16_t);
+        default:
+            return n_elems * (int64_t)sizeof(float);
+    }
 }
 
 // MTP (Multi-Token Prediction) head for speculative decode

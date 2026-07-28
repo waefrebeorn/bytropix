@@ -20,9 +20,11 @@
 #include "wubu_roofline.h"
 
 typedef enum {
-    WUBU_KV_F16 = 0,    /* ample bandwidth: keep fp16 KV */
-    WUBU_KV_Q8  = 1,    /* our Q8_0 block-32: near-lossless, 2x vs fp16 */
-    WUBU_KV_KIVI = 2     /* KIVI K!=V: best for very long / very BW-bound */
+    WUBU_KV_F32  = 0,   /* full precision (fallback) */
+    WUBU_KV_F16  = 1,   /* fp16: 2 bytes/elem */
+    WUBU_KV_Q4_0 = 2,   /* 4-bit Q4_0: 0.56 bytes/elem */
+    WUBU_KV_Q8   = 3,   /* our Q8_0 block-32: 1.125 bytes/elem, near-lossless */
+    WUBU_KV_KIVI = 4     /* KIVI per-token V (K!=V): ~1.03 bytes/elem */
 } wubu_kv_scheme_t;
 
 typedef struct {

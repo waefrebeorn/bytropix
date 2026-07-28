@@ -69,8 +69,9 @@ int main(void) {
         /* Large batch -> KV dominates (B >> B*): expect KV compression (Q8,
          * short ctx). bstar(4096)~105, B=256 -> COMPRESS_KV. P=27e9 (27B). */
         wubu_kv_choice_t a = wubu_kv_select(&c, 27e9, 256, 4096);
-        printf("select(P=27B,B=256,s=4k): kv=%s  wbits=%d  \"%s\"\n",
-               wubu_kv_scheme_name(a.kv), a.weight_bits, a.why);
+        printf("select(P=27B,B=256,s=4k): kv=%s(%d)  wbits=%d  \"%s\"\n",
+               wubu_kv_scheme_name(a.kv), (int)a.kv, a.weight_bits, a.why);
+        fflush(stdout);
         assert(a.kv == WUBU_KV_Q8);          /* short ctx -> Q8 */
         assert(a.weight_bits == 16);
 

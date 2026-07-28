@@ -415,6 +415,18 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
             total_cache_elems += (int64_t)GQA_MAX_CTX * kv_dim;
         }
     }
+    // Auto-select KV precision (Roofline) for this model before sizing cache.
+    {
+        int ghd = 128, gnkv = 1;
+        for (int l = 0; l < nL; l++) {
+            if (!m->layers[l].is_ssm) { ghd = m->layers[l].gqa.head_dim; gnkv = m->layers[l].gqa.kv_heads; break; }
+        }
+        double bw = 0.05; const char *be = getenv("WUBU_BW_TBS"); if (be) bw = atof(be);
+        double npar = (double)m->d_model * m->d_model * nL * 12.0;
+        int ch = wubu_kv_autoselect(npar, nL, gnkv, ghd, bw, GQA_MAX_CTX);
+        printf("KV-cache scheme auto-selected (bridge): %s (ctx=%d)\n",
+               wubu_kv_scheme_name((wubu_kv_scheme_t)ch), GQA_MAX_CTX);
+    }
     int64_t k_cache_bytes = kv_cache_alloc_size(total_cache_elems);
     m->gqa_k_cache = malloc(k_cache_bytes ? k_cache_bytes : 16);
     m->gqa_v_cache = malloc(k_cache_bytes ? k_cache_bytes : 16);

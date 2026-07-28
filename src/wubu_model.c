@@ -543,6 +543,29 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             total_cache_elems += (int64_t)GQA_MAX_CTX * kv_dim;
         }
     }
+    // Auto-select KV precision from the Roofline crossover, using real model
+    // dimensions + detected bandwidth (env WUBU_BW_TBS overrides, TB/s).
+    {
+        int gqa_head_dim = 128, gqa_n_kv = 1;
+        for (int l = 0; l < model->n_layers; l++) {
+            if (!model->layers[l].is_ssm) {
+                gqa_head_dim = model->layers[l].gqa.head_dim;
+                gqa_n_kv    = model->layers[l].gqa.kv_heads;
+                break;
+            }
+        }
+        double bw = 0.05; /* default CPU ~50 GB/s */
+        const char *bw_env = getenv("WUBU_BW_TBS");
+        if (bw_env) bw = atof(bw_env);
+        /* Rough param count (transformer ~12 * d_model^2 * n_layers) used only
+         * for the relative Roofline B* crossover, not absolute memory. */
+        double n_params = (double)model->d_model * model->d_model * model->n_layers * 12.0;
+        int chosen = wubu_kv_autoselect(
+            n_params, model->n_layers, gqa_n_kv, gqa_head_dim, bw, GQA_MAX_CTX);
+        printf("KV-cache scheme auto-selected: %s (ctx=%d)\n",
+               wubu_kv_scheme_name((wubu_kv_scheme_t)chosen), GQA_MAX_CTX);
+    }
+
     int64_t k_cache_bytes = kv_cache_alloc_size(total_cache_elems);
     model->gqa_k_cache = malloc(k_cache_bytes);
     model->gqa_v_cache = malloc(k_cache_bytes);
