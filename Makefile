@@ -268,6 +268,48 @@ test_real_load: tools/test_real_load.c src/wubu_model_adapter.o $(MODEL_OBJ)
 test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+# ── 100-improvement modules (Areas A/B/C/D/F/H/I/J/K) ───────────────
+test_spec_decode: tools/test_spec_decode.c src/wubu_spec_decode.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_kvquant: tools/test_kvquant.c src/wubu_kvquant.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_paged_kv: tools/test_paged_kv.c src/wubu_paged_kv.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_moe_grouped: tools/test_moe_grouped.c src/wubu_moe_grouped.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_ssm_scan: tools/test_ssm_scan.c src/wubu_ssm_scan.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_q8: tools/test_q8.c src/wubu_q8.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_cuda_graph: tools/test_cuda_graph.c src/wubu_cuda_graph.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_scheduler: tools/test_scheduler.c src/wubu_scheduler.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_affinity: tools/test_affinity.c src/wubu_affinity.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+# Aggregate of the new 100-improvement unit tests.
+test_100: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
+          test_ssm_scan test_q8 test_cuda_graph test_scheduler test_affinity
+	@echo "ALL 100-IMPROVEMENT UNIT TESTS PASSED"
+
 test_model_config: tools/test_model_config.c src/wubu_model_adapter.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
