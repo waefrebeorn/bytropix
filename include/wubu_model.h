@@ -4,6 +4,7 @@
 #include "wubu_ssm.h"
 #include "wubu_moe.h"
 #include "wubu_safetensors_shard.h"
+#include "wubu_kvcache_quant.h"
 #include <stdbool.h>
 #include <math.h>
 #include <string.h>
@@ -92,6 +93,26 @@ typedef struct {
 
 #define QK4_CACHE 32
 
+// Our own Q8_0 KV-cache block (8-bit, block-32 absmax symmetric) -- routes to
+// the tested wubu_kvcache_quant module. 4:1 vs F16, near-lossless (Roofline +
+// llama.cpp + KIVI convergence: decode is BW-bound, halving KV bytes = faster).
+typedef struct {
+    int8_t qs[32];   // 32 int8 values
+    float  d;        // absmax scale (fp32)
+} block_q8_0_cache;
+#define QK8_CACHE 32
+
+// KIVI per-token V block: head_dim used at alloc time to size the per-token
+// fp32 scales. Must match the model's attention head_dim (Qwen-class = 128).
+#ifndef KV_KIVI_HEADDIM
+#define KV_KIVI_HEADDIM 128
+#endif
+
+// KIVI layout note: one fp32 scale per token's head_dim int8 values.
+// (KIVI paper: V per-token, K per-channel. We store K as Q8_0-block which is
+// per-block absmax -- near the per-channel intent at block granularity, and is
+// computed streamingly; V per-token is exact KIVI since each write is 1 token.)
+// Storage per token = head_dim int8 + 1 fp32 scale.
 // Quantize 32 floats to Q4_0 block (symmetric, signed)
 static inline void quantize_q4_0_cache_block(const float *x, block_q4_0_cache *b) {
     float amax = 0.0f;
@@ -144,6 +165,36 @@ static inline void kv_cache_read_head(const void *cache, int64_t offset,
         for (int i = 0; i < to_copy; i++) buf[done + i] = tmp[blk_off + i];
         done += to_copy;
     }
+#elif KV_CACHE_OUR_Q8
+    // Our Q8_0 block-32 (near-lossless, routes to wubu_kvcache_quant).
+    const int block_n = QK8_CACHE;
+    int start_block = (int)(offset / block_n);
+    int start_elem = (int)(offset % block_n);
+    const block_q8_0_cache *blocks = (const block_q8_0_cache *)cache;
+    int done = 0;
+    while (done < n) {
+        float tmp[QK8_CACHE];
+        wubu_kvq_q8_dequant(blocks[start_block + (start_elem + done) / block_n].qs,
+                             blocks[start_block + (start_elem + done) / block_n].d,
+                             tmp, block_n);
+        int blk_off = (start_elem + done) % block_n;
+        int to_copy = n - done;
+        if (to_copy > block_n - blk_off) to_copy = block_n - blk_off;
+        for (int i = 0; i < to_copy; i++) buf[done + i] = tmp[blk_off + i];
+        done += to_copy;
+    }
+#elif KV_CACHE_KIVI
+    // KIVI per-token V, ELEMENT-indexed. token = offset/head_dim, in-token
+    // position p = offset%head_dim. Read the whole token, copy slice [p,p+n).
+    int hd = n;  // per-token call: n == head_dim
+    int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
+    const uint8_t *base = (const uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
+    const int8_t *q = (const int8_t *)base;
+    float scale = *(const float *)(base + hd);
+    float tmp[512];
+    if (hd > 512) hd = 512;
+    wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, hd);
+    for (int i = 0; i < n; i++) buf[i] = tmp[p0 + i];
 #elif KV_CACHE_F16
     const uint16_t *src = (const uint16_t *)cache + offset;
     for (int i = 0; i < n; i++) buf[i] = fp16_to_fp32(src[i]);
@@ -196,6 +247,47 @@ static inline void kv_cache_write_head(void *cache, int64_t offset,
             kv_cache_write_head(cache, offset + first_rem, buf + first_rem, remaining);
         }
     }
+#elif KV_CACHE_OUR_Q8
+    // Our Q8_0 block-32.
+    const int block_n = QK8_CACHE;
+    int start_block = (int)(offset / block_n);
+    int start_elem = (int)(offset % block_n);
+    block_q8_0_cache *blocks = (block_q8_0_cache *)cache;
+    int done = 0;
+    while (done < n) {
+        int bn = block_n - ((start_elem + done) % block_n);
+        if (bn > n - done) bn = n - done;
+        int blk = start_block + (start_elem + done) / block_n;
+        if (bn == block_n) {
+            wubu_kvq_q8_quant(buf + done, blocks[blk].qs, &blocks[blk].d, block_n);
+        } else {
+            // partial: dequant existing, overwrite the slice, re-quant
+            float tmp[QK8_CACHE];
+            wubu_kvq_q8_dequant(blocks[blk].qs, blocks[blk].d, tmp, block_n);
+            int blk_off = (start_elem + done) % block_n;
+            for (int i = 0; i < bn; i++) tmp[blk_off + i] = buf[done + i];
+            wubu_kvq_q8_quant(tmp, blocks[blk].qs, &blocks[blk].d, block_n);
+        }
+        done += bn;
+    }
+#elif KV_CACHE_KIVI
+    // KIVI per-token V, ELEMENT-indexed like the other schemes. Element e lives
+    // in token t=e/head_dim at in-token position p=e%head_dim. Token t's block
+    // is head_dim int8 + 1 fp32 scale at byte t*(head_dim+4). We reconstruct the
+    // whole token, overwrite slice [p,p+n), re-quant. head_dim == n for a
+    // per-token call; for a whole-layer call (n=N*head_dim, offset=0) this still
+    // works because we loop over the n elements element-by-element.
+    int hd = n;  // per-token call: n == head_dim
+    int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
+    uint8_t *base = (uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
+    int8_t *q = (int8_t *)base;
+    float scale = *(const float *)(base + hd);
+    float tmp[512];
+    if (hd > 512) hd = 512;
+    wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, hd);
+    for (int i = 0; i < n; i++) tmp[p0 + i] = buf[i];
+    wubu_kvq_kivi_quant_V(tmp, q, &scale, 1, hd);
+    *(float *)(base + hd) = scale;
 #elif KV_CACHE_F16
     uint16_t *dst = (uint16_t *)cache + offset;
     for (int i = 0; i < n; i++) dst[i] = fp32_to_fp16(buf[i]);
@@ -209,6 +301,13 @@ static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
 #if KV_CACHE_Q4_0
     int64_t n_blocks = (n_elems + QK4_CACHE - 1) / QK4_CACHE;
     return n_blocks * (int64_t)sizeof(block_q4_0_cache);
+#elif KV_CACHE_OUR_Q8
+    int64_t n_blocks = (n_elems + QK8_CACHE - 1) / QK8_CACHE;
+    return n_blocks * (int64_t)sizeof(block_q8_0_cache);
+#elif KV_CACHE_KIVI
+    // per-token: n_elems int8 + 1 fp32 scale per token; tokens = n_elems/HEADDIM
+    int64_t tokens = (n_elems + KV_KIVI_HEADDIM - 1) / KV_KIVI_HEADDIM;
+    return n_elems * (int64_t)sizeof(int8_t) + tokens * (int64_t)sizeof(float);
 #elif KV_CACHE_F16
     return n_elems * (int64_t)sizeof(uint16_t);
 #else
