@@ -297,6 +297,23 @@ test_cuda_graph: tools/test_cuda_graph.c src/wubu_cuda_graph.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# ── Round-2 (cross-disciplinary) modules (Areas L/M/N/O) ───────
+test_roofline: tools/test_roofline.c src/wubu_roofline.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_cache_advice: tools/test_cache_advice.c src/wubu_cache_advice.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_kereq: tools/test_kereq.c src/wubu_kereq.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_pd_split: tools/test_pd_split.c src/wubu_pd_split.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 test_scheduler: tools/test_scheduler.c src/wubu_scheduler.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
@@ -305,10 +322,11 @@ test_affinity: tools/test_affinity.c src/wubu_affinity.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
-# Aggregate of the new 100-improvement unit tests.
-test_100: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
-          test_ssm_scan test_q8 test_cuda_graph test_scheduler test_affinity
-	@echo "ALL 100-IMPROVEMENT UNIT TESTS PASSED"
+# Aggregate of ALL 200 improvement unit tests (Round-1 + Round-2).
+test_200: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
+          test_ssm_scan test_q8 test_cuda_graph test_scheduler test_affinity \
+          test_roofline test_cache_advice test_kereq test_pd_split
+	@echo "ALL 200-IMPROVEMENT UNIT TESTS PASSED"
 
 test_model_config: tools/test_model_config.c src/wubu_model_adapter.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
