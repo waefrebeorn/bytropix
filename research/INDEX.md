@@ -21,7 +21,7 @@ attacks bytes moved.
 ## THEME B — Weight quantization (halve weight traffic)
 - B01 int8 GEMV (row absmax, fp32 acc) ................. `wired` (wubu_gemv_tune)
 - B02 int4 weight-only GEMV (Marlin-style pack) .......... `wired` → doc 003
-- B03 BitNet 1.58 ternary {-1,0,+1} GEMV ............. `open` → doc 004
+- B03 BitNet 1.58 ternary {-1,0,+1} GEMV ............. `wired` → doc 004
 - B04 SmoothQuant activation outlier migration ............. `open` → doc 005
 - B05 AWQ activation-aware 1% salient channel protect .... `open` (ties to 003/005)
 - B06 GPTQ 2nd-order weight quant ...................... `open` (offline calib; safe)
