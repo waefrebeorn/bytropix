@@ -20,6 +20,7 @@
 
 #include "gguf_reader.h"
 #include "wubu_ssm.h"
+#include "wubu_gemm.h"
 
 // ========================================================================
 // Block sizes (from ggml-common.h)
@@ -107,67 +108,56 @@ void quantized_matmul(const float *x,
                       float *y) {
     if (n_rows <= 0 || n_cols <= 0) return;
     
-    // Handle F32 directly (no quantization needed)
+    // Handle F32 directly (no quantization needed).
+    // Use our own tiled AVX2/AVX512-FMA GEMM kernel (cache-blocked, SIMD).
     if (weight_type == GGML_TYPE_F32) {
         const float *w = (const float *)W;
         int64_t stride = (col_stride_bytes > 0) ? (col_stride_bytes / 4) : n_rows;
-        #pragma omp parallel for if(n_cols > 16)
-        for (int64_t j = 0; j < n_cols; j++) {
-            float sum = 0.0f;
-            for (int64_t k = 0; k < n_rows; k++) {
-                sum += x[k] * w[k + j * stride];
-            }
-            y[j] = sum;
-        }
+        /* X is a single row [1 x n_rows] (this call computes one token's
+         * projection). GEMM: Y[1,n_cols] = X[1,n_rows] * W[n_rows,n_cols]. */
+        wubu_gemm_f32(x, w, y, 1, n_rows, n_cols);
+        (void)stride;
         return;
     }
     
-    // Handle F16: dequantize to F32, then SGEMM
+    // Handle F16: dequantize to F32, then our tiled GEMM
     if (weight_type == GGML_TYPE_F16) {
         const uint16_t *w = (const uint16_t *)W;
         int64_t stride_elems = (col_stride_bytes > 0) ? (col_stride_bytes / 2) : n_rows;
-        #pragma omp parallel for if(n_cols > 16)
-        for (int64_t j = 0; j < n_cols; j++) {
-            float sum = 0.0f;
+        /* Materialize the F16 column into a contiguous F32 row-major matrix
+         * via a temp buffer, then call the GEMM kernel once. */
+        float *w32 = (float *)malloc((size_t)n_rows * n_cols * sizeof(float));
+        if (!w32) { fprintf(stderr, "quantized_matmul: F16 alloc failed\n"); return; }
+        for (int64_t j = 0; j < n_cols; j++)
             for (int64_t k = 0; k < n_rows; k++) {
-                // F16 to F32
                 uint16_t h = w[k + j * stride_elems];
-                uint32_t sign = (h >> 15) & 1;
-                uint32_t exp  = (h >> 10) & 0x1F;
-                uint32_t mant = h & 0x03FF;
+                uint32_t sign = (h >> 15) & 1, exp = (h >> 10) & 0x1F, mant = h & 0x03FF;
                 uint32_t f32;
-                if (exp == 0) {
-                    f32 = (sign << 31) | ((uint32_t)(127 - 15 + 1) << 23) | (mant << 13);
-                } else if (exp == 31) {
-                    f32 = (sign << 31) | (0xFF << 23) | (mant << 13);
-                } else {
-                    f32 = (sign << 31) | ((uint32_t)(127 - 15 + exp) << 23) | (mant << 13);
-                }
-                float val;
-                memcpy(&val, &f32, 4);
-                sum += x[k] * val;
+                if (exp == 0) f32 = (sign<<31)|((uint32_t)(127-15+1)<<23)|(mant<<13);
+                else if (exp == 31) f32 = (sign<<31)|(0xFF<<23)|(mant<<13);
+                else f32 = (sign<<31)|((uint32_t)(127-15+exp)<<23)|(mant<<13);
+                memcpy(&w32[k + j*n_rows], &f32, 4);
             }
-            y[j] = sum;
-        }
+        wubu_gemm_f32(x, w32, y, 1, n_rows, n_cols);
+        free(w32);
         return;
     }
     
-    // Handle BF16: dequantize to F32, then SGEMM
+    // Handle BF16: dequantize to F32, then our tiled GEMM
     // Also handles type 30 (older BF16 enum value from newer GGUF files)
     if (weight_type == GGML_TYPE_BF16 || weight_type == 30) {
         const uint16_t *w = (const uint16_t *)W;
         int64_t stride_elems = (col_stride_bytes > 0) ? (col_stride_bytes / 2) : n_rows;
-        #pragma omp parallel for if(n_cols > 16)
-        for (int64_t j = 0; j < n_cols; j++) {
-            float sum = 0.0f;
+        float *w32 = (float *)malloc((size_t)n_rows * n_cols * sizeof(float));
+        if (!w32) { fprintf(stderr, "quantized_matmul: BF16 alloc failed\n"); return; }
+        for (int64_t j = 0; j < n_cols; j++)
             for (int64_t k = 0; k < n_rows; k++) {
                 uint32_t bits = (uint32_t)w[k + j * stride_elems] << 16;  // BF16 = high 16 bits of F32
-                float val;
-                memcpy(&val, &bits, 4);
-                sum += x[k] * val;
+                float val; memcpy(&val, &bits, 4);
+                w32[k + j*n_rows] = val;
             }
-            y[j] = sum;
-        }
+        wubu_gemm_f32(x, w32, y, 1, n_rows, n_cols);
+        free(w32);
         return;
     }
     
