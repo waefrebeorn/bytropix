@@ -267,8 +267,9 @@ void kv_paged_free_block(kv_cache_manager_t* mgr, int block_id) {
     
     if (--mgr->blocks[block_id].ref_count == 0) {
         if (mgr->free_count >= mgr->free_capacity) {
-            mgr->free_capacity *= 2;
-            mgr->free_blocks = realloc(mgr->free_blocks, mgr->free_capacity * sizeof(int));
+            int *tmp = realloc(mgr->free_blocks, mgr->free_capacity * 2 * sizeof(int));
+            if (tmp) mgr->free_blocks = tmp;
+            else mgr->free_capacity *= 2;  /* retry on next call */
         }
         mgr->free_blocks[mgr->free_count++] = block_id;
         mgr->total_freed_blocks++;
@@ -329,8 +330,9 @@ int kv_paged_evict_blocks(kv_cache_manager_t* mgr, int layer_idx, int target_fre
         
         // Add to free list
         if (mgr->free_count >= mgr->free_capacity) {
-            mgr->free_capacity *= 2;
-            mgr->free_blocks = realloc(mgr->free_blocks, mgr->free_capacity * sizeof(int));
+            int *tmp = realloc(mgr->free_blocks, mgr->free_capacity * 2 * sizeof(int));
+            if (tmp) mgr->free_blocks = tmp;
+            else mgr->free_capacity *= 2;  /* retry on next call */
         }
         mgr->free_blocks[mgr->free_count++] = victim;
         mgr->total_freed_blocks++;
@@ -416,8 +418,15 @@ int kv_paged_alloc_prefill(kv_cache_manager_t* mgr, request_t* req) {
     // Ensure block table has capacity
     if (req->req_id >= mgr->batch_capacity) {
         int new_cap = mgr->batch_capacity * 2;
-        mgr->block_tables = realloc(mgr->block_tables, new_cap * sizeof(int*));
-        mgr->block_table_sizes = realloc(mgr->block_table_sizes, new_cap * sizeof(int));
+        int **new_tables = realloc(mgr->block_tables, new_cap * sizeof(int*));
+        int *new_sizes = realloc(mgr->block_table_sizes, new_cap * sizeof(int));
+        if (!new_tables || !new_sizes) {
+            if (new_tables) { free(new_tables); }
+            if (new_sizes) { free(new_sizes); }
+            return -1;
+        }
+        mgr->block_tables = new_tables;
+        mgr->block_table_sizes = new_sizes;
         for (int i = mgr->batch_capacity; i < new_cap; i++) {
             mgr->block_tables[i] = NULL;
             mgr->block_table_sizes[i] = 0;

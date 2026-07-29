@@ -62,7 +62,9 @@ void wubu_sched_free(wubu_sched_t *s) {
 int wubu_sched_submit(wubu_sched_t *s, wubu_req_t *r) {
     if (s->n >= s->cap) { /* grow */
         int nc = s->cap * 2;
-        s->reqs = (wubu_req_t **)realloc(s->reqs, nc * sizeof(wubu_req_t *));
+        wubu_req_t **tmp = (wubu_req_t **)realloc(s->reqs, nc * sizeof(wubu_req_t *));
+        if (!tmp) return -1;
+        s->reqs = tmp;
         s->cap = nc;
     }
     s->reqs[s->n++] = r;
@@ -123,8 +125,11 @@ int wubu_sched_step(wubu_sched_t *s) {
 /* Append an emitted token to a request (caller drives sampling). */
 void wubu_req_emit(wubu_req_t *r, int tok) {
     if (r->n_kv >= r->max_tokens + r->prompt_len) return;
-    if (r->n_kv % 16 == 0)
-        r->tokens = (int *)realloc(r->tokens, (r->n_kv + 16) * sizeof(int));
+    if (r->n_kv % 16 == 0) {
+        int *tmp = (int *)realloc(r->tokens, (r->n_kv + 16) * sizeof(int));
+        if (!tmp) return;
+        r->tokens = tmp;
+    }
     r->tokens[r->n_kv++] = tok;
     r->n_gen++;
 }
