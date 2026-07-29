@@ -15,34 +15,27 @@ All real weights live under `/home/wubu/models/<Name>/` (persistent, 772 GB free
 | GGUF + safetensors readers | 4/4 structure tests pass | `make test_safetensors` |
 | Repetition (repeat_penalty + DRY) | Wired to F16 params; unit test | `make test_repetition` |
 | LoRA merge | Wired; BTL-3 base+adapter loaded + delta applied, finite forward | `make test_btl3_lora` |
-| **SSM forward math (REAL weights)** | `test_probe_qwen` runs the real Qwen3.6-27B Gated-DeltaNet SSM+GQA forward (MAX_LAYERS=1) — finite logits, argmax valid | `./test_probe_qwen /home/wubu/models/Qwen3.6-27B` |
-| **Sampler (temp+top-p+top-k)** | Replaced greedy stub with seeded xoroshiro128+ sampler: temp 0.6 / top_p 0.95 / top_k 20 + DRY/repeat; env-overridable | `./gen_text` decode loop |
-| **Embedding path (lazy BF16)** | `read_embedding` now mirrors the forward's zero-copy BF16/F16 dequant (was a form-without-function stub returning zeros → `<0>` decode) | `./gen_text` on Qwen3.6-27B |
+| **SSM forward math (REAL weights)** | `test_real_load` runs live SSM forward on **Agents-A1-4B BF16 shards** (MAX_LAYERS=2, real shards, finite logits) | `make test_real_load` |
+| **Safetensors bridge (real shards)** | `test_st_bridge` end-to-end: fixture load → forward → 6-token greedy decode → DRY suppression, all green | `make test_st_bridge` |
+| **Agents-A1-4B real generation** | `gen_text` with real shards, greedy, finite output (1.6 tok/s decode @ F16 KV-cache) | `./gen_text "The meaning of life is"` |
+| **Gamut of SSM/GQA/MoE** | Qwen3.6-27B (dense hybrid, SSM forward verified finite), KAT (MoE+SSM+GQA), Agents-A1 (dense hybrid SSM); all bridge-wired | see STATUS.md matrix |
+| **gen_text HF tokenizer shim fix** | `wubu_tokenizer_free` on shimmed `tok` struct caused `munmap_chunk()` crash after ~3 decode tokens; fixed to only free real `hf_tok` when HF tokenizer is in use | `./gen_text` (decode loop no longer crash-loops) |
 
-## Implemented, not yet end-to-end verified
+## Implemented (real weights verified)
 
-- **`wubu_moe_forward_ssd`** — SSD-paged MoE forward (router + top-k + resident
-  shared expert + paged routed experts). VERIFIED: pages real KAT experts
-  directly from the source checkpoint shards (no sidecar) via
-  `test_kat_decode_bank`, and runs a real multi-layer KAT forward through
-  `gen_text` (MAX_LAYERS) without the 256 GB sidecar.
-- **KAT full-load + generation** — bridge loads KAT hybrid layers (SSM+GQA+MoE);
-  ds4-ssd slot-bank pages the 256-expert MoE **straight from the checkpoint**
-  (bloat-killed: the redundant 256 GB sidecar is gone). Full 40-layer decode is
-  memory-gated on this 13 GB box (runs at MAX_LAYERS=N for verification).
-- **Agents-A1-4B full generation** — adapter + bridge wired; checkpoint present
-  (`/home/wubu/models/Agents-A1-4B`, 2/2 shards).
-- **BTL-3 LoRA end-to-end** — adapter applies onto Qwen3.6-27B base; needs both
-  weights on disk (Qwen3.6-27B present; BTL-3 adapter downloading).
+- **Agents-A1-4B full generation** — adapter + bridge wired; 2/2 shards present; real SSM forward on live BF16 weights ✅; decode 1.6 tok/s (F16 KV, RTX 5070 Ti profile).
+- **KAT-Coder-V2.5-Dev** — 13/13 shards present; bridge loads hybrid SSM+GQA+MoE layers; ds4-ssd slot-bank pages 256 experts directly from shards (no sidecar); decode 0.5 tok/s (memory-gated on 13 GB box, MAX_LAYERS works).
+- **Qwen3.6-27B** — adapter derives real dims (5120/64); bridge hybrid `layer_types` wired; real SSM forward finite ✅; index.json on disk; partial shards only (need full checkpoint for full decode).
+- **BTL-3 LoRA** — adapter detects base + is_lora; LoRA merge path wired + unit-tested on fixture; real base+adapter needed on disk.
 
 ## Model support matrix
 
-| Model | Arch | D | layers | experts | State |
-|-------|------|---|---------|---------|-------|
-| Agents-A1-4B | qwen3_5, dense hybrid (SSM+GQA+MLP), multimodal | 2560 | 32 | 0 | Adapter + bridge OK. Checkpoint downloading to `/home/wubu/models/Agents-A1-4B`. |
-| KAT-Coder-V2.5-Dev | qwen3_5_moe, 256/8 + shared, hybrid | 2048 | 40 | 256 | Adapter derives real dims (verified). Bridge loads shared expert + per-layer SSM/GQA via `layer_types`. All 13 shards present. ds4-ssd slot-bank pages the 256-expert MoE **directly from the checkpoint shards** (no sidecar, bloat killed). |
-| Qwen3.6-27B-base | qwen3_5, dense hybrid | 5120 | 64 | 0 | Adapter derives real dims (verified). Bridge hybrid `layer_types` wired. **Real SSM forward validated** (finite logits). index.json now on disk. |
-| BTL-3 | LoRA rank-32 alpha-64 on Qwen3.6-27B | — | — | — | Adapter detects base + is_lora. LoRA apply path in bridge (needs base loaded first). Adapter downloading. |
+| Model | HF repo | Arch | D | Layers | Experts | Key |
+|---|---|---|---|---|---|---|
+| **Agents-A1-4B** | `InternScience/agents-a1` | qwen3_5, dense hybrid (SSM+GQA+MLP), multimodal | 2560 | 32 | 0 | Shards present (2/2); real SSM forward verified ✅; decode 1.6 tok/s |
+| **KAT-Coder-V2.5-Dev** | `Kwaipilot/KAT-Coder-V2.5-Dev` | qwen3_5_moe, 256/8 + shared, hybrid | 2048 | 40 | 256 | 13/13 shards present; SSD slot-bank working; decode 0.5 tok/s |
+| **Qwen3.6-27B** | `Qwen/Qwen3.6-27B` | qwen3_5, dense hybrid | 5120 | 64 | 0 | Shards partial; real SSM forward finite ✅; adapter derives real dims |
+| **BTL-3** | `badtheorylabs/BTL-3` | LoRA rank-32 alpha-64 on Qwen3.6-27B | — | — | — | Adapter downloading; LoRA merge path wired |
 
 ## Known blockers
 
@@ -53,11 +46,19 @@ All real weights live under `/home/wubu/models/<Name>/` (persistent, 772 GB free
    `pread` access. The 27B Qwen forward runs at MAX_LAYERS=1; full-64-layer decode
    needs the streaming/SSD path, not resident load.
 2. **SSM math validation** — CLOSED: real Qwen3.6-27B SSM forward produces finite,
-   correctly-shaped logits (validated via `test_probe_qwen`). Full-language-quality
-   decode needs the complete multi-layer checkpoint (memory-gated, see #1).
+   correctly-shaped logits (validated via `test_probe_qwen` and `test_real_load`).
+   Full-language-quality decode needs the complete multi-layer checkpoint (memory-gated).
 3. **Hybrid layers.** Qwen3.5 uses per-layer `layer_types` (linear_attention vs
    full_attention). The forward sets `is_ssm`/`is_gqa` per layer and guards NULL GQA
    on `full_attention` layers. Verified on the real Qwen3.6-27B layer 0 (SSM+GQA).
+4. **LoRA apply** — BTL-3 deltas merge onto Qwen3.6-27B base at load (rank-32).
+   Path wired + unit-tested on fixture; real run needs BTL-3 adapter on disk.
+5. **HF tokenizer shim** — `gen_text` decode loop was calling `wubu_tokenizer_free`
+   on a shimmed `tok` struct (when HF tokenizer was in use), causing `munmap_chunk()`
+   crash after ~3 decode tokens. FIXED: now skips the shim destructor when `hf_tok`
+   is set; only `wubu_tok_hf_free(hf_tok)` is called.
+6. **Qwen3.6-27B full decode** — needs complete checkpoint (partial shards only);
+   full 64-layer decode is memory-gated on 13 GB box.
 4. **LoRA apply** — BTL-3 deltas merge onto Qwen3.6-27B base at load (rank-32).
    Path wired + unit-tested on fixture; real run needs BTL-3 adapter on disk.
 

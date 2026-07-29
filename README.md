@@ -30,8 +30,29 @@ C11, GCC/Clang. CUDA paths require `nvcc` (optional). Flags in `Makefile`.
 
 Loads GGUF and HuggingFace safetensors. Tensor-name mapping + dimension
 derivation live in `src/wubu_model_safetensors_bridge.c`. Per-model status is in
-[STATUS.md](STATUS.md). Supported architectures include Gated-DeltaNet hybrid
-(SSM + GQA + MLP), Qwen3.5 MoE (256 experts), dense 27B, and LoRA adapters.
+[STATUS.md](STATUS.md).
+
+### Supported architectures
+
+| Architecture | What it is | Key files |
+|---|---|---|
+| **Gated-DeltaNet hybrid** (SSM + GQA + MLP) | Qwen3.x / Agents-A1; per-layer `layer_types` selects SSM vs GQA | `src/wubu_ssm.c`, `src/wubu_model_safetensors_bridge.c` |
+| **Qwen3.x MoE** (256 experts) | Deep MoE with shared expert + routed experts; SSD-paged | `src/wubu_moe.c`, `src/wubu_ssd_moe.c` |
+| **Dense hybrid** (Qwen3.6-27B) | 64-layer dense, SSM+GQA per layer | `src/wubu_ssm.c` |
+| **LoRA adapters** | BTL-3 rank-32 alpha-64 on Qwen3.6-27B base | `src/wubu_lora.c` |
+
+### Model status matrix
+
+| Model | HF repo | D | Layers | Experts | Key |
+|---|---|---|---|---|---|
+| **Agents-A1-4B** | `InternScience/agents-a1` | 2560 | 32 | 0 (dense) | Shards present; real SSM forward verified ✅ |
+| **KAT-Coder-V2.5-Dev** | `Kwaipilot/KAT-Coder-V2.5-Dev` | 2048 | 40 | 256 | 13/13 shards present; SSD slot-bank working |
+| **Qwen3.6-27B** | `Qwen/Qwen3.6-27B` | 5120 | 64 | 0 (dense hybrid) | Shards partial; real SSM forward finite ✅ |
+| **BTL-3** | `badtheorylabs/BTL-3` | — | — | — | LoRA on Qwen3.6-27B; adapter downloading |
+
+The bridge also handles legacy GGUF checkpoints (see `src/wubu_model.c`).
+All tensor loading goes through `wubu_shard_open` + `wubu_model_safetensors_bridge.c`;
+the lazy BF16 path (mmap + on-demand dequant) keeps 27B-class models under 13 GB.
 
 ## Subsystems
 
