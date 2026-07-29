@@ -2,6 +2,7 @@
 #define WUBU_SPEC_DECODE_H
 
 #include <stdint.h>
+#include "wubu_ngram.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,12 +16,6 @@ int wubu_spec_verify_tree(const int *candidates, const int *parent,
                           const float *draft_probs, const float *target_logits,
                           int n, int vocab, int *accepted, int max_accepted,
                           float rng);
-
-/* n-gram draft model (context repetition). */
-typedef struct wubu_ngram_draft_t wubu_ngram_draft_t;
-wubu_ngram_draft_t *wubu_ngram_create(const int *ctx, int ctx_len, int order);
-void wubu_ngram_free(wubu_ngram_draft_t *d);
-int wubu_ngram_propose(wubu_ngram_draft_t *d, int k, int *out);
 
 /* MTP bonus-token sampler from residual distribution. Returns token id or -1. */
 int wubu_spec_bonus_token(const float *target_logits, const float *draft_probs,

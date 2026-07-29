@@ -212,17 +212,32 @@ static inline void kv_cache_read_head_q8(const void *cache, int64_t offset,
 
 static inline void kv_cache_read_head_kivi(const void *cache, int64_t offset,
                                            float *buf, int n) {
-    // KIVI per-token V, ELEMENT-indexed. token = offset/head_dim, in-token
-    // position p = offset%head_dim. Read the whole token, copy slice [p,p+n).
-    int hd = n;  // per-token call: n == head_dim
-    int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
-    const uint8_t *base = (const uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
-    const int8_t *q = (const int8_t *)base;
-    float scale = *(const float *)(base + hd);
-    float tmp[512];
-    if (hd > 512) hd = 512;
-    wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, hd);
-    for (int i = 0; i < n; i++) buf[i] = tmp[p0 + i];
+    int hd = g_kv_head_dim > 0 ? g_kv_head_dim : KV_KIVI_HEADDIM;
+    if (n == hd) {
+        // Fast path: single token
+        int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
+        const uint8_t *base = (const uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
+        const int8_t *q = (const int8_t *)base;
+        float scale = *(const float *)(base + hd);
+        float tmp[512];
+        int work_hd = hd > 512 ? 512 : hd;
+        wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, work_hd);
+        for (int i = 0; i < n; i++) buf[i] = tmp[p0 + i];
+    } else {
+        // Batch path: read multiple tokens
+        int tokens = n / hd;
+        for (int t = 0; t < tokens; t++) {
+            int token_offset = offset + t * hd;
+            int t0 = (int)(token_offset / hd), p0 = (int)(token_offset % hd);
+            const uint8_t *base = (const uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
+            const int8_t *q = (const int8_t *)base;
+            float scale = *(const float *)(base + hd);
+            float tmp[512];
+            int work_hd = hd > 512 ? 512 : hd;
+            wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, work_hd);
+            for (int i = 0; i < hd; i++) buf[t * hd + i] = tmp[p0 + i];
+        }
+    }
 }
 
 static inline void kv_cache_read_head_f16(const void *cache, int64_t offset,
@@ -316,17 +331,36 @@ static inline void kv_cache_write_head_q8(void *cache, int64_t offset,
 
 static inline void kv_cache_write_head_kivi(void *cache, int64_t offset,
                                             const float *buf, int n) {
-    int hd = n;  // per-token call: n == head_dim
-    int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
-    uint8_t *base = (uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
-    int8_t *q = (int8_t *)base;
-    float scale = *(const float *)(base + hd);
-    float tmp[512];
-    if (hd > 512) hd = 512;
-    wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, hd);
-    for (int i = 0; i < n; i++) tmp[p0 + i] = buf[i];
-    wubu_kvq_kivi_quant_V(tmp, q, &scale, 1, hd);
-    *(float *)(base + hd) = scale;
+    int hd = g_kv_head_dim > 0 ? g_kv_head_dim : KV_KIVI_HEADDIM;
+    if (n == hd) {
+        // Fast path: single token
+        int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
+        uint8_t *base = (uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
+        int8_t *q = (int8_t *)base;
+        float scale = *(const float *)(base + hd);
+        float tmp[512];
+        int work_hd = hd > 512 ? 512 : hd;
+        wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, work_hd);
+        for (int i = 0; i < n; i++) tmp[p0 + i] = buf[i];
+        wubu_kvq_kivi_quant_V(tmp, q, &scale, 1, work_hd);
+        *(float *)(base + hd) = scale;
+    } else {
+        // Batch path: write multiple tokens
+        int tokens = n / hd;
+        for (int t = 0; t < tokens; t++) {
+            int token_offset = offset + t * hd;
+            int t0 = (int)(token_offset / hd), p0 = (int)(token_offset % hd);
+            uint8_t *base = (uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
+            int8_t *q = (int8_t *)base;
+            float scale = *(const float *)(base + hd);
+            float tmp[512];
+            int work_hd = hd > 512 ? 512 : hd;
+            wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, work_hd);
+            for (int i = 0; i < hd; i++) tmp[p0 + i] = buf[t * hd + i];
+            wubu_kvq_kivi_quant_V(tmp, q, &scale, 1, work_hd);
+            *(float *)(base + hd) = scale;
+        }
+    }
 }
 
 static inline void kv_cache_write_head_f16(void *cache, int64_t offset,
@@ -341,6 +375,7 @@ static inline void kv_cache_write_head_f32(void *cache, int64_t offset,
 }
 
 // KV cache allocation: returns number of bytes needed for n_elems (runtime dispatch).
+// Uses model's actual head_dim via g_kv_head_dim (set by wubu_kv_autoselect).
 static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
     switch (g_kv_scheme) {
         case WUBU_KV_Q4_0: {
@@ -352,7 +387,8 @@ static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
             return n_blocks * (int64_t)sizeof(block_q8_0_cache);
         }
         case WUBU_KV_KIVI: {
-            int64_t tokens = (n_elems + KV_KIVI_HEADDIM - 1) / KV_KIVI_HEADDIM;
+            int64_t hd = g_kv_head_dim > 0 ? g_kv_head_dim : KV_KIVI_HEADDIM;
+            int64_t tokens = (n_elems + hd - 1) / hd;
             return n_elems * (int64_t)sizeof(int8_t) + tokens * (int64_t)sizeof(float);
         }
         case WUBU_KV_F16:
@@ -397,6 +433,7 @@ typedef struct {
     bool tied_output;                // true if output_weight_q points to token_embd
     const uint8_t *token_embd_q;     // raw Q4_K quantized token embeddings (large vocab, mmap'd)
     int token_embd_type;             // GGML type of token_embd (usually Q4_K)
+    int rotate_P;                    // doc 013: Hadamard prefix fused into output_weight (>1 if WUBU_ROTATE_W)
     // Lazy, zero-copy embedding / lm_head (safetensors BF16 path). When set,
     // token_embd / output_weight are NOT copied to F32; the row is dequantized
     // on demand from the mmap'd shard. Saves ~10 GB for 27B-class models.
@@ -421,7 +458,7 @@ typedef struct {
     // State buffers (reused across calls)
     float *ssm_states;    // [max_layers, SSM_V_HEADS, SSM_D_STATE, SSM_D_STATE]
     float *conv_states;   // [max_layers, B, CONV_KERNEL-1, CONV_DIM]
-    
+    size_t ssm_state_total;  // bytes allocated for ssm_states (incl. conv_states)    
     // GQA KV cache (10 GQA layers, max 256k context)
     void *gqa_k_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM] F32 or F16
     void *gqa_v_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM]
@@ -504,6 +541,11 @@ void wubu_model_forward(wubu_model_t *model,
 void wubu_model_forward_from_embd(wubu_model_t *model,
                                    const float *embeddings, int B, int T,
                                    float *logits);
+
+// Reset persistent SSM/conv recurrence state to zero (start a fresh sequence).
+// Required before comparing two independent generations (e.g. plain vs
+// speculative decode) so both start from the same zero state.
+void wubu_model_reset_state(wubu_model_t *model);
 
 // Chunked forward: process a long [B, T_total] sequence in time-chunks of
 // <= chunk_sz tokens, carrying the model's persistent SSM/conv/KV-cache state

@@ -1,4 +1,4 @@
-/* gauntlet_run.c -- CLI driver for the bytropix agent tool gauntlet.
+/* gauntlet_run.c -- CLI driver for the wubuwizard agent tool gauntlet.
  *
  * Loads all four Colonel models (fixture fallback), runs them through the
  * agent-tool battery, fans every agent action into the WuBuOS EDR layer,
@@ -13,7 +13,7 @@ static const char *task_name(int t) {
 }
 
 int main(void) {
-    printf("== bytropix agent tool gauntlet (4 models x 3 tools, EDR fan-out) ==\n");
+    printf("== wubuwizard agent tool gauntlet (4 models x 3 tools, EDR fan-out) ==\n");
     gauntlet_edr_init();
 
     int n = gauntlet_load_models();

@@ -15,7 +15,7 @@ behind the WuBu Nested Hyperbolic framework.
 ## Build
 
 ```bash
-cd /home/wubu/bytropix/MATH/lean/wubu_proofs
+cd /home/wubu/wubuwizard/MATH/lean/wubu_proofs
 lake build
 ```
 

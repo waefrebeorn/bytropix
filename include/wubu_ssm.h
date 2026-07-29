@@ -13,7 +13,7 @@ extern "C" {
 // ============================================================
 
 // Hyperparameters -- now runtime via wubu_dims.h (WUBU_DIMS global).
-// bytropix's forward reads D_MODEL / CONV_DIM / VALUE_DIM / etc. which
+// wubuwizard's forward reads D_MODEL / CONV_DIM / VALUE_DIM / etc. which
 // resolve to the model's real dimensions at load time. See wubu_dims.h.
 #include "wubu_dims.h"
 

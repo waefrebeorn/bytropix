@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bytropix - Inference Script (Aligned with main.py)
+WubuWizard - Inference Script (Aligned with main.py)
 """
 
 import os
@@ -679,7 +679,7 @@ def interactive_inference(args):
     logging.info(f"Sampler Config: Low={sampling_config.low_entropy_threshold}, Medium={sampling_config.medium_entropy_threshold}")
     logging.info(f"Generation settings: Max New Bytes={args.max_length}, Temperature={args.temperature}")
     print("\n*******************************")
-    print("* Bytropix Inference Tool   *")
+    print("* WubuWizard Inference Tool   *")
     print("*******************************")
     print("\nEnter prompt (or 'quit'/'exit'):"); print("---")
 
@@ -706,7 +706,7 @@ def interactive_inference(args):
     logging.info("Interactive inference finished."); print("Goodbye!")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Bytropix Inference Script")
+    parser = argparse.ArgumentParser(description="WubuWizard Inference Script")
     subparsers = parser.add_subparsers(dest='command', help='Choose inference mode', required=True)
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument("--checkpoint_path", type=str, required=True, help="Path to checkpoint")

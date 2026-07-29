@@ -40,7 +40,7 @@ For `u, v, w` in the Poincaré ball:
 ## Building
 
 ```bash
-cd /home/wubu/bytropix/MATH/lean/
+cd /home/wubu/wubuwizard/MATH/lean/
 lake build
 ```
 

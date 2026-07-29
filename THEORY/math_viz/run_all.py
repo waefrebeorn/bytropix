@@ -22,7 +22,7 @@ OUTPUT = os.path.join(os.path.dirname(BASE), "visualizations")
 os.makedirs(OUTPUT, exist_ok=True)
 
 print("=" * 60)
-print("Bytropix Math Visualization Generator")
+print("WubuWizard Math Visualization Generator")
 print("=" * 60)
 
 for script in SCRIPTS:

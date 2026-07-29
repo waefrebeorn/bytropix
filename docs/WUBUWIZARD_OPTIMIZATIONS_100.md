@@ -1,4 +1,4 @@
-# bytropix — 100 Optimizations for Agnostic Model Loading & Hardware-Agnostic Inference
+# wubuwizard — 100 Optimizations for Agnostic Model Loading & Hardware-Agnostic Inference
 
 **Goal:** enable the masses to load *all* models into our AGI — agnostic weight loading,
 best-in-class handling on *every* hardware class (CPU-only, integrated GPU, consumer dGPU,
@@ -6,7 +6,7 @@ datacenter GPU, Apple Silicon, ARM, RISC-V), without vendor lock-in.
 
 Every item cites the authoritative source it was derived from (llama.cpp, vLLM, FLA,
 exllamav2, MLC-LLM/TVM, NVIDIA, Intel, peer-reviewed papers). Items already implemented in
-bytropix are marked `[DONE]`; the rest are the backlog for the perpetual gap-closer loop.
+wubuwizard are marked `[DONE]`; the rest are the backlog for the perpetual gap-closer loop.
 
 The unifying principle (hardware-agnostic): **dimension-driven loading + a compile-time
 invariant core (SSM_D_STATE=128, SSM_K_HEADS=16, DT_RANK=32, CONV_KERNEL=4, KEY_DIM=2048)
@@ -19,9 +19,9 @@ best available kernel per device. No god-headers, no vendor shortcuts, C11 only.
 
 1. [DONE] **Safetensors directory + single-file detection** — `wubu_model_init_auto` accepts
    multi-shard checkpoints (glob `model-*-of-*.safetensors`) and single adapter files.
-   (HuggingFace safetensors spec; bytropix `wubu_model_safetensors_bridge.c`.)
+   (HuggingFace safetensors spec; wubuwizard `wubu_model_safetensors_bridge.c`.)
 2. [DONE] **LoRA/BTL-3 adapter overlay** — adapter `.safetensors` (peft r=32/α64) applied over
-   a base checkpoint via `BTL_BASE` env. (peft; bytropix LoRA branch.)
+   a base checkpoint via `BTL_BASE` env. (peft; wubuwizard LoRA branch.)
 3. **Memory-mapped weights (`mmap`) for zero-copy load** — map GGUF/safetensors directly into
    the address space; weights are paged in on first touch, no bulk `memcpy`. Unified-memory
    (UMA) GPUs get true zero-copy. (llama.cpp GGUF mmap; HF `mmap` on safetensors.)
@@ -48,7 +48,7 @@ best available kernel per device. No god-headers, no vendor shortcuts, C11 only.
     resume, persistent `/home/wubu/models/<Name>/` (already used; 80 GB survived reboot-proof).
 14. **Read-token accelerated HF fetch** — authenticated `HF_TOKEN` raises the anonymous
     rate limit (already applied: Qwen3.6-27B 15 shards pulled in one session).
-15. **Model registry dataset (HF)** — `WaefreBeorn/bytropix-colonel-registry` inventories
+15. **Model registry dataset (HF)** — `WaefreBeorn/wubuwizard-colonel-registry` inventories
     every model's dims/quants/tokenizer so the loader is config-driven, not hard-coded.
 16. **Tokenizer portability** — ship `tokenizer.json` (HF fast tokenizer) + BPE merges +
     chat template; agnostic across all 4 Colonels. (already wired in gauntlet.)
@@ -65,7 +65,7 @@ best available kernel per device. No god-headers, no vendor shortcuts, C11 only.
 
 ## B. Quantization (fit more model in less memory, less quality loss)  [21–40]
 
-21. [DONE] **Q8_0 path** — near-lossless (≈+0.0004 ppl @7B), default high-quality bytropix.
+21. [DONE] **Q8_0 path** — near-lossless (≈+0.0004 ppl @7B), default high-quality wubuwizard.
 22. [DONE] **F16 path** — full-precision reference path.
 23. **Q4_K_M default** — best balance (≈+0.05 ppl @7B, ~4.5 bpw), the community default
     for ≤16 GB VRAM. (llama.cpp + PromptQuorum 2026.)
@@ -104,7 +104,7 @@ best available kernel per device. No god-headers, no vendor shortcuts, C11 only.
 
 ## C. CPU Kernels (the masses run on CPU/RAM)  [41–58]
 
-41. [DONE] **AVX2 matmul** — bytropix builds with `-mavx2 -mfma`. (justine.lol/matmul.)
+41. [DONE] **AVX2 matmul** — wubuwizard builds with `-mavx2 -mfma`. (justine.lol/matmul.)
 42. **AVX-512 + VNNI int8** — one-thread-per-physical-core, int8 VNNI dot-product for Q8_K.
     (Intel Xeon study; llama.cpp AVX512.)
 43. **AMX int8/bf16** — tile MMA on Sapphire Rapids+; biggest CPU speedup for INT8 quants.
@@ -122,9 +122,9 @@ best available kernel per device. No god-headers, no vendor shortcuts, C11 only.
     as LUT registers) — NoMAD-Attention trick for attention scores too. (NoMAD-Attention.)
 50. **Half-precision (F16) SIMD path** — `_mm256_cvtph_ps` on AVX2/512; half weights, f32 math.
 51. **Prefetch + software pipelining** — overlap dequant with the fma stream.
-52. **Repetition/DRY penalties (already in bytropix)** — repeat-penalty 1.05/1.1, dry-mult
+52. **Repetition/DRY penalties (already in wubuwizard)** — repeat-penalty 1.05/1.1, dry-mult
     0.5/1.2, dry-base 1.75 — slashed agent-loop failure Q8 34%→3%. (your tuning paste.)
-53. **Chunked prefill (already exact)** — O(T·d) chunked SSM; 256K verified. (bytropix.)
+53. **Chunked prefill (already exact)** — O(T·d) chunked SSM; 256K verified. (wubuwizard.)
 54. **GDN chunkwise-parallel prefill [DONE this session]** — exact WY/UT closed form,
     opt-in `WUBU_GDN_CHUNK`; proven 0.0 diff vs scalar at all C. (veitner/sustcsonglin/GDN
     arXiv:2412.06464 — the GPU-ready matmul form.)
@@ -144,7 +144,7 @@ best available kernel per device. No god-headers, no vendor shortcuts, C11 only.
     (llama.cpp `GGML_CUDA_FORCE_MMQ`.)
 60. **cuBLAS path for f16/bf16** — when weights stay fp16, call cuBLAS directly.
 61. **Vulkan backend** — single cross-vendor shader for NVIDIA/AMD/Intel GPUs + MoltenVK.
-    (MLC-LLM; bytropix GPU shim goal.)
+    (MLC-LLM; wubuwizard GPU shim goal.)
 62. **Metal backend** — Apple-Silicon-native for the Mac masses. (MLC-LLM / llama.cpp metal.)
 63. **ROCm (HIP) backend** — AMD dGPU path. (MLC-LLM ROCm.)
 64. **WebGPU / browser** — run in-browser on any GPU via WebGPU (up to 59% faster prefill than
@@ -188,14 +188,14 @@ best available kernel per device. No god-headers, no vendor shortcuts, C11 only.
 82. **Chunked prefill** — split long prompts into chunks interleaved with decode to keep
     latency flat under continuous batching. (Modular handbook.)
 83. **CPU+GPU hybrid attention** — attention may stay on CPU for huge ctx while GPU does FFN
-    (DocShotgun NUMA note) — keep the math identical (bytropix does this via FORCE_CPU_SSM_SEQ).
+    (DocShotgun NUMA note) — keep the math identical (wubuwizard does this via FORCE_CPU_SSM_SEQ).
 84. **Async weight staging** — overlap next-layer DMA with current-layer compute.
 
 ---
 
 ## F. MoE Handling (KAT-Coder, DeepSeek-class)  [85–92]
 
-85. [DONE] **MoE config detection** — bytropix reads `qwen3_5_moe_text` (KAT: 256 experts/8
+85. [DONE] **MoE config detection** — wubuwizard reads `qwen3_5_moe_text` (KAT: 256 experts/8
     active, shared expert). (config.json.)
 86. **Grouped GEMM** — batch all active experts' GEMMs into one kernel for high utilization.
     (Megatron `--moe-grouped-gemm`; DeepSeek-V3 prod.)
@@ -222,7 +222,7 @@ best available kernel per device. No god-headers, no vendor shortcuts, C11 only.
 96. **Lookahead / n-gram draft** — cheap CPU-friendly draft from the model's own n-grams.
 97. **Repetition + DRY already tuned** — see #52; essential for long agent rollouts.
 98. **Sampling config defaults** — temp 0.6 / top_p 0.95 / top_k 20 (your paste); ctx 131072,
-    ub 2048 — already in bytropix `gen_text`.
+    ub 2048 — already in wubuwizard `gen_text`.
 99. **Attention backend select** — FlashAttention / FlashDecoding / PagedAttention chosen per
     device + query length automatically (long ctx → split-KV; short → fused).
 100. **Backend auto-dispatch (GGML-style)** — `ggml_backend_*_supports_op` lets each device

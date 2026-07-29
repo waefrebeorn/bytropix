@@ -1,4 +1,4 @@
-// compare_iq1m_dequant.c — Compare bytropix vs llama.cpp IQ1_M dequant
+// compare_iq1m_dequant.c — Compare wubuwizard vs llama.cpp IQ1_M dequant
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

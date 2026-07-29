@@ -1,6 +1,6 @@
-/* agent_gauntlet.c -- bytropix model-agnostic agent tool gauntlet.
+/* agent_gauntlet.c -- wubuwizard model-agnostic agent tool gauntlet.
  *
- * Design (see bytropix-multimodel-c11 + wubuos-architecture skills):
+ * Design (see wubuwizard-multimodel-c11 + wubuos-architecture skills):
  *  - Every Colonel model is loaded once (missing/oversized -> fixture fallback).
  *  - Each model is run through 3 agent-tool tasks (shell / file / code).
  *  - For each decode step we fan the token sample + any recognized tool-form

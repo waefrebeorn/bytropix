@@ -1,9 +1,9 @@
-# BYTROPIX — 100 Inference-Engine Improvements
+# WUBUWIZARD — 100 Inference-Engine Improvements
 
-Goal: make bytropix the best possible inference engine. Grounded in 2026 SOTA
+Goal: make wubuwizard the best possible inference engine. Grounded in 2026 SOTA
 research (llama.cpp/NVIDIA CUDA-graph post, vLLM continuous-batching, DeepSeek
 MoE/EP, Flash/vLLM FP8-KV, ds4-ssd/Anemll, Mamba-3/SSM, DeepEP/DeepGEMM,
-TurboQuant INT4-KV, speculative decoding EAGLE/MTP) and bytropix's actual
+TurboQuant INT4-KV, speculative decoding EAGLE/MTP) and wubuwizard's actual
 subsystems (`wubu_ssd_moe`, `kv_paged_attention`, `flash_attn_tiled`,
 `gpu_ssm_recurrence`, `hedged_spec`, `wubu_turboquant`, `wubu_moe_hyperbolic`,
 `wubu_poincare_gqa`, `thread_pool`, `tile_manager`, `wubu_lora`).

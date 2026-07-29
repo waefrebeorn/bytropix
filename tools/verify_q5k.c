@@ -2,7 +2,7 @@
  * verify_q5k.c — Verify Q5_K dequant against ggml reference.
  * 
  * Build:
- *   cd /home/wubu/bytropix
+ *   cd /home/wubu/wubuwizard
  *   g++ -std=c++11 -O2 -I include -I/home/wubu/llama.cpp/ggml/include \
  *       -o verify_q5k tools/verify_q5k.c src/gguf_reader.o \
  *       -L/home/wubu/llama.cpp/build/bin -Wl,-rpath,/home/wubu/llama.cpp/build/bin \

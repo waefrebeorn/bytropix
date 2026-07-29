@@ -9,9 +9,9 @@ import json
 import os
 import sys
 
-INPUT = "/home/wubu/bytropix/data/openwebmath_sample.jsonl.gz"
-OUTPUT = "/home/wubu/bytropix/data/train_data.bin"
-STATS = "/home/wubu/bytropix/data/dataset_stats.json"
+INPUT = "/home/wubu/wubuwizard/data/openwebmath_sample.jsonl.gz"
+OUTPUT = "/home/wubu/wubuwizard/data/train_data.bin"
+STATS = "/home/wubu/wubuwizard/data/dataset_stats.json"
 
 def main():
     docs = []

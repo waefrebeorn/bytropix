@@ -37,12 +37,12 @@ int64_t wubu_shard_n_tensors(const wubu_shard_ctx_t *sc);
  * On success returns the pointer and writes the element count to
  * *n_elems_out; on failure returns NULL. Mirrors st_load_f32's
  * allocate-and-return convention so callers need no scratch buffers.
- * For transposed loads (HF [out,in] -> bytropix [in,out]) use _t. */
+ * For transposed loads (HF [out,in] -> wubuwizard [in,out]) use _t. */
 float *wubu_shard_load_f32(const wubu_shard_ctx_t *sc, const char *name,
                            int64_t *n_elems_out);
 
 /* Load a named tensor as F32 and transpose from [rows,cols] to [cols,rows]
- * (HF Linear weight layout -> bytropix forward layout). Returns a freshly
+ * (HF Linear weight layout -> wubuwizard forward layout). Returns a freshly
  * malloc'd buffer of rows*cols floats (caller frees), or NULL on error. */
 float *wubu_shard_load_f32_t(const wubu_shard_ctx_t *sc, const char *name,
                              int rows, int cols);

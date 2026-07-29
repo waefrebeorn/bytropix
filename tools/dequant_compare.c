@@ -1,5 +1,5 @@
 /**
- * dequant_compare.c — Compare bytropix dequant vs llama.cpp ggml dequant.
+ * dequant_compare.c — Compare wubuwizard dequant vs llama.cpp ggml dequant.
  * Reads raw quantized data from GGUF file at known offset.
  * No gguf_reader.h include — avoids enum conflicts.
  *

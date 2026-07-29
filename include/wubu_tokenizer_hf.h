@@ -1,5 +1,5 @@
 /*
- * wubu_tokenizer_hf.h -- HuggingFace tokenizer.json loader for bytropix.
+ * wubu_tokenizer_hf.h -- HuggingFace tokenizer.json loader for wubuwizard.
  *
  * Loads a standard HF BPE tokenizer (Qwen3.6 / Agents-A1 family): NFC
  * normalizer, ByteLevel pre-tokenizer + post-processor, vocab + merges +

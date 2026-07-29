@@ -1,14 +1,14 @@
-# WuBuOS × bytropix — Agentic Development & Inference-Test Harness Plan
+# WuBuOS × wubuwizard — Agentic Development & Inference-Test Harness Plan
 
-**Status:** 2026-07-26. Two workstreams converge: (1) bytropix inference engine
+**Status:** 2026-07-26. Two workstreams converge: (1) wubuwizard inference engine
 model-agnostic forward + 256K-context verification; (2) slermes (C11 Hermes
-reimplementation) as the agentic harness driving wubuos/bytropix dev + test loops.
+reimplementation) as the agentic harness driving wubuos/wubuwizard dev + test loops.
 
 ---
 
 ## 1. What is proven working (verified by real execution)
 
-### bytropix
+### wubuwizard
 - **Model-agnostic forward** across 4 model families (KAT-Coder-V2.5-Dev,
   Agents-A1-4B, Qwen3.6-27B, BTL-3 LoRA). Varying dims (D_MODEL, VALUE_DIM,
   SSM_V_HEADS, CONV_DIM, GQA_*) are runtime globals; invariants (SSM_D_STATE=128,
@@ -48,11 +48,11 @@ reimplementation) as the agentic harness driving wubuos/bytropix dev + test loop
   - `lib/` — needs vendored SQLite amalgamation (fetched to `lib/libdb/`).
 - Build: run `make deps` (needs `unzip` — use Python to extract the SQLite
   amalgamation if unzip absent), then `make -j$(nproc)` ALONE (do not run
-  concurrently with heavy bytropix tests — both exhaust 13 GB WSL RAM → OOM).
+  concurrently with heavy wubuwizard tests — both exhaust 13 GB WSL RAM → OOM).
 
 ---
 
-## 2. Agentic harness design (slermes driving bytropix/wubuos)
+## 2. Agentic harness design (slermes driving wubuwizard/wubuos)
 
 ### Principle: one heavy task at a time
 The WSL box has ~13 GB RAM. A 256K prefill (~8 GB) OR a full slermes build
@@ -77,7 +77,7 @@ gateway**. The agentic harness MUST serialize heavy work and cap memory.
   programs; prefer running alone + monitoring RSS, or `systemd-run --scope
   -p MemoryMax=…` (needs root). On unprivileged WSL, serialize + watch `free -m`.
 
-### Loop C — bytropix feature work
+### Loop C — wubuwizard feature work
 - New capability (e.g. fix the decode-after-prefill state bug, add chunked
   prefill to make full 262144 feasible under memory, LoRA on SSM out_proj) is
   broken into a self-contained task, handed to an ACP subagent with the repo

@@ -4,7 +4,7 @@
  *   -lm -fopenmp -Wl,-rpath,/home/wubu/llama.cpp/build/bin
  *
  * This reads dequantized weights from bin files, runs the SSM using ggml ops,
- * and compares with bytropix output.
+ * and compares with wubuwizard output.
  */
 #include <cstdio>
 #include <cstdlib>

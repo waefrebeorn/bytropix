@@ -17,7 +17,7 @@
 #include <string.h>
 #include <math.h>
 
-// Default dimensions matching the bytropix config
+// Default dimensions matching the wubuwizard config
 #define D_MODEL 2048
 #define VOCAB_SMALL 4096   // small vocab for fast testing
 #define N_BATCH 4          // batch * seqlen = 4 samples

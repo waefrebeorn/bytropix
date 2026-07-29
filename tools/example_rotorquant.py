@@ -7,7 +7,7 @@ Demonstrates the concept using numpy. The actual implementation would use
 
 Inference: dequantize Q4_0 → inverse Givens rotation → use as normal K/V.
 
-Author: Hermes Agent for bytropix
+Author: Hermes Agent for wubuwizard
 """
 
 import numpy as np

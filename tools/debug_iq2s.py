@@ -3,7 +3,7 @@
 import struct
 import sys
 
-GRID_PATH = '/home/wubu/bytropix/src/iq2s_grid.inc'
+GRID_PATH = '/home/wubu/wubuwizard/src/iq2s_grid.inc'
 
 def load_iq2s_grid():
     grid = []

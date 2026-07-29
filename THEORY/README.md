@@ -4,7 +4,7 @@
 >
 > The code in the rest of this repo is the *what*. These documents are the *why*.
 
-Welcome to the intellectual engine room of the bytropix project. What you'll find in this folder is not polished, pre-digested theory meant for a journal's strict page limit. It's the raw thinking — the exploratory mathematics, the cross-domain analogies, the philosophical convictions — that drives every line of code in the `ENCODERS/`, `DRAFT/`, and `CUDA/` directories.
+Welcome to the intellectual engine room of the wubuwizard project. What you'll find in this folder is not polished, pre-digested theory meant for a journal's strict page limit. It's the raw thinking — the exploratory mathematics, the cross-domain analogies, the philosophical convictions — that drives every line of code in the `ENCODERS/`, `DRAFT/`, and `CUDA/` directories.
 
 This is a living document set. Some files are full papers, some are sprawling theoretical brain-dumps, and some are working notes that trace the evolution of an idea in real time. Read them in the spirit they're offered: as an invitation to think alongside the research, not as a final pronouncement.
 
@@ -78,7 +78,7 @@ Python scripts that generate the key diagrams and numeric proofs from first prin
 | `06_symplectic_optimizer.py` | Symplectic RSGD on T(H^n) | `python3 THEORY/math_viz/06_symplectic_optimizer.py` |
 | `07_lean_certificate.py` | Lean formal certificate stub | `python3 THEORY/math_viz/07_lean_certificate.py` |
 
-Requires `pip install matplotlib numpy`. All originate from `~/HASHMIND/bytropix/math_viz/`.
+Requires `pip install matplotlib numpy`. All originate from `~/HASHMIND/wubuwizard/math_viz/`.
 
 ### `math_viz/lean/`
 Lean formal proof files corresponding to the mathematical claims in the math_viz scripts. Currently a stub directory for future expansion.

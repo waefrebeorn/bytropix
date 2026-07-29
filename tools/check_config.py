@@ -1,6 +1,6 @@
 """Read GGUF model config key-value pairs to verify hardcoded constants."""
 import sys
-sys.path.insert(0, '/home/wubu/bytropix')
+sys.path.insert(0, '/home/wubu/wubuwizard')
 from src.gguf_reader import *
 
 # Open the model and read KV pairs

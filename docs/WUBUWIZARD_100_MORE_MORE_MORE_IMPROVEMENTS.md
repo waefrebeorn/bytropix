@@ -1,4 +1,4 @@
-# BYTROPIX — 100 MORE Improvements, Round 4 (Kevin-Bacon via Kimi K3 + its papers)
+# WUBUWIZARD — 100 MORE Improvements, Round 4 (Kevin-Bacon via Kimi K3 + its papers)
 
 Method: 7-degrees-to-Kevin-Bacon, seeded from **Kimi K3** (2.8T, 594GB MXFP4,
 Moonshot AI, July 2026 — weights July 27) and the papers it sits on top of.
@@ -142,7 +142,7 @@ Concrete, tested modules (covered by `make test_400`):
 | src/wubu_latentmoe.c | AD.423, AD.424, AD.430 | 896/16 routed + shared expert routing |
 | src/wubu_mxfp4.c  | AE.433, AE.435, AE.437, AE.438 | MXFP4/MXFP8 pack/unpack, E8M0 scale |
 
-The remaining Round-4 items (AF–AJ) map onto existing bytropix subsystems
+The remaining Round-4 items (AF–AJ) map onto existing wubuwizard subsystems
 (paged_kv, scheduler, ssd_moe, turboquant, moe_grouped, roofline) for next strike.
 
 GRAND TOTAL across all rounds: **400 researched improvements** (100x4), with
@@ -151,5 +151,5 @@ GRAND TOTAL across all rounds: **400 researched improvements** (100x4), with
 NOTE on size: Kimi K3 is 594GB MXFP4 / 2.8T params — far beyond a 13GB-RAM
 WSL box. We CANNOT download or run it here. Per user directive, the value is
 LEARNING the architecture (KDA, AttnRes, Stable LatentMoE, MXFP4) and porting
-those techniques into bytropix as real, tested C modules — which is exactly
+those techniques into wubuwizard as real, tested C modules — which is exactly
 what this Round does. Weights stay on HF; we reap the ideas.

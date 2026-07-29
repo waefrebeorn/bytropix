@@ -1,6 +1,6 @@
 /*
  * wubu_model_safetensors_bridge.c -- load HF safetensors Colonel models
- * into bytropix's wubu_model_t and run them through the EXISTING
+ * into wubuwizard's wubu_model_t and run them through the EXISTING
  * SSM + GQA + MoE forward passes in pure F32.
  *
  * Tensor names are the real published HF names (from each repo's
@@ -13,7 +13,9 @@
 #include "wubu_safetensors_shard.h"
 #include "safetensors_reader.h"
 #include "wubu_lora.h"
+#include "wubu_rotate.h"   // doc 013: wubu_pow2_floor / wubu_rotate_fuse_right
 #include <stdlib.h>
+#include "wubu_affinity.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -34,7 +36,7 @@ static float *st_load_f32(st_ctx *st, const char *name, int64_t *nelems) {
     return buf;
 }
 
-/* load + TRANSPOSE: HF Linear weight [out,in] -> bytropix [in,out] row-major.
+/* load + TRANSPOSE: HF Linear weight [out,in] -> wubuwizard [in,out] row-major.
  * Delegates to the shard loader's transpose path. */
 static float *st_load_f32_t(wubu_shard_ctx_t *sc, const char *name, int rows, int cols) {
     float *dst = (float *)malloc((size_t)rows * cols * sizeof(float));
@@ -89,10 +91,25 @@ int wubu_model_init_safetensors(wubu_model_t *m, const char *path,
 }
 
 int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
-                                   const wubu_adapter_t *ad,
-                                   const char *sidecar_dir) {
+                                  const wubu_adapter_t *ad,
+                                  const char *sidecar_dir) {
     if (!m || !path || !ad) return -1;
     memset(m, 0, sizeof(*m));
+
+    /* Game-console hardware discipline (I05 / NuMA+P-core pinning). Mirrors
+     * the same block in wubu_model_init(): pin to P-cores + close/core-
+     * bound OpenMP so the GEMV parallel-for keeps each row-chunk on
+     * one core's cache. Graceful no-op when not applicable. */
+    {
+        int pinned[64]; int k = wubu_affinity_pin_pcores(pinned, 64);
+        if (k > 0) {
+            setenv("OMP_PROC_BIND", "close", 1);
+            setenv("OMP_PLACES", "cores", 1);
+            setenv("OMP_SCHEDULE", "dynamic,64", 1);
+            fprintf(stderr, "[affinity] pinned engine to %d P-cores (core0=%d)\n",
+                    k, pinned[0]);
+        }
+    }
 
     st_ctx *st = st_open(path);
     if (!st) {
@@ -467,6 +484,24 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     }
     m->token_embd_q = NULL; m->output_weight_q = NULL;
     m->use_embedding_file = false;
+
+    /* doc 013: optional QuaRot-style Hadamard fuse into the lm_head.
+     * For the F32 path we physically fuse H_P into output_weight (above
+     * branch); for the zero-copy BF16/F16 lazy path we keep the weight
+     * unrotated and instead rotate each row + the input on the fly in the
+     * forward (see wubu_model.c lm_head GEMVs). Either way we set rotate_P
+     * so the forward knows to apply H_P. Gated by WUBU_ROTATE_W=1;
+     * OFF by default (no behavior change). */
+    m->rotate_P = 0;
+    if (getenv("WUBU_ROTATE_W")) {
+        int P = wubu_pow2_floor(m->d_model);
+        if (P > 1) {
+            m->rotate_P = P;
+            fprintf(stderr, "[rotate] Hadamard P=%d armed for lm_head (doc 013)\n", P);
+            if (m->output_weight)  /* F32 path: fuse physically */
+                wubu_rotate_fuse_right(m->output_weight, m->vocab_size, m->d_model);
+        }
+    }
     
     /* Keep the shard context alive for lazy embed/lm_head mmap access.
      * Store in model; wubu_model_free will close it. */

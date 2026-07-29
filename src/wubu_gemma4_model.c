@@ -1,6 +1,6 @@
 /* wubu_gemma4_model.c — Gemma 4 12B dual-head-dim ISWA forward pass.
  *
- * Port of llama.cpp gemma4 model, adapted for bytropix quantized matmul.
+ * Port of llama.cpp gemma4 model, adapted for wubuwizard quantized matmul.
  * Architecture: 48 layers, 40 sliding-window (HEAD_DIM=256) + 8 full-attention (HEAD_DIM=512).
  * Full attention at indices 5, 11, 17, 23, 29, 35, 41, 47 (every 6th from 5).
  * KV sharing: layers 40-47 reuse KV from layers 38-39.

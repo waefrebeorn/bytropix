@@ -8,7 +8,7 @@ import time
 
 VOCAB = 248320
 HIDDEN = 2048
-PATH = '/home/wubu/bytropix/data/qwen36_embeddings.bin'
+PATH = '/home/wubu/wubuwizard/data/qwen36_embeddings.bin'
 
 print("Loading embeddings...")
 t0 = time.time()

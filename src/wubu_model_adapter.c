@@ -1,5 +1,5 @@
 /*
- * wubu_model_adapter.c -- HF config.json -> bytropix dims (C11,
+ * wubu_model_adapter.c -- HF config.json -> wubuwizard dims (C11,
  * self-contained, opaque). Hand-parses the JSON we care about:
  *   architectures[0] / model_type, num_hidden_layers, hidden_size,
  *   intermediate_size, num_experts, num_experts_per_tok, num_attention_heads,
@@ -314,7 +314,7 @@ bool wubu_model_resolve(const char *path, wubu_adapter_t *out) {
     }
 
     /* Legacy GGUF: report the generic Qwen3.6-35B-A3B family that
-     * bytropix already supports; the on-disk gguf carries the real dims. */
+     * wubuwizard already supports; the on-disk gguf carries the real dims. */
     out->arch = WUBU_ARCH_QWEN_FAMILY;
     out->tensor_naming = 0;
     out->ok = true;

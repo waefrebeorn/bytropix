@@ -49,7 +49,7 @@ int main() {
     // Check if token 0 embedding is reasonable
     
     // Read our file
-    FILE *f = fopen("/home/wubu/bytropix/data/qwen36_embeddings_c.bin.raw", "rb");
+    FILE *f = fopen("/home/wubu/wubuwizard/data/qwen36_embeddings_c.bin.raw", "rb");
     if (!f) { printf("Cannot open embedding file\n"); return 1; }
     
     float *crnt = (float *)malloc(n_embd * sizeof(float));

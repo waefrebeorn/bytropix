@@ -843,13 +843,13 @@ of large genus, 2020.
 autoencoders. In International Conference on Learning Representations (ICLR), 2020.
 
 [19] W. WaefreBeorn. Wubu nesting (˘5c64˘758a˘5d4c˘5957): A comprehensive geometric framework for  
-adaptive multi-scale hierarchical representation with integrated rotational dynamics. Bytropix  
-project repository (DNS redirect), 2024. URL http://bytropix.waefrebeorn.com. Self-  
+adaptive multi-scale hierarchical representation with integrated rotational dynamics. WubuWizard  
+project repository (DNS redirect), 2024. URL http://wubuwizard.waefrebeorn.com. Self-  
 published technical report / manuscript accompanying video presentations.
 
 [20] W. WaefreBeorn. Wubu spatio-temporal nesting (˘6642˘7a7a˘5c64˘758a˘5d4c˘5957): An adaptive,  
 rotation-aware, nested hyperbolic framework for dynamic scene understanding and prediction.  
-Bytropix project repository (DNS redirect), 2025. URL http://bytropix.waefrebeorn.com.  
+WubuWizard project repository (DNS redirect), 2025. URL http://wubuwizard.waefrebeorn.com.  
 Self-published technical report / manuscript accompanying video presentations.
 
 [21] Hongyuan Wang and Tony Low. Hyperbolicity in 2d transition metal ditellurides induced by  

@@ -33,7 +33,7 @@ int main() {
     
     // Alternative: load the BOS embedding (same for both)
     float *embd = (float *)malloc(D_MODEL * sizeof(float));
-    FILE *f = fopen("/home/wubu/bytropix/data/qwen36_embeddings_c.bin.raw", "rb");
+    FILE *f = fopen("/home/wubu/wubuwizard/data/qwen36_embeddings_c.bin.raw", "rb");
     fseek(f, 248044LL * D_MODEL * sizeof(float), SEEK_SET);
     fread(embd, sizeof(float), D_MODEL, f);
     fclose(f);

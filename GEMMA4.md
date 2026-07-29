@@ -1,4 +1,4 @@
-# bytropix — Gemma 4 12B Engine
+# wubuwizard — Gemma 4 12B Engine
 
 ## Architecture
 - Dual-head-dim ISWA: 40 sliding (HDIM=256, Q=4096, KV=2048, 8KV heads, 10K rope) + 8 full (HDIM=512, Q=8192, KV=512, 1KV head, 1M rope, 25% rotary, rope_freqs)

@@ -7,7 +7,7 @@ from tqdm import tqdm
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def create_poem_dataset(output_dir: str = "C:/projects/bytropix/data/poems"):
+def create_poem_dataset(output_dir: str = "C:/projects/wubuwizard/data/poems"):
     """
     Creates small poem datasets for training and validation in the NPY format
     compatible with the ByteTropix model.
@@ -93,8 +93,8 @@ if __name__ == "__main__":
     # Print instructions for using these datasets
     logger.info("\nTo use these datasets with your model, run with:")
     logger.info("python integrated_hyper_hakmem_model.py \\")
-    logger.info("    --data_path=C:/projects/bytropix/data/poems/poems_train.npy \\")
-    logger.info("    --val_data_path=C:/projects/bytropix/data/poems/poems_val.npy \\")
+    logger.info("    --data_path=C:/projects/wubuwizard/data/poems/poems_train.npy \\")
+    logger.info("    --val_data_path=C:/projects/wubuwizard/data/poems/poems_val.npy \\")
     logger.info("    --batch_size=2 --grad_accum_steps=4 --learning_rate=5e-05 \\")
     logger.info("    --epochs=3 --data_fraction=1.0 --max_grad_norm=0.5 \\")
     logger.info("    --save_interval=50 --log_interval=5")

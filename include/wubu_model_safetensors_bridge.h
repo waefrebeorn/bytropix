@@ -12,14 +12,14 @@ extern "C" {
 /*
  * wubu_model_safetensors_bridge.h -- load a HuggingFace safetensors
  * checkpoint (the Colonel models: Qwen3.6-27B hybrid, Agents-A1-4B,
- * KAT-Coder MoE, BTL-3 LoRA) into bytropix's wubu_model_t and run it
+ * KAT-Coder MoE, BTL-3 LoRA) into wubuwizard's wubu_model_t and run it
  * through the EXISTING SSM + GQA + MoE forward passes in pure F32.
  *
  * No third-party deps, no GGUF assumption. Tensor names are the real
  * published HF names (model.language_model.layers.N.linear_attn.* etc.)
  * discovered from each repo's model.safetensors.index.json.
  *
- * Layout mapping (HF -> bytropix, all F32, transposed where needed):
+ * Layout mapping (HF -> wubuwizard, all F32, transposed where needed):
  *   self_attn.q_proj/k_proj/v_proj/o_proj  -> gqa.attn_{q,k,v,output}_weight
  *   linear_attn.in_proj_qkv                 -> ssm.attn_qkv_weight_f32 [D,CONV_DIM]
  *   linear_attn.in_proj_z                   -> ssm.attn_gate_weight_f32 [D,VALUE_DIM]

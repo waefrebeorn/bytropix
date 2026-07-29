@@ -11,7 +11,7 @@ extern "C" {
 
 /*
  * wubu_model_adapter.h -- map a HuggingFace Transformers config.json
- * to bytropix's model dimensions + detect the architecture + LoRA.
+ * to wubuwizard's model dimensions + detect the architecture + LoRA.
  *
  * Covers the four new Colonel models:
  *   - Qwen3.6-27B        : dense Qwen3.6 hybrid (Gated DeltaNet SSM + GQA)
@@ -20,7 +20,7 @@ extern "C" {
  *   - BTL-3               : rank-32 LoRA adapter on Qwen3.6-27B base
  *
  * The adapter is the bridge between HuggingFace's "architectures" /
- * "model_type" strings and bytropix's internal d_model / n_experts /
+ * "model_type" strings and wubuwizard's internal d_model / n_experts /
  * tensor_naming. Opaque: caller only reads the resolved struct.
  */
 

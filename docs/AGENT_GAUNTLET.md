@@ -19,7 +19,7 @@ On-disk checkpoints live **persistently** under `/home/wubu/models/<Name>/`
 accepts the **directory** (dense/moe) or the **adapter file** (BTL-3, with
 `BTL_BASE` = the Qwen3.6-27B base dir). The canonical, exact-dim inventory is
 stored on HuggingFace:
-**https://huggingface.co/datasets/WaefreBeorn/bytropix-colonel-registry**
+**https://huggingface.co/datasets/WaefreBeorn/wubuwizard-colonel-registry**
 (`registry.json` + card).
 
 | codename        | kind | on-disk checkpoint (resolved at runtime) |
@@ -54,7 +54,7 @@ surface as OS process/file/network telemetry. The OS self-improvement loop
 consumes `edr_recent_events()` for replay + scoring.
 
 Build: `make gauntlet` (driver) / `make test_gauntlet` (regression).
-Links bytropix engine (`CORE_OBJ`) + WuBuOS `$(EDR_SRC)` (no daemon) + `-lpthread`.
+Links wubuwizard engine (`CORE_OBJ`) + WuBuOS `$(EDR_SRC)` (no daemon) + `-lpthread`.
 Override the WuBuOS checkout path with `make WUBUOS=/path/to/wubuos test_gauntlet`.
 
 ## Verification (this box, fixture fallback)

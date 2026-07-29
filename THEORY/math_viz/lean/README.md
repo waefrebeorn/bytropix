@@ -15,7 +15,7 @@
 ### Setup to Compile Lean Proofs
 
 ```bash
-cd bytropix/math_viz/lean/wubu_lean_proofs
+cd wubuwizard/math_viz/lean/wubu_lean_proofs
 # First install elan: curl -sSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh
 lake build
 ```

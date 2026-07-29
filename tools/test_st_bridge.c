@@ -1,6 +1,6 @@
-/* test_st_bridge.c -- verify the safetensors->bytropix F32 bridge
+/* test_st_bridge.c -- verify the safetensors->wubuwizard F32 bridge
  * maps the REAL published HF tensor names (model.language_model.layers.N...)
- * onto bytropix's SSM/GQA/MoE F32 weight structs with no gaps, AND runs the
+ * onto wubuwizard's SSM/GQA/MoE F32 weight structs with no gaps, AND runs the
  * full pipeline (load -> wubu_model_forward -> greedy decode -> repetition
  * controller) at the model's own runtime dims (D=16 fixture). The forward
  * reads D_MODEL from the runtime wubu_dims global, so it runs on any model.
@@ -81,7 +81,7 @@ int main(void) {
     if (bad) { fprintf(stderr, "FAIL: loaded F32 weights degenerate/non-finite\n"); return 1; }
 
     wubu_model_safetensors_free(&m);
-    printf("PASS: safetensors bridge maps HF->bytropix F32 structs (SSM+GQA+MoE, real weights)\n");
+    printf("PASS: safetensors bridge maps HF->wubuwizard F32 structs (SSM+GQA+MoE, real weights)\n");
 
     /* ---- End-to-end: load again and actually RUN the forward + a short
      * greedy decode loop with the repetition controller (your llama.cpp

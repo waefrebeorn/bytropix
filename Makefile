@@ -11,7 +11,7 @@ CUDA_HOME = $(shell d=$(NVCC); d=$${d%/*}; d=$${d%/*}; echo $$d)
 CUDA_INC = -I$(CUDA_HOME)/include
 CUDA_LIBDIR = $(shell if [ -d $(CUDA_HOME)/lib/x86_64-linux-gnu ]; then echo $(CUDA_HOME)/lib/x86_64-linux-gnu; else echo $(CUDA_HOME)/lib64; fi)
 CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include $(CUDA_INC) -fopenmp
-LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -lcudart -lcublas -lpthread
+LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -lcudart -lcublas -lpthread -lssl -lcrypto
 NVCC_FLAGS = -O3 -I include -arch=sm_86
 CUDA_INCS = $(CUDA_INC)
 CUDA_LIBS = -L$(CUDA_LIBDIR) -lcublas -lcudart
@@ -25,10 +25,10 @@ api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -I include -o $@ $< -lssl -lcrypto -lm
 
 # Object files
-CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o src/wubu_gemm.o src/wubu_kvcache_quant.o src/wubu_ssm_scan.o src/wubu_roofline.o src/wubu_kv_select.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o
+CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o src/wubu_gemm.o src/wubu_kvcache_quant.o src/wubu_ssm_scan.o src/wubu_roofline.o src/wubu_kv_select.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o src/wubu_prefix_cache.o src/wubu_paged_kv.o src/wubu_q4k_m.o src/wubu_delta_net.o src/wubu_scheduler.o src/wubu_ngram.o src/wubu_self_cascade.o src/wubu_spec_cascade.o
 MODEL_OBJ = $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o src/flash_attn_q4_0_opt.o src/flash_attn_q4_0_prefill_opt.o
-GPU_OBJ = src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o
+GPU_OBJ = src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o
 RSGD_OBJ = src/rsgd.o
 
 # New Colonel-model support (safetensors + LoRA + repetition + adapter)
@@ -61,7 +61,7 @@ src/wubu_dims.o: src/wubu_dims.c include/wubu_dims.h
 src/wubu_dims_gpu.o: src/wubu_dims_gpu.cu include/wubu_dims.h
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
 
-src/wubu_model_safetensors_bridge.o: src/wubu_model_safetensors_bridge.c include/wubu_model_safetensors_bridge.h include/wubu_model.h
+src/wubu_model_safetensors_bridge.o: src/wubu_model_safetensors_bridge.c include/wubu_model_safetensors_bridge.h include/wubu_model.h include/wubu_lora.h include/wubu_model_adapter.h include/wubu_affinity.h include/wubu_rotate.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_repetition.o: src/wubu_repetition.c include/wubu_repetition.h
@@ -112,6 +112,27 @@ src/wubu_poincare_gqa.o: src/wubu_poincare_gqa.c include/wubu_poincare_gqa.h inc
 src/wubu_poincare_gqa_backward.o: src/wubu_poincare_gqa_backward.c include/wubu_poincare_gqa.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+src/wubu_prefix_cache.o: src/wubu_prefix_cache.c include/wubu_prefix_cache.h include/wubu_paged_kv.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_paged_kv.o: src/wubu_paged_kv.c include/wubu_paged_kv.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_q4k_m.o: src/wubu_q4k_m.c include/wubu_q4k_m.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_delta_net.o: src/wubu_delta_net.c include/wubu_delta_net.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_ngram.o: src/wubu_ngram.c include/wubu_ngram.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_spec_cascade.o: src/wubu_spec_cascade.c include/wubu_spec_cascade.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/wubu_scheduler.o: src/wubu_scheduler.c include/wubu_scheduler.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 src/wubu_mobius_linear.o: src/wubu_mobius_linear.c include/wubu_mobius_linear.h include/wubu_mobius.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -130,7 +151,15 @@ src/wubu_vision.o: src/wubu_vision.c include/wubu_vision.h include/wubu_ssm.h
 src/gguf_reader.o: src/gguf_reader.c include/gguf_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/wubu_model.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h include/wubu_moe.h include/gguf_reader.h include/wubu_kv_select.h include/wubu_kv_runtime.h
+src/wubu_generate.o: src/wubu_generate.c include/wubu_generate.h include/wubu_model.h include/wubu_spec_decode.h
+src/wubu_kvvq.o: src/wubu_kvvq.c include/wubu_kvvq.h
+src/wubu_arena.o: src/wubu_arena.c include/wubu_arena.h
+src/wubu_smoothquant.o: src/wubu_smoothquant.c include/wubu_smoothquant.h
+src/wubu_ternary.o: src/wubu_ternary.c include/wubu_ternary.h
+src/wubu_spec_decode.o: src/wubu_spec_decode.c include/wubu_spec_decode.h
+src/wubu_flashdecode.o: src/wubu_flashdecode.c include/wubu_flashdecode.h
+src/wubu_rotate.o: src/wubu_rotate.c include/wubu_rotate.h
+src/wubu_model.o: src/wubu_model.c include/wubu_model.h include/wubu_ssm.h include/wubu_moe.h include/gguf_reader.h include/wubu_kv_select.h include/wubu_kv_runtime.h include/wubu_affinity.h include/wubu_rotate.h
 src/wubu_gemm.o: src/wubu_gemm.c include/wubu_gemm.h
 src/wubu_gemv_tune.o: src/wubu_gemv_tune.c include/wubu_gemv_tune.h include/wubu_roofline.h
 src/quantized_matmul.o: src/quantized_matmul.c include/wubu_gemm.h include/wubu_gemv_tune.h include/gguf_reader.h include/wubu_ssm.h include/wubu_safetensors_shard.h
@@ -273,7 +302,7 @@ test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o src/wubu_safetensors_shard
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ── 100-improvement modules (Areas A/B/C/D/F/H/I/J/K) ───────────────
-test_spec_decode: tools/test_spec_decode.c src/wubu_spec_decode.o
+test_spec_decode: tools/test_spec_decode.c src/wubu_spec_decode.o src/wubu_ngram.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
@@ -454,6 +483,41 @@ test_kv_cache_kivi: tools/test_kv_cache_integration.c $(CPU_OBJ) src/wubu_kv_sel
 # Roofline-driven GEMV auto-tuner: tiled fp32 + int8 variants vs scalar oracle
 # + tuner sanity. Real Qwen weight used for one probe (skip-safe if absent).
 # B03: int4 weight GEMV vs fp32 oracle + autotune precedence
+# doc 018/K01: n-gram speculative decoding generator (equivalence vs plain)
+test_generate_spec: tools/test_generate_spec.c src/wubu_generate.o src/wubu_spec_decode.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
+# doc 006: arena allocator for per-request + KV buffers
+test_arena: tools/test_arena.c src/wubu_arena.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
+# doc 005: SmoothQuant activation outlier migration
+test_smoothquant: tools/test_smoothquant.c src/wubu_smoothquant.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
+# doc 004: BitNet 1.58 ternary {-1,0,+1} GEMV
+test_ternary: tools/test_ternary.c src/wubu_ternary.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
+# doc 014: sub-4-bit KV vector quantization (CommVQ/TurboQuant)
+test_kvvq: tools/test_kvvq.c src/wubu_kvvq.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
+# doc 015: FlashDecoding-style parallel KV-load decode attention
+test_flashdecode: tools/test_flashdecode.c src/wubu_flashdecode.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
+# doc 013: QuaRot/Hadamard rotation invariance + outlier-suppression
+test_rotate: tools/test_rotate.c src/wubu_rotate.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
 test_gemv_int4: tools/test_gemv_int4.c $(CPU_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
 	./$@

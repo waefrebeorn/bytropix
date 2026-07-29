@@ -10,9 +10,9 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def download_and_preprocess_hh_rlhf(output_dir: str = "C:/projects/bytropix/data"):
+def download_and_preprocess_hh_rlhf(output_dir: str = "C:/projects/wubuwizard/data"):
     """
-    Downloads and preprocesses the Anthropic HH-RLHF dataset for Bytropix training.
+    Downloads and preprocesses the Anthropic HH-RLHF dataset for WubuWizard training.
     
     Args:
         output_dir (str): Directory to save the processed NPY files

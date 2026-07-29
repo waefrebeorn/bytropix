@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bytropix/math_viz/03_poincare_clock.py
+wubuwizard/math_viz/03_poincare_clock.py
 
 PROVES: The holographic geodesic optimizer decomposes gradients into soul (integer) 
         and echo (fractional) components, enabling perfect gradient recovery.

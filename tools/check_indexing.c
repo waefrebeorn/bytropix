@@ -7,7 +7,7 @@
 #define MAX_MODEL_TENSORS 1024
 
 int main() {
-    gguf_ctx *ctx = gguf_load("bytropix-v13-q5_k-moe.gguf");
+    gguf_ctx *ctx = gguf_load("wubuwizard-v13-q5_k-moe.gguf");
     if (!ctx) {
         fprintf(stderr, "Failed to load model\n");
         return 1;

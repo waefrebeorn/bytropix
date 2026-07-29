@@ -14,6 +14,7 @@ extern "C" {
 
 /* Global selected scheme (set at model load, read by kv_cache_* in wubu_model.h). */
 extern int g_kv_scheme;
+extern int g_kv_head_dim;
 void wubu_kv_set_scheme(int scheme);
 int  wubu_kv_get_scheme(void);
 

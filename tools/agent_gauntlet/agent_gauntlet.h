@@ -1,4 +1,4 @@
-/* agent_gauntlet.h -- bytropix model-agnostic agent tool gauntlet
+/* agent_gauntlet.h -- wubuwizard model-agnostic agent tool gauntlet
  *
  * Runs every loaded Colonel model through a battery of agent-tool tasks and
  * fans every agent action (tool invocation, token sample, completion) into the
@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "wubu_model.h"   /* bytropix engine: wubu_model_t, wubu_model_init_auto, ... */
+#include "wubu_model.h"   /* wubuwizard engine: wubu_model_t, wubu_model_init_auto, ... */
 #include "wubu_edr.h"     /* WuBuOS EDR public API (EDR_EV_*, EdrEventView, edr_log_*) */
 
 #ifdef __cplusplus

@@ -6,7 +6,7 @@
 
 int main(int argc, char **argv) {
     const char *gguf_path = "/mnt/wslg/distro/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
-    const char *out_path = "/home/wubu/bytropix/data/qwen36_embeddings_c.bin";
+    const char *out_path = "/home/wubu/wubuwizard/data/qwen36_embeddings_c.bin";
     float R = 0.956f;  // Poincaré ball radius from analysis
     
     if (argc > 1) gguf_path = argv[1];

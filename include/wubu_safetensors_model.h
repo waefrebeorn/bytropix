@@ -13,9 +13,9 @@ extern "C" {
 
 /*
  * wubu_safetensors_model.h -- load a HuggingFace safetensors checkpoint
- * into bytropix's internal SSM+GQA+MoE weight layout.
+ * into wubuwizard's internal SSM+GQA+MoE weight layout.
  *
- * bytropix's native path reads GGUF (blk.N.* names). The Colonel models
+ * wubuwizard's native path reads GGUF (blk.N.* names). The Colonel models
  * ship as safetensors with Transformers naming:
  *   model.layers.N.self_attn.q_proj.weight        [d_model, d_model]
  *   model.layers.N.self_attn.k_proj.weight        [d_model, kv_dim]
@@ -32,7 +32,7 @@ extern "C" {
  *   model.embed_tokens.weight                    [vocab, d_model]
  *   lm_head.weight                              [vocab, d_model]
  *
- * The SSM (Gated DeltaNet) projection is the fused qkv in bytropix's
+ * The SSM (Gated DeltaNet) projection is the fused qkv in wubuwizard's
  * internal layout; for the Transformers models we map the attention
  * projections directly to gqa_layer_weights and the MLP to moe/expert.
  *

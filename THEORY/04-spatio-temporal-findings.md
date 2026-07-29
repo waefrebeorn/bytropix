@@ -144,11 +144,11 @@ The WuBu Nesting and WuBu Spatio-Temporal Nesting frameworks represent a concert
 
 *(Self-references and key external papers)*
 
-<a name="ref_wunp1"></a>[WNP1] WaefreBeorn, W. (2024-2025). *WuBu Nesting (層疊嵌套): A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics*. Bytropix Project (Self-Published). (Corresponds to `WuBuHypCD-paper.md` or `WuBu_Nesting.pdf` from your repository)
+<a name="ref_wunp1"></a>[WNP1] WaefreBeorn, W. (2024-2025). *WuBu Nesting (層疊嵌套): A Comprehensive Geometric Framework for Adaptive Multi-Scale Hierarchical Representation with Integrated Rotational Dynamics*. WubuWizard Project (Self-Published). (Corresponds to `WuBuHypCD-paper.md` or `WuBu_Nesting.pdf` from your repository)
 
-<a name="ref_wustp1"></a>[WSTP1] WaefreBeorn, W. (2024-2025). *WuBu Spatio-Temporal Nesting (時空層疊嵌套): An Adaptive, Rotation-Aware, Nested Hyperbolic Framework for Dynamic Scene Understanding and Prediction*. Bytropix Project (Self-Published). (Corresponds to `WuBu Spatio-Temporal Nesting.md` from your repository)
+<a name="ref_wustp1"></a>[WSTP1] WaefreBeorn, W. (2024-2025). *WuBu Spatio-Temporal Nesting (時空層疊嵌套): An Adaptive, Rotation-Aware, Nested Hyperbolic Framework for Dynamic Scene Understanding and Prediction*. WubuWizard Project (Self-Published). (Corresponds to `WuBu Spatio-Temporal Nesting.md` from your repository)
 
-<a name="ref_pycode"></a>[PyCodeRef] WaefreBeorn, W. (2024-2025). *Bytropix: WuBuSpecTrans_v0.1.1.py and HAKMEMQController.py implementations*. Bytropix GitHub Repository. `https://github.com/waefrebeorn/bytropix` (Illustrative URL)
+<a name="ref_pycode"></a>[PyCodeRef] WaefreBeorn, W. (2024-2025). *WubuWizard: WuBuSpecTrans_v0.1.1.py and HAKMEMQController.py implementations*. WubuWizard GitHub Repository. `https://github.com/waefrebeorn/wubuwizard` (Illustrative URL)
 
 <a name="ref_pwx21"></a>[PWX21] Parlier, H., Wu, Y., & Xue, Y. (2020). The simple separating systole for hyperbolic surfaces of large genus. *arXiv preprint arXiv:2005.01006*.
 

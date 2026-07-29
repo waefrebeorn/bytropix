@@ -270,7 +270,7 @@ def extract_embeddings(gguf_path, out_path):
 
 if __name__ == '__main__':
     gguf = sys.argv[1] if len(sys.argv) > 1 else '/mnt/wslg/distro/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf'
-    out = sys.argv[2] if len(sys.argv) > 2 else '/home/wubu/bytropix/data/qwen36_embeddings.bin'
+    out = sys.argv[2] if len(sys.argv) > 2 else '/home/wubu/wubuwizard/data/qwen36_embeddings.bin'
     if not os.path.exists(gguf):
         print(f"Not found: {gguf}")
         sys.exit(1)

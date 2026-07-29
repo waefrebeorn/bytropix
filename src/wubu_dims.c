@@ -1,5 +1,5 @@
 /*
- * wubu_dims.c -- runtime dimension global for bytropix.
+ * wubu_dims.c -- runtime dimension global for wubuwizard.
  * See wubu_dims.h. The loader sets WUBU_DIMS from real tensor shapes;
  * the forward passes read it via the macro aliases.
  */

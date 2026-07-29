@@ -1,4 +1,4 @@
-# bytropix
+# wubuwizard
 
 C11 inference engine ("the Colonel") plus a vault of mathematical encoders and
 prior research. No external ML dependencies; quantization, matmul, tokenizer,

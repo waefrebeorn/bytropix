@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bytropix/math_viz/02_golden_ratio_decomposition.py
+wubuwizard/math_viz/02_golden_ratio_decomposition.py
 
 PROVES: GAAD as optimal spatial tiling with phi
 MATH: Recursive Golden Subdivision + Phi-Spiral for aspect-ratio-agnostic decomposition

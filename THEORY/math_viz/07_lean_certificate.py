@@ -180,7 +180,7 @@ EOF
 # Create directory structure
 mkdir -p WuBuProofs
 
-# Copy all .lean files from bytropix Lean proofs
+# Copy all .lean files from wubuwizard Lean proofs
 cp ../math_viz/lean/*.lean WuBuProofs/
 
 # Build
@@ -214,7 +214,7 @@ ELAKE
 # Create directory structure
 mkdir -p WuBuProofs
 
-# Copy all .lean files from bytropix Lean proofs
+# Copy all .lean files from wubuwizard Lean proofs
 cp ../math_viz/lean/*.lean WuBuProofs/
 
 # Build

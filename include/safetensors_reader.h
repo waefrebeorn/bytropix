@@ -12,7 +12,7 @@ extern "C" {
 
 /*
  * safetensors_reader.h -- read HuggingFace safetensors files (the format ALL
- * of the new bytropix models ship in: Qwen3.6-27B, Agents-A1-4B,
+ * of the new wubuwizard models ship in: Qwen3.6-27B, Agents-A1-4B,
  * KAT-Coder-V2.5-Dev, BTL-3).
  *
  * safetensors layout:

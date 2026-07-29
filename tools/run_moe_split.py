@@ -14,7 +14,7 @@ import ctypes
 import os
 
 # Load C library for dequant
-lib = ctypes.CDLL(os.path.expanduser("~/bytropix/src/gguf_reader.o"))
+lib = ctypes.CDLL(os.path.expanduser("~/wubuwizard/src/gguf_reader.o"))
 
 # Read MoE input
 moe_input = np.frombuffer(open("/tmp/dbg_moe_input.bin","rb").read(), dtype=np.float32)
@@ -267,7 +267,7 @@ print("C code written to /tmp/dump_routed_shared.c")
 # Now compile and run
 import subprocess
 ret = subprocess.run(
-    "cd /home/wubu/bytropix && gcc -O3 -march=native -ffast-math -fopenmp -I include "
+    "cd /home/wubu/wubuwizard && gcc -O3 -march=native -ffast-math -fopenmp -I include "
     "-o /tmp/dump_routed_shared /tmp/dump_routed_shared.c "
     "src/wubu_model.o src/wubu_ssm.o src/wubu_ssm_chunked.o src/wubu_mobius.o "
     "src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o "
@@ -277,7 +277,7 @@ ret = subprocess.run(
     "src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o "
     "-lm -fopenmp",
     shell=True, capture_output=True, text=True, timeout=30,
-    cwd="/home/wubu/bytropix"
+    cwd="/home/wubu/wubuwizard"
 )
 print(ret.stdout[-200:] if len(ret.stdout) > 200 else ret.stdout)
 print(ret.stderr[-200:] if len(ret.stderr) > 200 else ret.stderr)
@@ -286,7 +286,7 @@ if ret.returncode == 0:
     ret2 = subprocess.run(
         "timeout 120 /tmp/dump_routed_shared",
         shell=True, capture_output=True, text=True, timeout=130,
-        cwd="/home/wubu/bytropix"
+        cwd="/home/wubu/wubuwizard"
     )
     print(ret2.stdout)
     if ret2.stderr:

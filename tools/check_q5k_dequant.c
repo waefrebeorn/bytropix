@@ -30,7 +30,7 @@ int main() {
     fclose(f);
     
     // Second approach: use llama API to get actual dequantized values
-    // and compare with our bytropix values
+    // and compare with our wubuwizard values
     
     // Load llama model
     llama_backend_init();

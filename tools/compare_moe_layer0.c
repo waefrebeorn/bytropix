@@ -8,7 +8,7 @@
  *        src/wubu_moe.o src/wubu_model.o src/wubu_tokenizer.o \
  *        src/qlearner.o src/dequant_iq2_xxs.o -lm -fopenmp
  * 
- * Must run from bytropix/ dir (needs data/qwen36_embeddings_c.bin.raw)
+ * Must run from wubuwizard/ dir (needs data/qwen36_embeddings_c.bin.raw)
  */
 #include "wubu_model.h"
 #include "wubu_moe.h"

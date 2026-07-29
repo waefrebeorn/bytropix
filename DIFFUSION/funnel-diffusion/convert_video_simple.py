@@ -13,7 +13,7 @@ from typing import Optional # Import Optional for type hinting
 #
 # To force CPU encoding:
 # python convert_video_simple.py "input.mp4" "output.mp4" --encoder cpu --duration 10
-# python convert_video_simple.py "C:\Users\eman5\Videos\your_fortnite_video.mp4" "C:\Projects\bytropix\data\demo_video_data_dir\dummy_video.mp4" --width 256 --height 256 --fps 60 --encoder nvenc --duration 10
+# python convert_video_simple.py "C:\Users\eman5\Videos\your_fortnite_video.mp4" "C:\Projects\wubuwizard\data\demo_video_data_dir\dummy_video.mp4" --width 256 --height 256 --fps 60 --encoder nvenc --duration 10
 
 def find_ffmpeg():
     """Tries to find the ffmpeg executable."""

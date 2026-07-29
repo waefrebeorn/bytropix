@@ -1,4 +1,4 @@
-// Minimal Q2_K and Q3_K dequantization functions for bytropix
+// Minimal Q2_K and Q3_K dequantization functions for wubuwizard
 // Based on llama.cpp's ggml-quants.c (format documented in ggml-common.h)
 // Block size: QK_K = 256 for all K-quants
 #include "gguf_reader.h"

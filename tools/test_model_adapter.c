@@ -146,7 +146,7 @@ static int test_lora_adapter(const char *path) {
 static int test_dims_mirror(void) {
     printf("\n[dims] wubu_dims_set mirror + macro readback\n");
     wubu_adapter_t a; memset(&a, 0, sizeof(a));
-    wubu_adapter_load(&a, "/home/wubu/bytropix/testdata/Qwen36_config.json");
+    wubu_adapter_load(&a, "/home/wubu/wubuwizard/testdata/Qwen36_config.json");
     wubu_dims_t d; memset(&d, 0, sizeof(d));
     d.d_model     = a.d_model;       /* 5120 */
     d.ssm_d_state = a.ssm_d_state;   /* 128  */
@@ -168,15 +168,15 @@ static int test_dims_mirror(void) {
 }
 
 int main(void) {
-    printf("=== bytropix model-agnostic core unit test ===\n");
+    printf("=== wubuwizard model-agnostic core unit test ===\n");
     test_safetensors();
-    test_adapter_file("/home/wubu/bytropix/testdata/KAT_config.json",
+    test_adapter_file("/home/wubu/wubuwizard/testdata/KAT_config.json",
                       "KAT", 2048, 40, 32, 256, 8);
-    test_adapter_file("/home/wubu/bytropix/testdata/AgentsA1_config.json",
+    test_adapter_file("/home/wubu/wubuwizard/testdata/AgentsA1_config.json",
                       "AgentsA1", 2560, 32, 32, 0, 0);
-    test_adapter_file("/home/wubu/bytropix/testdata/Qwen36_config.json",
+    test_adapter_file("/home/wubu/wubuwizard/testdata/Qwen36_config.json",
                       "Qwen36", 5120, 64, 48, 0, 0);
-    test_lora_adapter("/home/wubu/bytropix/testdata/BTL3_adapter_config.json");
+    test_lora_adapter("/home/wubu/wubuwizard/testdata/BTL3_adapter_config.json");
     test_dims_mirror();
 
     printf("\n=== RESULTS: %s ===\n", g_fail ? "FAILURES" : "ALL PASS");

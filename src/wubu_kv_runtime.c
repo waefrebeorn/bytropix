@@ -25,12 +25,13 @@
 #endif
 
 int g_kv_scheme = KV_SCHEME_DEFAULT;
+int g_kv_head_dim = 0;
 
 void wubu_kv_set_scheme(int scheme) { g_kv_scheme = scheme; }
 int  wubu_kv_get_scheme(void)        { return g_kv_scheme; }
 
 /* Pick + apply the KV scheme from real model params + detected bandwidth.
- * P_params in absolute param count (e.g. 27e9 for 27B). s = target context.
+ * P_params in absolute param count (e.g. 27e9); s = target context.
  * Returns the chosen scheme. */
 int wubu_kv_autoselect(double P_params, int n_layers, int n_kv_heads,
                         int head_dim, double beta_eff_tb_s, int s) {
@@ -41,5 +42,6 @@ int wubu_kv_autoselect(double P_params, int n_layers, int n_kv_heads,
     c.beta_eff_tb_s = beta_eff_tb_s > 0 ? beta_eff_tb_s : 0.05;
     wubu_kv_choice_t ch = wubu_kv_select(&c, P_params, 1, s);
     g_kv_scheme = (int)ch.kv;
+    g_kv_head_dim = head_dim;
     return g_kv_scheme;
 }

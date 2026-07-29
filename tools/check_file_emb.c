@@ -43,7 +43,7 @@ int main() {
     llama_backend_free();
     
     // Read our saved embedding file and check its stats
-    FILE *f = fopen("/home/wubu/bytropix/data/qwen36_embeddings_c.bin.raw", "rb");
+    FILE *f = fopen("/home/wubu/wubuwizard/data/qwen36_embeddings_c.bin.raw", "rb");
     if (f) {
         float *emb = (float *)malloc(n_embd * sizeof(float));
         // First token (token 0)

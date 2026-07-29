@@ -176,7 +176,7 @@ static int sample_token(xrng_t *rng, const float *logits, int vocab,
 /* Load a model checkpoint, dispatching by extension:
  *   *.safetensors -> Colonel HF model (Qwen3.6 / Agents-A1 / KAT / BTL-3)
  *                 via the F32 safetensors bridge + adapter detection.
- *   *.gguf         -> legacy bytropix GGUF path.
+ *   *.gguf         -> legacy wubuwizard GGUF path.
  * Returns 1 on success (model ready), 0 on failure. */
 static int init_model(wubu_model_t *mdl, const char *path) {
     int is_st = (strstr(path, ".safetensors") != NULL);
@@ -268,7 +268,7 @@ int main(int argc, char **argv) {
     }
 
     // --- Repetition suppression (repeat_penalty + DRY) ---
-    // Tuned for the Colonel models on RTX 5070 Ti (see bytropix STATUS.md):
+    // Tuned for the Colonel models on RTX 5070 Ti (see wubuwizard STATUS.md):
     //   Q8:  repeat_penalty 1.05, DRY multiplier 0.5
     //   F16: repeat_penalty 1.1,  DRY multiplier 1.2 (Agents-A1-4B F16 exact)
         wubu_rep_state_t *rep = wubu_rep_create(mdl.vocab_size, 256, 2, -1);

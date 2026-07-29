@@ -9,7 +9,7 @@ int main(int argc, char **argv) {
     gguf_ctx *ctx = gguf_open(path);
     if (!ctx) return 1;
 
-    printf("bytropix GGML types: Q5_K=%d Q6_K=%d IQ2_XXS=%d IQ3_XXS=%d IQ4_XS=%d Q8_0=%d\n",
+    printf("wubuwizard GGML types: Q5_K=%d Q6_K=%d IQ2_XXS=%d IQ3_XXS=%d IQ4_XS=%d Q8_0=%d\n",
         GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_0);
 
     const char *names[] = {

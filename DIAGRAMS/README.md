@@ -1,6 +1,6 @@
 # `DIAGRAMS/` — SVG Architecture & Pipeline Visualizations
 
-**SVG diagrams for the bytropix inference engine.**
+**SVG diagrams for the wubuwizard inference engine.**
 
 ## Current Diagrams
 

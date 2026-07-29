@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
     // Run a single-token forward pass
     int B = 1, T = 4;
     int tokens[] = {0, 1, 2, 3};  // dummy token IDs
-    float *logits = (float *)malloc(B * T * 248320 * sizeof(float));
+    float *logits = (float *)malloc(B * T * model.vocab_size * sizeof(float));
     
     printf("\nRunning forward pass (B=%d, T=%d)...\n", B, T);
     wubu_model_forward(&model, tokens, B, T, logits);

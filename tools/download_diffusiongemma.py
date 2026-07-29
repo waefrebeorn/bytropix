@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Download and convert DiffusionGemma to GGUF for bytropix/wubu system.
+Download and convert DiffusionGemma to GGUF for wubuwizard/wubu system.
 Downloads safetensors from Hugging Face, converts using llama.cpp or custom converter.
 """
 

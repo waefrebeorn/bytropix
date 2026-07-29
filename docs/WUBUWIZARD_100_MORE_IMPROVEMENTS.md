@@ -1,4 +1,4 @@
-# BYTROPIX — 100 MORE Inference Improvements (Round 2: cross-disciplinary)
+# WUBUWIZARD — 100 MORE Inference Improvements (Round 2: cross-disciplinary)
 
 Method: "7-degrees-to-Kevin-Bacon" resource traversal + meta-analysis.
 Seed hubs: llama.cpp → FastAttention → SGLang → vLLM → (hop) a DB engine
@@ -19,7 +19,7 @@ Meta-analysis convergence (what MULTIPLE independent fields agree on):
   5. Kernel correctness must be proven, not unit-tested (compiler verification
      community + Gimlet/ProofWright).
 
-Each item: `[area] #id — action (cross-domain evidence → bytropix target)`.
+Each item: `[area] #id — action (cross-domain evidence → wubuwizard target)`.
 
 ---
 
@@ -158,17 +158,17 @@ Concrete, tested modules now exist (covered by `make test_200`):
 
 Remaining Round-2 items (P–U: DB-scheduling, compiler autotune, neuro-memory,
 OS-paging, speculative-compute, quant-depth) are spec'd in this doc and build on
-existing bytropix subsystems (`wubu_scheduler`, `wubu_affinity`, `wubu_turboquant`,
+existing wubuwizard subsystems (`wubu_scheduler`, `wubu_affinity`, `wubu_turboquant`,
 `wubu_ssd_moe`, `hedged_spec`). They are the next strike.
 
 ---
 - The single highest-leverage addition is **#101 B*-crossover auto-tuner**: it
   turns the echo-chamber "just quantize" advice into a *decision rule* grounded
-  in roofline math. Directly actionable on bytropix's 13 GB / RTX 5070 Ti box.
+  in roofline math. Directly actionable on wubuwizard's 13 GB / RTX 5070 Ti box.
 - **#111 ML-advice eviction** + **#120 memory-tier admission** upgrade the
   existing ds4-ssd slot-bank from LRU to learned/admission-controlled.
 - **#121 Z3 equivalence gate** hardening is the cross-disciplinary differentiator
-  — no other local engine proves kernel correctness. Fits bytropix's
+  — no other local engine proves kernel correctness. Fits wubuwizard's
   correctness-first culture.
 - **#131 PD-disaggregation** is the architecture-scale win if multi-GPU/cluster.
 - Round-1 covered the *algorithm* surface; Round-2 covers the *system+theory*

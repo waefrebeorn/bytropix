@@ -87,7 +87,7 @@ int main() {
     // ====== Step 1: Load test input ======
     // Use BOS embedding as input (like the model does)
     float *x = (float *)malloc(D_MODEL * sizeof(float));
-    FILE *f = fopen("/home/wubu/bytropix/data/qwen36_embeddings_c.bin.raw", "rb");
+    FILE *f = fopen("/home/wubu/wubuwizard/data/qwen36_embeddings_c.bin.raw", "rb");
     if (!f) { printf("FAIL: can't open embeddings\n"); return 1; }
     fseek(f, 248044LL * D_MODEL * sizeof(float), SEEK_SET);
     fread(x, sizeof(float), D_MODEL, f);

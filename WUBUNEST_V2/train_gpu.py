@@ -8,7 +8,7 @@ train_gpu.py — WubuNestGPT v2 GPU Training (JAX/Flax/CUDA)
 - Clean exit, no tcsetattr issues
 
 Usage:
-  cd /home/wubu/bytropix/WUBUNEST_V2
+  cd /home/wubu/wubuwizard/WUBUNEST_V2
   python -u train_gpu.py 2>&1 | tee -a train_gpu.log
 """
 

@@ -10,9 +10,9 @@
 #include <sys/stat.h>
 
 /* Models live on persistent storage (we lost /tmp weights to a reboot/cleanup).
- * BYTROPIX_MODELS_DIR overrides; default points at the persistent vault. */
+ * WUBUWIZARD_MODELS_DIR overrides; default points at the persistent vault. */
 static const char *models_dir(void) {
-    const char *d = getenv("BYTROPIX_MODELS_DIR");
+    const char *d = getenv("WUBUWIZARD_MODELS_DIR");
     return d && *d ? d : "/home/wubu/models";
 }
 

@@ -12,6 +12,7 @@
  */
 #include "wubu_spec_decode.h"
 #include "hedged_spec.h"
+#include "wubu_ngram.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -30,9 +31,9 @@
  * accepted token ids. On a partial accept, samples one bonus token into
  * accepted[] when the residual distribution allows (MTP bonus, item A.9 logic). */
 int wubu_spec_verify_tree(const int *candidates, const int *parent,
-                           const float *draft_probs, const float *target_logits,
-                           int n, int vocab, int *accepted, int max_accepted,
-                           float rng) {
+                          const float *draft_probs, const float *target_logits,
+                          int n, int vocab, int *accepted, int max_accepted,
+                          float rng) {
     int accepted_n = 0;
     for (int i = 0; i < n && accepted_n < max_accepted; i++) {
         int tok = candidates[i];
@@ -60,49 +61,8 @@ int wubu_spec_verify_tree(const int *candidates, const int *parent,
  * 2. n-gram draft model (item A.3) — zero weights, just context repetition.
  * ------------------------------------------------------------------------- */
 
-typedef struct wubu_ngram_draft_t {
-    const int *ctx;
-    int ctx_len;
-    int order;
-} wubu_ngram_draft_t;
-
-wubu_ngram_draft_t *wubu_ngram_create(const int *ctx, int ctx_len, int order) {
-    wubu_ngram_draft_t *d = (wubu_ngram_draft_t *)malloc(sizeof(*d));
-    if (!d) return NULL;
-    d->ctx = ctx; d->ctx_len = ctx_len; d->order = order;
-    return d;
-}
-void wubu_ngram_free(wubu_ngram_draft_t *d) { free(d); }
-
-/* Propose up to `k` draft tokens by extending the longest matching n-gram
- * suffix of the context. Returns number proposed; fills out[]. */
-int wubu_ngram_propose(wubu_ngram_draft_t *d, int k, int *out) {
-    int n = 0;
-    for (int step = 0; step < k; step++) {
-        int best_tok = -1;
-        /* try longest order first */
-        for (int ord = d->order; ord >= 1 && best_tok < 0; ord--) {
-            if (d->ctx_len < ord + step) continue;
-            int base = d->ctx_len - ord - step;
-            /* find a prior occurrence of the suffix [base .. ctx_len-1+step) */
-            for (int j = 0; j + ord + step <= d->ctx_len; j++) {
-                int ok = 1;
-                for (int t = 0; t < ord + step; t++)
-                    if (d->ctx[j + t] != d->ctx[base + t]) { ok = 0; break; }
-                if (ok && j + ord + step < d->ctx_len) {
-                    best_tok = d->ctx[j + ord + step];
-                    break;
-                }
-            }
-        }
-        if (best_tok < 0) break;
-        out[n++] = best_tok;
-        /* extend context virtually for next step */
-        /* (caller appends accepted tokens to ctx between calls) */
-        break; /* single proposed chain per call; caller loops with updated ctx */
-    }
-    return n;
-}
+// n-gram draft now implemented in wubu_ngram.c/h
+// Use wubu_ngram_draft_t from wubu_ngram.h
 
 /* ---------------------------------------------------------------------------
  * 3. MTP bonus-token sampler (item A.9): sample from residual

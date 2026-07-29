@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SFIN Inference Script (Adapted from BSFIN v2 and Bytropix Inference)
+SFIN Inference Script (Adapted from BSFIN v2 and WubuWizard Inference)
 
 Runs inference using the BSFINModel architecture.
 Supports standard single-prompt and interactive modes.

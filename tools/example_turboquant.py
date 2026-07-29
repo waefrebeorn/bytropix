@@ -5,7 +5,7 @@ Example: TurboQuant-style Walsh-Hadamard Transform (WHT) + Q4_0 quantization.
 WHT spreads information across dimensions before quantization, reducing
 the impact of outlier values on quantization error.
 
-Author: Hermes Agent for bytropix
+Author: Hermes Agent for wubuwizard
 """
 
 import numpy as np

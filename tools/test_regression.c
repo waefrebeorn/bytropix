@@ -1,5 +1,5 @@
 /**
- * test_regression.c — Regression test suite comparing bytropix engine output
+ * test_regression.c — Regression test suite comparing wubuwizard engine output
  * against llama.cpp reference on 10 fixed prompts.
  *
  * For each prompt:
@@ -10,7 +10,7 @@
  *   5. Reports comparison: top-3 from both, top-1 match, Jaccard(top5_us, {ref}+our_top4)
  *
  * Compilation template:
- *   cd /home/wubu/bytropix && make tools/test_regression
+ *   cd /home/wubu/wubuwizard && make tools/test_regression
  *
  * Requires Makefile entry:
  *   test_regression: tools/test_regression.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ)
@@ -180,14 +180,14 @@ int main() {
     const char *llama_cli  = "/home/wubu/llama.cpp/build/bin/llama-cli";
     const int D = 2048;  // D_MODEL
 
-    printf("=== BYTROPIX vs llama.cpp REGRESSION TEST ===\n");
+    printf("=== WUBUWIZARD vs llama.cpp REGRESSION TEST ===\n");
     printf("Model: %s\n", model_path);
     printf("llama-cli: %s\n\n", llama_cli);
 
     // ── Initialize our model ──
     wubu_model_t model;
     if (!wubu_model_init(&model, model_path)) {
-        fprintf(stderr, "FAILED to initialize bytropix model\n");
+        fprintf(stderr, "FAILED to initialize wubuwizard model\n");
         return 1;
     }
 

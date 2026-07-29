@@ -2,7 +2,7 @@
  * gen_fixture_safetensors_model.c -- write a tiny F32 safetensors model
  * using the REAL published HF tensor names (model.language_model.layers.N...)
  * at SSM-VALID dims, so test_st_bridge can verify the bridge maps them into
- * bytropix's SSM/GQA/MoE F32 forward and it RUNS (no stub).
+ * wubuwizard's SSM/GQA/MoE F32 forward and it RUNS (no stub).
  *
  * The SSM recurrence is dimension-locked to the invariant SSM_D_STATE=128,
  * SSM_K_HEADS=16 (so KEY_DIM = 128*16 = 2048) and requires VALUE_DIM to be a

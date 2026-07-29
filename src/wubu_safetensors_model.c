@@ -1,8 +1,8 @@
 /*
- * wubu_safetensors_model.c -- safetensors -> bytropix weight layout (C11).
+ * wubu_safetensors_model.c -- safetensors -> wubuwizard weight layout (C11).
  *
  * Maps HF Transformers tensor names to the per-layer matrices the
- * bytropix forward pass consumes. Dequantizes F16/BF16/F32 on the fly
+ * wubuwizard forward pass consumes. Dequantizes F16/BF16/F32 on the fly
  * via safetensors_reader. Keeps the adapter's dims for sizing.
  */
 

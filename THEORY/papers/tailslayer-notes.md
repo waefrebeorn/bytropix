@@ -8,7 +8,7 @@
 
 A C++ library that reduces tail latency in RAM reads caused by DRAM refresh stalls. It replicates data across multiple independent DRAM channels with uncorrelated refresh schedules, uses undocumented channel scrambling offsets (works on AMD, Intel, Graviton), and issues hedged reads (clflush+reload) — taking whichever replica responds first.
 
-## Relevance to WuBuText / bytropix
+## Relevance to WuBuText / wubuwizard
 
 ### 1. Hedged Reads → Speculative Decoding (direct pattern match)
 

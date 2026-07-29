@@ -1,5 +1,5 @@
 /**
- * api_server.c — Local inference API server for bytropix
+ * api_server.c — Local inference API server for wubuwizard
  *
  * OpenAI-compatible HTTP server for educational/research use.
  * Provides a REST API wrapping the infer_text_gpu binary.
@@ -111,7 +111,7 @@ static void handle_signal(int sig) {
 static void print_banner(void) {
     printf("\n");
     printf("  ╔══════════════════════════════════════════════════════╗\n");
-    printf("  ║       bytropix Local Inference API Server          ║\n");
+    printf("  ║       wubuwizard Local Inference API Server          ║\n");
     printf("  ║       EDUCATIONAL / RESEARCH USE ONLY              ║\n");
     printf("  ╚══════════════════════════════════════════════════════╝\n");
     printf("  Port: %d  |  TLS: %s  |  Sandbox: %s\n",
@@ -175,7 +175,7 @@ static char *make_json_response(const char *content) {
         "\"id\":\"chatcmpl-%s\","
         "\"object\":\"chat.completion\","
         "\"created\":%s,"
-        "\"model\":\"bytropix-qwen3.6\","
+        "\"model\":\"wubuwizard-qwen3.6\","
         "\"choices\":[{"
           "\"index\":0,"
           "\"message\":{\"role\":\"assistant\",\"content\":%s},"
@@ -246,7 +246,7 @@ static char *run_inference(const char *prompt, int max_tokens,
             "\"id\":\"chatcmpl-sandbox-%ld\","
             "\"object\":\"chat.completion\","
             "\"created\":%ld,"
-            "\"model\":\"bytropix-qwen3.6-sandbox\","
+            "\"model\":\"wubuwizard-qwen3.6-sandbox\","
             "\"choices\":[{"
               "\"index\":0,"
               "\"message\":{\"role\":\"assistant\",\"content\":%s},"
@@ -328,7 +328,7 @@ static char *run_inference(const char *prompt, int max_tokens,
         "\"id\":\"chatcmpl-%ld\","
         "\"object\":\"chat.completion\","
         "\"created\":%ld,"
-        "\"model\":\"bytropix-qwen3.6\","
+        "\"model\":\"wubuwizard-qwen3.6\","
         "\"choices\":[{"
           "\"index\":0,"
           "\"message\":{\"role\":\"assistant\",\"content\":%s},"
@@ -358,7 +358,7 @@ static void send_response(int fd, int status, const char *content_type,
         "Access-Control-Allow-Origin: *\r\n"
         "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
         "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-        "Server: bytropix-api/1.0 (educational research)\r\n"
+        "Server: wubuwizard-api/1.0 (educational research)\r\n"
         "X-Content-Type-Options: nosniff\r\n"
         "Connection: close\r\n"
         "\r\n",
@@ -504,16 +504,16 @@ static const char *get_header(http_request_t *req, const char *name) {
 static void handle_request(int fd, http_request_t *req, SSL *ssl) {
     /* Health check */
     if (strcmp(req->path, "/health") == 0 && strcmp(req->method, "GET") == 0) {
-        send_json(fd, 200, "{\"status\":\"ok\",\"service\":\"bytropix-inference-api\",\"version\":\"1.0.0\",\"educational\":true,\"notice\":\"For educational/research use only. No liability assumed.\"}", ssl);
+        send_json(fd, 200, "{\"status\":\"ok\",\"service\":\"wubuwizard-inference-api\",\"version\":\"1.0.0\",\"educational\":true,\"notice\":\"For educational/research use only. No liability assumed.\"}", ssl);
         return;
     }
 
     /* List models */
     if (strcmp(req->path, "/v1/models") == 0 && strcmp(req->method, "GET") == 0) {
         char models[4096];
-        char *name = json_escape("bytropix-qwen3.6");
+        char *name = json_escape("wubuwizard-qwen3.6");
         snprintf(models, sizeof(models),
-            "{\"object\":\"list\",\"data\":[{\"id\":%s,\"object\":\"model\",\"created\":1715097600,\"owned_by\":\"bytropix\"}]}",
+            "{\"object\":\"list\",\"data\":[{\"id\":%s,\"object\":\"model\",\"created\":1715097600,\"owned_by\":\"wubuwizard\"}]}",
             name);
         free(name);
         send_json(fd, 200, models, ssl);
@@ -647,7 +647,7 @@ static void handle_client(int fd, SSL *ssl) {
 static void usage(const char *prog) {
     fprintf(stderr, "Usage: %s [options]\n", prog);
     fprintf(stderr, "\n");
-    fprintf(stderr, "OpenAI-compatible API server for bytropix inference engine.\n");
+    fprintf(stderr, "OpenAI-compatible API server for wubuwizard inference engine.\n");
     fprintf(stderr, "EDUCATIONAL / RESEARCH USE ONLY.\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Options:\n");

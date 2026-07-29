@@ -2783,7 +2783,7 @@ def parse_arguments():
     msgrp = parser.add_argument_group('Miscellaneous')
     msgrp.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     msgrp.add_argument("--wandb", action="store_true", help="Enable WandB logging.")
-    msgrp.add_argument("--wandb_project", type=str, default="bytropix-integrated-hyperbolic", help="WandB project name.")
+    msgrp.add_argument("--wandb_project", type=str, default="wubuwizard-integrated-hyperbolic", help="WandB project name.")
     msgrp.add_argument("--no_amp", action="store_true", help="Disable Automatic Mixed Precision (AMP).")
     msgrp.add_argument("--num_workers", type=int, default=2, help="Number of dataloader worker processes (set 0 for main process loading).")
     msgrp.add_argument("--detect_anomaly", action="store_true", help="Enable torch.autograd.detect_anomaly() for debugging.")

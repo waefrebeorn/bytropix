@@ -23,7 +23,7 @@ int main(void) {
     
     printf("Read %ld bytes\n", sz);
     
-    // Dequantize with bytropix
+    // Dequantize with wubuwizard
     float out1[2048];
     dequantize_iq2_xxs_row(raw, out1, 2048);
     
@@ -37,7 +37,7 @@ int main(void) {
         double d = fabs(out1[i] - out2[i]);
         if (d > max_diff) max_diff = d;
     }
-    printf("bytropix[0..3]: %.10f %.10f %.10f %.10f\n", out1[0], out1[1], out1[2], out1[3]);
+    printf("wubuwizard[0..3]: %.10f %.10f %.10f %.10f\n", out1[0], out1[1], out1[2], out1[3]);
     printf("llamcpp[0..3]: %.10f %.10f %.10f %.10f\n", out2[0], out2[1], out2[2], out2[3]);
     printf("max_diff: %.10f\n", max_diff);
     

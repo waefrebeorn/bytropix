@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bytropix/math_viz/01_nested_hyperbolic_spaces.py
+wubuwizard/math_viz/01_nested_hyperbolic_spaces.py
 
 PROVES: WuBu nesting visualizes correctly as nested Poincaré disks
 MATH: Riemannian metric g = 4 * g_E / (1 - ||x||^2)^2 on the unit ball

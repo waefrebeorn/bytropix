@@ -2,4 +2,4 @@
 
 Experimental training checkpoints and logs from the WuBuNesting research track.
 
-**DEPRECATED.** Not part of the bytropix inference engine. Preserved for historical reference.
+**DEPRECATED.** Not part of the wubuwizard inference engine. Preserved for historical reference.

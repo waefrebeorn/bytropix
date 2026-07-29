@@ -4,7 +4,7 @@ math_viz/06_symplectic_optimizer.py
 
 NEXT RESEARCH: PROVE the holographic optimizer is a symplectic integrator.
 
-This is the ONE unambiguously correct new result in bytropix.
+This is the ONE unambiguously correct new result in wubuwizard.
 
 MATH:
 The holographic optimizer decomposes gradient g into:
@@ -51,7 +51,7 @@ def decompose(g, boundary=2*math.pi):
     g = q * boundary + r
     where q = integer, r = mod(g, boundary) in [-boundary/2, boundary/2]
     
-    This is THE ONE operation in bytropix that is both:
+    This is THE ONE operation in wubuwizard that is both:
     1. Mathematically rigorous (proven property of modular arithmetic)
     2. Implemented in working code (Wubu_Geodesic_Benchmarks.py)
     3. Verified to be bit-perfect (math_viz/03)

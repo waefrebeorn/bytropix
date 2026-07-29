@@ -5,7 +5,7 @@
  *        src/wubu_moe.o src/wubu_model.o src/wubu_tokenizer.o \
  *        src/qlearner.o -lm -fopenmp
  * Usage: ./dump_full_layers model.gguf
- * Output: /tmp/bytropix_l{layer}_residual.bin (after attention + FFN pass-through)
+ * Output: /tmp/wubuwizard_l{layer}_residual.bin (after attention + FFN pass-through)
  */
 #include "wubu_model.h"
 #include "wubu_ssm.h"
@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
     memcpy(residual, x, D_MODEL * sizeof(float));
 
     // Dump initial residual (embedding only)
-    FILE *f = fopen("/tmp/bytropix_embed.bin", "wb");
+    FILE *f = fopen("/tmp/wubuwizard_embed.bin", "wb");
     if (f) { fwrite(residual, sizeof(float), D, f); fclose(f); }
 
     for (int l = 0; l < L; l++) {
@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
 
         // Dump attention output (before residual)
         char fn[256];
-        snprintf(fn, sizeof(fn), "/tmp/bytropix_l%02d_attn.bin", l);
+        snprintf(fn, sizeof(fn), "/tmp/wubuwizard_l%02d_attn.bin", l);
         f = fopen(fn, "wb");
         if (f) { fwrite(attn, sizeof(float), D_MODEL, f); fclose(f); }
 
@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < D_MODEL; i++) residual[i] += normed2[i];
 
         // Dump residual after layer l (matches llama's post_moe dump DIRECTLY)
-        snprintf(fn, sizeof(fn), "/tmp/bytropix_l%02d_residual.bin", l);
+        snprintf(fn, sizeof(fn), "/tmp/wubuwizard_l%02d_residual.bin", l);
         f = fopen(fn, "wb");
         if (f) { fwrite(residual, sizeof(float), D_MODEL, f); fclose(f); }
 
@@ -98,11 +98,11 @@ int main(int argc, char **argv) {
     float final_normed[D_MODEL];
     wubu_rms_norm(1, 1, D_MODEL, residual, mdl.norm_weight, 1e-6f, final_normed);
 
-    f = fopen("/tmp/bytropix_final_hidden.bin", "wb");
+    f = fopen("/tmp/wubuwizard_final_hidden.bin", "wb");
     if (f) { fwrite(final_normed, sizeof(float), D_MODEL, f); fclose(f); }
 
     free(residual);
     wubu_model_free(&mdl);
-    printf("Done. Check /tmp/bytropix_*.bin\n");
+    printf("Done. Check /tmp/wubuwizard_*.bin\n");
     return 0;
 }

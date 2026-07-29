@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bytropix - Byte Latent Transformer with Babylon Index and Q-Learning Optimization
+WubuWizard - Byte Latent Transformer with Babylon Index and Q-Learning Optimization
 (EnhancedSGD Stabilized)
 """
 
@@ -2263,13 +2263,13 @@ class RLHFTrainer: # Renaming might be confusing if no RLHF is actually happenin
             return 0 # Start from scratch on failure
 
 def parse_args():
-    """Parse command-line arguments for Bytropix training."""
-    parser = argparse.ArgumentParser(description="Bytropix - Byte Latent Transformer Training (Stabilized)")
+    """Parse command-line arguments for WubuWizard training."""
+    parser = argparse.ArgumentParser(description="WubuWizard - Byte Latent Transformer Training (Stabilized)")
 
     # Data parameters
-    parser.add_argument("--data_path", type=str, default="C:/projects/bytropix/data/wikitext_train.npy",
+    parser.add_argument("--data_path", type=str, default="C:/projects/wubuwizard/data/wikitext_train.npy",
                         help="Path to training data numpy file")
-    parser.add_argument("--val_data_path", type=str, default="C:/projects/bytropix/data/wikitext_val.npy",
+    parser.add_argument("--val_data_path", type=str, default="C:/projects/wubuwizard/data/wikitext_val.npy",
                         help="Path to validation data numpy file")
     parser.add_argument("--context_size", type=int, default=128,
                         help="Context size for training and generation")
@@ -2304,7 +2304,7 @@ def parse_args():
     parser.add_argument("--grad_accum_steps", type=int, default=4,
                         help="Gradient accumulation steps")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm for clipping (used by EnhancedSGD)")
-    parser.add_argument("--checkpoint_dir", type=str, default="./bytropix_checkpoints_stabilized", # Changed default dir
+    parser.add_argument("--checkpoint_dir", type=str, default="./wubuwizard_checkpoints_stabilized", # Changed default dir
                         help="Directory to save checkpoints")
     parser.add_argument("--log_interval", type=int, default=50, # Log less frequently
                         help="Logging interval in optimizer steps")
@@ -2324,7 +2324,7 @@ def parse_args():
                         help="Random seed")
     parser.add_argument("--wandb", action="store_true", default=False,
                         help="Enable Weights & Biases logging (requires wandb installed)")
-    parser.add_argument("--wandb_project", type=str, default="bytropix-stabilized",
+    parser.add_argument("--wandb_project", type=str, default="wubuwizard-stabilized",
                         help="Weights & Biases project name")
     parser.add_argument("--no_amp", action="store_true", default=False,
                         help="Disable automatic mixed precision")
@@ -2727,10 +2727,10 @@ def main():
     # otherwise, log to file on all ranks but maybe add rank info to filename/log format.
     # For simplicity here, adding file handler always, but be mindful of multiple logs in DDP.
     try:
-        log_filename = f"bytropix_stabilized_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        log_filename = f"wubuwizard_stabilized_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         # Optional: Add rank info if distributed
         if int(os.environ.get("RANK", -1)) != -1:
-             log_filename = f"bytropix_stabilized_rank{os.environ['RANK']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+             log_filename = f"wubuwizard_stabilized_rank{os.environ['RANK']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         log_handlers.append(logging.FileHandler(log_filename))
     except Exception as log_ex:
          print(f"Warning: Could not create file handler for logging: {log_ex}")

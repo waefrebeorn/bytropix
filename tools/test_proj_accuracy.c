@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     float *x = (float*)malloc(D*sizeof(float));
     for (int i=0;i<D;i++) x[i]=(float)(i%7-3)*0.01f;
 
-    /* (1) bytropix quantized_matmul (GEMV path, correct dtype) */
+    /* (1) wubuwizard quantized_matmul (GEMV path, correct dtype) */
     float *y = (float*)malloc(dff*sizeof(float));
     quantized_matmul(x, W16, wt, D, dff, 0, y);
 

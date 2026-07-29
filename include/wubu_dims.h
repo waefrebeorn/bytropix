@@ -1,7 +1,7 @@
 /*
- * wubu_dims.h -- runtime model dimensions for bytropix.
+ * wubu_dims.h -- runtime model dimensions for wubuwizard.
  *
- * bytropix's SSM/GQA/MoE forward passes were originally hardcoded to a
+ * wubuwizard's SSM/GQA/MoE forward passes were originally hardcoded to a
  * single model via compile-time macros (D_MODEL=2048, CONV_DIM=8192,
  * ...). That is broken: it cannot load the real Colonel models
  * (Qwen3.6-27B hidden=5120, Agents-A1-4B hidden=2560, ...).
@@ -64,7 +64,7 @@ void wubu_dims_set(const wubu_dims_t *d);
  * primary fields already present in *d. Safe to call after a partial set. */
 void wubu_dims_finalize(wubu_dims_t *d);
 
-/* Defaults matching bytropix's original 2048-hidden build (GGUF path
+/* Defaults matching wubuwizard's original 2048-hidden build (GGUF path
  * stays byte-compatible). Call before any legacy GGUF load. */
 void wubu_dims_default(void);
 

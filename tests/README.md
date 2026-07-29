@@ -1,6 +1,6 @@
 # `tests/` — Test Harness
 
-Regression testing for the bytropix inference engine.
+Regression testing for the wubuwizard inference engine.
 
 | File | Purpose |
 |------|---------|

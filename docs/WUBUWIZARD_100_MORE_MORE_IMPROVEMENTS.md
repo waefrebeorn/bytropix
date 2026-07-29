@@ -1,4 +1,4 @@
-# BYTROPIX — 100 MORE Improvements, Round 3 (Kevin-Bacon via NEW MODELS + their PAPERS)
+# WUBUWIZARD — 100 MORE Improvements, Round 3 (Kevin-Bacon via NEW MODELS + their PAPERS)
 
 Method: 7-degrees-to-Kevin-Bacon resource traversal, this time seeded from the
 **new 2026 models** and the papers they cite, then hopped into adjacent
@@ -165,7 +165,7 @@ Concrete, tested modules (covered by `make test_300`):
 | src/wubu_yarn.c         | U.241, U.242                       | NTK-aware dim ramp + extrapolate |
 
 The remaining Round-3 items (V–AA) are spec'd above and map onto existing
-bytropix subsystems (hedged_spec, wubu_moe_grouped, wubu_turboquant,
+wubuwizard subsystems (hedged_spec, wubu_moe_grouped, wubu_turboquant,
 wubu_scheduler, gen_text) for the next strike.
 
 Total across all rounds: **300 researched improvements** (100 + 100 + 100),

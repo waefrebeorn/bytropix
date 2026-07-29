@@ -1,6 +1,6 @@
 /*
- * wubu_delta_net.c — Gated-DeltaNet recurrent state (Round-3 #202/#204/#206/#207/#209).
- * C11, self-contained. Implements the DeltaNet fast-weight update
+ * wubu_delta_net.c — Gated-DeltaNet recurrent state (3:1 hybrid linear attention).
+ * C11, self-contained. Implements the DeltaNet fast-weight update:
  *   S_t = (I - beta_t * k_t k_t^T) S_{t-1} + beta_t * k_t v_t^T
  * with optional QK-L2 norm and SiLU output gate, plus a chunkwise WY-form
  * forward (GatedDeltaNet-2 style) that must match the serial recurrence.
@@ -12,22 +12,30 @@
 #include <math.h>
 #include <assert.h>
 
-/* Serial recurrence over a sequence, head_dim = d. Returns final state S (d*d). */
+/* ---------- Serial recurrence (decode path) ---------- */
+
 void wubu_delta_net_recurrence(const float *q, const float *k, const float *v,
                                const float *beta, int n, int d,
-                               float *S /*in/out d*d*/) {
+                               float *S /* in/out d*d */) {
     float *kt = (float *)malloc(sizeof(float) * d);
     float *kv = (float *)malloc(sizeof(float) * d);
+    if (!kt || !kv) { free(kt); free(kv); return; }
+
     for (int t = 0; t < n; t++) {
         const float *kt_full = k + t * d;
         const float *vt = v + t * d;
         const float *qt = q + t * d;
+
         /* QK-L2 norm (optional stabilization). */
         float kn = 0, qn = 0;
-        for (int i = 0; i < d; i++) { kn += kt_full[i]*kt_full[i]; qn += qt[i]*qt[i]; }
+        for (int i = 0; i < d; i++) {
+            kn += kt_full[i] * kt_full[i];
+            qn += qt[i] * qt[i];
+        }
         float ks = (kn > 1e-12f) ? (1.0f / sqrtf(kn)) : 0.0f;
         float qs = (qn > 1e-12f) ? (1.0f / sqrtf(qn)) : 0.0f;
-        for (int i = 0; i < d; i++) { kt[i] = kt_full[i] * ks; }
+        for (int i = 0; i < d; i++) kt[i] = kt_full[i] * ks;
+
         /* S = S - beta * (S k) k^T  (erase) */
         float b = beta[t];
         for (int i = 0; i < d; i++) {
@@ -38,16 +46,17 @@ void wubu_delta_net_recurrence(const float *q, const float *k, const float *v,
         for (int i = 0; i < d; i++)
             for (int j = 0; j < d; j++)
                 S[i*d + j] -= b * kv[i] * kt[j];
+
         /* S = S + beta * k v^T  (write) */
         for (int i = 0; i < d; i++)
             for (int j = 0; j < d; j++)
                 S[i*d + j] += b * kt[i] * vt[j];
+
         (void)qs; (void)qt;
     }
     free(kt); free(kv);
 }
 
-/* Output y_t = S q_t (then caller applies RMSNorm + SiLU gate externally). */
 void wubu_delta_net_output(const float *q, const float *S, int n, int d, float *y) {
     for (int t = 0; t < n; t++) {
         const float *qt = q + t * d;
@@ -55,6 +64,110 @@ void wubu_delta_net_output(const float *q, const float *S, int n, int d, float *
             float acc = 0;
             for (int j = 0; j < d; j++) acc += S[i*d + j] * qt[j];
             y[t*d + i] = acc;
+        }
+    }
+}
+
+/* ---------- Chunkwise WY-form prefill (matches serial recurrence) ---------- */
+
+/*
+ * WY representation: S = I - Y W^T where Y,W in R^(d x chunk)
+ * For chunk size C: compute Y = [k_0, ..., k_{C-1}], W = [b_0 k_0, ..., b_{C-1} k_{C-1}]
+ * Then S_chunk = I - Y W^T, and the update is S_out = S_in * (I - Y W^T) + Y V^T
+ * This avoids the O(d^2 * C) inner loop per token.
+ */
+
+void wubu_delta_net_chunk_prefill(const float *q, const float *k, const float *v,
+                                  const float *beta, int n, int d, int chunk,
+                                  float *S /* in/out d*d */) {
+    if (chunk <= 0) chunk = 64;
+
+    float *Y = (float *)malloc(sizeof(float) * d * chunk);
+    float *W = (float *)malloc(sizeof(float) * d * chunk);
+    float *Vc = (float *)malloc(sizeof(float) * d * chunk);
+    float *tmp = (float *)malloc(sizeof(float) * d * d);
+
+    for (int t0 = 0; t0 < n; t0 += chunk) {
+        int C = (t0 + chunk <= n) ? chunk : (n - t0);
+
+        /* Build Y = K_chunk, W = beta * K_chunk, Vc = V_chunk */
+        for (int c = 0; c < C; c++) {
+            const float *kt = k + (t0 + c) * d;
+            const float *vt = v + (t0 + c) * d;
+            float b = beta[t0 + c];
+
+            /* QK-L2 norm on k */
+            float kn = 0;
+            for (int i = 0; i < d; i++) kn += kt[i] * kt[i];
+            float ks = (kn > 1e-12f) ? (1.0f / sqrtf(kn)) : 0.0f;
+
+            for (int i = 0; i < d; i++) {
+                float ktn = kt[i] * ks;
+                Y[c*d + i] = ktn;
+                W[c*d + i] = b * ktn;
+                Vc[c*d + i] = vt[i];
+            }
+        }
+
+        /* S = S * (I - Y W^T) + Y V^T */
+        /* tmp = I - Y W^T (d x d) */
+        memset(tmp, 0, sizeof(float) * d * d);
+        for (int i = 0; i < d; i++) tmp[i*d + i] = 1.0f;
+
+        for (int c = 0; c < C; c++) {
+            for (int i = 0; i < d; i++) {
+                float yi = Y[c*d + i];
+                for (int j = 0; j < d; j++) {
+                    tmp[i*d + j] -= yi * W[c*d + j];
+                }
+            }
+        }
+
+        /* S = S * tmp */
+        float *Snew = (float *)malloc(sizeof(float) * d * d);
+        for (int i = 0; i < d; i++)
+            for (int j = 0; j < d; j++) {
+                float acc = 0;
+                for (int k = 0; k < d; k++) acc += S[i*d + k] * tmp[k*d + j];
+                Snew[i*d + j] = acc;
+            }
+        memcpy(S, Snew, sizeof(float) * d * d);
+        free(Snew);
+
+        /* S += Y V^T */
+        for (int c = 0; c < C; c++) {
+            for (int i = 0; i < d; i++) {
+                float yi = Y[c*d + i];
+                for (int j = 0; j < d; j++) {
+                    S[i*d + j] += yi * Vc[c*d + j];
+                }
+            }
+        }
+    }
+
+    free(Y); free(W); free(Vc); free(tmp);
+}
+
+/* ---------- Output gate (RMSNorm + SiLU) ---------- */
+
+void wubu_delta_net_apply_gate(const float *S_out, const float *gate_logits,
+                               int n, int d, float *y) {
+    for (int t = 0; t < n; t++) {
+        const float *so = S_out + t * d;
+        const float *gl = gate_logits + t * d;
+        float *yt = y + t * d;
+
+        /* RMSNorm(S_out) */
+        float rms = 0;
+        for (int i = 0; i < d; i++) rms += so[i] * so[i];
+        rms = sqrtf(rms / d + 1e-8f);
+
+        for (int i = 0; i < d; i++) {
+            float normed = so[i] / rms;
+            /* SiLU gate: x * sigmoid(x) */
+            float g = gl[i];
+            float sig = 1.0f / (1.0f + expf(-g));
+            yt[i] = normed * sig;
         }
     }
 }

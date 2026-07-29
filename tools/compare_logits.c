@@ -5,8 +5,8 @@
 #include <math.h>
 
 #include "llama.h"          // from llama.cpp
-#include "wubu_model.h"     // from bytropix
-#include "gguf_reader.h"    // from bytropix
+#include "wubu_model.h"     // from wubuwizard
+#include "gguf_reader.h"    // from wubuwizard
 #include "wubu_tokenizer.h"
 #include "ggml.h"
 

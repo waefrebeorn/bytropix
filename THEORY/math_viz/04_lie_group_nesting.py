@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bytropix/math_viz/04_lie_group_nesting.py
+wubuwizard/math_viz/04_lie_group_nesting.py
 
 PROVES: WuBu nesting as a fiber bundle structure with SO(n) connection
 MATH: Each nested level is associated with a Lie group action via rotations

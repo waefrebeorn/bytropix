@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Compare MoE router weights and scores between bytropix and llama.cpp.
+Compare MoE router weights and scores between wubuwizard and llama.cpp.
 Extract ffn_gate_inp.weight from GGUF, compute router scores with our input,
 and compare against reference.
 """

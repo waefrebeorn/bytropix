@@ -4,7 +4,7 @@
 
 **Agent:** Hermes (Nous Research AI Agent)
 **Human:** waefrebeorn (Wubu)
-**Repository:** [waefrebeorn/bytropix](https://github.com/waefrebeorn/bytropix)
+**Repository:** [waefrebeorn/wubuwizard](https://github.com/waefrebeorn/wubuwizard)
 **Model:** Qwen3.6-35B-A3B-UD-IQ2_M (2.7 bpw, 10.7 GB GGUF) + qwen3.6-35b-mmproj-F16 (vision)
 **Hardware:** AMD Ryzen 7950X (16C/32T), 64 GB DDR5, RTX 5050 8GB VRAM | WSL2
 **Reference:** llama.cpp (qwen35moe.cpp handler, 733-line model implementation)
@@ -186,13 +186,13 @@ IMRoPE → full attention(KV cache: Q4_0 or F16) → output(Q5_K) → sigmoid(ga
 
 ---
 
-## 4. bytropix vs llama.cpp: What's Different?
+## 4. wubuwizard vs llama.cpp: What's Different?
 
 Both implement **identical mathematical operations**. The differences are implementation-level:
 
-### Where bytropix is unique:
+### Where wubuwizard is unique:
 
-| Feature | bytropix | llama.cpp |
+| Feature | wubuwizard | llama.cpp |
 |---------|----------|-----------|
 | **Engine scope** | Single model (Qwen3.6-35B-A3B) | 100+ architectures |
 | **Codebase** | ~14,000 lines C/CUDA | ~500K+ lines C/C++ |
@@ -206,7 +206,7 @@ Both implement **identical mathematical operations**. The differences are implem
 
 ### Where llama.cpp is ahead:
 
-| Feature | llama.cpp | bytropix |
+| Feature | llama.cpp | wubuwizard |
 |---------|-----------|----------|
 | **GPU MoE** | Full GPU expert forward via ggml-cuda | Per-expert cache, CPU router, H2D upload on miss |
 | **Decode speed** | 35.4 tok/s (RTX 4060 Ti, -ncmoe 30) | 8.5 tok/s (RTX 5050) — SSM on CPU |
@@ -217,7 +217,7 @@ Both implement **identical mathematical operations**. The differences are implem
 
 ### The Key Distinction: Verification Dependency
 
-llama.cpp is the REFERENCE. bytropix is a REIMPLEMENTATION. Every time bytropix diverges from llama.cpp, the bug is in bytropix. The DA verification pipeline (layer_cos_sim, isolate-then-compare) is the ONLY tool for detecting divergence. Without it, the system runs at full speed producing garbage output.
+llama.cpp is the REFERENCE. wubuwizard is a REIMPLEMENTATION. Every time wubuwizard diverges from llama.cpp, the bug is in wubuwizard. The DA verification pipeline (layer_cos_sim, isolate-then-compare) is the ONLY tool for detecting divergence. Without it, the system runs at full speed producing garbage output.
 
 ### GPU_SUPPORT Path Architecture (what Phase 28 enabled)
 
@@ -287,7 +287,7 @@ llama.cpp is the REFERENCE. bytropix is a REIMPLEMENTATION. Every time bytropix 
 - `block_q4_0_cache {uint16_t d, uint8_t qs[16]}` — 18 bytes per 32-element block
 - CPU: Aligned bulk write, multi-block read — cos-sim 0.9994 vs F16
 - GPU: Fused Q4_0 decode attention — 8.1 tok/s (beats FP16 7.6)
-- **Unique to bytropix** — llama.cpp doesn't quantize KV cache for this model
+- **Unique to wubuwizard** — llama.cpp doesn't quantize KV cache for this model
 
 ### 6.2 Fused Q5_K/Q6_K Quant Matmul (Phase 25) 🟡
 - Incremental dequant+dot without bv[256] local array
@@ -326,7 +326,7 @@ llama.cpp is the REFERENCE. bytropix is a REIMPLEMENTATION. Every time bytropix 
 
 ## 7. Manifold Research Concepts (Not Wired)
 
-The bytropix codebase and vault contain extensive research into hyperbolic geometry and manifold-based attention, but **none of these are in the inference path**:
+The wubuwizard codebase and vault contain extensive research into hyperbolic geometry and manifold-based attention, but **none of these are in the inference path**:
 
 ### 7.1 Poincaré SSM
 Status: **Exists as standalone test** — NOT wired into inference
@@ -457,7 +457,7 @@ CPU/GPU tandem pipeline using ring buffer for continuous compute.
 
 <div align="center">
 
-*Engine: bytropix — from-scratch C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE).*
+*Engine: wubuwizard — from-scratch C inference for Qwen3.6-35B-A3B (Gated DeltaNet + MoE).*
 *14 bugs found and fixed. Phase 28b: GPU_SUPPORT fixed and live, DA audit revealed 3 additional critical issues, 2 existing claims downgraded.*
 *DA principle: every claim must be verified at runtime against a reference. "It compiles" does not mean "it works."*
 *What does this claim rest on?*

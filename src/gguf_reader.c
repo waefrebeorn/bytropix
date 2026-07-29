@@ -855,9 +855,11 @@ static void dequantize_q2_K_row(const uint8_t *data, float *output, int64_t n_el
 static void dequantize_q3_K_row(const uint8_t *data, float *output, int64_t n_elems);
 
 int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output, int64_t max_elems) {
+    fprintf(stderr, "DEBUG gguf_read_tensor_f32: START tensor=%s, n_elems=?, type=%d\n", tensor->name, tensor->ggml_type);
     // Calculate total elements
     int64_t n_elems = 1;
     for (int d = 0; d < tensor->n_dims; d++) n_elems *= tensor->dims[d];
+    fprintf(stderr, "DEBUG gguf_read_tensor_f32: tensor=%s n_elems=%ld\n", tensor->name, n_elems);
     
     // max_elems <= 0 means no limit (use the tensor's own size)
     if (max_elems > 0 && n_elems > max_elems) {

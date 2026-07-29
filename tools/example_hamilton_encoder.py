@@ -12,7 +12,7 @@ Key architectural insight: Instead of quantizing individual values (Q4_0),
 compress entire token representations into a learned manifold and only
 materialize relevant subsets at decode time.
 
-Author: Hermes Agent for bytropix
+Author: Hermes Agent for wubuwizard
 """
 
 import numpy as np

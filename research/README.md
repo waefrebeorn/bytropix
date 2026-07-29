@@ -1,7 +1,7 @@
-# bytropix Research Archive (Kevin-Bacon convergence store)
+# wubuwizard Research Archive (Kevin-Bacon convergence store)
 
 This directory is the **persistent, cross-session research document system** for the
-bytropix C/C++ LLM inference engine. Every optimization idea that survives the
+wubuwizard C/C++ LLM inference engine. Every optimization idea that survives the
 triple-DA audit gets a numbered document here so we can re-derive it, re-audit it,
 and re-implement it without re-searching the web.
 

@@ -1,6 +1,6 @@
 # Vault — Verification & Legacy Tools
 
-These files document critical verification results from the bytropix GPU acceleration project.
+These files document critical verification results from the wubuwizard GPU acceleration project.
 
 ## GPU Kernel Verification Files
 
@@ -24,6 +24,6 @@ For every GPU kernel: read → compile → run → verify → compare → fix �
 ## GPU Quantization Type Note
 
 GGML type enums differ between codebases:
-- Q4_K = 12 in bytropix `gguf_reader.h`
+- Q4_K = 12 in wubuwizard `gguf_reader.h`
 - Q4_K = 15 in llama.cpp `ggml.h`
 - Always verify tensor type against local header, not documentation

@@ -1,5 +1,5 @@
 /*
- * wubu_tokenizer_hf.c -- HuggingFace BPE tokenizer loader for bytropix.
+ * wubu_tokenizer_hf.c -- HuggingFace BPE tokenizer loader for wubuwizard.
  * Self-contained: embeds a tiny, correct recursive-descent JSON scanner
  * (no external deps). The scanner advances a single forward cursor over the
  * whole file exactly once; it never re-scans. Hard safety cap prevents any

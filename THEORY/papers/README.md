@@ -1,6 +1,6 @@
 # Research Papers — WuBuText AI
 
-> **Location:** `/home/wubu/bytropix/THEORY/papers/`
+> **Location:** `/home/wubu/wubuwizard/THEORY/papers/`
 > **Total:** 22 papers (all arxiv abstracts as markdown)
 > **Last updated:** 2026-05-12
 
@@ -67,7 +67,7 @@
 | 25 | **DFT-WuBu** | 31KB | DFT-enhanced WuBu: spectral decomposition + hyperbolic geometry |
 | 26 | **DCT-WuBu** | 20KB | DCT-enhanced WuBu: discrete cosine transform integration |
 
-These originate from `~/HASHMIND/bytropix/theory/` (the Python research prototype repo).
+These originate from `~/HASHMIND/wubuwizard/theory/` (the Python research prototype repo).
 
 ## Runnable Math Proofs (`THEORY/math_viz/`)
 
@@ -81,7 +81,7 @@ These originate from `~/HASHMIND/bytropix/theory/` (the Python research prototyp
 | `06_symplectic_optimizer.py` | Symplectic integration of RSGD in T(H^n) | Same |
 | `07_lean_certificate.py` | Lean formal certificate generator | Same |
 
-All originate from `~/HASHMIND/bytropix/math_viz/`.
+All originate from `~/HASHMIND/wubuwizard/math_viz/`.
 
 ## Systems Reference: Tailslayer (5 files — hedged reads / speculative execution)
 

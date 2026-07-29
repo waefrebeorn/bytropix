@@ -2,7 +2,7 @@
 import numpy as np
 import struct
 import sys
-sys.path.insert(0, '/home/wubu/bytropix/tools')
+sys.path.insert(0, '/home/wubu/wubuwizard/tools')
 
 # Read first 66 bytes of L0 gate_exps tensor from the GGUF data blob
 # The model is 10GB+ so let me compute the offset from the tensor info
@@ -10,7 +10,7 @@ sys.path.insert(0, '/home/wubu/bytropix/tools')
 
 import subprocess
 result = subprocess.run([
-    '/home/wubu/bytropix/tools/gguf_read_type',
+    '/home/wubu/wubuwizard/tools/gguf_read_type',
     '/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf',
     'blk.0.ffn_gate_exps.weight'
 ], capture_output=True, text=True, timeout=30)

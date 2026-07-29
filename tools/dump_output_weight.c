@@ -4,7 +4,7 @@
 #include <math.h>
 #include <stdint.h>
 
-// Q4_K dequant helper (replicated from bytropix gguf_reader.c)
+// Q4_K dequant helper (replicated from wubuwizard gguf_reader.c)
 #define QK_K 256
 #define Q4_K_BLOCK_SIZE 144
 
@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
     const char *path = argc > 1 ? argv[1] : "/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const int N = 1000;
     
-    // Use bytropix gguf_reader to find tensor info
+    // Use wubuwizard gguf_reader to find tensor info
     // (Parse GGUF header ourselves to get offset and type)
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "Failed to open %s\n", path); return 1; }
@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
     printf("Read %zu raw bytes (%lld blocks of %d bytes)\n", n_bytes, (long long)n_blocks, Q4_K_BLOCK_SIZE);
     printf("Total tensor elements: %lld, reading first %d\n", (long long)total_elems, n_read);
     
-    // Dequantize using replicated bytropix Q4_K dequant
+    // Dequantize using replicated wubuwizard Q4_K dequant
     float *buf = (float *)malloc(n_blocks * QK_K * sizeof(float));
     if (!buf) { free(raw); return 1; }
     
@@ -190,7 +190,7 @@ int main(int argc, char **argv) {
     double mean = sum / n_read;
     double rms = sqrt(sum2 / n_read);
     
-    printf("\n=== Bytropix Dequant Stats (first %d elements of output.weight) ===\n", n_read);
+    printf("\n=== WubuWizard Dequant Stats (first %d elements of output.weight) ===\n", n_read);
     printf("  Min:   %+.10f\n", (double)vmin);
     printf("  Max:   %+.10f\n", (double)vmax);
     printf("  Mean:  %+.10f\n", mean);
@@ -202,7 +202,7 @@ int main(int argc, char **argv) {
     }
     
     // Write values to binary file for comparison
-    const char *outpath = "/home/wubu/vault/bins/output_weight_bytropix_f32.bin";
+    const char *outpath = "/home/wubu/vault/bins/output_weight_wubuwizard_f32.bin";
     FILE *fout = fopen(outpath, "wb");
     if (fout) {
         fwrite(buf, sizeof(float), n_read, fout);

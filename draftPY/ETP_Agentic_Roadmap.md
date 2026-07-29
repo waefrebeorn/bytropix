@@ -1,9 +1,9 @@
-# Master Document: The Bytropix Unification & Embedding Transfusion Pretraining (ETP) for WuBu Knowledge Spheres
+# Master Document: The WubuWizard Unification & Embedding Transfusion Pretraining (ETP) for WuBu Knowledge Spheres
 
-**Project Codename:** Bytropix ETP Genesis
+**Project Codename:** WubuWizard ETP Genesis
 
 **Objective:** To create a comprehensive theoretical and implementation guide for an agentic system to:
-1.  Understand the unified Bytropix framework, encompassing WuBu Nesting, Golden Aspect Adaptive Decomposition (GAAD), and their specialized architectural extensions.
+1.  Understand the unified WubuWizard framework, encompassing WuBu Nesting, Golden Aspect Adaptive Decomposition (GAAD), and their specialized architectural extensions.
 2.  Implement and validate the Embedding Transfusion Pretraining (ETP) methodology, specifically targeting the creation of:
     *   `WuBuText-DS-R1`: A WuBu "knowledge sphere" transfused with semantic knowledge from the `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` language model.
     *   `WuBuVisionLang-DS-VL2`: A WuBu "knowledge sphere" (or initially, separate vision and language spheres) transfused with knowledge from the `deepseek-ai/deepseek-vl2-small` vision-language model.
@@ -12,11 +12,11 @@
 
 **Paper Structure & Content for Agentic System Execution**
 
-## Title: The Bytropix Paradigm: Adaptive Nested Hyperbolic Geometries, φ-Infused Perception, and Embedding Transfusion Pretraining for Universal Semantic Structure Modeling
+## Title: The WubuWizard Paradigm: Adaptive Nested Hyperbolic Geometries, φ-Infused Perception, and Embedding Transfusion Pretraining for Universal Semantic Structure Modeling
 
 ### Abstract
 
-The Bytropix ecosystem represents a concerted effort to advance the modeling of complex, dynamic, and hierarchically structured data by transcending traditional Euclidean assumptions in favor of deeply geometric, adaptive, and perceptually-informed representations. This paper presents a unified view of the Bytropix framework, consolidating its core theoretical pillars: **WuBu Nesting (層疊嵌套)**, an architecture of recursively nested hyperbolic spaces (`H^{n_i}_{c_i,s_i}`) characterized by adaptive geometry (dimensionality, curvature, scale) and explicit tangent space rotations; and **Golden Aspect Adaptive Decomposition (GAAD)**, a φ-infused method for principled, aspect-ratio agnostic regionalization of visual data. We detail the evolution of these foundational concepts into specialized architectures for diverse modalities, including WuBu Spatio-Temporal Nesting (WuBu-ST) for video, DCT-WuBu for audio spectrograms, and generative modeling via DFT/DCT-WuBu VAE-GANs. The framework's robustness and learning efficacy are further enhanced by advanced adaptivity mechanisms, such as `log(g)`-inspired geometric parameter scaling and Q-Controller-driven "adaptive strain engineering" for dynamic hyperparameter optimization.
+The WubuWizard ecosystem represents a concerted effort to advance the modeling of complex, dynamic, and hierarchically structured data by transcending traditional Euclidean assumptions in favor of deeply geometric, adaptive, and perceptually-informed representations. This paper presents a unified view of the WubuWizard framework, consolidating its core theoretical pillars: **WuBu Nesting (層疊嵌套)**, an architecture of recursively nested hyperbolic spaces (`H^{n_i}_{c_i,s_i}`) characterized by adaptive geometry (dimensionality, curvature, scale) and explicit tangent space rotations; and **Golden Aspect Adaptive Decomposition (GAAD)**, a φ-infused method for principled, aspect-ratio agnostic regionalization of visual data. We detail the evolution of these foundational concepts into specialized architectures for diverse modalities, including WuBu Spatio-Temporal Nesting (WuBu-ST) for video, DCT-WuBu for audio spectrograms, and generative modeling via DFT/DCT-WuBu VAE-GANs. The framework's robustness and learning efficacy are further enhanced by advanced adaptivity mechanisms, such as `log(g)`-inspired geometric parameter scaling and Q-Controller-driven "adaptive strain engineering" for dynamic hyperparameter optimization.
 
 The central innovation detailed herein is **Embedding Transfusion Pretraining (ETP)**, a novel methodology enabling the translation of rich semantic information from powerful pre-trained source models—specifically targeting `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` for text and `deepseek-ai/deepseek-vl2-small` for vision-language modalities—into the WuBu framework *without requiring paired data*. Drawing inspiration from the conjecture of a universal latent semantic structure across diverse embedding models, ETP learns to align these source representations within WuBu's structured, nested hyperbolic latent spaces. This process allows WuBu "knowledge spheres" to be rapidly initialized with pre-existing, high-level semantic knowledge, upon which WuBu's inherent hierarchical, rotational, and multi-scale geometric organization is subsequently imposed. ETP is designed to facilitate accelerated pretraining, enhanced generalization, and the creation of specialized, modality-aware WuBu spheres, representing a significant step towards building AI systems capable of universal, geometrically-grounded understanding.
 
@@ -25,19 +25,19 @@ The central innovation detailed herein is **Embedding Transfusion Pretraining (E
 ### 1. Introduction: The Quest for Geometrically-Grounded and Transferable AI
 
 *   **1.1. Motivation:** Articulate the limitations of Euclidean deep learning when modeling data with complex intrinsic structures (hierarchical, dynamic, rotational). Emphasize the need for models endowed with strong, appropriate geometric inductive biases.
-*   **1.2. The Bytropix Vision:** Introduce Bytropix as an experimental, iterative research program focused on developing AI systems that intrinsically "think" and operate in terms of geometry. Present WuBu Nesting and GAAD as foundational components of this vision.
+*   **1.2. The WubuWizard Vision:** Introduce WubuWizard as an experimental, iterative research program focused on developing AI systems that intrinsically "think" and operate in terms of geometry. Present WuBu Nesting and GAAD as foundational components of this vision.
 *   **1.3. The Challenge of Knowledge Acquisition in Complex Geometries:** Highlight the significant data and computational demands of training complex geometric models like WuBu Nesting from scratch. Pose the question of how to efficiently leverage the vast semantic knowledge already encapsulated in existing large-scale foundation models.
 *   **1.4. The Universal Geometry Hypothesis:** Briefly discuss the emerging idea (cf. Platonic Representation Hypothesis [[HuhIsola24](#ref_huhisola24)], Jha et al. [[JhaShmatikovMorris25](#ref_jhashmatikovmorris25)]) that diverse neural network embedding models, despite their architectural and training differences, might converge to represent semantics in a shared, universal latent geometric structure, even if their direct output spaces are incompatible.
 *   **1.5. Embedding Transfusion Pretraining (ETP) – The Core Innovation:** Introduce ETP as the central novel contribution of this work. Define it as a methodology to "transfuse" semantic knowledge from pre-trained Euclidean embeddings (source models) into the structured, adaptive geometric framework of WuBu Nesting.
     *   Elaborate on the "Spinning flat yarn (Euclidean embeddings) into structured geometric yarn balls (WuBu spheres)" analogy to make the concept intuitive.
 *   **1.6. Specific ETP Targets for Implementation:** Clearly state the initial target source models: `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` (LLM) for creating `WuBuText-DS-R1`, and `deepseek-ai/deepseek-vl2-small` (VLM) for creating `WuBuVisionLang-DS-VL2`.
-*   **1.7. Paper Scope and Objectives:** State that this document aims to provide a unified overview of the Bytropix ecosystem, furnish a detailed theoretical and practical methodology for ETP, and outline a clear implementation and evaluation plan for the designated agentic system.
+*   **1.7. Paper Scope and Objectives:** State that this document aims to provide a unified overview of the WubuWizard ecosystem, furnish a detailed theoretical and practical methodology for ETP, and outline a clear implementation and evaluation plan for the designated agentic system.
 
 ---
 
-### 2. Foundational Pillars of the Bytropix Ecosystem
+### 2. Foundational Pillars of the WubuWizard Ecosystem
 
-*(This section should synthesize and concisely present the core concepts from existing Bytropix documentation, particularly `WuBuHypCD-paper.md`, `GAAD-WuBu-ST1.md`, and `GAAD-WuBu-ST2.md`.)*
+*(This section should synthesize and concisely present the core concepts from existing WubuWizard documentation, particularly `WuBuHypCD-paper.md`, `GAAD-WuBu-ST1.md`, and `GAAD-WuBu-ST2.md`.)*
 
 *   **2.1. WuBu Nesting (層疊嵌套): The Geometric Core Engine** [[WNP1](#ref_wunp1)]
     *   **2.1.1. Core Architecture:** Describe the recursively nested hyperbolic spaces (`H^{n_i}_{c_i,s_i}`), typically modeled using the Poincaré Ball.
@@ -61,16 +61,16 @@ The central innovation detailed herein is **Embedding Transfusion Pretraining (E
 
 *   **2.2. Golden Aspect Adaptive Decomposition (GAAD): The Perceptual Front-End for Visual Data** [[GAADWST1](#ref_gaadwst1), [GAADWST2](#ref_gaadwst2)]
     *   **2.2.1. Core Principles:** Emphasize aspect-ratio agnosticism, φ-infused compositional awareness, and inherent multi-scale analysis capabilities.
-    *   **2.2.2. Key Decomposition Techniques (Implemented in Bytropix):**
+    *   **2.2.2. Key Decomposition Techniques (Implemented in WubuWizard):**
         *   Recursive Golden Subdivision (GAS): Using `golden_subdivide_rect_fixed_n` for hierarchical rectangular partitioning.
         *   Phi-Spiral Patching/Sectoring (PSP): Using `phi_spiral_patch_centers_fixed_n` for foveated, logarithmically expanding regional sampling.
-    *   **2.2.3. Role in Bytropix Architectures:** Explain how GAAD generates a structured set of bounding boxes that guide feature extraction (from raw pixels, spectral representations, or intermediate CNN feature maps via `ROIAlign`) for input into subsequent processing stages like WuBu stacks.
+    *   **2.2.3. Role in WubuWizard Architectures:** Explain how GAAD generates a structured set of bounding boxes that guide feature extraction (from raw pixels, spectral representations, or intermediate CNN feature maps via `ROIAlign`) for input into subsequent processing stages like WuBu stacks.
 
 ---
 
-### 3. Evolution of Bytropix: Specialized Architectures and Advanced Mechanisms
+### 3. Evolution of WubuWizard: Specialized Architectures and Advanced Mechanisms
 
-*(This section should provide a concise overview of how WuBu Nesting and GAAD have been extended and applied, demonstrating the framework's maturity and versatility. The agent should draw from the abstracts and introductions of the referenced Bytropix documents.)*
+*(This section should provide a concise overview of how WuBu Nesting and GAAD have been extended and applied, demonstrating the framework's maturity and versatility. The agent should draw from the abstracts and introductions of the referenced WubuWizard documents.)*
 
 *   **3.1. WuBu Spatio-Temporal Nesting (WuBu-ST) for Dynamic Scene Understanding:** [[WSTP1](#ref_wustp1)]
     *   Briefly describe the dual-stack architecture: WuBu-S for per-frame spatial analysis and WuBu-T for modeling temporal dynamics of spatial features.
@@ -241,7 +241,7 @@ This section details the core novel contribution: ETP, a methodology to initiali
         *   **Integration with `HAKMEMQController`:** Allow Q-Controllers to manage learning rates for different optimizer groups and potentially the `λ` loss weights.
         *   Robust logging to WandB/TensorBoard, regular checkpointing, support for gradient accumulation and Automatic Mixed Precision (AMP).
     *   **4.4.7. Experiment Runner Scripts (`run_etp_wubutext_ds_r1.py`, `run_etp_wubuvision_ds_vl2.py`, etc. - Agent Task):**
-        *   Use `argparse` for comprehensive configuration: paths to pre-extracted embedding datasets, WuBu stack parameters (passed via WuBu config objects defined in Bytropix core), ETP model MLP dimensions, `λ` loss weights, all training hyperparameters (batch size, epochs, optimizer settings, etc.).
+        *   Use `argparse` for comprehensive configuration: paths to pre-extracted embedding datasets, WuBu stack parameters (passed via WuBu config objects defined in WubuWizard core), ETP model MLP dimensions, `λ` loss weights, all training hyperparameters (batch size, epochs, optimizer settings, etc.).
         *   Instantiate datasets, ETP WuBu Sphere models, discriminators, `ETPTrainer`, and initiate the training process.
         *   Include corresponding `.bat` or shell scripts for easy experiment launching.
 
@@ -369,7 +369,7 @@ A phased approach is crucial for managing the complexity of ETP pretraining.
 
 ### 8. Discussion: Towards a Universal, Geometrically Principled, and Transferable AI
 
-*   **8.1. Strengths and Advantages of the Bytropix ETP Paradigm:**
+*   **8.1. Strengths and Advantages of the WubuWizard ETP Paradigm:**
     *   **Principled Knowledge Transfer:** ETP moves beyond simple fine-tuning of pre-trained models by attempting a fundamental geometric restructuring and enhancement of existing knowledge.
     *   **Unsupervised Alignment Nature:** The core ETP objectives (ALA, VSP) reduce the dependence on massive, task-specific paired datasets for initializing powerful geometric models.
     *   **Enhanced Representational Power:** WuBu spheres, with their adaptive hyperbolic geometry and rich component set, offer a significantly more expressive latent space than standard Euclidean projections or simpler manifold learning techniques.
@@ -389,15 +389,15 @@ A phased approach is crucial for managing the complexity of ETP pretraining.
 
 ### 9. Conclusion
 
-The Bytropix framework, through its foundational pillars of WuBu Nesting and Golden Aspect Adaptive Decomposition, has consistently aimed to integrate deep geometric principles into the fabric of AI systems. The introduction of Embedding Transfusion Pretraining (ETP) marks a pivotal evolution in this endeavor. ETP is designed to bridge the gap between the vast semantic knowledge captured by large-scale pre-trained foundation models, such as the targeted DeepSeek LLM and VLM, and the sophisticated, adaptive geometric representational power inherent in the WuBu Nesting architecture. By providing a principled methodology for unsupervised translation and geometric restructuring of source embeddings, ETP offers a promising pathway to rapidly initialize WuBu "knowledge spheres" that are not only semantically potent from their inception but are also endowed with a rich, explicit geometric structure.
+The WubuWizard framework, through its foundational pillars of WuBu Nesting and Golden Aspect Adaptive Decomposition, has consistently aimed to integrate deep geometric principles into the fabric of AI systems. The introduction of Embedding Transfusion Pretraining (ETP) marks a pivotal evolution in this endeavor. ETP is designed to bridge the gap between the vast semantic knowledge captured by large-scale pre-trained foundation models, such as the targeted DeepSeek LLM and VLM, and the sophisticated, adaptive geometric representational power inherent in the WuBu Nesting architecture. By providing a principled methodology for unsupervised translation and geometric restructuring of source embeddings, ETP offers a promising pathway to rapidly initialize WuBu "knowledge spheres" that are not only semantically potent from their inception but are also endowed with a rich, explicit geometric structure.
 
-The successful implementation and rigorous validation of ETP for `WuBuText-DS-R1` and the `DS-VL2-VLM`-based spheres (`WuBuVision-DS-VL2`, `WuBuLang-DS-VL2`) are anticipated to yield powerful new text, vision, and language representation models. More broadly, this work aims to provide empirical support for the compelling hypothesis of a universal latent semantic geometry underlying diverse AI embeddings. The Bytropix project, with its unwavering commitment to open experimentation, iterative refinement, and the pursuit of geometrically intelligent systems, serves as an ideal crucible for forging these next-generation AI capabilities. Ultimately, the Bytropix ETP Genesis project strives towards a future where artificial intelligence can learn, reason, and generate through a profound, adaptable, and geometrically intuitive understanding of the complex information that defines our world.
+The successful implementation and rigorous validation of ETP for `WuBuText-DS-R1` and the `DS-VL2-VLM`-based spheres (`WuBuVision-DS-VL2`, `WuBuLang-DS-VL2`) are anticipated to yield powerful new text, vision, and language representation models. More broadly, this work aims to provide empirical support for the compelling hypothesis of a universal latent semantic geometry underlying diverse AI embeddings. The WubuWizard project, with its unwavering commitment to open experimentation, iterative refinement, and the pursuit of geometrically intelligent systems, serves as an ideal crucible for forging these next-generation AI capabilities. Ultimately, the WubuWizard ETP Genesis project strives towards a future where artificial intelligence can learn, reason, and generate through a profound, adaptable, and geometrically intuitive understanding of the complex information that defines our world.
 
 ---
 
 ### References
 
-*(This section requires careful population by the Agent. It must be a consolidated and de-duplicated list from all Bytropix markdown files provided in the initial prompt, PLUS new key references for the following categories. The agent should search for and include appropriate academic citations.)*
+*(This section requires careful population by the Agent. It must be a consolidated and de-duplicated list from all WubuWizard markdown files provided in the initial prompt, PLUS new key references for the following categories. The agent should search for and include appropriate academic citations.)*
 
 *   **Source Foundation Models:**
     *   Official paper, website, or arXiv preprint for `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B`.
@@ -413,7 +413,7 @@ The successful implementation and rigorous validation of ETP for `WuBuText-DS-R1
 *   **Text and Image Corpora:**
     *   Citations for C4, The Pile, OpenWebText, Wikipedia (for text).
     *   Citations for COCO, Visual Genome, CC3M/CC12M, LAION (for vision-language).
-*   **Bytropix Internal Document References (using consistent keys):**
+*   **WubuWizard Internal Document References (using consistent keys):**
     *   `[WNP1]` for `WuBuHypCD-paper.md`
     *   `[GAADWST1]` for `GAAD-WuBu-ST1.md`
     *   `[GAADWST2]` for `GAAD-WuBu-ST2.md`
@@ -450,7 +450,7 @@ The successful implementation and rigorous validation of ETP for `WuBuText-DS-R1
 
 The journey documented in this paper—from the foundational concepts of WuBu Nesting and Golden Aspect Adaptive Decomposition to the ambitious vision of Embedding Transfusion Pretraining—is more than a chronicle of algorithmic development. It is a testament to an enduring fascination with the intrinsic structure of information and a belief that true artificial intelligence must, at some fundamental level, learn to "think" in terms of geometry, hierarchy, and transformation.
 
-The Bytropix ecosystem, with its often "unfiltered" and relentlessly iterative approach, has served as a crucible for these ideas. We embarked on this path with the intuition that the rigid grids and flat vector spaces of conventional deep learning, while powerful, were like trying to understand a dynamic, curved universe with only a straightedge and compass. WuBu Nesting was our attempt to build a more flexible toolkit—one capable of carving out adaptive, curved spaces, of seeing in multiple dimensions, and of understanding how things relate and rotate within those spaces. GAAD was our effort to ensure that our models perceived the world not as an arbitrary collection of pixels, but through a lens shaped by natural compositional principles like the Golden Ratio.
+The WubuWizard ecosystem, with its often "unfiltered" and relentlessly iterative approach, has served as a crucible for these ideas. We embarked on this path with the intuition that the rigid grids and flat vector spaces of conventional deep learning, while powerful, were like trying to understand a dynamic, curved universe with only a straightedge and compass. WuBu Nesting was our attempt to build a more flexible toolkit—one capable of carving out adaptive, curved spaces, of seeing in multiple dimensions, and of understanding how things relate and rotate within those spaces. GAAD was our effort to ensure that our models perceived the world not as an arbitrary collection of pixels, but through a lens shaped by natural compositional principles like the Golden Ratio.
 
 The evolution through spatio-temporal modeling, spectral pre-encoding, and sophisticated meta-control mechanisms like Q-Controllers and adaptive heuristics was driven by a constant dialogue between theoretical aspiration and the often-humbling realities of empirical experimentation. Each iteration, from the early diffusion models to the robust VAE-GAN hybrids, taught us invaluable lessons about stability, scalability, and the subtle art of guiding complex systems towards meaningful learning. The "Math Prover" findings, often born from debugging cryptic numerical instabilities, became quiet affirmations of the need for rigor when dealing with the delicate dance of hyperbolic geometry.
 
@@ -460,7 +460,7 @@ This endeavor is, of course, fraught with challenges. The computational demands 
 
 The "CAT scan" metaphor for how WuBu analyzes transfused knowledge—dissecting it layer by layer, probing its rotational symmetries, mapping its relative structures—highlights the analytical depth we aim for. We are not merely seeking to build black boxes that perform well on benchmarks, but to create systems whose internal representations and processing mechanisms offer a richer, more interpretable window into the structure of the data they model.
 
-As the Bytropix agentic system embarks on the implementation and validation of ETP, we are acutely aware that this is not an endpoint, but another significant waypoint on a much longer voyage. The dream is an ecosystem of interconnected WuBu spheres, each an expert in its transfused domain, communicating and collaborating through shared geometric principles. This is the grand, unfolding geometry of intelligence that the Bytropix project, in its own experimental and evolving way, seeks to explore and, ultimately, to help bring into being. The path is complex, the outcome uncertain, but the pursuit itself is a profound intellectual adventure.
+As the WubuWizard agentic system embarks on the implementation and validation of ETP, we are acutely aware that this is not an endpoint, but another significant waypoint on a much longer voyage. The dream is an ecosystem of interconnected WuBu spheres, each an expert in its transfused domain, communicating and collaborating through shared geometric principles. This is the grand, unfolding geometry of intelligence that the WubuWizard project, in its own experimental and evolving way, seeks to explore and, ultimately, to help bring into being. The path is complex, the outcome uncertain, but the pursuit itself is a profound intellectual adventure.
 
-**W. WaefreBeorn & The Bytropix Collective**
+**W. WaefreBeorn & The WubuWizard Collective**
 *May 21, 2025 (Anticipated)*
