@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "wubu_tokenizer.h"
+#include "wubu_spawn.h"
 #include "gguf_reader.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -617,23 +618,15 @@ int wubu_tokenizer_encode_python(wubu_tokenizer_t *tok,
     write(fd, script, slen);
     close(fd);
     
-    char cmd[66000];
-    snprintf(cmd, sizeof(cmd), "python3 %s ", script_path);
-    int clen = (int)strlen(cmd);
-    cmd[clen++] = '\'';
-    for (int i = 0; text[i] && clen < (int)sizeof(cmd) - 10; i++) {
-        if (text[i] == '\'') { cmd[clen++] = '\''; cmd[clen++] = '\\'; cmd[clen++] = '\''; cmd[clen++] = '\''; }
-        else cmd[clen++] = text[i];
-    }
-    cmd[clen++] = '\''; cmd[clen] = '\0';
-    
-    FILE *pipe = popen(cmd, "r");
-    unlink(script_path);
-    if (!pipe) return -1;
-    
+    const char *py_argv[] = {
+        "python3", script_path, NULL
+    };
+
+    int rc = -1;
     char result[65536];
-    if (!fgets(result, sizeof(result), pipe)) { pclose(pipe); return -1; }
-    pclose(pipe);
+    int captured = wubu_spawn_capture("python3", py_argv, result, sizeof(result), &rc);
+    unlink(script_path);
+    if (captured < 0 || rc != 0) return -1;
     
     int n = 0;
     char *token = strtok(result, " \n");

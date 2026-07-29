@@ -7,7 +7,9 @@
 
 const char *wubu_kv_scheme_name(wubu_kv_scheme_t kv) {
     switch (kv) {
+        case WUBU_KV_F32:  return "F32";
         case WUBU_KV_F16:  return "F16";
+        case WUBU_KV_Q4_0: return "Q4_0";
         case WUBU_KV_Q8:   return "OUR_Q8";
         case WUBU_KV_KIVI: return "KIVI";
         default:           return "?";

@@ -1,3 +1,4 @@
+#include <dirent.h>
 /*
  * wubu_safetensors_shard.c -- multi-shard safetensors loader.
  * See wubu_safetensors_shard.h. Self-contained; uses safetensors_reader.
@@ -17,23 +18,29 @@ struct wubu_shard_ctx {
 };
 
 /* Scan a directory for model-NNNNN-of-NNNNN.safetensors files. */
+#include <fnmatch.h>
 static int scan_shards(const char *dir, char paths[SHARD_MAX][1024]) {
-    /* Use a glob via opendir would be cleaner, but to stay dependency-free
-     * we shell out to a tiny helper: list files, keep the shard pattern. */
-    char cmd[2048];
-    snprintf(cmd, sizeof(cmd),
-             "ls %s/model-*-of-*.safetensors 2>/dev/null | sort", dir);
-    FILE *p = popen(cmd, "r");
+    /* dependency-free directory scan — opendir/readdir + fnmatch filter */
+    DIR *d = opendir(dir);
+    if (!d) return 0;
     int n = 0;
-    if (p) {
-        char line[2048];
-        while (fgets(line, sizeof(line), p) && n < SHARD_MAX) {
-            size_t L = strlen(line);
-            while (L && (line[L-1]=='\n'||line[L-1]=='\r')) line[--L]=0;
-            if (L) { snprintf(paths[n], 1024, "%s", line); n++; }
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL && n < SHARD_MAX) {
+        if (fnmatch("model-*-of-*.safetensors", ent->d_name, 0) == 0) {
+            snprintf(paths[n], 1024, "%s/%s", dir, ent->d_name);
+            n++;
         }
-        pclose(p);
     }
+    closedir(d);
+    if (n <= 1) return n;
+    /* sort for stable load order */
+    for (int i = 0; i < n - 1; i++)
+        for (int j = i + 1; j < n; j++)
+            if (strcmp(paths[i], paths[j]) > 0) {
+                char tmp[1024]; strncpy(tmp, paths[i], 1023); tmp[1023]=0;
+                strncpy(paths[i], paths[j], 1023); paths[i][1023]=0;
+                strncpy(paths[j], tmp, 1023); paths[j][1023]=0;
+            }
     return n;
 }
 

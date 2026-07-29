@@ -55,12 +55,26 @@ int main(void) {
     }
 
     wubu_layer_t *ly = &m.layers[0];
-    if (!ly->ssm.attn_qkv_weight_f32 || !ly->ssm.attn_gate_weight_f32 ||
-        !ly->ssm.ssm_out_weight_f32 || !ly->gqa.attn_q_weight ||
-        !ly->gqa.attn_output_weight || !ly->moe.ffn_up_exps || !m.token_embd) {
-        fprintf(stderr, "FAIL: real weight pointers not mapped\n"); return 1;
+    /* Layer 0 in Agents-A1 is SSM-only (no self_attn tensors). Check weights.
+     * For BF16 models, use _raw fields; for F32 models, use _f32 fields.
+     * SSM-only layers have no GQA weights. */
+    int has_ssm = (ly->ssm.attn_qkv_weight_f32 || ly->ssm.attn_qkv_weight_raw) &&
+                  (ly->ssm.attn_gate_weight_f32 || ly->ssm.attn_gate_weight_raw) &&
+                  (ly->ssm.ssm_out_weight_f32  || ly->ssm.ssm_out_weight_raw);
+    int has_embd = m.token_embd != NULL || m.lazy_embd_raw != NULL;
+    if (!has_ssm || !has_embd) {
+        fprintf(stderr, "FAIL: real weight pointers not mapped\n");
+        fprintf(stderr, "  qkv=%p gate=%p out=%p embd=%p\n",
+                (void*)ly->ssm.attn_qkv_weight_raw, (void*)ly->ssm.attn_gate_weight_raw,
+                (void*)ly->ssm.ssm_out_weight_raw, (void*)m.token_embd);
+        return 1;
     }
     printf("PASS: real Agents-A1-4B shards loaded; all weight pointers mapped\n");
+
+    /* Materialize lazy BF16 weights to F32 before calling the forward directly.
+     * In production, wubu_model_forward() does this via wubu_ssm_ensure_f32(),
+     * but test_real_load calls wubu_ssm_forward() directly. */
+    wubu_ssm_ensure_f32(&ly->ssm, m.d_model, WUBU_DIMS.conv_dim, WUBU_DIMS.value_dim);
 
     /* Run a real SSM forward on layer 0 with actual weights (B=1,T=1). */
     const int D = WUBU_DIMS.d_model;

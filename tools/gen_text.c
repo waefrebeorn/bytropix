@@ -438,8 +438,15 @@ int main(int argc, char **argv) {
 
     free(logits); free(embd);
     if (emb_file) fclose(emb_file);
-    wubu_tokenizer_free(&tok);
-    if (hf_tok) wubu_tok_hf_free(hf_tok);
+    /* When using HF tokenizer, tok is only a shim — do NOT call
+     * wubu_tokenizer_free() on it; that walks uninitialized pointers
+     * and causes munmap_chunk() in decode. Free the real HF tokenizer
+     * instead and skip the shim destructor entirely. */
+    if (hf_tok) {
+        wubu_tok_hf_free(hf_tok);
+    } else {
+        wubu_tokenizer_free(&tok);
+    }
     if (rep) wubu_rep_free(rep);
     gpu_output_cleanup();
     wubu_model_free(&mdl);

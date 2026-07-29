@@ -74,6 +74,18 @@ static float *load_f32_try2(wubu_shard_ctx_t *sc, const char *name, int64_t *n_e
     return wubu_shard_load_f32(sc, alt, n_elems);
 }
 
+/* Load a named tensor as raw bytes, trying the name as given then with
+ * ".weight" appended. NULL if neither exists. Fills *dtype and *n_elems. */
+static const uint8_t *raw_try2(wubu_shard_ctx_t *sc, const char *name,
+                               int *dtype, int64_t *n_elems)
+{
+    const uint8_t *raw = wubu_shard_raw(sc, name, dtype, n_elems);
+    if (raw) return raw;
+    char alt[512];
+    snprintf(alt, sizeof(alt), "%s.weight", name);
+    return wubu_shard_raw(sc, alt, dtype, n_elems);
+}
+
 /* Load a named tensor as F32 and transpose [rows,cols]->[cols,rows], trying
  * the name as given then with ".weight" appended. NULL if neither exists. */
 static float *load_f32_try2_t(wubu_shard_ctx_t *sc, const char *name,
@@ -162,11 +174,15 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     if (dff < 0) dff = dimof_sc(sc, "model.language_model.layers.0.mlp.gate_proj.weight", 0);
     if (dff < 0) dff = (int)ad->d_ff > 0 ? (int)ad->d_ff : (D * 4);
 
-    /* Count real layers by probing across shards (robust to adapter quirks). */
+    /* Count real layers by probing across shards (robust to adapter quirks).
+     * NOTE: hybrid models have both SSM (linear_attention) and GQA-only
+     * (full_attention, no linear_attn) layers, so probing for
+     * linear_attn.in_proj_qkv.weight undercounts. Use input_layernorm
+     * instead, which every layer has. */
     int nL = 0;
     for (int l = 0; l < 512; l++) {
         char qn[256];
-        tn(qn, sizeof(qn), "model.language_model.layers.%d.linear_attn.in_proj_qkv.weight", l);
+        tn(qn, sizeof(qn), "model.language_model.layers.%d.input_layernorm.weight", l);
         if (!wubu_shard_has(sc, qn)) break;
         nL = l + 1;
     }
@@ -209,43 +225,51 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
         /* ---- GQA (self_attn.*_proj) ----
          * LAZY BF16: keep raw mmap'd bytes and materialize to F32 per call.
          * This keeps dense GQA layers out of RAM until the layer is active,
-         * which is what makes the full 27B forward fit in 13 GB. */
-        int g_dtype = 0; int64_t g_row = 0;
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.q_proj.weight", l);
-        const uint8_t *qraw = wubu_shard_raw(sc, nm, &g_dtype, &g_row);
-        if (qraw && (g_dtype == ST_DTYPE_BF16 || g_dtype == ST_DTYPE_F16)) {
-            ly->gqa.attn_q_weight_raw = qraw; ly->gqa.lazy_dtype = g_dtype;
-            ly->gqa.attn_q_weight = NULL;
+         * which is what makes the full 27B forward fit in 13 GB.
+         * NOTE: In hybrid models, SSM layers (linear_attention) have NO
+         * self_attn tensors — they use linear_attn instead. Only load GQA
+         * weights for full_attention (GQA-only) layers. */
+        if (!ssm_layer) {
+            int g_dtype = 0; int64_t g_row = 0;
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.q_proj.weight", l);
+            const uint8_t *qraw = raw_try2(sc, nm, &g_dtype, &g_row);
+            if (qraw && (g_dtype == ST_DTYPE_BF16 || g_dtype == ST_DTYPE_F16)) {
+                ly->gqa.attn_q_weight_raw = qraw; ly->gqa.lazy_dtype = g_dtype;
+                ly->gqa.attn_q_weight = NULL;
+            } else {
+                ly->gqa.attn_q_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
+            }
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.k_proj.weight", l);
+            qraw = raw_try2(sc, nm, &g_dtype, &g_row);
+            if (qraw && (g_dtype == ST_DTYPE_BF16 || g_dtype == ST_DTYPE_F16)) {
+                ly->gqa.attn_k_weight_raw = qraw; ly->gqa.lazy_dtype = g_dtype;
+                ly->gqa.attn_k_weight = NULL;
+            } else {
+                ly->gqa.attn_k_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
+            }
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.v_proj.weight", l);
+            qraw = raw_try2(sc, nm, &g_dtype, &g_row);
+            if (qraw && (g_dtype == ST_DTYPE_BF16 || g_dtype == ST_DTYPE_F16)) {
+                ly->gqa.attn_v_weight_raw = qraw; ly->gqa.lazy_dtype = g_dtype;
+                ly->gqa.attn_v_weight = NULL;
+            } else {
+                ly->gqa.attn_v_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
+            }
+            tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.o_proj.weight", l);
+            qraw = raw_try2(sc, nm, &g_dtype, &g_row);
+            if (qraw && (g_dtype == ST_DTYPE_BF16 || g_dtype == ST_DTYPE_F16)) {
+                ly->gqa.attn_output_weight_raw = qraw; ly->gqa.lazy_dtype = g_dtype;
+                ly->gqa.attn_output_weight = NULL;
+            } else {
+                ly->gqa.attn_output_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
+            }
+            ly->gqa.q_heads = qh; ly->gqa.kv_heads = kvh; ly->gqa.head_dim = hd;
+            ly->gqa.attn_q_weight_q = NULL; ly->gqa.attn_k_weight_q = NULL;
+            ly->gqa.attn_v_weight_q = NULL; ly->gqa.attn_output_weight_q = NULL;
         } else {
-            ly->gqa.attn_q_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
+            /* SSM layers: GQA fields stay NULL (use SSM for QKV). */
+            ly->gqa.q_heads = qh; ly->gqa.kv_heads = kvh; ly->gqa.head_dim = hd;
         }
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.k_proj.weight", l);
-        qraw = wubu_shard_raw(sc, nm, &g_dtype, &g_row);
-        if (qraw && (g_dtype == ST_DTYPE_BF16 || g_dtype == ST_DTYPE_F16)) {
-            ly->gqa.attn_k_weight_raw = qraw; ly->gqa.lazy_dtype = g_dtype;
-            ly->gqa.attn_k_weight = NULL;
-        } else {
-            ly->gqa.attn_k_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        }
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.v_proj.weight", l);
-        qraw = wubu_shard_raw(sc, nm, &g_dtype, &g_row);
-        if (qraw && (g_dtype == ST_DTYPE_BF16 || g_dtype == ST_DTYPE_F16)) {
-            ly->gqa.attn_v_weight_raw = qraw; ly->gqa.lazy_dtype = g_dtype;
-            ly->gqa.attn_v_weight = NULL;
-        } else {
-            ly->gqa.attn_v_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        }
-        tn(nm, sizeof(nm), "model.language_model.layers.%d.self_attn.o_proj.weight", l);
-        qraw = wubu_shard_raw(sc, nm, &g_dtype, &g_row);
-        if (qraw && (g_dtype == ST_DTYPE_BF16 || g_dtype == ST_DTYPE_F16)) {
-            ly->gqa.attn_output_weight_raw = qraw; ly->gqa.lazy_dtype = g_dtype;
-            ly->gqa.attn_output_weight = NULL;
-        } else {
-            ly->gqa.attn_output_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0});
-        }
-        ly->gqa.q_heads = qh; ly->gqa.kv_heads = kvh; ly->gqa.head_dim = hd;
-        ly->gqa.attn_q_weight_q = NULL; ly->gqa.attn_k_weight_q = NULL;
-        ly->gqa.attn_v_weight_q = NULL; ly->gqa.attn_output_weight_q = NULL;
 
         /* ---- SSM (linear_attn.*) -> F32 path ----
          * Only present on linear_attention (SSM) layers. Skipped on
@@ -257,7 +281,7 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
          * norm, a/b) stay F32-resident — they're tiny. */
         tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_qkv", l);
         int s_dtype = 0; int64_t s_row = 0;
-        const uint8_t *raw = wubu_shard_raw(sc, nm, &s_dtype, &s_row);
+        const uint8_t *raw = raw_try2(sc, nm, &s_dtype, &s_row);
         if (raw && (s_dtype == ST_DTYPE_BF16 || s_dtype == ST_DTYPE_F16)) {
             ly->ssm.attn_qkv_weight_raw = raw; ly->ssm.lazy_dtype = s_dtype;
             ly->ssm.attn_qkv_weight_f32 = NULL;
@@ -265,7 +289,7 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
             ly->ssm.attn_qkv_weight_f32 = load_f32_try2_t(sc, nm, D, CONVD); /* [D,CONVD] */
         }
         tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.in_proj_z", l);
-        raw = wubu_shard_raw(sc, nm, &s_dtype, &s_row);
+        raw = raw_try2(sc, nm, &s_dtype, &s_row);
         if (raw && (s_dtype == ST_DTYPE_BF16 || s_dtype == ST_DTYPE_F16)) {
             ly->ssm.attn_gate_weight_raw = raw; ly->ssm.lazy_dtype = s_dtype;
             ly->ssm.attn_gate_weight_f32 = NULL;
@@ -290,7 +314,7 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
         tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.norm", l);
         ly->ssm.ssm_norm_weight = load_f32_try2(sc, nm, &(int64_t){0});
         tn(nm, sizeof(nm), "model.language_model.layers.%d.linear_attn.out_proj", l);
-        raw = wubu_shard_raw(sc, nm, &s_dtype, &s_row);
+        raw = raw_try2(sc, nm, &s_dtype, &s_row);
         if (raw && (s_dtype == ST_DTYPE_BF16 || s_dtype == ST_DTYPE_F16)) {
             ly->ssm.ssm_out_weight_raw = raw; ly->ssm.lazy_dtype = s_dtype;
             ly->ssm.ssm_out_weight_f32 = NULL;
