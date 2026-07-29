@@ -10,6 +10,7 @@
  */
 
 #include "wubu_model_adapter.h"
+#include "wubu_da_guard.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -84,6 +85,10 @@ static int parse_layer_types(wubu_adapter_t *out, const char *buf, const char *e
 
 bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
     if (!out || !path) return false;
+    /* DA-2 fail-closed: refuse to load weights if the kernel schema
+     * doesn't match our compile-time constant. The env var WUBU_KERNEL_SCHEMA
+     * is set by wubu_realm_start() in WuBuOS; absent it, we run standalone. */
+    if (wubu_da_check_kernel_schema() != 0) return false;
     memset(out, 0, sizeof(*out));
     /* A bare checkpoint DIRECTORY: resolve to its config.json. The model dir
      * (model-NNN-of-MMM shards) carries config.json; opening the dir directly

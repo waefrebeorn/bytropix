@@ -257,6 +257,10 @@ test_nested_moe_router_backward: tools/test_nested_moe_router_backward.c $(CORE_
 gen_fixture_safetensors: tools/gen_fixture_safetensors.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
+test_kv_styx: tools/test_kv_styx.c src/wubu_kv_styx.o src/wubu_spawn.o
+	$(CC) $(CFLAGS) -o $@ tools/test_kv_styx.c src/wubu_kv_styx.o src/wubu_spawn.o $(LDFLAGS)
+	./$@
+
 test_safetensors: tools/test_safetensors.c src/safetensors_reader.o gen_fixture_safetensors
 	$(CC) $(CFLAGS) -o $@ $< src/safetensors_reader.o $(LDFLAGS)
 	./gen_fixture_safetensors

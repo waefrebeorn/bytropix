@@ -146,7 +146,9 @@ static int test_lora_adapter(const char *path) {
 static int test_dims_mirror(void) {
     printf("\n[dims] wubu_dims_set mirror + macro readback\n");
     wubu_adapter_t a; memset(&a, 0, sizeof(a));
-    wubu_adapter_load(&a, "/home/wubu/wubuwizard/testdata/Qwen36_config.json");
+    int ok = wubu_adapter_load(&a, "/home/wubu/wubuwizard/testdata/Qwen36_config.json");
+    CHECK(ok && a.ok, "load ok (no realm env → standalone allowed)");
+    if (!ok || !a.ok) return 1;
     wubu_dims_t d; memset(&d, 0, sizeof(d));
     d.d_model     = a.d_model;       /* 5120 */
     d.ssm_d_state = a.ssm_d_state;   /* 128  */
@@ -178,6 +180,16 @@ int main(void) {
                       "Qwen36", 5120, 64, 48, 0, 0);
     test_lora_adapter("/home/wubu/wubuwizard/testdata/BTL3_adapter_config.json");
     test_dims_mirror();
+
+    /* DA-2 fail-closed gate test: schema mismatch refuses load */
+    printf("\n[DA-2] kernel schema mismatch gate\n");
+    wubu_adapter_t a; memset(&a, 0, sizeof(a));
+    setenv("WUBU_KERNEL_SCHEMA", "99", 1);
+    int refused = wubu_adapter_load(&a, "/home/wubu/wubuwizard/testdata/Qwen36_config.json");
+    CHECK(!refused, "load refused when WUBU_KERNEL_SCHEMA=99 (DA-2 fail-closed)");
+    unsetenv("WUBU_KERNEL_SCHEMA");
+    int allowed = wubu_adapter_load(&a, "/home/wubu/wubuwizard/testdata/Qwen36_config.json");
+    CHECK(allowed && a.ok, "load allowed when no realm env (standalone)");
 
     printf("\n=== RESULTS: %s ===\n", g_fail ? "FAILURES" : "ALL PASS");
     return g_fail ? 1 : 0;
