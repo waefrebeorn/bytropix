@@ -105,7 +105,7 @@ for (int i = 0; i < 30; i++) {
 ## Benchmark Command
 
 ```bash
-cd /home/wubu/bytropix
+cd /home/wubu/wubuwizard
 make bench_512k_full
 ./bench_512k_full /home/wubu/models/DiffusionGemma-26B-Q4_K_M.gguf 4096 1 0
 ```

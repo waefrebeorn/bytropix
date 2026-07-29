@@ -1,5 +1,5 @@
 /**
- * Flash Attention Tiled Kernel for bytropix
+ * Flash Attention Tiled Kernel for wubuwizard
  *
  * Based on llama.cpp ggml-cuda/fattn-tile.cuh but adapted for standalone C11+C11 compatibility.
  * Supports:

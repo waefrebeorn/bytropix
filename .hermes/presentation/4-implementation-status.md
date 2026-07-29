@@ -1,4 +1,4 @@
-# bytropix Implementation Status (May 19 PM v22)
+# wubuwizard Implementation Status (May 19 PM v22)
 
 ## Inference Pipeline (CPU)
 | Component | Status | Detail |

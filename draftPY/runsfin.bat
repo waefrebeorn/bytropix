@@ -10,10 +10,10 @@ if not exist "venv" (
 call venv\Scripts\activate
 
 REM --- Set BSFIN Training Parameters ---
-set DATA_PATH=C:/projects/bytropix/data/wikitext_train.npy
-set VAL_DATA_PATH=C:/projects/bytropix/data/wikitext_val.npy
-set CHECKPOINT_DIR=C:/projects/bytropix/checkpoints_v2
-set WANDB_PROJECT=bytropix-v2
+set DATA_PATH=C:/projects/wubuwizard/data/wikitext_train.npy
+set VAL_DATA_PATH=C:/projects/wubuwizard/data/wikitext_val.npy
+set CHECKPOINT_DIR=C:/projects/wubuwizard/checkpoints_v2
+set WANDB_PROJECT=wubuwizard-v2
 
 REM --- Model Architecture ---
 set LOCAL_HIDDEN_SIZE=512

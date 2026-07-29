@@ -4,7 +4,7 @@
 set -e
 
 # Paths
-SRC_DIR="/home/wubu/bytropix"
+SRC_DIR="/home/wubu/wubuwizard"
 BUILD_DIR="$SRC_DIR/build"
 TOOLS_DIR="$SRC_DIR/tools"
 SRC="$SRC_DIR/src"

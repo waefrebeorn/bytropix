@@ -1,6 +1,6 @@
 # Prestige Prompt — May 18, 2026 — PHASE 2 COMPLETE
 
-## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M
+## Project: wubuwizard — Qwen3.6-35B-A3B-UD-IQ2_M
 Cos-sim vs ref: **0.9969** — Phase 2 DONE. All 40 layers > 0.995.
 gen_text coherent: "The capital of France is → the city of Paris..."
 Decode: 0.7 tok/s (2.3× faster). DA gaps: **ALL 10 CLOSED**.

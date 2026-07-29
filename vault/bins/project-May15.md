@@ -1,4 +1,4 @@
-# bytropix — Project Overview (May 18 — Phase 2 Complete)
+# wubuwizard — Project Overview (May 18 — Phase 2 Complete)
 
 ## Mission
 Build Qwen3.6-35B-A3B inference from scratch in C + CUDA.

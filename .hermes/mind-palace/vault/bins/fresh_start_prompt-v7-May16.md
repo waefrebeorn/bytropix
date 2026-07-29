@@ -44,7 +44,7 @@ cd ~/llama.cpp/build/bin
 
 ## API Server
 ```bash
-cd /home/wubu/bytropix
+cd /home/wubu/wubuwizard
 python3 tools/serve.py --sandbox --port 8080    # sandbox (no GPU)
 python3 tools/serve.py --port 8080              # production
 bash tests/test_api.sh                           # 14 tests

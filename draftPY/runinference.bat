@@ -1,12 +1,12 @@
 @echo off
-:: Bytropix Interactive Inference Launcher (Restructured)
+:: WubuWizard Interactive Inference Launcher (Restructured)
 :: ----------------------------------------------------
 :: Provides a user-friendly way to launch the interactive inference mode
 :: using flags and goto instead of if/else blocks.
 
 echo.
 echo *******************************
-echo * Bytropix Inference Tool   *
+echo * WubuWizard Inference Tool   *
 echo *******************************
 echo.
 
@@ -40,7 +40,7 @@ echo.
 
 :: --- Default Configuration Values ---
 :: !! IMPORTANT: Update these defaults to match your trained checkpoint !!
-set DEFAULT_CHECKPOINT=C:\projects\bytropix\checkpoints\checkpoint_final.pt
+set DEFAULT_CHECKPOINT=C:\projects\wubuwizard\checkpoints\checkpoint_final.pt
 set DEFAULT_MAX_LENGTH=150
 set DEFAULT_TEMPERATURE=0.75
 set DEFAULT_LOW_ENTROPY=0.3

@@ -9,7 +9,7 @@ CONTEXT="${2:-524288}"          # 512k default
 TRIALS="${3:-3}"
 BENCH_TYPE="${4:-6}"            # 6=ALL
 
-BUILD_DIR="/home/wubu/bytropix/build"
+BUILD_DIR="/home/wubu/wubuwizard/build"
 BENCH_BIN="$BUILD_DIR/bench_512k_full"
 
 echo "============================================================"
@@ -30,7 +30,7 @@ fi
 # Build if needed
 if [[ ! -f "$BENCH_BIN" ]]; then
     echo "Building benchmark..."
-    /home/wubu/bytropix/tools/build_bench.sh
+    /home/wubu/wubuwizard/tools/build_bench.sh
 fi
 
 if [[ ! -f "$BENCH_BIN" ]]; then

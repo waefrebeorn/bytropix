@@ -2,7 +2,7 @@
 
 ## P0: 1:1 Parity with llama.cpp — Corrected Approach
 
-The root cause of 1:1 parity failure has been identified: **token embedding** differs between bytropix and llama.cpp (cs=0.118). This explains the L0 divergence cs=0.405, not any GQA or SSM computation bug.
+The root cause of 1:1 parity failure has been identified: **token embedding** differs between wubuwizard and llama.cpp (cs=0.118). This explains the L0 divergence cs=0.405, not any GQA or SSM computation bug.
 
 ### P0.1: Fix Token Embedding (Highest Priority)
 The `token_embd.weight` tensor in the GGUF file is stored in a quantized format. `gguf_read_tensor_f32()` doesn't properly dequantize it, producing near-zero values (std=0.013 vs expected std=1.295).
@@ -33,7 +33,7 @@ Still broken. Workaround: `FORCE_CPU_SSM_SEQ=1`.
 ✅ **DONE** — symlink `gen_text → gen_text_cpu`.
 
 ## Root Cause Evidence
-| Metric | Reference | Bytropix |
+| Metric | Reference | WubuWizard |
 |--------|-----------|----------|
 | Embedding mean | 0.011 | 3.1e-5 |
 | Embedding std | 1.295 | 0.013 |

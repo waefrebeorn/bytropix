@@ -1,5 +1,5 @@
 /**
- * check_embedding.c — Compare token embeddings between bytropix file and libllama
+ * check_embedding.c — Compare token embeddings between wubuwizard file and libllama
  * Usage: ./check_embedding [token_id]
  * Uses libllama's internal access to token_embd.weight, compares with extracted file.
  */
@@ -75,10 +75,10 @@ int main(int argc, char **argv) {
                 embd[0], embd[D-1]); // just show first/last
     }
 
-    // Compare with bytropix logits if available
-    const char *bytropix_path = getenv("BYTROPIX_LOGITS_PATH");
-    if (bytropix_path && logits_path) {
-        FILE * fb = fopen(bytropix_path, "rb");
+    // Compare with wubuwizard logits if available
+    const char *wubuwizard_path = getenv("WUBUWIZARD_LOGITS_PATH");
+    if (wubuwizard_path && logits_path) {
+        FILE * fb = fopen(wubuwizard_path, "rb");
         if (fb) {
             float *by_logits = (float *)malloc(n_vocab * sizeof(float));
             fread(by_logits, sizeof(float), n_vocab, fb);
@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
                 n2 += (double)by_logits[i] * by_logits[i];
             }
             double cos_sim = dot / (sqrt(n1) * sqrt(n2) + 1e-30);
-            fprintf(stderr, "Logits cos-sim vs bytropix: %.6f\n", cos_sim);
+            fprintf(stderr, "Logits cos-sim vs wubuwizard: %.6f\n", cos_sim);
             free(by_logits);
         }
     }

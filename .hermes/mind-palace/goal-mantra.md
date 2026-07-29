@@ -10,7 +10,7 @@
 | DUMP_EMBEDDING_DIR | ✅ Built | Dumps token embedding for 1:1 comparison |
 | Root cause found | ✅ | Token embedding cs=0.118. gguf_read_tensor_f32 bug. |
 | Llama.cpp DUMP_INTERMEDIATE_DIR | ✅ Rebuilt | libllama.so + llama-simple |
-| Bytropix DUMP_GQA_DEBUG_DIR | ✅ Built | Per-layer GQA intermediate dumps |
+| WubuWizard DUMP_GQA_DEBUG_DIR | ✅ Built | Per-layer GQA intermediate dumps |
 | gen_text symlink | ✅ DONE | gen_text → gen_text_cpu |
 
 ## P0: Corrected Priority
@@ -19,7 +19,7 @@
 3. **Verify**: After fix, cs should be 1.0 for embedding, then re-check L0-L39
 
 ## Key Finding
-Token embedding cs=0.118 vs reference. gguf_read_tensor_f32 doesn't handle the quantized format. Reference `global_model.input_embed.bin` has std=1.295, bytropix has std=0.013 (nearly zero). This explains the L0 cs=0.405 and all downstream divergence.
+Token embedding cs=0.118 vs reference. gguf_read_tensor_f32 doesn't handle the quantized format. Reference `global_model.input_embed.bin` has std=1.295, wubuwizard has std=0.013 (nearly zero). This explains the L0 cs=0.405 and all downstream divergence.
 
 ## BUILD
 ```

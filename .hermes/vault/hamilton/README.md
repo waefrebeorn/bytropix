@@ -35,7 +35,7 @@ See `.hermes/` vault there for full documentation. **Kerning CUDA kernel already
 ## Vault Audit (May 15)
 - **Port priority:** P2 — medium effort, high value for KV cache compression (~10×, 62% compression, ~3% overhead)
 - **Key insight:** Validated "Energy-Based Manifold Learning" (Nov 22 commit)
-- **Status:** CUDA kernels exist in llama.cpp fork, need copy into bytropix/src/
+- **Status:** CUDA kernels exist in llama.cpp fork, need copy into wubuwizard/src/
 
 ---
 

@@ -1,7 +1,7 @@
 # Vault — Reference & Debug Tools (May 21, 2026)
 
 ## Purpose
-These tools generate reference inference data from llama.cpp's libllama.so for 1:1 parity comparison against bytropix.
+These tools generate reference inference data from llama.cpp's libllama.so for 1:1 parity comparison against wubuwizard.
 
 ## Reference Data Generation Flow
 

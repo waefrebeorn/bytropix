@@ -71,7 +71,7 @@ ref_dumper → DUMP_INTERMEDIATE_DIR → L<N>_<tensor>.bin (Q/K/V, attn, MoE wei
 → 1997 files per BOS token → layer_cos_sim comparison
 ```
 
-**But bytropix DUMP_LAYER_DIR writes `our_layer_N.bin` with N*tokens floats**  
+**But wubuwizard DUMP_LAYER_DIR writes `our_layer_N.bin` with N*tokens floats**  
 **llama.cpp writes `ref_layer_N.bin` with D_MODEL floats (1 token only)**  
 → For 1:1 parity, BOTH must be run with SAME prompt length
 

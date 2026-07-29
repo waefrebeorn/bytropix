@@ -5,14 +5,14 @@
 - GQA Q/gate interleave bug fixed ✓ (cos-sim -0.51 → 0.9968)
 - MoE quantized path wired ✓ (IQ2_XXS/IQ3_XXS/IQ4_XS via blob)
 - Shared expert quantized path wired ✓ (Q5_K/Q6_K)
-- Per-layer dump infrastructure ✓ (modded llama.cpp + bytropix)
+- Per-layer dump infrastructure ✓ (modded llama.cpp + wubuwizard)
 - Layer-by-layer comparison tooling ✓ (python3 script)
 
 ## Phase 1: DA v10 Real Priorities (May 18)
 
 ### Task 1.1: Build llama reference dumper tool [P0] ✓
 Replaces llama-cli with direct libllama.so linkage for fast per-layer dumps.
-- ref_dumper at /home/wubu/bytropix/ref_dumper ✓ (make ref_dumper)
+- ref_dumper at /home/wubu/wubuwizard/ref_dumper ✓ (make ref_dumper)
 - Links libllama.so directly, CUDA-backed
 - Dumps 40 per-layer hidden states + logits in one call
 - Verified: cos-sim 0.99696 against GPU reference

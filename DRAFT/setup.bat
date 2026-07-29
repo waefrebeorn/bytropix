@@ -1,5 +1,5 @@
 @echo off
-echo Setting up the Bytropix environment and installing dependencies...
+echo Setting up the WubuWizard environment and installing dependencies...
 
 REM Create a virtual environment if it doesn't already exist
 if not exist "venv" (

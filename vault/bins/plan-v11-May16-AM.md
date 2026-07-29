@@ -1,4 +1,4 @@
-# bytropix — Plan (May 18 — Phase 2 Complete)
+# wubuwizard — Plan (May 18 — Phase 2 Complete)
 
 ## Purpose
 Achieve 1:1 inference parity with llama.cpp + serve Qwen3.6-35B-A3B-UD-IQ2_M as a real inference engine.

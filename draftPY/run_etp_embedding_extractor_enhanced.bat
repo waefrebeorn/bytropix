@@ -20,8 +20,8 @@ REM =====================================================================
 REM Configuration
 REM =====================================================================
 SET "MODEL_NAME=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-SET "TEXTS_FILE_A=C:\Projects\bytropix\draftPY\mteb_corpus_A.txt"
-SET "TEXTS_FILE_B=C:\Projects\bytropix\draftPY\mteb_corpus_B.txt"
+SET "TEXTS_FILE_A=C:\Projects\wubuwizard\draftPY\mteb_corpus_A.txt"
+SET "TEXTS_FILE_B=C:\Projects\wubuwizard\draftPY\mteb_corpus_B.txt"
 SET "NUM_DUMMY_TEXTS_A=70"
 SET "NUM_DUMMY_TEXTS_B=60"
 SET "DUMMY_TEXT_USE_DIVERSE_POOL=true"

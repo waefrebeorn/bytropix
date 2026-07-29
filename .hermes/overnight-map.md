@@ -1,7 +1,7 @@
 # Overnight Map — May 19, 2026 (Triple DA v6)
 
 ## TRIPLE DA SUMMARY
-**SSM recurrence math IDENTICAL** between bytropix and llama.cpp.
+**SSM recurrence math IDENTICAL** between wubuwizard and llama.cpp.
 Both use `scale=1/sqrt(128)`, `h←h*exp(gate)+k·(v-h·k)·beta`, `out=h·q*scale`.
 Divergence is quantized matmul precision — NOT algorithm bug.
 
@@ -24,7 +24,7 @@ Divergence is quantized matmul precision — NOT algorithm bug.
 ## Critical Knowledge (DON'T RE-DERIVE)
 - `ggml_set_output()` prevents buffer reuse (took 3 iterations to discover)
 - `ggml_gated_delta_net` kernel: ops.cpp line 10547, scale=1/sqrt(S_v)
-- bytropix wubu_ssm_forward: wubu_ssm.c line 183, same 3-step recurrence
+- wubuwizard wubu_ssm_forward: wubu_ssm.c line 183, same 3-step recurrence
 - The 0.79 cos-sim is NOT a bug — it's quantized arithmetic precision
 
 ## Next Workstream

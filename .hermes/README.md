@@ -1,6 +1,6 @@
 # .hermes/ — Hermes Mind Palace & Research Vault
 
-**Project navigation, state tracking, and research references for the bytropix inference engine.**
+**Project navigation, state tracking, and research references for the wubuwizard inference engine.**
 
 ## Quick Navigation
 

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" font-family="'Courier New', monospace" font-size="12">
   <rect width="900" height="400" fill="#1a1a2e"/>
-  <text x="20" y="30" fill="#ff4444" font-size="16" font-weight="bold">bytropix Phase Roadmap — May 21 2026 (DA corrected)</text>
+  <text x="20" y="30" fill="#ff4444" font-size="16" font-weight="bold">wubuwizard Phase Roadmap — May 21 2026 (DA corrected)</text>
   <text x="20" y="46" fill="#888" font-size="11">Phases 0-24: Stable, verified. Phases 25-26: Fused kernels built but never verified end-to-end. Phase 28: GPU_SUPPORT fixed. Phase 28b: DA audit cleanup.</text>
 
   <!-- Timeline -->

@@ -20,7 +20,7 @@ PROMPTS=(
     "The meaning of life is"
 )
 
-cd /home/wubu/bytropix
+cd /home/wubu/wubuwizard
 
 echo "=== Regression Test Suite ==="
 echo "Model: Qwen3.6-35B-A3B-UD-IQ2_M"

@@ -1,6 +1,6 @@
 # State — May 21 PM (Phase 29d: Token Embedding Divergence — Root Cause Found)
 
-**bytropix: GPU inference engine for Qwen3.6-35B MoE + vision multi-modal**  
+**wubuwizard: GPU inference engine for Qwen3.6-35B MoE + vision multi-modal**  
 **Reference: llama.cpp (libllama.so, DUMP_INTERMEDIATE_DIR in llama-simple)**  
 **CUDA: sm_120 (RTX 5050 Blackwell, 13.1 toolkit)**  
 **Only model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB)**
@@ -21,9 +21,9 @@
 
 **Accomplished:**
 1. **DUMP_EMBEDDING_DIR** added to `tools/gen_text.c` — dumps embedding buffer right after token lookup.
-2. **Token embedding comparison** reveals cs=0.118 between bytropix and llama.cpp:
+2. **Token embedding comparison** reveals cs=0.118 between wubuwizard and llama.cpp:
    - Reference `global_model.input_embed.bin`: mean=0.011, std=1.295 (correct F32 dequant)
-   - Bytropix `embedding.bin`: mean=3.1e-5, std=0.013 (nearly zero — quantization bug)
+   - WubuWizard `embedding.bin`: mean=3.1e-5, std=0.013 (nearly zero — quantization bug)
    - gguf_read_tensor_f32() fails to dequantize quantized token_embd.weight
 
 ## What's Broken
@@ -42,9 +42,9 @@ DUMP_INTERMEDIATE_DIR=/tmp/ref                    # llama.cpp reference dump
 
 ## Debug Infrastructure Built
 - `DUMP_INTERMEDIATE_DIR` in llama.cpp (rebuilt libllama.so + llama-simple)
-- `DUMP_GQA_DEBUG_DIR` + `DUMP_GQA_PREFIX` + `DUMP_GQA_LAYER` in bytropix (`src/wubu_ssm.c`, `src/wubu_model.c`)
-- `DUMP_EMBEDDING_DIR` in bytropix (`tools/gen_text.c`)
-- `DUMP_LAYER_DIR` in bytropix (per-layer hidden states)
+- `DUMP_GQA_DEBUG_DIR` + `DUMP_GQA_PREFIX` + `DUMP_GQA_LAYER` in wubuwizard (`src/wubu_ssm.c`, `src/wubu_model.c`)
+- `DUMP_EMBEDDING_DIR` in wubuwizard (`tools/gen_text.c`)
+- `DUMP_LAYER_DIR` in wubuwizard (per-layer hidden states)
 
 ## COMMITS (latest)
 - 4ebe712 — feat(debug): DUMP_GQA_DEBUG_DIR + per-layer divergence audit

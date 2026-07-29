@@ -1,4 +1,4 @@
-# bytropix — State Dashboard (May 18 — Phase 2 Complete)
+# wubuwizard — State Dashboard (May 18 — Phase 2 Complete)
 
 ## Inference Engine (gen_text — CPU-only decode)
 

@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 // Include the kernel implementation directly
-#include "/home/wubu/bytropix/src/flash_attn_q4_0_opt.cu"
+#include "/home/wubu/wubuwizard/src/flash_attn_q4_0_opt.cu"
 
 #define HEAD_DIM 256
 #define N_Q_HEADS 16

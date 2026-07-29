@@ -425,7 +425,7 @@ test_model: tools/test_model.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ── Agent tool gauntlet (4 Colonel models × 3 tools, EDR fan-out) ──────────
-# Links the bytropix engine + WuBuOS EDR layer. The EDR sources are
+# Links the wubuwizard engine + WuBuOS EDR layer. The EDR sources are
 # standalone (lock-free ring + worker thread); no daemon required.
 gauntlet: tools/agent_gauntlet/agent_gauntlet.c tools/agent_gauntlet/gauntlet_run.c \
           tools/agent_gauntlet/agent_gauntlet.h $(MODEL_OBJ) $(EDR_SRC) \

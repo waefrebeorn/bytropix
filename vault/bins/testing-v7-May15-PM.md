@@ -1,4 +1,4 @@
-# bytropix — Testing Protocol (May 18 — Phase 2 Complete)
+# wubuwizard — Testing Protocol (May 18 — Phase 2 Complete)
 
 ## Purpose
 Automated accuracy and performance verification before any commit.

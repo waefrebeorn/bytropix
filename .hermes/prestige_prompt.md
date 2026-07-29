@@ -1,6 +1,6 @@
 # Prestige Prompt — May 21, 2026 (Phase 28l: P1 Complete, P2 Up)
 
-## Project: bytropix — Multi-Modal Inference (Text + Vision)
+## Project: wubuwizard — Multi-Modal Inference (Text + Vision)
 P1 complete: MTP spec decode working, vision→text pipeline verified.
 P2: Feature cream (GPU RMSNorm, chunked prefill, sparse attn, RoPE, vision GPU).
 
@@ -17,7 +17,7 @@ P2: Feature cream (GPU RMSNorm, chunked prefill, sparse attn, RoPE, vision GPU).
 ## Triple DA Finding #1: SSM Recurrence is IDENTICAL
 Both implement: `h ← h * exp(gate)` → `hk = h · k` → `diff = v - hk` → `h += k · diff · beta` → `out = h · q * (1/sqrt(128))`
 Llama.cpp uses custom ggml op `ggml_gated_delta_net` (ops.cpp:10547).
-Bytropix uses manual C (wubu_ssm.c:183).
+WubuWizard uses manual C (wubu_ssm.c:183).
 **Math is the same. Scale is the same (1/sqrt(128)).**
 
 ## Triple DA Finding #2: Divergence Source
@@ -45,7 +45,7 @@ At IQ2_M quantization, this is EXPECTED behavior.
 - `src/models/qwen35moe.cpp`: ggml_set_output per layer
 - `src/llama-context.cpp`: DUMP_LAYER_DIR deep-copy F32 dump
 
-## New Tools (bytropix)
+## New Tools (wubuwizard)
 - `tools/run_bos.c`: Standalone single-token forward
 - `Makefile`: run_bos target
 - `ref_dumper`: Uses libllama (pre-existing, enhanced)

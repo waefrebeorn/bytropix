@@ -46,7 +46,7 @@ set "MAX_COMBINED=--max_combined_datasets 1"
 
 REM --- Paths and Project Names ---
 set "DATA_DIR=data"
-set "CHECKPOINT_DIR=C:\projects\bytropix\wubu_nest_nucleotide_checkpoints"
+set "CHECKPOINT_DIR=C:\projects\wubuwizard\wubu_nest_nucleotide_checkpoints"
 set "WANDB_PROJECT=WuBuNestingNucleotide"
 set "WANDB_ENTITY=waefrebeorn-wubu"
 

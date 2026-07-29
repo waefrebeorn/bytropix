@@ -1,6 +1,6 @@
 # WuBuNesting Inference Engine — ARCHITECTURE (May 21, 2026)
 
-**Project**: bytropix — custom C inference engine for Qwen3.6-35B-A3B (qwen35moe)  
+**Project**: wubuwizard — custom C inference engine for Qwen3.6-35B-A3B (qwen35moe)  
 **Author**: waefrebeorn / WuBuText AI  
 **Model**: Qwen3.6-35B-A3B-UD-IQ2_M.gguf (Unsloth Dynamic 2.0 quantization)  
 **Vision**: Moondream3 3D ViT via mmproj, 27 layers, 1152 hidden  
@@ -64,7 +64,7 @@ rms_norm → output_proj (Q4_K: 2048×248320) → softmax → sample → token
 ## 2. FILE LAYOUT
 
 ```
-/home/wubu/bytropix/
+/home/wubu/wubuwizard/
 ├── src/                    ← Core engine (C + CUDA)
 │   ├── wubu_model.c        ← MAIN: model load, layer forward, gen_text
 │   ├── wubu_model_gpu.cu   ← GPU forward: GQA prefill, quant matmul dispatcher
@@ -266,7 +266,7 @@ text model inference → logits
 
 ```bash
 # Build
-cd /home/wubu/bytropix
+cd /home/wubu/wubuwizard
 make gen_text              # CPU inference (RECOMMENDED)
 make gen_text_gpu          # GPU hybrid (net-negative)
 make gen_text_mtp          # MTP speculative decode

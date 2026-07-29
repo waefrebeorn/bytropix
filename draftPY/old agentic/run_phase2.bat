@@ -7,10 +7,10 @@ echo Starting ETP Phase 2 Training Runner...
 echo Ensure your Python environment with PyTorch and other dependencies is activated.
 echo Replace placeholder paths with actual paths to your embedding files and checkpoints before execution.
 
-REM Example: SET EMBEDDING_DIR_COMMON=C:\bytropix_project\draftPY\etp_common
-REM Example: SET CHECKPOINT_DIR_PHASE2=C:\bytropix_project\draftPY\etp_phase2_ala\checkpoints_p2
+REM Example: SET EMBEDDING_DIR_COMMON=C:\wubuwizard_project\draftPY\etp_common
+REM Example: SET CHECKPOINT_DIR_PHASE2=C:\wubuwizard_project\draftPY\etp_phase2_ala\checkpoints_p2
 
-REM Assuming the script is run from the root of the Bytropix project,
+REM Assuming the script is run from the root of the WubuWizard project,
 REM and draftPY is in the PYTHONPATH or accessible directly.
 
 python draftPY/etp_phase2_ala/run_phase2.py ^

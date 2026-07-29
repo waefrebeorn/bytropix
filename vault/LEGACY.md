@@ -1,4 +1,4 @@
-# bytropix — Phase 14 Legacy Dump (May 19, 2026 PM)
+# wubuwizard — Phase 14 Legacy Dump (May 19, 2026 PM)
 
 ## Scope
 This document captures everything built, learned, and left behind across ~5 days of agentic C inference engineering for Qwen3.6-35B-A3B. It is the authoritative reference for future sessions.

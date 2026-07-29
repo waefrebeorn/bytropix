@@ -1,6 +1,6 @@
 # Overnight Map — May 21 PM (Phase 29d: Token Embedding Root Cause Found)
 
-**Active repo:** /home/wubu/bytropix/  
+**Active repo:** /home/wubu/wubuwizard/  
 **Current commit:** 4ebe712 (uncommitted: DUMP_EMBEDDING_DIR in gen_text.c)  
 **Model:** /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (11.5GB, only model)  
 **Reference:** /home/wubu/llama.cpp/build/bin/llama-simple (fast, no chat template)
@@ -8,9 +8,9 @@
 ## Session Summary (Phase 29d)
 
 ### Root Cause Found: Token Embedding
-**The bytropix token embedding differs from reference with cs=0.118.** 
+**The wubuwizard token embedding differs from reference with cs=0.118.** 
 - Reference `global_model.input_embed.bin`: mean=0.011, std=1.295 (correct)
-- Bytropix `embedding.bin`: mean=3.1e-5, std=0.013 (nearly zero)
+- WubuWizard `embedding.bin`: mean=3.1e-5, std=0.013 (nearly zero)
 - `gguf_read_tensor_f32()` fails to dequantize quantized `token_embd.weight`
 - This explains the L0 cs=0.405 and all downstream divergence up to L39
 
@@ -22,7 +22,7 @@
 ### Verified Claims
 | Claim | Status | Evidence |
 |-------|--------|----------|
-| Token embedding broken | ✅ | cs=0.118 vs reference. Bytropix std=0.013, ref std=1.295 |
+| Token embedding broken | ✅ | cs=0.118 vs reference. WubuWizard std=0.013, ref std=1.295 |
 | Root cause found | ✅ | gguf_read_tensor_f32 dequantization bug |
 | L0 cs=0.405 explained | ✅ | Direct consequence of wrong embedding |
 | All downstream divergence explained | ✅ | Wrong input propagates through 40 layers |

@@ -15,7 +15,7 @@ cleanup() { [ -n "${PID:-}" ] && kill "$PID" 2>/dev/null || true; }
 trap cleanup EXIT
 
 start_server() {
-    cd /home/wubu/bytropix
+    cd /home/wubu/wubuwizard
     python3 tools/serve.py --sandbox --port "$PORT" > /tmp/api_test.log 2>&1 &
     PID=$!
     for i in $(seq 1 20); do

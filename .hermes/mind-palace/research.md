@@ -35,7 +35,7 @@ The actual types per tensor vary as defined by Unsloth Dynamic 2.0 quantization.
 - Shared expert: gate_shexp + up_shexp = Q5_K, down_shexp = Q6_K, gate_inp_shexp = F32
 - Router: ffn_gate_inp.weight = F32 [2048, 256]
 
-## Comparison bytropix vs Reference (llama.cpp)
+## Comparison wubuwizard vs Reference (llama.cpp)
 - SSM: uses proj_matmul (quantized path) — correct
 - GQA: uses proj_matmul (quantized path) — correct  
 - Output: Q4_K quantized matmul — correct

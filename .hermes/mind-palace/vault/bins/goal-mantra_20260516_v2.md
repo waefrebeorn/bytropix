@@ -1,5 +1,5 @@
 ═══ GOAL PASTE (May 16 v24 — DA AUDITED) ═══
-PROJECT: bytropix — Custom Qwen3.6-35B-A3B inference engine
+PROJECT: wubuwizard — Custom Qwen3.6-35B-A3B inference engine
 MODEL: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf (7-type mixed quant)
 STATUS: All P0-P3 infrastructure done. Output WRONG — NOT tool-call ready.
 
@@ -7,11 +7,11 @@ STATUS: All P0-P3 infrastructure done. Output WRONG — NOT tool-call ready.
 ❌ "Doug" vs "Here" — CRITICAL. Root cause UNKNOWN.
 ❌ Embeds from pre-extracted file were CORRUPTED (extracted with buggy dequant).
     → Fixed: auto-extract token_embd.weight from GGUF at load time.
-❌ BOS: add_bos_token=false in GGUF, but bytropix added BOS anyway.
+❌ BOS: add_bos_token=false in GGUF, but wubuwizard added BOS anyway.
     → Fixed: ADD_BOS env var, default off.
 ❌ h_last IDENTICAL for "Hello" and "X" prompt — forward pass not using input??
     → Actually h_last changes for multi-token prompts.
-✓ Metadata epsilon=1e-6 matches bytropix hardcoded value.
+✓ Metadata epsilon=1e-6 matches wubuwizard hardcoded value.
 ✓ All 7 types (F32, Q5_K, Q6_K, IQ2_XXS, IQ3_XXS, IQ4_XS, Q4_K) supported.
 
 === ROOT CAUSE STILL UNKNOWN ===

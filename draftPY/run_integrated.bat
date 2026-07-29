@@ -23,10 +23,10 @@ REM === Set Integrated HyperHAKMEM Parameters (Hyperbolic Attention) ===
 REM ====================================================================
 
 REM --- Data Paths ---
-set "DATA_PATH=C:/projects/bytropix/data/wikitext_train.npy"
-set "VAL_DATA_PATH=C:/projects/bytropix/data/wikitext_val.npy"
-set "CHECKPOINT_DIR=C:/projects/bytropix/integrated_checkpoints_v3_fix3"
-set "WANDB_PROJECT=bytropix-integrated-v3-fix3"
+set "DATA_PATH=C:/projects/wubuwizard/data/wikitext_train.npy"
+set "VAL_DATA_PATH=C:/projects/wubuwizard/data/wikitext_val.npy"
+set "CHECKPOINT_DIR=C:/projects/wubuwizard/integrated_checkpoints_v3_fix3"
+set "WANDB_PROJECT=wubuwizard-integrated-v3-fix3"
 
 REM --- Model Architecture (Common) ---
 set "LOCAL_HIDDEN_SIZE=384"

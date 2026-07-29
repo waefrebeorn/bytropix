@@ -1362,7 +1362,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         // DUMP_INTERMEDIATE_DIR: dump all intermediate tensors from cb() calls
         // These include Qcur, Kcur, Vcur, beta, alpha_softplus, gate, etc.
-        // Use for 1:1 parity verification against bytropix inference engine
+        // Use for 1:1 parity verification against wubuwizard inference engine
         {
             const char * int_dir = getenv("DUMP_INTERMEDIATE_DIR");
             if (int_dir && int_dir[0] && !res->t_intermediates.empty()) {

@@ -13,8 +13,8 @@ call venv\Scripts\activate
 REM Run the main.py script with updated arguments
 echo Running main.py...
 python main.py ^
-  --data_path C:/projects/bytropix/data/wikitext_train.npy ^
-  --val_data_path C:/projects/bytropix/data/wikitext_val.npy ^
+  --data_path C:/projects/wubuwizard/data/wikitext_train.npy ^
+  --val_data_path C:/projects/wubuwizard/data/wikitext_val.npy ^
   --context_size 256 ^
   --local_hidden_size 512 ^
   --global_hidden_size 1024 ^
@@ -26,7 +26,7 @@ python main.py ^
   --grad_accum_steps 2 ^
   --learning_rate 0.003 ^
   --epochs 15 ^
-  --checkpoint_dir C:/projects/bytropix/checkpoints ^
+  --checkpoint_dir C:/projects/wubuwizard/checkpoints ^
   --log_interval 10 ^
   --weight_decay 0.01 ^
   --max_grad_norm 1.0 ^
@@ -36,7 +36,7 @@ python main.py ^
   --seed 42 ^
   --num_workers 2 ^
   --wandb ^
-  --wandb_project bytropix
+  --wandb_project wubuwizard
 
 REM Inform the user that the script has completed
 echo main.py execution completed.

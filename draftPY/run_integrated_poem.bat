@@ -23,10 +23,10 @@ REM === Set Integrated HyperHAKMEM Parameters for Poem Dataset      ===
 REM ====================================================================
 
 REM --- Data Paths ---
-set "DATA_PATH=C:/projects/bytropix/data/poems/poems_train.npy"
-set "VAL_DATA_PATH=C:/projects/bytropix/data/poems/poems_val.npy"
-set "CHECKPOINT_DIR=C:/projects/bytropix/poem_checkpoints"
-set "WANDB_PROJECT=bytropix-poem-test"
+set "DATA_PATH=C:/projects/wubuwizard/data/poems/poems_train.npy"
+set "VAL_DATA_PATH=C:/projects/wubuwizard/data/poems/poems_val.npy"
+set "CHECKPOINT_DIR=C:/projects/wubuwizard/poem_checkpoints"
+set "WANDB_PROJECT=wubuwizard-poem-test"
 
 REM --- Model Architecture (Common) ---
 set "LOCAL_HIDDEN_SIZE=256"

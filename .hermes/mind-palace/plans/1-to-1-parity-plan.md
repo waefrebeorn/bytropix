@@ -11,7 +11,7 @@ L31 is a GQA-only layer (index 3 in every 4-cycle). Its cos-sim drops to 0.9585.
 
 The chain of error:
 
-1. L00-L30: Each layer adds ~0.06% quantization noise from different quantized matmul implementations (bytropix Q8_K→vec_dot vs llama.cpp ggml_vec_dot)
+1. L00-L30: Each layer adds ~0.06% quantization noise from different quantized matmul implementations (wubuwizard Q8_K→vec_dot vs llama.cpp ggml_vec_dot)
 2. L30 output cos-sim: 0.9994 (cumulative 0.06% error)
 3. L31 is pure GQA: its attention mechanism is SENSITIVE to subtle differences in Q/K values
 4. The attention softmax amplifies small Q·K differences: a 0.06% Q difference can produce a 4% attention weight shift
@@ -21,20 +21,20 @@ The chain of error:
 
 **P0 — Immediate: Use DUMP_INTERMEDIATE_DIR to compare L31 Q, K, V values**
 
-The reference intermediate dumps contain L31_Qcur.bin, L31_Kcur.bin, L31_Vcur.bin. Bytropix needs to dump the same intermediates. Add `DUMP_GQA_DEBUG_DIR` to `wubu_gqa_forward()` that saves Q_full, K, V before and after RMSNorm, and after RoPE.
+The reference intermediate dumps contain L31_Qcur.bin, L31_Kcur.bin, L31_Vcur.bin. WubuWizard needs to dump the same intermediates. Add `DUMP_GQA_DEBUG_DIR` to `wubu_gqa_forward()` that saves Q_full, K, V before and after RMSNorm, and after RoPE.
 
 Then compare:
-- bytropix L31_Qcur vs ref L31_Qcur → if match, problem is in attention
-- bytropix L31_Kcur vs ref L31_Kcur → if mismatch, problem is in K projection
-- bytropix L31_attn_norm vs ref L31_attn_norm → if mismatch, problem is in RMSNorm
+- wubuwizard L31_Qcur vs ref L31_Qcur → if match, problem is in attention
+- wubuwizard L31_Kcur vs ref L31_Kcur → if mismatch, problem is in K projection
+- wubuwizard L31_attn_norm vs ref L31_attn_norm → if mismatch, problem is in RMSNorm
 
 **P1 — If Q/K match but attention diverges: compare attention score distributions**
 
-The reference has L31___fattn__.bin (attention scores). Compare bytropix's raw attention scores vs reference. If they diverge, the online softmax or score computation is the cause.
+The reference has L31___fattn__.bin (attention scores). Compare wubuwizard's raw attention scores vs reference. If they diverge, the online softmax or score computation is the cause.
 
 **P1 — If Q/K projections diverge: check quantized matmul**
 
-Test the Q5_K matmul for L31 against F32 SGEMM. If bytropix's matmul produces different results than llama.cpp's, the issue is in `quantized_dot_generic.c` (Q5_K vec_dot).
+Test the Q5_K matmul for L31 against F32 SGEMM. If wubuwizard's matmul produces different results than llama.cpp's, the issue is in `quantized_dot_generic.c` (Q5_K vec_dot).
 
 ## Implementation Plan
 
@@ -67,7 +67,7 @@ tools/layer_cos_sim /tmp/ref /tmp/our 40
 - All 40 layers > 0.99
 
 ## If the Gap Persists
-If fixing L31 still leaves a gap, the remaining 0.0006 difference is from bytropix vs llama.cpp quantized matmul implementation differences. These are:
+If fixing L31 still leaves a gap, the remaining 0.0006 difference is from wubuwizard vs llama.cpp quantized matmul implementation differences. These are:
 - Q5_K vec_dot (SSM attn_qkv, attn_gate, GQA Q/K/V/output)
 - Q6_K vec_dot (SSM ssm_out, shared expert down)
 - Q4_K vec_dot (output projection)

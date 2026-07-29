@@ -7,7 +7,7 @@
 
 ## DA-1: Code vs Theory Cross-Reference
 
-**Claim:** Bytropix SSM recurrence differs from llama.cpp, causing 0.79 cos-sim.
+**Claim:** WubuWizard SSM recurrence differs from llama.cpp, causing 0.79 cos-sim.
 **TRUST: LOW — debunked**
 
 ### Verification
@@ -21,7 +21,7 @@ h[j] += k * delta[j]                    // state update (outer product)
 attn[j] = dot(h[j], q) * scale          // output = h·q / sqrt(d)
 ```
 
-Read bytropix `wubu_ssm_forward` at `~/bytropix/src/wubu_ssm.c:183`:
+Read wubuwizard `wubu_ssm_forward` at `~/wubuwizard/src/wubu_ssm.c:183`:
 ```
 q_scaled[i] = q_vh[i] * (1.0f/sqrtf(128))  // identical scale
 gg = tgt_safe_expf(gate_s[vh])           // exp(gate) — identical

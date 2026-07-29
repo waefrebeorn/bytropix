@@ -211,7 +211,7 @@ logits = tanh(logits / 30.0) * 30.0  # softcap
 
 ---
 
-## What bytropix needs to change
+## What wubuwizard needs to change
 
 ### Ships that stay
 

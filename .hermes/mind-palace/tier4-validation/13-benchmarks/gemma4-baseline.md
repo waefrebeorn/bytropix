@@ -39,7 +39,7 @@
 
 ## Comparison: Gemma 4 12B vs Qwen3.6-35B-A3B
 
-| Metric | Gemma 4 12B | Qwen3.6-35B (bytropix, GPU) |
+| Metric | Gemma 4 12B | Qwen3.6-35B (wubuwizard, GPU) |
 |--------|-------------|------------------------------|
 | Prompt | **1,352 tok/s** | ~500 tok/s (estimated) |
 | Generation | **42.9 tok/s** | ~5.9 tok/s (GPU SSM path) |

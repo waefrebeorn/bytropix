@@ -17,7 +17,7 @@
 
 ## Build Command
 ```bash
-cd /home/wubu/bytropix && make infer_text
+cd /home/wubu/wubuwizard && make infer_text
 ```
 
 ## Reference

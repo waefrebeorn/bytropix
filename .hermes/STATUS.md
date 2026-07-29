@@ -1,4 +1,4 @@
-# bytropix — True State (June 14, 2026 — Multi-Model Integration)
+# wubuwizard — True State (June 14, 2026 — Multi-Model Integration)
 
 ## Ground Truth
 **Multi-model adapter works.** Model auto-detection, dynamic dimension extraction, and dynamic KV cache allocation are all functional. DiffusionGemma-26B loads all 30 GQA layers with correct dimensions.

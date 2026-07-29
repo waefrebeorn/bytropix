@@ -25,7 +25,7 @@ At 24K context: gap grows to **16.7x** (MoE: zero context degradation via SSM, d
 - MoE 35B: 4/6
 - Trade-off: speed vs quality
 
-## Key Takeaway for bytropix
+## Key Takeaway for wubuwizard
 - Our approach (keep 3B active params on GPU, quantized weights for inactive experts) is validated by this external benchmark
 - 35.4 tok/s on RTX 4060 Ti 8GB is the target to beat
 - The benchmark confirms: MoE with expert offload is 10-17x faster than dense layer offload on 8GB VRAM

@@ -10,9 +10,9 @@ if not exist "venv" (
 call venv\Scripts\activate
 
 REM --- Set LIVEBSFIN Parameters ---
-set BASE_CHECKPOINT=C:/projects/bytropix/checkpoints_v2/checkpoint_final.pt
-set DATA_STREAM_FILE=C:/projects/bytropix/data/live_data_stream.txt
-set LIVE_CHECKPOINT_DIR=C:/projects/bytropix/live_checkpoints_v1
+set BASE_CHECKPOINT=C:/projects/wubuwizard/checkpoints_v2/checkpoint_final.pt
+set DATA_STREAM_FILE=C:/projects/wubuwizard/data/live_data_stream.txt
+set LIVE_CHECKPOINT_DIR=C:/projects/wubuwizard/live_checkpoints_v1
 
 REM --- Continual Learning Parameters ---
 set MEMORY_CAPACITY=100000

@@ -60,4 +60,4 @@ This keeps h_t in the Poincaré ball at all times, and the recurrence is still O
 | **Product of Poincaré** | Multiple curvatures | More params |
 
 **Recommendation: Start with Poincaré Ball** — our WuBu math is already in this model,
-the bytropix Lean proofs are in this model, and the Möbius operations are proven.
+the wubuwizard Lean proofs are in this model, and the Möbius operations are proven.

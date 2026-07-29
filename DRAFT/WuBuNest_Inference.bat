@@ -35,7 +35,7 @@ echo Virtual environment activated.
 echo.
 
 :: --- Default Configuration Values ---
-set DEFAULT_CHECKPOINT=C:\projects\bytropix\wubunest_poem_checkpoints_v03\checkpoint_epoch_1_final_vloss4.811.pt
+set DEFAULT_CHECKPOINT=C:\projects\wubuwizard\wubunest_poem_checkpoints_v03\checkpoint_epoch_1_final_vloss4.811.pt
 set DEFAULT_MAX_LENGTH=200
 set DEFAULT_TEMPERATURE=0.3
 set DEFAULT_DEVICE=cuda

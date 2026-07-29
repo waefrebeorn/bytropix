@@ -42,7 +42,7 @@ echo.
 
 :: --- Default Configuration Values ---
 :: !! IMPORTANT: Checkpoint path MUST be updated !!
-set DEFAULT_CHECKPOINT=C:/projects/bytropix/checkpoints_v2\checkpoint_epoch_0_step_696.pt
+set DEFAULT_CHECKPOINT=C:/projects/wubuwizard/checkpoints_v2\checkpoint_epoch_0_step_696.pt
 REM PLEASE UPDATE THE CHECKPOINT PATH ABOVE
 :: Generation Defaults
 set DEFAULT_MAX_LENGTH=150

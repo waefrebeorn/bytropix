@@ -55,7 +55,7 @@
   <rect width="1100" height="820" fill="url(#bg)" rx="12"/>
 
   <!-- Title -->
-  <text x="450" y="38" fill="#58a6ff" font-size="20" font-weight="bold" text-anchor="middle" filter="url(#glow)">bytropix Training Pipeline</text>
+  <text x="450" y="38" fill="#58a6ff" font-size="20" font-weight="bold" text-anchor="middle" filter="url(#glow)">wubuwizard Training Pipeline</text>
   <text x="450" y="56" fill="#8b949e" font-size="12" text-anchor="middle">Qwen3.6-35B-A3B · DeltaNet + Poincaré · MoE 8/256 · RTX 5050</text>
 
   <!-- ===================== BOX 1: GGUF Model Load ===================== -->

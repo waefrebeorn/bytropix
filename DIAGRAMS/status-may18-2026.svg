@@ -3,7 +3,7 @@
 
   <!-- Title -->
   <text x="450" y="40" text-anchor="middle" fill="#00ff88" font-size="20" font-weight="bold">
-    bytropix — Qwen3.6-35B-A3B Inference Engine
+    wubuwizard — Qwen3.6-35B-A3B Inference Engine
   </text>
   <text x="450" y="60" text-anchor="middle" fill="#888" font-size="12">
     Status: May 18, 2026 | Agentically by Hermes

@@ -1,5 +1,5 @@
 ═══ WUBUTEXT AI — PRESTIGE RESUME (May 16 v18 — DA AUDITED) ═══
-Path: /home/wubu/bytropix | Branch: master
+Path: /home/wubu/wubuwizard | Branch: master
 HW: RTX 5050 6.4GB, -arch=sm_120
 Build: make infer_text | Models: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 
@@ -38,7 +38,7 @@ Tool-call parity: function names start from token 1. If token 1 is wrong, tool c
   Two engines running same quantized GGUF MUST produce same output at temp=0.
 - Embedding file was corrupted from earlier buggy dequant extraction.
   Fixed by re-extracting from GGUF using current gguf_read_tensor_f32.
-- BOS handling mismatch: bytropix added BOS, llama.cpp doesn't (add_bos=false).
+- BOS handling mismatch: wubuwizard added BOS, llama.cpp doesn't (add_bos=false).
   Fixed with env var.
 - Output still wrong after both fixes → deeper bug in model computation.
 

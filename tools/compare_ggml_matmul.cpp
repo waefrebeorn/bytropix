@@ -21,7 +21,7 @@ extern "C" int64_t ggml_time_us(void);
 #define BOS 248044
 
 static const char *MODEL_PATH = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
-static const char *EMBD_PATH = "/home/wubu/bytropix/data/qwen36_embeddings_c.bin.raw";
+static const char *EMBD_PATH = "/home/wubu/wubuwizard/data/qwen36_embeddings_c.bin.raw";
 
 int main() {
     printf("=== ggml Quantized Matmul vs SGEMM ===\n\n");

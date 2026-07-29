@@ -1,5 +1,5 @@
 ═══ WUBUTEXT AI — PRESTIGE RESUME (May 17 PM v17 — HONEST) ═══
-Path: /home/wubu/bytropix | Branch: master
+Path: /home/wubu/wubuwizard | Branch: master
 HW: RTX 5050 6.4GB, -arch=sm_120
 Build: make infer_text | Models: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 

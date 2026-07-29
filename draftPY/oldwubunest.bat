@@ -25,10 +25,10 @@ REM ====================================================================
 REM === Note: List arguments (dims, curvatures, scales, etc.) MUST match NUM_LEVELS ===
 
 REM --- Data Paths ---
-set "DATA_PATH=C:/projects/bytropix/data/poems/poems_train.npy"
-set "VAL_DATA_PATH=C:/projects/bytropix/data/poems/poems_val.npy"
-set "CHECKPOINT_DIR=C:/projects/bytropix/wubunest_poem_checkpoints"
-set "WANDB_PROJECT=bytropix-wubunest-poem"
+set "DATA_PATH=C:/projects/wubuwizard/data/poems/poems_train.npy"
+set "VAL_DATA_PATH=C:/projects/wubuwizard/data/poems/poems_val.npy"
+set "CHECKPOINT_DIR=C:/projects/wubuwizard/wubunest_poem_checkpoints"
+set "WANDB_PROJECT=wubuwizard-wubunest-poem"
 
 REM --- Sequence Model Base Config ---
 set "LOCAL_HIDDEN_SIZE=256"

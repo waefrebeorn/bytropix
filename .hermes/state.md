@@ -17,8 +17,8 @@
 | GPU MoE (single layer) | 0.9888 cos-sim vs CPU | 🟡 Fundamental path diff | DA v13 analysis |
 
 ## Infrastructure Built This Session
-1. `/home/wubu/bytropix/src/wubu_vision.c` — 2 segfault fixes (n_patches_total cap, scores heap)
-2. `/home/wubu/bytropix/Makefile` — test_vision_real target fixed with GPU_SUPPORT
+1. `/home/wubu/wubuwizard/src/wubu_vision.c` — 2 segfault fixes (n_patches_total cap, scores heap)
+2. `/home/wubu/wubuwizard/Makefile` — test_vision_real target fixed with GPU_SUPPORT
 3. `/tmp/screen_vision_input.bin` — Test pixel data pipeline (ffmpeg→PIL→raw float)
 4. `src/wubu_moe_cpu.o` — CPU-only moe object for GPU-free linking
 
@@ -37,6 +37,6 @@
 - BOS 248044 for Qwen3.6-35B. Top-1 = 220 for single BOS forward.
 
 ## Tools Vault (tmp code copied)
-- `run_bos` at `/home/wubu/bytropix/run_bos`
-- `ref_dumper` at `/home/wubu/bytropix/ref_dumper`  
-- Layer dumps: `/tmp/dump_layers_ref/` (llama.cpp), `/tmp/dump_layers_our/` (bytropix)
+- `run_bos` at `/home/wubu/wubuwizard/run_bos`
+- `ref_dumper` at `/home/wubu/wubuwizard/ref_dumper`  
+- Layer dumps: `/tmp/dump_layers_ref/` (llama.cpp), `/tmp/dump_layers_our/` (wubuwizard)

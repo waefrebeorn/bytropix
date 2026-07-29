@@ -4,10 +4,10 @@
 # if the Hermes-tracked parent shell is reaped. Uses a lockfile so only ONE
 # downloader ever runs (prevents concurrent writers corrupting shards).
 export HF_TOKEN="${HF_TOKEN:-}"
-cd /home/wubu/bytropix
-LOG=/home/wubu/bytropix/logs/dl_all_curl.log
-PIDF=/home/wubu/bytropix/logs/dl_pid.txt
-LOCK=/home/wubu/bytropix/logs/dl.lock
+cd /home/wubu/wubuwizard
+LOG=/home/wubu/wubuwizard/logs/dl_all_curl.log
+PIDF=/home/wubu/wubuwizard/logs/dl_pid.txt
+LOCK=/home/wubu/wubuwizard/logs/dl.lock
 
 # Self-detach: if not already in our own session, re-exec under setsid and exit.
 if [ -z "${DL_WATCHDOG_DETACHED:-}" ]; then

@@ -12,7 +12,7 @@ This folder is the **public-facing presentation layer** of the `.hermes/` vault.
 presentation/
 ├── README.md               ← This file (presentation overview)
 ├── 1-project-overview.md     → One-page summary: what, why, how
-├── 2-research-vault.md       → Guided tour of bytropix research (all phases + variants)
+├── 2-research-vault.md       → Guided tour of wubuwizard research (all phases + variants)
 ├── 3-architecture.md         → System architecture: GGUF → C → CUDA → WuBu math
 ├── 4-implementation-status.md → Current implementation state per phase
 ├── 5-diagrams.md             → Index of all SVG diagrams (10 total)

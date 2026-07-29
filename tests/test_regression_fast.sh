@@ -3,7 +3,7 @@
 set -e
 MODEL="/home/wubu/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf"
 LLAMA="/home/wubu/llama.cpp/build/bin/llama-cli"
-cd /home/wubu/bytropix
+cd /home/wubu/wubuwizard
 
 echo "=== Quick Regression (3 prompts) ==="
 PASS=0; TOTAL=0

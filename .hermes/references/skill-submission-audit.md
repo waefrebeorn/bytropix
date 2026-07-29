@@ -16,7 +16,7 @@ A skill is suitable for Hermes online skills if:
 **Description:** Prestige prompt structure system with multi-stage directions, devils advocate loop, and slate markdown for project navigation.
 **Size:** 254 lines, 24KB
 **Frontmatter:** ❌ Missing version, tags, platforms, author, license
-**Self-contained:** ❌ References to `/home/wubu/`, `~/HASHMIND/`, `~/bytropix/` (22 references)
+**Self-contained:** ❌ References to `/home/wubu/`, `~/HASHMIND/`, `~/wubuwizard/` (22 references)
 **Submission verdict:** ❌ **NOT suitable** — deeply coupled to WuBu-specific projects, local paths everywhere
 
 **How to fix for submission:**
@@ -37,7 +37,7 @@ A skill is suitable for Hermes online skills if:
 **Self-contained:** ❌ 12 local path references, deeply WuBu-specific
 **Submission verdict:** ❌ **NOT suitable** — this is a project notebook, not a generalizable skill
 
-This is a **project detail skill** — meant to be loaded with `skill_view()` during CLI sessions on the bytropix project. It has no general value outside the WuBuText AI project. Keep local-only.
+This is a **project detail skill** — meant to be loaded with `skill_view()` during CLI sessions on the wubuwizard project. It has no general value outside the WuBuText AI project. Keep local-only.
 
 **Recommendation:** ❌ Keep local only. Not submission material.
 

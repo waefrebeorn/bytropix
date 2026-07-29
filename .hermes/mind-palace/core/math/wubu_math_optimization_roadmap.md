@@ -521,7 +521,7 @@ Phase 5: Vision
 ## Appendix A: Frequently Asked Math Questions
 
 ### Q: Why Poincaré ball and not Lorentz model?
-**A:** Simpler exp/log maps (tanh/artanh vs hyperbolic trig), our bytropix Lean
+**A:** Simpler exp/log maps (tanh/artanh vs hyperbolic trig), our wubuwizard Lean
 proofs are all in Poincaré coordinates, and Phase 1 verified the geometry works
 (95% NN preservation). The Lorentz model is numerically stable near the boundary,
 but our norms stay at ~0.34 (well below the R=0.956 boundary), so boundary

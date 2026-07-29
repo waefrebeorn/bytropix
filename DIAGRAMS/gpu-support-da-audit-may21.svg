@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" font-family="'Courier New', monospace" font-size="12">
   <rect width="900" height="620" fill="#1a1a2e"/>
-  <text x="20" y="30" fill="#ff4444" font-size="16" font-weight="bold"> bytropix GPU_SUPPORT — What's Connected, What's Dead, What's Broken</text>
+  <text x="20" y="30" fill="#ff4444" font-size="16" font-weight="bold"> wubuwizard GPU_SUPPORT — What's Connected, What's Dead, What's Broken</text>
   <text x="20" y="46" fill="#888" font-size="11">Phase 28b DA Audit — SSM GPU path architecture with honest verification status. Red = broken/dead, Yellow = unverified, Green = working.</text>
 
   <!-- CPU path group -->

@@ -15,7 +15,7 @@
   </defs>
 
   <!-- Title -->
-  <text x="450" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#333">bytropix Phase Roadmap — May 19 2026</text>
+  <text x="450" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#333">wubuwizard Phase Roadmap — May 19 2026</text>
   <text x="450" y="48" text-anchor="middle" font-size="12" fill="#666">Qwen3.6-35B-A3B-UD-IQ2_M | Cos-sim: 0.9967 | Decode: 7.0 tok/s | 256k KV cache (F16)</text>
 
   <!-- Phase 0-6: Core -->

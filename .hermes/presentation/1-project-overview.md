@@ -1,7 +1,7 @@
 # WuBuText AI — Project Overview (May 19 PM v22)
 
 ## What We're Building
-**bytropix** — pure C inference engine for Qwen3.6-35B-A3B (Gated DeltaNet + MoE).
+**wubuwizard** — pure C inference engine for Qwen3.6-35B-A3B (Gated DeltaNet + MoE).
 Cos-sim 0.9994 vs llama.cpp. 256k context on 8GB laptop GPU.
 
 ### Architecture (Discovered May 19)

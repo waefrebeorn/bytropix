@@ -1,15 +1,15 @@
 # Prestige Prompt — May 21 PM (Phase 29d: Token Embedding Root Cause Found)
 
-## Project: bytropix — Multi-Modal Inference (Text + Vision)
+## Project: wubuwizard — Multi-Modal Inference (Text + Vision)
 
 **Qwen3.6-35B-A3B-UD-IQ2_M text + Moondream3 3D ViT vision via mmproj**  
 **CPU-only: 3-4 tok/s decode (sequential SSM) | GPU vision: 15.7s pipeline**
 
 ## Current State
 - **CPU text WORKS** with `FORCE_CPU_SSM_SEQ=1`. Coherent output verified.
-- **Root cause of 1:1 parity failure found**: Token embedding differs from reference (cs=0.118). `gguf_read_tensor_f32` fails to dequantize quantized `token_embd.weight`. Bytropix embedding has std=0.013 vs reference std=1.295.
+- **Root cause of 1:1 parity failure found**: Token embedding differs from reference (cs=0.118). `gguf_read_tensor_f32` fails to dequantize quantized `token_embd.weight`. WubuWizard embedding has std=0.013 vs reference std=1.295.
 - **DUMP_EMBEDDING_DIR** added to `tools/gen_text.c` for embedding comparison.
-- All debug infrastructure now built: DUMP_INTERMEDIATE_DIR (ref), DUMP_GQA_DEBUG_DIR (bytropix GQA), DUMP_LAYER_DIR (bytropix layers), DUMP_EMBEDDING_DIR (bytropix embedding).
+- All debug infrastructure now built: DUMP_INTERMEDIATE_DIR (ref), DUMP_GQA_DEBUG_DIR (wubuwizard GQA), DUMP_LAYER_DIR (wubuwizard layers), DUMP_EMBEDDING_DIR (wubuwizard embedding).
 
 ## Root Cause Analysis (Complete)
 1. **Token embedding** (P0.1): cs=0.118 — gguf_read_tensor_f32 dequantization bug ← **THIS IS THE ROOT CAUSE**

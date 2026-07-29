@@ -1,6 +1,6 @@
 # Session-End State: WuBuText AI — May 13, 2026
 
-**Path:** `/home/wubu/bytropix`
+**Path:** `/home/wubu/wubuwizard`
 **Model:** Qwen3.6-35B-A3B-UD-IQ2_M.gguf at `/models/` (11GB, IQ2_M)
 **MMProj:** `/models/qwen3.6-35b-mmproj-F16.gguf` (858MB, F16)
 **HF configs:** `/home/wubu/models/qwen36_og/` (11 files, 22MB)

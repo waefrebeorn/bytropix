@@ -89,7 +89,7 @@ int main() {
             // Quantize column j to Q8_K
             const float *col = qkv_f32 + (int64_t)j * D_MODEL;
             uint8_t *q8_col = q8_w + q8_size * j;
-            // This is a simplified Q8_K quant — just use the actual bytropix quantized matmul
+            // This is a simplified Q8_K quant — just use the actual wubuwizard quantized matmul
             // by calling the quantized_matmul function directly
         }
         free(q8_w);

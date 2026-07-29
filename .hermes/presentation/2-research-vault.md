@@ -1,6 +1,6 @@
 # Research Vault Tour
 
-**Purpose:** A guided walkthrough of the bytropix research vault (`../vault/`) — what each area explored, what was learned, and how results feed into the current WuBu project.
+**Purpose:** A guided walkthrough of the wubuwizard research vault (`../vault/`) — what each area explored, what was learned, and how results feed into the current WuBu project.
 
 ---
 

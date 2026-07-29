@@ -8,7 +8,7 @@
 - 40 layers: **10x (3x Gated DeltaNet -> MoE -> 1x Gated Attention -> MoE)**
 - Gated DeltaNet (SSM): 32 V-heads, 16 QK-heads, hd=128, conv_kernel=4, mamba_ssm_dtype=float32
 - Gated Attention (GQA): 16 Q-heads, 2 KV-heads, hd=256, RoPE dim=64 (25% partial), theta=10M
-- **attn_output_gate: True** — EVERY attention output has a sigmoid gate (`blk.X.attn_gate.weight`). bytropix MISSING this!
+- **attn_output_gate: True** — EVERY attention output has a sigmoid gate (`blk.X.attn_gate.weight`). wubuwizard MISSING this!
 - MoE: 256 experts, 8 routed + 1 shared, expert_dim=512, shared_dim=512
 - Hidden: 2048, vocab: 248320 (padded)
 - Context: 262K native (up to 1,010,000)
@@ -40,7 +40,7 @@
 - SSM (Gated DeltaNet): L0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,32,33,34,36,37,38 (30)
 - GQA: L3,7,11,15,19,23,27,31,35,39 (10)
 
-## 5. Action Items for bytropix
+## 5. Action Items for wubuwizard
 - **[RESOLVED] attn_output_gate** — already implemented inside wubu_ssm_forward via silu(x @ attn_gate_weight). Applied to SSM raw output before ssm_out projection. GQA layers don't have attn_gate tensors.
 - **[DONE] Down_exps type varies per layer** (some IQ4_XS) — already handled via ty_gd fallback
 - **[DONE] Expert weights are contiguous-per-expert** — our fix was correct

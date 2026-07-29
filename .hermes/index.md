@@ -1,4 +1,4 @@
-# bytropix Mind Palace Index (June 14, 2026)
+# wubuwizard Mind Palace Index (June 14, 2026)
 
 ## Walkway Files (Read Order)
 1. `prestige_prompt.md` — Full resume: mission, architecture, priority queue
@@ -31,7 +31,7 @@
 **Adapter pattern**: `wubu_model.c` detects naming convention → extracts dims from GGUF → configures per-layer → allocates dynamic KV cache
 
 ## Key Paths
-- Source: `/home/wubu/bytropix/`
+- Source: `/home/wubu/wubuwizard/`
 - Models: `/home/wubu/models/` (DiffusionGemma, Gemma4, Qwen3.6)
 - llama.cpp ref: `/home/wubu/llama.cpp/`
 - Benchmark: `./bench_512k_full <model.gguf> 4096 1 0`

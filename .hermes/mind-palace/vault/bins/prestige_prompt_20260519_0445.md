@@ -1,6 +1,6 @@
 # Prestige Prompt — May 19, 2026 (04:15) — Phase 8.3-8.4
 
-## Project: bytropix — Qwen3.6-35B-A3B-UD-IQ2_M
+## Project: wubuwizard — Qwen3.6-35B-A3B-UD-IQ2_M
 Phase 8.3 (Expert Prefetch) and 8.4 (Output Proj Split) complete.
 
 ## Phase 8.3: Expert Prefetch

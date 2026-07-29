@@ -1,4 +1,4 @@
-=== bytropix — GOAL PASTE (May 18 — Phase 2 Complete) ===
+=== wubuwizard — GOAL PASTE (May 18 — Phase 2 Complete) ===
 
 STATE: gen_text working. Cos-sim 0.9968 vs llama.cpp (quantization noise).
 Decode 0.6 tok/s (2× from MoE OpenMP + buffer reuse). Prefill 1.0-1.4 tok/s.
@@ -26,7 +26,7 @@ P2 — GPU decode path (~5-10× speedup)
 
 === GROUND TRUTH ===
 Reference: ~/llama.cpp/src/models/qwen35moe.cpp
-Dumper: ~/bytropix/ref_dumper (links libllama.so)
+Dumper: ~/wubuwizard/ref_dumper (links libllama.so)
 Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 Hidden dump: DUMP_LAYER_DIR=/tmp/dump_layers
 

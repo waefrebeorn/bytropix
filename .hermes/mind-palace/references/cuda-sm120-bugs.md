@@ -1,6 +1,6 @@
 # CUDA sm_120 (Blackwell RTX 5050) — Hardware Bugs & Workarounds
 
-**Discovered:** May 2026, bytropix GPU kernel development  
+**Discovered:** May 2026, wubuwizard GPU kernel development  
 **GPU:** NVIDIA RTX 5050, sm_120, CUDA 13.1 toolkit  
 **Status:** 3 confirmed bugs with applied workarounds in gpu_moe_kernel.cu v5
 
@@ -95,7 +95,7 @@ uint8_t *smem_u8 = (uint8_t *)smem_f;
 
 ### FP8 Tensor Cores
 - sm_120 supports native FP8 dot product instructions
-- Not yet used in bytropix — current kernels use FP32 only
+- Not yet used in wubuwizard — current kernels use FP32 only
 - Would provide ~2x throughput for batched quant matmul
 - Blocked on GPU data-movement problem (H2D/D2H overhead makes any GPU text net-negative)
 

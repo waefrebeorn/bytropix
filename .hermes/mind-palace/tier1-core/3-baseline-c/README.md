@@ -1,7 +1,7 @@
 # Current C Baseline — What Exists
 
 ## Location
-Source: `/home/wubu/bytropix/include/` (5 headers) + `/home/wubu/bytropix/src/` (7 C files)
+Source: `/home/wubu/wubuwizard/include/` (5 headers) + `/home/wubu/wubuwizard/src/` (7 C files)
 Training: `src/train.c` — runs 6000+ steps, loss 4.68→3.12
 
 ## Components

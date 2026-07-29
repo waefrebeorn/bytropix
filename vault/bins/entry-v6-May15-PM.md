@@ -1,4 +1,4 @@
-# bytropix — Quick Start (May 18 — Phase 2 Complete)
+# wubuwizard — Quick Start (May 18 — Phase 2 Complete)
 
 ## Hardware
 AMD Ryzen 7950X (16C/32T), 64GB DDR5, RTX 5050 6.4GB
@@ -9,7 +9,7 @@ AMD Ryzen 7950X (16C/32T), 64GB DDR5, RTX 5050 6.4GB
 ## Build & Run
 ```bash
 # Text generation
-cd ~/bytropix && make gen_text
+cd ~/wubuwizard && make gen_text
 ./gen_text "The capital of France is" 32
 
 # Cos-sim verification vs llama.cpp

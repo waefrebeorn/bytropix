@@ -1,4 +1,4 @@
-# KV Cache Compression Resources — bytropix Research References
+# KV Cache Compression Resources — wubuwizard Research References
 
 **Three approaches + one legacy attention mechanism for fitting 256k+ context on laptop GPUs.**
 
@@ -79,7 +79,7 @@ void kv_cache_read_q4_0_head(const void *cache, int64_t offset, float *buf, int 
 
 **Claimed compression:** 3.8-6.4× with near-q8_0 perplexity, zero speed penalty on GPU.
 
-**Relevance to bytropix:** TurboQuant+'s WHT + PolarQuant approach could complement our Q4_0 cache. The asymmetric K/V would let us compress V to 2 bits while keeping K at 4 bits.
+**Relevance to wubuwizard:** TurboQuant+'s WHT + PolarQuant approach could complement our Q4_0 cache. The asymmetric K/V would let us compress V to 2 bits while keeping K at 4 bits.
 
 **Potential integration path:**
 ```c
@@ -105,7 +105,7 @@ void kv_cache_read_q4_0_head(const void *cache, int64_t offset, float *buf, int 
 
 **Claimed vs TurboQuant+:** -0.005 PPL, 28% faster decode, 5× faster prefill, 44× fewer rotation params.
 
-**Relevance to bytropix:** RotorQuant's block-diagonal approach is simpler to implement (just 2×2 or 4×4 rotations) than full WHT. The deferred quantization pattern fits our architecture (prefill is separate from decode).
+**Relevance to wubuwizard:** RotorQuant's block-diagonal approach is simpler to implement (just 2×2 or 4×4 rotations) than full WHT. The deferred quantization pattern fits our architecture (prefill is separate from decode).
 
 **Potential integration path:**
 ```c
@@ -130,11 +130,11 @@ Raw KV → MLP Encoder → [5, H, W] quaternion grid (711:1 compression)
          → BSP Tree → Subset Attention (O(N log N) instead of O(N²))
 ```
 
-**Why it matters for bytropix:** This is an orthogonal approach to cache compression. Instead of quantizing individual values (Q4_0, TurboQuant+, RotorQuant), it compresses the ENTIRE cache into a learned representation. The BSP occlusion tree enables O(log N) attention at 256k+.
+**Why it matters for wubuwizard:** This is an orthogonal approach to cache compression. Instead of quantizing individual values (Q4_0, TurboQuant+, RotorQuant), it compresses the ENTIRE cache into a learned representation. The BSP occlusion tree enables O(log N) attention at 256k+.
 
 **The 4096 recall window bug:** The original implementation had a stale-range bug where tokens beyond 4096 positions were not correctly indexed in the BSP tree. The root cause was that grid cell indices were computed from token count modulo 4096 instead of absolute position. Fix: use actual token count for cell index calculation.
 
-**Integration idea for bytropix:**
+**Integration idea for wubuwizard:**
 ```c
 // Hypothetical: Hamilton encoder as V cache compression layer
 // 1. After each prefill chunk, run MLP encoder on V cache
@@ -155,7 +155,7 @@ Raw KV → MLP Encoder → [5, H, W] quaternion grid (711:1 compression)
 | **RotorQuant** | 4-6:1 | Near q8_0 | 2×2 Givens per write | Low — 4 mults per pair |
 | **Hamilton Encoder** | 711:1 (V only) | Unknown | MLP encode O(N) per chunk | High — MLP + BSP tree |
 
-## Next Steps for bytropix
+## Next Steps for wubuwizard
 
 1. **Short-term:** Port Q4_0 to GPU path (same block format, CUDA dequant in attention kernel)
 2. **Medium-term:** Implement RotorQuant's Givens rotation before Q4_0 quantize (block-diagonal, 2 mults per pair)

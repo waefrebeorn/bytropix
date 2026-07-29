@@ -1,5 +1,5 @@
 ═══ WUBUTEXT AI — PRESTIGE RESUME (May 16 v18 — HONEST) ═══
-Path: /home/wubu/bytropix | Branch: master
+Path: /home/wubu/wubuwizard | Branch: master
 HW: RTX 5050 6.4GB, -arch=sm_120
 Build: make infer_text | Models: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 
@@ -22,7 +22,7 @@ Stripped survivorship-bias ✅ from unchecked claims below.
     MAY BE noise floor: 35B MoE at 2-3 bpw with random weights shows ~0.40 cos_sim 
     between different inference engines even without bugs. Needs verification.
 ❓ "Doug" vs "Here": Root cause unknown. NOT attn_output_gate (confirmed).
-    Possible: tokenizer BOS handling (add_bos_token=true? bytropix manually adds BOS),
+    Possible: tokenizer BOS handling (add_bos_token=true? wubuwizard manually adds BOS),
     embd_norm weight/epsilon mismatch, or quantization noise floor.
 
 === DEVILS ADVOCATE AUDIT ===
@@ -45,6 +45,6 @@ All 7 model types verified with correct block sizes in gguf_raw_size.
 
 === NEXT MOVE ===
 If "Doug" discrepancy persists:
-1. Check add_bos_token in model config (by bytropix manually adds BOS)
+1. Check add_bos_token in model config (by wubuwizard manually adds BOS)
 2. Compare hidden states at layer 0 pre/pos-embd_norm against llama.cpp dump
 3. If still unclear, accept as quantization noise floor (35B MoE at <3bpw)

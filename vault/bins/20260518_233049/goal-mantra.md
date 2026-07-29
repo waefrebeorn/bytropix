@@ -32,7 +32,7 @@ Island Boy + MTP speculative decode architecture.
 
 ## GROUND TRUTH
 - Reference: ~/llama.cpp/src/models/qwen35moe.cpp
-- Dumper: ~/bytropix/ref_dumper (links libllama.so directly)
+- Dumper: ~/wubuwizard/ref_dumper (links libllama.so directly)
 - Model: /models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
 - Hidden dump: DUMP_LAYER_DIR=/tmp/dump_layers
 
