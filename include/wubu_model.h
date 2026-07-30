@@ -7,6 +7,7 @@
 #include "wubu_kvcache_quant.h"
 #include "wubu_kv_select.h"
 #include "wubu_kv_runtime.h"
+#include "wubu_kvvq.h"  /* KB2: VQ codebook for KV compression */
 #include <stdbool.h>
 #include <math.h>
 #include <string.h>

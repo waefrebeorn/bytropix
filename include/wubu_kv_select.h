@@ -24,7 +24,8 @@ typedef enum {
     WUBU_KV_F16  = 1,   /* fp16: 2 bytes/elem */
     WUBU_KV_Q4_0 = 2,   /* 4-bit Q4_0: 0.56 bytes/elem */
     WUBU_KV_Q8   = 3,   /* our Q8_0 block-32: 1.125 bytes/elem, near-lossless */
-    WUBU_KV_KIVI = 4     /* KIVI per-token V (K!=V): ~1.03 bytes/elem */
+    WUBU_KV_KIVI = 4,    /* KIVI per-token V (K!=V): ~1.03 bytes/elem */
+    WUBU_KV_VQ   = 5     /* KB2 doc 014: sub-4-bit VQ (data-independent codebook) */
 } wubu_kv_scheme_t;
 
 typedef struct {
