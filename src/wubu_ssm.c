@@ -1,4 +1,5 @@
 #include "wubu_ssm.h"
+#include "wubu_ssm_workspace.h"
 #include "safetensors_reader.h"
 #include "wubu_mobius.h"
 #include "gguf_reader.h"
@@ -366,32 +367,47 @@ void wubu_ssm_forward(const float *x, int B, int T,
     const int N = B * T;  // total tokens
     const int C = CONV_DIM;  // 8192
     
-    // Allocate temporaries (in production: pre-allocate or use stack for small T)
-    // For T up to 512, these fit on stack (~2-4MB)
-    // For production: use heap
-    float *qkv_all = (float *)malloc(N * (KEY_DIM * 2 + VALUE_DIM) * sizeof(float));
-    float *z_all = (float *)malloc(N * VALUE_DIM * sizeof(float));
-    float *beta_raw = (float *)malloc(N * DT_RANK * sizeof(float));
-    float *alpha_raw = (float *)malloc(N * DT_RANK * sizeof(float));
-    float *conv_input = (float *)malloc(B * (T + CONV_KERNEL - 1) * C * sizeof(float));
-    float *conv_output = (float *)malloc(N * C * sizeof(float));
-    float *q_conv = (float *)malloc(N * KEY_DIM * sizeof(float));
-    float *k_conv = (float *)malloc(N * KEY_DIM * sizeof(float));
-    float *v_conv = (float *)malloc(N * VALUE_DIM * sizeof(float));
-    float *q_norm = (float *)malloc(N * KEY_DIM * sizeof(float));
-    float *k_norm = (float *)malloc(N * KEY_DIM * sizeof(float));
-    float *delta_out = (float *)malloc(N * VALUE_DIM * sizeof(float));
-    float *z_silu = (float *)malloc(N * VALUE_DIM * sizeof(float));
+    // Allocate temporaries from workspace pool when available,
+    // otherwise fall back to per-call malloc.
+    wubu_ssm_workspace_t *ws = wubu_ssm_workspace_get(0); /* caller sets layer idx */
+    float *qkv_all, *z_all, *beta_raw, *alpha_raw;
+    float *conv_input, *conv_output, *q_conv, *k_conv, *v_conv;
+    float *q_norm, *k_norm, *delta_out, *z_silu;
+    
+    if (ws) {
+        qkv_all = ws->qkv_all; z_all = ws->z_all;
+        beta_raw = ws->beta_raw; alpha_raw = ws->alpha_raw;
+        conv_input = ws->conv_input; conv_output = ws->conv_output;
+        q_conv = ws->q_conv; k_conv = ws->k_conv; v_conv = ws->v_conv;
+        q_norm = ws->q_norm; k_norm = ws->k_norm;
+        delta_out = ws->delta_out; z_silu = ws->z_silu;
+    } else {
+        qkv_all = (float *)malloc(N * (KEY_DIM * 2 + VALUE_DIM) * sizeof(float));
+        z_all = (float *)malloc(N * VALUE_DIM * sizeof(float));
+        beta_raw = (float *)malloc(N * DT_RANK * sizeof(float));
+        alpha_raw = (float *)malloc(N * DT_RANK * sizeof(float));
+        conv_input = (float *)malloc(B * (T + CONV_KERNEL - 1) * C * sizeof(float));
+        conv_output = (float *)malloc(N * C * sizeof(float));
+        q_conv = (float *)malloc(N * KEY_DIM * sizeof(float));
+        k_conv = (float *)malloc(N * KEY_DIM * sizeof(float));
+        v_conv = (float *)malloc(N * VALUE_DIM * sizeof(float));
+        q_norm = (float *)malloc(N * KEY_DIM * sizeof(float));
+        k_norm = (float *)malloc(N * KEY_DIM * sizeof(float));
+        delta_out = (float *)malloc(N * VALUE_DIM * sizeof(float));
+        z_silu = (float *)malloc(N * VALUE_DIM * sizeof(float));
+    }
     
     if (!qkv_all || !z_all || !beta_raw || !alpha_raw || !conv_input ||
         !conv_output || !q_conv || !k_conv || !v_conv || !q_norm || !k_norm ||
         !delta_out || !z_silu) {
         fprintf(stderr, "SSM forward: allocation failed\n");
-        free(qkv_all); free(z_all); free(beta_raw); free(alpha_raw);
-        free(conv_input); free(conv_output);
-        free(q_conv); free(k_conv); free(v_conv);
-        free(q_norm); free(k_norm);
-        free(delta_out); free(z_silu);
+        if (!ws) {
+            free(qkv_all); free(z_all); free(beta_raw); free(alpha_raw);
+            free(conv_input); free(conv_output);
+            free(q_conv); free(k_conv); free(v_conv);
+            free(q_norm); free(k_norm);
+            free(delta_out); free(z_silu);
+        }
         return;
     }
     
