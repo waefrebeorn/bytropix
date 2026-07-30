@@ -61,10 +61,10 @@ void wubu_kvq_kivi_quant_K(const float *K, int8_t *q, float *scale_per_ch,
 void wubu_kvq_kivi_dequant_K(const int8_t *q, const float *scale_per_ch,
                              float *out, int n_tokens, int head_dim);
 
-void wubu_kvq_kivi_quant_V(const float *V, int8_t *q, float *scale_per_tok,
+void wubu_kvq_kivi_quant_V(const float *V, uint8_t *q, float *scale_per_tok,
                             int n_tokens, int head_dim);
-void wubu_kvq_kivi_dequant_V(const int8_t *q, const float *scale_per_tok,
-                             float *out, int n_tokens, int head_dim);
+void wubu_kvq_kivi_dequant_V(const uint8_t *q, const float *scale_per_tok,
+                              float *out, int n_tokens, int head_dim);
 
 /* Bytes-per-element for a scheme (for capacity planning / DA checks). */
 float wubu_kvq_bytes_per_elem(wubu_kvq_scheme_t scheme);

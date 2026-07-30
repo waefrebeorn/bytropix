@@ -261,6 +261,10 @@ test_kv_styx: tools/test_kv_styx.c src/wubu_kv_styx.o src/wubu_spawn.o
 	$(CC) $(CFLAGS) -o $@ tools/test_kv_styx.c src/wubu_kv_styx.o src/wubu_spawn.o $(LDFLAGS)
 	./$@
 
+test_kivi_roundtrip: tools/test_kivi_roundtrip.c src/wubu_kvcache_quant.o
+	$(CC) $(CFLAGS) -o test_kivi_roundtrip $< src/wubu_kvcache_quant.o $(LDFLAGS) -lm
+	./test_kivi_roundtrip
+
 test_safetensors: tools/test_safetensors.c src/safetensors_reader.o gen_fixture_safetensors
 	$(CC) $(CFLAGS) -o $@ $< src/safetensors_reader.o $(LDFLAGS)
 	./gen_fixture_safetensors
