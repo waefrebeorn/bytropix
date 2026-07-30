@@ -722,9 +722,9 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             wubu_kv_styx_register(path, model->gqa_k_cache, k_cache_bytes);
         }
     }
-    
+
     return true;
-    
+
 fail:
     gguf_close(ctx);
     model->gguf_ctx = NULL;
