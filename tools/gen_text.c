@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <signal.h>
@@ -204,8 +205,16 @@ int main(int argc, char **argv) {
     float gen_top_p  = getenv("TOP_P")     ? (float)atof(getenv("TOP_P"))     : 0.95f;
     int   gen_top_k  = getenv("TOP_K")     ? atoi(getenv("TOP_K"))            : 20;
 
-    if (argc > 1) prompt = argv[1];
-    if (argc > 2) max_tokens = atoi(argv[2]);
+    if (argc > 1 && (strstr(argv[1], ".safetensors")
+                     || access(argv[1], F_OK) == 0)) {
+        /* argv[1] is a model path; later args are prompt/tokens */
+        model_path = argv[1];
+        if (argc > 2) prompt = argv[2];
+        if (argc > 3) max_tokens = atoi(argv[3]);
+    } else {
+        if (argc > 1) prompt = argv[1];
+        if (argc > 2) max_tokens = atoi(argv[2]);
+    }
 
     signal(SIGINT, handle_sigint);
 
@@ -453,4 +462,5 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+#include <unistd.h>
 #include <sys/stat.h>
