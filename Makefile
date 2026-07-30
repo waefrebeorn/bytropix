@@ -502,7 +502,7 @@ test_generate_spec: tools/test_generate_spec.c src/wubu_generate.o src/wubu_spec
 
 # doc 006: arena allocator for per-request + KV buffers
 test_arena: tools/test_arena.c src/wubu_arena.o $(CPU_OBJ)
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp -lssl -lcrypto
 	./$@
 
 # doc 005: SmoothQuant activation outlier migration

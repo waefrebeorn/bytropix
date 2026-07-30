@@ -13,6 +13,40 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "wubu_arena.h"
+
+/* KB7 hardware acceleration: arena-backed scratch for the decode hot path.
+ * Each GEMV allocates its F32 materialization from the arena instead of
+ * malloc/free, eliminating per-token syscall overhead. Falls back to
+ * malloc if the arena is NULL or exhausted. */
+static __thread wubu_sub_arena_t g_gemv_scratch;
+static __thread int g_gemv_scratch_init = 0;
+
+static void *gemv_scratch_alloc(size_t size) {
+    if (!g_gemv_scratch_init) {
+        wubu_arena_t *arena = (wubu_arena_t *)calloc(1, sizeof(wubu_arena_t));
+        if (!arena) return malloc(size);
+        if (wubu_arena_init(arena, 8 * 1024 * 1024, 0) != 0) {
+            free(arena);
+            return malloc(size);
+        }
+        if (wubu_sub_arena_create(arena, &g_gemv_scratch, 8*1024*1024) != 0) {
+            wubu_arena_free(arena);
+            free(arena);
+            return malloc(size);
+        }
+        g_gemv_scratch_init = 1;
+        return wubu_sub_arena_alloc(&g_gemv_scratch, size, 64);
+    }
+    void *p = wubu_sub_arena_alloc(&g_gemv_scratch, size, 64);
+    if (p) return p;
+    return malloc(size);
+}
+
+static void gemv_scratch_free(void *p, size_t size) {
+    /* arena resets per step; malloc fallback is freed normally */
+    (void)p; (void)size;
+}
 #include <math.h>
 #include <assert.h>
 #include <immintrin.h>  // _mm_prefetch
