@@ -829,11 +829,6 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             FILE *f=fopen(fn,"wb"); if(f){ fwrite(x,sizeof(float),(size_t)N*model->d_model,f); fclose(f);}
         }
     }
-    // Per-layer GQA debug counter (env var filters which GQA layer to dump)
-    int gqa_debug_layer = -1;
-    const char *gqa_debug_env = getenv("DUMP_GQA_LAYER");
-    if (gqa_debug_env) gqa_debug_layer = atoi(gqa_debug_env);
-    int gqa_layer_idx = 0;  // which GQA layer across the model (0,1,2,...)
     
     // Layer loop
     for (int l = 0; l < model->n_layers; l++) {
@@ -850,11 +845,12 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         
         // Pre-attention RMSNorm
         if (!layer->attn_norm_weight) {
-            fprintf(stderr, "BUG: layer %d attn_norm_weight NULL (naming=%d is_ssm=%d)\n",
+            fprintf(stderr, "WARN: layer %d attn_norm_weight NULL (naming=%d is_ssm=%d); using identity\n",
                     l, model->tensor_naming, layer->is_ssm);
-            return;
+            memcpy(normed, x, N * model->d_model * sizeof(float));
+        } else {
+            wubu_rms_norm(B, T, model->d_model, x, layer->attn_norm_weight, 1e-6f, normed);
         }
-        wubu_rms_norm(B, T, model->d_model, x, layer->attn_norm_weight, 1e-6f, normed);
         // TEMP DEBUG: dump normed (attn_norm output) for layer 0
         {
             const char *dbg = getenv("DBG_DUMP_NORMED");
@@ -990,17 +986,6 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             for (int li = 0; li < l; li++) {
                 if (!model->layers[li].is_ssm) l_gqa++;
             }
-            // Set DUMP_GQA_PREFIX for targeted layer debugging
-            const char *gqa_debug_layer_str = getenv("DUMP_GQA_LAYER");
-            int gqa_debug_target = gqa_debug_layer_str ? atoi(gqa_debug_layer_str) : -1;
-            char prefix_buf[64];
-            int is_debug_layer = (gqa_debug_target >= 0 && l == gqa_debug_target);
-            if (is_debug_layer) {
-                snprintf(prefix_buf, sizeof(prefix_buf), "L%d_gqa%d", l, l_gqa);
-                setenv("DUMP_GQA_PREFIX", prefix_buf, 1);
-            } else {
-                setenv("DUMP_GQA_PREFIX", "", 1);
-            }
             // Compute per-layer KV cache offset using actual kv_dim for each GQA layer
             int64_t layer_cache_elems = 0;
             int gqa_idx2 = 0;
@@ -1013,25 +998,38 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             }
             int kv_dim = layer->gqa.kv_dim;
             int64_t layer_cache_off = layer_cache_elems;
-            void *k_cache = (uint8_t *)model->gqa_k_cache + kv_cache_alloc_size(layer_cache_off);
-            void *v_cache = (uint8_t *)model->gqa_v_cache + kv_cache_alloc_size(layer_cache_off);
+            int64_t k_offset_bytes = kv_cache_alloc_size(layer_cache_off);
+            void *k_cache = (uint8_t *)model->gqa_k_cache + k_offset_bytes;
+            void *v_cache = (uint8_t *)model->gqa_v_cache + k_offset_bytes;
             void *k_out = (model->gqa_cache_len > 0) ?
                 ((uint8_t *)k_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * kv_dim)) : NULL;
             void *v_out = (model->gqa_cache_len > 0) ?
                 ((uint8_t *)v_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * kv_dim)) : NULL;
             const void *k_in = (model->gqa_cache_len > 0) ? k_cache : NULL;
             const void *v_in = (model->gqa_cache_len > 0) ? v_cache : NULL;
-            // For prefill (T>1 and first call): store to cache position 0
+            // For prefill (T>1 and first call): store to cache position 0, read from nothing.
+            // For single-token decode (T=1 and cache_len>0): read/write at current cache position.
+            // For single-token decode (T=1 and cache_len=0): store to cache position 0, no read.
             if (T > 1 && model->gqa_cache_len == 0) {
+                // Prefill: all tokens fit in one pass, write to cache start, no input cache.
                 k_out = k_cache;
                 v_out = v_cache;
                 k_in = NULL; v_in = NULL;
+            } else if (T == 1 && model->gqa_cache_len == 0) {
+                // Single-token decode with empty cache: write to position 0, no read.
+                k_out = k_cache;
+                v_out = v_cache;
+                k_in = NULL; v_in = NULL;
+            } else {
+                // Decode (one token) with non-empty cache: read+write at current cache position.
+                k_in = k_cache; v_in = v_cache;
+                k_out = (uint8_t *)k_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * kv_dim);
+                v_out = (uint8_t *)v_cache + kv_cache_alloc_size((int64_t)model->gqa_cache_len * kv_dim);
             }
             wubu_gqa_forward(normed, B, T, &layer->gqa, model->d_model, attn_out,
                              k_in, v_in, model->gqa_cache_len,
                              k_out, v_out,
                              layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads);
-            gqa_layer_idx++;
             }  // close CPU GQA block
         gqa_done:
         }  // close else block (non-SSM)
@@ -1048,27 +1046,24 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             fprintf(stderr, "  L%d %s attn: %.3fms\n", l, layer->is_ssm ? "SSM" : "GQA", (t1 - t0) * 1000.0);
         }
         
-        // NaN check: find exact index of first NaN
-        int nan_idx = -1;
+        // NaN/Inf check: find exact index of first bad value in attn_out
+        int bad_idx = -1;
         for (int i = 0; i < N * model->d_model; i++) {
-            if (isnan(attn_out[i])) { nan_idx = i; break; }
+            if (!isfinite(attn_out[i])) { bad_idx = i; break; }
         }
-        if (nan_idx >= 0) {
-            int t = nan_idx / model->d_model;
-            int d = nan_idx % model->d_model;
-            printf("  L%d (%s) *** NaN at [t=%d,d=%d] val=%+.4e prev=%+.4e next=%+.4e\n",
+        if (bad_idx >= 0) {
+            int t = bad_idx / model->d_model;
+            int d = bad_idx % model->d_model;
+            printf("  L%d (%s) *** BAD at [t=%d,d=%d] val=%+.4e prev=%+.4e next=%+.4e\n",
                    l, layer->is_ssm ? "SSM" : "GQA",
-                   t, d, attn_out[nan_idx],
-                   nan_idx > 0 ? (double)attn_out[nan_idx-1] : 0.0,
-                   nan_idx+1 < N*model->d_model ? (double)attn_out[nan_idx+1] : 0.0);
+                   t, d, attn_out[bad_idx],
+                   bad_idx > 0 ? (double)attn_out[bad_idx-1] : 0.0,
+                   bad_idx+1 < N*model->d_model ? (double)attn_out[bad_idx+1] : 0.0);
         }
         
         // Residual: x = x + attn_out
         #pragma omp parallel for if(N * model->d_model > 500000)
         for (int i = 0; i < N * model->d_model; i++) x[i] += attn_out[i];
-        
-        // Post-attention RMSNorm
-        wubu_rms_norm(B, T, model->d_model, x, layer->post_attn_norm_weight, 1e-6f, normed2);
         
         // MoE (FFN) forward — ds4-ssd slot-bank takes precedence (page experts
         // from the checkpoint shards; the resident blobs are intentionally NULL
@@ -1352,7 +1347,8 @@ void wubu_model_forward(wubu_model_t *model,
                 int tok = token_ids[i];
                 if (tok < 0 || tok >= model->vocab_size) tok = 0;
                 fseek(emb_f, (long)tok * model->d_model * sizeof(float), SEEK_SET);
-                fread(embd + i * model->d_model, sizeof(float), model->d_model, emb_f);
+                size_t rd = fread(embd + i * model->d_model, sizeof(float), model->d_model, emb_f);
+                (void)rd;
             }
             fclose(emb_f);
         } else {

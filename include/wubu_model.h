@@ -217,20 +217,20 @@ static inline void kv_cache_read_head_kivi(const void *cache, int64_t offset,
         // Fast path: single token
         int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
         const uint8_t *base = (const uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
-        const int8_t *q = (const int8_t *)base;
-        float scale = *(const float *)(base + hd);
-        float tmp[512];
-        int work_hd = hd > 512 ? 512 : hd;
-        wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, work_hd);
-        for (int i = 0; i < n; i++) buf[i] = tmp[p0 + i];
-    } else {
+            const uint8_t *q = base;
+            float scale = *(const float *)(base + hd);
+            float tmp[512];
+            int work_hd = hd > 512 ? 512 : hd;
+            wubu_kvq_kivi_dequant_V(q, &scale, tmp, 1, work_hd);
+            for (int i = 0; i < n; i++) buf[i] = tmp[p0 + i];
+        } else {
         // Batch path: read multiple tokens
         int tokens = n / hd;
         for (int t = 0; t < tokens; t++) {
             int token_offset = offset + t * hd;
             int t0 = (int)(token_offset / hd), p0 = (int)(token_offset % hd);
             const uint8_t *base = (const uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
-            const int8_t *q = (const int8_t *)base;
+            const uint8_t *q = base;
             float scale = *(const float *)(base + hd);
             float tmp[512];
             int work_hd = hd > 512 ? 512 : hd;
