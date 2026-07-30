@@ -710,6 +710,18 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     memset(model->gqa_k_cache, 0, k_cache_bytes);
     memset(model->gqa_v_cache, 0, k_cache_bytes);
     model->gqa_cache_len = 0;
+
+    /* Step 5: Register KV cache layers with wubu_kv_styx for /n/kv/ export.
+     * Each GQA layer gets a live JSON snapshot entry so external
+     * WuBuOS 9P clients can inspect KV state at runtime. */
+    wubu_kv_styx_init();
+    for (int l = 0; l < model->n_layers; l++) {
+        if (!model->layers[l].is_ssm) {
+            char path[128];
+            snprintf(path, sizeof(path), "/n/kv/layer_%02d", l);
+            wubu_kv_styx_register(path, model->gqa_k_cache, k_cache_bytes);
+        }
+    }
     
     return true;
     
