@@ -193,9 +193,8 @@ static int init_model(wubu_model_t *mdl, const char *path) {
 }
 
 int main(int argc, char **argv) {
-    fprintf(stderr, "[trace] gen_text reset\n");
-    const char *model_path = getenv_or_fallback("/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf");
-    fprintf(stderr, "[trace] gen_text reset model_path=%s\n", model_path);
+
+    const char *model_path = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *env_mp = getenv("MODEL");
     if (env_mp) model_path = env_mp;
     const char *prompt = "The meaning of life is";
@@ -227,10 +226,7 @@ int main(int argc, char **argv) {
     }
 
     wubu_model_t mdl;
-    if (!init_model(&mdl, model_path)) {
-        fprintf(stderr, "[gen_text] init_model failed for %s\n", model_path);
-        return 1;
-    }
+    if (!init_model(&mdl, model_path)) return 1;
     mdl.enable_moe = true;
 
     // GPU init (if GPU=1 env var set)
@@ -319,8 +315,7 @@ int main(int argc, char **argv) {
         prompt_tokens[pos++] = IM_START;
         n = hf_tok ? wubu_tok_hf_encode(hf_tok, "assistant\n", prompt_tokens + pos, 1024 - pos)
                    : wubu_tokenizer_encode(&tok, "assistant\n", prompt_tokens + pos, 1024 - pos);
-        if (n <= 0) return 1;
-        pos += n;
+        if (n <= 0) return 1; pos += n;
         prompt_tokens[pos++] = THINK; prompt_tokens[pos++] = NL_TOKEN;
         n_prompt = pos;
     } else {

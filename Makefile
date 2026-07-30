@@ -265,6 +265,9 @@ test_kivi_roundtrip: tools/test_kivi_roundtrip.c src/wubu_kvcache_quant.o
 	$(CC) $(CFLAGS) -o test_kivi_roundtrip $< src/wubu_kvcache_quant.o $(LDFLAGS) -lm
 	./test_kivi_roundtrip
 
+test_kv_bw: tools/test_kv_bw.c src/wubu_kvcache_quant.o
+	$(CC) $(CFLAGS) -o test_kv_bw $< src/wubu_kvcache_quant.o $(LDFLAGS) -lm
+	./test_kv_bw
 
 test_safetensors: tools/test_safetensors.c src/safetensors_reader.o gen_fixture_safetensors
 	$(CC) $(CFLAGS) -o $@ $< src/safetensors_reader.o $(LDFLAGS)
