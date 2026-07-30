@@ -1596,8 +1596,36 @@ void wubu_gqa_forward(const float *x, int B, int T,
     
     // n_q_heads Q heads, n_kv_heads KV heads. Each KV head serves n_q_heads/n_kv_heads Q heads.
     float scale = 1.0f / sqrtf(head_dim);
-    
-    // AVX2 horizontal sum helper (inlined)
+
+    // KB1: FlashDecoding fast-path (doc 015). When N==1 (single-token decode)
+    // and the cache is non-trivial (>=64 positions), and the env opt-in is set,
+    // route through chunked online-softmax decode attention. Mathematically
+    // identical to the serial loop below (verified at 1e-7 maxdiff on the
+    // standalone test_flashdecode oracle), but parallelizes over the KV axis
+    // for long-context speedup.
+    int use_flashdecode = (N == 1) && !use_sparse &&
+                         (getenv("WUBU_FLASHDECODE") != NULL) &&
+                         (cache_len >= 64);
+    if (use_flashdecode) {
+        extern void wubu_flashdecode_all(const float *Q, const float *Kc, const float *Vc,
+                                          int head_dim, int n_q_heads, int n_kv_heads,
+                                          int64_t cache_len, float scale, int chunk,
+                                          float *out);
+        const float *Q_flash = Q_norm;
+        const float *K_flash = (const float *)k_cache;
+        const float *V_flash = (const float *)v_cache;
+        // KV cache layout: kv_cache_read_head's F32 path. Cache must be F32 for
+        // wubu_flashdecode_all. If quantization is enabled this path is skipped.
+        int fd_chunk = getenv("WUBU_FLASHDECODE_CHUNK") ?
+                       atoi(getenv("WUBU_FLASHDECODE_CHUNK")) : 0;
+        wubu_flashdecode_all(Q_flash, K_flash, V_flash,
+                              head_dim, n_q_heads, n_kv_heads,
+                              (int64_t)cache_len, scale, fd_chunk,
+                              attn_out);
+        // Skip the serial attention loop below; jump to gating (Step 6).
+        goto gqa_attn_done;
+    }
+
 #ifdef __AVX2__
     #define HSUM256(v) ({ \
         __m128 vlow  = _mm256_castps256_ps128(v); \
@@ -1767,7 +1795,8 @@ void wubu_gqa_forward(const float *x, int B, int T,
             free(all_attn_w);
         }
     }
-    
+gqa_attn_done:;
+
     // Step 6: Gate (sigmoid)
     // DUMP_GQA_DEBUG_DIR: dump attn_out before gating (raw attention)
     {
