@@ -398,6 +398,54 @@ int main(int argc, char **argv) {
     // Decode loop
     xrng_t rng = { { 0x9E3779B97F4A7C15ULL, 0xD1B54A32D192ED03ULL } };
     if (getenv("SEED")) { uint64_t s = (uint64_t)atoll(getenv("SEED")); rng.s[0] ^= s; rng.s[1] ^= s * 0x9E3779B97F4A7C15ULL; }
+
+    /* KB5: speculative decode (doc 018). When WUBU_SPEC_DECODE=1 is set, route
+     * the decode loop through wubu_generate (n-gram drafter + target verify).
+     * Output is provably identical to plain argmax decode; fewer forward calls. */
+    if (getenv("WUBU_SPEC_DECODE") != NULL) {
+        extern int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
+                                 const void *cfg, int *out);
+        wubu_generate_cfg_t cfg = {0};
+        cfg.max_tokens  = max_tokens;
+        cfg.spec_k      = getenv("WUBU_SPEC_K") ? atoi(getenv("WUBU_SPEC_K")) : 4;
+        cfg.ngram_order = getenv("WUBU_NGRAM_ORDER") ? atoi(getenv("WUBU_NGRAM_ORDER")) : 3;
+        cfg.greedy      = (gen_temp <= 0.0f);
+        cfg.temperature = gen_temp;
+        cfg.seed        = (unsigned)rng.s[0];
+
+        int *spec_out = (int *)malloc((size_t)max_tokens * sizeof(int));
+        if (!spec_out) { fprintf(stderr, "spec alloc failed\n"); return 1; }
+        t0 = clock_seconds();
+        int spec_n = wubu_generate(&mdl, prompt_tokens, n_prompt, &cfg, spec_out);
+        double t_spec = clock_seconds() - t0;
+        generated = spec_n > max_tokens ? max_tokens : spec_n;
+        for (int i = 0; i < generated; i++) {
+            int tok_id = spec_out[i];
+            char *piece = hf_tok ? wubu_tok_hf_decode(hf_tok, &tok_id, 1) : NULL;
+            int n_chars = piece ? (int)strlen(piece) : 0;
+            if (n_chars > 0) fwrite(piece, 1, n_chars, stdout);
+            else printf("<%d>", tok_id);
+            if (piece) free(piece);
+        }
+        fflush(stdout);
+        free(spec_out);
+        double t_decode = t_spec;
+        t_total = t_prefill + t_decode;
+        printf("\n\n--- Stats ---\n");
+        printf("Prefill: %d tok in %.2fs (%.1f tok/s)\n", n_prompt, t_prefill, n_prompt / t_prefill);
+        if (generated > 0 && t_decode > 0)
+            printf("Decode:  %d tok in %.2fs (%.1f tok/s) [spec-k=%d]\n",
+                   generated, t_decode, generated / t_decode, cfg.spec_k);
+        free(logits); free(embd);
+        if (emb_file) fclose(emb_file);
+        if (hf_tok) wubu_tok_hf_free(hf_tok);
+        else        wubu_tokenizer_free(&tok);
+        if (rep) wubu_rep_free(rep);
+        gpu_output_cleanup();
+        wubu_model_free(&mdl);
+        return 0;
+    }
+
     while (generated < max_tokens && !g_stop) {
         // Suppress repetitions (repeat_penalty + DRY) BEFORE sampling.
         if (rep) wubu_rep_apply(rep, last_logits);
