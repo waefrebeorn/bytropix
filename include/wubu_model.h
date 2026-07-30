@@ -336,7 +336,7 @@ static inline void kv_cache_write_head_kivi(void *cache, int64_t offset,
         // Fast path: single token
         int t0 = (int)(offset / hd), p0 = (int)(offset % hd);
         uint8_t *base = (uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
-        int8_t *q = (int8_t *)base;
+        uint8_t *q = base;
         float scale = *(const float *)(base + hd);
         float tmp[512];
         int work_hd = hd > 512 ? 512 : hd;
@@ -351,7 +351,7 @@ static inline void kv_cache_write_head_kivi(void *cache, int64_t offset,
             int token_offset = offset + t * hd;
             int t0 = (int)(token_offset / hd), p0 = (int)(token_offset % hd);
             uint8_t *base = (uint8_t *)cache + (size_t)t0 * (hd + (int)sizeof(float));
-            int8_t *q = (int8_t *)base;
+            uint8_t *q = base;
             float scale = *(const float *)(base + hd);
             float tmp[512];
             int work_hd = hd > 512 ? 512 : hd;
