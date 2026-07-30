@@ -128,6 +128,7 @@ typedef struct {
 void quantize_row_q8_K(const float *x, block_q8_K *y, int64_t k);
 
 // Generic Q8_K-based quantized matmul
+// Optionally activate per-thread SmoothQuant via quantized_matmul_set_smoothquant()
 void quantized_matmul(const float *x,
                       const void *W, int weight_type,
                       int64_t n_rows, int64_t n_cols,
@@ -148,4 +149,4 @@ const uint64_t *gguf_get_iq1s_grid(void);
 }
 #endif
 
-#endif // GGUF_READER_H
+#endif /* GGUF_READER_H */

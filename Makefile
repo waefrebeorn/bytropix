@@ -507,7 +507,7 @@ test_arena: tools/test_arena.c src/wubu_arena.o $(CPU_OBJ)
 
 # doc 005: SmoothQuant activation outlier migration
 test_smoothquant: tools/test_smoothquant.c src/wubu_smoothquant.o $(CPU_OBJ)
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp -lssl -lcrypto
 	./$@
 
 # doc 004: BitNet 1.58 ternary {-1,0,+1} GEMV

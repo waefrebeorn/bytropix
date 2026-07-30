@@ -7,6 +7,11 @@
  *
  * Supports: F32, IQ2_XXS, IQ3_XXS, IQ4_XS, Q5_K, Q6_K
  * Falls back to SGEMM for F32/F16 types.
+ *
+ * Optional SmoothQuant integration (doc 005): if sq != NULL, the caller
+ * has already pre-smoothed weights (W' = W·diag(s)) and is passing them
+ * as W; this function smooths activations x with 1/s before quantizing
+ * to int8, enabling int8×int8 GEMV with outlier migration.
  */
 
 #include <stdint.h>
@@ -54,8 +59,17 @@ static void gemv_scratch_free(void *p, size_t size) {
 
 #include "gguf_reader.h"
 #include "wubu_ssm.h"
+#include "wubu_smoothquant.h"  /* doc 005: SmoothQuant OPTIONAL */
 #include "wubu_gemm.h"
 #include "wubu_gemv_tune.h"
+
+// ========================================================================
+// SmoothQuant thread-local state
+// ========================================================================
+static __thread const wubu_smoothquant_t * g_smoothquant_sq = NULL;
+
+void quantized_matmul_set_smoothquant(const wubu_smoothquant_t *sq) { g_smoothquant_sq = sq; }
+void quantized_matmul_clear_smoothquant(void) { g_smoothquant_sq = NULL; }
 
 // ========================================================================
 // Block sizes (from ggml-common.h)
@@ -148,6 +162,13 @@ void quantized_matmul(const float *x,
     if (weight_type == GGML_TYPE_F32) {
         const float *w = (const float *)W;
         int64_t stride = (col_stride_bytes > 0) ? (col_stride_bytes / 4) : n_rows;
+        /* doc 005 SmoothQuant: smooth activations before quantization, then quantize
+         * both X' and W' (already pre-smoothed by caller) cleanly to int8. */
+        float x_sq[65536];
+        if (g_smoothquant_sq && n_rows <= 65536) {
+            for (int64_t k = 0; k < n_rows; k++) x_sq[k] = x[k] / g_smoothquant_sq->s[k];
+            x = x_sq;
+        }
         /* Roofline-tuned GEMV: int4 (quarter traffic) > int8 (half) > fp32.
          * Precedence from wubu_gemv_autotune(): set when BW-bound + amortized. */
         wubu_gemv_tile_t tile = wubu_gemv_autotune((int)n_cols, (int)n_rows, 0.0);
