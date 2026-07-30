@@ -25,21 +25,35 @@ void wubu_gqa_ensure_f32(gqa_layer_weights *w, int d_model) {
     if (!w || w->lazy_f32_done) return;
     int q_dim = w->q_heads * w->head_dim;
     int kv_dim = w->kv_heads * w->head_dim;
+
+    /* KB6 (doc 013 QuaRot): fixed Hadamard fuse on weight columns
+     * before quantization. One-time O(M·K) cost at materialization;
+     * amortized over all subsequent decode steps. Gated by
+     * WUBU_HADAMARD_FUSE=1. No accuracy impact (H is orthonormal). */
+    int do_rotate = getenv("WUBU_HADAMARD_FUSE") != NULL;
+
     if (w->attn_q_weight_raw && !w->attn_q_weight) {
         w->attn_q_weight = (float *)malloc((size_t)d_model * q_dim * 2 * sizeof(float));
         gqa_dequant_t(w->attn_q_weight_raw, q_dim * 2, d_model, w->lazy_dtype, w->attn_q_weight);
+        if (do_rotate) {
+            wubu_rotate_fuse_right(w->attn_q_weight, q_dim * 2, d_model);
+            wubu_rotate_fuse_right(w->attn_q_weight + d_model, q_dim * 2, d_model);
+        }
     }
     if (w->attn_k_weight_raw && !w->attn_k_weight) {
         w->attn_k_weight = (float *)malloc((size_t)d_model * kv_dim * sizeof(float));
         gqa_dequant_t(w->attn_k_weight_raw, kv_dim, d_model, w->lazy_dtype, w->attn_k_weight);
+        if (do_rotate) wubu_rotate_fuse_right(w->attn_k_weight, kv_dim, d_model);
     }
     if (w->attn_v_weight_raw && !w->attn_v_weight) {
         w->attn_v_weight = (float *)malloc((size_t)d_model * kv_dim * sizeof(float));
         gqa_dequant_t(w->attn_v_weight_raw, kv_dim, d_model, w->lazy_dtype, w->attn_v_weight);
+        if (do_rotate) wubu_rotate_fuse_right(w->attn_v_weight, kv_dim, d_model);
     }
     if (w->attn_output_weight_raw && !w->attn_output_weight) {
         w->attn_output_weight = (float *)malloc((size_t)q_dim * d_model * sizeof(float));
         gqa_dequant_t(w->attn_output_weight_raw, d_model, q_dim, w->lazy_dtype, w->attn_output_weight);
+        if (do_rotate) wubu_rotate_fuse_right(w->attn_output_weight, d_model, q_dim);
     }
     w->lazy_f32_done = 1;
 }
