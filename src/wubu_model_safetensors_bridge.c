@@ -636,8 +636,6 @@ int wubu_model_init_auto(wubu_model_t *m, const char *path) {
     if (is_st) {
         wubu_adapter_t ad; memset(&ad, 0, sizeof(ad));
         int ad_ok = wubu_adapter_load(&ad, path);
-        fprintf(stderr, "[debug] wubu_model_init_auto adapter_load=%d arch=%d ok=%d is_lora=%d base_model=%s\n",
-                ad_ok, ad.arch, ad.ok, ad.is_lora, ad.base_model);
         if (!ad_ok) {
             ad.arch = WUBU_ARCH_QWEN_FAMILY; ad.ok = 1;
         }

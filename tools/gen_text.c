@@ -16,6 +16,7 @@
 #include "wubu_repetition.h"
 #include "wubu_model_safetensors_bridge.h"
 #include "wubu_tokenizer_hf.h"
+#include "wubu_generate.h"  /* KB5: spec decode */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -403,8 +404,6 @@ int main(int argc, char **argv) {
      * the decode loop through wubu_generate (n-gram drafter + target verify).
      * Output is provably identical to plain argmax decode; fewer forward calls. */
     if (getenv("WUBU_SPEC_DECODE") != NULL) {
-        extern int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
-                                 const void *cfg, int *out);
         wubu_generate_cfg_t cfg = {0};
         cfg.max_tokens  = max_tokens;
         cfg.spec_k      = getenv("WUBU_SPEC_K") ? atoi(getenv("WUBU_SPEC_K")) : 4;
@@ -430,7 +429,7 @@ int main(int argc, char **argv) {
         fflush(stdout);
         free(spec_out);
         double t_decode = t_spec;
-        t_total = t_prefill + t_decode;
+        double t_total = t_prefill + t_decode;
         printf("\n\n--- Stats ---\n");
         printf("Prefill: %d tok in %.2fs (%.1f tok/s)\n", n_prompt, t_prefill, n_prompt / t_prefill);
         if (generated > 0 && t_decode > 0)
