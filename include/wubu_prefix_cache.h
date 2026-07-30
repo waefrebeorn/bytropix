@@ -37,9 +37,7 @@ extern "C" {
 
 typedef uint64_t wubu_prefix_hash_t;
 
-/* Forward declaration for paged KV (full definition in wubu_paged_kv.h) */
-typedef struct wubu_paged_kv wubu_paged_kv_t;
-
+/* A single prefix tree node */
 typedef struct wubu_prefix_node {
     wubu_prefix_hash_t hash;
     int parent;              /* index in nodes array, -1 for root */
@@ -71,7 +69,7 @@ void wubu_prefix_cache_free(wubu_prefix_cache_t *cache);
 /* Register a prefix (token sequence) -> returns hash, allocates KV blocks via paged KV */
 wubu_prefix_hash_t wubu_prefix_cache_register(wubu_prefix_cache_t *cache,
                                                const int *token_ids, int n_tokens,
-                                               wubu_paged_kv_t *paged_kv,
+                                               void *paged_kv,
                                                int block_size);
 
 /* Lookup: returns number of matching prefix tokens (0 = no match).
