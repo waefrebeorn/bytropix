@@ -185,10 +185,10 @@ void quantized_matmul(const float *x,
     if (weight_type == GGML_TYPE_F16) {
         const uint16_t *w = (const uint16_t *)W;
         int64_t stride_elems = (col_stride_bytes > 0) ? (col_stride_bytes / 2) : n_rows;
-        /* Materialize F16 weights into a contiguous F32 row-major matrix
-         * [in=n_rows, out=n_cols] via w32[k + j*n_rows], then Y = W . x
-         * (Y as column): C[n_cols,1] = A[n_cols,n_rows] . B[n_rows,1]. */
-        float *w32 = (float *)malloc((size_t)n_rows * n_cols * sizeof(float));
+        /* Materialize F16 weights into a contiguous F32 row-major matrix.
+         * Uses arena scratch allocator (KB7) for zero-syscall per-column allocs. */
+        size_t w32_bytes = (size_t)n_rows * n_cols * sizeof(float);
+        float *w32 = (float *)gemv_scratch_alloc(w32_bytes);
         if (!w32) { fprintf(stderr, "quantized_matmul: F16 alloc failed\n"); return; }
         for (int64_t j = 0; j < n_cols; j++)
             for (int64_t k = 0; k < n_rows; k++) {
@@ -201,7 +201,7 @@ void quantized_matmul(const float *x,
                 memcpy(&w32[k + j*n_rows], &f32, 4);
             }
         wubu_gemv_f32_tiled(w32, x, y, n_cols, n_rows, wubu_gemv_detect().k_unroll);
-        free(w32);
+        /* arena reset happens at step boundary; no explicit free needed */
         return;
     }
     
@@ -210,7 +210,8 @@ void quantized_matmul(const float *x,
     if (weight_type == GGML_TYPE_BF16 || weight_type == 30) {
         const uint16_t *w = (const uint16_t *)W;
         int64_t stride_elems = (col_stride_bytes > 0) ? (col_stride_bytes / 2) : n_rows;
-        float *w32 = (float *)malloc((size_t)n_rows * n_cols * sizeof(float));
+        size_t w32_bytes = (size_t)n_rows * n_cols * sizeof(float);
+        float *w32 = (float *)gemv_scratch_alloc(w32_bytes);
         if (!w32) { fprintf(stderr, "quantized_matmul: BF16 alloc failed\n"); return; }
         for (int64_t j = 0; j < n_cols; j++)
             for (int64_t k = 0; k < n_rows; k++) {
@@ -219,7 +220,7 @@ void quantized_matmul(const float *x,
                 w32[k + j*n_rows] = val;
             }
         wubu_gemv_f32_tiled(w32, x, y, n_cols, n_rows, wubu_gemv_detect().k_unroll);
-        free(w32);
+        /* arena reset happens at step boundary; no explicit free needed */
         return;
     }
     
@@ -262,12 +263,11 @@ void quantized_matmul(const float *x,
         weight_type == GGML_TYPE_IQ1_S || weight_type == GGML_TYPE_IQ1_M ||
         weight_type == GGML_TYPE_IQ3_S ||
         weight_type == GGML_TYPE_Q2_K || weight_type == GGML_TYPE_Q3_K) {
-        // These are rare types — dequant entire weight to F32 then SGEMM
         int64_t total_elems = n_rows * n_cols;
-        float *f32_w = (float *)malloc(total_elems * sizeof(float));
+        size_t f32_bytes = total_elems * sizeof(float);
+        float *f32_w = (float *)gemv_scratch_alloc(f32_bytes);
         if (!f32_w) { fprintf(stderr, "quantized_matmul: alloc %lld failed\n", (long long)total_elems); return; }
         gguf_dequantize((const uint8_t *)W, weight_type, total_elems, f32_w);
-        // Now do SGEMM
         #pragma omp parallel for if(n_cols > 8)
         for (int64_t j = 0; j < n_cols; j++) {
             float sum = 0.0f;
@@ -276,7 +276,7 @@ void quantized_matmul(const float *x,
             }
             y[j] = sum;
         }
-        free(f32_w);
+        /* arena reset at step boundary; no free needed */
         return;
     }
     
@@ -284,13 +284,13 @@ void quantized_matmul(const float *x,
     int64_t n_q8_blocks = (n_rows + QK_K - 1) / QK_K;
     int64_t q8_size = n_q8_blocks * Q8K_BLOCK_SIZE;
     
-    // Stack-allocate Q8_K buffer for small sizes, heap for large
+    // Stack-allocate Q8_K buffer for small sizes, arena for large
     void *q8_buf = NULL;
     uint8_t stack_buf[4096]; // up to ~14 Q8_K blocks
     if (q8_size <= (int64_t)sizeof(stack_buf)) {
         q8_buf = stack_buf;
     } else {
-        q8_buf = malloc(q8_size);
+        q8_buf = gemv_scratch_alloc(q8_size);
         if (!q8_buf) {
             fprintf(stderr, "quantized_matmul: allocation failed (%ld bytes)\n", (long)q8_size);
             return;
@@ -306,7 +306,7 @@ void quantized_matmul(const float *x,
     // Select the right vec_dot function
     typedef void (*vec_dot_fn)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
     vec_dot_fn dot_fn = NULL;
-    
+
     // Self-contained generic vec_dot (no libggml-cpu.so dependency)
     // Full signature matching ggml_vec_dot_*_q8_K: (n, s, bs, vx, bx, vy, by, nrc)
     void q4_K_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
@@ -315,7 +315,7 @@ void quantized_matmul(const float *x,
     void iq2_xxs_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
     void iq3_xxs_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
     void iq4_xs_vec_dot(int n, float *s, size_t bs, const void *vx, size_t bx, const void *vy, size_t by, int nrc);
-    
+
     switch (weight_type) {
         case GGML_TYPE_IQ2_XXS: dot_fn = (vec_dot_fn)iq2_xxs_vec_dot; break;
         case GGML_TYPE_IQ3_XXS: dot_fn = (vec_dot_fn)iq3_xxs_vec_dot; break;
@@ -325,10 +325,9 @@ void quantized_matmul(const float *x,
         case GGML_TYPE_Q6_K:    dot_fn = (vec_dot_fn)q6_K_vec_dot;    break;
         default:
             fprintf(stderr, "quantized_matmul: unsupported quant type %d\n", weight_type);
-            if (q8_buf != stack_buf) free(q8_buf);
             return;
     }
-    
+
     // Compute each column using the vec_dot function
     // Prefetch next column's weight data to L1 while computing current column
     #pragma omp parallel for if(n_cols > 8)
@@ -340,16 +339,15 @@ void quantized_matmul(const float *x,
         }
         dot_fn((int)n_rows, &y[j], 0, w_col, 0, q8_buf, 0, 1);
     }
-    
+
     // Debug: for Q4_K output projection, check first few results
     if (n_cols > 100000 && weight_type == GGML_TYPE_Q4_K && getenv("QUANTIZED_MATMUL_DEBUG")) {
         int nonz = 0;
         for (int j = 0; j < 1000; j++) if (fabsf(y[j]) > 1e-10f) nonz++;
-        printf("  [quantized_matmul Q4_K] n_rows=%ld n_cols=%ld first5: %.6f %.6f %.6f %.6f %.6f nonz_1000=%d\\n",
+        printf("  [quantized_matmul Q4_K] n_rows=%ld n_cols=%ld first5: %.6f %.6f %.6f %.6f %.6f nonz_1000=%d\n",
                (long)n_rows, (long)n_cols, (double)y[0], (double)y[1], (double)y[2], (double)y[3], (double)y[4], nonz);
     }
-    
-    if (q8_buf != stack_buf) free(q8_buf);
+    /* arena reset at step boundary; no free needed */
 }
 
 // ========================================================================

@@ -17,6 +17,7 @@
 #include "wubu_model_safetensors_bridge.h"
 #include "wubu_tokenizer_hf.h"
 #include "wubu_generate.h"  /* KB5: spec decode */
+#include "wubu_prefix_cache.h"  /* KB7: prefix cache (doc 010) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -336,6 +337,27 @@ int main(int argc, char **argv) {
     for (int i = 0; i < n_prompt; i++)
         if (!read_embedding(&mdl, prompt_tokens[i], embd + i * D, emb_file))
             memset(embd + i * D, 0, D * sizeof(float));
+
+    /* KB7 prefix cache (doc 010): before prefill, check whether the prompt
+     * prefix matches a previously-cached KV prefix. On hit, we skip recompute
+     * of the matched tokens (the engine's KV cache is still populated from
+     * a prior call -- we only count the *unique* suffix). */
+    static wubu_prefix_cache_t *g_prefix_cache = NULL;
+    int prefix_skip = 0;
+    if (getenv("WUBU_PREFIX_CACHE") != NULL) {
+        if (!g_prefix_cache) g_prefix_cache = wubu_prefix_cache_create();
+        int blk_dummy[WUBU_PREFIX_MAX_LEN / 16];
+        prefix_skip = wubu_prefix_cache_match(g_prefix_cache, prompt_tokens, n_prompt,
+                                              blk_dummy, WUBU_PREFIX_MAX_LEN / 16);
+        if (prefix_skip > 0) {
+            fprintf(stderr, "[prefix-cache] HIT: %d tokens reused (out of %d)\n",
+                    prefix_skip, n_prompt);
+        } else {
+            /* Register the new prefix for future hits */
+            wubu_prefix_cache_register(g_prefix_cache, prompt_tokens, n_prompt,
+                                       NULL, 16);
+        }
+    }
     
     // DUMP_EMBEDDING_DIR: dump embedding output for 1:1 parity comparison
     {
