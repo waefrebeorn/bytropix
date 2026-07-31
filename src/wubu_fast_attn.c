@@ -213,6 +213,33 @@ void wubu_fast_attn_decode(
 }
 
 /* ------------------------------------------------------------------ */
+/* Singleton accessor — lazily init one context per model config     */
+/* ------------------------------------------------------------------ */
+
+wubu_fast_attn_ctx_t *wubu_fast_attn_get_ctx(
+        int n_q_heads, int n_kv_heads, int head_dim,
+        int n_rot, float freq_base, float scale_factor)
+{
+    static wubu_fast_attn_ctx_t *cached = NULL;
+    static int cached_nq = 0, cached_nkv = 0, cached_hd = 0;
+
+    if (cached && cached_nq == n_q_heads && cached_nkv == n_kv_heads && cached_hd == head_dim)
+        return cached;
+
+    /* Lazy init on first call */
+    if (!cached) {
+        cached = wubu_fast_attn_init(n_q_heads, n_kv_heads, head_dim,
+                                     512 * 1024, n_rot, freq_base, scale_factor);
+        if (cached) {
+            cached_nq = n_q_heads;
+            cached_nkv = n_kv_heads;
+            cached_hd = head_dim;
+        }
+    }
+    return cached;
+}
+
+/* ------------------------------------------------------------------ */
 /* Write K/V to cache (direct pointer, no dispatch abstraction) */
 /* ------------------------------------------------------------------ */
 

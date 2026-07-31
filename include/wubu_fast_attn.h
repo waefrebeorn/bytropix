@@ -95,6 +95,11 @@ void wubu_fast_attn_write_kv(wubu_fast_attn_ctx_t *ctx,
                                   float *k_cache, float *v_cache,
                                   int pos);
 
+/* Singleton accessor — lazily init one context per model config. */
+wubu_fast_attn_ctx_t *wubu_fast_attn_get_ctx(
+        int n_q_heads, int n_kv_heads, int head_dim,
+        int n_rot, float freq_base, float scale_factor);
+
 #ifdef __cplusplus
 }
 #endif

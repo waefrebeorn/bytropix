@@ -5,6 +5,7 @@
 #include "gguf_reader.h"
 #include "thread_pool.h"
 #include "wubu_model.h"  // for kv_cache_read_head / kv_cache_write_head
+#include "wubu_fast_attn.h"  // fast zero-malloc attention kernel
 
 // Global tensor naming convention (defined here for CORE_OBJ visibility)
 // 0 = Qwen-style "blk.N.*", 1 = Gemma-style "model.layers.N.*", 2 = pure GQA
@@ -1603,6 +1604,32 @@ void wubu_gqa_forward(const float *x, int B, int T,
     // identical to the serial loop below (verified at 1e-7 maxdiff on the
     // standalone test_flashdecode oracle), but parallelizes over the KV axis
     // for long-context speedup.
+    // KB1: Fast attention fast-path (wubu_fast_attn).
+    // Zero-malloc, precomputed-RoPE, bandwidth-optimal decode attention.
+    // Default for N==1 decode (no env var required) — the old path does
+    // ~175 malloc/free per layer which is catastrophic at 512K context.
+    int use_fast_attn = (N == 1) && !use_sparse && (cache_len >= 1);
+    if (use_fast_attn) {
+        extern wubu_fast_attn_ctx_t *wubu_fast_attn_get_ctx(int n_q, int n_kv, int hd,
+                                                            int n_rot, float freq_base,
+                                                            float scale_factor);
+        extern void wubu_fast_attn_decode(wubu_fast_attn_ctx_t *ctx,
+                                               const float *q,
+                                               const float *k_cache,
+                                               const float *v_cache,
+                                               int cache_len,
+                                               float *out,
+                                               int n_threads);
+        wubu_fast_attn_ctx_t *fctx = wubu_fast_attn_get_ctx(n_q_heads, n_kv_heads,
+                                                            head_dim, 64, 10000000.0f, 1.0f);
+        if (fctx) {
+            wubu_fast_attn_decode(fctx, Q_norm,
+                                  (const float *)k_cache, (const float *)v_cache,
+                                  cache_len, attn_out, 6);
+            goto gqa_attn_done;
+        }
+    }
+
     int use_flashdecode = (N == 1) && !use_sparse &&
                          (getenv("WUBU_FLASHDECODE") != NULL) &&
                          (cache_len >= 64);
