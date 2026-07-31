@@ -9,12 +9,12 @@ attacks bytes moved.
 ## THEME A — KV-cache compression (memory wall)
 - A01 KV Q8_0 block-32 absmax ............................ `wired` (wubu_kvcache_quant)
 - A02 KIVI K-per-channel / V-per-token ................... `wired`
-- A03 Ecco entropy-aware per-block 2–8bit adaptive ........ `open` → doc 001
-- A04 Predictive multi-tier KV (DRAM/NVMe/CXL/IB, Bayesian reuse) `open` → doc 002
-- A05 Multi-tier dynamic KV offload for edge (MTDS) ........ `open` (subsumed by 002)
-- A06 LMCache/KVBM prefix+PD-disaggregation .............. `open` (prefix reuse → doc 010)
-- A07 NVIDIA priority-based KV eviction (LRU+importance) .. `open` (ties to 002)
-- A08 KV dtype alignment across tiers (fp8/bf16/fp16) .... `open` (ties to 002/003)
+- A03 Ecco entropy-aware per-block 2–8bit adaptive ........ `wired` (wubu_4kv, INT8 skip-head) → doc 001
+- A04 SAW-INT4 KV (Hadamard rot + block INT4) ............. `wired` (wubu_4kv) ← 7-hop K=0.9969, V=0.9965
+- A05 TurboQuant <3-bit KV (INT3 token-wise) .............. `wired` (wubu_4kv, 6.1× compression)
+- A06 Predictive multi-tier KV (DRAM/NVMe/CXL/IB, Bayesian reuse) `open` (CPU-only, skip) → doc 002
+- A07 LMCache/KVBM prefix+PD-disaggregation .............. `open` (prefix reuse → doc 010)
+- A08 NVIDIA priority-based KV eviction (LRU+importance) .. `open` (ties to 002)
 - A09 Attention-sink-free gated attention (kills massive activations) `open` → doc 011
 - A10 RoPE-aware KV prefetch ............................. `open` (ties to 002)
 
