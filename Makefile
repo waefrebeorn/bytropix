@@ -638,6 +638,16 @@ test_lmcache: tools/test_lmcache.c src/wubu_lmcache.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+# doc 001: adaptive KV hot-path integration test
+test_adaptive_hotpath: tools/test_adaptive_hotpath.c src/wubu_kv_adaptive.o src/wubu_kv_runtime.o src/wubu_kv_select.o src/wubu_roofline.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
+# AGI OS integration test — all modules end-to-end
+test_agi_os_integration: tools/test_agi_os_integration.c src/wubu_kv_adaptive.o src/wubu_rope_prefetch.o src/wubu_flash_prefill.o src/wubu_soa.o src/wubu_lmcache.o src/wubu_smt_check.o src/wubu_expert_choice.o src/wubu_chunked_prefill.o src/wubu_mla.o src/wubu_kv_cacheline.o src/wubu_kv_runtime.o src/wubu_kv_select.o src/wubu_roofline.o src/wubu_scheduler.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 # doc 015: FlashDecoding-style parallel KV-load decode attention
 test_flashdecode: tools/test_flashdecode.c src/wubu_flashdecode.o $(CPU_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp

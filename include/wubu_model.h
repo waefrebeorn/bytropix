@@ -105,6 +105,17 @@ typedef struct {
 } block_q8_0_cache;
 #define QK8_CACHE 32
 
+// KB1: Adaptive KV block (doc 001, Ecco). Variable bit-width per block:
+// 2-bit, 4-bit, or 8-bit stored as width_bits + scale + packed bytes.
+// Layout: 16 bytes (width_bits + scale + 14 bytes packed) = same as Q4_0 block.
+typedef struct {
+    uint8_t width_bits;   // 2, 4, or 8
+    uint8_t _pad[3];      // alignment padding
+    float   scale;        // absmax scale
+    uint8_t qs[24];       // packed values (32 × 8-bit max, fewer for 2/4-bit)
+} block_adaptive_cache;
+#define ADAPTIVE_CACHE 32
+
 // KIVI per-token V block: head_dim used at alloc time to size the per-token
 // fp32 scales. Must match the model's attention head_dim (Qwen-class = 128).
 #ifndef KV_KIVI_HEADDIM
@@ -157,6 +168,7 @@ extern void wubu_kv_set_scheme(int);
 static inline void kv_cache_read_head_q4(const void *cache, int64_t offset, float *buf, int n);
 static inline void kv_cache_read_head_q8(const void *cache, int64_t offset, float *buf, int n);
 static inline void kv_cache_read_head_kivi(const void *cache, int64_t offset, float *buf, int n);
+static inline void kv_cache_read_head_adaptive(const void *cache, int64_t offset, float *buf, int n);
 static inline void kv_cache_read_head_f16(const void *cache, int64_t offset, float *buf, int n);
 static inline void kv_cache_read_head_f32(const void *cache, int64_t offset, float *buf, int n);
 
@@ -166,6 +178,7 @@ static inline void kv_cache_read_head(const void *cache, int64_t offset,
         case WUBU_KV_Q4_0: kv_cache_read_head_q4(cache, offset, buf, n); break;
         case WUBU_KV_Q8:   kv_cache_read_head_q8(cache, offset, buf, n); break;
         case WUBU_KV_KIVI: kv_cache_read_head_kivi(cache, offset, buf, n); break;
+        case WUBU_KV_ADAPTIVE: kv_cache_read_head_adaptive(cache, offset, buf, n); break;
         case WUBU_KV_F16:  kv_cache_read_head_f16(cache, offset, buf, n); break;
         default:           kv_cache_read_head_f32(cache, offset, buf, n); break;
     }
@@ -247,6 +260,46 @@ static inline void kv_cache_read_head_f16(const void *cache, int64_t offset,
     for (int i = 0; i < n; i++) buf[i] = fp16_to_fp32(src[i]);
 }
 
+/* KB1: Adaptive KV read (doc 001). Uses wubu_kvq_adaptive_dequant
+ * for per-block variable bit-width dequantization. */
+static inline void kv_cache_read_head_adaptive(const void *cache, int64_t offset,
+                                                  float *buf, int n) {
+    const int block_n = ADAPTIVE_CACHE;
+    int start_block = (int)(offset / block_n);
+    int start_elem = (int)(offset % block_n);
+    const block_adaptive_cache *blocks = (const block_adaptive_cache *)cache;
+    int done = 0;
+    while (done < n) {
+        float tmp[ADAPTIVE_CACHE];
+        const block_adaptive_cache *blk = &blocks[start_block + (start_elem + done) / block_n];
+        /* Dequantize: unpack based on width_bits */
+        int bits = blk->width_bits;
+        float scale = blk->scale;
+        int vals_per_byte = (bits == 2) ? 4 : (bits == 4) ? 2 : 1;
+        for (int i = 0; i < block_n; i++) {
+            int byte_idx = i / vals_per_byte;
+            int pos = i % vals_per_byte;
+            uint8_t raw;
+            if (bits == 2) {
+                raw = (blk->qs[byte_idx] >> (2 * pos)) & 0x3;
+            } else if (bits == 4) {
+                raw = (blk->qs[byte_idx] >> (4 * pos)) & 0xF;
+            } else {
+                raw = blk->qs[byte_idx];
+            }
+            /* Convert to signed: unsigned [0, qmax] → signed [-half, half-1] */
+            int half = (1 << (bits - 1));
+            int sq = (int)raw - half;
+            tmp[i] = (float)sq * scale;
+        }
+        int blk_off = (start_elem + done) % block_n;
+        int to_copy = n - done;
+        if (to_copy > block_n - blk_off) to_copy = block_n - blk_off;
+        for (int i = 0; i < to_copy; i++) buf[done + i] = tmp[blk_off + i];
+        done += to_copy;
+    }
+}
+
 static inline void kv_cache_read_head_f32(const void *cache, int64_t offset,
                                           float *buf, int n) {
     memcpy(buf, (const float *)cache + offset, n * sizeof(float));
@@ -256,6 +309,7 @@ static inline void kv_cache_read_head_f32(const void *cache, int64_t offset,
 static inline void kv_cache_write_head_q4(void *cache, int64_t offset, const float *buf, int n);
 static inline void kv_cache_write_head_q8(void *cache, int64_t offset, const float *buf, int n);
 static inline void kv_cache_write_head_kivi(void *cache, int64_t offset, const float *buf, int n);
+static inline void kv_cache_write_head_adaptive(void *cache, int64_t offset, const float *buf, int n);
 static inline void kv_cache_write_head_f16(void *cache, int64_t offset, const float *buf, int n);
 static inline void kv_cache_write_head_f32(void *cache, int64_t offset, const float *buf, int n);
 static inline void kv_cache_write_head(void *cache, int64_t offset,
@@ -264,6 +318,7 @@ static inline void kv_cache_write_head(void *cache, int64_t offset,
         case WUBU_KV_Q4_0: kv_cache_write_head_q4(cache, offset, buf, n); break;
         case WUBU_KV_Q8:   kv_cache_write_head_q8(cache, offset, buf, n); break;
         case WUBU_KV_KIVI: kv_cache_write_head_kivi(cache, offset, buf, n); break;
+        case WUBU_KV_ADAPTIVE: kv_cache_write_head_adaptive(cache, offset, buf, n); break;
         case WUBU_KV_F16:  kv_cache_write_head_f16(cache, offset, buf, n); break;
         default:           kv_cache_write_head_f32(cache, offset, buf, n); break;
     }
@@ -375,6 +430,126 @@ static inline void kv_cache_write_head_f32(void *cache, int64_t offset,
     memcpy((float *)cache + offset, buf, n * sizeof(float));
 }
 
+/* KB1: Adaptive KV write (doc 001). Uses Ecco entropy-aware bit-width
+ * selection: low-variance blocks → 2-bit, high-variance → 8-bit. */
+static inline void kv_cache_write_head_adaptive(void *cache, int64_t offset,
+                                                 const float *buf, int n) {
+    const int block_n = ADAPTIVE_CACHE;
+    int start_block = (int)(offset / block_n);
+    int start_elem = (int)(offset % block_n);
+    block_adaptive_cache *blocks = (block_adaptive_cache *)cache;
+    int done = 0;
+    while (done < n) {
+        int bn = block_n - ((start_elem + done) % block_n);
+        if (bn > n - done) bn = n - done;
+        int blk_idx = start_block + (start_elem + done) / block_n;
+        int blk_off = (start_elem + done) % block_n;
+
+        if (bn == block_n) {
+            /* Full block: quantize directly */
+            float tmp[block_n];
+            for (int i = 0; i < block_n; i++) tmp[i] = buf[done + i];
+            /* Compute absmax and variance for bit-width selection */
+            float amax = 0.0f, mean = 0.0f;
+            for (int i = 0; i < block_n; i++) {
+                float ax = fabsf(tmp[i]);
+                if (ax > amax) amax = ax;
+                mean += tmp[i];
+            }
+            mean /= (float)block_n;
+            float var = 0.0f;
+            for (int i = 0; i < block_n; i++) {
+                float d = tmp[i] - mean;
+                var += d * d;
+            }
+            var /= (float)block_n;
+            /* Select bit-width: low variance → fewer bits */
+            int bits = (var < 0.01f) ? 2 : (var < 0.1f) ? 4 : 8;
+            int half = (1 << (bits - 1));
+            /* Symmetric signed: [-amax, +amax] → [-half, half-1] */
+            /* scale maps amax to half-1 so the full range is representable */
+            float scale = (amax > 1e-8f) ? amax / (float)(half - 1) : 0.0f;
+            if (scale == 0.0f) scale = 1e-8f;
+            blocks[blk_idx].width_bits = (uint8_t)bits;
+            blocks[blk_idx].scale = scale;
+            /* Pack values — symmetric signed quantization */
+            int vals_per_byte = (bits == 2) ? 4 : (bits == 4) ? 2 : 1;
+            memset(blocks[blk_idx].qs, 0, sizeof(blocks[blk_idx].qs));
+            for (int i = 0; i < block_n; i++) {
+                int q = (int)roundf(tmp[i] / scale);
+                /* Clamp to signed range [-half, half-1] */
+                if (q >= half) q = half - 1;
+                if (q < -half) q = -half;
+                /* Convert to unsigned: [-half, half-1] → [0, qmax] */
+                q += half;
+                int byte_idx = i / vals_per_byte;
+                int pos = i % vals_per_byte;
+                if (bits == 2) {
+                    blocks[blk_idx].qs[byte_idx] |= (uint8_t)(q << (2 * pos));
+                } else if (bits == 4) {
+                    blocks[blk_idx].qs[byte_idx] |= (uint8_t)(q << (4 * pos));
+                } else {
+                    blocks[blk_idx].qs[byte_idx] = (uint8_t)q;
+                }
+            }
+        } else {
+            /* Partial block: read existing, merge, re-quantize */
+            float tmp[block_n];
+            /* Dequantize existing block */
+            const block_adaptive_cache *blk = &blocks[blk_idx];
+            int bits = blk->width_bits;
+            float scale = blk->scale;
+            int vals_per_byte = (bits == 2) ? 4 : (bits == 4) ? 2 : 1;
+            int qmax = (1 << bits) - 1;
+            int half = (1 << (bits - 1));
+            for (int i = 0; i < block_n; i++) {
+                int byte_idx = i / vals_per_byte;
+                int pos = i % vals_per_byte;
+                uint8_t raw;
+                if (bits == 2) raw = (blk->qs[byte_idx] >> (2 * pos)) & 0x3;
+                else if (bits == 4) raw = (blk->qs[byte_idx] >> (4 * pos)) & 0xF;
+                else raw = blk->qs[byte_idx];
+                int sq = (int)raw;
+                if (sq >= half) sq -= (qmax + 1);
+                tmp[i] = (float)sq * scale;
+            }
+            /* Overwrite the new elements */
+            for (int i = 0; i < bn; i++) tmp[blk_off + i] = buf[done + i];
+            /* Re-quantize the whole block */
+            float amax = 0.0f, mean = 0.0f;
+            for (int i = 0; i < block_n; i++) {
+                float ax = fabsf(tmp[i]);
+                if (ax > amax) amax = ax;
+                mean += tmp[i];
+            }
+            mean /= (float)block_n;
+            float var = 0.0f;
+            for (int i = 0; i < block_n; i++) { float d = tmp[i] - mean; var += d * d; }
+            var /= (float)block_n;
+            int new_bits = (var < 0.01f) ? 2 : (var < 0.1f) ? 4 : 8;
+            int nhalf = (1 << (new_bits - 1));
+            /* Symmetric signed: [-amax, +amax] → [-nhalf, nhalf-1] */
+            float new_scale = (amax > 1e-8f) ? amax / (float)(nhalf - 1) : 1e-8f;
+            blocks[blk_idx].width_bits = (uint8_t)new_bits;
+            blocks[blk_idx].scale = new_scale;
+            int nvpb = (new_bits == 2) ? 4 : (new_bits == 4) ? 2 : 1;
+            memset(blocks[blk_idx].qs, 0, sizeof(blocks[blk_idx].qs));
+            for (int i = 0; i < block_n; i++) {
+                int q = (int)roundf(tmp[i] / new_scale);
+                if (q >= nhalf) q = nhalf - 1;
+                if (q < -nhalf) q = -nhalf;
+                q += nhalf;
+                int byte_idx = i / nvpb;
+                int pos = i % nvpb;
+                if (new_bits == 2) blocks[blk_idx].qs[byte_idx] |= (uint8_t)(q << (2 * pos));
+                else if (new_bits == 4) blocks[blk_idx].qs[byte_idx] |= (uint8_t)(q << (4 * pos));
+                else blocks[blk_idx].qs[byte_idx] = (uint8_t)q;
+            }
+        }
+        done += bn;
+    }
+}
+
 // KV cache allocation: returns number of bytes needed for n_elems (runtime dispatch).
 // Uses model's actual head_dim via g_kv_head_dim (set by wubu_kv_autoselect).
 static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
@@ -391,6 +566,10 @@ static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
             int64_t hd = g_kv_head_dim > 0 ? g_kv_head_dim : KV_KIVI_HEADDIM;
             int64_t tokens = (n_elems + hd - 1) / hd;
             return n_elems * (int64_t)sizeof(int8_t) + tokens * (int64_t)sizeof(float);
+        }
+        case WUBU_KV_ADAPTIVE: {
+            int64_t n_blocks = (n_elems + ADAPTIVE_CACHE - 1) / ADAPTIVE_CACHE;
+            return n_blocks * (int64_t)sizeof(block_adaptive_cache);
         }
         case WUBU_KV_F16:
             return n_elems * (int64_t)sizeof(uint16_t);
