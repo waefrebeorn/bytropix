@@ -160,6 +160,20 @@ int main(void) {
     wubu_kernel_shutdown();
     printf("[9] shutdown OK\n");
 
+    /* 10. CPU feature detection */
+    {
+        wubu_cpu_features_t cpu;
+        wubu_cpu_detect(&cpu);
+        printf("[10] CPU: AVX2=%d FMA=%d AVX512=%d cores=%d L1d=%dKB L2=%dKB L3=%dKB mem_bw=%.0fGB/s\n",
+               cpu.has_avx2, cpu.has_fma, cpu.has_avx512, cpu.n_cores,
+               cpu.l1d_kb, cpu.l2_kb, cpu.l3_kb, cpu.mem_bw_gbs);
+        wubu_backend_id_t b = wubu_kernel_auto_select(WUBU_KERN_GEMM);
+        printf("     auto-select GEMM backend: %s\n", wubu_backend_name(b));
+        if (cpu.has_avx2 && cpu.has_fma && b != WUBU_BACKEND_CPU_SIMD) {
+            fprintf(stderr, "  FAIL: should auto-select CPU_SIMD\n"); errors++;
+        }
+    }
+
     printf("=== errors: %d ===\n", errors);
     return errors;
 }

@@ -98,10 +98,10 @@ int    wubu_kernel_init(void);
 void   wubu_kernel_shutdown(void);
 
 /* ---- backend registration ---- */
-int    wubu_kernel_register(wubu_backend_id_t id, const char *name,
+int wubu_kernel_register(wubu_backend_id_t id, const char *name,
                                     wubu_kernel_backend_t *backend);
-int    wubu_kernel_unregister(wubu_backend_id_t id);
-int    wubu_kernel_force_backend(wubu_backend_id_t id);
+int wubu_kernel_unregister(wubu_backend_id_t id);
+int wubu_kernel_force_backend(wubu_backend_id_t id);
 
 /* ---- dispatch query ---- */
 const char *wubu_kernel_active_backend(wubu_kernel_type_t type);
@@ -163,6 +163,23 @@ void wubu_kernel_dequantize_scalar(const int8_t *q, const float *scales,
 #  define WUBU_HAS_BLAS   0
 #endif
 #define WUBU_HAS_CPU  1  /* CPU baseline is always available */
+
+/* ---- CPU feature detection ---- */
+typedef struct {
+    int has_avx2;
+    int has_avx512;
+    int has_fma;
+    int l1d_kb;
+    int l2_kb;
+    int l3_kb;
+    int n_cores;
+    float mem_bw_gbs;
+} wubu_cpu_features_t;
+
+extern const wubu_cpu_features_t wubu_cpu_features;
+
+int wubu_cpu_detect(wubu_cpu_features_t *cpu);
+wubu_backend_id_t wubu_kernel_auto_select(wubu_kernel_type_t type);
 
 /* ---- build flags ---- */
 /* Define these at compile time to select a device backend:

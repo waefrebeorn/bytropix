@@ -36,6 +36,9 @@ static wubu_dequantize_fn g_cpu_dequantize = NULL;
 /* Flag: true if the cpu_b (static) entry is in the list */
 static int g_cpu_b_registered = 0;
 
+/* CPU feature detection result — populated at init */
+static wubu_cpu_features_t g_cpu_feat = {0};
+
 /* ------------------------------------------------------------------ */
 /* CPU baseline implementations                            */
 /* ------------------------------------------------------------------ */
@@ -143,6 +146,18 @@ int wubu_kernel_init(void) {
     g_forced_backend = WUBU_BACKEND_AUTO;
     g_cpu_b_registered = 0;
     g_backends = NULL;
+
+    /* Auto-detect CPU features for Roofline optimization */
+    wubu_cpu_detect(&g_cpu_feat);
+
+    /* If no device backend registered, auto-select based on hardware */
+    if (!g_backends) {
+        wubu_backend_id_t auto_b = wubu_kernel_auto_select(WUBU_KERN_GEMM);
+        if (auto_b != WUBU_BACKEND_SCALAR) {
+            /* register a synthetic scalar+SIMD entry hint */
+            (void)auto_b;  /* placeholder: device backends register real impls */
+        }
+    }
     return 0;
 }
 
@@ -394,4 +409,167 @@ void wubu_kernel_dequantize_scalar(const int8_t *q, const float *scales,
                                           const float *zeros, float *fp32,
                                           int M, int K, int bits) {
     cpu_dequantize(q, scales, zeros, fp32, M, K, bits);
+}
+
+/* ================================================================== */
+/* CPU Feature Detection — Roofline-aware backend selection          */
+/* ================================================================== */
+
+#if defined(__x86_64__) || defined(_M_X64)
+#  include <cpuid.h>
+#endif
+#include <unistd.h>  /* sysconf */
+
+static int detect_avx2(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+    unsigned eax, ebx, ecx, edx;
+    __cpuid(1, eax, ebx, ecx, edx);
+    return (ecx >> 5) & 1;  /* AVX2 bit in ECX */
+#else
+    return 0;
+#endif
+}
+
+static int detect_avx512(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+    unsigned eax, ebx, ecx, edx;
+    __cpuid(7, eax, ebx, ecx, edx);
+    return (ebx >> 16) & 1;  /* AVX512F bit in EBX */
+#else
+    return 0;
+#endif
+}
+
+static int detect_fma(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+    unsigned eax, ebx, ecx, edx;
+    __cpuid(1, eax, ebx, ecx, edx);
+    return (ecx >> 12) & 1;  /* FMA bit in ECX */
+#else
+    return 0;
+#endif
+}
+
+static int detect_n_cores(void) {
+#if defined(_WIN32)
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors;
+#elif defined(__APPLE__)
+    int n = 1;
+    size_t sz = sizeof(n);
+    sysctlbyname("hw.logicalcpu", &n, &sz, NULL, 0);
+    return n;
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 1;
+#endif
+}
+
+static int detect_l1d_kb(void) {
+#if defined(__linux__)
+    FILE *f = fopen("/sys/devices/system/cpu/cpu0/cache/index0/size", "r");
+    if (!f) return 32;  /* conservative default */
+    char buf[64];
+    if (!fgets(buf, sizeof(buf), f)) { fclose(f); return 32; }
+    fclose(f);
+    int val = 0;
+    for (char *p = buf; *p && *p != 'K'; p++) {
+        if (*p >= '0' && *p <= '9') val = val * 10 + (*p - '0');
+    }
+    return val > 0 ? val : 32;
+#else
+    return 32;
+#endif
+}
+
+static int detect_l2_kb(void) {
+#if defined(__linux__)
+    FILE *f = fopen("/sys/devices/system/cpu/cpu0/cache/index1/size", "r");
+    if (!f) return 256;
+    char buf[64];
+    if (!fgets(buf, sizeof(buf), f)) { fclose(f); return 256; }
+    fclose(f);
+    int val = 0;
+    for (char *p = buf; *p && *p != 'K'; p++) {
+        if (*p >= '0' && *p <= '9') val = val * 10 + (*p - '0');
+    }
+    return val > 0 ? val : 256;
+#else
+    return 256;
+#endif
+}
+
+static int detect_l3_kb(void) {
+#if defined(__linux__)
+    FILE *f = fopen("/sys/devices/system/cpu/cpu0/cache/index2/size", "r");
+    if (!f) return 0;  /* 0 means unknown/unified */
+    char buf[64];
+    if (!fgets(buf, sizeof(buf), f)) { fclose(f); return 0; }
+    fclose(f);
+    int val = 0;
+    for (char *p = buf; *p && *p != 'K'; p++) {
+        if (*p >= '0' && *p <= '9') val = val * 10 + (*p - '0');
+    }
+    return val;
+#else
+    return 0;
+#endif
+}
+
+static float estimate_mem_bw_gbs(void) {
+#if defined(__linux__)
+    /* Estimate from /proc/meminfo total RAM and typical DDR5 bandwidth.
+     * For WSL2 substrate: 6P cores, ~13GB RAM, DDR5-4800.
+     * Theoretical peak per channel: 38.4 GB/s.
+     * Single-channel WSL2: ~25 GB/s practical. */
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return 25.0f;
+    char buf[256];
+    long total_kb = 0;
+    while (fgets(buf, sizeof(buf), f)) {
+        if (strncmp(buf, "MemTotal:", 9) == 0) {
+            sscanf(buf + 9, "%ld", &total_kb);
+            break;
+        }
+    }
+    fclose(f);
+    /* Rough model: dual-channel DDR5-4800 = 76.8 GB/s theoretical,
+     * ~50 GB/s practical on WSL2. Scale with RAM to detect if
+     * we're on a bigger machine. */
+    if (total_kb > 32L * 1024 * 1024) return 60.0f;  /* >32GB = big machine */
+    return 50.0f;  /* WSL2 ~13GB, DDR5 */
+#else
+    return 25.0f;
+#endif
+}
+
+const wubu_cpu_features_t wubu_cpu_features = {0};
+
+int wubu_cpu_detect(wubu_cpu_features_t *cpu) {
+    if (!cpu) return -1;
+    cpu->has_avx2    = detect_avx2();
+    cpu->has_avx512  = detect_avx512();
+    cpu->has_fma     = detect_fma();
+    cpu->l1d_kb      = detect_l1d_kb();
+    cpu->l2_kb       = detect_l2_kb();
+    cpu->l3_kb       = detect_l3_kb();
+    cpu->n_cores     = detect_n_cores();
+    cpu->mem_bw_gbs  = estimate_mem_bw_gbs();
+    return 0;
+}
+
+/* Auto-select the best kernel backend based on detected hardware.
+ * Called at init if no device backend has been explicitly registered. */
+wubu_backend_id_t wubu_kernel_auto_select(wubu_kernel_type_t type) {
+    (void)type;
+    wubu_cpu_features_t cpu;
+    wubu_cpu_detect(&cpu);
+
+    /* WSL2-specific tuning: AVX2 is always present on x86_64 WSL2 */
+    if (cpu.has_avx2 && cpu.has_fma) {
+        /* Use AVX2-FMA backend for compute-bound kernels */
+        return WUBU_BACKEND_CPU_SIMD;
+    }
+    return WUBU_BACKEND_SCALAR;
 }
