@@ -19,6 +19,7 @@
 #include "wubu_generate.h"  /* KB5: spec decode */
 #include "wubu_prefix_cache.h"  /* KB7: prefix cache (doc 010) */
 #include "wubu_kernel.h"  /* HW dispatch table */
+#include "wubu_eagle.h"   /* G01: EAGLE speculative decode */
 #include "wubu_smt_check.h"     /* F02: boot-time GEMV verification */
 #include "wubu_lmcache.h"       /* A06: persistent KV cache */
 #include "wubu_kv_adaptive.h"   /* 001: Ecco entropy-aware KV */
@@ -490,13 +491,11 @@ int main(int argc, char **argv) {
         }
         fflush(stdout);
         free(spec_out);
-        double t_decode = t_spec;
-        double t_total = t_prefill + t_decode;
         printf("\n\n--- Stats ---\n");
         printf("Prefill: %d tok in %.2fs (%.1f tok/s)\n", n_prompt, t_prefill, n_prompt / t_prefill);
-        if (generated > 0 && t_decode > 0)
-            printf("Decode:  %d tok in %.2fs (%.1f tok/s) [spec-k=%d]\n",
-                   generated, t_decode, generated / t_decode, cfg.spec_k);
+        if (generated > 0 && t_spec > 0)
+            printf("Decode:  %d tok in %.2fs (%.1f tok/s) [n-gram spec-k=%d]\n",
+                   generated, t_spec, generated / t_spec, cfg.spec_k);
         free(logits); free(embd);
         if (emb_file) fclose(emb_file);
         if (hf_tok) wubu_tok_hf_free(hf_tok);
@@ -507,6 +506,53 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    /* G01: EAGLE self-draft speculative decode.
+     * Uses a truncated model (draft_layers) as a draft model.
+     * Draft model runs ~3x faster than target → if accuracy high,
+     * most draft tokens accepted → up to 3x speedup. */
+    if (getenv("WUBU_EAGLE") != NULL) {
+        wubu_eagle_draft_t draft = {0};
+        int draft_layers = getenv("WUBU_EAGLE_LAYERS")
+                           ? atoi(getenv("WUBU_EAGLE_LAYERS"))
+                           : (mdl.n_layers >= 32 ? mdl.n_layers / 3 : 1);
+        if (wubu_eagle_draft_init(&draft, &mdl, draft_layers) == 0) {
+            t0 = clock_seconds();
+            int *eagle_out = (int *)malloc((size_t)max_tokens * sizeof(int));
+            if (eagle_out) {
+                int eagle_n = wubu_eagle_speculative_decode(&draft, &mdl,
+                                                               prompt_tokens, n_prompt,
+                                                               eagle_out, max_tokens);
+                double t_eagle = clock_seconds() - t0;
+                for (int i = 0; i < eagle_n; i++) {
+                    int tok_id = eagle_out[i];
+                    char *piece = hf_tok ? wubu_tok_hf_decode(hf_tok, &tok_id, 1) : NULL;
+                    int n_chars = piece ? (int)strlen(piece) : 0;
+                    if (n_chars > 0) fwrite(piece, 1, n_chars, stdout);
+                    else printf("<%d>", tok_id);
+                    if (piece) free(piece);
+                }
+                fflush(stdout);
+                printf("\n\n--- Stats ---\n");
+                printf("Prefill: %d tok in %.2fs (%.1f tok/s)\n", n_prompt, t_prefill, n_prompt / t_prefill);
+                if (eagle_n > 0 && t_eagle > 0)
+                    printf("Decode:  %d tok in %.2fs (%.1f tok/s) [eagle-%dlayers]\n",
+                           eagle_n, t_eagle, eagle_n / t_eagle, draft_layers);
+                free(eagle_out);
+                free(logits); free(embd);
+                if (emb_file) fclose(emb_file);
+                if (hf_tok) wubu_tok_hf_free(hf_tok);
+                else        wubu_tokenizer_free(&tok);
+                if (rep) wubu_rep_free(rep);
+                gpu_output_cleanup();
+                wubu_model_free(&mdl);
+                return 0;
+            }
+        } else {
+            fprintf(stderr, "EAGLE init failed, falling back to plain decode\n");
+        }
+    }
+
+    /* Plain decode loop */
     while (generated < max_tokens && !g_stop) {
         // Suppress repetitions (repeat_penalty + DRY) BEFORE sampling.
         if (rep) wubu_rep_apply(rep, last_logits);
