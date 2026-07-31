@@ -28,6 +28,8 @@ static wubu_backend_id_t g_forced_backend = WUBU_BACKEND_AUTO;
 /* CPU baseline function pointers */
 static wubu_gemm_fn      g_cpu_gemm     = NULL;
 static wubu_gemv_fn      g_cpu_gemv     = NULL;
+static wubu_attn_fn      g_cpu_attn     = NULL;
+static wubu_rope_fn      g_cpu_rope     = NULL;
 static wubu_softmax_fn   g_cpu_softmax  = NULL;
 static wubu_rmsnorm_fn   g_cpu_rmsnorm  = NULL;
 static wubu_quantize_fn  g_cpu_quantize = NULL;
@@ -133,12 +135,81 @@ static void cpu_dequantize(const int8_t *q, const float *scales,
     }
 }
 
+/* CPU baseline: causal (masked) attention.
+ * Q/K/V are [M, n_heads, d] (M = tokens, N = n_heads * d, d = head_dim).
+ * out same layout.  Uses -1e30f sentinel (NOT -INFINITY under -ffast-math). */
+static void cpu_attention(const float *Q, const float *K, const float *V,
+                          float *out, int M, int N, int d, int n_heads, float scale) {
+    for (int tok = 0; tok < M; tok++) {
+        for (int h = 0; h < n_heads; h++) {
+            float *scores = (float *)malloc((tok + 1) * sizeof(float));
+            if (!scores) continue;
+            float maxv = -1e30f;
+            const float *q = Q + (size_t)(tok * n_heads + h) * d;
+            for (int j = 0; j <= tok; j++) {
+                const float *k = K + (size_t)(j * n_heads + h) * d;
+                float dot = 0.0f;
+                for (int i = 0; i < d; i++) dot += q[i] * k[i];
+                float s = dot * scale;
+                scores[j] = s;
+                if (s > maxv) maxv = s;
+            }
+            float sum = 0.0f;
+            for (int j = 0; j <= tok; j++) {
+                scores[j] = expf(scores[j] - maxv);
+                sum += scores[j];
+            }
+            if (sum > 0.0f) {
+                for (int j = 0; j <= tok; j++) scores[j] /= sum;
+            } else {
+                float u = 1.0f / (float)(tok + 1);
+                for (int j = 0; j <= tok; j++) scores[j] = u;
+            }
+            float *o = out + (size_t)(tok * n_heads + h) * d;
+            for (int i = 0; i < d; i++) o[i] = 0.0f;
+            for (int j = 0; j <= tok; j++) {
+                float w = scores[j];
+                const float *v = V + (size_t)(j * n_heads + h) * d;
+                for (int i = 0; i < d; i++) o[i] += w * v[i];
+            }
+            free(scores);
+        }
+    }
+}
+
+/* CPU baseline: RoPE (rotary positional embedding).
+ * Standard interleaved layout: rotate pairs within head_dim/2. */
+static void cpu_rope(float *q, float *k, int d, int seq_len,
+                     float theta, int offset) {
+    int half = d / 2;
+    if (half > 64 || half <= 0) return;
+    float inv_freq[64];
+    for (int i = 0; i < half; i++)
+        inv_freq[i] = 1.0f / powf(theta, (float)(2 * i) / (float)d);
+    for (int pos = 0; pos < seq_len; pos++) {
+        int gp = pos + offset;
+        float *qx = q + (size_t)pos * d;
+        float *kx = k + (size_t)pos * d;
+        for (int i = 0; i < half; i++) {
+            float f = (float)gp * inv_freq[i];
+            float c = cosf(f), s = sinf(f);
+            float q0 = qx[i], q1 = qx[half + i];
+            qx[i]       = q0 * c - q1 * s;
+            qx[half+i]  = q0 * s + q1 * c;
+            float k0 = kx[i], k1 = kx[half + i];
+            kx[i]       = k0 * c - k1 * s;
+            kx[half+i]  = k0 * s + k1 * c;
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Backend management                                     */
-/* ------------------------------------------------------------------ */
 int wubu_kernel_init(void) {
     g_cpu_gemm      = cpu_gemm;
     g_cpu_gemv      = cpu_gemv;
+    g_cpu_attn      = cpu_attention;
+    g_cpu_rope      = cpu_rope;
     g_cpu_softmax   = cpu_softmax;
     g_cpu_rmsnorm   = cpu_rmsnorm;
     g_cpu_quantize  = cpu_quantize;
@@ -371,10 +442,33 @@ int wubu_kernel_run(wubu_kernel_type_t type, ...) {
         fn(q, scales, zeros, fp32, M, K, bits);
         break;
     }
-    case WUBU_KERN_ATTN:
-    case WUBU_KERN_ROPE:
-        rc = -3;  /* CPU baseline not yet implemented for these */
+    case WUBU_KERN_ATTN: {
+        wubu_attn_fn fn = (best && best->attn) ? best->attn : g_cpu_attn;
+        if (!fn) { rc = -3; goto done; }
+        const float *Q = va_arg(args, const float *);
+        const float *K = va_arg(args, const float *);
+        const float *V = va_arg(args, const float *);
+        float *out = va_arg(args, float *);
+        int M = va_arg(args, int);
+        int N = va_arg(args, int);
+        int d = va_arg(args, int);
+        int n_heads = va_arg(args, int);
+        double scale = va_arg(args, double);
+        fn(Q, K, V, out, M, N, d, n_heads, (float)scale);
         break;
+    }
+    case WUBU_KERN_ROPE: {
+        wubu_rope_fn fn = (best && best->rope) ? best->rope : g_cpu_rope;
+        if (!fn) { rc = -3; goto done; }
+        float *q = va_arg(args, float *);
+        float *k = va_arg(args, float *);
+        int d = va_arg(args, int);
+        int seq_len = va_arg(args, int);
+        double theta = va_arg(args, double);
+        int offset = va_arg(args, int);
+        fn(q, k, d, seq_len, (float)theta, offset);
+        break;
+    }
     default:
         rc = -1;
         break;
@@ -409,6 +503,15 @@ void wubu_kernel_dequantize_scalar(const int8_t *q, const float *scales,
                                           const float *zeros, float *fp32,
                                           int M, int K, int bits) {
     cpu_dequantize(q, scales, zeros, fp32, M, K, bits);
+}
+void wubu_kernel_attention_scalar(const float *Q, const float *K, const float *V,
+                                           float *out, int M, int N, int d, int n_heads,
+                                           float scale) {
+    cpu_attention(Q, K, V, out, M, N, d, n_heads, scale);
+}
+void wubu_kernel_rope_scalar(float *q, float *k, int d, int seq_len,
+                                    float theta, int offset) {
+    cpu_rope(q, k, d, seq_len, theta, offset);
 }
 
 /* ================================================================== */

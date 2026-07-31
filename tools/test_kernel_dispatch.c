@@ -176,6 +176,49 @@ int main(void) {
         }
     }
 
+    /* Re-init for kernel dispatch tests (shutdown null'd the cpu fptrs) */
+    wubu_kernel_init();
+
+    /* 11. Attention (dispatch + scalar correctness) */
+    {
+        int M = 2, n_heads = 2, d = 4;
+        int N = n_heads * d;
+        float Q[32], K[32], V[32], out[32], ref[32];
+        for (int i = 0; i < 32; i++) {
+            Q[i] = (float)(i % 7 - 3) * 0.2f;
+            K[i] = (float)(i % 5 - 2) * 0.3f;
+            V[i] = (float)(i % 4 - 1) * 0.1f;
+        }
+        int rc = wubu_kernel_run(WUBU_KERN_ATTN, Q, K, V, out, M, N, d, n_heads, 1.0f);
+        printf("[11] ATTN dispatch rc=%d %s\n", rc, rc == 0 ? "PASS" : "FAIL");
+        if (rc != 0) errors++;
+        /* Verify dispatch == scalar baseline */
+        wubu_kernel_attention_scalar(Q, K, V, ref, M, N, d, n_heads, 1.0f);
+        float md = max_diff(out, ref, M * N);
+        printf("     ATTN dispatch==scalar max_diff=%.8e %s\n", (double)md, md < EPS ? "PASS" : "FAIL");
+        if (md > EPS) errors++;
+    }
+
+    /* 12. RoPE (dispatch + scalar correctness) */
+    {
+        int d = 8, seq = 3;
+        float q[24], k[24], q2[24], k2[24];
+        for (int i = 0; i < 24; i++) {
+            q[i] = (float)(i % 5 - 2) * 0.3f;
+            k[i] = (float)(i % 4 - 1) * 0.2f;
+        }
+        memcpy(q2, q, sizeof(q)); memcpy(k2, k, sizeof(k));
+        int rc = wubu_kernel_run(WUBU_KERN_ROPE, q, k, d, seq, 10000.0, 0);
+        printf("[12] ROPE dispatch rc=%d %s\n", rc, rc == 0 ? "PASS" : "FAIL");
+        if (rc != 0) errors++;
+        /* Verify dispatch == scalar baseline */
+        /* q2/k2 still hold originals from line 210 copy */
+        wubu_kernel_rope_scalar(q2, k2, d, seq, 10000.0f, 0);
+        float md = max_diff(q, q2, 24) + max_diff(k, k2, 24);
+        printf("     ROPE dispatch==scalar max_diff=%.8e %s\n", (double)md, md < EPS ? "PASS" : "FAIL");
+        if (md > EPS) errors++;
+    }
+
     printf("=== errors: %d ===\n", errors);
     return errors;
 }

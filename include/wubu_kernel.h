@@ -64,7 +64,7 @@ typedef void (*wubu_dequantize_fn)(const int8_t *q, const float *scales,
                                          const float *zeros, float *fp32,
                                          int M, int K, int bits);
 typedef void (*wubu_attn_fn)(const float *Q, const float *K, const float *V,
-                                   float *out, int M, int N, int d, float scale);
+                                   float *out, int M, int N, int d, int n_heads, float scale);
 typedef void (*wubu_rope_fn)(float *q, float *k, int d, int seq_len,
                                    float theta, int offset);
 
@@ -128,6 +128,10 @@ void wubu_kernel_gemm_scalar(const float *A, const float *B, float *C,
 void wubu_kernel_gemv_scalar(const float *A, const float *x, float *y,
                                     int M, int K);
 void wubu_kernel_softmax_scalar(float *logits, int M, int N);
+void wubu_kernel_attention_scalar(const float *Q, const float *K, const float *V,
+                                           float *out, int M, int N, int d, int n_heads, float scale);
+void wubu_kernel_rope_scalar(float *q, float *k, int d, int seq_len,
+                                    float theta, int offset);
 void wubu_kernel_rmsnorm_scalar(float *x, const float *gamma,
                                        const float *beta, int M, int d, float eps);
 void wubu_kernel_quantize_scalar(const float *fp32, int8_t *q,
