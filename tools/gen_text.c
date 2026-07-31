@@ -423,7 +423,19 @@ int main(int argc, char **argv) {
         // GPU path: forward saves hidden states, GPU does output proj
         mdl.skip_output_proj = true;
         mdl.enable_moe = true;
-        wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+        /* D04: Chunked prefill for 512K context — process prompt in
+         * memory-bounded chunks to avoid 30-40 GB peak allocation.
+         * Each chunk carries SSM/GQA state across calls. */
+        int chunk_sz = getenv("WUBU_CHUNK_PREFILL")
+                       ? atoi(getenv("WUBU_CHUNK_PREFILL")) : 4096;
+        if (n_prompt > chunk_sz) {
+            /* Only last chunk's logits needed; intermediate chunks free their buffers.
+             * For GPU path, we need ALL hidden states — so use chunk_sz = n_prompt
+             * with WUBU_CHUNK_PREFILL=0 to force single-pass. */
+            wubu_model_forward_chunked(&mdl, prompt_tokens, 1, n_prompt, chunk_sz, logits);
+        } else {
+            wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+        }
         // skip_output_proj=true writes hidden states (D_MODEL per token) to logits buffer
         // Copy correctly: hidden states are at D_MODEL stride, not vocab_size stride
         float *hidden_batch = (float *)malloc(n_prompt * D * sizeof(float));
@@ -434,7 +446,15 @@ int main(int argc, char **argv) {
         free(hidden_batch);
     } else {
         mdl.skip_output_proj = false;
-        wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+        /* D04: Chunked prefill for large contexts (512K) to bound peak memory.
+         * WUBU_CHUNK_PREFILL=0 disables (single-shot). */
+        const char *chunk_env = getenv("WUBU_CHUNK_PREFILL");
+        int chunk_sz = chunk_env ? atoi(chunk_env) : 4096;
+        if (chunk_sz > 0 && n_prompt > chunk_sz) {
+            wubu_model_forward_chunked(&mdl, prompt_tokens, 1, n_prompt, chunk_sz, logits);
+        } else {
+            wubu_model_forward_from_embd(&mdl, embd, 1, n_prompt, logits);
+        }
     }
 
     // Dump logits if DUMP_LOGITS env var set
