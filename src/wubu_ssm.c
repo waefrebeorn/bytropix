@@ -136,6 +136,27 @@ static void proj_matmul(const float *x, int64_t n_rows, int64_t n_cols,
                          const float *W_f32, const uint8_t *W_q, int weight_type,
                          float *out) {
     if (W_q && weight_type != GGML_TYPE_F32 && n_cols > 0) {
+        /* A:03 — GPU-quantized matmul. At runtime, if CUDA backend is active
+         * and g_use_gpu_backend flag is set, route quantized matmul through
+         * GPU kernels with persistent weight cache. Falls back to CPU
+         * quantized_matmul if GPU unavailable or unsupported quant type.
+         * Uses runtime dispatch (not #ifdef) so wubu_ssm.o is shared
+         * between CPU and GPU builds. */
+        extern int g_use_gpu_backend;
+        /* proj_matmul_gpu is defined in wubu_gpu_weight_cache.cu (GPU build only).
+         * For CPU-only builds, g_use_gpu_backend is always 0, so this is
+         * never called — but we still need the symbol to resolve at link time. */
+        extern int proj_matmul_gpu(const float *x, const uint8_t *W_q,
+                                   int quant_type, int n_rows, int n_cols,
+                                   float *out);
+        if (g_use_gpu_backend && proj_matmul_gpu(x, W_q, weight_type,
+                (int)n_rows, (int)n_cols, out)) {
+            return; /* GPU path succeeded */
+        }
+        if (getenv("WUBU_DEBUG") && g_use_gpu_backend) {
+            fprintf(stderr, "[gpu] proj_matmul_gpu FAILED (qt=%d rows=%ld cols=%ld) falling back to CPU\n", weight_type, n_rows, n_cols);
+            fflush(stderr);
+        }
         quantized_matmul(x, W_q, weight_type, n_rows, n_cols, 0, out);
     } else if (W_f32 && n_cols > 0) {
         /* F32 path: dispatch through kernel table (CUDA if available,

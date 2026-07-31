@@ -27,8 +27,8 @@ api_server: tools/api_server.c
 # Object files
 CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ssm.o src/wubu_ssm_workspace.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o src/wubu_gemm.o src/wubu_kvcache_quant.o src/wubu_ssm_scan.o src/wubu_roofline.o src/wubu_kv_select.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o src/wubu_prefix_cache.o src/wubu_paged_kv.o src/wubu_q4k_m.o src/wubu_delta_net.o src/wubu_scheduler.o src/wubu_ngram.o src/wubu_self_cascade.o src/wubu_spec_cascade.o src/wubu_spawn.o src/wubu_kv_styx.o src/wubu_kv_tier.o src/wubu_attn_gate.o src/wubu_layer_skip.o src/wubu_kv_adaptive.o src/wubu_awq.o src/wubu_gptq.o src/wubu_soa.o src/wubu_flash_prefill.o src/wubu_kv_cacheline.o src/wubu_rope_prefetch.o src/wubu_numerical_audit.o src/wubu_mla.o src/wubu_expert_choice.o src/wubu_chunked_prefill.o src/wubu_smt_check.o src/wubu_lmcache.o src/wubu_kernel.o src/wubu_kernel_backends.o src/wubu_fast_attn.o src/wubu_4kv.o src/wubu_polarquant.o src/wubu_eagle.o
 MODEL_OBJ = $(CORE_OBJ)
-CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o src/flash_attn_q4_0_opt.o src/flash_attn_q4_0_prefill_opt.o
-GPU_OBJ = src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o
+CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o src/flash_attn_q4_0_opt.o src/flash_attn_q4_0_prefill_opt.o src/wubu_kernel_cuda.o
+GPU_OBJ = src/wubu_model_gpu.o src/wubu_gpu_weight_cache.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o
 RSGD_OBJ = src/rsgd.o
 
 # New Colonel-model support (safetensors + LoRA + repetition + adapter)
@@ -179,6 +179,9 @@ src/gpu_output_proj.o: src/gpu_output_proj.cu include/gpu_output_proj.h
 	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_model_gpu.o: src/wubu_model_gpu.cu include/wubu_model.h include/cuda_kernels.h include/bench.h
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
+
+src/wubu_gpu_weight_cache.o: src/wubu_gpu_weight_cache.cu include/wubu_kernel.h include/gguf_reader.h
 	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gpu_quant_matmul.o: src/gpu_quant_matmul.cu include/gpu_quant_matmul.h include/gguf_reader.h
@@ -750,11 +753,18 @@ test_probe_qwen_asan: tools/test_probe_qwen.c $(MODEL_OBJ) src/wubu_tokenizer.o
 gen_text_mtp: tools/gen_text_mtp.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $(filter %.c %.o,$^) $(LDFLAGS)
 
-gen_text_gpu: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(CUDA_OBJ) $(GPU_OBJ_NODUP)
-	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(CUDA_OBJ) $(GPU_OBJ_NODUP) $(LDFLAGS) -L$(CUDA_LIBDIR) -lcublas -lcudart
+# GPU-enabled kernel_backends (recompiled with WUBU_ENABLE_CUDA so the
+# CUDA backend probe+register actually runs).
+src/wubu_kernel_backends_gpu.o: src/wubu_kernel_backends.c
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
+
+# gen_text_gpu: link CORE_OBJ but replace wubu_kernel_backends.o with GPU version
+# that has CUDA probe enabled. Also adds CUDA kernels + GPU weight cache.
+gen_text_gpu: tools/gen_text.c $(filter-out src/wubu_kernel_backends.o,$(CORE_OBJ)) src/wubu_kernel_backends_gpu.o src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(CUDA_OBJ) $(GPU_OBJ_NODUP)
+	$(CXX) $(CFLAGS) -DGPU_SUPPORT -DWUBU_ENABLE_CUDA -o $@ tools/gen_text.c $(filter-out src/wubu_kernel_backends.o,$(CORE_OBJ)) src/wubu_kernel_backends_gpu.o src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(CUDA_OBJ) $(GPU_OBJ_NODUP) $(LDFLAGS) -L$(CUDA_LIBDIR) -lcublas -lcudart
 
 # GPU_OBJ without files already in CORE_OBJ (avoids duplicate symbol errors)
-GPU_OBJ_NODUP = src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o
+GPU_OBJ_NODUP = src/wubu_model_gpu.o src/wubu_gpu_weight_cache.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o
 
 test_tok_debug: tools/test_tok_debug.c src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

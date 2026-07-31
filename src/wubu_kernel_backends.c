@@ -14,6 +14,7 @@
  * Set: LD_LIBRARY_PATH=/usr/lib/wsl/lib
  */
 #include "wubu_kernel.h"
+#include <stdio.h>
 
 /* CUDA backend probe + register (compiled in wubu_kernel_cuda.cu).
  * We declare them as weak here so non-CUDA test builds link without
@@ -23,9 +24,18 @@ __attribute__((weak)) int wubu_cuda_backend_probe(void) { return 0; }
 __attribute__((weak)) int wubu_cuda_backend_register(void) { return -1; }
 
 /* g_use_gpu_backend: flag for proj_matmul in wubu_ssm.c.
- * Set to 1 when CUDA is detected, enabling GPU-quantized matmul path.
- * Weights are uploaded once at model init (wubu_model_gpu_init), not per-token. */
+ * Set to 1 when CUDA is detected, enabling GPU-quantized proj_matmul path. */
 int g_use_gpu_backend = 0;
+
+/* A:03 — CPU stub for proj_matmul_gpu. Returns 0 (CPU fallback).
+ * In GPU builds, wubu_gpu_weight_cache.cu provides the real implementation
+ * (strong symbol overrides this weak stub). */
+__attribute__((weak))
+int proj_matmul_gpu(const float *x, const uint8_t *W_q, int quant_type,
+                    int n_rows, int n_cols, float *out) {
+    (void)x; (void)W_q; (void)quant_type; (void)n_rows; (void)n_cols; (void)out;
+    return 0; /* CPU fallback */
+}
 
 /* Device backend supports query: which kernel types does it handle? */
 static int default_supports(wubu_kernel_type_t type) {
@@ -37,9 +47,12 @@ static int default_supports(wubu_kernel_type_t type) {
  * at runtime. Called from wubu_kernel_init(). */
 void wubu_kernel_register_backends(void) {
 #if WUBU_HAS_CUDA
-    if (wubu_cuda_backend_probe()) {
+    int probed = wubu_cuda_backend_probe();
+    fprintf(stderr, "[cuda] probe returned %d\n", probed);
+    if (probed) {
         wubu_cuda_backend_register();
-        g_use_gpu_backend = 1;  /* A:02: enable GPU-quantized proj_matmul */
+        g_use_gpu_backend = 1;
+        fprintf(stderr, "[cuda] backend registered, g_use_gpu_backend=%d\n", g_use_gpu_backend);
     }
 #endif
 

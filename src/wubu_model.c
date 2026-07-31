@@ -580,9 +580,25 @@ int max_s = 1;
                 t = gguf_find_tensor(ctx, name);
                 if (t && blob) { layer->ssm.ssm_out_weight_q = blob + t->data_offset; layer->ssm.ssm_out_weight_type = t->ggml_type; }
             } else {
+                /* GQA: try separate Q/K/V first, then fused QKV */
                 snprintf(name, sizeof(name), "blk.%d.attn_q.weight", l);
                 t = gguf_find_tensor(ctx, name);
-                if (t && blob) { layer->gqa.attn_q_weight_q = blob + t->data_offset; layer->gqa.attn_q_weight_type = t->ggml_type; }
+                if (t && blob) {
+                    layer->gqa.attn_q_weight_q = blob + t->data_offset;
+                    layer->gqa.attn_q_weight_type = t->ggml_type;
+                } else {
+                    /* Fallback: Qwen3.6-style fused QKV: attn_q.weight ==
+                     * attn_qkv.weight — the tensor contains Q|K|V concatenated.
+                     * We store the pointer; proj_matmul adjusts row stride. */
+                    snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", l);
+                    t = gguf_find_tensor(ctx, name);
+                    if (t && blob) {
+                        layer->gqa.attn_q_weight_q = blob + t->data_offset;
+                        layer->gqa.attn_q_weight_type = t->ggml_type;
+                        layer->gqa.attn_q_weight_raw = layer->gqa.attn_q_weight_q;
+                        layer->gqa.is_large = 1; /* fused QKV marker */
+                    }
+                }
                 snprintf(name, sizeof(name), "blk.%d.attn_k.weight", l);
                 t = gguf_find_tensor(ctx, name);
                 if (t && blob) { layer->gqa.attn_k_weight_q = blob + t->data_offset; layer->gqa.attn_k_weight_type = t->ggml_type; }
