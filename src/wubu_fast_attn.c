@@ -32,8 +32,14 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #  include <immintrin.h>
-#  define WUBU_HAVE_AVX2 1
+#define WUBU_HAVE_AVX2 1
 #endif
+
+/* Q8_0 block layout: { float d; int8_t qs[32]; } = 36 bytes per 32 elements */
+typedef struct {
+    float d;
+    int8_t qs[32];
+} __attribute__((packed)) wubu_q8_block;
 
 /* Tiling configuration — tuned for L1/L2 cache on WSL2 (6P, ~13GB).
  * TILE_Q=16 rows of Q per tile fits in L2 with space for K/V streaming.
@@ -212,7 +218,125 @@ void wubu_fast_attn_decode(
     }
 }
 
-/* ------------------------------------------------------------------ */
+/* L3-tiled Q8 decode — online softmax with cross-tile merge */
+void wubu_fast_attn_decode_q8_tiled(
+        wubu_fast_attn_ctx_t *ctx,
+        const float *q,
+        const void *k_cache_q8,
+        const void *v_cache_q8,
+        int cache_len,
+        float *out,
+        int n_threads,
+        int tile_tokens)
+{
+    if (cache_len <= 0) { memset(out, 0, (size_t)ctx->n_q_heads * ctx->head_dim * sizeof(float)); return; }
+    int n_q = ctx->n_q_heads, n_kv = ctx->n_kv_heads;
+    int hd = ctx->head_dim, group_sz = ctx->kv_group_size;
+    float scale = 1.0f / sqrtf((float)hd);
+    int blocks_per_head = (hd + 31) / 32;
+    int kv_head_bytes = blocks_per_head * (int)sizeof(wubu_q8_block);
+
+    if (tile_tokens <= 0) {
+        int l3_kb = 16384;
+        FILE *f = fopen("/sys/devices/system/cpu/cpu0/cache/index3/size", "r");
+        if (f) { char buf[64]; if (fgets(buf,sizeof(buf),f)) { int v=0; for(char*p=buf;*p&&*p!='K';p++) if(*p>='0'&&*p<='9') v=v*10+(*p-'0'); if(v>0) l3_kb=v; } fclose(f); }
+        size_t usable = (size_t)l3_kb * 1024 * 80 / 100;
+        size_t bytes_per_token = (size_t)n_kv * kv_head_bytes * 2;
+        tile_tokens = (int)(usable / bytes_per_token);
+        if (tile_tokens < 1) tile_tokens = cache_len;
+    }
+    if (tile_tokens > cache_len) tile_tokens = cache_len;
+
+    float *out_acc = (float *)alloca((size_t)n_q * hd * sizeof(float));
+    memset(out_acc, 0, (size_t)n_q * hd * sizeof(float));
+    float *tile_acc = (float *)alloca((size_t)n_q * hd * sizeof(float));
+    float global_max = -INFINITY, global_sum = 0.0f;
+
+    for (int tile_start = 0; tile_start < cache_len; tile_start += tile_tokens) {
+        int tile_end = tile_start + tile_tokens;
+        if (tile_end > cache_len) tile_end = cache_len;
+
+        float tile_max = -INFINITY, tile_sum = 0.0f;
+        memset(tile_acc, 0, (size_t)n_q * hd * sizeof(float));
+
+        for (int t = tile_start; t < tile_end; t++) {
+            if (t + 16 < cache_len) {
+                __builtin_prefetch((const char *)k_cache_q8 + (size_t)(t+16)*n_kv*kv_head_bytes, 0, 3);
+                __builtin_prefetch((const char *)v_cache_q8 + (size_t)(t+16)*n_kv*kv_head_bytes, 0, 3);
+            }
+            for (int qh = 0; qh < n_q; qh++) {
+                int g = qh / group_sz;
+                const wubu_q8_block *k_head = (const wubu_q8_block *)
+                    ((const char *)k_cache_q8 + (size_t)t*n_kv*kv_head_bytes + g*kv_head_bytes);
+                const wubu_q8_block *v_head = (const wubu_q8_block *)
+                    ((const char *)v_cache_q8 + (size_t)t*n_kv*kv_head_bytes + g*kv_head_bytes);
+                const float *q_h = q + (size_t)qh * hd;
+                float dot = 0.0f;
+                for (int b = 0; b < blocks_per_head; b++) {
+                    float d = k_head[b].d;
+#if defined(WUBU_HAVE_AVX2)
+                    __m256i qs8 = _mm256_loadu_si256((const __m256i *)k_head[b].qs);
+                    __m256 fv = _mm256_set1_ps(d);
+                    __m256i ext = _mm256_cvtepi8_epi32(_mm256_castsi256_si128(qs8));
+                    __m256 fq = _mm256_mul_ps(_mm256_cvtepi32_ps(ext), fv);
+                    __m256 qv = _mm256_loadu_ps(q_h + b*32);
+                    __m256 acc = _mm256_mul_ps(qv, fq);
+                    float tmp[8]; _mm256_storeu_ps(tmp, acc);
+                    for (int i=0;i<8;i++) dot += tmp[i];
+#else
+                    for (int i=0;i<32&&b*32+i<hd;i++) dot += q_h[b*32+i]*d*(float)k_head[b].qs[i];
+#endif
+                }
+                float s = dot * scale;
+                if (s > tile_max) {
+                    float f = (tile_max > -INFINITY) ? expf(tile_max - s) : 0.0f;
+                    tile_sum *= f;
+                    for (int i=0;i<n_q*hd;i++) tile_acc[i] *= f;
+                    tile_max = s;
+                }
+                float ew = expf(s - tile_max);
+                tile_sum += ew;
+                float *tacc = tile_acc + (size_t)qh * hd;
+                for (int b = 0; b < blocks_per_head; b++) {
+                    float ewd = ew * v_head[b].d;
+#if defined(WUBU_HAVE_AVX2)
+                    __m256i qs8 = _mm256_loadu_si256((const __m256i *)v_head[b].qs);
+                    __m256i ext = _mm256_cvtepi8_epi32(_mm256_castsi256_si128(qs8));
+                    __m256 fv = _mm256_cvtepi32_ps(ext);
+                    __m256 we = _mm256_set1_ps(ewd);
+                    __m256 prod = _mm256_mul_ps(we, fv);
+                    __m256 ov = _mm256_loadu_ps(tacc + b*32);
+                    _mm256_storeu_ps(tacc + b*32, _mm256_add_ps(ov, prod));
+#else
+                    for (int i=0;i<32&&b*32+i<hd;i++) tacc[b*32+i] += ewd*(float)v_head[b].qs[i];
+#endif
+                }
+            }
+        }
+
+        /* Cross-tile merge */
+        if (global_max == -INFINITY) {
+            global_max = tile_max; global_sum = tile_sum;
+            memcpy(out_acc, tile_acc, (size_t)n_q*hd*sizeof(float));
+        } else if (tile_max > global_max) {
+            float rescale = expf(global_max - tile_max);
+            for (int i=0;i<n_q*hd;i++) out_acc[i] *= rescale;
+            global_sum = global_sum * rescale + tile_sum;
+            global_max = tile_max;
+            for (int i=0;i<n_q*hd;i++) out_acc[i] += tile_acc[i];
+        } else {
+            float rescale = expf(tile_max - global_max);
+            for (int i=0;i<n_q*hd;i++) out_acc[i] += tile_acc[i] * rescale;
+            global_sum += tile_sum * rescale;
+        }
+    }
+
+    float inv = 1.0f / global_sum;
+    for (int qh = 0; qh < n_q; qh++) {
+        float *oh = out + (size_t)qh * hd;
+        for (int d = 0; d < hd; d++) oh[d] = out_acc[qh*hd + d] * inv;
+    }
+}
 /* Singleton accessor — lazily init one context per model config     */
 /* ------------------------------------------------------------------ */
 
@@ -263,11 +387,6 @@ void wubu_fast_attn_write_kv(
  * At 512K context, F32 KV reads 858ms/token. Q8 KV reads 215ms/token.
  * This function fuses dequant + dot product + softmax + V accumulation
  * in a single sequential pass over the Q8 KV cache. */
-
-typedef struct {
-    float d;
-    int8_t qs[32];
-} __attribute__((packed)) wubu_q8_block;
 
 void wubu_fast_attn_decode_q8(
         wubu_fast_attn_ctx_t *ctx,

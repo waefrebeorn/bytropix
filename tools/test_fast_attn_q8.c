@@ -13,29 +13,22 @@ static double now_ms(void) {
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
 }
 
-static void quantize_row_q8(const float *src, q8_block *dst, int n) {
-    int n_blocks = (n + 31) / 32;
-    for (int b = 0; b < n_blocks; b++) {
+static void quant_row_q8(const float *src, q8_block *dst, int n) {
+    int nb = (n + 31) / 32;
+    for (int b = 0; b < nb; b++) {
         int off = b * 32;
         int cnt = (off + 32 <= n) ? 32 : (n - off);
         float amax = 0.0f;
         for (int i = 0; i < cnt; i++) { float a = fabsf(src[off+i]); if (a > amax) amax = a; }
-        float scale = (amax > 1e-8f) ? amax / 127.0f : 1e-8f;
-        dst[b].d = scale;
+        float sc = (amax > 1e-8f) ? amax / 127.0f : 1e-8f;
+        dst[b].d = sc;
         for (int i = 0; i < cnt; i++) {
-            int v = (int)roundf(src[off+i] / scale);
-            if (v > 127) v = 127; if (v < -128) v = -128;
+            int v = (int)roundf(src[off+i] / sc);
+            if (v > 127) v = 127;
+            if (v < -128) v = -128;
             dst[b].qs[i] = (int8_t)v;
         }
         for (int i = cnt; i < 32; i++) dst[b].qs[i] = 0;
-    }
-}
-
-static void dequant_row_q8(const q8_block *src, float *dst, int n) {
-    int n_blocks = (n + 31) / 32;
-    for (int b = 0; b < n_blocks; b++) {
-        for (int i = 0; i < 32 && b*32+i < n; i++)
-            dst[b*32+i] = src[b].d * (float)src[b].qs[i];
     }
 }
 
@@ -45,88 +38,75 @@ int main(void) {
             n_q, n_kv, hd, 512*1024, n_rot, 10000000.0f, 0.25f);
     if (!ctx) { fprintf(stderr, "init failed\n"); return 1; }
 
-    int blocks_per_head = (hd + 31) / 32;
-    int kv_head_bytes = blocks_per_head * (int)sizeof(q8_block);
-
-    int ctx_sizes[] = {4096, 16384, 65536, 262144};
-    int n_sizes = 4;
+    int bph = (hd + 31) / 32;
+    int kvhb = bph * (int)sizeof(q8_block);
+    int sizes[] = {4096, 16384, 65536, 262144};
+    int nsz = 4;
     int errors = 0;
 
-    for (int si = 0; si < n_sizes; si++) {
-        int cache_len = ctx_sizes[si];
-        printf("\n=== Q8 Context: %d tokens ===\n", cache_len);
+    for (int si = 0; si < nsz; si++) {
+        int cl = sizes[si];
+        printf("\n=== Q8 Context: %d tokens ===\n", cl);
 
-        float *q = malloc((size_t)n_q * hd * sizeof(float));
-        float *k_f32 = malloc((size_t)cache_len * n_kv * hd * sizeof(float));
-        float *v_f32 = malloc((size_t)cache_len * n_kv * hd * sizeof(float));
-        float *out_q8 = malloc((size_t)n_q * hd * sizeof(float));
-        float *out_f32 = malloc((size_t)n_q * hd * sizeof(float));
+        float *q = malloc((size_t)n_q*hd*sizeof(float));
+        float *kf = malloc((size_t)cl*n_kv*hd*sizeof(float));
+        float *vf = malloc((size_t)cl*n_kv*hd*sizeof(float));
+        float *oq8 = malloc((size_t)n_q*hd*sizeof(float));
+        float *of32 = malloc((size_t)n_q*hd*sizeof(float));
+        float *otiled = malloc((size_t)n_q*hd*sizeof(float));
+        q8_block *kq8 = malloc((size_t)cl*n_kv*kvhb);
+        q8_block *vq8 = malloc((size_t)cl*n_kv*kvhb);
+        if (!q||!kf||!vf||!oq8||!of32||!otiled||!kq8||!vq8) { fprintf(stderr,"OOM\n"); break; }
 
-        /* Q8 caches */
-        q8_block *k_q8 = malloc((size_t)cache_len * n_kv * kv_head_bytes);
-        q8_block *v_q8 = malloc((size_t)cache_len * n_kv * kv_head_bytes);
-
-        if (!q || !k_f32 || !v_f32 || !out_q8 || !out_f32 || !k_q8 || !v_q8) {
-            fprintf(stderr, "OOM at ctx %d\n", cache_len); break;
+        for (int i = 0; i < n_q*hd; i++) q[i] = (float)((i*7+13)%17-8)*0.01f;
+        for (int i = 0; i < cl*n_kv*hd; i++) {
+            kf[i] = (float)((i*3+1)%19-9)*0.01f;
+            vf[i] = (float)((i*5+7)%23-11)*0.01f;
         }
-
-        /* Fill with deterministic data */
-        for (int i = 0; i < n_q * hd; i++) q[i] = (float)((i*7+13)%17-8)*0.01f;
-        for (int i = 0; i < cache_len*n_kv*hd; i++) {
-            k_f32[i] = (float)((i*3+1)%19-9)*0.01f;
-            v_f32[i] = (float)((i*5+7)%23-11)*0.01f;
-        }
-
-        /* Quantize to Q8 */
-        for (int t = 0; t < cache_len; t++) {
+        for (int t = 0; t < cl; t++)
             for (int g = 0; g < n_kv; g++) {
-                quantize_row_q8(k_f32 + (size_t)t*n_kv*hd + g*hd,
-                                k_q8 + (size_t)t*n_kv*blocks_per_head + g*blocks_per_head, hd);
-                quantize_row_q8(v_f32 + (size_t)t*n_kv*hd + g*hd,
-                                v_q8 + (size_t)t*n_kv*blocks_per_head + g*blocks_per_head, hd);
+                quant_row_q8(kf+(size_t)t*n_kv*hd+g*hd, kq8+(size_t)t*n_kv*bph+g*bph, hd);
+                quant_row_q8(vf+(size_t)t*n_kv*hd+g*hd, vq8+(size_t)t*n_kv*bph+g*bph, hd);
             }
-        }
 
-        /* Apply RoPE to Q */
-        float *k_new = malloc((size_t)n_kv * hd * sizeof(float));
-        memcpy(k_new, k_f32 + (size_t)(cache_len-1)*n_kv*hd, (size_t)n_kv*hd*sizeof(float));
-        wubu_fast_attn_rope(ctx, q, k_new, cache_len - 1);
-        free(k_new);
+        float *kn = malloc((size_t)n_kv*hd*sizeof(float));
+        memcpy(kn, kf+(size_t)(cl-1)*n_kv*hd, (size_t)n_kv*hd*sizeof(float));
+        wubu_fast_attn_rope(ctx, q, kn, cl-1);
+        free(kn);
 
-        /* F32 baseline */
         double t0 = now_ms();
-        wubu_fast_attn_decode(ctx, q, k_f32, v_f32, cache_len, out_f32, 6);
-        double t_f32 = now_ms() - t0;
+        wubu_fast_attn_decode(ctx, q, kf, vf, cl, of32, 6);
+        double tf = now_ms() - t0;
 
-        /* Q8 decode */
         double t1 = now_ms();
-        wubu_fast_attn_decode_q8(ctx, q, k_q8, v_q8, cache_len, out_q8, 6);
-        double t_q8 = now_ms() - t1;
+        wubu_fast_attn_decode_q8(ctx, q, kq8, vq8, cl, oq8, 6);
+        double tq8 = now_ms() - t1;
 
-        /* Correctness: Q8 should be close to F32 (quantization noise) */
-        float max_diff = 0.0f;
-        for (int i = 0; i < n_q*hd; i++) {
-            float d = fabsf(out_q8[i] - out_f32[i]);
-            if (d > max_diff) max_diff = d;
-        }
-        printf("[correctness] F32 vs Q8 max_diff = %.6e %s\n",
-               (double)max_diff, max_diff < 0.05f ? "PASS" : "FAIL");
-        if (max_diff > 0.05f) errors++;
+        double t2 = now_ms();
+        wubu_fast_attn_decode_q8_tiled(ctx, q, kq8, vq8, cl, otiled, 6, 0);
+        double tt = now_ms() - t2;
 
-        /* Bandwidth comparison */
-        size_t f32_bytes = (size_t)cache_len * n_kv * hd * 4 * 2;
-        size_t q8_bytes = (size_t)cache_len * n_kv * kv_head_bytes * 2;
-        printf("[timing] F32=%.2fms (%.1f GB/s), Q8=%.2fms (%.1f GB/s), speedup=%.2fx\n",
-               t_f32, (double)f32_bytes/(t_f32/1000.0)/1e9,
-               t_q8,  (double)q8_bytes/(t_q8/1000.0)/1e9,
-               t_f32 / t_q8);
-        printf("[bandwidth] F32 reads %.1f MB, Q8 reads %.1f MB (%.1f%% less)\n",
-               (double)f32_bytes/1e6, (double)q8_bytes/1e6,
-               100.0*(1.0 - (double)q8_bytes/f32_bytes));
+        /* Correctness: Q8 vs F32 */
+        float md = 0.0f;
+        for (int i = 0; i < n_q*hd; i++) { float d = fabsf(oq8[i]-of32[i]); if (d > md) md = d; }
+        printf("[Q8]    vs F32:  max_diff=%.2e %s\n", (double)md, md < 0.05f ? "PASS" : "FAIL");
+        if (md > 0.05f) errors++;
 
-        free(q); free(k_f32); free(v_f32);
-        free(out_q8); free(out_f32);
-        free(k_q8); free(v_q8);
+        /* Tiled vs untiled Q8 */
+        float td = 0.0f;
+        for (int i = 0; i < n_q*hd; i++) { float d = fabsf(oq8[i]-otiled[i]); if (d > td) td = d; }
+        printf("[tiled] vs Q8:   max_diff=%.2e %s\n", (double)td, td < 1e-5f ? "PASS" : "FAIL");
+        if (td > 1e-5f) errors++;
+
+        size_t fb = (size_t)cl*n_kv*hd*4*2;
+        size_t qb = (size_t)cl*n_kv*kvhb*2;
+        printf("[timing] F32=%.1fms Q8=%.1fms tiled=%.1fms | F32→Q8=%.2fx Q8→tiled=%.2fx\n",
+               tf, tq8, tt, tf/tq8, tq8/tt);
+        printf("[bandwidth] F32=%.1f MB Q8=%.1f MB (%.0f%% less data)\n",
+               (double)fb/1e6, (double)qb/1e6, 100.0*(1.0-(double)qb/fb));
+
+        free(q); free(kf); free(vf); free(oq8); free(of32); free(otiled);
+        free(kq8); free(vq8);
     }
 
     printf("\n=== Summary: %d errors ===\n", errors);

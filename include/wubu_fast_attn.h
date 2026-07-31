@@ -111,6 +111,17 @@ void wubu_fast_attn_decode_q8(wubu_fast_attn_ctx_t *ctx,
                                    float *out,
                                    int n_threads);
 
+/* L3-tiled Q8 decode — processes KV in L3-sized chunks with cross-tile softmax merge.
+ * tile_tokens=0 → auto-detect from /sys L3 cache size. */
+void wubu_fast_attn_decode_q8_tiled(wubu_fast_attn_ctx_t *ctx,
+                                         const float *q,
+                                         const void *k_cache_q8,
+                                         const void *v_cache_q8,
+                                         int cache_len,
+                                         float *out,
+                                         int n_threads,
+                                         int tile_tokens);
+
 #ifdef __cplusplus
 }
 #endif
