@@ -276,7 +276,7 @@ int wubu_polarquant_encode(const wubu_polarquant_t *pq,
     /* Recursive polar decomposition with per-level bits */
     int angle_pos = 0;
     float final_r;
-    int bits_buf[512]; /* max d-1 angles */
+    int bits_buf[1024]; /* max d-1 angles (d <= 1024) */
     polar_encode_recursive(x_rot, d, d, pq, level_angle_idx, &angle_pos,
                            bits_buf, &final_r);
 
@@ -305,7 +305,7 @@ int wubu_polarquant_decode(const wubu_polarquant_t *pq,
 
     /* Recursive polar reconstruction with per-level bits */
     int angle_pos = 0;
-    int bits_buf[512];
+    int bits_buf[1024];
     /* Reconstruct bits_buf from pq's per-level config */
     int idx = 0;
     int n = d_out;
@@ -451,81 +451,7 @@ int wubu_polarquant_dequantize_kv(const wubu_polarquant_t *pq,
 
 /* ==========================================================
  * Fused decode + attention dot product
- *
- * Instead of dequant→K→dot(Q,K), we recursively reconstruct K
- * and accumulate Q·K simultaneously. The Hadamard rotation is
- * applied to Q (same as precondition), then the polar decode
- * is fused with the dot product accumulation.
- *
- * Algorithm:
- *   Q_rot = Hadamard(Q)
- *   score = recursive_polar_dot(Q_rot, angles, radius, d)
- *
- * The recursive dot works bottom-up: decode the radii first,
- * then at each level, accumulate Q·(r*cos(θ), r*sin(θ)).
  * ========================================================== */
-
-static float polar_dot_recursive(const float *q, int n, int d_orig,
-    const wubu_polarquant_t *pq,
-    const int *angle_buf, int *angle_pos,
-    const int *bits_buf,
-    float final_r) {
-    if (n <= 1) {
-        if (n == 1) return q[0] * final_r;
-        return 0.0f;
-    }
-
-    int n_pairs = n / 2;
-    int rem = n - n_pairs * 2;
-
-    int level = level_from_n(d_orig, n);
-    int bits = wubu_polarquant_bits_at(pq, level);
-    int levels = 1 << bits;
-
-    /* Save angles for this level */
-    int *level_angles = (int *)malloc((size_t)n_pairs * sizeof(int));
-    int *level_bits = (int *)malloc((size_t)n_pairs * sizeof(int));
-    for (int p = 0; p < n_pairs; p++) {
-        level_angles[p] = angle_buf[(*angle_pos)++];
-        level_bits[p] = bits_buf[(*angle_pos) - 1];
-    }
-
-    /* Recursive: decode radii and compute dot of Q_half · radii */
-    /* Q_half = q[0:n_pairs] (the "radius query" sub-vector) */
-    float *radii = (float *)malloc((size_t)n_pairs * sizeof(float));
-    /* We need to reconstruct radii, then dot with Q's first n_pairs elements */
-    if (n_pairs > 1) {
-        /* Reconstruct radii recursively */
-        float sub_dot = polar_dot_recursive(q, n_pairs, d_orig, pq,
-            angle_buf, angle_pos, bits_buf, final_r);
-        /* But we also need the actual radii values for the (x,y) reconstruction */
-        /* So we need a proper decode-and-dot, not just a recursive dot */
-        /* For now, decode radii separately */
-        int save_pos = *angle_pos;
-        /* Rewind to re-read radii angles — this doesn't work with a single pass */
-        /* Instead, decode radii inline */
-        memset(radii, 0, n_pairs * sizeof(float));
-        /* Re-decode from a saved position won't work. Let's decode properly: */
-    }
-    
-    /* Actually the correct approach: decode radii by calling the decode
-     * function on the sub-vector of radii. But we can't get radii from
-     * the packed bitstream without full decode. The cleanest solution
-     * is to decode K fully then dot with Q. But that's not "fused." */
-    
-    /* For a truly fused implementation, we'd interleave decode + dot.
-     * The bottom-up decode means: decode innermost (radii), then
-     * use those radii to compute outer (x,y), and accumulate Q·(x,y).
-     *
-     * Simpler correct approach: decode K into a stack-allocated buffer,
-     * then dot with Q. The "fusion" saves the CALLER from allocating
-     * a separate K buffer, but internally we still decode. */
-    
-    free(level_angles);
-    free(level_bits);
-    free(radii);
-    return 0.0f; /* placeholder — will use decode-then-dot below */
-}
 
 float wubu_polarquant_fused_dot(
         const wubu_polarquant_t *pq,
