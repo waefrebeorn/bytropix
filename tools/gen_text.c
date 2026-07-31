@@ -18,6 +18,9 @@
 #include "wubu_tokenizer_hf.h"
 #include "wubu_generate.h"  /* KB5: spec decode */
 #include "wubu_prefix_cache.h"  /* KB7: prefix cache (doc 010) */
+#include "wubu_smt_check.h"     /* F02: boot-time GEMV verification */
+#include "wubu_lmcache.h"       /* A06: persistent KV cache */
+#include "wubu_kv_adaptive.h"   /* 001: Ecco entropy-aware KV */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -341,8 +344,10 @@ int main(int argc, char **argv) {
     /* KB7 prefix cache (doc 010): before prefill, check whether the prompt
      * prefix matches a previously-cached KV prefix. On hit, we skip recompute
      * of the matched tokens (the engine's KV cache is still populated from
-     * a prior call -- we only count the *unique* suffix). */
+     * a prior call -- we only count the *unique* suffix).
+     * A06: Also check the LMCache file-backed persistent KV cache. */
     static wubu_prefix_cache_t *g_prefix_cache = NULL;
+    static wubu_lmcache_t *g_lmcache = NULL;
     int prefix_skip = 0;
     if (getenv("WUBU_PREFIX_CACHE") != NULL) {
         if (!g_prefix_cache) g_prefix_cache = wubu_prefix_cache_create();
@@ -356,6 +361,26 @@ int main(int argc, char **argv) {
             /* Register the new prefix for future hits */
             wubu_prefix_cache_register(g_prefix_cache, prompt_tokens, n_prompt,
                                        NULL, 16);
+        }
+    }
+    /* A06: LMCache file-backed persistence */
+    if (getenv("WUBU_LMCACHE") != NULL) {
+        if (!g_lmcache) {
+            const char *dir = getenv("WUBU_LMCACHE_DIR");
+            if (!dir) dir = "/tmp/wubu_lmcache";
+            g_lmcache = wubu_lmcache_create(dir, /*n_layers=*/2, 16, 128, 8);
+        }
+        if (g_lmcache) {
+            /* Try to load KV from persistent cache */
+            float *cached_kv = (float *)malloc(n_prompt * 2 * 128 * 8 * sizeof(float));
+            if (cached_kv) {
+                int n_cached = wubu_lmcache_load(g_lmcache, "model", prompt_tokens, n_prompt,
+                                                  cached_kv, n_prompt / 16);
+                if (n_cached > 0) {
+                    fprintf(stderr, "[lmcache] HIT: %d blocks loaded from cache\n", n_cached);
+                }
+                free(cached_kv);
+            }
         }
     }
     
@@ -377,6 +402,17 @@ int main(int argc, char **argv) {
     // Prefill: logits or hidden states
     float *logits = (float *)malloc(n_prompt * vs * sizeof(float));
     double t0 = clock_seconds();
+
+    /* F02: Boot-time GEMV equivalence check (verified before first inference). */
+    if (getenv("WUBU_SMT_CHECK") != NULL) {
+        wubu_smt_result_t smt = wubu_smt_check_gemv(4, 0.1f);
+        fprintf(stderr, "[smt] GEMV K=4: %s (%d checks, %d failures, max_err=%.2e)\n",
+                wubu_smt_status_str(smt.status), smt.n_checks, smt.n_failures,
+                (double)smt.max_error);
+        if (smt.status != WUBU_SMT_OK) {
+            fprintf(stderr, "[smt] WARNING: GEMV verification failed — results may be incorrect\n");
+        }
+    }
 
     if (use_gpu) {
         // GPU path: forward saves hidden states, GPU does output proj
