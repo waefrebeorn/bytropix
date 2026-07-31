@@ -974,3 +974,7 @@ src/wubu_fast_attn.o: src/wubu_fast_attn.c include/wubu_fast_attn.h
 test_fast_attn: tools/test_fast_attn.c src/wubu_fast_attn.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
+
+test_fast_attn_q8: tools/test_fast_attn_q8.c src/wubu_fast_attn.o
+	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
+	./$@

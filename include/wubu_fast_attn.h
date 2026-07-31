@@ -100,6 +100,17 @@ wubu_fast_attn_ctx_t *wubu_fast_attn_get_ctx(
         int n_q_heads, int n_kv_heads, int head_dim,
         int n_rot, float freq_base, float scale_factor);
 
+/* Q8 KV cache decode — 4x bandwidth reduction vs F32.
+ * Fuses dequant + dot + softmax + V accumulation in one pass.
+ * k_cache_q8/v_cache_q8: Q8_0 block layout {float d; int8_t qs[32]} per 32 elems */
+void wubu_fast_attn_decode_q8(wubu_fast_attn_ctx_t *ctx,
+                                   const float *q,
+                                   const void *k_cache_q8,
+                                   const void *v_cache_q8,
+                                   int cache_len,
+                                   float *out,
+                                   int n_threads);
+
 #ifdef __cplusplus
 }
 #endif
