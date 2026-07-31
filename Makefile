@@ -986,3 +986,11 @@ test_polarquant: tools/test_polarquant.c src/wubu_polarquant.o src/wubu_mobius.o
 test_polarquant: tools/test_polarquant.c src/wubu_polarquant.o src/wubu_mobius.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
+
+test_polarquant_cache: tools/test_polarquant_cache.c src/wubu_polarquant.o
+	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
+	./$@
+
+test_polarquant_cache: tools/test_polarquant_cache.c src/wubu_polarquant.o
+	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
+	./$@

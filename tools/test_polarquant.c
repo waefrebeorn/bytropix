@@ -18,8 +18,81 @@ static float cos_sim(const float *a, const float *b, int d) {
 int main(void) {
     printf("=== PolarQuant Recursive Polar Packed Roundtrip ===\n\n");
 
+    /* Configs: d, default_bits, min_pass_score, use_perlevel, bits_array... */
+    /* For per-level: bits_array = {level0_bits, level1_bits, ...} */
+    
+    /* Uniform configs */
+    printf("--- Uniform d=128, 8-bit ---\n");
+    {
+        wubu_polarquant_t pq;
+        wubu_polarquant_init(&pq, 128, 1, 1.0f, 8.0f);
+        int storage = wubu_polarquant_storage_bytes(&pq, 128);
+        printf("  storage = %d bytes, %.1fx compression\n", storage, 512.0/storage);
+        /* quick check */
+        float orig[128], recon[128], bits_buf[600];
+        for (int i=0;i<128;i++) orig[i]=(float)(i%19-9)*0.01f;
+        int ob=600;
+        wubu_polarquant_quantize_kv(&pq, orig, bits_buf, &ob);
+        wubu_polarquant_dequantize_kv(&pq, bits_buf, ob, recon, 128);
+        float cs=0, no=0,nr=0,do_=0;
+        for(int i=0;i<128;i++){no+=orig[i]*orig[i];nr+=recon[i]*recon[i];do_+=orig[i]*recon[i];}
+        cs=do_/(sqrtf(no)*sqrtf(nr)+1e-10f);
+        printf("  cosine = %.4f %s\n\n", cs, cs>0.95f?"PASS":"FAIL");
+        wubu_polarquant_free(&pq);
+    }
+    
+    /* Per-level configs: level0=4, level1=3, level2=2, rest=2 */
+    printf("--- Per-level d=128, {4,3,2,2,...} ---\n");
+    {
+        wubu_polarquant_t pq;
+        int bits_arr[] = {4,3,2,2,2,2,2};
+        wubu_polarquant_init_perlevel(&pq, 128, 1.0f, 4.0f, bits_arr, 7);
+        int storage = wubu_polarquant_storage_bytes(&pq, 128);
+        printf("  storage = %d bytes, %.1fx compression\n", storage, 512.0/storage);
+        float orig[128], recon[128], bits_buf[600];
+        float avg_cos = 0; int pass_cos=0;
+        for (int t=0;t<200;t++){
+            for(int i=0;i<128;i++) orig[i]=(float)((i*7+t*13+3)%19-9)*0.01f;
+            int ob=600;
+            wubu_polarquant_quantize_kv(&pq, orig, bits_buf, &ob);
+            wubu_polarquant_dequantize_kv(&pq, bits_buf, ob, recon, 128);
+            float no=0,nr=0,do_=0;
+            for(int i=0;i<128;i++){no+=orig[i]*orig[i];nr+=recon[i]*recon[i];do_+=orig[i]*recon[i];}
+            float cs=do_/(sqrtf(no)*sqrtf(nr)+1e-10f);
+            avg_cos+=cs; if(cs>0.90f) pass_cos++;
+        }
+        avg_cos/=200;
+        printf("  cosine = %.4f pass=%d/200 %s\n\n", avg_cos, pass_cos, pass_cos>=150?"PASS":"FAIL");
+        wubu_polarquant_free(&pq);
+    }
+    
+    /* Per-level: 6,4,3,2 */
+    printf("--- Per-level d=128, {6,4,3,2,...} ---\n");
+    {
+        wubu_polarquant_t pq;
+        int bits_arr[] = {6,4,3,2,2,2,2};
+        wubu_polarquant_init_perlevel(&pq, 128, 1.0f, 4.0f, bits_arr, 7);
+        int storage = wubu_polarquant_storage_bytes(&pq, 128);
+        printf("  storage = %d bytes, %.1fx compression\n", storage, 512.0/storage);
+        float orig[128], recon[128], bits_buf[600];
+        float avg_cos = 0; int pass_cos=0;
+        for (int t=0;t<200;t++){
+            for(int i=0;i<128;i++) orig[i]=(float)((i*7+t*13+3)%19-9)*0.01f;
+            int ob=600;
+            wubu_polarquant_quantize_kv(&pq, orig, bits_buf, &ob);
+            wubu_polarquant_dequantize_kv(&pq, bits_buf, ob, recon, 128);
+            float no=0,nr=0,do_=0;
+            for(int i=0;i<128;i++){no+=orig[i]*orig[i];nr+=recon[i]*recon[i];do_+=orig[i]*recon[i];}
+            float cs=do_/(sqrtf(no)*sqrtf(nr)+1e-10f);
+            avg_cos+=cs; if(cs>0.90f) pass_cos++;
+        }
+        avg_cos/=200;
+        printf("  cosine = %.4f pass=%d/200 %s\n\n", avg_cos, pass_cos, pass_cos>=150?"PASS":"FAIL");
+        wubu_polarquant_free(&pq);
+    }
+    
+    /* Default uniform configs */
     int configs[][3] = {
-        /* d, bits, min_pass_score (out of 200) */
         {128, 8, 150}, {128, 6, 100}, {64, 8, 150}, {32, 8, 150},
     };
     int n_cfg = 4;

@@ -70,7 +70,10 @@ typedef struct {
     int d;                    /* original vector dimension */
     int depth;                /* number of polar recursion levels */
     float R_max;             /* radius of outermost Poincaré ball */
-    float bits_per_coord;    /* bits per coordinate in codebook */
+    float bits_per_coord;    /* default bits per coordinate (fallback) */
+    int   bits_per_level[16]; /* per-level bit allocation (0 = use default) */
+    int   n_levels;           /* number of levels with explicit bit allocation */
+    int   *bits_store;        /* [d] temporary storage for bit widths per angle */
     float *rand_precondition; /* [d] random rotation preconditioning vector */
 
     /* Fractal codebook: level l has d_l dimensions and a codebook
@@ -92,6 +95,22 @@ typedef struct {
  * Returns 0 on success, -1 on allocation failure. */
 int wubu_polarquant_init(wubu_polarquant_t *pq, int d, int depth,
                                 float R_max, float bits_per_coord);
+
+/* Init with per-level bit allocation. bits_array[l] = bits for level l.
+ * If bits_array is NULL or n <= 0, uses bits_per_coord for all levels.
+ * Recommended: deeper levels get fewer bits (4,3,2,...) since residuals
+ * concentrate after Hadamard rotation. */
+int wubu_polarquant_init_perlevel(wubu_polarquant_t *pq, int d,
+    float R_max, float default_bits,
+    const int *bits_array, int n);
+
+/* Get bit width for a specific recursion level */
+static inline int wubu_polarquant_bits_at(const wubu_polarquant_t *pq, int level) {
+    if (level < 0) return (int)pq->bits_per_coord;
+    if (pq->n_levels > 0 && level < pq->n_levels && pq->bits_per_level[level] > 0)
+        return pq->bits_per_level[level];
+    return (int)pq->bits_per_coord;
+}
 
 /* Free all allocated memory */
 void wubu_polarquant_free(wubu_polarquant_t *pq);
@@ -157,6 +176,70 @@ int wubu_polarquant_dequantize_kv(
         int d);
 
 /* ==========================================================
+ * Fused decode + attention dot product (no intermediate dequant)
+ *
+ * Instead of dequantizing K then doing Q·K, this fuses both:
+ *   score = Q · decode(K_quantized)
+ * This avoids allocating a temporary d-dim buffer per token.
+ *
+ * This is the FlashDecoding++ pattern: fuse the quantization-aware
+ * dot product with the online softmax to minimize memory traffic.
+ * ========================================================== */
+
+/* Fused: compute dot(Q, dequant(K_packed)) without materializing K.
+ * Returns the attention score (Q·K). */
+float wubu_polarquant_fused_dot(
+        const wubu_polarquant_t *pq,
+        const float *q,           /* [d] query vector */
+        const float *k_packed,    /* packed PolarQuant bitstream */
+        int k_bytes);
+
+/* ==========================================================
+ * Mixed-precision KV cache (KIVI/Kitty pattern)
+ *
+ * Recent N tokens stay in F32 (residual buffer), older tokens
+ * are PolarQuant-quantized. This handles the "recent tokens are
+ * most attended" observation from ZipCache/KIVI.
+ * ========================================================== */
+
+typedef struct {
+    wubu_polarquant_t *pq;       /* quantizer config */
+    int d;                       /* head_dim */
+    int n_recent;               /* number of F32 residual tokens */
+    int capacity;               /* max tokens in cache */
+    int n_filled;               /* current number of tokens */
+    
+    /* Ring buffer for recent F32 tokens */
+    float *recent_k;            /* [n_recent * d] K cache (F32) */
+    float *recent_v;            /* [n_recent * d] V cache (F32) */
+    int recent_head;            /* ring buffer write position */
+    
+    /* PolarQuant-quantized older tokens */
+    float *quant_k;             /* [capacity * max_bytes] packed K */
+    float *quant_v;             /* [capacity * max_bytes] packed V */
+    int *quant_bytes;           /* [capacity] bytes per token */
+    int max_bytes_per_token;    /* max packed size */
+} wubu_polar_cache_t;
+
+/* Initialize mixed-precision cache */
+int wubu_polar_cache_init(wubu_polar_cache_t *c,
+    wubu_polarquant_t *pq, int d, int n_recent, int capacity);
+
+/* Free cache */
+void wubu_polar_cache_free(wubu_polar_cache_t *c);
+
+/* Push a new K,V pair into the cache */
+int wubu_polar_cache_push(wubu_polar_cache_t *c,
+    const float *k, const float *v);
+
+/* Compute attention: score = sum softmax(Q·K_i) * V_i
+ * Uses fused decode+dot for quantized tokens. */
+int wubu_polar_cache_attention(wubu_polar_cache_t *c,
+    const float *q,              /* [d] query */
+    float *out,                  /* [d] attention output */
+    float temperature);         /* softmax temperature */
+
+/* ==========================================================
  * KV bandwidth analysis (Roofline)
  * ========================================================== */
 
@@ -167,8 +250,22 @@ static inline double wubu_polarquant_bits_per_vector(const wubu_polarquant_t *pq
 }
 
 static inline int wubu_polarquant_storage_bytes(const wubu_polarquant_t *pq, int d) {
-    int n_angles = d - 1;
-    int packed = (n_angles * (int)pq->bits_per_coord + 7) / 8;
+    /* Sum per-level bits */
+    int total_bits = 0;
+    int n = d;
+    int level = 0;
+    while (n > 1) {
+        int n_pairs = n / 2;
+        int b;
+        if (pq->n_levels > 0 && level < pq->n_levels && pq->bits_per_level[level] > 0)
+            b = pq->bits_per_level[level];
+        else
+            b = (int)pq->bits_per_coord;
+        total_bits += n_pairs * b;
+        n = n_pairs;
+        level++;
+    }
+    int packed = (total_bits + 7) / 8;
     return (int)sizeof(float) + packed;
 }
 
