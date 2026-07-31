@@ -1018,3 +1018,10 @@ test_q8k_pqv: tools/test_q8k_pqv.c src/wubu_fast_attn.o src/wubu_polarquant.o sr
 test_splitk: tools/test_splitk.c src/wubu_fast_attn.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
+
+test_cross_attn: tools/test_cross_attn.c src/wubu_cross_attn.o
+	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
+	./$@
+
+test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn
+	@echo "=== ALL TESTS PASSED ==="

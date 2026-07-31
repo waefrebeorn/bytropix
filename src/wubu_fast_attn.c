@@ -315,13 +315,17 @@ void wubu_fast_attn_decode_splitk(
             gsum += p[1] * sf;
         }
 
+        /* Merge: out = Σ_s exp(lmax_s - gmax) * local_out_s / gsum
+         * local_out_s = Σ_t exp(s_t - lmax_s) * v_t (unnormalized)
+         * gsum = Σ_s exp(lmax_s - gmax) * lsum_s = Σ_s exp(lmax_s - gmax) * Σ_t exp(s_t - lmax_s)
+         * This is exactly softmax over ALL tokens, so out is exact. */
         memset(oh, 0, (size_t)hd * sizeof(float));
         for (int s = 0; s < n_splits; s++) {
             float *p = partials + (size_t)(s * n_q + qh) * ps;
             float sf = expf(p[0] - gmax);
-            float w = p[1] * sf / (gsum + 1e-10f);
+            float w = sf / (gsum + 1e-10f);
             for (int d = 0; d < hd; d++)
-                oh[d] += w * p[2 + d] / (p[1] + 1e-10f);
+                oh[d] += w * p[2 + d];
         }
     }
 }
@@ -378,22 +382,15 @@ void wubu_fast_attn_decode_q8_tiled(
                     ((const char *)k_cache_q8 + (size_t)t*n_kv*kv_head_bytes + g*kv_head_bytes);
                 const wubu_q8_block *v_head = (const wubu_q8_block *)
                     ((const char *)v_cache_q8 + (size_t)t*n_kv*kv_head_bytes + g*kv_head_bytes);
+                /* Fused dequant Q·K — scalar (compiler auto-vectorizes).
+                 * No AVX2: _mm256_cvtepi8_epi32 only extends lower 8 of 32
+                 * int8 values, silently dropping 75% of dot product data. */
                 const float *q_h = q + (size_t)qh * hd;
                 float dot = 0.0f;
                 for (int b = 0; b < blocks_per_head; b++) {
                     float d = k_head[b].d;
-#if defined(WUBU_HAVE_AVX2)
-                    __m256i qs8 = _mm256_loadu_si256((const __m256i *)k_head[b].qs);
-                    __m256 fv = _mm256_set1_ps(d);
-                    __m256i ext = _mm256_cvtepi8_epi32(_mm256_castsi256_si128(qs8));
-                    __m256 fq = _mm256_mul_ps(_mm256_cvtepi32_ps(ext), fv);
-                    __m256 qv = _mm256_loadu_ps(q_h + b*32);
-                    __m256 acc = _mm256_mul_ps(qv, fq);
-                    float tmp[8]; _mm256_storeu_ps(tmp, acc);
-                    for (int i=0;i<8;i++) dot += tmp[i];
-#else
-                    for (int i=0;i<32&&b*32+i<hd;i++) dot += q_h[b*32+i]*d*(float)k_head[b].qs[i];
-#endif
+                    for (int i = 0; i < 32 && b*32+i < hd; i++)
+                        dot += q_h[b*32+i] * d * (float)k_head[b].qs[i];
                 }
                 float s = dot * scale;
                 if (s > tile_max) {
@@ -404,20 +401,13 @@ void wubu_fast_attn_decode_q8_tiled(
                 }
                 float ew = expf(s - tile_max);
                 tile_sum += ew;
+                /* Fused dequant V + weighted accumulation — scalar
+                 * (compiler auto-vectorizes); no broken AVX2 cvtepi8_epi32. */
                 float *tacc = tile_acc + (size_t)qh * hd;
                 for (int b = 0; b < blocks_per_head; b++) {
                     float ewd = ew * v_head[b].d;
-#if defined(WUBU_HAVE_AVX2)
-                    __m256i qs8 = _mm256_loadu_si256((const __m256i *)v_head[b].qs);
-                    __m256i ext = _mm256_cvtepi8_epi32(_mm256_castsi256_si128(qs8));
-                    __m256 fv = _mm256_cvtepi32_ps(ext);
-                    __m256 we = _mm256_set1_ps(ewd);
-                    __m256 prod = _mm256_mul_ps(we, fv);
-                    __m256 ov = _mm256_loadu_ps(tacc + b*32);
-                    _mm256_storeu_ps(tacc + b*32, _mm256_add_ps(ov, prod));
-#else
-                    for (int i=0;i<32&&b*32+i<hd;i++) tacc[b*32+i] += ewd*(float)v_head[b].qs[i];
-#endif
+                    for (int i = 0; i < 32 && b*32+i < hd; i++)
+                        tacc[b*32+i] += ewd * (float)v_head[b].qs[i];
                 }
             }
         }
@@ -642,29 +632,14 @@ void wubu_fast_attn_decode_q8(
             const wubu_q8_block *v_head = (const wubu_q8_block *)
                 ((const char *)v_cache_q8 + (size_t)t * n_kv * kv_head_bytes + (size_t)g * kv_head_bytes);
 
-            /* Fused dequant + dot product: Q·K */
+            /* Fused dequant Q·K — scalar (compiler auto-vectorizes with
+             * -O3 -march=native); no broken AVX2 _mm256_cvtepi8_epi32. */
             const float *q_h = q + (size_t)qh * hd;
             float dot = 0.0f;
             for (int b = 0; b < blocks_per_head; b++) {
                 float d = k_head[b].d;
-                float dq[32];
-                /* Dequant: scalar (compiler auto-vectorizes with -O3 -march=native).
-                 * Was: broken AVX2 _mm256_cvtepi8_epi32 only processed lower 8
-                 * of 32 int8 values — 75% of dot product data was lost. */
-                for (int i = 0; i < 32; i++) dq[i] = d * (float)k_head[b].qs[i];
-#if defined(WUBU_HAVE_AVX2)
-                /* AVX2 dot product: 4 × 8-element chunks */
-                for (int i = 0; i < 32; i += 8) {
-                    __m256 qv = _mm256_loadu_ps(q_h + b * 32 + i);
-                    __m256 dv = _mm256_loadu_ps(dq + i);
-                    __m256 acc = _mm256_mul_ps(qv, dv);
-                    float tmp[8]; _mm256_storeu_ps(tmp, acc);
-                    for (int j = 0; j < 8; j++) dot += tmp[j];
-                }
-#else
                 for (int i = 0; i < 32 && b * 32 + i < hd; i++)
-                    dot += q_h[b * 32 + i] * dq[i];
-#endif
+                    dot += q_h[b * 32 + i] * d * (float)k_head[b].qs[i];
             }
 
             float s = dot * scale;
@@ -672,23 +647,13 @@ void wubu_fast_attn_decode_q8(
             float ew = expf(s - max_score);
             sum_exp += ew;
 
-            /* Fused dequant V + weighted accumulation */
+            /* Fused dequant V + weighted accumulation — scalar
+             * (compiler auto-vectorizes); no broken AVX2 cvtepi8_epi32. */
             float *oacc = out_acc + (size_t)qh * hd;
             for (int b = 0; b < blocks_per_head; b++) {
                 float d = v_head[b].d;
                 float ewd = ew * d;
-#if defined(WUBU_HAVE_AVX2)
-                __m256i qs8 = _mm256_loadu_si256((const __m256i *)v_head[b].qs);
-                __m256i ext = _mm256_cvtepi8_epi32(_mm256_castsi256_si128(qs8));
-                __m256 fv = _mm256_cvtepi32_ps(ext);
-                __m256 we = _mm256_set1_ps(ewd);
-                __m256 prod = _mm256_mul_ps(we, fv);
-                __m256 ov = _mm256_loadu_ps(oacc + b * 32);
-                _mm256_storeu_ps(oacc + b * 32, _mm256_add_ps(ov, prod));
-#else
-                for (int i = 0; i < 32 && b * 32 + i < hd; i++)
-                    oacc[b * 32 + i] += ewd * (float)v_head[b].qs[i];
-#endif
+                for (int i = 0; i < 32 && b * 32 + i < hd; i++) oacc[b * 32 + i] += ewd * (float)v_head[b].qs[i];
             }
         }
     }
