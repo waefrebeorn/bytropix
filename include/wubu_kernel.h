@@ -1,54 +1,177 @@
 /*
- * wubu_kernel.h -- WuBuOS-agnostic compute kernel strategy.
+ * wubu_kernel.h — Hardware-agnostic kernel dispatch for WuBuOS AGI OS.
  *
- * Mandate (from the Colonel project): kernels must be usable on ALL
- * accelerators ("all accelerators acceptable"). This rules out Triton, which
- * is CUDA-locked. Our design is ISA-portable C + intrinsics with a backend
- * registry:
+ * Design: one C API, multiple backends. CPU portable C baseline
+ * + device backends (CUDA/Metal/Vulkan/ROCm) register at init.
+ * The engine dispatches through the table which auto-selects
+ * the best backend at runtime based on workload characteristics.
  *
- *   - CPU backend  : OUR OWN tiled GEMM (wubu_gemm.c) — AVX2-FMA / AVX512-FMA,
- *                    cache-blocked, with a portable scalar fallback. No external
- *                    BLAS dependency.
- *   - Device backend: CUDA / Metal / Vulkan / ROCm register a function pointer
- *                    via wubu_gemm_register_device() at init. They win if present.
+ * WASTE reference: https://github.com/sqliteai/waste
+ * Adopted: kernel dispatch table pattern (waste_kernels[]),
+ * compile-time #if backend guards, "all accelerators acceptable"
+ * philosophy. Implemented fully self-contained in C11.
  *
- * The single entry point wubu_gemm_f32() dispatches at runtime. New accelerators
- * drop in a .c/.cu/.metal that calls wubu_gemm_register_device() — no changes
- * to caller code (quantized_matmul, moe_expert_forward_lib, etc.).
- *
- * Why not Triton: Triton compiles to CUDA PTX only; it cannot target Metal/
- * Vulkan/ROCm. That contradicts the WuBuOS all-accelerator requirement. Our
- * hand-written kernels + backend registry cover every target with one API.
+ * C11 clean. No device backend code in this module — only the
+ * dispatch interface and CPU baseline. Device backends register
+ * their function pointers at runtime via wubu_kernel_register().
  */
+
 #ifndef WUBU_KERNEL_H
 #define WUBU_KERNEL_H
 
-#include "wubu_gemm.h"   /* the concrete implementation + registry */
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Accelerator families WuBuOS targets. A device backend advertises which it
- * serves; the CPU backend always covers "cpu". */
+/* Kernel types — what the dispatch table dispatches */
 typedef enum {
-    WUBU_DEV_CPU    = 0,
-    WUBU_DEV_CUDA   = 1,
-    WUBU_DEV_METAL  = 2,
-    WUBU_DEV_VULKAN = 3,
-    WUBU_DEV_ROCM   = 4
-} wubu_device_kind_t;
+    WUBU_KERN_GEMM       = 0,  /* C = A*B  [M,K]x[K,N] -> [M,N] */
+    WUBU_KERN_GEMV       = 1,  /* y = A*x    [M,K]x[K]  -> [M] */
+    WUBU_KERN_ATTN       = 2,  /* softmax(QK^T/sqrt(d)) * V */
+    WUBU_KERN_ROPE       = 3,  /* rotary positional embedding */
+    WUBU_KERN_SOFTMAX    = 4,  /* row-wise softmax */
+    WUBU_KERN_LAYER_NORM = 5,  /* RMSNorm */
+    WUBU_KERN_QUANT      = 6,  /* fp32 -> int8/4/2 */
+    WUBU_KERN_DEQUANT    = 7   /* int8/4/2 -> fp32 */
+} wubu_kernel_type_t;
 
-/* Register a device backend. fn has the wubu_gemm_f32 signature. Returns 0
- * if accepted. A registered device takes precedence over the CPU kernel. */
-static inline int wubu_kernel_register_device(wubu_gemm_fn fn, const char *name) {
-    return wubu_gemm_register_device(fn, name);
+/* Backend IDs */
+typedef enum {
+    WUBU_BACKEND_AUTO    = 0,
+    WUBU_BACKEND_SCALAR  = 1,  /* portable C reference */
+    WUBU_BACKEND_CPU_SIMD= 2,  /* our hand-tuned SIMD */
+    WUBU_BACKEND_CUDA    = 3,
+    WUBU_BACKEND_METAL   = 4,
+    WUBU_BACKEND_VULKAN  = 5,
+    WUBU_BACKEND_ROCM    = 6,
+    WUBU_BACKEND_BLAS    = 7
+} wubu_backend_id_t;
+
+/* Function pointer types — one per kernel */
+typedef void (*wubu_gemm_fn)(const float *A, const float *B, float *C,
+                                   int M, int K, int N, float beta);
+typedef void (*wubu_gemv_fn)(const float *A, const float *x, float *y,
+                                   int M, int K);
+typedef void (*wubu_softmax_fn)(float *logits, int M, int N);
+typedef void (*wubu_rmsnorm_fn)(float *x, const float *gamma,
+                                       const float *beta, int M, int d, float eps);
+typedef void (*wubu_quantize_fn)(const float *fp32, int8_t *q, float *scales,
+                                        int M, int K, int bits);
+typedef void (*wubu_dequantize_fn)(const int8_t *q, const float *scales,
+                                         const float *zeros, float *fp32,
+                                         int M, int K, int bits);
+typedef void (*wubu_attn_fn)(const float *Q, const float *K, const float *V,
+                                   float *out, int M, int N, int d, float scale);
+typedef void (*wubu_rope_fn)(float *q, float *k, int d, int seq_len,
+                                   float theta, int offset);
+
+/* Single backend struct — registered at init time by device
+ * backends (CUDA, Metal, Vulkan, ROCm, BLAS). The CPU
+ * scalar baseline is always available. */
+typedef struct wubu_kernel_backend {
+    wubu_backend_id_t  id;
+    const char         *name;
+
+    /* NULL = not supported for this kernel type */
+    wubu_gemm_fn       gemm;
+    wubu_gemv_fn       gemv;
+    wubu_attn_fn       attn;
+    wubu_rope_fn       rope;
+    wubu_softmax_fn    softmax;
+    wubu_rmsnorm_fn    rmsnorm;
+    wubu_quantize_fn   quantize;
+    wubu_dequantize_fn dequantize;
+
+    /* Probe: returns 1 if this backend handles the type.
+     * NULL means it handles all types where function
+     * pointers are non-NULL. */
+    int (*supports)(wubu_kernel_type_t type);
+
+    struct wubu_kernel_backend *next;
+} wubu_kernel_backend_t;
+
+/* ---- init/shutdown ---- */
+int    wubu_kernel_init(void);
+void   wubu_kernel_shutdown(void);
+
+/* ---- backend registration ---- */
+int    wubu_kernel_register(wubu_backend_id_t id, const char *name,
+                                    wubu_kernel_backend_t *backend);
+int    wubu_kernel_unregister(wubu_backend_id_t id);
+int    wubu_kernel_force_backend(wubu_backend_id_t id);
+
+/* ---- dispatch query ---- */
+const char *wubu_kernel_active_backend(wubu_kernel_type_t type);
+
+/* ---- variadic dispatch (engine calls this) ---- */
+int    wubu_kernel_run(wubu_kernel_type_t type, ...);
+
+/* ---- helpers ---- */
+const char *wubu_backend_name(wubu_backend_id_t id);
+static inline int wubu_kernel_is_cpu(wubu_backend_id_t id) {
+    return id == WUBU_BACKEND_SCALAR || id == WUBU_BACKEND_CPU_SIMD;
+}
+static inline int wubu_kernel_is_device(wubu_backend_id_t id) {
+    return id >= WUBU_BACKEND_CUDA && id <= WUBU_BACKEND_BLAS;
 }
 
-/* Which kernel backend is active (for diagnostics). */
-static inline const char *wubu_kernel_active(void) {
-    return wubu_gemm_active_backend();
-}
+/* ---- CPU baselines (always available, always correct) ---- */
+/* These are the portable portable-reference implementations
+ * used as fallback when no device backend is registered or
+ * when it reports unsupported. They are correct and produce
+ * results identical to a naive FP32 matmul within machine epsilon. */
+void wubu_kernel_gemm_scalar(const float *A, const float *B, float *C,
+                                    int M, int K, int N, float beta);
+void wubu_kernel_gemv_scalar(const float *A, const float *x, float *y,
+                                    int M, int K);
+void wubu_kernel_softmax_scalar(float *logits, int M, int N);
+void wubu_kernel_rmsnorm_scalar(float *x, const float *gamma,
+                                       const float *beta, int M, int d, float eps);
+void wubu_kernel_quantize_scalar(const float *fp32, int8_t *q,
+                                        float *scales, int M, int K, int bits);
+void wubu_kernel_dequantize_scalar(const int8_t *q, const float *scales,
+                                          const float *zeros, float *fp32,
+                                          int M, int K, int bits);
+
+/* ---- compile-time backend feature macros ---- */
+#if defined(WUBU_BACKEND_CUDA)
+#  define WUBU_HAS_CUDA  1
+#else
+#  define WUBU_HAS_CUDA  0
+#endif
+#if defined(WUBU_BACKEND_METAL)
+#  define WUBU_HAS_METAL  1
+#else
+#  define WUBU_HAS_METAL  0
+#endif
+#if defined(WUBU_BACKEND_VULKAN)
+#  define WUBU_HAS_VULKAN 1
+#else
+#  define WUBU_HAS_VULKAN 0
+#endif
+#if defined(WUBU_BACKEND_ROCM)
+#  define WUBU_HAS_ROCM   1
+#else
+#  define WUBU_HAS_ROCM   0
+#endif
+#if defined(WUBU_BACKEND_BLAS)
+#  define WUBU_HAS_BLAS   1
+#else
+#  define WUBU_HAS_BLAS   0
+#endif
+#define WUBU_HAS_CPU  1  /* CPU baseline is always available */
+
+/* ---- build flags ---- */
+/* Define these at compile time to select a device backend:
+ *   -DWUBU_BACKEND_CUDA    (CUDA device backend)
+ *   -DWUBU_BACKEND_METAL   (Apple Metal backend)
+ *   -DWUBU_BACKEND_VULKAN  (Vulkan compute backend)
+ *   -DWUBU_BACKEND_ROCM    (ROCm/HIP backend)
+ *   -DWUBU_BACKEND_BLAS    (BLAS backend, cublas/mkl)
+ * If none are defined, the CPU scalar baseline is used. */
 
 #ifdef __cplusplus
 }
