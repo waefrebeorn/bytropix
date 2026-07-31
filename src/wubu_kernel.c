@@ -423,8 +423,8 @@ void wubu_kernel_dequantize_scalar(const int8_t *q, const float *scales,
 static int detect_avx2(void) {
 #if defined(__x86_64__) || defined(_M_X64)
     unsigned eax, ebx, ecx, edx;
-    __cpuid(1, eax, ebx, ecx, edx);
-    return (ecx >> 5) & 1;  /* AVX2 bit in ECX */
+    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    return (ebx >> 5) & 1;  /* AVX2 bit in EBX of leaf 7 subleaf 0 */
 #else
     return 0;
 #endif
