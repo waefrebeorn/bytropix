@@ -14,10 +14,12 @@ attacks bytes moved.
 - A05 TurboQuant <3-bit KV (INT3 token-wise) .............. `wired` (wubu_4kv, 6.1× compression)
 - A06 Predictive multi-tier KV (DRAM/NVMe/CXL/IB, Bayesian reuse) `open` (CPU-only, skip) → doc 002
 - A07 LMCache/KVBM prefix+PD-disaggregation .............. `open` (prefix reuse → doc 010)
-- A08 NVIDIA priority-based KV eviction (LRU+importance) .. `open` (ties to 002)
+- A07b NVIDIA priority-based KV eviction (LRU+importance) ... `open` (ties to 002)
+- A08 NVIDIA MLA (Multi-head Latent Attention) ............ `open` (skip — MLA needs model-specific weight loading)
 - A09 Attention-sink-free gated attention (kills massive activations) `wired` (wubu_attn_gate, in GQA decode path)
-- A10 RoPE-aware KV prefetch ............................. `wired` (wubu_rope_prefetch, in test_all)
+- A10 RoPE-aware KV prefetch ............................. `wired` (wubu_rope_prefetch_kv_f32 in decode path)
 - A11 Mixture-of-Depths layer skip ....................... `wired` (WUBU_LAYER_SKIP env, src/wubu_model.c)
+- A12 Auto-KV eviction for long context .................. `wired` (auto-SWA window at 256K+ cache)
 - D04 Chunked prefill ................................... `wired` (wubu_model_forward_chunked in gen_text)
 - C03 Cache-line-packed KV pages ....................... `wired` (aligned_alloc(64,...) in wubu_model.c)
 

@@ -1639,10 +1639,23 @@ void wubu_gqa_forward(const float *x, int B, int T,
         wubu_fast_attn_ctx_t *fctx = wubu_fast_attn_get_ctx(n_q_heads, n_kv_heads,
                                                             head_dim, 64, 10000000.0f, 1.0f);
         if (fctx) {
+            /* A10: RoPE-aware KV prefetch — software-prefetch KV blocks for
+             * nearby positions before the attention scan loop. Overlapped with
+             * current token's QKV projection compute. High temporal locality (3). */
+            {
+                extern void wubu_rope_prefetch_kv_f32(const float *k_cache,
+                    const float *v_cache, int cache_len, int kv_stride,
+                    int pos, int lookback, int lookahead);
+                int kv_stride = n_kv_heads * head_dim;
+                wubu_rope_prefetch_kv_f32((const float *)k_cache,
+                    (const float *)v_cache, cache_len, kv_stride,
+                    cache_len - 1, 8, 16);
+            }
+
             /* Adaptive dispatch based on context length + KV quantization scheme.
-             * 512K context: split-K parallel decode (6 threads → ~5x speedup).
+             * 512K context: sliding window + split-K parallel decode.
              * Q8_KV scheme: fused dequant+dot+softmax (4x bandwidth).
-             * Both: tiled Q8 + split-K for maximum throughput. */
+             * Both: tiled Q8 + SWA for maximum throughput. */
             int kv_scheme = g_kv_scheme;
             extern int g_use_q8_cache; /* set by model load or env */
             int use_q8 = g_use_q8_cache && (g_kv_scheme == WUBU_KV_Q8);
@@ -1654,9 +1667,16 @@ void wubu_gqa_forward(const float *x, int B, int T,
             } else if (cache_len > 1024) {
                 /* 512K+ context: use sliding window + split-K parallel decode.
                  * SWA window reduces O(cache_len) → O(window).
-                 * WUBU_SWA env var sets window size (0 = unlimited). */
+                 * WUBU_SWA env var sets window size (0 = unlimited).
+                 * A07: Auto-KV eviction — at 256K+ cache, default SWA=8192
+                 * to bound decode time while retaining conversational context. */
                 const char *swa_env = getenv("WUBU_SWA");
                 int swa_window = swa_env ? atoi(swa_env) : 0;
+                if (swa_window == 0 && cache_len > 262144) {
+                    /* Auto-evict: window = min(8192, cache_len/32) */
+                    swa_window = 8192;
+                    if (cache_len / 32 < swa_window) swa_window = cache_len / 32;
+                }
                 if (swa_window > 0) {
                     extern void wubu_fast_attn_decode_swa(wubu_fast_attn_ctx_t *ctx,
                         const float *q, const float *k_cache, const float *v_cache,

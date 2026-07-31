@@ -67,6 +67,36 @@ void wubu_rope_prefetch_kv(wubu_kv_cacheline_t *store,
     }
 }
 
+/* Prefetch raw F32 KV cache for nearby decode positions.
+ * Works with standard GQA layout: k_cache[v][pos * kv_stride].
+ * Lookahead prefetch: position pos+1..pos+lookahead, each kv_stride floats.
+ * This is called BEFORE the attention scan loop so KV data is in L1/L2. */
+void wubu_rope_prefetch_kv_f32(const float *k_cache, const float *v_cache,
+                                 int cache_len, int kv_stride,
+                                 int pos, int lookback, int lookahead) {
+    if (!k_cache || !v_cache || cache_len <= 0 || kv_stride <= 0) return;
+    if (pos < 0) return;
+
+    /* Prefetch lookahead: future positions the scan loop will touch */
+    for (int d = 1; d <= lookahead; d++) {
+        int future = pos + d;
+        if (future >= cache_len) break;
+        const float *kp = k_cache + (size_t)future * kv_stride;
+        const float *vp = v_cache + (size_t)future * kv_stride;
+        __builtin_prefetch(kp, 0, 3);  /* read, high temporal locality */
+        __builtin_prefetch(vp, 0, 3);
+    }
+
+    /* Prefetch lookback (less critical, may already be warm) */
+    for (int d = 1; d <= lookback; d++) {
+        int past = pos - d;
+        if (past < 0) break;
+        const float *kp = k_cache + (size_t)past * kv_stride;
+        const float *vp = v_cache + (size_t)past * kv_stride;
+        __builtin_prefetch(kp, 0, 0);  /* read, no temporal (already used) */
+    }
+}
+
 /* Compute the RoPE rotation angle for a given position and dimension.
  * This is a reference implementation for verifying prefetch locality. */
 float wubu_rope_theta(int dim, int pos, int head_dim) {
