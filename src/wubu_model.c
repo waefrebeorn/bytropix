@@ -896,7 +896,43 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         }
         
         double t0 = wall_time();
-        
+
+        /* A11: Mixture-of-Depths layer skip for decode speed.
+         * WUBU_LAYER_SKIP=N skips layer N (0-indexed) during decode (T==1).
+         * Multiple layers: WUBU_LAYER_SKIP=3,7,11 skips those specific layers.
+         * Reduces compute for 512K inference — 25 tok/s target. */
+        {
+            const char *ls_env = getenv("WUBU_LAYER_SKIP");
+            if (ls_env && N == 1 && T == 1) {
+                /* Check if current layer l should be skipped */
+                size_t ls_len = strlen(ls_env);
+                char *ls_copy = (char *)malloc(ls_len + 1);
+                if (ls_copy) {
+                    memcpy(ls_copy, ls_env, ls_len + 1);
+                    char *tok = ls_copy;
+                    int skip_me = 0;
+                    while (tok && *tok) {
+                        char *end = strchr(tok, ',');
+                        if (end) {
+                            int skip_layer = atoi(tok);
+                            if (skip_layer == l) skip_me = 1;
+                            tok = end + 1;
+                        } else {
+                            int skip_layer = atoi(tok);
+                            if (skip_layer == l) skip_me = 1;
+                            break;
+                        }
+                    }
+                    free(ls_copy);
+                    if (skip_me) {
+                        /* Skip compute: attn_out = normed (residual passthrough) */
+                        memcpy(attn_out, normed, N * model->d_model * sizeof(float));
+                        goto layer_timing;
+                    }
+                }
+            }
+        }
+
         if (layer->is_ssm) {
             /* Materialize lazy BF16 SSM proj matrices to F32 on first use. */
             wubu_ssm_ensure_f32(&layer->ssm, model->d_model, CONV_DIM, VALUE_DIM);
@@ -1045,8 +1081,9 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
         wubu_ssm_release_f32(&layer->ssm);
         wubu_gqa_release_f32(&layer->gqa);
 
+layer_timing:
         double t1 = wall_time();
-        if (getenv("PROFILE") && l < 3) {
+        if (getenv("PROFILE") || getenv("PROFILE_LAYER")) {
             fprintf(stderr, "  L%d %s attn: %.3fms\n", l, layer->is_ssm ? "SSM" : "GQA", (t1 - t0) * 1000.0);
         }
         
