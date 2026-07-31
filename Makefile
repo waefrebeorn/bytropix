@@ -570,6 +570,16 @@ test_gptq: tools/test_gptq.c src/wubu_gptq.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+# doc 010: cross-request prefix KV reuse
+test_prefix_reuse: tools/test_prefix_reuse.c src/wubu_prefix_cache.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
+# doc 007: continuous (iteration-level) batching
+test_continuous_batching: tools/test_continuous_batching.c src/wubu_scheduler.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
 # doc 015: FlashDecoding-style parallel KV-load decode attention
 test_flashdecode: tools/test_flashdecode.c src/wubu_flashdecode.o $(CPU_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
