@@ -48,7 +48,7 @@ int wubu_ngram_propose(wubu_ngram_draft_t *d, int k, int *out) {
         }
         if (best_tok < 0) break;
         out[n++] = best_tok;
-        break;  // single chain per call
+        /* Continue to next step to draft more tokens (no break here) */
     }
     return n;
 }

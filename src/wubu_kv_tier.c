@@ -106,7 +106,7 @@ static wubu_kv_block_t *hot_alloc(wubu_kv_tier_t *t) {
     wubu_kv_block_t *b = &t->hot_blocks[t->hot_used++];
     b->tier = WUBU_KV_TIER_HOT;
     b->ref_count = 1;
-    b->last_access_ema = 1.0f;
+    b->last_access_ema = 0.0f;  /* starts cold; bumps on each access */
     b->offset_in_file = 0;
     b->file_fd = -1;
     b->mmap_addr = NULL;
@@ -174,7 +174,8 @@ int wubu_kv_tier_read_block(wubu_kv_tier_t *t, wubu_kv_block_t *b, size_t offset
                              uint8_t *dst, size_t len) {
     if (!b || !b->data || offset + len > b->block_bytes) return -1;
     memcpy(dst, b->data + offset, len);
-    b->last_access_ema = b->last_access_ema * 0.9f + 1.0f * 0.1f;
+    /* EMA: bump toward 1.0 on access, naturally decays when not accessed */
+    b->last_access_ema = b->last_access_ema * 0.9f + 0.1f;
     return 0;
 }
 
@@ -225,6 +226,8 @@ void wubu_kv_tier_evict_cold(wubu_kv_tier_t *t, size_t target_evict_bytes) {
                     b->offset_in_file = (uint64_t)off;
                     b->file_fd = t->warm_fd;
                     write(t->warm_fd, b->data, b->block_bytes);
+                    free(b->data);  /* free hot RAM after demote to warm */
+                    b->data = NULL;
                     b->tier = WUBU_KV_TIER_WARM;
                     b->is_dirty = false;
                     t->warm_used_bytes += b->block_bytes;

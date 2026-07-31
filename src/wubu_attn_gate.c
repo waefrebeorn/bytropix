@@ -34,15 +34,23 @@ void wubu_apply_gate(float *attn_out, const float *gate, int D) {
     }
 }
 
-/* Full forward: softmax·V → σ(W_gate·x) → elementwise mul. */
+/* Full forward: softmax·V → σ(W_gate·x) → elementwise mul.
+ * Uses heap allocation for D > 4096 (no stack overflow). */
 void wubu_attn_gate_forward(const float *attn_out, const float *x,
                               const float *W_gate,
                               float *y, int D, int hidden_dim) {
-    float gate[16384];
-    if (D <= 16384) {
-        wubu_gate_sigmoid(gate, x, W_gate, D, hidden_dim);
-        memcpy(y, attn_out, sizeof(float) * D);
-        wubu_apply_gate(y, gate, D);
+    float gate_stack[4096];
+    float *gate = gate_stack;
+    if (D > 4096) {
+        gate = (float *)malloc(sizeof(float) * D);
+        if (!gate) {
+            /* OOM: copy attn_out to y ungated (degraded but not crashed) */
+            memcpy(y, attn_out, sizeof(float) * D);
+            return;
+        }
     }
-    /* D > 16384 not supported in this single-pass variant */
+    wubu_gate_sigmoid(gate, x, W_gate, D, hidden_dim);
+    memcpy(y, attn_out, sizeof(float) * D);
+    wubu_apply_gate(y, gate, D);
+    if (gate != gate_stack) free(gate);
 }

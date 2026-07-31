@@ -20,6 +20,34 @@ static uint64_t fnv1a64(const int *data, int n) {
     return h;
 }
 
+/* Create: allocate and initialize the prefix cache. */
+wubu_prefix_cache_t *wubu_prefix_cache_create(void) {
+    wubu_prefix_cache_t *cache = (wubu_prefix_cache_t *)calloc(1, sizeof(*cache));
+    if (!cache) return NULL;
+
+    /* Initialize free list: all nodes except root (0) are free */
+    cache->free_top = WUBU_PREFIX_MAX_NODES - 1;
+    for (int i = 1; i < WUBU_PREFIX_MAX_NODES; i++) {
+        cache->free_list[i - 1] = WUBU_PREFIX_MAX_NODES - i;
+    }
+    /* Root node (0): all children = -1 */
+    for (int t = 0; t < 256; t++) {
+        cache->nodes[0].children[t] = -1;
+    }
+    cache->nodes[0].parent = -1;
+    cache->n_nodes = 1;
+    cache->access_counter = 0;
+    cache->hits = 0;
+    cache->misses = 0;
+    cache->evictions = 0;
+
+    return cache;
+}
+
+void wubu_prefix_cache_free(wubu_prefix_cache_t *cache) {
+    free(cache);
+}
+
 /* Register a prefix: walk/create nodes, mark as cached terminal. */
 wubu_prefix_hash_t wubu_prefix_cache_register(wubu_prefix_cache_t *cache,
                                                const int *token_ids, int n_tokens,
@@ -29,7 +57,7 @@ wubu_prefix_hash_t wubu_prefix_cache_register(wubu_prefix_cache_t *cache,
 
     int node = 0;  /* root */
     int depth = 0;
-    int tokens_per_block = block_size;
+    int tokens_per_block = block_size > 0 ? block_size : 1;
 
     for (int i = 0; i < n_tokens; i++) {
         int tok = token_ids[i] & 0xFF;
@@ -38,16 +66,17 @@ wubu_prefix_hash_t wubu_prefix_cache_register(wubu_prefix_cache_t *cache,
             int new_node = cache->free_list[--cache->free_top];
             memset(&cache->nodes[new_node], 0, sizeof(wubu_prefix_node_t));
             cache->nodes[new_node].parent = node;
+            for (int t = 0; t < 256; t++)
+                cache->nodes[new_node].children[t] = -1;
             cache->nodes[node].children[tok] = new_node;
             cache->n_nodes++;
         }
         node = cache->nodes[node].children[tok];
         depth++;
 
-        /* Allocate KV block at block boundaries (stubbed: paged_kv unused here) */
+        /* Allocate KV block at block boundaries */
         if ((i + 1) % tokens_per_block == 0 && paged_kv) {
-            /* Placeholder: real integration would call wubu_paged_kv_ensure() */
-            (void)paged_kv;
+            (void)paged_kv; /* real integration would call wubu_paged_kv_ensure() */
         }
     }
 
@@ -154,7 +183,7 @@ void wubu_prefix_cache_stats(const wubu_prefix_cache_t *cache,
     if (hits) *hits = cache ? cache->hits : 0;
     if (misses) *misses = cache ? cache->misses : 0;
     if (evictions) *evictions = cache ? cache->evictions : 0;
-    if (nodes_used) *nodes_used = cache ? cache->n_nodes : 0;
+    if (nodes_used) *nodes_used = cache ? (size_t)cache->n_nodes : 0;
 }
 
 wubu_prefix_hash_t wubu_prefix_hash_compute(const int *token_ids, int n_tokens) {
