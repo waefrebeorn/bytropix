@@ -183,3 +183,81 @@ void wubu_spec_decode_eagle3_conditioning(
         }
     }
 }
+
+int wubu_spec_verify_tree(
+        const int *candidates, const int *parents,
+        const float *draft_probs, const float *target_probs,
+        int n_cand, int vocab,
+        int *accepted, int max_acc, float rng_val)
+{
+    if (n_cand <= 0 || max_acc <= 0) return 0;
+
+    /* BFS order: process candidates in array order (root first, then children).
+     * For each candidate, check if parent was accepted (or parent is -1). */
+    int n_accepted = 0;
+    int *parent_accepted = (int *)calloc(n_cand, sizeof(int));
+    if (!parent_accepted) return 0;
+
+    for (int i = 0; i < n_cand && n_accepted < max_acc; i++) {
+        int pid = parents[i];
+        /* Root or parent was accepted */
+        if (pid < 0 || (pid >= 0 && pid < i && parent_accepted[pid])) {
+            float p_t = target_probs[candidates[i]];
+            float p_d = draft_probs[i];
+            if (p_d <= 0.0f) p_d = 1e-10f;
+            float ratio = p_t / p_d;
+            if (p_t >= p_d || rng_val < ratio) {
+                accepted[n_accepted++] = candidates[i];
+                parent_accepted[i] = 1;
+            } else {
+                /* First rejection — stop */
+                break;
+            }
+        } else {
+            /* Parent not accepted — skip this subtree */
+            break;
+        }
+    }
+
+    free(parent_accepted);
+    return n_accepted;
+}
+
+int wubu_spec_bonus_token(
+        const float *target_probs, const float *draft_probs,
+        int vocab, float rng_val)
+{
+    /* Residual distribution: r(t) = max(0, p_target(t) - p_draft(t)) */
+    float *residual = (float *)calloc(vocab, sizeof(float));
+    if (!residual) return 0;
+
+    float total = 0.0f;
+    for (int t = 0; t < vocab; t++) {
+        float d = draft_probs ? draft_probs[t] : 0.0f;
+        float r = target_probs[t] - d;
+        if (r > 0.0f) {
+            residual[t] = r;
+            total += r;
+        }
+    }
+
+    if (total <= 0.0f) {
+        free(residual);
+        return 0;
+    }
+
+    /* Sample from residual using rng_val */
+    float cum = 0.0f;
+    float needle = rng_val * total;
+    int sampled = 0;
+    for (int t = 0; t < vocab; t++) {
+        cum += residual[t];
+        if (cum >= needle) {
+            sampled = t;
+            break;
+        }
+    }
+
+    free(residual);
+    return sampled;
+}

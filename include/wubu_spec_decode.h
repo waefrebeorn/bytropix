@@ -77,6 +77,40 @@ void wubu_spec_decode_eagle3_conditioning(
         float *target_cond,
         float temperature);
 
+/* Tree-based speculative verification (Medusa/EAGLE pattern).
+ *
+ * candidates:  [n_cand] — candidate token IDs in the draft tree
+ * parents:     [n_cand] — parent index for each candidate (-1 = root)
+ * draft_probs: [n_cand] — draft model's probability for each candidate
+ * target_probs:[vocab]  — target model's probability distribution
+ * n_cand:      number of candidates in the tree
+ * vocab:       vocabulary size
+ * accepted:    output — accepted token IDs (up to n_cand)
+ * max_acc:     max accepted tokens to write
+ * rng_val:     RNG value in [0,1) for rejection sampling
+ *
+ * Returns: number of accepted tokens (0..n_cand).
+ * Algorithm: walk the tree in BFS order, accept if p_target >= p_draft
+ *            or RNG < p_target/p_draft. Stop at first rejection. */
+int wubu_spec_verify_tree(
+        const int *candidates, const int *parents,
+        const float *draft_probs, const float *target_probs,
+        int n_cand, int vocab,
+        int *accepted, int max_acc, float rng_val);
+
+/* Bonus token: sample from residual distribution (target - draft).
+ * Used when all draft tokens are accepted to get one extra free token.
+ *
+ * target_probs: [vocab] — target model's probability distribution
+ * draft_probs:  [vocab]  — draft model's probability distribution (same vocab)
+ * vocab:        vocabulary size
+ * rng_val:      RNG value in [0,1) for sampling
+ *
+ * Returns: sampled token ID from residual distribution. */
+int wubu_spec_bonus_token(
+        const float *target_probs, const float *draft_probs,
+        int vocab, float rng_val);
+
 #ifdef __cplusplus
 }
 #endif

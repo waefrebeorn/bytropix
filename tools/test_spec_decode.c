@@ -1,5 +1,6 @@
 /* Test: wubu_spec_decode (Area A — speculative decoding). */
 #include "wubu_spec_decode.h"
+#include "wubu_ngram.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
