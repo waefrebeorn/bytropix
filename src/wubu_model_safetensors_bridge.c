@@ -467,6 +467,11 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
         int ch = wubu_kv_autoselect(npar, nL, gnkv, ghd, bw, GQA_MAX_CTX);
         printf("KV-cache scheme auto-selected (bridge): %s (ctx=%d)\n",
                wubu_kv_scheme_name((wubu_kv_scheme_t)ch), GQA_MAX_CTX);
+        /* For 512K context or memory pressure: enable Q8 fast-attn decode */
+        g_use_q8_cache = (ch == WUBU_KV_Q8 || ch == WUBU_KV_Q4_0 || ch == WUBU_KV_4KV);
+        if (g_use_q8_cache) {
+            printf("Fast-attn Q8 decode path enabled for %d-token context\n", GQA_MAX_CTX);
+        }
     }
     int64_t k_cache_bytes = kv_cache_alloc_size(total_cache_elems);
     m->gqa_k_cache = malloc(k_cache_bytes ? k_cache_bytes : 16);

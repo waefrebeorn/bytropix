@@ -220,6 +220,86 @@ void wubu_fast_attn_decode(
 }
 
 /* ================================================================== */
+/* Sliding Window Attention (SWA) — O(window) not O(cache_len)      */
+/* ================================================================== */
+
+/* Sliding window decode: only attend to last `window` KV positions.
+ * At 512K context with window=4096, this reduces per-token decode
+ * from O(512K) to O(4K) — roughly 100x fewer dot products.
+ *
+ * q:        [n_q_heads * head_dim] — already RoPE'd
+ * k_cache:  [cache_len, n_kv_heads, head_dim] F32
+ * v_cache:  [cache_len, n_kv_heads, head_dim] F32
+ * cache_len: total cached positions
+ * window:   max positions to attend to (0 = unlimited)
+ * out:      [n_q_heads * head_dim]
+ * n_threads: OpenMP threads */
+void wubu_fast_attn_decode_swa(
+        wubu_fast_attn_ctx_t *ctx,
+        const float *q,
+        const float *k_cache,
+        const float *v_cache,
+        int cache_len,
+        float *out,
+        int n_threads,
+        int window)
+{
+    if (cache_len <= 0) { memset(out, 0, (size_t)ctx->n_q_heads * ctx->head_dim * sizeof(float)); return; }
+
+    /* Compute attention window start */
+    int t_start = 0;
+    if (window > 0 && window < cache_len) t_start = cache_len - window;
+    int eff_len = cache_len - t_start;
+
+    int n_q = ctx->n_q_heads, n_kv = ctx->n_kv_heads;
+    int hd = ctx->head_dim, group_sz = ctx->kv_group_size;
+    float scale = 1.0f / sqrtf((float)hd);
+
+    float max_score = -1e30f; /* -INFINITY safe with -ffast-math */
+    float sum_exp = 0.0f;
+    float *out_acc = (float *)alloca((size_t)n_q * hd * sizeof(float));
+    memset(out_acc, 0, (size_t)n_q * hd * sizeof(float));
+
+    for (int t = 0; t < eff_len; t++) {
+        int abs_t = t_start + t;
+        if (abs_t + 16 < cache_len) {
+            __builtin_prefetch(k_cache + (size_t)(abs_t + 16) * n_kv * hd, 0, 3);
+            __builtin_prefetch(v_cache + (size_t)(abs_t + 16) * n_kv * hd, 0, 3);
+        }
+        for (int qh = 0; qh < n_q; qh++) {
+            int g = qh / group_sz;
+            const float *k_tg = k_cache + (size_t)abs_t * n_kv * hd + (size_t)g * hd;
+            const float *q_h = q + (size_t)qh * hd;
+            float dot = 0.0f;
+#if defined(WUBU_HAVE_AVX2)
+            __m256 acc = _mm256_setzero_ps();
+            int d = 0;
+            for (; d + 8 <= hd; d += 8) {
+                acc = _mm256_fmadd_ps(_mm256_loadu_ps(q_h + d),
+                                      _mm256_loadu_ps(k_tg + d), acc);
+            }
+            float tmp[8]; _mm256_storeu_ps(tmp, acc);
+            for (int i = 0; i < 8; i++) dot += tmp[i];
+            for (; d < hd; d++) dot += q_h[d] * k_tg[d];
+#else
+            for (int d = 0; d < hd; d++) dot += q_h[d] * k_tg[d];
+#endif
+            float s = dot * scale;
+            if (s > max_score) { float f = expf(max_score - s); sum_exp *= f; max_score = s; }
+            float ew = expf(s - max_score);
+            sum_exp += ew;
+            const float *v_tg = v_cache + (size_t)abs_t * n_kv * hd + (size_t)g * hd;
+            for (int d = 0; d < hd; d++) out_acc[qh * hd + d] += ew * v_tg[d];
+        }
+    }
+    float inv = 1.0f / sum_exp;
+    for (int qh = 0; qh < n_q; qh++) {
+        float *oh = out + (size_t)qh * hd;
+        for (int d = 0; d < hd; d++) oh[d] = out_acc[qh * hd + d] * inv;
+    }
+}
+
+/* ================================================================== */
 /* Split-K parallel decode (FlashDecoding++ pattern)                  */
 /* ================================================================== */
 

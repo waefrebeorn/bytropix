@@ -36,7 +36,7 @@ typedef struct {
 } wubu_layer_t;
 
 // Complete model
-#define GQA_MAX_CTX 262144  // max cached positions for KV cache (256k context)
+#define GQA_MAX_CTX 524288  // max cached positions for KV cache (512k context)
 /* GQA_KV_DIM is provided by wubu_dims.h (WUBU_DIMS.gqa_kv_dim) so it
  * resolves to the model's real kv dim at load time. */
 

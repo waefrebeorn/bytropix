@@ -47,6 +47,12 @@ typedef struct {
     float *attn_scores;   /* [n_q_heads * max_ctx] — scores + softmax weights */
     float *k_buf;         /* [n_kv_heads * head_dim] — token K read buffer */
     float *v_buf;         /* [n_kv_heads * head_dim] — token V read buffer */
+
+    /* Sliding window config for long-context (512K+).
+     * window_size: only attend to last `window_size` KV positions.
+     * 0 = unlimited (attend to all). Set via WUBU_SWA env var.
+     * At 512K, SWA window=4096 reduces decode from O(512K) to O(4K). */
+    int    window_size;   /* 0 = unlimited, N = last N tokens */
 } wubu_fast_attn_ctx_t;
 
 /* Init workspace. Returns NULL on OOM. Call once per model. */
@@ -136,9 +142,21 @@ void wubu_fast_attn_decode_q8k_pqv(
         int cache_len,
         float *out,
         int n_threads);
+/* Sliding window decode — only attends to last `window` tokens. */
+void wubu_fast_attn_decode_swa(
+        wubu_fast_attn_ctx_t *ctx,
+        const float *q,
+        const float *k_cache,
+        const float *v_cache,
+        int cache_len,
+        float *out,
+        int n_threads,
+        int window);
 
-/* Split-K parallel decode (FlashDecoding++ pattern).
- * Splits K/V cache into n_splits chunks, computes partial attention per
+/* ================================================================== */
+/* Split-K parallel decode (FlashDecoding++ pattern)                  */
+/* ================================================================== */
+/* Splits K/V cache into n_splits chunks, computes partial attention per
  * chunk (local max + sum_exp + output), then merges with log-sum-exp rescale.
  * For 512K context with n_threads=6, this achieves ~5x speedup vs serial.
  *

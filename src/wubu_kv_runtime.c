@@ -26,6 +26,7 @@
 
 int g_kv_scheme = KV_SCHEME_DEFAULT;
 int g_kv_head_dim = 0;
+int g_use_q8_cache = 0; /* set to 1 when fast-attn Q8 decode should be used */
 
 void wubu_kv_set_scheme(int scheme) { g_kv_scheme = scheme; }
 int  wubu_kv_get_scheme(void)        { return g_kv_scheme; }

@@ -15,6 +15,7 @@ extern "C" {
 /* Global selected scheme (set at model load, read by kv_cache_* in wubu_model.h). */
 extern int g_kv_scheme;
 extern int g_kv_head_dim;
+extern int g_use_q8_cache; /* 1 when fast-attn Q8 decode is active (memory pressure) */
 void wubu_kv_set_scheme(int scheme);
 int  wubu_kv_get_scheme(void);
 
