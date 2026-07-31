@@ -30,10 +30,14 @@ typedef struct {
     int   n_kv_heads;
     int   head_dim;
     int   max_ctx;
-    int   n_rot;         /* rotary dimension (e.g. 64 for Qwen3.6) */
-    float freq_base;     /* RoPE base frequency (e.g. 10000000.0) */
-    float scale_factor;  /* RoPE scale (e.g. 0.25 for 4x extension) */
-    int   kv_group_size; /* n_q_heads / n_kv_heads */
+    int   n_rot;
+    float freq_base;
+    float scale_factor;
+    int   kv_group_size;
+
+    /* Tiling constants */
+#define WUBU_TILE_Q      16
+#define WUBU_STREAM_BLOCK 32
 
     /* Precomputed RoPE tables: [max_ctx, n_rot/2] */
     float *rope_sin;

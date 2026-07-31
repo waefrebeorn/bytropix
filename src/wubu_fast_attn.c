@@ -35,6 +35,12 @@
 #  define WUBU_HAVE_AVX2 1
 #endif
 
+/* Tiling configuration — tuned for L1/L2 cache on WSL2 (6P, ~13GB).
+ * TILE_Q=16 rows of Q per tile fits in L2 with space for K/V streaming.
+ * STREAM_BLOCK=32 KV positions per streaming window fits L1. */
+#define TILE_Q      16
+#define STREAM_BLOCK 32
+
 /* ------------------------------------------------------------------ */
 /* Init / free                                                      */
 /* ------------------------------------------------------------------ */
@@ -146,116 +152,63 @@ void wubu_fast_attn_rope(
 
 void wubu_fast_attn_decode(
         wubu_fast_attn_ctx_t *ctx,
-        const float *q,           /* [n_q_heads * head_dim] — already RoPE'd */
+        const float *q,           /* [n_q_heads * head_dim] */
         const float *k_cache,     /* F32: [cache_len, n_kv_heads, head_dim] */
         const float *v_cache,      /* F32: [cache_len, n_kv_heads, head_dim] */
         int cache_len,
-        float *out,               /* [n_q_heads * head_dim] output */
+        float *out,               /* [n_q_heads * head_dim] */
         int n_threads)
 {
-    int n_q       = ctx->n_q_heads;
-    int n_kv      = ctx->n_kv_heads;
-    int hd        = ctx->head_dim;
-    int group_sz  = ctx->kv_group_size;
-    float scale   = 1.0f / sqrtf((float)hd);
-    int total_len = cache_len;
+    if (cache_len <= 0) { memset(out, 0, (size_t)ctx->n_q_heads * ctx->head_dim * sizeof(float)); return; }
 
-    if (total_len <= 0) {
-        memset(out, 0, (size_t)n_q * hd * sizeof(float));
-        return;
-    }
+    /* Single token: scan KV cache, accumulate weighted V in-place */
+    int n_q = ctx->n_q_heads, n_kv = ctx->n_kv_heads;
+    int hd = ctx->head_dim, group_sz = ctx->kv_group_size;
+    float scale = 1.0f / sqrtf((float)hd);
 
-    /*
-     * Phase 1: Compute all attention scores Q·K^T
-     * Layout: K/totallen, n_kv_heads, head_dim]
-     *         Q[n_q_heads, head_dim]
-     * For each KV head g, it serves Q heads [g*group_sz, (g+1)*group_sz)
-     */
+    float max_score = -INFINITY;
+    float sum_exp = 0.0f;
+    float *out_acc = (float *)alloca((size_t)n_q * hd * sizeof(float));
+    memset(out_acc, 0, (size_t)n_q * hd * sizeof(float));
 
-    /* Parallelize over KV positions AND Q heads with OpenMP */
-    #pragma omp parallel for schedule(dynamic, 256) if(total_len > 512 && n_threads > 1)
-    for (int t = 0; t < total_len; t++) {
-        for (int g = 0; g < n_kv; g++) {
-            const float *k_t_g = k_cache + (size_t)t * n_kv * hd + (size_t)g * hd;
-
-            /* Dot product Q heads [g*group_sz, (g+1)*group_sz) × k_t_g */
-            for (int qh = g * group_sz; qh < (g+1) * group_sz; qh++) {
-                const float *q_h = q + (size_t)qh * hd;
-                float dot = 0.0f;
-
+    for (int t = 0; t < cache_len; t++) {
+        /* Software prefetch: 16 lines ahead = 4096B = one L2 line
+         * at 64-byte cache line. Gives ~1000 cycles of latency cover
+         * on WSL2 DDR5 (~50 GB/s, ~200ns/line). */
+        if (t + 16 < cache_len) {
+            __builtin_prefetch(k_cache + (size_t)(t + 16) * n_kv * hd, 0, 3);
+            __builtin_prefetch(v_cache + (size_t)(t + 16) * n_kv * hd, 0, 3);
+        }
+        for (int qh = 0; qh < n_q; qh++) {
+            int g = qh / group_sz;
+            const float *k_tg = k_cache + (size_t)t * n_kv * hd + (size_t)g * hd;
+            const float *q_h = q + (size_t)qh * hd;
+            float dot = 0.0f;
 #if defined(WUBU_HAVE_AVX2)
-                __m256 acc = _mm256_setzero_ps();
-                int d = 0;
-                for (; d + 8 <= hd; d += 8) {
-                    __m256 qv = _mm256_loadu_ps(q_h + d);
-                    __m256 kv = _mm256_loadu_ps(k_t_g + d);
-                    acc = _mm256_fmadd_ps(qv, kv, acc);
-                }
-                /* Horizontal sum */
-                float tmp[8];
-                _mm256_storeu_ps(tmp, acc);
-                for (int i = 0; i < 8; i++) dot += tmp[i];
-                for (; d < hd; d++) dot += q_h[d] * k_t_g[d];
-#else
-                for (int d = 0; d < hd; d++) dot += q_h[d] * k_t_g[d];
-#endif
-                /* Store score: interleaved for per-head softmax later */
-                ctx->attn_scores[(size_t)t * n_q + qh] = dot * scale;
-            }
-        }
-    }
-
-    /*
-     * Phase 2: Per-Q-head online softmax + weighted V sum
-     * For each Q head: normalize scores over [0, total_len),
-     * then accumulate out[qh, d] = sum_t softmax[t, qh] * V_cache[t, g, d]
-     */
-    /* Parallelize over Q heads */
-    #pragma omp parallel for if(n_q > 2 && n_threads > 1)
-    for (int qh = 0; qh < n_q; qh++) {
-        int g = qh / group_sz;  /* which KV head serves this Q head */
-
-        /* Find max score for this Q head (numerical stability) */
-        float max_score = -INFINITY;
-        for (int t = 0; t < total_len; t++) {
-            float s = ctx->attn_scores[(size_t)t * n_q + qh];
-            if (s > max_score) max_score = s;
-        }
-
-        /* Compute exp(s - max) and sum */
-        float sum_exp = 0.0f;
-        for (int t = 0; t < total_len; t++) {
-            float s = ctx->attn_scores[(size_t)t * n_q + qh];
-            float e = expf(s - max_score);
-            ctx->attn_scores[(size_t)t * n_q + qh] = e;  /* reuse buffer */
-            sum_exp += e;
-        }
-        float inv_sum = 1.0f / sum_exp;
-
-        /* Weighted V accumulation */
-        float *out_h = out + (size_t)qh * hd;
-        memset(out_h, 0, (size_t)hd * sizeof(float));
-
-#if defined(WUBU_HAVE_AVX2)
-        for (int t = 0; t < total_len; t++) {
-            float weight = ctx->attn_scores[(size_t)t * n_q + qh] * inv_sum;
-            const float *v_t_g = v_cache + (size_t)t * n_kv * hd + (size_t)g * hd;
-            __m256 wv = _mm256_set1_ps(weight);
+            __m256 acc = _mm256_setzero_ps();
             int d = 0;
             for (; d + 8 <= hd; d += 8) {
-                __m256 vv = _mm256_loadu_ps(v_t_g + d);
-                __m256 ov = _mm256_loadu_ps(out_h + d);
-                _mm256_storeu_ps(out_h + d, _mm256_fmadd_ps(wv, vv, ov));
+                acc = _mm256_fmadd_ps(_mm256_loadu_ps(q_h + d),
+                                      _mm256_loadu_ps(k_tg + d), acc);
             }
-            for (; d < hd; d++) out_h[d] += weight * v_t_g[d];
-        }
+            float tmp[8]; _mm256_storeu_ps(tmp, acc);
+            for (int i = 0; i < 8; i++) dot += tmp[i];
+            for (; d < hd; d++) dot += q_h[d] * k_tg[d];
 #else
-        for (int t = 0; t < total_len; t++) {
-            float weight = ctx->attn_scores[(size_t)t * n_q + qh] * inv_sum;
-            const float *v_t_g = v_cache + (size_t)t * n_kv * hd + (size_t)g * hd;
-            for (int d = 0; d < hd; d++) out_h[d] += weight * v_t_g[d];
-        }
+            for (int d = 0; d < hd; d++) dot += q_h[d] * k_tg[d];
 #endif
+            float s = dot * scale;
+            if (s > max_score) { float f = expf(max_score - s); sum_exp *= f; max_score = s; }
+            float ew = expf(s - max_score);
+            sum_exp += ew;
+            const float *v_tg = v_cache + (size_t)t * n_kv * hd + (size_t)g * hd;
+            for (int d = 0; d < hd; d++) out_acc[qh * hd + d] += ew * v_tg[d];
+        }
+    }
+    float inv = 1.0f / sum_exp;
+    for (int qh = 0; qh < n_q; qh++) {
+        float *oh = out + (size_t)qh * hd;
+        for (int d = 0; d < hd; d++) oh[d] = out_acc[qh * hd + d] * inv;
     }
 }
 
