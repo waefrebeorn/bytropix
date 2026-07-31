@@ -312,8 +312,9 @@ int wubu_polar_precache_attention(wubu_polar_precache_t *pc,
 
     float max_s = -1e30f;
     float sum_e = 0.0f;
-    float *p_out = (float *)calloc((size_t)d, sizeof(float));
+    float *p_out = (float *)alloca((size_t)d * sizeof(float));
     if (!p_out) return -1;
+    memset(p_out, 0, (size_t)d * sizeof(float));
 
     /* F32 recent tokens (high accuracy for most-attended) */
     int n_recent = n_recent_f32 < pc->n_tokens ? n_recent_f32 : pc->n_tokens;
@@ -365,7 +366,6 @@ int wubu_polar_precache_attention(wubu_polar_precache_t *pc,
     tl_pso = NULL;  /* restore */
 
     for (int j = 0; j < d; j++) out[j] = p_out[j] / (sum_e + 1e-10f);
-    free(p_out);
     return 0;
 }
 
@@ -380,14 +380,13 @@ float wubu_polar_rambus_fused_dot(
     int k_bytes) {
     int d = pso->d;
     
-    /* Decode K inline using serial bit reader */
-    float *k = (float *)malloc((size_t)d * sizeof(float));
-    pso_decode_fast(NULL, k_seed, k_bytes, k, d);
-    
+    /* Decode K inline using serial bit reader — stack buffer, no malloc */
+    float k_buf[WUBU_POLAR_MAX_D];
+    pso_decode_fast(NULL, k_seed, k_bytes, k_buf, d);
+
     /* Dot product */
     float dot = 0.0f;
-    for (int i = 0; i < d; i++) dot += q[i] * k[i];
-    
-    free(k);
+    for (int i = 0; i < d; i++) dot += q[i] * k_buf[i];
+
     return dot;
 }

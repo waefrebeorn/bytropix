@@ -413,6 +413,10 @@ void wubu_fast_attn_decode_q8k_pqv(
     float *out_acc = (float *)alloca((size_t)n_q * hd * sizeof(float));
     memset(out_acc, 0, (size_t)n_q * hd * sizeof(float));
 
+    /* Pre-allocate V decode buffer ONCE — NOT per-iteration (alloca doesn't
+     * free until function return; per-iter alloca = stack overflow at scale) */
+    float *v_dec_buf = (float *)alloca((size_t)hd * sizeof(float));
+
     float max_score = -INFINITY;
     float sum_exp = 0.0f;
 
@@ -461,20 +465,19 @@ void wubu_fast_attn_decode_q8k_pqv(
             float ew = expf(s - max_score);
             sum_exp += ew;
 
-            /* V: PolarQuant decode — replace Q8 V with PQ V */
+            /* V: PolarQuant decode — use pre-allocated buffer (NOT per-iter alloca) */
             const uint8_t *v_pq = (const uint8_t *)
                 ((const char *)v_cache_pq + (size_t)t * n_kv * pq_bytes
                  + (size_t)g * pq_bytes);
-            float *v_dec = (float *)alloca((size_t)hd * sizeof(float));
             if (wubu_polarquant_dequantize_kv(pq_v,
-                (const float *)v_pq, pq_bytes, v_dec, hd) != 0) {
-                memset(v_dec, 0, (size_t)hd * sizeof(float));
+                (const float *)v_pq, pq_bytes, v_dec_buf, hd) != 0) {
+                memset(v_dec_buf, 0, (size_t)hd * sizeof(float));
             }
 
             /* Weighted accumulation */
             float *oacc = out_acc + (size_t)qh * hd;
             for (int i = 0; i < hd; i++) {
-                oacc[i] += ew * v_dec[i];
+                oacc[i] += ew * v_dec_buf[i];
             }
         }
     }
@@ -538,21 +541,20 @@ void wubu_fast_attn_decode_q8(
             for (int b = 0; b < blocks_per_head; b++) {
                 float d = k_head[b].d;
                 float dq[32];
-#if defined(WUBU_HAVE_AVX2)
-                /* Dequant 32 int8 → 32 float: scale * qs[i] */
-                __m256i qs8 = _mm256_loadu_si256((const __m256i *)k_head[b].qs);
-                __m256 fv = _mm256_set1_ps(d);
-                __m256i ext = _mm256_cvtepi8_epi32(_mm256_castsi256_si128(qs8));
-                __m256 fq = _mm256_mul_ps(_mm256_cvtepi32_ps(ext), fv);
-                _mm256_storeu_ps(dq, fq);
-                /* Dot with Q */
-                __m256 qv = _mm256_loadu_ps(q_h + b * 32);
-                __m256 acc = _mm256_mul_ps(qv, fq);
-                /* Horizontal sum */
-                float tmp[8]; _mm256_storeu_ps(tmp, acc);
-                for (int i = 0; i < 8; i++) dot += tmp[i];
-#else
+                /* Dequant: scalar (compiler auto-vectorizes with -O3 -march=native).
+                 * Was: broken AVX2 _mm256_cvtepi8_epi32 only processed lower 8
+                 * of 32 int8 values — 75% of dot product data was lost. */
                 for (int i = 0; i < 32; i++) dq[i] = d * (float)k_head[b].qs[i];
+#if defined(WUBU_HAVE_AVX2)
+                /* AVX2 dot product: 4 × 8-element chunks */
+                for (int i = 0; i < 32; i += 8) {
+                    __m256 qv = _mm256_loadu_ps(q_h + b * 32 + i);
+                    __m256 dv = _mm256_loadu_ps(dq + i);
+                    __m256 acc = _mm256_mul_ps(qv, dv);
+                    float tmp[8]; _mm256_storeu_ps(tmp, acc);
+                    for (int j = 0; j < 8; j++) dot += tmp[j];
+                }
+#else
                 for (int i = 0; i < 32 && b * 32 + i < hd; i++)
                     dot += q_h[b * 32 + i] * dq[i];
 #endif

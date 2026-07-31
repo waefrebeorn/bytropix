@@ -121,7 +121,21 @@ static void polar_encode_recursive(const float *x, int n, int d_orig,
         float theta = atan2f(ry, rx);
         radii_scratch[p] = r;
 
-        float norm_a = (theta + (float)M_PI) / (2.0f * (float)M_PI);
+        /* Angle normalization per PolarQuant paper (arXiv:2502.02617):
+         * Level 0 (n == d_orig): angles uniform in [0, 2π) → map [−π,π]→[0,1]
+         * Levels ≥1: angles concentrate in [0, π/2] → map [−π/2,π/2]→[0,1]
+         * Deeper levels have tighter concentration → utilize full codebook. */
+        float norm_a;
+        if (n == d_orig) {
+            /* Level 0: full circle */
+            norm_a = (theta + (float)M_PI) / (2.0f * (float)M_PI);
+        } else {
+            /* Deeper levels: half range [−π/2, π/2] */
+            float theta_clamped = theta;
+            if (theta_clamped > (float)M_PI / 2.0f) theta_clamped -= (float)M_PI;
+            if (theta_clamped < -(float)M_PI / 2.0f) theta_clamped += (float)M_PI;
+            norm_a = (theta_clamped + (float)M_PI / 2.0f) / (float)M_PI;
+        }
         int idx = (int)(norm_a * levels);
         if (idx >= levels) idx = levels - 1;
         if (idx < 0) idx = 0;
@@ -183,7 +197,15 @@ static void polar_decode_recursive(int n, int d_orig,
     for (int p = 0; p < n_pairs; p++) {
         int idx = angles_scratch[p];
         float norm_a = (float)idx / (float)levels;
-        float theta = norm_a * 2.0f * (float)M_PI - (float)M_PI;
+        /* Decode must match encode normalization:
+         * Level 0 (n == d_orig): [0,1] → [−π, π] (full circle)
+         * Levels ≥1: [0,1] → [−π/2, π/2] (half range, paper: [0, π/2]) */
+        float theta;
+        if (n == d_orig) {
+            theta = norm_a * 2.0f * (float)M_PI - (float)M_PI;
+        } else {
+            theta = norm_a * (float)M_PI - (float)M_PI / 2.0f;
+        }
         float r = radii_scratch[p];
         x_out[2*p]   = r * cosf(theta);
         x_out[2*p+1] = r * sinf(theta);
