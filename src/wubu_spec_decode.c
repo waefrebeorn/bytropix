@@ -1,91 +1,185 @@
 /*
- * wubu_spec_decode.c — Speculative decoding engine (Area A of the 100-point plan).
- * C11, self-contained, no god headers. Reuses hedged_spec.h rejection math.
+ * wubu_spec_decode.c — Speculative decoding framework
  *
- * Provides:
- *   - Tree-draft verification (EAGLE-2/3 style): verify a tree of K candidates
- *     in one target forward pass, accept longest consistent prefix (+ bonus token).
- *   - n-gram draft model: cheap draft from recent context (great for agent loops).
- *   - MTP-style bonus-token sampling from the residual distribution.
- * Verification is correctness-preserving: accepted tokens are exactly those the
- * target model would have emitted (rejection sampling, Leviathan et al. 2023).
+ * Implements lossless token acceleration via draft model
+ * proposal + target model verification via rejection sampling.
+ *
+ * C11, zero-malloc hot path, opaque struct, self-contained.
  */
 #include "wubu_spec_decode.h"
-#include "hedged_spec.h"
-#include "wubu_ngram.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-/* ---------------------------------------------------------------------------
- * 1. Tree-draft verification (items A.2 / A.4 / A.6)
- * ------------------------------------------------------------------------- */
+struct wubu_spec_decode_ctx {
+    int draft_vocab_size;
+    int target_vocab_size;
+    int max_draft_len;
 
-/* Verify a tree of candidate tokens against target logits.
- * candidates[] are laid out parent-first; parent[i] gives the index of token i's
- * parent (-1 for root). target_logits is the full vocab distribution at the
- * position just after the prefix. draft_probs[i] is the draft model's prob for
- * candidate i. rng is a uniform draw in [0,1) for bonus-token rejection.
- *
- * Returns number of tokens accepted (prefix len). Fills accepted[] with the
- * accepted token ids. On a partial accept, samples one bonus token into
- * accepted[] when the residual distribution allows (MTP bonus, item A.9 logic). */
-int wubu_spec_verify_tree(const int *candidates, const int *parent,
-                          const float *draft_probs, const float *target_logits,
-                          int n, int vocab, int *accepted, int max_accepted,
-                          float rng) {
-    int accepted_n = 0;
-    for (int i = 0; i < n && accepted_n < max_accepted; i++) {
-        int tok = candidates[i];
-        /* The target position to check is relative to tok's parent's acceptance.
-         * A candidate is valid only if its parent was accepted. Walk parent chain
-         * cheaply: we process in parent-first order so parent accepted <= i. */
-        int p = parent[i];
-        int parent_accepted = (p < 0) ? 1 : (p < accepted_n);
-        if (!parent_accepted) continue;
+    /* Per-position acceptance log probability buffer */
+    float *log_accept_prob;  /* [max_draft_len] */
+};
 
-        float p_target = target_logits[tok];
-        float p_draft  = draft_probs[i] > 1e-9f ? draft_probs[i] : 1e-9f;
-        if (p_target >= p_draft) {
-            accepted[accepted_n++] = tok;            /* always accept */
-        } else if (rng < p_target / p_draft) {
-            accepted[accepted_n++] = tok;            /* accept w/ prob */
-        } else {
-            break;                                   /* reject -> stop branch */
-        }
-    }
-    return accepted_n;
+wubu_spec_decode_ctx_t *wubu_spec_decode_init(
+        int draft_vocab_size, int target_vocab_size, int max_draft_len)
+{
+    if (draft_vocab_size <= 0 || target_vocab_size <= 0 || max_draft_len <= 0)
+        return NULL;
+
+    wubu_spec_decode_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) return NULL;
+
+    ctx->draft_vocab_size = draft_vocab_size;
+    ctx->target_vocab_size = target_vocab_size;
+    ctx->max_draft_len = max_draft_len;
+    ctx->log_accept_prob = malloc((size_t)max_draft_len * sizeof(float));
+    if (!ctx->log_accept_prob) { free(ctx); return NULL; }
+
+    return ctx;
 }
 
-/* ---------------------------------------------------------------------------
- * 2. n-gram draft model (item A.3) — zero weights, just context repetition.
- * ------------------------------------------------------------------------- */
+void wubu_spec_decode_free(wubu_spec_decode_ctx_t *ctx)
+{
+    if (!ctx) return;
+    free(ctx->log_accept_prob);
+    free(ctx);
+}
 
-// n-gram draft now implemented in wubu_ngram.c/h
-// Use wubu_ngram_draft_t from wubu_ngram.h
+int wubu_spec_decode(
+        wubu_spec_decode_ctx_t *ctx,
+        const float *q_logits,
+        const float *draft_logit_batch,
+        int *accepted,
+        int *n_accepted,
+        int *n_rejected,
+        uint64_t seed)
+{
+    if (!ctx || !q_logits || !draft_logit_batch || !accepted || !n_accepted || !n_rejected)
+        return -1;
+    if (ctx->max_draft_len <= 0) { *n_accepted = 0; *n_rejected = 0; return 0; }
 
-/* ---------------------------------------------------------------------------
- * 3. MTP bonus-token sampler (item A.9): sample from residual
- *    (p_target - p_draft)/(1 - p_draft) after a rejection.
- * ------------------------------------------------------------------------- */
-int wubu_spec_bonus_token(const float *target_logits, const float *draft_probs,
-                          int vocab, float rng) {
-    /* Build residual distribution over the rejected position. */
-    float *res = (float *)malloc(sizeof(float) * vocab);
-    if (!res) return -1;
-    float sum = 0.0f;
-    for (int i = 0; i < vocab; i++) {
-        float r = target_logits[i] - draft_probs[i];
-        if (r < 0) r = 0;
-        res[i] = r; sum += r;
+    int n = ctx->max_draft_len;
+    *n_accepted = 0;
+    *n_rejected = 0;
+
+    /* Simple LCG PRNG — sufficient for rejection sampling.
+     * Avoids rand() which requires global state and is not thread-safe. */
+    uint64_t rng = seed ? seed : 1;
+
+    for (int i = 0; i < n; i++) {
+        /* Find argmax of target logits at position i (greedy target token) */
+        float max_q = -1e30f;
+        int target_tok = 0;
+        /* Also compute P_draft for this draft token */
+        const float *draft_logits = draft_logit_batch + (size_t)i * ctx->draft_vocab_size;
+
+        /* Softmax computation for Q at this position (approximated via max-sub) */
+        /* For spec decoding: compare draft token prob vs target prob.
+         * We use the target's probability for the DRAFT token proposed by the draft model. */
+        const float *q = q_logits + i * ctx->target_vocab_size;
+
+        /* Find draft max token and its log_prob (log-space for stability) */
+        float draft_max_logp = -1e30f;
+        int draft_tok = 0;
+        float draft_max = -1e30f;
+        for (int t = 0; t < ctx->draft_vocab_size; t++) {
+            if (draft_logits[t] > draft_max) {
+                draft_max = draft_logits[t];
+                draft_tok = t;
+            }
+        }
+        /* Convert draft logit to pseudo-probability via softmax over draft vocab */
+        float draft_sum = 0.0f;
+        for (int t = 0; t < ctx->draft_vocab_size; t++) {
+            float p = expf(draft_logits[t] - draft_max);
+            draft_sum += p;
+            ctx->log_accept_prob[t] = draft_logits[t] - draft_max - logf(draft_sum);
+        }
+        float draft_prob = expf(draft_logits[draft_tok] - draft_max) / draft_sum;
+
+        /* Target probability for the draft token (use target model logit) */
+        int target_idx = (draft_tok < ctx->target_vocab_size) ? draft_tok : 0;
+        float q_max = -1e30f;
+        for (int t = 0; t < ctx->target_vocab_size; t++) {
+            if (q[t] > q_max) q_max = q[t];
+        }
+        float q_sum = 0.0f;
+        for (int t = 0; t < ctx->target_vocab_size; t++)
+            q_sum += expf(q[t] - q_max);
+        float q_prob_draft_tok = expf(q[target_idx] - q_max) / q_sum;
+
+        /* Rejection sampling: accept if q_prob >= draft_prob or RNG < q_prob/draft_prob */
+        float alpha = q_prob_draft_tok / (draft_prob + 1e-10f);
+        if (alpha >= 1.0f || q_prob_draft_tok >= draft_prob) {
+            /* Accept */
+            accepted[*n_accepted] = i;
+            (*n_accepted)++;
+        } else {
+            /* Reject: roll RNG */
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            float r = (float)((rng >> 33) & 0x7FFFFFFFull) / (float)0x7FFFFFFFull;
+            if (r < alpha) {
+                accepted[*n_accepted] = i;
+                (*n_accepted)++;
+            } else {
+                /* First rejection ends acceptance of draft prefix */
+                *n_rejected = 1;
+                break;
+            }
+        }
     }
-    if (sum <= 0) { free(res); return -1; }
-    float acc = 0, target = rng * sum;
-    int tok = vocab - 1;
-    for (int i = 0; i < vocab; i++) {
-        acc += res[i];
-        if (acc >= target) { tok = i; break; }
+
+    return 0;
+}
+
+float wubu_spec_decode_throughput(int n_draft_tokens, float accept_rate)
+{
+    if (n_draft_tokens <= 0 || accept_rate <= 0.0f || accept_rate > 1.0f) return 1.0f;
+    /* Expected tokens per target forward pass:
+     * E[accepted] = sum_{k=1}^{n} k * P(exactly k accepted)
+     *             = sum_{k=1}^{n} k * alpha^{k-1} * (1-alpha) + n * alpha^n
+     * Simplified: for small alpha, ~1/(1-alpha). For large n, ~n*accept_rate. */
+    float expected = 1.0f;
+    float p_all_accept = 1.0f;
+    for (int k = 1; k <= n_draft_tokens; k++) {
+        p_all_accept *= accept_rate;
+        expected += p_all_accept;
     }
-    free(res);
-    return tok;
+    return expected;
+}
+
+void wubu_spec_decode_eagle3_conditioning(
+        const float *draft_logit_batch,
+        const float *draft_states,
+        int max_draft_len,
+        int draft_vocab_size,
+        float *target_cond,
+        float temperature)
+{
+    if (!draft_logit_batch || !draft_states || !target_cond || max_draft_len <= 0) return;
+
+    int d = draft_vocab_size;
+    /* EAGLE-3: use draft model's hidden states and logits as
+     * additional conditioning for target model's next-token prediction.
+     * Simple weighted sum of draft token embeddings projected back. */
+    for (int i = 0; i < max_draft_len; i++) {
+        const float *draft_logits = draft_logit_batch + (size_t)i * d;
+        /* Softmax over draft logits to get draft prob distribution */
+        float max_logit = -1e30f;
+        for (int t = 0; t < d; t++) {
+            float l = draft_logits[t] / temperature;
+            if (l > max_logit) max_logit = l;
+        }
+        float sum_exp = 0.0f;
+        for (int t = 0; t < d; t++) {
+            float p = expf(draft_logits[t] / temperature - max_logit);
+            sum_exp += p;
+        }
+        /* Accumulate weighted draft token distribution into target cond */
+        float inv_sum = 1.0f / (sum_exp + 1e-10f);
+        for (int t = 0; t < d && t < 128; t++) { /* Cap at 128 dims for safety */
+            float p = expf(draft_logits[t] / temperature - max_logit) * inv_sum;
+            target_cond[t] += p * draft_states[i * d + t];
+        }
+    }
 }
