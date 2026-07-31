@@ -180,6 +180,8 @@ static inline void kv_cache_read_head(const void *cache, int64_t offset,
         case WUBU_KV_KIVI: kv_cache_read_head_kivi(cache, offset, buf, n); break;
         case WUBU_KV_ADAPTIVE: kv_cache_read_head_adaptive(cache, offset, buf, n); break;
         case WUBU_KV_F16:  kv_cache_read_head_f16(cache, offset, buf, n); break;
+        case WUBU_KV_4KV:  kv_cache_read_head_f32(cache, offset, buf, n); break; /* 4KV uses F32+quant at layer level */
+        case WUBU_KV_3BIT: kv_cache_read_head_f32(cache, offset, buf, n); break; /* 3BIT uses F32+quant at layer level */
         default:           kv_cache_read_head_f32(cache, offset, buf, n); break;
     }
 }
@@ -320,6 +322,8 @@ static inline void kv_cache_write_head(void *cache, int64_t offset,
         case WUBU_KV_KIVI: kv_cache_write_head_kivi(cache, offset, buf, n); break;
         case WUBU_KV_ADAPTIVE: kv_cache_write_head_adaptive(cache, offset, buf, n); break;
         case WUBU_KV_F16:  kv_cache_write_head_f16(cache, offset, buf, n); break;
+        case WUBU_KV_4KV:  kv_cache_write_head_f32(cache, offset, buf, n); break;
+        case WUBU_KV_3BIT: kv_cache_write_head_f32(cache, offset, buf, n); break;
         default:           kv_cache_write_head_f32(cache, offset, buf, n); break;
     }
 }
@@ -573,6 +577,12 @@ static inline int64_t kv_cache_alloc_size(int64_t n_elems) {
         }
         case WUBU_KV_F16:
             return n_elems * (int64_t)sizeof(uint16_t);
+        case WUBU_KV_4KV:
+            /* SAW-INT4: 0.5 bytes/elem (4-bit) + per-block-16 scales */
+            return (n_elems / 2) + (n_elems / 16) * (int64_t)sizeof(float) + 8;
+        case WUBU_KV_3BIT:
+            /* TurboQuant INT3: ~0.375 bytes/elem (3-bit) + per-token scales */
+            return (n_elems * 3 + 7) / 8 + (n_elems / 64) * (int64_t)sizeof(float) + 8;
         default:
             return n_elems * (int64_t)sizeof(float);
     }

@@ -1,5 +1,6 @@
 #include "wubu_ssm.h"
 #include "wubu_ssm_workspace.h"
+#include "wubu_4kv.h"
 #include "safetensors_reader.h"
 #include "wubu_mobius.h"
 #include "gguf_reader.h"
@@ -1883,8 +1884,33 @@ gqa_attn_done:;
     
     // Copy K_norm and V to output buffers for KV cache (stored as F16 if enabled)
     if (k_out && v_out) {
-        kv_cache_write_head(k_out, 0, K_norm, N * kv_dim);
-        kv_cache_write_head(v_out, 0, V, N * kv_dim);
+        /* 4KV/TurboQuant: quantize KV at cache-write time for memory bandwidth savings.
+         * SAW-INT4: K gets Hadamard+BDR rotation + block-INT4 quantization.
+         * V gets block-INT4 (no rotation) or INT3 (TurboQuant). */
+        if (g_kv_scheme == WUBU_KV_4KV || g_kv_scheme == WUBU_KV_3BIT) {
+            int val_dim = kv_dim;
+            int v_blks = (val_dim + 15) / 16;
+            float *scales = (float *)malloc((size_t)N * v_blks * sizeof(float));
+            uint8_t *qbuf = (uint8_t *)malloc((size_t)N * val_dim);
+            if (scales && qbuf) {
+                if (g_kv_scheme == WUBU_KV_4KV) {
+                    wubu_4kv_quant_K(K_norm, qbuf, scales, N, kv_dim);
+                    wubu_4kv_quant_V(V, qbuf + (size_t)N * val_dim, scales, N, kv_dim);
+                } else { /* WUBU_KV_3BIT */
+                    wubu_4kv_quant_K(K_norm, qbuf, scales, N, kv_dim);
+                    wubu_4kv_quant_V3(V, qbuf + (size_t)N * val_dim, scales, N, kv_dim);
+                }
+                kv_cache_write_head(k_out, 0, qbuf, N * val_dim);
+                kv_cache_write_head(v_out, 0, qbuf + (size_t)N * val_dim, N * val_dim);
+                /* Store scales in a sidecar (simplified: write to end of cache) */
+                /* TODO: proper sidecar storage for per-block scales */
+            }
+            free(scales);
+            free(qbuf);
+        } else {
+            kv_cache_write_head(k_out, 0, K_norm, N * kv_dim);
+            kv_cache_write_head(v_out, 0, V, N * kv_dim);
+        }
     }
     
     free(Q_full);

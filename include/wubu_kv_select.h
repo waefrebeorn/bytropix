@@ -27,6 +27,8 @@ typedef enum {
     WUBU_KV_KIVI = 4,    /* KIVI per-token V (K!=V): ~1.03 bytes/elem */
     WUBU_KV_VQ   = 5,    /* KB2 doc 014: sub-4-bit VQ (data-independent codebook) */
     WUBU_KV_ADAPTIVE = 6, /* doc 001: Ecco entropy-aware 2-8bit per-block */
+    WUBU_KV_4KV    = 7,   /* doc 013: SAW-INT4 Hadamard-BDR K + block-INT4 V */
+    WUBU_KV_3BIT   = 8,   /* doc 014: TurboQuant INT3 V (sub-3-bit) */
 } wubu_kv_scheme_t;
 
 typedef struct {
