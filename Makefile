@@ -1015,7 +1015,7 @@ test_q8k_pqv: tools/test_q8k_pqv.c src/wubu_fast_attn.o src/wubu_polarquant.o sr
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
-test_splitk: tools/test_splitk.c src/wubu_fast_attn.o
+test_splitk: tools/test_splitk.c src/wubu_fast_attn.o src/wubu_polarquant.o src/wubu_mobius.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
