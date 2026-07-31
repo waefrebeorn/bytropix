@@ -971,11 +971,11 @@ OBJS += src/wubu_kernel.o
 src/wubu_fast_attn.o: src/wubu_fast_attn.c include/wubu_fast_attn.h
 	$(CC) $(CFLAGS) -fopenmp -I include -c -o $@ $<
 
-test_fast_attn: tools/test_fast_attn.c src/wubu_fast_attn.o
+test_fast_attn: tools/test_fast_attn.c src/wubu_fast_attn.o src/wubu_polarquant.o src/wubu_mobius.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
-test_fast_attn_q8: tools/test_fast_attn_q8.c src/wubu_fast_attn.o
+test_fast_attn_q8: tools/test_fast_attn_q8.c src/wubu_fast_attn.o src/wubu_polarquant.o src/wubu_mobius.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
@@ -1000,5 +1000,17 @@ test_polarquant_scale: tools/test_polarquant_scale.c src/wubu_polarquant.o
 	./$@
 
 test_polar_pso: tools/test_polar_pso.c src/wubu_polar_pso.o src/wubu_polarquant.o
+	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
+	./$@
+
+test_polarquant_benchmark: tools/test_polarquant_benchmark.c src/wubu_polarquant.o src/wubu_mobius.o
+	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
+	./$@
+
+test_polarquant_benchmark: tools/test_polarquant_benchmark.c src/wubu_polarquant.o src/wubu_polar_pso.o src/wubu_mobius.o
+	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
+	./$@
+
+test_q8k_pqv: tools/test_q8k_pqv.c src/wubu_fast_attn.o src/wubu_polarquant.o src/wubu_q8.o src/wubu_mobius.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@

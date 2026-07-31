@@ -25,6 +25,7 @@
  */
 
 #include "wubu_fast_attn.h"
+#include "wubu_polarquant.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -381,7 +382,113 @@ void wubu_fast_attn_write_kv(
 }
 
 /* ================================================================== */
-/* Q8 KV cache fast decode — 4x bandwidth reduction vs F32         */
+/* Hybrid Q8_K + PolarQuant_V cache fast decode                       */
+/* Q8 for K (score accuracy critical), PolarQuant for V (6x compress)  */
+/* ================================================================== */
+
+void wubu_fast_attn_decode_q8k_pqv(
+        wubu_fast_attn_ctx_t *ctx,
+        const float *q,           /* [n_q_heads * head_dim] — already RoPE'd */
+        const void *k_cache_q8,  /* Q8_0 blocks */
+        const void *v_cache_pq,  /* PolarQuant packed bitstream */
+        const wubu_polarquant_t *pq_v,  /* PQ config for V */
+        int pq_v_bytes_per_token,
+        int cache_len,
+        float *out,              /* [n_q_heads * head_dim] */
+        int n_threads)
+{
+    (void)n_threads;  /* single-threaded for now */
+    if (cache_len <= 0) {
+        memset(out, 0, (size_t)ctx->n_q_heads * ctx->head_dim * sizeof(float));
+        return;
+    }
+
+    int n_q = ctx->n_q_heads, n_kv = ctx->n_kv_heads;
+    int hd = ctx->head_dim, group_sz = ctx->kv_group_size;
+    float scale = 1.0f / sqrtf((float)hd);
+    int blocks_per_head = (hd + 31) / 32;
+    int kv_head_bytes_q8 = blocks_per_head * (int)sizeof(wubu_q8_block);
+    int pq_bytes = pq_v_bytes_per_token;
+
+    float *out_acc = (float *)alloca((size_t)n_q * hd * sizeof(float));
+    memset(out_acc, 0, (size_t)n_q * hd * sizeof(float));
+
+    float max_score = -INFINITY;
+    float sum_exp = 0.0f;
+
+    for (int t = 0; t < cache_len; t++) {
+        /* Prefetch Q8 K and PQ V for next token */
+        if (t + 16 < cache_len) {
+            __builtin_prefetch((const char *)k_cache_q8 +
+                (size_t)(t + 16) * n_kv * kv_head_bytes_q8, 0, 3);
+            __builtin_prefetch((const char *)v_cache_pq +
+                (size_t)(t + 16) * n_kv * pq_bytes, 0, 3);
+        }
+
+        for (int qh = 0; qh < n_q; qh++) {
+            int g = qh / group_sz;
+
+            /* K: Q8 decode (same as wubu_fast_attn_decode_q8) */
+            const wubu_q8_block *k_head = (const wubu_q8_block *)
+                ((const char *)k_cache_q8 + (size_t)t * n_kv * kv_head_bytes_q8
+                 + (size_t)g * kv_head_bytes_q8);
+
+            const float *q_h = q + (size_t)qh * hd;
+            float dot = 0.0f;
+            for (int b = 0; b < blocks_per_head; b++) {
+                float d = k_head[b].d;
+#ifdef WUBU_HAVE_AVX2
+                __m256i qs8 = _mm256_loadu_si256((const __m256i *)k_head[b].qs);
+                __m256 fv = _mm256_set1_ps(d);
+                __m256i ext = _mm256_cvtepi8_epi32(_mm256_castsi256_si128(qs8));
+                __m256 fq = _mm256_mul_ps(_mm256_cvtepi32_ps(ext), fv);
+                __m256 qv = _mm256_loadu_ps(q_h + b * 32);
+                __m256 acc = _mm256_mul_ps(qv, fq);
+                float tmp[8]; _mm256_storeu_ps(tmp, acc);
+                for (int i = 0; i < 8; i++) dot += tmp[i];
+#else
+                for (int i = 0; i < 32 && b * 32 + i < hd; i++)
+                    dot += q_h[b * 32 + i] * d * (float)k_head[b].qs[i];
+#endif
+            }
+
+            float s = dot * scale;
+            if (s > max_score) {
+                float f = expf(max_score - s);
+                sum_exp *= f;
+                max_score = s;
+            }
+            float ew = expf(s - max_score);
+            sum_exp += ew;
+
+            /* V: PolarQuant decode — replace Q8 V with PQ V */
+            const uint8_t *v_pq = (const uint8_t *)
+                ((const char *)v_cache_pq + (size_t)t * n_kv * pq_bytes
+                 + (size_t)g * pq_bytes);
+            float *v_dec = (float *)alloca((size_t)hd * sizeof(float));
+            if (wubu_polarquant_dequantize_kv(pq_v,
+                (const float *)v_pq, pq_bytes, v_dec, hd) != 0) {
+                memset(v_dec, 0, (size_t)hd * sizeof(float));
+            }
+
+            /* Weighted accumulation */
+            float *oacc = out_acc + (size_t)qh * hd;
+            for (int i = 0; i < hd; i++) {
+                oacc[i] += ew * v_dec[i];
+            }
+        }
+    }
+
+    float inv = 1.0f / sum_exp;
+    for (int qh = 0; qh < n_q; qh++) {
+        float *oh = out + (size_t)qh * hd;
+        for (int d = 0; d < hd; d++)
+            oh[d] = out_acc[qh * hd + d] * inv;
+    }
+}
+
+/* ================================================================== */
+/* Q8 KV cache fast decode — 4x bandwidth reduction vs F32            */
 /* ================================================================== */
 /* Q8_0 block layout: { float d; int8_t qs[32]; } = 36 bytes per 32 elements
  * At 512K context, F32 KV reads 858ms/token. Q8 KV reads 215ms/token.

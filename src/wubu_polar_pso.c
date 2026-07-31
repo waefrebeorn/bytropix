@@ -137,6 +137,11 @@ void wubu_pso_decode(const uint8_t *packed, int nbytes, float *out, int d) {
     pso_decode_fast(NULL, packed, nbytes, out, d);
 }
 
+/* Set thread-local PSO context (enables trig tables for decode) */
+void wubu_pso_set_context(const wubu_polar_pso_t *pso) {
+    tl_pso = pso;
+}
+
 /* PSO decode function: serial bit reader + scratch arena + trig tables.
  * Thread-local tl_pso provides trig tables and bit-width. */
 static void pso_decode_fast(

@@ -78,17 +78,29 @@ static void undo_precondition(const wubu_polarquant_t *pq,
     }
 }
 
+/* Thread-local scratch arenas — zero malloc on encode/decode hot path.
+ * Sized for d <= 1024 (max head_dim).
+ * g_pq_radii: used for radii during encode recursion + decode output
+ * g_pq_rot:   used for preconditioned input during encode + inter/radii during decode
+ * g_pq_angles: used for angle indices during encode/dequantize
+ * NOTE: decode needs x_out (caller buffer) + intermediate radii + x_unrot.
+ *   g_pq_rot serves double duty: radii_scratch OR x_unrot (never both). */
+#define WUBU_PQ_MAX_D 1024
+static __thread float g_pq_radii_scratch[WUBU_PQ_MAX_D];
+static __thread float g_pq_rot_scratch[WUBU_PQ_MAX_D];
+static __thread int   g_pq_angles_scratch[WUBU_PQ_MAX_D];
+
 /* ==========================================================
  * Recursive polar encode: d-dim vector → (d-1) angle indices + 1 radius
  *
- * The recursion produces a binary tree of polar decompositions.
- * Angles are stored in pre-order (left-to-right, top-to-bottom).
+ * NO MALLOC — uses thread-local scratch buffers.
  * ========================================================== */
 
 static void polar_encode_recursive(const float *x, int n, int d_orig,
     const wubu_polarquant_t *pq,
     int *angle_buf, int *angle_pos,
-    int *bits_buf, float *out_final_r) {
+    int *bits_buf, float *out_final_r,
+    float *radii_scratch) {
     if (n <= 1) {
         if (n == 1) *out_final_r = x[0];
         else *out_final_r = 0.0f;
@@ -98,17 +110,16 @@ static void polar_encode_recursive(const float *x, int n, int d_orig,
     int n_pairs = n / 2;
     int rem = n - n_pairs * 2;
 
-    /* Per-level bit allocation */
     int level = level_from_n(d_orig, n);
     int bits = wubu_polarquant_bits_at(pq, level);
     int levels = 1 << bits;
 
-    float *radii = (float *)malloc((size_t)n_pairs * sizeof(float));
+    /* Use caller-provided scratch instead of malloc */
     for (int p = 0; p < n_pairs; p++) {
         float rx = x[2*p], ry = x[2*p+1];
         float r = sqrtf(rx*rx + ry*ry);
         float theta = atan2f(ry, rx);
-        radii[p] = r;
+        radii_scratch[p] = r;
 
         float norm_a = (theta + (float)M_PI) / (2.0f * (float)M_PI);
         int idx = (int)(norm_a * levels);
@@ -119,31 +130,30 @@ static void polar_encode_recursive(const float *x, int n, int d_orig,
     }
 
     float sub_r;
-    polar_encode_recursive(radii, n_pairs, d_orig, pq,
-        angle_buf, angle_pos, bits_buf, &sub_r);
+    /* Nested scratch: level 0 uses [0, d/2), level 1 uses [d/2, 3d/4), etc. */
+    polar_encode_recursive(radii_scratch, n_pairs, d_orig, pq,
+        angle_buf, angle_pos, bits_buf, &sub_r,
+        radii_scratch + n_pairs);
 
     if (rem > 0) {
         *out_final_r = x[n - 1];
     } else {
         *out_final_r = sub_r;
     }
-
-    free(radii);
 }
 
 /* ==========================================================
  * Recursive polar decode: (d-1) angle indices + 1 radius → d-dim vector
  *
- * Reconstructs the tree bottom-up: first decode the deepest level
- * (innermost radii), then work outward using the stored angles.
- * Angles are consumed in the SAME order as encode (pre-order).
+ * NO MALLOC — uses thread-local scratch buffers.
  * ========================================================== */
 
 static void polar_decode_recursive(int n, int d_orig,
     const wubu_polarquant_t *pq,
     const int *angle_buf, int *angle_pos,
     const int *bits_buf,
-    float final_r, float *x_out) {
+    float final_r, float *x_out,
+    int *angles_scratch, float *radii_scratch) {
     if (n <= 1) {
         if (n == 1) x_out[0] = final_r;
         return;
@@ -156,27 +166,25 @@ static void polar_decode_recursive(int n, int d_orig,
     int bits = wubu_polarquant_bits_at(pq, level);
     int levels = 1 << bits;
 
-    int *level_angles = (int *)malloc((size_t)n_pairs * sizeof(int));
-    int *level_bits  = (int *)malloc((size_t)n_pairs * sizeof(int));
+    /* Read angles into scratch — no malloc */
     for (int p = 0; p < n_pairs; p++) {
-        level_angles[p] = angle_buf[(*angle_pos)++];
-        level_bits[p]   = bits_buf[(*angle_pos) - 1];
+        angles_scratch[p] = angle_buf[(*angle_pos)++];
     }
 
-    float *radii = (float *)malloc((size_t)n_pairs * sizeof(float));
+    /* Recursive: decode the radii using nested scratch */
     if (n_pairs > 1) {
         polar_decode_recursive(n_pairs, d_orig, pq, angle_buf, angle_pos,
-                               bits_buf, final_r, radii);
+                               bits_buf, final_r, radii_scratch,
+                               angles_scratch + n_pairs, radii_scratch + n_pairs);
     } else {
-        radii[0] = final_r;
+        radii_scratch[0] = final_r;
     }
 
     for (int p = 0; p < n_pairs; p++) {
-        int idx = level_angles[p];
-        int lvl = 1 << level_bits[p];
-        float norm_a = (float)idx / (float)lvl;
+        int idx = angles_scratch[p];
+        float norm_a = (float)idx / (float)levels;
         float theta = norm_a * 2.0f * (float)M_PI - (float)M_PI;
-        float r = radii[p];
+        float r = radii_scratch[p];
         x_out[2*p]   = r * cosf(theta);
         x_out[2*p+1] = r * sinf(theta);
     }
@@ -184,10 +192,6 @@ static void polar_decode_recursive(int n, int d_orig,
     if (rem > 0) {
         x_out[n - 1] = final_r;
     }
-
-    free(level_angles);
-    free(level_bits);
-    free(radii);
 }
 
 /* ==========================================================
@@ -268,26 +272,26 @@ int wubu_polarquant_encode(const wubu_polarquant_t *pq,
 
     int d = pq->d;
 
-    /* Precondition: Hadamard rotation to spread outliers */
-    float *x_rot = (float *)malloc((size_t)d * sizeof(float));
-    if (!x_rot) return -1;
+    /* Precondition: Hadamard rotation to spread outliers.
+     * Use scratch arena instead of malloc. */
+    float *x_rot = g_pq_rot_scratch;
     apply_precondition(pq, x, x_rot);
 
-    /* Recursive polar decomposition with per-level bits */
+    /* Recursive polar decomposition with scratch arena (NO MALLOC) */
     int angle_pos = 0;
     float final_r;
-    int bits_buf[1024]; /* max d-1 angles (d <= 1024) */
+    int bits_buf[1024];
     polar_encode_recursive(x_rot, d, d, pq, level_angle_idx, &angle_pos,
-                           bits_buf, &final_r);
+                           bits_buf, &final_r, g_pq_radii_scratch);
 
     level_radius[0] = final_r;
     n_angles_per_level[0] = angle_pos;
-    /* Store bit widths alongside for packed quantize */
+
+    /* Store bit widths for quantize_kv */
     if (pq->bits_store) {
         memcpy(pq->bits_store, bits_buf, (size_t)angle_pos * sizeof(int));
     }
 
-    free(x_rot);
     return 0;
 }
 
@@ -319,15 +323,20 @@ int wubu_polarquant_decode(const wubu_polarquant_t *pq,
         n = n_pairs;
     }
 
+    /* Use g_pq_rot_scratch as intermediate radii buffer during decode.
+     * x_out is the output — cannot be the same as radii_scratch,
+     * so use the separate rot buffer for intermediates. */
     polar_decode_recursive(d_out, d_out, pq, level_angle_idx, &angle_pos,
-                           bits_buf, level_radius[0], x_out);
+                           bits_buf, level_radius[0], x_out,
+                           g_pq_angles_scratch, g_pq_rot_scratch);
 
-    /* Undo preconditioning */
-    float *x_unrot = (float *)malloc((size_t)d_out * sizeof(float));
-    if (!x_unrot) return -1;
+    (void)bits_buf;
+
+    /* Undo preconditioning.
+     * Use scratch arena instead of malloc. */
+    float *x_unrot = g_pq_rot_scratch;
     undo_precondition(pq, x_out, x_unrot);
     memcpy(x_out, x_unrot, (size_t)d_out * sizeof(float));
-    free(x_unrot);
 
     return 0;
 }
@@ -345,13 +354,12 @@ int wubu_polarquant_quantize_kv(const wubu_polarquant_t *pq,
     int n_angles = d - 1;
 
     float level_radius[1];
-    int *angle_idx = (int *)malloc((size_t)n_angles * sizeof(int));
     int n_per_level[1];
-    if (!angle_idx) return -1;
 
-    wubu_polarquant_encode(pq, k_col, level_radius, angle_idx, n_per_level);
+    /* Encode into thread-local scratch — NO MALLOC */
+    wubu_polarquant_encode(pq, k_col, level_radius,
+                           g_pq_angles_scratch, n_per_level);
 
-    /* Pack: 1 float radius + per-angle variable bits */
     /* Compute total bit width from per-level config */
     int total_bits = 0;
     int n = d;
@@ -364,18 +372,18 @@ int wubu_polarquant_quantize_kv(const wubu_polarquant_t *pq,
     }
     int packed_angle_bytes = (total_bits + 7) / 8;
     int need = (int)sizeof(float) + packed_angle_bytes;
-    if (*out_bytes < need) { free(angle_idx); return -1; }
+    if (*out_bytes < need) return -1;
 
     float *fp = (float *)out_bits;
     fp[0] = level_radius[0];
 
-    /* Pack angle indices with per-angle bit widths */
+    /* Pack angle indices from thread-local scratch */
     uint8_t *bp = (uint8_t *)(fp + 1);
     memset(bp, 0, (size_t)packed_angle_bytes);
     int bit_pos = 0;
     for (int i = 0; i < n_angles; i++) {
         int bits = pq->bits_store ? pq->bits_store[i] : (int)pq->bits_per_coord;
-        int val = angle_idx[i];
+        int val = g_pq_angles_scratch[i];
         for (int b = 0; b < bits; b++) {
             if (val & (1 << b)) {
                 bp[bit_pos / 8] |= (1 << (bit_pos % 8));
@@ -385,7 +393,6 @@ int wubu_polarquant_quantize_kv(const wubu_polarquant_t *pq,
     }
 
     *out_bytes = need;
-    free(angle_idx);
     return 0;
 }
 
@@ -416,11 +423,10 @@ int wubu_polarquant_dequantize_kv(const wubu_polarquant_t *pq,
     float level_radius[1];
     level_radius[0] = fp[0];
 
-    int *angle_idx = (int *)malloc((size_t)n_angles * sizeof(int));
     int n_per_level[1];
-    if (!angle_idx) return -1;
 
-    /* Unpack with per-angle bit widths */
+    /* Unpack with per-angle bit widths into thread-local scratch.
+     * NO MALLOC — uses g_pq_angles_scratch. */
     const uint8_t *bp = (const uint8_t *)(fp + 1);
     int bit_pos = 0;
     int idx = 0;
@@ -437,15 +443,15 @@ int wubu_polarquant_dequantize_kv(const wubu_polarquant_t *pq,
                 }
                 bit_pos++;
             }
-            angle_idx[idx++] = val;
+            g_pq_angles_scratch[idx++] = val;
         }
         n = n_pairs;
     }
     n_per_level[0] = n_angles;
 
-    int rc = wubu_polarquant_decode(pq, level_radius, angle_idx, n_per_level,
+    int rc = wubu_polarquant_decode(pq, level_radius,
+                                    g_pq_angles_scratch, n_per_level,
                                     k_col_out, d);
-    free(angle_idx);
     return rc;
 }
 
@@ -462,15 +468,13 @@ float wubu_polarquant_fused_dot(
      * Q is also in original space — no Hadamard needed on Q. */
     int d = pq->d;
     
-    /* Decode K inline */
-    float *k = (float *)malloc((size_t)d * sizeof(float));
+    /* Decode K inline into thread-local scratch — NO MALLOC */
+    float *k = g_pq_radii_scratch;  /* reuse as decode buffer */
     wubu_polarquant_dequantize_kv(pq, k_packed, k_bytes, k, d);
-    
+
     /* Compute dot product */
     float dot = 0.0f;
     for (int i = 0; i < d; i++) dot += q[i] * k[i];
-    
-    free(k);
     return dot;
 }
 
@@ -562,8 +566,9 @@ int wubu_polar_cache_attention(wubu_polar_cache_t *c,
     /* Online softmax (FlashDecoding++ pattern) */
     float max_score = -1e30f;
     float sum_exp = 0.0f;
-    float *partial_out = (float *)calloc((size_t)d, sizeof(float));
+    float *partial_out = (float *)alloca((size_t)d * sizeof(float));
     if (!partial_out) return -1;
+    memset(partial_out, 0, (size_t)d * sizeof(float));
     
     /* F32 recent tokens */
     int n_recent = c->n_filled < c->n_recent ? c->n_filled : c->n_recent;
@@ -598,8 +603,10 @@ int wubu_polar_cache_attention(wubu_polar_cache_t *c,
         float score = wubu_polarquant_fused_dot(c->pq, q, k_packed, k_bytes);
         score /= temperature;
         
-        /* Decode V for weighted sum */
-        float *v = (float *)malloc((size_t)d * sizeof(float));
+        /* Decode V for weighted sum — use scratch arena (NO MALLOC).
+         * fused_dot already used g_pq_radii_scratch for K decode,
+         * so it's safe to reuse for V. */
+        float *v = g_pq_radii_scratch;
         wubu_polarquant_dequantize_kv(c->pq, v_packed, k_bytes, v, d);
         
         if (score > max_score) {
@@ -614,13 +621,10 @@ int wubu_polar_cache_attention(wubu_polar_cache_t *c,
             sum_exp += e;
             for (int j = 0; j < d; j++) partial_out[j] += e * v[j];
         }
-        free(v);
     }
-    
+
     /* Normalize */
     for (int j = 0; j < d; j++) out[j] = partial_out[j] / (sum_exp + 1e-10f);
-    
-    free(partial_out);
     return 0;
 }
 

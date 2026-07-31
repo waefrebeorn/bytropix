@@ -109,6 +109,9 @@ typedef struct {
 /* Public PSO decode wrapper */
 void wubu_pso_decode(const uint8_t *packed, int nbytes, float *out, int d);
 
+/* Set thread-local PSO context (enables trig tables for decode) */
+void wubu_pso_set_context(const wubu_polar_pso_t *pso);
+
 /* Initialize PSO for a given (bits, d) config.
  * Pre-compiles the decode kernel and precomputes trig tables. */
 int wubu_polar_pso_init(wubu_polar_pso_t *pso,

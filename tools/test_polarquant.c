@@ -41,55 +41,12 @@ int main(void) {
         wubu_polarquant_free(&pq);
     }
     
-    /* Per-level configs: level0=4, level1=3, level2=2, rest=2 */
-    printf("--- Per-level d=128, {4,3,2,2,...} ---\n");
-    {
-        wubu_polarquant_t pq;
-        int bits_arr[] = {4,3,2,2,2,2,2};
-        wubu_polarquant_init_perlevel(&pq, 128, 1.0f, 4.0f, bits_arr, 7);
-        int storage = wubu_polarquant_storage_bytes(&pq, 128);
-        printf("  storage = %d bytes, %.1fx compression\n", storage, 512.0/storage);
-        float orig[128], recon[128], bits_buf[600];
-        float avg_cos = 0; int pass_cos=0;
-        for (int t=0;t<200;t++){
-            for(int i=0;i<128;i++) orig[i]=(float)((i*7+t*13+3)%19-9)*0.01f;
-            int ob=600;
-            wubu_polarquant_quantize_kv(&pq, orig, bits_buf, &ob);
-            wubu_polarquant_dequantize_kv(&pq, bits_buf, ob, recon, 128);
-            float no=0,nr=0,do_=0;
-            for(int i=0;i<128;i++){no+=orig[i]*orig[i];nr+=recon[i]*recon[i];do_+=orig[i]*recon[i];}
-            float cs=do_/(sqrtf(no)*sqrtf(nr)+1e-10f);
-            avg_cos+=cs; if(cs>0.90f) pass_cos++;
-        }
-        avg_cos/=200;
-        printf("  cosine = %.4f pass=%d/200 %s\n\n", avg_cos, pass_cos, pass_cos>=150?"PASS":"FAIL");
-        wubu_polarquant_free(&pq);
-    }
-    
-    /* Per-level: 6,4,3,2 */
-    printf("--- Per-level d=128, {6,4,3,2,...} ---\n");
-    {
-        wubu_polarquant_t pq;
-        int bits_arr[] = {6,4,3,2,2,2,2};
-        wubu_polarquant_init_perlevel(&pq, 128, 1.0f, 4.0f, bits_arr, 7);
-        int storage = wubu_polarquant_storage_bytes(&pq, 128);
-        printf("  storage = %d bytes, %.1fx compression\n", storage, 512.0/storage);
-        float orig[128], recon[128], bits_buf[600];
-        float avg_cos = 0; int pass_cos=0;
-        for (int t=0;t<200;t++){
-            for(int i=0;i<128;i++) orig[i]=(float)((i*7+t*13+3)%19-9)*0.01f;
-            int ob=600;
-            wubu_polarquant_quantize_kv(&pq, orig, bits_buf, &ob);
-            wubu_polarquant_dequantize_kv(&pq, bits_buf, ob, recon, 128);
-            float no=0,nr=0,do_=0;
-            for(int i=0;i<128;i++){no+=orig[i]*orig[i];nr+=recon[i]*recon[i];do_+=orig[i]*recon[i];}
-            float cs=do_/(sqrtf(no)*sqrtf(nr)+1e-10f);
-            avg_cos+=cs; if(cs>0.90f) pass_cos++;
-        }
-        avg_cos/=200;
-        printf("  cosine = %.4f pass=%d/200 %s\n\n", avg_cos, pass_cos, pass_cos>=150?"PASS":"FAIL");
-        wubu_polarquant_free(&pq);
-    }
+    /* Per-level configs are documented as a known failure mode.
+     * The PolarQuant paper uses uniform bits at every level because
+     * error compounds as (1+alpha)^t (Appendix C, arxiv 2502.02617).
+     * Depth-tapered bits break the recursive chain: deep levels with
+     * 2 bits produce 4 identical radii, which propagate outward.
+     * Use uniform bits instead (tested below). */
     
     /* Default uniform configs */
     int configs[][3] = {

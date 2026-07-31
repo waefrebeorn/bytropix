@@ -122,6 +122,21 @@ void wubu_fast_attn_decode_q8_tiled(wubu_fast_attn_ctx_t *ctx,
                                          int n_threads,
                                          int tile_tokens);
 
+/* Hybrid Q8_K + PolarQuant_V cache fast decode.
+ * K stays Q8 (score accuracy critical). V uses PolarQuant (6x compress,
+ * lower accuracy acceptable for value vectors). */
+#include "wubu_polarquant.h"
+void wubu_fast_attn_decode_q8k_pqv(
+        wubu_fast_attn_ctx_t *ctx,
+        const float *q,
+        const void *k_cache_q8,
+        const void *v_cache_pq,
+        const wubu_polarquant_t *pq_v,
+        int pq_v_bytes_per_token,
+        int cache_len,
+        float *out,
+        int n_threads);
+
 #ifdef __cplusplus
 }
 #endif
