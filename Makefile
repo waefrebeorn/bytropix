@@ -750,8 +750,11 @@ test_probe_qwen_asan: tools/test_probe_qwen.c $(MODEL_OBJ) src/wubu_tokenizer.o
 gen_text_mtp: tools/gen_text_mtp.c $(MODEL_OBJ) src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $(filter %.c %.o,$^) $(LDFLAGS)
 
-gen_text_gpu: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_repetition.o $(CUDA_OBJ) $(GPU_OBJ)
-	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o $(CUDA_OBJ) $(GPU_OBJ) $(LDFLAGS) -L$(CUDA_LIBDIR) -lcublas -lcudart
+gen_text_gpu: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(CUDA_OBJ) $(GPU_OBJ_NODUP)
+	$(CXX) $(CFLAGS) -DGPU_SUPPORT -o $@ tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(CUDA_OBJ) $(GPU_OBJ_NODUP) $(LDFLAGS) -L$(CUDA_LIBDIR) -lcublas -lcudart
+
+# GPU_OBJ without files already in CORE_OBJ (avoids duplicate symbol errors)
+GPU_OBJ_NODUP = src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o
 
 test_tok_debug: tools/test_tok_debug.c src/wubu_tokenizer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

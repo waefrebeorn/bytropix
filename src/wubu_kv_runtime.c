@@ -42,6 +42,23 @@ int wubu_kv_autoselect(double P_params, int n_layers, int n_kv_heads,
     c.head_dim   = head_dim;
     c.beta_eff_tb_s = beta_eff_tb_s > 0 ? beta_eff_tb_s : 0.05;
     wubu_kv_choice_t ch = wubu_kv_select(&c, P_params, 1, s);
+    /* A04: For long-context decode (s >= 4096), force Q8 KV cache regardless
+     * of Roofline crossover — Q8 is near-lossless (0.075 MSE) and 2x faster
+     * than F16 on bandwidth-bound attention scan at 512K. */
+    if (s >= 4096 && ch.kv != WUBU_KV_Q8 && ch.kv != WUBU_KV_KIVI
+        && ch.kv != WUBU_KV_Q4_0 && ch.kv != WUBU_KV_4KV) {
+        /* Only override if currently F32/F16 (not already compressed) */
+        ch.kv = WUBU_KV_Q8;
+        ch.kv_bits = 8;
+        ch.why = "512K decode: Q8 KV cache (near-lossless, 2x faster)";
+    }
+    /* WUBU_FORCE_Q8_KV env overrides everything */
+    const char *fq8 = getenv("WUBU_FORCE_Q8_KV");
+    if (fq8 && atoi(fq8)) {
+        ch.kv = WUBU_KV_Q8;
+        ch.kv_bits = 8;
+        ch.why = "WUBU_FORCE_Q8_KV env override";
+    }
     g_kv_scheme = (int)ch.kv;
     g_kv_head_dim = head_dim;
     return g_kv_scheme;

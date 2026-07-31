@@ -22,6 +22,11 @@
 __attribute__((weak)) int wubu_cuda_backend_probe(void) { return 0; }
 __attribute__((weak)) int wubu_cuda_backend_register(void) { return -1; }
 
+/* g_use_gpu_backend: flag for proj_matmul in wubu_ssm.c.
+ * Set to 1 when CUDA is detected, enabling GPU-quantized matmul path.
+ * Weights are uploaded once at model init (wubu_model_gpu_init), not per-token. */
+int g_use_gpu_backend = 0;
+
 /* Device backend supports query: which kernel types does it handle? */
 static int default_supports(wubu_kernel_type_t type) {
     (void)type;
@@ -34,6 +39,7 @@ void wubu_kernel_register_backends(void) {
 #if WUBU_HAS_CUDA
     if (wubu_cuda_backend_probe()) {
         wubu_cuda_backend_register();
+        g_use_gpu_backend = 1;  /* A:02: enable GPU-quantized proj_matmul */
     }
 #endif
 

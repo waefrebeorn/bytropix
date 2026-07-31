@@ -449,11 +449,17 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     m->conv_states = m->ssm_states + ssm_state_size;
 
     /* ---- GQA KV cache (per GQA layer) ---- */
+    /* Runtime override: WUBU_MAX_CTX env var. Default 8192 (safe for 13GB RAM). */
+    int runtime_max_ctx = GQA_MAX_CTX;
+    {
+        const char *mc_env = getenv("WUBU_MAX_CTX");
+        if (mc_env) { int mc = atoi(mc_env); if (mc > 0) runtime_max_ctx = mc; }
+    }
     int64_t total_cache_elems = 0;
     for (int l = 0; l < nL; l++) {
         if (!m->layers[l].is_ssm) {
             int kv_dim = m->layers[l].gqa.kv_dim;
-            total_cache_elems += (int64_t)GQA_MAX_CTX * kv_dim;
+            total_cache_elems += (int64_t)runtime_max_ctx * kv_dim;
         }
     }
     // Auto-select KV precision (Roofline) for this model before sizing cache.
@@ -464,13 +470,13 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
         }
         double bw = 0.05; const char *be = getenv("WUBU_BW_TBS"); if (be) bw = atof(be);
         double npar = (double)m->d_model * m->d_model * nL * 12.0;
-        int ch = wubu_kv_autoselect(npar, nL, gnkv, ghd, bw, GQA_MAX_CTX);
+        int ch = wubu_kv_autoselect(npar, nL, gnkv, ghd, bw, runtime_max_ctx);
         printf("KV-cache scheme auto-selected (bridge): %s (ctx=%d)\n",
-               wubu_kv_scheme_name((wubu_kv_scheme_t)ch), GQA_MAX_CTX);
-        /* For 512K context or memory pressure: enable Q8 fast-attn decode */
+               wubu_kv_scheme_name((wubu_kv_scheme_t)ch), runtime_max_ctx);
+        /* For large context or memory pressure: enable Q8 fast-attn decode */
         g_use_q8_cache = (ch == WUBU_KV_Q8 || ch == WUBU_KV_Q4_0 || ch == WUBU_KV_4KV);
         if (g_use_q8_cache) {
-            printf("Fast-attn Q8 decode path enabled for %d-token context\n", GQA_MAX_CTX);
+            printf("Fast-attn Q8 decode path enabled for %d-token context\n", runtime_max_ctx);
         }
     }
     int64_t k_cache_bytes = kv_cache_alloc_size(total_cache_elems);
@@ -479,6 +485,7 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     if (m->gqa_k_cache) memset(m->gqa_k_cache, 0, k_cache_bytes ? k_cache_bytes : 16);
     if (m->gqa_v_cache) memset(m->gqa_v_cache, 0, k_cache_bytes ? k_cache_bytes : 16);
     m->gqa_cache_len = 0;
+    m->gqa_max_ctx = runtime_max_ctx;
 
     /* ---- embed_tokens / lm_head ----
      * ZERO-COPY for the safetensors path: embed_tokens / lm_head are huge

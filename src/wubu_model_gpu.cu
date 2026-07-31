@@ -202,6 +202,8 @@ static void precompute_rotary_host(float *h_sc, int maxT) {
     }
 }
 
+extern "C" int g_use_gpu_backend;
+
 // ================================================================
 // Init: upload GQA weights, create KV cache, allocate scratch
 // ================================================================
@@ -742,6 +744,7 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
         gpu->attn_window = atoi(gqa_win);
         printf("GPU: sliding window attention active (window=%d tokens)\n", gpu->attn_window);
     }
+    g_use_gpu_backend = 1;  /* signal wubu_ssm.c proj_matmul to use GPU quantized matmul */
     printf("GPU: GQA acceleration active (max_ctx=%d, chunk=%d)\n", max_ctx, chunk_sz);
     return 1;
 }

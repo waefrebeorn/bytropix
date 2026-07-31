@@ -23,7 +23,7 @@ int main() {
     
     printf("Loading MTP head...\n");
     double t0 = now_sec();
-    if (!wubu_mtp_load(&mdl.mtp, NULL, mdl.gguf_ctx, NULL)) {
+    if (!wubu_mtp_load(&mdl.mtp, NULL, mdl.gguf_ctx, NULL, mdl.gqa_max_ctx)) {
         printf("FAIL: MTP load\n");
         wubu_model_free(&mdl);
         return 1;

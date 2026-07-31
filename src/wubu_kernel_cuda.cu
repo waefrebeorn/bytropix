@@ -12,6 +12,12 @@
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
+
+/* Forward declaration — defined in gpu_quant_matmul.cu, linked at build time */
+extern "C" int wubu_cuda_quant_matmul_batched(const float *x, int C,
+    const uint8_t *W_q, int quant_type, int n_rows, int n_cols,
+    float *y, cudaStream_t stream);
 
 /* ------------------------------------------------------------------ */
 /* CUDA kernels                                                       */
@@ -209,6 +215,20 @@ extern "C" int wubu_cuda_backend_probe(void) {
     if (err != cudaSuccess) return 0;
     return n > 0 ? 1 : 0;
 }
+/* A:02 — GPU-quantized matmul stub. Returns 0 (fails gracefully),
+ * falling back to CPU quantized_matmul. Full GPU weight upload
+ * requires wubu_model_gpu_init which handles per-model tensor naming. */
+extern "C" int proj_matmul_gpu(const float *x, const uint8_t *W_q,
+                               int weight_type, int n_rows, int n_layers,
+                               float *out) {
+    (void)x; (void)W_q; (void)weight_type; (void)n_rows; (void)n_layers; (void)out;
+    return 0; /* fall back to CPU */
+}
+
+/* g_use_gpu_backend: flag set by GPU init, checked by wubu_ssm.c proj_matmul.
+ * Defined in wubu_kernel_backends.c (C, non-PIC for gen_text_cpu; PIC-safe
+ * for gen_text_gpu since CUDA path overrides via linker). */
+extern int g_use_gpu_backend;
 
 extern "C" int wubu_cuda_backend_register(void) {
     if (!wubu_cuda_backend_probe()) return -1;

@@ -36,7 +36,10 @@ typedef struct {
 } wubu_layer_t;
 
 // Complete model
-#define GQA_MAX_CTX 524288  // max cached positions for KV cache (512k context)
+#define GQA_MAX_CTX 8192  // default max cached positions (overridden by WUBU_MAX_CTX env)
+// At 512K context, SWA (sliding window) handles long-range attention.
+// KV cache is pre-allocated to this size; larger contexts use auto-eviction.
+// Set WUBU_MAX_CTX=524288 to enable full 512K pre-allocation (needs ~64GB RAM).
 /* GQA_KV_DIM is provided by wubu_dims.h (WUBU_DIMS.gqa_kv_dim) so it
  * resolves to the model's real kv dim at load time. */
 
@@ -650,9 +653,10 @@ typedef struct {
     float *conv_states;   // [max_layers, B, CONV_KERNEL-1, CONV_DIM]
     size_t ssm_state_total;  // bytes allocated for ssm_states (incl. conv_states)    
     // GQA KV cache (10 GQA layers, max 256k context)
-    void *gqa_k_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM] F32 or F16
-    void *gqa_v_cache;  // [10 * GQA_MAX_CTX * GQA_KV_DIM]
-    int gqa_cache_len;   // how many tokens cached per layer (all 10 layers same len)
+    void *gqa_k_cache;  // [n_gqa_layers * runtime_max_ctx * kv_dim] F32 or F16
+    void *gqa_v_cache;  // [n_gqa_layers * runtime_max_ctx * kv_dim]
+    int gqa_cache_len;   // how many tokens cached per layer (all layers same len)
+    int gqa_max_ctx;     // runtime max ctx (GQA_MAX_CTX or WUBU_MAX_CTX env)
 
     // GGUF context (for per-layer MoE lazy loading)
     // Model state save/restore (for speculative decode rollback)
@@ -838,7 +842,8 @@ void wubu_model_backward_from_embd(
 // Must be called AFTER wubu_model_init on the main model
 // Pass the MTP GGUF model path
 bool wubu_mtp_load(mtp_head_t *mtp, const char *mtp_gguf_path,
-                   gguf_ctx *main_ctx, const uint8_t *main_blob);
+                   gguf_ctx *main_ctx, const uint8_t *main_blob,
+                   int gqa_max_ctx);
 
 // MTP: Draft forward — predict next tokens from last hidden state
 // x: [D_MODEL] — last hidden state from main model (layer 39 output, post-residual)

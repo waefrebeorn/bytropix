@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
             gguf_buffer_data(mtp_ctx);
             mtp_blob = (const uint8_t *)mtp_ctx->data_blob;
 
-            if (!wubu_mtp_load(&mdl.mtp, mtp_model, mtp_ctx, mtp_blob)) {
+            if (!wubu_mtp_load(&mdl.mtp, mtp_model, mtp_ctx, mtp_blob, mdl.gqa_max_ctx)) {
                 fprintf(stderr, "MTP head not available in MTP model file\n");
                 gguf_close(mtp_ctx);
                 mtp_ctx = NULL;
