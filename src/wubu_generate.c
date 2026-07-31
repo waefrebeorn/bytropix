@@ -3,6 +3,7 @@
  * (doc 018 / K01). Self-contained C11. See header.
  */
 #include "wubu_generate.h"
+#include "wubu_ngram.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
