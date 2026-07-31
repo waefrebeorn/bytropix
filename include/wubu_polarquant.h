@@ -162,14 +162,14 @@ int wubu_polarquant_dequantize_kv(
 
 /* Bits per KV column at this configuration (d dims, depth levels). */
 static inline double wubu_polarquant_bits_per_vector(const wubu_polarquant_t *pq, int d) {
-    double total_bits = 0.0;
-    for (int l = 0; l < pq->depth; l++) {
-        int d_l = d / (1 << l);  /* dims shrink by half each level */
-        if (d_l < 1) d_l = 1;
-        /* radius + d_l angles, each quantized to bits_per_coord bits */
-        total_bits += (1 + d_l) * pq->bits_per_coord;
-    }
-    return total_bits;
+    /* Packed: 1 float radius (32 bits) + (d-1) angles * bits_per_coord bits */
+    return (double)sizeof(float) * 8.0 + (double)(d - 1) * (double)pq->bits_per_coord;
+}
+
+static inline int wubu_polarquant_storage_bytes(const wubu_polarquant_t *pq, int d) {
+    int n_angles = d - 1;
+    int packed = (n_angles * (int)pq->bits_per_coord + 7) / 8;
+    return (int)sizeof(float) + packed;
 }
 
 static inline double wubu_polarquant_bytes_per_vector(const wubu_polarquant_t *pq, int d) {

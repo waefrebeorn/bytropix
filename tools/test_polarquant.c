@@ -1,60 +1,99 @@
-/* test_polarquant.c — PolarQuant fractal validation */
+/* test_polarquant.c — PolarQuant recursive polar packed roundtrip */
 #include "wubu_polarquant.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
+static float dot_f(const float *a, const float *b, int d) {
+    float s=0; for(int i=0;i<d;i++) s+=a[i]*b[i]; return s;
+}
+static float norm_f(const float *v, int d) {
+    float s=0; for(int i=0;i<d;i++) s+=v[i]*v[i]; return sqrtf(s);
+}
+static float cos_sim(const float *a, const float *b, int d) {
+    return dot_f(a,b,d)/(norm_f(a,d)*norm_f(b,d)+1e-10f);
+}
+
 int main(void) {
-    printf("=== PolarQuant Fractal Stacking Validation ===\n\n");
-    int dims[] = {32, 64, 128};
-    int nd = 3;
-    int failures = 0;
-    for (int di = 0; di < nd; di++) {
-        int d = dims[di];
-        printf("--- d=%d, depth=%d, bits/coord=2 ---\n", d, WUBU_POLAR_DEPTH);
+    printf("=== PolarQuant Recursive Polar Packed Roundtrip ===\n\n");
+
+    int configs[][3] = {
+        /* d, bits, min_pass_score (out of 200) */
+        {128, 8, 150}, {128, 6, 100}, {64, 8, 150}, {32, 8, 150},
+    };
+    int n_cfg = 4;
+    int errors = 0;
+
+    for (int ci = 0; ci < n_cfg; ci++) {
+        int d = configs[ci][0];
+        int bits = configs[ci][1];
+        int min_score = configs[ci][2];
+        printf("--- d=%d, bits/angle=%d ---\n", d, bits);
+
         wubu_polarquant_t pq;
-        if (wubu_polarquant_init(&pq, d, WUBU_POLAR_DEPTH, WUBU_POLAR_R_OUTER, WUBU_POLAR_BITS_PER_COORD) != 0) {
-            fprintf(stderr, "pq init FAILED\n"); failures++; continue;
+        if (wubu_polarquant_init(&pq, d, 1, 1.0f, (float)bits) != 0) {
+            fprintf(stderr, "init FAIL\n"); errors++; continue;
         }
-        double bpv = wubu_polarquant_bits_per_vector(&pq, d);
-        double cpr = wubu_polarquant_compression_ratio(&pq, d);
-        printf("  bits/vec = %.1f  bytes/vec = %.2f  F32 baseline = %d  compress = %.1fx\n",
-               bpv, bpv/8.0, d*4, cpr);
-        printf("  level radii: [");
-        for (int l = 0; l < pq.depth; l++) printf("%.3f ", pq.levels[l].R);
-        printf("]\n  level dims:  [");
-        for (int l = 0; l < pq.depth; l++) printf("%d ", pq.levels[l].dims);
-        printf("]\n");
-        /* Validate fractal nesting */
-        int nesting_ok = 1;
-        for (int l = 1; l < pq.depth; l++) {
-            if (pq.levels[l].R >= pq.levels[l-1].R) { nesting_ok = 0; break; }
+
+        int storage = wubu_polarquant_storage_bytes(&pq, d);
+        printf("  storage = %d bytes vs F32 %d bytes = %.1fx compression\n",
+               storage, d*4, (double)(d*4)/storage);
+
+        float *orig = malloc((size_t)d*sizeof(float));
+        float *recon = malloc((size_t)d*sizeof(float));
+        float *qvec = malloc((size_t)d*sizeof(float));
+        float *bits_buf = malloc((size_t)(storage + 64));
+
+        if (!orig||!recon||!qvec||!bits_buf) {
+            errors++; wubu_polarquant_free(&pq); continue;
         }
-        printf("  fractal R decreasing: %s\n", nesting_ok ? "PASS" : "FAIL");
-        if (!nesting_ok) failures++;
-        /* Validate codebook inside ball */
-        int inside_ok = 1;
-        for (int l = 0; l < pq.depth; l++) {
-            float R = pq.levels[l].R;
-            for (int k = 0; k < pq.levels[l].codebook_size; k++) {
-                float norm = 0.0f;
-                const float *p = pq.levels[l].codebook + (size_t)k * pq.levels[l].dims;
-                for (int i = 0; i < pq.levels[l].dims; i++) norm += p[i]*p[i];
-                if (sqrtf(norm) >= R) { inside_ok = 0; break; }
+
+        float avg_cos = 0;
+        int pass_cos = 0, pass_score = 0;
+        int n_trials = 200;
+
+        for (int t = 0; t < n_trials; t++) {
+            for (int i = 0; i < d; i++) {
+                orig[i] = (float)((i*7 + t*13 + 3) % 19 - 9) * 0.01f;
+                qvec[i] = (float)(((i+1)*3 + t*11) % 17 - 8) * 0.01f;
             }
-            if (!inside_ok) break;
+
+            int out_bytes = storage + 64;
+            if (wubu_polarquant_quantize_kv(&pq, orig, bits_buf, &out_bytes) != 0) {
+                fprintf(stderr, "quantize FAIL t=%d\n", t); errors++; break;
+            }
+            if (wubu_polarquant_dequantize_kv(&pq, bits_buf, out_bytes, recon, d) != 0) {
+                fprintf(stderr, "dequantize FAIL t=%d\n", t); errors++; break;
+            }
+
+            float cs = cos_sim(orig, recon, d);
+            avg_cos += cs;
+            if (cs > 0.90f) pass_cos++;
+
+            float so = dot_f(qvec, orig, d);
+            float sr = dot_f(qvec, recon, d);
+            float rel = fabsf(so-sr)/(fabsf(so)+1e-6f);
+            if (rel < 0.30f) pass_score++;
         }
-        printf("  codebook inside Poincare ball: %s\n", inside_ok ? "PASS" : "FAIL");
-        if (!inside_ok) failures++;
+
+        avg_cos /= n_trials;
+        printf("  cosine sim:  avg=%.4f  pass(>0.90)=%d/%d %s\n",
+               avg_cos, pass_cos, n_trials, pass_cos >= n_trials*3/4 ? "PASS" : "FAIL");
+        printf("  attn score:   pass(<30%%)=%d/%d %s\n",
+               pass_score, n_trials, pass_score >= min_score ? "PASS" : "FAIL");
+        if (pass_score < min_score) errors++;
+
         /* 512K bandwidth */
-        int n_kv=2, layers=40, ctx=524288;
-        double f32_mb = (double)d*4*n_kv*ctx/1e6;
-        double pq_mb  = bpv/8.0*n_kv*ctx/1e6;
-        printf("  512K KV: F32=%.1f MB  PolarQuant=%.1f MB  reduction=%.0fx\n\n",
+        double f32_mb = (double)d*4*2*524288/1e6;
+        double pq_mb  = (double)storage*2*524288/1e6;
+        printf("  512K KV: F32=%.1f MB  PQ=%.1f MB  (%.0fx)\n\n",
                f32_mb, pq_mb, f32_mb/pq_mb);
+
+        free(orig); free(recon); free(qvec); free(bits_buf);
         wubu_polarquant_free(&pq);
     }
-    printf("=== Result: %d validation failures ===\n", failures);
-    return failures > 0 ? 1 : 0;
+
+    printf("=== %d errors ===\n", errors);
+    return errors > 0 ? 1 : 0;
 }
