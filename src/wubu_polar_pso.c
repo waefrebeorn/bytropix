@@ -41,28 +41,6 @@ static void fwht(float *v, int d) {
  * Uses precomputed cos/sin tables for angle reconstruction.
  * ========================================================== */
 
-/* Generic decode using wubu_polarquant API + precomputed trig */
-static void pso_decode_generic(
-    const wubu_polarquant_t *pq_unused,
-    const uint8_t *packed, int nbytes,
-    float *out, int d) {
-    (void)pq_unused;
-    /* Just call the existing dequantize — the pq is in the PSO */
-    /* Actually we need the pq... let's pass it via a global or
-     * store it in the PSO. For now, use the wubu_polarquant API. */
-    /* The PSO caller passes pq=NULL (unused), so we reconstruct
-     * from the packed data directly without pq. */
-    
-    /* But we need pq for the per-level config... Pass it differently. */
-    /* Simplest: store pq inside the PSO and use it. */
-    /* This function is a placeholder — the real decode is in the PSO. */
-    wubu_polarquant_t dummy;
-    wubu_polarquant_init(&dummy, d, 1, 1.0f, 8.0f);
-    /* Can't dequantize without pq... this design needs rework. */
-    (void)packed; (void)nbytes; (void)out;
-    wubu_polarquant_free(&dummy);
-}
-
 /* ==========================================================
  * Rambus-style serial bit reader decode
  *
@@ -70,11 +48,14 @@ static void pso_decode_generic(
  * Decodes the polar angles serially, reconstructing K inline.
  * ========================================================== */
 
-/* Fast recursive polar decode using serial bit reader + trig tables */
-static void rambus_decode_recursive(
+/* Fast recursive polar decode using serial bit reader.
+ * NO MALLOC — uses thread-local scratch arena.
+ * Recursion levels reuse pre-allocated buffers. */
+static void rambus_decode_recursive_nomalloc(
     wubu_bit_reader_t *br,
     int n, const float *cos_tbl, const float *sin_tbl,
-    int bits, float final_r, float *x_out) {
+    int bits, float final_r, float *x_out,
+    int *scratch_angles, float *scratch_radii) {
     if (n <= 1) {
         if (n == 1) x_out[0] = final_r;
         return;
@@ -84,35 +65,35 @@ static void rambus_decode_recursive(
     int rem = n - n_pairs * 2;
     int levels = 1 << bits;
 
-    /* Read angles for this level from the serial bitstream */
-    int *level_angles = (int *)malloc((size_t)n_pairs * sizeof(int));
+    /* Read angles from serial bitstream — no malloc */
     for (int p = 0; p < n_pairs; p++) {
-        level_angles[p] = wubu_bit_reader_pop(br, bits);
+        scratch_angles[p] = wubu_bit_reader_pop(br, bits);
     }
 
-    /* Recursive: decode the radii first */
-    float *radii = (float *)malloc((size_t)n_pairs * sizeof(float));
+    /* Recursive: decode the radii using remaining scratch */
+    float *sub_radii = scratch_radii + n_pairs;  /* nested space */
     if (n_pairs > 1) {
-        rambus_decode_recursive(br, n_pairs, cos_tbl, sin_tbl,
-                                bits, final_r, radii);
+        rambus_decode_recursive_nomalloc(br, n_pairs, cos_tbl, sin_tbl,
+                                         bits, final_r, scratch_radii,
+                                         scratch_angles + n_pairs, sub_radii);
     } else {
-        radii[0] = final_r;
+        scratch_radii[0] = final_r;
     }
 
-    /* Reconstruct (x, y) from (r, theta) using precomputed trig */
+    /* Reconstruct (x, y) using precomputed trig tables */
     for (int p = 0; p < n_pairs; p++) {
-        int idx = level_angles[p];
-        float theta = ((float)idx / (float)levels) * 2.0f * (float)M_PI
-                      - (float)M_PI;
+        int idx = scratch_angles[p];
         float c, s;
         if (cos_tbl) {
             c = cos_tbl[idx];
             s = sin_tbl[idx];
         } else {
+            float theta = ((float)idx / (float)levels) * 2.0f * (float)M_PI
+                          - (float)M_PI;
             c = cosf(theta);
             s = sinf(theta);
         }
-        float r = radii[p];
+        float r = scratch_radii[p];
         x_out[2*p]   = r * c;
         x_out[2*p+1] = r * s;
     }
@@ -120,40 +101,69 @@ static void rambus_decode_recursive(
     if (rem > 0) {
         x_out[n - 1] = final_r;
     }
-
-    free(level_angles);
-    free(radii);
 }
 
-/* Forward declaration */
+/* Forward declarations */
 static void pso_decode_fast(const wubu_polarquant_t *pq,
     const uint8_t *packed, int nbytes, float *out, int d);
+
+/* ==========================================================
+ * Scratch arena — eliminates malloc from decode hot path.
+ *
+ * Pre-allocate enough scratch for d=1024 (max head_dim).
+ * The recursive decode uses this instead of per-call malloc.
+ * This is the game-dev "pre-allocated decompression buffer"
+ * pattern (same as DirectStorage's fixed working buffer).
+ * ========================================================== */
+
+#define WUBU_POLAR_MAX_D 1024
+#define WUBU_POLAR_MAX_LEVELS 10  /* log2(1024) */
+
+typedef struct {
+    float  radii_buf[WUBU_POLAR_MAX_D];      /* max level 0 radii */
+    int    angles_buf[WUBU_POLAR_MAX_D];      /* max level 0 angles */
+    float  x_buf[WUBU_POLAR_MAX_D];           /* decode output */
+    float  sub_radii[WUBU_POLAR_MAX_D / 2];   /* recursive radii */
+} wubu_polar_scratch_t;
+
+/* Thread-local scratch arena (avoids malloc per decode) */
+static __thread wubu_polar_scratch_t g_scratch;
+
+/* Thread-local PSO pointer — set before batch decode, read by decode kernel */
+static __thread const wubu_polar_pso_t *tl_pso = NULL;
 
 /* Public wrapper for PSO decode */
 void wubu_pso_decode(const uint8_t *packed, int nbytes, float *out, int d) {
     pso_decode_fast(NULL, packed, nbytes, out, d);
 }
 
-/* PSO decode function: uses serial bit reader + trig tables */
+/* PSO decode function: serial bit reader + scratch arena + trig tables.
+ * Thread-local tl_pso provides trig tables and bit-width. */
 static void pso_decode_fast(
     const wubu_polarquant_t *pq_unused,
     const uint8_t *packed, int nbytes,
     float *out, int d) {
     (void)pq_unused;
-    
+
     /* Read the final radius (first 4 bytes) */
     float final_r;
     memcpy(&final_r, packed, sizeof(float));
-    
-    /* Initialize serial bit reader for angle data (after radius) */
+
+    /* Initialize serial bit reader for angle data */
     wubu_bit_reader_t br;
     wubu_bit_reader_init(&br, packed + sizeof(float),
                          nbytes - (int)sizeof(float));
-    
-    /* We don't have access to trig tables here...
-     * The PSO should pass them. For now, use cosf/sinf. */
-    rambus_decode_recursive(&br, d, NULL, NULL, 8, final_r, out);
-    
+
+    /* Get bits from thread-local PSO, or default to 8 */
+    int bits = tl_pso ? tl_pso->bits : 8;
+    const float *cos_tbl = tl_pso ? tl_pso->cos_table : NULL;
+    const float *sin_tbl = tl_pso ? tl_pso->sin_table : NULL;
+
+    /* Decode using thread-local scratch (NO MALLOC) */
+    rambus_decode_recursive_nomalloc(&br, d, cos_tbl, sin_tbl,
+        bits, final_r, out,
+        g_scratch.angles_buf, g_scratch.radii_buf);
+
     /* Undo Hadamard rotation */
     if ((d & (d - 1)) == 0) {
         fwht(out, d);
@@ -262,23 +272,26 @@ int wubu_polar_precache_push(wubu_polar_precache_t *pc,
 int wubu_polar_precache_decode_k(wubu_polar_precache_t *pc,
     int token_idx, float *k_out) {
     if (!pc || token_idx < 0 || token_idx >= pc->n_tokens) return -1;
-    
+
     const uint8_t *seed = &pc->k_seed[token_idx * pc->bytes_per_token];
     int nbytes = pc->seed_bytes[token_idx];
-    
-    /* Use PSO decode — serial bit reader + trig tables */
+
+    tl_pso = &pc->pso;  /* enable trig tables */
     pso_decode_fast(NULL, seed, nbytes, k_out, pc->d);
+    tl_pso = NULL;
     return 0;
 }
 
 int wubu_polar_precache_decode_v(wubu_polar_precache_t *pc,
     int token_idx, float *v_out) {
     if (!pc || token_idx < 0 || token_idx >= pc->n_tokens) return -1;
-    
+
     const uint8_t *seed = &pc->v_seed[token_idx * pc->bytes_per_token];
     int nbytes = pc->seed_bytes[token_idx]; /* V same size as K */
-    
+
+    tl_pso = &pc->pso;
     pso_decode_fast(NULL, seed, nbytes, v_out, pc->d);
+    tl_pso = NULL;
     return 0;
 }
 
@@ -316,18 +329,24 @@ int wubu_polar_precache_attention(wubu_polar_precache_t *pc,
         }
     }
 
-    /* Quantized tokens — PSO decode with serial bit reader */
+    /* Quantized tokens — PSO decode with serial bit reader + trig tables.
+     * Set tl_pso ONCE for the batch (avoids per-token overhead). */
+    tl_pso = &pc->pso;
     for (int i = n_recent; i < pc->n_tokens; i++) {
-        float k_dec[1024]; /* stack buffer for d <= 1024 */
-        wubu_polar_precache_decode_k(pc, i, k_dec);
-        
+        /* Decode K — uses thread-local scratch, no malloc */
+        float *k_dec = g_scratch.x_buf;  /* reuse scratch buffer */
+        const uint8_t *k_seed = &pc->k_seed[i * pc->bytes_per_token];
+        pso_decode_fast(NULL, k_seed, pc->seed_bytes[i], k_dec, d);
+
         float s = 0.0f;
         for (int j = 0; j < d; j++) s += q[j] * k_dec[j];
         s /= temperature;
-        
-        float v_dec[1024];
-        wubu_polar_precache_decode_v(pc, i, v_dec);
-        
+
+        /* Decode V — needs separate buffer since K is still in use */
+        float v_dec[WUBU_POLAR_MAX_D];
+        const uint8_t *v_seed = &pc->v_seed[i * pc->bytes_per_token];
+        pso_decode_fast(NULL, v_seed, pc->seed_bytes[i], v_dec, d);
+
         if (s > max_s) {
             float om = max_s; max_s = s;
             sum_e = sum_e * expf(om - max_s) + 1.0f;
@@ -338,6 +357,7 @@ int wubu_polar_precache_attention(wubu_polar_precache_t *pc,
             for (int j = 0; j < d; j++) p_out[j] += e * v_dec[j];
         }
     }
+    tl_pso = NULL;  /* restore */
 
     for (int j = 0; j < d; j++) out[j] = p_out[j] / (sum_e + 1e-10f);
     free(p_out);
