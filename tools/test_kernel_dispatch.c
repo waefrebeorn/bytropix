@@ -219,6 +219,23 @@ int main(void) {
         if (md > EPS) errors++;
     }
 
+    /* 13. CUDA backend registration + dispatch */
+    {
+        const char *name = wubu_kernel_active_backend(WUBU_KERN_GEMV);
+        printf("[13] Active GEMV backend: %s\n", name);
+        const char *gemm_name = wubu_kernel_active_backend(WUBU_KERN_GEMM);
+        printf("     Active GEMM backend: %s\n", gemm_name);
+        /* Verify dispatch == scalar for GEMV (correctness across backends) */
+        float A[TM*TK], x[TK], y_disp[TM], y_cpu[TM];
+        for (int i = 0; i < TM*TK; i++) A[i] = (float)(i % 11 - 5) * 0.1f;
+        for (int i = 0; i < TK; i++) x[i] = (float)(i - TK/2) * 0.05f;
+        wubu_kernel_run(WUBU_KERN_GEMV, A, x, y_disp, TM, TK);
+        wubu_kernel_gemv_scalar(A, x, y_cpu, TM, TK);
+        float md = max_diff(y_disp, y_cpu, TM);
+        printf("     GEMV dispatch==scalar max_diff=%.8e %s\n", (double)md, md < 1e-4 ? "PASS" : "FAIL");
+        if (md > 1e-4) errors++;
+    }
+
     printf("=== errors: %d ===\n", errors);
     return errors;
 }

@@ -24,6 +24,10 @@
 #include "wubu_model.h"
 #include "wubu_spec_decode.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     int max_tokens;          /* total tokens to emit (incl. prompt echoes if any) */
     int spec_k;              /* draft depth (0 = no speculative, plain decode) */
@@ -39,5 +43,9 @@ typedef struct {
  * used when spec_k > 0. */
 int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
                   const wubu_generate_cfg_t *cfg, int *out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* WUBU_GENERATE_H */

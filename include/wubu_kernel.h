@@ -141,27 +141,27 @@ void wubu_kernel_dequantize_scalar(const int8_t *q, const float *scales,
                                           int M, int K, int bits);
 
 /* ---- compile-time backend feature macros ---- */
-#if defined(WUBU_BACKEND_CUDA)
+#if defined(WUBU_ENABLE_CUDA)
 #  define WUBU_HAS_CUDA  1
 #else
 #  define WUBU_HAS_CUDA  0
 #endif
-#if defined(WUBU_BACKEND_METAL)
+#if defined(WUBU_ENABLE_METAL)
 #  define WUBU_HAS_METAL  1
 #else
 #  define WUBU_HAS_METAL  0
 #endif
-#if defined(WUBU_BACKEND_VULKAN)
+#if defined(WUBU_ENABLE_VULKAN)
 #  define WUBU_HAS_VULKAN 1
 #else
 #  define WUBU_HAS_VULKAN 0
 #endif
-#if defined(WUBU_BACKEND_ROCM)
+#if defined(WUBU_ENABLE_ROCM)
 #  define WUBU_HAS_ROCM   1
 #else
 #  define WUBU_HAS_ROCM   0
 #endif
-#if defined(WUBU_BACKEND_BLAS)
+#if defined(WUBU_ENABLE_BLAS)
 #  define WUBU_HAS_BLAS   1
 #else
 #  define WUBU_HAS_BLAS   0
@@ -187,11 +187,11 @@ wubu_backend_id_t wubu_kernel_auto_select(wubu_kernel_type_t type);
 
 /* ---- build flags ---- */
 /* Define these at compile time to select a device backend:
- *   -DWUBU_BACKEND_CUDA    (CUDA device backend)
- *   -DWUBU_BACKEND_METAL   (Apple Metal backend)
- *   -DWUBU_BACKEND_VULKAN  (Vulkan compute backend)
- *   -DWUBU_BACKEND_ROCM    (ROCm/HIP backend)
- *   -DWUBU_BACKEND_BLAS    (BLAS backend, cublas/mkl)
+ *   -DWUBU_ENABLE_CUDA    (CUDA device backend, requires -lcudart)
+ *   -DWUBU_ENABLE_METAL   (Apple Metal backend)
+ *   -DWUBU_ENABLE_VULKAN  (Vulkan compute backend)
+ *   -DWUBU_ENABLE_ROCM    (ROCm/HIP backend)
+ *   -DWUBU_ENABLE_BLAS    (BLAS backend, cublas/mkl)
  * If none are defined, the CPU scalar baseline is used. */
 
 #ifdef __cplusplus

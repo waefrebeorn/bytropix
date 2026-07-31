@@ -25,7 +25,7 @@ api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -I include -o $@ $< -lssl -lcrypto -lm
 
 # Object files
-CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ssm.o src/wubu_ssm_workspace.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o src/wubu_gemm.o src/wubu_kvcache_quant.o src/wubu_ssm_scan.o src/wubu_roofline.o src/wubu_kv_select.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o src/wubu_prefix_cache.o src/wubu_paged_kv.o src/wubu_q4k_m.o src/wubu_delta_net.o src/wubu_scheduler.o src/wubu_ngram.o src/wubu_self_cascade.o src/wubu_spec_cascade.o src/wubu_spawn.o src/wubu_kv_styx.o src/wubu_kv_tier.o src/wubu_attn_gate.o src/wubu_layer_skip.o src/wubu_kv_adaptive.o src/wubu_awq.o src/wubu_gptq.o src/wubu_soa.o src/wubu_flash_prefill.o src/wubu_kv_cacheline.o src/wubu_rope_prefetch.o src/wubu_numerical_audit.o src/wubu_mla.o src/wubu_expert_choice.o src/wubu_chunked_prefill.o src/wubu_smt_check.o src/wubu_lmcache.o src/wubu_kernel.o src/wubu_fast_attn.o src/wubu_polarquant.o
+CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ssm.o src/wubu_ssm_workspace.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o src/wubu_gemm.o src/wubu_kvcache_quant.o src/wubu_ssm_scan.o src/wubu_roofline.o src/wubu_kv_select.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o src/wubu_prefix_cache.o src/wubu_paged_kv.o src/wubu_q4k_m.o src/wubu_delta_net.o src/wubu_scheduler.o src/wubu_ngram.o src/wubu_self_cascade.o src/wubu_spec_cascade.o src/wubu_spawn.o src/wubu_kv_styx.o src/wubu_kv_tier.o src/wubu_attn_gate.o src/wubu_layer_skip.o src/wubu_kv_adaptive.o src/wubu_awq.o src/wubu_gptq.o src/wubu_soa.o src/wubu_flash_prefill.o src/wubu_kv_cacheline.o src/wubu_rope_prefetch.o src/wubu_numerical_audit.o src/wubu_mla.o src/wubu_expert_choice.o src/wubu_chunked_prefill.o src/wubu_smt_check.o src/wubu_lmcache.o src/wubu_kernel.o src/wubu_kernel_backends.o src/wubu_fast_attn.o src/wubu_polarquant.o
 MODEL_OBJ = $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o src/flash_attn_q4_0_opt.o src/flash_attn_q4_0_prefill_opt.o
 GPU_OBJ = src/wubu_model_gpu.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o
@@ -47,13 +47,13 @@ EDR_SRC  = $(WUBUOS)/src/runtime/wubu_edr.c \
            $(WUBUOS)/src/runtime/edr/edr_poller.c
 
 src/wubu_ssd_moe.o: src/wubu_ssd_moe.c include/wubu_ssd_moe.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/safetensors_reader.o: src/safetensors_reader.c include/safetensors_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_safetensors_shard.o: src/wubu_safetensors_shard.c include/wubu_safetensors_shard.h include/safetensors_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_dims.o: src/wubu_dims.c include/wubu_dims.h
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -61,95 +61,101 @@ src/wubu_dims.o: src/wubu_dims.c include/wubu_dims.h
 src/wubu_dims_gpu.o: src/wubu_dims_gpu.cu include/wubu_dims.h
 	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
 
+src/wubu_kernel_cuda.o: src/wubu_kernel_cuda.cu include/wubu_kernel.h
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
+
+src/wubu_kernel_backends.o: src/wubu_kernel_backends.c include/wubu_kernel.h
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
+
 src/wubu_model_safetensors_bridge.o: src/wubu_model_safetensors_bridge.c include/wubu_model_safetensors_bridge.h include/wubu_model.h include/wubu_lora.h include/wubu_model_adapter.h include/wubu_affinity.h include/wubu_rotate.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_repetition.o: src/wubu_repetition.c include/wubu_repetition.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_lora.o: src/wubu_lora.c include/wubu_lora.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_model_adapter.o: src/wubu_model_adapter.c include/wubu_model_adapter.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_safetensors_model.o: src/wubu_safetensors_model.c include/wubu_safetensors_model.h include/safetensors_reader.h include/wubu_model_adapter.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/qlearner.o: src/qlearner.c include/qlearner.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_ssm.o: src/wubu_ssm.c include/wubu_ssm.h include/wubu_mobius.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_ssm_chunked.o: src/wubu_ssm_chunked.c include/wubu_ssm.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_nested_ssm.o: src/wubu_nested_ssm.c include/wubu_nested_ssm.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_nested_ssm_backward.o: src/wubu_nested_ssm_backward.c include/wubu_nested_ssm.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_mobius.o: src/wubu_mobius.c include/wubu_mobius.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_moe.o: src/wubu_moe.c include/wubu_moe.h include/wubu_ssm.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_moe_hyperbolic.o: src/wubu_moe_hyperbolic.c include/wubu_moe_hyperbolic.h include/wubu_moe.h include/wubu_mobius.h include/wubu_ssm.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_moe_backward.o: src/wubu_moe_backward.c include/wubu_moe.h include/wubu_ssm.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_poincare_ssm_backward.o: src/wubu_poincare_ssm_backward.c include/wubu_ssm.h include/wubu_mobius.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_poincare_gqa.o: src/wubu_poincare_gqa.c include/wubu_poincare_gqa.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_poincare_gqa_backward.o: src/wubu_poincare_gqa_backward.c include/wubu_poincare_gqa.h include/wubu_ssm.h include/wubu_mobius.h include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_prefix_cache.o: src/wubu_prefix_cache.c include/wubu_prefix_cache.h include/wubu_paged_kv.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_paged_kv.o: src/wubu_paged_kv.c include/wubu_paged_kv.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_q4k_m.o: src/wubu_q4k_m.c include/wubu_q4k_m.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_delta_net.o: src/wubu_delta_net.c include/wubu_delta_net.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_ngram.o: src/wubu_ngram.c include/wubu_ngram.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_spec_cascade.o: src/wubu_spec_cascade.c include/wubu_spec_cascade.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_scheduler.o: src/wubu_scheduler.c include/wubu_scheduler.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_mobius_linear.o: src/wubu_mobius_linear.c include/wubu_mobius_linear.h include/wubu_mobius.h include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_mobius_gyrate.o: src/wubu_mobius_gyrate.c include/wubu_mobius.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_moe_hyperbolic_backward.o: src/wubu_moe_hyperbolic_backward.c include/wubu_moe_hyperbolic.h include/wubu_mobius.h include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_hyperbolic_output_proj.o: src/wubu_hyperbolic_output_proj.c include/wubu_hyperbolic_output_proj.h include/wubu_mobius_linear.h include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_vision.o: src/wubu_vision.c include/wubu_vision.h include/wubu_ssm.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gguf_reader.o: src/gguf_reader.c include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_generate.o: src/wubu_generate.c include/wubu_generate.h include/wubu_model.h include/wubu_spec_decode.h
 src/wubu_kvvq.o: src/wubu_kvvq.c include/wubu_kvvq.h
@@ -164,52 +170,52 @@ src/wubu_gemm.o: src/wubu_gemm.c include/wubu_gemm.h
 src/wubu_gemv_tune.o: src/wubu_gemv_tune.c include/wubu_gemv_tune.h include/wubu_roofline.h
 src/quantized_matmul.o: src/quantized_matmul.c include/wubu_gemm.h include/wubu_gemv_tune.h include/gguf_reader.h include/wubu_ssm.h include/wubu_safetensors_shard.h
 src/wubu_kv_runtime.o: src/wubu_kv_runtime.c include/wubu_kv_runtime.h include/wubu_kv_select.h include/wubu_roofline.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/cuda_kernels.o: src/cuda_kernels.cu include/cuda_kernels.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gpu_output_proj.o: src/gpu_output_proj.cu include/gpu_output_proj.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_model_gpu.o: src/wubu_model_gpu.cu include/wubu_model.h include/cuda_kernels.h include/bench.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gpu_quant_matmul.o: src/gpu_quant_matmul.cu include/gpu_quant_matmul.h include/gguf_reader.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gpu_quant_matmul_row_major.o: src/gpu_quant_matmul_row_major.cu include/gpu_quant_matmul.h include/gguf_reader.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gpu_moe_kernel.o: src/gpu_moe_kernel.cu include/gpu_moe_kernel.h include/gguf_reader.h src/iq2xxs_grid_data.inc src/iq3xxs_grid.inc
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gpu_ssm_recurrence.o: src/gpu_ssm_recurrence.cu include/gpu_ssm_recurrence.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/flash_attn_q4_0_opt.o: src/flash_attn_q4_0_opt.cu include/cuda_kernels.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/flash_attn_q4_0_prefill_opt.o: src/flash_attn_q4_0_prefill_opt.cu include/cuda_kernels.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gpu_gemma4.o: src/gpu_gemma4.cu include/gpu_gemma4.h include/wubu_gemma4.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/gpu_gemma4_forward.o: src/gpu_gemma4_forward.cu include/gpu_gemma4.h include/wubu_gemma4.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/rsgd.o: src/rsgd.c include/rsgd.h include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_tst.o: src/wubu_tst.c include/wubu_tst.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/bench.o: src/bench.c include/bench.h include/cuda_kernels.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) $(CUDA_INC) -c -o $@ $<
 
 src/dequant_iq2_xxs.o: src/dequant_iq2_xxs.c include/gguf_reader.h
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 # Test binaries
 
@@ -466,8 +472,8 @@ bench_gemm: tools/bench_gemm.c src/wubu_gemm.o
 	./$@
 
 # WuBuOS-agnostic kernel dispatch: prove device-backend registry works.
-test_kernel_dispatch: tools/test_kernel_dispatch.c src/wubu_kernel.o
-	$(CC) $(CFLAGS) -mavx2 -mfma -I include -o $@ $^ -lm -fopenmp
+test_kernel_dispatch: tools/test_kernel_dispatch.c src/wubu_kernel.o src/wubu_kernel_backends.o src/wubu_kernel_cuda.o
+	$(CXX) $(CFLAGS) -DWUBU_ENABLE_CUDA -I include -o $@ tools/test_kernel_dispatch.c src/wubu_kernel.o src/wubu_kernel_backends.o src/wubu_kernel_cuda.o $(LDFLAGS) -L$(CUDA_LIBDIR) -lcudart -lstdc++
 	./$@
 
 bench_gemm_run: bench_gemm
@@ -683,8 +689,9 @@ test_full_moe: tools/test_full_moe.c $(MODEL_OBJ)
 test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-gen_text: tools/gen_text.c $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o
-	$(CC) $(CFLAGS) -o $@ $< $(MODEL_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDFLAGS)
+gen_text: tools/gen_text.c $(CPU_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o src/wubu_kernel_cuda.o
+	$(CXX) $(CFLAGS) -DWUBU_ENABLE_CUDA -I include -o $@ $< $(CPU_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o src/wubu_kernel_cuda.o $(LDFLAGS) -L$(CUDA_LIBDIR) -lcudart -lstdc++
+
 # CPU-only gen_text (recompiles wubu_model + wubu_moe without GPU_SUPPORT)
 gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I$(CUDA_INC),$(CFLAGS))
 gen_text_cpu: src/wubu_model_cpu.o src/wubu_moe_cpu.o $(filter-out src/wubu_moe.o,$(CORE_OBJ)) src/wubu_tokenizer.o
@@ -829,7 +836,7 @@ infer_vision_text_gpu: tools/infer_vision_text_gpu_nvcc.o $(MODEL_OBJ) $(CUDA_OB
 	$(CXX) $(CFLAGS) $(CUDA_INC) -DGPU_SUPPORT -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lcublas -lcudart -lstdc++
 
 tools/infer_vision_text_gpu_nvcc.o: tools/infer_vision_text_gpu.cu include/cuda_vision.h include/wubu_vision.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 infer_poincare: tools/infer_poincare.c src/bench.o $(CORE_OBJ) $(CUDA_OBJ)
 	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
@@ -841,10 +848,10 @@ infer_vision_gpu: tools/infer_vision_gpu.o $(CORE_OBJ) src/cuda_vision.o
 	$(CC) $(CFLAGS) $(CUDA_INC) -o $@ $^ $(LDFLAGS) $(CUDA_LIBS) -L$(CUDA_LIBDIR) -lstdc++
 
 tools/infer_vision_gpu.o: tools/infer_vision_gpu.cu include/cuda_vision.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/cuda_vision.o: src/cuda_vision.cu include/cuda_vision.h include/wubu_vision.h
-	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 test_256k: tools/test_256k.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

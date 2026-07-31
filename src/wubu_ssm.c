@@ -6,7 +6,7 @@
 #include "thread_pool.h"
 #include "wubu_model.h"  // for kv_cache_read_head / kv_cache_write_head
 #include "wubu_fast_attn.h"  // fast zero-malloc attention kernel
-
+#include "wubu_kernel.h"   // hardware dispatch table
 // Global tensor naming convention (defined here for CORE_OBJ visibility)
 // 0 = Qwen-style "blk.N.*", 1 = Gemma-style "model.layers.N.*", 2 = pure GQA
 int g_tensor_naming = 0;
@@ -137,9 +137,9 @@ static void proj_matmul(const float *x, int64_t n_rows, int64_t n_cols,
     if (W_q && weight_type != GGML_TYPE_F32 && n_cols > 0) {
         quantized_matmul(x, W_q, weight_type, n_rows, n_cols, 0, out);
     } else if (W_f32 && n_cols > 0) {
-        /* F32 fast path: use tiled AVX2/AVX512-FMA GEMV kernel (16× faster
-         * than the scalar triple-loop on --march=native). */
-        quantized_matmul(x, W_f32, GGML_TYPE_F32, n_rows, n_cols, 0, out);
+        /* F32 path: dispatch through kernel table (CUDA if available,
+         * else CPU tiled AVX2-FMA GEMV). 16x faster than scalar triple-loop. */
+        wubu_kernel_run(WUBU_KERN_GEMV, W_f32, x, out, (int)n_cols, (int)n_rows);
     }
 }
 
@@ -419,10 +419,11 @@ void wubu_ssm_forward(const float *x, int B, int T,
         // F32 safetensors path: use tiled GEMV kernel (16× faster than matmul_nt)
         for (int s = 0; s < N; s++) {
             const float *x_s = x + s * WUBU_DIMS.d_model;
-            quantized_matmul(x_s, w->attn_qkv_weight_f32, GGML_TYPE_F32,
-                             WUBU_DIMS.d_model, C, 0, qkv_all + s * C);
-            quantized_matmul(x_s, w->attn_gate_weight_f32, GGML_TYPE_F32,
-                             WUBU_DIMS.d_model, VALUE_DIM, 0, z_all + s * VALUE_DIM);
+            /* F32 path: kernel dispatch (CUDA GEMV if available, else CPU) */
+            wubu_kernel_run(WUBU_KERN_GEMV, w->attn_qkv_weight_f32, x_s,
+                            qkv_all + s * C, C, WUBU_DIMS.d_model);
+            wubu_kernel_run(WUBU_KERN_GEMV, w->attn_gate_weight_f32, x_s,
+                            z_all + s * VALUE_DIM, VALUE_DIM, WUBU_DIMS.d_model);
         }
     } else {
         // Fused QKV + gate projection via single Q8_K quantization

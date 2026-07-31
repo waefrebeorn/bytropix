@@ -221,14 +221,9 @@ int wubu_kernel_init(void) {
     /* Auto-detect CPU features for Roofline optimization */
     wubu_cpu_detect(&g_cpu_feat);
 
-    /* If no device backend registered, auto-select based on hardware */
-    if (!g_backends) {
-        wubu_backend_id_t auto_b = wubu_kernel_auto_select(WUBU_KERN_GEMM);
-        if (auto_b != WUBU_BACKEND_SCALAR) {
-            /* register a synthetic scalar+SIMD entry hint */
-            (void)auto_b;  /* placeholder: device backends register real impls */
-        }
-    }
+    /* Register device backends (CUDA, Vulkan, Metal, etc.) if compiled in */
+    wubu_kernel_register_backends();
+
     return 0;
 }
 

@@ -18,6 +18,7 @@
 #include "wubu_tokenizer_hf.h"
 #include "wubu_generate.h"  /* KB5: spec decode */
 #include "wubu_prefix_cache.h"  /* KB7: prefix cache (doc 010) */
+#include "wubu_kernel.h"  /* HW dispatch table */
 #include "wubu_smt_check.h"     /* F02: boot-time GEMV verification */
 #include "wubu_lmcache.h"       /* A06: persistent KV cache */
 #include "wubu_kv_adaptive.h"   /* 001: Ecco entropy-aware KV */
@@ -198,6 +199,9 @@ static int init_model(wubu_model_t *mdl, const char *path) {
 }
 
 int main(int argc, char **argv) {
+
+    /* Initialize kernel dispatch table (registers CUDA backend if compiled in) */
+    wubu_kernel_init();
 
     const char *model_path = "/models/Qwen3.6-35B-A3B-UD-IQ2_M.gguf";
     const char *env_mp = getenv("MODEL");
