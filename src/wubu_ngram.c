@@ -11,6 +11,7 @@
 
 wubu_ngram_draft_t *wubu_ngram_create(const int *ctx, int ctx_len, int order) {
     if (order < 2) order = 2;
+    if (!ctx || ctx_len <= 0) return NULL;
     wubu_ngram_draft_t *d = (wubu_ngram_draft_t *)calloc(1, sizeof(*d));
     if (!d) return NULL;
     d->cap = ctx_len + 256;

@@ -15,11 +15,12 @@
  */
 #include "wubu_kernel.h"
 
-/* CUDA backend probe + register (compiled only when WUBU_HAS_CUDA=1) */
-#if WUBU_HAS_CUDA
-extern int wubu_cuda_backend_probe(void);
-extern int wubu_cuda_backend_register(void);
-#endif
+/* CUDA backend probe + register (compiled in wubu_kernel_cuda.cu).
+ * We declare them as weak here so non-CUDA test builds link without
+ * the CUDA object file. When wubu_kernel_cuda.o is linked, its strong
+ * symbols override these. */
+__attribute__((weak)) int wubu_cuda_backend_probe(void) { return 0; }
+__attribute__((weak)) int wubu_cuda_backend_register(void) { return -1; }
 
 /* Device backend supports query: which kernel types does it handle? */
 static int default_supports(wubu_kernel_type_t type) {

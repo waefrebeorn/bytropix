@@ -23,14 +23,11 @@ attacks bytes moved.
 - B02 int4 weight-only GEMV (Marlin-style pack) .......... `wired` → doc 003
 - B03 BitNet 1.58 ternary {-1,0,+1} GEMV ............. `wired` → doc 004
 - B04 SmoothQuant activation outlier migration ............. `wired` → doc 005
-- B05 AWQ activation-aware 1% salient channel protect .... `open` (ties to 003/005)
-- B06 GPTQ 2nd-order weight quant ...................... `open` (offline calib; safe)
+- B05 AWQ activation-aware 1% salient channel protect .... `wired` (wubu_awq)
+- B06 GPTQ 2nd-order weight quant ...................... `wired` (wubu_gptq, offline calib)
 - B07 FP8 E4M3/E5M2 mixed precision (HW-dependent) ...... `open` (CPU→emul, low prio)
 - B08 NVFP4 dispatch (Blackwell) ....................... `open` (HW-gated, skip CPU)
-
-## THEME C — Structure-of-Arrays / cache-aware layout (game-console lesson)
-- C01 Arena allocator for per-request + KV buffers ....... `wired` → doc 006
-- C02 SoA activation/state tensors (vs AoS malloc) ....... `open` (ties to 006)
+- C02 SoA activation/state tensors (vs AoS malloc) ....... `wired` (wubu_soa, in test_all)
 - C03 Cache-line packing of KV pages (64B aligned) ...... `open` (ties to 006/002)
 - C04 Fixed-timestep / deterministic decode step ......... `open` (scheduler → doc 007)
 - C05 Hot/cold split (compute vs metadata) ............. `open` (ties to 006)
