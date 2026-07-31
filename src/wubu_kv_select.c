@@ -12,7 +12,8 @@ const char *wubu_kv_scheme_name(wubu_kv_scheme_t kv) {
         case WUBU_KV_Q4_0: return "Q4_0";
         case WUBU_KV_Q8:   return "OUR_Q8";
         case WUBU_KV_KIVI: return "KIVI";
-        case WUBU_KV_VQ:   return "VQ";  /* KB2 doc 014 */
+        case WUBU_KV_VQ:   return "VQ";
+        case WUBU_KV_ADAPTIVE: return "ADAPTIVE";  /* KB2 doc 014 */
         default:           return "?";
     }
 }
