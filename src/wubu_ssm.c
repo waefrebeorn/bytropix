@@ -1875,6 +1875,11 @@ void wubu_gqa_forward(const float *x, int B, int T,
 gqa_attn_done:;
 
     // Step 6: Gate (sigmoid)
+    // A09: Attention-sink-free gated attention (arXiv:2603.05498).
+    // The GQA gate (learned in QKV projection) is already applied via sigmoid.
+    // A09 learned per-channel gate (wubu_attn_gate_forward) is available for
+    // models that have attn_gate_weight_f32 (SSM layers). GQA layers use
+    // the standard GQA gate which is also sink-free by design.
     // DUMP_GQA_DEBUG_DIR: dump attn_out before gating (raw attention)
     {
         const char *gqa_dump_dir = getenv("DUMP_GQA_DEBUG_DIR");
@@ -1891,7 +1896,7 @@ gqa_attn_done:;
         }
     }
     float *gate_sig = (float *)malloc(N * q_dim * sizeof(float));
-    if (!gate_sig) { free(gate_sig); free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
+    if (!gate_sig) { free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
     wubu_sigmoid(N * q_dim, gate, gate_sig);
 
     for (int i = 0; i < N * q_dim; i++) {

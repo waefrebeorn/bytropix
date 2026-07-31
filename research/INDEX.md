@@ -15,7 +15,7 @@ attacks bytes moved.
 - A06 Predictive multi-tier KV (DRAM/NVMe/CXL/IB, Bayesian reuse) `open` (CPU-only, skip) → doc 002
 - A07 LMCache/KVBM prefix+PD-disaggregation .............. `open` (prefix reuse → doc 010)
 - A08 NVIDIA priority-based KV eviction (LRU+importance) .. `open` (ties to 002)
-- A09 Attention-sink-free gated attention (kills massive activations) `open` → doc 011
+- A09 Attention-sink-free gated attention (kills massive activations) `wired` (wubu_attn_gate, in GQA decode path)
 - A10 RoPE-aware KV prefetch ............................. `open` (ties to 002)
 
 ## THEME B — Weight quantization (halve weight traffic)
