@@ -219,6 +219,113 @@ void wubu_fast_attn_decode(
     }
 }
 
+/* ================================================================== */
+/* Split-K parallel decode (FlashDecoding++ pattern)                  */
+/* ================================================================== */
+
+void wubu_fast_attn_decode_splitk(
+        wubu_fast_attn_ctx_t *ctx,
+        const float *q,
+        const float *k_cache,
+        const float *v_cache,
+        int cache_len,
+        float *out,
+        int n_threads,
+        int n_splits)
+{
+    if (cache_len <= 0) {
+        memset(out, 0, (size_t)ctx->n_q_heads * ctx->head_dim * sizeof(float));
+        return;
+    }
+
+    int n_q = ctx->n_q_heads, n_kv = ctx->n_kv_heads;
+    int hd = ctx->head_dim, group_sz = ctx->kv_group_size;
+    float inv_sqrt_hd = 1.0f / sqrtf((float)hd);
+
+    if (n_splits <= 0) n_splits = n_threads > 0 ? n_threads : 1;
+    if (n_splits > cache_len) n_splits = cache_len;
+    if (n_splits < 1) n_splits = 1;
+
+    /* Per-split partials: [n_splits * n_q * (hd+2)] floats.
+     * Layout per partial: [local_max, local_sumexp, local_out[hd]] */
+    int ps = hd + 2;
+    float *partials = (float *)alloca((size_t)n_splits * n_q * ps * sizeof(float));
+    memset(partials, 0, (size_t)n_splits * n_q * ps * sizeof(float));
+
+    int tps = (cache_len + n_splits - 1) / n_splits;
+
+    #pragma omp parallel for num_threads(n_threads) collapse(2) schedule(dynamic)
+    for (int split = 0; split < n_splits; split++) {
+        for (int qh = 0; qh < n_q; qh++) {
+            int g = qh / group_sz;
+            int t0 = split * tps;
+            int t1 = t0 + tps;
+            if (t0 >= cache_len) continue;
+            if (t1 > cache_len) t1 = cache_len;
+
+            const float *q_h = q + (size_t)qh * hd;
+            float *p = partials + (size_t)(split * n_q + qh) * ps;
+
+            float lmax = -INFINITY;
+            float lsum = 0.0f;
+
+            for (int t = t0; t < t1; t++) {
+                const float *k_h = k_cache + (size_t)(t * n_kv + g) * hd;
+                const float *v_h = v_cache + (size_t)(t * n_kv + g) * hd;
+
+                float dot = 0.0f;
+                for (int d = 0; d < hd; d++) dot += q_h[d] * k_h[d];
+                float s = dot * inv_sqrt_hd;
+
+                if (s > lmax) {
+                    float f = expf(lmax - s);
+                    lsum = lsum * f + 1.0f;
+                    for (int d = 0; d < hd; d++) p[2 + d] *= f;
+                    lmax = s;
+                }
+                float ew = expf(s - lmax);
+                lsum += ew;
+                for (int d = 0; d < hd; d++) p[2 + d] += ew * v_h[d];
+            }
+
+            p[0] = lmax;
+            p[1] = lsum;
+        }
+    }
+
+    /* Merge splits via log-sum-exp rescale */
+    for (int qh = 0; qh < n_q; qh++) {
+        float *oh = out + (size_t)qh * hd;
+
+        float gmax = -INFINITY;
+        for (int s = 0; s < n_splits; s++) {
+            float *p = partials + (size_t)(s * n_q + qh) * ps;
+            if (p[1] > 0.0f && p[0] > gmax) gmax = p[0];
+        }
+
+        if (gmax == -INFINITY) {
+            memset(oh, 0, (size_t)hd * sizeof(float));
+            continue;
+        }
+
+        float gsum = 0.0f;
+        for (int s = 0; s < n_splits; s++) {
+            float *p = partials + (size_t)(s * n_q + qh) * ps;
+            float sf = expf(p[0] - gmax);
+            gsum += p[1] * sf;
+        }
+
+        memset(oh, 0, (size_t)hd * sizeof(float));
+        for (int s = 0; s < n_splits; s++) {
+            float *p = partials + (size_t)(s * n_q + qh) * ps;
+            float sf = expf(p[0] - gmax);
+            float w = p[1] * sf / (gsum + 1e-10f);
+            for (int d = 0; d < hd; d++)
+                oh[d] += w * p[2 + d] / (p[1] + 1e-10f);
+        }
+    }
+}
+
 /* L3-tiled Q8 decode — online softmax with cross-tile merge */
 void wubu_fast_attn_decode_q8_tiled(
         wubu_fast_attn_ctx_t *ctx,
@@ -586,9 +693,4 @@ void wubu_fast_attn_decode_q8(
         }
     }
 
-    float inv = 1.0f / sum_exp;
-    for (int qh = 0; qh < n_q; qh++) {
-        float *oh = out + (size_t)qh * hd;
-        for (int d = 0; d < hd; d++) oh[d] = out_acc[qh * hd + d] * inv;
-    }
 }

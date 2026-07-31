@@ -1014,3 +1014,7 @@ test_polarquant_benchmark: tools/test_polarquant_benchmark.c src/wubu_polarquant
 test_q8k_pqv: tools/test_q8k_pqv.c src/wubu_fast_attn.o src/wubu_polarquant.o src/wubu_q8.o src/wubu_mobius.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
+
+test_splitk: tools/test_splitk.c src/wubu_fast_attn.o
+	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
+	./$@
