@@ -565,6 +565,11 @@ test_awq: tools/test_awq.c src/wubu_awq.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+# doc B06: GPTQ second-order weight quantization
+test_gptq: tools/test_gptq.c src/wubu_gptq.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 # doc 015: FlashDecoding-style parallel KV-load decode attention
 test_flashdecode: tools/test_flashdecode.c src/wubu_flashdecode.o $(CPU_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
