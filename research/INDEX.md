@@ -389,3 +389,18 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - AV08 Agentic vector memory — episodic memory is flat list, not ANN index
 Status: `open` (all 8 to be closed as C11)
 EOF
+
+## Theme AW: Causal + Neuro-Symbolic + Temporal — 7-hop KB sweep
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### Causal/neuro-symbolic substrate gaps (10 gaps AW01-AW10)
+- AW01 Structural Causal Model (graph of cause->effect) — only dynamical predictor (AG04)
+- AW02 do-intervention p(x|do(a)) — cannot estimate interventions
+- AW03 Counterfactual query — cannot ask "what if"
+- AW04 Identifiability check — may attempt non-identifiable queries
+- AW05 Symbolic verifier in decode path — safety is imperative, not logical
+- AW06 Temporal belief revision (Bayesian over timestamped facts) — memory has no time
+- AW07 Logic engine (Prolog/ASP) — no deductive inference over facts
+- AW08 PDDL/STRIPS planner — replan is single-step, not goal-directed
+- AW09 Abductive diagnosis (hypotheses from failure) — no why-generation
+- AW10 Counter-abduction (rival-explanation defeat) — no defeat of wrong CoT
+Status: `open` (all 10 to be closed as C11)

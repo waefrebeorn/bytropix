@@ -1035,6 +1035,10 @@ test_vecsearch: tools/test_vecsearch.c src/wubu_vecsearch.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+test_causal_symbolic: tools/test_causal_symbolic.c src/wubu_causal.o src/wubu_symbolic.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 # doc B08/H03/E06/F02: remaining CPU-closable cores (NVFP4, Hadamard,
 # wide all-reduce, equiv-check). MLA (A08/E02) is in wubu_mla.c/test_mla.
 test_more_cores: tools/test_more_cores.c src/wubu_nvfp4.o src/wubu_hadamard.o src/wubu_expert_allreduce.o src/wubu_equiv_check.o src/wubu_fp8.o
