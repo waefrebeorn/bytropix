@@ -102,7 +102,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L03 H2O heavy-hitter eviction (keep top-p% attention) ........... `wired` (wubu_kv_evict track_attn + select_h2o + test_kv_evict_h2o)
 - L04 InfiniGen KV prefetch (predict hot KV to fast tier) ......... `open` (ties A06)
 - L05 CacheBlend cross-request KV stitch .......................... `open`
-- L06 Quest blockwise top-k KV retrieval (sub-linear attn) ........ `open`
+- L06 Quest blockwise top-k KV retrieval (sub-linear attn) ........ `wired` (wubu_attn_tune quest_topk)
 - L07 SnapKV cluster-based KV compression at layer depth ........... `wired` (wubu_kv_compress keep_clusters)
 - L08 PyramidKV pyramid-accumulation KV reduction ................. `wired` (wubu_kv_compress pyramid_keep)
 - L09 CIA KV (attention-score-driven compression) ................ `wired` (wubu_kv_compress keep_top_score)
@@ -111,7 +111,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L12 MoBA memory-block attention (segment KV) .................... `wired` (wubu_sparse_attn moba_topk)
 - L13 LM-Infinite landmark attention (soft prompt) .............. `open`
 - L14 Activation-beam KV offload (CPU/SSD tier) ................... `open` (ties A06/C05)
-- L15 KVShield adversarial-robust KV (no poison OOB) ............. `open` (ties F)
+- L15 KVShield adversarial-robust KV (no poison OOB) ............. `wired` (wubu_kv_shield bounds-check, ties F)
 - L16 Elastic context (grow/shrink window online) ................ `open`
 - L17 Dual-window (global sink + local) hybrid .................. `wired` (wubu_stream_kv sink+window = same design)
 - L18 Layer-wise KV budget (deeper=less) ........................ `wired` (wubu_kv_budget layer_kv_budget)
@@ -159,7 +159,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N16 Cache-hit-rate feedback loop (prefix reuse) .............. `wired` (wubu_cache_fb, ties D02)
 - N17 KV-footprint forecaster (pre-alloc advise) .............. `wired` (wubu_kv_budget forecast, ties N12)
 - N18 OOM-risk early-warning (streaming engage) ................ `wired` (wubu_capacity_wall oom_risk, ties D04)
-- N19 Adaptive chunk size (prefill vs decode) .................. `open` (ties D04)
+- N19 Adaptive chunk size (prefill vs decode) .................. `wired` (wubu_attn_tune adaptive_chunk, ties D04)
 - N20 Scheme A/B online (shadow quant compare) ............... `open`
 
 ## THEME O — Cross-discipline (DB/OS/formal/neuro) 7-hop wins
@@ -173,7 +173,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - O08 RDMA net -> KV transfer (localhost analog) .............. `wired` (wubu_kv_transfer)
 - O09 HPC roofline -> decode-bound proof ....................... `wired` (doc survey)
 - O10 Z3/Alive2 -> GEMV rewrite verify ........................ `wired` (wubu_equiv_check)
-- O11 TVM cost -> split-K auto-tune ........................... `open` (ties N)
+- O11 TVM cost -> split-K auto-tune ........................... `wired` (wubu_attn_tune splitk_tune, ties N13)
 - O12 ProofWright -> dequant equivalence ...................... `open` (ties F)
 - O13 OS mmap prefault -> KV warm ............................. `open` (ties A06)
 - O14 DB query plan -> decode schedule ....................... `open` (ties D)
