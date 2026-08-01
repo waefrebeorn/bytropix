@@ -216,21 +216,21 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - Q05 OBCache Hessian-guided token saliency pruning ............. `wired` (wubu_kv2026b obcache_saliency proxy)
 - Q06 KeyDiff key-similarity KV eviction ....................... `wired` (wubu_kv2026b keydiff_evict)
 - Q07 LAVa layer-wise eviction w/ dynamic head+layer budget .... `wired` (wubu_kv2026 lava_budget, ties L18)
-- Q08 PolyKV shared asymmetrically-compressed KV pool (agents) .. `open`
+- Q08 PolyKV shared asymmetrically-compressed KV pool (agents) .. `wired` (wubu_ttc polykv_coherent)
 - Q09 FreeKV speculative top-k KV retrieval ................... `wired` (wubu_kv2026 freekv_topk, ties L11)
 - Q10 TTKV temporal-tiered KV placement (hetero precision) ..... `wired` (wubu_kv2026 ttkv_tier, ties N07)
 - Q11 DASH-KV hash-based token-level attn scheduling ........... `open`
 - Q12 TARDIS GPU-centric KV service w/ host spillover ......... `open`
 - Q13 KVDrive multi-tier CPU/DRAM/SSD KV management ........... `open` (ties O02)
 - Q14 ScoutAttention layer-ahead CPU precompute + GPU decode .. `open`
-- Q15 HotPrefix hotness-aware KV scheduling (prefix sharing) .. `open` (ties L05)
+- Q15 HotPrefix hotness-aware KV scheduling (prefix sharing) .. `wired` (wubu_ttc hotprefix_priority, ties L05)
 - Q16 AlignedServe prefix-aware batching scheduler ........... `open` (ties D04)
 - Q17 CoDec prefix-shared decoding kernel .................... `open`
 - Q18 SparKV overhead-aware KV loading (cloud<->device) ...... `open` (ties A06)
 - Q19 HeteroCache heterogeneous KV compression retrieval ...... `open`
-- Q20 Test-time-compute budget allocator (adaptive token budget)  `open`
-- R01 Inference-time scaling controller (budget vs accuracy) .. `open`
+- Q20 Test-time-compute budget allocator (adaptive token budget)  `wired` (wubu_ttc budget_steps)
+- R01 Inference-time scaling controller (budget vs accuracy) .. `wired` (wubu_ttc scaling_factor)
 - R02 Agentic context-axis efficiency (curated input context) . `open`
-- R03 CATTS contrastive adaptive token scaling .............. `open`
+- R03 CATTS contrastive adaptive token scaling .............. `wired` (wubu_ttc catts_tokens)
 - R04 Reasoning-model KV redundancy profiler ................. `open` (ties Q04)
 - R05 Multi-agent shared KV pool coherence ................... `open` (ties Q08)
