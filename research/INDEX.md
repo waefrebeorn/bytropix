@@ -268,3 +268,18 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - W01 NoPE (no positional encoding; attention carries position) ........ `wired` (wubu_parallel_spec nope_enabled)
 - W02 ALiBi-style distance bias (extrapolatable slope) ................. `wired` (wubu_parallel_spec alibi_bias) (ties rope)
 - W03 Attention sandwitch / FFN-first (length-robust order) ............ `wired` (wubu_parallel_spec ffn_first_enabled)
+
+## Theme X-Y: 2026 MoE routing + RAG/retrieval KV sweep (fresh gaps)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### X: Mixture-of-Experts routing
+- X01 Top-K router (softmax gate, pick K of N routed experts) .......... `wired` (wubu_moe_rag topk_route)
+- X02 Expert-Choice routing (expert picks top tokens; balanced) ......... `wired` (wubu_moe_rag expert_choice)
+- X03 Shared-expert always-on (routed + shared aggregation) ............ `wired` (wubu_moe_rag shared_expert)
+- X04 Sigmoid gating (independent expert probs, not softmax) ........... `wired` (wubu_moe_rag sigmoid_gate)
+- X05 Predictive expert caching (ExpertFlow: prefetch by predicted route) `wired` (wubu_moe_rag expert_prefetch)
+- X06 Capacity factor / token dropping (overflow guard) ................ `wired` (wubu_moe_rag capacity_factor)
+### Y: Retrieval-augmented / context-independent KV
+- Y01 KV Packet context-independent caching (reusable per-doc KV) ....... `wired` (wubu_moe_rag kvpacket_doc)
+- Y02 RACC retrieval-aware KV compression (keep retrieved chunks) ...... `wired` (wubu_moe_rag racc_keep)
+- Y03 CAG cache-augmented generation (preload doc KV, no per-query retr)  `wired` (wubu_moe_rag cag_ready)
+- Y04 Cross-document KV isolation (per-doc KV namespace) .............. `wired` (wubu_moe_rag crossdoc_ns)
