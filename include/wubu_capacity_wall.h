@@ -36,4 +36,7 @@ int wubu_oom_risk(double weight_params, int b_w,
                   int L, int n_kv, int d_h, int b_kv,
                   int batch, int seq, double ram_bytes, double engage_frac);
 
+/* N13 regime classifier: 0=WEIGHT_BOUND, 1=BALANCED, 2=KV_BOUND. */
+int wubu_regime(double b_star, int batch, double tol);
+
 #endif /* WUBU_CAPACITY_WALL_H */

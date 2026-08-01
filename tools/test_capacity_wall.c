@@ -51,6 +51,9 @@ int main(void) {
     CHECK(wubu_b_star(params, 16, L, n_kv, d_h, 0, 4096) < 0.0, "KV bits 0 -> never KV-bound (-1)");
     CHECK(wubu_oom_risk(params, 16, L, n_kv, d_h, b_kv, 1, 4096, 12e9, 0.9) == 0, "no OOM risk @4k/12GB");
     CHECK(wubu_oom_risk(params, 16, L, n_kv, d_h, b_kv, 1, 1000000, 12e9, 0.9) == 1, "OOM risk trips @1M/12GB");
+    CHECK(wubu_regime(50.0, 1, 1.5) == 0, "b*>>batch -> WEIGHT_BOUND");
+    CHECK(wubu_regime(0.5, 100, 1.5) == 2, "b*<<batch -> KV_BOUND");
+    CHECK(wubu_regime(30.0, 30, 1.5) == 1, "b*~batch -> BALANCED");
 
     if (failures == 0) { printf("ALL CAPACITY-WALL TESTS PASSED\n"); return 0; }
     printf("%d CAPACITY-WALL TEST(S) FAILED\n", failures);

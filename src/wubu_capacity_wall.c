@@ -75,15 +75,31 @@ double wubu_tok_per_sec(double weight_params, int b_w,
 
 /* OOM-risk early-warning (N18): should streaming/eviction engage now?
  * Returns 1 if the projected KV cache for (batch, seq) would exceed
- * `engage_frac` of ram_bytes (default 0.9). The operator calls this each
+ * engage_frac of ram_bytes (default 0.9). The operator calls this each
  * step; when it trips, it enables StreamingKV/H2O so the cache never OOMs. */
 int wubu_oom_risk(double weight_params, int b_w,
                   int L, int n_kv, int d_h, int b_kv,
                   int batch, int seq, double ram_bytes, double engage_frac) {
-    if (ram_bytes <= 0) return 1;
-    if (engage_frac <= 0.0) engage_frac = 0.9;
-    double kv = wubu_kv_cache_bytes(L, n_kv, d_h, b_kv, batch, seq);
-    /* include weights in the footprint only if not already resident-pinned */
-    double footprint = kv; /* weights are amortized/streamed; KV is the live risk */
-    return footprint > engage_frac * ram_bytes;
-}
+     if (ram_bytes <= 0) return 1;
+     if (engage_frac <= 0.0) engage_frac = 0.9;
+     double kv = wubu_kv_cache_bytes(L, n_kv, d_h, b_kv, batch, seq);
+     /* include weights in the footprint only if not already resident-pinned */
+     double footprint = kv; /* weights are amortized/streamed; KV is the live risk */
+     return footprint > engage_frac * ram_bytes;
+ }
+
+ /* N13 compute-vs-bandwidth regime classifier. Given B* crossover, the
+  * operating regime is:
+  *   b_star >> batch  -> WEIGHT_BOUND (decode gated by weight I/O)
+  *   b_star ~  batch  -> BALANCED
+  *   b_star << batch  -> KV_BOUND    (decode gated by KV I/O)
+  * Returns 0=WEIGHT, 1=BALANCED, 2=KV. Used by the operator to pick the lever
+  * (compress KV vs. fuse weights vs. raise batch). */
+ int wubu_regime(double b_star, int batch, double tol) {
+     if (b_star < 0.0) return 2;          /* never weight-bound (no KV bytes) */
+     if (tol <= 0.0) tol = 1.5;
+     double r = b_star / (double)(batch > 0 ? batch : 1);
+     if (r > tol) return 0;               /* weight-bound */
+     if (r < 1.0 / tol) return 2;         /* kv-bound */
+     return 1;                            /* balanced */
+ }

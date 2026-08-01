@@ -114,8 +114,8 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L15 KVShield adversarial-robust KV (no poison OOB) ............. `open` (ties F)
 - L16 Elastic context (grow/shrink window online) ................ `open`
 - L17 Dual-window (global sink + local) hybrid .................. `wired` (wubu_stream_kv sink+window = same design)
-- L18 Layer-wise KV budget (deeper=less) ........................ `open`
-- L19 Adaptive sink count (entropy-selected) .................... `open`
+- L18 Layer-wise KV budget (deeper=less) ........................ `wired` (wubu_kv_budget layer_kv_budget)
+- L19 Adaptive sink count (entropy-selected) .................... `wired` (wubu_kv_budget adaptive_sink)
 - L20 Recurrent-compressed KV (SSM fallback > window) .......... `open` (ties E03)
 
 ## THEME M — Speculative / self-draft (ADHD lilypad focus hops)
@@ -143,7 +143,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 ## THEME N — Roofline auto-tuner / adaptive compute
 - N01 B* crossover auto-detector (W vs K bound) ................. `open` (ties survey 2026)
 - N02 Online roofline sampler (measure beta_eff) ................ `open`
-- N03 Bandwidth-aware scheme selector (INT4kv vs FP16) .......... `open`
+- N03 Bandwidth-aware scheme selector (INT4kv vs FP16) .......... `wired` (wubu_kv_budget scheme_bits, ties N01)
 - N04 Batch-size-aware quant switch ............................ `open`
 - N05 Context-length-aware KV precision ladder .................. `open`
 - N06 NUMA-bandwidth topology auto-detect ...................... `open`
@@ -153,11 +153,11 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N10 Energy-per-token metric (compute+HBM+interconnect) ....... `open`
 - N11 TPOT predictor (given B, s, bits) ........................ `wired` (wubu_capacity_wall)
 - N12 Capacity-wall predictor (KV GB vs RAM) ................... `wired` (wubu_capacity_wall fits-ram + b_star, ties 512k)
-- N13 Compute-vs-bandwidth regime classifier ................... `open`
+- N13 Compute-vs-bandwidth regime classifier ................... `wired` (wubu_capacity_wall regime, ties N01)
 - N14 Mixture-of-depths router calibration ..................... `open` (ties J01)
 - N15 Speculative acceptance model (pick K) .................... `open`
 - N16 Cache-hit-rate feedback loop (prefix reuse) .............. `open` (ties D02)
-- N17 KV-footprint forecaster (pre-alloc advise) .............. `open`
+- N17 KV-footprint forecaster (pre-alloc advise) .............. `wired` (wubu_kv_budget forecast, ties N12)
 - N18 OOM-risk early-warning (streaming engage) ................ `wired` (wubu_capacity_wall oom_risk, ties D04)
 - N19 Adaptive chunk size (prefill vs decode) .................. `open` (ties D04)
 - N20 Scheme A/B online (shadow quant compare) ............... `open`
