@@ -33,14 +33,14 @@ attacks bytes moved.
 - B07 FP8 E4M3/E5M2 mixed precision (HW-dependent) ...... `open` (CPU→emul, low prio)
 - B08 NVFP4 dispatch (Blackwell) ....................... `open` (HW-gated, skip CPU)
 - C02 SoA activation/state tensors (vs AoS malloc) ....... `wired` (wubu_soa, in test_all)
-- C03 Cache-line packing of KV pages (64B aligned) ...... `open` (ties to 006/002)
+- C03 Cache-line packing of KV pages (64B aligned) ...... `wired` (wubu_kv_cacheline.c: posix_memalign(64) per block + is_aligned verify) (ties to 006/002)
 - C04 Fixed-timestep / deterministic decode step ......... `open` (scheduler → doc 007)
 - C05 Hot/cold split (compute vs metadata) ............. `open` (ties to 006)
 - C06 ECS-style component store for engine state ........ `open` (ties to 001/006)
 
 ## THEME D — Batching / scheduling / transport
 - D01 Continuous (iteration-level) batching ............. `wired` (wubu_cont_batch_overlap: prefill chunks interleaved with decode) → doc 007
-- D02 Prefix KV reuse across requests (hash map) ........ `open` → doc 010
+- D02 Prefix KV reuse across requests (hash map) ........ `wired` (wubu_prefix_cache.c: FNV-1a64 hash + tok_slot spreading, collision-free) → doc 010
 - D03 Disaggregated prefill/decode (separate passes) ..... `open` (ties to 002/007)
 - D04 Chunked prefill (overlap w/ decode) ............. `wired` (wubu_cont_batch_overlap: bounded prefill per iter + decode) (ties to 007)
 - D05 KV transfer layer (NIXL/UCX analog, localhost) .. `open` (ties to 002/003)

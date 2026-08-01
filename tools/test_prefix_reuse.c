@@ -14,10 +14,11 @@ int main(void) {
     wubu_prefix_cache_t *cache = wubu_prefix_cache_create();
     assert(cache);
 
-    /* Build a 512-token prefix */
+    /* Build a 512-token prefix with REAL token ids (1000+ range).
+     * The old `tok & 0xFF` indexing would collide e.g. token 1001 and 1. */
     int prefix_len = 512;
     int *prefix = (int *)malloc(prefix_len * sizeof(int));
-    for (int i = 0; i < prefix_len; i++) prefix[i] = i % 128;
+    for (int i = 0; i < prefix_len; i++) prefix[i] = 1000 + i * 7;  /* 1000, 1007, 1014, ... */
 
     /* Request 1: register the prefix (first time → miss) */
     int out_blocks[64];
@@ -34,9 +35,9 @@ int main(void) {
     printf("Request 2: match=%d (expected 512, full prefix reused)\n", match2);
     assert(match2 > 0);
 
-    /* Request 3: different prefix → should miss */
+    /* Request 3: different prefix → should miss (uses token ids in 5000+ range) */
     int *other = (int *)malloc(prefix_len * sizeof(int));
-    for (int i = 0; i < prefix_len; i++) other[i] = (i + 200) % 128;
+    for (int i = 0; i < prefix_len; i++) other[i] = 5000 + i * 11;  /* 5000, 5011, 5022, ... */
     int match3 = wubu_prefix_cache_match(cache, other, prefix_len, out_blocks, 64);
     printf("Request 3: match=%d (expected 0, different prefix)\n", match3);
     assert(match3 == 0);

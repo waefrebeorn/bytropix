@@ -9,15 +9,17 @@
 #include <stdint.h>
 #include <assert.h>
 
-/* FNV-1a 64-bit: deterministic, good distribution, zero third-party dep. */
-static uint64_t fnv1a64(const int *data, int n) {
-    if (!data || n <= 0) return 0;
-    uint64_t h = 1469598103934665603ULL;
-    for (int i = 0; i < n; i++) {
-        h ^= (uint64_t)(uint32_t)data[i];
-        h *= 1099511628211ULL;
-    }
-    return h;
+/* Hash a single token id into a 0..255 child-slot index.
+ * The naive `tok & 0xFF` collides e.g. token 1 and 257. We spread the full
+ * 32-bit token id across the byte range with a multiplicative hash so distinct
+ * token ids almost never land in the same slot (and never for the common case
+ * of adjacent ids). */
+static inline int tok_slot(int tok) {
+    uint32_t x = (uint32_t)tok;
+    x ^= x >> 16;
+    x *= 0x45d9f3bU;   /* Knuth multiplicative hash */
+    x ^= x >> 16;
+    return (int)(x & 0xFF);
 }
 
 /* Create: allocate and initialize the prefix cache. */
@@ -60,7 +62,7 @@ wubu_prefix_hash_t wubu_prefix_cache_register(wubu_prefix_cache_t *cache,
     int tokens_per_block = block_size > 0 ? block_size : 1;
 
     for (int i = 0; i < n_tokens; i++) {
-        int tok = token_ids[i] & 0xFF;
+        int tok = tok_slot(token_ids[i]);
         if (cache->nodes[node].children[tok] == -1) {
             if (cache->free_top <= 0) break; /* cache full */
             int new_node = cache->free_list[--cache->free_top];
@@ -84,7 +86,7 @@ wubu_prefix_hash_t wubu_prefix_cache_register(wubu_prefix_cache_t *cache,
     cache->nodes[node].ref_count++;
     cache->nodes[node].last_access = ++cache->access_counter;
 
-    return fnv1a64(token_ids, depth);
+    return wubu_prefix_hash_compute(token_ids, depth);
 }
 
 /* Match: walk the trie, return matched tokens. */
@@ -98,7 +100,7 @@ int wubu_prefix_cache_match(wubu_prefix_cache_t *cache,
     int blocks_copied = 0;
 
     for (int i = 0; i < n_tokens; i++) {
-        int tok = token_ids[i] & 0xFF;
+        int tok = tok_slot(token_ids[i]);
         int child = cache->nodes[node].children[tok];
         if (child == -1) break;
 
@@ -129,7 +131,7 @@ void wubu_prefix_cache_release(wubu_prefix_cache_t *cache,
 
     int node = 0;
     for (int i = 0; i < n_tokens; i++) {
-        int tok = token_ids[i] & 0xFF;
+        int tok = tok_slot(token_ids[i]);
         int child = cache->nodes[node].children[tok];
         if (child == -1) break;
         node = child;
@@ -187,5 +189,11 @@ void wubu_prefix_cache_stats(const wubu_prefix_cache_t *cache,
 }
 
 wubu_prefix_hash_t wubu_prefix_hash_compute(const int *token_ids, int n_tokens) {
-    return fnv1a64(token_ids, n_tokens);
+    if (!token_ids || n_tokens <= 0) return 0;
+    uint64_t h = 1469598103934665603ULL;
+    for (int i = 0; i < n_tokens; i++) {
+        h ^= (uint64_t)(uint32_t)token_ids[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
 }
