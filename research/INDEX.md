@@ -13,8 +13,8 @@ attacks bytes moved.
 - A04 SAW-INT4 KV (Hadamard rot + block INT4) ............. `wired` (wubu_4kv) ← 7-hop K=0.9969, V=0.9965
 - A05 TurboQuant <3-bit KV (INT3 token-wise) .............. `wired` (wubu_4kv, 6.1× compression)
 - A06 Predictive multi-tier KV (DRAM/NVMe/CXL/IB, Bayesian reuse) `wired` (wubu_kv_tier.c: 3-tier hot/warm/cold with EMA-LRU eviction, fp16 cold storage) ← 7-hop arXiv:2604.26968 → doc 002
-- A07 LMCache/KVBM prefix+PD-disaggregation .............. `open` (prefix reuse → doc 010)
-- A07b NVIDIA priority-based KV eviction (LRU+importance) ... `open` (ties to 002)
+- A07 LMCache/KVBM prefix+PD-disaggregation .............. `wired` (wubu_lmcache.c: FNV-1a64 keyed prefix+PD KV persistence, tested) → doc 010
+- A07b NVIDIA priority-based KV eviction (LRU+importance) ... `wired` (wubu_kv_evict.c: recencyEMA×(1+importance) priority eviction, tested) (ties to 002)
 - A08 NVIDIA MLA (Multi-head Latent Attention) ............ `open` (skip — MLA needs model-specific weight loading)
 - A09 Attention-sink-free gated attention (kills massive activations) `wired` (wubu_attn_gate, in GQA decode path)
 - A10 RoPE-aware KV prefetch ............................. `wired` (wubu_rope_prefetch_kv_f32 in decode path)
@@ -56,16 +56,16 @@ attacks bytes moved.
 ## THEME F — Formal verification of kernels
 - F01 Bounded equivalence test: quant-GEMV == oracle .... `wired` (test_gemv_equivalence: 9/9, injected-bug harness) → doc 009
 - F02 Alive2-style SMT check of GEMV rewrites ......... `open` (tooling; ties to 009)
-- F03 Numerical-stability audit of dequant paths ........ `open` (ties to 009)
+- F03 Numerical-stability audit of dequant paths ........ `wired` (wubu_numerical_audit.c: per-kernel max-abs/rel-error audit, tested) (ties to 009)
 
 ## THEME G — Speculative / draft acceleration
-- G01 EAGLE self-draft tree verify ..................... `open` → doc 012
-- G02 MEDUSA multiple guess heads ..................... `open` (ties to 012)
-- G03 Lookahead / n-gram fallback ..................... `open` (cheap; ties to 012)
+- G01 EAGLE self-draft tree verify ..................... `wired` (wubu_eagle.c: truncated-draft + batched verify, tested) → doc 012
+- G02 MEDUSA multiple guess heads ..................... `wired` (wubu_spec_decode.c: multi-head draft+merge+verify, tested) (ties to 012)
+- G03 Lookahead / n-gram fallback ..................... `wired` (wubu_ngram.c: n-gram drafter, tested) (ties to 012)
 
 ## THEME H — Prefill kernel / compute-bound phase
-| H01 FlashAttention-style fused prefill (tile+softmax) . `open` (ties to 001/003)
-- H02 Warp/thread specialization analog for CPU ......... `open` (ties to 007)
+- H01 FlashAttention-style fused prefill (tile+softmax) . `open` (ties to 001/003)
+- H02 Warp/thread specialization analog for CPU ......... `wired` (wubu_thread_spec.c: pinned prefill/decode pools, tested) (ties to 007)
 - H03 Incoherent FP8 processing (Hadamard) ............ `open` (HW-gated)
 - H04 FlashDecoding parallel KV-load decode attn ..... `wired` → doc 015
 - H05 QuaRot/SpinQuant Hadamard 4-bit W+A+KV ..... `wired` → doc 013
@@ -79,14 +79,14 @@ attacks bytes moved.
 - I06 Hot/cold split (compute vs metadata) ............. `wired` (wubu_kv_tier) (ties to 006)
 
 ## THEME J — Adaptive compute (skip layers / early exit)
-- J01 Mixture-of-Depths dynamic layer skip ............ `open` (ties to 008)
+- J01 Mixture-of-Depths dynamic layer skip ............ `wired` (wubu_layer_skip + wubu_model WUBU_LAYER_SKIP) (ties to 008)
 - J02 GateSkip/LayerSkip token-wise gate skip ........ `wired` (wubu_layer_skip: token-wise gate + floor) → doc 017
-- J03 Early-exit + self-speculative verify ........... `open` (ties to 017/012)
+- J03 Early-exit + self-speculative verify ........... `wired` (wubu_early_exit.c: per-layer convergence gate + self-spec verify, tested) (ties to 017/012)
 
 ## THEME K — Cascade speculative (small drafter + large verifier)
 - K01 n-gram cascade drafter (no 3rd-party) ........ `wired*` → doc 018
-- K02 Self-cascade (small local Colonel drafts) ...... `open` (ties to 018)
-- K03 CAS-Spec adaptive deferral rule ............... `open` (ties to 018)
+- K02 Self-cascade (small local Colonel drafts) ...... `wired` (wubu_self_cascade.c: small-drafter cascade, tested) (ties to 018)
+- K03 CAS-Spec adaptive deferral rule ............... `wired` (wubu_spec_cascade.c: adaptive eager/defer, tested) (ties to 018)
 
 ## Cross-cutting convergence statement
 A/B/C all reduce *bytes per token*. D/E/F/G/H/I/J/K are about *amortizing*
