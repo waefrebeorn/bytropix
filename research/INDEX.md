@@ -30,13 +30,13 @@ attacks bytes moved.
 - B04 SmoothQuant activation outlier migration ............. `wired` → doc 005
 - B05 AWQ activation-aware 1% salient channel protect .... `wired` (wubu_awq)
 - B06 GPTQ 2nd-order weight quant ...................... `wired` (wubu_gptq, offline calib)
-- B07 FP8 E4M3/E5M2 mixed precision (HW-dependent) ...... `open` (CPU→emul, low prio)
+- B07 FP8 E4M3/E5M2 mixed precision (HW-dependent) ...... `wired` (wubu_fp8.c: CPU emulation F32<->E4M3/E5M2 + FP8 GEMV; tested) (ties to 009)
 - B08 NVFP4 dispatch (Blackwell) ....................... `open` (HW-gated, skip CPU)
 - C02 SoA activation/state tensors (vs AoS malloc) ....... `wired` (wubu_soa, in test_all)
 - C03 Cache-line packing of KV pages (64B aligned) ...... `wired` (wubu_kv_cacheline.c: posix_memalign(64) per block + is_aligned verify) (ties to 006/002)
 - C04 Fixed-timestep / deterministic decode step ......... `wired` (wubu_scheduler: deterministic per-iteration stepping) (scheduler → doc 007)
 - C05 Hot/cold split (compute vs metadata) ............. `wired` (wubu_kv_tier: hot RAM / warm DRAM / cold NVMe split) (ties to 006)
-- C06 ECS-style component store for engine state ........ `open` (ties to 001/006)
+- C06 ECS-style component store for engine state ........ `wired` (wubu_ecs.c: typed named components + snapshot/restore; tested) (ties to 001/006)
 
 ## THEME D — Batching / scheduling / transport
 - D01 Continuous (iteration-level) batching ............. `wired` (wubu_cont_batch_overlap: prefill chunks interleaved with decode) → doc 007
@@ -64,7 +64,7 @@ attacks bytes moved.
 - G03 Lookahead / n-gram fallback ..................... `wired` (wubu_ngram.c: n-gram drafter, tested) (ties to 012)
 
 ## THEME H — Prefill kernel / compute-bound phase
-- H01 FlashAttention-style fused prefill (tile+softmax) . `open` (ties to 001/003)
+- H01 FlashAttention-style fused prefill (tile+softmax) . `wired` (wubu_flash_prefill.c: online-softmax tiled prefill; tested) (ties to 001/003)
 - H02 Warp/thread specialization analog for CPU ......... `wired` (wubu_thread_spec.c: pinned prefill/decode pools, tested) (ties to 007)
 - H03 Incoherent FP8 processing (Hadamard) ............ `open` (HW-gated)
 - H04 FlashDecoding parallel KV-load decode attn ..... `wired` → doc 015
