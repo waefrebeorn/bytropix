@@ -344,3 +344,15 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - AF-11 Non-tamperable interrupt (stop outside reasoning loop) `wired` (wubu_safekern stop_honored)
 - AF-12 Graduated containment (proportional, reversible) `wired` (wubu_safekern containment_level/reversible)
 - AF-13 Stability-plasticity guard (RSI cannot weaken 512K gate) `wired` (wubu_safekern rsi_mutation_ok)
+
+## Theme AG: Missing needs (2026 agentic/AGI-OS gap research)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### Missing-need gaps (N1-N8)
+- [x] AG-01 Runaway-loop guard: max step-count + hard deadline + terminate (OWASP LLM10/ASI08) `wired` (wubu_loopguard loop_may_continue)
+- [x] AG-02 Goal-hijack / injection defense: control-plane vs data-plane separation (ASI01/LLM01) `wired` (wubu_planediv plane_enforce)
+- [x] AG-03 Memory/context poisoning detection: cross-session replay + divergence flag (ASI06/L3×T3) `wired` (wubu_planediv mem_fingerprint/diverged/replay_flagged)
+- [ ] AG-04 Closed-loop deliberative planning: verify world-state + replan (open-loop problem) `open` (research)
+- [x] AG-05 Trajectory-level audit attribution: append-only per-action record (L7×T1-4) `wired` (wubu_loopguard traj_append)
+- [x] AG-06 Tool-abuse / excessive-agency cap: per-agent tool-call rate limit (LLM06/ASI02) `wired` (wubu_loopguard tool_allowed)
+- [ ] AG-07 Inter-agent message authentication (ASI07) `open` (research)
+- [x] AG-08 JIT provisioning + HITL gating: sensitive-action approval token (ASI08/strata) `wired` (wubu_loopguard hitl_approve)
