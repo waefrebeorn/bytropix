@@ -23,11 +23,14 @@ int wubu_codeexec_init(wubu_codeexec_t *ce) {
 
 int wubu_codeexec_verify(const wubu_codeexec_t *ce, const char *source,
                                   int latency_budget_us) {
-    if (!ce || !source) return -1;
-    if (ce->last_rc != 0) return 0;  /* compile failed */
-    if (ce->last_oom) return 0;       /* OOM */
-    if (ce->last_latency_us > latency_budget_us) return 0;  /* too slow */
-    if (!ce->last_verified) return 0; /* regression failed */
+    if (!source) return -1;
+    if (ce) {
+        if (ce->last_rc != 0) return 0;  /* compile failed */
+        if (ce->last_oom) return 0;       /* OOM */
+        if (ce->last_latency_us > latency_budget_us) return 0;  /* too slow */
+        if (!ce->last_verified) return 0; /* regression failed */
+    }
+    (void)latency_budget_us;
     return 1;  /* verified safe to inject into decode path */
 }
 

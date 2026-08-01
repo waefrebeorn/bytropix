@@ -407,7 +407,7 @@ Status: `open` (all 10 to be closed as C11)
 
 ## Theme AX: Self-Improving Code + Sandboxed Execution + Verifiable Tool-Use
 Status: `open` = not yet in engine; `wired` = implemented+tested.
-### Self-Improving Code + Sandbox (8 gaps AX01-AX08)
+### Self-Improving Code + Sandbox (12 gaps AX01-AX12, 2 research)
 - AX01 DGM empirical gate + regression test runner `wired` (wubu_dgm.c)
 - AX02 seccomp-bpf sandbox `open` (research: kernel-level, exceeds single C11 module)
 - AX03 formal verification `open` (research: proof-assistant-level)
@@ -416,3 +416,8 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - AX06 self-evolution loop (propose→verify→commit→regress) `wired` (wubu_evolve.c)
 - AX07 code exec verifier → feeds loopguard `wired` (wubu_codeexec.c)
 - AX08 sandbox capability bridge → safekern `wired` (wubu_sandbox_safekern.c)
+- AX09 C11 type-check + invariant gate `wired` (wubu_verify.c)
+- AX10 spec→C11 codesynth `wired` (wubu_codesynth.c)
+- AX11 evolve loop extension `wired` (wubu_evolve.c)
+- AX12 evolve+exec+verify bridge → loopguard `wired` (test_axi)
+AXEOF
