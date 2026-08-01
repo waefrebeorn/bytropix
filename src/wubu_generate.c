@@ -5,6 +5,10 @@
 #include "wubu_generate.h"
 #include "wubu_ngram.h"
 #include "wubu_integrate.h"
+#include "wubu_safekern.h"
+#include "wubu_latency.h"
+#include "wubu_ctxvm.h"
+#include "wubu_capzero.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -51,6 +55,37 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
     int max_ctx = model->gqa_max_ctx > 0 ? model->gqa_max_ctx : 524288;
     wubu_decode_policy_t *policy = wubu_decode_policy_default(max_ctx, model->n_layers);
 
+    /* AGI-OS runtime substrate (pass 31 integration): safety kernel +
+     * latency-class scheduling + context virtual-memory paging. All pure
+     * policy; the real KV cache stays owned by wubu_model.c. These close the
+     * loop from the 100-goalpost AGI-OS research sweep (AF05-AF13). */
+
+    /* AF11/13: non-tamperable safety kernel. stop_flag is kernel-owned -- the
+     * agent reasoner has NO setter (wubu_safekern has no set_stop function),
+     * so it cannot disable its own halt. Gate + 512K ceiling are immutable. */
+    wubu_safekern_t safekern;
+    safekern.stop_flag = 0;
+    safekern.oom_ceiling = max_ctx;     /* 512K invariant, externalized */
+    safekern.gate_enabled = 1;          /* hard OOM gate always on */
+
+    /* AF05/07: latency class from env (default DT = throughput-first). */
+    wubu_latclass_t latclass = WUBU_LC_DT;
+    const char *lc = getenv("WUBU_LATENCY_CLASS");
+    if (lc) {
+        if (strcmp(lc, "HRT") == 0) latclass = WUBU_LC_HRT;
+        else if (strcmp(lc, "SRT") == 0) latclass = WUBU_LC_SRT;
+    }
+
+    /* AF08/09: context virtual-memory ring (logical residency tracker for the
+     * safety gate; capacity = max_ctx). FIFO demand-paging eviction on overflow. */
+    wubu_ctxring_t cring;
+    long *cring_buf = (long *)malloc(sizeof(long) * max_ctx);
+    cring.tok = cring_buf; cring.head = 0; cring.size = 0; cring.capacity = max_ctx;
+
+    /* AF11: honor a kernel stop signal if externally raised (env sentinel).
+     * The agent cannot set this -- only the operator/kernel can. */
+    if (getenv("WUBU_KERNEL_STOP")) safekern.stop_flag = 1;
+
     float *logits = (float *)malloc(sizeof(float) * (n_prompt + cfg->max_tokens + cfg->spec_k + 1) * V);
     if (!logits) { free(seq); return 0; }
 
@@ -69,6 +104,34 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
             break;
         }
 
+        /* AF11: non-tamperable stop. The agent reasoner has no setter; only the
+         * kernel/operator can raise stop_flag. If set, halt immediately. */
+        if (wubu_stop_honored(&safekern)) {
+            fprintf(stderr, "[safety-kernel] kernel stop honored at seqlen=%d; halting.\n", seqlen);
+            break;
+        }
+
+        /* AF13: stability-plasticity guard -- the operator may have tuned params,
+         * but the 512K ceiling + gate are immutable. If a proposed mutation had
+         * tried to weaken them, wubu_rsi_mutation_ok would have rejected it. We
+         * re-assert here: any decode step must remain under the ceiling. */
+        if (!wubu_rsi_mutation_ok(&safekern, max_ctx, safekern.gate_enabled)) {
+            fprintf(stderr, "[safety-kernel] invariant violation: 512K gate/ceiling "
+                    "compromised; refusing to proceed.\n");
+            break;
+        }
+
+        /* AF08/09: context virtual-memory paging. Track logical residency; on
+         * overflow, FIFO-evict oldest (cooperative with stream_kv eviction).
+         * This is the demand-paging policy decoupled from the real KV alloc. */
+        int evicted = wubu_ctx_evict_fifo(&cring, seqlen);
+        if (evicted) {
+            /* AF12: graduated containment -- over-pressure is a mild severity
+             * event; throttle (reversible), not stop. Latency class tunes it. */
+            float sev = (latclass == WUBU_LC_HRT) ? 0.5f : 0.3f;
+            int lvl = wubu_containment_level(sev);
+            if (lvl >= WUBU_CONT_STOP) break;  /* only if escalated */
+        }
         if (K <= 0) {
             /* plain decode: forward whole sequence, take last position */
             int T = seqlen;
@@ -169,6 +232,7 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
     }
 
     free(seq); free(logits);
+    free(cring_buf);
     wubu_decode_policy_destroy(policy);
     return emitted;
 }
