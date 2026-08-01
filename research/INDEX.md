@@ -375,3 +375,17 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - [x] AH-13 Self-improvement delta metric (did mutation help?) `wired`  # (wubu_metagame improvement_delta)
 - [x] AH-14 Resource envelope profiler (auto-detect VRAM/BW/RAM) `wired`  # (wubu_resource pick_tier/est_toks)
 - [x] AH-15 Graceful degradation tiers (70B->14B->7B on OOM) `wired`  # (wubu_resource degrade_tier)
+
+## Theme AV: Vectors — 7-hop Kevin-Bacon lily-pad KB sweep
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### Vector substrate gaps (8 gaps AV01-AV08)
+- AV01 ANN index (HNSW/IVF) for KV cache + semantic cache — O(N) scan today
+- AV02 Quantization (PQ/RaBitQ/SQ) for KV cache — BF16 full precision today
+- AV03 KV reuse across sessions — FIFO eviction throws everything away
+- AV04 Similarity-based KV eviction — age-based, not relevance-based
+- AV05 FlashAttention-style tiling — flat attention for 512K ctx
+- AV06 MRL / flexible-dim embeddings — fixed 128-dim semantic cache
+- AV07 On-device vector DB — no embedded, offline, low-RAM vector search
+- AV08 Agentic vector memory — episodic memory is flat list, not ANN index
+Status: `open` (all 8 to be closed as C11)
+EOF
