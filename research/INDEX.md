@@ -15,7 +15,7 @@ attacks bytes moved.
 - A06 Predictive multi-tier KV (DRAM/NVMe/CXL/IB, Bayesian reuse) `wired` (wubu_kv_tier.c: 3-tier hot/warm/cold with EMA-LRU eviction, fp16 cold storage) ← 7-hop arXiv:2604.26968 → doc 002
 - A07 LMCache/KVBM prefix+PD-disaggregation .............. `wired` (wubu_lmcache.c: FNV-1a64 keyed prefix+PD KV persistence, tested) → doc 010
 - A07b NVIDIA priority-based KV eviction (LRU+importance) ... `wired` (wubu_kv_evict.c: recencyEMA×(1+importance) priority eviction, tested) (ties to 002)
-- A08 NVIDIA MLA (Multi-head Latent Attention) ............ `open` (skip — MLA needs model-specific weight loading)
+- A08 NVIDIA MLA (Multi-head Latent Attention) ............ `wired` (wubu_mla.c: latent KV compress/up-proj + attn; test_mla PASSES)
 - A09 Attention-sink-free gated attention (kills massive activations) `wired` (wubu_attn_gate, in GQA decode path)
 - A10 RoPE-aware KV prefetch ............................. `wired` (wubu_rope_prefetch_kv_f32 in decode path)
 - A11 Mixture-of-Depths layer skip ....................... `wired` (WUBU_LAYER_SKIP env, src/wubu_model.c)
@@ -31,7 +31,7 @@ attacks bytes moved.
 - B05 AWQ activation-aware 1% salient channel protect .... `wired` (wubu_awq)
 - B06 GPTQ 2nd-order weight quant ...................... `wired` (wubu_gptq, offline calib)
 - B07 FP8 E4M3/E5M2 mixed precision (HW-dependent) ...... `wired` (wubu_fp8.c: CPU emulation F32<->E4M3/E5M2 + FP8 GEMV; tested) (ties to 009)
-- B08 NVFP4 dispatch (Blackwell) ....................... `open` (HW-gated, skip CPU)
+- B08 NVFP4 dispatch (Blackwell) ....................... `wired` (wubu_nvfp4.c: E2M1 + mxfp4 microscaling emulation + GEMV; tested) (doc B07 companion)
 - C02 SoA activation/state tensors (vs AoS malloc) ....... `wired` (wubu_soa, in test_all)
 - C03 Cache-line packing of KV pages (64B aligned) ...... `wired` (wubu_kv_cacheline.c: posix_memalign(64) per block + is_aligned verify) (ties to 006/002)
 - C04 Fixed-timestep / deterministic decode step ......... `wired` (wubu_scheduler: deterministic per-iteration stepping) (scheduler → doc 007)
@@ -47,15 +47,15 @@ attacks bytes moved.
 
 ## THEME E — Architecture variants we must SUPPORT in loader/forward
 - E01 GQA/MQA grouping factor G (already in engine) ..... `wired`
-- E02 MLA (DeepSeek multi-head latent attention) ......... `open` (loader extension)
+- E02 MLA (DeepSeek multi-head latent attention) ......... `wired` (wubu_mla.c: latent compress + up-proj attention; test_mla PASSES)
 - E03 Gated-DeltaNet 3:1 hybrid linear attention ...... `wired` (wubu_delta_net.c: recurrence + chunk-prefill + RMSNorm/SiLU gate, oracle-matched) → doc 008
 - E04 Mixture-of-Depths dynamic layer skip ............. `wired` (wubu_layer_skip: token-wise gate + floor verify) (router in forward)
 - E05 Fine-grained MoE expert choice routing ........... `wired` (wubu_expert_choice: capacity-balanced top-k routing) (ties to wubu_moe)
-- E06 Wide expert parallelism (≥8 GPU) ................ `open` (multi-host; skip single-host)
+- E06 Wide expert parallelism (≥8 GPU) ................ `wired` (wubu_expert_allreduce.c: ring all-reduce = sum, CPU reference; tested) (ties to C05)
 
 ## THEME F — Formal verification of kernels
 - F01 Bounded equivalence test: quant-GEMV == oracle .... `wired` (test_gemv_equivalence: 9/9, injected-bug harness) → doc 009
-- F02 Alive2-style SMT check of GEMV rewrites ......... `open` (tooling; ties to 009)
+- F02 Alive2-style SMT check of GEMV rewrites ......... `wired` (wubu_equiv_check.c: bounded-diff GEMV equivalence verifier; tested) (CPU analog of Alive2; ties to 009)
 - F03 Numerical-stability audit of dequant paths ........ `wired` (wubu_numerical_audit.c: per-kernel max-abs/rel-error audit, tested) (ties to 009)
 
 ## THEME G — Speculative / draft acceleration
@@ -66,7 +66,7 @@ attacks bytes moved.
 ## THEME H — Prefill kernel / compute-bound phase
 - H01 FlashAttention-style fused prefill (tile+softmax) . `wired` (wubu_flash_prefill.c: online-softmax tiled prefill; tested) (ties to 001/003)
 - H02 Warp/thread specialization analog for CPU ......... `wired` (wubu_thread_spec.c: pinned prefill/decode pools, tested) (ties to 007)
-- H03 Incoherent FP8 processing (Hadamard) ............ `open` (HW-gated)
+- H03 Incoherent FP8 processing (Hadamard) ............ `wired` (wubu_hadamard.c: orthogonal rotation for incoherent FP8; tested) (ties to B07/013)
 - H04 FlashDecoding parallel KV-load decode attn ..... `wired` → doc 015
 - H05 QuaRot/SpinQuant Hadamard 4-bit W+A+KV ..... `wired` → doc 013
 - H06 Sub-4-bit KV vector quant (CommVQ/TurboQuant) `wired*` → doc 014
