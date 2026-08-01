@@ -176,12 +176,12 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - O11 TVM cost -> split-K auto-tune ........................... `wired` (wubu_attn_tune splitk_tune, ties N13)
 - O12 ProofWright -> dequant equivalence ...................... `wired` (wubu_misc_gaps dequant_equiv, ties F) (ties F)
 - O13 OS mmap prefault -> KV warm ............................. `wired` (wubu_misc_gaps prefault, ties A06) (ties A06)
-- O14 DB query plan -> decode schedule ....................... `open` (ties D)
+- O14 DB query plan -> decode schedule ....................... `wired` (wubu_db_cross plan_decode, ties D) (ties D)
 - O15 Neuro theta/gamma -> attention rhythmic gate ........... `wired` (wubu_misc_gaps rhythmic_gate)
 - O16 Compiler autovec -> GEMV simd auto-select .............. `wired` (wubu_gemv_tune)
 - O17 OS page cache -> KV LRU ................................ `wired` (wubu_kv_tier)
-- O18 Formal bound -> OOM never (provable) ................... `open` (ties 512k)
-- O19 DB WAL -> KV append-log replay ......................... `open`
+- O18 Formal bound -> OOM never (provable) ................... `wired` (wubu_db_cross kv_invariant_ok, ties 512k) (ties 512k)
+- O19 DB WAL -> KV append-log replay ......................... `wired` (wubu_db_cross WAL replay)
 - O20 Neuro plasticity -> online KV re-quant ................ `wired` (wubu_attn_kernels plasticity_bits)
 
 ## THEME P — Dispatch / kernel fusion (console-game discipline)
