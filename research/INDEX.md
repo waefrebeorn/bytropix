@@ -106,7 +106,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L07 SnapKV cluster-based KV compression at layer depth ........... `wired` (wubu_kv_compress keep_clusters)
 - L08 PyramidKV pyramid-accumulation KV reduction ................. `wired` (wubu_kv_compress pyramid_keep)
 - L09 CIA KV (attention-score-driven compression) ................ `wired` (wubu_kv_compress keep_top_score)
-- L10 SeerAttention-R dynamic sparse attention ................... `open`
+- L10 SeerAttention-R dynamic sparse attention ................... `wired` (wubu_sys_tune seer_keep_frac, ties L11)
 - L11 Native sparse attention (NSA, blockwise) ................... `open`
 - L12 MoBA memory-block attention (segment KV) .................... `wired` (wubu_sparse_attn moba_topk)
 - L13 LM-Infinite landmark attention (soft prompt) .............. `open`
@@ -146,7 +146,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N03 Bandwidth-aware scheme selector (INT4kv vs FP16) .......... `wired` (wubu_kv_budget scheme_bits, ties N01)
 - N04 Batch-size-aware quant switch ............................ `wired` (wubu_quant_selector batch_quant, ties N01)
 - N05 Context-length-aware KV precision ladder .................. `wired` (wubu_quant_selector ctx_precision_ladder)
-- N06 NUMA-bandwidth topology auto-detect ...................... `open`
+- N06 NUMA-bandwidth topology auto-detect ...................... `wired` (wubu_sys_tune numa_nodes fallback)
 - N07 Tiered-cache advisor (hot/warm/cold => precision) ......... `wired` (wubu_ctx_manage tier_advice, ties A06)
 - N08 Per-layer compute budget (skip floor) .................... `wired` (wubu_layer_floor, wubu_wm_kv)
 - N09 Hardware-counters roofline (if PMC avail) ................ `wired` (wubu_quant_selector pmc_roofline fallback)
@@ -165,7 +165,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 ## THEME O — Cross-discipline (DB/OS/formal/neuro) 7-hop wins
 - O01 DB buffer-pool -> KV eviction (LRU-k with learned advice) . `wired` (wubu_lruk, ties A07b)
 - O02 OS THP/hugepage KV arena (2MB pages) ..................... `wired` (wubu_hugepage + test_hugepage, plain-mmap fallback)
-- O03 Compiler cost-model -> roofline auto-tuner ............... `open` (ties N)
+- O03 Compiler cost-model -> roofline auto-tuner ............... `wired` (wubu_sys_tune tile_factor, ties N)
 - O04 Formal equiv -> quant kernel prove ...................... `wired` (wubu_equiv_check)
 - O05 Neuro Titans -> bounded working-memory KV ............... `wired` (wubu_wm_kv bounded ring)
 - O06 Neuro ADHD/lilypad -> focus-gated attention (distraction suppress) `wired` (wubu_attn_gate)
