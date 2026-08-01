@@ -23,6 +23,7 @@
 #include "wubu_smt_check.h"     /* F02: boot-time GEMV verification */
 #include "wubu_lmcache.h"       /* A06: persistent KV cache */
 #include "wubu_kv_adaptive.h"   /* 001: Ecco entropy-aware KV */
+#include "wubu_mem_budget.h"    /* OOM-proof memory budget detector */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -349,8 +350,27 @@ int main(int argc, char **argv) {
     }
     printf("Prompt: %d tokens\n", n_prompt);
 
-    // Embeddings
-    float *embd = (float *)malloc(n_prompt * D * sizeof(float));
+    // Embeddings — OOM guard: only allocate embed buffer if NOT using chunked prefill.
+    // Chunked prefill (wubu_model_forward_chunked) takes raw token_ids and does
+    // its own per-chunk embedding, so we skip the full n_prompt*D allocation.
+    // At 512K tokens × D=2048, full embed = 4GB — would OOM on 13GB box.
+    const char *_chunk_env = getenv("WUBU_CHUNK_PREFILL");
+    int _chunk_check = _chunk_env ? atoi(_chunk_env) : 4096;
+    bool _use_chunked = (_chunk_check > 0 && n_prompt > _chunk_check);
+    float *embd = NULL;
+    if (!_use_chunked) {
+        size_t full_embd_bytes = (size_t)n_prompt * D * sizeof(float);
+        size_t avail = wubu_mem_detect_available_ram();
+        if (avail > 0 && full_embd_bytes > avail / 2) {
+            /* Embedding too large — force chunked prefill path */
+            _use_chunked = true;
+            fprintf(stderr, "[oom-guard] embed %zuMB > %zuMB avail, using chunked prefill\n",
+                    full_embd_bytes / (1024*1024), avail / (1024*1024));
+        }
+    }
+    if (!_use_chunked) {
+        embd = (float *)malloc(n_prompt * D * sizeof(float));
+    }
     FILE *emb_file = NULL;
     if (mdl.use_embedding_file) {
         emb_file = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
@@ -390,8 +410,20 @@ int main(int argc, char **argv) {
             g_lmcache = wubu_lmcache_create(dir, /*n_layers=*/2, 16, 128, 8);
         }
         if (g_lmcache) {
-            /* Try to load KV from persistent cache */
-            float *cached_kv = (float *)malloc(n_prompt * 2 * 128 * 8 * sizeof(float));
+            /* Try to load KV from persistent cache — OOM guard:
+             * n_prompt * 2 * 128 * 8 * 4 bytes = n_prompt * 8KB.
+             * At 512K tokens = 4GB — cap to available / 4. */
+            size_t avail = wubu_mem_detect_available_ram();
+            int max_cached = n_prompt;
+            if (avail > 0) {
+                int cap = (int)(avail / 4 / (2 * 128 * 8 * sizeof(float)));
+                if (cap < 64) cap = 64;
+                if (max_cached > cap) {
+                    max_cached = cap;
+                    fprintf(stderr, "[oom-guard] LMCache capped to %d tokens\n", max_cached);
+                }
+            }
+            float *cached_kv = (float *)malloc((size_t)max_cached * 2 * 128 * 8 * sizeof(float));
             if (cached_kv) {
                 int n_cached = wubu_lmcache_load(g_lmcache, "model", prompt_tokens, n_prompt,
                                                   cached_kv, n_prompt / 16);
@@ -419,7 +451,46 @@ int main(int argc, char **argv) {
     }
 
     // Prefill: logits or hidden states
-    float *logits = (float *)malloc(n_prompt * vs * sizeof(float));
+    // OOM guard: n_prompt * vocab_size * sizeof(float) can be 500GB at 512K context.
+    // For decode, we only need the LAST token's logits. For chunked prefill,
+    // the function fills the caller's logits buffer with the last chunk only.
+    // Strategy: allocate only chunk_sz * vocab_size (or 1 * vocab_size for decode).
+    {
+        size_t avail = wubu_mem_detect_available_ram();
+        size_t full_logits_bytes = (size_t)n_prompt * vs * sizeof(float);
+        size_t safe_logits_bytes = full_logits_bytes;
+        int chunk_sz_logits = getenv("WUBU_CHUNK_PREFILL")
+                              ? atoi(getenv("WUBU_CHUNK_PREFILL")) : 4096;
+        if (chunk_sz_logits <= 0) chunk_sz_logits = n_prompt;
+        /* AirLLM layer streaming: force chunked prefill even for short prompts
+         * when the budget system determined KV cache exceeds RAM budget. */
+        if (mdl.use_layer_stream && chunk_sz_logits < n_prompt) {
+            fprintf(stderr, "[airllm] layer streaming active, forcing chunked prefill\n");
+        }
+        if (chunk_sz_logits > 0 && n_prompt > chunk_sz_logits) {
+            /* Already chunked — use chunk size for logits */
+            safe_logits_bytes = (size_t)chunk_sz_logits * vs * sizeof(float);
+        }
+        size_t chunked_bytes = (size_t)chunk_sz_logits * vs * sizeof(float);
+        if (avail > 0 && full_logits_bytes > avail / 4) {
+            /* Full logits would OOM — use chunk-sized or single-token */
+            if (n_prompt > chunk_sz_logits) {
+                safe_logits_bytes = chunked_bytes;
+                fprintf(stderr, "[oom-guard] logits %zuMB > %zuMB avail, capping to chunk %d (%zuMB)\n",
+                        full_logits_bytes / (1024*1024), avail / 4 / (1024*1024),
+                        chunk_sz_logits, safe_logits_bytes / (1024*1024));
+            } else {
+                /* Even single chunk too big — use just the last token */
+                safe_logits_bytes = (size_t)vs * sizeof(float);
+                fprintf(stderr, "[oom-guard] logits %zuMB > %zuMB avail, using last-token only\n",
+                        full_logits_bytes / (1024*1024), avail / 4 / (1024*1024));
+            }
+        }
+        /* The forward functions write to logits at offset (n_prompt-1)*vs for the
+         * last token. For chunked prefill, the last chunk's logits go to logits[0..C*vs].
+         * So we allocate chunk_sz*vs or vs (single token), NOT n_prompt*vs. */
+        logits = (float *)malloc(safe_logits_bytes ? safe_logits_bytes : 16);
+    }
     double t0 = clock_seconds();
 
     /* F02: Boot-time GEMV equivalence check (verified before first inference). */

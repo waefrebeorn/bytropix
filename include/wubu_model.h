@@ -666,6 +666,11 @@ typedef struct {
     int gqa_cache_len_saved;
     int mtp_cache_len_saved;
 
+    // AirLLM layer streaming: when set, force chunked prefill in gen_text
+    // even for single calls. The budget system sets this when max_ctx < 256
+    // (KV cache too large for available RAM — must stream layers).
+    int use_layer_stream;
+
     // GGUF context (for per-layer MoE lazy loading)
     gguf_ctx *gguf_ctx;
     size_t    data_blob_size;  // size of GGUF data blob (for budget calc)

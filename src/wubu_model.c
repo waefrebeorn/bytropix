@@ -791,12 +791,15 @@ int max_s = 1;
         }
     }
     int64_t k_cache_bytes = kv_cache_alloc_size(total_cache_elems);
-    /* C03: Cache-line-aligned KV allocation. 64-byte alignment eliminates
-     * split-line loads in the decode attention inner loop. Using posix_memalign
-     * instead of plain malloc — single cache line boundary per KV vector row.
-     * ~8-12% throughput uplift at 512K context (measured on WSL2 DDR5). */
-    model->gqa_k_cache = aligned_alloc(64, (size_t)k_cache_bytes);
-    model->gqa_v_cache = aligned_alloc(64, (size_t)k_cache_bytes);
+    /* C03: Cache-line-aligned KV allocation. Use posix_memalign (NOT
+     * aligned_alloc) because aligned_alloc requires size % alignment == 0,
+     * and k_cache_bytes may not be 64-aligned. posix_memalign has no such
+     * constraint. 64-byte alignment eliminates split-line loads in the
+     * decode attention inner loop (~8-12% throughput uplift at 512K). */
+    if (posix_memalign((void **)&model->gqa_k_cache, 64, (size_t)k_cache_bytes) != 0)
+        model->gqa_k_cache = NULL;
+    if (posix_memalign((void **)&model->gqa_v_cache, 64, (size_t)k_cache_bytes) != 0)
+        model->gqa_v_cache = NULL;
     if (!model->gqa_k_cache || !model->gqa_v_cache) {
         fprintf(stderr, "Failed to allocate GQA KV cache (%ld MB)\n", (long)(k_cache_bytes / (1024*1024)));
         goto fail;
@@ -805,6 +808,10 @@ int max_s = 1;
     memset(model->gqa_v_cache, 0, k_cache_bytes);
     model->gqa_cache_len = 0;
     model->gqa_max_ctx = runtime_max_ctx;
+    /* AirLLM layer streaming: wire the budget result into the model.
+     * use_layer_stream=1 when max_ctx < 256 (KV cache too large for
+     * available RAM — must stream layers à la airllm/ds4-ssd). */
+    model->use_layer_stream = (runtime_max_ctx < 256) ? 1 : 0;
 
     /* Step 5: Register KV cache layers with wubu_kv_styx for /n/kv/ export.
      * Each GQA layer gets a live JSON snapshot entry so external
@@ -1583,6 +1590,16 @@ void wubu_model_forward_chunked(wubu_model_t *model,
         int C = T_total - off;
         if (C > chunk_sz) C = chunk_sz;
         float *embd = (float *)malloc((size_t)C * model->d_model * sizeof(float));
+        if (!embd) {
+            /* OOM: try shrinking C to fit */
+            size_t avail = wubu_mem_detect_available_ram();
+            if (avail > 0) {
+                int new_C = (int)(avail / 8 / ((size_t)model->d_model * sizeof(float)));
+                if (new_C < 64) new_C = 64;
+                C = new_C;
+                embd = (float *)malloc((size_t)C * model->d_model * sizeof(float));
+            }
+        }
         if (!embd) { fprintf(stderr, "wubu_model_forward_chunked: embd alloc failed\n"); return; }
         if (model->token_embd) {
             for (int i = 0; i < C; i++) {
@@ -1613,7 +1630,21 @@ void wubu_model_forward_chunked(wubu_model_t *model,
 
         // Per-chunk logits buffer (B*C*vocab_size). Only the LAST chunk's
         // contents are copied out to `logits` (the caller's buffer).
-        float *chunk_logits = (float *)malloc((size_t)B * C * model->vocab_size * sizeof(float));
+        // OOM guard: cap chunk_logits to available RAM / 4. If chunk is too
+        // large, reduce C to fit. At vocab=250K, C=4096 → 4GB — must cap.
+        size_t chunk_logits_bytes = (size_t)B * C * model->vocab_size * sizeof(float);
+        size_t avail = wubu_mem_detect_available_ram();
+        if (avail > 0 && chunk_logits_bytes > avail / 4) {
+            int new_C = (int)(avail / 4 / ((size_t)B * model->vocab_size * sizeof(float)));
+            if (new_C < 64) new_C = 64;
+            if (new_C < C) {
+                fprintf(stderr, "[oom-guard] chunked logits %zuMB > %zuMB, reducing C %d→%d\n",
+                        chunk_logits_bytes / (1024*1024), avail / 4 / (1024*1024), C, new_C);
+                C = new_C;
+                chunk_logits_bytes = (size_t)B * C * model->vocab_size * sizeof(float);
+            }
+        }
+        float *chunk_logits = (float *)malloc(chunk_logits_bytes ? chunk_logits_bytes : 16);
         if (!chunk_logits) { fprintf(stderr, "wubu_model_forward_chunked: logits alloc failed\n"); free(embd); return; }
         wubu_model_forward_from_embd(model, embd, B, C, chunk_logits);
 

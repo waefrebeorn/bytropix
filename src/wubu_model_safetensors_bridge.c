@@ -480,8 +480,11 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
         }
     }
     int64_t k_cache_bytes = kv_cache_alloc_size(total_cache_elems);
-    m->gqa_k_cache = malloc(k_cache_bytes ? k_cache_bytes : 16);
-    m->gqa_v_cache = malloc(k_cache_bytes ? k_cache_bytes : 16);
+    /* OOM guard: use posix_memalign (aligned_alloc requires size%64==0). */
+    if (posix_memalign((void **)&m->gqa_k_cache, 64, k_cache_bytes ? k_cache_bytes : 16) != 0)
+        m->gqa_k_cache = NULL;
+    if (posix_memalign((void **)&m->gqa_v_cache, 64, k_cache_bytes ? k_cache_bytes : 16) != 0)
+        m->gqa_v_cache = NULL;
     if (m->gqa_k_cache) memset(m->gqa_k_cache, 0, k_cache_bytes ? k_cache_bytes : 16);
     if (m->gqa_v_cache) memset(m->gqa_v_cache, 0, k_cache_bytes ? k_cache_bytes : 16);
     m->gqa_cache_len = 0;

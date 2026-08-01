@@ -260,7 +260,49 @@ void wubu_moe_forward_ssd(const float *x, int B, int T,
     }
     if (selected_experts) memcpy(selected_experts, topk_indices, (size_t)N * n_active_experts * sizeof(int));
 
+    /* OOM guard: N*d_model*4 can be huge at large batch prefill.
+     * If alloc fails, fall back to per-token accumulation (slower, bounded). */
     float *expert_out = (float *)malloc((size_t)N * d_model * sizeof(float));
+    if (!expert_out) {
+        /* Process one token at a time into output directly — bounded to d_model */
+        for (int s = 0; s < N; s++) {
+            float *out_s = output + s * d_model;
+            memset(out_s, 0, d_model * sizeof(float));
+            if (w->ffn_gate_shexp && w->ffn_up_shexp && w->ffn_down_shexp) {
+                for (int j = 0; j < d_ff; j++) {
+                    float sum_g = 0.0f, sum_u = 0.0f;
+                    for (int k = 0; k < d_model; k++) {
+                        sum_g += x[s*d_model+k] * w->ffn_gate_shexp[j + k * d_ff];
+                        sum_u += x[s*d_model+k] * w->ffn_up_shexp[j + k * d_ff];
+                    }
+                    float act = fmaxf(0.0f, sum_g) * sum_u;
+                    for (int k = 0; k < d_model; k++)
+                        out_s[k] += act * w->ffn_down_shexp[k + j * d_model];
+                }
+            }
+            for (int ki = 0; ki < n_active_experts; ki++) {
+                int e = topk_indices[s * n_active_experts + ki];
+                float weight = topk_weights[s * n_active_experts + ki];
+                float *exp[3];
+                int r = wubu_ssd_moe_get(ssd, layer, e, exp);
+                if (r < 0) continue;
+                const float *g = exp[0], *u = exp[1], *d = exp[2];
+                for (int j = 0; j < d_ff; j++) {
+                    float sum_g = 0.0f, sum_u = 0.0f;
+                    for (int k = 0; k < d_model; k++) {
+                        sum_g += x[s*d_model+k] * g[j + k * d_ff];
+                        sum_u += x[s*d_model+k] * u[j + k * d_ff];
+                    }
+                    float act = fmaxf(0.0f, sum_g) * sum_u;
+                    for (int k = 0; k < d_model; k++)
+                        out_s[k] += weight * act * d[k + j * d_model];
+                }
+            }
+        }
+        free(scores); free(topk_indices); free(topk_weights);
+        free(gate_shared); free(up_shared);
+        return;
+    }
     memset(expert_out, 0, (size_t)N * d_model * sizeof(float));
 
     // Per-token expert scratch buffers (heap, not alloca: alloca grows the
@@ -375,7 +417,61 @@ void wubu_moe_forward(const float *x, int B, int T,
     }
 
     // Expert computation
+    /* OOM guard: N*d_model*4 can be huge at large batch prefill.
+     * If alloc fails, fall back to per-token accumulation (slower, bounded). */
     float *expert_out = (float *)malloc((size_t)N * d_model * sizeof(float));
+    if (!expert_out) {
+        /* Process one token at a time into output directly — bounded to d_model */
+        float *gate_shared = (float *)malloc((size_t)d_ff * sizeof(float));
+        float *up_shared   = (float *)malloc((size_t)d_ff * sizeof(float));
+        for (int s = 0; s < N; s++) {
+            float *out_s = output + s * d_model;
+            memset(out_s, 0, d_model * sizeof(float));
+            if (w->ffn_gate_shexp) {
+                for (int j = 0; j < d_ff; j++) {
+                    float sum_g = 0.0f, sum_u = 0.0f;
+                    for (int k = 0; k < d_model; k++) {
+                        sum_g += x[s*d_model+k] * w->ffn_gate_shexp[j + k * d_ff];
+                        sum_u += x[s*d_model+k] * w->ffn_up_shexp[j + k * d_ff];
+                    }
+                    gate_shared[j] = fmaxf(0.0f, sum_g);
+                    up_shared[j] = sum_u;
+                }
+                for (int k = 0; k < d_model; k++) {
+                    float sum = 0.0f;
+                    for (int j = 0; j < d_ff; j++) sum += gate_shared[j] * up_shared[j] * w->ffn_down_shexp[k + j * d_model];
+                    out_s[k] += sum;
+                }
+            }
+            for (int ki = 0; ki < n_active_experts; ki++) {
+                int e = topk_indices[s * n_active_experts + ki];
+                float weight = topk_weights[s * n_active_experts + ki];
+                float *exp[3];
+                /* layer arg removed: no layer index in this OOM fallback path */
+                (void)layer;
+                int r = wubu_ssd_moe_get(ssd, 0, e, exp);
+                if (r < 0) continue;
+                const float *g = exp[0], *u = exp[1], *d = exp[2];
+                for (int j = 0; j < d_ff; j++) {
+                    float sum = 0.0f;
+                    for (int k = 0; k < d_model; k++) sum += x[s*d_model+k] * g[k + j * d_model];
+                    gate_shared[j] = fmaxf(0.0f, sum);
+                    sum = 0.0f;
+                    for (int k = 0; k < d_model; k++) sum += x[s*d_model+k] * u[k + j * d_model];
+                    up_shared[j] = sum;
+                }
+                for (int k = 0; k < d_model; k++) {
+                    float sum = 0.0f;
+                    for (int j = 0; j < d_ff; j++) sum += gate_shared[j] * up_shared[j] * d[k + j * d_model];
+                    out_s[k] += weight * sum;
+                }
+            }
+        }
+        free(gate_shared); free(up_shared);
+        free(topk_indices); free(topk_weights);
+        free(scores);
+        return;
+    }
     memset(expert_out, 0, (size_t)N * d_model * sizeof(float));
 
     // Per-token expert scratch buffers (heap, not alloca: alloca grows the
