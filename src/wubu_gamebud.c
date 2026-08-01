@@ -87,6 +87,12 @@ int wubu_gamebud_can_spend(wubu_gamebud_t *g, uint64_t us_optional) {
     return 0;
 }
 
+uint64_t wubu_gamebud_elapsed_us(const wubu_gamebud_t *g) {
+    if (!g || !g->in_frame) return 0;
+    uint64_t now = now_us();
+    return (now > g->frame_start) ? (now - g->frame_start) : 0;
+}
+
 uint64_t wubu_gamebud_effective_budget(const wubu_gamebud_t *g) {
     if (!g) return 0;
     uint64_t eff = g->budget_us + g->credit_us;

@@ -1,17 +1,18 @@
 CC = gcc
 CXX = g++
-# CUDA on this WSL box is the Debian nvidia-cuda-toolkit package (V12.0):
-#   nvcc -> /usr/bin/nvcc, headers in /usr/include, libs in /usr/lib/x86_64-linux-gnu
-# (NOT the NVIDIA .run layout /usr/local/cuda-X.Y/targets/...). Auto-detect and
-# fall back to the Debian FHS paths so the same Makefile works on both layouts.
+# CUDA layout on this WSL2 box: NVIDIA .run install at /usr/local/cuda-13.1
+# (symlinked /usr/local/cuda). nvcc at /usr/bin/nvcc, headers in
+# /usr/local/cuda/include, libs in /usr/local/cuda/lib64. The WSL2 GPU
+# passthrough libcuda.so.1 lives in /usr/lib/wsl/lib and is NOT on the default
+# linker path, so we add it as an rpath so GPU binaries find it at load time
+# without the caller exporting LD_LIBRARY_PATH.
 NVCC = $(or $(shell which nvcc 2>/dev/null),/usr/bin/nvcc)
-# Derive /usr from /usr/bin/nvcc using a single shell command (avoid nesting
-# Make $(...) inside $(shell ...), which Make mis-expands).
 CUDA_HOME = $(shell d=$(NVCC); d=$${d%/*}; d=$${d%/*}; echo $$d)
 CUDA_INC = -I$(CUDA_HOME)/include
 CUDA_LIBDIR = $(shell if [ -d $(CUDA_HOME)/lib/x86_64-linux-gnu ]; then echo $(CUDA_HOME)/lib/x86_64-linux-gnu; else echo $(CUDA_HOME)/lib64; fi)
+WSL_LIB = /usr/lib/wsl/lib
 CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include $(CUDA_INC) -fopenmp
-LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -lcudart -lcublas -lpthread -lssl -lcrypto
+LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -L$(WSL_LIB) -Wl,-rpath,$(WSL_LIB) -lcudart -lcublas -lpthread -lssl -lcrypto
 NVCC_FLAGS = -O3 -I include -arch=sm_86
 CUDA_INCS = $(CUDA_INC)
 CUDA_LIBS = -L$(CUDA_LIBDIR) -lcublas -lcudart
@@ -697,6 +698,10 @@ test_ecs: tools/test_ecs.c src/wubu_ecs.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+test_512k_budget: tools/test_512k_budget.c src/wubu_mem_budget.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 # doc B08/H03/E06/F02: remaining CPU-closable cores (NVFP4, Hadamard,
 # wide all-reduce, equiv-check). MLA (A08/E02) is in wubu_mla.c/test_mla.
 test_more_cores: tools/test_more_cores.c src/wubu_nvfp4.o src/wubu_hadamard.o src/wubu_expert_allreduce.o src/wubu_equiv_check.o src/wubu_fp8.o
@@ -1123,7 +1128,7 @@ test_cross_attn: tools/test_cross_attn.c src/wubu_cross_attn.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
-test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive
+test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive
 	@echo "=== ALL TESTS PASSED ==="
 
 test_nf4: tools/test_nf4.c src/wubu_nf4.o

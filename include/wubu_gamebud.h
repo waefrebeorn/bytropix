@@ -43,6 +43,10 @@ int wubu_gamebud_can_spend(wubu_gamebud_t *g, uint64_t us_optional);
  * to future frames (burst allowance). Returns current effective budget. */
 uint64_t wubu_gamebud_effective_budget(const wubu_gamebud_t *g);
 
+/* Returns microseconds elapsed since the last wubu_gamebud_begin() for this
+ * governor (0 if no frame open). Lets the caller bill the real wall-clock. */
+uint64_t wubu_gamebud_elapsed_us(const wubu_gamebud_t *g);
+
 /* Stats: frames, overruns, avg/peak us, total throttled us. */
 void wubu_gamebud_stats(const wubu_gamebud_t *g,
                         uint64_t *frames, uint64_t *overruns,

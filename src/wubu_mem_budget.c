@@ -166,19 +166,21 @@ wubu_mem_budget_info_t wubu_mem_budget_compute(
 
     /* Actual KV cache bytes at max_ctx */
     info.kv_cache_bytes = total_kv_elems(b, max_ctx) * (int64_t)bpe * 2;
-
     info.max_kv_ctx = max_ctx;
-    info.swa_window = 0;
+    info.swa_window = (max_ctx < requested_ctx) ? max_ctx : 0;
     info.use_ssd_moe = (moe_slot_sz > 0) ? 1 : 0;
-    info.use_layer_stream = 0;
 
-    /* If max_ctx < requested_ctx, we need SWA to handle longer contexts */
-    if (max_ctx < requested_ctx) {
-        info.swa_window = max_ctx;
-        /* If even max_ctx is too small for the model, stream layers */
-        if (max_ctx < 256)
-            info.use_layer_stream = 1;
-    }
+    /* AirLLM layer streaming: stream when the *requested* context's full KV
+     * footprint would exceed available RAM (we had to shrink max_ctx below the
+     * requested context because KV cache is RAM-bound). At 512K that means the
+     * unconstrained KV (requested_ctx positions) is larger than RAM can hold,
+     * so we must stream layers instead of materializing the whole model. */
+    int64_t req_kv_elems = total_kv_elems(b, requested_ctx);
+    int64_t req_kv_bytes  = req_kv_elems * (int64_t)bpe * 2;
+    if (requested_ctx > max_ctx && req_kv_bytes > (int64_t)b->available_ram)
+        info.use_layer_stream = 1;
+    else
+        info.use_layer_stream = 0;
 
     fprintf(stderr, "[membudget] RAM=%zuMB model=%zuMB ssm=%zuMB "
             "moe=%zuMB gpu=%zuMB fwd=%zuMB headroom=%zuMB → "

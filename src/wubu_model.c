@@ -758,6 +758,7 @@ int max_s = 1;
                 kv_dims[gi++] = model->layers[l].gqa.kv_dim;
     }
     /* Compute budget: detect RAM, subtract fixed costs, cap KV to fit. */
+    int stream = 0;
     {
         size_t ssm_sz = model->ssm_state_total;
         size_t fwd_sz = (size_t)model->n_layers * model->d_model * 5 * sizeof(float);
@@ -774,10 +775,12 @@ int max_s = 1;
             n_gqa, model->n_layers - n_gqa,
             kv_dims, 0,
             bytes_per_kv_elem);
+        int stream = 0;
         if (budget) {
             wubu_mem_budget_info_t info = wubu_mem_budget_compute(
                 budget, runtime_max_ctx, ssm_sz, fwd_sz, moe_sz, 0);
             runtime_max_ctx = info.max_kv_ctx;
+            stream = info.use_layer_stream;
             if (info.swa_window > 0) {
                 fprintf(stderr, "[membudget] Context %d > budget %d: "
                         "SWA window=%d auto-enabled\n",
@@ -812,10 +815,10 @@ int max_s = 1;
     memset(model->gqa_v_cache, 0, k_cache_bytes);
     model->gqa_cache_len = 0;
     model->gqa_max_ctx = runtime_max_ctx;
-    /* AirLLM layer streaming: wire the budget result into the model.
-     * use_layer_stream=1 when max_ctx < 256 (KV cache too large for
-     * available RAM — must stream layers à la airllm/ds4-ssd). */
-    model->use_layer_stream = (runtime_max_ctx < 256) ? 1 : 0;
+    /* AirLLM layer streaming: honor the budget calculator's RAM-pressure
+     * decision (stream when the requested 512K KV footprint exceeds RAM).
+     * Do NOT override with a hardcoded ctx threshold. */
+    model->use_layer_stream = stream;
 
     /* Step 5: Register KV cache layers with wubu_kv_styx for /n/kv/ export.
      * Each GQA layer gets a live JSON snapshot entry so external

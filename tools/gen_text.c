@@ -723,10 +723,10 @@ int main(int argc, char **argv) {
         }
 
         if (mdl.gamebud) {
-            /* Bill the real wall-clock of this frame (sampled). Cheap estimate:
-             * forward already ran; we just record a nominal budget usage so the
-             * governor can throttle future optional work. */
-            wubu_gamebud_end((wubu_gamebud_t *)mdl.gamebud, 1000);
+            /* Bill the real wall-clock of this frame. */
+            uint64_t us_used = wubu_gamebud_elapsed_us((wubu_gamebud_t *)mdl.gamebud);
+            if (us_used == 0) us_used = 1;
+            wubu_gamebud_end((wubu_gamebud_t *)mdl.gamebud, us_used);
         }
         last_logits = logits;
         generated++;
@@ -742,10 +742,12 @@ int main(int argc, char **argv) {
 
     /* HW-accel stats */
     if (mdl.gamebud) {
-        wubu_gamebud_t *gb = (wubu_gamebud_t *)mdl.gamebud;
-        printf("HW-accel: gamebud frames=%llu overruns=%llu avg=%.1fus\n",
-               (unsigned long long)gb->frames, (unsigned long long)gb->overruns,
-               gb->frames ? (double)gb->total_ns / 1e3 / gb->frames : 0.0);
+        uint64_t gf = 0, go = 0, ga = 0, gp = 0, gt = 0;
+        wubu_gamebud_stats((const wubu_gamebud_t *)mdl.gamebud,
+                           &gf, &go, &ga, &gp, &gt);
+        printf("HW-accel: gamebud frames=%llu overruns=%llu avg=%.1fus peak=%.1fus\n",
+               (unsigned long long)gf, (unsigned long long)go,
+               (double)ga, (double)gp);
     }
 
     free(logits); free(embd);
