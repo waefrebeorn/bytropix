@@ -35,6 +35,15 @@ int main(void) {
     float maxdiff = 0; for (int i=0;i<d*d;i++) maxdiff = fmaxf(maxdiff, fabsf(S[i]-S0[i]));
     printf("DeltaNet recurrence determinism diff = %.2e (expect 0)\n", maxdiff);
     assert(maxdiff < 1e-5f);
+
+    /* E03 oracle: chunked-prefill state must match serial recurrence exactly. */
+    float *Schunk = (float *)calloc(d*d, sizeof(float));
+    wubu_delta_net_chunk_prefill(q, k, v, b, n, d, 4, Schunk);
+    float corr = 0; for (int i=0;i<d*d;i++) corr = fmaxf(corr, fabsf(S[i]-Schunk[i]));
+    printf("DeltaNet chunk-prefill vs recurrence max diff = %.2e (expect ~0)\n", corr);
+    assert(corr < 1e-4f);
+    free(Schunk);
+
     free(q);free(k);free(v);free(b);free(S);free(S0);free(y);
     printf("ALL DELTA-NET TESTS PASSED\n");
     return 0;

@@ -81,71 +81,16 @@ void wubu_delta_net_chunk_prefill(const float *q, const float *k, const float *v
                                   const float *beta, int n, int d, int chunk,
                                   float *S /* in/out d*d */) {
     if (chunk <= 0) chunk = 64;
-
-    float *Y = (float *)malloc(sizeof(float) * d * chunk);
-    float *W = (float *)malloc(sizeof(float) * d * chunk);
-    float *Vc = (float *)malloc(sizeof(float) * d * chunk);
-    float *tmp = (float *)malloc(sizeof(float) * d * d);
-
+    /* Process in chunks of `chunk` tokens to bound working-set memory for
+     * very long sequences, but apply the EXACT serial recurrence per token
+     * so the result is bit-for-bit identical to wubu_delta_net_recurrence.
+     * (The WY-form (I - Y W^T) + Y V^T is only correct for C=1; for C>1 it
+     * drops the cross-token right-multiplication terms.) */
     for (int t0 = 0; t0 < n; t0 += chunk) {
         int C = (t0 + chunk <= n) ? chunk : (n - t0);
-
-        /* Build Y = K_chunk, W = beta * K_chunk, Vc = V_chunk */
-        for (int c = 0; c < C; c++) {
-            const float *kt = k + (t0 + c) * d;
-            const float *vt = v + (t0 + c) * d;
-            float b = beta[t0 + c];
-
-            /* QK-L2 norm on k */
-            float kn = 0;
-            for (int i = 0; i < d; i++) kn += kt[i] * kt[i];
-            float ks = (kn > 1e-12f) ? (1.0f / sqrtf(kn)) : 0.0f;
-
-            for (int i = 0; i < d; i++) {
-                float ktn = kt[i] * ks;
-                Y[c*d + i] = ktn;
-                W[c*d + i] = b * ktn;
-                Vc[c*d + i] = vt[i];
-            }
-        }
-
-        /* S = S * (I - Y W^T) + Y V^T */
-        /* tmp = I - Y W^T (d x d) */
-        memset(tmp, 0, sizeof(float) * d * d);
-        for (int i = 0; i < d; i++) tmp[i*d + i] = 1.0f;
-
-        for (int c = 0; c < C; c++) {
-            for (int i = 0; i < d; i++) {
-                float yi = Y[c*d + i];
-                for (int j = 0; j < d; j++) {
-                    tmp[i*d + j] -= yi * W[c*d + j];
-                }
-            }
-        }
-
-        /* S = S * tmp */
-        float *Snew = (float *)malloc(sizeof(float) * d * d);
-        for (int i = 0; i < d; i++)
-            for (int j = 0; j < d; j++) {
-                float acc = 0;
-                for (int k = 0; k < d; k++) acc += S[i*d + k] * tmp[k*d + j];
-                Snew[i*d + j] = acc;
-            }
-        memcpy(S, Snew, sizeof(float) * d * d);
-        free(Snew);
-
-        /* S += Y V^T */
-        for (int c = 0; c < C; c++) {
-            for (int i = 0; i < d; i++) {
-                float yi = Y[c*d + i];
-                for (int j = 0; j < d; j++) {
-                    S[i*d + j] += yi * Vc[c*d + j];
-                }
-            }
-        }
+        wubu_delta_net_recurrence(q + t0 * d, k + t0 * d, v + t0 * d,
+                                 beta + t0, C, d, S);
     }
-
-    free(Y); free(W); free(Vc); free(tmp);
 }
 
 /* ---------- Output gate (RMSNorm + SiLU) ---------- */

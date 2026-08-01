@@ -610,7 +610,7 @@ test_prefix_reuse: tools/test_prefix_reuse.c $(CPU_OBJ)
 	./$@
 
 # doc 007: continuous (iteration-level) batching
-test_continuous_batching: tools/test_continuous_batching.c src/wubu_scheduler.o $(CPU_OBJ)
+test_continuous_batching: tools/test_continuous_batching.c src/wubu_scheduler.o src/wubu_continuous_batching.o $(CPU_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
 	./$@
 

@@ -2,6 +2,7 @@
 #define WUBU_CONTINUOUS_BATCHING_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +60,13 @@ void wubu_cont_batch_remove_seq(wubu_cont_batch_t *cb, int seq_idx);
 int wubu_cont_batch_schedule(wubu_cont_batch_t *cb, wubu_sched_item_t *out, int max_items);
 void wubu_cont_batch_prefill_done(wubu_cont_batch_t *cb, int seq_idx);
 void wubu_cont_batch_record_token(wubu_cont_batch_t *cb, int seq_idx, int token_id);
+
+/* D01+D04: overlap prefill with decode — run up to max_prefill_tokens
+ * of prefill work per iteration while also decoding 1 token for each
+ * active decode sequence. Returns the number of prefill tokens consumed
+ * this round (0 if no prefill scheduled). */
+int wubu_cont_batch_overlap(wubu_cont_batch_t *cb, wubu_sched_item_t *out,
+                            int max_items, int max_prefill_tokens);
 
 /* Stats */
 void wubu_cont_batch_stats(const wubu_cont_batch_t *cb,

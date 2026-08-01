@@ -39,16 +39,16 @@ attacks bytes moved.
 - C06 ECS-style component store for engine state ........ `open` (ties to 001/006)
 
 ## THEME D — Batching / scheduling / transport
-- D01 Continuous (iteration-level) batching ............. `open` → doc 007
+- D01 Continuous (iteration-level) batching ............. `wired` (wubu_cont_batch_overlap: prefill chunks interleaved with decode) → doc 007
 - D02 Prefix KV reuse across requests (hash map) ........ `open` → doc 010
 - D03 Disaggregated prefill/decode (separate passes) ..... `open` (ties to 002/007)
-- D04 Chunked prefill (overlap w/ decode) ............. `open` (ties to 007)
+- D04 Chunked prefill (overlap w/ decode) ............. `wired` (wubu_cont_batch_overlap: bounded prefill per iter + decode) (ties to 007)
 - D05 KV transfer layer (NIXL/UCX analog, localhost) .. `open` (ties to 002/003)
 
 ## THEME E — Architecture variants we must SUPPORT in loader/forward
 - E01 GQA/MQA grouping factor G (already in engine) ..... `wired`
 - E02 MLA (DeepSeek multi-head latent attention) ......... `open` (loader extension)
-- E03 Gated-DeltaNet 3:1 hybrid linear attention ...... `open` → doc 008
+- E03 Gated-DeltaNet 3:1 hybrid linear attention ...... `wired` (wubu_delta_net.c: recurrence + chunk-prefill + RMSNorm/SiLU gate, oracle-matched) → doc 008
 - E04 Mixture-of-Depths dynamic layer skip ............. `open` (router in forward)
 - E05 Fine-grained MoE expert choice routing ........... `open` (ties to wubu_moe)
 - E06 Wide expert parallelism (≥8 GPU) ................ `open` (multi-host; skip single-host)

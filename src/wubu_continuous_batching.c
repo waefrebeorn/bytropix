@@ -140,13 +140,6 @@ void wubu_cont_batch_remove_seq(wubu_cont_batch_t *cb, int seq_idx) {
 
 /* ---------- Per-iteration scheduling ---------- */
 
-typedef struct {
-    int seq_idx;
-    int is_prefill;
-    int n_new_tokens;  /* for prefill: total tokens; for decode: 1 */
-    int prefix_matched;
-} wubu_sched_item_t;
-
 /* Build schedule for this iteration: prefill new, decode continuing */
 int wubu_cont_batch_schedule(wubu_cont_batch_t *cb, wubu_sched_item_t *out, int max_items) {
     int n = 0;
@@ -209,6 +202,59 @@ void wubu_cont_batch_record_token(wubu_cont_batch_t *cb, int seq_idx, int token_
     }
 }
 
+/* D01+D04: Overlap prefill with decode.
+ * Each iteration: decode 1 token for every active decode sequence,
+ * then consume up to max_prefill_tokens of prefill work for new
+ * sequences. This keeps the GEMV pipeline full under variable-length
+ * traffic — the key win for 512K context where prefill dominates. */
+int wubu_cont_batch_overlap(wubu_cont_batch_t *cb, wubu_sched_item_t *out,
+                                int max_items, int max_prefill_tokens) {
+    int n = 0;
+    int prefill_tokens_used = 0;
+    cb->iteration++;
+
+    /* Phase 1: decode 1 token for each active decode sequence */
+    for (int i = 0; i < WUBU_CONT_MAX_SEQ && n < max_items; i++) {
+        wubu_seq_state_t *s = &cb->seqs[i];
+        if (!s->alive || !s->prefill_done) continue;
+        if (s->tokens_generated >= cb->max_tokens_per_seq) continue;
+
+        out[n++] = (wubu_sched_item_t){
+            .seq_idx = i,
+            .is_prefill = 0,
+            .n_new_tokens = 1,
+            .prefix_matched = 0
+        };
+    }
+
+    /* Phase 2: prefill new sequences, bounded by max_prefill_tokens */
+    for (int i = 0; i < WUBU_CONT_MAX_SEQ && prefill_tokens_used < max_prefill_tokens; i++) {
+        wubu_seq_state_t *s = &cb->seqs[i];
+        if (!s->alive || s->prefill_done) continue;
+
+        int remaining = s->n_tokens - s->tokens_generated;
+        int budget = max_prefill_tokens - prefill_tokens_used;
+        int chunk = remaining < budget ? remaining : budget;
+        if (chunk <= 0) continue;
+
+        out[n++] = (wubu_sched_item_t){
+            .seq_idx = i,
+            .is_prefill = 1,
+            .n_new_tokens = chunk,
+            .prefix_matched = 0
+        };
+        prefill_tokens_used += chunk;
+        s->tokens_generated += chunk;
+
+        if (s->tokens_generated >= s->n_tokens) {
+            s->prefill_done = 1;
+            s->tokens_generated = s->n_tokens - 1; /* last prompt pos processed */
+        }
+    }
+
+    return n;
+}
+
 /* ---------- Stats ---------- */
 
 void wubu_cont_batch_stats(const wubu_cont_batch_t *cb,
@@ -218,7 +264,7 @@ void wubu_cont_batch_stats(const wubu_cont_batch_t *cb,
     int tot = 0;
     for (int i = 0; i < WUBU_CONT_MAX_SEQ; i++) if (cb->seqs[i].alive) tot += cb->seqs[i].n_tokens;
     if (total_tokens) *total_tokens = tot;
-    if (kv_blocks_used && cb->paged_kv) *kv_blocks_used = cb->paged_kv->n_blocks - wubu_paged_kv_free_count(cb->paged_kv);
+    if (kv_blocks_used && cb->paged_kv) *kv_blocks_used = wubu_paged_kv_free_count(cb->paged_kv);
     if (kv_blocks_free && cb->paged_kv) *kv_blocks_free = wubu_paged_kv_free_count(cb->paged_kv);
     if (prefix_hits && cb->prefix_cache) *prefix_hits = cb->prefix_cache->hits;
     if (prefix_misses && cb->prefix_cache) *prefix_misses = cb->prefix_cache->misses;
