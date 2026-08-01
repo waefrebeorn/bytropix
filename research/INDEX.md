@@ -311,3 +311,36 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - AC01 Per-token layer-skipping router (MoD gating) .................. `wired` (wubu_pd_serve mod_execute, ties layer_skip) (ties layer_skip)
 - AC02 Mixture-of-depths capacity (max active layers per token) ...... `wired` (wubu_pd_serve mod_capacity)
 - AC03 Early-exit confidence threshold (dynamic depth) ............... `wired` (wubu_pd_serve early_exit, ties early_exit) (ties early_exit)
+
+## Theme AD-AE: AGI operating-system runtime + memory (from 2026 research sweep)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### AD: Agentic-OS runtime governance (AgentCgroup 2026 / 9P capability surface)
+- AD-01 Per-agent 9P capability enforcement (each agent subtree bounded, not full FS) `wired` (wubu_agentic_os 9p_cap_allowed)
+- AD-02 Agent scheduler: skip-if-running + exponential backoff (cron-style) `wired` (wubu_agentic_os backoff/skip)
+- AD-03 Durable-execution resume for long-running agents (state checkpoint) `wired` (wubu_agentic_os checkpoint)
+- AD-04 cgroup/BPF attach bounding agent CPU/RAM/IO (AgentCgroup 2026) `wired` (wubu_agentic_os resbound_check, ties syscalls)
+### AE: Agentic memory (TeleMem/HiMem/Redis 2026 3-tier + consolidation)
+- AE-01 Episodic->semantic consolidation pass (distill events to facts) `wired` (wubu_agentic_mem consolidate/tier)
+- AE-02 Semantic dedup / merge (avoid fact duplication) `wired` (wubu_agentic_mem dedup)
+- AE-03 Hierarchical tiers: working / session / long-term retrieval `wired` (wubu_agentic_mem tier)
+- AE-04 Memory retrieval ranking by recency + importance (forgetting curve) `wired` (wubu_agentic_mem retrieval_score)
+
+## Theme AF: 100-goalpost AGI-OS integration (from 7-hop KB sweep)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### AF: Capability/Zero-Trust kernel (items 86-100)
+- AF-01 Per-agent 9P capability enforcement (deny-by-default subtree) ......... `wired` (wubu_agentic_os 9p_cap_allowed, pass 29)
+- AF-02 Deny-by-default tool registry (capability list per agent) `wired` (wubu_capzero capset deny-by-default)
+- AF-03 Encrypted agent memory at rest (AES-CTR over blobs) `wired` (wubu_capzero mem_crypt CTR)
+- AF-04 Non-human identity (NHI) + token issuance per agent `wired` (wubu_capzero nhi_issue)
+### AF: Latency-class scheduler (items 41-50)
+- AF-05 Latency-class enum + EDF/RM scheduler hook (HRT/SRT/DT) ............... `open`
+- AF-06 WCET + jitter budget accounting ...................................... `open`
+- AF-07 Agent-Contract SLO enforcement (TTFT/turn/throughput) ................. `open`
+### AF: Context virtual-memory hierarchy (items 51-65)
+- AF-08 4-level context hierarchy (L1 gen/L2 session/L3 long/L4 cross) ........ `open`
+- AF-09 Demand-paging eviction (FIFO + working-set) over KV .................. `open`
+- AF-10 Semantic cache reuse across agents (vector sim) ...................... `open`
+### AF: Safety kernel (items 66-85)
+- AF-11 Non-tamperable interrupt (stop outside reasoning loop) ............... `open`
+- AF-12 Graduated containment (proportional, reversible) ...................... `open`
+- AF-13 Stability-plasticity guard (RSI cannot weaken 512K gate) ............. `open`
