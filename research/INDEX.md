@@ -220,17 +220,17 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - Q09 FreeKV speculative top-k KV retrieval ................... `wired` (wubu_kv2026 freekv_topk, ties L11)
 - Q10 TTKV temporal-tiered KV placement (hetero precision) ..... `wired` (wubu_kv2026 ttkv_tier, ties N07)
 - Q11 DASH-KV hash-based token-level attn scheduling ........... `wired` (wubu_kv2026c dashkv_schedule)
-- Q12 TARDIS GPU-centric KV service w/ host spillover ......... `open`
-- Q13 KVDrive multi-tier CPU/DRAM/SSD KV management ........... `open` (ties O02)
-- Q14 ScoutAttention layer-ahead CPU precompute + GPU decode .. `open`
+- Q12 TARDIS GPU-centric KV service w/ host spillover ......... `wired` (wubu_sys2026 tardis_spill)
+- Q13 KVDrive multi-tier CPU/DRAM/SSD KV management ........... `wired` (wubu_sys2026 kvdrive_tier, ties O02)
+- Q14 ScoutAttention layer-ahead CPU precompute + GPU decode .. `wired` (wubu_sys2026 scout_eligible)
 - Q15 HotPrefix hotness-aware KV scheduling (prefix sharing) .. `wired` (wubu_ttc hotprefix_priority, ties L05)
-- Q16 AlignedServe prefix-aware batching scheduler ........... `open` (ties D04)
-- Q17 CoDec prefix-shared decoding kernel .................... `open`
-- Q18 SparKV overhead-aware KV loading (cloud<->device) ...... `open` (ties A06)
+- Q16 AlignedServe prefix-aware batching scheduler ........... `wired` (wubu_sys2026 aligned_lcp, ties D04)
+- Q17 CoDec prefix-shared decoding kernel .................... `wired` (wubu_sys2026 codec_share)
+- Q18 SparKV overhead-aware KV loading (cloud<->device) ...... `wired` (wubu_sys2026 sparkv_load, ties A06)
 - Q19 HeteroCache heterogeneous KV compression retrieval ...... `wired` (wubu_kv2026c hetero_bits)
 - Q20 Test-time-compute budget allocator (adaptive token budget)  `wired` (wubu_ttc budget_steps)
 - R01 Inference-time scaling controller (budget vs accuracy) .. `wired` (wubu_ttc scaling_factor)
-- R02 Agentic context-axis efficiency (curated input context) . `open`
+- R02 Agentic context-axis efficiency (curated input context) . `wired` (wubu_sys2026 agentic_ctx)
 - R03 CATTS contrastive adaptive token scaling .............. `wired` (wubu_ttc catts_tokens)
 - R04 Reasoning-model KV redundancy profiler ................. `wired` (wubu_kv2026c redundancy_profile, ties Q04)
 - R05 Multi-agent shared KV pool coherence ................... `wired` (wubu_kv2026c multiagent_coherence, ties Q08)
