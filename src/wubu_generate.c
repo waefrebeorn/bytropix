@@ -4,6 +4,7 @@
  */
 #include "wubu_generate.h"
 #include "wubu_ngram.h"
+#include "wubu_integrate.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -44,6 +45,12 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
     memcpy(seq, prompt, (size_t)n_prompt * sizeof(int));
     int seqlen = n_prompt;
 
+    /* runtime decode policy: composes the recursive-loop gap modules
+     * (capacity_wall + kv_budget + stream_kv + ctx_manage + hybrid + pd).
+     * Pure policy -- guards the 512K OOM ceiling and advises eviction. */
+    int max_ctx = model->gqa_max_ctx > 0 ? model->gqa_max_ctx : 524288;
+    wubu_decode_policy_t *policy = wubu_decode_policy_default(max_ctx, model->n_layers);
+
     float *logits = (float *)malloc(sizeof(float) * (n_prompt + cfg->max_tokens + cfg->spec_k + 1) * V);
     if (!logits) { free(seq); return 0; }
 
@@ -51,6 +58,17 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
     int K = cfg->spec_k;
 
     while (emitted < cfg->max_tokens) {
+        wubu_decode_decision_t dec;
+        wubu_decode_policy_step(policy, seqlen, 0, 1 << 30, 0, &dec);
+        /* capacity_wall: never let decode exceed the 512K OOM ceiling (EAMM guard).
+         * If unsafe, stop gracefully -- the operator's budget/streaming keeps us
+         * under the ceiling; we never silently OOM. */
+        if (!dec.oom_safe) {
+            fprintf(stderr, "[decode-policy] 512K ceiling reached at seqlen=%d; "
+                    "stopping (force_evict=%d). Tighten WUBU_STREAM_WINDOW.\n", seqlen, dec.force_evict);
+            break;
+        }
+
         if (K <= 0) {
             /* plain decode: forward whole sequence, take last position */
             int T = seqlen;
@@ -151,5 +169,6 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
     }
 
     free(seq); free(logits);
+    wubu_decode_policy_destroy(policy);
     return emitted;
 }
