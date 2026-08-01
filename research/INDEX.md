@@ -129,10 +129,10 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - M08 Online speculative tree restructuring .................... `open`
 - M09 Contrastive / lossless spec (no quality drop) ............ `open`
 - M10 Draft-model distillation for hybrid arch .................. `open`
-- M11 Spec verify via KV reuse (no re-forward) ................. `open`
+- M11 Spec verify via KV reuse (no re-forward) ................. `wired` (wubu_spec_variants kv_reuse_ok)
 - M12 Acceptance-rate-adaptive K (per layer) ................... `wired` (wubu_spec_tuner per-layer K, ties N15)
-- M13 Speculative + KV-quant co-design ......................... `open` (ties A04+L01)
-- M14 Blockwise parallel verify (FlashDecoding style) .......... `open` (ties F)
+- M13 Speculative + KV-quant co-design ......................... `wired` (wubu_spec_variants codesign, ties A04+L01)
+- M14 Blockwise parallel verify (FlashDecoding style) .......... `wired` (wubu_spec_variants blockwise_verify_blocks, ties F)
 - M15 Speculative routing for MoE (skip experts) ............... `open` (ties E05)
 - M16 Self-cascade small Colonel (local draft) ................. `wired` (wubu_self_cascade)
 - M17 LLM-Speculative cascade (big model verify) ............... `open`
