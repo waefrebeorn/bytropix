@@ -144,12 +144,12 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N01 B* crossover auto-detector (W vs K bound) ................. `open` (ties survey 2026)
 - N02 Online roofline sampler (measure beta_eff) ................ `wired` (wubu_roofline EMA, wubu_wm_kv)
 - N03 Bandwidth-aware scheme selector (INT4kv vs FP16) .......... `wired` (wubu_kv_budget scheme_bits, ties N01)
-- N04 Batch-size-aware quant switch ............................ `open`
-- N05 Context-length-aware KV precision ladder .................. `open`
+- N04 Batch-size-aware quant switch ............................ `wired` (wubu_quant_selector batch_quant, ties N01)
+- N05 Context-length-aware KV precision ladder .................. `wired` (wubu_quant_selector ctx_precision_ladder)
 - N06 NUMA-bandwidth topology auto-detect ...................... `open`
 - N07 Tiered-cache advisor (hot/warm/cold => precision) ......... `open` (ties A06)
 - N08 Per-layer compute budget (skip floor) .................... `wired` (wubu_layer_floor, wubu_wm_kv)
-- N09 Hardware-counters roofline (if PMC avail) ................ `open`
+- N09 Hardware-counters roofline (if PMC avail) ................ `wired` (wubu_quant_selector pmc_roofline fallback)
 - N10 Energy-per-token metric (compute+HBM+interconnect) ....... `open`
 - N11 TPOT predictor (given B, s, bits) ........................ `wired` (wubu_capacity_wall)
 - N12 Capacity-wall predictor (KV GB vs RAM) ................... `wired` (wubu_capacity_wall fits-ram + b_star, ties 512k)
