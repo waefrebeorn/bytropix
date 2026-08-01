@@ -351,10 +351,10 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - [x] AG-01 Runaway-loop guard: max step-count + hard deadline + terminate (OWASP LLM10/ASI08) `wired` (wubu_loopguard loop_may_continue)
 - [x] AG-02 Goal-hijack / injection defense: control-plane vs data-plane separation (ASI01/LLM01) `wired` (wubu_planediv plane_enforce)
 - [x] AG-03 Memory/context poisoning detection: cross-session replay + divergence flag (ASI06/L3×T3) `wired` (wubu_planediv mem_fingerprint/diverged/replay_flagged)
-- [ ] AG-04 Closed-loop deliberative planning: verify world-state + replan (open-loop problem) `open` (research)
+- [x] AG-04 Closed-loop deliberative planning: verify world-state + replan (open-loop problem) `wired` (research)  # (wubu_worldmodel closed_step/divergence)
 - [x] AG-05 Trajectory-level audit attribution: append-only per-action record (L7×T1-4) `wired` (wubu_loopguard traj_append)
 - [x] AG-06 Tool-abuse / excessive-agency cap: per-agent tool-call rate limit (LLM06/ASI02) `wired` (wubu_loopguard tool_allowed)
-- [ ] AG-07 Inter-agent message authentication (ASI07) `open` (research)
+- [x] AG-07 Inter-agent message authentication (ASI07) `wired` (research)  # (wubu_agentauth mac/verify, keyed-FNV, default-deny)
 - [x] AG-08 JIT provisioning + HITL gating: sensitive-action approval token (ASI08/strata) `wired` (wubu_loopguard hitl_approve)
 
 ## Theme AH: AGI-at-home meta-game (7-hop lily-pad KB sweep)
