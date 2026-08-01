@@ -206,3 +206,31 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - P19 Weak-symbol CUDA stub (link-clean) .................... `wired`
 - P20 Trace/span operator hook (DA-3) ........................ `wired` (wubu_selfimprove)
 
+
+## Theme Q-T: 2026 KV-cache / test-time-compute research sweep (fresh gaps)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+- Q01 CentroidKV cross-token KV clustering (semantic centroids) .... `open`
+- Q02 ChunkKV semantic chunk-level KV compression ................ `wired` (wubu_kv2026 chunkkv_evict)
+- Q03 KVzip query-agnostic KV compression + context reconstruction  `wired` (wubu_kv2026 kvzip_importance)
+- Q04 R-KV redundancy-aware KV eviction (reasoning models) ....... `open`
+- Q05 OBCache Hessian-guided token saliency pruning ............. `open`
+- Q06 KeyDiff key-similarity KV eviction ....................... `open`
+- Q07 LAVa layer-wise eviction w/ dynamic head+layer budget .... `wired` (wubu_kv2026 lava_budget, ties L18)
+- Q08 PolyKV shared asymmetrically-compressed KV pool (agents) .. `open`
+- Q09 FreeKV speculative top-k KV retrieval ................... `wired` (wubu_kv2026 freekv_topk, ties L11)
+- Q10 TTKV temporal-tiered KV placement (hetero precision) ..... `wired` (wubu_kv2026 ttkv_tier, ties N07)
+- Q11 DASH-KV hash-based token-level attn scheduling ........... `open`
+- Q12 TARDIS GPU-centric KV service w/ host spillover ......... `open`
+- Q13 KVDrive multi-tier CPU/DRAM/SSD KV management ........... `open` (ties O02)
+- Q14 ScoutAttention layer-ahead CPU precompute + GPU decode .. `open`
+- Q15 HotPrefix hotness-aware KV scheduling (prefix sharing) .. `open` (ties L05)
+- Q16 AlignedServe prefix-aware batching scheduler ........... `open` (ties D04)
+- Q17 CoDec prefix-shared decoding kernel .................... `open`
+- Q18 SparKV overhead-aware KV loading (cloud<->device) ...... `open` (ties A06)
+- Q19 HeteroCache heterogeneous KV compression retrieval ...... `open`
+- Q20 Test-time-compute budget allocator (adaptive token budget)  `open`
+- R01 Inference-time scaling controller (budget vs accuracy) .. `open`
+- R02 Agentic context-axis efficiency (curated input context) . `open`
+- R03 CATTS contrastive adaptive token scaling .............. `open`
+- R04 Reasoning-model KV redundancy profiler ................. `open` (ties Q04)
+- R05 Multi-agent shared KV pool coherence ................... `open` (ties Q08)
