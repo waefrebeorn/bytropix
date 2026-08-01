@@ -239,20 +239,20 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### S: Linear / recurrent attention hybrids
 - S01 Gated DeltaNet delta-rule state update ..................... `wired` (wubu_linear_attn deltanet_update)
-- S02 Gated DeltaNet-2 decoupled erase/write gate ....................... `open`
+- S02 Gated DeltaNet-2 decoupled erase/write gate ....................... `wired` (wubu_dn2 dn2_update)
 - S03 Mamba-2 / SSM selective-scan gated state decay .............. `wired` (wubu_linear_attn mamba2_update)
 - S04 GLA gated linear attention (per-head state gate) ................. `wired` (wubu_linear_attn gla_update)
 - S05 RetNet / GSA retention decay matrix .............................. `wired` (wubu_linear_attn retnet_update)
-- S06 Hybrid layer scheduler (3:1 GDN:GA mix, recurrent vs attn) ...... `open` (ties layer_skip)
+- S06 Hybrid layer scheduler (3:1 GDN:GA mix, recurrent vs attn) ...... `wired` (wubu_agentic_kv hybrid_is_recurrent) (ties layer_skip)
 - S07 HGRN2 / GSA state-expansion gated RNN ........................... `wired` (wubu_linear_attn hgrn2_update)
 ### T: Sub-2-bit / ternary weights
 - T01 BitNet ternary weight pack (2-bit/val, 4/byte) + dequant ......... `wired` (wubu_ternary pack/unpack)
 - T02 mpGEMM ternary matvec (F32 = sum ternary_w . int8_act) ......... `wired` (wubu_ternary mpgemv)
-- T03 Ternary absmax scaling (W scaled to [-1,1] before ternarize) ..... `open`
-- T04 Ternary training-aware (Straight-Through Estimator proxy) ....... `open`
+- T03 Ternary absmax scaling (W scaled to [-1,1] before ternarize) ..... `wired` (wubu_ternary scale)
+- T04 Ternary training-aware (Straight-Through Estimator proxy) ....... `wired` (wubu_dn2 ternary_ste)
 ### U: Multimodal / agentic KV
-- U01 Gemma-4 shared-KV across layers (reuse KV of earlier layer) ...... `open`
-- U02 DeepSeek-V4 CSA/HCA compressed attention (128->1 entry) ......... `open`
-- U03 LMCache vision-token hashing (KV reuse across requests) ......... `open`
-- U04 LOOK-M multimodal KV prune (drop least-important vision tokens) .. `open`
-- U05 Agentic memory KV compaction (summarize old turns into slots) .... `open`
+- U01 Gemma-4 shared-KV across layers (reuse KV of earlier layer) ...... `wired` (wubu_agentic_kv shared_kv_source)
+- U02 DeepSeek-V4 CSA/HCA compressed attention (128->1 entry) ......... `wired` (wubu_agentic_kv csa_compress)
+- U03 LMCache vision-token hashing (KV reuse across requests) ......... `wired` (wubu_agentic_kv vision_hash)
+- U04 LOOK-M multimodal KV prune (drop least-important vision tokens) .. `wired` (wubu_agentic_kv lookm_keep)
+- U05 Agentic memory KV compaction (summarize old turns into slots) .... `wired` (wubu_agentic_kv agentic_compact)
