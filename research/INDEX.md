@@ -103,9 +103,9 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L04 InfiniGen KV prefetch (predict hot KV to fast tier) ......... `open` (ties A06)
 - L05 CacheBlend cross-request KV stitch .......................... `open`
 - L06 Quest blockwise top-k KV retrieval (sub-linear attn) ........ `open`
-- L07 SnapKV cluster-based KV compression at layer depth ........... `open`
+- L07 SnapKV cluster-based KV compression at layer depth ........... `wired` (wubu_kv_compress keep_clusters)
 - L08 PyramidKV pyramid-accumulation KV reduction ................. `open`
-- L09 CIA KV (attention-score-driven compression) ................ `open`
+- L09 CIA KV (attention-score-driven compression) ................ `wired` (wubu_kv_compress keep_top_score)
 - L10 SeerAttention-R dynamic sparse attention ................... `open`
 - L11 Native sparse attention (NSA, blockwise) ................... `open`
 - L12 MoBA memory-block attention (segment KV) .................... `open`

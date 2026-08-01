@@ -146,6 +146,9 @@ src/wubu_spec_tuner.o: src/wubu_spec_tuner.c include/wubu_spec_tuner.h
 src/wubu_quant_selector.o: src/wubu_quant_selector.c include/wubu_quant_selector.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
+src/wubu_kv_compress.o: src/wubu_kv_compress.c include/wubu_kv_compress.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
 src/wubu_paged_kv.o: src/wubu_paged_kv.c include/wubu_paged_kv.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
@@ -755,6 +758,10 @@ test_quant_selector: tools/test_quant_selector.c src/wubu_quant_selector.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+test_kv_compress: tools/test_kv_compress.c src/wubu_kv_compress.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 # doc B08/H03/E06/F02: remaining CPU-closable cores (NVFP4, Hadamard,
 # wide all-reduce, equiv-check). MLA (A08/E02) is in wubu_mla.c/test_mla.
 test_more_cores: tools/test_more_cores.c src/wubu_nvfp4.o src/wubu_hadamard.o src/wubu_expert_allreduce.o src/wubu_equiv_check.o src/wubu_fp8.o
@@ -1181,7 +1188,7 @@ test_cross_attn: tools/test_cross_attn.c src/wubu_cross_attn.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
-test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive test_stream_kv test_kv_evict_h2o test_capacity_wall test_hugepage test_kv_budget test_wm_kv test_spec_tuner test_quant_selector
+test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive test_stream_kv test_kv_evict_h2o test_capacity_wall test_hugepage test_kv_budget test_wm_kv test_spec_tuner test_quant_selector test_kv_compress
 	@echo "=== ALL TESTS PASSED ==="
 
 test_nf4: tools/test_nf4.c src/wubu_nf4.o
