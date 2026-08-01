@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <unistd.h>
 
 int main(void) {
     wubu_kv_tier_t *t = wubu_kv_tier_create(4, 1, 1, "/tmp/kv_warm.bin", "/tmp/kv_cold.bin");

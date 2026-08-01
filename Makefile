@@ -127,6 +127,9 @@ src/wubu_mem_budget.o: src/wubu_mem_budget.c include/wubu_mem_budget.h
 src/wubu_paged_kv.o: src/wubu_paged_kv.c include/wubu_paged_kv.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
+src/wubu_kv_tier.o: src/wubu_kv_tier.c include/wubu_kv_tier.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 src/wubu_q4k_m.o: src/wubu_q4k_m.c include/wubu_q4k_m.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
@@ -426,7 +429,8 @@ test_400: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
           test_ssm_scan test_q8 test_cuda_graph test_scheduler test_affinity \
           test_roofline test_cache_advice test_kereq test_pd_split \
           test_delta_net test_mhc test_cla test_mega test_yarn \
-          test_kda test_attnres test_latentmoe test_mxfp4
+          test_kda test_attnres test_latentmoe test_mxfp4 \
+          test_kv_tier test_kv_tier_evict
 	@echo "ALL 400-IMPROVEMENT UNIT TESTS PASSED"
 
 # Aggregate of ALL 300 improvement unit tests (Round-1 + Round-2 + Round-3).
@@ -549,6 +553,10 @@ test_kvvq: tools/test_kvvq.c src/wubu_kvvq.o $(CPU_OBJ)
 # doc 002: KV multi-tier storage (hot/warm/cold)
 test_kv_tier: tools/test_kv_tier.c src/wubu_kv_tier.o $(CPU_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
+	./$@
+
+test_kv_tier_evict: tools/test_kv_tier_evict.c src/wubu_kv_tier.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
 # doc 011: attention-sink-free gated attention

@@ -56,6 +56,7 @@ typedef struct wubu_kv_tier {
     wubu_kv_block_t *hot_blocks;
     size_t warm_limit_bytes;
     size_t warm_used_bytes;
+    int    cold_used_bytes;  /* bytes demoted to cold tier */
     size_t cold_limit_bytes;
     char *warm_file_path;
     char *cold_file_path;

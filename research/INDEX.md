@@ -12,7 +12,7 @@ attacks bytes moved.
 - A03 Ecco entropy-aware per-block 2–8bit adaptive ........ `wired` (wubu_4kv, INT8 skip-head) → doc 001
 - A04 SAW-INT4 KV (Hadamard rot + block INT4) ............. `wired` (wubu_4kv) ← 7-hop K=0.9969, V=0.9965
 - A05 TurboQuant <3-bit KV (INT3 token-wise) .............. `wired` (wubu_4kv, 6.1× compression)
-- A06 Predictive multi-tier KV (DRAM/NVMe/CXL/IB, Bayesian reuse) `open` (CPU-only, skip) → doc 002
+- A06 Predictive multi-tier KV (DRAM/NVMe/CXL/IB, Bayesian reuse) `wired` (wubu_kv_tier.c: 3-tier hot/warm/cold with EMA-LRU eviction, fp16 cold storage) ← 7-hop arXiv:2604.26968 → doc 002
 - A07 LMCache/KVBM prefix+PD-disaggregation .............. `open` (prefix reuse → doc 010)
 - A07b NVIDIA priority-based KV eviction (LRU+importance) ... `open` (ties to 002)
 - A08 NVIDIA MLA (Multi-head Latent Attention) ............ `open` (skip — MLA needs model-specific weight loading)

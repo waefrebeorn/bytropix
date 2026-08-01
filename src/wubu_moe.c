@@ -300,7 +300,6 @@ void wubu_moe_forward_ssd(const float *x, int B, int T,
             }
         }
         free(scores); free(topk_indices); free(topk_weights);
-        free(gate_shared); free(up_shared);
         return;
     }
     memset(expert_out, 0, (size_t)N * d_model * sizeof(float));
@@ -446,12 +445,11 @@ void wubu_moe_forward(const float *x, int B, int T,
             for (int ki = 0; ki < n_active_experts; ki++) {
                 int e = topk_indices[s * n_active_experts + ki];
                 float weight = topk_weights[s * n_active_experts + ki];
-                float *exp[3];
-                /* layer arg removed: no layer index in this OOM fallback path */
-                (void)layer;
-                int r = wubu_ssd_moe_get(ssd, 0, e, exp);
-                if (r < 0) continue;
-                const float *g = exp[0], *u = exp[1], *d = exp[2];
+                /* Resident expert weights: [D_MODEL, D_FF, N_EXPERTS] layout */
+                const float *g = w->ffn_gate_exps + (size_t)e * d_model * d_ff;
+                const float *u = w->ffn_up_exps + (size_t)e * d_model * d_ff;
+                const float *d = w->ffn_down_exps + (size_t)e * d_model * d_ff;
+                if (!g || !u || !d) continue; /* expert not loaded */
                 for (int j = 0; j < d_ff; j++) {
                     float sum = 0.0f;
                     for (int k = 0; k < d_model; k++) sum += x[s*d_model+k] * g[k + j * d_model];

@@ -144,7 +144,6 @@ wubu_kv_block_t *wubu_kv_tier_alloc_block(wubu_kv_tier_t *t,
             }
             /* Demote victim to warm */
             wubu_kv_block_t *v = &t->hot_blocks[victim];
-            /* Write victim data to warm file */
             if (v->is_dirty && v->data) {
                 off_t off = lseek(t->warm_fd, 0, SEEK_END);
                 if (off >= 0) {
@@ -154,11 +153,65 @@ wubu_kv_block_t *wubu_kv_tier_alloc_block(wubu_kv_tier_t *t,
                     if (wr == (ssize_t)v->block_bytes) {
                         v->is_dirty = false;
                         v->tier = WUBU_KV_TIER_WARM;
-                        /* Compact hot array: swap with last */
+                        free(v->data);  /* free hot RAM after demote to warm */
+                        v->data = NULL;
+                        t->warm_used_bytes += v->block_bytes;
+                        /* Compact hot array: swap victim with last, then
+                         * allocate the freed slot directly (no recursion). */
                         t->hot_blocks[victim] = t->hot_blocks[t->hot_used - 1];
                         t->hot_used--;
-                        t->warm_used_bytes += v->block_bytes;
-                        return wubu_kv_tier_alloc_block(t, block_bytes);
+                        wubu_kv_block_t *nb = hot_alloc(t);
+                        if (nb) {
+                            nb->data = (uint8_t *)calloc(1, block_bytes);
+                            if (nb->data) {
+                                nb->block_bytes = block_bytes;
+                                nb->is_dirty = true;
+                                return nb;
+                            }
+                            t->hot_used--; /* roll back on alloc failure */
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Hot tier full and warm unavailable — try cold tier */
+    if (t->cold_fd >= 0) {
+        /* Evict lowest-EMA hot block to cold file */
+        if (t->hot_used > 0) {
+            int victim = 0;
+            float lowest_ema = t->hot_blocks[0].last_access_ema;
+            for (size_t i = 1; i < t->hot_used; i++) {
+                if (t->hot_blocks[i].last_access_ema < lowest_ema) {
+                    lowest_ema = t->hot_blocks[i].last_access_ema;
+                    victim = (int)i;
+                }
+            }
+            wubu_kv_block_t *v = &t->hot_blocks[victim];
+            if (v->is_dirty && v->data) {
+                off_t off = lseek(t->cold_fd, 0, SEEK_END);
+                if (off >= 0) {
+                    ssize_t wr = write(t->cold_fd, v->data, v->block_bytes);
+                    if (wr == (ssize_t)v->block_bytes) {
+                        v->offset_in_file = (uint64_t)off;
+                        v->file_fd = t->cold_fd;
+                        free(v->data);
+                        v->data = NULL;
+                        v->tier = WUBU_KV_TIER_COLD;
+                        v->is_dirty = false;
+                        t->hot_blocks[victim] = t->hot_blocks[t->hot_used - 1];
+                        t->hot_used--;
+                        wubu_kv_block_t *nb = hot_alloc(t);
+                        if (nb) {
+                            nb->data = (uint8_t *)calloc(1, block_bytes);
+                            if (nb->data) {
+                                nb->block_bytes = block_bytes;
+                                nb->is_dirty = true;
+                                return nb;
+                            }
+                            t->hot_used--;
+                        }
                     }
                 }
             }
@@ -184,27 +237,38 @@ int wubu_kv_tier_write_block(wubu_kv_tier_t *t, wubu_kv_block_t *b, size_t offse
     /* Ensure block is in hot tier */
     if (b->tier != WUBU_KV_TIER_HOT) {
         /* Promote from warm/cold to hot */
-        if (b->tier == WUBU_KV_TIER_WARM && b->file_fd >= 0) {
-            /* Read from warm file into fresh hot block */
-            off_t cur = lseek(b->file_fd, 0, SEEK_CUR);
-            lseek(b->file_fd, b->offset_in_file, SEEK_SET);
+        if ((b->tier == WUBU_KV_TIER_WARM || b->tier == WUBU_KV_TIER_COLD)
+            && b->file_fd >= 0) {
+            /* Read from file into a fresh hot block */
             uint8_t *tmp = (uint8_t *)malloc(b->block_bytes);
             if (!tmp) return -1;
+            /* Save current file position, seek to block offset, read, restore */
+            off_t cur = lseek(b->file_fd, 0, SEEK_CUR);
+            lseek(b->file_fd, (off_t)b->offset_in_file, SEEK_SET);
             ssize_t rd = read(b->file_fd, tmp, b->block_bytes);
             lseek(b->file_fd, cur, SEEK_SET);
-            if (rd != (ssize_t)b->block_bytes) { free(tmp); return -1; }
-            /* Find or allocate hot slot */
-            wubu_kv_block_t *hot = hot_alloc(t);
-            if (!hot) { free(tmp); return -1; }
-            memcpy(hot->data, tmp, b->block_bytes);
-            hot->block_bytes = b->block_bytes;
-            hot->is_dirty = true;
-            memcpy(b, hot, sizeof(*b));
+            if (rd != (ssize_t)b->block_bytes) {
+                free(tmp);
+                return -1;
+            }
+            /* Copy the file data into b->data */
+            if (!b->data) {
+                b->data = (uint8_t *)calloc(1, b->block_bytes);
+                if (!b->data) { free(tmp); return -1; }
+            }
+            memcpy(b->data, tmp, b->block_bytes);
             free(tmp);
+            b->tier = WUBU_KV_TIER_HOT;
+            b->is_dirty = true;
+            b->offset_in_file = 0;
+            b->file_fd = -1;
+            b->mmap_addr = NULL;
+            b->mmap_size = 0;
         } else {
             return -1;
         }
     }
+    if (!b->data || offset + len > b->block_bytes) return -1;
     memcpy(b->data + offset, src, len);
     b->is_dirty = true;
     b->last_access_ema += 1.0f;
@@ -214,33 +278,60 @@ int wubu_kv_tier_write_block(wubu_kv_tier_t *t, wubu_kv_block_t *b, size_t offse
 /* ---- Eviction ---- */
 
 void wubu_kv_tier_evict_cold(wubu_kv_tier_t *t, size_t target_evict_bytes) {
-    /* Evict low-EMA blocks from warm to cold (or free cold blocks) */
+    /* Evict low-EMA blocks from hot tier to warm/cold files.
+     * EMA < 0.3f = cold enough to demote. */
     size_t evicted = 0;
-    for (size_t i = 0; i < t->hot_used && evicted < target_evict_bytes; i++) {
+    for (size_t i = 0; i < t->hot_used && evicted < target_evict_bytes; ) {
         wubu_kv_block_t *b = &t->hot_blocks[i];
         if (b->tier == WUBU_KV_TIER_HOT && b->last_access_ema < 0.3f) {
-            /* Demote to warm if possible, otherwise free */
+            int demoted = 0;
+            /* Try warm tier first */
             if (t->warm_fd >= 0 && t->warm_used_bytes + b->block_bytes <= t->warm_limit_bytes) {
                 off_t off = lseek(t->warm_fd, 0, SEEK_END);
                 if (off >= 0) {
                     b->offset_in_file = (uint64_t)off;
                     b->file_fd = t->warm_fd;
-                    write(t->warm_fd, b->data, b->block_bytes);
-                    free(b->data);  /* free hot RAM after demote to warm */
-                    b->data = NULL;
-                    b->tier = WUBU_KV_TIER_WARM;
-                    b->is_dirty = false;
-                    t->warm_used_bytes += b->block_bytes;
-                    evicted += b->block_bytes;
+                    ssize_t wr = write(t->warm_fd, b->data, b->block_bytes);
+                    if (wr == (ssize_t)b->block_bytes) {
+                        free(b->data);  /* free hot RAM after demote to warm */
+                        b->data = NULL;
+                        b->tier = WUBU_KV_TIER_WARM;
+                        b->is_dirty = false;
+                        t->warm_used_bytes += b->block_bytes;
+                        evicted += b->block_bytes;
+                        demoted = 1;
+                    }
                 }
-            } else {
-                /* Free the block */
-                if (b->data) free(b->data);
-                /* Swap with last */
+            }
+            /* If warm failed, try cold tier */
+            if (!demoted && t->cold_fd >= 0) {
+                off_t off = lseek(t->cold_fd, 0, SEEK_END);
+                if (off >= 0) {
+                    ssize_t wr = write(t->cold_fd, b->data, b->block_bytes);
+                    if (wr == (ssize_t)b->block_bytes) {
+                        b->offset_in_file = (uint64_t)off;
+                        b->file_fd = t->cold_fd;
+                        free(b->data);
+                        b->data = NULL;
+                        b->tier = WUBU_KV_TIER_COLD;
+                        b->is_dirty = false;
+                        t->cold_used_bytes += b->block_bytes;
+                        evicted += b->block_bytes;
+                        demoted = 1;
+                    }
+                }
+            }
+            if (demoted) {
+                /* Swap with last, shrink hot_used */
                 t->hot_blocks[i] = t->hot_blocks[t->hot_used - 1];
                 t->hot_used--;
-                i--;
+                /* Do NOT increment i — we swapped a new element into slot i */
+            } else {
+                /* Could not demote (file full / write failed) — skip this block */
+                i++;
             }
+        } else {
+            i++;
         }
     }
 }
@@ -252,5 +343,5 @@ void wubu_kv_tier_stats(const wubu_kv_tier_t *t,
                             size_t *cold_bytes) {
     if (hot_blocks) *hot_blocks = t ? t->hot_used : 0;
     if (warm_bytes) *warm_bytes = t ? t->warm_used_bytes : 0;
-    if (cold_bytes) *cold_bytes = 0; /* simplified: cold eviction not yet implemented */
+    if (cold_bytes) *cold_bytes = t ? t->cold_used_bytes : 0;
 }
