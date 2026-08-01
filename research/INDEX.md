@@ -234,3 +234,25 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - R03 CATTS contrastive adaptive token scaling .............. `wired` (wubu_ttc catts_tokens)
 - R04 Reasoning-model KV redundancy profiler ................. `wired` (wubu_kv2026c redundancy_profile, ties Q04)
 - R05 Multi-agent shared KV pool coherence ................... `wired` (wubu_kv2026c multiagent_coherence, ties Q08)
+
+## Theme S-U: 2026 linear-attention / ternary-weight / multimodal-KV sweep (fresh gaps)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### S: Linear / recurrent attention hybrids
+- S01 Gated DeltaNet delta-rule state update ..................... `wired` (wubu_linear_attn deltanet_update)
+- S02 Gated DeltaNet-2 decoupled erase/write gate ....................... `open`
+- S03 Mamba-2 / SSM selective-scan gated state decay .............. `wired` (wubu_linear_attn mamba2_update)
+- S04 GLA gated linear attention (per-head state gate) ................. `wired` (wubu_linear_attn gla_update)
+- S05 RetNet / GSA retention decay matrix .............................. `wired` (wubu_linear_attn retnet_update)
+- S06 Hybrid layer scheduler (3:1 GDN:GA mix, recurrent vs attn) ...... `open` (ties layer_skip)
+- S07 HGRN2 / GSA state-expansion gated RNN ........................... `wired` (wubu_linear_attn hgrn2_update)
+### T: Sub-2-bit / ternary weights
+- T01 BitNet ternary weight pack (2-bit/val, 4/byte) + dequant ......... `wired` (wubu_ternary pack/unpack)
+- T02 mpGEMM ternary matvec (F32 = sum ternary_w . int8_act) ......... `wired` (wubu_ternary mpgemv)
+- T03 Ternary absmax scaling (W scaled to [-1,1] before ternarize) ..... `open`
+- T04 Ternary training-aware (Straight-Through Estimator proxy) ....... `open`
+### U: Multimodal / agentic KV
+- U01 Gemma-4 shared-KV across layers (reuse KV of earlier layer) ...... `open`
+- U02 DeepSeek-V4 CSA/HCA compressed attention (128->1 entry) ......... `open`
+- U03 LMCache vision-token hashing (KV reuse across requests) ......... `open`
+- U04 LOOK-M multimodal KV prune (drop least-important vision tokens) .. `open`
+- U05 Agentic memory KV compaction (summarize old turns into slots) .... `open`
