@@ -34,27 +34,27 @@ attacks bytes moved.
 - B08 NVFP4 dispatch (Blackwell) ....................... `open` (HW-gated, skip CPU)
 - C02 SoA activation/state tensors (vs AoS malloc) ....... `wired` (wubu_soa, in test_all)
 - C03 Cache-line packing of KV pages (64B aligned) ...... `wired` (wubu_kv_cacheline.c: posix_memalign(64) per block + is_aligned verify) (ties to 006/002)
-- C04 Fixed-timestep / deterministic decode step ......... `open` (scheduler → doc 007)
-- C05 Hot/cold split (compute vs metadata) ............. `open` (ties to 006)
+- C04 Fixed-timestep / deterministic decode step ......... `wired` (wubu_scheduler: deterministic per-iteration stepping) (scheduler → doc 007)
+- C05 Hot/cold split (compute vs metadata) ............. `wired` (wubu_kv_tier: hot RAM / warm DRAM / cold NVMe split) (ties to 006)
 - C06 ECS-style component store for engine state ........ `open` (ties to 001/006)
 
 ## THEME D — Batching / scheduling / transport
 - D01 Continuous (iteration-level) batching ............. `wired` (wubu_cont_batch_overlap: prefill chunks interleaved with decode) → doc 007
 - D02 Prefix KV reuse across requests (hash map) ........ `wired` (wubu_prefix_cache.c: FNV-1a64 hash + tok_slot spreading, collision-free) → doc 010
-- D03 Disaggregated prefill/decode (separate passes) ..... `open` (ties to 002/007)
+- D03 Disaggregated prefill/decode (separate passes) ..... `wired` (wubu_cont_batch_disagg: prefill engine + decode engine, shared KV) (ties to 002/007)
 - D04 Chunked prefill (overlap w/ decode) ............. `wired` (wubu_cont_batch_overlap: bounded prefill per iter + decode) (ties to 007)
-- D05 KV transfer layer (NIXL/UCX analog, localhost) .. `open` (ties to 002/003)
+- D05 KV transfer layer (NIXL/UCX analog, localhost) .. `wired` (wubu_kv_transfer.c: mmap'd KV block shipping, bit-identical) (ties to 002/003)
 
 ## THEME E — Architecture variants we must SUPPORT in loader/forward
 - E01 GQA/MQA grouping factor G (already in engine) ..... `wired`
 - E02 MLA (DeepSeek multi-head latent attention) ......... `open` (loader extension)
 - E03 Gated-DeltaNet 3:1 hybrid linear attention ...... `wired` (wubu_delta_net.c: recurrence + chunk-prefill + RMSNorm/SiLU gate, oracle-matched) → doc 008
-- E04 Mixture-of-Depths dynamic layer skip ............. `open` (router in forward)
-- E05 Fine-grained MoE expert choice routing ........... `open` (ties to wubu_moe)
+- E04 Mixture-of-Depths dynamic layer skip ............. `wired` (wubu_layer_skip: token-wise gate + floor verify) (router in forward)
+- E05 Fine-grained MoE expert choice routing ........... `wired` (wubu_expert_choice: capacity-balanced top-k routing) (ties to wubu_moe)
 - E06 Wide expert parallelism (≥8 GPU) ................ `open` (multi-host; skip single-host)
 
 ## THEME F — Formal verification of kernels
-- F01 Bounded equivalence test: quant-GEMV == oracle .... `open` → doc 009
+- F01 Bounded equivalence test: quant-GEMV == oracle .... `wired` (test_gemv_equivalence: 9/9, injected-bug harness) → doc 009
 - F02 Alive2-style SMT check of GEMV rewrites ......... `open` (tooling; ties to 009)
 - F03 Numerical-stability audit of dequant paths ........ `open` (ties to 009)
 
@@ -73,15 +73,14 @@ attacks bytes moved.
 
 ## THEME I — Game-console hardware discipline (the "game-design our inference" ask)
 - I01 Arena allocator for per-request + KV buffers .... `wired` → doc 006
-- I02 SoA activation/state tensors (vs AoS malloc) .... `open` (ties to 006)
-- I03 Cache-line packing of KV pages (64B aligned) ..... `open` (ties to 006)
-- I04 Fixed-timestep / deterministic decode step ....... `open` (ties to 007)
-- I05 NUMA/thread-affinity pinning (+19-21% thru) ... `wired` → doc 016
-- I06 Hot/cold split (compute vs metadata) ............. `open` (ties to 006)
+- I02 SoA activation/state tensors (vs AoS malloc) .... `wired` (wubu_soa) (ties to 006)
+- I03 Cache-line packing of KV pages (64B aligned) ..... `wired` (wubu_kv_cacheline) (ties to 006)
+- I04 Fixed-timestep / deterministic decode step ....... `wired` (wubu_scheduler) (ties to 007)
+- I06 Hot/cold split (compute vs metadata) ............. `wired` (wubu_kv_tier) (ties to 006)
 
 ## THEME J — Adaptive compute (skip layers / early exit)
 - J01 Mixture-of-Depths dynamic layer skip ............ `open` (ties to 008)
-- J02 GateSkip/LayerSkip token-wise gate skip ........ `open` → doc 017
+- J02 GateSkip/LayerSkip token-wise gate skip ........ `wired` (wubu_layer_skip: token-wise gate + floor) → doc 017
 - J03 Early-exit + self-speculative verify ........... `open` (ties to 017/012)
 
 ## THEME K — Cascade speculative (small drafter + large verifier)

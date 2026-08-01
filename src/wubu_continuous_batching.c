@@ -255,6 +255,58 @@ int wubu_cont_batch_overlap(wubu_cont_batch_t *cb, wubu_sched_item_t *out,
     return n;
 }
 
+/* D03: Disaggregated prefill/decode — two separate passes over the same KV store.
+ * Prefill engine first (bounded chunk), then decode engine. This decouples the
+ * two phases so a long prefill cannot stall decodes (and vice-versa), matching
+ * the PD-disaggregation pattern from doc 007. */
+int wubu_cont_batch_disagg(wubu_cont_batch_t *cb, wubu_sched_item_t *out,
+                           int max_items, int max_prefill_tokens, int *n_prefill_out) {
+    int n = 0;
+    int prefill_used = 0;
+    cb->iteration++;
+
+    /* Pass 1: prefill engine — all new sequences, bounded by max_prefill_tokens */
+    for (int i = 0; i < WUBU_CONT_MAX_SEQ && n < max_items && prefill_used < max_prefill_tokens; i++) {
+        wubu_seq_state_t *s = &cb->seqs[i];
+        if (!s->alive || s->prefill_done) continue;
+
+        int remaining = s->n_tokens - s->tokens_generated;
+        int budget = max_prefill_tokens - prefill_used;
+        int chunk = remaining < budget ? remaining : budget;
+        if (chunk <= 0) continue;
+
+        out[n++] = (wubu_sched_item_t){
+            .seq_idx = i,
+            .is_prefill = 1,
+            .n_new_tokens = chunk,
+            .prefix_matched = 0
+        };
+        prefill_used += chunk;
+        s->tokens_generated += chunk;
+        if (s->tokens_generated >= s->n_tokens) {
+            s->prefill_done = 1;
+            s->tokens_generated = s->n_tokens - 1;
+        }
+    }
+
+    /* Pass 2: decode engine — 1 token for every active decode sequence */
+    for (int i = 0; i < WUBU_CONT_MAX_SEQ && n < max_items; i++) {
+        wubu_seq_state_t *s = &cb->seqs[i];
+        if (!s->alive || !s->prefill_done) continue;
+        if (s->tokens_generated >= cb->max_tokens_per_seq) continue;
+
+        out[n++] = (wubu_sched_item_t){
+            .seq_idx = i,
+            .is_prefill = 0,
+            .n_new_tokens = 1,
+            .prefix_matched = 0
+        };
+    }
+
+    if (n_prefill_out) *n_prefill_out = prefill_used;
+    return n;
+}
+
 /* ---------- Stats ---------- */
 
 void wubu_cont_batch_stats(const wubu_cont_batch_t *cb,

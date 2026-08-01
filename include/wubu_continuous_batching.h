@@ -68,6 +68,14 @@ void wubu_cont_batch_record_token(wubu_cont_batch_t *cb, int seq_idx, int token_
 int wubu_cont_batch_overlap(wubu_cont_batch_t *cb, wubu_sched_item_t *out,
                             int max_items, int max_prefill_tokens);
 
+/* D03: disaggregated prefill/decode — two separate passes sharing one KV store.
+ * Pass 1 (prefill engine): consume up to max_prefill_tokens of prefill work for
+ *   new sequences. Pass 2 (decode engine): decode 1 token for every active
+ *   decode sequence. This is the PD-disaggregation pattern (separate prefill
+ *   and decode "instances") applied on a single host. Returns total items. */
+int wubu_cont_batch_disagg(wubu_cont_batch_t *cb, wubu_sched_item_t *out,
+                           int max_items, int max_prefill_tokens, int *n_prefill_out);
+
 /* Stats */
 void wubu_cont_batch_stats(const wubu_cont_batch_t *cb,
                            int *active, int *total_tokens, int *kv_blocks_used,
