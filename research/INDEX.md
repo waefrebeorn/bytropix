@@ -283,3 +283,17 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - Y02 RACC retrieval-aware KV compression (keep retrieved chunks) ...... `wired` (wubu_moe_rag racc_keep)
 - Y03 CAG cache-augmented generation (preload doc KV, no per-query retr)  `wired` (wubu_moe_rag cag_ready)
 - Y04 Cross-document KV isolation (per-doc KV namespace) .............. `wired` (wubu_moe_rag crossdoc_ns)
+
+## Theme Z-AA: 2026 long-context eval + QAT sweep (fresh gaps)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### Z: Long-context evaluation harness
+- Z01 NIAH-2 multi-needle injection + retrieval scoring ................ `wired` (wubu_eval_qat niah_inject)
+- Z02 RULER retrieval category (variable needles) .................... `wired` (wubu_eval_qat ruler_retrieve)
+- Z03 RULER multi-hop tracing (chain of keys) ....................... `wired` (wubu_eval_qat ruler_multihop)
+- Z04 RULER aggregation (count/freq over context) ................... `wired` (wubu_eval_qat ruler_aggregate)
+- Z05 synthetic haystack generator (configurable len/noise) ......... `wired` (wubu_eval_qat haystack_gen)
+### AA: Quantization-aware training
+- AA01 Fake-quant (round-to-nearest in fake precision) .............. `wired` (wubu_eval_qat fakequant)
+- AA02 QAT straight-through estimator (grad passes past quant) ...... `wired` (wubu_eval_qat qat_ste, ties T04) (ties T04)
+- AA03 per-channel quant + dequant (QAT weight dtype) .............. `wired` (wubu_eval_qat dequant_pc)
+- AA04 quantization noise injection (robustness augmentation) ....... `wired` (wubu_eval_qat noise_inject)
