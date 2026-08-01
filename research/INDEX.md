@@ -108,7 +108,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L09 CIA KV (attention-score-driven compression) ................ `wired` (wubu_kv_compress keep_top_score)
 - L10 SeerAttention-R dynamic sparse attention ................... `open`
 - L11 Native sparse attention (NSA, blockwise) ................... `open`
-- L12 MoBA memory-block attention (segment KV) .................... `open`
+- L12 MoBA memory-block attention (segment KV) .................... `wired` (wubu_sparse_attn moba_topk)
 - L13 LM-Infinite landmark attention (soft prompt) .............. `open`
 - L14 Activation-beam KV offload (CPU/SSD tier) ................... `open` (ties A06/C05)
 - L15 KVShield adversarial-robust KV (no poison OOB) ............. `open` (ties F)
