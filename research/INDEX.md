@@ -112,7 +112,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L13 LM-Infinite landmark attention (soft prompt) .............. `open`
 - L14 Activation-beam KV offload (CPU/SSD tier) ................... `open` (ties A06/C05)
 - L15 KVShield adversarial-robust KV (no poison OOB) ............. `wired` (wubu_kv_shield bounds-check, ties F)
-- L16 Elastic context (grow/shrink window online) ................ `open`
+- L16 Elastic context (grow/shrink window online) ................ `wired` (wubu_ctx_manage elastic_window)
 - L17 Dual-window (global sink + local) hybrid .................. `wired` (wubu_stream_kv sink+window = same design)
 - L18 Layer-wise KV budget (deeper=less) ........................ `wired` (wubu_kv_budget layer_kv_budget)
 - L19 Adaptive sink count (entropy-selected) .................... `wired` (wubu_kv_budget adaptive_sink)
@@ -124,7 +124,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - M03 Medusa multi-head draft ................................... `wired` (wubu_medusa)
 - M04 n-gram cascade (no weights) ............................... `wired` (doc 018)
 - M05 CAS-Spec adaptive eager/defer ............................. `wired` (wubu_spec_cascade)
-- M06 Lookahead parallel n-gram decoding ........................ `open`
+- M06 Lookahead parallel n-gram decoding ........................ `wired` (wubu_lookahead probe)
 - M07 Rest-in-peace (REST) residual-Estimating draft ........... `open`
 - M08 Online speculative tree restructuring .................... `open`
 - M09 Contrastive / lossless spec (no quality drop) ............ `open`
@@ -147,14 +147,14 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N04 Batch-size-aware quant switch ............................ `wired` (wubu_quant_selector batch_quant, ties N01)
 - N05 Context-length-aware KV precision ladder .................. `wired` (wubu_quant_selector ctx_precision_ladder)
 - N06 NUMA-bandwidth topology auto-detect ...................... `open`
-- N07 Tiered-cache advisor (hot/warm/cold => precision) ......... `open` (ties A06)
+- N07 Tiered-cache advisor (hot/warm/cold => precision) ......... `wired` (wubu_ctx_manage tier_advice, ties A06)
 - N08 Per-layer compute budget (skip floor) .................... `wired` (wubu_layer_floor, wubu_wm_kv)
 - N09 Hardware-counters roofline (if PMC avail) ................ `wired` (wubu_quant_selector pmc_roofline fallback)
 - N10 Energy-per-token metric (compute+HBM+interconnect) ....... `open`
 - N11 TPOT predictor (given B, s, bits) ........................ `wired` (wubu_capacity_wall)
 - N12 Capacity-wall predictor (KV GB vs RAM) ................... `wired` (wubu_capacity_wall fits-ram + b_star, ties 512k)
 - N13 Compute-vs-bandwidth regime classifier ................... `wired` (wubu_capacity_wall regime, ties N01)
-- N14 Mixture-of-depths router calibration ..................... `open` (ties J01)
+- N14 Mixture-of-depths router calibration ..................... `wired` (wubu_ctx_manage mod_tau, ties J01)
 - N15 Speculative acceptance model (pick K) .................... `wired` (wubu_spec_tuner K from acceptance, ties M12)
 - N16 Cache-hit-rate feedback loop (prefix reuse) .............. `wired` (wubu_cache_fb, ties D02)
 - N17 KV-footprint forecaster (pre-alloc advise) .............. `wired` (wubu_kv_budget forecast, ties N12)
