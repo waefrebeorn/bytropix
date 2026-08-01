@@ -442,3 +442,14 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - CC06 Multimodal token pipeline (image→pseudo-tokens) `wired` (test_multimodal)
 - CC07 Integration + safety gate → decode path `wired` (test_multimodal)
 - CC08 End-to-end multimodal gen_text `open` (research: needs trained visual vocab)
+
+## Theme DD: Multi-Agent Consensus + Inter-Agent Auth (BFT)
+Status: `wired` = implemented+tested.
+### 7 gaps closed as tested C11:
+- DD01 BFT consensus (3-round voting, 2/3+1 threshold) `wired` (wubu_bft.c)
+- DD02 Threshold signing (aggregate agent signatures) `wired` (wubu_threshsig.c)
+- DD03 Inter-agent identity + zero-trust auth `wired` (wubu_agentid.c)
+- DD04 Semantic consensus (claim + verify + dispute) `wired` (wubu_semcons.c)
+- DD05 Fraud detection (outlier + dispute + trust decay) `wired` (wubu_fraud.c)
+- DD06 Trust-gated voting weight `wired` (test_multiconsensus)
+- DD07 Integration: consensus → DGM archive `wired` (test_multiconsensus)
