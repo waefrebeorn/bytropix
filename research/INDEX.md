@@ -420,4 +420,13 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - AX10 spec→C11 codesynth `wired` (wubu_codesynth.c)
 - AX11 evolve loop extension `wired` (wubu_evolve.c)
 - AX12 evolve+exec+verify bridge → loopguard `wired` (test_axi)
-AXEOF
+## Theme BB: Continual Learning + Catastrophic Forgetting Prevention
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7 gaps (BB01-BB05 wired, BB06-BB07 research):
+- BB01 Experience replay buffer (reservoir sampling) `wired` (wubu_replay.c)
+- BB02 EWC consolidation (Fisher importance + quadratic penalty) `wired` (wubu_ewc.c)
+- BB03 Task boundary detection (OOD via tok/s divergence) `wired` (wubu_taskbd.c)
+- BB04 Knowledge distillation (teacher snapshot + KL soft targets) `wired` (wubu_distill.c)
+- BB05 Integration: continual learning loop feeds loopguard `wired` (test_continual)
+- BB06 SI path-integral importance `open` (research: path tracking beyond sweep)
+- BB07 Dark experience replay (distillation + replay hybrid) `open` (research: model-level)
