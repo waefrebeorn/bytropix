@@ -130,7 +130,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - M09 Contrastive / lossless spec (no quality drop) ............ `open`
 - M10 Draft-model distillation for hybrid arch .................. `open`
 - M11 Spec verify via KV reuse (no re-forward) ................. `open`
-- M12 Acceptance-rate-adaptive K (per layer) ................... `open`
+- M12 Acceptance-rate-adaptive K (per layer) ................... `wired` (wubu_spec_tuner per-layer K, ties N15)
 - M13 Speculative + KV-quant co-design ......................... `open` (ties A04+L01)
 - M14 Blockwise parallel verify (FlashDecoding style) .......... `open` (ties F)
 - M15 Speculative routing for MoE (skip experts) ............... `open` (ties E05)
@@ -142,21 +142,21 @@ the next halvings on top of shipped B01/B02/A01/A02.
 
 ## THEME N — Roofline auto-tuner / adaptive compute
 - N01 B* crossover auto-detector (W vs K bound) ................. `open` (ties survey 2026)
-- N02 Online roofline sampler (measure beta_eff) ................ `open`
+- N02 Online roofline sampler (measure beta_eff) ................ `wired` (wubu_roofline EMA, wubu_wm_kv)
 - N03 Bandwidth-aware scheme selector (INT4kv vs FP16) .......... `wired` (wubu_kv_budget scheme_bits, ties N01)
 - N04 Batch-size-aware quant switch ............................ `open`
 - N05 Context-length-aware KV precision ladder .................. `open`
 - N06 NUMA-bandwidth topology auto-detect ...................... `open`
 - N07 Tiered-cache advisor (hot/warm/cold => precision) ......... `open` (ties A06)
-- N08 Per-layer compute budget (skip floor) .................... `open`
+- N08 Per-layer compute budget (skip floor) .................... `wired` (wubu_layer_floor, wubu_wm_kv)
 - N09 Hardware-counters roofline (if PMC avail) ................ `open`
 - N10 Energy-per-token metric (compute+HBM+interconnect) ....... `open`
 - N11 TPOT predictor (given B, s, bits) ........................ `wired` (wubu_capacity_wall)
 - N12 Capacity-wall predictor (KV GB vs RAM) ................... `wired` (wubu_capacity_wall fits-ram + b_star, ties 512k)
 - N13 Compute-vs-bandwidth regime classifier ................... `wired` (wubu_capacity_wall regime, ties N01)
 - N14 Mixture-of-depths router calibration ..................... `open` (ties J01)
-- N15 Speculative acceptance model (pick K) .................... `open`
-- N16 Cache-hit-rate feedback loop (prefix reuse) .............. `open` (ties D02)
+- N15 Speculative acceptance model (pick K) .................... `wired` (wubu_spec_tuner K from acceptance, ties M12)
+- N16 Cache-hit-rate feedback loop (prefix reuse) .............. `wired` (wubu_cache_fb, ties D02)
 - N17 KV-footprint forecaster (pre-alloc advise) .............. `wired` (wubu_kv_budget forecast, ties N12)
 - N18 OOM-risk early-warning (streaming engage) ................ `wired` (wubu_capacity_wall oom_risk, ties D04)
 - N19 Adaptive chunk size (prefill vs decode) .................. `open` (ties D04)
@@ -167,7 +167,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - O02 OS THP/hugepage KV arena (2MB pages) ..................... `wired` (wubu_hugepage + test_hugepage, plain-mmap fallback)
 - O03 Compiler cost-model -> roofline auto-tuner ............... `open` (ties N)
 - O04 Formal equiv -> quant kernel prove ...................... `wired` (wubu_equiv_check)
-- O05 Neuro Titans -> bounded working-memory KV ............... `open`
+- O05 Neuro Titans -> bounded working-memory KV ............... `wired` (wubu_wm_kv bounded ring)
 - O06 Neuro ADHD/lilypad -> focus-gated attention (distraction suppress) `wired` (wubu_attn_gate)
 - O07 Neuro sink neurons -> attention-sink KEEP ................ `open` (ties L01)
 - O08 RDMA net -> KV transfer (localhost analog) .............. `wired` (wubu_kv_transfer)
