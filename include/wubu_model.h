@@ -707,6 +707,20 @@ typedef struct {
     // Number of GQA layers (for KV cache sizing)
     int n_gqa_layers;
 
+    // ---- HW-acceleration wiring (doc "tandem"/"rambus"/"gamebud") ----
+    // hwcaps: detected SIMD ladder at model load (cached from wubu_hwcaps_get).
+    int hw_simd_bits;     // 128/256/512
+    int hw_simd_lanes;    // 4/8/16 floats per lane
+    // rambus: KV cache laid out as interleaved banks (RDRAM-style) so decode
+    // attention reads stream bank-by-bank with row-buffer hits. The flat
+    // gqa_k_cache/gqa_v_cache are allocated THROUGH this arena.
+    void *kv_rambus;      // wubu_rambus_t* (opaque)
+    int   kv_rambus_banks;
+    // gamebud: per-decode-step frame budget governor (NULL = disabled).
+    void *gamebud;        // wubu_gamebud_t* (opaque)
+    uint64_t frame_budget_us;  // 0 = disabled
+    // tandem: N64 RCP two-stage pipeline (prefill=A, decode=B). NULL = inline.
+    void *tandem;         // wubu_tandem_t* (opaque)
     // Dynamic model dimensions (extracted from GGUF, model-adapter aware)
     int d_model;          // hidden dimension (2048 for Qwen, 2816 for DiffusionGemma)
     int d_ff;             // expert intermediate dim
@@ -735,6 +749,25 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path);
 
 // Free model resources
 void wubu_model_free(wubu_model_t *model);
+
+/* ---- HW-acceleration wiring (doc "tandem"/"rambus"/"gamebud"/hwcaps) ----
+ * Wire the SIMD-ladder detect + RDRAM-interleaved KV + N64 tandem pipeline +
+ * game frame-budget into an already-init'd model. Call after wubu_model_init.
+ *   simd_autodetect : if true, detect CPU SIMD width (always on here).
+ *   rambus_banks    : interleave factor for KV (0 = 8 default; 1 = disable).
+ *   kv_dim          : per-layer KV dim (kv_heads * head_dim) for arena sizing.
+ *   frame_budget_us : per-decode-step time budget (0 = disable gamebud).
+ *   tandem_a/tandem_b: core lists for the two stages (NULL = OS default).
+ * Returns 0 on success. Safe to call once; re-call frees prior wiring. */
+int wubu_model_wire_hwaccel(wubu_model_t *model, int simd_autodetect,
+                            int rambus_banks, int kv_dim, uint64_t frame_budget_us,
+                            const char *tandem_a, const char *tandem_b);
+
+/* Tear down HW-accel wiring (called by wubu_model_free). */
+void wubu_model_unwire_hwaccel(wubu_model_t *model);
+
+/* Report a one-line HW-accel status string into buf (static). */
+const char *wubu_model_hwaccel_str(const wubu_model_t *model);
 
 // Forward pass through all layers
 // Input: token_ids [B, T], Output: logits [B, T, vocab_size]

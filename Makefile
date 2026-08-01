@@ -682,6 +682,11 @@ test_tandem_gamebud: tools/test_tandem_gamebud.c src/wubu_hwcaps.o src/wubu_ramb
 	$(CC) $(CFLAGS) -I include -pthread -o $@ $^ -lm
 	./$@
 
+# doc "hwaccel": wubu_model_wire_hwaccel() wires the real HW stack into a model
+test_model_hwaccel: tools/test_model_hwaccel.c $(CORE_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o
+	$(CXX) $(CFLAGS) -DWUBU_ENABLE_CUDA -I include -pthread -o $@ $^ -lm -L$(CUDA_LIBDIR) -lcudart -lstdc++
+	./$@
+
 # doc 007/D05: localhost KV transfer layer (NIXL/UCX analog)
 test_kv_transfer: tools/test_kv_transfer.c src/wubu_kv_transfer.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
@@ -1102,7 +1107,7 @@ test_cross_attn: tools/test_cross_attn.c src/wubu_cross_attn.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
-test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive
+test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive
 	@echo "=== ALL TESTS PASSED ==="
 
 test_nf4: tools/test_nf4.c src/wubu_nf4.o

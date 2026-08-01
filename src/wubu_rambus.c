@@ -95,3 +95,8 @@ void wubu_rambus_stats(const wubu_rambus_t *r,
     if (misses) *misses = r ? r->misses : 0;
     if (cycles) *cycles = r ? r->cycle_cost : 0;
 }
+
+/* Effective sustained bandwidth in MB/s (convenience wrapper). */
+double wubu_rambus_eff_bw_mbps(const wubu_rambus_t *r, uint64_t bytes_moved) {
+    return wubu_rambus_eff_bw(r, bytes_moved) / (1024.0 * 1024.0);
+}

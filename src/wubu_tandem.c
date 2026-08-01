@@ -76,25 +76,23 @@ static int parse_cores(const char *s, int *out, int max) {
 
 static void *stage_a(void *arg) {
     wubu_tandem_t *t = (wubu_tandem_t *)arg;
-    pin(t->n_a_t >= 0 ? t->a_cores_buf[t->a_idx++] : -1);
+    pin(t->n_a_t > 0 ? t->a_cores_buf[t->a_idx++ % t->n_a_t] : -1);
     for (;;) {
         pthread_mutex_lock(&t->m);
-        while (t->produced - t->consumed >= t->ring_sz - 1 && !t->stop)
+        /* Wait for a frame that A hasn't processed yet. */
+        while (!(t->produced > t->consumed && !t->ring[t->consumed % t->ring_sz].stage_done[0])
+               && !t->stop)
             pthread_cond_wait(&t->cv_a, &t->m);
-        if (t->stop && t->produced - t->consumed >= t->ring_sz - 1) {
+        if (t->stop && !(t->produced > t->consumed)) {
             pthread_mutex_unlock(&t->m); break;
         }
-        /* claim a free ring slot */
-        int slot = t->produced % t->ring_sz;
-        t->ring[slot].in_use = 1;
-        t->ring[slot].stage_done[0] = 0;
-        t->ring[slot].stage_done[1] = 0;
-        int frame = t->next_frame++;
-        t->produced++;
+        int slot = t->consumed % t->ring_sz;
+        void *a = t->ring[slot].arg;
+        int frame = t->ring[slot].frame;
         pthread_mutex_unlock(&t->m);
 
         /* Run A stage work */
-        if (t->fn_a) t->fn_a(t->ring[slot].arg, 0, frame);
+        if (t->fn_a) t->fn_a(a, 0, frame);
         t->a_busy++;
 
         pthread_mutex_lock(&t->m);
@@ -107,7 +105,7 @@ static void *stage_a(void *arg) {
 
 static void *stage_b(void *arg) {
     wubu_tandem_t *t = (wubu_tandem_t *)arg;
-    pin(t->n_b_t >= 0 ? t->b_cores_buf[t->b_idx++] : -1);
+    pin(t->n_b_t > 0 ? t->b_cores_buf[t->b_idx++ % t->n_b_t] : -1);
     for (;;) {
         pthread_mutex_lock(&t->m);
         while (t->consumed >= t->produced && !t->stop)
@@ -191,6 +189,16 @@ void wubu_tandem_free(wubu_tandem_t *t) {
 void wubu_tandem_set_a(wubu_tandem_t *t, wubu_tandem_fn fn) { if (t) t->fn_a = fn; }
 void wubu_tandem_set_b(wubu_tandem_t *t, wubu_tandem_fn fn) { if (t) t->fn_b = fn; }
 
+/* Block until all submitted frames have been fully consumed by stage B.
+ * Guarantees t->frames is final before any stats read. */
+void wubu_tandem_drain(wubu_tandem_t *t) {
+    if (!t) return;
+    pthread_mutex_lock(&t->m);
+    while (t->consumed < t->produced && !t->stop)
+        pthread_cond_wait(&t->cv_a, &t->m);
+    pthread_mutex_unlock(&t->m);
+}
+
 int wubu_tandem_submit(wubu_tandem_t *t, void *arg) {
     if (!t) return -1;
     /* Synchronous submit: wait for a free slot, fill it, wait for B to finish. */
@@ -199,21 +207,21 @@ int wubu_tandem_submit(wubu_tandem_t *t, void *arg) {
         pthread_cond_wait(&t->cv_a, &t->m);
     if (t->stop) { pthread_mutex_unlock(&t->m); return -1; }
     int slot = t->produced % t->ring_sz;
+    int frame = t->next_frame++;
     t->ring[slot].in_use = 1;
     t->ring[slot].arg = arg;
+    t->ring[slot].frame = frame;
     t->ring[slot].stage_done[0] = 0;
     t->ring[slot].stage_done[1] = 0;
-    int frame = t->next_frame++;
     t->produced++;
     pthread_mutex_unlock(&t->m);
 
-    /* Run A inline (so submit is deterministic); B runs concurrently in its pool */
-    if (t->fn_a) t->fn_a(arg, 0, frame);
-    t->a_busy++;
-
+    /* A runs in its own pool (stage_a worker). Just signal A's pool and wait
+     * for B to finish this frame. This gives true N64-style tandem overlap:
+     * stage A (prefill) and stage B (decode) execute concurrently. */
     pthread_mutex_lock(&t->m);
-    t->ring[slot].stage_done[0] = 1;
-    pthread_cond_broadcast(&t->cv_b);
+    pthread_cond_broadcast(&t->cv_a);   /* wake a stage_a worker */
+    pthread_cond_broadcast(&t->cv_b);   /* also safe if A already done */
     /* Wait for B to consume this frame */
     while (t->consumed <= frame && !t->stop)
         pthread_cond_wait(&t->cv_a, &t->m);
@@ -224,7 +232,11 @@ int wubu_tandem_submit(wubu_tandem_t *t, void *arg) {
 
 void wubu_tandem_stats(const wubu_tandem_t *t,
                        uint64_t *frames, uint64_t *a_busy, uint64_t *b_busy) {
-    if (frames) *frames = t ? t->frames : 0;
-    if (a_busy) *a_busy = t ? t->a_busy : 0;
-    if (b_busy) *b_busy = t ? t->b_busy : 0;
+    if (!t) { if (frames) *frames = 0; if (a_busy) *a_busy = 0; if (b_busy) *b_busy = 0; return; }
+    /* Lock so we read a consistent snapshot (matches the B-thread writer). */
+    pthread_mutex_lock((pthread_mutex_t *)&t->m);
+    if (frames) *frames = t->frames;
+    if (a_busy) *a_busy = t->a_busy;
+    if (b_busy) *b_busy = t->b_busy;
+    pthread_mutex_unlock((pthread_mutex_t *)&t->m);
 }

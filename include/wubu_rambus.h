@@ -71,6 +71,9 @@ void wubu_rambus_access(wubu_rambus_t *r, int token, int head,
 /* Effective sustained bandwidth estimate (bytes/cycle * clk) in bytes/sec. */
 double wubu_rambus_eff_bw(const wubu_rambus_t *r, uint64_t bytes_moved);
 
+/* Effective sustained bandwidth in MB/sec (convenience wrapper). */
+double wubu_rambus_eff_bw_mbps(const wubu_rambus_t *r, uint64_t bytes_moved);
+
 /* Stats: hits, misses, cycle cost. */
 void wubu_rambus_stats(const wubu_rambus_t *r,
                        uint64_t *hits, uint64_t *misses, uint64_t *cycles);

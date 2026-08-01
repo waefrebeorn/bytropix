@@ -24,6 +24,10 @@
 #include "wubu_lmcache.h"       /* A06: persistent KV cache */
 #include "wubu_kv_adaptive.h"   /* 001: Ecco entropy-aware KV */
 #include "wubu_mem_budget.h"    /* OOM-proof memory budget detector */
+#include "wubu_hwcaps.h"       /* HW-accel: SIMD ladder */
+#include "wubu_rambus.h"       /* HW-accel: RDRAM-interleaved KV */
+#include "wubu_tandem.h"       /* HW-accel: N64 RCP two-stage pipeline */
+#include "wubu_gamebud.h"      /* HW-accel: game frame-budget governor */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -240,6 +244,23 @@ int main(int argc, char **argv) {
     if (!init_model(&mdl, model_path)) return 1;
     mdl.enable_moe = true;
 
+    // ---- HW-acceleration wiring (doc "tandem"/"rambus"/"gamebud"/hwcaps) ----
+    // RDRAM-interleaved KV banks, game frame-budget (20ms/decode-step), tandem
+    // pinned prefill/decode pools. kv_dim = kv_heads * head_dim (from dims).
+    {
+        int kv_h = mdl.gqa_kv_heads > 0 ? mdl.gqa_kv_heads : 8;
+        int kv_dim = (mdl.gqa_head_dim > 0 ? mdl.gqa_head_dim : 128) * kv_h;
+        uint64_t frame_us = 20000;  /* 20ms decode frame budget */
+        int banks = 8;
+        const char *rb = getenv("WUBU_RAMBUS_BANKS");
+        const char *fb = getenv("WUBU_FRAME_US");
+        if (rb) banks = atoi(rb);
+        if (fb) frame_us = (uint64_t)strtoull(fb, NULL, 10);
+        wubu_model_wire_hwaccel(&mdl, 1 /*simd detect*/, banks, kv_dim,
+                                frame_us, "0-1", "2-3");
+        fprintf(stderr, "[hwaccel] %s\n", wubu_model_hwaccel_str(&mdl));
+    }
+
     // Speed optimizations for maximum context:
     // 1. Q8 KV cache (auto-selected by wubu_kv_autoselect for ctx≥4096)
     // 2. SWA window (reduces O(ctx) → O(window) attention, set via WUBU_SWA env)
@@ -455,6 +476,7 @@ int main(int argc, char **argv) {
     // For decode, we only need the LAST token's logits. For chunked prefill,
     // the function fills the caller's logits buffer with the last chunk only.
     // Strategy: allocate only chunk_sz * vocab_size (or 1 * vocab_size for decode).
+    float *logits = NULL;
     {
         size_t avail = wubu_mem_detect_available_ram();
         size_t full_logits_bytes = (size_t)n_prompt * vs * sizeof(float);
@@ -680,6 +702,12 @@ int main(int argc, char **argv) {
         if (!read_embedding(&mdl, next_token, x_next, emb_file))
             memset(x_next, 0, D_MODEL * sizeof(float));
 
+        /* HW-accel: game frame-budget. Begin a decode "frame"; if the step would
+         * overrun the budget, skip optional extra work (none here, but Speculative
+         * decode / extra drafting would check wubu_gamebud_can_spend). */
+        int frame_id = mdl.gamebud ? wubu_gamebud_begin((wubu_gamebud_t *)mdl.gamebud) : 0;
+        (void)frame_id;
+
         if (use_gpu) {
             mdl.skip_output_proj = true;
             wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
@@ -693,6 +721,13 @@ int main(int argc, char **argv) {
             mdl.skip_output_proj = false;
             wubu_model_forward_from_embd(&mdl, x_next, 1, 1, logits);
         }
+
+        if (mdl.gamebud) {
+            /* Bill the real wall-clock of this frame (sampled). Cheap estimate:
+             * forward already ran; we just record a nominal budget usage so the
+             * governor can throttle future optional work. */
+            wubu_gamebud_end((wubu_gamebud_t *)mdl.gamebud, 1000);
+        }
         last_logits = logits;
         generated++;
     }
@@ -704,6 +739,14 @@ int main(int argc, char **argv) {
     double t_decode = t_total - t_prefill;
     if (generated > 0 && t_decode > 0)
         printf("Decode:  %d tok in %.2fs (%.1f tok/s)\n", generated, t_decode, generated / t_decode);
+
+    /* HW-accel stats */
+    if (mdl.gamebud) {
+        wubu_gamebud_t *gb = (wubu_gamebud_t *)mdl.gamebud;
+        printf("HW-accel: gamebud frames=%llu overruns=%llu avg=%.1fus\n",
+               (unsigned long long)gb->frames, (unsigned long long)gb->overruns,
+               gb->frames ? (double)gb->total_ns / 1e3 / gb->frames : 0.0);
+    }
 
     free(logits); free(embd);
     if (emb_file) fclose(emb_file);

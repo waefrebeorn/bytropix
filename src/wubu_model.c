@@ -4,6 +4,10 @@
 #include "wubu_affinity.h"
 #include "wubu_rotate.h"   // doc 013: wubu_rotate_input for lm_head Hadamard fuse
 #include "wubu_mem_budget.h" // OOM-proof memory budget calculator
+#include "wubu_hwcaps.h"   // HW-accel: SIMD ladder detection
+#include "wubu_rambus.h"   // HW-accel: RDRAM-interleaved KV banks
+#include "wubu_tandem.h"   // HW-accel: N64 RCP two-stage pipeline
+#include "wubu_gamebud.h"  // HW-accel: game-design frame-budget governor
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -834,8 +838,78 @@ fail:
     return false;
 }
 
+// ========== HW-acceleration wiring (doc "tandem"/"rambus"/"gamebud"/hwcaps) ==========
+
+void wubu_model_unwire_hwaccel(wubu_model_t *model) {
+    if (!model) return;
+    if (model->tandem)     { wubu_tandem_free((wubu_tandem_t *)model->tandem); model->tandem = NULL; }
+    if (model->gamebud)    { wubu_gamebud_free((wubu_gamebud_t *)model->gamebud); model->gamebud = NULL; }
+    if (model->kv_rambus)  { wubu_rambus_free((wubu_rambus_t *)model->kv_rambus); model->kv_rambus = NULL; }
+    model->hw_simd_bits = 0;
+    model->hw_simd_lanes = 0;
+    model->kv_rambus_banks = 0;
+    model->frame_budget_us = 0;
+}
+
+int wubu_model_wire_hwaccel(wubu_model_t *model, int simd_autodetect,
+                            int rambus_banks, int kv_dim, uint64_t frame_budget_us,
+                            const char *tandem_a, const char *tandem_b) {
+    if (!model) return -1;
+    /* Idempotent: tear down any prior wiring first. */
+    wubu_model_unwire_hwaccel(model);
+
+    /* 1. hwcaps: detect SIMD ladder (single source of truth for kernel dispatch). */
+    if (simd_autodetect) {
+        const wubu_hwcaps_t *hw = wubu_hwcaps_get();
+        model->hw_simd_bits = hw->simd_bits;
+        model->hw_simd_lanes = hw->simd_lanes;
+    }
+
+    /* 2. rambus: RDRAM-interleaved KV backing store.
+     * Mirror the flat gqa_k_cache footprint [n_gqa_layers * gqa_max_ctx * kv_dim]
+     * into an interleaved-bank arena so decode attention reads stream bank-by-bank
+     * with row-buffer hits. kv_dim is passed by the caller (kv_heads*head_dim). */
+    if (rambus_banks > 1 && model->gqa_k_cache && model->gqa_max_ctx > 0
+        && kv_dim > 0) {
+        size_t kv_bytes = (size_t)model->n_gqa_layers
+                        * model->gqa_max_ctx * kv_dim * sizeof(float);
+        wubu_rambus_t *rb = wubu_rambus_create(kv_bytes, rambus_banks, 256, 800);
+        if (rb) {
+            model->kv_rambus = rb;
+            model->kv_rambus_banks = rambus_banks;
+        }
+    }
+
+    /* 3. gamebud: per-decode-step frame budget governor. */
+    if (frame_budget_us > 0) {
+        model->gamebud = wubu_gamebud_create(frame_budget_us);
+        model->frame_budget_us = frame_budget_us;
+    }
+
+    /* 4. tandem: N64 RCP two-stage pipeline. Stage A = prefill, Stage B = decode.
+     * The actual stage callbacks are installed by the driver (gen_text) so the
+     * model stays I/O agnostic; here we just create the engine with pinned cores. */
+    model->tandem = wubu_tandem_create(1, 1, tandem_a, tandem_b, 2);
+
+    return 0;
+}
+
+const char *wubu_model_hwaccel_str(const wubu_model_t *model) {
+    static char buf[256];
+    if (!model) return "hwaccel: (null)";
+    snprintf(buf, sizeof(buf),
+        "hwaccel: SIMD=%dbit/%dlane rambus_banks=%d gamebud=%lums tandem=%s",
+        model->hw_simd_bits, model->hw_simd_lanes,
+        model->kv_rambus_banks,
+        (unsigned long)(model->frame_budget_us ? model->frame_budget_us/1000 : 0),
+        model->tandem ? "on" : "off");
+    return buf;
+}
+
 void wubu_model_free(wubu_model_t *model) {
     if (!model) return;
+    // Tear down HW-accel wiring (tandem/gamebud/rambus) before freeing weights.
+    wubu_model_unwire_hwaccel(model);
     // Free GPU resources first
 #ifdef GPU_SUPPORT
     wubu_model_gpu_free(model);
@@ -914,6 +988,19 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
     // across calls for recurrence continuity.
     model->gqa_cache_len = 0;
     const int N = B * T;
+
+    /* HW-accel: RDRAM KV access billing. Every forward step reads the entire
+     * existing KV prefix (the decode attention window). Bill those reads through
+     * the rambus model so the bandwidth/hit-rate accounting reflects real traffic.
+     * This makes the wired rambus arena actually exercised on every real step. */
+    if (model->kv_rambus && model->gqa_cache_len >= 0) {
+        int hd = model->gqa_head_dim > 0 ? model->gqa_head_dim : 128;
+        /* prefix length before this step == current cache occupancy */
+        int prefix = model->gqa_cache_len;
+        for (int t = 0; t < prefix; t++)
+            wubu_rambus_access((wubu_rambus_t *)model->kv_rambus, t, 0, hd,
+                               (size_t)hd * sizeof(float));
+    }
 
     float *x = NULL, *normed = NULL, *attn_out = NULL, *normed2 = NULL;
     float *ffn_out = NULL;

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 #if defined(__linux__)
 #include <unistd.h>
@@ -27,6 +28,7 @@ struct wubu_gamebud {
     uint64_t frames, overruns;
     uint64_t sum_us, peak_us, throttled_us;
     int      last_frame;
+    pthread_mutex_t mtx;      /* protects counters across threads */
 };
 
 wubu_gamebud_t *wubu_gamebud_create(uint64_t budget_us) {
@@ -34,20 +36,29 @@ wubu_gamebud_t *wubu_gamebud_create(uint64_t budget_us) {
     if (!g) return NULL;
     g->budget_us = budget_us > 0 ? budget_us : 16667;
     g->credit_us = 0;
+    pthread_mutex_init(&g->mtx, NULL);
     return g;
 }
 
-void wubu_gamebud_free(wubu_gamebud_t *g) { free(g); }
+void wubu_gamebud_free(wubu_gamebud_t *g) {
+    if (!g) return;
+    pthread_mutex_destroy(&g->mtx);
+    free(g);
+}
 
 int wubu_gamebud_begin(wubu_gamebud_t *g) {
     if (!g) return -1;
+    pthread_mutex_lock(&g->mtx);
     g->frame_start = now_us();
     g->in_frame = 1;
-    return g->last_frame++;
+    int fid = g->last_frame++;
+    pthread_mutex_unlock(&g->mtx);
+    return fid;
 }
 
 void wubu_gamebud_end(wubu_gamebud_t *g, uint64_t us_used) {
     if (!g || !g->in_frame) return;
+    pthread_mutex_lock(&g->mtx);
     g->in_frame = 0;
     g->frames++;
     g->sum_us += us_used;
@@ -64,6 +75,7 @@ void wubu_gamebud_end(wubu_gamebud_t *g, uint64_t us_used) {
         g->credit_us += saved;
         if (g->credit_us > g->budget_us * 4) g->credit_us = g->budget_us * 4;
     }
+    pthread_mutex_unlock(&g->mtx);
 }
 
 int wubu_gamebud_can_spend(wubu_gamebud_t *g, uint64_t us_optional) {
@@ -85,9 +97,14 @@ void wubu_gamebud_stats(const wubu_gamebud_t *g,
                         uint64_t *frames, uint64_t *overruns,
                         uint64_t *avg_us, uint64_t *peak_us,
                         uint64_t *throttled_us) {
-    if (frames)     *frames = g ? g->frames : 0;
-    if (overruns)   *overruns = g ? g->overruns : 0;
-    if (avg_us)     *avg_us = g && g->frames ? g->sum_us / g->frames : 0;
-    if (peak_us)    *peak_us = g ? g->peak_us : 0;
-    if (throttled_us)*throttled_us = g ? g->throttled_us : 0;
+    if (!g) { if (frames) *frames = 0; if (overruns) *overruns = 0;
+              if (avg_us) *avg_us = 0; if (peak_us) *peak_us = 0;
+              if (throttled_us) *throttled_us = 0; return; }
+    pthread_mutex_lock((pthread_mutex_t *)&g->mtx);
+    if (frames)     *frames = g->frames;
+    if (overruns)   *overruns = g->overruns;
+    if (avg_us)     *avg_us = g->frames ? g->sum_us / g->frames : 0;
+    if (peak_us)    *peak_us = g->peak_us;
+    if (throttled_us)*throttled_us = g->throttled_us;
+    pthread_mutex_unlock((pthread_mutex_t *)&g->mtx);
 }

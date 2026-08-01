@@ -50,6 +50,10 @@ void wubu_tandem_set_b(wubu_tandem_t *t, wubu_tandem_fn fn);
  * finished this frame. Returns 0 on success, -1 on shutdown. */
 int wubu_tandem_submit(wubu_tandem_t *t, void *arg);
 
+/* Block until all submitted frames have been fully consumed by stage B.
+ * Call before wubu_tandem_stats to guarantee final counts. */
+void wubu_tandem_drain(wubu_tandem_t *t);
+
 /* Stats: frames completed, A-stage busy ticks, B-stage busy ticks. */
 void wubu_tandem_stats(const wubu_tandem_t *t,
                        uint64_t *frames, uint64_t *a_busy, uint64_t *b_busy);

@@ -83,6 +83,9 @@ int main(void) {
         assert(rc == 0);
     }
 
+    /* Drain: ensure stage B finished all 8 frames before reading stats. */
+    wubu_tandem_drain(td);
+
     uint64_t frames, a_busy, b_busy;
     wubu_tandem_stats(td, &frames, &a_busy, &b_busy);
     printf("  tandem: frames=%lu a_busy=%lu b_busy=%lu\n", frames, a_busy, b_busy);
