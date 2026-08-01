@@ -209,12 +209,12 @@ the next halvings on top of shipped B01/B02/A01/A02.
 
 ## Theme Q-T: 2026 KV-cache / test-time-compute research sweep (fresh gaps)
 Status: `open` = not yet in engine; `wired` = implemented+tested.
-- Q01 CentroidKV cross-token KV clustering (semantic centroids) .... `open`
+- Q01 CentroidKV cross-token KV clustering (semantic centroids) .... `wired` (wubu_kv2026b centroidkv)
 - Q02 ChunkKV semantic chunk-level KV compression ................ `wired` (wubu_kv2026 chunkkv_evict)
 - Q03 KVzip query-agnostic KV compression + context reconstruction  `wired` (wubu_kv2026 kvzip_importance)
-- Q04 R-KV redundancy-aware KV eviction (reasoning models) ....... `open`
-- Q05 OBCache Hessian-guided token saliency pruning ............. `open`
-- Q06 KeyDiff key-similarity KV eviction ....................... `open`
+- Q04 R-KV redundancy-aware KV eviction (reasoning models) ....... `wired` (wubu_kv2026b rkv_redundancy)
+- Q05 OBCache Hessian-guided token saliency pruning ............. `wired` (wubu_kv2026b obcache_saliency proxy)
+- Q06 KeyDiff key-similarity KV eviction ....................... `wired` (wubu_kv2026b keydiff_evict)
 - Q07 LAVa layer-wise eviction w/ dynamic head+layer budget .... `wired` (wubu_kv2026 lava_budget, ties L18)
 - Q08 PolyKV shared asymmetrically-compressed KV pool (agents) .. `open`
 - Q09 FreeKV speculative top-k KV retrieval ................... `wired` (wubu_kv2026 freekv_topk, ties L11)
