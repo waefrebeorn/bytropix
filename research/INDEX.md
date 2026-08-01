@@ -256,3 +256,15 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - U03 LMCache vision-token hashing (KV reuse across requests) ......... `wired` (wubu_agentic_kv vision_hash)
 - U04 LOOK-M multimodal KV prune (drop least-important vision tokens) .. `wired` (wubu_agentic_kv lookm_keep)
 - U05 Agentic memory KV compaction (summarize old turns into slots) .... `wired` (wubu_agentic_kv agentic_compact)
+
+## Theme V-W: 2026 parallel-speculative / length-generalization PE sweep (fresh gaps)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### V: Parallel speculative decoding
+- V01 EAGLE-3 feature-level drafting (predict hidden feats, not tokens) .... `wired` (wubu_parallel_spec eagle3_draft)
+- V02 P-EAGLE parallel drafting (K independent drafts, tree-verify) ........ `wired` (wubu_parallel_spec peagle_verify)
+- V03 Tree-attention verification mask (beam-shaped attention) ........... `wired` (wubu_parallel_spec tree_attn_parents) (ties more_spec)
+- V04 Kangaroo double-early-exit self-speculative ....................... `wired` (wubu_parallel_spec kangaroo_accept) (ties more_spec)
+### W: Length-generalization positional encoding
+- W01 NoPE (no positional encoding; attention carries position) ........ `wired` (wubu_parallel_spec nope_enabled)
+- W02 ALiBi-style distance bias (extrapolatable slope) ................. `wired` (wubu_parallel_spec alibi_bias) (ties rope)
+- W03 Attention sandwitch / FFN-first (length-robust order) ............ `wired` (wubu_parallel_spec ffn_first_enabled)
