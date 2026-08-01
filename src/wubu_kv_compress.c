@@ -53,7 +53,7 @@ int wubu_kv_keep_top_score(const float *scores, int n, float keep_frac,
  * clusters (by mean score), return all slots within them. Writes retained slot
  * indices into out_ids (caller-sized >= n). Returns number retained. */
 int wubu_kv_keep_clusters(const float *scores, int n, int nclusters,
-                          int keep_clusters, int *out_ids) {
+                         int keep_clusters, int *out_ids) {
     if (!scores || n <= 0 || !out_ids || nclusters <= 0) return 0;
     if (nclusters > n) nclusters = n;
     if (keep_clusters <= 0) return 0;
@@ -88,4 +88,21 @@ int wubu_kv_keep_clusters(const float *scores, int n, int nclusters,
         for (int i = s; i < e; i++) out_ids[retained++] = i;
     }
     return retained;
+}
+
+/* L08 PyramidKV: pyramidal accumulation. Earlier layers keep *more* KV (they
+ * are pooled/global); deeper layers keep less (pyramid narrows). Given per-layer
+ * keep_frac and the layer depth (0=shallow), returns the adjusted keep_frac so
+ * shallow layers retain a larger fraction. depth_frac in [0,1] (0=shallow). */
+float wubu_pyramid_keep(float base_keep, float depth_frac, float pyramid) {
+    if (base_keep < 0.0f) base_keep = 0.0f;
+    if (base_keep > 1.0f) base_keep = 1.0f;
+    if (depth_frac < 0.0f) depth_frac = 0.0f;
+    if (depth_frac > 1.0f) depth_frac = 1.0f;
+    if (pyramid <= 0.0f) pyramid = 1.0f;
+    /* shallow (depth_frac=0) -> base_keep * pyramid; deep -> base_keep / pyramid */
+    float f = base_keep * (pyramid * (1.0f - depth_frac) + (1.0f / pyramid) * depth_frac);
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    return f;
 }

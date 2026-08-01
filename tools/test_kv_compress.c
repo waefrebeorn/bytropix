@@ -36,6 +36,12 @@ int main(void) {
     for (int i = 0; i < kc; i++) { if (out2[i]==3||out2[i]==4) has3b=1; if (out2[i]==6||out2[i]==7) has7b=1; }
     CHECK(has3b && has7b, "high-attention clusters retained");
 
+    /* L08 PyramidKV: shallow layer keeps more than deep. */
+    float shallow = wubu_pyramid_keep(0.5f, 0.0f, 2.0f);
+    float deep    = wubu_pyramid_keep(0.5f, 1.0f, 2.0f);
+    CHECK(shallow > deep, "shallow layer keeps more KV than deep");
+    CHECK(shallow <= 1.0f && deep >= 0.0f, "pyramid keep within [0,1]");
+
     if (failures == 0) { printf("ALL KV-COMPRESS TESTS PASSED\n"); return 0; }
     printf("%d KV-COMPRESS TEST(S) FAILED\n", failures);
     return 1;

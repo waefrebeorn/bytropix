@@ -104,7 +104,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L05 CacheBlend cross-request KV stitch .......................... `open`
 - L06 Quest blockwise top-k KV retrieval (sub-linear attn) ........ `open`
 - L07 SnapKV cluster-based KV compression at layer depth ........... `wired` (wubu_kv_compress keep_clusters)
-- L08 PyramidKV pyramid-accumulation KV reduction ................. `open`
+- L08 PyramidKV pyramid-accumulation KV reduction ................. `wired` (wubu_kv_compress pyramid_keep)
 - L09 CIA KV (attention-score-driven compression) ................ `wired` (wubu_kv_compress keep_top_score)
 - L10 SeerAttention-R dynamic sparse attention ................... `open`
 - L11 Native sparse attention (NSA, blockwise) ................... `open`
@@ -163,7 +163,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N20 Scheme A/B online (shadow quant compare) ............... `open`
 
 ## THEME O — Cross-discipline (DB/OS/formal/neuro) 7-hop wins
-- O01 DB buffer-pool -> KV eviction (LRU-k with learned advice) . `open` (ties A07b)
+- O01 DB buffer-pool -> KV eviction (LRU-k with learned advice) . `wired` (wubu_lruk, ties A07b)
 - O02 OS THP/hugepage KV arena (2MB pages) ..................... `wired` (wubu_hugepage + test_hugepage, plain-mmap fallback)
 - O03 Compiler cost-model -> roofline auto-tuner ............... `open` (ties N)
 - O04 Formal equiv -> quant kernel prove ...................... `wired` (wubu_equiv_check)
