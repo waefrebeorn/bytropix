@@ -297,3 +297,17 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - AA02 QAT straight-through estimator (grad passes past quant) ...... `wired` (wubu_eval_qat qat_ste, ties T04) (ties T04)
 - AA03 per-channel quant + dequant (QAT weight dtype) .............. `wired` (wubu_eval_qat dequant_pc)
 - AA04 quantization noise injection (robustness augmentation) ....... `wired` (wubu_eval_qat noise_inject)
+
+## Theme AB-AC: 2026 disaggregated PD serving + dynamic-depth sweep (fresh gaps)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### AB: Disaggregated prefill/decode serving
+- AB01 Prefill/decode pool split (independent scaling) ................ `wired` (wubu_pd_serve pd_split)
+- AB02 KV handoff scheduler (transfer KV prefill->decode when ready) .... `wired` (wubu_pd_serve kv_handoff_ready)
+- AB03 Pull-based decode routing (drain prefill spikes) .............. `wired` (wubu_pd_serve pull_route, ties sys2026) (ties sys2026)
+- AB04 Heterogeneous pool mapping (compute-dense prefill / bw-dense decode) `wired` (wubu_pd_serve hetero_map, ties KVDrive) (ties KVDrive)
+- AB05 KV transfer cost model (size/bandwidth vs TTFT budget) ......... `wired` (wubu_pd_serve kv_xfer_fits)
+- AB06 Prefix-aware PD routing (reuse prefill across requests) ........ `wired` (wubu_pd_serve prefix_reuse, ties CacheBlend/LCP) (ties CacheBlend/LCP)
+### AC: Dynamic compute / mixture-of-depths
+- AC01 Per-token layer-skipping router (MoD gating) .................. `wired` (wubu_pd_serve mod_execute, ties layer_skip) (ties layer_skip)
+- AC02 Mixture-of-depths capacity (max active layers per token) ...... `wired` (wubu_pd_serve mod_capacity)
+- AC03 Early-exit confidence threshold (dynamic depth) ............... `wired` (wubu_pd_serve early_exit, ties early_exit) (ties early_exit)
