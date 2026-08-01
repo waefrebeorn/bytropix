@@ -1260,51 +1260,44 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
 // After this, gguf_read_tensor_f32 reads from RAM instead of SSD
 // Uses mmap for OS paging, huge pages, and shared memory support
 int gguf_buffer_data(gguf_ctx *ctx) {
-    if (ctx->data_blob) return 1;  // already buffered
+    if (ctx->data_blob) return 1;
 
-    // Get file size
-    fseek(ctx->file, 0, SEEK_END);
-    long file_size = ftell(ctx->file);
-    uint64_t blob_size = file_size - ctx->data_blob_offset;
-    fseek(ctx->file, ctx->data_blob_offset, SEEK_SET);
-
-    // Use mmap instead of malloc + fread for better OS paging
-    // MAP_PRIVATE: copy-on-write, changes don't affect file
-    // MAP_POPULATE: pre-fault pages (optional, can help latency)
-    int fd = fileno(ctx->file);
-    if (fd < 0) {
-        fprintf(stderr, "gguf_buffer_data: failed to get file descriptor\n");
+    struct stat st;
+    if (fstat(fileno(ctx->file), &st) != 0) {
+        fprintf(stderr, "gguf_buffer_data: fstat failed\n");
         return 0;
     }
+    uint64_t file_size = (uint64_t)st.st_size;
+    uint64_t blob_size = file_size - ctx->data_blob_offset;
+    if (blob_size == 0) { ctx->data_blob_size = 0; return 1; }
 
-    void *mapped = mmap(NULL, blob_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, ctx->data_blob_offset);
+    int fd = fileno(ctx->file);
+    if (fd < 0) { fprintf(stderr, "gguf_buffer_data: bad fd\n"); return 0; }
+
+    // mmap offset MUST be page-aligned; round down and offset the pointer.
+    long page_sz = sysconf(_SC_PAGESIZE);
+    uint64_t page_off  = ctx->data_blob_offset % (uint64_t)page_sz;
+    uint64_t map_off   = ctx->data_blob_offset - page_off;
+    uint64_t map_sz    = blob_size + page_off;
+
+    // Try MAP_NORESERVE first (allows overcommit on WSL2 for 11GB blobs).
+    void *mapped = mmap(NULL, (size_t)map_sz, PROT_READ, MAP_PRIVATE | MAP_NORESERVE,
+                        fd, (off_t)map_off);
     if (mapped == MAP_FAILED) {
-        // Fallback to malloc + fread
-        ctx->data_blob = malloc(blob_size);
-        ctx->data_blob_is_mmap = 0;
-        if (!ctx->data_blob) {
-            fprintf(stderr, "gguf_buffer_data: failed to allocate %lu bytes\n", (unsigned long)blob_size);
+        mapped = mmap(NULL, (size_t)map_sz, PROT_READ, MAP_PRIVATE, fd, (off_t)map_off);
+        if (mapped == MAP_FAILED) {
+            fprintf(stderr, "gguf_buffer_data: mmap failed (%s) for %zu MB\n",
+                    strerror(errno), (size_t)(map_sz / (1024*1024)));
             return 0;
         }
-        size_t n_read = fread(ctx->data_blob, 1, blob_size, ctx->file);
-        if (n_read != blob_size) {
-            fprintf(stderr, "gguf_buffer_data: read %zu/%lu bytes\n", n_read, (unsigned long)blob_size);
-            free(ctx->data_blob);
-            ctx->data_blob = NULL;
-            return 0;
-        }
-    } else {
-        ctx->data_blob = mapped;
-        ctx->data_blob_is_mmap = 1;
-        // Advise OS for random access pattern during inference (weights accessed non-sequentially)
-        // DO NOT use MADV_WILLNEED on entire blob - that forces all pages to load (11GB bottleneck)
-        madvise(ctx->data_blob, blob_size, MADV_RANDOM);
-        // Try to enable huge pages if available (transparent huge pages)
-        madvise(ctx->data_blob, blob_size, MADV_HUGEPAGE);
     }
 
+    ctx->data_blob      = (uint8_t *)mapped + page_off;
     ctx->data_blob_size = blob_size;
-    fprintf(stderr, "  GGUF data blob mmap'd: %lu MB\n", (unsigned long)(blob_size / (1024*1024)));
+    ctx->data_blob_is_mmap = 1;
+
+    fprintf(stderr, "  GGUF data blob mmap'd: %lu MB\n",
+            (unsigned long)(blob_size / (1024*1024)));
     return 1;
 }
 

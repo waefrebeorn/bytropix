@@ -37,7 +37,7 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
     // Note: we don't have access to g_adapter here, so we use the resolved names from wubu_model.c
 
     // Router: ffn_gate_inp.weight [D_MODEL, N_EXPERTS]
-    snprintf(name, sizeof(name), "%s.%d.ffn_gate_inp.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_gate_inp.weight", prefix, layer);
     gguf_tensor_info *t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
     moe->ffn_gate_inp = (float *)malloc((size_t)d_model * n_experts * sizeof(float));
@@ -45,7 +45,7 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
         { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
 
     // Expert gate [D_MODEL, D_FF, N_EXPERTS]
-    snprintf(name, sizeof(name), "%s.%d.ffn_gate_exps.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_gate_exps.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
     int64_t n = (int64_t)d_model * d_ff * n_experts;
@@ -54,7 +54,7 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
         { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
 
     // Expert up [D_MODEL, D_FF, N_EXPERTS]
-    snprintf(name, sizeof(name), "%s.%d.ffn_up_exps.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_up_exps.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
     moe->ffn_up_exps = (float *)malloc((size_t)n * sizeof(float));
@@ -62,7 +62,7 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
         { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
 
     // Expert down [D_FF, D_MODEL, N_EXPERTS]
-    snprintf(name, sizeof(name), "%s.%d.ffn_down_exps.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_down_exps.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
     n = (int64_t)d_ff * d_model * n_experts;
@@ -71,7 +71,7 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
         { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
 
     // Shared expert gate [D_MODEL, D_FF] (using d_ff as SHARED_D_FF)
-    snprintf(name, sizeof(name), "%s.%d.ffn_gate_shexp.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_gate_shexp.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
     moe->ffn_gate_shexp = (float *)malloc((size_t)d_model * d_ff * sizeof(float));
@@ -79,7 +79,7 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
         { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
 
     // Shared expert up [D_MODEL, D_FF]
-    snprintf(name, sizeof(name), "%s.%d.ffn_up_shexp.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_up_shexp.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
     moe->ffn_up_shexp = (float *)malloc((size_t)d_model * d_ff * sizeof(float));
@@ -87,7 +87,7 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
         { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
 
     // Shared expert down [D_FF, D_MODEL]
-    snprintf(name, sizeof(name), "%s.%d.ffn_down_shexp.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_down_shexp.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
     moe->ffn_down_shexp = (float *)malloc((size_t)d_ff * d_model * sizeof(float));
@@ -95,7 +95,7 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
         { fprintf(stderr, "MoE load: failed %s\n", name); return 0; }
 
     // ffn_gate_inp_shexp — shared expert output gate: sigmoid(x_s @ this) scales output
-    snprintf(name, sizeof(name), "%s.%d.ffn_gate_inp_shexp.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_gate_inp_shexp.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) {
         // Some models don't have this tensor; gate defaults to 1.0
@@ -165,7 +165,7 @@ int wubu_moe_load_layer_quant(gguf_ctx *ctx, int layer,
     const char *prefix = (g_tensor_naming == 1) ? "model.layers." : "blk.";
 
     // Expert gate — quantized [D_MODEL, D_FF, N_EXPERTS]
-    snprintf(name, sizeof(name), "%s.%d.ffn_gate_exps.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_gate_exps.weight", prefix, layer);
     gguf_tensor_info *t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE quant load: missing %s\n", name); return 0; }
     int64_t n_elems = (int64_t)d_model * d_ff;
@@ -180,7 +180,7 @@ int wubu_moe_load_layer_quant(gguf_ctx *ctx, int layer,
     if (gate_raw_size) *gate_raw_size = raw_sz;
 
     // Expert up — quantized [D_MODEL, D_FF, N_EXPERTS]
-    snprintf(name, sizeof(name), "%s.%d.ffn_up_exps.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_up_exps.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE quant load: missing %s\n", name); return 0; }
     raw_sz = gguf_raw_size(t->ggml_type, n_elems);
@@ -189,7 +189,7 @@ int wubu_moe_load_layer_quant(gguf_ctx *ctx, int layer,
     if (up_raw_size) *up_raw_size = raw_sz;
 
     // Expert down — quantized [D_FF, D_MODEL, N_EXPERTS]
-    snprintf(name, sizeof(name), "%s.%d.ffn_down_exps.weight", prefix, layer);
+    snprintf(name, sizeof(name), "%s%d.ffn_down_exps.weight", prefix, layer);
     t = gguf_find_tensor(ctx, name);
     if (!t) { fprintf(stderr, "MoE quant load: missing %s\n", name); return 0; }
     n_elems = (int64_t)d_ff * d_model;

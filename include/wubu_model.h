@@ -8,6 +8,7 @@
 #include "wubu_kv_select.h"
 #include "wubu_kv_runtime.h"
 #include "wubu_kvvq.h"  /* KB2: VQ codebook for KV compression */
+#include "wubu_arena.h" /* C01: arena allocator for forward-buffer OOM safety */
 #include <stdbool.h>
 #include <math.h>
 #include <string.h>
@@ -667,6 +668,7 @@ typedef struct {
 
     // GGUF context (for per-layer MoE lazy loading)
     gguf_ctx *gguf_ctx;
+    size_t    data_blob_size;  // size of GGUF data blob (for budget calc)
     
     // Enable MoE during forward (default: false for memory reasons)
     bool enable_moe;
@@ -689,8 +691,13 @@ typedef struct {
     float *save_last_hidden;
 
     // GPU acceleration context (opaque pointer, managed by wubu_model_gpu.cu)
-    // When non-NULL, GQA layers run on GPU via chunked attention.
     void *gpu_ctx;
+
+    // OOM-safe forward arena: allocated once at model init, reset per forward.
+    // All temporary buffers (x, normed, attn_out, normed2, ffn_out, prev_experts)
+    // come from here — no per-token malloc churn. Sized to B*T*d_model*4.
+    wubu_arena_t fwd_arena;
+    wubu_sub_arena_t fwd_sub;
 
     // Number of GQA layers (for KV cache sizing)
     int n_gqa_layers;

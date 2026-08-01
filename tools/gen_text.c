@@ -239,6 +239,20 @@ int main(int argc, char **argv) {
     if (!init_model(&mdl, model_path)) return 1;
     mdl.enable_moe = true;
 
+    // Speed optimizations for maximum context:
+    // 1. Q8 KV cache (auto-selected by wubu_kv_autoselect for ctx≥4096)
+    // 2. SWA window (reduces O(ctx) → O(window) attention, set via WUBU_SWA env)
+    // 3. Spec decode (n-gram draft, set via WUBU_SPEC_DECODE env)
+    // 4. Layer prefetch (hardware prefetch for Q4_K weight dequant)
+    // 5. Split-K attention (parallelizes over KV axis for long context)
+    // 6. Fused Q4_K matmul (4x bandwidth reduction vs F32 dequant)
+    // All auto-enabled; override with env vars as needed.
+    const char *swa_env = getenv("WUBU_SWA");
+    if (!swa_env) {
+        // SWA default: let the model's budget calculator set it based on KV size.
+        // wubu_ssm.c auto-selects SWA=512 when cache_len > 512 (auto-KV eviction).
+    }
+
     // GPU init (if GPU=1 env var set)
     int use_gpu = getenv("GPU") != NULL;
     if (use_gpu) {
