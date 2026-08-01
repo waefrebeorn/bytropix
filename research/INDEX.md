@@ -109,7 +109,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L10 SeerAttention-R dynamic sparse attention ................... `wired` (wubu_sys_tune seer_keep_frac, ties L11)
 - L11 Native sparse attention (NSA, blockwise) ................... `open`
 - L12 MoBA memory-block attention (segment KV) .................... `wired` (wubu_sparse_attn moba_topk)
-- L13 LM-Infinite landmark attention (soft prompt) .............. `open`
+- L13 LM-Infinite landmark attention (soft prompt) .............. `wired` (wubu_lm_infinite landmark_positions)
 - L14 Activation-beam KV offload (CPU/SSD tier) ................... `open` (ties A06/C05)
 - L15 KVShield adversarial-robust KV (no poison OOB) ............. `wired` (wubu_kv_shield bounds-check, ties F)
 - L16 Elastic context (grow/shrink window online) ................ `wired` (wubu_ctx_manage elastic_window)
@@ -160,7 +160,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N17 KV-footprint forecaster (pre-alloc advise) .............. `wired` (wubu_kv_budget forecast, ties N12)
 - N18 OOM-risk early-warning (streaming engage) ................ `wired` (wubu_capacity_wall oom_risk, ties D04)
 - N19 Adaptive chunk size (prefill vs decode) .................. `wired` (wubu_attn_tune adaptive_chunk, ties D04)
-- N20 Scheme A/B online (shadow quant compare) ............... `open`
+- N20 Scheme A/B online (shadow quant compare) ............... `wired` (wubu_lm_infinite shadow state machine)
 
 ## THEME O — Cross-discipline (DB/OS/formal/neuro) 7-hop wins
 - O01 DB buffer-pool -> KV eviction (LRU-k with learned advice) . `wired` (wubu_lruk, ties A07b)
@@ -169,7 +169,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - O04 Formal equiv -> quant kernel prove ...................... `wired` (wubu_equiv_check)
 - O05 Neuro Titans -> bounded working-memory KV ............... `wired` (wubu_wm_kv bounded ring)
 - O06 Neuro ADHD/lilypad -> focus-gated attention (distraction suppress) `wired` (wubu_attn_gate)
-- O07 Neuro sink neurons -> attention-sink KEEP ................ `open` (ties L01)
+- O07 Neuro sink neurons -> attention-sink KEEP ................ `wired` (wubu_lm_infinite sink_positions, ties L01)
 - O08 RDMA net -> KV transfer (localhost analog) .............. `wired` (wubu_kv_transfer)
 - O09 HPC roofline -> decode-bound proof ....................... `wired` (doc survey)
 - O10 Z3/Alive2 -> GEMV rewrite verify ........................ `wired` (wubu_equiv_check)
