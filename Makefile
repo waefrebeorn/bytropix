@@ -242,6 +242,15 @@ src/wubu_agentic_mem.o: src/wubu_agentic_mem.c include/wubu_agentic_mem.h
 src/wubu_capzero.o: src/wubu_capzero.c include/wubu_capzero.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
+src/wubu_latency.o: src/wubu_latency.c include/wubu_latency.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
+src/wubu_ctxvm.o: src/wubu_ctxvm.c include/wubu_ctxvm.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
+src/wubu_safekern.o: src/wubu_safekern.c include/wubu_safekern.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
 src/wubu_paged_kv.o: src/wubu_paged_kv.c include/wubu_paged_kv.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
@@ -972,6 +981,10 @@ test_agentic_os_mem: tools/test_agentic_os_mem.c src/wubu_agentic_os.o src/wubu_
 	./$@
 
 test_capzero: tools/test_capzero.c src/wubu_capzero.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
+test_agi_os_integration: tools/test_agi_os_integration.c src/wubu_latency.o src/wubu_ctxvm.o src/wubu_safekern.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 

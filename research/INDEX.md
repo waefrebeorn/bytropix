@@ -333,14 +333,14 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - AF-03 Encrypted agent memory at rest (AES-CTR over blobs) `wired` (wubu_capzero mem_crypt CTR)
 - AF-04 Non-human identity (NHI) + token issuance per agent `wired` (wubu_capzero nhi_issue)
 ### AF: Latency-class scheduler (items 41-50)
-- AF-05 Latency-class enum + EDF/RM scheduler hook (HRT/SRT/DT) ............... `open`
-- AF-06 WCET + jitter budget accounting ...................................... `open`
-- AF-07 Agent-Contract SLO enforcement (TTFT/turn/throughput) ................. `open`
+- AF-05 Latency-class enum + EDF/RM scheduler hook (HRT/SRT/DT) `wired` (wubu_latency edf_order)
+- AF-06 WCET + jitter budget accounting `wired` (wubu_latency wcet_account/deadline_miss)
+- AF-07 Agent-Contract SLO enforcement (TTFT/turn/throughput) `wired` (wubu_latency slo_check)
 ### AF: Context virtual-memory hierarchy (items 51-65)
-- AF-08 4-level context hierarchy (L1 gen/L2 session/L3 long/L4 cross) ........ `open`
-- AF-09 Demand-paging eviction (FIFO + working-set) over KV .................. `open`
-- AF-10 Semantic cache reuse across agents (vector sim) ...................... `open`
+- AF-08 4-level context hierarchy (L1 gen/L2 session/L3 long/L4 cross) `wired` (wubu_ctxvm ctx_tier)
+- AF-09 Demand-paging eviction (FIFO + working-set) over KV `wired` (wubu_ctxvm evict_fifo/resident)
+- AF-10 Semantic cache reuse across agents (vector sim) `wired` (wubu_ctxvm cosine/sem_cache_hit)
 ### AF: Safety kernel (items 66-85)
-- AF-11 Non-tamperable interrupt (stop outside reasoning loop) ............... `open`
-- AF-12 Graduated containment (proportional, reversible) ...................... `open`
-- AF-13 Stability-plasticity guard (RSI cannot weaken 512K gate) ............. `open`
+- AF-11 Non-tamperable interrupt (stop outside reasoning loop) `wired` (wubu_safekern stop_honored)
+- AF-12 Graduated containment (proportional, reversible) `wired` (wubu_safekern containment_level/reversible)
+- AF-13 Stability-plasticity guard (RSI cannot weaken 512K gate) `wired` (wubu_safekern rsi_mutation_ok)
