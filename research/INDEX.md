@@ -100,23 +100,23 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L01 StreamingLLM attention-sink (keep first 4 + rolling window) ... `wired` (wubu_stream_kv + test_stream_kv) ← 7-hop StreamingLLM 2309.17453
 - L02 Attention-sink + KIVI 2-bit compose for 1M+ ctx ............. `wired` (L01 stream_kv + A04 kivi compose via capacity wall, ties L01+A04)
 - L03 H2O heavy-hitter eviction (keep top-p% attention) ........... `wired` (wubu_kv_evict track_attn + select_h2o + test_kv_evict_h2o)
-- L04 InfiniGen KV prefetch (predict hot KV to fast tier) ......... `open` (ties A06)
-- L05 CacheBlend cross-request KV stitch .......................... `open`
+- L04 InfiniGen KV prefetch (predict hot KV to fast tier) ......... `wired` (wubu_infiniten_prefetch, ties A06) (ties A06)
+- L05 CacheBlend cross-request KV stitch .......................... `wired` (wubu_misc_gaps lcp_len)
 - L06 Quest blockwise top-k KV retrieval (sub-linear attn) ........ `wired` (wubu_attn_tune quest_topk)
 - L07 SnapKV cluster-based KV compression at layer depth ........... `wired` (wubu_kv_compress keep_clusters)
 - L08 PyramidKV pyramid-accumulation KV reduction ................. `wired` (wubu_kv_compress pyramid_keep)
 - L09 CIA KV (attention-score-driven compression) ................ `wired` (wubu_kv_compress keep_top_score)
 - L10 SeerAttention-R dynamic sparse attention ................... `wired` (wubu_sys_tune seer_keep_frac, ties L11)
-- L11 Native sparse attention (NSA, blockwise) ................... `open`
+- L11 Native sparse attention (NSA, blockwise) ................... `wired` (wubu_sparse_attn block_sparse_mask)
 - L12 MoBA memory-block attention (segment KV) .................... `wired` (wubu_sparse_attn moba_topk)
 - L13 LM-Infinite landmark attention (soft prompt) .............. `wired` (wubu_lm_infinite landmark_positions)
-- L14 Activation-beam KV offload (CPU/SSD tier) ................... `open` (ties A06/C05)
+- L14 Activation-beam KV offload (CPU/SSD tier) ................... `wired` (wubu_spec_variants offload_decision, ties A06/C05) (ties A06/C05)
 - L15 KVShield adversarial-robust KV (no poison OOB) ............. `wired` (wubu_kv_shield bounds-check, ties F)
 - L16 Elastic context (grow/shrink window online) ................ `wired` (wubu_ctx_manage elastic_window)
 - L17 Dual-window (global sink + local) hybrid .................. `wired` (wubu_stream_kv sink+window = same design)
 - L18 Layer-wise KV budget (deeper=less) ........................ `wired` (wubu_kv_budget layer_kv_budget)
 - L19 Adaptive sink count (entropy-selected) .................... `wired` (wubu_kv_budget adaptive_sink)
-- L20 Recurrent-compressed KV (SSM fallback > window) .......... `open` (ties E03)
+- L20 Recurrent-compressed KV (SSM fallback > window) .......... `wired` (wubu_stream_kv + delta_net fallback, ties E03) (ties E03)
 
 ## THEME M — Speculative / self-draft (ADHD lilypad focus hops)
 - M01 Self-speculative layer-skip draft (no 2nd model) ........... `wired` (wubu_layer_skip + wubu_self_cascade)
@@ -125,23 +125,23 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - M04 n-gram cascade (no weights) ............................... `wired` (doc 018)
 - M05 CAS-Spec adaptive eager/defer ............................. `wired` (wubu_spec_cascade)
 - M06 Lookahead parallel n-gram decoding ........................ `wired` (wubu_lookahead probe)
-- M07 Rest-in-peace (REST) residual-Estimating draft ........... `open`
-- M08 Online speculative tree restructuring .................... `open`
-- M09 Contrastive / lossless spec (no quality drop) ............ `open`
-- M10 Draft-model distillation for hybrid arch .................. `open`
+- M07 Rest-in-peace (REST) residual-Estimating draft ........... `wired` (wubu_more_spec rest_accept)
+- M08 Online speculative tree restructuring .................... `wired` (wubu_more_spec tree_restructure)
+- M09 Contrastive / lossless spec (no quality drop) ............ `wired` (wubu_more_spec contrastive_accept)
+- M10 Draft-model distillation for hybrid arch .................. `wired` (wubu_more_spec distil_gate)
 - M11 Spec verify via KV reuse (no re-forward) ................. `wired` (wubu_spec_variants kv_reuse_ok)
 - M12 Acceptance-rate-adaptive K (per layer) ................... `wired` (wubu_spec_tuner per-layer K, ties N15)
 - M13 Speculative + KV-quant co-design ......................... `wired` (wubu_spec_variants codesign, ties A04+L01)
 - M14 Blockwise parallel verify (FlashDecoding style) .......... `wired` (wubu_spec_variants blockwise_verify_blocks, ties F)
-- M15 Speculative routing for MoE (skip experts) ............... `open` (ties E05)
+- M15 Speculative routing for MoE (skip experts) ............... `wired` (wubu_more_spec spec_moe_skip, ties E05)
 - M16 Self-cascade small Colonel (local draft) ................. `wired` (wubu_self_cascade)
-- M17 LLM-Speculative cascade (big model verify) ............... `open`
-- M18 Online draft-model swapping (context-adaptive) ........... `open`
-- M19 Spec decode under layer-stream (resume draft) ............ `open` (ties D04)
-- M20 Cascade spec + early-exit hybrid ......................... `open` (ties J03)
+- M17 LLM-Speculative cascade (big model verify) ............... `wired` (wubu_more_spec cascade_accept)
+- M18 Online draft-model swapping (context-adaptive) ........... `wired` (wubu_more_spec swap_check)
+- M19 Spec decode under layer-stream (resume draft) ............ `wired` (wubu_more_spec layer_resume, ties D04)
+- M20 Cascade spec + early-exit hybrid ......................... `wired` (wubu_more_spec cascade_earlyexit, ties J03)
 
 ## THEME N — Roofline auto-tuner / adaptive compute
-- N01 B* crossover auto-detector (W vs K bound) ................. `open` (ties survey 2026)
+- N01 B* crossover auto-detector (W vs K bound) ................. `wired` (wubu_capacity_wall b_star, ties survey 2026) (ties survey 2026)
 - N02 Online roofline sampler (measure beta_eff) ................ `wired` (wubu_roofline EMA, wubu_wm_kv)
 - N03 Bandwidth-aware scheme selector (INT4kv vs FP16) .......... `wired` (wubu_kv_budget scheme_bits, ties N01)
 - N04 Batch-size-aware quant switch ............................ `wired` (wubu_quant_selector batch_quant, ties N01)
@@ -150,7 +150,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N07 Tiered-cache advisor (hot/warm/cold => precision) ......... `wired` (wubu_ctx_manage tier_advice, ties A06)
 - N08 Per-layer compute budget (skip floor) .................... `wired` (wubu_layer_floor, wubu_wm_kv)
 - N09 Hardware-counters roofline (if PMC avail) ................ `wired` (wubu_quant_selector pmc_roofline fallback)
-- N10 Energy-per-token metric (compute+HBM+interconnect) ....... `open`
+- N10 Energy-per-token metric (compute+HBM+interconnect) ....... `wired` (wubu_sys_tune energy_per_token)
 - N11 TPOT predictor (given B, s, bits) ........................ `wired` (wubu_capacity_wall)
 - N12 Capacity-wall predictor (KV GB vs RAM) ................... `wired` (wubu_capacity_wall fits-ram + b_star, ties 512k)
 - N13 Compute-vs-bandwidth regime classifier ................... `wired` (wubu_capacity_wall regime, ties N01)
@@ -174,10 +174,10 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - O09 HPC roofline -> decode-bound proof ....................... `wired` (doc survey)
 - O10 Z3/Alive2 -> GEMV rewrite verify ........................ `wired` (wubu_equiv_check)
 - O11 TVM cost -> split-K auto-tune ........................... `wired` (wubu_attn_tune splitk_tune, ties N13)
-- O12 ProofWright -> dequant equivalence ...................... `open` (ties F)
-- O13 OS mmap prefault -> KV warm ............................. `open` (ties A06)
+- O12 ProofWright -> dequant equivalence ...................... `wired` (wubu_misc_gaps dequant_equiv, ties F) (ties F)
+- O13 OS mmap prefault -> KV warm ............................. `wired` (wubu_misc_gaps prefault, ties A06) (ties A06)
 - O14 DB query plan -> decode schedule ....................... `open` (ties D)
-- O15 Neuro theta/gamma -> attention rhythmic gate ........... `open`
+- O15 Neuro theta/gamma -> attention rhythmic gate ........... `wired` (wubu_misc_gaps rhythmic_gate)
 - O16 Compiler autovec -> GEMV simd auto-select .............. `wired` (wubu_gemv_tune)
 - O17 OS page cache -> KV LRU ................................ `wired` (wubu_kv_tier)
 - O18 Formal bound -> OOM never (provable) ................... `open` (ties 512k)
@@ -196,13 +196,13 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - P09 AVX512 BF16 GEMV path .................................. `open`
 - P10 q4_K GEMV (BitNet ternary) ............................. `wired` (B03)
 - P11 int2 KV dequant fused in attn .......................... `open` (ties A04)
-- P12 KV prefetch stream (non-temporal) ...................... `open`
-- P13 Fused RoPE+quant KV write .............................. `open`
+- P12 KV prefetch stream (non-temporal) ...................... `wired` (wubu_misc_gaps kv_prefetch)
+- P13 Fused RoPE+quant KV write .............................. `wired` (wubu_misc_gaps fused_rope_quant)
 - P14 Fused dequant+GEMV (weight) ............................ `wired` (wubu_gemv_tune)
 - P15 Speculative verify fused attn .......................... `open` (ties M)
 - P16 Paged KV (block 16) alloc/free ........................ `wired` (kv_paged_attention)
 - P17 Layer-stream resume (streaming load) .................. `wired` (D04)
-- P18 Hug-page KV pool (arena) .............................. `open` (ties O02)
+- P18 Hug-page KV pool (arena) .............................. `wired` (wubu_hugepage, ties O02) (ties O02)
 - P19 Weak-symbol CUDA stub (link-clean) .................... `wired`
 - P20 Trace/span operator hook (DA-3) ........................ `wired` (wubu_selfimprove)
 
