@@ -366,12 +366,12 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - [x] AH-04 Coordination heartbeat / conflict resolution dialogue `wired`  # (wubu_coord resolve_conflict/heartbeat_alive)
 - [x] AH-05 Open-ended self-modifying agent archive (DGM branch tree) `wired`  # (wubu_metagame archive_add/best)
 - [x] AH-06 Empirical fitness validation (bench, don't prove) `wired`  # (wubu_metagame accept_child/archive_best)
-- [ ] AH-07 Sandboxed self-modification (no web/fs escape) `open`
+- [x] AH-07 Sandboxed self-modification (no web/fs escape) `wired`  # (wubu_metagame2 sandbox_allow)
 - [x] AH-08 Anti-hallucinated-self-log (don't trust own unverified "passed") `wired`  # (wubu_metagame accept_child verified gate)
-- [ ] AH-09 Skill library (reusable, non-parametric, replayable) `open`
-- [ ] AH-10 Continual learning without forgetting (replay buffer) `open`
-- [ ] AH-11 Intrinsic metacognition (calibrate own confidence) `open`
+- [x] AH-09 Skill library (reusable, non-parametric, replayable) `wired`  # (wubu_metagame2 skill_add/topk)
+- [x] AH-10 Continual learning without forgetting (replay buffer) `wired`  # (wubu_metagame2 replay_add reservoir)
+- [x] AH-11 Intrinsic metacognition (calibrate own confidence) `wired`  # (wubu_metagame2 metacog_update/calibrated)
 - [x] AH-12 Turn-level credit assignment (TD, verifier-anchored) `wired`  # (wubu_credit turn_credit/credit_sign)
 - [x] AH-13 Self-improvement delta metric (did mutation help?) `wired`  # (wubu_metagame improvement_delta)
-- [ ] AH-14 Resource envelope profiler (auto-detect VRAM/BW/RAM) `open`
-- [ ] AH-15 Graceful degradation tiers (70B->14B->7B on OOM) `open`
+- [x] AH-14 Resource envelope profiler (auto-detect VRAM/BW/RAM) `wired`  # (wubu_resource pick_tier/est_toks)
+- [x] AH-15 Graceful degradation tiers (70B->14B->7B on OOM) `wired`  # (wubu_resource degrade_tier)
