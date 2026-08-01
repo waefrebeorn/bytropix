@@ -95,3 +95,114 @@ those bytes across requests (D), matching the *model's own* structure (E/J),
 matmul (G/K), and *landing on real silicon* via console-game hardware
 discipline (I: arena/SoA/NUMA/cache-line). The 013/014/015 wins are
 the next halvings on top of shipped B01/B02/A01/A02.
+
+## THEME L — Streaming / infinite context (Kevin-Bacon wave 100 hops)
+- L01 StreamingLLM attention-sink (keep first 4 + rolling window) ... `wired` (wubu_stream_kv + test_stream_kv) ← 7-hop StreamingLLM 2309.17453
+- L02 Attention-sink + KIVI 2-bit compose for 1M+ ctx ............. `open` (ties L01+A04)
+- L03 H2O heavy-hitter eviction (keep top-p% attention) ........... `open` (wubu_kv_evict ext)
+- L04 InfiniGen KV prefetch (predict hot KV to fast tier) ......... `open` (ties A06)
+- L05 CacheBlend cross-request KV stitch .......................... `open`
+- L06 Quest blockwise top-k KV retrieval (sub-linear attn) ........ `open`
+- L07 SnapKV cluster-based KV compression at layer depth ........... `open`
+- L08 PyramidKV pyramid-accumulation KV reduction ................. `open`
+- L09 CIA KV (attention-score-driven compression) ................ `open`
+- L10 SeerAttention-R dynamic sparse attention ................... `open`
+- L11 Native sparse attention (NSA, blockwise) ................... `open`
+- L12 MoBA memory-block attention (segment KV) .................... `open`
+- L13 LM-Infinite landmark attention (soft prompt) .............. `open`
+- L14 Activation-beam KV offload (CPU/SSD tier) ................... `open` (ties A06/C05)
+- L15 KVShield adversarial-robust KV (no poison OOB) ............. `open` (ties F)
+- L16 Elastic context (grow/shrink window online) ................ `open`
+- L17 Dual-window (global sink + local) hybrid .................. `open`
+- L18 Layer-wise KV budget (deeper=less) ........................ `open`
+- L19 Adaptive sink count (entropy-selected) .................... `open`
+- L20 Recurrent-compressed KV (SSM fallback > window) .......... `open` (ties E03)
+
+## THEME M — Speculative / self-draft (ADHD lilypad focus hops)
+- M01 Self-speculative layer-skip draft (no 2nd model) ........... `wired` (wubu_layer_skip + wubu_self_cascade)
+- M02 EAGLE-2 tree draft (tree verify, higher accept) ........... `wired` (wubu_eagle)
+- M03 Medusa multi-head draft ................................... `wired` (wubu_medusa)
+- M04 n-gram cascade (no weights) ............................... `wired` (doc 018)
+- M05 CAS-Spec adaptive eager/defer ............................. `wired` (wubu_spec_cascade)
+- M06 Lookahead parallel n-gram decoding ........................ `open`
+- M07 Rest-in-peace (REST) residual-Estimating draft ........... `open`
+- M08 Online speculative tree restructuring .................... `open`
+- M09 Contrastive / lossless spec (no quality drop) ............ `open`
+- M10 Draft-model distillation for hybrid arch .................. `open`
+- M11 Spec verify via KV reuse (no re-forward) ................. `open`
+- M12 Acceptance-rate-adaptive K (per layer) ................... `open`
+- M13 Speculative + KV-quant co-design ......................... `open` (ties A04+L01)
+- M14 Blockwise parallel verify (FlashDecoding style) .......... `open` (ties F)
+- M15 Speculative routing for MoE (skip experts) ............... `open` (ties E05)
+- M16 Self-cascade small Colonel (local draft) ................. `wired` (wubu_self_cascade)
+- M17 LLM-Speculative cascade (big model verify) ............... `open`
+- M18 Online draft-model swapping (context-adaptive) ........... `open`
+- M19 Spec decode under layer-stream (resume draft) ............ `open` (ties D04)
+- M20 Cascade spec + early-exit hybrid ......................... `open` (ties J03)
+
+## THEME N — Roofline auto-tuner / adaptive compute
+- N01 B* crossover auto-detector (W vs K bound) ................. `open` (ties survey 2026)
+- N02 Online roofline sampler (measure beta_eff) ................ `open`
+- N03 Bandwidth-aware scheme selector (INT4kv vs FP16) .......... `open`
+- N04 Batch-size-aware quant switch ............................ `open`
+- N05 Context-length-aware KV precision ladder .................. `open`
+- N06 NUMA-bandwidth topology auto-detect ...................... `open`
+- N07 Tiered-cache advisor (hot/warm/cold => precision) ......... `open` (ties A06)
+- N08 Per-layer compute budget (skip floor) .................... `open`
+- N09 Hardware-counters roofline (if PMC avail) ................ `open`
+- N10 Energy-per-token metric (compute+HBM+interconnect) ....... `open`
+- N11 TPOT predictor (given B, s, bits) ........................ `open`
+- N12 Capacity-wall predictor (KV GB vs RAM) ................... `open` (ties 512k)
+- N13 Compute-vs-bandwidth regime classifier ................... `open`
+- N14 Mixture-of-depths router calibration ..................... `open` (ties J01)
+- N15 Speculative acceptance model (pick K) .................... `open`
+- N16 Cache-hit-rate feedback loop (prefix reuse) .............. `open` (ties D02)
+- N17 KV-footprint forecaster (pre-alloc advise) .............. `open`
+- N18 OOM-risk early-warning (streaming engage) ................ `open` (ties D04)
+- N19 Adaptive chunk size (prefill vs decode) .................. `open` (ties D04)
+- N20 Scheme A/B online (shadow quant compare) ............... `open`
+
+## THEME O — Cross-discipline (DB/OS/formal/neuro) 7-hop wins
+- O01 DB buffer-pool -> KV eviction (LRU-k with learned advice) . `open` (ties A07b)
+- O02 OS THP/hugepage KV arena (2MB pages) ..................... `open` (ties I)
+- O03 Compiler cost-model -> roofline auto-tuner ............... `open` (ties N)
+- O04 Formal equiv -> quant kernel prove ...................... `wired` (wubu_equiv_check)
+- O05 Neuro Titans -> bounded working-memory KV ............... `open`
+- O06 Neuro ADHD/lilypad -> focus-gated attention (distraction suppress) `wired` (wubu_attn_gate)
+- O07 Neuro sink neurons -> attention-sink KEEP ................ `open` (ties L01)
+- O08 RDMA net -> KV transfer (localhost analog) .............. `wired` (wubu_kv_transfer)
+- O09 HPC roofline -> decode-bound proof ....................... `wired` (doc survey)
+- O10 Z3/Alive2 -> GEMV rewrite verify ........................ `wired` (wubu_equiv_check)
+- O11 TVM cost -> split-K auto-tune ........................... `open` (ties N)
+- O12 ProofWright -> dequant equivalence ...................... `open` (ties F)
+- O13 OS mmap prefault -> KV warm ............................. `open` (ties A06)
+- O14 DB query plan -> decode schedule ....................... `open` (ties D)
+- O15 Neuro theta/gamma -> attention rhythmic gate ........... `open`
+- O16 Compiler autovec -> GEMV simd auto-select .............. `wired` (wubu_gemv_tune)
+- O17 OS page cache -> KV LRU ................................ `wired` (wubu_kv_tier)
+- O18 Formal bound -> OOM never (provable) ................... `open` (ties 512k)
+- O19 DB WAL -> KV append-log replay ......................... `open`
+- O20 Neuro plasticity -> online KV re-quant ................ `open`
+
+## THEME P — Dispatch / kernel fusion (console-game discipline)
+- P01 Q8_KV -> SWA -> split-K -> serial chain ................ `wired` (wubu_ssm)
+- P02 Cache-line-aligned KV alloc (64B) ...................... `wired` (C03)
+- P03 NUMA-aware weight pin (P-core affinity) ................ `wired` (wubu_affinity)
+- P04 SIMD 512/16lane GEMV auto-dispatch ..................... `wired` (wubu_gemv_tune)
+- P05 Tandem CPU/GPU split (RAM-bound offload) ............... `wired` (wubu_tandem)
+- P06 Rambus banked KV (interleave banks) ................... `wired` (wubu_rambus)
+- P07 Gamebud frame-budget (real wall-clock) ................. `wired` (wubu_gamebud)
+- P08 GPU F32 GEMV -> cuda_gemv dispatch ..................... `wired`
+- P09 AVX512 BF16 GEMV path .................................. `open`
+- P10 q4_K GEMV (BitNet ternary) ............................. `wired` (B03)
+- P11 int2 KV dequant fused in attn .......................... `open` (ties A04)
+- P12 KV prefetch stream (non-temporal) ...................... `open`
+- P13 Fused RoPE+quant KV write .............................. `open`
+- P14 Fused dequant+GEMV (weight) ............................ `wired` (wubu_gemv_tune)
+- P15 Speculative verify fused attn .......................... `open` (ties M)
+- P16 Paged KV (block 16) alloc/free ........................ `wired` (kv_paged_attention)
+- P17 Layer-stream resume (streaming load) .................. `wired` (D04)
+- P18 Hug-page KV pool (arena) .............................. `open` (ties O02)
+- P19 Weak-symbol CUDA stub (link-clean) .................... `wired`
+- P20 Trace/span operator hook (DA-3) ........................ `wired` (wubu_selfimprove)
+
