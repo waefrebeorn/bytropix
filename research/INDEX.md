@@ -430,3 +430,15 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - BB05 Integration: continual learning loop feeds loopguard `wired` (test_continual)
 - BB06 SI path-integral importance `open` (research: path tracking beyond sweep)
 - BB07 Dark experience replay (distillation + replay hybrid) `open` (research: model-level)
+
+## Theme CC: Multimodal Grounding (Vision + Audio + Text)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 8 gaps (CC01-CC05, CC06, CC07 wired; CC08 research):
+- CC01 Vision encoder (ViT patch embedding from scratch) `wired` (wubu_vision.c)
+- CC02 Audio encoder (mel-spectrogram + radix-2 real FFT) `wired` (wubu_audio.c)
+- CC03 Cross-modal alignment (CLIP-style projection to 512-dim) `wired` (wubu_mm_align.c)
+- CC04 Multimodal adapter (align → quantize → token IDs) `wired` (wubu_mm_adapter.c)
+- CC05 Positional KV integration (prepend prefix, no EAMM at 512K) `wired` (wubu_mm_kv.c)
+- CC06 Multimodal token pipeline (image→pseudo-tokens) `wired` (test_multimodal)
+- CC07 Integration + safety gate → decode path `wired` (test_multimodal)
+- CC08 End-to-end multimodal gen_text `open` (research: needs trained visual vocab)
