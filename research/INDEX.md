@@ -404,3 +404,15 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - AW09 Abductive diagnosis (hypotheses from failure) — no why-generation
 - AW10 Counter-abduction (rival-explanation defeat) — no defeat of wrong CoT
 Status: `open` (all 10 to be closed as C11)
+
+## Theme AX: Self-Improving Code + Sandboxed Execution + Verifiable Tool-Use
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### Self-Improving Code + Sandbox (8 gaps AX01-AX08)
+- AX01 DGM empirical gate + regression test runner `wired` (wubu_dgm.c)
+- AX02 seccomp-bpf sandbox `open` (research: kernel-level, exceeds single C11 module)
+- AX03 formal verification `open` (research: proof-assistant-level)
+- AX04 MCP-compatible tool schema + dispatch `wired` (wubu_tooluse.c)
+- AX05 program synthesis (spec→C11) `wired` (wubu_synth.c)
+- AX06 self-evolution loop (propose→verify→commit→regress) `wired` (wubu_evolve.c)
+- AX07 code exec verifier → feeds loopguard `wired` (wubu_codeexec.c)
+- AX08 sandbox capability bridge → safekern `wired` (wubu_sandbox_safekern.c)
