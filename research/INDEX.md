@@ -356,3 +356,22 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - [x] AG-06 Tool-abuse / excessive-agency cap: per-agent tool-call rate limit (LLM06/ASI02) `wired` (wubu_loopguard tool_allowed)
 - [ ] AG-07 Inter-agent message authentication (ASI07) `open` (research)
 - [x] AG-08 JIT provisioning + HITL gating: sensitive-action approval token (ASI08/strata) `wired` (wubu_loopguard hitl_approve)
+
+## Theme AH: AGI-at-home meta-game (7-hop lily-pad KB sweep)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### Meta-game / coordination / credit gaps
+- [x] AH-01 Concurrent-modification intent-lock before editing shared module `wired`  # (wubu_coord lock_acquire/release)
+- [x] AH-02 Serializability at quiescence (MTPO targeted repair) `wired`  # (wubu_coord txn_committable)
+- [x] AH-03 Shared-memory access-control (right agents see right memory) `wired`  # (wubu_coord mem_allowed)
+- [x] AH-04 Coordination heartbeat / conflict resolution dialogue `wired`  # (wubu_coord resolve_conflict/heartbeat_alive)
+- [x] AH-05 Open-ended self-modifying agent archive (DGM branch tree) `wired`  # (wubu_metagame archive_add/best)
+- [x] AH-06 Empirical fitness validation (bench, don't prove) `wired`  # (wubu_metagame accept_child/archive_best)
+- [ ] AH-07 Sandboxed self-modification (no web/fs escape) `open`
+- [x] AH-08 Anti-hallucinated-self-log (don't trust own unverified "passed") `wired`  # (wubu_metagame accept_child verified gate)
+- [ ] AH-09 Skill library (reusable, non-parametric, replayable) `open`
+- [ ] AH-10 Continual learning without forgetting (replay buffer) `open`
+- [ ] AH-11 Intrinsic metacognition (calibrate own confidence) `open`
+- [x] AH-12 Turn-level credit assignment (TD, verifier-anchored) `wired`  # (wubu_credit turn_credit/credit_sign)
+- [x] AH-13 Self-improvement delta metric (did mutation help?) `wired`  # (wubu_metagame improvement_delta)
+- [ ] AH-14 Resource envelope profiler (auto-detect VRAM/BW/RAM) `open`
+- [ ] AH-15 Graceful degradation tiers (70B->14B->7B on OOM) `open`

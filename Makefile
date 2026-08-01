@@ -257,6 +257,15 @@ src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
 src/wubu_planediv.o: src/wubu_planediv.c include/wubu_planediv.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
+src/wubu_coord.o: src/wubu_coord.c include/wubu_coord.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
+src/wubu_metagame.o: src/wubu_metagame.c include/wubu_metagame.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
+src/wubu_credit.o: src/wubu_credit.c include/wubu_credit.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
 src/wubu_paged_kv.o: src/wubu_paged_kv.c include/wubu_paged_kv.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
@@ -995,6 +1004,10 @@ test_agi_os_integration: tools/test_agi_os_integration.c src/wubu_latency.o src/
 	./$@
 
 test_loopguard_planediv: tools/test_loopguard_planediv.c src/wubu_loopguard.o src/wubu_planediv.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
+test_metagame_coord: tools/test_metagame_coord.c src/wubu_coord.o src/wubu_metagame.o src/wubu_credit.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
