@@ -98,8 +98,8 @@ the next halvings on top of shipped B01/B02/A01/A02.
 
 ## THEME L — Streaming / infinite context (Kevin-Bacon wave 100 hops)
 - L01 StreamingLLM attention-sink (keep first 4 + rolling window) ... `wired` (wubu_stream_kv + test_stream_kv) ← 7-hop StreamingLLM 2309.17453
-- L02 Attention-sink + KIVI 2-bit compose for 1M+ ctx ............. `open` (ties L01+A04)
-- L03 H2O heavy-hitter eviction (keep top-p% attention) ........... `open` (wubu_kv_evict ext)
+- L02 Attention-sink + KIVI 2-bit compose for 1M+ ctx ............. `wired` (L01 stream_kv + A04 kivi compose via capacity wall, ties L01+A04)
+- L03 H2O heavy-hitter eviction (keep top-p% attention) ........... `wired` (wubu_kv_evict track_attn + select_h2o + test_kv_evict_h2o)
 - L04 InfiniGen KV prefetch (predict hot KV to fast tier) ......... `open` (ties A06)
 - L05 CacheBlend cross-request KV stitch .......................... `open`
 - L06 Quest blockwise top-k KV retrieval (sub-linear attn) ........ `open`
@@ -113,7 +113,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L14 Activation-beam KV offload (CPU/SSD tier) ................... `open` (ties A06/C05)
 - L15 KVShield adversarial-robust KV (no poison OOB) ............. `open` (ties F)
 - L16 Elastic context (grow/shrink window online) ................ `open`
-- L17 Dual-window (global sink + local) hybrid .................. `open`
+- L17 Dual-window (global sink + local) hybrid .................. `wired` (wubu_stream_kv sink+window = same design)
 - L18 Layer-wise KV budget (deeper=less) ........................ `open`
 - L19 Adaptive sink count (entropy-selected) .................... `open`
 - L20 Recurrent-compressed KV (SSM fallback > window) .......... `open` (ties E03)
@@ -151,20 +151,20 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - N08 Per-layer compute budget (skip floor) .................... `open`
 - N09 Hardware-counters roofline (if PMC avail) ................ `open`
 - N10 Energy-per-token metric (compute+HBM+interconnect) ....... `open`
-- N11 TPOT predictor (given B, s, bits) ........................ `open`
-- N12 Capacity-wall predictor (KV GB vs RAM) ................... `open` (ties 512k)
+- N11 TPOT predictor (given B, s, bits) ........................ `wired` (wubu_capacity_wall)
+- N12 Capacity-wall predictor (KV GB vs RAM) ................... `wired` (wubu_capacity_wall fits-ram + b_star, ties 512k)
 - N13 Compute-vs-bandwidth regime classifier ................... `open`
 - N14 Mixture-of-depths router calibration ..................... `open` (ties J01)
 - N15 Speculative acceptance model (pick K) .................... `open`
 - N16 Cache-hit-rate feedback loop (prefix reuse) .............. `open` (ties D02)
 - N17 KV-footprint forecaster (pre-alloc advise) .............. `open`
-- N18 OOM-risk early-warning (streaming engage) ................ `open` (ties D04)
+- N18 OOM-risk early-warning (streaming engage) ................ `wired` (wubu_capacity_wall oom_risk, ties D04)
 - N19 Adaptive chunk size (prefill vs decode) .................. `open` (ties D04)
 - N20 Scheme A/B online (shadow quant compare) ............... `open`
 
 ## THEME O — Cross-discipline (DB/OS/formal/neuro) 7-hop wins
 - O01 DB buffer-pool -> KV eviction (LRU-k with learned advice) . `open` (ties A07b)
-- O02 OS THP/hugepage KV arena (2MB pages) ..................... `open` (ties I)
+- O02 OS THP/hugepage KV arena (2MB pages) ..................... `wired` (wubu_hugepage + test_hugepage, plain-mmap fallback)
 - O03 Compiler cost-model -> roofline auto-tuner ............... `open` (ties N)
 - O04 Formal equiv -> quant kernel prove ...................... `wired` (wubu_equiv_check)
 - O05 Neuro Titans -> bounded working-memory KV ............... `open`
