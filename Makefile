@@ -182,6 +182,12 @@ src/wubu_more_spec.o: src/wubu_more_spec.c include/wubu_more_spec.h
 src/wubu_misc_gaps.o: src/wubu_misc_gaps.c include/wubu_misc_gaps.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
+src/wubu_bf16_gemv.o: src/wubu_bf16_gemv.c include/wubu_bf16_gemv.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
+src/wubu_attn_kernels.o: src/wubu_attn_kernels.c include/wubu_attn_kernels.h
+	$(CC) $(CFLAGS) -I include -c -o $@ $<
+
 src/wubu_paged_kv.o: src/wubu_paged_kv.c include/wubu_paged_kv.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
@@ -839,6 +845,14 @@ test_misc_gaps: tools/test_misc_gaps.c src/wubu_misc_gaps.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+test_bf16_gemv: tools/test_bf16_gemv.c src/wubu_bf16_gemv.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
+test_attn_kernels: tools/test_attn_kernels.c src/wubu_attn_kernels.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 # doc B08/H03/E06/F02: remaining CPU-closable cores (NVFP4, Hadamard,
 # wide all-reduce, equiv-check). MLA (A08/E02) is in wubu_mla.c/test_mla.
 test_more_cores: tools/test_more_cores.c src/wubu_nvfp4.o src/wubu_hadamard.o src/wubu_expert_allreduce.o src/wubu_equiv_check.o src/wubu_fp8.o
@@ -1265,7 +1279,7 @@ test_cross_attn: tools/test_cross_attn.c src/wubu_cross_attn.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
-test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive test_stream_kv test_kv_evict_h2o test_capacity_wall test_hugepage test_kv_budget test_wm_kv test_spec_tuner test_quant_selector test_kv_compress test_lruk test_sparse_attn test_attn_tune test_kv_shield test_ctx_manage test_lookahead test_sys_tune test_lm_infinite test_spec_variants test_more_spec test_misc_gaps
+test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive test_stream_kv test_kv_evict_h2o test_capacity_wall test_hugepage test_kv_budget test_wm_kv test_spec_tuner test_quant_selector test_kv_compress test_lruk test_sparse_attn test_attn_tune test_kv_shield test_ctx_manage test_lookahead test_sys_tune test_lm_infinite test_spec_variants test_more_spec test_misc_gaps test_bf16_gemv test_attn_kernels
 	@echo "=== ALL TESTS PASSED ==="
 
 test_nf4: tools/test_nf4.c src/wubu_nf4.o

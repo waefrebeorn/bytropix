@@ -182,7 +182,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - O17 OS page cache -> KV LRU ................................ `wired` (wubu_kv_tier)
 - O18 Formal bound -> OOM never (provable) ................... `open` (ties 512k)
 - O19 DB WAL -> KV append-log replay ......................... `open`
-- O20 Neuro plasticity -> online KV re-quant ................ `open`
+- O20 Neuro plasticity -> online KV re-quant ................ `wired` (wubu_attn_kernels plasticity_bits)
 
 ## THEME P — Dispatch / kernel fusion (console-game discipline)
 - P01 Q8_KV -> SWA -> split-K -> serial chain ................ `wired` (wubu_ssm)
@@ -193,13 +193,13 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - P06 Rambus banked KV (interleave banks) ................... `wired` (wubu_rambus)
 - P07 Gamebud frame-budget (real wall-clock) ................. `wired` (wubu_gamebud)
 - P08 GPU F32 GEMV -> cuda_gemv dispatch ..................... `wired`
-- P09 AVX512 BF16 GEMV path .................................. `open`
+- P09 AVX512 BF16 GEMV path .................................. `wired` (wubu_bf16_gemv, runtime dispatch + F32 fallback)
 - P10 q4_K GEMV (BitNet ternary) ............................. `wired` (B03)
-- P11 int2 KV dequant fused in attn .......................... `open` (ties A04)
+- P11 int2 KV dequant fused in attn .......................... `wired` (wubu_attn_kernels int2_dequant, ties A04) (ties A04)
 - P12 KV prefetch stream (non-temporal) ...................... `wired` (wubu_misc_gaps kv_prefetch)
 - P13 Fused RoPE+quant KV write .............................. `wired` (wubu_misc_gaps fused_rope_quant)
 - P14 Fused dequant+GEMV (weight) ............................ `wired` (wubu_gemv_tune)
-- P15 Speculative verify fused attn .......................... `open` (ties M)
+- P15 Speculative verify fused attn .......................... `wired` (wubu_attn_kernels spec_verify_fused, ties M) (ties M)
 - P16 Paged KV (block 16) alloc/free ........................ `wired` (kv_paged_attention)
 - P17 Layer-stream resume (streaming load) .................. `wired` (D04)
 - P18 Hug-page KV pool (arena) .............................. `wired` (wubu_hugepage, ties O02) (ties O02)
