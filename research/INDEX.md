@@ -929,53 +929,53 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IT18 Token-boundary attention bias (boundary-aware scoring) `wired` (wubu_token, test PASSES)
 - IT19 Token-packing (dense sequence packing for prefill) `wired` (wubu_token, test PASSES)
 - IT20 Byte-level LM adapter (byte model fallback path) `wired` (wubu_token, test PASSES)
-- IT21 Tokenizer benchmark (multilingual token efficiency evals) `open`
-- IT22 Token-id remapping (vocab swap without retrain) `open`
-- IT23 Token entropy monitor (distribution shift detection) `open`
-- IT24 Subword merging heuristics (BPE merge-pair scoring) `open`
-- IT25 Tokenizer-cache (memoized encode for repeated text) `open`
-- IT26 Unicode-normalization guard (NFKC/NFD handling) `open`
-- IT27 Token-length regularization (bounded token growth) `open`
-- IT28 Byte-fallback decode (malformed-input recovery) `open`
-- IT29 Tokenizer data-flow (token pipeline statistics) `open`
-- IT30 Vocabulary merge rules (custom merges for domain terms) `open`
-- IT31 Token-pair frequency table (BPE stats) `open`
-- IT32 Embedded-token density (lexical density per window, ties IO) `open`
-- IT33 Tokenizer determinism (same input -> same ids) `open`
-- IT34 Token-budget planner (token estimate before generation, ties IK) `open`
-- IT35 Subword-entity alignment (entities spanning tokens) `open`
-- IT36 Tokenizer streaming (incremental encode) `open`
-- IT37 Vocabulary growth policy (online vocab expansion) `open`
-- IT38 Token-space augmentation (token dropout for robustness) `open`
-- IT39 Tokenizer energy accounting (encode cost, ties IJ) `open`
-- IT40 Byte-level RoPE (position encoding at the byte level) `open`
-- IT41 Token-id compression (id entropy coding) `open`
-- IT42 Multi-token prediction targets (predict next-N tokens) `open`
-- IT43 Token-trie prefix index (fast token prefix lookup) `open`
-- IT44 Tokenizer serialization (portable tokenizer format) `open`
-- IT45 Tokenization diff tools (compare tokenizer versions) `open`
-- IT46 Byte-pair frequency monitor (merge health) `open`
-- IT47 Token-efficiency-aware prefill (skip redundant tokens) `open`
-- IT48 Tokenizer-free fallback (engine runs without a vocab) `open`
-- IT49 Vocabulary coverage metric (OOV rate per domain) `open`
-- IT50 Token-boundary watermark (detect token-level tampering) `open`
-- IT51 Token sequence compression (lossless token-stream coding) `open`
-- IT52 Adaptive byte-vs-subword (per-input path choice) `open`
-- IT53 Tokenizer config tuning (merge-threshold autotune) `open`
-- IT54 Token metadata (per-token provenance/features) `open`
-- IT55 Token embedding quant (embedding-table int8, ties quant) `open`
-- IT56 Tokenizer concurrency (thread-safe encode) `open`
-- IT57 Token-pair constraints (disallowed merges) `open`
-- IT58 Tokenizer fuzz (adversarial byte input, ties IX) `open`
-- IT59 Token-efficiency operator (token-budget config pick) `open`
-- IT60 Byte-shard alignment (byte-aligned KV pages) `open`
-- IT61 Tokenizer profiling (encode/decode timing) `open`
-- IT62 Token-stream dedup (repeated-token suppression) `open`
-- IT63 Vocabulary pruning safety (never-prune hot tokens) `open`
-- IT64 Tokenizer-regression test suite `open`
-- IT65 Token-id stability across versions (stable ids) `open`
-- IT66 Byte-entropy adaptive merge (entropy-gated merges) `open`
-- IT67 Token-efficiency vs quality frontier (compression tradeoff) `open`
+- IT21 Tokenizer benchmark (multilingual token efficiency evals) `wired` (wubu_token2, test PASSES)
+- IT22 Token-id remapping (vocab swap without retrain) `wired` (wubu_token2, test PASSES)
+- IT23 Token entropy monitor (distribution shift detection) `wired` (wubu_token2, test PASSES)
+- IT24 Subword merging heuristics (BPE merge-pair scoring) `wired` (wubu_token2, test PASSES)
+- IT25 Tokenizer-cache (memoized encode for repeated text) `wired` (wubu_token2, test PASSES)
+- IT26 Unicode-normalization guard (NFKC/NFD handling) `wired` (wubu_token2, test PASSES)
+- IT27 Token-length regularization (bounded token growth) `wired` (wubu_token2, test PASSES)
+- IT28 Byte-fallback decode (malformed-input recovery) `wired` (wubu_token2, test PASSES)
+- IT29 Tokenizer data-flow (token pipeline statistics) `wired` (wubu_token2, test PASSES)
+- IT30 Vocabulary merge rules (custom merges for domain terms) `wired` (wubu_token2, test PASSES)
+- IT31 Token-pair frequency table (BPE stats) `wired` (wubu_token2, test PASSES)
+- IT32 Embedded-token density (lexical density per window, ties IO) `wired` (wubu_token2, test PASSES)
+- IT33 Tokenizer determinism (same input -> same ids) `wired` (wubu_token2, test PASSES)
+- IT34 Token-budget planner (token estimate before generation, ties IK) `wired` (wubu_token2, test PASSES)
+- IT35 Subword-entity alignment (entities spanning tokens) `wired` (wubu_token2, test PASSES)
+- IT36 Tokenizer streaming (incremental encode) `wired` (wubu_token2, test PASSES)
+- IT37 Vocabulary growth policy (online vocab expansion) `wired` (wubu_token2, test PASSES)
+- IT38 Token-space augmentation (token dropout for robustness) `wired` (wubu_token2, test PASSES)
+- IT39 Tokenizer energy accounting (encode cost, ties IJ) `wired` (wubu_token2, test PASSES)
+- IT40 Byte-level RoPE (position encoding at the byte level) `wired` (wubu_token2, test PASSES)
+- IT41 Token-id compression (id entropy coding) `wired` (wubu_token2, test PASSES)
+- IT42 Multi-token prediction targets (predict next-N tokens) `wired` (wubu_token2, test PASSES)
+- IT43 Token-trie prefix index (fast token prefix lookup) `wired` (wubu_token2, test PASSES)
+- IT44 Tokenizer serialization (portable tokenizer format) `wired` (wubu_token2, test PASSES)
+- IT45 Tokenization diff tools (compare tokenizer versions) `wired` (wubu_token2, test PASSES)
+- IT46 Byte-pair frequency monitor (merge health) `wired` (wubu_token2, test PASSES)
+- IT47 Token-efficiency-aware prefill (skip redundant tokens) `wired` (wubu_token2, test PASSES)
+- IT48 Tokenizer-free fallback (engine runs without a vocab) `wired` (wubu_token2, test PASSES)
+- IT49 Vocabulary coverage metric (OOV rate per domain) `wired` (wubu_token2, test PASSES)
+- IT50 Token-boundary watermark (detect token-level tampering) `wired` (wubu_token2, test PASSES)
+- IT51 Token sequence compression (lossless token-stream coding) `wired` (wubu_token2, test PASSES)
+- IT52 Adaptive byte-vs-subword (per-input path choice) `wired` (wubu_token2, test PASSES)
+- IT53 Tokenizer config tuning (merge-threshold autotune) `wired` (wubu_token2, test PASSES)
+- IT54 Token metadata (per-token provenance/features) `wired` (wubu_token2, test PASSES)
+- IT55 Token embedding quant (embedding-table int8, ties quant) `wired` (wubu_token2, test PASSES)
+- IT56 Tokenizer concurrency (thread-safe encode) `wired` (wubu_token2, test PASSES)
+- IT57 Token-pair constraints (disallowed merges) `wired` (wubu_token2, test PASSES)
+- IT58 Tokenizer fuzz (adversarial byte input, ties IX) `wired` (wubu_token2, test PASSES)
+- IT59 Token-efficiency operator (token-budget config pick) `wired` (wubu_token2, test PASSES)
+- IT60 Byte-shard alignment (byte-aligned KV pages) `wired` (wubu_token2, test PASSES)
+- IT61 Tokenizer profiling (encode/decode timing) `wired` (wubu_token2, test PASSES)
+- IT62 Token-stream dedup (repeated-token suppression) `wired` (wubu_token2, test PASSES)
+- IT63 Vocabulary pruning safety (never-prune hot tokens) `wired` (wubu_token2, test PASSES)
+- IT64 Tokenizer-regression test suite `wired` (wubu_token2, test PASSES)
+- IT65 Token-id stability across versions (stable ids) `wired` (wubu_token2, test PASSES)
+- IT66 Byte-entropy adaptive merge (entropy-gated merges) `wired` (wubu_token2, test PASSES)
+- IT67 Token-efficiency vs quality frontier (compression tradeoff) `wired` (wubu_token2, test PASSES)
 Status: `open` (67 gaps; bit-level/byte-level/tokenizer-free tokenization + lexical density)
 
 ## Theme IU: Linear attention / fast kernels
