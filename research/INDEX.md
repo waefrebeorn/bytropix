@@ -837,26 +837,26 @@ Status: `open` (67 gaps; fair multi-tenant scheduling + preemption + prefix-awar
 ## Theme IS: PIM / near-memory / hardware co-design
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (P3-LLM NPU-PIM 2511.06838; near-memory 3D-DRAM DAC2025; CIM crossbar/RRAM/SRAM 2026; AQPIM HPCA 2026)
-- IS01 PIM offload model (which ops move near memory: GEMV over KV) `open`
-- IS02 Near-memory KV tier (KV resident next to the compute) `open`
-- IS03 Crossbar-compatible matmul emulation (CIM-style GEMV model) `open`
-- IS04 SRAM-CIM quantization constraints (bit-cell precision limits) `open`
-- IS05 RRAM/FeFET/SOT-MRAM tier model (emerging memory energy/latency) `open`
-- IS06 Near-storage compute (smart-SSD KV filter) `open`
-- IS07 PIM capacity wall guard (PIM memory budget vs model size) `open`
-- IS08 3D-DRAM bonding model (logic-on-memory integration cost) `open`
-- IS09 Hybrid NPU-PIM dispatch (when to use PIM vs NPU) `open`
-- IS10 Data-movement accounting (bytes moved per op, ties roofline) `open`
-- IS11 HBM-stack near-memory buffers (in-stack staging) `open`
-- IS12 PIM-friendly weight layout (channel-last for in-memory MAC) `open`
-- IS13 Analog-compute noise model (crossbar ADC/DAC precision) `open`
-- IS14 Hardware cost model integration (energy+latency per op, ties IJ) `open`
-- IS15 PIM offload scheduler (batch ops for near-memory execution) `open`
-- IS16 Memory-centric attention tiling (attention tiles resident in memory) `open`
-- IS17 Device-model portability (same engine, hardware-abstracted) `open`
-- IS18 Near-memory reduce (partial sums at the memory) `open`
-- IS19 PIM page-locality (KV pages colocated with the compute) `open`
-- IS20 Hardware telemetry model (simulated counters: MACs, bytes, J) `open`
+- IS01 PIM offload model (which ops move near memory: GEMV over KV) `wired` (wubu_pim, test PASSES)
+- IS02 Near-memory KV tier (KV resident next to the compute) `wired` (wubu_pim, test PASSES)
+- IS03 Crossbar-compatible matmul emulation (CIM-style GEMV model) `wired` (wubu_pim, test PASSES)
+- IS04 SRAM-CIM quantization constraints (bit-cell precision limits) `wired` (wubu_pim, test PASSES)
+- IS05 RRAM/FeFET/SOT-MRAM tier model (emerging memory energy/latency) `wired` (wubu_pim, test PASSES)
+- IS06 Near-storage compute (smart-SSD KV filter) `wired` (wubu_pim, test PASSES)
+- IS07 PIM capacity wall guard (PIM memory budget vs model size) `wired` (wubu_pim, test PASSES)
+- IS08 3D-DRAM bonding model (logic-on-memory integration cost) `wired` (wubu_pim, test PASSES)
+- IS09 Hybrid NPU-PIM dispatch (when to use PIM vs NPU) `wired` (wubu_pim, test PASSES)
+- IS10 Data-movement accounting (bytes moved per op, ties roofline) `wired` (wubu_pim, test PASSES)
+- IS11 HBM-stack near-memory buffers (in-stack staging) `wired` (wubu_pim, test PASSES)
+- IS12 PIM-friendly weight layout (channel-last for in-memory MAC) `wired` (wubu_pim, test PASSES)
+- IS13 Analog-compute noise model (crossbar ADC/DAC precision) `wired` (wubu_pim, test PASSES)
+- IS14 Hardware cost model integration (energy+latency per op, ties IJ) `wired` (wubu_pim, test PASSES)
+- IS15 PIM offload scheduler (batch ops for near-memory execution) `wired` (wubu_pim, test PASSES)
+- IS16 Memory-centric attention tiling (attention tiles resident in memory) `wired` (wubu_pim, test PASSES)
+- IS17 Device-model portability (same engine, hardware-abstracted) `wired` (wubu_pim, test PASSES)
+- IS18 Near-memory reduce (partial sums at the memory) `wired` (wubu_pim, test PASSES)
+- IS19 PIM page-locality (KV pages colocated with the compute) `wired` (wubu_pim, test PASSES)
+- IS20 Hardware telemetry model (simulated counters: MACs, bytes, J) `wired` (wubu_pim, test PASSES)
 - IS21 CIM bit-precision adaptation (precision per layer by sensitivity) `open`
 - IS22 Emerging-memory endurance model (write-wear budget for KV) `open`
 - IS23 Near-memory speculative decode (draft heads at the memory) `open`
