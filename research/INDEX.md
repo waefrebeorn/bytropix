@@ -1197,26 +1197,26 @@ Status: `open` (67 gaps; spike/event-driven crossover, neuromorphic energy, STDP
 ## Theme IX: Fuzzing / robustness / security
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (prompt-fuzzing evasion 2026; LogicFuzz NDSS 2026; autonomous fuzzing CERT 2026; EU-AI-Act robustness)
-- IX01 Prompt-fuzz harness (adversarial prompt variants) `open`
-- IX02 Evasion-rate measurement (per-category guardrail evasion) `open`
-- IX03 Guardrail sensitivity matrix (keyword-adjacent robustness) `open`
-- IX04 Autonomous fuzzing pipeline (LLM-supervised fuzzing) `open`
-- IX05 Crash validator (filter unreachable crashes) `open`
-- IX06 Fuzz-log analysis (LLM trace triage) `open`
-- IX07 Semantic-fuzz oracle (behavior divergence, not just crashes) `open`
-- IX08 Coverage-guided prompt mutation `open`
-- IX09 Robustness regression gate (fuzz on every model change) `open`
-- IX10 Adversarial-prompt taxonomy (jailbreak categories) `open`
-- IX11 Robustness benchmark suite (measurable robustness) `open`
-- IX12 Guardrail stress profile (per-guardrail weakness map) `open`
-- IX13 Input-validation layer (schema-check adversarial input) `open`
-- IX14 Fuzz-seed curation (high-value seed prompts) `open`
-- IX15 Mutation operator library (prompt mutation ops) `open`
-- IX16 Robustness scorecard (per-model robustness metrics) `open`
-- IX17 Prompt-injection detector (injection-pattern classifier) `open`
-- IX18 Output-validation gate (validate generated output) `open`
-- IX19 Fuzz-round budget (bounded fuzz campaigns) `open`
-- IX20 Vulnerability triage ledger (found + fixed registry) `open`
+- IX01 Prompt-fuzz harness (adversarial prompt variants) `wired` (wubu_fuzz, test PASSES)
+- IX02 Evasion-rate measurement (per-category guardrail evasion) `wired` (wubu_fuzz, test PASSES)
+- IX03 Guardrail sensitivity matrix (keyword-adjacent robustness) `wired` (wubu_fuzz, test PASSES)
+- IX04 Autonomous fuzzing pipeline (LLM-supervised fuzzing) `wired` (wubu_fuzz, test PASSES)
+- IX05 Crash validator (filter unreachable crashes) `wired` (wubu_fuzz, test PASSES)
+- IX06 Fuzz-log analysis (LLM trace triage) `wired` (wubu_fuzz, test PASSES)
+- IX07 Semantic-fuzz oracle (behavior divergence, not just crashes) `wired` (wubu_fuzz, test PASSES)
+- IX08 Coverage-guided prompt mutation `wired` (wubu_fuzz, test PASSES)
+- IX09 Robustness regression gate (fuzz on every model change) `wired` (wubu_fuzz, test PASSES)
+- IX10 Adversarial-prompt taxonomy (jailbreak categories) `wired` (wubu_fuzz, test PASSES)
+- IX11 Robustness benchmark suite (measurable robustness) `wired` (wubu_fuzz, test PASSES)
+- IX12 Guardrail stress profile (per-guardrail weakness map) `wired` (wubu_fuzz, test PASSES)
+- IX13 Input-validation layer (schema-check adversarial input) `wired` (wubu_fuzz, test PASSES)
+- IX14 Fuzz-seed curation (high-value seed prompts) `wired` (wubu_fuzz, test PASSES)
+- IX15 Mutation operator library (prompt mutation ops) `wired` (wubu_fuzz, test PASSES)
+- IX16 Robustness scorecard (per-model robustness metrics) `wired` (wubu_fuzz, test PASSES)
+- IX17 Prompt-injection detector (injection-pattern classifier) `wired` (wubu_fuzz, test PASSES)
+- IX18 Output-validation gate (validate generated output) `wired` (wubu_fuzz, test PASSES)
+- IX19 Fuzz-round budget (bounded fuzz campaigns) `wired` (wubu_fuzz, test PASSES)
+- IX20 Vulnerability triage ledger (found + fixed registry) `wired` (wubu_fuzz, test PASSES)
 - IX21 Robustness-vs-quality tradeoff monitor `open`
 - IX22 Adversarial example archive (replayable attack corpus) `open`
 - IX23 Fuzzer self-healing (auto-recover fuzz stalls) `open`
