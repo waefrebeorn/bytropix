@@ -533,3 +533,15 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IM06 Reward-hacking / value-drift monitor (spiked mean + collapsed variance) `wired` (wubu_align monitor)
 - IM07 The operator: (alignment, cost) frontier config pick `wired` (wubu_align pick_config)
 Status: `wired` (wubu_align, test_align PASSES)
+
+## Theme IN: Predictive coding / free energy / active inference
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7 gaps (IN01-IN07)
+- IN01 Prediction-error layers (e = x - mu_hat) `wired` (wubu_freeenergy pred_error)
+- IN02 Variational free energy (F = -accuracy + complexity) `wired` (wubu_freeenergy free_energy)
+- IN03 Active inference: expected-free-energy policy prior (softmax(-gamma*G)) `wired` (wubu_freeenergy policy_prior)
+- IN04 Precision-weighted prediction errors `wired` (wubu_freeenergy precision_weight)
+- IN05 Perception-action loop (perception = PE minimization, action = EFE minimization) `wired` (wubu_freeenergy percept_step)
+- IN06 Epistemic value (information-gain curiosity bonus) `wired` (wubu_freeenergy epistemic_value)
+- IN07 The operator: free-energy-gated model selection `wired` (wubu_freeenergy pick_model)
+Status: `wired` (wubu_freeenergy, test_freeenergy PASSES)
