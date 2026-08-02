@@ -509,3 +509,15 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IJ06 Speculative-decoding energy break-even (draft_jpt < target_jpt*accept_rate; DA-verified model) `wired` (wubu_energy spec_breakeven/round)
 - IJ07 Budget-driven operator (pick the lowest-J/token config clearing the throughput gate) `wired` (wubu_energy pick_config)
 Status: `wired` (wubu_energy, test_energy PASSES)
+
+## Theme IL: Modern Hopfield / associative memory
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7 gaps (IL01-IL07)
+- IL01 Modern-Hopfield retrieval (xi' = X^T softmax(beta*X*xi)) `wired` (wubu_hopfield retrieve)
+- IL02 Attention equivalence (the softmax attention IS the Hopfield update; beta = 1/sqrt(d)) `wired` (wubu_hopfield beta_attention)
+- IL03 Exponential storage capacity (C ~ exp(alpha*d), beats the Hebbian O(d)) `wired` (wubu_hopfield capacity)
+- IL04 Associative recall (pattern completion from a corrupted cue) `wired` (wubu_hopfield denoise)
+- IL05 Memory decay (the STM->LTM forgetting curve) `wired` (wubu_hopfield decay)
+- IL06 Consolidation (replay/reward strengthens the stored pattern) `wired` (wubu_hopfield consolidate)
+- IL07 The operator: top-k KV-slot retrieval by Hopfield overlap `wired` (wubu_hopfield topk)
+Status: `wired` (wubu_hopfield, test_hopfield PASSES)
