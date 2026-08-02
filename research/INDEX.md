@@ -909,26 +909,26 @@ Status: `open` (67 gaps; PIM/CIM/near-memory co-design, hardware-abstracted engi
 ## Theme IT: Tokenization / data plane
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (subword decoupling 2604.27263; bit-level BPE 2506.07541; tokenizer-free 2406.19223; lexical density 2026)
-- IT01 Bit-level BPE (compression below the byte boundary) `open`
-- IT02 Tokenizer-free UTF-8 embeddings (no vocab, ~85% embedding savings) `open`
-- IT03 Subword-benefit decoupling (isolate tokenization effects) `open`
-- IT04 Byte-entropy-aware merges (low-entropy byte distribution handling) `open`
-- IT05 Lexical-density detector (context density -> effective window) `open`
-- IT06 Token-merge cache (frequent-token path memoization) `open`
-- IT07 Vocabulary pruning (drop unused tokens, remap ids) `open`
-- IT08 Tokenizer roundtrip audit (encode/decode fidelity checks) `open`
-- IT09 Multi-script tokenization (mixed-script merge policy) `open`
-- IT10 Token-level compression (post-token entropy coding) `open`
-- IT11 Adaptive tokenization (per-domain vocab) `open`
-- IT12 Token-efficiency metric (tokens per information unit) `open`
-- IT13 Embedding-table compression (shared embeddings, ties quant) `open`
-- IT14 Token-frequency telemetry (vocab usage distribution) `open`
-- IT15 Tokenizer-spec versioning (tokenizer changes tracked) `open`
-- IT16 OOV handling policy (unknown-token fallbacks) `open`
-- IT17 Subword-to-byte fallback (lossless decode guarantees) `open`
-- IT18 Token-boundary attention bias (boundary-aware scoring) `open`
-- IT19 Token-packing (dense sequence packing for prefill) `open`
-- IT20 Byte-level LM adapter (byte model fallback path) `open`
+- IT01 Bit-level BPE (compression below the byte boundary) `wired` (wubu_token, test PASSES)
+- IT02 Tokenizer-free UTF-8 embeddings (no vocab, ~85% embedding savings) `wired` (wubu_token, test PASSES)
+- IT03 Subword-benefit decoupling (isolate tokenization effects) `wired` (wubu_token, test PASSES)
+- IT04 Byte-entropy-aware merges (low-entropy byte distribution handling) `wired` (wubu_token, test PASSES)
+- IT05 Lexical-density detector (context density -> effective window) `wired` (wubu_token, test PASSES)
+- IT06 Token-merge cache (frequent-token path memoization) `wired` (wubu_token, test PASSES)
+- IT07 Vocabulary pruning (drop unused tokens, remap ids) `wired` (wubu_token, test PASSES)
+- IT08 Tokenizer roundtrip audit (encode/decode fidelity checks) `wired` (wubu_token, test PASSES)
+- IT09 Multi-script tokenization (mixed-script merge policy) `wired` (wubu_token, test PASSES)
+- IT10 Token-level compression (post-token entropy coding) `wired` (wubu_token, test PASSES)
+- IT11 Adaptive tokenization (per-domain vocab) `wired` (wubu_token, test PASSES)
+- IT12 Token-efficiency metric (tokens per information unit) `wired` (wubu_token, test PASSES)
+- IT13 Embedding-table compression (shared embeddings, ties quant) `wired` (wubu_token, test PASSES)
+- IT14 Token-frequency telemetry (vocab usage distribution) `wired` (wubu_token, test PASSES)
+- IT15 Tokenizer-spec versioning (tokenizer changes tracked) `wired` (wubu_token, test PASSES)
+- IT16 OOV handling policy (unknown-token fallbacks) `wired` (wubu_token, test PASSES)
+- IT17 Subword-to-byte fallback (lossless decode guarantees) `wired` (wubu_token, test PASSES)
+- IT18 Token-boundary attention bias (boundary-aware scoring) `wired` (wubu_token, test PASSES)
+- IT19 Token-packing (dense sequence packing for prefill) `wired` (wubu_token, test PASSES)
+- IT20 Byte-level LM adapter (byte model fallback path) `wired` (wubu_token, test PASSES)
 - IT21 Tokenizer benchmark (multilingual token efficiency evals) `open`
 - IT22 Token-id remapping (vocab swap without retrain) `open`
 - IT23 Token entropy monitor (distribution shift detection) `open`
