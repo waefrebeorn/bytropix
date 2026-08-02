@@ -7,7 +7,7 @@
 
 int wubu_tok_bit_bpe_cost(int byte_len, int bits_per_symbol)
 {
-    if (byte_len < 0 || bits_per_symbol <= 0) return -1;
+    if (byte_len < 0 || bits_per_symbol < 0) return -1;
     /* the bytes above the entropy floor cost the symbol bits */
     return byte_len * 8 + byte_len * bits_per_symbol / 8;
 }

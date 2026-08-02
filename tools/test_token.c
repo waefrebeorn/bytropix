@@ -27,10 +27,10 @@ int main(void)
         CHECK(e > 0, "embedding non-zero");
     }
 
-    /* IT04: entropy merge score -- uniform is higher entropy */
+    /* IT04: entropy merge score -- uniform is higher entropy (in NATS) */
     {
         uint32_t c1[4] = { 25, 25, 25, 25 }, c2[4] = { 97, 1, 1, 1 };
-        NEAR(wubu_tok_entropy_merge(c1, 4), 2.0f, 1e-4f);
+        NEAR(wubu_tok_entropy_merge(c1, 4), logf(4.0f), 1e-4f);
         CHECK(wubu_tok_entropy_merge(c2, 4) < 0.5f, "skewed is low-entropy");
     }
 
