@@ -981,26 +981,26 @@ Status: `open` (67 gaps; bit-level/byte-level/tokenizer-free tokenization + lexi
 ## Theme IU: Linear attention / fast kernels
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (Mamba3 2603.15569; Kimi Linear/KDA 2510.26692; FLA 2503.14376; Gated DeltaNet; PaTH attention; Hymba hybrid-head)
-- IU01 Chunkwise-parallel linear attention (FLA-style chunked formulation) `open`
-- IU02 Mamba3 selective state update (recurrent state, constant memory) `open`
-- IU03 Gated DeltaNet update (gated delta rule per step) `open`
-- IU04 Gated Slot Attention (GSA) state slots `open`
-- IU05 HGRN2 gated linear RNN with state expansion `open`
-- IU06 GLA hardware-efficient gated linear attention `open`
-- IU07 mLSTM sigmoid-gated reduced-compute variant (mLSTMsig) `open`
-- IU08 Tiled flash linear attention (TFLA kernel tiling) `open`
-- IU09 Lightning attention (Ling-style recurrent linear variant) `open`
-- IU10 PaTH position encoding (Householder accumulation) `open`
-- IU11 Hybrid-head attention (Hymba-style attention+SSM heads per layer) `open`
-- IU12 Hybrid layer mixing (attention/SSM alternation, Falcon-H1 style) `open`
-- IU13 SSM KV-cache elimination path (recurrent state instead of KV) `open`
-- IU14 SSM long-context scaling (beyond quadratic-attention limits) `open`
-- IU15 Hybrid TTFT comparison (SSM 1.35s vs Transformer 8.24s at 57K) `open`
-- IU16 Linear-attention numerical stability (recurrent accumulation guards) `open`
-- IU17 State compression (learned state summarization) `open`
-- IU18 Linear-attention + RoPE interaction (position in linear recurrences) `open`
-- IU19 Chunk state transfer (carry chunk states across batches) `open`
-- IU20 Gated state decay (forget gates in the state) `open`
+- IU01 Chunkwise-parallel linear attention (FLA-style chunked formulation) `wired` (wubu_linattn, test PASSES)
+- IU02 Mamba3 selective state update (recurrent state, constant memory) `wired` (wubu_linattn, test PASSES)
+- IU03 Gated DeltaNet update (gated delta rule per step) `wired` (wubu_linattn, test PASSES)
+- IU04 Gated Slot Attention (GSA) state slots `wired` (wubu_linattn, test PASSES)
+- IU05 HGRN2 gated linear RNN with state expansion `wired` (wubu_linattn, test PASSES)
+- IU06 GLA hardware-efficient gated linear attention `wired` (wubu_linattn, test PASSES)
+- IU07 mLSTM sigmoid-gated reduced-compute variant (mLSTMsig) `wired` (wubu_linattn, test PASSES)
+- IU08 Tiled flash linear attention (TFLA kernel tiling) `wired` (wubu_linattn, test PASSES)
+- IU09 Lightning attention (Ling-style recurrent linear variant) `wired` (wubu_linattn, test PASSES)
+- IU10 PaTH position encoding (Householder accumulation) `wired` (wubu_linattn, test PASSES)
+- IU11 Hybrid-head attention (Hymba-style attention+SSM heads per layer) `wired` (wubu_linattn, test PASSES)
+- IU12 Hybrid layer mixing (attention/SSM alternation, Falcon-H1 style) `wired` (wubu_linattn, test PASSES)
+- IU13 SSM KV-cache elimination path (recurrent state instead of KV) `wired` (wubu_linattn, test PASSES)
+- IU14 SSM long-context scaling (beyond quadratic-attention limits) `wired` (wubu_linattn, test PASSES)
+- IU15 Hybrid TTFT comparison (SSM 1.35s vs Transformer 8.24s at 57K) `wired` (wubu_linattn, test PASSES)
+- IU16 Linear-attention numerical stability (recurrent accumulation guards) `wired` (wubu_linattn, test PASSES)
+- IU17 State compression (learned state summarization) `wired` (wubu_linattn, test PASSES)
+- IU18 Linear-attention + RoPE interaction (position in linear recurrences) `wired` (wubu_linattn, test PASSES)
+- IU19 Chunk state transfer (carry chunk states across batches) `wired` (wubu_linattn, test PASSES)
+- IU20 Gated state decay (forget gates in the state) `wired` (wubu_linattn, test PASSES)
 - IU21 Delta-rule memory write (delta updates to the state) `open`
 - IU22 Linear-attention kernel variant selection (FLA-style autotune) `open`
 - IU23 SSM precision control (state precision vs drift) `open`
