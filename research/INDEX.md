@@ -453,3 +453,14 @@ Status: `wired` = implemented+tested.
 - DD05 Fraud detection (outlier + dispute + trust decay) `wired` (wubu_fraud.c)
 - DD06 Trust-gated voting weight `wired` (test_multiconsensus)
 - DD07 Integration: consensus → DGM archive `wired` (test_multiconsensus)
+
+## Theme EE: Symbolic Regression + Automated Theorem Proving + Invariant Discovery
+Status: wired = implemented+tested; open = research-level.
+### 7 gaps (EE01-EE06 wired, EE07 open):
+- EE01 Symbolic regression (GP equation discovery) wired (wubu_symreg.c)
+- EE02 SINDy (sparse dynamics identification) wired (wubu_sindy.c)
+- EE03 CEGIS (counterexample-guided config synthesis) wired (wubu_cegis.c)
+- EE04 Automated theorem proving (natural-deduction) wired (wubu_prover.c)
+- EE05 Invariant discovery (loop invariant synthesis) wired (wubu_invariant.c)
+- EE06 Integration: discovered law to loopguard/safekern wired (test_ee.c)
+- EE07 Closed-loop self-verification (re-discover on shift) open (research: needs world-model)
