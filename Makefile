@@ -237,6 +237,7 @@ src/wubu_bonzi.o: src/wubu_bonzi.c include/wubu_bonzi.h
 src/wubu_metacog.o: src/wubu_metacog.c include/wubu_metacog.h
 src/wubu_bridge.o: src/wubu_bridge.c include/wubu_bridge.h
 src/wubu_hopfield2.o: src/wubu_hopfield2.c include/wubu_hopfield2.h
+src/wubu_evict2026b.o: src/wubu_evict2026b.c include/wubu_evict2026b.h
 src/wubu_evict2026.o: src/wubu_evict2026.c include/wubu_evict2026.h
 src/wubu_freeenergy.o: src/wubu_freeenergy.c include/wubu_freeenergy.h
 src/wubu_align.o: src/wubu_align.c include/wubu_align.h
@@ -1091,6 +1092,10 @@ test_hopfield2: tools/test_hopfield2.c src/wubu_hopfield2.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+test_evict2026b: tools/test_evict2026b.c src/wubu_evict2026b.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 test_evict2026: tools/test_evict2026.c src/wubu_evict2026.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
@@ -1552,7 +1557,7 @@ test_cross_attn: tools/test_cross_attn.c src/wubu_cross_attn.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
-test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive test_stream_kv test_kv_evict_h2o test_capacity_wall test_hugepage test_kv_budget test_wm_kv test_spec_tuner test_quant_selector test_kv_compress test_lruk test_sparse_attn test_attn_tune test_kv_shield test_ctx_manage test_lookahead test_sys_tune test_lm_infinite test_spec_variants test_more_spec test_misc_gaps test_bf16_gemv test_attn_kernels test_db_cross test_kv2026 test_kv2026b test_ttc test_kv2026c test_sys2026 test_linear_attn test_ternary test_agentic_kv test_dn2 test_parallel_spec test_moe_rag test_eval_qat test_pd_serve test_integrate test_agentic_os_mem test_capzero test_loopguard_planediv test_vecsearch test_causal_symbolic test_metagame_coord test_energy test_debt test_hopfield test_align test_freeenergy test_evict2026 test_hopfield2 test_bridge test_metacog test_bonzi test_worldmodel_agentauth test_ax test_axi test_continual test_multimodal test_multiconsensus test_ee test_ff test_gg test_hh
+test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive test_stream_kv test_kv_evict_h2o test_capacity_wall test_hugepage test_kv_budget test_wm_kv test_spec_tuner test_quant_selector test_kv_compress test_lruk test_sparse_attn test_attn_tune test_kv_shield test_ctx_manage test_lookahead test_sys_tune test_lm_infinite test_spec_variants test_more_spec test_misc_gaps test_bf16_gemv test_attn_kernels test_db_cross test_kv2026 test_kv2026b test_ttc test_kv2026c test_sys2026 test_linear_attn test_ternary test_agentic_kv test_dn2 test_parallel_spec test_moe_rag test_eval_qat test_pd_serve test_integrate test_agentic_os_mem test_capzero test_loopguard_planediv test_vecsearch test_causal_symbolic test_metagame_coord test_energy test_debt test_hopfield test_align test_freeenergy test_evict2026 test_evict2026b test_hopfield2 test_bridge test_metacog test_bonzi test_worldmodel_agentauth test_ax test_axi test_continual test_multimodal test_multiconsensus test_ee test_ff test_gg test_hh
 	@echo "=== ALL TESTS PASSED ==="
 
 test_nf4: tools/test_nf4.c src/wubu_nf4.o
