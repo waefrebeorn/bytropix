@@ -693,28 +693,28 @@ Status: `open` (67 gaps; continuous-time / manifold / federated Hopfield + atten
 ## Theme IQ: Preference optimization frontier
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (2602.00954 small-margin; 2605.20834 DPO/RLHF equivalence; 2509.24159 RE-PO; SimPO; CPO; AlphaPO)
-- IQ01 SimPO reference-free reward (length-normalized average log-prob) `open`
+- IQ01 SimPO reference-free reward (length-normalized average log-prob) `wired` (wubu_pref, test PASSES)
 - IQ02 CPO conditional preference optimization (difficult discriminative prompts) `open`
-- IQ03 IPO identity-preference optimization (squared-error preference loss) `open`
-- IQ04 RE-PO robust enhanced policy optimization (general enhancer over DPO/IPO/SimPO/CPO) `open`
-- IQ05 AlphaPO reward-shape-aware alignment (reward shaping for DAAs) `open`
-- IQ06 Small-margin preference training (margin-aware sampling) `open`
-- IQ07 DPO/RLHF conditional-equivalence checker (when DPO == RLHF provably) `open`
-- IQ08 Length-bias correction (length-normalized rewards) `open`
-- IQ09 Reference-model-free margin (SimPO-style implicit reference) `open`
-- IQ10 Preference pair quality weighting (pair difficulty weighting) `open`
-- IQ11 Reward accuracy monitor (preference-vs-generation alignment metric) `open`
-- IQ12 Preference dataset dedup (near-duplicate pair suppression) `open`
-- IQ13 Offline vs online preference mixing (static pairs + live feedback) `open`
-- IQ14 Preference aggregation (multiple annotators -> consensus pair) `open`
-- IQ15 Margin schedule (margin annealed across training) `open`
-- IQ16 Preference noise robustness (label-noise-tolerant loss) `open`
-- IQ17 Token-level preference (per-token rewards, not sequence-level) `open`
-- IQ18 Step-level process preferences (ties the PRM literature) `open`
-- IQ19 Preference cache (reuse pair gradients across updates) `open`
-- IQ20 Preference-based early stopping (reward-accuracy gate) `open`
+- IQ03 IPO identity-preference optimization (squared-error preference loss) `wired` (wubu_pref, test PASSES)
+- IQ04 RE-PO robust enhanced policy optimization (general enhancer over DPO/IPO/SimPO/CPO) `wired` (wubu_pref, test PASSES)
+- IQ05 AlphaPO reward-shape-aware alignment (reward shaping for DAAs) `wired` (wubu_pref, test PASSES)
+- IQ06 Small-margin preference training (margin-aware sampling) `wired` (wubu_pref, test PASSES)
+- IQ07 DPO/RLHF conditional-equivalence checker (when DPO == RLHF provably) `wired` (wubu_pref, test PASSES)
+- IQ08 Length-bias correction (length-normalized rewards) `wired` (wubu_pref, test PASSES)
+- IQ09 Reference-model-free margin (SimPO-style implicit reference) `wired` (wubu_pref, test PASSES)
+- IQ10 Preference pair quality weighting (pair difficulty weighting) `wired` (wubu_pref, test PASSES)
+- IQ11 Reward accuracy monitor (preference-vs-generation alignment metric) `wired` (wubu_pref, test PASSES)
+- IQ12 Preference dataset dedup (near-duplicate pair suppression) `wired` (wubu_pref, test PASSES)
+- IQ13 Offline vs online preference mixing (static pairs + live feedback) `wired` (wubu_pref, test PASSES)
+- IQ14 Preference aggregation (multiple annotators -> consensus pair) `wired` (wubu_pref, test PASSES)
+- IQ15 Margin schedule (margin annealed across training) `wired` (wubu_pref, test PASSES)
+- IQ16 Preference noise robustness (label-noise-tolerant loss) `wired` (wubu_pref, test PASSES)
+- IQ17 Token-level preference (per-token rewards, not sequence-level) `wired` (wubu_pref, test PASSES)
+- IQ18 Step-level process preferences (ties the PRM literature) `wired` (wubu_pref, test PASSES)
+- IQ19 Preference cache (reuse pair gradients across updates) `wired` (wubu_pref, test PASSES)
+- IQ20 Preference-based early stopping (reward-accuracy gate) `wired` (wubu_pref, test PASSES)
 - IQ21 Multi-objective preference (win/lose/ties with three-way loss) `open`
-- IQ22 Preference staleness (pair age weighting) `open`
+- IQ22 Preference staleness (pair age weighting) `wired` (wubu_pref, test PASSES)
 - IQ23 Reward-free calibration (reference-free reward alignment check) `open`
 - IQ24 Preference conflict detection (contradictory pairs) `open`
 - IQ25 Robust preference optimization (RE-PO-style robustness envelope) `open`
