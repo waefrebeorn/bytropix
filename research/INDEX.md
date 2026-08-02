@@ -635,43 +635,43 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IP12 Memory decay scheduler (halflife adaptation by pattern utility) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP13 Context-dependent recall gating (context vector modulates the memory read) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP14 Heteroassociative binding (input -> output associations, not just auto-assoc) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
-- IP15 Memory matrix compression (low-rank storage of the pattern matrix) `open`
+- IP15 Memory matrix compression (low-rank storage of the pattern matrix) `wired` (wubu_hopfield3, test PASSES)
 - IP16 Retrieval by partial cue (prefix / fragment completion) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
-- IP17 Hopfield-encoded KV cache (attention KV stored as Hopfield patterns, ties IO) `open`
+- IP17 Hopfield-encoded KV cache (attention KV stored as Hopfield patterns, ties IO) `wired` (wubu_hopfield3, test PASSES)
 - IP18 Memory capacity accounting (exponential-capacity bookkeeping) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP19 Episodic memory with time-tags (temporal associative memory) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP20 Memory interference repair (re-orthogonalize similar stored patterns) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP21 Continuous-time numerical integration (memory ODE solver, RK4) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP22 Manifold curvature estimation for context reorganization `open`
 - IP23 Federated memory sharing (patterns shared across agents with provenance) `open`
-- IP24 Memory retrieval ranking by spectral overlap `open`
+- IP24 Memory retrieval ranking by spectral overlap `wired` (wubu_hopfield3, test PASSES)
 - IP25 Forgetting curve integration (Ebbinghaus curve into the memory weight) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP26 Memory replay scheduling (when to replay stored patterns, ties BB) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
-- IP27 Memory write dedup (identical/duplicate pattern suppression) `open`
-- IP28 Memory read with temperature control (softmax sharpness per query) `open`
+- IP27 Memory write dedup (identical/duplicate pattern suppression) `wired` (wubu_hopfield3, test PASSES)
+- IP28 Memory read with temperature control (softmax sharpness per query) `wired` (wubu_hopfield3, test PASSES)
 - IP29 Associative memory for tool selection (cue -> tool pattern retrieval) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
-- IP30 Memory chaining (sequential pattern association, story recall) `open`
-- IP31 Hopfield energy monitor (free-energy of the memory state) `open`
+- IP30 Memory chaining (sequential pattern association, story recall) `wired` (wubu_hopfield3, test PASSES)
+- IP31 Hopfield energy monitor (free-energy of the memory state) `wired` (wubu_hopfield3, test PASSES)
 - IP32 Memory stabilization (pattern anchoring after consolidation) `open`
-- IP33 Cross-modal associative memory (text cue -> vision pattern, ties JB) `open`
-- IP34 Memory corruption detection (pattern degradation watchdog) `open`
-- IP35 Memory hygiene: prune low-utility stale patterns (ties IL05) `open`
-- IP36 Associative recall in the decode path (memory-guided token candidates) `open`
-- IP37 Memory-attention fusion (retrieved pattern as attention bias) `open`
-- IP38 Multi-scale memories (short/long-term with separate betas) `open`
-- IP39 Memory state snapshot/restore (checkpoint the pattern matrix) `open`
-- IP40 Hopfield capacity telemetry (used vs theoretical capacity) `open`
+- IP33 Cross-modal associative memory (text cue -> vision pattern, ties JB) `wired` (wubu_hopfield3, test PASSES)
+- IP34 Memory corruption detection (pattern degradation watchdog) `wired` (wubu_hopfield3, test PASSES)
+- IP35 Memory hygiene: prune low-utility stale patterns (ties IL05) `wired` (wubu_hopfield3, test PASSES)
+- IP36 Associative recall in the decode path (memory-guided token candidates) `wired` (wubu_hopfield3, test PASSES)
+- IP37 Memory-attention fusion (retrieved pattern as attention bias) `wired` (wubu_hopfield3, test PASSES)
+- IP38 Multi-scale memories (short/long-term with separate betas) `wired` (wubu_hopfield3, test PASSES)
+- IP39 Memory state snapshot/restore (checkpoint the pattern matrix) `wired` (wubu_hopfield3, test PASSES)
+- IP40 Hopfield capacity telemetry (used vs theoretical capacity) `wired` (wubu_hopfield3, test PASSES)
 - IP41 Cue embedding quality monitor (cue dims that hurt recall) `open`
 - IP42 Memory write batching (bulk store of a session's patterns) `open`
 - IP43 Memory read batching (bulk recall for batched decode) `open`
-- IP44 Pattern condensation (merge near-identical patterns) `open`
-- IP45 Memory-based reasoning (recall chains as CoT memory, ties IV) `open`
+- IP44 Pattern condensation (merge near-identical patterns) `wired` (wubu_hopfield3, test PASSES)
+- IP45 Memory-based reasoning (recall chains as CoT memory, ties IV) `wired` (wubu_hopfield3, test PASSES)
 - IP46 Associative outlier tolerance (robust recall under adversarial cues) `open`
-- IP47 Memory matrix spectral cleanup (drop low-singular-value directions) `open`
-- IP48 Context-switch memory isolation (per-task memory partitions) `open`
+- IP47 Memory matrix spectral cleanup (drop low-singular-value directions) `wired` (wubu_hopfield3, test PASSES)
+- IP48 Context-switch memory isolation (per-task memory partitions) `wired` (wubu_hopfield3, test PASSES)
 - IP49 Memory search over patterns (ANN over the memory, ties AV) `open`
 - IP50 Memory write/read asymmetry modeling (write cost vs read benefit) `open`
-- IP51 Hopfield beta autotuning (temperature fit by recall error) `open`
+- IP51 Hopfield beta autotuning (temperature fit by recall error) `wired` (wubu_hopfield3, test PASSES)
 - IP52 Memory decay vs consolidation arbitration (decay rate vs rehearsal rate) `open`
 - IP53 Retrieval-augmented memory (external corpus -> memory patterns) `open`
 - IP54 Memory provenance (which source stored each pattern) `open`
