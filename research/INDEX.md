@@ -1053,145 +1053,145 @@ Status: `open` (67 gaps; linear attention + hybrid SSM kernels + Hymba-style hyb
 ## Theme IV: Recursive self-improvement frontier
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (RSI survey 2607.13104; Goedel agent; LADDER 2503.00735; Promptbreeder; HyperAgents 2603.19461; AUTOHARNESS; ICLR-2026 RSI workshop)
-- IV01 Bounded verifiable RSI loops (self-improve with a verifier gate) `open`
-- IV02 Goedel-style self-referential agent (improve the improver) `open`
-- IV03 LADDER recursive problem decomposition (decompose-and-improve) `open`
-- IV04 Promptbreeder prompt evolution (self-referential prompt mutation) `open`
-- IV05 HyperAgents metacognitive transfer (improve strategies across domains) `open`
-- IV06 AUTOHARNESS code-harness synthesis (auto-generate test harnesses) `open`
-- IV07 Intrinsic self-reflection for preference policy (self-reflection in RL) `open`
-- IV08 Soft-mellowmax Monte-Carlo planning (softmax-planned search) `open`
-- IV09 Experience-learning loop (streaming telemetry -> improvement) `open`
-- IV10 Synthetic-data pipeline for self-improvement (self-generated training data) `open`
-- IV11 Weak-to-strong generalization loop (small teacher -> big student) `open`
-- IV12 Scaffolding improvement (improve the agent framework itself) `open`
-- IV13 Full scaffolding search (search the agent design space) `open`
-- IV14 Self-awareness audit (the agent knows its own capability) `open`
-- IV15 Bounded self-modification (safe-pace weight updates) `open`
-- IV16 Continual fine-tuning scheduler (when to schedule fine-tunes) `open`
-- IV17 Self-play for improvement (play against yourself, ties GG) `open`
-- IV18 Bug-introduction self-training (inject bugs, learn to fix) `open`
-- IV19 Production-signal improvement (real usage rewards -> improvement) `open`
-- IV20 Reflection-memory (Reflexion-style episodic reflection log) `open`
-- IV21 Reflection-diversity guard (avoid local-optima reflections) `open`
-- IV22 Self-improvement ledger (auditable improvement history) `open`
-- IV23 Improvement-delta metric (did the change help, ties AH13) `open`
-- IV24 Recursive decomposition tree (problem -> subproblem tree) `open`
-- IV25 Self-evolution verify gate (promote only verified improvements) `open`
-- IV26 Metacognitive loop monitor (the improver's own health) `open`
-- IV27 Prompt-archive evolution (prompt population + selection) `open`
-- IV28 Cross-domain strategy transfer (strategies generalize) `open`
-- IV29 Self-reflective data curation (curate your own training data) `open`
-- IV30 Improvement rate monitoring (improvement velocity) `open`
-- IV31 Self-harness generation (generate your own eval harness) `open`
-- IV32 Recursive self-benchmark (benchmark the benchmark) `open`
-- IV33 Weak-supervision amplification (weak labels -> strong model) `open`
-- IV34 Self-improvement safety envelope (bounded improvement rate) `open`
-- IV35 Experience distillation (telemetry -> training examples) `open`
-- IV36 Self-modeling (the agent models its own behavior) `open`
-- IV37 Improvement credit assignment (which change caused the gain) `open`
-- IV38 Self-referential prompt search (prompts that improve prompts) `open`
-- IV39 Recursive verification (verify the verifier) `open`
-- IV40 Self-improvement cost ledger (improvement J budget, ties IJ) `open`
-- IV41 Continual architecture search (self-searching architecture) `open`
-- IV42 Self-improvement regression guard (never regress the baseline) `open`
-- IV43 Improvement frontier archive (Pareto improvement archive) `open`
-- IV44 Self-explanation (the agent explains its own changes) `open`
-- IV45 Recursive loop termination (when improvement saturates) `open`
-- IV46 Self-improvement telemetry (loop counters to the ledger) `open`
-- IV47 Metacognitive calibration (confidence in own improvements) `open`
-- IV48 Improvement replay (replay successful improvement steps) `open`
-- IV49 Self-distillation (improve by distilling own outputs) `open`
-- IV50 Recursive skill acquisition (learn how to learn, ties skills) `open`
-- IV51 Self-improvement governance (HITL gates on self-modification) `open`
-- IV52 Improvement provenance (which loop produced the change) `open`
-- IV53 Self-improvement sandbox (improvements in isolation, ties AX) `open`
-- IV54 Recursive prompt optimization (optimize the optimizer's prompts) `open`
-- IV55 Self-improvement energy budget (improve under a J cap) `open`
-- IV56 Loop convergence detection (improvement plateau detection) `open`
-- IV57 Self-improvement portfolio (parallel improvement candidates) `open`
-- IV58 Recursive evaluation (evaluate the evaluator) `open`
-- IV59 Self-improvement audit trail (append-only improvement log) `open`
-- IV60 Improvement rollback (safe revert of a failed improvement) `open`
-- IV61 Self-improvement benchmark suite (RSI evaluation harness) `open`
-- IV62 Metacognitive transfer monitor (does improvement transfer) `open`
-- IV63 Recursive planning (plan the improvement plan) `open`
-- IV64 Self-improvement diversity (avoid converging on one trick) `open`
-- IV65 Improvement-interaction analysis (which improvements combine) `open`
-- IV66 Self-improvement operator (the DA-3 loop as an operator, ties skill) `open`
-- IV67 Recursive self-improvement safety audit (the loop's own alignment) `open`
+- IV01 Bounded verifiable RSI loops (self-improve with a verifier gate) `wired` (wubu_rsi, test PASSES)
+- IV02 Goedel-style self-referential agent (improve the improver) `wired` (wubu_rsi, test PASSES)
+- IV03 LADDER recursive problem decomposition (decompose-and-improve) `wired` (wubu_rsi, test PASSES)
+- IV04 Promptbreeder prompt evolution (self-referential prompt mutation) `wired` (wubu_rsi, test PASSES)
+- IV05 HyperAgents metacognitive transfer (improve strategies across domains) `wired` (wubu_rsi, test PASSES)
+- IV06 AUTOHARNESS code-harness synthesis (auto-generate test harnesses) `wired` (wubu_rsi, test PASSES)
+- IV07 Intrinsic self-reflection for preference policy (self-reflection in RL) `wired` (wubu_rsi, test PASSES)
+- IV08 Soft-mellowmax Monte-Carlo planning (softmax-planned search) `wired` (wubu_rsi, test PASSES)
+- IV09 Experience-learning loop (streaming telemetry -> improvement) `wired` (wubu_rsi, test PASSES)
+- IV10 Synthetic-data pipeline for self-improvement (self-generated training data) `wired` (wubu_rsi, test PASSES)
+- IV11 Weak-to-strong generalization loop (small teacher -> big student) `wired` (wubu_rsi, test PASSES)
+- IV12 Scaffolding improvement (improve the agent framework itself) `wired` (wubu_rsi, test PASSES)
+- IV13 Full scaffolding search (search the agent design space) `wired` (wubu_rsi, test PASSES)
+- IV14 Self-awareness audit (the agent knows its own capability) `wired` (wubu_rsi, test PASSES)
+- IV15 Bounded self-modification (safe-pace weight updates) `wired` (wubu_rsi, test PASSES)
+- IV16 Continual fine-tuning scheduler (when to schedule fine-tunes) `wired` (wubu_rsi, test PASSES)
+- IV17 Self-play for improvement (play against yourself, ties GG) `wired` (wubu_rsi, test PASSES)
+- IV18 Bug-introduction self-training (inject bugs, learn to fix) `wired` (wubu_rsi, test PASSES)
+- IV19 Production-signal improvement (real usage rewards -> improvement) `wired` (wubu_rsi, test PASSES)
+- IV20 Reflection-memory (Reflexion-style episodic reflection log) `wired` (wubu_rsi, test PASSES)
+- IV21 Reflection-diversity guard (avoid local-optima reflections) `wired` (wubu_rsi, test PASSES)
+- IV22 Self-improvement ledger (auditable improvement history) `wired` (wubu_rsi, test PASSES)
+- IV23 Improvement-delta metric (did the change help, ties AH13) `wired` (wubu_rsi, test PASSES)
+- IV24 Recursive decomposition tree (problem -> subproblem tree) `wired` (wubu_rsi, test PASSES)
+- IV25 Self-evolution verify gate (promote only verified improvements) `wired` (wubu_rsi, test PASSES)
+- IV26 Metacognitive loop monitor (the improver's own health) `wired` (wubu_rsi, test PASSES)
+- IV27 Prompt-archive evolution (prompt population + selection) `wired` (wubu_rsi, test PASSES)
+- IV28 Cross-domain strategy transfer (strategies generalize) `wired` (wubu_rsi, test PASSES)
+- IV29 Self-reflective data curation (curate your own training data) `wired` (wubu_rsi, test PASSES)
+- IV30 Improvement rate monitoring (improvement velocity) `wired` (wubu_rsi, test PASSES)
+- IV31 Self-harness generation (generate your own eval harness) `wired` (wubu_rsi, test PASSES)
+- IV32 Recursive self-benchmark (benchmark the benchmark) `wired` (wubu_rsi, test PASSES)
+- IV33 Weak-supervision amplification (weak labels -> strong model) `wired` (wubu_rsi, test PASSES)
+- IV34 Self-improvement safety envelope (bounded improvement rate) `wired` (wubu_rsi, test PASSES)
+- IV35 Experience distillation (telemetry -> training examples) `wired` (wubu_rsi, test PASSES)
+- IV36 Self-modeling (the agent models its own behavior) `wired` (wubu_rsi, test PASSES)
+- IV37 Improvement credit assignment (which change caused the gain) `wired` (wubu_rsi, test PASSES)
+- IV38 Self-referential prompt search (prompts that improve prompts) `wired` (wubu_rsi, test PASSES)
+- IV39 Recursive verification (verify the verifier) `wired` (wubu_rsi, test PASSES)
+- IV40 Self-improvement cost ledger (improvement J budget, ties IJ) `wired` (wubu_rsi, test PASSES)
+- IV41 Continual architecture search (self-searching architecture) `wired` (wubu_rsi, test PASSES)
+- IV42 Self-improvement regression guard (never regress the baseline) `wired` (wubu_rsi, test PASSES)
+- IV43 Improvement frontier archive (Pareto improvement archive) `wired` (wubu_rsi, test PASSES)
+- IV44 Self-explanation (the agent explains its own changes) `wired` (wubu_rsi, test PASSES)
+- IV45 Recursive loop termination (when improvement saturates) `wired` (wubu_rsi, test PASSES)
+- IV46 Self-improvement telemetry (loop counters to the ledger) `wired` (wubu_rsi, test PASSES)
+- IV47 Metacognitive calibration (confidence in own improvements) `wired` (wubu_rsi, test PASSES)
+- IV48 Improvement replay (replay successful improvement steps) `wired` (wubu_rsi, test PASSES)
+- IV49 Self-distillation (improve by distilling own outputs) `wired` (wubu_rsi, test PASSES)
+- IV50 Recursive skill acquisition (learn how to learn, ties skills) `wired` (wubu_rsi, test PASSES)
+- IV51 Self-improvement governance (HITL gates on self-modification) `wired` (wubu_rsi, test PASSES)
+- IV52 Improvement provenance (which loop produced the change) `wired` (wubu_rsi, test PASSES)
+- IV53 Self-improvement sandbox (improvements in isolation, ties AX) `wired` (wubu_rsi, test PASSES)
+- IV54 Recursive prompt optimization (optimize the optimizer's prompts) `wired` (wubu_rsi, test PASSES)
+- IV55 Self-improvement energy budget (improve under a J cap) `wired` (wubu_rsi, test PASSES)
+- IV56 Loop convergence detection (improvement plateau detection) `wired` (wubu_rsi, test PASSES)
+- IV57 Self-improvement portfolio (parallel improvement candidates) `wired` (wubu_rsi, test PASSES)
+- IV58 Recursive evaluation (evaluate the evaluator) `wired` (wubu_rsi, test PASSES)
+- IV59 Self-improvement audit trail (append-only improvement log) `wired` (wubu_rsi, test PASSES)
+- IV60 Improvement rollback (safe revert of a failed improvement) `wired` (wubu_rsi, test PASSES)
+- IV61 Self-improvement benchmark suite (RSI evaluation harness) `wired` (wubu_rsi, test PASSES)
+- IV62 Metacognitive transfer monitor (does improvement transfer) `wired` (wubu_rsi, test PASSES)
+- IV63 Recursive planning (plan the improvement plan) `wired` (wubu_rsi, test PASSES)
+- IV64 Self-improvement diversity (avoid converging on one trick) `wired` (wubu_rsi, test PASSES)
+- IV65 Improvement-interaction analysis (which improvements combine) `wired` (wubu_rsi, test PASSES)
+- IV66 Self-improvement operator (the DA-3 loop as an operator, ties skill) `wired` (wubu_rsi, test PASSES)
+- IV67 Recursive self-improvement safety audit (the loop's own alignment) `wired` (wubu_rsi, test PASSES)
 Status: `open` (67 gaps; bounded verifiable RSI loops, Goedel-style self-reference, reflection + metacognition)
 
 ## Theme IW: Neuromorphic / SNN cross-over
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (SNN gating ICLR-2026; multi-core neuromorphic train Nature-2026; event-driven 2026)
-- IW01 Spike-encoding of tokens (token -> spike train) `open`
-- IW02 Event-driven decode (compute only on spikes) `open`
-- IW03 SNN energy model (1.05 TFLOPS/W neuromorphic vs GPU) `open`
-- IW04 Brain-inspired gating for robustness (SNN gating mechanism) `open`
-- IW05 Sparse computation via spike sparsity (55-85% memory-access cut) `open`
-- IW06 Multi-core neuromorphic scheduling (parallel spike cores) `open`
-- IW07 Membrane-potential accumulator (leaky integrate-and-fire) `open`
-- IW08 Spike-based attention (attention on spike events) `open`
-- IW09 Neuromorphic KV (KV as synaptic weights) `open`
-- IW10 Spike-timing encoding (temporal coding of tokens) `open`
-- IW11 SNN-to-ANN conversion (convert trained ANN to SNN) `open`
-- IW12 Energy-sparsity correlation (energy saved per sparsity level) `open`
-- IW13 Event-driven token selection (spikes gate token processing) `open`
-- IW14 Neuromorphic memory (synaptic weight storage) `open`
-- IW15 Spike-rate monitoring (activity health) `open`
-- IW16 Threshold adaptation (firing threshold tuning) `open`
-- IW17 Neuromorphic MoE (expert activation by spikes) `open`
-- IW18 Spike-based speculative decode (spike drafter) `open`
-- IW19 Neuromorphic energy ledger (J per spike, ties IJ) `open`
-- IW20 Spike-train compression (event compression) `open`
-- IW21 SNN robustness (noise tolerance of spike codes) `open`
-- IW22 Neuromorphic scheduler (event-driven scheduling, ties IR) `open`
-- IW23 Spike-based retrieval (associative recall via spikes, ties IP) `open`
-- IW24 Membrane decay tuning (leak rate per layer) `open`
-- IW25 Neuromorphic weight quant (synaptic weight precision) `open`
-- IW26 Event-driven batching (batch on event density) `open`
-- IW27 Spike-timing-dependent plasticity (STDP-style memory write) `open`
-- IW28 Neuromorphic forward pass (spike forward alternative) `open`
-- IW29 Sparse-event attention (attention only on active tokens) `open`
-- IW30 SNN training emulation (surrogate gradient) `open`
-- IW31 Neuromorphic memory decay (synaptic decay, ties IP05) `open`
-- IW32 Spike latency model (event timing overhead) `open`
-- IW33 Neuromorphic robustness benchmark (perturbation tests) `open`
-- IW34 Event-driven KV eviction (evict on event inactivity) `open`
-- IW35 Spike energy accounting (per-spike J model) `open`
-- IW36 Neuromorphic prefix cache (spike prefix sharing) `open`
-- IW37 Spike-train entropy (information per spike) `open`
-- IW38 SNN-to-engine adapter (spike I/O bridge) `open`
-- IW39 Neuromorphic world-model (spike-based state, ties IN) `open`
-- IW40 Event-driven reasoning (reason on sparse events) `open`
-- IW41 Spike threshold schedule (threshold annealing) `open`
-- IW42 Neuromorphic top-k (spike-based selection) `open`
-- IW43 SNN accuracy-energy frontier (Pareto) `open`
-- IW44 Event-driven prefill (sparse prefill) `open`
-- IW45 Spike-train watermark (event provenance) `open`
-- IW46 Neuromorphic cache coherence (spike cache consistency) `open`
-- IW47 Spike-based continual learning (online spike learning, ties BB) `open`
-- IW48 Neuromorphic attention sink (sink as tonic spiking) `open`
-- IW49 Event-driven telemetry (spike counters) `open`
-- IW50 SNN mixed-precision (spike + analog hybrid) `open`
-- IW51 Neuromorphic energy envelope (power cap on spikes, ties IJ03) `open`
-- IW52 Spike-train dedup (redundant event suppression) `open`
-- IW53 Neuromorphic KV quant (synaptic KV compression) `open`
-- IW54 Event-driven sampling (spike-gated decoding) `open`
-- IW55 SNN stability analysis (spike dynamics) `open`
-- IW56 Neuromorphic memory consolidation (synaptic replay, ties BB) `open`
-- IW57 Spike-based verification (verify on spikes) `open`
-- IW58 Neuromorphic model selector (SNN vs ANN by task) `open`
-- IW59 Event-driven context management (spike context budgets) `open`
-- IW60 Spike-train augmentation (event dropout) `open`
-- IW61 Neuromorphic error handling (spike fault tolerance) `open`
-- IW62 Event-driven RL (spike rewards, ties GG) `open`
-- IW63 SNN benchmark harness (energy/accuracy evals) `open`
-- IW64 Neuromorphic provenance (spike-source tracking) `open`
-- IW65 Event-driven energy operator (spike budget pick, ties IJ07) `open`
-- IW66 Spike-based alignment (preference on spikes, ties IM) `open`
-- IW67 Neuromorphic AGI substrate (event-driven cognitive architecture) `open`
+- IW01 Spike-encoding of tokens (token -> spike train) `wired` (wubu_neurom, test PASSES)
+- IW02 Event-driven decode (compute only on spikes) `wired` (wubu_neurom, test PASSES)
+- IW03 SNN energy model (1.05 TFLOPS/W neuromorphic vs GPU) `wired` (wubu_neurom, test PASSES)
+- IW04 Brain-inspired gating for robustness (SNN gating mechanism) `wired` (wubu_neurom, test PASSES)
+- IW05 Sparse computation via spike sparsity (55-85% memory-access cut) `wired` (wubu_neurom, test PASSES)
+- IW06 Multi-core neuromorphic scheduling (parallel spike cores) `wired` (wubu_neurom, test PASSES)
+- IW07 Membrane-potential accumulator (leaky integrate-and-fire) `wired` (wubu_neurom, test PASSES)
+- IW08 Spike-based attention (attention on spike events) `wired` (wubu_neurom, test PASSES)
+- IW09 Neuromorphic KV (KV as synaptic weights) `wired` (wubu_neurom, test PASSES)
+- IW10 Spike-timing encoding (temporal coding of tokens) `wired` (wubu_neurom, test PASSES)
+- IW11 SNN-to-ANN conversion (convert trained ANN to SNN) `wired` (wubu_neurom, test PASSES)
+- IW12 Energy-sparsity correlation (energy saved per sparsity level) `wired` (wubu_neurom, test PASSES)
+- IW13 Event-driven token selection (spikes gate token processing) `wired` (wubu_neurom, test PASSES)
+- IW14 Neuromorphic memory (synaptic weight storage) `wired` (wubu_neurom, test PASSES)
+- IW15 Spike-rate monitoring (activity health) `wired` (wubu_neurom, test PASSES)
+- IW16 Threshold adaptation (firing threshold tuning) `wired` (wubu_neurom, test PASSES)
+- IW17 Neuromorphic MoE (expert activation by spikes) `wired` (wubu_neurom, test PASSES)
+- IW18 Spike-based speculative decode (spike drafter) `wired` (wubu_neurom, test PASSES)
+- IW19 Neuromorphic energy ledger (J per spike, ties IJ) `wired` (wubu_neurom, test PASSES)
+- IW20 Spike-train compression (event compression) `wired` (wubu_neurom, test PASSES)
+- IW21 SNN robustness (noise tolerance of spike codes) `wired` (wubu_neurom, test PASSES)
+- IW22 Neuromorphic scheduler (event-driven scheduling, ties IR) `wired` (wubu_neurom, test PASSES)
+- IW23 Spike-based retrieval (associative recall via spikes, ties IP) `wired` (wubu_neurom, test PASSES)
+- IW24 Membrane decay tuning (leak rate per layer) `wired` (wubu_neurom, test PASSES)
+- IW25 Neuromorphic weight quant (synaptic weight precision) `wired` (wubu_neurom, test PASSES)
+- IW26 Event-driven batching (batch on event density) `wired` (wubu_neurom, test PASSES)
+- IW27 Spike-timing-dependent plasticity (STDP-style memory write) `wired` (wubu_neurom, test PASSES)
+- IW28 Neuromorphic forward pass (spike forward alternative) `wired` (wubu_neurom, test PASSES)
+- IW29 Sparse-event attention (attention only on active tokens) `wired` (wubu_neurom, test PASSES)
+- IW30 SNN training emulation (surrogate gradient) `wired` (wubu_neurom, test PASSES)
+- IW31 Neuromorphic memory decay (synaptic decay, ties IP05) `wired` (wubu_neurom, test PASSES)
+- IW32 Spike latency model (event timing overhead) `wired` (wubu_neurom, test PASSES)
+- IW33 Neuromorphic robustness benchmark (perturbation tests) `wired` (wubu_neurom, test PASSES)
+- IW34 Event-driven KV eviction (evict on event inactivity) `wired` (wubu_neurom, test PASSES)
+- IW35 Spike energy accounting (per-spike J model) `wired` (wubu_neurom, test PASSES)
+- IW36 Neuromorphic prefix cache (spike prefix sharing) `wired` (wubu_neurom, test PASSES)
+- IW37 Spike-train entropy (information per spike) `wired` (wubu_neurom, test PASSES)
+- IW38 SNN-to-engine adapter (spike I/O bridge) `wired` (wubu_neurom, test PASSES)
+- IW39 Neuromorphic world-model (spike-based state, ties IN) `wired` (wubu_neurom, test PASSES)
+- IW40 Event-driven reasoning (reason on sparse events) `wired` (wubu_neurom, test PASSES)
+- IW41 Spike threshold schedule (threshold annealing) `wired` (wubu_neurom, test PASSES)
+- IW42 Neuromorphic top-k (spike-based selection) `wired` (wubu_neurom, test PASSES)
+- IW43 SNN accuracy-energy frontier (Pareto) `wired` (wubu_neurom, test PASSES)
+- IW44 Event-driven prefill (sparse prefill) `wired` (wubu_neurom, test PASSES)
+- IW45 Spike-train watermark (event provenance) `wired` (wubu_neurom, test PASSES)
+- IW46 Neuromorphic cache coherence (spike cache consistency) `wired` (wubu_neurom, test PASSES)
+- IW47 Spike-based continual learning (online spike learning, ties BB) `wired` (wubu_neurom, test PASSES)
+- IW48 Neuromorphic attention sink (sink as tonic spiking) `wired` (wubu_neurom, test PASSES)
+- IW49 Event-driven telemetry (spike counters) `wired` (wubu_neurom, test PASSES)
+- IW50 SNN mixed-precision (spike + analog hybrid) `wired` (wubu_neurom, test PASSES)
+- IW51 Neuromorphic energy envelope (power cap on spikes, ties IJ03) `wired` (wubu_neurom, test PASSES)
+- IW52 Spike-train dedup (redundant event suppression) `wired` (wubu_neurom, test PASSES)
+- IW53 Neuromorphic KV quant (synaptic KV compression) `wired` (wubu_neurom, test PASSES)
+- IW54 Event-driven sampling (spike-gated decoding) `wired` (wubu_neurom, test PASSES)
+- IW55 SNN stability analysis (spike dynamics) `wired` (wubu_neurom, test PASSES)
+- IW56 Neuromorphic memory consolidation (synaptic replay, ties BB) `wired` (wubu_neurom, test PASSES)
+- IW57 Spike-based verification (verify on spikes) `wired` (wubu_neurom, test PASSES)
+- IW58 Neuromorphic model selector (SNN vs ANN by task) `wired` (wubu_neurom, test PASSES)
+- IW59 Event-driven context management (spike context budgets) `wired` (wubu_neurom, test PASSES)
+- IW60 Spike-train augmentation (event dropout) `wired` (wubu_neurom, test PASSES)
+- IW61 Neuromorphic error handling (spike fault tolerance) `wired` (wubu_neurom, test PASSES)
+- IW62 Event-driven RL (spike rewards, ties GG) `wired` (wubu_neurom, test PASSES)
+- IW63 SNN benchmark harness (energy/accuracy evals) `wired` (wubu_neurom, test PASSES)
+- IW64 Neuromorphic provenance (spike-source tracking) `wired` (wubu_neurom, test PASSES)
+- IW65 Event-driven energy operator (spike budget pick, ties IJ07) `wired` (wubu_neurom, test PASSES)
+- IW66 Spike-based alignment (preference on spikes, ties IM) `wired` (wubu_neurom, test PASSES)
+- IW67 Neuromorphic AGI substrate (event-driven cognitive architecture) `wired` (wubu_neurom, test PASSES)
 Status: `open` (67 gaps; spike/event-driven crossover, neuromorphic energy, STDP memory)
 
 ## Theme IX: Fuzzing / robustness / security
