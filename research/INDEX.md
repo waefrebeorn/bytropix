@@ -379,31 +379,31 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 ## Theme AV: Vectors — 7-hop Kevin-Bacon lily-pad KB sweep
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### Vector substrate gaps (8 gaps AV01-AV08)
-- AV01 ANN index (HNSW/IVF) for KV cache + semantic cache — O(N) scan today
-- AV02 Quantization (PQ/RaBitQ/SQ) for KV cache — BF16 full precision today
-- AV03 KV reuse across sessions — FIFO eviction throws everything away
-- AV04 Similarity-based KV eviction — age-based, not relevance-based
-- AV05 FlashAttention-style tiling — flat attention for 512K ctx
-- AV06 MRL / flexible-dim embeddings — fixed 128-dim semantic cache
-- AV07 On-device vector DB — no embedded, offline, low-RAM vector search
-- AV08 Agentic vector memory — episodic memory is flat list, not ANN index
-Status: `open` (all 8 to be closed as C11)
+- AV01 ANN index (HNSW layered graph + IVFFlat hybrid) for KV + semantic cache `wired` (wubu_vecsearch hnsw_insert/search)
+- AV02 RaBitQ + PQ quantization for the KV vectors `wired` (wubu_vecsearch rabitsq_quantize/estimate)
+- AV03 Cross-session KV reuse `wired` (wubu_vecsearch kvcache session keys)
+- AV04 Similarity-based KV eviction `wired` (wubu_vecsearch evict_by_similarity)
+- AV05 FlashAttention-style tiling (online-softmax 2-pass) `wired` (wubu_vecsearch flash tile)
+- AV06 MRL flexible-dim embeddings `wired` (wubu_vecsearch mrl dims)
+- AV07 On-device vector DB (ANN-backed, low-RAM) `wired` (wubu_vecsearch vecdb)
+- AV08 Agentic vector memory (ANN-indexed episodic store) `wired` (wubu_vecsearch agentic_mem)
+Status: `wired` (wubu_vecsearch, test_vecsearch PASSES)
 EOF
 
 ## Theme AW: Causal + Neuro-Symbolic + Temporal — 7-hop KB sweep
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### Causal/neuro-symbolic substrate gaps (10 gaps AW01-AW10)
-- AW01 Structural Causal Model (graph of cause->effect) — only dynamical predictor (AG04)
-- AW02 do-intervention p(x|do(a)) — cannot estimate interventions
-- AW03 Counterfactual query — cannot ask "what if"
-- AW04 Identifiability check — may attempt non-identifiable queries
-- AW05 Symbolic verifier in decode path — safety is imperative, not logical
-- AW06 Temporal belief revision (Bayesian over timestamped facts) — memory has no time
-- AW07 Logic engine (Prolog/ASP) — no deductive inference over facts
-- AW08 PDDL/STRIPS planner — replan is single-step, not goal-directed
-- AW09 Abductive diagnosis (hypotheses from failure) — no why-generation
-- AW10 Counter-abduction (rival-explanation defeat) — no defeat of wrong CoT
-Status: `open` (all 10 to be closed as C11)
+- AW01 Structural Causal Model (DAG of cause->effect) `wired` (wubu_causal scm)
+- AW02 do-intervention via truncated factorization `wired` (wubu_causal do_intervene)
+- AW03 Counterfactual query (abduction-action-prediction) `wired` (wubu_causal counterfactual)
+- AW04 Identifiability check (backdoor criterion) `wired` (wubu_causal identifiable)
+- AW05 Symbolic verifier in the decode path `wired` (wubu_symbolic verify_tokens)
+- AW06 Temporal belief revision (Bayesian, timestamped) `wired` (wubu_symbolic belief_revise)
+- AW07 Logic engine (unification + forward chaining) `wired` (wubu_symbolic logic)
+- AW08 PDDL/STRIPS goal-directed planner `wired` (wubu_symbolic plan)
+- AW09 Abductive diagnosis (best-explanation search) `wired` (wubu_symbolic abduce)
+- AW10 Counter-abduction (rival-explanation defeat) `wired` (wubu_symbolic defeat)
+Status: `wired` (wubu_causal + wubu_symbolic, test_causal_symbolic PASSES)
 
 ## Theme AX: Self-Improving Code + Sandboxed Execution + Verifiable Tool-Use
 Status: `open` = not yet in engine; `wired` = implemented+tested.
