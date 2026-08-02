@@ -765,26 +765,26 @@ Status: `open` (67 gaps; SimPO/CPO/IPO/RE-PO/AlphaPO + DPO-RLHF equivalence + al
 ## Theme IR: Multi-tenant serving / scheduler
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (2603.00356 token management; FIFO-fairness 2026; Stream2LLM MLsys-oral; scheduling survey)
-- IR01 Token-management admission control (request acceptance by token budget) `open`
-- IR02 Fair-share scheduler (weighted fair queuing over KV budget) `open`
-- IR03 Preemption with cache-rebuild cost model (preempt vs restart decision) `open`
-- IR04 Activation-budget preemption guard (bounded memory below the threshold) `open`
-- IR05 Stream2LLM context streaming + prefill overlap (TTFT reduction) `open`
-- IR06 Longest-common-prefix scheduling (minimize redundant prefill) `open`
-- IR07 Decoupled scheduling (schedule decision separate from resource acquisition) `open`
-- IR08 Hardware-specific cost model for preemption (per-device costs) `open`
-- IR09 Burst handling (elastic admission under demand spikes) `open`
-- IR10 Priority tiers with starvation bounds `open`
-- IR11 Multi-tenant KV isolation (per-tenant cache partitions) `open`
-- IR12 Token-budget fairness (each tenant's token share) `open`
-- IR13 Preemption victim selection (cheapest-to-restart request) `open`
-- IR14 Checkpointed preemption (KV snapshot on preempt, resume not restart) `open`
-- IR15 SLO-aware scheduling (per-request latency targets) `open`
-- IR16 Batch compaction (fill decode gaps with prefill chunks) `open`
-- IR17 Scheduler-cache coherence (schedule decisions respect cache reuse) `open`
-- IR18 Dynamic batching window (batch size adaptation by memory) `open`
-- IR19 Request-level priority inheritance (ties the OS PI concept) `open`
-- IR20 Memory-stability hysteresis (avoid preempt/accept oscillation) `open`
+- IR01 Token-management admission control (request acceptance by token budget) `wired` (wubu_serve, test PASSES)
+- IR02 Fair-share scheduler (weighted fair queuing over KV budget) `wired` (wubu_serve, test PASSES)
+- IR03 Preemption with cache-rebuild cost model (preempt vs restart decision) `wired` (wubu_serve, test PASSES)
+- IR04 Activation-budget preemption guard (bounded memory below the threshold) `wired` (wubu_serve, test PASSES)
+- IR05 Stream2LLM context streaming + prefill overlap (TTFT reduction) `wired` (wubu_serve, test PASSES)
+- IR06 Longest-common-prefix scheduling (minimize redundant prefill) `wired` (wubu_serve, test PASSES)
+- IR07 Decoupled scheduling (schedule decision separate from resource acquisition) `wired` (wubu_serve, test PASSES)
+- IR08 Hardware-specific cost model for preemption (per-device costs) `wired` (wubu_serve, test PASSES)
+- IR09 Burst handling (elastic admission under demand spikes) `wired` (wubu_serve, test PASSES)
+- IR10 Priority tiers with starvation bounds `wired` (wubu_serve, test PASSES)
+- IR11 Multi-tenant KV isolation (per-tenant cache partitions) `wired` (wubu_serve, test PASSES)
+- IR12 Token-budget fairness (each tenant's token share) `wired` (wubu_serve, test PASSES)
+- IR13 Preemption victim selection (cheapest-to-restart request) `wired` (wubu_serve, test PASSES)
+- IR14 Checkpointed preemption (KV snapshot on preempt, resume not restart) `wired` (wubu_serve, test PASSES)
+- IR15 SLO-aware scheduling (per-request latency targets) `wired` (wubu_serve, test PASSES)
+- IR16 Batch compaction (fill decode gaps with prefill chunks) `wired` (wubu_serve, test PASSES)
+- IR17 Scheduler-cache coherence (schedule decisions respect cache reuse) `wired` (wubu_serve, test PASSES)
+- IR18 Dynamic batching window (batch size adaptation by memory) `wired` (wubu_serve, test PASSES)
+- IR19 Request-level priority inheritance (ties the OS PI concept) `wired` (wubu_serve, test PASSES)
+- IR20 Memory-stability hysteresis (avoid preempt/accept oscillation) `wired` (wubu_serve, test PASSES)
 - IR21 Fairness metric monitor (per-tenant service share) `open`
 - IR22 Preemption telemetry (preempt frequency, rebuild cost) `open`
 - IR23 Co-scheduling prefill+decode (interleaved phases, ties HH04) `open`

@@ -51,10 +51,9 @@ int main(void)
     {
         long starve = 0;
         CHECK(wubu_serve_tier_admit(0, &starve, 3) == 1, "top tier always");
-        CHECK(wubu_serve_tier_admit(1, &starve, 3) == 0, "low tier waits");
-        wubu_serve_tier_admit(1, &starve, 3);
-        wubu_serve_tier_admit(1, &starve, 3);
-        CHECK(wubu_serve_tier_admit(1, &starve, 3) == 1, "bound breaks through");
+        CHECK(wubu_serve_tier_admit(1, &starve, 3) == 0, "low tier waits #1");
+        CHECK(wubu_serve_tier_admit(1, &starve, 3) == 0, "low tier waits #2");
+        CHECK(wubu_serve_tier_admit(1, &starve, 3) == 1, "bound breaks through at 3");
     }
 
     /* IR11: tenant share */
