@@ -464,3 +464,14 @@ Status: wired = implemented+tested; open = research-level.
 - EE05 Invariant discovery (loop invariant synthesis) wired (wubu_invariant.c)
 - EE06 Integration: discovered law to loopguard/safekern wired (test_ee.c)
 - EE07 Closed-loop self-verification (re-discover on shift) open (research: needs world-model)
+
+## Theme FF: Bayesian Optimization + Uncertainty Quantification + Active Learning
+Status: wired = implemented+tested.
+### 7 gaps closed as tested C11:
+- FF01 Gaussian Process surrogate (RBF kernel, Cholesky predict) wired (wubu_gp.c)
+- FF02 Acquisition functions (EI / UCB / PI) wired (wubu_acq.c)
+- FF03 Bayesian Optimization loop wired (wubu_bo.c)
+- FF04 Uncertainty Quantification (bootstrap + conformal) wired (wubu_uq.c)
+- FF05 Active Learning (uncertainty sampling / QBC) wired (wubu_active.c)
+- FF06 Thompson Sampling / bandits wired (wubu_bandit.c)
+- FF07 Integration with recursive_optimize wired (test_ff.c)
