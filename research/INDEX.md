@@ -621,35 +621,35 @@ Status: `open` (67 gaps; each = a real mechanism from the surveyed literature)
 ## Theme IP: Hopfield / associative memory 2026 frontier
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (continuous-time Hopfield 2502.10122; dynamic-manifold 2506.01303; federated many-to-one 2603.19902; spectral capacity 2026)
-- IP01 Continuous-time memory dynamics (memory state as an ODE, not a discrete update) `open`
-- IP02 Dynamic-manifold Hopfield (context-dependent reorganization of the stored manifold) `open`
-- IP03 Federated many-to-one Hopfield (heteroassociative: cue -> associated output) `open`
-- IP04 Spectral-capacity scaling analysis (capacity vs spectral norm of the memory matrix) `open`
+- IP01 Continuous-time memory dynamics (memory state as an ODE, not a discrete update) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP02 Dynamic-manifold Hopfield (context-dependent reorganization of the stored manifold) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP03 Federated many-to-one Hopfield (heteroassociative: cue -> associated output) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP04 Spectral-capacity scaling analysis (capacity vs spectral norm of the memory matrix) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP05 Attention-as-Hopfield retrieval formalization (softmax update == memory read) `open`
-- IP06 Memory write scheduling (store policy: when a pattern deserves storage) `open`
-- IP07 Memory read with beta annealing (sharp-to-flat retrieval over iterations) `open`
-- IP08 Pattern separation metric (overlap control between stored patterns) `open`
-- IP09 Memory consolidation via rehearsal (periodic re-store of hot patterns) `open`
-- IP10 Associative interference monitor (crosstalk detection between similar patterns) `open`
-- IP11 Cue denoising with precision control (noisy-cue recall strength) `open`
-- IP12 Memory decay scheduler (halflife adaptation by pattern utility) `open`
-- IP13 Context-dependent recall gating (context vector modulates the memory read) `open`
-- IP14 Heteroassociative binding (input -> output associations, not just auto-assoc) `open`
+- IP06 Memory write scheduling (store policy: when a pattern deserves storage) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP07 Memory read with beta annealing (sharp-to-flat retrieval over iterations) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP08 Pattern separation metric (overlap control between stored patterns) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP09 Memory consolidation via rehearsal (periodic re-store of hot patterns) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP10 Associative interference monitor (crosstalk detection between similar patterns) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP11 Cue denoising with precision control (noisy-cue recall strength) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP12 Memory decay scheduler (halflife adaptation by pattern utility) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP13 Context-dependent recall gating (context vector modulates the memory read) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP14 Heteroassociative binding (input -> output associations, not just auto-assoc) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP15 Memory matrix compression (low-rank storage of the pattern matrix) `open`
-- IP16 Retrieval by partial cue (prefix / fragment completion) `open`
+- IP16 Retrieval by partial cue (prefix / fragment completion) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP17 Hopfield-encoded KV cache (attention KV stored as Hopfield patterns, ties IO) `open`
-- IP18 Memory capacity accounting (exponential-capacity bookkeeping) `open`
-- IP19 Episodic memory with time-tags (temporal associative memory) `open`
-- IP20 Memory interference repair (re-orthogonalize similar stored patterns) `open`
-- IP21 Continuous-time numerical integration (memory ODE solver, RK4) `open`
+- IP18 Memory capacity accounting (exponential-capacity bookkeeping) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP19 Episodic memory with time-tags (temporal associative memory) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP20 Memory interference repair (re-orthogonalize similar stored patterns) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP21 Continuous-time numerical integration (memory ODE solver, RK4) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP22 Manifold curvature estimation for context reorganization `open`
 - IP23 Federated memory sharing (patterns shared across agents with provenance) `open`
 - IP24 Memory retrieval ranking by spectral overlap `open`
-- IP25 Forgetting curve integration (Ebbinghaus curve into the memory weight) `open`
-- IP26 Memory replay scheduling (when to replay stored patterns, ties BB) `open`
+- IP25 Forgetting curve integration (Ebbinghaus curve into the memory weight) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
+- IP26 Memory replay scheduling (when to replay stored patterns, ties BB) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP27 Memory write dedup (identical/duplicate pattern suppression) `open`
 - IP28 Memory read with temperature control (softmax sharpness per query) `open`
-- IP29 Associative memory for tool selection (cue -> tool pattern retrieval) `open`
+- IP29 Associative memory for tool selection (cue -> tool pattern retrieval) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP30 Memory chaining (sequential pattern association, story recall) `open`
 - IP31 Hopfield energy monitor (free-energy of the memory state) `open`
 - IP32 Memory stabilization (pattern anchoring after consolidation) `open`
