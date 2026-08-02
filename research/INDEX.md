@@ -521,3 +521,15 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IL06 Consolidation (replay/reward strengthens the stored pattern) `wired` (wubu_hopfield consolidate)
 - IL07 The operator: top-k KV-slot retrieval by Hopfield overlap `wired` (wubu_hopfield topk)
 Status: `wired` (wubu_hopfield, test_hopfield PASSES)
+
+## Theme IM: Preference alignment + unlearning (the AGI's values + right-to-be-forgotten)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7 gaps (IM01-IM07)
+- IM01 DPO implicit reward + loss (Rafailov 2023; reward-model-free alignment) `wired` (wubu_align dpo_reward/dpo_loss)
+- IM02 KTO binary-desirability loss (Ethayarajh 2024; the Kahneman-Tversky reference point; DA caught the sigmoid sign) `wired` (wubu_align kto_loss)
+- IM03 Gradient-ascent unlearning (the approximate exact-unlearning) `wired` (wubu_align unlearn_ascent)
+- IM04 KL-anchored unlearning (forget without collapse) `wired` (wubu_align unlearn_anchor_weight)
+- IM05 Preference-ranked alignment replay reservoir `wired` (wubu_align buffer/topk/mean)
+- IM06 Reward-hacking / value-drift monitor (spiked mean + collapsed variance) `wired` (wubu_align monitor)
+- IM07 The operator: (alignment, cost) frontier config pick `wired` (wubu_align pick_config)
+Status: `wired` (wubu_align, test_align PASSES)
