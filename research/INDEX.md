@@ -545,3 +545,1083 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IN06 Epistemic value (information-gain curiosity bonus) `wired` (wubu_freeenergy epistemic_value)
 - IN07 The operator: free-energy-gated model selection `wired` (wubu_freeenergy pick_model)
 Status: `wired` (wubu_freeenergy, test_freeenergy PASSES)
+
+## Theme IO: KV-cache eviction / compression 2026 frontier
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (2603.20397 KV survey; KeyDiff 2504.15364; KVQuant NeurIPS 2024)
+- IO01 H2O heavy-hitter token retention (accumulated-attention greedy eviction) `open`
+- IO02 StreamingLLM attention-sink keep + rolling window `open` (ties L-theme)
+- IO03 SnapKV observation-window pooling + important-prefix retention `open`
+- IO04 Proxy-token one-shot eviction (softmax-probability batch discard) `open`
+- IO05 InfiniPot novelty distillation (novelty-weighted retain at capacity) `open`
+- IO06 HASHEVICT LSH pre-attention eviction (SimHash hamming-distance prune) `open`
+- IO07 RocketKV two-stage coarse eviction + dynamic sparse selection `open`
+- IO08 Ada-KV head-adaptive budget (eviction-loss upper bound, head-sparse reallocation) `open`
+- IO09 KeyDiff key-similarity eviction (attention-sink position varies per head/layer) `open`
+- IO10 KVQuant attention-sink-aware quantization + outlier sparse store (3-bit, 4.8x ctx) `open`
+- IO11 Semantic-sponsorship KV retention (semantic importance, not score) `open`
+- IO12 Pyramidal/block-wise eviction under block prompt processing (eviction-error compounding) `open`
+- IO13 Accumulated-attention tracker with per-token running sums (O(1) update) `open`
+- IO14 Eviction-loss upper-bound model (formal eviction-error budget) `open`
+- IO15 Per-head sink-token discovery (sink position varies across heads/layers) `open`
+- IO16 Coarse-to-fine two-stage selection (RocketKV-style page granularity) `open`
+- IO17 KV-reconstruction autoencoder importance (regenerate-input criticality) `open`
+- IO18 LSH bucket refresh policy (hamming-distance threshold adaptation) `open`
+- IO19 Novelty scoring by embedding distance to the retained set `open`
+- IO20 Pooled observation window (SnapKV 1D pooling, cluster context) `open`
+- IO21 Proxy-token selection via compressed cue (small subset scoring) `open`
+- IO22 Eviction + quantization hybrid budget (evict OR compress by value) `open`
+- IO23 Sink-token FP16 reservation within quantized caches `open`
+- IO24 Outlier channel sparse store (top-1% outlier KV in raw precision) `open`
+- IO25 Per-layer eviction budget allocation (attention-sparse vs dispersed layers) `open`
+- IO26 Per-head retention count adaptation (variable critical tokens per head) `open`
+- IO27 Streaming-aware eviction (evict under continuous generation, not just prefill) `open`
+- IO28 Block-boundary eviction coordination (block Xi decisions feed Xi+1) `open`
+- IO29 Eviction-error compounding guard (bounded drift across blocks) `open`
+- IO30 Key-similarity vs query-similarity dual metric `open`
+- IO31 Eviction score normalization across heads (scale-free comparison) `open`
+- IO32 Cache-budget renegotiation on OOM (graceful eviction cascade) `open`
+- IO33 Hierarchical eviction: hot RAM / warm DRAM / cold NVMe (ties A06) `open`
+- IO34 Eviction feedback to the AGI ledger (per-token retention telemetry) `open`
+- IO35 Reconstruction-based importance at the page granularity `open`
+- IO36 KV-compression ratio governor (target-ratio eviction scheduler) `open`
+- IO37 Attention-sink reserve (never evict the first-k tokens regardless of score) `open`
+- IO38 LSH distance threshold tuning by observed attention correlation `open`
+- IO39 Proxy-token count adaptation by prompt length `open`
+- IO40 Eviction-batch grouping (one-shot discard sets, not per-token) `open`
+- IO41 Pooling kernel for SnapKV-style context clustering `open`
+- IO42 Retention priority queue (heap-based, O(log n) evict) `open`
+- IO43 Eviction-aware RoPE (position re-encode after eviction) `open`
+- IO44 Compressed-cache correctness audit (perplexity guard after heavy eviction) `open`
+- IO45 Eviction decision caching (reuse scores across decode steps) `open`
+- IO46 Attention-score streaming aggregator (running softmax without full matrix) `open`
+- IO47 Block-paged eviction aligned to the paged-KV table (ties HH02) `open`
+- IO48 Importance-vs-novelty dual score (H2O x InfiniPot fusion) `open`
+- IO49 Eviction under batched requests (shared cache, per-request criticality) `open`
+- IO50 Sink-token count adaptation per model (calibration probe) `open`
+- IO51 KVQuant-style 3-bit + outlier split encode/decode kernels `open`
+- IO52 Eviction telemetry to the operator (retained-vs-evicted quality delta) `open`
+- IO53 Budget-constrained eviction via the energy ledger (ties IJ) `open`
+- IO54 Eviction threshold hysteresis (avoid evict/keep oscillation) `open`
+- IO55 Cross-session cache reuse (eviction-aware persistence, ties AV03) `open`
+- IO56 Semantic eviction via the ANN index (ties AV04) `open`
+- IO57 Eviction + speculative-decoding interaction (draft cache retention) `open`
+- IO58 Eviction-aware attention scaling (post-eviction normalization) `open`
+- IO59 Head-disparity monitor (which heads need the most retention) `open`
+- IO60 Eviction policy selector (auto-pick policy by head/block profile) `open`
+- IO61 Cache compaction (defragment retained KV pages) `open`
+- IO62 Eviction under 1M+ context (cost-modeled retention) `open`
+- IO63 Per-layer KV budget governor (layer-wise OOM safety) `open`
+- IO64 Eviction-score calibration on a probe set (threshold fitting) `open`
+- IO65 Reconstruction-aware eviction in hybrid attention (ties JA) `open`
+- IO66 Eviction for multimodal tokens (vision token criticality, ties JB) `open`
+- IO67 Eviction ledger integration (which tokens were dropped and why) `open`
+Status: `open` (67 gaps; each = a real mechanism from the surveyed literature)
+
+## Theme IP: Hopfield / associative memory 2026 frontier
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (continuous-time Hopfield 2502.10122; dynamic-manifold 2506.01303; federated many-to-one 2603.19902; spectral capacity 2026)
+- IP01 Continuous-time memory dynamics (memory state as an ODE, not a discrete update) `open`
+- IP02 Dynamic-manifold Hopfield (context-dependent reorganization of the stored manifold) `open`
+- IP03 Federated many-to-one Hopfield (heteroassociative: cue -> associated output) `open`
+- IP04 Spectral-capacity scaling analysis (capacity vs spectral norm of the memory matrix) `open`
+- IP05 Attention-as-Hopfield retrieval formalization (softmax update == memory read) `open`
+- IP06 Memory write scheduling (store policy: when a pattern deserves storage) `open`
+- IP07 Memory read with beta annealing (sharp-to-flat retrieval over iterations) `open`
+- IP08 Pattern separation metric (overlap control between stored patterns) `open`
+- IP09 Memory consolidation via rehearsal (periodic re-store of hot patterns) `open`
+- IP10 Associative interference monitor (crosstalk detection between similar patterns) `open`
+- IP11 Cue denoising with precision control (noisy-cue recall strength) `open`
+- IP12 Memory decay scheduler (halflife adaptation by pattern utility) `open`
+- IP13 Context-dependent recall gating (context vector modulates the memory read) `open`
+- IP14 Heteroassociative binding (input -> output associations, not just auto-assoc) `open`
+- IP15 Memory matrix compression (low-rank storage of the pattern matrix) `open`
+- IP16 Retrieval by partial cue (prefix / fragment completion) `open`
+- IP17 Hopfield-encoded KV cache (attention KV stored as Hopfield patterns, ties IO) `open`
+- IP18 Memory capacity accounting (exponential-capacity bookkeeping) `open`
+- IP19 Episodic memory with time-tags (temporal associative memory) `open`
+- IP20 Memory interference repair (re-orthogonalize similar stored patterns) `open`
+- IP21 Continuous-time numerical integration (memory ODE solver, RK4) `open`
+- IP22 Manifold curvature estimation for context reorganization `open`
+- IP23 Federated memory sharing (patterns shared across agents with provenance) `open`
+- IP24 Memory retrieval ranking by spectral overlap `open`
+- IP25 Forgetting curve integration (Ebbinghaus curve into the memory weight) `open`
+- IP26 Memory replay scheduling (when to replay stored patterns, ties BB) `open`
+- IP27 Memory write dedup (identical/duplicate pattern suppression) `open`
+- IP28 Memory read with temperature control (softmax sharpness per query) `open`
+- IP29 Associative memory for tool selection (cue -> tool pattern retrieval) `open`
+- IP30 Memory chaining (sequential pattern association, story recall) `open`
+- IP31 Hopfield energy monitor (free-energy of the memory state) `open`
+- IP32 Memory stabilization (pattern anchoring after consolidation) `open`
+- IP33 Cross-modal associative memory (text cue -> vision pattern, ties JB) `open`
+- IP34 Memory corruption detection (pattern degradation watchdog) `open`
+- IP35 Memory hygiene: prune low-utility stale patterns (ties IL05) `open`
+- IP36 Associative recall in the decode path (memory-guided token candidates) `open`
+- IP37 Memory-attention fusion (retrieved pattern as attention bias) `open`
+- IP38 Multi-scale memories (short/long-term with separate betas) `open`
+- IP39 Memory state snapshot/restore (checkpoint the pattern matrix) `open`
+- IP40 Hopfield capacity telemetry (used vs theoretical capacity) `open`
+- IP41 Cue embedding quality monitor (cue dims that hurt recall) `open`
+- IP42 Memory write batching (bulk store of a session's patterns) `open`
+- IP43 Memory read batching (bulk recall for batched decode) `open`
+- IP44 Pattern condensation (merge near-identical patterns) `open`
+- IP45 Memory-based reasoning (recall chains as CoT memory, ties IV) `open`
+- IP46 Associative outlier tolerance (robust recall under adversarial cues) `open`
+- IP47 Memory matrix spectral cleanup (drop low-singular-value directions) `open`
+- IP48 Context-switch memory isolation (per-task memory partitions) `open`
+- IP49 Memory search over patterns (ANN over the memory, ties AV) `open`
+- IP50 Memory write/read asymmetry modeling (write cost vs read benefit) `open`
+- IP51 Hopfield beta autotuning (temperature fit by recall error) `open`
+- IP52 Memory decay vs consolidation arbitration (decay rate vs rehearsal rate) `open`
+- IP53 Retrieval-augmented memory (external corpus -> memory patterns) `open`
+- IP54 Memory provenance (which source stored each pattern) `open`
+- IP55 Memory privacy (forget-set patterns removable, ties IM) `open`
+- IP56 Memory load balancing across tiers (hot patterns to fast tier) `open`
+- IP57 Associative memory for world-model updates (ties IN) `open`
+- IP58 Memory capacity warning (approaching exponential limit) `open`
+- IP59 Pattern importance weighting in storage (weighted patterns) `open`
+- IP60 Memory coherence across sessions (shared memory merge) `open`
+- IP61 Hopfield update with momentum (faster retrieval convergence) `open`
+- IP62 Memory read failure handling (no-match fallback policy) `open`
+- IP63 Associative memory ablation analysis (which patterns matter) `open`
+- IP64 Memory pattern normalization (unit-norm storage for stable recall) `open`
+- IP65 Memory-write energy accounting (ties IJ energy ledger) `open`
+- IP66 Memory consolidation scheduling (offline consolidation pass) `open`
+- IP67 Memory monitor: recall accuracy drift (memory health metric) `open`
+Status: `open` (67 gaps; continuous-time / manifold / federated Hopfield + attention-as-memory formalization)
+
+## Theme IQ: Preference optimization frontier
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (2602.00954 small-margin; 2605.20834 DPO/RLHF equivalence; 2509.24159 RE-PO; SimPO; CPO; AlphaPO)
+- IQ01 SimPO reference-free reward (length-normalized average log-prob) `open`
+- IQ02 CPO conditional preference optimization (difficult discriminative prompts) `open`
+- IQ03 IPO identity-preference optimization (squared-error preference loss) `open`
+- IQ04 RE-PO robust enhanced policy optimization (general enhancer over DPO/IPO/SimPO/CPO) `open`
+- IQ05 AlphaPO reward-shape-aware alignment (reward shaping for DAAs) `open`
+- IQ06 Small-margin preference training (margin-aware sampling) `open`
+- IQ07 DPO/RLHF conditional-equivalence checker (when DPO == RLHF provably) `open`
+- IQ08 Length-bias correction (length-normalized rewards) `open`
+- IQ09 Reference-model-free margin (SimPO-style implicit reference) `open`
+- IQ10 Preference pair quality weighting (pair difficulty weighting) `open`
+- IQ11 Reward accuracy monitor (preference-vs-generation alignment metric) `open`
+- IQ12 Preference dataset dedup (near-duplicate pair suppression) `open`
+- IQ13 Offline vs online preference mixing (static pairs + live feedback) `open`
+- IQ14 Preference aggregation (multiple annotators -> consensus pair) `open`
+- IQ15 Margin schedule (margin annealed across training) `open`
+- IQ16 Preference noise robustness (label-noise-tolerant loss) `open`
+- IQ17 Token-level preference (per-token rewards, not sequence-level) `open`
+- IQ18 Step-level process preferences (ties the PRM literature) `open`
+- IQ19 Preference cache (reuse pair gradients across updates) `open`
+- IQ20 Preference-based early stopping (reward-accuracy gate) `open`
+- IQ21 Multi-objective preference (win/lose/ties with three-way loss) `open`
+- IQ22 Preference staleness (pair age weighting) `open`
+- IQ23 Reward-free calibration (reference-free reward alignment check) `open`
+- IQ24 Preference conflict detection (contradictory pairs) `open`
+- IQ25 Robust preference optimization (RE-PO-style robustness envelope) `open`
+- IQ26 Preference budget allocation (which prompts deserve pairs) `open`
+- IQ27 Alignment without forgetting (preference + KL-anchor, ties IM04) `open`
+- IQ28 Preference feedback loop to the AGI (user signals as pairs, ties IV) `open`
+- IQ29 Implicit reward visualization (reward traces per token) `open`
+- IQ30 Preference benchmark harness (alignment eval suite) `open`
+- IQ31 Length-normalized margin (SimPO gamma) `open`
+- IQ32 Reference-model distillation into the reward (offline reward model) `open`
+- IQ33 Preference pair augmentation (synthetic pairs from rejected samples) `open`
+- IQ34 Alignment drift monitor during fine-tune (ties IM06) `open`
+- IQ35 Preference transfer across domains (pair curriculum) `open`
+- IQ36 Reward shaping functions (AlphaPO-style shaping) `open`
+- IQ37 Preference update frequency (mini-batch preference mixing) `open`
+- IQ38 Pair difficulty-aware sampling (hard-pair emphasis) `open`
+- IQ39 Preference-regularized decode (no retrain: preference-constrained sampling) `open`
+- IQ40 Alignment energy accounting (preference training under the energy ledger) `open`
+- IQ41 Preference-pair provenance (which source made the pair) `open`
+- IQ42 Multi-turn preference (conversation-level pairs) `open`
+- IQ43 Preference staleness decay (old pairs weight down) `open`
+- IQ44 Preference quality gate (reject low-agreement pairs) `open`
+- IQ45 DPO vs RLHF divergence metric (when to switch methods) `open`
+- IQ46 Preference ensemble (multiple reward hypotheses, ties DD) `open`
+- IQ47 Alignment health dashboard (reward accuracy + drift + margin) `open`
+- IQ48 Preference-selective replay (alignment replay, ties IM05) `open`
+- IQ49 Online preference bootstrap (self-generated pairs, ties IV) `open`
+- IQ50 Preference curriculum (easy->hard pair schedule) `open`
+- IQ51 Length-robust reward normalization (SimPO's answer) `open`
+- IQ52 Preference-aware sampling temperature (confidence-scaled pairs) `open`
+- IQ53 Pair margin prediction (predict pair difficulty) `open`
+- IQ54 Preference logbook (auditable alignment history) `open`
+- IQ55 Alignment verification gate (post-align eval before promotion, ties AX) `open`
+- IQ56 Preference transfer learning (align small model, transfer to big) `open`
+- IQ57 Reward hacking pre-detection (alignment-time monitoring) `open`
+- IQ58 Preference-efficient alignment (fewer pairs via active selection) `open`
+- IQ59 Preference entropy (pair distribution flatness) `open`
+- IQ60 Alignment + unlearning joint objective (align AND forget, ties IM) `open`
+- IQ61 Preference-based model selection (align then pick by eval) `open`
+- IQ62 Preference watermark (align-time provenance for outputs) `open`
+- IQ63 Preference data versioning (dataset version in the training ledger) `open`
+- IQ64 Margin regularization (avoid over-confident preference fitting) `open`
+- IQ65 Preference meta-learning (learn the alignment objective, ties IV) `open`
+- IQ66 Alignment test-time scaling (preference-guided decoding budget, ties IK) `open`
+- IQ67 Preference-to-policy operator (alignment config promotion, ties IM07) `open`
+Status: `open` (67 gaps; SimPO/CPO/IPO/RE-PO/AlphaPO + DPO-RLHF equivalence + alignment monitoring)
+
+## Theme IR: Multi-tenant serving / scheduler
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (2603.00356 token management; FIFO-fairness 2026; Stream2LLM MLsys-oral; scheduling survey)
+- IR01 Token-management admission control (request acceptance by token budget) `open`
+- IR02 Fair-share scheduler (weighted fair queuing over KV budget) `open`
+- IR03 Preemption with cache-rebuild cost model (preempt vs restart decision) `open`
+- IR04 Activation-budget preemption guard (bounded memory below the threshold) `open`
+- IR05 Stream2LLM context streaming + prefill overlap (TTFT reduction) `open`
+- IR06 Longest-common-prefix scheduling (minimize redundant prefill) `open`
+- IR07 Decoupled scheduling (schedule decision separate from resource acquisition) `open`
+- IR08 Hardware-specific cost model for preemption (per-device costs) `open`
+- IR09 Burst handling (elastic admission under demand spikes) `open`
+- IR10 Priority tiers with starvation bounds `open`
+- IR11 Multi-tenant KV isolation (per-tenant cache partitions) `open`
+- IR12 Token-budget fairness (each tenant's token share) `open`
+- IR13 Preemption victim selection (cheapest-to-restart request) `open`
+- IR14 Checkpointed preemption (KV snapshot on preempt, resume not restart) `open`
+- IR15 SLO-aware scheduling (per-request latency targets) `open`
+- IR16 Batch compaction (fill decode gaps with prefill chunks) `open`
+- IR17 Scheduler-cache coherence (schedule decisions respect cache reuse) `open`
+- IR18 Dynamic batching window (batch size adaptation by memory) `open`
+- IR19 Request-level priority inheritance (ties the OS PI concept) `open`
+- IR20 Memory-stability hysteresis (avoid preempt/accept oscillation) `open`
+- IR21 Fairness metric monitor (per-tenant service share) `open`
+- IR22 Preemption telemetry (preempt frequency, rebuild cost) `open`
+- IR23 Co-scheduling prefill+decode (interleaved phases, ties HH04) `open`
+- IR24 Cache-aware request routing (route to the node with the prefix) `open`
+- IR25 Token-budget profiler (per-request token demand estimation) `open`
+- IR26 Admission by predicted KV growth (proactive OOM avoidance) `open`
+- IR27 Work-conserving scheduler (never idle while work exists) `open`
+- IR28 Preemption budget per tenant (fair preemption) `open`
+- IR29 Decode-phase priority (decode > prefill under contention) `open`
+- IR30 Scheduler-ledger integration (schedule decisions to the AGI ledger) `open`
+- IR31 Multi-queue scheduling (separate queues per SLO class) `open`
+- IR32 Backfill scheduling (fill idle slots with background work) `open`
+- IR33 Speculative prefill (predict next prompt, prefill ahead) `open`
+- IR34 Context-keepalive scheduler (keep hot contexts resident) `open`
+- IR35 Eviction-vs-preempt arbitration (evict cold cache or preempt request) `open`
+- IR36 Cost-aware scheduling (J/token cost, ties IJ) `open`
+- IR37 Scheduler fairness under variable demand (burst-adaptive weights) `open`
+- IR38 Request grouping by prefix similarity (batched prefill) `open`
+- IR39 Preemption recovery speedup (KV checkpoint restore) `open`
+- IR40 Scheduler resilience (scheduler restart without request loss) `open`
+- IR41 Multi-tenant security isolation (tenant cache boundaries, ties AD) `open`
+- IR42 Token-budget debt tracking (tenant overspend recovery) `open`
+- IR43 SLO violation monitor (latency-target breach alerts) `open`
+- IR44 Adaptive concurrency (max in-flight by memory pressure) `open`
+- IR45 Scheduling policy selector (auto-pick scheduler by load profile) `open`
+- IR46 Idle-capacity scavenging (low-priority batch on idle resources) `open`
+- IR47 Request coalescing (merge similar prompts) `open`
+- IR48 Preemption decision cost-benefit (restart cost vs preempt cost) `open`
+- IR49 Memory-pressure feedback loop (scheduler <-> allocator) `open`
+- IR50 Deadline-aware scheduling (hard deadlines for time-critical requests) `open`
+- IR51 Fair preemption ordering (preempt the least-SLO-critical first) `open`
+- IR52 Scheduler benchmarking harness (fairness/latency/throughput evals) `open`
+- IR53 Cache-sharing scheduler (shared prefix across tenants with accounting) `open`
+- IR54 Preemption-aware token generation (checkpoint generation state) `open`
+- IR55 Multi-model scheduling (multiple models on one pool) `open`
+- IR56 Scheduler hysteresis (stability under load oscillation) `open`
+- IR57 Queue-depth telemetry (per-queue waiting metrics) `open`
+- IR58 Request aging (avoid indefinite starvation) `open`
+- IR59 Cost-fairness tradeoff scheduler (J/token per tenant, ties IJ) `open`
+- IR60 Preemption simulation (dry-run preemption policy) `open`
+- IR61 Scheduler config operator (auto-tune scheduler params, ties IV) `open`
+- IR62 Token-budget negotiation (tenant request for more budget) `open`
+- IR63 Memory-debt reclamation (slow-tenant cache reclaim) `open`
+- IR64 Prefill batch planning (chunked prefill schedule) `open`
+- IR65 Scheduler event log (auditable schedule decisions) `open`
+- IR66 Cross-node scheduling (distributed request placement) `open`
+- IR67 Serving energy envelope (power-cap-aware scheduling, ties IJ03) `open`
+Status: `open` (67 gaps; fair multi-tenant scheduling + preemption + prefix-aware routing)
+
+## Theme IS: PIM / near-memory / hardware co-design
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (P3-LLM NPU-PIM 2511.06838; near-memory 3D-DRAM DAC2025; CIM crossbar/RRAM/SRAM 2026; AQPIM HPCA 2026)
+- IS01 PIM offload model (which ops move near memory: GEMV over KV) `open`
+- IS02 Near-memory KV tier (KV resident next to the compute) `open`
+- IS03 Crossbar-compatible matmul emulation (CIM-style GEMV model) `open`
+- IS04 SRAM-CIM quantization constraints (bit-cell precision limits) `open`
+- IS05 RRAM/FeFET/SOT-MRAM tier model (emerging memory energy/latency) `open`
+- IS06 Near-storage compute (smart-SSD KV filter) `open`
+- IS07 PIM capacity wall guard (PIM memory budget vs model size) `open`
+- IS08 3D-DRAM bonding model (logic-on-memory integration cost) `open`
+- IS09 Hybrid NPU-PIM dispatch (when to use PIM vs NPU) `open`
+- IS10 Data-movement accounting (bytes moved per op, ties roofline) `open`
+- IS11 HBM-stack near-memory buffers (in-stack staging) `open`
+- IS12 PIM-friendly weight layout (channel-last for in-memory MAC) `open`
+- IS13 Analog-compute noise model (crossbar ADC/DAC precision) `open`
+- IS14 Hardware cost model integration (energy+latency per op, ties IJ) `open`
+- IS15 PIM offload scheduler (batch ops for near-memory execution) `open`
+- IS16 Memory-centric attention tiling (attention tiles resident in memory) `open`
+- IS17 Device-model portability (same engine, hardware-abstracted) `open`
+- IS18 Near-memory reduce (partial sums at the memory) `open`
+- IS19 PIM page-locality (KV pages colocated with the compute) `open`
+- IS20 Hardware telemetry model (simulated counters: MACs, bytes, J) `open`
+- IS21 CIM bit-precision adaptation (precision per layer by sensitivity) `open`
+- IS22 Emerging-memory endurance model (write-wear budget for KV) `open`
+- IS23 Near-memory speculative decode (draft heads at the memory) `open`
+- IS24 PIM capacity-vs-latency frontier (tradeoff model) `open`
+- IS25 Heterogeneous CPU/GPU/NPU-PIM scheduling `open`
+- IS26 Memory-wall budget governor (data-movement cap per token) `open`
+- IS27 PIM-friendly KV quant (integer KV for CIM, ties IO10) `open`
+- IS28 Near-storage RAG (retrieval at the SSD) `open`
+- IS29 Hardware abstraction layer for the engine (kernel dispatch table) `open`
+- IS30 Crossbar mapping optimizer (weight-to-crossbar placement) `open`
+- IS31 PIM energy ledger (in-memory J/op accounting, ties IJ) `open`
+- IS32 Near-memory attention sink (sink KV pinned near compute) `open`
+- IS33 PIM correctness audit (analog error bounds) `open`
+- IS34 Hardware-targeted kernel variants (per-device GEMV) `open`
+- IS35 Memory-centric decode loop (decode organized around the memory) `open`
+- IS36 PIM-offload benefit predictor (when PIM beats CPU) `open`
+- IS37 Near-memory MoE routing (expert weights at the memory) `open`
+- IS38 CIM weight stationary layout (weights fixed in crossbar) `open`
+- IS39 Hardware counter model (cycle/J/byte counters for tuning) `open`
+- IS40 PIM page eviction (KV page movement between tiers) `open`
+- IS41 Near-memory prefix cache (LCP prefix at the memory) `open`
+- IS42 Emerging-memory latency model (PCM/FeFET read/write costs) `open`
+- IS43 PIM-aware batching (batch shapes that fit the memory arrays) `open`
+- IS44 Hardware co-simulation harness (simulated device models) `open`
+- IS45 PIM numerical stability (low-precision accumulation guards) `open`
+- IS46 Near-memory KV compression (compress at the memory, ties IO) `open`
+- IS47 Hardware-aware auto-tuning (kernel selection by counters) `open`
+- IS48 Memory-centric speculative decode (draft KV near memory) `open`
+- IS49 PIM capacity planning (model+KV fit check per device) `open`
+- IS50 Near-storage dedup (SSD-side KV dedup) `open`
+- IS51 Hardware event simulation (simulated PMU events) `open`
+- IS52 PIM dataflow optimization (input-stationary vs output-stationary) `open`
+- IS53 Memory-wall roofline update (energy roofline, ties IJ01) `open`
+- IS54 Near-memory attention offload (attention compute at DRAM) `open`
+- IS55 CIM weight refresh policy (drift compensation) `open`
+- IS56 Hardware-aware quantization selector (per-device bit choice) `open`
+- IS57 PIM offload regression tests (host parity checks) `open`
+- IS58 Near-memory top-k (softmax/selection near memory) `open`
+- IS59 Memory-centric scheduling (schedule by memory, ties IR) `open`
+- IS60 Hardware diversity matrix (which kernels run where) `open`
+- IS61 PIM energy envelope (in-memory power cap, ties IJ03) `open`
+- IS62 Near-memory KV dedup (dedup at the memory tier) `open`
+- IS63 Hardware cost ledger (J + latency per request) `open`
+- IS64 PIM-friendly tokenizer (byte alignment for memory ops) `open`
+- IS65 Memory-centric planning (plan steps co-resident with memory) `open`
+- IS66 Near-memory verifier (verify tokens near the compute) `open`
+- IS67 Hardware-abstracted engine config (device descriptors) `open`
+Status: `open` (67 gaps; PIM/CIM/near-memory co-design, hardware-abstracted engine)
+
+## Theme IT: Tokenization / data plane
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (subword decoupling 2604.27263; bit-level BPE 2506.07541; tokenizer-free 2406.19223; lexical density 2026)
+- IT01 Bit-level BPE (compression below the byte boundary) `open`
+- IT02 Tokenizer-free UTF-8 embeddings (no vocab, ~85% embedding savings) `open`
+- IT03 Subword-benefit decoupling (isolate tokenization effects) `open`
+- IT04 Byte-entropy-aware merges (low-entropy byte distribution handling) `open`
+- IT05 Lexical-density detector (context density -> effective window) `open`
+- IT06 Token-merge cache (frequent-token path memoization) `open`
+- IT07 Vocabulary pruning (drop unused tokens, remap ids) `open`
+- IT08 Tokenizer roundtrip audit (encode/decode fidelity checks) `open`
+- IT09 Multi-script tokenization (mixed-script merge policy) `open`
+- IT10 Token-level compression (post-token entropy coding) `open`
+- IT11 Adaptive tokenization (per-domain vocab) `open`
+- IT12 Token-efficiency metric (tokens per information unit) `open`
+- IT13 Embedding-table compression (shared embeddings, ties quant) `open`
+- IT14 Token-frequency telemetry (vocab usage distribution) `open`
+- IT15 Tokenizer-spec versioning (tokenizer changes tracked) `open`
+- IT16 OOV handling policy (unknown-token fallbacks) `open`
+- IT17 Subword-to-byte fallback (lossless decode guarantees) `open`
+- IT18 Token-boundary attention bias (boundary-aware scoring) `open`
+- IT19 Token-packing (dense sequence packing for prefill) `open`
+- IT20 Byte-level LM adapter (byte model fallback path) `open`
+- IT21 Tokenizer benchmark (multilingual token efficiency evals) `open`
+- IT22 Token-id remapping (vocab swap without retrain) `open`
+- IT23 Token entropy monitor (distribution shift detection) `open`
+- IT24 Subword merging heuristics (BPE merge-pair scoring) `open`
+- IT25 Tokenizer-cache (memoized encode for repeated text) `open`
+- IT26 Unicode-normalization guard (NFKC/NFD handling) `open`
+- IT27 Token-length regularization (bounded token growth) `open`
+- IT28 Byte-fallback decode (malformed-input recovery) `open`
+- IT29 Tokenizer data-flow (token pipeline statistics) `open`
+- IT30 Vocabulary merge rules (custom merges for domain terms) `open`
+- IT31 Token-pair frequency table (BPE stats) `open`
+- IT32 Embedded-token density (lexical density per window, ties IO) `open`
+- IT33 Tokenizer determinism (same input -> same ids) `open`
+- IT34 Token-budget planner (token estimate before generation, ties IK) `open`
+- IT35 Subword-entity alignment (entities spanning tokens) `open`
+- IT36 Tokenizer streaming (incremental encode) `open`
+- IT37 Vocabulary growth policy (online vocab expansion) `open`
+- IT38 Token-space augmentation (token dropout for robustness) `open`
+- IT39 Tokenizer energy accounting (encode cost, ties IJ) `open`
+- IT40 Byte-level RoPE (position encoding at the byte level) `open`
+- IT41 Token-id compression (id entropy coding) `open`
+- IT42 Multi-token prediction targets (predict next-N tokens) `open`
+- IT43 Token-trie prefix index (fast token prefix lookup) `open`
+- IT44 Tokenizer serialization (portable tokenizer format) `open`
+- IT45 Tokenization diff tools (compare tokenizer versions) `open`
+- IT46 Byte-pair frequency monitor (merge health) `open`
+- IT47 Token-efficiency-aware prefill (skip redundant tokens) `open`
+- IT48 Tokenizer-free fallback (engine runs without a vocab) `open`
+- IT49 Vocabulary coverage metric (OOV rate per domain) `open`
+- IT50 Token-boundary watermark (detect token-level tampering) `open`
+- IT51 Token sequence compression (lossless token-stream coding) `open`
+- IT52 Adaptive byte-vs-subword (per-input path choice) `open`
+- IT53 Tokenizer config tuning (merge-threshold autotune) `open`
+- IT54 Token metadata (per-token provenance/features) `open`
+- IT55 Token embedding quant (embedding-table int8, ties quant) `open`
+- IT56 Tokenizer concurrency (thread-safe encode) `open`
+- IT57 Token-pair constraints (disallowed merges) `open`
+- IT58 Tokenizer fuzz (adversarial byte input, ties IX) `open`
+- IT59 Token-efficiency operator (token-budget config pick) `open`
+- IT60 Byte-shard alignment (byte-aligned KV pages) `open`
+- IT61 Tokenizer profiling (encode/decode timing) `open`
+- IT62 Token-stream dedup (repeated-token suppression) `open`
+- IT63 Vocabulary pruning safety (never-prune hot tokens) `open`
+- IT64 Tokenizer-regression test suite `open`
+- IT65 Token-id stability across versions (stable ids) `open`
+- IT66 Byte-entropy adaptive merge (entropy-gated merges) `open`
+- IT67 Token-efficiency vs quality frontier (compression tradeoff) `open`
+Status: `open` (67 gaps; bit-level/byte-level/tokenizer-free tokenization + lexical density)
+
+## Theme IU: Linear attention / fast kernels
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (Mamba3 2603.15569; Kimi Linear/KDA 2510.26692; FLA 2503.14376; Gated DeltaNet; PaTH attention; Hymba hybrid-head)
+- IU01 Chunkwise-parallel linear attention (FLA-style chunked formulation) `open`
+- IU02 Mamba3 selective state update (recurrent state, constant memory) `open`
+- IU03 Gated DeltaNet update (gated delta rule per step) `open`
+- IU04 Gated Slot Attention (GSA) state slots `open`
+- IU05 HGRN2 gated linear RNN with state expansion `open`
+- IU06 GLA hardware-efficient gated linear attention `open`
+- IU07 mLSTM sigmoid-gated reduced-compute variant (mLSTMsig) `open`
+- IU08 Tiled flash linear attention (TFLA kernel tiling) `open`
+- IU09 Lightning attention (Ling-style recurrent linear variant) `open`
+- IU10 PaTH position encoding (Householder accumulation) `open`
+- IU11 Hybrid-head attention (Hymba-style attention+SSM heads per layer) `open`
+- IU12 Hybrid layer mixing (attention/SSM alternation, Falcon-H1 style) `open`
+- IU13 SSM KV-cache elimination path (recurrent state instead of KV) `open`
+- IU14 SSM long-context scaling (beyond quadratic-attention limits) `open`
+- IU15 Hybrid TTFT comparison (SSM 1.35s vs Transformer 8.24s at 57K) `open`
+- IU16 Linear-attention numerical stability (recurrent accumulation guards) `open`
+- IU17 State compression (learned state summarization) `open`
+- IU18 Linear-attention + RoPE interaction (position in linear recurrences) `open`
+- IU19 Chunk state transfer (carry chunk states across batches) `open`
+- IU20 Gated state decay (forget gates in the state) `open`
+- IU21 Delta-rule memory write (delta updates to the state) `open`
+- IU22 Linear-attention kernel variant selection (FLA-style autotune) `open`
+- IU23 SSM precision control (state precision vs drift) `open`
+- IU24 Hybrid energy model (SSM 75% energy cut at 57K, ties IJ) `open`
+- IU25 Attention/SSM layer scheduler (which layers are which) `open`
+- IU26 Recurrent state checkpoint (state snapshot/restore) `open`
+- IU27 Linear-attention recall limits (ICL/precise-recall gap analysis) `open`
+- IU28 Hybrid recall compensation (attention layers for precise recall) `open`
+- IU29 State-space initialization (SSM parameter init) `open`
+- IU30 Linear-attention streaming (constant-memory infinite streaming) `open`
+- IU31 Chunked state compute (parallel chunk prefill) `open`
+- IU32 Gated linear attention forget schedule (learned gates) `open`
+- IU33 Delta-rule binding (write specific keys to state slots) `open`
+- IU34 Linear-attention weight tying (recurrent weight sharing) `open`
+- IU35 SSM normalization (state normalization for stability) `open`
+- IU36 Hybrid decode overlap (attention+SSM heads in one pass) `open`
+- IU37 Linear-attention energy ledger (per-state-update J) `open`
+- IU38 Recurrent memory decay (state forgetting, ties IP) `open`
+- IU39 Linear-attention quantization (quantized state, ties quant) `open`
+- IU40 SSM long-context memory bound (constant memory proof) `open`
+- IU41 Hybrid benchmark harness (attention vs SSM vs hybrid evals) `open`
+- IU42 State expansion ratio tuning (HGRN2-style) `open`
+- IU43 Linear-attention speculative decode (recurrent drafter) `open`
+- IU44 Chunk parallelization (sequence-chunk parallelism) `open`
+- IU45 Gated state multiplexing (shared state across heads) `open`
+- IU46 Linear-attention stability monitor (state norm watchdog) `open`
+- IU47 Hybrid position encoding (per-head position schemes) `open`
+- IU48 SSM hardware mapping (recurrent scan on CPU) `open`
+- IU49 Linear-attention gradient path (backward recurrence) `open`
+- IU50 Recurrent attention span (effective receptive field) `open`
+- IU51 Hybrid layer count tuning (attention/SSM ratio) `open`
+- IU52 Linear-attention memory bound (O(1) state size) `open`
+- IU53 Delta-rule capacity (state slot capacity, ties IP) `open`
+- IU54 SSM multi-scale states (parallel state scales) `open`
+- IU55 Linear-attention token-efficiency (ties IT) `open`
+- IU56 Hybrid decode scheduling (which phase uses which mechanism) `open`
+- IU57 Gated linear attention init (gating init for stability) `open`
+- IU58 Linear-attention long-context eval (needle tests) `open`
+- IU59 SSM state pruning (drop low-importance state dims) `open`
+- IU60 Hybrid attention cost model (attention vs SSM per layer) `open`
+- IU61 Linear-attention + Hopfield memory (state as associative memory, ties IP) `open`
+- IU62 Chunked linear-attention prefill (parallel chunk prefill) `open`
+- IU63 SSM robustness (perturbation sensitivity) `open`
+- IU64 Hybrid energy frontier (Pareto energy/accuracy) `open`
+- IU65 Linear-attention operator (mechanism selection by context length) `open`
+- IU66 Recurrent state ledger (state telemetry) `open`
+- IU67 Hybrid model fusion (merge attention + SSM outputs) `open`
+Status: `open` (67 gaps; linear attention + hybrid SSM kernels + Hymba-style hybrid heads)
+
+## Theme IV: Recursive self-improvement frontier
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (RSI survey 2607.13104; Goedel agent; LADDER 2503.00735; Promptbreeder; HyperAgents 2603.19461; AUTOHARNESS; ICLR-2026 RSI workshop)
+- IV01 Bounded verifiable RSI loops (self-improve with a verifier gate) `open`
+- IV02 Goedel-style self-referential agent (improve the improver) `open`
+- IV03 LADDER recursive problem decomposition (decompose-and-improve) `open`
+- IV04 Promptbreeder prompt evolution (self-referential prompt mutation) `open`
+- IV05 HyperAgents metacognitive transfer (improve strategies across domains) `open`
+- IV06 AUTOHARNESS code-harness synthesis (auto-generate test harnesses) `open`
+- IV07 Intrinsic self-reflection for preference policy (self-reflection in RL) `open`
+- IV08 Soft-mellowmax Monte-Carlo planning (softmax-planned search) `open`
+- IV09 Experience-learning loop (streaming telemetry -> improvement) `open`
+- IV10 Synthetic-data pipeline for self-improvement (self-generated training data) `open`
+- IV11 Weak-to-strong generalization loop (small teacher -> big student) `open`
+- IV12 Scaffolding improvement (improve the agent framework itself) `open`
+- IV13 Full scaffolding search (search the agent design space) `open`
+- IV14 Self-awareness audit (the agent knows its own capability) `open`
+- IV15 Bounded self-modification (safe-pace weight updates) `open`
+- IV16 Continual fine-tuning scheduler (when to schedule fine-tunes) `open`
+- IV17 Self-play for improvement (play against yourself, ties GG) `open`
+- IV18 Bug-introduction self-training (inject bugs, learn to fix) `open`
+- IV19 Production-signal improvement (real usage rewards -> improvement) `open`
+- IV20 Reflection-memory (Reflexion-style episodic reflection log) `open`
+- IV21 Reflection-diversity guard (avoid local-optima reflections) `open`
+- IV22 Self-improvement ledger (auditable improvement history) `open`
+- IV23 Improvement-delta metric (did the change help, ties AH13) `open`
+- IV24 Recursive decomposition tree (problem -> subproblem tree) `open`
+- IV25 Self-evolution verify gate (promote only verified improvements) `open`
+- IV26 Metacognitive loop monitor (the improver's own health) `open`
+- IV27 Prompt-archive evolution (prompt population + selection) `open`
+- IV28 Cross-domain strategy transfer (strategies generalize) `open`
+- IV29 Self-reflective data curation (curate your own training data) `open`
+- IV30 Improvement rate monitoring (improvement velocity) `open`
+- IV31 Self-harness generation (generate your own eval harness) `open`
+- IV32 Recursive self-benchmark (benchmark the benchmark) `open`
+- IV33 Weak-supervision amplification (weak labels -> strong model) `open`
+- IV34 Self-improvement safety envelope (bounded improvement rate) `open`
+- IV35 Experience distillation (telemetry -> training examples) `open`
+- IV36 Self-modeling (the agent models its own behavior) `open`
+- IV37 Improvement credit assignment (which change caused the gain) `open`
+- IV38 Self-referential prompt search (prompts that improve prompts) `open`
+- IV39 Recursive verification (verify the verifier) `open`
+- IV40 Self-improvement cost ledger (improvement J budget, ties IJ) `open`
+- IV41 Continual architecture search (self-searching architecture) `open`
+- IV42 Self-improvement regression guard (never regress the baseline) `open`
+- IV43 Improvement frontier archive (Pareto improvement archive) `open`
+- IV44 Self-explanation (the agent explains its own changes) `open`
+- IV45 Recursive loop termination (when improvement saturates) `open`
+- IV46 Self-improvement telemetry (loop counters to the ledger) `open`
+- IV47 Metacognitive calibration (confidence in own improvements) `open`
+- IV48 Improvement replay (replay successful improvement steps) `open`
+- IV49 Self-distillation (improve by distilling own outputs) `open`
+- IV50 Recursive skill acquisition (learn how to learn, ties skills) `open`
+- IV51 Self-improvement governance (HITL gates on self-modification) `open`
+- IV52 Improvement provenance (which loop produced the change) `open`
+- IV53 Self-improvement sandbox (improvements in isolation, ties AX) `open`
+- IV54 Recursive prompt optimization (optimize the optimizer's prompts) `open`
+- IV55 Self-improvement energy budget (improve under a J cap) `open`
+- IV56 Loop convergence detection (improvement plateau detection) `open`
+- IV57 Self-improvement portfolio (parallel improvement candidates) `open`
+- IV58 Recursive evaluation (evaluate the evaluator) `open`
+- IV59 Self-improvement audit trail (append-only improvement log) `open`
+- IV60 Improvement rollback (safe revert of a failed improvement) `open`
+- IV61 Self-improvement benchmark suite (RSI evaluation harness) `open`
+- IV62 Metacognitive transfer monitor (does improvement transfer) `open`
+- IV63 Recursive planning (plan the improvement plan) `open`
+- IV64 Self-improvement diversity (avoid converging on one trick) `open`
+- IV65 Improvement-interaction analysis (which improvements combine) `open`
+- IV66 Self-improvement operator (the DA-3 loop as an operator, ties skill) `open`
+- IV67 Recursive self-improvement safety audit (the loop's own alignment) `open`
+Status: `open` (67 gaps; bounded verifiable RSI loops, Goedel-style self-reference, reflection + metacognition)
+
+## Theme IW: Neuromorphic / SNN cross-over
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (SNN gating ICLR-2026; multi-core neuromorphic train Nature-2026; event-driven 2026)
+- IW01 Spike-encoding of tokens (token -> spike train) `open`
+- IW02 Event-driven decode (compute only on spikes) `open`
+- IW03 SNN energy model (1.05 TFLOPS/W neuromorphic vs GPU) `open`
+- IW04 Brain-inspired gating for robustness (SNN gating mechanism) `open`
+- IW05 Sparse computation via spike sparsity (55-85% memory-access cut) `open`
+- IW06 Multi-core neuromorphic scheduling (parallel spike cores) `open`
+- IW07 Membrane-potential accumulator (leaky integrate-and-fire) `open`
+- IW08 Spike-based attention (attention on spike events) `open`
+- IW09 Neuromorphic KV (KV as synaptic weights) `open`
+- IW10 Spike-timing encoding (temporal coding of tokens) `open`
+- IW11 SNN-to-ANN conversion (convert trained ANN to SNN) `open`
+- IW12 Energy-sparsity correlation (energy saved per sparsity level) `open`
+- IW13 Event-driven token selection (spikes gate token processing) `open`
+- IW14 Neuromorphic memory (synaptic weight storage) `open`
+- IW15 Spike-rate monitoring (activity health) `open`
+- IW16 Threshold adaptation (firing threshold tuning) `open`
+- IW17 Neuromorphic MoE (expert activation by spikes) `open`
+- IW18 Spike-based speculative decode (spike drafter) `open`
+- IW19 Neuromorphic energy ledger (J per spike, ties IJ) `open`
+- IW20 Spike-train compression (event compression) `open`
+- IW21 SNN robustness (noise tolerance of spike codes) `open`
+- IW22 Neuromorphic scheduler (event-driven scheduling, ties IR) `open`
+- IW23 Spike-based retrieval (associative recall via spikes, ties IP) `open`
+- IW24 Membrane decay tuning (leak rate per layer) `open`
+- IW25 Neuromorphic weight quant (synaptic weight precision) `open`
+- IW26 Event-driven batching (batch on event density) `open`
+- IW27 Spike-timing-dependent plasticity (STDP-style memory write) `open`
+- IW28 Neuromorphic forward pass (spike forward alternative) `open`
+- IW29 Sparse-event attention (attention only on active tokens) `open`
+- IW30 SNN training emulation (surrogate gradient) `open`
+- IW31 Neuromorphic memory decay (synaptic decay, ties IP05) `open`
+- IW32 Spike latency model (event timing overhead) `open`
+- IW33 Neuromorphic robustness benchmark (perturbation tests) `open`
+- IW34 Event-driven KV eviction (evict on event inactivity) `open`
+- IW35 Spike energy accounting (per-spike J model) `open`
+- IW36 Neuromorphic prefix cache (spike prefix sharing) `open`
+- IW37 Spike-train entropy (information per spike) `open`
+- IW38 SNN-to-engine adapter (spike I/O bridge) `open`
+- IW39 Neuromorphic world-model (spike-based state, ties IN) `open`
+- IW40 Event-driven reasoning (reason on sparse events) `open`
+- IW41 Spike threshold schedule (threshold annealing) `open`
+- IW42 Neuromorphic top-k (spike-based selection) `open`
+- IW43 SNN accuracy-energy frontier (Pareto) `open`
+- IW44 Event-driven prefill (sparse prefill) `open`
+- IW45 Spike-train watermark (event provenance) `open`
+- IW46 Neuromorphic cache coherence (spike cache consistency) `open`
+- IW47 Spike-based continual learning (online spike learning, ties BB) `open`
+- IW48 Neuromorphic attention sink (sink as tonic spiking) `open`
+- IW49 Event-driven telemetry (spike counters) `open`
+- IW50 SNN mixed-precision (spike + analog hybrid) `open`
+- IW51 Neuromorphic energy envelope (power cap on spikes, ties IJ03) `open`
+- IW52 Spike-train dedup (redundant event suppression) `open`
+- IW53 Neuromorphic KV quant (synaptic KV compression) `open`
+- IW54 Event-driven sampling (spike-gated decoding) `open`
+- IW55 SNN stability analysis (spike dynamics) `open`
+- IW56 Neuromorphic memory consolidation (synaptic replay, ties BB) `open`
+- IW57 Spike-based verification (verify on spikes) `open`
+- IW58 Neuromorphic model selector (SNN vs ANN by task) `open`
+- IW59 Event-driven context management (spike context budgets) `open`
+- IW60 Spike-train augmentation (event dropout) `open`
+- IW61 Neuromorphic error handling (spike fault tolerance) `open`
+- IW62 Event-driven RL (spike rewards, ties GG) `open`
+- IW63 SNN benchmark harness (energy/accuracy evals) `open`
+- IW64 Neuromorphic provenance (spike-source tracking) `open`
+- IW65 Event-driven energy operator (spike budget pick, ties IJ07) `open`
+- IW66 Spike-based alignment (preference on spikes, ties IM) `open`
+- IW67 Neuromorphic AGI substrate (event-driven cognitive architecture) `open`
+Status: `open` (67 gaps; spike/event-driven crossover, neuromorphic energy, STDP memory)
+
+## Theme IX: Fuzzing / robustness / security
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (prompt-fuzzing evasion 2026; LogicFuzz NDSS 2026; autonomous fuzzing CERT 2026; EU-AI-Act robustness)
+- IX01 Prompt-fuzz harness (adversarial prompt variants) `open`
+- IX02 Evasion-rate measurement (per-category guardrail evasion) `open`
+- IX03 Guardrail sensitivity matrix (keyword-adjacent robustness) `open`
+- IX04 Autonomous fuzzing pipeline (LLM-supervised fuzzing) `open`
+- IX05 Crash validator (filter unreachable crashes) `open`
+- IX06 Fuzz-log analysis (LLM trace triage) `open`
+- IX07 Semantic-fuzz oracle (behavior divergence, not just crashes) `open`
+- IX08 Coverage-guided prompt mutation `open`
+- IX09 Robustness regression gate (fuzz on every model change) `open`
+- IX10 Adversarial-prompt taxonomy (jailbreak categories) `open`
+- IX11 Robustness benchmark suite (measurable robustness) `open`
+- IX12 Guardrail stress profile (per-guardrail weakness map) `open`
+- IX13 Input-validation layer (schema-check adversarial input) `open`
+- IX14 Fuzz-seed curation (high-value seed prompts) `open`
+- IX15 Mutation operator library (prompt mutation ops) `open`
+- IX16 Robustness scorecard (per-model robustness metrics) `open`
+- IX17 Prompt-injection detector (injection-pattern classifier) `open`
+- IX18 Output-validation gate (validate generated output) `open`
+- IX19 Fuzz-round budget (bounded fuzz campaigns) `open`
+- IX20 Vulnerability triage ledger (found + fixed registry) `open`
+- IX21 Robustness-vs-quality tradeoff monitor `open`
+- IX22 Adversarial example archive (replayable attack corpus) `open`
+- IX23 Fuzzer self-healing (auto-recover fuzz stalls) `open`
+- IX24 Robustness telemetry (per-input robustness signals) `open`
+- IX25 Input-schema fuzzing (malformed structured input) `open`
+- IX26 Injection-mitigation layers (defense-in-depth) `open`
+- IX27 Robustness delta tracking (regression detection) `open`
+- IX28 Fuzz coverage metrics (prompt-space coverage) `open`
+- IX29 Adversarial distillation defense (robust training signal) `open`
+- IX30 Fuzz-oracle calibration (false-positive control) `open`
+- IX31 Prompt-leak detection (data-exfiltration guard) `open`
+- IX32 Robustness energy budget (fuzz under J cap, ties IJ) `open`
+- IX33 Security audit ledger (auditable security posture) `open`
+- IX34 Input canonicalization (normalize adversarial variants) `open`
+- IX35 Fuzz differential testing (same input, model variants) `open`
+- IX36 Robustness auto-repair (detect + patch weak guardrails) `open`
+- IX37 Adversarial robustness eval harness (NDSS-style) `open`
+- IX38 Injection-resistance benchmark (standardized evals) `open`
+- IX39 Fuzz-to-fix loop (fuzz finds, fix verifies) `open`
+- IX40 Robustness model card (documented robustness) `open`
+- IX41 Input-token anomaly detection (outlier input detection) `open`
+- IX42 Guardrail redundancy (overlapping defenses) `open`
+- IX43 Fuzz mutation seeds from real incidents `open`
+- IX44 Robustness under resource limits (degraded-but-safe) `open`
+- IX45 Security regression CI (fuzz in the pipeline) `open`
+- IX46 Adversarial-prompt generation (auto-generate attacks) `open`
+- IX47 Robustness attribution (which layer failed) `open`
+- IX48 Fuzz-parallelization (parallel fuzz workers) `open`
+- IX49 Injection-resistance training (robust fine-tune) `open`
+- IX50 Robustness SLA (minimum robustness bar) `open`
+- IX51 Fuzz campaign reports (structured findings) `open`
+- IX52 Guardrail evolution (update guardrails from findings) `open`
+- IX53 Adversarial robustness scoring (quantified defense) `open`
+- IX54 Fuzz-verifier integration (fuzz feeds the verifier) `open`
+- IX55 Robustness debt tracking (known weaknesses ledger) `open`
+- IX56 Input-entropy guard (reject adversarial entropy spikes) `open`
+- IX57 Robustness provenance (which defense caught what) `open`
+- IX58 Fuzz coverage dashboards `open`
+- IX59 Adversarial robustness transfer (attacks transfer across models) `open`
+- IX60 Robustness-aware sampling (defense-aware decode) `open`
+- IX61 Security-posture operator (auto-apply robustness configs) `open`
+- IX62 Fuzz memory-safety (C-level crash fuzz, ties the kernel) `open`
+- IX63 Robustness regression tests (per-gap assertion) `open`
+- IX64 Adversarial input ledger (append-only attack log) `open`
+- IX65 Robustness calibration (threshold fitting on attacks) `open`
+- IX66 Security benchmark comparison (vs baseline defenses) `open`
+- IX67 Fuzz-to-operator loop (findings drive config promotion) `open`
+Status: `open` (67 gaps; fuzz/evasion measurement + autonomous fuzzing + guardrail hardening)
+
+## Theme IY: Prompt compression / context budgeting
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (LLMLingua-2; LongLLMLingua; RECOMP; Doc2Atom; Cartridges/CAS; LaMR; SES-RAG; GRC; EPC)
+- IY01 LLMLingua perplexity-gated token drop (small-LM scoring) `open`
+- IY02 LLMLingua-2 token classification (distilled BERT-level compressor) `open`
+- IY03 LongLLMLingua question-aware reordering `open`
+- IY04 Selective-Context self-information pruning (2x content, 40% compute) `open`
+- IY05 RECOMP extractive+abstractive compression with selective augmentation `open`
+- IY06 Doc2Atom compositional parametric memory (knowledge atoms + micro-LoRA) `open`
+- IY07 Cartridges at Scale (modular KV caches, distractor mixing, budget manager) `open`
+- IY08 LaMR multi-rubric code-context pruning (semantic + dependency CRFs) `open`
+- IY09 SES-RAG semantic segmentation + query expansion + density truncation `open`
+- IY10 GRC unified generation/retrieval/compression (meta latent tokens) `open`
+- IY11 EPC expected-predictive compression (write-time retention by predicted questions) `open`
+- IY12 Lost-in-the-middle mitigation (reorder important context) `open`
+- IY13 Lexical-density-aware budgeting (dense contexts need more budget) `open`
+- IY14 Tool-schema compression (44-50% schema token savings, ties agentic) `open`
+- IY15 In-context autoencoder (continuous-embedding context) `open`
+- IY16 Context distillation to LoRA (Doc-to-LoRA) `open`
+- IY17 Latent-memory generation (compressed KV as updatable memory) `open`
+- IY18 Hybrid paged attention for compressed context `open`
+- IY19 Compression-ratio governor (target ratio with quality guard) `open`
+- IY20 Compressed-prompt fidelity audit (reconstruction check) `open`
+- IY21 Question-aware compression (query-conditioned retention) `open`
+- IY22 Task-agnostic compressor (works across tasks) `open`
+- IY23 Compression benchmark harness (compression quality evals) `open`
+- IY24 Streaming compression (compress incrementally) `open`
+- IY25 Compression energy accounting (compress vs not, ties IJ) `open`
+- IY26 Retrieval-aware compression (retain retrieval-critical spans) `open`
+- IY27 Per-token importance score caching `open`
+- IY28 Compression curriculum (progressively harder compression) `open`
+- IY29 Compressor-model choice (small-LM vs classifier vs heuristic) `open`
+- IY30 Compression telemetry (ratio, quality, latency) `open`
+- IY31 Context-budget planner (budget per stage: system/prompt/evidence) `open`
+- IY32 Evidence-retention sufficiency (answerability check) `open`
+- IY33 Compression + RAG integration (compress retrieved docs) `open`
+- IY34 Agentic context pruning (multi-turn agent contexts, LaMR-style) `open`
+- IY35 Compressed-KV paging (compressed pages) `open`
+- IY36 Compositional compression (atom-level composition) `open`
+- IY37 Compression provenance (what was compressed away) `open`
+- IY38 Query-router for atom selection (Doc2Atom-style) `open`
+- IY39 Micro-adapter injection (per-atom LoRA, ties lora) `open`
+- IY40 Cartridge rotation (budget-managed cartridge swap) `open`
+- IY41 Compression-quality monitor (post-compression performance) `open`
+- IY42 Compress-or-keep decision (selective compression) `open`
+- IY43 Token-budget inheritance (parent -> child agent budgets) `open`
+- IY44 Compression-aware sampling (compressed context sampling) `open`
+- IY45 Context-density profiler (density per window) `open`
+- IY46 Compressed-prompt safety (never compress safety instructions) `open`
+- IY47 Compression rollback (keep the original if quality drops) `open`
+- IY48 Multi-stage compression (compress progressively) `open`
+- IY49 Compression verification (answerability after compression) `open`
+- IY50 Context-budget operator (auto-budget by task, ties IK) `open`
+- IY51 Compressed-memory integration (compressed context as memory, ties IP) `open`
+- IY52 Compression under energy budget (compress to save J) `open`
+- IY53 Token-cost ledger (compression savings accounting) `open`
+- IY54 Compression benchmark vs full-context baseline `open`
+- IY55 Adaptive compression ratio (per-request ratio) `open`
+- IY56 Compressor staleness (re-compress on context change) `open`
+- IY57 Compression + eviction integration (compressed + evicted, ties IO) `open`
+- IY58 Compressed-prompt telemetry (per-prompt stats) `open`
+- IY59 Compression failure handling (fallback to full context) `open`
+- IY60 Cross-model compression transfer (compress once, use anywhere) `open`
+- IY61 Compression dataset distillation (train compressor from LLM outputs) `open`
+- IY62 Context-budget fairness (per-tenant compression, ties IR) `open`
+- IY63 Compression provenance audit (reproducible compression) `open`
+- IY64 Compressed-context continual learning (compress + learn, ties BB) `open`
+- IY65 Compression robustness (compressed adversarial input) `open`
+- IY66 Compressor model portability (no external LM dependency) `open`
+- IY67 Compression-to-operator loop (compression config promotion) `open`
+Status: `open` (67 gaps; LLMLingua-family + RECOMP + cartridges + latent memory + density-aware budgeting)
+
+## Theme IZ: Mixture-of-experts routing frontier
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (Routing-Free MoE 2604.00801; PathMoE 2603.18297; expert specialization 2505.22323; DeepSeek-V3 aux-free)
+- IZ01 Routing-free MoE (experts self-activate, no centralized router) `open`
+- IZ02 Path-constrained MoE (concentrated expert paths, 11% lower entropy) `open`
+- IZ03 Expert-specialization gradient objective (diversify expert behaviors) `open`
+- IZ04 Auxiliary-loss-free balancing (per-expert bias, DeepSeek-V3 style) `open`
+- IZ05 Router z-loss (logit regularization for stability) `open`
+- IZ06 Token-choice + expert-choice hybrid balancing `open`
+- IZ07 Similarity-preserving routers (load balance via expert similarity) `open`
+- IZ08 Device-level balancing (per-device expert grouping) `open`
+- IZ09 Fine-grained expert dispatch (many small experts, DeepSeek-V2) `open`
+- IZ10 Interleaved MoE layers (every 4th/6th layer MoE) `open`
+- IZ11 Routing consistency monitor (cross-layer path consistency) `open`
+- IZ12 Expert entropy monitor (routing entropy health) `open`
+- IZ13 Router perturbation robustness (22.5x robust paths) `open`
+- IZ14 Expert-collapse prevention (idle-expert guard) `open`
+- IZ15 Load-balance telemetry (per-expert utilization) `open`
+- IZ16 Expert specialization score (how distinct are experts) `open`
+- IZ17 MoE weight quant (expert weights at low precision, ties quant) `open`
+- IZ18 Expert caching (hot-expert weight cache) `open`
+- IZ19 MoE speculative decode (draft expert routing) `open`
+- IZ20 Expert prefetch (predict next experts, prefetch weights) `open`
+- IZ21 MoE energy accounting (per-expert J, ties IJ) `open`
+- IZ22 Routing path replay (remember good paths) `open`
+- IZ23 Expert load scheduler (batch routing by expert load) `open`
+- IZ24 MoE memory tiering (cold experts to slow tier) `open`
+- IZ25 Adaptive expert count (grow experts by need) `open`
+- IZ26 Router determinism (same input -> same experts) `open`
+- IZ27 Expert dropout (train-time expert regularization) `open`
+- IZ28 MoE continual learning (new experts for new tasks, ties BB) `open`
+- IZ29 Router calibration (router confidence calibration) `open`
+- IZ30 Expert routing graph (path visualization) `open`
+- IZ31 MoE + Hopfield routing (associative expert selection, ties IP) `open`
+- IZ32 Expert weight sharing (shared expert subspaces) `open`
+- IZ33 MoE fault tolerance (expert failure fallback) `open`
+- IZ34 Router distillation (small router for big MoE) `open`
+- IZ35 Expert ensemble (multiple experts for one token) `open`
+- IZ36 MoE load-balance benchmark (routing fairness evals) `open`
+- IZ37 Expert pruning (drop redundant experts) `open`
+- IZ38 MoE token-budget (per-token expert budget) `open`
+- IZ39 Routing-aware KV (expert-specific KV partitioning) `open`
+- IZ40 Expert importance (which experts matter) `open`
+- IZ41 MoE + speculative + paged (combined acceleration) `open`
+- IZ42 Router adversarial robustness (routing attacks) `open`
+- IZ43 Expert temperature (routing softmax temperature) `open`
+- IZ44 MoE incremental experts (add experts online) `open`
+- IZ45 Expert-gating MLP (per-expert gating) `open`
+- IZ46 MoE telemetry to the operator (routing health) `open`
+- IZ47 Expert memory pinning (hot experts in fast memory) `open`
+- IZ48 MoE capacity factor tuning (capacity governor) `open`
+- IZ49 Router attention (attention-based routing) `open`
+- IZ50 Expert credit assignment (which expert helped) `open`
+- IZ51 MoE continual specialization (experts specialize over time) `open`
+- IZ52 Routing-free activation patterns (AoE/ReMoE comparisons) `open`
+- IZ53 Expert load rebalancing (live expert migration) `open`
+- IZ54 MoE energy frontier (expert activation vs J) `open`
+- IZ55 Router explainability (why this expert) `open`
+- IZ56 Expert dedup (merge similar experts) `open`
+- IZ57 MoE + agentic routing (task-aware expert selection) `open`
+- IZ58 Expert watermark (per-expert provenance) `open`
+- IZ59 MoE robustness benchmark (expert perturbation evals) `open`
+- IZ60 Router prior (domain-prior routing) `open`
+- IZ61 Expert vector cache (expert output cache) `open`
+- IZ62 MoE scheduling (expert compute scheduling, ties IR) `open`
+- IZ63 Router feedback loop (routing errors -> retrain router) `open`
+- IZ64 Expert bias adaptation (bias-based load balancing) `open`
+- IZ65 MoE quantization-aware routing (quantized router) `open`
+- IZ66 Expert co-activation analysis (which experts fire together) `open`
+- IZ67 MoE operator (auto-tune routing config, ties IV) `open`
+Status: `open` (67 gaps; routing-free/path-constrained MoE + aux-loss-free balancing + expert specialization)
+
+## Theme JA: Architecture hybrids (attention + SSM)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (Falcon-H1 hybrid; Hymba hybrid-head; Qwen3-Next GDN+Gated-Attn; Kimi Linear; 2507.12442 SSM characterization)
+- JA01 Falcon-H1 parallel hybrid (attention + Mamba2 layers, 256K ctx) `open`
+- JA02 Hymba hybrid-head (attention + SSM heads in one layer, 11x KV cut) `open`
+- JA03 Qwen3-Next GDN + gated-attention alternation (262K native ctx) `open`
+- JA04 SSM-at-scale analysis (57K energy 1492J -> 370J) `open`
+- JA05 Hybrid Pareto analysis (accuracy vs TTFT frontier) `open`
+- JA06 SSM recall-limitation compensation (attention for precise recall) `open`
+- JA07 Hybrid layer-position design (which layers are attention) `open`
+- JA08 SSM local + attention global (hybrid receptive fields) `open`
+- JA09 Hybrid KV budget (attention layers keep KV, SSM layers don't) `open`
+- JA10 Hybrid decode scheduling (per-layer mechanism dispatch) `open`
+- JA11 SSM prefill speed (SSM TTFT advantage) `open`
+- JA12 Hybrid accuracy-parity evaluation (hybrid >= transformer) `open`
+- JA13 SSM energy model at scale (energy vs ctx, ties IJ) `open`
+- JA14 Hybrid streaming (SSM constant memory + attention window) `open`
+- JA15 Gated-attention long-context stability (hybrid stability) `open`
+- JA16 Hybrid reasoning accuracy (long-context reasoning on hybrids) `open`
+- JA17 SSM + attention co-training (hybrid training recipe) `open`
+- JA18 Hybrid quantization (quantize both mechanisms) `open`
+- JA19 SSM state + KV unified cache (one memory system) `open`
+- JA20 Hybrid speculative decode (SSM drafter + attention verifier) `open`
+- JA21 Hybrid architecture selector (auto-pick hybrid ratio) `open`
+- JA22 SSM long-context needle test (hybrid recall evals) `open`
+- JA23 Hybrid memory bound (attention window + SSM state) `open`
+- JA24 SSM on-device viability (consumer-hardware long context) `open`
+- JA25 Hybrid layer ablation (which layers need attention) `open`
+- JA26 SSM state size tuning (state dimension) `open`
+- JA27 Hybrid context switching (mechanism switch on context) `open`
+- JA28 SSM + rotary interaction (position in SSM) `open`
+- JA29 Hybrid benchmark harness (attention vs SSM vs hybrid) `open`
+- JA30 Hybrid energy Pareto (energy/accuracy curves) `open`
+- JA31 SSM numerical stability at scale (state drift) `open`
+- JA32 Hybrid prefix caching (prefix in both mechanisms) `open`
+- JA33 SSM long-context memory accounting (state bytes) `open`
+- JA34 Hybrid token efficiency (mechanism-aware token budget) `open`
+- JA35 SSM parallel scan on CPU (efficient scan kernels) `open`
+- JA36 Hybrid robustness (perturbation resilience of hybrids) `open`
+- JA37 SSM attention-sink equivalents (SSM sink tokens) `open`
+- JA38 Hybrid eviction (evict attention KV, keep SSM state) `open`
+- JA39 SSM speculative draft (recurrent draft heads) `open`
+- JA40 Hybrid alignment (preference-align hybrids, ties IQ) `open`
+- JA41 SSM world-model integration (SSM for stateful world, ties IN) `open`
+- JA42 Hybrid MoE (MoE layers in hybrid models) `open`
+- JA43 SSM multi-modal (SSM for audio/video sequences) `open`
+- JA44 Hybrid energy operator (mechanism pick by energy, ties IJ07) `open`
+- JA45 SSM state snapshot (checkpoint recurrent state) `open`
+- JA46 Hybrid context-length switch (switch mechanism past a length) `open`
+- JA47 SSM hardware mapping (scan-friendly layout) `open`
+- JA48 Hybrid continual learning (state + weights, ties BB) `open`
+- JA49 SSM tokenizer interplay (byte-level state inputs) `open`
+- JA50 Hybrid provenance (mechanism attribution per token) `open`
+- JA51 SSM quantization at scale (quantized recurrent state) `open`
+- JA52 Hybrid verifier (verify across mechanisms) `open`
+- JA53 SSM capacity analysis (state capacity vs KV) `open`
+- JA54 Hybrid serving (schedule hybrid requests, ties IR) `open`
+- JA55 SSM robustness benchmark (hybrid perturbation evals) `open`
+- JA56 Hybrid telemetry (per-mechanism counters) `open`
+- JA57 SSM memory consolidation (state as memory, ties IP) `open`
+- JA58 Hybrid energy ledger (per-mechanism J) `open`
+- JA59 SSM long-horizon stability (very-long-context behavior) `open`
+- JA60 Hybrid architecture search (auto hybrid design) `open`
+- JA61 SSM forgetting (state decay, ties IP05) `open`
+- JA62 Hybrid multi-tenant (hybrid cache sharing) `open`
+- JA63 SSM differential privacy (state privacy) `open`
+- JA64 Hybrid watermark (mechanism-tagged outputs) `open`
+- JA65 SSM speculative verification (SSM-verified drafts) `open`
+- JA66 Hybrid model portability (run on any hardware) `open`
+- JA67 Hybrid operator (auto hybrid config, ties IV) `open`
+Status: `open` (67 gaps; attention+SSM hybrids, Hymba hybrid-head, Falcon-H1, energy/accuracy Pareto)
+
+## Theme JB: Multimodal token compression
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (MM token compression survey 2507.20198; VisionSelector; visual-text token efficiency 2026)
+- JB01 VisionSelector learnable visual-token selection `open`
+- JB02 Visual-text token efficiency (text-as-pixels saves 38-58% decoder tokens) `open`
+- JB03 Image token compression (patch merging) `open`
+- JB04 Video token compression (temporal redundancy) `open`
+- JB05 Audio token compression (spectral redundancy) `open`
+- JB06 Cross-modal token alignment (CLIP-style, ties CC03) `open`
+- JB07 Visual redundancy detection (similar-patch dedup) `open`
+- JB08 Modality-aware KV (per-modality KV budgets) `open`
+- JB09 Multimodal attention sparsity (vision tokens sparse attention) `open`
+- JB10 Token-compression survey gaps (all surveyed methods) `open`
+- JB11 Visual token importance scoring (salience-based retention) `open`
+- JB12 Audio-visual fusion compression (joint token compression) `open`
+- JB13 Multimodal token budget planner (per-modality budgets) `open`
+- JB14 Vision encoder efficiency (ViT patch efficiency) `open`
+- JB15 Multimodal eviction (evict low-salience modality tokens, ties IO) `open`
+- JB16 Cross-modal prefix (shared multimodal prefix) `open`
+- JB17 Visual token streaming (streaming image tokens) `open`
+- JB18 Multimodal energy (per-modality J, ties IJ) `open`
+- JB19 Visual token dedup (repeated-region suppression) `open`
+- JB20 Modality routing (which modality matters per task) `open`
+- JB21 Multimodal Hopfield memory (cross-modal patterns, ties IP) `open`
+- JB22 Vision-language alignment quality monitor `open`
+- JB23 Audio token quantization (compressed audio tokens) `open`
+- JB24 Visual token reordering (salience-first ordering) `open`
+- JB25 Multimodal compression benchmark (MM token evals) `open`
+- JB26 Cross-modal retrieval compression (retrieve + compress) `open`
+- JB27 Visual attention sink (vision sink tokens) `open`
+- JB28 Multimodal speculative decode (vision draft) `open`
+- JB29 Token-efficiency for multimodal (dense modality contexts, ties IY) `open`
+- JB30 Visual token provenance (which region produced the token) `open`
+- JB31 Multimodal cache sharing (cross-request visual KV reuse) `open`
+- JB32 Video frame dedup (temporal frame similarity) `open`
+- JB33 Audio-visual token fusion (early fusion compression) `open`
+- JB34 Multimodal robustness (adversarial modality input, ties IX) `open`
+- JB35 Vision token budget governor (per-image token cap) `open`
+- JB36 Multimodal alignment energy (alignment cost) `open`
+- JB37 Visual token curriculum (easy->hard visual tasks) `open`
+- JB38 Modality-fusion attention (attention over fused modalities) `open`
+- JB39 Multimodal memory tiers (modality-tiered memory) `open`
+- JB40 Visual compression quality audit (perceptual loss checks) `open`
+- JB41 Cross-modal token transfer (text cues -> vision tokens) `open`
+- JB42 Multimodal prefix cache (vision prefix reuse) `open`
+- JB43 Audio event detection (audio token salience) `open`
+- JB44 Multimodal planning (plan over modalities, ties IN) `open`
+- JB45 Visual token embedding quant (vision embedding compression) `open`
+- JB46 Multimodal continual learning (new modalities, ties BB) `open`
+- JB47 Cross-modal adversarial robustness (modality attacks) `open`
+- JB48 Multimodal energy operator (modality budget pick) `open`
+- JB49 Visual token sampling (salience-based token sampling) `open`
+- JB50 Multimodal verifier (cross-modal consistency check) `open`
+- JB51 Video temporal compression (frame-rate adaptation) `open`
+- JB52 Audio-visual coherence (AV alignment check) `open`
+- JB53 Multimodal telemetry (per-modality counters) `open`
+- JB54 Visual token watermark (image-region provenance) `open`
+- JB55 Cross-modal distillation (vision teacher -> text student) `open`
+- JB56 Multimodal alignment drift monitor (ties IM06) `open`
+- JB57 Visual context management (visual context budgets) `open`
+- JB58 Multimodal speculative verification (cross-modal verify) `open`
+- JB59 Token-efficiency-aware vision (fewer tokens, same info) `open`
+- JB60 Multimodal OOM safety (modality-budget OOM guard) `open`
+- JB61 Visual KV quantization (quantized vision KV, ties IO10) `open`
+- JB62 Multimodal scheduler (modality-aware scheduling, ties IR) `open`
+- JB63 Cross-modal attention pruning (prune low-cross-attention tokens) `open`
+- JB64 Multimodal provenance ledger (auditable modality inputs) `open`
+- JB65 Visual token importance model (salience predictor) `open`
+- JB66 Multimodal frontier (token-compression quality frontier) `open`
+- JB67 Multimodal operator (auto modality config, ties IV) `open`
+Status: `open` (67 gaps; vision/audio/video token compression + cross-modal budgets + salience retention)
+
+## Theme JC: Quantization frontier (weights + QAT)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7-hop convergence (1.58-bit QAT bottom-up 2411.05882; 16->1.58 transition ACL-2025; BitNet b1.58; 2-bit 2026)
+- JC01 1.58-bit QAT (ternary weights via quantization-aware training) `open`
+- JC02 16->1.58 transition schedule (when to switch precision mid-training) `open`
+- JC03 BitNet 1.58 regularizer view (ternary as regularization) `open`
+- JC04 Weight-only 1.58 inference path `open`
+- JC05 Two-phase QAT (full-precision warm-up then quantize) `open`
+- JC06 Per-layer precision schedule (layer-adaptive bit width) `open`
+- JC07 Activation-aware QAT (quantize with activation ranges) `open`
+- JC08 Quantization curriculum (gradually reduce bit width) `open`
+- JC09 Ternary GEMV optimization (BitNet-style kernel, ties B03) `open`
+- JC10 2-bit QAT (2-bit weights with QAT recovery) `open`
+- JC11 QAT gradient handling (straight-through estimators) `open`
+- JC12 Quantization-aware KV training (QKV in the loop) `open`
+- JC13 Precision transition monitor (when to transition) `open`
+- JC14 QAT energy accounting (quantized inference J, ties IJ) `open`
+- JC15 Quantized fine-tuning (QAT during fine-tune) `open`
+- JC16 Bit-width ablation (per-width accuracy curves) `open`
+- JC17 QAT robustness (quantized model robustness) `open`
+- JC18 Quantization-aware alignment (align quantized models, ties IQ) `open`
+- JC19 Mixed-precision QAT (per-tensor precision) `open`
+- JC20 QAT evaluation harness (quantized evals) `open`
+- JC21 1.58-bit scaling laws (ternary scaling behavior) `open`
+- JC22 QAT convergence speed (quantized training speed) `open`
+- JC23 Quantized speculative decode (quantized drafter) `open`
+- JC24 QAT + LoRA (quantized LoRA adapters) `open`
+- JC25 Quantization-aware distillation (teacher guides quantized student) `open`
+- JC26 QAT stability (quantization training stability) `open`
+- JC27 Quantized memory footprint (weights + KV + activations) `open`
+- JC28 QAT operator (auto bit-width pick, ties IV) `open`
+- JC29 Quantized MoE (quantized experts, ties IZ) `open`
+- JC30 QAT continual learning (quantized continual learning, ties BB) `open`
+- JC31 Ternary attention (quantized attention) `open`
+- JC32 QAT precision schedule search (search the schedule) `open`
+- JC33 Quantized hybrid models (quantize SSM+attention, ties JA) `open`
+- JC34 QAT hardware mapping (quantized kernels per device, ties IS) `open`
+- JC35 Quantization-aware embedding (quantized embeddings, ties IT) `open`
+- JC36 QAT data selection (which data to quantize-train on) `open`
+- JC37 Quantized inference accuracy monitor (perplexity guard) `open`
+- JC38 QAT + unlearning (quantized forget, ties IM) `open`
+- JC39 Ternary KV (1.58 KV cache, ties IO) `open`
+- JC40 QAT reproducibility (seeded quantized training) `open`
+- JC41 Quantized long-context (quantized KV for long ctx) `open`
+- JC42 QAT energy frontier (bits vs J frontier) `open`
+- JC43 Quantization-aware RAG (quantized retrievers) `open`
+- JC44 QAT multi-objective (accuracy + energy + size) `open`
+- JC45 Quantized world-model (quantized state, ties IN) `open`
+- JC46 QAT benchmark suite (quantized training evals) `open`
+- JC47 Ternary momentum (quantized optimizer states) `open`
+- JC48 Quantized multi-tenant (quantized serving, ties IR) `open`
+- JC49 QAT adversarial robustness (quantized model attacks) `open`
+- JC50 Quantization-aware speculative (spec with quantized models) `open`
+- JC51 QAT transfer (quantize small, transfer to big) `open`
+- JC52 Quantized memory consolidation (quantized memory, ties IP) `open`
+- JC53 QAT watermark (quantized provenance) `open`
+- JC54 Quantized streaming (quantized KV streaming, ties L) `open`
+- JC55 QAT precision governor (adaptive precision by loss) `open`
+- JC56 Quantized attention kernels (int8 attention) `open`
+- JC57 QAT curriculum search (auto curriculum) `open`
+- JC58 Quantized tokenizer embeddings (quantized vocab) `open`
+- JC59 QAT + speculative + quantized (full-stack quantized) `open`
+- JC60 Quantized memory tiers (quantized cold KV, ties A06) `open`
+- JC61 QAT energy operator (precision pick by energy) `open`
+- JC62 Quantized agentic (quantized agents, ties AD) `open`
+- JC63 QAT safety (quantized alignment safety) `open`
+- JC64 Quantized telemetry (per-precision counters) `open`
+- JC65 QAT fault tolerance (quantized error resilience) `open`
+- JC66 Quantized continual self-improvement (quantized RSI, ties IV) `open`
+- JC67 QAT frontier (bits/accuracy/energy Pareto) `open`
+Status: `open` (67 gaps; 1.58-bit QAT, precision-transition schedules, quantized full-stack integration)
