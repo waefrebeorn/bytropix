@@ -694,7 +694,7 @@ Status: `open` (67 gaps; continuous-time / manifold / federated Hopfield + atten
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (2602.00954 small-margin; 2605.20834 DPO/RLHF equivalence; 2509.24159 RE-PO; SimPO; CPO; AlphaPO)
 - IQ01 SimPO reference-free reward (length-normalized average log-prob) `wired` (wubu_pref, test PASSES)
-- IQ02 CPO conditional preference optimization (difficult discriminative prompts) `open`
+- IQ02 CPO conditional preference optimization (difficult discriminative prompts) `wired` (wubu_pref2, test PASSES)
 - IQ03 IPO identity-preference optimization (squared-error preference loss) `wired` (wubu_pref, test PASSES)
 - IQ04 RE-PO robust enhanced policy optimization (general enhancer over DPO/IPO/SimPO/CPO) `wired` (wubu_pref, test PASSES)
 - IQ05 AlphaPO reward-shape-aware alignment (reward shaping for DAAs) `wired` (wubu_pref, test PASSES)
@@ -713,53 +713,53 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IQ18 Step-level process preferences (ties the PRM literature) `wired` (wubu_pref, test PASSES)
 - IQ19 Preference cache (reuse pair gradients across updates) `wired` (wubu_pref, test PASSES)
 - IQ20 Preference-based early stopping (reward-accuracy gate) `wired` (wubu_pref, test PASSES)
-- IQ21 Multi-objective preference (win/lose/ties with three-way loss) `open`
+- IQ21 Multi-objective preference (win/lose/ties with three-way loss) `wired` (wubu_pref2, test PASSES)
 - IQ22 Preference staleness (pair age weighting) `wired` (wubu_pref, test PASSES)
-- IQ23 Reward-free calibration (reference-free reward alignment check) `open`
-- IQ24 Preference conflict detection (contradictory pairs) `open`
-- IQ25 Robust preference optimization (RE-PO-style robustness envelope) `open`
-- IQ26 Preference budget allocation (which prompts deserve pairs) `open`
-- IQ27 Alignment without forgetting (preference + KL-anchor, ties IM04) `open`
-- IQ28 Preference feedback loop to the AGI (user signals as pairs, ties IV) `open`
-- IQ29 Implicit reward visualization (reward traces per token) `open`
-- IQ30 Preference benchmark harness (alignment eval suite) `open`
-- IQ31 Length-normalized margin (SimPO gamma) `open`
-- IQ32 Reference-model distillation into the reward (offline reward model) `open`
-- IQ33 Preference pair augmentation (synthetic pairs from rejected samples) `open`
-- IQ34 Alignment drift monitor during fine-tune (ties IM06) `open`
-- IQ35 Preference transfer across domains (pair curriculum) `open`
-- IQ36 Reward shaping functions (AlphaPO-style shaping) `open`
-- IQ37 Preference update frequency (mini-batch preference mixing) `open`
-- IQ38 Pair difficulty-aware sampling (hard-pair emphasis) `open`
-- IQ39 Preference-regularized decode (no retrain: preference-constrained sampling) `open`
-- IQ40 Alignment energy accounting (preference training under the energy ledger) `open`
-- IQ41 Preference-pair provenance (which source made the pair) `open`
-- IQ42 Multi-turn preference (conversation-level pairs) `open`
-- IQ43 Preference staleness decay (old pairs weight down) `open`
-- IQ44 Preference quality gate (reject low-agreement pairs) `open`
-- IQ45 DPO vs RLHF divergence metric (when to switch methods) `open`
-- IQ46 Preference ensemble (multiple reward hypotheses, ties DD) `open`
-- IQ47 Alignment health dashboard (reward accuracy + drift + margin) `open`
-- IQ48 Preference-selective replay (alignment replay, ties IM05) `open`
-- IQ49 Online preference bootstrap (self-generated pairs, ties IV) `open`
-- IQ50 Preference curriculum (easy->hard pair schedule) `open`
-- IQ51 Length-robust reward normalization (SimPO's answer) `open`
-- IQ52 Preference-aware sampling temperature (confidence-scaled pairs) `open`
-- IQ53 Pair margin prediction (predict pair difficulty) `open`
-- IQ54 Preference logbook (auditable alignment history) `open`
-- IQ55 Alignment verification gate (post-align eval before promotion, ties AX) `open`
-- IQ56 Preference transfer learning (align small model, transfer to big) `open`
-- IQ57 Reward hacking pre-detection (alignment-time monitoring) `open`
-- IQ58 Preference-efficient alignment (fewer pairs via active selection) `open`
-- IQ59 Preference entropy (pair distribution flatness) `open`
-- IQ60 Alignment + unlearning joint objective (align AND forget, ties IM) `open`
-- IQ61 Preference-based model selection (align then pick by eval) `open`
-- IQ62 Preference watermark (align-time provenance for outputs) `open`
-- IQ63 Preference data versioning (dataset version in the training ledger) `open`
-- IQ64 Margin regularization (avoid over-confident preference fitting) `open`
-- IQ65 Preference meta-learning (learn the alignment objective, ties IV) `open`
-- IQ66 Alignment test-time scaling (preference-guided decoding budget, ties IK) `open`
-- IQ67 Preference-to-policy operator (alignment config promotion, ties IM07) `open`
+- IQ23 Reward-free calibration (reference-free reward alignment check) `wired` (wubu_pref2, test PASSES)
+- IQ24 Preference conflict detection (contradictory pairs) `wired` (wubu_pref2, test PASSES)
+- IQ25 Robust preference optimization (RE-PO-style robustness envelope) `wired` (wubu_pref2, test PASSES)
+- IQ26 Preference budget allocation (which prompts deserve pairs) `wired` (wubu_pref2, test PASSES)
+- IQ27 Alignment without forgetting (preference + KL-anchor, ties IM04) `wired` (wubu_pref2, test PASSES)
+- IQ28 Preference feedback loop to the AGI (user signals as pairs, ties IV) `wired` (wubu_pref2, test PASSES)
+- IQ29 Implicit reward visualization (reward traces per token) `wired` (wubu_pref2, test PASSES)
+- IQ30 Preference benchmark harness (alignment eval suite) `wired` (wubu_pref2, test PASSES)
+- IQ31 Length-normalized margin (SimPO gamma) `wired` (wubu_pref2, test PASSES)
+- IQ32 Reference-model distillation into the reward (offline reward model) `wired` (wubu_pref2, test PASSES)
+- IQ33 Preference pair augmentation (synthetic pairs from rejected samples) `wired` (wubu_pref2, test PASSES)
+- IQ34 Alignment drift monitor during fine-tune (ties IM06) `wired` (wubu_pref2, test PASSES)
+- IQ35 Preference transfer across domains (pair curriculum) `wired` (wubu_pref2, test PASSES)
+- IQ36 Reward shaping functions (AlphaPO-style shaping) `wired` (wubu_pref2, test PASSES)
+- IQ37 Preference update frequency (mini-batch preference mixing) `wired` (wubu_pref2, test PASSES)
+- IQ38 Pair difficulty-aware sampling (hard-pair emphasis) `wired` (wubu_pref2, test PASSES)
+- IQ39 Preference-regularized decode (no retrain: preference-constrained sampling) `wired` (wubu_pref2, test PASSES)
+- IQ40 Alignment energy accounting (preference training under the energy ledger) `wired` (wubu_pref2, test PASSES)
+- IQ41 Preference-pair provenance (which source made the pair) `wired` (wubu_pref2, test PASSES)
+- IQ42 Multi-turn preference (conversation-level pairs) `wired` (wubu_pref2, test PASSES)
+- IQ43 Preference staleness decay (old pairs weight down) `wired` (wubu_pref2, test PASSES)
+- IQ44 Preference quality gate (reject low-agreement pairs) `wired` (wubu_pref2, test PASSES)
+- IQ45 DPO vs RLHF divergence metric (when to switch methods) `wired` (wubu_pref2, test PASSES)
+- IQ46 Preference ensemble (multiple reward hypotheses, ties DD) `wired` (wubu_pref2, test PASSES)
+- IQ47 Alignment health dashboard (reward accuracy + drift + margin) `wired` (wubu_pref2, test PASSES)
+- IQ48 Preference-selective replay (alignment replay, ties IM05) `wired` (wubu_pref2, test PASSES)
+- IQ49 Online preference bootstrap (self-generated pairs, ties IV) `wired` (wubu_pref2, test PASSES)
+- IQ50 Preference curriculum (easy->hard pair schedule) `wired` (wubu_pref2, test PASSES)
+- IQ51 Length-robust reward normalization (SimPO's answer) `wired` (wubu_pref2, test PASSES)
+- IQ52 Preference-aware sampling temperature (confidence-scaled pairs) `wired` (wubu_pref2, test PASSES)
+- IQ53 Pair margin prediction (predict pair difficulty) `wired` (wubu_pref2, test PASSES)
+- IQ54 Preference logbook (auditable alignment history) `wired` (wubu_pref2, test PASSES)
+- IQ55 Alignment verification gate (post-align eval before promotion, ties AX) `wired` (wubu_pref2, test PASSES)
+- IQ56 Preference transfer learning (align small model, transfer to big) `wired` (wubu_pref2, test PASSES)
+- IQ57 Reward hacking pre-detection (alignment-time monitoring) `wired` (wubu_pref2, test PASSES)
+- IQ58 Preference-efficient alignment (fewer pairs via active selection) `wired` (wubu_pref2, test PASSES)
+- IQ59 Preference entropy (pair distribution flatness) `wired` (wubu_pref2, test PASSES)
+- IQ60 Alignment + unlearning joint objective (align AND forget, ties IM) `wired` (wubu_pref2, test PASSES)
+- IQ61 Preference-based model selection (align then pick by eval) `wired` (wubu_pref2, test PASSES)
+- IQ62 Preference watermark (align-time provenance for outputs) `wired` (wubu_pref2, test PASSES)
+- IQ63 Preference data versioning (dataset version in the training ledger) `wired` (wubu_pref2, test PASSES)
+- IQ64 Margin regularization (avoid over-confident preference fitting) `wired` (wubu_pref2, test PASSES)
+- IQ65 Preference meta-learning (learn the alignment objective, ties IV) `wired` (wubu_pref2, test PASSES)
+- IQ66 Alignment test-time scaling (preference-guided decoding budget, ties IK) `wired` (wubu_pref2, test PASSES)
+- IQ67 Preference-to-policy operator (alignment config promotion, ties IM07) `wired` (wubu_pref2, test PASSES)
 Status: `open` (67 gaps; SimPO/CPO/IPO/RE-PO/AlphaPO + DPO-RLHF equivalence + alignment monitoring)
 
 ## Theme IR: Multi-tenant serving / scheduler
