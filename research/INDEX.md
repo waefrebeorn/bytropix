@@ -857,53 +857,53 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IS18 Near-memory reduce (partial sums at the memory) `wired` (wubu_pim, test PASSES)
 - IS19 PIM page-locality (KV pages colocated with the compute) `wired` (wubu_pim, test PASSES)
 - IS20 Hardware telemetry model (simulated counters: MACs, bytes, J) `wired` (wubu_pim, test PASSES)
-- IS21 CIM bit-precision adaptation (precision per layer by sensitivity) `open`
-- IS22 Emerging-memory endurance model (write-wear budget for KV) `open`
-- IS23 Near-memory speculative decode (draft heads at the memory) `open`
-- IS24 PIM capacity-vs-latency frontier (tradeoff model) `open`
-- IS25 Heterogeneous CPU/GPU/NPU-PIM scheduling `open`
-- IS26 Memory-wall budget governor (data-movement cap per token) `open`
-- IS27 PIM-friendly KV quant (integer KV for CIM, ties IO10) `open`
-- IS28 Near-storage RAG (retrieval at the SSD) `open`
-- IS29 Hardware abstraction layer for the engine (kernel dispatch table) `open`
-- IS30 Crossbar mapping optimizer (weight-to-crossbar placement) `open`
-- IS31 PIM energy ledger (in-memory J/op accounting, ties IJ) `open`
-- IS32 Near-memory attention sink (sink KV pinned near compute) `open`
-- IS33 PIM correctness audit (analog error bounds) `open`
-- IS34 Hardware-targeted kernel variants (per-device GEMV) `open`
-- IS35 Memory-centric decode loop (decode organized around the memory) `open`
-- IS36 PIM-offload benefit predictor (when PIM beats CPU) `open`
-- IS37 Near-memory MoE routing (expert weights at the memory) `open`
-- IS38 CIM weight stationary layout (weights fixed in crossbar) `open`
-- IS39 Hardware counter model (cycle/J/byte counters for tuning) `open`
-- IS40 PIM page eviction (KV page movement between tiers) `open`
-- IS41 Near-memory prefix cache (LCP prefix at the memory) `open`
-- IS42 Emerging-memory latency model (PCM/FeFET read/write costs) `open`
-- IS43 PIM-aware batching (batch shapes that fit the memory arrays) `open`
-- IS44 Hardware co-simulation harness (simulated device models) `open`
-- IS45 PIM numerical stability (low-precision accumulation guards) `open`
-- IS46 Near-memory KV compression (compress at the memory, ties IO) `open`
-- IS47 Hardware-aware auto-tuning (kernel selection by counters) `open`
-- IS48 Memory-centric speculative decode (draft KV near memory) `open`
-- IS49 PIM capacity planning (model+KV fit check per device) `open`
-- IS50 Near-storage dedup (SSD-side KV dedup) `open`
-- IS51 Hardware event simulation (simulated PMU events) `open`
-- IS52 PIM dataflow optimization (input-stationary vs output-stationary) `open`
-- IS53 Memory-wall roofline update (energy roofline, ties IJ01) `open`
-- IS54 Near-memory attention offload (attention compute at DRAM) `open`
-- IS55 CIM weight refresh policy (drift compensation) `open`
-- IS56 Hardware-aware quantization selector (per-device bit choice) `open`
-- IS57 PIM offload regression tests (host parity checks) `open`
-- IS58 Near-memory top-k (softmax/selection near memory) `open`
-- IS59 Memory-centric scheduling (schedule by memory, ties IR) `open`
-- IS60 Hardware diversity matrix (which kernels run where) `open`
-- IS61 PIM energy envelope (in-memory power cap, ties IJ03) `open`
-- IS62 Near-memory KV dedup (dedup at the memory tier) `open`
-- IS63 Hardware cost ledger (J + latency per request) `open`
-- IS64 PIM-friendly tokenizer (byte alignment for memory ops) `open`
-- IS65 Memory-centric planning (plan steps co-resident with memory) `open`
-- IS66 Near-memory verifier (verify tokens near the compute) `open`
-- IS67 Hardware-abstracted engine config (device descriptors) `open`
+- IS21 CIM bit-precision adaptation (precision per layer by sensitivity) `wired` (wubu_pim2, test PASSES)
+- IS22 Emerging-memory endurance model (write-wear budget for KV) `wired` (wubu_pim2, test PASSES)
+- IS23 Near-memory speculative decode (draft heads at the memory) `wired` (wubu_pim2, test PASSES)
+- IS24 PIM capacity-vs-latency frontier (tradeoff model) `wired` (wubu_pim2, test PASSES)
+- IS25 Heterogeneous CPU/GPU/NPU-PIM scheduling `wired` (wubu_pim2, test PASSES)
+- IS26 Memory-wall budget governor (data-movement cap per token) `wired` (wubu_pim2, test PASSES)
+- IS27 PIM-friendly KV quant (integer KV for CIM, ties IO10) `wired` (wubu_pim2, test PASSES)
+- IS28 Near-storage RAG (retrieval at the SSD) `wired` (wubu_pim2, test PASSES)
+- IS29 Hardware abstraction layer for the engine (kernel dispatch table) `wired` (wubu_pim2, test PASSES)
+- IS30 Crossbar mapping optimizer (weight-to-crossbar placement) `wired` (wubu_pim2, test PASSES)
+- IS31 PIM energy ledger (in-memory J/op accounting, ties IJ) `wired` (wubu_pim2, test PASSES)
+- IS32 Near-memory attention sink (sink KV pinned near compute) `wired` (wubu_pim2, test PASSES)
+- IS33 PIM correctness audit (analog error bounds) `wired` (wubu_pim2, test PASSES)
+- IS34 Hardware-targeted kernel variants (per-device GEMV) `wired` (wubu_pim2, test PASSES)
+- IS35 Memory-centric decode loop (decode organized around the memory) `wired` (wubu_pim2, test PASSES)
+- IS36 PIM-offload benefit predictor (when PIM beats CPU) `wired` (wubu_pim2, test PASSES)
+- IS37 Near-memory MoE routing (expert weights at the memory) `wired` (wubu_pim2, test PASSES)
+- IS38 CIM weight stationary layout (weights fixed in crossbar) `wired` (wubu_pim2, test PASSES)
+- IS39 Hardware counter model (cycle/J/byte counters for tuning) `wired` (wubu_pim2, test PASSES)
+- IS40 PIM page eviction (KV page movement between tiers) `wired` (wubu_pim2, test PASSES)
+- IS41 Near-memory prefix cache (LCP prefix at the memory) `wired` (wubu_pim2, test PASSES)
+- IS42 Emerging-memory latency model (PCM/FeFET read/write costs) `wired` (wubu_pim2, test PASSES)
+- IS43 PIM-aware batching (batch shapes that fit the memory arrays) `wired` (wubu_pim2, test PASSES)
+- IS44 Hardware co-simulation harness (simulated device models) `wired` (wubu_pim2, test PASSES)
+- IS45 PIM numerical stability (low-precision accumulation guards) `wired` (wubu_pim2, test PASSES)
+- IS46 Near-memory KV compression (compress at the memory, ties IO) `wired` (wubu_pim2, test PASSES)
+- IS47 Hardware-aware auto-tuning (kernel selection by counters) `wired` (wubu_pim2, test PASSES)
+- IS48 Memory-centric speculative decode (draft KV near memory) `wired` (wubu_pim2, test PASSES)
+- IS49 PIM capacity planning (model+KV fit check per device) `wired` (wubu_pim2, test PASSES)
+- IS50 Near-storage dedup (SSD-side KV dedup) `wired` (wubu_pim2, test PASSES)
+- IS51 Hardware event simulation (simulated PMU events) `wired` (wubu_pim2, test PASSES)
+- IS52 PIM dataflow optimization (input-stationary vs output-stationary) `wired` (wubu_pim2, test PASSES)
+- IS53 Memory-wall roofline update (energy roofline, ties IJ01) `wired` (wubu_pim2, test PASSES)
+- IS54 Near-memory attention offload (attention compute at DRAM) `wired` (wubu_pim2, test PASSES)
+- IS55 CIM weight refresh policy (drift compensation) `wired` (wubu_pim2, test PASSES)
+- IS56 Hardware-aware quantization selector (per-device bit choice) `wired` (wubu_pim2, test PASSES)
+- IS57 PIM offload regression tests (host parity checks) `wired` (wubu_pim2, test PASSES)
+- IS58 Near-memory top-k (softmax/selection near memory) `wired` (wubu_pim2, test PASSES)
+- IS59 Memory-centric scheduling (schedule by memory, ties IR) `wired` (wubu_pim2, test PASSES)
+- IS60 Hardware diversity matrix (which kernels run where) `wired` (wubu_pim2, test PASSES)
+- IS61 PIM energy envelope (in-memory power cap, ties IJ03) `wired` (wubu_pim2, test PASSES)
+- IS62 Near-memory KV dedup (dedup at the memory tier) `wired` (wubu_pim2, test PASSES)
+- IS63 Hardware cost ledger (J + latency per request) `wired` (wubu_pim2, test PASSES)
+- IS64 PIM-friendly tokenizer (byte alignment for memory ops) `wired` (wubu_pim2, test PASSES)
+- IS65 Memory-centric planning (plan steps co-resident with memory) `wired` (wubu_pim2, test PASSES)
+- IS66 Near-memory verifier (verify tokens near the compute) `wired` (wubu_pim2, test PASSES)
+- IS67 Hardware-abstracted engine config (device descriptors) `wired` (wubu_pim2, test PASSES)
 Status: `open` (67 gaps; PIM/CIM/near-memory co-design, hardware-abstracted engine)
 
 ## Theme IT: Tokenization / data plane
