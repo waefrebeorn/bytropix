@@ -486,3 +486,14 @@ Status: wired = implemented+tested.
 - GG05 DQN / Q-learning (value-based) wired (wubu_dqn.c)
 - GG06 Value iteration / Bellman backup wired (wubu_value.c)
 - GG07 Unified policy/value interface + integration wired (test_gg.c)
+
+## Theme HH: Inference Acceleration (Speculative Decoding + Paged KV + MoE Routing + Continuous Batching)
+Status: wired = implemented+tested.
+### 7 gaps closed (HH01-HH07)
+- HH01 Speculative decoding (draft/verify/reject) `wired` (wubu_specdec.c)
+- HH02 Paged KV cache (block table, CoW, prefix) `wired` (wubu_pagedkv.c)
+- HH03 MoE capacity routing + load-balancing `wired` (wubu_moeroute.c)
+- HH04 Continuous batching (iterative scheduling) `wired` (wubu_contbatch.c)
+- HH05 Medusa self-draft heads (tree draft) `wired` (wubu_medusa.c)
+- HH06 KV quantization (INT8 group-wise) `wired` (wubu_quantkv.c)
+- HH07 Integration: speedup model `wired` (test_hh.c)
