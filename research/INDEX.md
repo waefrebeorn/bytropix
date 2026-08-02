@@ -428,8 +428,8 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - BB03 Task boundary detection (OOD via tok/s divergence) `wired` (wubu_taskbd.c)
 - BB04 Knowledge distillation (teacher snapshot + KL soft targets) `wired` (wubu_distill.c)
 - BB05 Integration: continual learning loop feeds loopguard `wired` (test_continual)
-- BB06 SI path-integral importance `open` (research: path tracking beyond sweep)
-- BB07 Dark experience replay (distillation + replay hybrid) `open` (research: model-level)
+- BB06 SI path-integral importance (Zenke 2017; omega accumulates the gradient path) `wired` (wubu_si, test_debt)
+- BB07 Dark experience replay (teacher-soft-target replay; the KL vs CE bug caught by DA) `wired` (wubu_der, test_debt)
 
 ## Theme CC: Multimodal Grounding (Vision + Audio + Text)
 Status: `open` = not yet in engine; `wired` = implemented+tested.
@@ -463,7 +463,7 @@ Status: wired = implemented+tested; open = research-level.
 - EE04 Automated theorem proving (natural-deduction) wired (wubu_prover.c)
 - EE05 Invariant discovery (loop invariant synthesis) wired (wubu_invariant.c)
 - EE06 Integration: discovered law to loopguard/safekern wired (test_ee.c)
-- EE07 Closed-loop self-verification (re-discover on shift) open (research: needs world-model)
+- EE07 Closed-loop self-verification (divergence -> re-synthesize -> replace) `wired` (wubu_reverify, test_debt)
 
 ## Theme FF: Bayesian Optimization + Uncertainty Quantification + Active Learning
 Status: wired = implemented+tested.
@@ -497,3 +497,15 @@ Status: wired = implemented+tested.
 - HH05 Medusa self-draft heads (tree draft) `wired` (wubu_medusa.c)
 - HH06 KV quantization (INT8 group-wise) `wired` (wubu_quantkv.c)
 - HH07 Integration: speedup model `wired` (test_hh.c)
+
+## Theme IJ: Energy-aware inference (power-budgeted decode)
+Status: `open` = not yet in engine; `wired` = implemented+tested.
+### 7 gaps (IJ01-IJ07)
+- IJ01 Energy roofline model (E = mem_bytes*J/byte + flops*J/flop; decode is memory-bound) `wired` (wubu_energy estimate/j_per_token)
+- IJ02 Energy-per-token ledger with a hard budget (arXiv 2603.20224 E/token) `wired` (wubu_energy ledger)
+- IJ03 Power-cap frequency scheduler (DVFS P~CV²f; memory-bound decode: lower f = higher tok/J, CCGrid 2026) `wired` (wubu_energy freq_for_cap/jpt_at_freq)
+- IJ04 Energy-budget early exit (stop when the remaining budget can't afford the next token) `wired` (wubu_energy should_continue)
+- IJ05 Energy-tier KV offload (choose the tier by amortized J/byte, not capacity) `wired` (wubu_energy choose_tier)
+- IJ06 Speculative-decoding energy break-even (draft_jpt < target_jpt*accept_rate; DA-verified model) `wired` (wubu_energy spec_breakeven/round)
+- IJ07 Budget-driven operator (pick the lowest-J/token config clearing the throughput gate) `wired` (wubu_energy pick_config)
+Status: `wired` (wubu_energy, test_energy PASSES)
