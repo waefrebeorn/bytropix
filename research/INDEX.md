@@ -785,53 +785,53 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IR18 Dynamic batching window (batch size adaptation by memory) `wired` (wubu_serve, test PASSES)
 - IR19 Request-level priority inheritance (ties the OS PI concept) `wired` (wubu_serve, test PASSES)
 - IR20 Memory-stability hysteresis (avoid preempt/accept oscillation) `wired` (wubu_serve, test PASSES)
-- IR21 Fairness metric monitor (per-tenant service share) `open`
-- IR22 Preemption telemetry (preempt frequency, rebuild cost) `open`
-- IR23 Co-scheduling prefill+decode (interleaved phases, ties HH04) `open`
-- IR24 Cache-aware request routing (route to the node with the prefix) `open`
-- IR25 Token-budget profiler (per-request token demand estimation) `open`
-- IR26 Admission by predicted KV growth (proactive OOM avoidance) `open`
-- IR27 Work-conserving scheduler (never idle while work exists) `open`
-- IR28 Preemption budget per tenant (fair preemption) `open`
-- IR29 Decode-phase priority (decode > prefill under contention) `open`
-- IR30 Scheduler-ledger integration (schedule decisions to the AGI ledger) `open`
-- IR31 Multi-queue scheduling (separate queues per SLO class) `open`
-- IR32 Backfill scheduling (fill idle slots with background work) `open`
-- IR33 Speculative prefill (predict next prompt, prefill ahead) `open`
-- IR34 Context-keepalive scheduler (keep hot contexts resident) `open`
-- IR35 Eviction-vs-preempt arbitration (evict cold cache or preempt request) `open`
-- IR36 Cost-aware scheduling (J/token cost, ties IJ) `open`
-- IR37 Scheduler fairness under variable demand (burst-adaptive weights) `open`
-- IR38 Request grouping by prefix similarity (batched prefill) `open`
-- IR39 Preemption recovery speedup (KV checkpoint restore) `open`
-- IR40 Scheduler resilience (scheduler restart without request loss) `open`
-- IR41 Multi-tenant security isolation (tenant cache boundaries, ties AD) `open`
-- IR42 Token-budget debt tracking (tenant overspend recovery) `open`
-- IR43 SLO violation monitor (latency-target breach alerts) `open`
-- IR44 Adaptive concurrency (max in-flight by memory pressure) `open`
-- IR45 Scheduling policy selector (auto-pick scheduler by load profile) `open`
-- IR46 Idle-capacity scavenging (low-priority batch on idle resources) `open`
-- IR47 Request coalescing (merge similar prompts) `open`
-- IR48 Preemption decision cost-benefit (restart cost vs preempt cost) `open`
-- IR49 Memory-pressure feedback loop (scheduler <-> allocator) `open`
-- IR50 Deadline-aware scheduling (hard deadlines for time-critical requests) `open`
-- IR51 Fair preemption ordering (preempt the least-SLO-critical first) `open`
-- IR52 Scheduler benchmarking harness (fairness/latency/throughput evals) `open`
-- IR53 Cache-sharing scheduler (shared prefix across tenants with accounting) `open`
-- IR54 Preemption-aware token generation (checkpoint generation state) `open`
-- IR55 Multi-model scheduling (multiple models on one pool) `open`
-- IR56 Scheduler hysteresis (stability under load oscillation) `open`
-- IR57 Queue-depth telemetry (per-queue waiting metrics) `open`
-- IR58 Request aging (avoid indefinite starvation) `open`
-- IR59 Cost-fairness tradeoff scheduler (J/token per tenant, ties IJ) `open`
-- IR60 Preemption simulation (dry-run preemption policy) `open`
-- IR61 Scheduler config operator (auto-tune scheduler params, ties IV) `open`
-- IR62 Token-budget negotiation (tenant request for more budget) `open`
-- IR63 Memory-debt reclamation (slow-tenant cache reclaim) `open`
-- IR64 Prefill batch planning (chunked prefill schedule) `open`
-- IR65 Scheduler event log (auditable schedule decisions) `open`
-- IR66 Cross-node scheduling (distributed request placement) `open`
-- IR67 Serving energy envelope (power-cap-aware scheduling, ties IJ03) `open`
+- IR21 Fairness metric monitor (per-tenant service share) `wired` (wubu_serve2, test PASSES)
+- IR22 Preemption telemetry (preempt frequency, rebuild cost) `wired` (wubu_serve2, test PASSES)
+- IR23 Co-scheduling prefill+decode (interleaved phases, ties HH04) `wired` (wubu_serve2, test PASSES)
+- IR24 Cache-aware request routing (route to the node with the prefix) `wired` (wubu_serve2, test PASSES)
+- IR25 Token-budget profiler (per-request token demand estimation) `wired` (wubu_serve2, test PASSES)
+- IR26 Admission by predicted KV growth (proactive OOM avoidance) `wired` (wubu_serve2, test PASSES)
+- IR27 Work-conserving scheduler (never idle while work exists) `wired` (wubu_serve2, test PASSES)
+- IR28 Preemption budget per tenant (fair preemption) `wired` (wubu_serve2, test PASSES)
+- IR29 Decode-phase priority (decode > prefill under contention) `wired` (wubu_serve2, test PASSES)
+- IR30 Scheduler-ledger integration (schedule decisions to the AGI ledger) `wired` (wubu_serve2, test PASSES)
+- IR31 Multi-queue scheduling (separate queues per SLO class) `wired` (wubu_serve2, test PASSES)
+- IR32 Backfill scheduling (fill idle slots with background work) `wired` (wubu_serve2, test PASSES)
+- IR33 Speculative prefill (predict next prompt, prefill ahead) `wired` (wubu_serve2, test PASSES)
+- IR34 Context-keepalive scheduler (keep hot contexts resident) `wired` (wubu_serve2, test PASSES)
+- IR35 Eviction-vs-preempt arbitration (evict cold cache or preempt request) `wired` (wubu_serve2, test PASSES)
+- IR36 Cost-aware scheduling (J/token cost, ties IJ) `wired` (wubu_serve2, test PASSES)
+- IR37 Scheduler fairness under variable demand (burst-adaptive weights) `wired` (wubu_serve2, test PASSES)
+- IR38 Request grouping by prefix similarity (batched prefill) `wired` (wubu_serve2, test PASSES)
+- IR39 Preemption recovery speedup (KV checkpoint restore) `wired` (wubu_serve2, test PASSES)
+- IR40 Scheduler resilience (scheduler restart without request loss) `wired` (wubu_serve2, test PASSES)
+- IR41 Multi-tenant security isolation (tenant cache boundaries, ties AD) `wired` (wubu_serve2, test PASSES)
+- IR42 Token-budget debt tracking (tenant overspend recovery) `wired` (wubu_serve2, test PASSES)
+- IR43 SLO violation monitor (latency-target breach alerts) `wired` (wubu_serve2, test PASSES)
+- IR44 Adaptive concurrency (max in-flight by memory pressure) `wired` (wubu_serve2, test PASSES)
+- IR45 Scheduling policy selector (auto-pick scheduler by load profile) `wired` (wubu_serve2, test PASSES)
+- IR46 Idle-capacity scavenging (low-priority batch on idle resources) `wired` (wubu_serve2, test PASSES)
+- IR47 Request coalescing (merge similar prompts) `wired` (wubu_serve2, test PASSES)
+- IR48 Preemption decision cost-benefit (restart cost vs preempt cost) `wired` (wubu_serve2, test PASSES)
+- IR49 Memory-pressure feedback loop (scheduler <-> allocator) `wired` (wubu_serve2, test PASSES)
+- IR50 Deadline-aware scheduling (hard deadlines for time-critical requests) `wired` (wubu_serve2, test PASSES)
+- IR51 Fair preemption ordering (preempt the least-SLO-critical first) `wired` (wubu_serve2, test PASSES)
+- IR52 Scheduler benchmarking harness (fairness/latency/throughput evals) `wired` (wubu_serve2, test PASSES)
+- IR53 Cache-sharing scheduler (shared prefix across tenants with accounting) `wired` (wubu_serve2, test PASSES)
+- IR54 Preemption-aware token generation (checkpoint generation state) `wired` (wubu_serve2, test PASSES)
+- IR55 Multi-model scheduling (multiple models on one pool) `wired` (wubu_serve2, test PASSES)
+- IR56 Scheduler hysteresis (stability under load oscillation) `wired` (wubu_serve2, test PASSES)
+- IR57 Queue-depth telemetry (per-queue waiting metrics) `wired` (wubu_serve2, test PASSES)
+- IR58 Request aging (avoid indefinite starvation) `wired` (wubu_serve2, test PASSES)
+- IR59 Cost-fairness tradeoff scheduler (J/token per tenant, ties IJ) `wired` (wubu_serve2, test PASSES)
+- IR60 Preemption simulation (dry-run preemption policy) `wired` (wubu_serve2, test PASSES)
+- IR61 Scheduler config operator (auto-tune scheduler params, ties IV) `wired` (wubu_serve2, test PASSES)
+- IR62 Token-budget negotiation (tenant request for more budget) `wired` (wubu_serve2, test PASSES)
+- IR63 Memory-debt reclamation (slow-tenant cache reclaim) `wired` (wubu_serve2, test PASSES)
+- IR64 Prefill batch planning (chunked prefill schedule) `wired` (wubu_serve2, test PASSES)
+- IR65 Scheduler event log (auditable schedule decisions) `wired` (wubu_serve2, test PASSES)
+- IR66 Cross-node scheduling (distributed request placement) `wired` (wubu_serve2, test PASSES)
+- IR67 Serving energy envelope (power-cap-aware scheduling, ties IJ03) `wired` (wubu_serve2, test PASSES)
 Status: `open` (67 gaps; fair multi-tenant scheduling + preemption + prefix-aware routing)
 
 ## Theme IS: PIM / near-memory / hardware co-design
