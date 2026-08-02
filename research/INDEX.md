@@ -475,3 +475,14 @@ Status: wired = implemented+tested.
 - FF05 Active Learning (uncertainty sampling / QBC) wired (wubu_active.c)
 - FF06 Thompson Sampling / bandits wired (wubu_bandit.c)
 - FF07 Integration with recursive_optimize wired (test_ff.c)
+
+## Theme GG: Reinforcement Learning (Policy Gradients, Actor-Critic, PPO, PPO-Clip)
+Status: wired = implemented+tested.
+### 7 gaps closed as tested C11:
+- GG01 REINFORCE (policy gradient, Monte-Carlo) wired (wubu_reinforce.c)
+- GG02 Baseline / variance reduction wired (wubu_policy.c)
+- GG03 Actor-Critic (TD advantage) wired (wubu_actor_critic.c)
+- GG04 PPO (clipped surrogate) wired (wubu_ppo.c)
+- GG05 DQN / Q-learning (value-based) wired (wubu_dqn.c)
+- GG06 Value iteration / Bellman backup wired (wubu_value.c)
+- GG07 Unified policy/value interface + integration wired (test_gg.c)
