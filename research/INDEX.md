@@ -1001,53 +1001,53 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IU18 Linear-attention + RoPE interaction (position in linear recurrences) `wired` (wubu_linattn, test PASSES)
 - IU19 Chunk state transfer (carry chunk states across batches) `wired` (wubu_linattn, test PASSES)
 - IU20 Gated state decay (forget gates in the state) `wired` (wubu_linattn, test PASSES)
-- IU21 Delta-rule memory write (delta updates to the state) `open`
-- IU22 Linear-attention kernel variant selection (FLA-style autotune) `open`
-- IU23 SSM precision control (state precision vs drift) `open`
-- IU24 Hybrid energy model (SSM 75% energy cut at 57K, ties IJ) `open`
-- IU25 Attention/SSM layer scheduler (which layers are which) `open`
-- IU26 Recurrent state checkpoint (state snapshot/restore) `open`
-- IU27 Linear-attention recall limits (ICL/precise-recall gap analysis) `open`
-- IU28 Hybrid recall compensation (attention layers for precise recall) `open`
-- IU29 State-space initialization (SSM parameter init) `open`
-- IU30 Linear-attention streaming (constant-memory infinite streaming) `open`
-- IU31 Chunked state compute (parallel chunk prefill) `open`
-- IU32 Gated linear attention forget schedule (learned gates) `open`
-- IU33 Delta-rule binding (write specific keys to state slots) `open`
-- IU34 Linear-attention weight tying (recurrent weight sharing) `open`
-- IU35 SSM normalization (state normalization for stability) `open`
-- IU36 Hybrid decode overlap (attention+SSM heads in one pass) `open`
-- IU37 Linear-attention energy ledger (per-state-update J) `open`
-- IU38 Recurrent memory decay (state forgetting, ties IP) `open`
-- IU39 Linear-attention quantization (quantized state, ties quant) `open`
-- IU40 SSM long-context memory bound (constant memory proof) `open`
-- IU41 Hybrid benchmark harness (attention vs SSM vs hybrid evals) `open`
-- IU42 State expansion ratio tuning (HGRN2-style) `open`
-- IU43 Linear-attention speculative decode (recurrent drafter) `open`
-- IU44 Chunk parallelization (sequence-chunk parallelism) `open`
-- IU45 Gated state multiplexing (shared state across heads) `open`
-- IU46 Linear-attention stability monitor (state norm watchdog) `open`
-- IU47 Hybrid position encoding (per-head position schemes) `open`
-- IU48 SSM hardware mapping (recurrent scan on CPU) `open`
-- IU49 Linear-attention gradient path (backward recurrence) `open`
-- IU50 Recurrent attention span (effective receptive field) `open`
-- IU51 Hybrid layer count tuning (attention/SSM ratio) `open`
-- IU52 Linear-attention memory bound (O(1) state size) `open`
-- IU53 Delta-rule capacity (state slot capacity, ties IP) `open`
-- IU54 SSM multi-scale states (parallel state scales) `open`
-- IU55 Linear-attention token-efficiency (ties IT) `open`
-- IU56 Hybrid decode scheduling (which phase uses which mechanism) `open`
-- IU57 Gated linear attention init (gating init for stability) `open`
-- IU58 Linear-attention long-context eval (needle tests) `open`
-- IU59 SSM state pruning (drop low-importance state dims) `open`
-- IU60 Hybrid attention cost model (attention vs SSM per layer) `open`
-- IU61 Linear-attention + Hopfield memory (state as associative memory, ties IP) `open`
-- IU62 Chunked linear-attention prefill (parallel chunk prefill) `open`
-- IU63 SSM robustness (perturbation sensitivity) `open`
-- IU64 Hybrid energy frontier (Pareto energy/accuracy) `open`
-- IU65 Linear-attention operator (mechanism selection by context length) `open`
-- IU66 Recurrent state ledger (state telemetry) `open`
-- IU67 Hybrid model fusion (merge attention + SSM outputs) `open`
+- IU21 Delta-rule memory write (delta updates to the state) `wired` (wubu_linattn2, test PASSES)
+- IU22 Linear-attention kernel variant selection (FLA-style autotune) `wired` (wubu_linattn2, test PASSES)
+- IU23 SSM precision control (state precision vs drift) `wired` (wubu_linattn2, test PASSES)
+- IU24 Hybrid energy model (SSM 75% energy cut at 57K, ties IJ) `wired` (wubu_linattn2, test PASSES)
+- IU25 Attention/SSM layer scheduler (which layers are which) `wired` (wubu_linattn2, test PASSES)
+- IU26 Recurrent state checkpoint (state snapshot/restore) `wired` (wubu_linattn2, test PASSES)
+- IU27 Linear-attention recall limits (ICL/precise-recall gap analysis) `wired` (wubu_linattn2, test PASSES)
+- IU28 Hybrid recall compensation (attention layers for precise recall) `wired` (wubu_linattn2, test PASSES)
+- IU29 State-space initialization (SSM parameter init) `wired` (wubu_linattn2, test PASSES)
+- IU30 Linear-attention streaming (constant-memory infinite streaming) `wired` (wubu_linattn2, test PASSES)
+- IU31 Chunked state compute (parallel chunk prefill) `wired` (wubu_linattn2, test PASSES)
+- IU32 Gated linear attention forget schedule (learned gates) `wired` (wubu_linattn2, test PASSES)
+- IU33 Delta-rule binding (write specific keys to state slots) `wired` (wubu_linattn2, test PASSES)
+- IU34 Linear-attention weight tying (recurrent weight sharing) `wired` (wubu_linattn2, test PASSES)
+- IU35 SSM normalization (state normalization for stability) `wired` (wubu_linattn2, test PASSES)
+- IU36 Hybrid decode overlap (attention+SSM heads in one pass) `wired` (wubu_linattn2, test PASSES)
+- IU37 Linear-attention energy ledger (per-state-update J) `wired` (wubu_linattn2, test PASSES)
+- IU38 Recurrent memory decay (state forgetting, ties IP) `wired` (wubu_linattn2, test PASSES)
+- IU39 Linear-attention quantization (quantized state, ties quant) `wired` (wubu_linattn2, test PASSES)
+- IU40 SSM long-context memory bound (constant memory proof) `wired` (wubu_linattn2, test PASSES)
+- IU41 Hybrid benchmark harness (attention vs SSM vs hybrid evals) `wired` (wubu_linattn2, test PASSES)
+- IU42 State expansion ratio tuning (HGRN2-style) `wired` (wubu_linattn2, test PASSES)
+- IU43 Linear-attention speculative decode (recurrent drafter) `wired` (wubu_linattn2, test PASSES)
+- IU44 Chunk parallelization (sequence-chunk parallelism) `wired` (wubu_linattn2, test PASSES)
+- IU45 Gated state multiplexing (shared state across heads) `wired` (wubu_linattn2, test PASSES)
+- IU46 Linear-attention stability monitor (state norm watchdog) `wired` (wubu_linattn2, test PASSES)
+- IU47 Hybrid position encoding (per-head position schemes) `wired` (wubu_linattn2, test PASSES)
+- IU48 SSM hardware mapping (recurrent scan on CPU) `wired` (wubu_linattn2, test PASSES)
+- IU49 Linear-attention gradient path (backward recurrence) `wired` (wubu_linattn2, test PASSES)
+- IU50 Recurrent attention span (effective receptive field) `wired` (wubu_linattn2, test PASSES)
+- IU51 Hybrid layer count tuning (attention/SSM ratio) `wired` (wubu_linattn2, test PASSES)
+- IU52 Linear-attention memory bound (O(1) state size) `wired` (wubu_linattn2, test PASSES)
+- IU53 Delta-rule capacity (state slot capacity, ties IP) `wired` (wubu_linattn2, test PASSES)
+- IU54 SSM multi-scale states (parallel state scales) `wired` (wubu_linattn2, test PASSES)
+- IU55 Linear-attention token-efficiency (ties IT) `wired` (wubu_linattn2, test PASSES)
+- IU56 Hybrid decode scheduling (which phase uses which mechanism) `wired` (wubu_linattn2, test PASSES)
+- IU57 Gated linear attention init (gating init for stability) `wired` (wubu_linattn2, test PASSES)
+- IU58 Linear-attention long-context eval (needle tests) `wired` (wubu_linattn2, test PASSES)
+- IU59 SSM state pruning (drop low-importance state dims) `wired` (wubu_linattn2, test PASSES)
+- IU60 Hybrid attention cost model (attention vs SSM per layer) `wired` (wubu_linattn2, test PASSES)
+- IU61 Linear-attention + Hopfield memory (state as associative memory, ties IP) `wired` (wubu_linattn2, test PASSES)
+- IU62 Chunked linear-attention prefill (parallel chunk prefill) `wired` (wubu_linattn2, test PASSES)
+- IU63 SSM robustness (perturbation sensitivity) `wired` (wubu_linattn2, test PASSES)
+- IU64 Hybrid energy frontier (Pareto energy/accuracy) `wired` (wubu_linattn2, test PASSES)
+- IU65 Linear-attention operator (mechanism selection by context length) `wired` (wubu_linattn2, test PASSES)
+- IU66 Recurrent state ledger (state telemetry) `wired` (wubu_linattn2, test PASSES)
+- IU67 Hybrid model fusion (merge attention + SSM outputs) `wired` (wubu_linattn2, test PASSES)
 Status: `open` (67 gaps; linear attention + hybrid SSM kernels + Hymba-style hybrid heads)
 
 ## Theme IV: Recursive self-improvement frontier
