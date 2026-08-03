@@ -4,7 +4,7 @@
  *
  * The audit found three gaps in the first trainer:
  *   1. layer_grad() gave EVERY layer the same outer product of the
- *      final hidden state -- all 32 layers received identical updates,
+ *      final hidden state -- every layer (12) received identical updates,
  *      so they could never specialize. Not backprop.
  *   2. muon_update() was momentum SGD -- the Muon paper's entire point
  *      is the Newton-Schulz orthogonalization of the momentum matrix.
@@ -62,6 +62,19 @@ typedef struct {
     float *final_h;   /* [seq, 448] the final-norm output */
     /* the softmax probs per (layer, head, position) are recomputed in
      * the backward from the saved q/k (memory-light: no extra store) */
+    /* backward scratch (allocated once, reused per layer) */
+    float *scratch;   /* one big arena, carved below */
+    float *s_dq;      /* [seq, 448] dL/dq */
+    float *s_dk;      /* [seq, 64]  dL/dk */
+    float *s_dv;      /* [seq, 64]  dL/dv */
+    float *s_dao;     /* [seq, 448] dL/dattn_out */
+    float *s_dfg;     /* [seq, 2*FF] dL/dgate_up out */
+    float *s_dfu;     /* [seq, FF]  dL/dffn_up */
+    float *s_dfn;     /* [seq, 448] dL/dffn_norm out */
+    float *s_dan;     /* [seq, 448] dL/dattn_norm out */
+    float *s_dffn_out;/* [seq, 448] dL/dffn_out */
+    float *s_do;      /* [seq, 448] dL/do_proj out */
+    float *s_dg;      /* [seq, 448] dL/dg_proj out */
 } barun_bp_t;
 
 /* BP1: allocate the recorder for a given max sequence length. */
