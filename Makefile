@@ -1161,8 +1161,12 @@ barun_tokenc: tools/barun_tokenc.c src/wubu_tokenizer_hf.o
 gpu_barun.o: src/gpu_barun.cu
 	nvcc -O2 -c src/gpu_barun.cu -o $@ -Xcompiler -fPIC
 
-barun_train: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/safetensors_reader.o
+barun_train: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_moe2.o src/safetensors_reader.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+
+# the GPU-accelerated trainer: same CLI, weak-linked cuBLAS dispatch.
+barun_train_gpu: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart -Wl,-rpath,/usr/local/cuda-13.1/lib64
 
 test_barun_save: tools/test_barun_save.c src/wubu_barun.o src/safetensors_reader.o src/safetensors_writer.o src/barun_save.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
