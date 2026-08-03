@@ -8,6 +8,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 /* --- MD01: image preprocessing --- */
 int wubu_md3_preprocess(const uint8_t *raw, int w, int h, int c, wubu_image_t *out)
@@ -29,7 +30,7 @@ int wubu_md3_encode(const wubu_image_t *img, float *tokens, int max_tokens)
     int patch_h = img->height / 2;
     if (patch_w <= 0 || patch_h <= 0) return -1;
     int n_tokens = patch_w * patch_h;
-    int tok_dim = img->channels * 2 * 2;  /* 2x2 patch */
+    const int tok_dim = 4;   /* the model dim: MoE + detect read 4 per token */
     if (n_tokens > max_tokens) n_tokens = max_tokens;
     for (int ty = 0; ty < patch_h; ty++) {
         for (int tx = 0; tx < patch_w; tx++) {
@@ -47,7 +48,7 @@ int wubu_md3_encode(const wubu_image_t *img, float *tokens, int max_tokens)
                     }
                 }
             }
-            for (int d = 0; d < tok_dim && d < 4; d++)
+            for (int d = 0; d < tok_dim; d++)
                 tokens[tid * tok_dim + d] = mean[d] / 4.0f;
         }
     }

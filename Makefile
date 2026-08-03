@@ -1141,6 +1141,9 @@ test_compress: tools/test_compress.c src/wubu_compress.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+moondream_cli: tools/moondream_cli.c src/wubu_moondream.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+
 test_moondream: tools/test_moondream.c src/wubu_moondream.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
@@ -1152,6 +1155,9 @@ test_hybrid: tools/test_hybrid.c src/wubu_hybrid.o
 test_vision: tools/test_vision.c src/wubu_vision.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
+
+moondream_cli: tools/moondream_cli.c src/wubu_moondream.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 
 test_moondream: tools/test_moondream.c src/wubu_moondream.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
