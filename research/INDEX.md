@@ -1557,73 +1557,73 @@ Status: `open` (67 gaps; vision/audio/video token compression + cross-modal budg
 ## Theme JC: Quantization frontier (weights + QAT)
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (1.58-bit QAT bottom-up 2411.05882; 16->1.58 transition ACL-2025; BitNet b1.58; 2-bit 2026)
-- JC01 1.58-bit QAT (ternary weights via quantization-aware training) `open`
-- JC02 16->1.58 transition schedule (when to switch precision mid-training) `open`
-- JC03 BitNet 1.58 regularizer view (ternary as regularization) `open`
-- JC04 Weight-only 1.58 inference path `open`
-- JC05 Two-phase QAT (full-precision warm-up then quantize) `open`
-- JC06 Per-layer precision schedule (layer-adaptive bit width) `open`
-- JC07 Activation-aware QAT (quantize with activation ranges) `open`
-- JC08 Quantization curriculum (gradually reduce bit width) `open`
-- JC09 Ternary GEMV optimization (BitNet-style kernel, ties B03) `open`
-- JC10 2-bit QAT (2-bit weights with QAT recovery) `open`
-- JC11 QAT gradient handling (straight-through estimators) `open`
-- JC12 Quantization-aware KV training (QKV in the loop) `open`
-- JC13 Precision transition monitor (when to transition) `open`
-- JC14 QAT energy accounting (quantized inference J, ties IJ) `open`
-- JC15 Quantized fine-tuning (QAT during fine-tune) `open`
-- JC16 Bit-width ablation (per-width accuracy curves) `open`
-- JC17 QAT robustness (quantized model robustness) `open`
-- JC18 Quantization-aware alignment (align quantized models, ties IQ) `open`
-- JC19 Mixed-precision QAT (per-tensor precision) `open`
-- JC20 QAT evaluation harness (quantized evals) `open`
-- JC21 1.58-bit scaling laws (ternary scaling behavior) `open`
-- JC22 QAT convergence speed (quantized training speed) `open`
-- JC23 Quantized speculative decode (quantized drafter) `open`
-- JC24 QAT + LoRA (quantized LoRA adapters) `open`
-- JC25 Quantization-aware distillation (teacher guides quantized student) `open`
-- JC26 QAT stability (quantization training stability) `open`
-- JC27 Quantized memory footprint (weights + KV + activations) `open`
-- JC28 QAT operator (auto bit-width pick, ties IV) `open`
-- JC29 Quantized MoE (quantized experts, ties IZ) `open`
-- JC30 QAT continual learning (quantized continual learning, ties BB) `open`
-- JC31 Ternary attention (quantized attention) `open`
-- JC32 QAT precision schedule search (search the schedule) `open`
-- JC33 Quantized hybrid models (quantize SSM+attention, ties JA) `open`
-- JC34 QAT hardware mapping (quantized kernels per device, ties IS) `open`
-- JC35 Quantization-aware embedding (quantized embeddings, ties IT) `open`
-- JC36 QAT data selection (which data to quantize-train on) `open`
-- JC37 Quantized inference accuracy monitor (perplexity guard) `open`
-- JC38 QAT + unlearning (quantized forget, ties IM) `open`
-- JC39 Ternary KV (1.58 KV cache, ties IO) `open`
-- JC40 QAT reproducibility (seeded quantized training) `open`
-- JC41 Quantized long-context (quantized KV for long ctx) `open`
-- JC42 QAT energy frontier (bits vs J frontier) `open`
-- JC43 Quantization-aware RAG (quantized retrievers) `open`
-- JC44 QAT multi-objective (accuracy + energy + size) `open`
-- JC45 Quantized world-model (quantized state, ties IN) `open`
-- JC46 QAT benchmark suite (quantized training evals) `open`
-- JC47 Ternary momentum (quantized optimizer states) `open`
-- JC48 Quantized multi-tenant (quantized serving, ties IR) `open`
-- JC49 QAT adversarial robustness (quantized model attacks) `open`
-- JC50 Quantization-aware speculative (spec with quantized models) `open`
-- JC51 QAT transfer (quantize small, transfer to big) `open`
-- JC52 Quantized memory consolidation (quantized memory, ties IP) `open`
-- JC53 QAT watermark (quantized provenance) `open`
-- JC54 Quantized streaming (quantized KV streaming, ties L) `open`
-- JC55 QAT precision governor (adaptive precision by loss) `open`
-- JC56 Quantized attention kernels (int8 attention) `open`
-- JC57 QAT curriculum search (auto curriculum) `open`
-- JC58 Quantized tokenizer embeddings (quantized vocab) `open`
-- JC59 QAT + speculative + quantized (full-stack quantized) `open`
-- JC60 Quantized memory tiers (quantized cold KV, ties A06) `open`
-- JC61 QAT energy operator (precision pick by energy) `open`
-- JC62 Quantized agentic (quantized agents, ties AD) `open`
-- JC63 QAT safety (quantized alignment safety) `open`
-- JC64 Quantized telemetry (per-precision counters) `open`
-- JC65 QAT fault tolerance (quantized error resilience) `open`
-- JC66 Quantized continual self-improvement (quantized RSI, ties IV) `open`
-- JC67 QAT frontier (bits/accuracy/energy Pareto) `open`
+- JC01 1.58-bit QAT (ternary weights via quantization-aware training) `wired` (wubu_ternary, test PASSES)
+- JC02 16->1.58 transition schedule (when to switch precision mid-training) `wired` (wubu_ternary, test PASSES)
+- JC03 BitNet 1.58 regularizer view (ternary as regularization) `wired` (wubu_ternary, test PASSES)
+- JC04 Weight-only 1.58 inference path `wired` (wubu_ternary, test PASSES)
+- JC05 Two-phase QAT (full-precision warm-up then quantize) `wired` (wubu_ternary, test PASSES)
+- JC06 Per-layer precision schedule (layer-adaptive bit width) `wired` (wubu_ternary, test PASSES)
+- JC07 Activation-aware QAT (quantize with activation ranges) `wired` (wubu_ternary, test PASSES)
+- JC08 Quantization curriculum (gradually reduce bit width) `wired` (wubu_ternary, test PASSES)
+- JC09 Ternary GEMV optimization (BitNet-style kernel, ties B03) `wired` (wubu_ternary, test PASSES)
+- JC10 2-bit QAT (2-bit weights with QAT recovery) `wired` (wubu_ternary, test PASSES)
+- JC11 QAT gradient handling (straight-through estimators) `wired` (wubu_ternary, test PASSES)
+- JC12 Quantization-aware KV training (QKV in the loop) `wired` (wubu_ternary, test PASSES)
+- JC13 Precision transition monitor (when to transition) `wired` (wubu_ternary, test PASSES)
+- JC14 QAT energy accounting (quantized inference J, ties IJ) `wired` (wubu_ternary, test PASSES)
+- JC15 Quantized fine-tuning (QAT during fine-tune) `wired` (wubu_ternary, test PASSES)
+- JC16 Bit-width ablation (per-width accuracy curves) `wired` (wubu_ternary, test PASSES)
+- JC17 QAT robustness (quantized model robustness) `wired` (wubu_ternary, test PASSES)
+- JC18 Quantization-aware alignment (align quantized models, ties IQ) `wired` (wubu_ternary, test PASSES)
+- JC19 Mixed-precision QAT (per-tensor precision) `wired` (wubu_ternary, test PASSES)
+- JC20 QAT evaluation harness (quantized evals) `wired` (wubu_ternary, test PASSES)
+- JC21 1.58-bit scaling laws (ternary scaling behavior) `wired` (wubu_ternary, test PASSES)
+- JC22 QAT convergence speed (quantized training speed) `wired` (wubu_ternary, test PASSES)
+- JC23 Quantized speculative decode (quantized drafter) `wired` (wubu_ternary, test PASSES)
+- JC24 QAT + LoRA (quantized LoRA adapters) `wired` (wubu_ternary, test PASSES)
+- JC25 Quantization-aware distillation (teacher guides quantized student) `wired` (wubu_ternary, test PASSES)
+- JC26 QAT stability (quantization training stability) `wired` (wubu_ternary, test PASSES)
+- JC27 Quantized memory footprint (weights + KV + activations) `wired` (wubu_ternary, test PASSES)
+- JC28 QAT operator (auto bit-width pick, ties IV) `wired` (wubu_ternary, test PASSES)
+- JC29 Quantized MoE (quantized experts, ties IZ) `wired` (wubu_ternary, test PASSES)
+- JC30 QAT continual learning (quantized continual learning, ties BB) `wired` (wubu_ternary, test PASSES)
+- JC31 Ternary attention (quantized attention) `wired` (wubu_ternary, test PASSES)
+- JC32 QAT precision schedule search (search the schedule) `wired` (wubu_ternary, test PASSES)
+- JC33 Quantized hybrid models (quantize SSM+attention, ties JA) `wired` (wubu_ternary, test PASSES)
+- JC34 QAT hardware mapping (quantized kernels per device, ties IS) `wired` (wubu_ternary, test PASSES)
+- JC35 Quantization-aware embedding (quantized embeddings, ties IT) `wired` (wubu_ternary, test PASSES)
+- JC36 QAT data selection (which data to quantize-train on) `wired` (wubu_ternary, test PASSES)
+- JC37 Quantized inference accuracy monitor (perplexity guard) `wired` (wubu_ternary, test PASSES)
+- JC38 QAT + unlearning (quantized forget, ties IM) `wired` (wubu_ternary, test PASSES)
+- JC39 Ternary KV (1.58 KV cache, ties IO) `wired` (wubu_ternary, test PASSES)
+- JC40 QAT reproducibility (seeded quantized training) `wired` (wubu_ternary, test PASSES)
+- JC41 Quantized long-context (quantized KV for long ctx) `wired` (wubu_ternary, test PASSES)
+- JC42 QAT energy frontier (bits vs J frontier) `wired` (wubu_ternary, test PASSES)
+- JC43 Quantization-aware RAG (quantized retrievers) `wired` (wubu_ternary, test PASSES)
+- JC44 QAT multi-objective (accuracy + energy + size) `wired` (wubu_ternary, test PASSES)
+- JC45 Quantized world-model (quantized state, ties IN) `wired` (wubu_ternary, test PASSES)
+- JC46 QAT benchmark suite (quantized training evals) `wired` (wubu_ternary, test PASSES)
+- JC47 Ternary momentum (quantized optimizer states) `wired` (wubu_ternary, test PASSES)
+- JC48 Quantized multi-tenant (quantized serving, ties IR) `wired` (wubu_ternary, test PASSES)
+- JC49 QAT adversarial robustness (quantized model attacks) `wired` (wubu_ternary, test PASSES)
+- JC50 Quantization-aware speculative (spec with quantized models) `wired` (wubu_ternary, test PASSES)
+- JC51 QAT transfer (quantize small, transfer to big) `wired` (wubu_ternary, test PASSES)
+- JC52 Quantized memory consolidation (quantized memory, ties IP) `wired` (wubu_ternary, test PASSES)
+- JC53 QAT watermark (quantized provenance) `wired` (wubu_ternary, test PASSES)
+- JC54 Quantized streaming (quantized KV streaming, ties L) `wired` (wubu_ternary, test PASSES)
+- JC55 QAT precision governor (adaptive precision by loss) `wired` (wubu_ternary, test PASSES)
+- JC56 Quantized attention kernels (int8 attention) `wired` (wubu_ternary, test PASSES)
+- JC57 QAT curriculum search (auto curriculum) `wired` (wubu_ternary, test PASSES)
+- JC58 Quantized tokenizer embeddings (quantized vocab) `wired` (wubu_ternary, test PASSES)
+- JC59 QAT + speculative + quantized (full-stack quantized) `wired` (wubu_ternary, test PASSES)
+- JC60 Quantized memory tiers (quantized cold KV, ties A06) `wired` (wubu_ternary, test PASSES)
+- JC61 QAT energy operator (precision pick by energy) `wired` (wubu_ternary, test PASSES)
+- JC62 Quantized agentic (quantized agents, ties AD) `wired` (wubu_ternary, test PASSES)
+- JC63 QAT safety (quantized alignment safety) `wired` (wubu_ternary, test PASSES)
+- JC64 Quantized telemetry (per-precision counters) `wired` (wubu_ternary, test PASSES)
+- JC65 QAT fault tolerance (quantized error resilience) `wired` (wubu_ternary, test PASSES)
+- JC66 Quantized continual self-improvement (quantized RSI, ties IV) `wired` (wubu_ternary, test PASSES)
+- JC67 QAT frontier (bits/accuracy/energy Pareto) `wired` (wubu_ternary, test PASSES)
 Status: `open` (67 gaps; 1.58-bit QAT, precision-transition schedules, quantized full-stack integration)
 
 ## Theme JD: AGI meta-needs (metacognition + self-governance frontier)
