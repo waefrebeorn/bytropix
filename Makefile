@@ -1,11 +1,14 @@
 CC = gcc
 CXX = g++
-# CUDA layout on this WSL2 box: NVIDIA .run install at /usr/local/cuda-13.1
-# (symlinked /usr/local/cuda). nvcc at /usr/bin/nvcc, headers in
-# /usr/local/cuda/include, libs in /usr/local/cuda/lib64. The WSL2 GPU
-# passthrough libcuda.so.1 lives in /usr/lib/wsl/lib and is NOT on the default
-# linker path, so we add it as an rpath so GPU binaries find it at load time
-# without the caller exporting LD_LIBRARY_PATH.
+# CUDA layout on this WSL2 box (2026-08-03, verified): the GPU is an
+# NVIDIA GeForce RTX 4050 Laptop (sm_89, 6GB) exposed via WSL /dev/dxg.
+# nvcc lives in the partial .run install at /usr/local/cuda-13.1/bin;
+# its include/ and lib64/ are SYMLINKED to the apt toolkit
+# (/usr/include/cuda + /usr/lib/x86_64-linux-gnu) -- see
+# tools/check_cuda_env.sh. The WSL GPU passthrough libcuda.so.1 lives in
+# /usr/lib/wsl/lib and is NOT on the default linker path, so it is added
+# as an rpath so GPU binaries find it at load time without the caller
+# exporting LD_LIBRARY_PATH.
 NVCC = $(or $(shell which nvcc 2>/dev/null),/usr/bin/nvcc)
 CUDA_HOME = $(shell d=$(NVCC); d=$${d%/*}; d=$${d%/*}; echo $$d)
 CUDA_INC = -I$(CUDA_HOME)/include
@@ -13,10 +16,19 @@ CUDA_LIBDIR = $(shell if [ -d $(CUDA_HOME)/lib/x86_64-linux-gnu ]; then echo $(C
 WSL_LIB = /usr/lib/wsl/lib
 CFLAGS = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include $(CUDA_INC) -fopenmp
 LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -L$(WSL_LIB) -Wl,-rpath,$(WSL_LIB) -lcudart -lcublas -lpthread -lssl -lcrypto
-NVCC_FLAGS = -O3 -I include -arch=sm_86
+NVCC_FLAGS = -O3 -I include -arch=sm_89
 CUDA_INCS = $(CUDA_INC)
 CUDA_LIBS = -L$(CUDA_LIBDIR) -lcublas -lcudart
 CUDA_LIB = -L$(CUDA_LIBDIR) -lcudart
+
+# ---- CUDA sanity guard (so a broken CUDA layout can never silently
+# produce CPU-only binaries again). Runs before any GPU target. ----
+cuda_check:
+	@if [ ! -x "$(NVCC)" ]; then echo "FATAL: nvcc not found ($(NVCC)). Fix: apt install nvidia-cuda-toolkit OR restore /usr/local/cuda-13.1"; exit 1; fi
+	@if [ ! -d "$(CUDA_HOME)/include" ]; then echo "FATAL: CUDA headers missing ($(CUDA_HOME)/include). Fix: sudo ln -s /usr/include/cuda $(CUDA_HOME)/include"; exit 1; fi
+	@if [ ! -f "$(CUDA_LIBDIR)/libcublas.so" ] && [ ! -f "$(CUDA_LIBDIR)/libcublas.so.12" ]; then echo "FATAL: libcublas missing in $(CUDA_LIBDIR). Fix: sudo ln -s /usr/lib/x86_64-linux-gnu $(CUDA_HOME)/lib64"; exit 1; fi
+	@if [ ! -f "$(WSL_LIB)/libcuda.so.1" ]; then echo "FATAL: WSL GPU passthrough missing ($(WSL_LIB)/libcuda.so.1). Is the Windows NVIDIA driver installed?"; exit 1; fi
+	@echo "CUDA OK: nvcc=$(NVCC) inc=$(CUDA_HOME)/include libdir=$(CUDA_LIBDIR) gpu=$(WSL_LIB)/libcuda.so.1"
 
 .PHONY: all clean
 
@@ -1165,8 +1177,8 @@ barun_tokenc: tools/barun_tokenc.c src/wubu_tokenizer_hf.o
 gpu_barun.o: src/gpu_barun.cu
 	nvcc -O2 -c src/gpu_barun.cu -o $@ -Xcompiler -fPIC
 
-barun_train: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_barun_backprop.o src/wubu_moe2.o src/safetensors_reader.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+barun_train: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_barun_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 
 # the GPU-accelerated trainer: same CLI, weak-linked cuBLAS dispatch.
 barun_train_gpu: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_barun_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
@@ -1188,22 +1200,27 @@ test_moe2: tools/test_moe2.c src/wubu_moe2.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
-barun_cli: tools/barun_cli.c src/wubu_barun.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+barun_cli: tools/barun_cli.c src/wubu_barun.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o gpu_barun.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 
-test_barun: tools/test_barun.c src/wubu_barun.o src/wubu_moe2.o src/safetensors_reader.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+test_barun: tools/test_barun.c src/wubu_barun.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@ models/barun/model.safetensors
 
-test_barun_train: tools/test_barun_train.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_barun_backprop.o src/wubu_moe2.o src/safetensors_reader.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+test_barun_train: tools/test_barun_train.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_barun_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@ models/barun/model.safetensors
 
 src/wubu_barun_backprop.o: include/wubu_barun_backprop.h include/wubu_barun_train.h include/wubu_barun.h
 src/wubu_barun_train.o: include/wubu_barun_train.h include/wubu_barun.h include/wubu_barun_backprop.h
 
-test_backprop: tools/test_backprop.c src/wubu_barun_backprop.o src/wubu_barun.o src/wubu_barun_train.o src/wubu_moe2.o src/safetensors_reader.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+test_backprop: tools/test_backprop.c src/wubu_barun_backprop.o src/wubu_barun.o src/wubu_barun_train.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
+	./$@
+
+# the GPU NS5 orthogonalization vs the CPU reference (square/wide/tall)
+test_gpu_ns5: tools/test_gpu_ns5.c gpu_barun.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@
 
 moondream_cli: tools/moondream_cli.c src/wubu_moondream.o
@@ -1758,7 +1775,7 @@ test_cross_attn: tools/test_cross_attn.c src/wubu_cross_attn.o
 	$(CC) $(CFLAGS) -fopenmp -I include -o $@ $^ -lm
 	./$@
 
-test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive test_stream_kv test_kv_evict_h2o test_capacity_wall test_hugepage test_kv_budget test_wm_kv test_spec_tuner test_quant_selector test_kv_compress test_lruk test_sparse_attn test_attn_tune test_kv_shield test_ctx_manage test_lookahead test_sys_tune test_lm_infinite test_spec_variants test_more_spec test_misc_gaps test_bf16_gemv test_attn_kernels test_db_cross test_kv2026 test_kv2026b test_ttc test_kv2026c test_sys2026 test_linear_attn test_ternary test_agentic_kv test_dn2 test_parallel_spec test_moe_rag test_eval_qat test_pd_serve test_integrate test_agentic_os_mem test_capzero test_loopguard_planediv test_vecsearch test_causal_symbolic test_metagame_coord test_energy test_debt test_hopfield test_align test_freeenergy test_evict2026 test_evict2026b test_hopfield3 test_hopfield2 test_pref test_pref2 test_serve test_serve2 test_pim test_pim2 test_token test_token2 test_linattn test_linattn2 test_rsi test_neurom test_fuzz test_bridge test_metacog test_metagame2 test_bonzi2 test_bridge2 test_bonzi test_worldmodel_agentauth test_ax test_axi test_continual test_multimodal test_multiconsensus test_ee test_ff test_gg test_hh test_backprop
+test_all: test_polarquant test_polarquant_cache test_polar_pso test_polarquant_benchmark test_fast_attn test_fast_attn_q8 test_q8k_pqv test_splitk test_cross_attn test_ring_attn test_nf4 test_4kv test_eagle test_soa test_awq test_gptq test_attn_gate test_rope_prefetch test_kv_cacheline test_scheduler test_mla test_expert_choice test_layer_skip test_smt_check test_self_cascade test_spec_cascade test_lmcache test_kv_adaptive test_delta_net test_chunked_prefill test_disagg_prefill_decode test_kv_transfer test_kv_evict test_thread_spec test_early_exit test_tandem_gamebud test_model_hwaccel test_fp8 test_ecs test_more_cores test_512k_budget test_medusa test_numerical_audit test_paged_kv test_smoothquant test_flashdecode test_gemv_int4 test_prefix_reuse test_continuous_batching test_flash_prefill test_ngram test_hive test_stream_kv test_kv_evict_h2o test_capacity_wall test_hugepage test_kv_budget test_wm_kv test_spec_tuner test_quant_selector test_kv_compress test_lruk test_sparse_attn test_attn_tune test_kv_shield test_ctx_manage test_lookahead test_sys_tune test_lm_infinite test_spec_variants test_more_spec test_misc_gaps test_bf16_gemv test_attn_kernels test_db_cross test_kv2026 test_kv2026b test_ttc test_kv2026c test_sys2026 test_linear_attn test_ternary test_agentic_kv test_dn2 test_parallel_spec test_moe_rag test_eval_qat test_pd_serve test_integrate test_agentic_os_mem test_capzero test_loopguard_planediv test_vecsearch test_causal_symbolic test_metagame_coord test_energy test_debt test_hopfield test_align test_freeenergy test_evict2026 test_evict2026b test_hopfield3 test_hopfield2 test_pref test_pref2 test_serve test_serve2 test_pim test_pim2 test_token test_token2 test_linattn test_linattn2 test_rsi test_neurom test_fuzz test_bridge test_metacog test_metagame2 test_bonzi2 test_bridge2 test_bonzi test_worldmodel_agentauth test_ax test_axi test_continual test_multimodal test_multiconsensus test_ee test_ff test_gg test_hh test_backprop test_gpu_ns5
 	@echo "=== ALL TESTS PASSED ==="
 
 test_nf4: tools/test_nf4.c src/wubu_nf4.o

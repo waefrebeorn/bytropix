@@ -29,6 +29,30 @@
 #include <string.h>
 #include <math.h>
 
+/* the GPU dispatch (the wubu_model.h pattern, same as wubu_barun.c):
+ * the trainer rides cuBLAS when the GPU is present and falls back to
+ * the CPU loops otherwise. The symbols are weak so a CPU-only link
+ * still works. */
+#include "gpu_barun.h"
+#if defined(__GNUC__)
+#define BP_WEAK __attribute__((weak))
+#else
+#define BP_WEAK
+#endif
+BP_WEAK int gpu_barun_init(void);
+BP_WEAK int gpu_barun_ready(void);
+BP_WEAK int gpu_barun_matmul(float *y, const float *w, const float *x,
+                             int M, int N, int K);
+BP_WEAK int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
+                                int M, int N, int K);
+BP_WEAK int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
+                                int M, int N, int K);
+BP_WEAK int gpu_barun_ns5(float *X, int rows, int cols);
+static int g_gpu_tried = 0;
+/* tiny matmuls cost more in upload/launch than they save -- the GPU
+ * threshold from the hardware table (RTX 4050, 6GB) */
+#define GPU_MIN_FLOP 1000000
+
 #define D  BARUN_DIM
 #define FF BARUN_FFN_DIM
 
@@ -64,6 +88,7 @@ int barun_bp_alloc(barun_bp_t *bp, int max_seq)
     bp->ckpt      = calloc_f(sd);
     bp->sel_w0    = calloc_f((size_t)L);
     bp->final_h   = calloc_f(sd);
+    bp->logits    = calloc_f((size_t)max_seq * BARUN_VOCAB);
     bp->s_dq      = calloc_f(sd);
     bp->s_dk      = calloc_f((size_t)max_seq * 64);
     bp->s_dv      = calloc_f((size_t)max_seq * 64);
@@ -81,7 +106,7 @@ int barun_bp_alloc(barun_bp_t *bp, int max_seq)
         !bp->k_pre || !bp->q || !bp->k || !bp->v || !bp->attn_out ||
         !bp->o_out || !bp->g_val || !bp->ffn_norm || !bp->ffn_gate ||
         !bp->ffn_up || !bp->ffn_out || !bp->sel_out || !bp->ckpt ||
-        !bp->sel_w0 || !bp->final_h || !bp->s_dq || !bp->s_dk ||
+        !bp->sel_w0 || !bp->final_h || !bp->logits || !bp->s_dq || !bp->s_dk ||
         !bp->s_dv || !bp->s_dao || !bp->s_dfg || !bp->s_dfu ||
         !bp->s_dfn || !bp->s_dan || !bp->s_dffn_out || !bp->s_do ||
         !bp->s_dg || !bp->s_dx || !bp->s_dxentry) {
@@ -99,7 +124,7 @@ void barun_bp_free(barun_bp_t *bp)
     free(bp->v); free(bp->attn_out); free(bp->o_out); free(bp->g_val);
     free(bp->ffn_norm); free(bp->ffn_gate); free(bp->ffn_up);
     free(bp->ffn_out); free(bp->sel_out); free(bp->ckpt);
-    free(bp->sel_w0); free(bp->final_h);
+    free(bp->sel_w0); free(bp->final_h); free(bp->logits);
     free(bp->s_dq); free(bp->s_dk); free(bp->s_dv); free(bp->s_dao);
     free(bp->s_dfg); free(bp->s_dfu); free(bp->s_dfn); free(bp->s_dan);
     free(bp->s_dffn_out); free(bp->s_do); free(bp->s_dg);
@@ -126,10 +151,16 @@ static float silu_deriv(float v)   /* v = the CLIPPED pre-activation */
 }
 static float sigm(float v) { return 1.0f / (1.0f + expf(-v)); }
 
-/* out[s, o] = sum_i w[o, i] * x[s, i]  (w is [out, in] row-major) */
+/* out[s, o] = sum_i w[o, i] * x[s, i]  (w is [out, in] row-major).
+ * Rides the cuBLAS path for the big products; CPU otherwise. */
 static void mm(float *out, const float *w, const float *x,
                int out_n, int in_n, int seq)
 {
+    if (!g_gpu_tried) { g_gpu_tried = 1; if (gpu_barun_init) gpu_barun_init(); }
+    if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul &&
+        (long)seq * out_n * in_n >= GPU_MIN_FLOP &&
+        gpu_barun_matmul(out, w, x, seq, out_n, in_n))
+        return;
     for (int s = 0; s < seq; s++) {
         const float *xs = x + (size_t)s * in_n;
         float *os = out + (size_t)s * out_n;
@@ -228,11 +259,11 @@ static void rms_norm_backward(const float *x, const float *w,
 }
 
 /* ---- the tied head: mean-reduced next-token CE + gradients ----
- * loss = mean_s CE(softmax(embedding @ final_h[s]), tokens[s+1])
- * If dh_out: accumulates dL/d(final_h)[s] into it (zeros expected).
- * If demb:   accumulates dL/d(embedding)[v] into it (zeros expected).
- * The head IS the embedding (tied), so the weight grad and the input
- * grad are the same tensor accumulated twice -- handled by the caller. */
+ * loss = mean_s CE(softmax(logits[s]), tokens[s+1])
+ * The logits were computed ONCE by the forward (one GEMM into
+ * bp->logits) -- this function only reads them. If dh_out: accumulates
+ * dL/d(final_h)[s] into it. If demb: accumulates dL/d(embedding)[v]
+ * into it (the head IS the embedding, tied). */
 static float head_ce(barun_model_t *m, barun_bp_t *bp,
                      const uint16_t *tokens, int n_tokens,
                      float *dh_out, float *demb)
@@ -242,37 +273,28 @@ static float head_ce(barun_model_t *m, barun_bp_t *bp,
     float loss = 0;
     for (int s = 0; s < seq - 1; s++) {
         uint16_t target = tokens[s + 1];
+        const float *lg = bp->logits + (size_t)s * BARUN_VOCAB;
         const float *h = bp->final_h + (size_t)s * D;
-        float maxv = -1e30f;
-        for (int v = 0; v < BARUN_VOCAB; v++) {
-            const float *e = m->embedding + (size_t)v * D;
-            float logit = 0;
-            for (int d = 0; d < D; d++) logit += e[d] * h[d];
-            if (logit > maxv) maxv = logit;
-        }
+        float maxv = lg[0];
+        for (int v = 1; v < BARUN_VOCAB; v++) if (lg[v] > maxv) maxv = lg[v];
         double sum = 0, lt = 0;
         for (int v = 0; v < BARUN_VOCAB; v++) {
-            const float *e = m->embedding + (size_t)v * D;
-            float logit = 0;
-            for (int d = 0; d < D; d++) logit += e[d] * h[d];
-            double p = exp((double)(logit - maxv));
-            if (v == target) lt = (double)logit;
+            double p = exp((double)(lg[v] - maxv));
+            if (v == target) lt = (double)lg[v];
             sum += p;
         }
         loss += (float)(((double)maxv + log(sum) - lt) / (double)n_pos);
         if (dh_out || demb) {
+            float *dh = dh_out ? dh_out + (size_t)s * D : NULL;
             for (int v = 0; v < BARUN_VOCAB; v++) {
-                const float *e = m->embedding + (size_t)v * D;
-                float logit = 0;
-                for (int d = 0; d < D; d++) logit += e[d] * h[d];
-                float p = (float)(exp((double)(logit - maxv)) / sum);
+                float p = (float)(exp((double)(lg[v] - maxv)) / sum);
                 float g = (p - (v == target ? 1.0f : 0.0f)) / n_pos;
                 if (demb) {
                     float *ga = demb + (size_t)v * D;
                     for (int d = 0; d < D; d++) ga[d] += g * h[d];
                 }
-                if (dh_out) {
-                    float *dh = dh_out + (size_t)s * D;
+                if (dh) {
+                    const float *e = m->embedding + (size_t)v * D;
                     for (int d = 0; d < D; d++) dh[d] += g * e[d];
                 }
             }
@@ -455,10 +477,53 @@ float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
     for (int s = 0; s < seq; s++)
         rms_norm(bp->final_h + (size_t)s * D, xlast + (size_t)s * D,
                  m->final_norm, D);
+    /* the head logits: ONE GEMM (GPU when present) -- head_ce only
+     * reads them, so the per-step cost is a single pass over the vocab */
+    mm(bp->logits, m->embedding, bp->final_h, BARUN_VOCAB, D, seq);
     return head_ce(m, bp, tokens, n_tokens, NULL, NULL);
 }
 
-/* ---------- the REAL backward pass ---------- */
+/* acc[s, i<in_w] = sum_{o<out_w} w[o, i] * x[s, o]  (the backward's
+ * input-gradient products: the stored weight applied to a gradient),
+ * GPU when big enough. */
+static void mm_t(float *acc, const float *w, const float *x,
+                 int out_w, int in_w, int seq)
+{
+    if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul_nt &&
+        (long)seq * out_w * in_w >= GPU_MIN_FLOP &&
+        gpu_barun_matmul_nt(acc, w, x, seq, in_w, out_w))
+        return;
+    for (int s = 0; s < seq; s++) {
+        const float *xs = x + (size_t)s * out_w;
+        float *as = acc + (size_t)s * in_w;
+        for (int i = 0; i < in_w; i++) {
+            float accv = 0;
+            for (int o = 0; o < out_w; o++) accv += w[(size_t)o * in_w + i] * xs[o];
+            as[i] = accv;
+        }
+    }
+}
+
+/* wg[o, i] += sum_s dy[s, o] * inp[s, i]  (the backward's weight-gradient
+ * outer products), GPU when big enough. */
+static void wg_t(float *wg, const float *dy, const float *inp,
+                 int out_w, int in_w, int seq)
+{
+    if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul_tx &&
+        (long)seq * out_w * in_w >= GPU_MIN_FLOP &&
+        gpu_barun_matmul_tx(wg, dy, inp, out_w, in_w, seq))
+        return;
+    for (int o = 0; o < out_w; o++) {
+        float *wr = wg + (size_t)o * in_w;
+        for (int i = 0; i < in_w; i++) {
+            float acc = 0;
+            for (int s = 0; s < seq; s++) acc += dy[(size_t)s * out_w + o] * inp[(size_t)s * in_w + i];
+            wr[i] += acc;
+        }
+    }
+}
+
+/* ---- the REAL backward pass ---- */
 
 float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
                         barun_train_t *tr, const uint16_t *tokens,
@@ -580,22 +645,9 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
 
         /* ---- FFN path ---- */
         /* dL/dfo = dx (the ffn add identity); down grads + dL/dfu */
-        for (int s = 0; s < seq; s++) {
-            const float *fu = fu_l + (size_t)s * FF;
-            const float *df = dx + (size_t)s * D;
-            float *dfo_s = dfo + (size_t)s * D;
-            float *dfu_s = dfu + (size_t)s * FF;
-            for (int o = 0; o < D; o++) dfo_s[o] = df[o];
-            for (int d = 0; d < FF; d++) {
-                float acc = 0;
-                for (int o = 0; o < D; o++) {
-                    float dfv = df[o];
-                    acc += blk->down[(size_t)o * FF + d] * dfv;
-                    tr->down_g[l][(size_t)o * FF + d] += dfv * fu[d];
-                }
-                dfu_s[d] = acc;
-            }
-        }
+        memcpy(dfo, dx, (size_t)seq * D * sizeof(float));
+        mm_t(dfu, blk->down, dfo, D, FF, seq);       /* dfu[s,d] = Σ_o down[o,d]*dfo[s,o] */
+        wg_t(tr->down_g[l], dfo, fu_l, D, FF, seq);  /* down_g[o,d] += Σ_s dfo[s,o]*fu[s,d] */
         /* swiglu backward: u = silu(clip(g)) * clip(u) */
         for (int s = 0; s < seq; s++) {
             const float *fg = fg_l + (size_t)s * 2 * FF;
@@ -614,22 +666,8 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
             }
         }
         /* gate_up grads + dL/dfn */
-        for (int s = 0; s < seq; s++) {
-            const float *fn = fn_l + (size_t)s * D;
-            const float *dgu = dfg + (size_t)s * 2 * FF;
-            float *dfn_s = dfn + (size_t)s * D;
-            float *gu_g = tr->gate_up_g[l];
-            for (int o = 0; o < 2 * FF; o++) {
-                float dgv = dgu[o];
-                if (dgv == 0.0f) continue;
-                const float *gu_row = blk->gate_up + (size_t)o * D;
-                float *gg = gu_g + (size_t)o * D;
-                for (int i = 0; i < D; i++) {
-                    gg[i] += dgv * fn[i];
-                    dfn_s[i]  += dgv * gu_row[i];
-                }
-            }
-        }
+        mm_t(dfn, blk->gate_up, dfg, 2 * FF, D, seq);   /* dfn[s,i] = Σ_o gate_up[o,i]*dfg[s,o] */
+        wg_t(tr->gate_up_g[l], dfg, fn_l, 2 * FF, D, seq);
         /* ffn_norm backward: x1 = x_entry + o*sigmoid(g) (recomputed) */
         for (int s = 0; s < seq; s++) {
             const float *o_s = o_l + (size_t)s * D;
@@ -677,31 +715,11 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
             }
         }
         /* o_proj grads + dL/dattn_out ; g_proj grads + dL/dan */
-        for (int s = 0; s < seq; s++) {
-            const float *ao = ao_l + (size_t)s * D;
-            const float *an = an_l + (size_t)s * D;
-            const float *do_s = dod + (size_t)s * D;
-            const float *dg_s = dgd + (size_t)s * D;
-            float *dao_s = dao + (size_t)s * D;
-            float *dan_s = dan + (size_t)s * D;
-            for (int o = 0; o < D; o++) {
-                float dov = do_s[o], dgv = dg_s[o];
-                const float *o_row = blk->o_proj + (size_t)o * D;
-                const float *g_row = blk->g_proj + (size_t)o * D;
-                float *og = tr->o_proj_g[l] + (size_t)o * D;
-                float *gg = tr->g_proj_g[l] + (size_t)o * D;
-                if (dov != 0.0f)
-                    for (int i = 0; i < D; i++) {
-                        og[i] += dov * ao[i];
-                        dao_s[i] += dov * o_row[i];
-                    }
-                if (dgv != 0.0f)
-                    for (int i = 0; i < D; i++) {
-                        gg[i] += dgv * an[i];
-                        dan_s[i] += dgv * g_row[i];
-                    }
-            }
-        }
+        mm_t(dao, blk->o_proj, dod, D, D, seq);         /* dao[s,i] = Σ_o o_proj[o,i]*dod[s,o] */
+        wg_t(tr->o_proj_g[l], dod, ao_l, D, D, seq);    /* o_proj_g[o,i] += Σ_s dod[s,o]*ao[s,i] */
+        mm_t(dod, blk->g_proj, dgd, D, D, seq);        /* into scratch, then dan += */
+        wg_t(tr->g_proj_g[l], dgd, an_l, D, D, seq);
+        for (int i = 0; i < seq * D; i++) dan[i] += dod[i];
         /* attention backward (GQA: all heads share the KV rows) */
         int is_full = ((l + 1) % BARUN_FULL_EVERY == 0);
         memset(dq, 0, (size_t)seq * D * sizeof(float));
@@ -771,42 +789,15 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
                               tr->norm_g[4 * l + 3], 64);
         }
         /* q/k/v projection grads + dL/dan from the attention path */
-        for (int s = 0; s < seq; s++) {
-            const float *an = an_l + (size_t)s * D;
-            float *dan_s = dan + (size_t)s * D;
-            float *qg = tr->q_proj_g[l], *kg = tr->k_proj_g[l], *vg = tr->v_proj_g[l];
-            for (int o = 0; o < BARUN_HEADS * 64; o++) {
-                float dqv = dq[(size_t)s * D + o];
-                if (dqv != 0.0f) {
-                    const float *qr = blk->q_proj + (size_t)o * D;
-                    float *qq = qg + (size_t)o * D;
-                    for (int i = 0; i < D; i++) {
-                        qq[i] += dqv * an[i];
-                        dan_s[i] += dqv * qr[i];
-                    }
-                }
-            }
-            for (int o = 0; o < 64; o++) {
-                float dkv = dk[(size_t)s * 64 + o];
-                float dvv = dv[(size_t)s * 64 + o];
-                if (dkv != 0.0f) {
-                    const float *kr = blk->k_proj + (size_t)o * D;
-                    float *kk = kg + (size_t)o * D;
-                    for (int i = 0; i < D; i++) {
-                        kk[i] += dkv * an[i];
-                        dan_s[i] += dkv * kr[i];
-                    }
-                }
-                if (dvv != 0.0f) {
-                    const float *vr = blk->v_proj + (size_t)o * D;
-                    float *vv = vg + (size_t)o * D;
-                    for (int i = 0; i < D; i++) {
-                        vv[i] += dvv * an[i];
-                        dan_s[i] += dvv * vr[i];
-                    }
-                }
-            }
-        }
+        mm_t(dod, blk->q_proj, dq, BARUN_HEADS * 64, D, seq);
+        wg_t(tr->q_proj_g[l], dq, an_l, BARUN_HEADS * 64, D, seq);
+        for (int i = 0; i < seq * D; i++) dan[i] += dod[i];
+        mm_t(dod, blk->k_proj, dk, 64, D, seq);
+        wg_t(tr->k_proj_g[l], dk, an_l, 64, D, seq);
+        for (int i = 0; i < seq * D; i++) dan[i] += dod[i];
+        mm_t(dod, blk->v_proj, dv, 64, D, seq);
+        wg_t(tr->v_proj_g[l], dv, an_l, 64, D, seq);
+        for (int i = 0; i < seq * D; i++) dan[i] += dod[i];
         /* attn_norm backward: x_entry (the layer input) */
         {
             const float *x_entry = (l == 0)
@@ -979,7 +970,17 @@ static void muon_matrix(float *w, float *g, float *mom, int rows, int cols,
     /* Nesterov momentum: buf = mu*buf + g ; X = buf + mu*buf */
     for (size_t i = 0; i < n; i++) mom[i] = mu * mom[i] + g[i];
     for (size_t i = 0; i < n; i++) look[i] = mom[i] + mu * mom[i];
-    ns5_inplace(look, rows, cols, scratch, trans);
+    /* the NS5 orthogonalization: GPU when present (the optimizer was
+     * the last CPU bottleneck -- ~61 GFLOP/step of NS5), CPU otherwise.
+     * The NS5 does 15 GEMMs per call, so even a 448x448 matrix
+     * (~1.35 GFLOP) is worth the upload -- the threshold is tiny. */
+    if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_ns5 &&
+        (size_t)rows * cols >= 4096 &&
+        gpu_barun_ns5(look, rows, cols)) {
+        /* GPU path: look is already orthogonalized */
+    } else {
+        ns5_inplace(look, rows, cols, scratch, trans);
+    }
     /* the Moonlight per-matrix scale: normalize the NS update so its
      * RMS = 0.2 -- a bounded step that reuses the AdamW-scale LR */
     double ss = 0;

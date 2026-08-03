@@ -78,6 +78,9 @@ typedef struct barun_bp_t {
                          the layer has no selector) */
     /* the final hidden (pre lm_head) + the loss */
     float *final_h;   /* [seq, 448] the final-norm output */
+    float *logits;    /* [seq, 16384] the head logits, computed ONCE per
+                         forward by one GEMM (the old head_ce recomputed
+                         them up to 5x per step -- the DA catch) */
     /* the softmax probs per (layer, head, position) are recomputed in
      * the backward from the saved q/k (memory-light: no extra store) */
     /* backward scratch (allocated once, reused per layer) */

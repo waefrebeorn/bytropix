@@ -19,6 +19,21 @@ int gpu_barun_ready(void);
 int gpu_barun_matmul(float *y, const float *w, const float *x,
                      int M, int N, int K);
 
+/* y[M,N] = a[K,M]^T @ b[K,N]  (row-major F32) -- the backward's
+ * weight-gradient outer products. Returns 1 on success, 0 otherwise. */
+int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
+                        int M, int N, int K);
+
+/* y[M,N] = x[M,K] @ w[K,N] with w STORED [K,N] (no transpose) -- the
+ * backward's input-gradient products. Returns 1 on success, 0 otherwise. */
+int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
+                        int M, int N, int K);
+
+/* The Muon Newton-Schulz 5 orthogonalization: X[rows,cols] in-place,
+ * tall matrices transposed, Frobenius-renormalized per iteration.
+ * Returns 1 on success, 0 otherwise (caller falls back to CPU). */
+int gpu_barun_ns5(float *X, int rows, int cols);
+
 #ifdef __cplusplus
 }
 #endif

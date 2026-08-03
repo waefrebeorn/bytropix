@@ -23,13 +23,16 @@ static int failures = 0;
 
 /* deterministic xorshift */
 static uint32_t rng_state = 0x12345678u;
-static float frand(void)
+static uint32_t rng_next(void)
 {
     uint32_t x = rng_state;
     x ^= x << 13; x ^= x >> 17; x ^= x << 5;
     rng_state = x;
-    /* in [-1, 1] */
-    return ((float)(x & 0xFFFF) / 32767.5f) - 1.0f;
+    return x;
+}
+static float frand(void)
+{
+    return ((float)(rng_next() & 0xFFFF) / 32767.5f) - 1.0f;
 }
 
 static void fill_rand(float *p, size_t n, float scale)
@@ -140,9 +143,25 @@ int main(void)
     barun_train_t tr;
     CHECK(barun_train_init(&tr, &m) == 0, "train init");
 
-    /* a small random token sequence (ids 10..40, like the trainer test) */
+    /* a small varied token sequence: the RNG advances per token (the
+     * DA catch -- the old loop reused the same state and every token
+     * was identical, so the embedding INPUT path was never exercised).
+     * ids span 10..40, some repeated, so rows are both inputs and
+     * (tied) head targets. */
     uint16_t tok[24];
-    for (int i = 0; i < 24; i++) tok[i] = (uint16_t)(10 + (rng_state % 31));
+    for (int i = 0; i < 24; i++) tok[i] = (uint16_t)(10 + (rng_next() % 31));
+    {
+        int uniq = 0;
+        for (int i = 0; i < 24; i++) {
+            int seen = 0;
+            for (int j = 0; j < i; j++) if (tok[j] == tok[i]) seen = 1;
+            if (!seen) uniq++;
+        }
+        printf("  token diversity: %d unique / 24 (first: %u %u %u %u)\n",
+               uniq, (unsigned)tok[0], (unsigned)tok[1],
+               (unsigned)tok[2], (unsigned)tok[3]);
+        CHECK(uniq > 8, "tokens are varied (not a degenerate stream)");
+    }
 
     /* ---- forward parity: the recording forward == the released forward */
     float loss_bp = barun_bp_forward(&m, &b, &bp, tok, 24);
@@ -172,7 +191,8 @@ int main(void)
     int ok = 1;
     barun_bp_forward(&m, &b, &bp, tok, 24);   /* fresh activations */
 
-    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].q_proj[7 * 448 + 13], tr.q_proj_g[0][7 * 448 + 13], "q_proj[0]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].q_proj[7 * 448 + 13], tr.q_proj_g[0][7 * 448 + 13], "q_proj[0]a");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].q_proj[400 * 448 + 300], tr.q_proj_g[0][400 * 448 + 300], "q_proj[0]b");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].k_proj[3 * 448 + 5],  tr.k_proj_g[0][3 * 448 + 5],  "k_proj[0]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].v_proj[2 * 448 + 9],  tr.v_proj_g[0][2 * 448 + 9],  "v_proj[0]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].o_proj[11 * 448 + 4], tr.o_proj_g[0][11 * 448 + 4], "o_proj[0]");
@@ -180,17 +200,30 @@ int main(void)
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].gate_up[100 * 448 + 3], tr.gate_up_g[0][100 * 448 + 3], "gate_up[0]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].down[50 * 1228 + 21], tr.down_g[0][50 * 1228 + 21], "down[0]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[7].q_proj[9 * 448 + 8], tr.q_proj_g[7][9 * 448 + 8], "q_proj[7]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[7].o_proj[3 * 448 + 60], tr.o_proj_g[7][3 * 448 + 60], "o_proj[7]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[7].v_proj[10 * 448 + 4], tr.v_proj_g[7][10 * 448 + 4], "v_proj[7]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[11].down[3 * 1228 + 77], tr.down_g[11][3 * 1228 + 77], "down[11]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[3].attn_norm[10], tr.norm_g[4 * 3 + 0][10], "attn_norm[3]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[7].attn_norm[200], tr.norm_g[4 * 7 + 0][200], "attn_norm[7]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[7].ffn_norm[22], tr.norm_g[4 * 7 + 1][22], "ffn_norm[7]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[3].ffn_norm[300], tr.norm_g[4 * 3 + 1][300], "ffn_norm[3]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].q_norm[0], tr.norm_g[4 * 0 + 2][0], "q_norm[0]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[7].q_norm[50], tr.norm_g[4 * 7 + 2][50], "q_norm[7]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].k_norm[31], tr.norm_g[4 * 0 + 3][31], "k_norm[0]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[5].k_norm[10], tr.norm_g[4 * 5 + 3][10], "k_norm[5]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.final_norm[3], tr.norm_g[4 * BARUN_LAYERS][3], "final_norm");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.selectors[1][4], tr.norm_g[4 * BARUN_LAYERS + 1 + 1][4], "selectors[1]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.selectors[2][100], tr.norm_g[4 * BARUN_LAYERS + 1 + 2][100], "selectors[2]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.embedding[13 * 448 + 25], tr.emb_g[13 * 448 + 25], "embedding[13]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.embedding[27 * 448 + 300], tr.emb_g[27 * 448 + 300], "embedding[27]");
+    /* the INPUT path: rows that ARE input tokens (both input grad and,
+     * when they are also targets, the tied-head grad) */
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.embedding[(size_t)tok[0] * 448 + 77],
+                   tr.emb_g[(size_t)tok[0] * 448 + 77], "embedding[tok0] (input path)");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.embedding[(size_t)tok[3] * 448 + 300],
+                   tr.emb_g[(size_t)tok[3] * 448 + 300], "embedding[tok3] (input path)");
     CHECK(ok, "all finite-difference gradient checks");
-    if (ok) printf("  FD: all %d parameter types match the numeric gradient\n", 17);
+    if (ok) printf("  FD: all %d parameter checks match the numeric gradient\n", 26);
 
     /* ---- the Muon step must be finite and move the weights ---- */
     barun_train_cfg_t cfg;
@@ -210,6 +243,26 @@ int main(void)
     double consumed = 0;
     for (size_t i = 0; i < 448 * 448; i++) consumed += fabsf(tr.q_proj_g[0][i]);
     CHECK(consumed == 0.0, "gradients consumed by the step");
+
+    /* ---- DA: the grad-clip path must work (recipe: clip 1.0) ---- */
+    {
+        barun_train_zero_grad(&tr);
+        barun_bp_forward(&m, &b, &bp, tok, 24);
+        barun_bp_backward(&m, &b, &bp, &tr, tok, 24);
+        barun_train_cfg_t cc;
+        memset(&cc, 0, sizeof(cc));
+        cc.lr = 1e-3f; cc.weight_decay = 0.1f; cc.muon_momentum = 0.95f;
+        cc.grad_clip = 1e-6f;    /* absurdly tight: everything gets scaled */
+        cc.warmup_steps = 2; cc.max_steps = 10;
+        CHECK(barun_bp_muon_step(&m, &tr, &cc, 3) == 0, "grad-clipped step runs");
+        int finite = 1;
+        for (size_t i = 0; i < 448 * 448; i++)
+            if (m.blocks[0].q_proj[i] != m.blocks[0].q_proj[i]) finite = 0;
+        CHECK(finite, "weights finite after the clipped step");
+        double cl = 0;
+        for (size_t i = 0; i < 448 * 448; i++) cl += fabsf(tr.q_proj_g[0][i]);
+        CHECK(cl == 0.0, "clipped step consumed the grads");
+    }
 
     barun_bp_free(&bp);
     barun_train_free(&tr);
