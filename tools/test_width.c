@@ -26,7 +26,7 @@ int main(void)
     int fails = 0;
 
     /* build a small model (2 active layers) with known weights */
-    barun_block_t blocks[BARUN_LAYERS];
+    wubu_block_t blocks[BARUN_LAYERS];
     memset(blocks, 0, sizeof blocks);
     for (int i = 0; i < BARUN_LAYERS; i++) {
         blocks[i].q_proj    = mk(BARUN_DIM * BARUN_HEADS * 64, &seed);
@@ -46,14 +46,14 @@ int main(void)
     float *sel[BARUN_SELECTORS];
     for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = mk(BARUN_DIM, &seed);
 
-    barun_model_t m;
-    if (barun_model_init(&m, embedding, final_norm, blocks, sel) != 0) {
+    wubu_model_t m;
+    if (wubu_model_init(&m, embedding, final_norm, blocks, sel) != 0) {
         printf("  model init FAIL\n"); return 1;
     }
     m.n_layers = 2;
 
     /* snapshot the old weights for the exactness checks (the expansion
-     * FREES the originals -- barun_model_init references, doesn't copy) */
+     * FREES the originals -- wubu_model_init references, doesn't copy) */
     float *old_q = (float *)malloc((size_t)BARUN_DIM * BARUN_DIM * sizeof(float));
     float *old_k = (float *)malloc((size_t)BARUN_DIM * BARUN_KV_HEADS * BARUN_HEAD_DIM * sizeof(float));
     float *old_gu = (float *)malloc((size_t)BARUN_DIM * BARUN_FFN_DIM * 2 * sizeof(float));

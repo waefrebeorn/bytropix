@@ -26,7 +26,7 @@ every freed slot.
 | **The mixed agents** (wubu_moe2) | top-k routing with distinct agents | which cells fire per token |
 | **The prover** (wubu_prover2, Lean-verified) | the sound reward signal — accepts/rejects proof steps | the fitness oracle: only verified growth survives |
 | **The 5+1 recovery** (wubu_recovery) | five rollback slots + the Jesus state | mistakes are safe: a bad mutation rolls back to the last healthy colony |
-| **Muon + the real backward pass** (wubu_barun_backprop, RC01) | the correct training recipe | the growth engine: cells learn only when their gradients are real |
+| **Muon + the real backward pass** (wubu_backprop, RC01) | the correct training recipe | the growth engine: cells learn only when their gradients are real |
 | **Gated-DeltaNet / linear attention** (008) | fixed-size state, linear KV | the colony's circulation: context flows through a small state, cheap to grow |
 | **WuBu Nesting** (THEORY/03) | hyperbolic inter-level transitions | the colony's space: curvature changes = the amoeba's environment bends |
 | **GRPO / RLVR** (043) | verifiable rewards, group-relative advantage | the colony's natural selection: fitness is measured, not assumed |
@@ -149,9 +149,9 @@ loop: *empirical fitness, archive, open-ended, sandboxed.*
 | the prover (the fitness oracle) | DONE, tested | wubuwizard/src/wubu_prover2.c |
 | the nesting (the space) | DONE, tested | wubuwizard/src/wubu_nest.c |
 | the deltanet (the circulation) | DONE, tested | wubuwizard/src/wubu_deltanet.c |
-| the real backward + Muon | IN PROGRESS | wubuwizard/src/wubu_barun_backprop.c |
+| the real backward + Muon | IN PROGRESS | wubuwizard/src/wubu_backprop.c |
 | the recovery (the safety) | DONE, on metal | wubuos/src/kernel/wubu_recovery.c |
-| the trainer (the growth engine) | DONE | wubuwizard/src/wubu_barun_train.c |
+| the trainer (the growth engine) | DONE | wubuwizard/src/wubu_train.c |
 | **the diagnostic immune system** | DONE, tested | wubuwizard/src/wubu_amoeba.c |
 | **the grow/shrink operators** | DONE, tested | same module |
 | **the fitness gate** | DONE, tested | same module |

@@ -7,17 +7,17 @@
  * the qk/attn/ffn/final norms, the selectors, the embedding).
  *
  * Also proves the recording forward matches the RELEASED forward
- * (barun_forward) loss for the same tokens -- the trainer and the
+ * (wubu_forward) loss for the same tokens -- the trainer and the
  * inference engine must agree on the model they see.
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include "gpu_barun.h"   /* the weight-cache dirty mark for the FD perturbations */
+#include "gpu_wubu.h"   /* the weight-cache dirty mark for the FD perturbations */
 #include <string.h>
 #include <math.h>
-#include "wubu_barun.h"
-#include "wubu_barun_train.h"
-#include "wubu_barun_backprop.h"
+#include "wubu.h"
+#include "wubu_train.h"
+#include "wubu_backprop.h"
 
 static int failures = 0;
 #define CHECK(c, m) do { if (!(c)) { printf("  FAIL: %s\n", m); failures++; } } while (0)
@@ -42,7 +42,7 @@ static void fill_rand(float *p, size_t n, float scale)
 }
 
 /* build a small random model (no safetensors needed) */
-static int make_model(barun_model_t *m)
+static int make_model(wubu_model_t *m)
 {
     float *emb = (float *)malloc(16384 * 448 * sizeof(float));
     float *final_norm = (float *)malloc(448 * sizeof(float));
@@ -50,10 +50,10 @@ static int make_model(barun_model_t *m)
     fill_rand(emb, 16384 * 448, 0.02f);
     for (int i = 0; i < 448; i++) final_norm[i] = 1.0f + 0.01f * frand();
 
-    barun_block_t blocks[BARUN_LAYERS];
+    wubu_block_t blocks[BARUN_LAYERS];
     memset(blocks, 0, sizeof(blocks));
     for (int l = 0; l < BARUN_LAYERS; l++) {
-        barun_block_t *blk = &blocks[l];
+        wubu_block_t *blk = &blocks[l];
         blk->q_proj   = (float *)malloc(448 * 448 * sizeof(float));
         blk->k_proj   = (float *)malloc(448 * 64 * sizeof(float));
         blk->v_proj   = (float *)malloc(448 * 64 * sizeof(float));
@@ -87,11 +87,11 @@ static int make_model(barun_model_t *m)
         selectors[i] = (float *)malloc(448 * sizeof(float));
         fill_rand(selectors[i], 448, 0.02f);
     }
-    return barun_model_init(m, emb, final_norm, blocks, selectors);
+    return wubu_model_init(m, emb, final_norm, blocks, selectors);
 }
 
 /* the mean-reduced CE from the REFERENCE forward's logits (parity) */
-static float ref_loss(const barun_model_t *m, const barun_buf_t *b,
+static float ref_loss(const wubu_model_t *m, const wubu_buf_t *b,
                       const uint16_t *tokens, int n)
 {
     float loss = 0, n_pos = (float)(n - 1);
@@ -107,7 +107,7 @@ static float ref_loss(const barun_model_t *m, const barun_buf_t *b,
 }
 
 /* one FD check: perturb *pw by h, re-forward, compare with ana */
-static int fd_check(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
+static int fd_check(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
                     const uint16_t *tokens, int n,
                     float *pw, float ana, const char *name)
 {
@@ -117,11 +117,11 @@ static int fd_check(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
      * after EVERY perturb, or the second forward reuses the cached
      * first value and lp == lm exactly (the DA catch) */
     *pw = orig + h;
-    if (gpu_barun_mark_weights_dirty) gpu_barun_mark_weights_dirty();
-    float lp = barun_bp_forward(m, b, bp, tokens, n);
+    if (gpu_wubu_mark_weights_dirty) gpu_wubu_mark_weights_dirty();
+    float lp = wubu_bp_forward(m, b, bp, tokens, n);
     *pw = orig - h;
-    if (gpu_barun_mark_weights_dirty) gpu_barun_mark_weights_dirty();
-    float lm = barun_bp_forward(m, b, bp, tokens, n);
+    if (gpu_wubu_mark_weights_dirty) gpu_wubu_mark_weights_dirty();
+    float lm = wubu_bp_forward(m, b, bp, tokens, n);
     *pw = orig;
     float num = (lp - lm) / (2.0f * h);
     float diff = fabsf(num - ana);
@@ -137,17 +137,17 @@ int main(void)
 {
     printf("=== test_backprop (the REAL backward pass + Muon, FD-verified) ===\n");
 
-    barun_model_t m;
+    wubu_model_t m;
     if (make_model(&m) != 0) { printf("  FAIL: cannot build the random model\n"); return 1; }
 
-    barun_buf_t b;
-    CHECK(barun_buf_alloc(&b, 64) == 0, "buf alloc");
+    wubu_buf_t b;
+    CHECK(wubu_buf_alloc(&b, 64) == 0, "buf alloc");
 
-    barun_bp_t bp;
-    CHECK(barun_bp_alloc(&bp, 64) == 0, "bp alloc");
+    wubu_bp_t bp;
+    CHECK(wubu_bp_alloc(&bp, 64) == 0, "bp alloc");
 
-    barun_train_t tr;
-    CHECK(barun_train_init(&tr, &m) == 0, "train init");
+    wubu_train_t tr;
+    CHECK(wubu_train_init(&tr, &m) == 0, "train init");
 
     /* a small varied token sequence: the RNG advances per token (the
      * DA catch -- the old loop reused the same state and every token
@@ -170,15 +170,15 @@ int main(void)
     }
 
     /* ---- forward parity: the recording forward == the released forward */
-    float loss_bp = barun_bp_forward(&m, &b, &bp, tok, 24);
-    barun_forward(&m, &b, tok, 24);
+    float loss_bp = wubu_bp_forward(&m, &b, &bp, tok, 24);
+    wubu_forward(&m, &b, tok, 24);
     float loss_ref = ref_loss(&m, &b, tok, 24);
     printf("  loss bp %.6f vs released %.6f\n", loss_bp, loss_ref);
     CHECK(fabsf(loss_bp - loss_ref) < 1e-3f, "recording forward == released forward");
 
     /* ---- the analytic backward ---- */
-    barun_train_zero_grad(&tr);
-    float loss_b = barun_bp_backward(&m, &b, &bp, &tr, tok, 24);
+    wubu_train_zero_grad(&tr);
+    float loss_b = wubu_bp_backward(&m, &b, &bp, &tr, tok, 24);
     CHECK(fabsf(loss_bp - loss_b) < 1e-4f, "forward/backward loss agree");
     CHECK(tr.micro_steps == 1, "micro_steps counted");
     CHECK(tr.loss_sum > 0, "loss positive");
@@ -195,7 +195,7 @@ int main(void)
 
     /* ---- finite differences: one element of every parameter type ---- */
     int ok = 1;
-    barun_bp_forward(&m, &b, &bp, tok, 24);   /* fresh activations */
+    wubu_bp_forward(&m, &b, &bp, tok, 24);   /* fresh activations */
 
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].q_proj[7 * 448 + 13], tr.q_proj_g[0][7 * 448 + 13], "q_proj[0]a");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].q_proj[400 * 448 + 300], tr.q_proj_g[0][400 * 448 + 300], "q_proj[0]b");
@@ -232,7 +232,7 @@ int main(void)
     if (ok) printf("  FD: all %d parameter checks match the numeric gradient\n", 26);
 
     /* ---- the Muon step must be finite and move the weights ---- */
-    barun_train_cfg_t cfg;
+    wubu_train_cfg_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.lr = 1e-3f;
     cfg.muon_momentum = 0.95f;
@@ -240,7 +240,7 @@ int main(void)
     cfg.warmup_steps = 2;
     cfg.max_steps = 10;
     float w_before = m.blocks[0].q_proj[0];
-    CHECK(barun_bp_muon_step(&m, &tr, &cfg, 3) == 0, "muon step runs");
+    CHECK(wubu_bp_muon_step(&m, &tr, &cfg, 3) == 0, "muon step runs");
     float w_after = m.blocks[0].q_proj[0];
     CHECK(w_after != w_before, "muon step moved the weights");
     CHECK(w_after == w_after, "weights finite after muon");
@@ -252,15 +252,15 @@ int main(void)
 
     /* ---- DA: the grad-clip path must work (recipe: clip 1.0) ---- */
     {
-        barun_train_zero_grad(&tr);
-        barun_bp_forward(&m, &b, &bp, tok, 24);
-        barun_bp_backward(&m, &b, &bp, &tr, tok, 24);
-        barun_train_cfg_t cc;
+        wubu_train_zero_grad(&tr);
+        wubu_bp_forward(&m, &b, &bp, tok, 24);
+        wubu_bp_backward(&m, &b, &bp, &tr, tok, 24);
+        wubu_train_cfg_t cc;
         memset(&cc, 0, sizeof(cc));
         cc.lr = 1e-3f; cc.weight_decay = 0.1f; cc.muon_momentum = 0.95f;
         cc.grad_clip = 1e-6f;    /* absurdly tight: everything gets scaled */
         cc.warmup_steps = 2; cc.max_steps = 10;
-        CHECK(barun_bp_muon_step(&m, &tr, &cc, 3) == 0, "grad-clipped step runs");
+        CHECK(wubu_bp_muon_step(&m, &tr, &cc, 3) == 0, "grad-clipped step runs");
         int finite = 1;
         for (size_t i = 0; i < 448 * 448; i++)
             if (m.blocks[0].q_proj[i] != m.blocks[0].q_proj[i]) finite = 0;
@@ -270,9 +270,9 @@ int main(void)
         CHECK(cl == 0.0, "clipped step consumed the grads");
     }
 
-    barun_bp_free(&bp);
-    barun_train_free(&tr);
-    barun_free(&m, &b);
+    wubu_bp_free(&bp);
+    wubu_train_free(&tr);
+    wubu_free(&m, &b);
 
     if (failures == 0) printf("ALL BACKPROP TESTS PASSED -- the gradients are real\n");
     else printf("%d BACKPROP FAILURES\n", failures);

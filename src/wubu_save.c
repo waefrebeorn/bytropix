@@ -1,5 +1,5 @@
 /*
- * barun_save.c -- save BarunLM checkpoints as REAL safetensors.
+ * wubu_save.c -- save BarunLM checkpoints as REAL safetensors.
  *
  * The DA pass found: we could read safetensors but never write them --
  * every trained checkpoint was a private .st dump no standard tooling
@@ -7,7 +7,7 @@
  * released layout (137 tensors, same names), so HF tooling, the bigger
  * brother (Qwen), and any future framework can load our fine-tunes.
  */
-#include "wubu_barun.h"
+#include "wubu.h"
 #include "safetensors_writer.h"
 #include <string.h>
 #include <stdlib.h>
@@ -26,7 +26,7 @@ static char *local_strdup(const char *s)
     return out;
 }
 
-int barun_save_safetensors(const barun_model_t *m, const char *path)
+int wubu_save_safetensors(const wubu_model_t *m, const char *path)
 {
     if (!m || !path) return -1;
     /* 1 embedding + 1 final_norm + 12 blocks * 11 + 3 selectors = 137 */
@@ -45,7 +45,7 @@ int barun_save_safetensors(const barun_model_t *m, const char *path)
     n++;
     char name[128];
     for (int i = 0; i < BARUN_LAYERS; i++) {
-        const barun_block_t *b = &m->blocks[i];
+        const wubu_block_t *b = &m->blocks[i];
         struct { const char *suffix; const float *data; int64_t r, c; } w[11] = {
             { "attn.q_proj.weight", b->q_proj, 448, 448 },
             { "attn.k_proj.weight", b->k_proj, 64, 448 },

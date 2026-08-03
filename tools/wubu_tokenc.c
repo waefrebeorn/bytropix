@@ -1,5 +1,5 @@
 /*
- * barun_tokenc.c -- the C11 corpus tokenizer (the AGI corpus pipeline).
+ * wubu_tokenc.c -- the C11 corpus tokenizer (the AGI corpus pipeline).
  *
  * Reads text files (or stdin), tokenizes with the byte-level BPE
  * tokenizer (wubu_tok_hf -- OUR implementation), and writes compact
@@ -7,7 +7,7 @@
  * The wubuwizard trainer consumes these .tok streams directly.
  *
  * Usage:
- *   barun_tokenc <tokenizer.json> <input.txt|-> <output.tok>
+ *   wubu_tokenc <tokenizer.json> <input.txt|-> <output.tok>
  */
 #define _POSIX_C_SOURCE 200809L   /* getline is POSIX, not C11 */
 #include <stdio.h>

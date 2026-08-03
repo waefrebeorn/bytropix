@@ -28,8 +28,8 @@ static int collect_token(void *ptr, void *user)
     return 0;
 }
 
-int wubu_agi_init(wubu_agi_t *agi, barun_model_t *m,
-                      barun_buf_t *b, wubu_moe2_t *agents)
+int wubu_agi_init(wubu_agi_t *agi, wubu_model_t *m,
+                      wubu_buf_t *b, wubu_moe2_t *agents)
 {
     if (!agi || !m || !b || !agents) return -1;
     memset(agi, 0, sizeof(*agi));
@@ -61,9 +61,9 @@ int wubu_agi_think(wubu_agi_t *agi, uint16_t *out_tokens, int max_out)
     wubu_hive_foreach(&agi->memory, collect_token, user);
     if (k == 0) return 0;
     /* forward the model */
-    barun_forward(agi->model, agi->buf, ctx, k);
+    wubu_forward(agi->model, agi->buf, ctx, k);
     /* pick the top-1 */
-    float *logits = barun_last_logits(agi->buf);
+    float *logits = wubu_last_logits(agi->buf);
     if (!logits) return -1;
     int best = 0;
     for (int i = 1; i < BARUN_VOCAB && i < max_out; i++)

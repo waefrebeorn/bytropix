@@ -1,5 +1,5 @@
 /*
- * test_barun_train.c -- the BarunLM training core test (the AGI loop).
+ * test_wubu_train.c -- the BarunLM training core test (the AGI loop).
  *
  * Proves the training loop: the seed model takes synthetic sequences,
  * the loss is computed, Muon+AdamW updates the weights, and the loss
@@ -10,8 +10,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "wubu_barun.h"
-#include "wubu_barun_train.h"
+#include "wubu.h"
+#include "wubu_train.h"
 
 static int failures = 0;
 #define CHECK(c, m) do { if (!(c)) { printf("  FAIL: %s\n", m); failures++; } } while (0)
@@ -31,23 +31,23 @@ static void make_sequence(uint16_t *tok, size_t n, uint32_t seed)
 
 int main(int argc, char **argv)
 {
-    const char *path = (argc > 1) ? argv[1] : "models/barun/model.safetensors";
-    printf("=== test_barun_train (the AGI training loop) ===\n");
+    const char *path = (argc > 1) ? argv[1] : "models/wubu/model.safetensors";
+    printf("=== test_wubu_train (the AGI training loop) ===\n");
 
-    barun_model_t m;
-    if (barun_load(&m, path) != 0) {
+    wubu_model_t m;
+    if (wubu_load(&m, path) != 0) {
         printf("  FAIL: cannot load %s\n", path);
         return 1;
     }
-    printf("  loaded the seed (%ld parameters)\n", barun_parameter_count(&m));
+    printf("  loaded the seed (%ld parameters)\n", wubu_parameter_count(&m));
 
-    barun_buf_t b;
-    CHECK(barun_buf_alloc(&b, 128) == 0, "buf alloc");
+    wubu_buf_t b;
+    CHECK(wubu_buf_alloc(&b, 128) == 0, "buf alloc");
 
-    barun_train_t tr;
-    CHECK(barun_train_init(&tr, &m) == 0, "train init");
+    wubu_train_t tr;
+    CHECK(wubu_train_init(&tr, &m) == 0, "train init");
 
-    barun_train_cfg_t cfg;
+    wubu_train_cfg_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.lr = 1e-3f;          /* the seed loop uses a higher lr than the
                                 reference's 1e-4 so a few steps show the loss
@@ -66,7 +66,7 @@ int main(int argc, char **argv)
     float first_loss = -1, last_loss = -1;
     for (uint32_t step = 1; step <= 6; step++) {
         make_sequence(tok, 128, step * 7919u);
-        float loss = barun_train_step_loop(&m, &tr, &b, tok, 128, &cfg, step);
+        float loss = wubu_train_step_loop(&m, &tr, &b, tok, 128, &cfg, step);
         if (step == 1) first_loss = loss;
         last_loss = loss;
         printf("  step %u: loss %.4f\n", step, loss);
@@ -81,13 +81,13 @@ int main(int argc, char **argv)
     CHECK(w1 == w1 && e1 == e1, "weights finite");
 
     /* the LR schedule */
-    float lr1 = barun_train_lr(&cfg, 1);
-    float lr2 = barun_train_lr(&cfg, 10);
+    float lr1 = wubu_train_lr(&cfg, 1);
+    float lr2 = wubu_train_lr(&cfg, 10);
     CHECK(lr1 > 0 && lr2 > 0, "lr positive");
     printf("  lr(1)=%.6f lr(10)=%.6f\n", lr1, lr2);
 
-    barun_train_free(&tr);
-    barun_free(&m, &b);
+    wubu_train_free(&tr);
+    wubu_free(&m, &b);
 
     if (failures == 0) printf("ALL BARUN_TRAIN TESTS PASSED -- the seed learns\n");
     else printf("%d BARUN_TRAIN FAILURES\n", failures);

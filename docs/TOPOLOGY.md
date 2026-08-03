@@ -46,8 +46,8 @@ wubuos) is where the Body hosts the Brain.
 | Path | Role | Contents |
 |---|---|---|
 | `src/` + `include/` | the ENGINE | **277 C modules / 273 headers** — every algorithm, every kernel, every data structure. Opaque structs, minimal includes, pure C11. |
-| `tools/*.c` | the CLI + tests | **516 C tools** — one test per module (`test_<module>.c`), operational CLIs (`barun_cli`, `barun_train_cli`, `gen_text*`, `infer_*`). |
-| `tools/*.py` | the harnesses | **84 Python tools** — corpus fetch/extract (`barun_*`), API clients (`nvidia_nim`, `openrouter_rlhf`), viz. |
+| `tools/*.c` | the CLI + tests | **516 C tools** — one test per module (`test_<module>.c`), operational CLIs (`wubu_cli`, `wubu_train_cli`, `gen_text*`, `infer_*`). |
+| `tools/*.py` | the harnesses | **84 Python tools** — corpus fetch/extract (`wubu_*`), API clients (`nvidia_nim`, `openrouter_rlhf`), viz. |
 | `research/` | the paper library | **40+ research notes** (`001-kv-entropy` …) — each with Triple-DA, implementation status (`wired`/gap), ties. |
 | `THEORY/` | our own papers | the WuBu Nesting (層疊嵌套) papers, foundational philosophy, axiomatic emergent theory, `papers/` (DeepSeek lineage, Möbius transformers, …). |
 | `MATH/` | the proof vault | `lean/wubu_proofs/` — the Lean-verified theorems (Poincaré ball, Möbius, gyration, MLA compression). |
@@ -55,7 +55,7 @@ wubuos) is where the Body hosts the Brain.
 | `docs/` | the brain's docs | model blueprint, model card, live-stream/free-API ledger, improvement plans. |
 | `vault/` | collected references | api-server notes, quantization formats, bins/tools. |
 | `manifests/` | model configs | `Qwen_Qwen3.6-27B`, `Kwaipilot_KAT*`, `InternScience*` — the bigger-brother line. |
-| `models/` | local weights | `barun/` (the WuBu seed: safetensors + tokenizer), the reference checkpoints. |
+| `models/` | local weights | `wubu/` (the WuBu seed: safetensors + tokenizer), the reference checkpoints. |
 | `python/` | small helpers | tokenizer extraction etc. |
 | `DEMOS/ DRAFT/ DIAGRAMS/` | sketches | the early prototyping (kept for lineage; most logic now lives in `src/`). |
 
@@ -73,7 +73,7 @@ The `src/wubu_*.c` modules cluster by theme (the naming convention:
 | **speculative** (4+) | `wubu_spec_decode`, `wubu_spec_tuner`, `wubu_spec_variants`, `wubu_medusa` |
 | **quantization** | `quantized_matmul`, `quantized_dot_generic`, `wubu_awq`, `wubu_gptq`, `wubu_smoothquant`, `wubu_nf4`, `wubu_mxfp4`, `dequant_iq2_xxs` |
 | **hyperbolic/nesting** | `wubu_hyper`, `wubu_nest`, `wubu_mobius_linear`, `wubu_poincare_gqa`, `wubu_hyperbolic_output_proj`, `rsgd` |
-| **model core** | `wubu_barun` (the seed), `wubu_barun_train`, `wubu_barun_backprop`, `wubu_model`, `wubu_gemma4`, `wubu_tokenizer_hf` |
+| **model core** | `wubu` (the seed), `wubu_train`, `wubu_backprop`, `wubu_model`, `wubu_gemma4`, `wubu_tokenizer_hf` |
 | **the AGI organs** | `wubu_hive` (memory), `wubu_moe2` (agents), `wubu_prover2` (verifier), `wubu_agi` (the loop), `wubu_deltanet` (linear mixer) |
 | **agentic OS** | `wubu_agentic_kv`, `wubu_agentic_mem`, `wubu_agentic_os`, `wubu_agentauth`, `wubu_agentid` |
 | **misc** | `wubu_arena`, `wubu_audio`, `wubu_bandit`, `wubu_actor_critic`, `wubu_ecs`, `wubu_hopfield`, `wubu_energy`, `wubu_freeenergy`, `thread_pool`, `tile_manager` |
@@ -82,13 +82,13 @@ The `src/wubu_*.c` modules cluster by theme (the naming convention:
 
 ```
 corpus (SD card: /home/wubu/sdcard/corpus/)
-  ├─ text/        raw Cosmopedia shards (barun_extract.py)
-  ├─ tokens/      .tok uint16 streams (barun_tokenc C11 BPE)
-  ├─ finemath-live.tok / openmath-live.tok   (barun_stream.py live)
+  ├─ text/        raw Cosmopedia shards (wubu_extract.py)
+  ├─ tokens/      .tok uint16 streams (wubu_tokenc C11 BPE)
+  ├─ finemath-live.tok / openmath-live.tok   (wubu_stream.py live)
   └─ checkpoints/ seed.st-NNN.st (every 10 steps, the 5+1 slots)
 
-trainer (tools/barun_train_cli.c + src/wubu_barun_train.c
-         + src/wubu_barun_backprop.c)
+trainer (tools/wubu_train_cli.c + src/wubu_train.c
+         + src/wubu_backprop.c)
   └─ WuBu-35M safetensors -> trained .st checkpoints -> HF
        (WaefreBeorn/WuBu-35M, weights + tokenizer + LICENSE + card)
 
@@ -201,9 +201,9 @@ WuBuFW (src/firmware) measures the kernel
 1. **No topology doc existed** — this file fixes that. The repo roots
    had grown organically; the boundaries were implicit.
 2. **The Brain's training core had 3 real gaps** (found by reading
-   `src/wubu_barun_train.c`):
+   `src/wubu_train.c`):
    - `layer_grad()` gave EVERY layer the same outer product — not
-     backprop; the full backward pass is the `wubu_barun_backprop`
+     backprop; the full backward pass is the `wubu_backprop`
      milestone in progress.
    - `muon_update()` was momentum SGD — no Newton-Schulz (the Muon
      paper's entire point).
@@ -216,7 +216,7 @@ WuBuFW (src/firmware) measures the kernel
 
 ## 6. NEXT ACTIONS (the cohesive path)
 
-1. Finish `wubu_barun_backprop` (real backward + real Muon) — the
+1. Finish `wubu_backprop` (real backward + real Muon) — the
    Brain's training gap.
 2. Wire the RLHF oracle rewards (NVIDIA/OpenRouter) into the trainer —
    the Brain's RLHF loop.

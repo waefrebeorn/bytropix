@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gpu_barun.h"
+#include "gpu_wubu.h"
 
 int main(void)
 {
@@ -14,7 +14,7 @@ int main(void)
     for (int i = 0; i < M * K; i++) x[i] = ((float)rand() / RAND_MAX) - 0.5f;
     for (int i = 0; i < N * K; i++) w[i] = ((float)rand() / RAND_MAX) - 0.5f;
 
-    /* CPU: out[s,o] = sum_i w[o,i]*x[s,i]  (the wubu_barun loop) */
+    /* CPU: out[s,o] = sum_i w[o,i]*x[s,i]  (the wubu loop) */
     for (int s = 0; s < M; s++)
         for (int o = 0; o < N; o++) {
             float acc = 0;
@@ -22,8 +22,8 @@ int main(void)
             cpu[s * N + o] = acc;
         }
 
-    if (!gpu_barun_init()) { printf("NO GPU\n"); return 0; }
-    int rc = gpu_barun_matmul(gpu, w, x, M, N, K);
+    if (!gpu_wubu_init()) { printf("NO GPU\n"); return 0; }
+    int rc = gpu_wubu_matmul(gpu, w, x, M, N, K);
     if (!rc) { printf("GPU CALL FAILED\n"); return 1; }
 
     double max_diff = 0;
@@ -33,6 +33,6 @@ int main(void)
     }
     printf("max diff: %.6e %s\n", max_diff,
            max_diff < 1e-3 ? "MATCH" : "MISMATCH");
-    gpu_barun_free();
+    gpu_wubu_free();
     return max_diff < 1e-3 ? 0 : 1;
 }

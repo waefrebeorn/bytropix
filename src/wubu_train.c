@@ -1,18 +1,18 @@
 /*
- * wubu_barun_train.c -- the BarunLM training core (the AGI brain-cluster loop).
+ * wubu_train.c -- the BarunLM training core (the AGI brain-cluster loop).
  *
  * The wizard becomes a TRAINING engine. The mustard seed (BarunLM-35M)
- * grows here: the REAL backprop (wubu_barun_backprop) + the REAL Muon
+ * grows here: the REAL backprop (wubu_backprop) + the REAL Muon
  * (Newton-Schulz 5) + AdamW for the 1-D params, next-token
  * cross-entropy, the confirmed reference recipe. The gradient of
  * EVERY parameter is computed analytically through the full chain:
  * attention q/k/v/o/g, qk-norm, rope, softmax, the gated residual,
  * the bounded SwiGLU, the residual selectors, the final norm and the
  * tied head. This module owns the trainer state + the micro-batch
- * loop; the deep math lives in wubu_barun_backprop.c.
+ * loop; the deep math lives in wubu_backprop.c.
  */
-#include "wubu_barun_train.h"
-#include "wubu_barun_backprop.h"
+#include "wubu_train.h"
+#include "wubu_backprop.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +25,7 @@ static float *calloc_f(size_t n)
 
 static void free_mat(float *p) { free(p); }
 
-int barun_train_init(barun_train_t *tr, const barun_model_t *m)
+int wubu_train_init(wubu_train_t *tr, const wubu_model_t *m)
 {
     if (!tr || !m) return -1;
     memset(tr, 0, sizeof(*tr));
@@ -49,14 +49,14 @@ int barun_train_init(barun_train_t *tr, const barun_model_t *m)
             !tr->down_g[i] || !tr->q_proj_m[i] || !tr->k_proj_m[i] ||
             !tr->v_proj_m[i] || !tr->o_proj_m[i] || !tr->g_proj_m[i] ||
             !tr->gate_up_m[i] || !tr->down_m[i]) {
-            barun_train_free(tr);
+            wubu_train_free(tr);
             return -1;
         }
     }
     tr->emb_g = calloc_f(16384 * 448);
     tr->emb_m = calloc_f(16384 * 448);
     tr->emb_v = calloc_f(16384 * 448);
-    if (!tr->emb_g || !tr->emb_m || !tr->emb_v) { barun_train_free(tr); return -1; }
+    if (!tr->emb_g || !tr->emb_m || !tr->emb_v) { wubu_train_free(tr); return -1; }
     /* the 1-D AdamW slots: the per-layer norms, the final norm, the
      * selectors (sizes per the BARUN_NORM_SLOTS layout) */
     for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
@@ -65,7 +65,7 @@ int barun_train_init(barun_train_t *tr, const barun_model_t *m)
         tr->norm_m[i] = calloc_f((size_t)sz);
         tr->norm_v[i] = calloc_f((size_t)sz);
         if (!tr->norm_g[i] || !tr->norm_m[i] || !tr->norm_v[i]) {
-            barun_train_free(tr);
+            wubu_train_free(tr);
             return -1;
         }
     }
@@ -73,7 +73,7 @@ int barun_train_init(barun_train_t *tr, const barun_model_t *m)
     return 0;
 }
 
-void barun_train_free(barun_train_t *tr)
+void wubu_train_free(wubu_train_t *tr)
 {
     if (!tr) return;
     for (int i = 0; i < BARUN_LAYERS; i++) {
@@ -91,11 +91,11 @@ void barun_train_free(barun_train_t *tr)
         free_mat(tr->norm_v[i]);
     }
     free_mat(tr->emb_g); free_mat(tr->emb_m); free_mat(tr->emb_v);
-    if (tr->bp_rec) { barun_bp_free(tr->bp_rec); free(tr->bp_rec); }
+    if (tr->bp_rec) { wubu_bp_free(tr->bp_rec); free(tr->bp_rec); }
     memset(tr, 0, sizeof(*tr));
 }
 
-int barun_train_zero_grad(barun_train_t *tr)
+int wubu_train_zero_grad(wubu_train_t *tr)
 {
     if (!tr) return -1;
     for (int i = 0; i < BARUN_LAYERS; i++) {
@@ -119,13 +119,13 @@ int barun_train_zero_grad(barun_train_t *tr)
 }
 
 /* ensure the recorder can hold n_tokens (grow on demand) */
-static int ensure_bp(barun_train_t *tr, int n_tokens)
+static int ensure_bp(wubu_train_t *tr, int n_tokens)
 {
     if (tr->bp_rec && tr->bp_rec->cap_seq >= n_tokens) return 0;
-    if (tr->bp_rec) { barun_bp_free(tr->bp_rec); free(tr->bp_rec); tr->bp_rec = NULL; }
-    tr->bp_rec = (barun_bp_t *)calloc(1, sizeof(barun_bp_t));
+    if (tr->bp_rec) { wubu_bp_free(tr->bp_rec); free(tr->bp_rec); tr->bp_rec = NULL; }
+    tr->bp_rec = (wubu_bp_t *)calloc(1, sizeof(wubu_bp_t));
     if (!tr->bp_rec) return -1;
-    if (barun_bp_alloc(tr->bp_rec, n_tokens) != 0) {
+    if (wubu_bp_alloc(tr->bp_rec, n_tokens) != 0) {
         free(tr->bp_rec);
         tr->bp_rec = NULL;
         return -1;
@@ -133,18 +133,18 @@ static int ensure_bp(barun_train_t *tr, int n_tokens)
     return 0;
 }
 
-float barun_train_microbatch(barun_model_t *m, barun_train_t *tr,
-                             barun_buf_t *b, const uint16_t *tokens,
+float wubu_train_microbatch(wubu_model_t *m, wubu_train_t *tr,
+                             wubu_buf_t *b, const uint16_t *tokens,
                              size_t n_tokens)
 {
     if (!m || !tr || !b || !tokens || n_tokens < 2) return 0;
     if (ensure_bp(tr, (int)n_tokens) != 0) return 0;
-    float loss = barun_bp_forward(m, b, tr->bp_rec, tokens, (int)n_tokens);
-    barun_bp_backward(m, b, tr->bp_rec, tr, tokens, (int)n_tokens);
+    float loss = wubu_bp_forward(m, b, tr->bp_rec, tokens, (int)n_tokens);
+    wubu_bp_backward(m, b, tr->bp_rec, tr, tokens, (int)n_tokens);
     return loss;
 }
 
-float barun_train_lr(const barun_train_cfg_t *cfg, uint32_t step)
+float wubu_train_lr(const wubu_train_cfg_t *cfg, uint32_t step)
 {
     if (!cfg) return 1e-4f;
     float lr;
@@ -158,23 +158,23 @@ float barun_train_lr(const barun_train_cfg_t *cfg, uint32_t step)
     return lr;
 }
 
-int barun_train_step(barun_model_t *m, barun_train_t *tr,
-                     const barun_train_cfg_t *cfg, uint32_t step)
+int wubu_train_step(wubu_model_t *m, wubu_train_t *tr,
+                     const wubu_train_cfg_t *cfg, uint32_t step)
 {
     if (!m || !tr || !cfg) return -1;
-    return barun_bp_muon_step(m, tr, cfg, step);
+    return wubu_bp_muon_step(m, tr, cfg, step);
 }
 
-float barun_train_step_loop(barun_model_t *m, barun_train_t *tr,
-                            barun_buf_t *b, const uint16_t *tokens,
-                            size_t n_tokens, const barun_train_cfg_t *cfg,
+float wubu_train_step_loop(wubu_model_t *m, wubu_train_t *tr,
+                            wubu_buf_t *b, const uint16_t *tokens,
+                            size_t n_tokens, const wubu_train_cfg_t *cfg,
                             uint32_t step)
 {
     if (!m || !tr || !b || !tokens || !cfg || n_tokens < 2) return 0;
-    barun_train_zero_grad(tr);
+    wubu_train_zero_grad(tr);
     /* micro-batch: the whole sequence is one micro-batch in the seed
      * loop (the reference used 48 sequences of 2048; we chunk). */
-    float loss = barun_train_microbatch(m, tr, b, tokens, n_tokens);
-    barun_train_step(m, tr, cfg, step);
+    float loss = wubu_train_microbatch(m, tr, b, tokens, n_tokens);
+    wubu_train_step(m, tr, cfg, step);
     return loss;
 }

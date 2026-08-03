@@ -1,5 +1,5 @@
 /*
- * wubu_barun_backprop.c -- the REAL backward pass + REAL Muon for the
+ * wubu_backprop.c -- the REAL backward pass + REAL Muon for the
  * WuBu seed (12 layers, 7 Q heads / 1 KV head GQA, 448-dim, 16384
  * vocab, 1228 FFN).
  *
@@ -23,37 +23,37 @@
  * Verified by tools/test_backprop.c with finite differences (the DA
  * doctrine: tests != correct, so we check the gradients numerically).
  */
-#include "wubu_barun_backprop.h"
+#include "wubu_backprop.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-/* the GPU dispatch (the wubu_model.h pattern, same as wubu_barun.c):
+/* the GPU dispatch (the wubu_model.h pattern, same as wubu.c):
  * the trainer rides cuBLAS when the GPU is present and falls back to
  * the CPU loops otherwise. The symbols are weak so a CPU-only link
  * still works. */
-#include "gpu_barun.h"
+#include "gpu_wubu.h"
 #if defined(__GNUC__)
 #define BP_WEAK __attribute__((weak))
 #else
 #define BP_WEAK
 #endif
-BP_WEAK int gpu_barun_init(void);
-BP_WEAK int gpu_barun_ready(void);
-BP_WEAK void gpu_barun_mark_weights_dirty(void);
-BP_WEAK int gpu_barun_matmul(float *y, const float *w, const float *x,
+BP_WEAK int gpu_wubu_init(void);
+BP_WEAK int gpu_wubu_ready(void);
+BP_WEAK void gpu_wubu_mark_weights_dirty(void);
+BP_WEAK int gpu_wubu_matmul(float *y, const float *w, const float *x,
                              int M, int N, int K);
-BP_WEAK int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
+BP_WEAK int gpu_wubu_matmul_tx(float *y, const float *a, const float *b,
                                 int M, int N, int K);
-BP_WEAK int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
+BP_WEAK int gpu_wubu_matmul_nt(float *y, const float *w, const float *x,
                                 int M, int N, int K);
-BP_WEAK int gpu_barun_ns5(float *X, int rows, int cols);
-BP_WEAK int gpu_barun_ns5_gram(float *X, int rows, int cols);
-BP_WEAK int gpu_barun_attn(float *out, const float *q, const float *k,
+BP_WEAK int gpu_wubu_ns5(float *X, int rows, int cols);
+BP_WEAK int gpu_wubu_ns5_gram(float *X, int rows, int cols);
+BP_WEAK int gpu_wubu_attn(float *out, const float *q, const float *k,
                            const float *v, int seq, int heads, int dim,
                            int local_win, int is_full);
-BP_WEAK int gpu_barun_attn_backward(float *dq, float *dk, float *dv,
+BP_WEAK int gpu_wubu_attn_backward(float *dq, float *dk, float *dv,
                                     const float *q, const float *k,
                                     const float *v, const float *o,
                                     const float *dao, int seq, int heads,
@@ -71,7 +71,7 @@ static float *calloc_f(size_t n)
     return (float *)calloc(n ? n : 1, sizeof(float));
 }
 
-int barun_bp_alloc(barun_bp_t *bp, int max_seq)
+int wubu_bp_alloc(wubu_bp_t *bp, int max_seq)
 {
     if (!bp || max_seq <= 0) return -1;
     memset(bp, 0, sizeof(*bp));
@@ -120,13 +120,13 @@ int barun_bp_alloc(barun_bp_t *bp, int max_seq)
         !bp->s_dv || !bp->s_dao || !bp->s_dfg || !bp->s_dfu ||
         !bp->s_dfn || !bp->s_dan || !bp->s_dffn_out || !bp->s_do ||
         !bp->s_dg || !bp->s_dx || !bp->s_dxentry) {
-        barun_bp_free(bp);
+        wubu_bp_free(bp);
         return -1;
     }
     return 0;
 }
 
-void barun_bp_free(barun_bp_t *bp)
+void wubu_bp_free(wubu_bp_t *bp)
 {
     if (!bp) return;
     free(bp->x_in); free(bp->emb_in); free(bp->attn_norm);
@@ -166,10 +166,10 @@ static float sigm(float v) { return 1.0f / (1.0f + expf(-v)); }
 static void mm(float *out, const float *w, const float *x,
                int out_n, int in_n, int seq)
 {
-    if (!g_gpu_tried) { g_gpu_tried = 1; if (gpu_barun_init) gpu_barun_init(); }
-    if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul &&
+    if (!g_gpu_tried) { g_gpu_tried = 1; if (gpu_wubu_init) gpu_wubu_init(); }
+    if (gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_matmul &&
         (long)seq * out_n * in_n >= GPU_MIN_FLOP &&
-        gpu_barun_matmul(out, w, x, seq, out_n, in_n))
+        gpu_wubu_matmul(out, w, x, seq, out_n, in_n))
         return;
     for (int s = 0; s < seq; s++) {
         const float *xs = x + (size_t)s * in_n;
@@ -274,7 +274,7 @@ static void rms_norm_backward(const float *x, const float *w,
  * bp->logits) -- this function only reads them. If dh_out: accumulates
  * dL/d(final_h)[s] into it. If demb: accumulates dL/d(embedding)[v]
  * into it (the head IS the embedding, tied). */
-static float head_ce(barun_model_t *m, barun_bp_t *bp,
+static float head_ce(wubu_model_t *m, wubu_bp_t *bp,
                      const uint16_t *tokens, int n_tokens,
                      float *dh_out, float *demb)
 {
@@ -307,9 +307,9 @@ static float head_ce(barun_model_t *m, barun_bp_t *bp,
     }
     if (dh_out || demb) {
         int np = seq - 1;
-        if (demb && gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul_tx &&
+        if (demb && gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_matmul_tx &&
             (long)np * BARUN_VOCAB * D >= GPU_MIN_FLOP &&
-            gpu_barun_matmul_tx(demb, bp->logits, bp->final_h, BARUN_VOCAB, D, np)) {
+            gpu_wubu_matmul_tx(demb, bp->logits, bp->final_h, BARUN_VOCAB, D, np)) {
             /* GPU: demb = g^T @ h */
         } else if (demb) {
             for (int s = 0; s < np; s++) {
@@ -323,9 +323,9 @@ static float head_ce(barun_model_t *m, barun_bp_t *bp,
                 }
             }
         }
-        if (dh_out && gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul_nt &&
+        if (dh_out && gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_matmul_nt &&
             (long)np * BARUN_VOCAB * D >= GPU_MIN_FLOP &&
-            gpu_barun_matmul_nt(dh_out, m->embedding, bp->logits, np, D, BARUN_VOCAB)) {
+            gpu_wubu_matmul_nt(dh_out, m->embedding, bp->logits, np, D, BARUN_VOCAB)) {
             /* GPU: dh = g @ embedding */
         } else if (dh_out) {
             for (int s = 0; s < np; s++) {
@@ -344,7 +344,7 @@ static float head_ce(barun_model_t *m, barun_bp_t *bp,
 }
 
 /* is layer l a selector layer? (layers 3, 7, 11) */
-static int is_sel(const barun_model_t *m, int l)
+static int is_sel(const wubu_model_t *m, int l)
 {
     return l >= 0 && l < m->n_layers && m->fire_sel[l];
 }
@@ -464,7 +464,7 @@ static void cpu_attn_backward_loop(float *dq, float *dk, float *dv,
     }
 }
 
-float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
+float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
                        const uint16_t *tokens, int n_tokens)
 {
     if (!m || !b || !bp || !tokens || n_tokens < 2 ||
@@ -486,7 +486,7 @@ float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
 
     int Ln = m->n_layers;
     for (int l = 0; l < Ln; l++) {
-        barun_block_t *blk = &m->blocks[l];
+        wubu_block_t *blk = &m->blocks[l];
         float *x_in_l  = bp->x_in      + (size_t)l * seq * D;
         float *x_out_l = (l + 1 < Ln)
                              ? bp->x_in + (size_t)(l + 1) * seq * D : NULL;
@@ -532,10 +532,10 @@ float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
          * the sequence is worth the upload; the CPU loop below stays
          * the FD oracle and the fallback. */
         int is_full = ((l + 1) % BARUN_FULL_EVERY == 0);
-        if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_attn &&
+        if (gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_attn &&
             seq >= 32) {
             float *acc = ao_l;
-            if (gpu_barun_attn(acc, q_l, k_l, v_l, seq, BARUN_HEADS, 64,
+            if (gpu_wubu_attn(acc, q_l, k_l, v_l, seq, BARUN_HEADS, 64,
                                BARUN_LOCAL_WIN, is_full)) {
                 /* the GPU tile path: ao_l holds the attention output */
             } else {
@@ -631,9 +631,9 @@ float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
 static void mm_t(float *acc, const float *w, const float *x,
                  int out_w, int in_w, int seq)
 {
-    if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul_nt &&
+    if (gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_matmul_nt &&
         (long)seq * out_w * in_w >= GPU_MIN_FLOP &&
-        gpu_barun_matmul_nt(acc, w, x, seq, in_w, out_w))
+        gpu_wubu_matmul_nt(acc, w, x, seq, in_w, out_w))
         return;
     for (int s = 0; s < seq; s++) {
         const float *xs = x + (size_t)s * out_w;
@@ -651,9 +651,9 @@ static void mm_t(float *acc, const float *w, const float *x,
 static void wg_t(float *wg, const float *dy, const float *inp,
                  int out_w, int in_w, int seq)
 {
-    if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul_tx &&
+    if (gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_matmul_tx &&
         (long)seq * out_w * in_w >= GPU_MIN_FLOP &&
-        gpu_barun_matmul_tx(wg, dy, inp, out_w, in_w, seq))
+        gpu_wubu_matmul_tx(wg, dy, inp, out_w, in_w, seq))
         return;
     for (int o = 0; o < out_w; o++) {
         float *wr = wg + (size_t)o * in_w;
@@ -667,8 +667,8 @@ static void wg_t(float *wg, const float *dy, const float *inp,
 
 /* ---- the REAL backward pass ---- */
 
-float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
-                        barun_train_t *tr, const uint16_t *tokens,
+float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
+                        wubu_train_t *tr, const uint16_t *tokens,
                         int n_tokens)
 {
     if (!m || !b || !bp || !tr || !tokens || bp->seq != n_tokens) return 0;
@@ -695,7 +695,7 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
 
     /* ---- per-layer backward (REVERSED) ---- */
     for (int l = m->n_layers - 1; l >= 0; l--) {
-        barun_block_t *blk = &m->blocks[l];
+        wubu_block_t *blk = &m->blocks[l];
         float *x_in_l  = bp->x_in      + (size_t)l * seq * D;
         float *an_l    = bp->attn_norm + (size_t)l * seq * D;
         float *q_pre_l = bp->q_pre     + (size_t)l * seq * D;
@@ -870,9 +870,9 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
         memset(dq, 0, (size_t)seq * D * sizeof(float));
         memset(dk, 0, (size_t)seq * 64 * sizeof(float));
         memset(dv, 0, (size_t)seq * 64 * sizeof(float));
-        if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_attn_backward &&
+        if (gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_attn_backward &&
             seq >= 32) {
-            if (!gpu_barun_attn_backward(dq, dk, dv, q_l, k_l, v_l, ao_l, dao,
+            if (!gpu_wubu_attn_backward(dq, dk, dv, q_l, k_l, v_l, ao_l, dao,
                                          seq, BARUN_HEADS, 64,
                                          BARUN_LOCAL_WIN, is_full)) {
                 memset(dq, 0, (size_t)seq * D * sizeof(float));
@@ -1044,12 +1044,12 @@ static void ns5_inplace(float *X, int rows, int cols, float *scratch,
 }
 
 /* the 1-D AdamW slots (norms + selectors): weight pointer + size */
-static float *norm_slot_weight(barun_model_t *m, int slot, int *size)
+static float *norm_slot_weight(wubu_model_t *m, int slot, int *size)
 {
     int L = BARUN_LAYERS;
     if (slot < 4 * L) {
         int l = slot / 4, k = slot % 4;
-        barun_block_t *blk = &m->blocks[l];
+        wubu_block_t *blk = &m->blocks[l];
         switch (k) {
             case 0: *size = D; return blk->attn_norm;
             case 1: *size = D; return blk->ffn_norm;
@@ -1088,11 +1088,11 @@ static void muon_matrix(float *w, float *g, float *mom, int rows, int cols,
      * (~1.35 GFLOP) is worth the upload -- the threshold is tiny.
      * The Gram variant (the square-space iteration, Tri Dao 2026) is
      * preferred: ~5x fewer rectangular FLOPs, identical math. */
-    if (gpu_barun_ready && gpu_barun_ready() && (gpu_barun_ns5_gram || gpu_barun_ns5) &&
+    if (gpu_wubu_ready && gpu_wubu_ready() && (gpu_wubu_ns5_gram || gpu_wubu_ns5) &&
         (size_t)rows * cols >= 4096) {
-        if (gpu_barun_ns5_gram && gpu_barun_ns5_gram(look, rows, cols)) {
+        if (gpu_wubu_ns5_gram && gpu_wubu_ns5_gram(look, rows, cols)) {
             /* the Gram path: look is already orthogonalized */
-        } else if (gpu_barun_ns5 && gpu_barun_ns5(look, rows, cols)) {
+        } else if (gpu_wubu_ns5 && gpu_wubu_ns5(look, rows, cols)) {
             /* the standard path */
         } else {
             ns5_inplace(look, rows, cols, scratch, trans);
@@ -1115,8 +1115,8 @@ static void muon_matrix(float *w, float *g, float *mom, int rows, int cols,
     }
 }
 
-int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
-                       const barun_train_cfg_t *cfg, uint32_t step)
+int wubu_bp_muon_step(wubu_model_t *m, wubu_train_t *tr,
+                       const wubu_train_cfg_t *cfg, uint32_t step)
 {
     if (!m || !tr || !cfg) return -1;
     const char *skip = getenv("REPRO_SKIP");   /* TEMP BISECT: clip|muon|adam */
@@ -1174,7 +1174,7 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
         float *trans = look + max_cells;
         if (!scratch) return -1;
         for (int i = 0; i < m->n_layers; i++) {
-            barun_block_t *blk = &m->blocks[i];
+            wubu_block_t *blk = &m->blocks[i];
             muon_matrix(blk->q_proj,  tr->q_proj_g[i],  tr->q_proj_m[i],  448, 448,  mu_lr, wd, mu, scratch, look, trans);
             muon_matrix(blk->k_proj,  tr->k_proj_g[i],  tr->k_proj_m[i],  448, 64,   mu_lr, wd, mu, scratch, look, trans);
             muon_matrix(blk->v_proj,  tr->v_proj_g[i],  tr->v_proj_m[i],  448, 64,   mu_lr, wd, mu, scratch, look, trans);
@@ -1200,6 +1200,6 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
     }
     }
     /* the weights changed: the GPU cache re-uploads on the next matmul */
-    if (gpu_barun_mark_weights_dirty) gpu_barun_mark_weights_dirty();
+    if (gpu_wubu_mark_weights_dirty) gpu_wubu_mark_weights_dirty();
     return 0;
 }

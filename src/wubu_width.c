@@ -52,7 +52,7 @@ static int expand_norm(float **dst, const float *src, int n)
     return 1;
 }
 
-int wubu_width_expand(barun_model_t *m)
+int wubu_width_expand(wubu_model_t *m)
 {
     if (!m || m->n_layers <= 0) return 0;
 
@@ -72,7 +72,7 @@ int wubu_width_expand(barun_model_t *m)
         if (!expand_norm(&m->selectors[s], m->selectors[s], BARUN_DIM)) return 0;
 
     for (int l = 0; l < m->n_layers; l++) {
-        barun_block_t *b = &m->blocks[l];
+        wubu_block_t *b = &m->blocks[l];
         /* q/o/g: [448, 448] -> [896, 896] (square) */
         if (!expand_mat(&b->q_proj, b->q_proj, BARUN_DIM, BARUN_DIM)) return 0;
         if (!expand_mat(&b->o_proj, b->o_proj, BARUN_DIM, BARUN_DIM)) return 0;

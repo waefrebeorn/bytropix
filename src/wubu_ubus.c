@@ -5,7 +5,7 @@
  * only when the CUDA objects are linked). The selector is the roofline:
  *   t_b = max(flops / gfops_b, bytes / bw_b) + overhead_b
  * and the GPU's xfer cost is waived for weights the weight-cache has
- * seen (the gpu_barun cache makes repeat uploads free -- the selector
+ * seen (the gpu_wubu cache makes repeat uploads free -- the selector
  * mirrors that honesty by remembering recent weight pointers).
  */
 #include "wubu_ubus.h"
@@ -21,13 +21,13 @@
 #define UBUS_WEAK
 #endif
 /* the GPU backend (weak: absent on CPU-only links) */
-UBUS_WEAK int gpu_barun_init(void);
-UBUS_WEAK int gpu_barun_ready(void);
-UBUS_WEAK int gpu_barun_matmul(float *y, const float *w, const float *x,
+UBUS_WEAK int gpu_wubu_init(void);
+UBUS_WEAK int gpu_wubu_ready(void);
+UBUS_WEAK int gpu_wubu_matmul(float *y, const float *w, const float *x,
                                int M, int N, int K);
-UBUS_WEAK int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
+UBUS_WEAK int gpu_wubu_matmul_tx(float *y, const float *a, const float *b,
                                   int M, int N, int K);
-UBUS_WEAK int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
+UBUS_WEAK int gpu_wubu_matmul_nt(float *y, const float *w, const float *x,
                                   int M, int N, int K);
 
 #define MAX_BACKENDS 8
@@ -120,17 +120,17 @@ static int cpu_omp_matmul(void *ctx, float *y, const float *a,
 }
 #endif
 
-/* ---- GPU backend (the gpu_barun dispatch) ---- */
+/* ---- GPU backend (the gpu_wubu dispatch) ---- */
 static int gpu_matmul(void *ctx, float *y, const float *a,
                       const float *b, int M, int N, int K, int flags)
 {
     (void)ctx;
-    if (!gpu_barun_ready || !gpu_barun_ready()) return 0;
+    if (!gpu_wubu_ready || !gpu_wubu_ready()) return 0;
     int at = (flags & UBUS_AT) != 0;
     int wt = (flags & UBUS_WT) != 0;
-    if (at) return gpu_barun_matmul_tx ? gpu_barun_matmul_tx(y, a, b, M, N, K) : 0;
-    if (wt) return gpu_barun_matmul ? gpu_barun_matmul(y, b, a, M, N, K) : 0;
-    return gpu_barun_matmul_nt ? gpu_barun_matmul_nt(y, b, a, M, N, K) : 0;
+    if (at) return gpu_wubu_matmul_tx ? gpu_wubu_matmul_tx(y, a, b, M, N, K) : 0;
+    if (wt) return gpu_wubu_matmul ? gpu_wubu_matmul(y, b, a, M, N, K) : 0;
+    return gpu_wubu_matmul_nt ? gpu_wubu_matmul_nt(y, b, a, M, N, K) : 0;
 }
 
 /* ---- the bus ---- */
@@ -151,7 +151,7 @@ ubus_t *ubus_init(void)
         u->b[u->nb].present = 1; u->nb++;
     }
 #endif
-    if (gpu_barun_init && gpu_barun_init()) {
+    if (gpu_wubu_init && gpu_wubu_init()) {
         ubus_cap_t c = { "gpu-cublas", 1800.0f, 250.0f, 12.0f, (size_t)6u << 30 };
         u->b[u->nb].cap = c; u->b[u->nb].fn = gpu_matmul;
         u->b[u->nb].present = 1; u->nb++;

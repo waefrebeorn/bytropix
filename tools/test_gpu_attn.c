@@ -7,7 +7,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include "gpu_barun.h"
+#include "gpu_wubu.h"
 
 #define HEADS 7
 #define DIM 64
@@ -73,7 +73,7 @@ static double attn_loss(float *out, const float *q, const float *k,
 
 int main(void)
 {
-    if (!gpu_barun_init()) { printf("SKIP (no CUDA device)\n"); return 0; }
+    if (!gpu_wubu_init()) { printf("SKIP (no CUDA device)\n"); return 0; }
     int cases[][2] = { {64, 0}, {64, 1}, {256, 0}, {256, 1}, {512, 0}, {512, 1} };
     srand(11);
     for (int ci = 0; ci < 6; ci++) {
@@ -89,7 +89,7 @@ int main(void)
                                               v[i] = (float)((rand() % 2000) - 1000) / 100.0f; }
         cpu_attn(ref, q, k, v, seq, 256, is_full);
         double t0 = now_s();
-        int ok = gpu_barun_attn(gpu, q, k, v, seq, HEADS, DIM, 256, is_full);
+        int ok = gpu_wubu_attn(gpu, q, k, v, seq, HEADS, DIM, 256, is_full);
         double t1 = now_s();
         double maxd = 0, sumr = 0;
         for (int i = 0; i < seq * D; i++) {
@@ -119,7 +119,7 @@ int main(void)
         for (int i = 0; i < seq * DIM; i++) { k[i] = (float)((rand() % 2000) - 1000) / 100.0f;
                                               v[i] = (float)((rand() % 2000) - 1000) / 100.0f; }
         cpu_attn(o, q, k, v, seq, 256, full);
-        int ok = gpu_barun_attn_backward(dq, dk, dv, q, k, v, o, dao,
+        int ok = gpu_wubu_attn_backward(dq, dk, dv, q, k, v, o, dao,
                                          seq, HEADS, DIM, 256, full);
         int samples[][3] = { {3, 2, 7}, {17, 4, 33}, {50, 0, 61}, {90, 6, 5},
                              {121, 1, 44}, {64, 3, 0}, {9, 5, 63}, {100, 6, 30} };
@@ -315,7 +315,7 @@ int main(void)
                     }
                 }
             }
-        int ok = gpu_barun_attn_backward(gq, gk, gv, q, k, v, o, dao,
+        int ok = gpu_wubu_attn_backward(gq, gk, gv, q, k, v, o, dao,
                                          seq, HEADS, DIM, 256, full);
         double mq = 0, mk = 0, mv = 0;
         int mqi = -1, mki = -1;

@@ -6,10 +6,10 @@
 #include <stdlib.h>
 #include <stdlib.h>
 #include <string.h>
-#include "wubu_barun.h"
+#include "wubu.h"
 #include "wubu_grow.h"
-#include "wubu_barun_train.h"
-#include "wubu_barun_backprop.h"
+#include "wubu_train.h"
+#include "wubu_backprop.h"
 
 static float *mk(int n, unsigned *seed)
 {
@@ -21,9 +21,9 @@ static float *mk(int n, unsigned *seed)
     return p;
 }
 
-static barun_block_t make_block(unsigned *seed)
+static wubu_block_t make_block(unsigned *seed)
 {
-    barun_block_t blk;
+    wubu_block_t blk;
     memset(&blk, 0, sizeof blk);
     blk.q_proj    = mk(BARUN_DIM * BARUN_HEADS * 64, seed);
     blk.k_proj    = mk(BARUN_DIM * BARUN_KV_HEADS * 64, seed);
@@ -42,24 +42,24 @@ static barun_block_t make_block(unsigned *seed)
 int main(void)
 {
     unsigned seed = 99;
-    barun_block_t blocks[BARUN_LAYERS];
+    wubu_block_t blocks[BARUN_LAYERS];
     for (int i = 0; i < BARUN_LAYERS; i++) blocks[i] = make_block(&seed);
     float *embedding = mk(BARUN_VOCAB * BARUN_DIM, &seed);
     float *final_norm = mk(BARUN_DIM, &seed);
     float *sel[BARUN_SELECTORS];
     for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = mk(BARUN_DIM, &seed);
 
-    barun_model_t m;
-    if (barun_model_init(&m, embedding, final_norm, blocks, sel) != 0) {
+    wubu_model_t m;
+    if (wubu_model_init(&m, embedding, final_norm, blocks, sel) != 0) {
         printf("  model init FAIL\n"); return 1;
     }
-    barun_train_t tr;
-    if (barun_train_init(&tr, &m) != 0) { printf("  train init FAIL\n"); return 1; }
-    barun_bp_t bp;
-    if (barun_bp_alloc(&bp, 256) != 0) { printf("  bp alloc FAIL\n"); return 1; }
-    barun_buf_t b;
-    if (barun_buf_alloc(&b, 256) != 0) { printf("  buf alloc FAIL\n"); return 1; }
-    barun_train_cfg_t cfg;
+    wubu_train_t tr;
+    if (wubu_train_init(&tr, &m) != 0) { printf("  train init FAIL\n"); return 1; }
+    wubu_bp_t bp;
+    if (wubu_bp_alloc(&bp, 256) != 0) { printf("  bp alloc FAIL\n"); return 1; }
+    wubu_buf_t b;
+    if (wubu_buf_alloc(&b, 256) != 0) { printf("  buf alloc FAIL\n"); return 1; }
+    wubu_train_cfg_t cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.lr = 1e-3f; cfg.muon_lr = 1e-3f; cfg.adam_lr = 1e-3f;
     cfg.weight_decay = 0.1f; cfg.grad_clip = 1.0f;  /* match CLI */
@@ -97,14 +97,14 @@ int main(void)
          *   ns5probe = like full but the last grow's muon runs with the
          *              ns5 ENABLED (REPRO_SKIP is unset for it) */
         for (int s = 0; s < 50; s++) {
-            float loss = barun_bp_forward(&m, &b, &bp, toks, 256);
+            float loss = wubu_bp_forward(&m, &b, &bp, toks, 256);
             if (mode && strcmp(mode, "fwd") == 0) continue;
-            barun_train_zero_grad(&tr);
-            barun_bp_backward(&m, &b, &bp, &tr, toks, 256);
+            wubu_train_zero_grad(&tr);
+            wubu_bp_backward(&m, &b, &bp, &tr, toks, 256);
             if (mode && strcmp(mode, "fb") == 0) continue;
             int probe = (mode && strcmp(mode, "ns5probe") == 0 && n == 8 && s >= 48);
             if (probe) unsetenv("REPRO_SKIP");
-            barun_bp_muon_step(&m, &tr, &cfg, (uint32_t)(n * 100 + s));
+            wubu_bp_muon_step(&m, &tr, &cfg, (uint32_t)(n * 100 + s));
             if (probe) { setenv("REPRO_SKIP", "ns5", 1); fprintf(stderr, "  NS5-ON step at grow#7 s=%d\n", s); }
             if (s % 25 == 0)
                 fprintf(stderr, "  step %d/%d: loss=%.4f\n", s, 50, loss);
@@ -116,10 +116,10 @@ int main(void)
      * on the final 9-layer model to cross the crash point. */
     fprintf(stderr, "--- extended tail: 60 more steps on the 9-layer model ---\n");
     for (int s = 0; s < 60; s++) {
-        float loss = barun_bp_forward(&m, &b, &bp, toks, 256);
-        barun_train_zero_grad(&tr);
-        barun_bp_backward(&m, &b, &bp, &tr, toks, 256);
-        barun_bp_muon_step(&m, &tr, &cfg, (uint32_t)(100 + s));  /* NO skip — NS5 on */
+        float loss = wubu_bp_forward(&m, &b, &bp, toks, 256);
+        wubu_train_zero_grad(&tr);
+        wubu_bp_backward(&m, &b, &bp, &tr, toks, 256);
+        wubu_bp_muon_step(&m, &tr, &cfg, (uint32_t)(100 + s));  /* NO skip — NS5 on */
         if (s % 10 == 0)
             fprintf(stderr, "  tail %d/60: loss=%.4f\n", s, loss);
     }

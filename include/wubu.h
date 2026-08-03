@@ -1,5 +1,5 @@
 /*
- * wubu_barun.h -- BarunLM-35M, our base model, ported to C11. THE MUSTARD SEED.
+ * wubu.h -- BarunLM-35M, our base model, ported to C11. THE MUSTARD SEED.
  *
  * BarunLM-35M (Apache-2.0, (c) 2026 Harshal Singh) is a 35,072,768-parameter
  * decoder-only base language model. We port it into the wubuwizard engine as
@@ -25,7 +25,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* The released configuration (barun_config.json). */
+/* The released configuration (wubu_config.json). */
 #define BARUN_VOCAB       16384
 #define BARUN_DIM         448
 #define BARUN_LAYERS      12
@@ -60,13 +60,13 @@ typedef struct {
     float *gate_up;  /* [448, 2*1228] = [448, 2456] */
     float *down;     /* [1228, 448] */
     float *ffn_norm; /* [448] */
-} barun_block_t;
+} wubu_block_t;
 
 /* The full model. */
 typedef struct {
     float *embedding;       /* [16384, 448] (tied with lm_head) */
     float *final_norm;      /* [448] */
-    barun_block_t blocks[BARUN_LAYERS];
+    wubu_block_t blocks[BARUN_LAYERS];
     float *selectors[BARUN_SELECTORS];  /* [448] each (score weight) */
     int    is_full[BARUN_LAYERS];       /* attention rhythm */
     int    fire_sel[BARUN_LAYERS];     /* the residual-selector rhythm
@@ -77,12 +77,12 @@ typedef struct {
                                           released model = BARUN_LAYERS) */
     /* the WuBu mode (the blueprint phases 1-2): 0 = the released BarunLM
      * path (exact parity); 1 = hyperbolic lift/rotation + mixed agents.
-     * Set with barun_set_wubu_mode(). */
+     * Set with wubu_set_wubu_mode(). */
     int    wubu_mode;
     /* the mixed-agents router weights (wubu_moe2), owned by the caller
      * when wubu_mode is on; one per block, shared structure reused. */
     void  *wubu_moe;
-} barun_model_t;
+} wubu_model_t;
 
 /* An inference buffer (all the working memory, allocated once). */
 typedef struct {
@@ -108,45 +108,45 @@ typedef struct {
     float *cache_k;  /* [layers][max_seq, 64] */
     float *cache_v;  /* [layers][max_seq, 64] */
     size_t seq_alloc;
-} barun_buf_t;
+} wubu_buf_t;
 
 /* B1: init the model from raw weight buffers (the safetensors loader
  * fills them; the model takes ownership of the pointers). */
-int barun_model_init(barun_model_t *m, float *embedding, float *final_norm,
-                     barun_block_t *blocks, float **selectors);
+int wubu_model_init(wubu_model_t *m, float *embedding, float *final_norm,
+                     wubu_block_t *blocks, float **selectors);
 
 /* B2: load the released checkpoint from a safetensors file. */
-int barun_load(barun_model_t *m, const char *safetensors_path);
+int wubu_load(wubu_model_t *m, const char *safetensors_path);
 
 /* B3: allocate the inference buffer for a given max sequence. */
-int barun_buf_alloc(barun_buf_t *b, size_t max_seq);
+int wubu_buf_alloc(wubu_buf_t *b, size_t max_seq);
 
 /* B4: the forward pass -- full sequence, causal. */
-int barun_forward(barun_model_t *m, barun_buf_t *b,
+int wubu_forward(wubu_model_t *m, wubu_buf_t *b,
                   const uint16_t *tokens, size_t n_tokens);
 
 /* B5: greedy + temperature generation. */
-size_t barun_generate(barun_model_t *m, barun_buf_t *b,
+size_t wubu_generate(wubu_model_t *m, wubu_buf_t *b,
                       uint16_t *tokens, size_t n_prompt, size_t max_new,
                       float temperature, uint32_t seed);
 
 /* B6: the logits for the last token (the caller samples). */
-float *barun_last_logits(barun_buf_t *b);
+float *wubu_last_logits(wubu_buf_t *b);
 
 /* B7: the cross-entropy loss + the Muon optimizer step (training). */
-float barun_loss(barun_buf_t *b, const uint16_t *tokens, size_t n_tokens);
-int  barun_muon_step(barun_model_t *m, float lr, float weight_decay);
+float wubu_loss(wubu_buf_t *b, const uint16_t *tokens, size_t n_tokens);
+int  wubu_muon_step(wubu_model_t *m, float lr, float weight_decay);
 
 /* B8: the WuBu mode (the blueprint). 0 = released-path parity (default);
  * 1 = hyperbolic lift/rotation + mixed-agents FFN. The mixed-agents
  * weights are a wubu_moe2_t* (caller-owned) or NULL (the router runs
  * on the block's own gate_up as the shared expert only). */
-int barun_set_wubu_mode(barun_model_t *m, int mode, void *moe);
+int wubu_set_wubu_mode(wubu_model_t *m, int mode, void *moe);
 
 /* B9: the parameter count sanity check (must be 35,072,768). */
-long barun_parameter_count(const barun_model_t *m);
+long wubu_parameter_count(const wubu_model_t *m);
 
 /* B10: free everything. */
-void barun_free(barun_model_t *m, barun_buf_t *b);
+void wubu_free(wubu_model_t *m, wubu_buf_t *b);
 
 #endif

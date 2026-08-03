@@ -23,7 +23,7 @@
   Retry later; the client is ready.
 - Client: `tools/openrouter_rlhf.py` (rlhf_improve: score + critique + improved)
 
-## Live-stream data pipeline (`tools/barun_stream.py`)
+## Live-stream data pipeline (`tools/wubu_stream.py`)
 - Streams HF datasets row-by-row (parquet files, one at a time — no full download)
 - Tokenizes with our own BPE vocab (byte-level fallback in Python; the exact
   C11 tokenizer stays the reference)

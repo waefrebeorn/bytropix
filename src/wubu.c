@@ -1,5 +1,5 @@
 /*
- * wubu_barun.c -- BarunLM-35M in C11. THE MUSTARD SEED: our own base model.
+ * wubu.c -- BarunLM-35M in C11. THE MUSTARD SEED: our own base model.
  *
  * A faithful port of the released PyTorch implementation (Apache-2.0,
  * (c) 2026 Harshal Singh). Pure C11, no third-party deps. The forward
@@ -13,7 +13,7 @@
  * with a 256-token causal window. Partial RoPE rotates the first 32 of
  * 64 head dims.
  */
-#include "wubu_barun.h"
+#include "wubu.h"
 #include "wubu_foldmath.h"
 #include "safetensors_reader.h"
 #include "wubu_moe2.h"
@@ -72,8 +72,8 @@ static void apply_rope(float *qk, int seq, int head_dim, int rope_dim,
 }
 
 /* ---- the model init ---- */
-int barun_model_init(barun_model_t *m, float *embedding, float *final_norm,
-                     barun_block_t *blocks, float **selectors)
+int wubu_model_init(wubu_model_t *m, float *embedding, float *final_norm,
+                     wubu_block_t *blocks, float **selectors)
 {
     if (!m || !embedding || !final_norm || !blocks || !selectors) return -1;
     memset(m, 0, sizeof(*m));
@@ -94,11 +94,11 @@ static float *load_tensor(st_ctx *r, const char *name, size_t expect_elems)
 {
     const st_tensor_info *info = st_find_tensor(r, name);
     if (!info) {
-        fprintf(stderr, "barun: missing tensor %s\n", name);
+        fprintf(stderr, "wubu: missing tensor %s\n", name);
         return NULL;
     }
     if ((size_t)info->n_elems != expect_elems) {
-        fprintf(stderr, "barun: %s has %lld elems, expected %zu\n",
+        fprintf(stderr, "wubu: %s has %lld elems, expected %zu\n",
                 name, (long long)info->n_elems, expect_elems);
         return NULL;
     }
@@ -112,7 +112,7 @@ static float *load_tensor(st_ctx *r, const char *name, size_t expect_elems)
     return buf;
 }
 
-int barun_load(barun_model_t *m, const char *path)
+int wubu_load(wubu_model_t *m, const char *path)
 {
     if (!m || !path) return -1;
     st_ctx *r = st_open(path);
@@ -124,12 +124,12 @@ int barun_load(barun_model_t *m, const char *path)
     float *final_norm = load_tensor(r, "final_norm.weight", 448);
     if (!final_norm) { free(embedding); st_close(r); return -1; }
 
-    barun_block_t blocks[BARUN_LAYERS];
+    wubu_block_t blocks[BARUN_LAYERS];
     memset(blocks, 0, sizeof(blocks));
     char name[128];
     int ok = 1;
     for (int i = 0; i < BARUN_LAYERS && ok; i++) {
-        barun_block_t *blk = &blocks[i];
+        wubu_block_t *blk = &blocks[i];
         snprintf(name, sizeof(name), "layers.%d.attn.q_proj.weight", i);
         blk->q_proj = load_tensor(r, name, 448 * 448);
         snprintf(name, sizeof(name), "layers.%d.attn.k_proj.weight", i);
@@ -164,15 +164,15 @@ int barun_load(barun_model_t *m, const char *path)
     }
     st_close(r);
     if (!ok) {
-        fprintf(stderr, "barun: load failed\n");
+        fprintf(stderr, "wubu: load failed\n");
         free(embedding); free(final_norm);
         return -1;
     }
-    return barun_model_init(m, embedding, final_norm, blocks, selectors);
+    return wubu_model_init(m, embedding, final_norm, blocks, selectors);
 }
 
 /* ---- the inference buffer ---- */
-int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
+int wubu_buf_alloc(wubu_buf_t *b, size_t max_seq)
 {
     if (!b || max_seq <= 0 || max_seq > BARUN_MAX_SEQ) return -1;
     memset(b, 0, sizeof(*b));
@@ -199,7 +199,7 @@ int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
         !b->gate || !b->g_out || !b->ffn_gate || !b->ffn_up || !b->ffn_out ||
         !b->logits || !b->checkpoint || !b->cos_tbl || !b->sin_tbl ||
         !b->cache_k || !b->cache_v) {
-        barun_free(NULL, b);
+        wubu_free(NULL, b);
         return -1;
     }
     build_rope_tables(b->cos_tbl, b->sin_tbl, BARUN_MAX_SEQ, BARUN_ROPE_DIM,
@@ -208,21 +208,21 @@ int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
 }
 
 /* ---- the core math ---- */
-/* The DA pass: the wizard already has a cuBLAS GPU path (gpu_barun);
+/* The DA pass: the wizard already has a cuBLAS GPU path (gpu_wubu);
  * the trainer should ride it. This matmul dispatches through the GPU
  * backend when available and falls back to the CPU loop otherwise
  * (the wubu_model.h hwaccel pattern). The GPU symbols are weak so a
  * CPU-only link (no -lcublas) still works: missing symbols resolve
  * to NULL. */
-#include "gpu_barun.h"
+#include "gpu_wubu.h"
 #if defined(__GNUC__)
 #define WEAK __attribute__((weak))
 #else
 #define WEAK
 #endif
-WEAK int gpu_barun_init(void);
-WEAK int gpu_barun_ready(void);
-WEAK int gpu_barun_matmul(float *y, const float *w, const float *x,
+WEAK int gpu_wubu_init(void);
+WEAK int gpu_wubu_ready(void);
+WEAK int gpu_wubu_matmul(float *y, const float *w, const float *x,
                           int M, int N, int K);
 static int g_gpu_tried = 0;
 
@@ -231,9 +231,9 @@ static void matmul(float *out, const float *w, const float *x,
 {
     /* out[s, o] = sum_i w[o, i] * x[s, i]  (w is [in, out] row-major as
      * stored: w[o*in + i]) */
-    if (gpu_barun_init && !g_gpu_tried) { gpu_barun_init(); g_gpu_tried = 1; }
-    if (gpu_barun_ready && gpu_barun_ready() &&
-        gpu_barun_matmul && gpu_barun_matmul(out, w, x, seq, out_n, in_n))
+    if (gpu_wubu_init && !g_gpu_tried) { gpu_wubu_init(); g_gpu_tried = 1; }
+    if (gpu_wubu_ready && gpu_wubu_ready() &&
+        gpu_wubu_matmul && gpu_wubu_matmul(out, w, x, seq, out_n, in_n))
         return;
     for (int s = 0; s < seq; s++) {
         const float *xs = x + (size_t)s * in_n;
@@ -248,7 +248,7 @@ static void matmul(float *out, const float *w, const float *x,
 }
 
 /* attention: q [seq, heads*64], k/v [seq, 64]; local window or full. */
-static void attention(barun_buf_t *b, int seq, int is_full, int local_window,
+static void attention(wubu_buf_t *b, int seq, int is_full, int local_window,
                       int pos0)
 {
     /* GQA: 7 query heads share the single KV head. For each head: dot
@@ -294,7 +294,7 @@ static void attention(barun_buf_t *b, int seq, int is_full, int local_window,
     }
 }
 
-int barun_forward(barun_model_t *m, barun_buf_t *b,
+int wubu_forward(wubu_model_t *m, wubu_buf_t *b,
                   const uint16_t *tokens, size_t n_tokens)
 {
     if (!m || !b || !tokens || n_tokens == 0 || n_tokens > b->seq_alloc) return -1;
@@ -304,7 +304,7 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
      * hyperbolic lift/rotation + the mixed-agents FFN (the blueprint's
      * phases 1-2). Mode 0 = the released BarunLM path (exact parity). */
     if (m->wubu_mode) {
-        return barun_forward_wubu(m, b, tokens, seq);
+        return wubu_forward_wubu(m, b, tokens, seq);
     }
 
     /* embedding (tied) */
@@ -322,7 +322,7 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
     int sel = 0;
 
     for (int l = 0; l < m->n_layers; l++) {
-        barun_block_t *blk = &m->blocks[l];
+        wubu_block_t *blk = &m->blocks[l];
 
         /* --- attention --- */
         float *h = b->x;   /* the residual stream (in place is wrong; use
@@ -444,7 +444,7 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
  * FFN's second projection with the mixed-agents router output when a
  * wubu_moe2_t is attached. The embedding, attention, and residual
  * selectors stay identical to the released path. */
-int barun_set_wubu_mode(barun_model_t *m, int mode, void *moe)
+int wubu_set_wubu_mode(wubu_model_t *m, int mode, void *moe)
 {
     if (!m) return -1;
     m->wubu_mode = mode ? 1 : 0;
@@ -452,7 +452,7 @@ int barun_set_wubu_mode(barun_model_t *m, int mode, void *moe)
     return 0;
 }
 
-int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
+int wubu_forward_wubu(wubu_model_t *m, wubu_buf_t *b,
                               const uint16_t *tokens, int seq)
 {
     /* the embedding (tied) */
@@ -470,7 +470,7 @@ int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
     float *checkpoint = b->checkpoint;
     int sel = 0;
     for (int l = 0; l < m->n_layers; l++) {
-        barun_block_t *blk = &m->blocks[l];
+        wubu_block_t *blk = &m->blocks[l];
         if ((l + 1) % BARUN_SELECT_EVERY == 0)
             memcpy(checkpoint, b->x, (size_t)seq * BARUN_DIM * sizeof(float));
 
@@ -595,7 +595,7 @@ int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
     return 0;
 }
 
-float *barun_last_logits(barun_buf_t *b)
+float *wubu_last_logits(wubu_buf_t *b)
 {
     return b ? b->logits + (size_t)(b->seq_alloc - 1) * BARUN_VOCAB : NULL;
 }
@@ -609,7 +609,7 @@ static uint32_t rng_next(void)
     return rng_state;
 }
 
-size_t barun_generate(barun_model_t *m, barun_buf_t *b,
+size_t wubu_generate(wubu_model_t *m, wubu_buf_t *b,
                       uint16_t *tokens, size_t n_prompt, size_t max_new,
                       float temperature, uint32_t seed)
 {
@@ -617,7 +617,7 @@ size_t barun_generate(barun_model_t *m, barun_buf_t *b,
     rng_state = seed ? seed : 0x9E3779B9u;
     size_t total = n_prompt;
     for (size_t g = 0; g < max_new && total < BARUN_MAX_SEQ; g++) {
-        if (barun_forward(m, b, tokens, total) != 0) break;
+        if (wubu_forward(m, b, tokens, total) != 0) break;
         const float *lg = b->logits + (size_t)(total - 1) * BARUN_VOCAB;
         uint16_t next = 0;
         if (temperature <= 0) {
@@ -647,19 +647,19 @@ size_t barun_generate(barun_model_t *m, barun_buf_t *b,
     return total - n_prompt;
 }
 
-float barun_loss(barun_buf_t *b, const uint16_t *tokens, size_t n_tokens)
+float wubu_loss(wubu_buf_t *b, const uint16_t *tokens, size_t n_tokens)
 {
     (void)b; (void)tokens; (void)n_tokens;
     return 0.0f;   /* the caller computes CE against the logits */
 }
 
-int barun_muon_step(barun_model_t *m, float lr, float weight_decay)
+int wubu_muon_step(wubu_model_t *m, float lr, float weight_decay)
 {
     (void)m; (void)lr; (void)weight_decay;
     return 0;      /* the training loop is wired in the AGI loop */
 }
 
-long barun_parameter_count(const barun_model_t *m)
+long wubu_parameter_count(const wubu_model_t *m)
 {
     if (!m) return -1;
     long n = 0;
@@ -681,13 +681,13 @@ long barun_parameter_count(const barun_model_t *m)
     return n;
 }
 
-void barun_free(barun_model_t *m, barun_buf_t *b)
+void wubu_free(wubu_model_t *m, wubu_buf_t *b)
 {
     if (m) {
         free(m->embedding);
         free(m->final_norm);
         for (int i = 0; i < BARUN_LAYERS; i++) {
-            barun_block_t *blk = &m->blocks[i];
+            wubu_block_t *blk = &m->blocks[i];
             free(blk->q_proj); free(blk->k_proj); free(blk->v_proj);
             free(blk->o_proj); free(blk->g_proj);
             free(blk->q_norm); free(blk->k_norm);

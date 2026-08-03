@@ -1,5 +1,5 @@
 /*
- * gpu_barun.cu -- CUDA kernels for BarunLM training (the seed grows fast).
+ * gpu_wubu.cu -- CUDA kernels for BarunLM training (the seed grows fast).
  *
  * The DA pass found: the wizard already has cuBLAS + GPU kernels, but
  * the Barun training loop was pure CPU. This module gives the trainer
@@ -9,9 +9,9 @@
  * CUDA when present (the wubu_model.h pattern).
  *
  * API (C linkage):
- *   gpu_barun_init() / gpu_barun_free()
- *   gpu_barun_matmul(y, w, x, M, N, K)        // y[M,N] = x[M,K] @ w[K,N]
- *   gpu_barun_attn(...)                        // hybrid windowed attention
+ *   gpu_wubu_init() / gpu_wubu_free()
+ *   gpu_wubu_matmul(y, w, x, M, N, K)        // y[M,N] = x[M,K] @ w[K,N]
+ *   gpu_wubu_attn(...)                        // hybrid windowed attention
  */
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -59,29 +59,29 @@ extern "C" {
 
 /* call after the optimizer updates the weights: the GPU weight cache
  * re-uploads on the next matmul */
-void gpu_barun_mark_weights_dirty(void) { g_wgen++; }
+void gpu_wubu_mark_weights_dirty(void) { g_wgen++; }
 
-int gpu_barun_init(void)
+int gpu_wubu_init(void)
 {
     if (g_ready) return 1;
     cudaError_t ce = cudaSetDevice(0);
-    if (ce != cudaSuccess) { fprintf(stderr, "gpu_barun: no CUDA device\n"); return 0; }
+    if (ce != cudaSuccess) { fprintf(stderr, "gpu_wubu: no CUDA device\n"); return 0; }
     cublasStatus_t st = cublasCreate(&g_cublas);
-    if (st != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "gpu_barun: cublas init failed\n"); return 0; }
+    if (st != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "gpu_wubu: cublas init failed\n"); return 0; }
     g_ready = 1;
     return 1;
 }
 
-void gpu_barun_free(void)
+void gpu_wubu_free(void)
 {
     if (g_cublas) { cublasDestroy(g_cublas); g_cublas = NULL; }
     g_ready = 0;
 }
 
-int gpu_barun_ready(void) { return g_ready; }
+int gpu_wubu_ready(void) { return g_ready; }
 
 /* y[M,N] = x[M,K] @ w[K,N]  (row-major, F32). Uses cuBLAS SGEMM. */
-int gpu_barun_matmul(float *y, const float *w, const float *x,
+int gpu_wubu_matmul(float *y, const float *w, const float *x,
                      int M, int N, int K)
 {
     if (!g_ready) return 0;
@@ -125,7 +125,7 @@ int gpu_barun_matmul(float *y, const float *w, const float *x,
  * cuBLAS mapping (a row-major [K,M] lda=M == col-major [M,K];
  * b row-major [K,N] lda=N == col-major [N,K]): C[N,M] = B' @ A'^T with
  * C = y^T, so sgemm(OP_N, OP_T, N, M, K, B', N, A', M, C, N). */
-int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
+int gpu_wubu_matmul_tx(float *y, const float *a, const float *b,
                         int M, int N, int K)
 {
     if (!g_ready) return 0;
@@ -159,7 +159,7 @@ int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
 /* y[M,N] = x[M,K] @ w[K,N] with w STORED [K,N] (no transpose) -- the
  * backward's input-gradient products: dL/dx[seq,in] = dy[seq,out] @
  * w[out,in] with M=seq, N=in, K=out. */
-int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
+int gpu_wubu_matmul_nt(float *y, const float *w, const float *x,
                         int M, int N, int K)
 {
     if (!g_ready) return 0;
@@ -198,7 +198,7 @@ int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
  * in-place; tall matrices are transposed first per the recipe; each
  * iteration is Frobenius-renormalized (the fp32-stability fix). Uses
  * cuBLAS GEMMs + nrm2/scal/axpby. Returns 1 on success. */
-int gpu_barun_ns5(float *X, int rows, int cols)
+int gpu_wubu_ns5(float *X, int rows, int cols)
 {
     if (!g_ready) return 0;
     if (rows <= 0 || cols <= 0) return 0;
@@ -337,7 +337,7 @@ __global__ static void gns_diag_add(float *P, float a, int n)
     if (i < n) P[(size_t)i * n + i] += a;
 }
 
-int gpu_barun_ns5_gram(float *X, int rows, int cols)
+int gpu_wubu_ns5_gram(float *X, int rows, int cols)
 {
     if (!g_ready) return 0;
     if (rows <= 0 || cols <= 0) return 0;
@@ -547,7 +547,7 @@ __global__ static void gattn_merge(const float *O, float *out,
     out[(size_t)s * (heads * dim) + h * dim + d] = O[i];
 }
 
-int gpu_barun_attn(float *out, const float *q, const float *k, const float *v,
+int gpu_wubu_attn(float *out, const float *q, const float *k, const float *v,
                    int seq, int heads, int dim, int local_win, int is_full)
 {
     if (!g_ready) return 0;
@@ -677,7 +677,7 @@ __global__ static void gattn_sumheads(const float *acc, float *out,
     out[i] = s;
 }
 
-int gpu_barun_attn_backward(float *dq, float *dk, float *dv,
+int gpu_wubu_attn_backward(float *dq, float *dk, float *dv,
                             const float *q, const float *k, const float *v,
                             const float *o, const float *dao,
                             int seq, int heads, int dim,
@@ -801,6 +801,6 @@ int gpu_barun_attn_backward(float *dq, float *dk, float *dv,
     return 1;
 }
 
-int gpu_barun_attn_ready(void) { return g_ready; }
+int gpu_wubu_attn_ready(void) { return g_ready; }
 
 }

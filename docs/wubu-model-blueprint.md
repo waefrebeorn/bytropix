@@ -98,7 +98,7 @@ input tokens
 ### 2.6 The runtime spine (the wizard's 1400 gaps)
 - Speculative decoding (the cascade draft), FlashDecoding, QuaRot,
   arena allocators, NUMA pinning — all apply to the trained model.
-- GPU path: the cuBLAS backend (`gpu_barun`) already wired.
+- GPU path: the cuBLAS backend (`gpu_wubu`) already wired.
 
 ---
 
@@ -125,9 +125,9 @@ grown in the loop, and checked against the ledger.
 
 ## 4. The paperwork (where everything lives)
 
-- the seed: `wubuwizard/models/barun/` + `wubu_barun.{c,h}` + `wubu_barun_train.{c,h}`
+- the seed: `wubuwizard/models/wubu/` + `wubu.{c,h}` + `wubu_train.{c,h}`
 - the math: `wubuwizard/MATH/` (formalism + Lean proofs) + `THEORY/` (nesting paper, PDF)
 - the research: `wubuwizard/research/` (1400+ wired gaps) + `THEORY/papers/` (the lineage)
 - the corpus: `/home/wubu/sdcard/corpus/` (raw/text/tokens/checkpoints)
 - the safety: WuBuOS `wubu_recovery` (5+1) + Live Colonel
-- the license: `models/barun/LICENSE-BARUN.md` (WaefreBeorn umbrella)
+- the license: `models/wubu/LICENSE-BARUN.md` (WaefreBeorn umbrella)

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-barun_extract.py -- extract text from the parquet shards on the SD card.
+wubu_extract.py -- extract text from the parquet shards on the SD card.
 
-The C11 tokenizer (barun_tokenc) consumes plain text, not parquet.
+The C11 tokenizer (wubu_tokenc) consumes plain text, not parquet.
 This tool streams each parquet shard to .txt (one doc per paragraph-ish
 line), then the C tokenizer converts to .tok.
 
 Usage:
-    python3 barun_extract.py cosmopedia-v2 0 0     # -> corpus/text/<shard>.txt
+    python3 wubu_extract.py cosmopedia-v2 0 0     # -> corpus/text/<shard>.txt
 """
 import os, sys, json
 

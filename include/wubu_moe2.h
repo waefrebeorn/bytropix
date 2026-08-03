@@ -8,7 +8,7 @@
  * that decides which agents speak.
  *
  * The wizard's wubu_moe (256 experts, GPU kernels) is the production
- * path; this is the seed-sized drop-in that plugs into wubu_barun's
+ * path; this is the seed-sized drop-in that plugs into wubu's
  * blocks so the 35M model can grow the agent structure now.
  */
 #ifndef WUBU_MOE2_H

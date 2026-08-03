@@ -13,20 +13,20 @@
  * attention's new heads have zero q/k/v, so they contribute zero
  * through the o_proj's zeroed new columns.)
  *
- * The engine-side threading (barun_buf_t, forward, backprop, train
+ * The engine-side threading (wubu_buf_t, forward, backprop, train
  * state, checkpoint format all carry the fixed BARUN_DIM) is the
  * dynamic-dims refactor; this module produces the weight-level
  * expansion that refactor consumes. */
 #ifndef WUBU_WIDTH_H
 #define WUBU_WIDTH_H
 
-#include "wubu_barun.h"
+#include "wubu.h"
 
 /* Expand the model's hidden width by doubling it (BARUN_DIM *= 2).
  * Returns 1 on success, 0 on allocation failure.
  * Expands: every block's weights (attn q/k/v/o/g, gate_up, down,
  * norms), the embedding (right half zero), the final norm, and the
  * selectors. The old weights are preserved EXACTLY (no scaling). */
-int wubu_width_expand(barun_model_t *m);
+int wubu_width_expand(wubu_model_t *m);
 
 #endif

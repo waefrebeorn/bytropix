@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-barun_corpus.py -- the AGI corpus acquisition + tokenization pipeline.
+wubu_corpus.py -- the AGI corpus acquisition + tokenization pipeline.
 
 Downloads the smollm-corpus shards (the exact corpus BarunLM was trained
 on) to the SD card, extracts the text, tokenizes with the byte-level BPE
@@ -13,9 +13,9 @@ Layout on the SD card (D:, /home/wubu/sdcard):
     corpus/logs/                           acquisition ledger
 
 Usage:
-    python3 barun_corpus.py list          # what is available
-    python3 barun_corpus.py fetch 0 4     # download shards 0..4 (cosmopedia-v2)
-    python3 barun_corpus.py tokenize 0 4  # tokenize shards 0..4
+    python3 wubu_corpus.py list          # what is available
+    python3 wubu_corpus.py fetch 0 4     # download shards 0..4 (cosmopedia-v2)
+    python3 wubu_corpus.py tokenize 0 4  # tokenize shards 0..4
 """
 import json, os, struct, sys, urllib.request, hashlib
 
@@ -56,7 +56,7 @@ def tokenize(name, lo, hi):
     import pyarrow.parquet as pq
     from pathlib import Path
     # load the BPE tokenizer (byte-level, our release tokenizer)
-    tok_data = json.load(open("models/barun/tokenizer.json"))
+    tok_data = json.load(open("models/wubu/tokenizer.json"))
     vocab = tok_data["model"]["vocab"]
     merges = tok_data["model"]["merges"]
     # byte-level pre-tokenizer tables
@@ -139,4 +139,4 @@ if __name__ == "__main__":
     elif cmd == "tokenize":
         tokenize(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     else:
-        print("usage: barun_corpus.py list|fetch <name> <lo> <hi>|tokenize <name> <lo> <hi>")
+        print("usage: wubu_corpus.py list|fetch <name> <lo> <hi>|tokenize <name> <lo> <hi>")

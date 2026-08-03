@@ -1170,26 +1170,26 @@ test_compress: tools/test_compress.c src/wubu_compress.o
 	./$@
 
 # the Barun corpus pipeline (SD card -> tokens -> trainer)
-barun_tokenc: tools/barun_tokenc.c src/wubu_tokenizer_hf.o
+wubu_tokenc: tools/wubu_tokenc.c src/wubu_tokenizer_hf.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 
 # the GPU-accelerated trainer (cuBLAS; falls back to CPU without CUDA)
-gpu_barun.o: src/gpu_barun.cu
-	nvcc -O2 -c src/gpu_barun.cu -o $@ -Xcompiler -fPIC
+gpu_wubu.o: src/gpu_wubu.cu
+	nvcc -O2 -c src/gpu_wubu.cu -o $@ -Xcompiler -fPIC
 
-barun_train: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_barun_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_grow.o src/wubu_plateau.o gpu_barun.o
+wubu_train: tools/wubu_train_cli.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_grow.o src/wubu_plateau.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 
 # the GPU-accelerated trainer: same CLI, weak-linked cuBLAS dispatch.
-barun_train_gpu: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_barun_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+wubu_train_gpu: tools/wubu_train_cli.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart -Wl,-rpath,/usr/local/cuda-13.1/lib64
 
-test_barun_save: tools/test_barun_save.c src/wubu_barun.o src/safetensors_reader.o src/safetensors_writer.o src/barun_save.o
+test_wubu_save: tools/test_wubu_save.c src/wubu.o src/safetensors_reader.o src/safetensors_writer.o src/wubu_save.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
-	./$@ models/barun/model.safetensors
+	./$@ models/wubu/model.safetensors
 
-test_gpu_matmul: tools/gpu_matmul_check.c gpu_barun.o
-	$(CC) $(CFLAGS) -I include -o $@ tools/gpu_matmul_check.c gpu_barun.o -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart -Wl,-rpath,/usr/local/cuda-13.1/lib64
+test_gpu_matmul: tools/gpu_matmul_check.c gpu_wubu.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/gpu_matmul_check.c gpu_wubu.o -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart -Wl,-rpath,/usr/local/cuda-13.1/lib64
 	./$@
 
 test_hyper: tools/test_hyper.c src/wubu_hyper.o
@@ -1200,31 +1200,31 @@ test_moe2: tools/test_moe2.c src/wubu_moe2.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
-barun_cli: tools/barun_cli.c src/wubu_barun.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o gpu_barun.o
+wubu_cli: tools/wubu_cli.c src/wubu.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 
-test_barun: tools/test_barun.c src/wubu_barun.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+test_wubu: tools/test_wubu.c src/wubu.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
-	./$@ models/barun/model.safetensors
+	./$@ models/wubu/model.safetensors
 
-test_barun_train: tools/test_barun_train.c src/wubu_barun.o src/wubu_barun_train.o src/wubu_barun_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+test_wubu_train: tools/test_wubu_train.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
-	./$@ models/barun/model.safetensors
+	./$@ models/wubu/model.safetensors
 
-src/wubu_barun_backprop.o: include/wubu_barun_backprop.h include/wubu_barun_train.h include/wubu_barun.h
-src/wubu_barun_train.o: include/wubu_barun_train.h include/wubu_barun.h include/wubu_barun_backprop.h
+src/wubu_backprop.o: include/wubu_backprop.h include/wubu_train.h include/wubu.h
+src/wubu_train.o: include/wubu_train.h include/wubu.h include/wubu_backprop.h
 
-test_backprop: tools/test_backprop.c src/wubu_barun_backprop.o src/wubu_barun.o src/wubu_barun_train.o src/wubu_moe2.o src/safetensors_reader.o gpu_barun.o
+test_backprop: tools/test_backprop.c src/wubu_backprop.o src/wubu.o src/wubu_train.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@
 
 # the GPU NS5 orthogonalization vs the CPU reference (square/wide/tall)
-test_gpu_ns5: tools/test_gpu_ns5.c gpu_barun.o
-	$(CC) $(CFLAGS) -I/usr/local/cuda-13.1/include -fopenmp -I include -o test_gpu_ns5 tools/test_gpu_ns5.c gpu_barun.o -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart
+test_gpu_ns5: tools/test_gpu_ns5.c gpu_wubu.o
+	$(CC) $(CFLAGS) -I/usr/local/cuda-13.1/include -fopenmp -I include -o test_gpu_ns5 tools/test_gpu_ns5.c gpu_wubu.o -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart
 	./$@
 
-test_gpu_attn: tools/test_gpu_attn.c gpu_barun.o
-	$(CC) $(CFLAGS) -I/usr/local/cuda-13.1/include -fopenmp -I include -o test_gpu_attn tools/test_gpu_attn.c gpu_barun.o -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart
+test_gpu_attn: tools/test_gpu_attn.c gpu_wubu.o
+	$(CC) $(CFLAGS) -I/usr/local/cuda-13.1/include -fopenmp -I include -o test_gpu_attn tools/test_gpu_attn.c gpu_wubu.o -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart
 	./$@
 
 # the folded sin/cos (Silas Lock via Kaze's folded polynomial)
@@ -1233,7 +1233,7 @@ test_foldmath: tools/test_foldmath.c
 	./$@
 
 # the U-Bus substrate: agnostic dispatch + the roofline selector
-test_ubus: tools/test_ubus.c src/wubu_ubus.o gpu_barun.o
+test_ubus: tools/test_ubus.c src/wubu_ubus.o gpu_wubu.o
 # the agentic-corpus pipeline closes (the Orchard/tau-bench/Hermes wave):
 # trajectory-level GRPO (FD-verified), masked-observation SFT, user simulator
 test_traj_grpo: tools/test_traj_grpo.c src/wubu_traj_grpo.c include/wubu_traj_grpo.h
@@ -1249,9 +1249,9 @@ test_credit_dbstate: tools/test_credit_dbstate.c src/wubu_credit_sft.c src/wubu_
 	include/wubu_credit_sft.h include/wubu_dbstate.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_credit_dbstate.c src/wubu_credit_sft.c src/wubu_dbstate.c
 	./$@
-test_width: tools/test_width.c src/wubu_width.c src/wubu_barun.c src/wubu_moe2.c \
+test_width: tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_moe2.c \
 	include/wubu_width.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_width.c src/wubu_width.c src/wubu_barun.c src/wubu_moe2.c src/safetensors_reader.c -lm
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_moe2.c src/safetensors_reader.c -lm
 	./$@
 test_seed: tools/test_seed.c src/wubu_seed.c include/wubu_seed.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_seed.c src/wubu_seed.c
@@ -1290,10 +1290,10 @@ test_masked_ce: tools/test_masked_ce.c src/wubu_masked_ce.c include/wubu_masked_
 test_plateau: tools/test_plateau.c src/wubu_plateau.c include/wubu_plateau.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_plateau.c src/wubu_plateau.c
 	./$@
-test_grow: tools/test_grow.c src/wubu_grow.c src/wubu_barun.c src/wubu_barun_backprop.c src/wubu_barun_train.c \
+test_grow: tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_backprop.c src/wubu_train.c \
 	src/safetensors_reader.c src/wubu_moe2.c src/wubu_ubus.c \
-	include/wubu_grow.h include/wubu_barun.h include/wubu_barun_backprop.h include/wubu_barun_train.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_grow.c src/wubu_grow.c src/wubu_barun.c src/wubu_barun_backprop.c src/wubu_barun_train.c src/safetensors_reader.c src/wubu_moe2.c src/wubu_ubus.c -lm
+	include/wubu_grow.h include/wubu.h include/wubu_backprop.h include/wubu_train.h
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_backprop.c src/wubu_train.c src/safetensors_reader.c src/wubu_moe2.c src/wubu_ubus.c -lm
 	./$@
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@

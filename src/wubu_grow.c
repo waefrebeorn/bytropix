@@ -22,44 +22,64 @@ static size_t block_bytes(void)
     return s;
 }
 
-static barun_block_t zero_block(void)
+static wubu_block_t zero_block(void)
 {
-    barun_block_t z;
+    wubu_block_t z;
     memset(&z, 0, sizeof z);
-    size_t b = block_bytes();
-    float *mem = (float *)calloc(b, 1);
-    if (!mem) { memset(&z, 0, sizeof z); return z; }
-    /* the buffer layout: q k v o g qn kn an gu d fn */
-    float *p = mem;
-    z.q_proj   = p; p += (size_t)BARUN_DIM * BARUN_HEADS * 64;
-    z.k_proj   = p; p += (size_t)BARUN_DIM * BARUN_KV_HEADS * 64;
-    z.v_proj   = p; p += (size_t)BARUN_DIM * BARUN_KV_HEADS * 64;
-    z.o_proj   = p; p += (size_t)BARUN_DIM * BARUN_HEADS * 64;
-    z.g_proj   = p; p += (size_t)BARUN_DIM * BARUN_HEADS * 64;
-    z.q_norm   = p; p += (size_t)BARUN_KV_HEADS * 64;
-    z.k_norm   = p; p += (size_t)BARUN_KV_HEADS * 64;
-    z.attn_norm= p; p += (size_t)BARUN_DIM;
-    z.gate_up  = p; p += (size_t)BARUN_DIM * BARUN_FFN_DIM * 2;
-    z.down     = p; p += (size_t)BARUN_FFN_DIM * BARUN_DIM;
-    z.ffn_norm = p;
+    /* allocate each buffer independently so wubu_free's per-field
+     * free() calls work correctly (a single calloc with offset
+     * pointers would crash wubu_free's free(k_proj) etc.) */
+    z.q_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_HEADS * 64,    sizeof(float));
+    z.k_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_KV_HEADS * 64,  sizeof(float));
+    z.v_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_KV_HEADS * 64,  sizeof(float));
+    z.o_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_HEADS * 64,    sizeof(float));
+    z.g_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_HEADS * 64,    sizeof(float));
+    z.q_norm    = (float *)calloc((size_t)BARUN_KV_HEADS * 64,             sizeof(float));
+    z.k_norm    = (float *)calloc((size_t)BARUN_KV_HEADS * 64,             sizeof(float));
+    z.attn_norm = (float *)calloc((size_t)BARUN_DIM,                       sizeof(float));
+    z.gate_up   = (float *)calloc((size_t)BARUN_DIM * BARUN_FFN_DIM * 2,    sizeof(float));
+    z.down      = (float *)calloc((size_t)BARUN_FFN_DIM * BARUN_DIM,        sizeof(float));
+    z.ffn_norm  = (float *)calloc((size_t)BARUN_DIM,                       sizeof(float));
+    if (!z.q_proj) { memset(&z, 0, sizeof z); return z; }
     return z;
 }
 
-int wubu_grow_insert_block(barun_model_t *m, int pos)
+/* block_free: free a block's weight buffers.  Now that zero_block also
+ * allocates per-buffer (matching wubu_free), this is simply the per-field
+ * free.  Called by wubu_grow_insert_block to free the displaced block's
+ * buffers before the struct shift overwrites them (without it the shift
+ * aliases the same pointers and wubu_free double-frees). */
+static void block_free(wubu_block_t *blk)
+{
+    if (!blk) return;
+    free(blk->q_proj);  free(blk->k_proj);  free(blk->v_proj);
+    free(blk->o_proj);  free(blk->g_proj);
+    free(blk->q_norm);  free(blk->k_norm);  free(blk->attn_norm);  free(blk->ffn_norm);
+    free(blk->gate_up); free(blk->down);
+    memset(blk, 0, sizeof(*blk));
+}
+
+int wubu_grow_insert_block(wubu_model_t *m, int pos)
 {
     if (!m || pos < 0 || pos > m->n_layers) return 0;
     if (m->n_layers >= BARUN_LAYERS) return 0;
-    barun_block_t z = zero_block();
+    wubu_block_t z = zero_block();
     if (!z.q_proj) return 0;
-    /* NOTE: the displaced block at [n_layers] is overwritten by the
-     * shift -- its buffers are the caller's ownership question (the CLI
-     * runs short-lived; the test re-grows the same model, so a free here
-     * would be a use-after-free for the test's owned buffers) */
-    /* shift the blocks [pos..n) and their is_full rhythm up by one */
+    /* the displaced block at [n_layers] is overwritten by the shift.
+     * Free its weight buffers first to avoid orphaning them (the struct
+     * copy would alias the same pointers; a later wubu_free double-frees).
+     * The test-re-grow use-case (wubu_grow_stack_block) does NOT go through
+     * here -- stack grows into the next free index, no displacement. */
+    block_free(&m->blocks[m->n_layers]);
+    /* shift the blocks [pos..n) and their is_full rhythm up by one.
+     * After the struct copy, the source block at [l-1] and dest [l]
+     * alias the same weight pointers.  Transfer ownership: NULL the
+     * source pointers so wubu_free only free's each region once. */
     for (int l = m->n_layers; l > pos; l--) {
         m->blocks[l] = m->blocks[l - 1];
         m->is_full[l] = m->is_full[l - 1];
         m->fire_sel[l] = m->fire_sel[l - 1];
+        memset(&m->blocks[l - 1], 0, sizeof(wubu_block_t));
     }
     m->blocks[pos] = z;
     /* the new zero block is an identity whatever its rhythm -- give it the
@@ -72,14 +92,14 @@ int wubu_grow_insert_block(barun_model_t *m, int pos)
     return 1;
 }
 
-int wubu_grow_stack_block(barun_model_t *m, int src)
+int wubu_grow_stack_block(wubu_model_t *m, int src)
 {
     if (!m || src < 0 || src >= m->n_layers) return 0;
     if (m->n_layers >= BARUN_LAYERS) return 0;
-    barun_block_t z = zero_block();
+    wubu_block_t z = zero_block();
     if (!z.q_proj) return 0;
     /* the G_stack copy: every weight buffer of the source block copied */
-    barun_block_t *s = &m->blocks[src];
+    wubu_block_t *s = &m->blocks[src];
     size_t q = (size_t)BARUN_DIM * BARUN_HEADS * 64;
     size_t k = (size_t)BARUN_DIM * BARUN_KV_HEADS * 64;
     size_t f = (size_t)BARUN_DIM * BARUN_FFN_DIM * 2;
@@ -126,7 +146,7 @@ int wubu_grow_events(int T, int base_layers, int max_layers, float step_frac)
     return events > growable ? growable : events;
 }
 
-int wubu_train_grow(barun_train_t *tr, int pos, int n_layers)
+int wubu_train_grow(wubu_train_t *tr, int pos, int n_layers)
 {
     if (!tr || pos < 0 || pos > n_layers || n_layers >= BARUN_LAYERS) return 0;
     /* the per-block pointer arrays: shift up then allocate the new slot */

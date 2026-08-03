@@ -119,9 +119,9 @@ the U-Bus is the substrate it runs on.
 - [x] measured roofline table (above)
 - [x] src/wubu_ubus.c: pool + meter + roofline selector + CPU/GPU backends
 - [x] tools/test_ubus.c: dispatch equality, selector sanity, meter prints
-- [x] the barun training mm rides the U-Bus selector (the weak-symbol GPU
+- [x] the wubu training mm rides the U-Bus selector (the weak-symbol GPU
       dispatch = the GPU backend registration)
-- [x] the growth operator: barun_grow_depth (function-preserving) + the
+- [x] the growth operator: wubu_grow_depth (function-preserving) + the
       plateau diagnostics + test_grow (loss continuity at insertion)
 - [ ] fp16 tensor path (the 194 TFLOP/s) -- next
 - [ ] the GPU attention kernels (the seq-2048 enabler) -- next

@@ -6,7 +6,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include "gpu_barun.h"
+#include "gpu_wubu.h"
 
 static double now_s(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -60,8 +60,8 @@ static void cpu_ns5(float *X, int rows, int cols)
 int main(void)
 {
     int shapes[][2] = { {448, 448}, {448, 2456}, {1228, 448}, {448, 64} };
-    if (!gpu_barun_init()) { printf("SKIP (no CUDA device)\n"); return 0; }
-    printf("gpu ready: %d\n", gpu_barun_ready());
+    if (!gpu_wubu_init()) { printf("SKIP (no CUDA device)\n"); return 0; }
+    printf("gpu ready: %d\n", gpu_wubu_ready());
     srand(42);
     for (int s = 0; s < 4; s++) {
         int rows = shapes[s][0], cols = shapes[s][1];
@@ -70,7 +70,7 @@ int main(void)
         float *orig2 = malloc((size_t)rows * cols * sizeof(float));
         for (int i = 0; i < rows * cols; i++) g[i] = c[i] = orig2[i] = (float)((rand() % 2000) - 1000) / 100.0f;
         double t0 = now_s();
-        int ok = gpu_barun_ns5(g, rows, cols);
+        int ok = gpu_wubu_ns5(g, rows, cols);
         double t1 = now_s();
         cpu_ns5(c, rows, cols);
         double t2 = now_s();
@@ -90,7 +90,7 @@ int main(void)
         float *gr = malloc((size_t)rows * cols * sizeof(float));
         for (int i = 0; i < rows * cols; i++) gr[i] = orig2[i];
         double tg0 = now_s();
-        int gok = gpu_barun_ns5_gram(gr, rows, cols);
+        int gok = gpu_wubu_ns5_gram(gr, rows, cols);
         double tg1 = now_s();
         maxd = 0; sumg = 0;
         for (int i = 0; i < rows * cols; i++) {

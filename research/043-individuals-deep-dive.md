@@ -26,7 +26,7 @@ The converged principles (what the U-Bus took):
   traffic, not the FLOPs -- the tile (the SRAM-resident block) is the
   unit of work (OPT-C tiling theme).
 - **The square-space optimizer**: the Gram iteration drops the
-  rectangular FLOPs ~5x (OPT-D, IMPLEMENTED as gpu_barun_ns5_gram --
+  rectangular FLOPs ~5x (OPT-D, IMPLEMENTED as gpu_wubu_ns5_gram --
   committed acdf13d).
 - **The symmetric GEMM**: the A=MM^T half is redundant work (OPT-D03,
   the future kernel).

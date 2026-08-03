@@ -1,5 +1,5 @@
 /*
- * wubu_barun_backprop.h -- the REAL backward pass + REAL Muon for the
+ * wubu_backprop.h -- the REAL backward pass + REAL Muon for the
  * WuBu seed (the deep-training milestone).
  *
  * The audit found three gaps in the first trainer:
@@ -14,7 +14,7 @@
  * This module fixes all three:
  *   - BP1: a forward pass that RECORDS the per-layer activations
  *     (the standard training-time memory cost). It runs the EXACT
- *     released path (wubu_barun mode 0): partial RoPE per head,
+ *     released path (wubu mode 0): partial RoPE per head,
  *     qk-norm, GQA, gated attention output, bounded SwiGLU, residual
  *     selectors, tied head.
  *   - BP2: the analytic backward pass, layer by layer, REVERSED:
@@ -35,12 +35,12 @@
 #ifndef WUBU_BARUN_BACKPROP_H
 #define WUBU_BARUN_BACKPROP_H
 
-#include "wubu_barun.h"
-#include "wubu_barun_train.h"
+#include "wubu.h"
+#include "wubu_train.h"
 
 /* BP-A: the recorded activations for one sequence. The trainer owns
  * one of these; the forward fills it, the backward consumes it. */
-typedef struct barun_bp_t {
+typedef struct wubu_bp_t {
     int seq;
     int layers;   /* BARUN_LAYERS */
     int cap_seq;  /* the allocated sequence capacity (>= any seq used) */
@@ -97,33 +97,33 @@ typedef struct barun_bp_t {
     float *s_dg;      /* [seq, 448] dL/dg_proj out */
     float *s_dx;      /* [seq, 448] the incoming layer gradient */
     float *s_dxentry; /* [seq, 448] the gradient wrt the layer input */
-} barun_bp_t;
+} wubu_bp_t;
 
 /* BP1: allocate the recorder for a given max sequence length. */
-int barun_bp_alloc(barun_bp_t *bp, int max_seq);
+int wubu_bp_alloc(wubu_bp_t *bp, int max_seq);
 
 /* BP2: the recording forward. Runs the exact released path (using the
- * buffer's rope tables -- b must be a barun_buf_t whose tables were
+ * buffer's rope tables -- b must be a wubu_buf_t whose tables were
  * built) and saves every activation the backward needs. Returns the
  * mean-reduced next-token cross-entropy loss. */
-float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
+float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
                        const uint16_t *tokens, int n_tokens);
 
 /* BP3: the analytic backward. Accumulates the REAL gradients into
- * tr (barun_train_t), exactly like barun_train_microbatch does.
+ * tr (wubu_train_t), exactly like wubu_train_microbatch does.
  * Returns the loss (for the trainer's telemetry). */
-float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
-                        barun_train_t *tr, const uint16_t *tokens,
+float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
+                        wubu_train_t *tr, const uint16_t *tokens,
                         int n_tokens);
 
 /* BP4: the real optimizer step: Muon (Newton-Schulz 5) for the 2D
  * hidden matrices, AdamW for the embeddings, the norms and the
  * selectors (the confirmed reference split). Decoupled weight decay
  * for the Muon group; global-norm grad clipping per cfg->grad_clip. */
-int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
-                       const barun_train_cfg_t *cfg, uint32_t step);
+int wubu_bp_muon_step(wubu_model_t *m, wubu_train_t *tr,
+                       const wubu_train_cfg_t *cfg, uint32_t step);
 
 /* BP5: free. */
-void barun_bp_free(barun_bp_t *bp);
+void wubu_bp_free(wubu_bp_t *bp);
 
 #endif

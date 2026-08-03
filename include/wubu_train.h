@@ -1,5 +1,5 @@
 /*
- * wubu_barun_train.h -- the BarunLM training core (the AGI brain-cluster loop).
+ * wubu_train.h -- the BarunLM training core (the AGI brain-cluster loop).
  *
  * The wizard is an INFERENCE engine today; this module makes it a
  * TRAINING engine too. BarunLM-35M is the mustard seed: the training
@@ -10,7 +10,7 @@
  *   - Muon optimizer (the reference used it for the final 4B tokens:
  *     peak lr 1e-4, weight decay 0.1, batch 48, seq 2048)
  *   - cross-entropy on the next token
- *   - the hybrid local/global attention forward (wubu_barun)
+ *   - the hybrid local/global attention forward (wubu)
  *   - weight-decay applied via the Muon Newton-Schulz style update
  *
  * Training is memory-bound: we accumulate gradients over micro-batches
@@ -19,7 +19,7 @@
 #ifndef WUBU_BARUN_TRAIN_H
 #define WUBU_BARUN_TRAIN_H
 
-#include "wubu_barun.h"
+#include "wubu.h"
 
 /* The training config (the reference recipe). */
 typedef struct {
@@ -36,7 +36,7 @@ typedef struct {
     float  muon_momentum;  /* 0.95 */
     int    adam_for_embed; /* the embedding + norms use AdamW, the
                               matrices use Muon (reference split) */
-} barun_train_cfg_t;
+} wubu_train_cfg_t;
 
 /* The 1-D parameter slots trained with AdamW (norms + selectors):
  *   [4*l + 0] = attn_norm, [4*l + 1] = ffn_norm,
@@ -76,43 +76,43 @@ typedef struct {
     float *down_m[BARUN_LAYERS];
     /* the REAL backprop recorder (owned by the trainer; allocated on
      * first use, grown as the sequence grows) */
-    struct barun_bp_t *bp_rec;
+    struct wubu_bp_t *bp_rec;
     /* telemetry */
     uint32_t micro_steps;
     double   grad_norm_sum;
     double   loss_sum;
-} barun_train_t;
+} wubu_train_t;
 
 /* T1: initialize the training state (allocates the gradient buffers). */
-int barun_train_init(barun_train_t *tr, const barun_model_t *m);
+int wubu_train_init(wubu_train_t *tr, const wubu_model_t *m);
 
 /* T2: zero the accumulated gradients. */
-int barun_train_zero_grad(barun_train_t *tr);
+int wubu_train_zero_grad(wubu_train_t *tr);
 
 /* T3: accumulate the gradient of one micro-batch. Runs the recording
- * forward (barun_bp_forward) + the REAL analytic backward
- * (barun_bp_backward) -- chain rule through EVERY path (attention
+ * forward (wubu_bp_forward) + the REAL analytic backward
+ * (wubu_bp_backward) -- chain rule through EVERY path (attention
  * q/k/v/o/g, qk-norm, rope, softmax, gated residual, SwiGLU, the
  * residual selectors, final norm, tied head). Every parameter gets
  * its own gradient. Returns the loss. */
-float barun_train_microbatch(barun_model_t *m, barun_train_t *tr,
-                             barun_buf_t *b, const uint16_t *tokens,
+float wubu_train_microbatch(wubu_model_t *m, wubu_train_t *tr,
+                             wubu_buf_t *b, const uint16_t *tokens,
                              size_t n_tokens);
 
 /* T4: the Muon+AdamW optimizer step. */
-int barun_train_step(barun_model_t *m, barun_train_t *tr,
-                     const barun_train_cfg_t *cfg, uint32_t step);
+int wubu_train_step(wubu_model_t *m, wubu_train_t *tr,
+                     const wubu_train_cfg_t *cfg, uint32_t step);
 
 /* T5: the full training loop -- one step = batch of micro-batches. */
-float barun_train_step_loop(barun_model_t *m, barun_train_t *tr,
-                            barun_buf_t *b, const uint16_t *tokens,
-                            size_t n_tokens, const barun_train_cfg_t *cfg,
+float wubu_train_step_loop(wubu_model_t *m, wubu_train_t *tr,
+                            wubu_buf_t *b, const uint16_t *tokens,
+                            size_t n_tokens, const wubu_train_cfg_t *cfg,
                             uint32_t step);
 
 /* T6: the learning-rate schedule (warmup + cosine decay). */
-float barun_train_lr(const barun_train_cfg_t *cfg, uint32_t step);
+float wubu_train_lr(const wubu_train_cfg_t *cfg, uint32_t step);
 
 /* T7: free the training state. */
-void barun_train_free(barun_train_t *tr);
+void wubu_train_free(wubu_train_t *tr);
 
 #endif

@@ -1,7 +1,7 @@
 WaefreBeorn Umbrella License v3.0 — BarunLM Base Model Addendum
 ================================================================
 
-The BarunLM-35M port (wubu_barun, wubu_barun_train) in this repository
+The BarunLM-35M port (wubu, wubu_train) in this repository
 is part of the WuBuOS/WuBuWizard ecosystem and is governed by the
 WaefreBeorn Umbrella License v3.0 (see the LICENSE file at the
 repository root and https://github.com/waefrebeorn/waefrebeorn-umbrella-license).
@@ -13,7 +13,7 @@ originate from BarunLM-35M:
 
     BarunLM-35M
     Copyright 2026 Harshal Singh
-    https://github.com/harrrshall/barunlm-35m
+    https://github.com/harrrshall/wubulm-35m
     https://huggingface.co/harrrshall/BarunLM-35M
 
 BarunLM-35M is licensed under the Apache License 2.0. This addendum
@@ -23,11 +23,11 @@ THE MUSTARD SEED DOCTRINE
 -------------------------
 BarunLM-35M is the seed. Under the WuBuOS AGI brain-cluster doctrine:
 
-  1. THE SEED IS OURS. The C11 port (wubu_barun) is original work by the
+  1. THE SEED IS OURS. The C11 port (wubu) is original work by the
      WaefreBeorn project: a from-scratch implementation of the released
      architecture, written to the WuBuOS module discipline (opaque
      structs, minimal includes, freestanding C11, no third-party deps).
-  2. THE SEED GROWS. The training core (wubu_barun_train) is the AGI
+  2. THE SEED GROWS. The training core (wubu_train) is the AGI
      loop: it consumes the research repositories, the KB-growth waves,
      and the Kevin-Bacon research findings; it evaluates, grows
      parameters, and re-trains -- all in-house, no external model APIs.

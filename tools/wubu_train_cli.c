@@ -1,13 +1,13 @@
 /*
- * barun_train_cli.c -- the AGI training loop runner (the seed grows).
+ * wubu_train_cli.c -- the AGI training loop runner (the seed grows).
  *
- * Reads uint16 token streams (.tok, produced by barun_tokenc from the
+ * Reads uint16 token streams (.tok, produced by wubu_tokenc from the
  * corpus on the SD card), trains BarunLM-35M with the reference recipe
  * (Muon for matrices, AdamW for the embedding/norms, mean-reduced CE),
  * and checkpoints to the SD card every N steps.
  *
  * Usage:
- *   barun_train_cli --model models/barun/model.safetensors
+ *   wubu_train_cli --model models/wubu/model.safetensors
  *                    --tok /home/wubu/sdcard/corpus/tokens/*.tok
  *                    --steps 100 --lr 1e-4 --out /home/wubu/sdcard/corpus/checkpoints/seed-1.st
  */
@@ -15,8 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "wubu_barun.h"
-#include "wubu_barun_train.h"
+#include "wubu.h"
+#include "wubu_train.h"
 #include "wubu_grow.h"
 #include "wubu_plateau.h"
 
@@ -41,7 +41,7 @@ static float arg_float(int argc, char **argv, const char *name, float def)
 /* load a checkpoint dump into a freshly built model (the inverse of
  * save_checkpoint: magic + param count + the raw weights). Returns 0 on
  * success (the model owns the allocated buffers). */
-static int load_checkpoint(barun_model_t *m, const char *path)
+static int load_checkpoint(wubu_model_t *m, const char *path)
 {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
@@ -59,10 +59,10 @@ static int load_checkpoint(barun_model_t *m, const char *path)
     float *embedding = (float *)malloc(sizeof(float) * 16384 * 448);
     float *final_norm = (float *)malloc(sizeof(float) * 448);
     float **sel = (float **)calloc(BARUN_SELECTORS, sizeof(float *));
-    barun_block_t *blocks = (barun_block_t *)calloc(BARUN_LAYERS, sizeof(barun_block_t));
+    wubu_block_t *blocks = (wubu_block_t *)calloc(BARUN_LAYERS, sizeof(wubu_block_t));
     if (!embedding || !final_norm || !sel || !blocks) { fclose(f); return -1; }
     for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = (float *)malloc(sizeof(float) * 448);
-    barun_block_t *b = blocks;
+    wubu_block_t *b = blocks;
     for (int i = 0; i < BARUN_LAYERS; i++, b++) {
         b->q_proj    = (float *)malloc(sizeof(float) * 448 * 448);
         b->k_proj    = (float *)malloc(sizeof(float) * 448 * 64);
@@ -98,11 +98,11 @@ static int load_checkpoint(barun_model_t *m, const char *path)
     for (int i = 0; i < BARUN_SELECTORS; i++)
         if (fread(sel[i], sizeof(float), 448, f) != 448) { fclose(f); return -1; }
     fclose(f);
-    if (barun_model_init(m, embedding, final_norm, blocks, sel) != 0) return -1;
+    if (wubu_model_init(m, embedding, final_norm, blocks, sel) != 0) return -1;
     if (nl > 0) m->n_layers = nl;   /* the v2 progressive state */
     /* the dump's count is the ACTIVE count (a v1 progressive checkpoint
      * saved with fewer layers); it must not EXCEED the built full count */
-    if (n > barun_parameter_count(m)) { fprintf(stderr, "checkpoint count mismatch (%ld vs %ld)\n", n, barun_parameter_count(m)); return -1; }
+    if (n > wubu_parameter_count(m)) { fprintf(stderr, "checkpoint count mismatch (%ld vs %ld)\n", n, wubu_parameter_count(m)); return -1; }
     return 0;
 }
 
@@ -119,7 +119,7 @@ static long read_tokens(const char *path, uint16_t *buf, long cap)
 
 /* write the raw weights to a checkpoint file (a simple float dump --
  * the safetensors save is the next milestone). */
-static int save_checkpoint(const barun_model_t *m, const char *path)
+static int save_checkpoint(const wubu_model_t *m, const char *path)
 {
     FILE *f = fopen(path, "wb");
     if (!f) return -1;
@@ -128,12 +128,12 @@ static int save_checkpoint(const barun_model_t *m, const char *path)
     fwrite(&magic, 4, 1, f);
     int nl = m->n_layers;
     fwrite(&nl, 4, 1, f);
-    long n = barun_parameter_count(m);
+    long n = wubu_parameter_count(m);
     fwrite(&n, sizeof(long), 1, f);
     fwrite(m->embedding, sizeof(float), 16384 * 448, f);
     fwrite(m->final_norm, sizeof(float), 448, f);
     for (int i = 0; i < BARUN_LAYERS; i++) {
-        barun_block_t *b = (barun_block_t *)&m->blocks[i];
+        wubu_block_t *b = (wubu_block_t *)&m->blocks[i];
         fwrite(b->q_proj, sizeof(float), 448 * 448, f);
         fwrite(b->k_proj, sizeof(float), 448 * 64, f);
         fwrite(b->v_proj, sizeof(float), 448 * 64, f);
@@ -155,7 +155,7 @@ static int save_checkpoint(const barun_model_t *m, const char *path)
 int main(int argc, char **argv)
 {
     const char *model_path = arg_get(argc, argv, "--model",
-                                     "models/barun/model.safetensors");
+                                     "models/wubu/model.safetensors");
     const char *tok_glob = arg_get(argc, argv, "--tok",
                                    "/home/wubu/sdcard/corpus/tokens/cosmopedia-v2-00000.tok");
     const char *out_path = arg_get(argc, argv, "--out",
@@ -170,25 +170,25 @@ int main(int argc, char **argv)
     int grow_check = arg_int(argc, argv, "--grow-check", 0);
     int base_layers = arg_int(argc, argv, "--base-layers", 0);
 
-    barun_model_t m;
+    wubu_model_t m;
     if (resume) {
-        printf("barun_train_cli: resuming from %s ...\n", resume);
+        printf("wubu_train_cli: resuming from %s ...\n", resume);
         if (load_checkpoint(&m, resume) != 0) {
             fprintf(stderr, "cannot load checkpoint %s\n", resume);
             return 1;
         }
     } else {
-        printf("barun_train_cli: loading %s ...\n", model_path);
-        if (barun_load(&m, model_path) != 0) {
+        printf("wubu_train_cli: loading %s ...\n", model_path);
+        if (wubu_load(&m, model_path) != 0) {
             fprintf(stderr, "cannot load %s\n", model_path);
             return 1;
         }
     }
-    printf("barun_train_cli: %ld parameters\n", barun_parameter_count(&m));
+    printf("wubu_train_cli: %ld parameters\n", wubu_parameter_count(&m));
     if (base_layers > 0) {
         if (base_layers > BARUN_LAYERS) base_layers = BARUN_LAYERS;
         m.n_layers = base_layers;   /* the progressive start (Bu: start small) */
-        printf("barun_train_cli: progressive start at %d layers\n", m.n_layers);
+        printf("wubu_train_cli: progressive start at %d layers\n", m.n_layers);
     }
 
     /* load the corpus (expand the glob via a helper: we accept ONE file
@@ -199,14 +199,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "cannot read corpus %s\n", tok_glob);
         return 1;
     }
-    printf("barun_train_cli: corpus %ld tokens\n", corpus_n);
+    printf("wubu_train_cli: corpus %ld tokens\n", corpus_n);
 
-    barun_buf_t b;
-    if (barun_buf_alloc(&b, BARUN_MAX_SEQ) != 0) return 1;
-    barun_train_t tr;
-    if (barun_train_init(&tr, &m) != 0) return 1;
+    wubu_buf_t b;
+    if (wubu_buf_alloc(&b, BARUN_MAX_SEQ) != 0) return 1;
+    wubu_train_t tr;
+    if (wubu_train_init(&tr, &m) != 0) return 1;
 
-    barun_train_cfg_t cfg;
+    wubu_train_cfg_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.lr = lr;
     cfg.muon_lr = muon_lr;    /* the Moonlight RMS-0.2 scale makes the Muon
@@ -230,7 +230,7 @@ int main(int argc, char **argv)
         if (pos + seq > corpus_n) pos = 0;   /* epoch wrap */
         for (int i = 0; i < seq; i++) win[i] = corpus[pos + i];
         pos += seq;
-        float loss = barun_train_step_loop(&m, &tr, &b, win, (size_t)seq,
+        float loss = wubu_train_step_loop(&m, &tr, &b, win, (size_t)seq,
                                            &cfg, (uint32_t)step);
         loss_ema = loss_ema < 0 ? loss : 0.9 * loss_ema + 0.1 * loss;
         /* the ema history is a SHIFTING window (NOT a ring: the plateau
@@ -252,8 +252,16 @@ int main(int argc, char **argv)
                                     0.001f > 0.005f * (float)loss_ema
                                         ? 0.001f : 0.005f * (float)loss_ema)) {
                 int pos_g = m.n_layers / 2;   /* the progressive deepening */
+                /* NOTE: wubu_grow_insert_block already incremented m.n_layers
+                 * before we get here.  wubu_train_grow expects the PRE-grow
+                 * layer count (it frees the displaced-inactive slot at index
+                 * [n_layers] before the shift).  Passing the post-increment
+                 * value off-by-one frees a live slot, then the shift aliases
+                 * the previous layer's pointer into that index → double-free
+                 * at teardown (wubu_train_free). */
+                int pre_layers = m.n_layers - 1;
                 if (wubu_grow_insert_block(&m, pos_g) &&
-                    wubu_train_grow(&tr, pos_g, m.n_layers)) {
+                    wubu_train_grow(&tr, pos_g, pre_layers)) {
                     printf("  GROW at step %d: n_layers %d -> %d (plateau)\n",
                            step, m.n_layers - 1, m.n_layers);
                 }
@@ -271,9 +279,9 @@ int main(int argc, char **argv)
     if (save_checkpoint(&m, out_path) == 0)
         printf("final checkpoint -> %s\n", out_path);
 
-    barun_train_free(&tr);
-    barun_free(&m, &b);
+    wubu_train_free(&tr);
+    wubu_free(&m, &b);
     free(corpus);
-    printf("barun_train_cli: done\n");
+    printf("wubu_train_cli: done\n");
     return 0;
 }

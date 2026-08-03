@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-barun_stream.py -- the LIVE-STREAM data pipeline for WuBu.
+wubu_stream.py -- the LIVE-STREAM data pipeline for WuBu.
 
 The user's directive: "live stream embedding and free API". This tool
 streams datasets from HuggingFace in real-time (no full download),
-tokenizes on the fly with our C11 tokenizer (barun_tokenc), and
+tokenizes on the fly with our C11 tokenizer (wubu_tokenc), and
 appends to the training token streams on the SD card. WuBu learns
 from the stream as it flows.
 
@@ -15,11 +15,11 @@ Streams (research-backed best data, all accessible with our read token):
   --stream cosmopedia       HuggingFaceTB/smollm-corpus (already tokenizing)
 
 Usage:
-  python3 tools/barun_stream.py --stream finemath --limit 20000 \
-      --tok models/barun/tokenizer.json \
+  python3 tools/wubu_stream.py --stream finemath --limit 20000 \
+      --tok models/wubu/tokenizer.json \
       --out /home/wubu/sdcard/corpus/tokens/finemath-live.tok
 
-The tokenizer is our C11 binary: models/barun/tokenizer.json is parsed
+The tokenizer is our C11 binary: models/wubu/tokenizer.json is parsed
 here and the tokens are written as uint16 LE -- the SAME format the
 C11 trainer reads. No external tokenizer dependency.
 """
@@ -32,7 +32,7 @@ import time
 
 def load_bpe_vocab(path):
     """Load our C11 BPE tokenizer vocab: a JSON with 'vocab' (list of
-    strings) + 'merges'. The C11 tokenizer (barun_tokenc) uses the same
+    strings) + 'merges'. The C11 tokenizer (wubu_tokenc) uses the same
     file; here we only need the vocab length to validate ids."""
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -106,7 +106,7 @@ def main():
     ap.add_argument("--stream", required=True, choices=list(STREAMS))
     ap.add_argument("--limit", type=int, default=0,
                     help="max docs to stream (0 = all)")
-    ap.add_argument("--tok", default="models/barun/tokenizer.json")
+    ap.add_argument("--tok", default="models/wubu/tokenizer.json")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
