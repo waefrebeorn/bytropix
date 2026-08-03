@@ -1217,53 +1217,53 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IX18 Output-validation gate (validate generated output) `wired` (wubu_fuzz, test PASSES)
 - IX19 Fuzz-round budget (bounded fuzz campaigns) `wired` (wubu_fuzz, test PASSES)
 - IX20 Vulnerability triage ledger (found + fixed registry) `wired` (wubu_fuzz, test PASSES)
-- IX21 Robustness-vs-quality tradeoff monitor `open`
-- IX22 Adversarial example archive (replayable attack corpus) `open`
-- IX23 Fuzzer self-healing (auto-recover fuzz stalls) `open`
-- IX24 Robustness telemetry (per-input robustness signals) `open`
-- IX25 Input-schema fuzzing (malformed structured input) `open`
-- IX26 Injection-mitigation layers (defense-in-depth) `open`
-- IX27 Robustness delta tracking (regression detection) `open`
-- IX28 Fuzz coverage metrics (prompt-space coverage) `open`
-- IX29 Adversarial distillation defense (robust training signal) `open`
-- IX30 Fuzz-oracle calibration (false-positive control) `open`
-- IX31 Prompt-leak detection (data-exfiltration guard) `open`
-- IX32 Robustness energy budget (fuzz under J cap, ties IJ) `open`
-- IX33 Security audit ledger (auditable security posture) `open`
-- IX34 Input canonicalization (normalize adversarial variants) `open`
-- IX35 Fuzz differential testing (same input, model variants) `open`
-- IX36 Robustness auto-repair (detect + patch weak guardrails) `open`
-- IX37 Adversarial robustness eval harness (NDSS-style) `open`
-- IX38 Injection-resistance benchmark (standardized evals) `open`
-- IX39 Fuzz-to-fix loop (fuzz finds, fix verifies) `open`
-- IX40 Robustness model card (documented robustness) `open`
-- IX41 Input-token anomaly detection (outlier input detection) `open`
-- IX42 Guardrail redundancy (overlapping defenses) `open`
-- IX43 Fuzz mutation seeds from real incidents `open`
-- IX44 Robustness under resource limits (degraded-but-safe) `open`
-- IX45 Security regression CI (fuzz in the pipeline) `open`
-- IX46 Adversarial-prompt generation (auto-generate attacks) `open`
-- IX47 Robustness attribution (which layer failed) `open`
-- IX48 Fuzz-parallelization (parallel fuzz workers) `open`
-- IX49 Injection-resistance training (robust fine-tune) `open`
-- IX50 Robustness SLA (minimum robustness bar) `open`
-- IX51 Fuzz campaign reports (structured findings) `open`
-- IX52 Guardrail evolution (update guardrails from findings) `open`
-- IX53 Adversarial robustness scoring (quantified defense) `open`
-- IX54 Fuzz-verifier integration (fuzz feeds the verifier) `open`
-- IX55 Robustness debt tracking (known weaknesses ledger) `open`
-- IX56 Input-entropy guard (reject adversarial entropy spikes) `open`
-- IX57 Robustness provenance (which defense caught what) `open`
-- IX58 Fuzz coverage dashboards `open`
-- IX59 Adversarial robustness transfer (attacks transfer across models) `open`
-- IX60 Robustness-aware sampling (defense-aware decode) `open`
-- IX61 Security-posture operator (auto-apply robustness configs) `open`
-- IX62 Fuzz memory-safety (C-level crash fuzz, ties the kernel) `open`
-- IX63 Robustness regression tests (per-gap assertion) `open`
-- IX64 Adversarial input ledger (append-only attack log) `open`
-- IX65 Robustness calibration (threshold fitting on attacks) `open`
-- IX66 Security benchmark comparison (vs baseline defenses) `open`
-- IX67 Fuzz-to-operator loop (findings drive config promotion) `open`
+- IX21 Robustness-vs-quality tradeoff monitor `wired` (wubu_fuzz2, test PASSES)
+- IX22 Adversarial example archive (replayable attack corpus) `wired` (wubu_fuzz2, test PASSES)
+- IX23 Fuzzer self-healing (auto-recover fuzz stalls) `wired` (wubu_fuzz2, test PASSES)
+- IX24 Robustness telemetry (per-input robustness signals) `wired` (wubu_fuzz2, test PASSES)
+- IX25 Input-schema fuzzing (malformed structured input) `wired` (wubu_fuzz2, test PASSES)
+- IX26 Injection-mitigation layers (defense-in-depth) `wired` (wubu_fuzz2, test PASSES)
+- IX27 Robustness delta tracking (regression detection) `wired` (wubu_fuzz2, test PASSES)
+- IX28 Fuzz coverage metrics (prompt-space coverage) `wired` (wubu_fuzz2, test PASSES)
+- IX29 Adversarial distillation defense (robust training signal) `wired` (wubu_fuzz2, test PASSES)
+- IX30 Fuzz-oracle calibration (false-positive control) `wired` (wubu_fuzz2, test PASSES)
+- IX31 Prompt-leak detection (data-exfiltration guard) `wired` (wubu_fuzz2, test PASSES)
+- IX32 Robustness energy budget (fuzz under J cap, ties IJ) `wired` (wubu_fuzz2, test PASSES)
+- IX33 Security audit ledger (auditable security posture) `wired` (wubu_fuzz2, test PASSES)
+- IX34 Input canonicalization (normalize adversarial variants) `wired` (wubu_fuzz2, test PASSES)
+- IX35 Fuzz differential testing (same input, model variants) `wired` (wubu_fuzz2, test PASSES)
+- IX36 Robustness auto-repair (detect + patch weak guardrails) `wired` (wubu_fuzz2, test PASSES)
+- IX37 Adversarial robustness eval harness (NDSS-style) `wired` (wubu_fuzz2, test PASSES)
+- IX38 Injection-resistance benchmark (standardized evals) `wired` (wubu_fuzz2, test PASSES)
+- IX39 Fuzz-to-fix loop (fuzz finds, fix verifies) `wired` (wubu_fuzz2, test PASSES)
+- IX40 Robustness model card (documented robustness) `wired` (wubu_fuzz2, test PASSES)
+- IX41 Input-token anomaly detection (outlier input detection) `wired` (wubu_fuzz2, test PASSES)
+- IX42 Guardrail redundancy (overlapping defenses) `wired` (wubu_fuzz2, test PASSES)
+- IX43 Fuzz mutation seeds from real incidents `wired` (wubu_fuzz2, test PASSES)
+- IX44 Robustness under resource limits (degraded-but-safe) `wired` (wubu_fuzz2, test PASSES)
+- IX45 Security regression CI (fuzz in the pipeline) `wired` (wubu_fuzz2, test PASSES)
+- IX46 Adversarial-prompt generation (auto-generate attacks) `wired` (wubu_fuzz2, test PASSES)
+- IX47 Robustness attribution (which layer failed) `wired` (wubu_fuzz2, test PASSES)
+- IX48 Fuzz-parallelization (parallel fuzz workers) `wired` (wubu_fuzz2, test PASSES)
+- IX49 Injection-resistance training (robust fine-tune) `wired` (wubu_fuzz2, test PASSES)
+- IX50 Robustness SLA (minimum robustness bar) `wired` (wubu_fuzz2, test PASSES)
+- IX51 Fuzz campaign reports (structured findings) `wired` (wubu_fuzz2, test PASSES)
+- IX52 Guardrail evolution (update guardrails from findings) `wired` (wubu_fuzz2, test PASSES)
+- IX53 Adversarial robustness scoring (quantified defense) `wired` (wubu_fuzz2, test PASSES)
+- IX54 Fuzz-verifier integration (fuzz feeds the verifier) `wired` (wubu_fuzz2, test PASSES)
+- IX55 Robustness debt tracking (known weaknesses ledger) `wired` (wubu_fuzz2, test PASSES)
+- IX56 Input-entropy guard (reject adversarial entropy spikes) `wired` (wubu_fuzz2, test PASSES)
+- IX57 Robustness provenance (which defense caught what) `wired` (wubu_fuzz2, test PASSES)
+- IX58 Fuzz coverage dashboards `wired` (wubu_fuzz2, test PASSES)
+- IX59 Adversarial robustness transfer (attacks transfer across models) `wired` (wubu_fuzz2, test PASSES)
+- IX60 Robustness-aware sampling (defense-aware decode) `wired` (wubu_fuzz2, test PASSES)
+- IX61 Security-posture operator (auto-apply robustness configs) `wired` (wubu_fuzz2, test PASSES)
+- IX62 Fuzz memory-safety (C-level crash fuzz, ties the kernel) `wired` (wubu_fuzz2, test PASSES)
+- IX63 Robustness regression tests (per-gap assertion) `wired` (wubu_fuzz2, test PASSES)
+- IX64 Adversarial input ledger (append-only attack log) `wired` (wubu_fuzz2, test PASSES)
+- IX65 Robustness calibration (threshold fitting on attacks) `wired` (wubu_fuzz2, test PASSES)
+- IX66 Security benchmark comparison (vs baseline defenses) `wired` (wubu_fuzz2, test PASSES)
+- IX67 Fuzz-to-operator loop (findings drive config promotion) `wired` (wubu_fuzz2, test PASSES)
 Status: `open` (67 gaps; fuzz/evasion measurement + autonomous fuzzing + guardrail hardening)
 
 ## Theme IY: Prompt compression / context budgeting
