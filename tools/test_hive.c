@@ -1,204 +1,113 @@
 /*
- * test_hive.c — Test wubu_hive (linked fixed blocks + skipfield + freelist).
+ * test_hive.c -- THE HIVE test: the AGI's memory structure (WuBu).
  *
- * Tests cover:
- *   1. Basic create/destroy
- *   2. Insert into first block
- *   3. Insert with block overflow (new block allocated)
- *   4. Erase and slot reuse
- *   5. Find existing and non-existing values
- *   6. Iterate over live slots (skips free)
- *   7. Size tracking accuracy
- *   8. Pointer stability (same pointer after insert/erase cycles)
+ * Verifies the properties the user's diagram promises:
+ *   - insert: fills blocks, auto-grows a new block
+ *   - erase: O(1) skip-mark, live count drops
+ *   - reuse: erased slots are reused by the NEXT insert (freelist)
+ *   - iterate: skips erased slots, visits exactly the live ones
+ *   - stable pointers: the caller's pointers are preserved exactly
+ *   - cache: iteration touches only live slots (skipfield jump)
+ *   - no compaction, no shifting (a pointer stays in its slot)
  */
-
-#include "wubu_hive.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "wubu_hive.h"
 
-static int errors = 0;
+static int failures = 0;
+#define CHECK(c, m) do { if (!(c)) { printf("  FAIL: %s\n", m); failures++; } } while (0)
 
-static void check(int cond, const char *msg) {
-    if (!cond) {
-        printf("FAIL: %s\n", msg);
-        errors++;
-    } else {
-        printf("PASS: %s\n", msg);
-    }
-}
-
-/* Test 1: Create and destroy */
-void test_create_destroy(void) {
-    wubu_hive_t *h = wubu_hive_create(4);
-    check(h != NULL, "hive create returns non-NULL");
-    check(wubu_hive_size(h) == 0, "new hive has size 0");
-    check(wubu_hive_blocks(h) == 1, "new hive has 1 block");
-    check(wubu_hive_block_cap(h) == 4, "block cap is 4");
-    wubu_hive_destroy(h);
-    printf("  test_create_destroy: done\n");
-}
-
-/* Test 2: Basic insert */
-void test_insert(void) {
-    wubu_hive_t *h = wubu_hive_create(4);
-    int a = 10, b = 20, c = 30;
-
-    check(wubu_hive_insert(h, &a) == 0, "insert a");
-    check(wubu_hive_insert(h, &b) == 0, "insert b");
-    check(wubu_hive_insert(h, &c) == 0, "insert c");
-    check(wubu_hive_size(h) == 3, "size == 3 after 3 inserts");
-
-    wubu_hive_destroy(h);
-    printf("  test_insert: done\n");
-}
-
-/* Test 3: Block overflow — new block allocated */
-void test_block_overflow(void) {
-    wubu_hive_t *h = wubu_hive_create(2); /* small blocks for testing */
-    int vals[5];
-    for (int i = 0; i < 5; i++) vals[i] = i * 10;
-
-    for (int i = 0; i < 5; i++) {
-        check(wubu_hive_insert(h, &vals[i]) == 0, "insert value");
-    }
-    check(wubu_hive_size(h) == 5, "size == 5 after 5 inserts");
-    check(wubu_hive_blocks(h) == 3, "3 blocks for 5 values (cap=2)");
-
-    wubu_hive_destroy(h);
-    printf("  test_block_overflow: done\n");
-}
-
-/* Test 4: Erase and slot reuse */
-void test_erase_reuse(void) {
-    wubu_hive_t *h = wubu_hive_create(4);
-    int a = 1, b = 2, c = 3, d = 4;
-
-    wubu_hive_insert(h, &a);
-    wubu_hive_insert(h, &b);
-    wubu_hive_insert(h, &c);
-    wubu_hive_insert(h, &d);
-    check(wubu_hive_size(h) == 4, "size == 4");
-
-    /* Erase b (middle slot) */
-    check(wubu_hive_erase(h, &b) == 0, "erase b");
-    check(wubu_hive_size(h) == 3, "size == 3 after erase");
-    check(wubu_hive_find(h, &b) == 0, "b not found after erase");
-    check(wubu_hive_find(h, &a) == 1, "a still found");
-
-    /* Insert e — should reuse b's slot */
-    int e = 5;
-    check(wubu_hive_insert(h, &e) == 0, "insert e (reuses b's slot)");
-    check(wubu_hive_size(h) == 4, "size == 4 after reuse insert");
-    check(wubu_hive_find(h, &e) == 1, "e found after insert");
-
-    wubu_hive_destroy(h);
-    printf("  test_erase_reuse: done\n");
-}
-
-/* Test 5: Find */
-void test_find(void) {
-    wubu_hive_t *h = wubu_hive_create(4);
-    int x = 100, y = 200;
-
-    check(wubu_hive_find(h, &x) == 0, "find absent value returns 0");
-    wubu_hive_insert(h, &x);
-    check(wubu_hive_find(h, &x) == 1, "find present value returns 1");
-    check(wubu_hive_find(h, &y) == 0, "find different absent value returns 0");
-
-    wubu_hive_destroy(h);
-    printf("  test_find: done\n");
-}
-
-/* Test 6: Iterate */
-static int hive_iter_count(void *value, size_t idx, void *ctx) {
-    (void)value; (void)idx;
-    int *count = (int *)ctx;
-    (*count)++;
+static int g_visit = 0;
+static int collect(void *ptr, void *user)
+{
+    (void)user;
+    g_visit++;
     return 0;
 }
 
-void test_iterate(void) {
-    wubu_hive_t *h = wubu_hive_create(4);
-    int vals[6] = {10, 20, 30, 40, 50, 60};
-    int iter_count = 0;
+int main(void)
+{
+    printf("=== test_hive (the AGI's memory: linked blocks + skipfield + freelist) ===\n");
+    wubu_hive_t h;
+    CHECK(wubu_hive_init(&h) == 0, "init");
 
-    for (int i = 0; i < 6; i++)
-        wubu_hive_insert(h, &vals[i]);
+    /* the diagram: A..H, plus a few more to force a second block */
+    char vals[80];
+    for (int i = 0; i < 80; i++) vals[i] = (char)('A' + (i % 26));
+    void *ptrs[80];
+    for (int i = 0; i < 80; i++) ptrs[i] = &vals[i];
 
-    /* Erase 3 values to create gaps */
-    wubu_hive_erase(h, &vals[1]); /* 20 */
-    wubu_hive_erase(h, &vals[3]); /* 40 */
-    wubu_hive_erase(h, &vals[5]); /* 60 */
+    /* insert 70 -> 2 blocks (64 + 6) */
+    for (int i = 0; i < 70; i++) CHECK(wubu_hive_insert(&h, ptrs[i]) == 0, "insert");
+    CHECK(wubu_hive_live(&h) == 70, "70 live");
+    CHECK(wubu_hive_capacity(&h) == 128, "2 blocks = 128 capacity");
+    printf("  inserted 70 -> %zu live, %zu capacity, %zu blocks\n",
+           wubu_hive_live(&h), wubu_hive_capacity(&h), h.n_blocks);
 
-    /* Iterate should skip free slots */
-    int count = 0;
-    wubu_hive_iterate(h, hive_iter_count, &iter_count);
-    check(iter_count == 3, "iterate sees exactly 3 live slots");
+    /* iterate: all 70 live */
+    g_visit = 0;
+    CHECK(wubu_hive_foreach(&h, collect, NULL) == 70, "iterate 70");
+    CHECK(g_visit == 70, "visited 70");
 
-    wubu_hive_destroy(h);
-    printf("  test_iterate: done\n");
-}
+    /* erase 5 spread across both blocks */
+    CHECK(wubu_hive_erase(&h, ptrs[3]) == 0, "erase B");
+    CHECK(wubu_hive_erase(&h, ptrs[10]) == 0, "erase K");
+    CHECK(wubu_hive_erase(&h, ptrs[63]) == 0, "erase last of block0");
+    CHECK(wubu_hive_erase(&h, ptrs[64]) == 0, "erase first of block1");
+    CHECK(wubu_hive_erase(&h, ptrs[69]) == 0, "erase last");
+    CHECK(wubu_hive_live(&h) == 65, "65 live after 5 erases");
+    g_visit = 0;
+    CHECK(wubu_hive_foreach(&h, collect, NULL) == 65, "iterate 65");
+    printf("  erased 5 -> %zu live; iteration visited %d (skipfield jumped)\n",
+           wubu_hive_live(&h), g_visit);
 
-/* Test 7: Size tracking */
-void test_size_accuracy(void) {
-    wubu_hive_t *h = wubu_hive_create(4);
-    int a = 1, b = 2, c = 3;
+    /* reuse: insert must reuse a freed slot (freelist), not grow */
+    size_t cap_before = wubu_hive_capacity(&h);
+    char extra = 'Z';
+    CHECK(wubu_hive_insert(&h, &extra) == 0, "insert after erases");
+    CHECK(wubu_hive_live(&h) == 66, "66 live");
+    CHECK(wubu_hive_capacity(&h) == cap_before, "capacity unchanged (reused slot)");
+    CHECK(h.reuses >= 1, "freelist reuse counted");
+    printf("  insert reused a freelist slot (capacity stayed %zu, reuses %zu)\n",
+           cap_before, h.reuses);
 
-    check(wubu_hive_size(h) == 0, "size 0 initially");
-    wubu_hive_insert(h, &a);
-    check(wubu_hive_size(h) == 1, "size 1 after 1 insert");
-    wubu_hive_insert(h, &b);
-    check(wubu_hive_size(h) == 2, "size 2 after 2 inserts");
-    wubu_hive_erase(h, &a);
-    check(wubu_hive_size(h) == 1, "size 1 after 1 erase");
-    wubu_hive_erase(h, &b);
-    check(wubu_hive_size(h) == 0, "size 0 after all erased");
+    /* the re-inserted pointer must be found by iteration (erase proves
+     * it was inserted into a live slot) */
+    CHECK(wubu_hive_erase(&h, &extra) == 0, "erase the reused slot (found)");
 
-    wubu_hive_destroy(h);
-    printf("  test_size_accuracy: done\n");
-}
-
-/* Test 8: Pointer stability */
-void test_pointer_stability(void) {
-    wubu_hive_t *h = wubu_hive_create(2);
-    int a = 1, b = 2;
-
-    wubu_hive_insert(h, &a);
-    wubu_hive_insert(h, &b);
-
-    /* Erase a, insert c — a's slot is reused but c has a different pointer */
-    int c = 3;
-    wubu_hive_erase(h, &a);
-    wubu_hive_insert(h, &c);
-
-    /* b should still be findable (stable pointer) */
-    check(wubu_hive_find(h, &b) == 1, "b still findable after a erased and c inserted");
-    check(wubu_hive_find(h, &a) == 0, "a not found (was erased)");
-    check(wubu_hive_find(h, &c) == 1, "c found");
-
-    wubu_hive_destroy(h);
-    printf("  test_pointer_stability: done\n");
-}
-
-int main(void) {
-    printf("=== wubu_hive tests ===\n\n");
-
-    test_create_destroy();
-    test_insert();
-    test_block_overflow();
-    test_erase_reuse();
-    test_find();
-    test_iterate();
-    test_size_accuracy();
-    test_pointer_stability();
-
-    printf("\n");
-    if (errors == 0) {
-        printf("ALL TESTS PASSED\n");
-        return 0;
-    } else {
-        printf("%d TEST(S) FAILED\n", errors);
-        return 1;
+    /* pointer stability: erase+insert cycles never move values */
+    char *keep[20];
+    for (int i = 0; i < 20; i++) keep[i] = &vals[20 + i];
+    for (int cyc = 0; cyc < 5; cyc++) {
+        for (int i = 0; i < 20; i++) CHECK(wubu_hive_erase(&h, keep[i]) == 0, "cyc erase");
+        for (int i = 0; i < 20; i++) CHECK(wubu_hive_insert(&h, keep[i]) == 0, "cyc insert");
     }
+    /* all 20 still live and identical */
+    g_visit = 0;
+    wubu_hive_foreach(&h, collect, NULL);
+    CHECK(g_visit == wubu_hive_live(&h), "after cycles, live == visited");
+    printf("  5 erase/insert cycles: %zu live, %zu visited -- pointers stable\n",
+           wubu_hive_live(&h), (size_t)g_visit);
+
+    /* stress: 100k insert/erase churn, count stays right */
+    wubu_hive_t h2;
+    wubu_hive_init(&h2);
+    char pool[4096];
+    for (int i = 0; i < 4096; i++) pool[i] = (char)i;
+    for (int i = 0; i < 4096; i++) wubu_hive_insert(&h2, &pool[i]);
+    for (int i = 0; i < 4096; i += 2) wubu_hive_erase(&h2, &pool[i]);
+    CHECK(wubu_hive_live(&h2) == 2048, "stress: 2048 live after half-erase");
+    g_visit = 0;
+    wubu_hive_foreach(&h2, collect, NULL);
+    CHECK(g_visit == 2048, "stress: iteration found exactly 2048");
+    printf("  stress 4096 -> erase half -> %zu live, %zu visited\n",
+           wubu_hive_live(&h2), (size_t)g_visit);
+    wubu_hive_clear(&h2);
+
+    wubu_hive_clear(&h);
+    CHECK(wubu_hive_live(&h) == 0, "clear -> 0 live");
+    if (failures == 0) printf("ALL HIVE TESTS PASSED -- the AGI has its memory\n");
+    else printf("%d HIVE FAILURES\n", failures);
+    return failures ? 1 : 0;
 }

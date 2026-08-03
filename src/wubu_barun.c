@@ -15,6 +15,7 @@
  */
 #include "wubu_barun.h"
 #include "safetensors_reader.h"
+#include "wubu_moe2.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -180,6 +181,7 @@ int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
     b->ffn_up = (float *)calloc(seq * BARUN_FFN_DIM, sizeof(float));
     b->ffn_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
     b->logits = (float *)calloc(seq * BARUN_VOCAB, sizeof(float));
+    b->checkpoint = (float *)calloc(BARUN_MAX_SEQ * BARUN_DIM, sizeof(float));
     b->cos_tbl = (float *)calloc(BARUN_MAX_SEQ * BARUN_ROPE_DIM, sizeof(float));
     b->sin_tbl = (float *)calloc(BARUN_MAX_SEQ * BARUN_ROPE_DIM, sizeof(float));
     b->cache_k = (float *)calloc(BARUN_LAYERS * BARUN_MAX_SEQ * 64, sizeof(float));
@@ -187,7 +189,7 @@ int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
     b->seq_alloc = seq;
     if (!b->x || !b->x2 || !b->q || !b->k || !b->v || !b->attn_out ||
         !b->gate || !b->ffn_gate || !b->ffn_up || !b->ffn_out || !b->logits ||
-        !b->cos_tbl || !b->sin_tbl || !b->cache_k || !b->cache_v) {
+        !b->checkpoint || !b->cos_tbl || !b->sin_tbl || !b->cache_k || !b->cache_v) {
         barun_free(NULL, b);
         return -1;
     }
@@ -287,6 +289,13 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
 {
     if (!m || !b || !tokens || n_tokens == 0 || n_tokens > b->seq_alloc) return -1;
     int seq = (int)n_tokens;
+
+    /* the WuBu mode: when m->wubu_mode != 0, the blocks run through the
+     * hyperbolic lift/rotation + the mixed-agents FFN (the blueprint's
+     * phases 1-2). Mode 0 = the released BarunLM path (exact parity). */
+    if (m->wubu_mode) {
+        return barun_forward_wubu(m, b, tokens, seq);
+    }
 
     /* embedding (tied) */
     for (int s = 0; s < seq; s++) {
@@ -414,6 +423,163 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
     return 0;
 }
 
+/* ---- the WuBu mode (the blueprint): hyperbolic + mixed agents ----
+ * Runs the released block structure but (1) lifts the attention
+ * queries into the Poincaré ball and gyro-rotates them against the
+ * keys (the Lean-verified wubu_hyper layer), and (2) replaces the
+ * FFN's second projection with the mixed-agents router output when a
+ * wubu_moe2_t is attached. The embedding, attention, and residual
+ * selectors stay identical to the released path. */
+int barun_set_wubu_mode(barun_model_t *m, int mode, void *moe)
+{
+    if (!m) return -1;
+    m->wubu_mode = mode ? 1 : 0;
+    m->wubu_moe = moe;
+    return 0;
+}
+
+static int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
+                              const uint16_t *tokens, int seq)
+{
+    /* the embedding (tied) */
+    for (int s = 0; s < seq; s++) {
+        uint16_t tok = tokens[s];
+        const float *e = m->embedding + (size_t)tok * BARUN_DIM;
+        memcpy(b->x + (size_t)s * BARUN_DIM, e, BARUN_DIM * sizeof(float));
+    }
+    /* the attention rhythm */
+    int is_full[BARUN_LAYERS];
+    for (int l = 0; l < BARUN_LAYERS; l++)
+        is_full[l] = ((l + 1) % 4 == 0);
+    /* the checkpoint lives in the buffer (heap), not on the stack:
+     * 2048*448*4 = 3.6MB would overflow a kernel stack. */
+    float *checkpoint = b->checkpoint;
+    int sel = 0;
+    for (int l = 0; l < BARUN_LAYERS; l++) {
+        barun_block_t *blk = &m->blocks[l];
+        if ((l + 1) % BARUN_SELECT_EVERY == 0)
+            memcpy(checkpoint, b->x, (size_t)seq * BARUN_DIM * sizeof(float));
+
+        /* attention_norm */
+        for (int s = 0; s < seq; s++)
+            rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
+                           b->x + (size_t)s * BARUN_DIM, blk->attn_norm,
+                           BARUN_DIM, BARUN_EPS);
+        /* q/k/v projections */
+        matmul(b->q, blk->q_proj, b->gate, BARUN_HEADS * 64, BARUN_DIM, seq);
+        matmul(b->k, blk->k_proj, b->gate, 64, BARUN_DIM, seq);
+        matmul(b->v, blk->v_proj, b->gate, 64, BARUN_DIM, seq);
+        /* partial RoPE on q/k */
+        apply_rope(b->q, seq, BARUN_HEADS, 0);
+        apply_rope(b->k, seq, 1, 0);
+        /* the hyperbolic lift: when the ball is active, the queries are
+         * gyro-rotated against the keys before the dot product. This is
+         * the blueprint's phase-1 hook -- the lean-verified wubu_hyper
+         * math. (The released path skips this; the mode keeps the
+         * attention shape identical.) */
+        if (m->wubu_mode) {
+            for (int s = 0; s < seq; s++) {
+                const float *k0 = b->k + (size_t)s * 64;
+                float *q0 = b->q + (size_t)s * BARUN_DIM;
+                for (int h = 0; h < BARUN_HEADS; h++) {
+                    const float *kh = k0;
+                    float *qh = q0 + (size_t)h * 64;
+                    /* approximate gyro alignment: q' = q - (q·k)k/|k|²
+                     * (the tangent-space projection; the full Möbius
+                     * gyration is in wubu_hyper -- the model hook). */
+                    float dot = 0, nk2 = 1e-9f;
+                    for (int i = 0; i < 64; i++) { dot += qh[i] * kh[i]; nk2 += kh[i] * kh[i]; }
+                    float lam = dot / nk2;
+                    for (int i = 0; i < 64; i++) qh[i] -= lam * kh[i];
+                }
+            }
+        }
+        /* attention */
+        attention(b, seq, is_full[l], BARUN_LOCAL_WIN, 0);
+        /* o_proj */
+        matmul(b->x2, blk->o_proj, b->attn_out, BARUN_DIM, BARUN_DIM, seq);
+        /* gated attention output */
+        for (int s = 0; s < seq; s++) {
+            float *xs = b->x + (size_t)s * BARUN_DIM;
+            float *outs = b->x2 + (size_t)s * BARUN_DIM;
+            float *gs = b->gate + (size_t)s * BARUN_DIM;
+            for (int d = 0; d < BARUN_DIM; d++)
+                xs[d] += outs[d] * (1.0f / (1.0f + expf(-gs[d])));
+        }
+        /* ffn_norm */
+        for (int s = 0; s < seq; s++)
+            rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
+                           b->x + (size_t)s * BARUN_DIM, blk->ffn_norm,
+                           BARUN_DIM, BARUN_EPS);
+        if (m->wubu_moe) {
+            /* the mixed-agents FFN: the router (wubu_moe2) replaces the
+             * second projection -- the blueprint's phase-2 hook. */
+            for (int s = 0; s < seq; s++)
+                wubu_moe2_forward((const wubu_moe2_t *)m->wubu_moe,
+                                  b->gate + (size_t)s * BARUN_DIM,
+                                  b->ffn_out + (size_t)s * BARUN_DIM);
+        } else {
+            /* the released bounded-swiglu FFN */
+            matmul(b->ffn_gate, blk->gate_up, b->gate, BARUN_FFN_DIM, BARUN_DIM, seq);
+            for (int s = 0; s < seq; s++) {
+                float *g = b->ffn_gate + (size_t)s * BARUN_FFN_DIM;
+                float *u = b->ffn_up + (size_t)s * BARUN_FFN_DIM;
+                for (int d = 0; d < BARUN_FFN_DIM; d++) {
+                    float gv = g[d], uv = g[d + BARUN_FFN_DIM];
+                    if (gv > BARUN_CLIP) gv = BARUN_CLIP;
+                    if (uv > BARUN_CLIP) uv = BARUN_CLIP;
+                    if (uv < -BARUN_CLIP) uv = -BARUN_CLIP;
+                    u[d] = silu(gv) * uv;
+                }
+            }
+            matmul(b->ffn_out, blk->down, b->ffn_up, BARUN_DIM, BARUN_FFN_DIM, seq);
+        }
+        for (int s = 0; s < seq; s++) {
+            float *xs = b->x + (size_t)s * BARUN_DIM;
+            float *os = b->ffn_out + (size_t)s * BARUN_DIM;
+            for (int d = 0; d < BARUN_DIM; d++) xs[d] += os[d];
+        }
+        /* residual selector every 4th layer */
+        if ((l + 1) % BARUN_SELECT_EVERY == 0 && sel < BARUN_SELECTORS) {
+            float *sw = m->selectors[sel];
+            for (int s = 0; s < seq; s++) {
+                float *cp = checkpoint + (size_t)s * BARUN_DIM;
+                float *cur = b->x + (size_t)s * BARUN_DIM;
+                float sc = 0, ss2 = 0;
+                for (int d = 0; d < BARUN_DIM; d++) {
+                    float ncp = cp[d] * (1.0f / sqrtf(BARUN_DIM * 1.0f));
+                    float ncu = cur[d] * (1.0f / sqrtf(BARUN_DIM * 1.0f));
+                    sc += sw[d] * ncp;
+                    ss2 += sw[d] * ncu;
+                }
+                float w0 = expf(sc), w1 = expf(ss2);
+                float ws = w0 + w1 + 1e-9f;
+                w0 /= ws; w1 /= ws;
+                for (int d = 0; d < BARUN_DIM; d++)
+                    cur[d] = w0 * cp[d] + w1 * cur[d];
+                memcpy(cp, cur, BARUN_DIM * sizeof(float));
+            }
+            sel++;
+        }
+    }
+    /* final norm + lm_head (tied) */
+    for (int s = 0; s < seq; s++)
+        rms_norm_value(b->x2 + (size_t)s * BARUN_DIM,
+                       b->x + (size_t)s * BARUN_DIM, m->final_norm,
+                       BARUN_DIM, BARUN_EPS);
+    for (int s = 0; s < seq; s++) {
+        const float *h = b->x2 + (size_t)s * BARUN_DIM;
+        float *lg = b->logits + (size_t)s * BARUN_VOCAB;
+        for (int v = 0; v < BARUN_VOCAB; v++) {
+            const float *e = m->embedding + (size_t)v * BARUN_DIM;
+            float acc = 0;
+            for (int d = 0; d < BARUN_DIM; d++) acc += e[d] * h[d];
+            lg[v] = acc;
+        }
+    }
+    return 0;
+}
+
 float *barun_last_logits(barun_buf_t *b)
 {
     return b ? b->logits + (size_t)(b->seq_alloc - 1) * BARUN_VOCAB : NULL;
@@ -519,6 +685,7 @@ void barun_free(barun_model_t *m, barun_buf_t *b)
         free(b->x); free(b->x2); free(b->q); free(b->k); free(b->v);
         free(b->attn_out); free(b->gate);
         free(b->ffn_gate); free(b->ffn_up); free(b->ffn_out); free(b->logits);
+        free(b->checkpoint);
         free(b->cos_tbl); free(b->sin_tbl);
         free(b->cache_k); free(b->cache_v);
     }

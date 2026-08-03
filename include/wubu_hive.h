@@ -1,75 +1,86 @@
 /*
- * wubu_hive.h — C11 Hive data structure (Vector/List/Hive comparison).
+ * wubu_hive.h -- THE HIVE: the AGI's memory structure (WuBu).
  *
- * A Hive is a linked list of fixed-capacity blocks. Each block has:
- *   - void **slots:      contiguous array of void* pointers
- *   - uint8_t *skip:     bitmask — 1 = slot occupied, 0 = free
- *   - size_t live, cap:  live count and block capacity
- *   - struct block *next: pointer to next block (NULL = end)
+ * The user's diagram: Vector = contiguous array (fast but reallocation
+ * moves everything); List = scattered nodes (stable pointers but cache
+ * misses); Hive = linked FIXED BLOCKS + skipfield + freelist.
  *
- * Operations:
- *   - Insert: reuses a free slot (freelist pop) or allocates a new block
- *   - Erase:  marks slot free (skip=0), pushes to freelist
- *   - Iterate: skips free slots (O(live) not O(cap))
- *   - Pointer stability: slots never move (unlike Vector)
+ *   struct block {
+ *       void **slots;      // fixed block of pointers (cache-friendly)
+ *       uint8_t *skip;     // skipfield: 1 = erased, 0 = live
+ *       size_t live, cap;  // live count + block capacity
+ *       struct block *next;
+ *   };
  *
- * Performance profile (vs Vector vs List):
- *   - Random insert/erase: O(1) amortized (freelist) vs O(N) Vector shift
- *   - Pointer stability: YES (stable void* per slot) vs NO Vector realloc
- *   - Cache locality: BETTER than List (contiguous slots per block)
- *   - Modulo arithmetic: O(1) direct access vs O(N) List traversal
+ * Why the hive beats both:
+ *   - cache: blocks are contiguous pointer arrays (vector-like locality)
+ *   - stable ptrs: the slots arrays never move; the values they point
+ *     to are caller-owned and stable (list-like)
+ *   - fast erase: mark the skip bit + push the slot to the freelist --
+ *     O(1), no compaction, no shifting
+ *   - fast insert: reuse a freelist slot or allocate a new block --
+ *     O(1) amortized, no full reallocation
+ *   - fast iterate: jump the skipfield (skip erased slots in one read)
  *
- * Self-contained C11. No third-party deps. Opaque struct.
+ * Pure C11, no templates, no third-party. The hive is the memory of
+ * the WuBu AGI: tokens, routing history, KV lives, context slots --
+ * whatever needs stable pointers with cache-friendly iteration and
+ * O(1) erase/insert.
  */
-
 #ifndef WUBU_HIVE_H
 #define WUBU_HIVE_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
+/* The fixed block size: 64 slots per block (a cache-line-friendly
+ * choice; 64 void* = 512 bytes). */
+#define WUBU_HIVE_BLOCK_CAP 64
+
+typedef struct wubu_hive_block {
+    void **slots;                 /* [cap] caller-owned pointers */
+    uint8_t *skip;                /* [cap] 1 = erased, 0 = live */
+    size_t live;                  /* live slots in this block */
+    size_t cap;                   /* fixed at WUBU_HIVE_BLOCK_CAP */
+    struct wubu_hive_block *next; /* the chain */
+} wubu_hive_block_t;
+
+typedef struct {
+    wubu_hive_block_t *head;      /* first block */
+    wubu_hive_block_t *tail;      /* last block (append) */
+    size_t n_blocks;
+    size_t total_live;
+    /* the freelist: a LIFO stack of (block, slot) entries. Erase pushes,
+     * insert pops -- every erased slot is reusable, O(1). */
+    struct { wubu_hive_block_t *block; size_t slot; } *free_entries;
+    size_t n_free, free_cap;
+    /* stats */
+    size_t allocs;                /* slots allocated */
+    size_t reuses;                /* slots reused from the freelist */
+} wubu_hive_t;
+
+/* H1: init an empty hive. */
+int wubu_hive_init(wubu_hive_t *h);
+
+/* H2: insert a pointer. Returns 0 on success (slot added). The slot
+ * reuses a freelist entry when available, else a new block. */
+int wubu_hive_insert(wubu_hive_t *h, void *ptr);
+
+/* H3: erase a pointer (mark skip + push freelist). O(1). */
+int wubu_hive_erase(wubu_hive_t *h, void *ptr);
+
+/* H4: iterate all LIVE slots. The callback receives each live pointer;
+ * return nonzero to stop early. Returns the count visited. */
+size_t wubu_hive_foreach(wubu_hive_t *h,
+                         int (*fn)(void *ptr, void *user), void *user);
+
+/* H5: the live count. */
+size_t wubu_hive_live(const wubu_hive_t *h);
+
+/* H6: clear everything (frees all blocks). */
+void wubu_hive_clear(wubu_hive_t *h);
+
+/* H7: total capacity (slots across all blocks). */
+size_t wubu_hive_capacity(const wubu_hive_t *h);
+
 #endif
-
-typedef struct wubu_hive_block wubu_hive_block_t;
-typedef struct wubu_hive wubu_hive_t;
-
-/* Create a new Hive. block_cap = slots per block (default 64).
- * Returns NULL on OOM. */
-wubu_hive_t *wubu_hive_create(size_t block_cap);
-
-/* Destroy the Hive and free all blocks. */
-void wubu_hive_destroy(wubu_hive_t *hive);
-
-/* Insert value into the Hive. Reuses a free slot or allocates a new block.
- * Returns 0 on success, -1 on OOM. */
-int wubu_hive_insert(wubu_hive_t *hive, void *value);
-
-/* Erase value from the Hive. Marks slot free, pushes to freelist.
- * Returns 0 if found and erased, -1 if not found. */
-int wubu_hive_erase(wubu_hive_t *hive, void *value);
-
-/* Iterate over all live slots. cb receives (void *value, size_t index).
- * Returns 0 on success, -1 if callback returns non-zero (early stop). */
-int wubu_hive_iterate(const wubu_hive_t *hive,
-                      int (*cb)(void *value, size_t index, void *ctx),
-                      void *ctx);
-
-/* Get the number of live (occupied) slots. */
-size_t wubu_hive_size(const wubu_hive_t *hive);
-
-/* Get the total number of blocks. */
-size_t wubu_hive_blocks(const wubu_hive_t *hive);
-
-/* Get the block capacity (slots per block). */
-size_t wubu_hive_block_cap(const wubu_hive_t *hive);
-
-/* Lookup: find a value in the Hive. Returns 1 if found, 0 if not. */
-int wubu_hive_find(const wubu_hive_t *hive, void *value);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* WUBU_HIVE_H */

@@ -69,6 +69,13 @@ typedef struct {
     barun_block_t blocks[BARUN_LAYERS];
     float *selectors[BARUN_SELECTORS];  /* [448] each (score weight) */
     int    is_full[BARUN_LAYERS];       /* attention rhythm */
+    /* the WuBu mode (the blueprint phases 1-2): 0 = the released BarunLM
+     * path (exact parity); 1 = hyperbolic lift/rotation + mixed agents.
+     * Set with barun_set_wubu_mode(). */
+    int    wubu_mode;
+    /* the mixed-agents router weights (wubu_moe2), owned by the caller
+     * when wubu_mode is on; one per block, shared structure reused. */
+    void  *wubu_moe;
 } barun_model_t;
 
 /* An inference buffer (all the working memory, allocated once). */
@@ -84,6 +91,9 @@ typedef struct {
     float *ffn_up;   /* [seq, ffn_dim] */
     float *ffn_out;  /* [seq, 448] */
     float *logits;   /* [seq, vocab] */
+    float *checkpoint; /* [max_seq, 448] the group-input checkpoint
+                          (the released path uses x2; the wubu path
+                          needs its own so the o_proj output survives) */
     float *cos_tbl;  /* [max_seq, rope_dim] */
     float *sin_tbl;  /* [max_seq, rope_dim] */
     float *cache_k;  /* [layers][max_seq, 64] */
@@ -118,10 +128,16 @@ float *barun_last_logits(barun_buf_t *b);
 float barun_loss(barun_buf_t *b, const uint16_t *tokens, size_t n_tokens);
 int  barun_muon_step(barun_model_t *m, float lr, float weight_decay);
 
-/* B8: the parameter count sanity check (must be 35,072,768). */
+/* B8: the WuBu mode (the blueprint). 0 = released-path parity (default);
+ * 1 = hyperbolic lift/rotation + mixed-agents FFN. The mixed-agents
+ * weights are a wubu_moe2_t* (caller-owned) or NULL (the router runs
+ * on the block's own gate_up as the shared expert only). */
+int barun_set_wubu_mode(barun_model_t *m, int mode, void *moe);
+
+/* B9: the parameter count sanity check (must be 35,072,768). */
 long barun_parameter_count(const barun_model_t *m);
 
-/* B9: free everything. */
+/* B10: free everything. */
 void barun_free(barun_model_t *m, barun_buf_t *b);
 
 #endif

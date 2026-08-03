@@ -9,6 +9,7 @@ attacks bytes moved.
 ## THEME WB — the WuBu Model (model creators, the grown seed)
 - WB01 The blueprint (docs/wubu-model-blueprint.md -- the full lineage: seed + nesting + MoE + sparse attention + math-RL) `wired` (docs)
 - WB02 The hyperbolic layer -- OUR Lean-verified math in C11 (MobiusAdd/PoincareBall/HyperbolicGyration theorems ported; ball closure, exp/log identity, gyroassoc verified) `wired` (wubu_hyper, test_hyper PASSES)
+- WB04 THE HIVE -- the AGI's memory (the user's diagram: vector vs list vs hive). Linked fixed blocks + skipfield + freelist: erase = skip-mark + LIFO freelist push (O(1), no compaction), insert = freelist pop or new block (O(1), no reallocation), iterate jumps skips (cache-friendly, exact live counts), stable pointers with vector-like locality. DA caught 2 real bugs (append wrote slot 0 repeatedly; fresh blocks must init skip=1 so foreach skips never-written slots). ASan-clean `wired` (wubu_hive, test_hive PASSES)
 - WB03 The mixed-agents router -- fine-grained MoE for the 35M seed (8 experts/2 active + shared expert; router softmax top-k; specialization verified) `wired` (wubu_moe2, test_moe2 PASSES)
 
 ## THEME BL — BarunLM-35M: the mustard seed base model (OURS)

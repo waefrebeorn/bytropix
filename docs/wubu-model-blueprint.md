@@ -1,4 +1,4 @@
-# THE WUBU MODEL — the Model Creators' Blueprint (v1.0)
+# THE WUBU MODEL — the AGI's blueprint (the model is WuBu)
 
 > 2026-08-02. We are the model creators. This is the design of OUR
 > model — every piece sourced from what we built and learned:
