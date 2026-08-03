@@ -4,6 +4,7 @@
  * state -- built for ASan so the double-free names itself instantly. */
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdlib.h>
 #include <string.h>
 #include "wubu_barun.h"
 #include "wubu_grow.h"
@@ -67,6 +68,7 @@ int main(void)
     for (int i = 0; i < 8; i++) toks[i] = (uint16_t)(i * 3 % 512 + 10);
 
     m.n_layers = 2;
+    const char *mode = getenv("REPRO_MODE");   /* fwd | fb | full | ns5probe (default full) */
     for (int n = 2; n <= 8; n++) {           /* grow#1..#7 (2->9) */
         int pos_g = n / 2;                    /* the CLI's middle-insert */
         fprintf(stderr, "grow#%d: n=%d pos=%d\n", n - 1, n, pos_g);
@@ -74,17 +76,27 @@ int main(void)
         if (!wubu_train_grow(&tr, pos_g, n + 1)) { printf("  train_grow FAIL\n"); return 1; }
         /* FIFTY tiny training steps on the grown model (the real CLI
          * runs grow_check=50 steps between grows; the crash needs the
-         * accumulation -- one step per grow was clean) */
+         * accumulation). REPRO_MODE selects which components run:
+         *   fwd  = forward only            (the loss + the forward)
+         *   fb   = forward + backward      (no optimizer)
+         *   full = forward + backward + muon   (the default, the CLI path)
+         *   ns5probe = like full but the last grow's muon runs with the
+         *              ns5 ENABLED (REPRO_SKIP is unset for it) */
         for (int s = 0; s < 50; s++) {
-            barun_train_zero_grad(&tr);
             float loss = barun_bp_forward(&m, &b, &bp, toks, 8);
+            if (mode && strcmp(mode, "fwd") == 0) continue;
+            barun_train_zero_grad(&tr);
             barun_bp_backward(&m, &b, &bp, &tr, toks, 8);
+            if (mode && strcmp(mode, "fb") == 0) continue;
+            int probe = (mode && strcmp(mode, "ns5probe") == 0 && n == 8 && s >= 48);
+            if (probe) unsetenv("REPRO_SKIP");
             barun_bp_muon_step(&m, &tr, &cfg, (uint32_t)(n * 100 + s));
+            if (probe) { setenv("REPRO_SKIP", "ns5", 1); fprintf(stderr, "  NS5-ON step at grow#7 s=%d\n", s); }
             if (s % 25 == 0)
                 fprintf(stderr, "  step %d/%d: loss=%.4f\n", s, 50, loss);
         }
         fprintf(stderr, "  ok: n_layers=%d\n", m.n_layers);
     }
-    fprintf(stderr, "ALL 7 GROWTHS + 350 STEPS OK\n");
+    fprintf(stderr, "ALL 7 GROWTHS + 350 STEPS OK (mode=%s)\n", mode ? mode : "full");
     return 0;
 }

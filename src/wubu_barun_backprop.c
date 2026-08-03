@@ -1097,6 +1097,8 @@ static void muon_matrix(float *w, float *g, float *mom, int rows, int cols,
         } else {
             ns5_inplace(look, rows, cols, scratch, trans);
         }
+    } else if (getenv("REPRO_SKIP") && strstr(getenv("REPRO_SKIP"), "ns5")) {
+        /* TEMP BISECT: skip the orthogonalization, keep mom/look/w/g */
     } else {
         ns5_inplace(look, rows, cols, scratch, trans);
     }
@@ -1117,13 +1119,14 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
                        const barun_train_cfg_t *cfg, uint32_t step)
 {
     if (!m || !tr || !cfg) return -1;
+    const char *skip = getenv("REPRO_SKIP");   /* TEMP BISECT: clip|muon|adam */
     float mu_lr = cfg->muon_lr > 0 ? cfg->muon_lr : cfg->lr;
     float ad_lr = cfg->adam_lr > 0 ? cfg->adam_lr : cfg->lr;
     float wd = cfg->weight_decay;
     float mu = cfg->muon_momentum > 0 ? cfg->muon_momentum : 0.95f;
 
     /* global grad-norm clip (over every trainable gradient) */
-    if (cfg->grad_clip > 0) {
+    if (cfg->grad_clip > 0 && (!skip || strcmp(skip, "clip") != 0)) {
         double n2 = 0;
         for (int i = 0; i < m->n_layers; i++) {
             n2 += dot_grad(tr->q_proj_g[i], 448 * 448);
@@ -1162,6 +1165,7 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
     }
 
     /* Muon group: the 2D hidden matrices */
+    if (!skip || strcmp(skip, "muon") != 0) {
     {
         size_t max_cells = 448 * 2456;               /* gate_up */
         size_t max_sq = 448 * 448;                   /* the NS A/B mats */
@@ -1181,8 +1185,10 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
         }
         free(scratch);
     }
+    }
 
     /* AdamW group: the embedding, the norms, the selectors */
+    if (!skip || strcmp(skip, "adam") != 0) {
     adamw_update(m->embedding, tr->emb_g, tr->emb_m, tr->emb_v,
                  16384 * 448, ad_lr, wd, step);
     for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
@@ -1191,6 +1197,7 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
         if (!w) continue;
         adamw_update(w, tr->norm_g[i], tr->norm_m[i], tr->norm_v[i],
                      (size_t)sz, ad_lr, wd, step);
+    }
     }
     /* the weights changed: the GPU cache re-uploads on the next matmul */
     if (gpu_barun_mark_weights_dirty) gpu_barun_mark_weights_dirty();
