@@ -260,6 +260,7 @@ src/wubu_serve.o: src/wubu_serve.c include/wubu_serve.h
 src/wubu_pref2.o: src/wubu_pref2.c include/wubu_pref2.h
 src/wubu_pref.o: src/wubu_pref.c include/wubu_pref.h
 src/wubu_hopfield3.o: src/wubu_hopfield3.c include/wubu_hopfield3.h
+src/wubu_hopfield4.o: src/wubu_hopfield4.c include/wubu_hopfield4.h include/wubu_hopfield3.h
 src/wubu_evict2026c.o: src/wubu_evict2026c.c include/wubu_evict2026c.h
 src/wubu_evict2026b.o: src/wubu_evict2026b.c include/wubu_evict2026b.h
 src/wubu_evict2026.o: src/wubu_evict2026.c include/wubu_evict2026.h
@@ -1220,7 +1221,7 @@ test_pref: tools/test_pref.c src/wubu_pref.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
-test_hopfield4: tools/test_hopfield4.c src/wubu_hopfield3.o
+test_hopfield4: tools/test_hopfield4.c src/wubu_hopfield4.o src/wubu_hopfield3.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
