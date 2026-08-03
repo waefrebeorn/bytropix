@@ -1413,73 +1413,73 @@ Status: `open` (67 gaps; routing-free/path-constrained MoE + aux-loss-free balan
 ## Theme JA: Architecture hybrids (attention + SSM)
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (Falcon-H1 hybrid; Hymba hybrid-head; Qwen3-Next GDN+Gated-Attn; Kimi Linear; 2507.12442 SSM characterization)
-- JA01 Falcon-H1 parallel hybrid (attention + Mamba2 layers, 256K ctx) `open`
-- JA02 Hymba hybrid-head (attention + SSM heads in one layer, 11x KV cut) `open`
-- JA03 Qwen3-Next GDN + gated-attention alternation (262K native ctx) `open`
-- JA04 SSM-at-scale analysis (57K energy 1492J -> 370J) `open`
-- JA05 Hybrid Pareto analysis (accuracy vs TTFT frontier) `open`
-- JA06 SSM recall-limitation compensation (attention for precise recall) `open`
-- JA07 Hybrid layer-position design (which layers are attention) `open`
-- JA08 SSM local + attention global (hybrid receptive fields) `open`
-- JA09 Hybrid KV budget (attention layers keep KV, SSM layers don't) `open`
-- JA10 Hybrid decode scheduling (per-layer mechanism dispatch) `open`
-- JA11 SSM prefill speed (SSM TTFT advantage) `open`
-- JA12 Hybrid accuracy-parity evaluation (hybrid >= transformer) `open`
-- JA13 SSM energy model at scale (energy vs ctx, ties IJ) `open`
-- JA14 Hybrid streaming (SSM constant memory + attention window) `open`
-- JA15 Gated-attention long-context stability (hybrid stability) `open`
-- JA16 Hybrid reasoning accuracy (long-context reasoning on hybrids) `open`
-- JA17 SSM + attention co-training (hybrid training recipe) `open`
-- JA18 Hybrid quantization (quantize both mechanisms) `open`
-- JA19 SSM state + KV unified cache (one memory system) `open`
-- JA20 Hybrid speculative decode (SSM drafter + attention verifier) `open`
-- JA21 Hybrid architecture selector (auto-pick hybrid ratio) `open`
-- JA22 SSM long-context needle test (hybrid recall evals) `open`
-- JA23 Hybrid memory bound (attention window + SSM state) `open`
-- JA24 SSM on-device viability (consumer-hardware long context) `open`
-- JA25 Hybrid layer ablation (which layers need attention) `open`
-- JA26 SSM state size tuning (state dimension) `open`
-- JA27 Hybrid context switching (mechanism switch on context) `open`
-- JA28 SSM + rotary interaction (position in SSM) `open`
-- JA29 Hybrid benchmark harness (attention vs SSM vs hybrid) `open`
-- JA30 Hybrid energy Pareto (energy/accuracy curves) `open`
-- JA31 SSM numerical stability at scale (state drift) `open`
-- JA32 Hybrid prefix caching (prefix in both mechanisms) `open`
-- JA33 SSM long-context memory accounting (state bytes) `open`
-- JA34 Hybrid token efficiency (mechanism-aware token budget) `open`
-- JA35 SSM parallel scan on CPU (efficient scan kernels) `open`
-- JA36 Hybrid robustness (perturbation resilience of hybrids) `open`
-- JA37 SSM attention-sink equivalents (SSM sink tokens) `open`
-- JA38 Hybrid eviction (evict attention KV, keep SSM state) `open`
-- JA39 SSM speculative draft (recurrent draft heads) `open`
-- JA40 Hybrid alignment (preference-align hybrids, ties IQ) `open`
-- JA41 SSM world-model integration (SSM for stateful world, ties IN) `open`
-- JA42 Hybrid MoE (MoE layers in hybrid models) `open`
-- JA43 SSM multi-modal (SSM for audio/video sequences) `open`
-- JA44 Hybrid energy operator (mechanism pick by energy, ties IJ07) `open`
-- JA45 SSM state snapshot (checkpoint recurrent state) `open`
-- JA46 Hybrid context-length switch (switch mechanism past a length) `open`
-- JA47 SSM hardware mapping (scan-friendly layout) `open`
-- JA48 Hybrid continual learning (state + weights, ties BB) `open`
-- JA49 SSM tokenizer interplay (byte-level state inputs) `open`
-- JA50 Hybrid provenance (mechanism attribution per token) `open`
-- JA51 SSM quantization at scale (quantized recurrent state) `open`
-- JA52 Hybrid verifier (verify across mechanisms) `open`
-- JA53 SSM capacity analysis (state capacity vs KV) `open`
-- JA54 Hybrid serving (schedule hybrid requests, ties IR) `open`
-- JA55 SSM robustness benchmark (hybrid perturbation evals) `open`
-- JA56 Hybrid telemetry (per-mechanism counters) `open`
-- JA57 SSM memory consolidation (state as memory, ties IP) `open`
-- JA58 Hybrid energy ledger (per-mechanism J) `open`
-- JA59 SSM long-horizon stability (very-long-context behavior) `open`
-- JA60 Hybrid architecture search (auto hybrid design) `open`
-- JA61 SSM forgetting (state decay, ties IP05) `open`
-- JA62 Hybrid multi-tenant (hybrid cache sharing) `open`
-- JA63 SSM differential privacy (state privacy) `open`
-- JA64 Hybrid watermark (mechanism-tagged outputs) `open`
-- JA65 SSM speculative verification (SSM-verified drafts) `open`
-- JA66 Hybrid model portability (run on any hardware) `open`
-- JA67 Hybrid operator (auto hybrid config, ties IV) `open`
+- JA01 Falcon-H1 parallel hybrid (attention + Mamba2 layers, 256K ctx) `wired` (wubu_hybrid, test PASSES)
+- JA02 Hymba hybrid-head (attention + SSM heads in one layer, 11x KV cut) `wired` (wubu_hybrid, test PASSES)
+- JA03 Qwen3-Next GDN + gated-attention alternation (262K native ctx) `wired` (wubu_hybrid, test PASSES)
+- JA04 SSM-at-scale analysis (57K energy 1492J -> 370J) `wired` (wubu_hybrid, test PASSES)
+- JA05 Hybrid Pareto analysis (accuracy vs TTFT frontier) `wired` (wubu_hybrid, test PASSES)
+- JA06 SSM recall-limitation compensation (attention for precise recall) `wired` (wubu_hybrid, test PASSES)
+- JA07 Hybrid layer-position design (which layers are attention) `wired` (wubu_hybrid, test PASSES)
+- JA08 SSM local + attention global (hybrid receptive fields) `wired` (wubu_hybrid, test PASSES)
+- JA09 Hybrid KV budget (attention layers keep KV, SSM layers don't) `wired` (wubu_hybrid, test PASSES)
+- JA10 Hybrid decode scheduling (per-layer mechanism dispatch) `wired` (wubu_hybrid, test PASSES)
+- JA11 SSM prefill speed (SSM TTFT advantage) `wired` (wubu_hybrid, test PASSES)
+- JA12 Hybrid accuracy-parity evaluation (hybrid >= transformer) `wired` (wubu_hybrid, test PASSES)
+- JA13 SSM energy model at scale (energy vs ctx, ties IJ) `wired` (wubu_hybrid, test PASSES)
+- JA14 Hybrid streaming (SSM constant memory + attention window) `wired` (wubu_hybrid, test PASSES)
+- JA15 Gated-attention long-context stability (hybrid stability) `wired` (wubu_hybrid, test PASSES)
+- JA16 Hybrid reasoning accuracy (long-context reasoning on hybrids) `wired` (wubu_hybrid, test PASSES)
+- JA17 SSM + attention co-training (hybrid training recipe) `wired` (wubu_hybrid, test PASSES)
+- JA18 Hybrid quantization (quantize both mechanisms) `wired` (wubu_hybrid, test PASSES)
+- JA19 SSM state + KV unified cache (one memory system) `wired` (wubu_hybrid, test PASSES)
+- JA20 Hybrid speculative decode (SSM drafter + attention verifier) `wired` (wubu_hybrid, test PASSES)
+- JA21 Hybrid architecture selector (auto-pick hybrid ratio) `wired` (wubu_hybrid, test PASSES)
+- JA22 SSM long-context needle test (hybrid recall evals) `wired` (wubu_hybrid, test PASSES)
+- JA23 Hybrid memory bound (attention window + SSM state) `wired` (wubu_hybrid, test PASSES)
+- JA24 SSM on-device viability (consumer-hardware long context) `wired` (wubu_hybrid, test PASSES)
+- JA25 Hybrid layer ablation (which layers need attention) `wired` (wubu_hybrid, test PASSES)
+- JA26 SSM state size tuning (state dimension) `wired` (wubu_hybrid, test PASSES)
+- JA27 Hybrid context switching (mechanism switch on context) `wired` (wubu_hybrid, test PASSES)
+- JA28 SSM + rotary interaction (position in SSM) `wired` (wubu_hybrid, test PASSES)
+- JA29 Hybrid benchmark harness (attention vs SSM vs hybrid) `wired` (wubu_hybrid, test PASSES)
+- JA30 Hybrid energy Pareto (energy/accuracy curves) `wired` (wubu_hybrid, test PASSES)
+- JA31 SSM numerical stability at scale (state drift) `wired` (wubu_hybrid, test PASSES)
+- JA32 Hybrid prefix caching (prefix in both mechanisms) `wired` (wubu_hybrid, test PASSES)
+- JA33 SSM long-context memory accounting (state bytes) `wired` (wubu_hybrid, test PASSES)
+- JA34 Hybrid token efficiency (mechanism-aware token budget) `wired` (wubu_hybrid, test PASSES)
+- JA35 SSM parallel scan on CPU (efficient scan kernels) `wired` (wubu_hybrid, test PASSES)
+- JA36 Hybrid robustness (perturbation resilience of hybrids) `wired` (wubu_hybrid, test PASSES)
+- JA37 SSM attention-sink equivalents (SSM sink tokens) `wired` (wubu_hybrid, test PASSES)
+- JA38 Hybrid eviction (evict attention KV, keep SSM state) `wired` (wubu_hybrid, test PASSES)
+- JA39 SSM speculative draft (recurrent draft heads) `wired` (wubu_hybrid, test PASSES)
+- JA40 Hybrid alignment (preference-align hybrids, ties IQ) `wired` (wubu_hybrid, test PASSES)
+- JA41 SSM world-model integration (SSM for stateful world, ties IN) `wired` (wubu_hybrid, test PASSES)
+- JA42 Hybrid MoE (MoE layers in hybrid models) `wired` (wubu_hybrid, test PASSES)
+- JA43 SSM multi-modal (SSM for audio/video sequences) `wired` (wubu_hybrid, test PASSES)
+- JA44 Hybrid energy operator (mechanism pick by energy, ties IJ07) `wired` (wubu_hybrid, test PASSES)
+- JA45 SSM state snapshot (checkpoint recurrent state) `wired` (wubu_hybrid, test PASSES)
+- JA46 Hybrid context-length switch (switch mechanism past a length) `wired` (wubu_hybrid, test PASSES)
+- JA47 SSM hardware mapping (scan-friendly layout) `wired` (wubu_hybrid, test PASSES)
+- JA48 Hybrid continual learning (state + weights, ties BB) `wired` (wubu_hybrid, test PASSES)
+- JA49 SSM tokenizer interplay (byte-level state inputs) `wired` (wubu_hybrid, test PASSES)
+- JA50 Hybrid provenance (mechanism attribution per token) `wired` (wubu_hybrid, test PASSES)
+- JA51 SSM quantization at scale (quantized recurrent state) `wired` (wubu_hybrid, test PASSES)
+- JA52 Hybrid verifier (verify across mechanisms) `wired` (wubu_hybrid, test PASSES)
+- JA53 SSM capacity analysis (state capacity vs KV) `wired` (wubu_hybrid, test PASSES)
+- JA54 Hybrid serving (schedule hybrid requests, ties IR) `wired` (wubu_hybrid, test PASSES)
+- JA55 SSM robustness benchmark (hybrid perturbation evals) `wired` (wubu_hybrid, test PASSES)
+- JA56 Hybrid telemetry (per-mechanism counters) `wired` (wubu_hybrid, test PASSES)
+- JA57 SSM memory consolidation (state as memory, ties IP) `wired` (wubu_hybrid, test PASSES)
+- JA58 Hybrid energy ledger (per-mechanism J) `wired` (wubu_hybrid, test PASSES)
+- JA59 SSM long-horizon stability (very-long-context behavior) `wired` (wubu_hybrid, test PASSES)
+- JA60 Hybrid architecture search (auto hybrid design) `wired` (wubu_hybrid, test PASSES)
+- JA61 SSM forgetting (state decay, ties IP05) `wired` (wubu_hybrid, test PASSES)
+- JA62 Hybrid multi-tenant (hybrid cache sharing) `wired` (wubu_hybrid, test PASSES)
+- JA63 SSM differential privacy (state privacy) `wired` (wubu_hybrid, test PASSES)
+- JA64 Hybrid watermark (mechanism-tagged outputs) `wired` (wubu_hybrid, test PASSES)
+- JA65 SSM speculative verification (SSM-verified drafts) `wired` (wubu_hybrid, test PASSES)
+- JA66 Hybrid model portability (run on any hardware) `wired` (wubu_hybrid, test PASSES)
+- JA67 Hybrid operator (auto hybrid config, ties IV) `wired` (wubu_hybrid, test PASSES)
 Status: `open` (67 gaps; attention+SSM hybrids, Hymba hybrid-head, Falcon-H1, energy/accuracy Pareto)
 
 ## Theme JB: Multimodal token compression
