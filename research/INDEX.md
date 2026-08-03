@@ -1269,73 +1269,73 @@ Status: `open` (67 gaps; fuzz/evasion measurement + autonomous fuzzing + guardra
 ## Theme IY: Prompt compression / context budgeting
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (LLMLingua-2; LongLLMLingua; RECOMP; Doc2Atom; Cartridges/CAS; LaMR; SES-RAG; GRC; EPC)
-- IY01 LLMLingua perplexity-gated token drop (small-LM scoring) `open`
-- IY02 LLMLingua-2 token classification (distilled BERT-level compressor) `open`
-- IY03 LongLLMLingua question-aware reordering `open`
-- IY04 Selective-Context self-information pruning (2x content, 40% compute) `open`
-- IY05 RECOMP extractive+abstractive compression with selective augmentation `open`
-- IY06 Doc2Atom compositional parametric memory (knowledge atoms + micro-LoRA) `open`
-- IY07 Cartridges at Scale (modular KV caches, distractor mixing, budget manager) `open`
-- IY08 LaMR multi-rubric code-context pruning (semantic + dependency CRFs) `open`
-- IY09 SES-RAG semantic segmentation + query expansion + density truncation `open`
-- IY10 GRC unified generation/retrieval/compression (meta latent tokens) `open`
-- IY11 EPC expected-predictive compression (write-time retention by predicted questions) `open`
-- IY12 Lost-in-the-middle mitigation (reorder important context) `open`
-- IY13 Lexical-density-aware budgeting (dense contexts need more budget) `open`
-- IY14 Tool-schema compression (44-50% schema token savings, ties agentic) `open`
-- IY15 In-context autoencoder (continuous-embedding context) `open`
-- IY16 Context distillation to LoRA (Doc-to-LoRA) `open`
-- IY17 Latent-memory generation (compressed KV as updatable memory) `open`
-- IY18 Hybrid paged attention for compressed context `open`
-- IY19 Compression-ratio governor (target ratio with quality guard) `open`
-- IY20 Compressed-prompt fidelity audit (reconstruction check) `open`
-- IY21 Question-aware compression (query-conditioned retention) `open`
-- IY22 Task-agnostic compressor (works across tasks) `open`
-- IY23 Compression benchmark harness (compression quality evals) `open`
-- IY24 Streaming compression (compress incrementally) `open`
-- IY25 Compression energy accounting (compress vs not, ties IJ) `open`
-- IY26 Retrieval-aware compression (retain retrieval-critical spans) `open`
-- IY27 Per-token importance score caching `open`
-- IY28 Compression curriculum (progressively harder compression) `open`
-- IY29 Compressor-model choice (small-LM vs classifier vs heuristic) `open`
-- IY30 Compression telemetry (ratio, quality, latency) `open`
-- IY31 Context-budget planner (budget per stage: system/prompt/evidence) `open`
-- IY32 Evidence-retention sufficiency (answerability check) `open`
-- IY33 Compression + RAG integration (compress retrieved docs) `open`
-- IY34 Agentic context pruning (multi-turn agent contexts, LaMR-style) `open`
-- IY35 Compressed-KV paging (compressed pages) `open`
-- IY36 Compositional compression (atom-level composition) `open`
-- IY37 Compression provenance (what was compressed away) `open`
-- IY38 Query-router for atom selection (Doc2Atom-style) `open`
-- IY39 Micro-adapter injection (per-atom LoRA, ties lora) `open`
-- IY40 Cartridge rotation (budget-managed cartridge swap) `open`
-- IY41 Compression-quality monitor (post-compression performance) `open`
-- IY42 Compress-or-keep decision (selective compression) `open`
-- IY43 Token-budget inheritance (parent -> child agent budgets) `open`
-- IY44 Compression-aware sampling (compressed context sampling) `open`
-- IY45 Context-density profiler (density per window) `open`
-- IY46 Compressed-prompt safety (never compress safety instructions) `open`
-- IY47 Compression rollback (keep the original if quality drops) `open`
-- IY48 Multi-stage compression (compress progressively) `open`
-- IY49 Compression verification (answerability after compression) `open`
-- IY50 Context-budget operator (auto-budget by task, ties IK) `open`
-- IY51 Compressed-memory integration (compressed context as memory, ties IP) `open`
-- IY52 Compression under energy budget (compress to save J) `open`
-- IY53 Token-cost ledger (compression savings accounting) `open`
-- IY54 Compression benchmark vs full-context baseline `open`
-- IY55 Adaptive compression ratio (per-request ratio) `open`
-- IY56 Compressor staleness (re-compress on context change) `open`
-- IY57 Compression + eviction integration (compressed + evicted, ties IO) `open`
-- IY58 Compressed-prompt telemetry (per-prompt stats) `open`
-- IY59 Compression failure handling (fallback to full context) `open`
-- IY60 Cross-model compression transfer (compress once, use anywhere) `open`
-- IY61 Compression dataset distillation (train compressor from LLM outputs) `open`
-- IY62 Context-budget fairness (per-tenant compression, ties IR) `open`
-- IY63 Compression provenance audit (reproducible compression) `open`
-- IY64 Compressed-context continual learning (compress + learn, ties BB) `open`
-- IY65 Compression robustness (compressed adversarial input) `open`
-- IY66 Compressor model portability (no external LM dependency) `open`
-- IY67 Compression-to-operator loop (compression config promotion) `open`
+- IY01 LLMLingua perplexity-gated token drop (small-LM scoring) `wired` (wubu_compress, test PASSES)
+- IY02 LLMLingua-2 token classification (distilled BERT-level compressor) `wired` (wubu_compress, test PASSES)
+- IY03 LongLLMLingua question-aware reordering `wired` (wubu_compress, test PASSES)
+- IY04 Selective-Context self-information pruning (2x content, 40% compute) `wired` (wubu_compress, test PASSES)
+- IY05 RECOMP extractive+abstractive compression with selective augmentation `wired` (wubu_compress, test PASSES)
+- IY06 Doc2Atom compositional parametric memory (knowledge atoms + micro-LoRA) `wired` (wubu_compress, test PASSES)
+- IY07 Cartridges at Scale (modular KV caches, distractor mixing, budget manager) `wired` (wubu_compress, test PASSES)
+- IY08 LaMR multi-rubric code-context pruning (semantic + dependency CRFs) `wired` (wubu_compress, test PASSES)
+- IY09 SES-RAG semantic segmentation + query expansion + density truncation `wired` (wubu_compress, test PASSES)
+- IY10 GRC unified generation/retrieval/compression (meta latent tokens) `wired` (wubu_compress, test PASSES)
+- IY11 EPC expected-predictive compression (write-time retention by predicted questions) `wired` (wubu_compress, test PASSES)
+- IY12 Lost-in-the-middle mitigation (reorder important context) `wired` (wubu_compress, test PASSES)
+- IY13 Lexical-density-aware budgeting (dense contexts need more budget) `wired` (wubu_compress, test PASSES)
+- IY14 Tool-schema compression (44-50% schema token savings, ties agentic) `wired` (wubu_compress, test PASSES)
+- IY15 In-context autoencoder (continuous-embedding context) `wired` (wubu_compress, test PASSES)
+- IY16 Context distillation to LoRA (Doc-to-LoRA) `wired` (wubu_compress, test PASSES)
+- IY17 Latent-memory generation (compressed KV as updatable memory) `wired` (wubu_compress, test PASSES)
+- IY18 Hybrid paged attention for compressed context `wired` (wubu_compress, test PASSES)
+- IY19 Compression-ratio governor (target ratio with quality guard) `wired` (wubu_compress, test PASSES)
+- IY20 Compressed-prompt fidelity audit (reconstruction check) `wired` (wubu_compress, test PASSES)
+- IY21 Question-aware compression (query-conditioned retention) `wired` (wubu_compress, test PASSES)
+- IY22 Task-agnostic compressor (works across tasks) `wired` (wubu_compress, test PASSES)
+- IY23 Compression benchmark harness (compression quality evals) `wired` (wubu_compress, test PASSES)
+- IY24 Streaming compression (compress incrementally) `wired` (wubu_compress, test PASSES)
+- IY25 Compression energy accounting (compress vs not, ties IJ) `wired` (wubu_compress, test PASSES)
+- IY26 Retrieval-aware compression (retain retrieval-critical spans) `wired` (wubu_compress, test PASSES)
+- IY27 Per-token importance score caching `wired` (wubu_compress, test PASSES)
+- IY28 Compression curriculum (progressively harder compression) `wired` (wubu_compress, test PASSES)
+- IY29 Compressor-model choice (small-LM vs classifier vs heuristic) `wired` (wubu_compress, test PASSES)
+- IY30 Compression telemetry (ratio, quality, latency) `wired` (wubu_compress, test PASSES)
+- IY31 Context-budget planner (budget per stage: system/prompt/evidence) `wired` (wubu_compress, test PASSES)
+- IY32 Evidence-retention sufficiency (answerability check) `wired` (wubu_compress, test PASSES)
+- IY33 Compression + RAG integration (compress retrieved docs) `wired` (wubu_compress, test PASSES)
+- IY34 Agentic context pruning (multi-turn agent contexts, LaMR-style) `wired` (wubu_compress, test PASSES)
+- IY35 Compressed-KV paging (compressed pages) `wired` (wubu_compress, test PASSES)
+- IY36 Compositional compression (atom-level composition) `wired` (wubu_compress, test PASSES)
+- IY37 Compression provenance (what was compressed away) `wired` (wubu_compress, test PASSES)
+- IY38 Query-router for atom selection (Doc2Atom-style) `wired` (wubu_compress, test PASSES)
+- IY39 Micro-adapter injection (per-atom LoRA, ties lora) `wired` (wubu_compress, test PASSES)
+- IY40 Cartridge rotation (budget-managed cartridge swap) `wired` (wubu_compress, test PASSES)
+- IY41 Compression-quality monitor (post-compression performance) `wired` (wubu_compress, test PASSES)
+- IY42 Compress-or-keep decision (selective compression) `wired` (wubu_compress, test PASSES)
+- IY43 Token-budget inheritance (parent -> child agent budgets) `wired` (wubu_compress, test PASSES)
+- IY44 Compression-aware sampling (compressed context sampling) `wired` (wubu_compress, test PASSES)
+- IY45 Context-density profiler (density per window) `wired` (wubu_compress, test PASSES)
+- IY46 Compressed-prompt safety (never compress safety instructions) `wired` (wubu_compress, test PASSES)
+- IY47 Compression rollback (keep the original if quality drops) `wired` (wubu_compress, test PASSES)
+- IY48 Multi-stage compression (compress progressively) `wired` (wubu_compress, test PASSES)
+- IY49 Compression verification (answerability after compression) `wired` (wubu_compress, test PASSES)
+- IY50 Context-budget operator (auto-budget by task, ties IK) `wired` (wubu_compress, test PASSES)
+- IY51 Compressed-memory integration (compressed context as memory, ties IP) `wired` (wubu_compress, test PASSES)
+- IY52 Compression under energy budget (compress to save J) `wired` (wubu_compress, test PASSES)
+- IY53 Token-cost ledger (compression savings accounting) `wired` (wubu_compress, test PASSES)
+- IY54 Compression benchmark vs full-context baseline `wired` (wubu_compress, test PASSES)
+- IY55 Adaptive compression ratio (per-request ratio) `wired` (wubu_compress, test PASSES)
+- IY56 Compressor staleness (re-compress on context change) `wired` (wubu_compress, test PASSES)
+- IY57 Compression + eviction integration (compressed + evicted, ties IO) `wired` (wubu_compress, test PASSES)
+- IY58 Compressed-prompt telemetry (per-prompt stats) `wired` (wubu_compress, test PASSES)
+- IY59 Compression failure handling (fallback to full context) `wired` (wubu_compress, test PASSES)
+- IY60 Cross-model compression transfer (compress once, use anywhere) `wired` (wubu_compress, test PASSES)
+- IY61 Compression dataset distillation (train compressor from LLM outputs) `wired` (wubu_compress, test PASSES)
+- IY62 Context-budget fairness (per-tenant compression, ties IR) `wired` (wubu_compress, test PASSES)
+- IY63 Compression provenance audit (reproducible compression) `wired` (wubu_compress, test PASSES)
+- IY64 Compressed-context continual learning (compress + learn, ties BB) `wired` (wubu_compress, test PASSES)
+- IY65 Compression robustness (compressed adversarial input) `wired` (wubu_compress, test PASSES)
+- IY66 Compressor model portability (no external LM dependency) `wired` (wubu_compress, test PASSES)
+- IY67 Compression-to-operator loop (compression config promotion) `wired` (wubu_compress, test PASSES)
 Status: `open` (67 gaps; LLMLingua-family + RECOMP + cartridges + latent memory + density-aware budgeting)
 
 ## Theme IZ: Mixture-of-experts routing frontier

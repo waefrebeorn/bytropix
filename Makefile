@@ -238,6 +238,7 @@ src/wubu_metacog.o: src/wubu_metacog.c include/wubu_metacog.h
 src/wubu_bridge.o: src/wubu_bridge.c include/wubu_bridge.h
 src/wubu_hopfield2.o: src/wubu_hopfield2.c include/wubu_hopfield2.h
 src/wubu_fuzz2.o: src/wubu_fuzz2.c include/wubu_fuzz2.h
+src/wubu_compress.o: src/wubu_compress.c include/wubu_compress.h
 src/wubu_fuzz.o: src/wubu_fuzz.c include/wubu_fuzz.h
 src/wubu_neurom.o: src/wubu_neurom.c include/wubu_neurom.h
 src/wubu_rsi.o: src/wubu_rsi.c include/wubu_rsi.h
@@ -1108,6 +1109,10 @@ test_hopfield2: tools/test_hopfield2.c src/wubu_hopfield2.o
 	./$@
 
 test_fuzz2: tools/test_fuzz2.c src/wubu_fuzz2.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
+test_compress: tools/test_compress.c src/wubu_compress.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
