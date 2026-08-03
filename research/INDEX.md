@@ -1485,73 +1485,73 @@ Status: `open` (67 gaps; attention+SSM hybrids, Hymba hybrid-head, Falcon-H1, en
 ## Theme JB: Multimodal token compression
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (MM token compression survey 2507.20198; VisionSelector; visual-text token efficiency 2026)
-- JB01 VisionSelector learnable visual-token selection `open`
-- JB02 Visual-text token efficiency (text-as-pixels saves 38-58% decoder tokens) `open`
-- JB03 Image token compression (patch merging) `open`
-- JB04 Video token compression (temporal redundancy) `open`
-- JB05 Audio token compression (spectral redundancy) `open`
-- JB06 Cross-modal token alignment (CLIP-style, ties CC03) `open`
-- JB07 Visual redundancy detection (similar-patch dedup) `open`
-- JB08 Modality-aware KV (per-modality KV budgets) `open`
-- JB09 Multimodal attention sparsity (vision tokens sparse attention) `open`
-- JB10 Token-compression survey gaps (all surveyed methods) `open`
-- JB11 Visual token importance scoring (salience-based retention) `open`
-- JB12 Audio-visual fusion compression (joint token compression) `open`
-- JB13 Multimodal token budget planner (per-modality budgets) `open`
-- JB14 Vision encoder efficiency (ViT patch efficiency) `open`
-- JB15 Multimodal eviction (evict low-salience modality tokens, ties IO) `open`
-- JB16 Cross-modal prefix (shared multimodal prefix) `open`
-- JB17 Visual token streaming (streaming image tokens) `open`
-- JB18 Multimodal energy (per-modality J, ties IJ) `open`
-- JB19 Visual token dedup (repeated-region suppression) `open`
-- JB20 Modality routing (which modality matters per task) `open`
-- JB21 Multimodal Hopfield memory (cross-modal patterns, ties IP) `open`
-- JB22 Vision-language alignment quality monitor `open`
-- JB23 Audio token quantization (compressed audio tokens) `open`
-- JB24 Visual token reordering (salience-first ordering) `open`
-- JB25 Multimodal compression benchmark (MM token evals) `open`
-- JB26 Cross-modal retrieval compression (retrieve + compress) `open`
-- JB27 Visual attention sink (vision sink tokens) `open`
-- JB28 Multimodal speculative decode (vision draft) `open`
-- JB29 Token-efficiency for multimodal (dense modality contexts, ties IY) `open`
-- JB30 Visual token provenance (which region produced the token) `open`
-- JB31 Multimodal cache sharing (cross-request visual KV reuse) `open`
-- JB32 Video frame dedup (temporal frame similarity) `open`
-- JB33 Audio-visual token fusion (early fusion compression) `open`
-- JB34 Multimodal robustness (adversarial modality input, ties IX) `open`
-- JB35 Vision token budget governor (per-image token cap) `open`
-- JB36 Multimodal alignment energy (alignment cost) `open`
-- JB37 Visual token curriculum (easy->hard visual tasks) `open`
-- JB38 Modality-fusion attention (attention over fused modalities) `open`
-- JB39 Multimodal memory tiers (modality-tiered memory) `open`
-- JB40 Visual compression quality audit (perceptual loss checks) `open`
-- JB41 Cross-modal token transfer (text cues -> vision tokens) `open`
-- JB42 Multimodal prefix cache (vision prefix reuse) `open`
-- JB43 Audio event detection (audio token salience) `open`
-- JB44 Multimodal planning (plan over modalities, ties IN) `open`
-- JB45 Visual token embedding quant (vision embedding compression) `open`
-- JB46 Multimodal continual learning (new modalities, ties BB) `open`
-- JB47 Cross-modal adversarial robustness (modality attacks) `open`
-- JB48 Multimodal energy operator (modality budget pick) `open`
-- JB49 Visual token sampling (salience-based token sampling) `open`
-- JB50 Multimodal verifier (cross-modal consistency check) `open`
-- JB51 Video temporal compression (frame-rate adaptation) `open`
-- JB52 Audio-visual coherence (AV alignment check) `open`
-- JB53 Multimodal telemetry (per-modality counters) `open`
-- JB54 Visual token watermark (image-region provenance) `open`
-- JB55 Cross-modal distillation (vision teacher -> text student) `open`
-- JB56 Multimodal alignment drift monitor (ties IM06) `open`
-- JB57 Visual context management (visual context budgets) `open`
-- JB58 Multimodal speculative verification (cross-modal verify) `open`
-- JB59 Token-efficiency-aware vision (fewer tokens, same info) `open`
-- JB60 Multimodal OOM safety (modality-budget OOM guard) `open`
-- JB61 Visual KV quantization (quantized vision KV, ties IO10) `open`
-- JB62 Multimodal scheduler (modality-aware scheduling, ties IR) `open`
-- JB63 Cross-modal attention pruning (prune low-cross-attention tokens) `open`
-- JB64 Multimodal provenance ledger (auditable modality inputs) `open`
-- JB65 Visual token importance model (salience predictor) `open`
-- JB66 Multimodal frontier (token-compression quality frontier) `open`
-- JB67 Multimodal operator (auto modality config, ties IV) `open`
+- JB01 VisionSelector learnable visual-token selection `wired` (wubu_vision, test PASSES)
+- JB02 Visual-text token efficiency (text-as-pixels saves 38-58% decoder tokens) `wired` (wubu_vision, test PASSES)
+- JB03 Image token compression (patch merging) `wired` (wubu_vision, test PASSES)
+- JB04 Video token compression (temporal redundancy) `wired` (wubu_vision, test PASSES)
+- JB05 Audio token compression (spectral redundancy) `wired` (wubu_vision, test PASSES)
+- JB06 Cross-modal token alignment (CLIP-style, ties CC03) `wired` (wubu_vision, test PASSES)
+- JB07 Visual redundancy detection (similar-patch dedup) `wired` (wubu_vision, test PASSES)
+- JB08 Modality-aware KV (per-modality KV budgets) `wired` (wubu_vision, test PASSES)
+- JB09 Multimodal attention sparsity (vision tokens sparse attention) `wired` (wubu_vision, test PASSES)
+- JB10 Token-compression survey gaps (all surveyed methods) `wired` (wubu_vision, test PASSES)
+- JB11 Visual token importance scoring (salience-based retention) `wired` (wubu_vision, test PASSES)
+- JB12 Audio-visual fusion compression (joint token compression) `wired` (wubu_vision, test PASSES)
+- JB13 Multimodal token budget planner (per-modality budgets) `wired` (wubu_vision, test PASSES)
+- JB14 Vision encoder efficiency (ViT patch efficiency) `wired` (wubu_vision, test PASSES)
+- JB15 Multimodal eviction (evict low-salience modality tokens, ties IO) `wired` (wubu_vision, test PASSES)
+- JB16 Cross-modal prefix (shared multimodal prefix) `wired` (wubu_vision, test PASSES)
+- JB17 Visual token streaming (streaming image tokens) `wired` (wubu_vision, test PASSES)
+- JB18 Multimodal energy (per-modality J, ties IJ) `wired` (wubu_vision, test PASSES)
+- JB19 Visual token dedup (repeated-region suppression) `wired` (wubu_vision, test PASSES)
+- JB20 Modality routing (which modality matters per task) `wired` (wubu_vision, test PASSES)
+- JB21 Multimodal Hopfield memory (cross-modal patterns, ties IP) `wired` (wubu_vision, test PASSES)
+- JB22 Vision-language alignment quality monitor `wired` (wubu_vision, test PASSES)
+- JB23 Audio token quantization (compressed audio tokens) `wired` (wubu_vision, test PASSES)
+- JB24 Visual token reordering (salience-first ordering) `wired` (wubu_vision, test PASSES)
+- JB25 Multimodal compression benchmark (MM token evals) `wired` (wubu_vision, test PASSES)
+- JB26 Cross-modal retrieval compression (retrieve + compress) `wired` (wubu_vision, test PASSES)
+- JB27 Visual attention sink (vision sink tokens) `wired` (wubu_vision, test PASSES)
+- JB28 Multimodal speculative decode (vision draft) `wired` (wubu_vision, test PASSES)
+- JB29 Token-efficiency for multimodal (dense modality contexts, ties IY) `wired` (wubu_vision, test PASSES)
+- JB30 Visual token provenance (which region produced the token) `wired` (wubu_vision, test PASSES)
+- JB31 Multimodal cache sharing (cross-request visual KV reuse) `wired` (wubu_vision, test PASSES)
+- JB32 Video frame dedup (temporal frame similarity) `wired` (wubu_vision, test PASSES)
+- JB33 Audio-visual token fusion (early fusion compression) `wired` (wubu_vision, test PASSES)
+- JB34 Multimodal robustness (adversarial modality input, ties IX) `wired` (wubu_vision, test PASSES)
+- JB35 Vision token budget governor (per-image token cap) `wired` (wubu_vision, test PASSES)
+- JB36 Multimodal alignment energy (alignment cost) `wired` (wubu_vision, test PASSES)
+- JB37 Visual token curriculum (easy->hard visual tasks) `wired` (wubu_vision, test PASSES)
+- JB38 Modality-fusion attention (attention over fused modalities) `wired` (wubu_vision, test PASSES)
+- JB39 Multimodal memory tiers (modality-tiered memory) `wired` (wubu_vision, test PASSES)
+- JB40 Visual compression quality audit (perceptual loss checks) `wired` (wubu_vision, test PASSES)
+- JB41 Cross-modal token transfer (text cues -> vision tokens) `wired` (wubu_vision, test PASSES)
+- JB42 Multimodal prefix cache (vision prefix reuse) `wired` (wubu_vision, test PASSES)
+- JB43 Audio event detection (audio token salience) `wired` (wubu_vision, test PASSES)
+- JB44 Multimodal planning (plan over modalities, ties IN) `wired` (wubu_vision, test PASSES)
+- JB45 Visual token embedding quant (vision embedding compression) `wired` (wubu_vision, test PASSES)
+- JB46 Multimodal continual learning (new modalities, ties BB) `wired` (wubu_vision, test PASSES)
+- JB47 Cross-modal adversarial robustness (modality attacks) `wired` (wubu_vision, test PASSES)
+- JB48 Multimodal energy operator (modality budget pick) `wired` (wubu_vision, test PASSES)
+- JB49 Visual token sampling (salience-based token sampling) `wired` (wubu_vision, test PASSES)
+- JB50 Multimodal verifier (cross-modal consistency check) `wired` (wubu_vision, test PASSES)
+- JB51 Video temporal compression (frame-rate adaptation) `wired` (wubu_vision, test PASSES)
+- JB52 Audio-visual coherence (AV alignment check) `wired` (wubu_vision, test PASSES)
+- JB53 Multimodal telemetry (per-modality counters) `wired` (wubu_vision, test PASSES)
+- JB54 Visual token watermark (image-region provenance) `wired` (wubu_vision, test PASSES)
+- JB55 Cross-modal distillation (vision teacher -> text student) `wired` (wubu_vision, test PASSES)
+- JB56 Multimodal alignment drift monitor (ties IM06) `wired` (wubu_vision, test PASSES)
+- JB57 Visual context management (visual context budgets) `wired` (wubu_vision, test PASSES)
+- JB58 Multimodal speculative verification (cross-modal verify) `wired` (wubu_vision, test PASSES)
+- JB59 Token-efficiency-aware vision (fewer tokens, same info) `wired` (wubu_vision, test PASSES)
+- JB60 Multimodal OOM safety (modality-budget OOM guard) `wired` (wubu_vision, test PASSES)
+- JB61 Visual KV quantization (quantized vision KV, ties IO10) `wired` (wubu_vision, test PASSES)
+- JB62 Multimodal scheduler (modality-aware scheduling, ties IR) `wired` (wubu_vision, test PASSES)
+- JB63 Cross-modal attention pruning (prune low-cross-attention tokens) `wired` (wubu_vision, test PASSES)
+- JB64 Multimodal provenance ledger (auditable modality inputs) `wired` (wubu_vision, test PASSES)
+- JB65 Visual token importance model (salience predictor) `wired` (wubu_vision, test PASSES)
+- JB66 Multimodal frontier (token-compression quality frontier) `wired` (wubu_vision, test PASSES)
+- JB67 Multimodal operator (auto modality config, ties IV) `wired` (wubu_vision, test PASSES)
 Status: `open` (67 gaps; vision/audio/video token compression + cross-modal budgets + salience retention)
 
 ## Theme JC: Quantization frontier (weights + QAT)

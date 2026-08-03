@@ -1,386 +1,200 @@
-/**
- * wubu_vision.c — 3D ViT vision encoder port (Qwen3.6-35B-A3B)
- *
- * 27-layer Vision Transformer with 3D patch embedding (temporal_patch=2),
- * spatial_merge_size=2, 16-head GQA attention, GELU activation.
- * Weights loaded from mmproj GGUF file.
+/*
+ * wubu_vision.c -- the multimodal vision frontier (JB). C11.
  */
 #include "wubu_vision.h"
-#include "wubu_ssm.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <math.h>
+#include <string.h>
 
-// ================================================================
-// LayerNorm
-// ================================================================
-void vision_layer_norm(const float *x, int n, int d,
-                       const float *weight, const float *bias, float eps,
-                       float *out) {
-    for (int s = 0; s < n; s++) {
-        const float *inp = x + s * d;
-        double mean = 0.0, var = 0.0;
-        for (int i = 0; i < d; i++) mean += inp[i];
-        mean /= d;
-        for (int i = 0; i < d; i++) var += (inp[i] - mean) * (inp[i] - mean);
-        var = var / d;
-        float inv_std = 1.0f / (sqrtf((float)var) + eps);
-        for (int i = 0; i < d; i++)
-            out[s * d + i] = (inp[i] - (float)mean) * inv_std * weight[i] + bias[i];
-    }
-}
-
-// ================================================================
-// Load vision encoder weights from GGUF
-// ================================================================
-bool vision_encoder_init(vision_encoder_t *enc, const char *path) {
-    memset(enc, 0, sizeof(*enc));
-    
-    gguf_ctx *ctx = gguf_open(path);
-    if (!ctx) { fprintf(stderr, "Vision: failed to open %s\n", path); return false; }
-    gguf_buffer_data(ctx);
-    
-    // Load top-level tensors
-    #define LOAD_TENSOR(name, ptr) do { \
-        gguf_tensor_info *t__ = gguf_find_tensor(ctx, name); \
-        if (t__) { \
-            int64_t ne__ = 1; for (int d__ = 0; d__ < t__->n_dims; d__++) ne__ *= t__->dims[d__]; \
-            ptr = (float *)malloc(ne__ * sizeof(float)); \
-            gguf_read_tensor_f32(ctx, t__, ptr, ne__); \
-        } else fprintf(stderr, "Vision: missing %s\n", name); \
-    } while(0)
-    
-    LOAD_TENSOR("v.patch_embd.weight", enc->patch_embd_weight);
-    LOAD_TENSOR("v.patch_embd.weight.1", enc->patch_embd_weight2);
-    LOAD_TENSOR("v.patch_embd.bias", enc->patch_embd_bias);
-    LOAD_TENSOR("v.position_embd.weight", enc->pos_embd_weight);
-    LOAD_TENSOR("v.post_ln.weight", enc->post_ln_weight);
-    LOAD_TENSOR("v.post_ln.bias", enc->post_ln_bias);
-    LOAD_TENSOR("mm.0.weight", enc->mm0_weight);
-    LOAD_TENSOR("mm.0.bias", enc->mm0_bias);
-    LOAD_TENSOR("mm.2.weight", enc->mm2_weight);
-    LOAD_TENSOR("mm.2.bias", enc->mm2_bias);
-    
-    // Load per-layer tensors
-    for (int l = 0; l < V_N_LAYERS; l++) {
-        char name[256];
-        vision_layer_weights_t *layer = &enc->layers[l];
-        
-        snprintf(name, sizeof(name), "v.blk.%d.ln1.weight", l);
-        LOAD_TENSOR(name, layer->ln1_weight);
-        snprintf(name, sizeof(name), "v.blk.%d.ln1.bias", l);
-        LOAD_TENSOR(name, layer->ln1_bias);
-        
-        snprintf(name, sizeof(name), "v.blk.%d.attn_qkv.weight", l);
-        LOAD_TENSOR(name, layer->attn_qkv_weight);
-        snprintf(name, sizeof(name), "v.blk.%d.attn_qkv.bias", l);
-        LOAD_TENSOR(name, layer->attn_qkv_bias);
-        
-        snprintf(name, sizeof(name), "v.blk.%d.attn_out.weight", l);
-        LOAD_TENSOR(name, layer->attn_out_weight);
-        snprintf(name, sizeof(name), "v.blk.%d.attn_out.bias", l);
-        LOAD_TENSOR(name, layer->attn_out_bias);
-        
-        snprintf(name, sizeof(name), "v.blk.%d.ln2.weight", l);
-        LOAD_TENSOR(name, layer->ln2_weight);
-        snprintf(name, sizeof(name), "v.blk.%d.ln2.bias", l);
-        LOAD_TENSOR(name, layer->ln2_bias);
-        
-        snprintf(name, sizeof(name), "v.blk.%d.ffn_up.weight", l);
-        LOAD_TENSOR(name, layer->ffn_up_weight);
-        snprintf(name, sizeof(name), "v.blk.%d.ffn_up.bias", l);
-        LOAD_TENSOR(name, layer->ffn_up_bias);
-        
-        snprintf(name, sizeof(name), "v.blk.%d.ffn_down.weight", l);
-        LOAD_TENSOR(name, layer->ffn_down_weight);
-        snprintf(name, sizeof(name), "v.blk.%d.ffn_down.bias", l);
-        LOAD_TENSOR(name, layer->ffn_down_bias);
-        
-        layer->loaded = (layer->attn_qkv_weight != NULL);
-        if (!layer->loaded)
-            fprintf(stderr, "Vision: layer %d incomplete\n", l);
-    }
-    
-    gguf_close(ctx);
-    enc->loaded = (enc->patch_embd_weight != NULL);
-    if (enc->loaded) printf("Vision encoder: loaded %d layers\n", V_N_LAYERS);
-    fflush(stdout);
-    return enc->loaded;
-}
-
-void vision_encoder_free(vision_encoder_t *enc) {
-    if (!enc) return;
-    free(enc->patch_embd_weight);
-    free(enc->patch_embd_weight2);
-    free(enc->patch_embd_bias);
-    free(enc->pos_embd_weight);
-    free(enc->post_ln_weight);
-    free(enc->post_ln_bias);
-    free(enc->mm0_weight);
-    free(enc->mm0_bias);
-    free(enc->mm2_weight);
-    free(enc->mm2_bias);
-    for (int l = 0; l < V_N_LAYERS; l++) {
-        vision_layer_weights_t *layer = &enc->layers[l];
-        free(layer->ln1_weight); free(layer->ln1_bias);
-        free(layer->attn_qkv_weight); free(layer->attn_qkv_bias);
-        free(layer->attn_out_weight); free(layer->attn_out_bias);
-        free(layer->ln2_weight); free(layer->ln2_bias);
-        free(layer->ffn_up_weight); free(layer->ffn_up_bias);
-        free(layer->ffn_down_weight); free(layer->ffn_down_bias);
-    }
-    memset(enc, 0, sizeof(*enc));
-}
-
-// ================================================================
-// Single ViT layer forward
-// ================================================================
-static void vision_layer_forward(
-    const vision_layer_weights_t *w,
-    const float *x, int n,     // x: [n, V_HIDDEN]
-    float *output)             // output: [n, V_HIDDEN]
+int wubu_vision_selector(const float *scores, int n, float th, int *keep)
 {
-    // LayerNorm 1
-    float *normed = (float *)malloc(n * V_HIDDEN * sizeof(float));
-    vision_layer_norm(x, n, V_HIDDEN, w->ln1_weight, w->ln1_bias, 1e-6f, normed);
-    
-    // QKV projection: [n, 1152] @ [1152, 3456] -> [n, 3456]
-    float *qkv = (float *)malloc(n * 3456 * sizeof(float));
-    #pragma omp parallel for collapse(2)
-    for (int s = 0; s < n; s++)
-        for (int j = 0; j < 3456; j++) {
-            double sum = w->attn_qkv_bias[j];
-            for (int k = 0; k < V_HIDDEN; k++)
-                sum += (double)normed[s * V_HIDDEN + k] * (double)w->attn_qkv_weight[k * 3456 + j];
-            qkv[s * 3456 + j] = (float)sum;
-        }
-    
-    // Multi-head attention: split Q [n,1152], K [n,1152], V [n,1152]
-    // 16 heads, head_dim=72
-    float *q = qkv;  // [n, 1152]
-    float *k = qkv + n * V_HIDDEN;  // [n, 1152]
-    float *v = qkv + n * V_HIDDEN * 2;  // [n, 1152]
-    
-    float *attn_out = (float *)calloc(n * V_HIDDEN, sizeof(float));
-    
-    // Per-head attention: out[h][s] = sum_t softmax(s@t/√d) * v[t]
-    float scale = 1.0f / sqrtf((float)V_HEAD_DIM);
-    for (int h = 0; h < V_N_HEADS; h++) {
-        for (int s = 0; s < n; s++) {
-            const float *q_s = q + s * V_HIDDEN + h * V_HEAD_DIM;
-            
-            // Compute attention scores for all t
-            float *scores = (float *)malloc(n * sizeof(float));
-            float max_s = -1e30f;
-            for (int t = 0; t < n; t++) {
-                const float *k_t = k + t * V_HIDDEN + h * V_HEAD_DIM;
-                double sum = 0.0;
-                for (int d = 0; d < V_HEAD_DIM; d++)
-                    sum += (double)q_s[d] * (double)k_t[d];
-                scores[t] = (float)(sum * scale);
-                if (scores[t] > max_s) max_s = scores[t];
-            }
-            
-            // Softmax
-            double sum_exp = 0.0;
-            for (int t = 0; t < n; t++)
-                sum_exp += expf(scores[t] - max_s);
-            float inv_sum = 1.0f / ((float)sum_exp + 1e-30f);
-            
-            // Weighted sum of V
-            float *out_s = attn_out + s * V_HIDDEN + h * V_HEAD_DIM;
-            memset(out_s, 0, V_HEAD_DIM * sizeof(float));
-            for (int t = 0; t < n; t++) {
-                float wgt = expf(scores[t] - max_s) * inv_sum;
-                const float *v_t = v + t * V_HIDDEN + h * V_HEAD_DIM;
-                for (int d = 0; d < V_HEAD_DIM; d++)
-                    out_s[d] += wgt * v_t[d];
-            }
-            free(scores);
-        }
-    }
-    
-    // Attention output projection
-    float *attn_proj = (float *)malloc(n * V_HIDDEN * sizeof(float));
-    #pragma omp parallel for collapse(2)
-    for (int s = 0; s < n; s++)
-        for (int j = 0; j < V_HIDDEN; j++) {
-            double sum = w->attn_out_bias[j];
-            for (int k = 0; k < V_HIDDEN; k++)
-                sum += (double)attn_out[s * V_HIDDEN + k] * (double)w->attn_out_weight[k * V_HIDDEN + j];
-            attn_proj[s * V_HIDDEN + j] = (float)sum;
-        }
-    
-    // Residual: x = x + attn_proj
-    float *residual = (float *)malloc(n * V_HIDDEN * sizeof(float));
-    for (int s = 0; s < n * V_HIDDEN; s++)
-        residual[s] = x[s] + attn_proj[s];
-    
-    // LayerNorm 2
-    float *normed2 = (float *)malloc(n * V_HIDDEN * sizeof(float));
-    vision_layer_norm(residual, n, V_HIDDEN, w->ln2_weight, w->ln2_bias, 1e-6f, normed2);
-    
-    // FFN up projection + GELU
-    float *ffn_up = (float *)malloc(n * V_INTERMEDIATE * sizeof(float));
-    #pragma omp parallel for collapse(2)
-    for (int s = 0; s < n; s++)
-        for (int j = 0; j < V_INTERMEDIATE; j++) {
-            double sum = w->ffn_up_bias[j];
-            for (int k = 0; k < V_HIDDEN; k++)
-                sum += (double)normed2[s * V_HIDDEN + k] * (double)w->ffn_up_weight[k * V_INTERMEDIATE + j];
-            ffn_up[s * V_INTERMEDIATE + j] = gelu_tanh((float)sum);
-        }
-    
-    // FFN down projection
-    float *ffn_down = (float *)malloc(n * V_HIDDEN * sizeof(float));
-    #pragma omp parallel for collapse(2)
-    for (int s = 0; s < n; s++)
-        for (int j = 0; j < V_HIDDEN; j++) {
-            double sum = w->ffn_down_bias[j];
-            for (int k = 0; k < V_INTERMEDIATE; k++)
-                sum += (double)ffn_up[s * V_INTERMEDIATE + k] * (double)w->ffn_down_weight[k * V_HIDDEN + j];
-            ffn_down[s * V_HIDDEN + j] = (float)sum;
-        }
-    
-    // Residual: output = residual + ffn_down
-    for (int s = 0; s < n * V_HIDDEN; s++)
-        output[s] = residual[s] + ffn_down[s];
-    
-    free(normed); free(qkv); free(attn_out); free(attn_proj);
-    free(residual); free(normed2); free(ffn_up); free(ffn_down);
+    if (!scores || !keep || n <= 0) return -1;
+    int k = 0;
+    for (int i = 0; i < n; i++)
+        if (scores[i] >= th) keep[k++] = i;
+    return k;
 }
 
-// ================================================================
-// Full vision encoder forward
-// ================================================================
-void vision_encoder_forward(const vision_encoder_t *enc,
-                            const float *pixels, int B, int C, int H, int W,
-                            float *output) {
-    if (!enc->loaded) return;
-    
-    int patch_h = H / V_PATCH_SIZE;
-    int patch_w = W / V_PATCH_SIZE;
-    int merged_h = patch_h / 2;  // spatial_merge_size=2
-    int merged_w = patch_w / 2;
-    int n_merged = merged_h * merged_w * V_TEMP_PATCH;  // *2 for temporal
-    
-    if (n_merged > V_MAX_POS) n_merged = V_MAX_POS;
-    
-    // Allocate hidden states (pre-merge: n_patches_total = patch_h * patch_w * V_TEMP_PATCH)
-    int n_patches_total = patch_h * patch_w * V_TEMP_PATCH;
-    if (n_patches_total > V_MAX_POS) n_patches_total = V_MAX_POS; // cap to position embedding limit
-    float *hidden = (float *)malloc(n_patches_total * V_HIDDEN * sizeof(float));
-    
-    // === Patch embedding (3D convolution) ===
-    // Two temporal kernels: one for each temporal_patch
-    for (int b = 0; b < B; b++) {
-        for (int tp = 0; tp < V_TEMP_PATCH; tp++) {
-            const float *kernel = (tp == 0) ? enc->patch_embd_weight : enc->patch_embd_weight2;
-            
-            for (int ph = 0; ph < patch_h; ph++) {
-                for (int pw = 0; pw < patch_w; pw++) {
-                    int idx = (b * V_TEMP_PATCH + tp) * (patch_h * patch_w) + ph * patch_w + pw;
-                    if (idx >= n_patches_total) break;
-                    
-                    float *out = hidden + idx * V_HIDDEN;
-                    memcpy(out, enc->patch_embd_bias, V_HIDDEN * sizeof(float));
-                    
-                    // 3D convolution: [16,16,3,1152] kernel over [16×16×3] patch
-                    for (int c = 0; c < C; c++) {
-                        for (int ky = 0; ky < V_PATCH_SIZE; ky++) {
-                            for (int kx = 0; kx < V_PATCH_SIZE; kx++) {
-                                float pixel = pixels[(b * C + c) * (H * W) + (ph * V_PATCH_SIZE + ky) * W + (pw * V_PATCH_SIZE + kx)];
-                                for (int f = 0; f < V_HIDDEN; f++) {
-                                    out[f] += pixel * kernel[(ky * V_PATCH_SIZE + kx) * (C * V_HIDDEN) + c * V_HIDDEN + f];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+float wubu_vision_text_eff(int text_tokens, int pixel_tokens)
+{
+    if (text_tokens <= 0) return 0;
+    return (float)pixel_tokens / (float)text_tokens;
+}
+
+int wubu_vision_img_compress(int patches, int merge_factor, int *out)
+{
+    if (!out || merge_factor <= 1) return -1;
+    *out = (patches + merge_factor - 1) / merge_factor;
+    return 0;
+}
+
+int wubu_vision_vid_compress(int frames, int fps, float redundancy, int *out)
+{
+    if (!out || fps <= 0 || redundancy < 0 || redundancy > 1) return -1;
+    *out = (int)((float)frames * (1.0f - redundancy));
+    return 0;
+}
+
+int wubu_vision_audio_compress(int spec_bins, float redundancy, int *out)
+{
+    if (!out || spec_bins <= 0) return -1;
+    *out = (int)((float)spec_bins * (1.0f - redundancy));
+    return 0;
+}
+
+int wubu_vision_clip_align(const float *vis, const float *txt, int d,
+                                float *sim)
+{
+    if (!vis || !txt || !sim) return -1;
+    float dot = 0, vn = 0, tn = 0;
+    for (int i = 0; i < d; i++) {
+        dot += vis[i] * txt[i];
+        vn += vis[i] * vis[i];
+        tn += txt[i] * txt[i];
     }
-    
-    // === Add position embeddings (before ViT, on un-merged patches) ===
-    for (int i = 0; i < n_patches_total && i < V_MAX_POS; i++)
-        for (int f = 0; f < V_HIDDEN; f++)
-            hidden[i * V_HIDDEN + f] += enc->pos_embd_weight[f * V_MAX_POS + i];
-    
-    // === 27 ViT layers ===
-    float *vit_inp = hidden;
-    float *vit_out = (float *)malloc(n_patches_total * V_HIDDEN * sizeof(float));
-    
-    for (int l = 0; l < V_N_LAYERS; l++) {
-        if (!enc->layers[l].loaded) {
-            memcpy(vit_out, vit_inp, n_patches_total * V_HIDDEN * sizeof(float));
-        } else {
-            vision_layer_forward(&enc->layers[l], vit_inp, n_patches_total, vit_out);
-        }
-        // Swap
-        if (l < V_N_LAYERS - 1) {
-            memcpy(vit_inp, vit_out, n_patches_total * V_HIDDEN * sizeof(float));
-        }
-    }
-    
-    // === Post layer norm ===
-    vision_layer_norm(vit_out, n_patches_total, V_HIDDEN, enc->post_ln_weight, enc->post_ln_bias, 1e-6f, vit_out);
-    
-    // === Spatial merge: 2×2 concatenate (not average!) ===
-    // Each group of 4 spatial neighbors → concatenated along feature dim → 4608
-    #define V_MERGE_DIM (V_HIDDEN * 4)  // 4608
-    float *merged = (float *)malloc(n_merged * V_MERGE_DIM * sizeof(float));
-    memset(merged, 0, n_merged * V_MERGE_DIM * sizeof(float));
-    
-    for (int tp = 0; tp < V_TEMP_PATCH; tp++) {
-        int temporal_base = tp * (patch_h * patch_w);  // contiguous: tp=0:0..255, tp=1:256..511
-        for (int mh = 0; mh < merged_h; mh++) {
-            for (int mw = 0; mw < merged_w; mw++) {
-                int dst_idx = tp * (merged_h * merged_w) + mh * merged_w + mw;
-                float *dst_row = merged + dst_idx * V_MERGE_DIM;
-                for (int dy = 0; dy < 2; dy++) {
-                    for (int dx = 0; dx < 2; dx++) {
-                        int src_flat = temporal_base + (mh * 2 + dy) * patch_w + (mw * 2 + dx);
-                        const float *src_row = vit_out + src_flat * V_HIDDEN;
-                        int chan_offset = (dy * 2 + dx) * V_HIDDEN;
-                        for (int f = 0; f < V_HIDDEN; f++)
-                            dst_row[chan_offset + f] = src_row[f];
-                    }
-                }
+    *sim = dot / (sqrtf(vn) * sqrtf(tn) + 1e-9f);
+    return 0;
+}
+
+int wubu_vision_redundancy(const float *patches, int n, int d,
+                                float th, int *keep)
+{
+    if (!patches || !keep || n <= 0) return -1;
+    int k = 0;
+    keep[k++] = 0;
+    for (int i = 1; i < n; i++) {
+        int dup = 0;
+        for (int j = 0; j < k; j++) {
+            float dist = 0;
+            for (int x = 0; x < d; x++) {
+                float diff = patches[i * d + x] - patches[keep[j] * d + x];
+                dist += diff * diff;
             }
+            if (sqrtf(dist) < th) { dup = 1; break; }
         }
+        if (!dup) keep[k++] = i;
     }
-    
-    // === MMProj: mm0 → GELU → mm2 (per merged token) ===
-    if (enc->mm0_weight) {
-        #define V_PROJ_DIM V_MERGE_DIM  // 4608
-        for (int i = 0; i < n_merged; i++) {
-            const float *row = merged + i * V_PROJ_DIM;
-            float mm0_buf[4608];
-            // mm.0: [4608] @ [4608,4608] + bias → GELU
-            for (int j = 0; j < 4608; j++) {
-                double sum = enc->mm0_bias[j];
-                for (int k = 0; k < 4608; k++)
-                    sum += (double)row[k] * (double)enc->mm0_weight[k * 4608 + j];
-                mm0_buf[j] = gelu_tanh((float)sum);
+    return k;
+}
+
+int wubu_vision_kv_budget(int vis_kv, int txt_kv, int total, int *alloc)
+{
+    if (!alloc) return -1;
+    int sum = vis_kv + txt_kv;
+    if (sum <= total) { alloc[0] = vis_kv; alloc[1] = txt_kv; return 0; }
+    float ratio = (float)vis_kv / (float)sum;
+    alloc[0] = (int)((float)total * ratio);
+    alloc[1] = total - alloc[0];
+    return 0;
+}
+
+int wubu_vision_sparse(const float *attn, int n, float th, int *keep)
+{
+    if (!attn || !keep || n <= 0) return -1;
+    int k = 0;
+    for (int i = 0; i < n; i++)
+        if (attn[i] >= th) keep[k++] = i;
+    return k;
+}
+
+int wubu_vision_importance(const float *features, int n, int k, int *topk)
+{
+    if (!features || !topk || n <= 0 || k <= 0) return -1;
+    if (k > n) k = n;
+    for (int i = 0; i < n; i++) topk[i] = i;
+    for (int i = 0; i < n - 1; i++)
+        for (int j = i + 1; j < n; j++)
+            if (features[topk[j]] > features[topk[i]]) {
+                int t = topk[i]; topk[i] = topk[j]; topk[j] = t;
             }
-            // mm.2: [4608] @ [4608,2048] + bias → output
-            float *out_row = output + i * V_OUT_HIDDEN;
-            for (int j = 0; j < V_OUT_HIDDEN; j++) {
-                double sum = enc->mm2_bias[j];
-                for (int k = 0; k < 4608; k++)
-                    sum += (double)mm0_buf[k] * (double)enc->mm2_weight[k * V_OUT_HIDDEN + j];
-                out_row[j] = (float)sum;
+    return k;
+}
+
+int wubu_vision_av_fusion(const float *audio, const float *vis, int n,
+                               float *fused)
+{
+    if (!audio || !vis || !fused) return -1;
+    for (int i = 0; i < n; i++)
+        fused[i] = 0.5f * audio[i] + 0.5f * vis[i];
+    return n;
+}
+
+int wubu_vision_budget_plan(int vis_tok, int txt_tok, long total_budget,
+                                 int *vis_alloc, int *txt_alloc)
+{
+    if (!vis_alloc || !txt_alloc) return -1;
+    int total = vis_tok + txt_tok;
+    if (total <= total_budget) { *vis_alloc = vis_tok; *txt_alloc = txt_tok; return 0; }
+    float ratio = (float)vis_tok / (float)total;
+    *vis_alloc = (int)((float)total_budget * ratio);
+    *txt_alloc = total_budget - *vis_alloc;
+    return 0;
+}
+
+float wubu_vision_enc_eff(int patches, int d_model)
+{
+    if (patches <= 0 || d_model <= 0) return 0;
+    return (float)d_model / (float)patches;
+}
+
+int wubu_vision_evict(const float *salience, int n, float th, int *evict)
+{
+    if (!salience || !evict || n <= 0) return -1;
+    int k = 0;
+    for (int i = 0; i < n; i++)
+        if (salience[i] < th) evict[k++] = i;
+    return k;
+}
+
+int wubu_vision_prefix(const float *vis_prefix, const float *txt_prefix,
+                            int d, float *shared)
+{
+    if (!vis_prefix || !txt_prefix || !shared) return -1;
+    for (int i = 0; i < d; i++)
+        shared[i] = 0.5f * (vis_prefix[i] + txt_prefix[i]);
+    return d;
+}
+
+int wubu_vision_stream(const float *tokens, int n, int d, int window,
+                            float *out)
+{
+    if (!tokens || !out || window <= 0) return -1;
+    int out_n = n < window ? n : window;
+    for (int i = 0; i < out_n; i++)
+        for (int j = 0; j < d; j++)
+            out[i * d + j] = tokens[i * d + j];
+    return out_n;
+}
+
+float wubu_vision_energy(int modality, long tokens, float j_per_token)
+{
+    return (float)tokens * j_per_token;
+}
+
+int wubu_vision_dedup(const float *tokens, int n, int d, float th, int *keep)
+{
+    if (!tokens || !keep || n <= 0) return -1;
+    int k = 0;
+    keep[k++] = 0;
+    for (int i = 1; i < n; i++) {
+        int dup = 0;
+        for (int j = 0; j < k; j++) {
+            float dist = 0;
+            for (int x = 0; x < d; x++) {
+                float diff = tokens[i * d + x] - tokens[keep[j] * d + x];
+                dist += diff * diff;
             }
+            if (sqrtf(dist) < th) { dup = 1; break; }
         }
-    } else {
-        // No merger — just flatten (shouldn't happen for Qwen3VL)
-        for (int i = 0; i < n_merged; i++)
-            memcpy(output + i * V_OUT_HIDDEN, merged + i * V_MERGE_DIM,
-                   (V_MERGE_DIM < V_OUT_HIDDEN ? V_MERGE_DIM : V_OUT_HIDDEN) * sizeof(float));
+        if (!dup) keep[k++] = i;
     }
-    
-    free(hidden);
-    free(vit_out);
-    free(merged);
+    return k;
+}
+
+int wubu_vision_route(const float *task_vec, int n, float *weights)
+{
+    if (!task_vec || !weights || n <= 0) return -1;
+    float sum = 0;
+    for (int i = 0; i < n; i++) sum += task_vec[i];
+    for (int i = 0; i < n; i++) weights[i] = sum > 0 ? task_vec[i] / sum : 1.0f / n;
+    return 0;
 }
