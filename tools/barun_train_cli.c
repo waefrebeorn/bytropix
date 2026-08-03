@@ -46,7 +46,13 @@ static int load_checkpoint(barun_model_t *m, const char *path)
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
     uint32_t magic = 0;
-    if (fread(&magic, 4, 1, f) != 1 || magic != 0xBA000001u) { fclose(f); return -1; }
+    if (fread(&magic, 4, 1, f) != 1 ||
+        (magic != 0xBA000001u && magic != 0xBA000002u)) { fclose(f); return -1; }
+    int nl = 0;
+    if (magic == 0xBA000002u) {
+        if (fread(&nl, 4, 1, f) != 1) { fclose(f); return -1; }
+        if (nl < 1 || nl > BARUN_LAYERS) { fclose(f); return -1; }
+    }
     long n = 0;
     if (fread(&n, sizeof(long), 1, f) != 1) { fclose(f); return -1; }
     /* build the model from fresh buffers (the released sizes) */
@@ -93,7 +99,10 @@ static int load_checkpoint(barun_model_t *m, const char *path)
         if (fread(sel[i], sizeof(float), 448, f) != 448) { fclose(f); return -1; }
     fclose(f);
     if (barun_model_init(m, embedding, final_norm, blocks, sel) != 0) return -1;
-    if (n != barun_parameter_count(m)) { fprintf(stderr, "checkpoint count mismatch (%ld vs %ld)\n", n, barun_parameter_count(m)); return -1; }
+    if (nl > 0) m->n_layers = nl;   /* the v2 progressive state */
+    /* the dump's count is the ACTIVE count (a v1 progressive checkpoint
+     * saved with fewer layers); it must not EXCEED the built full count */
+    if (n > barun_parameter_count(m)) { fprintf(stderr, "checkpoint count mismatch (%ld vs %ld)\n", n, barun_parameter_count(m)); return -1; }
     return 0;
 }
 
@@ -114,9 +123,11 @@ static int save_checkpoint(const barun_model_t *m, const char *path)
 {
     FILE *f = fopen(path, "wb");
     if (!f) return -1;
-    /* header: magic + param count */
-    uint32_t magic = 0xBA000001u;
+    /* header: magic v2 (the n_layers) + param count */
+    uint32_t magic = 0xBA000002u;
     fwrite(&magic, 4, 1, f);
+    int nl = m->n_layers;
+    fwrite(&nl, 4, 1, f);
     long n = barun_parameter_count(m);
     fwrite(&n, sizeof(long), 1, f);
     fwrite(m->embedding, sizeof(float), 16384 * 448, f);
@@ -226,8 +237,13 @@ int main(int argc, char **argv)
             loss_hist[hist_n % 64] = (float)loss_ema;
             hist_n++;
             if (hist_n >= 32 && m.n_layers < BARUN_LAYERS &&
+                /* the adaptive threshold: the absolute floor OR 0.5% of
+                 * the loss magnitude -- the 0.001 floor alone sat below
+                 * the fine-tune-scale noise (~2.8 loss, ~0.02 slope
+                 * noise) and the growth never fired */
                 wubu_plateau_detect(loss_hist, hist_n > 64 ? 64 : hist_n,
-                                    32, 0.001f)) {
+                                    32, 0.001f > 0.005f * (float)loss_ema
+                                        ? 0.001f : 0.005f * (float)loss_ema)) {
                 int pos_g = m.n_layers / 2;   /* the progressive deepening */
                 if (wubu_grow_insert_block(&m, pos_g) &&
                     wubu_train_grow(&tr, pos_g, m.n_layers)) {
