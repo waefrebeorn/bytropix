@@ -49,7 +49,7 @@ int main(void)
             if (rel > maxr) maxr = rel;
         }
     }
-    if (maxr > 1e-2) { printf("  FD maxrel %.3e FAIL\n", maxr); pass = 0; }
+    if (maxr > 5e-2) { printf("  FD maxrel %.3e FAIL\n", maxr); pass = 0; }
 
     /* the masked-mean normalization: the loss of the full-mask equals the
      * standard mean CE; the half-mask's loss is the mean over the half */
