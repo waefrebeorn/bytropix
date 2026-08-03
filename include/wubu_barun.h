@@ -69,6 +69,12 @@ typedef struct {
     barun_block_t blocks[BARUN_LAYERS];
     float *selectors[BARUN_SELECTORS];  /* [448] each (score weight) */
     int    is_full[BARUN_LAYERS];       /* attention rhythm */
+    int    fire_sel[BARUN_LAYERS];     /* the residual-selector rhythm
+                                          (per-block like is_full: the
+                                          growth operator shifts it) */
+    int    n_layers;                   /* the ACTIVE layer count (the
+                                          growth operator's contract; the
+                                          released model = BARUN_LAYERS) */
     /* the WuBu mode (the blueprint phases 1-2): 0 = the released BarunLM
      * path (exact parity); 1 = hyperbolic lift/rotation + mixed agents.
      * Set with barun_set_wubu_mode(). */

@@ -82,7 +82,9 @@ int barun_model_init(barun_model_t *m, float *embedding, float *final_norm,
     for (int i = 0; i < BARUN_LAYERS; i++) {
         m->blocks[i] = blocks[i];
         m->is_full[i] = ((i + 1) % BARUN_FULL_EVERY == 0) ? 1 : 0;
+        m->fire_sel[i] = ((i + 1) % BARUN_SELECT_EVERY == 0) ? 1 : 0;
     }
+    m->n_layers = BARUN_LAYERS;
     for (int i = 0; i < BARUN_SELECTORS; i++) m->selectors[i] = selectors[i];
     return 0;
 }
@@ -319,7 +321,7 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
     memcpy(checkpoint, b->x, (size_t)seq * BARUN_DIM * sizeof(float));
     int sel = 0;
 
-    for (int l = 0; l < BARUN_LAYERS; l++) {
+    for (int l = 0; l < m->n_layers; l++) {
         barun_block_t *blk = &m->blocks[l];
 
         /* --- attention --- */
@@ -390,8 +392,9 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
             for (int d = 0; d < BARUN_DIM; d++) xs[d] += os[d];
         }
 
-        /* --- residual selector every 4th layer --- */
-        if ((l + 1) % BARUN_SELECT_EVERY == 0 && sel < BARUN_SELECTORS) {
+        /* --- residual selector (per-block rhythm: the growth operator
+         * shifts the flag with the block, so the function is preserved) */
+        if (m->fire_sel[l] && sel < BARUN_SELECTORS) {
             float *sw = m->selectors[sel];
             for (int s = 0; s < seq; s++) {
                 float *cp = checkpoint + (size_t)s * BARUN_DIM;
@@ -466,7 +469,7 @@ int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
      * 2048*448*4 = 3.6MB would overflow a kernel stack. */
     float *checkpoint = b->checkpoint;
     int sel = 0;
-    for (int l = 0; l < BARUN_LAYERS; l++) {
+    for (int l = 0; l < m->n_layers; l++) {
         barun_block_t *blk = &m->blocks[l];
         if ((l + 1) % BARUN_SELECT_EVERY == 0)
             memcpy(checkpoint, b->x, (size_t)seq * BARUN_DIM * sizeof(float));
@@ -662,7 +665,7 @@ long barun_parameter_count(const barun_model_t *m)
     long n = 0;
     n += 16384L * 448;                 /* embedding */
     n += 448;                          /* final norm */
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    for (int i = 0; i < m->n_layers; i++) {
         (void)m->blocks[i];
         n += 448L * 448;               /* q_proj */
         n += 448L * 64;                /* k_proj */
