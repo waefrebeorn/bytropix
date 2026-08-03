@@ -1,4 +1,5 @@
 /* wubu_passk.c -- the pass@k estimator. */
+#include <math.h>
 #include "wubu_passk.h"
 
 /* log C(n, k) via the log-gamma -- the counts are huge, the ratio is not */
