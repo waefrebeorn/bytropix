@@ -233,16 +233,23 @@ int main(int argc, char **argv)
         float loss = barun_train_step_loop(&m, &tr, &b, win, (size_t)seq,
                                            &cfg, (uint32_t)step);
         loss_ema = loss_ema < 0 ? loss : 0.9 * loss_ema + 0.1 * loss;
+        /* the ema history is a SHIFTING window (NOT a ring: the plateau
+         * detector reads the last-32 ARRAY elements; a ring wraps and
+         * the detector would fit its slope over the wrong data) */
+        if (hist_n >= 64) {
+            memmove(loss_hist, loss_hist + 1, 63 * sizeof(float));
+            loss_hist[63] = (float)loss_ema;
+        } else {
+            loss_hist[hist_n++] = (float)loss_ema;
+        }
         if (grow_check > 0 && step % grow_check == 0) {
-            loss_hist[hist_n % 64] = (float)loss_ema;
-            hist_n++;
             if (hist_n >= 32 && m.n_layers < BARUN_LAYERS &&
                 /* the adaptive threshold: the absolute floor OR 0.5% of
                  * the loss magnitude -- the 0.001 floor alone sat below
                  * the fine-tune-scale noise (~2.8 loss, ~0.02 slope
                  * noise) and the growth never fired */
-                wubu_plateau_detect(loss_hist, hist_n > 64 ? 64 : hist_n,
-                                    32, 0.001f > 0.005f * (float)loss_ema
+                wubu_plateau_detect(loss_hist, hist_n, 32,
+                                    0.001f > 0.005f * (float)loss_ema
                                         ? 0.001f : 0.005f * (float)loss_ema)) {
                 int pos_g = m.n_layers / 2;   /* the progressive deepening */
                 if (wubu_grow_insert_block(&m, pos_g) &&
