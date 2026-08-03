@@ -17,6 +17,8 @@
 #include <stdint.h>
 #include "wubu_barun.h"
 #include "wubu_barun_train.h"
+#include "wubu_grow.h"
+#include "wubu_plateau.h"
 
 static const char *arg_get(int argc, char **argv, const char *name,
                            const char *def)
@@ -34,6 +36,65 @@ static float arg_float(int argc, char **argv, const char *name, float def)
 {
     const char *v = arg_get(argc, argv, name, NULL);
     return v ? (float)atof(v) : def;
+}
+
+/* load a checkpoint dump into a freshly built model (the inverse of
+ * save_checkpoint: magic + param count + the raw weights). Returns 0 on
+ * success (the model owns the allocated buffers). */
+static int load_checkpoint(barun_model_t *m, const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    uint32_t magic = 0;
+    if (fread(&magic, 4, 1, f) != 1 || magic != 0xBA000001u) { fclose(f); return -1; }
+    long n = 0;
+    if (fread(&n, sizeof(long), 1, f) != 1) { fclose(f); return -1; }
+    /* build the model from fresh buffers (the released sizes) */
+    float *embedding = (float *)malloc(sizeof(float) * 16384 * 448);
+    float *final_norm = (float *)malloc(sizeof(float) * 448);
+    float **sel = (float **)calloc(BARUN_SELECTORS, sizeof(float *));
+    barun_block_t *blocks = (barun_block_t *)calloc(BARUN_LAYERS, sizeof(barun_block_t));
+    if (!embedding || !final_norm || !sel || !blocks) { fclose(f); return -1; }
+    for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = (float *)malloc(sizeof(float) * 448);
+    barun_block_t *b = blocks;
+    for (int i = 0; i < BARUN_LAYERS; i++, b++) {
+        b->q_proj    = (float *)malloc(sizeof(float) * 448 * 448);
+        b->k_proj    = (float *)malloc(sizeof(float) * 448 * 64);
+        b->v_proj    = (float *)malloc(sizeof(float) * 448 * 64);
+        b->o_proj    = (float *)malloc(sizeof(float) * 448 * 448);
+        b->g_proj    = (float *)malloc(sizeof(float) * 448 * 448);
+        b->q_norm    = (float *)malloc(sizeof(float) * 64);
+        b->k_norm    = (float *)malloc(sizeof(float) * 64);
+        b->attn_norm = (float *)malloc(sizeof(float) * 448);
+        b->gate_up   = (float *)malloc(sizeof(float) * 448 * 2456);
+        b->down      = (float *)malloc(sizeof(float) * 1228 * 448);
+        b->ffn_norm  = (float *)malloc(sizeof(float) * 448);
+        if (!b->q_proj || !b->k_proj || !b->v_proj || !b->o_proj || !b->g_proj ||
+            !b->q_norm || !b->k_norm || !b->attn_norm || !b->gate_up || !b->down ||
+            !b->ffn_norm) { fclose(f); return -1; }
+    }
+    if (fread(embedding, sizeof(float), 16384 * 448, f) != 16384 * 448 ||
+        fread(final_norm, sizeof(float), 448, f) != 448) { fclose(f); return -1; }
+    b = blocks;
+    for (int i = 0; i < BARUN_LAYERS; i++, b++) {
+        if (fread(b->q_proj, sizeof(float), 448 * 448, f) != 448 * 448 ||
+            fread(b->k_proj, sizeof(float), 448 * 64, f) != 448 * 64 ||
+            fread(b->v_proj, sizeof(float), 448 * 64, f) != 448 * 64 ||
+            fread(b->o_proj, sizeof(float), 448 * 448, f) != 448 * 448 ||
+            fread(b->g_proj, sizeof(float), 448 * 448, f) != 448 * 448 ||
+            fread(b->q_norm, sizeof(float), 64, f) != 64 ||
+            fread(b->k_norm, sizeof(float), 64, f) != 64 ||
+            fread(b->attn_norm, sizeof(float), 448, f) != 448 ||
+            fread(b->gate_up, sizeof(float), 448 * 2456, f) != 448 * 2456 ||
+            fread(b->down, sizeof(float), 1228 * 448, f) != 1228 * 448 ||
+            fread(b->ffn_norm, sizeof(float), 448, f) != 448) { fclose(f); return -1; }
+    }
+    for (int i = 0; i < BARUN_SELECTORS; i++)
+        if (fread(sel[i], sizeof(float), 448, f) != 448) { fclose(f); return -1; }
+    fclose(f);
+    if (barun_model_init(m, embedding, final_norm, blocks, sel) != 0) return -1;
+    if (n != barun_parameter_count(m)) { fprintf(stderr, "checkpoint count mismatch (%ld vs %ld)\n", n, barun_parameter_count(m)); return -1; }
+    return 0;
 }
 
 /* read a .tok stream into a buffer; returns the token count. */
@@ -88,18 +149,28 @@ int main(int argc, char **argv)
                                    "/home/wubu/sdcard/corpus/tokens/cosmopedia-v2-00000.tok");
     const char *out_path = arg_get(argc, argv, "--out",
                                    "/home/wubu/sdcard/corpus/checkpoints/seed.st");
+    const char *resume = arg_get(argc, argv, "--resume", NULL);
     int max_steps = arg_int(argc, argv, "--steps", 50);
     float lr = arg_float(argc, argv, "--lr", 1e-4f);
     float muon_lr = arg_float(argc, argv, "--muon-lr", 1e-3f);
     float adam_lr = arg_float(argc, argv, "--adam-lr", 1e-3f);
     int seq = arg_int(argc, argv, "--seq", 128);
     int ckpt_every = arg_int(argc, argv, "--ckpt", 10);
+    int grow_check = arg_int(argc, argv, "--grow-check", 0);
 
-    printf("barun_train_cli: loading %s ...\n", model_path);
     barun_model_t m;
-    if (barun_load(&m, model_path) != 0) {
-        fprintf(stderr, "cannot load %s\n", model_path);
-        return 1;
+    if (resume) {
+        printf("barun_train_cli: resuming from %s ...\n", resume);
+        if (load_checkpoint(&m, resume) != 0) {
+            fprintf(stderr, "cannot load checkpoint %s\n", resume);
+            return 1;
+        }
+    } else {
+        printf("barun_train_cli: loading %s ...\n", model_path);
+        if (barun_load(&m, model_path) != 0) {
+            fprintf(stderr, "cannot load %s\n", model_path);
+            return 1;
+        }
     }
     printf("barun_train_cli: %ld parameters\n", barun_parameter_count(&m));
 
@@ -136,6 +207,8 @@ int main(int argc, char **argv)
     uint16_t win[BARUN_MAX_SEQ];
     long pos = 0;
     double loss_ema = -1;
+    float loss_hist[64];
+    int hist_n = 0;
     for (int step = 1; step <= max_steps; step++) {
         if (pos + seq > corpus_n) pos = 0;   /* epoch wrap */
         for (int i = 0; i < seq; i++) win[i] = corpus[pos + i];
@@ -143,6 +216,20 @@ int main(int argc, char **argv)
         float loss = barun_train_step_loop(&m, &tr, &b, win, (size_t)seq,
                                            &cfg, (uint32_t)step);
         loss_ema = loss_ema < 0 ? loss : 0.9 * loss_ema + 0.1 * loss;
+        if (grow_check > 0 && step % grow_check == 0) {
+            loss_hist[hist_n % 64] = (float)loss_ema;
+            hist_n++;
+            if (hist_n >= 32 && m.n_layers < BARUN_LAYERS &&
+                wubu_plateau_detect(loss_hist, hist_n > 64 ? 64 : hist_n,
+                                    32, 0.001f)) {
+                int pos_g = m.n_layers / 2;   /* the progressive deepening */
+                if (wubu_grow_insert_block(&m, pos_g) &&
+                    wubu_train_grow(&tr, pos_g, m.n_layers)) {
+                    printf("  GROW at step %d: n_layers %d -> %d (plateau)\n",
+                           step, m.n_layers - 1, m.n_layers);
+                }
+            }
+        }
         if (step % 5 == 0 || step == 1)
             printf("  step %4d: loss %.4f (ema %.4f)\n", step, loss, loss_ema);
         if (step % ckpt_every == 0) {
