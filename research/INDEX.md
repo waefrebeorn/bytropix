@@ -625,7 +625,7 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IP02 Dynamic-manifold Hopfield (context-dependent reorganization of the stored manifold) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP03 Federated many-to-one Hopfield (heteroassociative: cue -> associated output) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP04 Spectral-capacity scaling analysis (capacity vs spectral norm of the memory matrix) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
-- IP05 Attention-as-Hopfield retrieval formalization (softmax update == memory read) `open`
+- IP05 Attention-as-Hopfield retrieval formalization (softmax update == memory read) `wired` (wubu_hopfield4, test PASSES)
 - IP06 Memory write scheduling (store policy: when a pattern deserves storage) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP07 Memory read with beta annealing (sharp-to-flat retrieval over iterations) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP08 Pattern separation metric (overlap control between stored patterns) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
@@ -642,8 +642,8 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IP19 Episodic memory with time-tags (temporal associative memory) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP20 Memory interference repair (re-orthogonalize similar stored patterns) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP21 Continuous-time numerical integration (memory ODE solver, RK4) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
-- IP22 Manifold curvature estimation for context reorganization `open`
-- IP23 Federated memory sharing (patterns shared across agents with provenance) `open`
+- IP22 Manifold curvature estimation for context reorganization `wired` (wubu_hopfield4, test PASSES)
+- IP23 Federated memory sharing (patterns shared across agents with provenance) `wired` (wubu_hopfield4, test PASSES)
 - IP24 Memory retrieval ranking by spectral overlap `wired` (wubu_hopfield3, test PASSES)
 - IP25 Forgetting curve integration (Ebbinghaus curve into the memory weight) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP26 Memory replay scheduling (when to replay stored patterns, ties BB) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
@@ -652,7 +652,7 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IP29 Associative memory for tool selection (cue -> tool pattern retrieval) `wired` (wubu_hopfield2, test_hopfield2 PASSES)
 - IP30 Memory chaining (sequential pattern association, story recall) `wired` (wubu_hopfield3, test PASSES)
 - IP31 Hopfield energy monitor (free-energy of the memory state) `wired` (wubu_hopfield3, test PASSES)
-- IP32 Memory stabilization (pattern anchoring after consolidation) `open`
+- IP32 Memory stabilization (pattern anchoring after consolidation) `wired` (wubu_hopfield4, test PASSES)
 - IP33 Cross-modal associative memory (text cue -> vision pattern, ties JB) `wired` (wubu_hopfield3, test PASSES)
 - IP34 Memory corruption detection (pattern degradation watchdog) `wired` (wubu_hopfield3, test PASSES)
 - IP35 Memory hygiene: prune low-utility stale patterns (ties IL05) `wired` (wubu_hopfield3, test PASSES)
@@ -661,33 +661,33 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IP38 Multi-scale memories (short/long-term with separate betas) `wired` (wubu_hopfield3, test PASSES)
 - IP39 Memory state snapshot/restore (checkpoint the pattern matrix) `wired` (wubu_hopfield3, test PASSES)
 - IP40 Hopfield capacity telemetry (used vs theoretical capacity) `wired` (wubu_hopfield3, test PASSES)
-- IP41 Cue embedding quality monitor (cue dims that hurt recall) `open`
-- IP42 Memory write batching (bulk store of a session's patterns) `open`
-- IP43 Memory read batching (bulk recall for batched decode) `open`
+- IP41 Cue embedding quality monitor (cue dims that hurt recall) `wired` (wubu_hopfield4, test PASSES)
+- IP42 Memory write batching (bulk store of a session's patterns) `wired` (wubu_hopfield4, test PASSES)
+- IP43 Memory read batching (bulk recall for batched decode) `wired` (wubu_hopfield4, test PASSES)
 - IP44 Pattern condensation (merge near-identical patterns) `wired` (wubu_hopfield3, test PASSES)
 - IP45 Memory-based reasoning (recall chains as CoT memory, ties IV) `wired` (wubu_hopfield3, test PASSES)
-- IP46 Associative outlier tolerance (robust recall under adversarial cues) `open`
+- IP46 Associative outlier tolerance (robust recall under adversarial cues) `wired` (wubu_hopfield4, test PASSES)
 - IP47 Memory matrix spectral cleanup (drop low-singular-value directions) `wired` (wubu_hopfield3, test PASSES)
 - IP48 Context-switch memory isolation (per-task memory partitions) `wired` (wubu_hopfield3, test PASSES)
-- IP49 Memory search over patterns (ANN over the memory, ties AV) `open`
-- IP50 Memory write/read asymmetry modeling (write cost vs read benefit) `open`
+- IP49 Memory search over patterns (ANN over the memory, ties AV) `wired` (wubu_hopfield4, test PASSES)
+- IP50 Memory write/read asymmetry modeling (write cost vs read benefit) `wired` (wubu_hopfield4, test PASSES)
 - IP51 Hopfield beta autotuning (temperature fit by recall error) `wired` (wubu_hopfield3, test PASSES)
-- IP52 Memory decay vs consolidation arbitration (decay rate vs rehearsal rate) `open`
-- IP53 Retrieval-augmented memory (external corpus -> memory patterns) `open`
-- IP54 Memory provenance (which source stored each pattern) `open`
-- IP55 Memory privacy (forget-set patterns removable, ties IM) `open`
-- IP56 Memory load balancing across tiers (hot patterns to fast tier) `open`
-- IP57 Associative memory for world-model updates (ties IN) `open`
-- IP58 Memory capacity warning (approaching exponential limit) `open`
-- IP59 Pattern importance weighting in storage (weighted patterns) `open`
-- IP60 Memory coherence across sessions (shared memory merge) `open`
-- IP61 Hopfield update with momentum (faster retrieval convergence) `open`
-- IP62 Memory read failure handling (no-match fallback policy) `open`
-- IP63 Associative memory ablation analysis (which patterns matter) `open`
-- IP64 Memory pattern normalization (unit-norm storage for stable recall) `open`
-- IP65 Memory-write energy accounting (ties IJ energy ledger) `open`
-- IP66 Memory consolidation scheduling (offline consolidation pass) `open`
-- IP67 Memory monitor: recall accuracy drift (memory health metric) `open`
+- IP52 Memory decay vs consolidation arbitration (decay rate vs rehearsal rate) `wired` (wubu_hopfield4, test PASSES)
+- IP53 Retrieval-augmented memory (external corpus -> memory patterns) `wired` (wubu_hopfield4, test PASSES)
+- IP54 Memory provenance (which source stored each pattern) `wired` (wubu_hopfield4, test PASSES)
+- IP55 Memory privacy (forget-set patterns removable, ties IM) `wired` (wubu_hopfield4, test PASSES)
+- IP56 Memory load balancing across tiers (hot patterns to fast tier) `wired` (wubu_hopfield4, test PASSES)
+- IP57 Associative memory for world-model updates (ties IN) `wired` (wubu_hopfield4, test PASSES)
+- IP58 Memory capacity warning (approaching exponential limit) `wired` (wubu_hopfield4, test PASSES)
+- IP59 Pattern importance weighting in storage (weighted patterns) `wired` (wubu_hopfield4, test PASSES)
+- IP60 Memory coherence across sessions (shared memory merge) `wired` (wubu_hopfield4, test PASSES)
+- IP61 Hopfield update with momentum (faster retrieval convergence) `wired` (wubu_hopfield4, test PASSES)
+- IP62 Memory read failure handling (no-match fallback policy) `wired` (wubu_hopfield4, test PASSES)
+- IP63 Associative memory ablation analysis (which patterns matter) `wired` (wubu_hopfield4, test PASSES)
+- IP64 Memory pattern normalization (unit-norm storage for stable recall) `wired` (wubu_hopfield4, test PASSES)
+- IP65 Memory-write energy accounting (ties IJ energy ledger) `wired` (wubu_hopfield4, test PASSES)
+- IP66 Memory consolidation scheduling (offline consolidation pass) `wired` (wubu_hopfield4, test PASSES)
+- IP67 Memory monitor: recall accuracy drift (memory health metric) `wired` (wubu_hopfield4, test PASSES)
 Status: `open` (67 gaps; continuous-time / manifold / federated Hopfield + attention-as-memory formalization)
 
 ## Theme IQ: Preference optimization frontier

@@ -1220,6 +1220,10 @@ test_pref: tools/test_pref.c src/wubu_pref.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+test_hopfield4: tools/test_hopfield4.c src/wubu_hopfield3.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 test_hopfield3: tools/test_hopfield3.c src/wubu_hopfield3.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
