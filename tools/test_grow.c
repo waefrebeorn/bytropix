@@ -8,6 +8,8 @@
 #include <math.h>
 #include "wubu_barun.h"
 #include "wubu_grow.h"
+#include "wubu_barun_backprop.h"
+#include "wubu_barun_train.h"
 
 #define SEQ 16
 
@@ -90,6 +92,56 @@ int main(void)
     if (blk <= 0) { printf("  stack param growth FAIL\n"); ok = 0; }
     if (barun_forward(&m, &b, toks, SEQ) != 0) { printf("  grown forward FAIL\n"); ok = 0; }
     printf("  G_stack: +%ld params, grown forward runs  %s\n", blk, ok ? "PASS" : "FAIL");
+
+    /* --- the growth through the backprop (the DA: the bp's loss of the
+     * grown model must EQUAL the small model's -- the zero block is an
+     * identity -- and the grown block's grads must match the FD) --- */
+    {
+        barun_bp_t bp;
+        if (barun_bp_alloc(&bp, 512) != 0) { printf("  bp alloc FAIL\n"); return 1; }
+        barun_train_t tr;
+        if (barun_train_init(&tr, &m) != 0) { printf("  train init FAIL\n"); return 1; }
+        m.n_layers = 2;
+        float loss_small = barun_bp_forward(&m, &b, &bp, toks, SEQ);
+        /* grow the model + the train state */
+        if (!wubu_grow_insert_block(&m, 1)) { printf("  bp-grow insert FAIL\n"); ok = 0; }
+        if (!wubu_train_grow(&tr, 1, m.n_layers)) { printf("  bp train-grow FAIL\n"); ok = 0; }
+        if (!wubu_grow_insert_block(&m, 3)) { printf("  bp-grow insert2 FAIL\n"); ok = 0; }
+        if (!wubu_train_grow(&tr, 3, m.n_layers)) { printf("  bp train-grow2 FAIL\n"); ok = 0; }
+        float loss_grown = barun_bp_forward(&m, &b, &bp, toks, SEQ);
+        double ldiff = fabs((double)loss_small - (double)loss_grown);
+        printf("  bp loss small %.6f grown %.6f diff %.3e  %s\n",
+               loss_small, loss_grown, ldiff, ldiff < 1e-4 ? "PASS" : "FAIL");
+        if (ldiff >= 1e-4) ok = 0;
+        /* the backward on the grown model (the grads must be real) */
+        barun_train_zero_grad(&tr);
+        barun_bp_backward(&m, &b, &bp, &tr, toks, SEQ);
+        /* the FD on the EMBEDDING: the grad is ~1e-2 -- measurable in the
+         * fp32 loss (the q_proj grads are ~1e-5, swamped by the 9.7-scale
+         * fp32 loss -- the fp32-honesty lesson). The grown model's loss
+         * must still depend on the weights through the grown stack. */
+        float *w = m.embedding;
+        float *wg = tr.emb_g;
+        size_t brow = (size_t)toks[3] * BARUN_DIM;
+        size_t bd = 0;
+        for (int d = 1; d < BARUN_DIM; d++)
+            if (fabs((double)wg[brow + d]) > fabs((double)wg[brow + bd])) bd = d;
+        size_t bi = brow + bd;
+        float save = w[bi];
+        float epsf = 1e-2f;
+        w[bi] = save + epsf;
+        float l1 = barun_bp_forward(&m, &b, &bp, toks, SEQ);
+        w[bi] = save - epsf;
+        float l2 = barun_bp_forward(&m, &b, &bp, toks, SEQ);
+        w[bi] = save;
+        double fd = (l1 - l2) / (2.0 * epsf);
+        double rel = fabs(fd - wg[bi]) / (fabs(fd) + 1e-9);
+        printf("  grown-bp FD (embedding): fd=%.6f grad=%.6f rel=%.3e  %s\n",
+               fd, wg[bi], rel, rel < 1e-2 ? "PASS" : "FAIL");
+        if (rel >= 1e-2) ok = 0;
+        barun_bp_free(&bp);
+        barun_train_free(&tr);
+    }
 
     /* --- the Bu schedule: expand every 10% of the horizon --- */
     int T = 1000, last = 1;

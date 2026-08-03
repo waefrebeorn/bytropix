@@ -8,6 +8,7 @@
 #define WUBU_GROW_H
 
 #include "wubu_barun.h"
+#include "wubu_barun_train.h"
 
 /* Insert a NEW zero-initialized block at position pos (0 <= pos <=
  * m->n_layers). The existing blocks [pos..n) shift up, keeping their
@@ -33,5 +34,10 @@ int wubu_grow_schedule(int t, int T, int base_layers, int max_layers,
 
 /* The number of growth events the schedule fires over the horizon. */
 int wubu_grow_events(int T, int base_layers, int max_layers, float step_frac);
+/* Grow the train state to match a model that just grew: shift the
+ * per-block gradient + momentum pointers [pos..n) up and allocate the
+ * new block's (zero-initialized) buffers -- the grads and the Muon
+ * momentum must follow the blocks the same way the weights did. */
+int wubu_train_grow(barun_train_t *tr, int pos, int n_layers);
 
 #endif

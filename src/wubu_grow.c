@@ -120,3 +120,44 @@ int wubu_grow_events(int T, int base_layers, int max_layers, float step_frac)
     int growable = max_layers - base_layers;
     return events > growable ? growable : events;
 }
+
+int wubu_train_grow(barun_train_t *tr, int pos, int n_layers)
+{
+    if (!tr || pos < 0 || pos > n_layers || n_layers >= BARUN_LAYERS) return 0;
+    /* the per-block pointer arrays: shift up then allocate the new slot */
+#define SHIFT_ARR(ARR, SZ) do {                                        \
+        if (ARR[n_layers]) free(ARR[n_layers]); /* the displaced unused */ \
+        for (int l = n_layers; l > pos; l--) ARR[l] = ARR[l - 1];       \
+        ARR[pos] = (float *)calloc((size_t)(SZ), sizeof(float));         \
+        if (!ARR[pos]) return 0;                                         \
+    } while (0)
+    size_t q = (size_t)BARUN_DIM * BARUN_HEADS * 64;
+    size_t k = (size_t)BARUN_DIM * BARUN_KV_HEADS * 64;
+    size_t f = (size_t)BARUN_DIM * BARUN_FFN_DIM * 2;
+    size_t d = (size_t)BARUN_FFN_DIM * BARUN_DIM;
+    SHIFT_ARR(tr->q_proj_g, q); SHIFT_ARR(tr->k_proj_g, k);
+    SHIFT_ARR(tr->v_proj_g, k); SHIFT_ARR(tr->o_proj_g, q);
+    SHIFT_ARR(tr->g_proj_g, q); SHIFT_ARR(tr->gate_up_g, f);
+    SHIFT_ARR(tr->down_g, d);
+    SHIFT_ARR(tr->q_proj_m, q); SHIFT_ARR(tr->k_proj_m, k);
+    SHIFT_ARR(tr->v_proj_m, k); SHIFT_ARR(tr->o_proj_m, q);
+    SHIFT_ARR(tr->g_proj_m, q); SHIFT_ARR(tr->gate_up_m, f);
+    SHIFT_ARR(tr->down_m, d);
+#undef SHIFT_ARR
+    /* the AdamW norm slots [4l+0..3]: shift + allocate the new block's */
+    for (int l = n_layers; l > pos; l--)
+        for (int k = 0; k < 4; k++) {
+            tr->norm_g[4 * l + k] = tr->norm_g[4 * (l - 1) + k];
+            tr->norm_m[4 * l + k] = tr->norm_m[4 * (l - 1) + k];
+            tr->norm_v[4 * l + k] = tr->norm_v[4 * (l - 1) + k];
+        }
+    int sz[4] = { BARUN_DIM, BARUN_DIM, 64, 64 };
+    for (int k = 0; k < 4; k++) {
+        tr->norm_g[4 * pos + k] = (float *)calloc((size_t)sz[k], sizeof(float));
+        tr->norm_m[4 * pos + k] = (float *)calloc((size_t)sz[k], sizeof(float));
+        tr->norm_v[4 * pos + k] = (float *)calloc((size_t)sz[k], sizeof(float));
+        if (!tr->norm_g[4 * pos + k] || !tr->norm_m[4 * pos + k] ||
+            !tr->norm_v[4 * pos + k]) return 0;
+    }
+    return 1;
+}

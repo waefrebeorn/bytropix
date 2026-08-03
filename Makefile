@@ -1249,9 +1249,10 @@ test_credit_dbstate: tools/test_credit_dbstate.c src/wubu_credit_sft.c src/wubu_
 	include/wubu_credit_sft.h include/wubu_dbstate.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_credit_dbstate.c src/wubu_credit_sft.c src/wubu_dbstate.c
 	./$@
-test_grow: tools/test_grow.c src/wubu_grow.c src/wubu_barun.c src/safetensors_reader.c src/wubu_moe2.c \
-	include/wubu_grow.h include/wubu_barun.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_grow.c src/wubu_grow.c src/wubu_barun.c src/safetensors_reader.c src/wubu_moe2.c -lm
+test_grow: tools/test_grow.c src/wubu_grow.c src/wubu_barun.c src/wubu_barun_backprop.c src/wubu_barun_train.c \
+	src/safetensors_reader.c src/wubu_moe2.c src/wubu_ubus.c \
+	include/wubu_grow.h include/wubu_barun.h include/wubu_barun_backprop.h include/wubu_barun_train.h
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_grow.c src/wubu_grow.c src/wubu_barun.c src/wubu_barun_backprop.c src/wubu_barun_train.c src/safetensors_reader.c src/wubu_moe2.c src/wubu_ubus.c -lm
 	./$@
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@

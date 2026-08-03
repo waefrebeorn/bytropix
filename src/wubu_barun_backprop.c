@@ -344,10 +344,9 @@ static float head_ce(barun_model_t *m, barun_bp_t *bp,
 }
 
 /* is layer l a selector layer? (layers 3, 7, 11) */
-static int is_sel(int l)
+static int is_sel(const barun_model_t *m, int l)
 {
-    return ((l + 1) % BARUN_SELECT_EVERY == 0) &&
-           ((l + 1) / BARUN_SELECT_EVERY - 1 < BARUN_SELECTORS);
+    return l >= 0 && l < m->n_layers && m->fire_sel[l];
 }
 
 /* The hybrid GQA attention on the CPU: the FD oracle (the FD tests
@@ -485,10 +484,11 @@ float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
     memcpy(bp->emb_in, x0, (size_t)seq * D * sizeof(float));
     memcpy(bp->ckpt, x0, (size_t)seq * D * sizeof(float));
 
-    for (int l = 0; l < BARUN_LAYERS; l++) {
+    int Ln = m->n_layers;
+    for (int l = 0; l < Ln; l++) {
         barun_block_t *blk = &m->blocks[l];
         float *x_in_l  = bp->x_in      + (size_t)l * seq * D;
-        float *x_out_l = (l + 1 < BARUN_LAYERS)
+        float *x_out_l = (l + 1 < Ln)
                              ? bp->x_in + (size_t)(l + 1) * seq * D : NULL;
         float *an_l    = bp->attn_norm + (size_t)l * seq * D;
         float *q_pre_l = bp->q_pre     + (size_t)l * seq * D;
@@ -579,7 +579,7 @@ float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
         }
         /* residual selector: blend into sel_out[l]; x_in[l] keeps the
          * layer's REAL output (the backward needs it exact). */
-        if (is_sel(l)) {
+        if (is_sel(m, l)) {
             float *sw = m->selectors[(l + 1) / BARUN_SELECT_EVERY - 1];
             float w0sum = 0;
             for (int s = 0; s < seq; s++) {
@@ -606,15 +606,16 @@ float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
         /* the residual stream chains: the next layer's input = the
          * layer output (or the selector blend). */
         if (x_out_l) {
-            const float *src = is_sel(l) ? sel_l : x_in_l;
+            const float *src = is_sel(m, l) ? sel_l : x_in_l;
             memcpy(x_out_l, src, (size_t)seq * D * sizeof(float));
         }
     }
     /* final norm: the input is the last layer's output (the blend if
      * the last layer is a selector layer) */
-    const float *xlast = is_sel(BARUN_LAYERS - 1)
-                             ? bp->sel_out + (size_t)(BARUN_LAYERS - 1) * seq * D
-                             : bp->x_in + (size_t)(BARUN_LAYERS - 1) * seq * D;
+    int Llast = m->n_layers - 1;
+    const float *xlast = is_sel(m, Llast)
+                             ? bp->sel_out + (size_t)Llast * seq * D
+                             : bp->x_in + (size_t)Llast * seq * D;
     for (int s = 0; s < seq; s++)
         rms_norm(bp->final_h + (size_t)s * D, xlast + (size_t)s * D,
                  m->final_norm, D);
@@ -683,16 +684,17 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
     float loss = head_ce(m, bp, tokens, n_tokens, dh_final, demb);
 
     /* final norm backward: dh_final -> dlast (+ final_norm grads) */
-    const float *xlast = is_sel(BARUN_LAYERS - 1)
-                             ? bp->sel_out + (size_t)(BARUN_LAYERS - 1) * seq * D
-                             : bp->x_in + (size_t)(BARUN_LAYERS - 1) * seq * D;
+    int Llast = m->n_layers - 1;
+    const float *xlast = is_sel(m, Llast)
+                             ? bp->sel_out + (size_t)Llast * seq * D
+                             : bp->x_in + (size_t)Llast * seq * D;
     for (int s = 0; s < seq; s++)
         rms_norm_backward(xlast + (size_t)s * D, m->final_norm,
                           dh_final + (size_t)s * D,
                           dlast + (size_t)s * D, tr->norm_g[4 * BARUN_LAYERS], D);
 
     /* ---- per-layer backward (REVERSED) ---- */
-    for (int l = BARUN_LAYERS - 1; l >= 0; l--) {
+    for (int l = m->n_layers - 1; l >= 0; l--) {
         barun_block_t *blk = &m->blocks[l];
         float *x_in_l  = bp->x_in      + (size_t)l * seq * D;
         float *an_l    = bp->attn_norm + (size_t)l * seq * D;
@@ -725,7 +727,7 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
 
         /* the incoming gradient: from the layer above (or the final
          * norm for l == L-1). */
-        if (l == BARUN_LAYERS - 1)
+        if (l == m->n_layers - 1)
             memcpy(dx, dlast, (size_t)seq * D * sizeof(float));
         else
             memcpy(dx, dxe, (size_t)seq * D * sizeof(float));
@@ -737,7 +739,7 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
 
         /* ---- residual selector: route the blend gradient into the
          * layer (w1) and the checkpoint (w0) ---- */
-        if (is_sel(l)) {
+        if (is_sel(m, l)) {
             int sel = (l + 1) / BARUN_SELECT_EVERY - 1;
             float *sw = m->selectors[sel];
             /* selectors are 1-D params -> their grad lives in the
@@ -821,7 +823,7 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
             /* x1 also needs the entry -- layer input + the gated add */
             const float *x_entry = (l == 0)
                                        ? bp->emb_in
-                                       : (is_sel(l - 1)
+                                       : (is_sel(m, l - 1)
                                               ? bp->sel_out + (size_t)(l - 1) * seq * D
                                               : bp->x_in + (size_t)(l - 1) * seq * D);
             for (int s = 0; s < seq; s++) {
@@ -912,7 +914,7 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
         {
             const float *x_entry = (l == 0)
                                        ? bp->emb_in
-                                       : (is_sel(l - 1)
+                                       : (is_sel(m, l - 1)
                                               ? bp->sel_out + (size_t)(l - 1) * seq * D
                                               : bp->x_in + (size_t)(l - 1) * seq * D);
             for (int s = 0; s < seq; s++)
@@ -1123,7 +1125,7 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
     /* global grad-norm clip (over every trainable gradient) */
     if (cfg->grad_clip > 0) {
         double n2 = 0;
-        for (int i = 0; i < BARUN_LAYERS; i++) {
+        for (int i = 0; i < m->n_layers; i++) {
             n2 += dot_grad(tr->q_proj_g[i], 448 * 448);
             n2 += dot_grad(tr->k_proj_g[i], 448 * 64);
             n2 += dot_grad(tr->v_proj_g[i], 448 * 64);
@@ -1141,7 +1143,7 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
         float gn = (float)sqrt(n2);
         if (gn > cfg->grad_clip) {
             float s = cfg->grad_clip / gn;
-            for (int i = 0; i < BARUN_LAYERS; i++) {
+            for (int i = 0; i < m->n_layers; i++) {
                 scale_grad(tr->q_proj_g[i], 448 * 448, s);
                 scale_grad(tr->k_proj_g[i], 448 * 64, s);
                 scale_grad(tr->v_proj_g[i], 448 * 64, s);
@@ -1167,7 +1169,7 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
         float *look = scratch + 2 * max_sq;
         float *trans = look + max_cells;
         if (!scratch) return -1;
-        for (int i = 0; i < BARUN_LAYERS; i++) {
+        for (int i = 0; i < m->n_layers; i++) {
             barun_block_t *blk = &m->blocks[i];
             muon_matrix(blk->q_proj,  tr->q_proj_g[i],  tr->q_proj_m[i],  448, 448,  mu_lr, wd, mu, scratch, look, trans);
             muon_matrix(blk->k_proj,  tr->k_proj_g[i],  tr->k_proj_m[i],  448, 64,   mu_lr, wd, mu, scratch, look, trans);
