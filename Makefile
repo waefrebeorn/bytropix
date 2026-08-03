@@ -1124,6 +1124,10 @@ test_bi: tools/test_bi.c src/wubu_bi.o
 src/wubu_bi.o: src/wubu_bi.c include/wubu_bi.h include/wubu.h
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_bi.c
 
+test_priority: tools/test_priority.c src/wubu_priority.c
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_priority.c src/wubu_priority.c -lm
+	./$@
+
 test_multimodal: tools/test_multimodal.c src/wubu_imgenc.o src/wubu_audio.o src/wubu_mm_align.o src/wubu_mm_adapter.o src/wubu_mm_kv.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
