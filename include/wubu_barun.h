@@ -86,7 +86,10 @@ typedef struct {
     float *k;        /* [seq, kv*head_dim] */
     float *v;        /* [seq, kv*head_dim] */
     float *attn_out; /* [seq, 448] */
-    float *gate;     /* [seq, 448] */
+    float *gate;     /* [seq, 448] scratch: rmsnorm out / ffn input */
+    float *g_out;    /* [seq, 448] the attention gate (g_proj output).
+                        Kept separate: matmul must never write into its
+                        own input (the in-place aliasing bug) */
     float *ffn_gate; /* [seq, ffn_dim] */
     float *ffn_up;   /* [seq, ffn_dim] */
     float *ffn_out;  /* [seq, 448] */

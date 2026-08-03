@@ -177,7 +177,8 @@ int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
     b->v = (float *)calloc(seq * BARUN_KV_HEADS * BARUN_HEAD_DIM, sizeof(float));
     b->attn_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
     b->gate = (float *)calloc(seq * BARUN_DIM, sizeof(float));
-    b->ffn_gate = (float *)calloc(seq * BARUN_FFN_DIM, sizeof(float));
+    b->g_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
+    b->ffn_gate = (float *)calloc(seq * 2 * BARUN_FFN_DIM, sizeof(float));
     b->ffn_up = (float *)calloc(seq * BARUN_FFN_DIM, sizeof(float));
     b->ffn_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
     b->logits = (float *)calloc(seq * BARUN_VOCAB, sizeof(float));
@@ -188,8 +189,9 @@ int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
     b->cache_v = (float *)calloc(BARUN_LAYERS * BARUN_MAX_SEQ * 64, sizeof(float));
     b->seq_alloc = seq;
     if (!b->x || !b->x2 || !b->q || !b->k || !b->v || !b->attn_out ||
-        !b->gate || !b->ffn_gate || !b->ffn_up || !b->ffn_out || !b->logits ||
-        !b->checkpoint || !b->cos_tbl || !b->sin_tbl || !b->cache_k || !b->cache_v) {
+        !b->gate || !b->g_out || !b->ffn_gate || !b->ffn_up || !b->ffn_out ||
+        !b->logits || !b->checkpoint || !b->cos_tbl || !b->sin_tbl ||
+        !b->cache_k || !b->cache_v) {
         barun_free(NULL, b);
         return -1;
     }
@@ -248,10 +250,11 @@ static void attention(barun_buf_t *b, int seq, int is_full, int local_window,
     for (int s = 0; s < seq; s++) {
         float *acc = b->attn_out + (size_t)s * BARUN_DIM;
         memset(acc, 0, BARUN_DIM * sizeof(float));
-        /* softmax denominator per head */
+        float *osum = b->x2 + (size_t)s * BARUN_DIM;  /* scratch: probs */
+        memset(osum, 0, BARUN_DIM * sizeof(float));   /* zeroed: the
+            buffer held the previous layer's o_proj output */
         for (int h = 0; h < BARUN_HEADS; h++) {
             const float *qrow = b->q + (size_t)s * BARUN_DIM + (size_t)h * 64;
-            float *osum = b->x2 + (size_t)s * BARUN_DIM;  /* scratch: probs */
             float maxv = -1e30f;
             /* find the window start */
             int lo = is_full ? 0 : (s > local_window ? s - local_window + 1 : 0);
@@ -304,7 +307,10 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
         memcpy(b->x + (size_t)s * BARUN_DIM, e, BARUN_DIM * sizeof(float));
     }
 
-    float *checkpoint = b->x2;   /* the group input checkpoint */
+    float *checkpoint = b->checkpoint;   /* the group input checkpoint
+                                            (dedicated buffer: b->x2 is
+                                            reused as the o_proj output
+                                            and the attention scratch) */
     memcpy(checkpoint, b->x, (size_t)seq * BARUN_DIM * sizeof(float));
     int sel = 0;
 
@@ -345,11 +351,11 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
         attention(b, seq, m->is_full[l], BARUN_LOCAL_WIN, 0);
         /* o_proj + gate: out = o_proj(attn) * sigmoid(g_proj(rmsnorm(x))) */
         matmul(b->x2, blk->o_proj, b->attn_out, BARUN_DIM, BARUN_DIM, seq);
-        matmul(b->gate, blk->g_proj, b->gate, BARUN_DIM, BARUN_DIM, seq);
+        matmul(b->g_out, blk->g_proj, b->gate, BARUN_DIM, BARUN_DIM, seq);
         for (int s = 0; s < seq; s++) {
             float *xs = b->x + (size_t)s * BARUN_DIM;
             float *outs = b->x2 + (size_t)s * BARUN_DIM;
-            float *gs = b->gate + (size_t)s * BARUN_DIM;
+            float *gs = b->g_out + (size_t)s * BARUN_DIM;
             for (int d = 0; d < BARUN_DIM; d++)
                 xs[d] += outs[d] * (1.0f / (1.0f + expf(-gs[d])));
         }
@@ -359,10 +365,10 @@ int barun_forward(barun_model_t *m, barun_buf_t *b,
             rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
                            b->x + (size_t)s * BARUN_DIM, blk->ffn_norm,
                            BARUN_DIM, BARUN_EPS);
-        matmul(b->ffn_gate, blk->gate_up, b->gate, BARUN_FFN_DIM, BARUN_DIM, seq);
+        matmul(b->ffn_gate, blk->gate_up, b->gate, 2 * BARUN_FFN_DIM, BARUN_DIM, seq);
         /* the second half of gate_up is the "up" projection */
         for (int s = 0; s < seq; s++) {
-            float *g = b->ffn_gate + (size_t)s * BARUN_FFN_DIM;
+            float *g = b->ffn_gate + (size_t)s * 2 * BARUN_FFN_DIM;
             float *u = b->ffn_up + (size_t)s * BARUN_FFN_DIM;
             for (int d = 0; d < BARUN_FFN_DIM; d++) {
                 float gv = g[d], uv = g[d + BARUN_FFN_DIM];
@@ -496,13 +502,14 @@ int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
         }
         /* attention */
         attention(b, seq, is_full[l], BARUN_LOCAL_WIN, 0);
-        /* o_proj */
+        /* o_proj + the attention gate */
         matmul(b->x2, blk->o_proj, b->attn_out, BARUN_DIM, BARUN_DIM, seq);
+        matmul(b->g_out, blk->g_proj, b->gate, BARUN_DIM, BARUN_DIM, seq);
         /* gated attention output */
         for (int s = 0; s < seq; s++) {
             float *xs = b->x + (size_t)s * BARUN_DIM;
             float *outs = b->x2 + (size_t)s * BARUN_DIM;
-            float *gs = b->gate + (size_t)s * BARUN_DIM;
+            float *gs = b->g_out + (size_t)s * BARUN_DIM;
             for (int d = 0; d < BARUN_DIM; d++)
                 xs[d] += outs[d] * (1.0f / (1.0f + expf(-gs[d])));
         }
@@ -520,9 +527,9 @@ int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
                                   b->ffn_out + (size_t)s * BARUN_DIM);
         } else {
             /* the released bounded-swiglu FFN */
-            matmul(b->ffn_gate, blk->gate_up, b->gate, BARUN_FFN_DIM, BARUN_DIM, seq);
+            matmul(b->ffn_gate, blk->gate_up, b->gate, 2 * BARUN_FFN_DIM, BARUN_DIM, seq);
             for (int s = 0; s < seq; s++) {
-                float *g = b->ffn_gate + (size_t)s * BARUN_FFN_DIM;
+                float *g = b->ffn_gate + (size_t)s * 2 * BARUN_FFN_DIM;
                 float *u = b->ffn_up + (size_t)s * BARUN_FFN_DIM;
                 for (int d = 0; d < BARUN_FFN_DIM; d++) {
                     float gv = g[d], uv = g[d + BARUN_FFN_DIM];
@@ -683,7 +690,7 @@ void barun_free(barun_model_t *m, barun_buf_t *b)
     }
     if (b) {
         free(b->x); free(b->x2); free(b->q); free(b->k); free(b->v);
-        free(b->attn_out); free(b->gate);
+        free(b->attn_out); free(b->gate); free(b->g_out);
         free(b->ffn_gate); free(b->ffn_up); free(b->ffn_out); free(b->logits);
         free(b->checkpoint);
         free(b->cos_tbl); free(b->sin_tbl);

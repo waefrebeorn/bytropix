@@ -13,19 +13,24 @@
  *
  * This module fixes all three:
  *   - BP1: a forward pass that RECORDS the per-layer activations
- *     (the standard training-time memory cost).
+ *     (the standard training-time memory cost). It runs the EXACT
+ *     released path (wubu_barun mode 0): partial RoPE per head,
+ *     qk-norm, GQA, gated attention output, bounded SwiGLU, residual
+ *     selectors, tied head.
  *   - BP2: the analytic backward pass, layer by layer, REVERSED:
  *     attention path (rope -> qk-norm -> softmax -> weighted sum ->
  *     o_proj/g_proj -> the gated residual), FFN path (swiglu ->
  *     gate_up -> down -> ffn_norm), the residual selectors, and the
  *     final norm + tied head. Every projection gets its REAL gradient.
- *   - BP3: the real Muon update: momentum, then the Newton-Schulz
- *     orthogonalization (5 iterations of M = (3M - M M^T M)/2), then
- *     the scaled step -- matching the Muon paper + the Barun reference
- *     (Muon for the matrices, AdamW for the embedding + norms).
- *   - BP4: a finite-difference verifier (test_backprop.c) -- the DA
- *     doctrine: tests != correct, so the analytic gradients are checked
- *     against numerical gradients on a tiny model.
+ *   - BP3: the real Muon update: Nesterov momentum (0.95), then the
+ *     Newton-Schulz 5 orthogonalization (a=3.4445, b=-4.7750,
+ *     c=2.0315, Frobenius-normalized, tall matrices transposed), then
+ *     the scaled step (the Moonlight per-matrix scale 0.2*sqrt(max
+ *     dims)). Matrices = Muon; embeddings/norms/selectors (1-D) =
+ *     AdamW -- the confirmed reference split.
+ *   - BP4: a finite-difference verifier (tools/test_backprop.c) -- the
+ *     DA doctrine: tests != correct, so the analytic gradients are
+ *     checked against numerical gradients on a tiny model.
  */
 #ifndef WUBU_BARUN_BACKPROP_H
 #define WUBU_BARUN_BACKPROP_H
@@ -35,13 +40,19 @@
 
 /* BP-A: the recorded activations for one sequence. The trainer owns
  * one of these; the forward fills it, the backward consumes it. */
-typedef struct {
+typedef struct barun_bp_t {
     int seq;
     int layers;   /* BARUN_LAYERS */
+    int cap_seq;  /* the allocated sequence capacity (>= any seq used) */
     /* per-layer residual-stream snapshots: x BEFORE the layer */
-    float *x_in;      /* [L, seq, 448] */
+    float *x_in;      /* [L, seq, 448] (the layer output survives) */
+    float *emb_in;    /* [seq, 448] the embedding output (layer 0's
+                         input and the first selector's checkpoint) */
     /* attention path */
     float *attn_norm; /* [L, seq, 448] rmsnorm(x_in) w/ attn_norm w */
+    float *q_pre;     /* [L, seq, 448] q_proj out (pre qk-norm + rope,
+                         needed by the norm backward) */
+    float *k_pre;     /* [L, seq, 64]  k_proj out (pre k-norm + rope) */
     float *q;         /* [L, seq, 448] post qk-norm + rope (7x64) */
     float *k;         /* [L, seq, 64]  post k-norm + rope */
     float *v;         /* [L, seq, 64]  raw v (no norm on v) */
@@ -52,47 +63,60 @@ typedef struct {
     float *ffn_norm;  /* [L, seq, 448] rmsnorm(x_after_attn) */
     float *ffn_gate;  /* [L, seq, 2456] gate_up pre-activation (saved to
                          recompute silu' and the up branch) */
-    float *ffn_up;    /* [L, seq, 2456] the swiglu output */
+    float *ffn_up;    /* [L, seq, 2456] the swiglu output (gate*up) */
     float *ffn_out;   /* [L, seq, 448] down(ffn_up) */
-    /* selectors: the checkpoint stream (evolves every 4 layers) */
-    float *ckpt;      /* [seq, 448] the running group checkpoint */
+    /* selectors: the blend output per selector layer + the running
+     * checkpoint (evolves every 4 layers). x_in[l] is left as the
+     * layer's REAL output (pre-blend) so the layer backward is exact;
+     * the blend itself lives in sel_out[l] and is what the next layer
+     * consumes (and the checkpoint for the following selector). */
+    float *sel_out;   /* [L, seq, 448] the blend at selector layers (0
+                         for non-selector layers) */
+    float *ckpt;      /* [seq, 448] the running group checkpoint
+                         (ends as the LAST selector's blend) */
     float *sel_w0;    /* [L] the blend weight w0 for each layer (0 if
                          the layer has no selector) */
-    /* the final hidden (pre lm_head) + the logits */
+    /* the final hidden (pre lm_head) + the loss */
     float *final_h;   /* [seq, 448] the final-norm output */
     /* the softmax probs per (layer, head, position) are recomputed in
      * the backward from the saved q/k (memory-light: no extra store) */
     /* backward scratch (allocated once, reused per layer) */
-    float *scratch;   /* one big arena, carved below */
     float *s_dq;      /* [seq, 448] dL/dq */
     float *s_dk;      /* [seq, 64]  dL/dk */
     float *s_dv;      /* [seq, 64]  dL/dv */
     float *s_dao;     /* [seq, 448] dL/dattn_out */
-    float *s_dfg;     /* [seq, 2*FF] dL/dgate_up out */
+    float *s_dfg;     /* [seq, 2*FF] dL/dgate_up out (gate + up) */
     float *s_dfu;     /* [seq, FF]  dL/dffn_up */
     float *s_dfn;     /* [seq, 448] dL/dffn_norm out */
     float *s_dan;     /* [seq, 448] dL/dattn_norm out */
     float *s_dffn_out;/* [seq, 448] dL/dffn_out */
     float *s_do;      /* [seq, 448] dL/do_proj out */
     float *s_dg;      /* [seq, 448] dL/dg_proj out */
+    float *s_dx;      /* [seq, 448] the incoming layer gradient */
+    float *s_dxentry; /* [seq, 448] the gradient wrt the layer input */
 } barun_bp_t;
 
 /* BP1: allocate the recorder for a given max sequence length. */
 int barun_bp_alloc(barun_bp_t *bp, int max_seq);
 
-/* BP2: the recording forward. Runs the exact released path and saves
- * every activation the backward needs. Returns the loss too. */
-float barun_bp_forward(barun_model_t *m, barun_bp_t *bp,
+/* BP2: the recording forward. Runs the exact released path (using the
+ * buffer's rope tables -- b must be a barun_buf_t whose tables were
+ * built) and saves every activation the backward needs. Returns the
+ * mean-reduced next-token cross-entropy loss. */
+float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
                        const uint16_t *tokens, int n_tokens);
 
 /* BP3: the analytic backward. Accumulates the REAL gradients into
  * tr (barun_train_t), exactly like barun_train_microbatch does.
  * Returns the loss (for the trainer's telemetry). */
-float barun_bp_backward(barun_model_t *m, barun_bp_t *bp,
+float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
                         barun_train_t *tr, const uint16_t *tokens,
                         int n_tokens);
 
-/* BP4: the real Muon step (Newton-Schulz orthogonalization). */
+/* BP4: the real optimizer step: Muon (Newton-Schulz 5) for the 2D
+ * hidden matrices, AdamW for the embeddings, the norms and the
+ * selectors (the confirmed reference split). Decoupled weight decay
+ * for the Muon group; global-norm grad clipping per cfg->grad_clip. */
 int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
                        const barun_train_cfg_t *cfg, uint32_t step);
 

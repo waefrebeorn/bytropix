@@ -23,9 +23,12 @@
 
 /* The training config (the reference recipe). */
 typedef struct {
-    float  lr;             /* 1e-4 peak */
+    float  lr;             /* 1e-4 peak (both groups when the splits
+                              below are 0) */
+    float  muon_lr;        /* the Muon group LR (2e-2); 0 -> lr */
+    float  adam_lr;        /* the AdamW group LR (2e-3); 0 -> lr */
     float  weight_decay;   /* 0.1 */
-    float  grad_clip;      /* 1.0 */
+    float  grad_clip;      /* global-norm clip; <= 0 -> no clip */
     uint32_t batch_size;   /* 48 (reference) -- we micro-batch */
     uint32_t seq_len;      /* 2048 */
     uint32_t warmup_steps;
@@ -35,8 +38,17 @@ typedef struct {
                               matrices use Muon (reference split) */
 } barun_train_cfg_t;
 
+/* The 1-D parameter slots trained with AdamW (norms + selectors):
+ *   [4*l + 0] = attn_norm, [4*l + 1] = ffn_norm,
+ *   [4*l + 2] = q_norm,    [4*l + 3] = k_norm      (l in 0..L-1)
+ *   [4*L]     = final_norm
+ *   [4*L+1+i] = selectors[i]                        (i in 0..S-1)
+ */
+#define BARUN_NORM_SLOTS (4 * BARUN_LAYERS + 1 + BARUN_SELECTORS)
+
 /* Gradient accumulators: one float per weight, only for the Muon-updated
- * matrices (the big ones). The norms + embeddings use AdamW states. */
+ * matrices (the big ones). The norms + embeddings + selectors use
+ * AdamW states. */
 typedef struct {
     /* per-block matrix gradients */
     float *q_proj_g[BARUN_LAYERS];  /* [448,448] */
@@ -46,14 +58,14 @@ typedef struct {
     float *g_proj_g[BARUN_LAYERS];
     float *gate_up_g[BARUN_LAYERS]; /* [448,2456] */
     float *down_g[BARUN_LAYERS];    /* [1228,448] */
-    float *selectors_g[BARUN_SELECTORS];
     /* AdamW states for the embedding */
     float *emb_g;   /* [16384,448] the gradient accumulator */
     float *emb_m;   /* [16384,448] the AdamW first moment */
     float *emb_v;   /* [16384,448] the AdamW second moment */
-    /* AdamW states for the norms (small) */
-    float *norm_m[BARUN_LAYERS * 3 + 1];
-    float *norm_v[BARUN_LAYERS * 3 + 1];
+    /* the 1-D params (norms + selectors) -> AdamW: gradient + states */
+    float *norm_g[BARUN_NORM_SLOTS];
+    float *norm_m[BARUN_NORM_SLOTS];
+    float *norm_v[BARUN_NORM_SLOTS];
     /* Muon states: the momentum per matrix (Newton-Schulz iteration) */
     float *q_proj_m[BARUN_LAYERS];
     float *k_proj_m[BARUN_LAYERS];
@@ -62,7 +74,9 @@ typedef struct {
     float *g_proj_m[BARUN_LAYERS];
     float *gate_up_m[BARUN_LAYERS];
     float *down_m[BARUN_LAYERS];
-    float *selectors_m[BARUN_SELECTORS];
+    /* the REAL backprop recorder (owned by the trainer; allocated on
+     * first use, grown as the sequence grows) */
+    struct barun_bp_t *bp_rec;
     /* telemetry */
     uint32_t micro_steps;
     double   grad_norm_sum;
@@ -75,12 +89,12 @@ int barun_train_init(barun_train_t *tr, const barun_model_t *m);
 /* T2: zero the accumulated gradients. */
 int barun_train_zero_grad(barun_train_t *tr);
 
-/* T3: accumulate the gradient of one micro-batch. The caller provides
- * the forward activations; the trainer computes the next-token CE
- * gradient and backprops through the last layer only (the reference
- * trains with the full backprop; the C11 trainer currently does the
- * analytic last-layer + embedding gradient, with the hidden layers'
- * grads accumulated numerically per micro-batch). Returns the loss. */
+/* T3: accumulate the gradient of one micro-batch. Runs the recording
+ * forward (barun_bp_forward) + the REAL analytic backward
+ * (barun_bp_backward) -- chain rule through EVERY path (attention
+ * q/k/v/o/g, qk-norm, rope, softmax, gated residual, SwiGLU, the
+ * residual selectors, final norm, tied head). Every parameter gets
+ * its own gradient. Returns the loss. */
 float barun_train_microbatch(barun_model_t *m, barun_train_t *tr,
                              barun_buf_t *b, const uint16_t *tokens,
                              size_t n_tokens);

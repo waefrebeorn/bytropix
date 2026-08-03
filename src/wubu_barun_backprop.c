@@ -9,13 +9,16 @@
  *      embedding -> 12 blocks (attention q/k/v/o/g + qk-norm + rope +
  *      softmax + gated residual + swiglu + selectors) -> final norm ->
  *      tied head). Each layer gets ITS OWN gradient, not a shared proxy.
- *   2. the REAL Muon: momentum (0.95) -> Newton-Schulz 5
- *      orthogonalization (the paper's whole point) -> scaled step.
- *      Matrices = Muon, embed/head/norms = AdamW (the confirmed split).
+ *   2. the REAL Muon: Nesterov momentum (0.95) -> Newton-Schulz 5
+ *      orthogonalization (a=3.4445, b=-4.7750, c=2.0315, the paper's
+ *      whole point) -> the Moonlight per-matrix scaled step.
+ *      Matrices = Muon, embed/head/norms/selectors = AdamW (the
+ *      confirmed reference split).
  *
- * Activation recording: bp->x_in[l] holds the residual input to layer l
- * (mutated in place by the layer), then copied to x_in[l+1]. Every
- * other buffer is captured per (layer, token) for the backward.
+ * Activation recording: bp->x_in[l] holds the residual input to layer
+ * l and is left as the layer's REAL output (pre-blend). The selector
+ * blend (which the next layer consumes) lives in bp->sel_out[l].
+ * Every other buffer is captured per (layer, token) for the backward.
  *
  * Verified by tools/test_backprop.c with finite differences (the DA
  * doctrine: tests != correct, so we check the gradients numerically).
@@ -39,26 +42,49 @@ int barun_bp_alloc(barun_bp_t *bp, int max_seq)
     if (!bp || max_seq <= 0) return -1;
     memset(bp, 0, sizeof(*bp));
     int L = BARUN_LAYERS;
+    size_t sd = (size_t)max_seq * D;
     bp->layers = L;
-    bp->x_in     = calloc_f((size_t)L * max_seq * D);
-    bp->attn_norm= calloc_f((size_t)L * max_seq * D);
-    bp->q        = calloc_f((size_t)L * max_seq * D);
-    bp->k        = calloc_f((size_t)L * max_seq * 64);
-    bp->v        = calloc_f((size_t)L * max_seq * 64);
-    bp->attn_out = calloc_f((size_t)L * max_seq * D);
-    bp->o_out    = calloc_f((size_t)L * max_seq * D);
-    bp->g_val    = calloc_f((size_t)L * max_seq * D);
-    bp->ffn_norm = calloc_f((size_t)L * max_seq * D);
-    bp->ffn_gate = calloc_f((size_t)L * max_seq * 2 * FF);
-    bp->ffn_up   = calloc_f((size_t)L * max_seq * FF);
-    bp->ffn_out  = calloc_f((size_t)L * max_seq * D);
-    bp->ckpt     = calloc_f((size_t)max_seq * D);
-    bp->sel_w0   = calloc_f((size_t)L);
-    bp->final_h  = calloc_f((size_t)max_seq * D);
-    if (!bp->x_in || !bp->attn_norm || !bp->q || !bp->k || !bp->v ||
-        !bp->attn_out || !bp->o_out || !bp->g_val || !bp->ffn_norm ||
-        !bp->ffn_gate || !bp->ffn_up || !bp->ffn_out || !bp->ckpt ||
-        !bp->sel_w0 || !bp->final_h) {
+    bp->cap_seq = max_seq;
+    bp->x_in      = calloc_f((size_t)L * sd);
+    bp->emb_in    = calloc_f(sd);
+    bp->attn_norm = calloc_f((size_t)L * sd);
+    bp->q_pre     = calloc_f((size_t)L * sd);
+    bp->k_pre     = calloc_f((size_t)L * (size_t)max_seq * 64);
+    bp->q         = calloc_f((size_t)L * sd);
+    bp->k         = calloc_f((size_t)L * (size_t)max_seq * 64);
+    bp->v         = calloc_f((size_t)L * (size_t)max_seq * 64);
+    bp->attn_out  = calloc_f((size_t)L * sd);
+    bp->o_out     = calloc_f((size_t)L * sd);
+    bp->g_val     = calloc_f((size_t)L * sd);
+    bp->ffn_norm  = calloc_f((size_t)L * sd);
+    bp->ffn_gate  = calloc_f((size_t)L * (size_t)max_seq * 2 * FF);
+    bp->ffn_up    = calloc_f((size_t)L * (size_t)max_seq * FF);
+    bp->ffn_out   = calloc_f((size_t)L * sd);
+    bp->sel_out   = calloc_f((size_t)L * sd);
+    bp->ckpt      = calloc_f(sd);
+    bp->sel_w0    = calloc_f((size_t)L);
+    bp->final_h   = calloc_f(sd);
+    bp->s_dq      = calloc_f(sd);
+    bp->s_dk      = calloc_f((size_t)max_seq * 64);
+    bp->s_dv      = calloc_f((size_t)max_seq * 64);
+    bp->s_dao     = calloc_f(sd);
+    bp->s_dfg     = calloc_f((size_t)max_seq * 2 * FF);
+    bp->s_dfu     = calloc_f((size_t)max_seq * FF);
+    bp->s_dfn     = calloc_f(sd);
+    bp->s_dan     = calloc_f(sd);
+    bp->s_dffn_out= calloc_f(sd);
+    bp->s_do      = calloc_f(sd);
+    bp->s_dg      = calloc_f(sd);
+    bp->s_dx      = calloc_f(sd);
+    bp->s_dxentry = calloc_f(sd);
+    if (!bp->x_in || !bp->emb_in || !bp->attn_norm || !bp->q_pre ||
+        !bp->k_pre || !bp->q || !bp->k || !bp->v || !bp->attn_out ||
+        !bp->o_out || !bp->g_val || !bp->ffn_norm || !bp->ffn_gate ||
+        !bp->ffn_up || !bp->ffn_out || !bp->sel_out || !bp->ckpt ||
+        !bp->sel_w0 || !bp->final_h || !bp->s_dq || !bp->s_dk ||
+        !bp->s_dv || !bp->s_dao || !bp->s_dfg || !bp->s_dfu ||
+        !bp->s_dfn || !bp->s_dan || !bp->s_dffn_out || !bp->s_do ||
+        !bp->s_dg || !bp->s_dx || !bp->s_dxentry) {
         barun_bp_free(bp);
         return -1;
     }
@@ -68,13 +94,20 @@ int barun_bp_alloc(barun_bp_t *bp, int max_seq)
 void barun_bp_free(barun_bp_t *bp)
 {
     if (!bp) return;
-    free(bp->x_in); free(bp->attn_norm); free(bp->q); free(bp->k);
+    free(bp->x_in); free(bp->emb_in); free(bp->attn_norm);
+    free(bp->q_pre); free(bp->k_pre); free(bp->q); free(bp->k);
     free(bp->v); free(bp->attn_out); free(bp->o_out); free(bp->g_val);
     free(bp->ffn_norm); free(bp->ffn_gate); free(bp->ffn_up);
-    free(bp->ffn_out); free(bp->ckpt); free(bp->sel_w0);
-    free(bp->final_h);
+    free(bp->ffn_out); free(bp->sel_out); free(bp->ckpt);
+    free(bp->sel_w0); free(bp->final_h);
+    free(bp->s_dq); free(bp->s_dk); free(bp->s_dv); free(bp->s_dao);
+    free(bp->s_dfg); free(bp->s_dfu); free(bp->s_dfn); free(bp->s_dan);
+    free(bp->s_dffn_out); free(bp->s_do); free(bp->s_dg);
+    free(bp->s_dx); free(bp->s_dxentry);
     memset(bp, 0, sizeof(*bp));
 }
+
+/* ---- tiny math helpers (the reference's exact formulas) ---- */
 
 static float rms_norm(float *out, const float *x, const float *w, int n)
 {
@@ -86,7 +119,14 @@ static float rms_norm(float *out, const float *x, const float *w, int n)
 }
 
 static float silu(float v) { return v / (1.0f + expf(-v)); }
+static float silu_deriv(float v)   /* v = the CLIPPED pre-activation */
+{
+    float s = 1.0f / (1.0f + expf(-v));
+    return s * (1.0f + v * (1.0f - s));
+}
+static float sigm(float v) { return 1.0f / (1.0f + expf(-v)); }
 
+/* out[s, o] = sum_i w[o, i] * x[s, i]  (w is [out, in] row-major) */
 static void mm(float *out, const float *w, const float *x,
                int out_n, int in_n, int seq)
 {
@@ -102,16 +142,32 @@ static void mm(float *out, const float *w, const float *x,
     }
 }
 
-/* rope: rotate the first ROPE_DIM channels of a [seq] x [hd] buffer
- * using the model's precomputed tables. */
-static void apply_rope_bp(float *qk, int seq, int hd,
-                          const float *cos_tbl, const float *sin_tbl,
-                          int pos0)
+/* partial RoPE on the q rows: each 64-wide head row rotates its first
+ * 32 channels at its own position (the released path, applied per
+ * head). k is a single 64-wide row per position. */
+static void rope_q(float *q, int seq, const float *cos_tbl,
+                   const float *sin_tbl)
 {
     for (int s = 0; s < seq; s++) {
-        float *row = qk + (size_t)s * hd;
-        const float *c = cos_tbl + (size_t)(pos0 + s) * BARUN_ROPE_DIM;
-        const float *si = sin_tbl + (size_t)(pos0 + s) * BARUN_ROPE_DIM;
+        for (int h = 0; h < BARUN_HEADS; h++) {
+            float *row = q + ((size_t)s * D + (size_t)h * 64);
+            const float *c = cos_tbl + (size_t)s * BARUN_ROPE_DIM;
+            const float *si = sin_tbl + (size_t)s * BARUN_ROPE_DIM;
+            for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
+                float x0 = row[i], x1 = row[BARUN_ROPE_DIM / 2 + i];
+                row[i] = x0 * c[i] - x1 * si[i];
+                row[BARUN_ROPE_DIM / 2 + i] = x0 * si[i] + x1 * c[i];
+            }
+        }
+    }
+}
+static void rope_k(float *k, int seq, const float *cos_tbl,
+                   const float *sin_tbl)
+{
+    for (int s = 0; s < seq; s++) {
+        float *row = k + (size_t)s * 64;
+        const float *c = cos_tbl + (size_t)s * BARUN_ROPE_DIM;
+        const float *si = sin_tbl + (size_t)s * BARUN_ROPE_DIM;
         for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
             float x0 = row[i], x1 = row[BARUN_ROPE_DIM / 2 + i];
             row[i] = x0 * c[i] - x1 * si[i];
@@ -119,22 +175,137 @@ static void apply_rope_bp(float *qk, int seq, int hd,
         }
     }
 }
+/* the transposed rotations (the backward): same angles, negated */
+static void unrope_q(float *dq, int seq, const float *cos_tbl,
+                     const float *sin_tbl)
+{
+    for (int s = 0; s < seq; s++) {
+        for (int h = 0; h < BARUN_HEADS; h++) {
+            float *row = dq + ((size_t)s * D + (size_t)h * 64);
+            const float *c = cos_tbl + (size_t)s * BARUN_ROPE_DIM;
+            const float *si = sin_tbl + (size_t)s * BARUN_ROPE_DIM;
+            for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
+                float g0 = row[i], g1 = row[BARUN_ROPE_DIM / 2 + i];
+                row[i] = g0 * c[i] + g1 * si[i];
+                row[BARUN_ROPE_DIM / 2 + i] = -g0 * si[i] + g1 * c[i];
+            }
+        }
+    }
+}
+static void unrope_k(float *dk, int seq, const float *cos_tbl,
+                     const float *sin_tbl)
+{
+    for (int s = 0; s < seq; s++) {
+        float *row = dk + (size_t)s * 64;
+        const float *c = cos_tbl + (size_t)s * BARUN_ROPE_DIM;
+        const float *si = sin_tbl + (size_t)s * BARUN_ROPE_DIM;
+        for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
+            float g0 = row[i], g1 = row[BARUN_ROPE_DIM / 2 + i];
+            row[i] = g0 * c[i] + g1 * si[i];
+            row[BARUN_ROPE_DIM / 2 + i] = -g0 * si[i] + g1 * c[i];
+        }
+    }
+}
 
-float barun_bp_forward(barun_model_t *m, barun_bp_t *bp,
+/* rms_norm backward. y = x * r * w, r = 1/sqrt(mean(x^2)+eps).
+ * Accumulates dx into dx_out (may equal dy -- the per-element reads
+ * happen before the writes) and dw into dw_out. */
+static void rms_norm_backward(const float *x, const float *w,
+                              const float *dy, float *dx_out, float *dw_out,
+                              int n)
+{
+    float ss = 0;
+    for (int i = 0; i < n; i++) ss += x[i] * x[i];
+    float r = 1.0f / sqrtf(ss / n + BARUN_EPS);
+    float dot = 0;
+    for (int i = 0; i < n; i++) dot += dy[i] * w[i] * x[i];
+    float c = -r * r * r * dot / (float)n;
+    for (int i = 0; i < n; i++) {
+        float dz = dy[i] * w[i] * r;
+        if (dx_out) dx_out[i] += dz + c * x[i];
+        if (dw_out) dw_out[i] += dy[i] * x[i] * r;
+    }
+}
+
+/* ---- the tied head: mean-reduced next-token CE + gradients ----
+ * loss = mean_s CE(softmax(embedding @ final_h[s]), tokens[s+1])
+ * If dh_out: accumulates dL/d(final_h)[s] into it (zeros expected).
+ * If demb:   accumulates dL/d(embedding)[v] into it (zeros expected).
+ * The head IS the embedding (tied), so the weight grad and the input
+ * grad are the same tensor accumulated twice -- handled by the caller. */
+static float head_ce(barun_model_t *m, barun_bp_t *bp,
+                     const uint16_t *tokens, int n_tokens,
+                     float *dh_out, float *demb)
+{
+    int seq = bp->seq;
+    float n_pos = (float)(seq - 1);
+    float loss = 0;
+    for (int s = 0; s < seq - 1; s++) {
+        uint16_t target = tokens[s + 1];
+        const float *h = bp->final_h + (size_t)s * D;
+        float maxv = -1e30f;
+        for (int v = 0; v < BARUN_VOCAB; v++) {
+            const float *e = m->embedding + (size_t)v * D;
+            float logit = 0;
+            for (int d = 0; d < D; d++) logit += e[d] * h[d];
+            if (logit > maxv) maxv = logit;
+        }
+        double sum = 0, lt = 0;
+        for (int v = 0; v < BARUN_VOCAB; v++) {
+            const float *e = m->embedding + (size_t)v * D;
+            float logit = 0;
+            for (int d = 0; d < D; d++) logit += e[d] * h[d];
+            double p = exp((double)(logit - maxv));
+            if (v == target) lt = (double)logit;
+            sum += p;
+        }
+        loss += (float)(((double)maxv + log(sum) - lt) / (double)n_pos);
+        if (dh_out || demb) {
+            for (int v = 0; v < BARUN_VOCAB; v++) {
+                const float *e = m->embedding + (size_t)v * D;
+                float logit = 0;
+                for (int d = 0; d < D; d++) logit += e[d] * h[d];
+                float p = (float)(exp((double)(logit - maxv)) / sum);
+                float g = (p - (v == target ? 1.0f : 0.0f)) / n_pos;
+                if (demb) {
+                    float *ga = demb + (size_t)v * D;
+                    for (int d = 0; d < D; d++) ga[d] += g * h[d];
+                }
+                if (dh_out) {
+                    float *dh = dh_out + (size_t)s * D;
+                    for (int d = 0; d < D; d++) dh[d] += g * e[d];
+                }
+            }
+        }
+    }
+    return loss;
+}
+
+/* is layer l a selector layer? (layers 3, 7, 11) */
+static int is_sel(int l)
+{
+    return ((l + 1) % BARUN_SELECT_EVERY == 0) &&
+           ((l + 1) / BARUN_SELECT_EVERY - 1 < BARUN_SELECTORS);
+}
+
+float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
                        const uint16_t *tokens, int n_tokens)
 {
-    if (!m || !bp || !tokens || n_tokens < 2) return 0;
+    if (!m || !b || !bp || !tokens || n_tokens < 2 ||
+        n_tokens > bp->cap_seq) return 0;
     int seq = n_tokens;
     bp->seq = seq;
     memset(bp->sel_w0, 0, (size_t)BARUN_LAYERS * sizeof(float));
 
-    /* embedding -> x_in[0] */
+    /* embedding -> x_in[0] (saved to emb_in for layer 0's backward
+     * and the first selector's checkpoint) */
     float *x0 = bp->x_in;
     for (int s = 0; s < seq; s++) {
         uint16_t tok = tokens[s];
         const float *e = m->embedding + (size_t)tok * D;
         memcpy(x0 + (size_t)s * D, e, D * sizeof(float));
     }
+    memcpy(bp->emb_in, x0, (size_t)seq * D * sizeof(float));
     memcpy(bp->ckpt, x0, (size_t)seq * D * sizeof(float));
 
     for (int l = 0; l < BARUN_LAYERS; l++) {
@@ -143,6 +314,8 @@ float barun_bp_forward(barun_model_t *m, barun_bp_t *bp,
         float *x_out_l = (l + 1 < BARUN_LAYERS)
                              ? bp->x_in + (size_t)(l + 1) * seq * D : NULL;
         float *an_l    = bp->attn_norm + (size_t)l * seq * D;
+        float *q_pre_l = bp->q_pre     + (size_t)l * seq * D;
+        float *k_pre_l = bp->k_pre     + (size_t)l * seq * 64;
         float *q_l     = bp->q         + (size_t)l * seq * D;
         float *k_l     = bp->k         + (size_t)l * seq * 64;
         float *v_l     = bp->v         + (size_t)l * seq * 64;
@@ -153,15 +326,18 @@ float barun_bp_forward(barun_model_t *m, barun_bp_t *bp,
         float *fg_l    = bp->ffn_gate  + (size_t)l * seq * 2 * FF;
         float *fu_l    = bp->ffn_up    + (size_t)l * seq * FF;
         float *fo_l    = bp->ffn_out   + (size_t)l * seq * D;
+        float *sel_l   = bp->sel_out   + (size_t)l * seq * D;
 
         /* attention norm */
         for (int s = 0; s < seq; s++)
             rms_norm(an_l + (size_t)s * D, x_in_l + (size_t)s * D,
                      blk->attn_norm, D);
-        /* q/k/v projections */
-        mm(q_l, blk->q_proj, an_l, BARUN_HEADS * 64, D, seq);
-        mm(k_l, blk->k_proj, an_l, 64, D, seq);
+        /* q/k/v projections (save the pre-norm q/k for the backward) */
+        mm(q_pre_l, blk->q_proj, an_l, BARUN_HEADS * 64, D, seq);
+        mm(k_pre_l, blk->k_proj, an_l, 64, D, seq);
         mm(v_l, blk->v_proj, an_l, 64, D, seq);
+        memcpy(q_l, q_pre_l, (size_t)seq * D * sizeof(float));
+        memcpy(k_l, k_pre_l, (size_t)seq * 64 * sizeof(float));
         /* qk-norm + rope */
         for (int s = 0; s < seq; s++) {
             for (int h = 0; h < BARUN_HEADS; h++) {
@@ -171,10 +347,10 @@ float barun_bp_forward(barun_model_t *m, barun_bp_t *bp,
             rms_norm(k_l + (size_t)s * 64, k_l + (size_t)s * 64,
                      blk->k_norm, 64);
         }
-        apply_rope_bp(q_l, seq, D, m->cos_tbl, m->sin_tbl, 0);
-        apply_rope_bp(k_l, seq, 64, m->cos_tbl, m->sin_tbl, 0);
+        rope_q(q_l, seq, b->cos_tbl, b->sin_tbl);
+        rope_k(k_l, seq, b->cos_tbl, b->sin_tbl);
 
-        /* GQA attention */
+        /* GQA attention (7 Q heads share the single KV head) */
         int is_full = ((l + 1) % BARUN_FULL_EVERY == 0);
         for (int s = 0; s < seq; s++) {
             float *acc = ao_l + (size_t)s * D;
@@ -207,10 +383,9 @@ float barun_bp_forward(barun_model_t *m, barun_bp_t *bp,
                 }
             }
         }
-        /* o_proj + gate */
+        /* o_proj + gate; gated residual: x = x + o * sigmoid(g) */
         mm(o_l, blk->o_proj, ao_l, D, D, seq);
         mm(g_l, blk->g_proj, an_l, D, D, seq);
-        /* gated residual: x = x + o * sigmoid(g) */
         for (int s = 0; s < seq; s++) {
             float *xs = x_in_l + (size_t)s * D;
             for (int d = 0; d < D; d++)
@@ -239,13 +414,15 @@ float barun_bp_forward(barun_model_t *m, barun_bp_t *bp,
             float *xs = x_in_l + (size_t)s * D;
             for (int d = 0; d < D; d++) xs[d] += fo_l[(size_t)s * D + d];
         }
-        /* residual selector (every 4th layer) */
-        if ((l + 1) % BARUN_SELECT_EVERY == 0) {
+        /* residual selector: blend into sel_out[l]; x_in[l] keeps the
+         * layer's REAL output (the backward needs it exact). */
+        if (is_sel(l)) {
             float *sw = m->selectors[(l + 1) / BARUN_SELECT_EVERY - 1];
             float w0sum = 0;
             for (int s = 0; s < seq; s++) {
                 float *cp = bp->ckpt + (size_t)s * D;
                 float *cur = x_in_l + (size_t)s * D;
+                float *bl = sel_l + (size_t)s * D;
                 float sc = 0, ss2 = 0;
                 for (int d = 0; d < D; d++) {
                     float ncp = cp[d] * (1.0f / sqrtf(D * 1.0f));
@@ -257,130 +434,64 @@ float barun_bp_forward(barun_model_t *m, barun_bp_t *bp,
                 float ws = w0 + w1 + 1e-9f;
                 w0 /= ws; w1 /= ws;
                 for (int d = 0; d < D; d++)
-                    cur[d] = w0 * cp[d] + w1 * cur[d];
-                memcpy(cp, cur, D * sizeof(float));
+                    bl[d] = w0 * cp[d] + w1 * cur[d];
+                memcpy(cp, bl, D * sizeof(float));
                 w0sum += w0;
             }
             bp->sel_w0[l] = w0sum / (float)seq;
         }
-        /* the residual stream chains: x_out_l = x_in_l (post-layer) */
-        if (x_out_l)
-            memcpy(x_out_l, x_in_l, (size_t)seq * D * sizeof(float));
+        /* the residual stream chains: the next layer's input = the
+         * layer output (or the selector blend). */
+        if (x_out_l) {
+            const float *src = is_sel(l) ? sel_l : x_in_l;
+            memcpy(x_out_l, src, (size_t)seq * D * sizeof(float));
+        }
     }
-    /* final norm (input = the last layer's output) */
-    const float *xlast = bp->x_in + (size_t)(BARUN_LAYERS - 1) * seq * D;
+    /* final norm: the input is the last layer's output (the blend if
+     * the last layer is a selector layer) */
+    const float *xlast = is_sel(BARUN_LAYERS - 1)
+                             ? bp->sel_out + (size_t)(BARUN_LAYERS - 1) * seq * D
+                             : bp->x_in + (size_t)(BARUN_LAYERS - 1) * seq * D;
     for (int s = 0; s < seq; s++)
         rms_norm(bp->final_h + (size_t)s * D, xlast + (size_t)s * D,
                  m->final_norm, D);
-    return 0;
+    return head_ce(m, bp, tokens, n_tokens, NULL, NULL);
 }
 
 /* ---------- the REAL backward pass ---------- */
 
-/* helper: rms_norm backward. y = x * r * w, r = 1/sqrt(mean(x^2)+eps).
- * Returns dx (accumulated into dx_out) and dw (into dw_out). */
-static void rms_norm_backward(const float *x, const float *w,
-                              const float *dy, float *dx_out, float *dw_out,
-                              int n)
-{
-    float ss = 0;
-    for (int i = 0; i < n; i++) ss += x[i] * x[i];
-    float r = 1.0f / sqrtf(ss / n + BARUN_EPS);
-    float dot = 0;
-    for (int i = 0; i < n; i++) dot += dy[i] * w[i] * x[i];
-    float c = -r * r * r * dot / (float)n;
-    for (int i = 0; i < n; i++) {
-        float dz = dy[i] * w[i] * r;
-        if (dx_out) dx_out[i] += dz + c * x[i];
-        if (dw_out) dw_out[i] += dy[i] * x[i] * r;
-    }
-}
-
-/* rope backward: same rotation with negated angles. */
-static void apply_rope_backward(float *dqk, int seq, int hd,
-                                const float *cos_tbl, const float *sin_tbl,
-                                int pos0)
-{
-    for (int s = 0; s < seq; s++) {
-        float *row = dqk + (size_t)s * hd;
-        const float *c = cos_tbl + (size_t)(pos0 + s) * BARUN_ROPE_DIM;
-        const float *si = sin_tbl + (size_t)(pos0 + s) * BARUN_ROPE_DIM;
-        for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
-            float g0 = row[i], g1 = row[BARUN_ROPE_DIM / 2 + i];
-            /* forward: y0 = x0*c - x1*si ; y1 = x0*si + x1*c
-             * inverse:  x0 = y0*c + y1*si ; x1 = -y0*si + y1*c */
-            row[i] = g0 * c[i] + g1 * si[i];
-            row[BARUN_ROPE_DIM / 2 + i] = -g0 * si[i] + g1 * c[i];
-        }
-    }
-}
-
-/* qk-norm backward (in place on the grad buffer). */
-static void qknorm_backward(const float *x, const float *w,
-                            float *dx, float *dw, int n)
-{
-    rms_norm_backward(x, w, dx, dx, dw, n);
-}
-
-float barun_bp_backward(barun_model_t *m, barun_bp_t *bp,
+float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
                         barun_train_t *tr, const uint16_t *tokens,
                         int n_tokens)
 {
-    if (!m || !bp || !tr || !tokens || bp->seq != n_tokens) return 0;
+    if (!m || !b || !bp || !tr || !tokens || bp->seq != n_tokens) return 0;
     int seq = n_tokens;
-    float loss = 0;
-    /* gradient buffers: reuse the trainer's accumulators (they are
-     * zeroed by barun_train_zero_grad before the batch). */
+    const float *cos_tbl = b->cos_tbl, *sin_tbl = b->sin_tbl;
     float *demb = tr->emb_g;
+
     /* ---- head: softmax CE vs the tied embedding ---- */
-    float *dh_final = calloc_f((size_t)seq * D);   /* dL/d(final_h) */
-    float *dlast = calloc_f((size_t)seq * D);      /* dL/d(last layer out) */
-    if (!dh_final || !dlast) { free(dh_final); free(dlast); return 0; }
-    float n_pos = (float)(seq - 1);
-    for (int s = 0; s < seq - 1; s++) {
-        uint16_t target = tokens[s + 1];
-        const float *h = bp->final_h + (size_t)s * D;
-        const float *e_t = m->embedding + (size_t)target * D;
-        float maxv = e_t[0];
-        for (int d = 1; d < D; d++) if (e_t[d] > maxv) maxv = e_t[d];
-        /* logits = h . e_v ; softmax over vocab */
-        float logsum = 0, lt = 0;
-        for (int v = 0; v < BARUN_VOCAB; v++) {
-            const float *e = m->embedding + (size_t)v * D;
-            float logit = 0;
-            for (int d = 0; d < D; d++) logit += e[d] * h[d];
-            if (v == target) lt = logit;
-            logsum += expf(logit - maxv);
-        }
-        loss += (logf(logsum) + maxv - lt) / n_pos;
-        /* dL/dh += sum_v (p_v - 1_{v=target}) * e_v */
-        for (int v = 0; v < BARUN_VOCAB; v++) {
-            const float *e = m->embedding + (size_t)v * D;
-            float logit = 0;
-            for (int d = 0; d < D; d++) logit += e[d] * h[d];
-            float p = expf(logit - maxv) / logsum;
-            float g = (p - (v == target ? 1.0f : 0.0f)) / n_pos;
-            for (int d = 0; d < D; d++) {
-                dh_final[(size_t)s * D + d] += g * e[d];
-                demb[(size_t)v * D + d] += g * h[d];
-            }
-        }
-    }
-    /* final norm backward: dh_final -> dlast */
-    const float *xlast = bp->x_in + (size_t)(BARUN_LAYERS - 1) * seq * D;
-    for (int s = 0; s < seq - 1; s++)
+    float *dh_final = calloc_f((size_t)seq * D);
+    float *dlast    = calloc_f((size_t)seq * D); /* dL/d(last layer out) */
+    float *dc       = calloc_f((size_t)seq * D); /* the checkpoint grad */
+    if (!dh_final || !dlast || !dc) { free(dh_final); free(dlast); free(dc); return 0; }
+    float loss = head_ce(m, bp, tokens, n_tokens, dh_final, demb);
+
+    /* final norm backward: dh_final -> dlast (+ final_norm grads) */
+    const float *xlast = is_sel(BARUN_LAYERS - 1)
+                             ? bp->sel_out + (size_t)(BARUN_LAYERS - 1) * seq * D
+                             : bp->x_in + (size_t)(BARUN_LAYERS - 1) * seq * D;
+    for (int s = 0; s < seq; s++)
         rms_norm_backward(xlast + (size_t)s * D, m->final_norm,
                           dh_final + (size_t)s * D,
-                          dlast + (size_t)s * D, NULL, D);
-    free(dh_final);
+                          dlast + (size_t)s * D, tr->norm_g[4 * BARUN_LAYERS], D);
 
     /* ---- per-layer backward (REVERSED) ---- */
-    float *dckpt = calloc_f((size_t)seq * D);
-    if (!dckpt) { free(dlast); return 0; }
     for (int l = BARUN_LAYERS - 1; l >= 0; l--) {
         barun_block_t *blk = &m->blocks[l];
         float *x_in_l  = bp->x_in      + (size_t)l * seq * D;
         float *an_l    = bp->attn_norm + (size_t)l * seq * D;
+        float *q_pre_l = bp->q_pre     + (size_t)l * seq * D;
+        float *k_pre_l = bp->k_pre     + (size_t)l * seq * 64;
         float *q_l     = bp->q         + (size_t)l * seq * D;
         float *k_l     = bp->k         + (size_t)l * seq * 64;
         float *v_l     = bp->v         + (size_t)l * seq * 64;
@@ -390,30 +501,53 @@ float barun_bp_backward(barun_model_t *m, barun_bp_t *bp,
         float *fn_l    = bp->ffn_norm  + (size_t)l * seq * D;
         float *fg_l    = bp->ffn_gate  + (size_t)l * seq * 2 * FF;
         float *fu_l    = bp->ffn_up    + (size_t)l * seq * FF;
-        float *fo_l    = bp->ffn_out   + (size_t)l * seq * D;
-        float *dx_l    = calloc_f((size_t)seq * D);
-        if (!dx_l) { free(dckpt); free(dlast); return 0; }
+        float *sel_l   = bp->sel_out   + (size_t)l * seq * D;
+        float *dx      = bp->s_dx;        /* dL/d(layer output) */
+        float *dxe     = bp->s_dxentry;   /* dL/d(layer input)   */
+        float *dfo     = bp->s_dffn_out;
+        float *dfu     = bp->s_dfu;
+        float *dfg     = bp->s_dfg;       /* [seq, 2*FF] */
+        float *dfn     = bp->s_dfn;
+        float *x1      = bp->s_dg;        /* scratch: x after attn */
+        float *dao     = bp->s_dao;
+        float *dod     = bp->s_do;
+        float *dgd     = bp->s_dg;        /* reused: dL/dg after x1 */
+        float *dan     = bp->s_dan;
+        float *dq      = bp->s_dq;
+        float *dk      = bp->s_dk;
+        float *dv      = bp->s_dv;
 
         /* the incoming gradient: from the layer above (or the final
-         * norm for l == L-1) PLUS the residual-selector path. */
-        if (l == BARUN_LAYERS - 1) {
-            memcpy(dx_l, dlast, (size_t)seq * D * sizeof(float));
-        } else {
-            /* the layer-above gradient is stored in dlast (reused) */
-        }
+         * norm for l == L-1). */
+        if (l == BARUN_LAYERS - 1)
+            memcpy(dx, dlast, (size_t)seq * D * sizeof(float));
+        else
+            memcpy(dx, dxe, (size_t)seq * D * sizeof(float));
+        /* every scratch accumulator is zeroed fresh per layer */
+        memset(dxe, 0, (size_t)seq * D * sizeof(float));
+        memset(dan, 0, (size_t)seq * D * sizeof(float));
+        memset(dao, 0, (size_t)seq * D * sizeof(float));
+        memset(dfn, 0, (size_t)seq * D * sizeof(float));
 
-        /* ---- residual selector (if this layer has one) ---- */
-        if ((l + 1) % BARUN_SELECT_EVERY == 0) {
+        /* ---- residual selector: route the blend gradient into the
+         * layer (w1) and the checkpoint (w0) ---- */
+        if (is_sel(l)) {
             int sel = (l + 1) / BARUN_SELECT_EVERY - 1;
             float *sw = m->selectors[sel];
-            float *sg = tr->selectors_g[sel];
-            float *cp = bp->ckpt + (size_t)0 * D;
+            /* selectors are 1-D params -> their grad lives in the
+             * AdamW norm slots ([4*L + 1 + sel]) */
+            float *sg = tr->norm_g[4 * BARUN_LAYERS + 1 + sel];
+            /* the checkpoint BEFORE this blend = the previous selector
+             * blend, or the embedding for the first selector */
+            float *ckpt_pre = (l == BARUN_SELECT_EVERY - 1)
+                                  ? bp->emb_in
+                                  : bp->sel_out + (size_t)(l - BARUN_SELECT_EVERY) * seq * D;
             for (int s = 0; s < seq; s++) {
+                float *cp = ckpt_pre + (size_t)s * D;
                 float *cur = x_in_l + (size_t)s * D;
-                float *cp_s = cp + (size_t)s * D;
                 float sc = 0, ss2 = 0;
                 for (int d = 0; d < D; d++) {
-                    float ncp = cp_s[d] * (1.0f / sqrtf(D * 1.0f));
+                    float ncp = cp[d] * (1.0f / sqrtf(D * 1.0f));
                     float ncu = cur[d] * (1.0f / sqrtf(D * 1.0f));
                     sc += sw[d] * ncp;
                     ss2 += sw[d] * ncu;
@@ -421,50 +555,522 @@ float barun_bp_backward(barun_model_t *m, barun_bp_t *bp,
                 float w0 = expf(sc), w1 = expf(ss2);
                 float ws = w0 + w1 + 1e-9f;
                 w0 /= ws; w1 /= ws;
-                float dcur = 0;
+                float *dbl = dx + (size_t)s * D;
+                float *dck = dc + (size_t)s * D;
+                float dot_cp = 0, dot_cur = 0;
                 for (int d = 0; d < D; d++) {
-                    float ncp = cp_s[d] * (1.0f / sqrtf(D * 1.0f));
-                    float ncu = cur[d] * (1.0f / sqrtf(D * 1.0f));
-                    float dout = dx_l[(size_t)s * D + d];
-                    /* dx through the blend: cur' = w0*cp + w1*cur */
-                    dcur = dout * w1;
-                    dx_l[(size_t)s * D + d] = dcur;
-                    /* the checkpoint path: cp' = cur' (copied) so the
-                     * checkpoint grad gets the same dout */
-                    dckpt[(size_t)s * D + d] += dout * w0;
-                    /* selector grad */
-                    sg[d] += dout * (cp_s[d] - cur[d]) * (w0 * (1 - w0)) *
-                             ncp * 0.5f;
-                    sg[d] += dout * (cur[d] - cp_s[d]) * (w1 * (1 - w1)) *
-                             ncu * 0.5f;
+                    /* the blend gradient = the layer-above gradient +
+                     * the checkpoint chain from later selectors */
+                    float db = dbl[d] + dck[d];
+                    dbl[d] = db * w1;      /* dL/d(layer output)   */
+                    dck[d] = db * w0;      /* dL/d(checkpoint)     */
+                    dot_cp += db * cp[d];
+                    dot_cur += db * cur[d];
                 }
-                (void)dcur;
+                /* selector weight gradient (softmax chain) */
+                float dsc  = w0 * (dot_cp * (1 - w0) - dot_cur * w1);
+                float dss2 = w1 * (dot_cur * (1 - w1) - dot_cp * w0);
+                for (int d = 0; d < D; d++) {
+                    float ncp = cp[d] * (1.0f / sqrtf(D * 1.0f));
+                    float ncu = cur[d] * (1.0f / sqrtf(D * 1.0f));
+                    sg[d] += dsc * ncp + dss2 * ncu;
+                }
             }
         }
 
         /* ---- FFN path ---- */
-        /* dL/dfn = down^T dL/dfo ; dL/ddown = dL/dfo x fu^T */
+        /* dL/dfo = dx (the ffn add identity); down grads + dL/dfu */
         for (int s = 0; s < seq; s++) {
             const float *fu = fu_l + (size_t)s * FF;
-            const float *df = dx_l + (size_t)s * D;   /* dL/dx after ffn add */
+            const float *df = dx + (size_t)s * D;
+            float *dfo_s = dfo + (size_t)s * D;
+            float *dfu_s = dfu + (size_t)s * FF;
+            for (int o = 0; o < D; o++) dfo_s[o] = df[o];
             for (int d = 0; d < FF; d++) {
                 float acc = 0;
-                for (int o = 0; o < D; o++)
-                    acc += blk->down[(size_t)o * FF + d] * df[o];
-                /* grad into ffn_up (buffer reuse: g_val area is free
-                 * after the gate used it -- use bp->ffn_norm as scratch
-                 * for dffn_up, then fold into the ffn backward) */
-                bp->ffn_norm[(size_t)s * FF + d] = acc;  /* overflow: no */
+                for (int o = 0; o < D; o++) {
+                    float dfv = df[o];
+                    acc += blk->down[(size_t)o * FF + d] * dfv;
+                    tr->down_g[l][(size_t)o * FF + d] += dfv * fu[d];
+                }
+                dfu_s[d] = acc;
             }
         }
-        (void)fn_l; (void)fg_l; (void)fo_l; (void)an_l; (void)g_l;
-        (void)q_l; (void)k_l; (void)v_l; (void)ao_l; (void)o_l;
-        (void)blk; (void)demb;
-        free(dx_l);
+        /* swiglu backward: u = silu(clip(g)) * clip(u) */
+        for (int s = 0; s < seq; s++) {
+            const float *fg = fg_l + (size_t)s * 2 * FF;
+            const float *du = dfu + (size_t)s * FF;
+            float *dgu = dfg + (size_t)s * 2 * FF;
+            for (int d = 0; d < FF; d++) {
+                float g_raw = fg[d], u_raw = fg[d + FF];
+                float gv = g_raw > BARUN_CLIP ? BARUN_CLIP : g_raw;
+                float uv = u_raw > BARUN_CLIP ? BARUN_CLIP : u_raw;
+                if (uv < -BARUN_CLIP) uv = -BARUN_CLIP;
+                float g_ok = (g_raw <= BARUN_CLIP) ? 1.0f : 0.0f;
+                float u_ok = (u_raw <= BARUN_CLIP && u_raw >= -BARUN_CLIP)
+                                 ? 1.0f : 0.0f;
+                dgu[d]        = silu_deriv(gv) * uv * du[d] * g_ok;
+                dgu[d + FF]   = silu(gv) * du[d] * u_ok;
+            }
+        }
+        /* gate_up grads + dL/dfn */
+        for (int s = 0; s < seq; s++) {
+            const float *fn = fn_l + (size_t)s * D;
+            const float *dgu = dfg + (size_t)s * 2 * FF;
+            float *dfn_s = dfn + (size_t)s * D;
+            float *gu_g = tr->gate_up_g[l];
+            for (int o = 0; o < 2 * FF; o++) {
+                float dgv = dgu[o];
+                if (dgv == 0.0f) continue;
+                const float *gu_row = blk->gate_up + (size_t)o * D;
+                float *gg = gu_g + (size_t)o * D;
+                for (int i = 0; i < D; i++) {
+                    gg[i] += dgv * fn[i];
+                    dfn_s[i]  += dgv * gu_row[i];
+                }
+            }
+        }
+        /* ffn_norm backward: x1 = x_entry + o*sigmoid(g) (recomputed) */
+        for (int s = 0; s < seq; s++) {
+            const float *o_s = o_l + (size_t)s * D;
+            const float *g_s = g_l + (size_t)s * D;
+            float *x1_s = x1 + (size_t)s * D;
+            for (int d = 0; d < D; d++)
+                x1_s[d] = o_s[d] * sigm(g_s[d]);
+        }
+        {
+            /* x1 also needs the entry -- layer input + the gated add */
+            const float *x_entry = (l == 0)
+                                       ? bp->emb_in
+                                       : (is_sel(l - 1)
+                                              ? bp->sel_out + (size_t)(l - 1) * seq * D
+                                              : bp->x_in + (size_t)(l - 1) * seq * D);
+            for (int s = 0; s < seq; s++) {
+                const float *xe = x_entry + (size_t)s * D;
+                float *x1_s = x1 + (size_t)s * D;
+                for (int d = 0; d < D; d++) x1_s[d] += xe[d];
+            }
+        }
+        for (int s = 0; s < seq; s++)
+            rms_norm_backward(x1 + (size_t)s * D, blk->ffn_norm,
+                              dfn + (size_t)s * D,
+                              dxe + (size_t)s * D, tr->norm_g[4 * l + 1], D);
+        /* the ffn-add identity: dL/dx1 += dx */
+        for (int s = 0; s < seq; s++) {
+            const float *df = dx + (size_t)s * D;
+            float *dx1_s = dxe + (size_t)s * D;
+            for (int d = 0; d < D; d++) dx1_s[d] += df[d];
+        }
+
+        /* ---- attention path (dx1_total = dxe) ---- */
+        /* gated residual: x1 = x_entry + o*sigmoid(g) */
+        for (int s = 0; s < seq; s++) {
+            const float *dx1_s = dxe + (size_t)s * D;
+            const float *o_s = o_l + (size_t)s * D;
+            const float *g_s = g_l + (size_t)s * D;
+            float *do_s = dod + (size_t)s * D;
+            float *dg_s = dgd + (size_t)s * D;
+            for (int d = 0; d < D; d++) {
+                float sg = sigm(g_s[d]);
+                do_s[d] = dx1_s[d] * sg;
+                dg_s[d] = dx1_s[d] * o_s[d] * sg * (1.0f - sg);
+            }
+        }
+        /* o_proj grads + dL/dattn_out ; g_proj grads + dL/dan */
+        for (int s = 0; s < seq; s++) {
+            const float *ao = ao_l + (size_t)s * D;
+            const float *an = an_l + (size_t)s * D;
+            const float *do_s = dod + (size_t)s * D;
+            const float *dg_s = dgd + (size_t)s * D;
+            float *dao_s = dao + (size_t)s * D;
+            float *dan_s = dan + (size_t)s * D;
+            for (int o = 0; o < D; o++) {
+                float dov = do_s[o], dgv = dg_s[o];
+                const float *o_row = blk->o_proj + (size_t)o * D;
+                const float *g_row = blk->g_proj + (size_t)o * D;
+                float *og = tr->o_proj_g[l] + (size_t)o * D;
+                float *gg = tr->g_proj_g[l] + (size_t)o * D;
+                if (dov != 0.0f)
+                    for (int i = 0; i < D; i++) {
+                        og[i] += dov * ao[i];
+                        dao_s[i] += dov * o_row[i];
+                    }
+                if (dgv != 0.0f)
+                    for (int i = 0; i < D; i++) {
+                        gg[i] += dgv * an[i];
+                        dan_s[i] += dgv * g_row[i];
+                    }
+            }
+        }
+        /* attention backward (GQA: all heads share the KV rows) */
+        int is_full = ((l + 1) % BARUN_FULL_EVERY == 0);
+        memset(dq, 0, (size_t)seq * D * sizeof(float));
+        memset(dk, 0, (size_t)seq * 64 * sizeof(float));
+        memset(dv, 0, (size_t)seq * 64 * sizeof(float));
+        {
+            float inv = 1.0f / sqrtf(64.0f);
+            for (int s = 0; s < seq; s++) {
+                for (int h = 0; h < BARUN_HEADS; h++) {
+                    const float *qrow = q_l + (size_t)s * D + (size_t)h * 64;
+                    int lo = is_full ? 0
+                                     : (s > BARUN_LOCAL_WIN ? s - BARUN_LOCAL_WIN + 1 : 0);
+                    int kv_n = 0;
+                    float probs[BARUN_LOCAL_WIN + 2];
+                    float maxv = -1e30f;
+                    for (int t = lo; t <= s; t++) {
+                        const float *krow = k_l + (size_t)t * 64;
+                        float dot = 0;
+                        for (int i = 0; i < 64; i++) dot += qrow[i] * krow[i];
+                        dot *= inv;
+                        if (dot > maxv) maxv = dot;
+                        probs[kv_n++] = dot;
+                    }
+                    float sum = 0;
+                    for (int i = 0; i < kv_n; i++) { probs[i] = expf(probs[i] - maxv); sum += probs[i]; }
+                    for (int i = 0; i < kv_n; i++) probs[i] /= sum;
+                    float *dao_h = dao + (size_t)s * D + (size_t)h * 64;
+                    float *dq_h  = dq  + (size_t)s * D + (size_t)h * 64;
+                    /* dvdot_i = <dao_h, v[t_i]> ; dscore = p*(dvdot-mean) */
+                    float mean = 0;
+                    for (int i = 0; i < kv_n; i++) {
+                        const float *vrow = v_l + (size_t)(lo + i) * 64;
+                        float dvdot = 0;
+                        for (int d = 0; d < 64; d++) dvdot += dao_h[d] * vrow[d];
+                        mean += probs[i] * dvdot;
+                    }
+                    for (int i = 0; i < kv_n; i++) {
+                        const float *krow = k_l + (size_t)(lo + i) * 64;
+                        const float *vrow = v_l + (size_t)(lo + i) * 64;
+                        float dvdot = 0;
+                        for (int d = 0; d < 64; d++) dvdot += dao_h[d] * vrow[d];
+                        float dscore = probs[i] * (dvdot - mean) * inv;
+                        float *dk_t = dk + (size_t)(lo + i) * 64;
+                        float *dv_t = dv + (size_t)(lo + i) * 64;
+                        for (int d = 0; d < 64; d++) {
+                            dq_h[d]  += dscore * krow[d];
+                            dk_t[d]  += dscore * qrow[d];
+                            dv_t[d]  += probs[i] * dao_h[d];
+                        }
+                    }
+                }
+            }
+        }
+        /* rope backward, then the qk-norm backward (needs the pre-norm
+         * q/k saved by the forward) */
+        unrope_q(dq, seq, cos_tbl, sin_tbl);
+        unrope_k(dk, seq, cos_tbl, sin_tbl);
+        for (int s = 0; s < seq; s++) {
+            for (int h = 0; h < BARUN_HEADS; h++)
+                rms_norm_backward(q_pre_l + (size_t)s * D + (size_t)h * 64,
+                                  blk->q_norm,
+                                  dq + (size_t)s * D + (size_t)h * 64,
+                                  dq + (size_t)s * D + (size_t)h * 64,
+                                  tr->norm_g[4 * l + 2], 64);
+            rms_norm_backward(k_pre_l + (size_t)s * 64, blk->k_norm,
+                              dk + (size_t)s * 64, dk + (size_t)s * 64,
+                              tr->norm_g[4 * l + 3], 64);
+        }
+        /* q/k/v projection grads + dL/dan from the attention path */
+        for (int s = 0; s < seq; s++) {
+            const float *an = an_l + (size_t)s * D;
+            float *dan_s = dan + (size_t)s * D;
+            float *qg = tr->q_proj_g[l], *kg = tr->k_proj_g[l], *vg = tr->v_proj_g[l];
+            for (int o = 0; o < BARUN_HEADS * 64; o++) {
+                float dqv = dq[(size_t)s * D + o];
+                if (dqv != 0.0f) {
+                    const float *qr = blk->q_proj + (size_t)o * D;
+                    float *qq = qg + (size_t)o * D;
+                    for (int i = 0; i < D; i++) {
+                        qq[i] += dqv * an[i];
+                        dan_s[i] += dqv * qr[i];
+                    }
+                }
+            }
+            for (int o = 0; o < 64; o++) {
+                float dkv = dk[(size_t)s * 64 + o];
+                float dvv = dv[(size_t)s * 64 + o];
+                if (dkv != 0.0f) {
+                    const float *kr = blk->k_proj + (size_t)o * D;
+                    float *kk = kg + (size_t)o * D;
+                    for (int i = 0; i < D; i++) {
+                        kk[i] += dkv * an[i];
+                        dan_s[i] += dkv * kr[i];
+                    }
+                }
+                if (dvv != 0.0f) {
+                    const float *vr = blk->v_proj + (size_t)o * D;
+                    float *vv = vg + (size_t)o * D;
+                    for (int i = 0; i < D; i++) {
+                        vv[i] += dvv * an[i];
+                        dan_s[i] += dvv * vr[i];
+                    }
+                }
+            }
+        }
+        /* attn_norm backward: x_entry (the layer input) */
+        {
+            const float *x_entry = (l == 0)
+                                       ? bp->emb_in
+                                       : (is_sel(l - 1)
+                                              ? bp->sel_out + (size_t)(l - 1) * seq * D
+                                              : bp->x_in + (size_t)(l - 1) * seq * D);
+            for (int s = 0; s < seq; s++)
+                rms_norm_backward(x_entry + (size_t)s * D, blk->attn_norm,
+                                  dan + (size_t)s * D,
+                                  dxe + (size_t)s * D, tr->norm_g[4 * l + 0], D);
+        }
+        /* the gated-residual identity is already in dxe (dx1_total);
+         * the attn_norm backward accumulated on top. dxe is now
+         * dL/d(layer input) -- passed to the layer below. */
+        (void)sel_l;
     }
-    free(dckpt);
+
+    /* ---- embedding gradients: the input-token path (the residual
+     * stream into layer 0 + the checkpoint chain) ---- */
+    for (int s = 0; s < seq; s++) {
+        uint16_t tok = tokens[s];
+        float *ga = demb + (size_t)tok * D;
+        const float *dx0 = bp->s_dxentry + (size_t)s * D;
+        const float *dck = dc + (size_t)s * D;
+        for (int d = 0; d < D; d++) ga[d] += dx0[d] + dck[d];
+    }
+
+    free(dh_final);
     free(dlast);
+    free(dc);
     tr->loss_sum += loss;
     tr->micro_steps++;
     return loss;
+}
+
+/* ---------- the REAL Muon step (Newton-Schulz 5) ---------- */
+
+static void adamw_update(float *w, float *g, float *m, float *v, size_t n,
+                         float lr, float wd, uint32_t step)
+{
+    float b1 = 0.9f, b2 = 0.95f, eps = 1e-8f;
+    float bc1 = 1.0f - powf(b1, (float)step);
+    float bc2 = 1.0f - powf(b2, (float)step);
+    for (size_t i = 0; i < n; i++) {
+        float gw = g[i] + wd * w[i];
+        m[i] = b1 * m[i] + (1 - b1) * gw;
+        v[i] = b2 * v[i] + (1 - b2) * gw * gw;
+        float mh = m[i] / bc1, vh = v[i] / bc2;
+        w[i] -= lr * mh / (sqrtf(vh) + eps);
+        g[i] = 0;
+    }
+}
+
+/* the Newton-Schulz 5 orthogonalization in place on X [rows, cols].
+ * (a, b, c) = (3.4445, -4.7750, 2.0315); A = X X^T; B = bA + cA^2;
+ * X = aX + BX. Tall matrices are transposed first (work on the
+ * columns' orthogonal basis), then the result is transposed back.
+ * scratch must hold 2 * trows * trows floats (A + B); tmp must hold
+ * rows * cols floats. */
+static void ns5_inplace(float *X, int rows, int cols, float *scratch,
+                        float *tmp)
+{
+    float nrm = 0;
+    for (int i = 0; i < rows * cols; i++) nrm += X[i] * X[i];
+    nrm = sqrtf(nrm);
+    if (nrm > 1e-12f)
+        for (int i = 0; i < rows * cols; i++) X[i] /= nrm;
+    else
+        return;   /* a zero matrix stays zero */
+#ifdef DBG_NS5
+    printf("ns5 rows=%d cols=%d nrm=%g maxin=%g\n", rows, cols, nrm,
+           (double)fabs(X[0]) + 1.0);
+#endif
+
+    int transposed = 0, trows = rows, tcols = cols;
+    if (rows > cols) { transposed = 1; trows = cols; tcols = rows; }
+
+    /* if transposed, build X^T into tmp and work there */
+    float *M = X;
+    if (transposed) {
+        for (int i = 0; i < rows; i++)
+            for (int j = 0; j < cols; j++)
+                tmp[j * rows + i] = X[i * cols + j];
+        M = tmp;
+    }
+    float *A = scratch, *B = scratch + (size_t)trows * trows;
+    const float a = 3.4445f, bb = -4.7750f, c = 2.0315f;
+    for (int it = 0; it < 5; it++) {
+        /* A[i,j] = sum_k M[i,k] M[j,k] */
+        for (int i = 0; i < trows; i++) {
+            for (int j = 0; j < trows; j++) {
+                float acc = 0;
+                const float *Mi = M + (size_t)i * tcols;
+                const float *Mj = M + (size_t)j * tcols;
+                for (int k = 0; k < tcols; k++) acc += Mi[k] * Mj[k];
+                A[i * trows + j] = acc;
+            }
+        }
+        /* B = b*A + c*(A@A) ; M = a*M + B@M */
+        for (int i = 0; i < trows; i++) {
+            for (int j = 0; j < trows; j++) {
+                float aij = A[i * trows + j], a2 = 0;
+                for (int k = 0; k < trows; k++) a2 += A[i * trows + k] * A[k * trows + j];
+                B[i * trows + j] = bb * aij + c * a2;
+            }
+        }
+        for (int i = 0; i < trows; i++) {
+            for (int j = 0; j < tcols; j++) {
+                float acc = a * M[i * tcols + j];
+                for (int k = 0; k < trows; k++) acc += B[i * trows + k] * M[k * tcols + j];
+                M[i * tcols + j] = acc;
+            }
+        }
+        /* renormalize: the (a,b,c) polynomial escapes its attraction
+         * basin for spread singular-value spectra in fp32; bounding the
+         * Frobenius norm every iteration keeps the same convergence
+         * dynamics (the ratios are scale-invariant) without the blowup */
+        double ss = 0;
+        for (int i = 0; i < trows; i++)
+            for (int j = 0; j < tcols; j++) ss += (double)M[i * tcols + j] * M[i * tcols + j];
+        float inv = (float)(1.0 / (sqrt(ss) + 1e-12));
+        for (int i = 0; i < trows; i++)
+            for (int j = 0; j < tcols; j++) M[i * tcols + j] *= inv;
+    }
+    if (transposed) {
+        /* copy M^T back into X */
+        for (int i = 0; i < trows; i++)
+            for (int j = 0; j < tcols; j++)
+                X[j * trows + i] = M[i * tcols + j];
+    }
+}
+
+/* the 1-D AdamW slots (norms + selectors): weight pointer + size */
+static float *norm_slot_weight(barun_model_t *m, int slot, int *size)
+{
+    int L = BARUN_LAYERS;
+    if (slot < 4 * L) {
+        int l = slot / 4, k = slot % 4;
+        barun_block_t *blk = &m->blocks[l];
+        switch (k) {
+            case 0: *size = D; return blk->attn_norm;
+            case 1: *size = D; return blk->ffn_norm;
+            case 2: *size = 64; return blk->q_norm;
+            default:*size = 64; return blk->k_norm;
+        }
+    }
+    if (slot == 4 * L) { *size = D; return m->final_norm; }
+    *size = D;
+    return m->selectors[slot - (4 * L + 1)];
+}
+
+/* the per-matrix Muon update: Nesterov momentum, NS5, scaled step */
+static double dot_grad(const float *g, size_t n)
+{
+    double s = 0;
+    for (size_t i = 0; i < n; i++) s += (double)g[i] * g[i];
+    return s;
+}
+static void scale_grad(float *g, size_t n, float s)
+{
+    for (size_t i = 0; i < n; i++) g[i] *= s;
+}
+
+static void muon_matrix(float *w, float *g, float *mom, int rows, int cols,
+                        float lr, float wd, float mu, float *scratch,
+                        float *look, float *trans)
+{
+    size_t n = (size_t)rows * cols;
+    /* Nesterov momentum: buf = mu*buf + g ; X = buf + mu*buf */
+    for (size_t i = 0; i < n; i++) mom[i] = mu * mom[i] + g[i];
+    for (size_t i = 0; i < n; i++) look[i] = mom[i] + mu * mom[i];
+    ns5_inplace(look, rows, cols, scratch, trans);
+    /* the Moonlight per-matrix scale: normalize the NS update so its
+     * RMS = 0.2 -- a bounded step that reuses the AdamW-scale LR */
+    double ss = 0;
+    for (size_t i = 0; i < n; i++) ss += (double)look[i] * look[i];
+    float rms = (float)sqrt(ss / (double)n);
+    float s = (rms > 1e-12f) ? 0.2f / rms : 0.0f;
+    for (size_t i = 0; i < n; i++) {
+        w[i] *= (1.0f - lr * wd);          /* decoupled weight decay */
+        w[i] -= lr * look[i] * s;
+        g[i] = 0;
+    }
+}
+
+int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
+                       const barun_train_cfg_t *cfg, uint32_t step)
+{
+    if (!m || !tr || !cfg) return -1;
+    float mu_lr = cfg->muon_lr > 0 ? cfg->muon_lr : cfg->lr;
+    float ad_lr = cfg->adam_lr > 0 ? cfg->adam_lr : cfg->lr;
+    float wd = cfg->weight_decay;
+    float mu = cfg->muon_momentum > 0 ? cfg->muon_momentum : 0.95f;
+
+    /* global grad-norm clip (over every trainable gradient) */
+    if (cfg->grad_clip > 0) {
+        double n2 = 0;
+        for (int i = 0; i < BARUN_LAYERS; i++) {
+            n2 += dot_grad(tr->q_proj_g[i], 448 * 448);
+            n2 += dot_grad(tr->k_proj_g[i], 448 * 64);
+            n2 += dot_grad(tr->v_proj_g[i], 448 * 64);
+            n2 += dot_grad(tr->o_proj_g[i], 448 * 448);
+            n2 += dot_grad(tr->g_proj_g[i], 448 * 448);
+            n2 += dot_grad(tr->gate_up_g[i], 448 * 2456);
+            n2 += dot_grad(tr->down_g[i], 1228 * 448);
+        }
+        n2 += dot_grad(tr->emb_g, 16384 * 448);
+        for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
+            int sz = 0;
+            (void)norm_slot_weight(m, i, &sz);
+            n2 += dot_grad(tr->norm_g[i], (size_t)sz);
+        }
+        float gn = (float)sqrt(n2);
+        if (gn > cfg->grad_clip) {
+            float s = cfg->grad_clip / gn;
+            for (int i = 0; i < BARUN_LAYERS; i++) {
+                scale_grad(tr->q_proj_g[i], 448 * 448, s);
+                scale_grad(tr->k_proj_g[i], 448 * 64, s);
+                scale_grad(tr->v_proj_g[i], 448 * 64, s);
+                scale_grad(tr->o_proj_g[i], 448 * 448, s);
+                scale_grad(tr->g_proj_g[i], 448 * 448, s);
+                scale_grad(tr->gate_up_g[i], 448 * 2456, s);
+                scale_grad(tr->down_g[i], 1228 * 448, s);
+            }
+            scale_grad(tr->emb_g, 16384 * 448, s);
+            for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
+                int sz = 0;
+                (void)norm_slot_weight(m, i, &sz);
+                scale_grad(tr->norm_g[i], (size_t)sz, s);
+            }
+        }
+    }
+
+    /* Muon group: the 2D hidden matrices */
+    {
+        size_t max_cells = 448 * 2456;               /* gate_up */
+        size_t max_sq = 448 * 448;                   /* the NS A/B mats */
+        float *scratch = (float *)malloc((2 * max_sq + 2 * max_cells) * sizeof(float));
+        float *look = scratch + 2 * max_sq;
+        float *trans = look + max_cells;
+        if (!scratch) return -1;
+        for (int i = 0; i < BARUN_LAYERS; i++) {
+            barun_block_t *blk = &m->blocks[i];
+            muon_matrix(blk->q_proj,  tr->q_proj_g[i],  tr->q_proj_m[i],  448, 448,  mu_lr, wd, mu, scratch, look, trans);
+            muon_matrix(blk->k_proj,  tr->k_proj_g[i],  tr->k_proj_m[i],  448, 64,   mu_lr, wd, mu, scratch, look, trans);
+            muon_matrix(blk->v_proj,  tr->v_proj_g[i],  tr->v_proj_m[i],  448, 64,   mu_lr, wd, mu, scratch, look, trans);
+            muon_matrix(blk->o_proj,  tr->o_proj_g[i],  tr->o_proj_m[i],  448, 448,  mu_lr, wd, mu, scratch, look, trans);
+            muon_matrix(blk->g_proj,  tr->g_proj_g[i],  tr->g_proj_m[i],  448, 448,  mu_lr, wd, mu, scratch, look, trans);
+            muon_matrix(blk->gate_up, tr->gate_up_g[i], tr->gate_up_m[i], 448, 2456, mu_lr, wd, mu, scratch, look, trans);
+            muon_matrix(blk->down,    tr->down_g[i],    tr->down_m[i],    1228, 448, mu_lr, wd, mu, scratch, look, trans);
+        }
+        free(scratch);
+    }
+
+    /* AdamW group: the embedding, the norms, the selectors */
+    adamw_update(m->embedding, tr->emb_g, tr->emb_m, tr->emb_v,
+                 16384 * 448, ad_lr, wd, step);
+    for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
+        int sz = 0;
+        float *w = norm_slot_weight(m, i, &sz);
+        if (!w) continue;
+        adamw_update(w, tr->norm_g[i], tr->norm_m[i], tr->norm_v[i],
+                     (size_t)sz, ad_lr, wd, step);
+    }
+    return 0;
 }

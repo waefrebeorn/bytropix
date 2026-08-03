@@ -90,6 +90,8 @@ int main(int argc, char **argv)
                                    "/home/wubu/sdcard/corpus/checkpoints/seed.st");
     int max_steps = arg_int(argc, argv, "--steps", 50);
     float lr = arg_float(argc, argv, "--lr", 1e-4f);
+    float muon_lr = arg_float(argc, argv, "--muon-lr", 0.0f);
+    float adam_lr = arg_float(argc, argv, "--adam-lr", 0.0f);
     int seq = arg_int(argc, argv, "--seq", 128);
     int ckpt_every = arg_int(argc, argv, "--ckpt", 10);
 
@@ -119,6 +121,10 @@ int main(int argc, char **argv)
     barun_train_cfg_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.lr = lr;
+    cfg.muon_lr = muon_lr;    /* the recipe split: 2e-3 Muon / 2e-3 AdamW
+                                 (the Moonlight RMS-0.2 scale makes the Muon
+                                 group LR comparable to AdamW); 0 -> lr */
+    cfg.adam_lr = adam_lr;
     cfg.weight_decay = 0.1f;
     cfg.muon_momentum = 0.95f;
     cfg.warmup_steps = (uint32_t)(max_steps / 10);
