@@ -41,6 +41,7 @@
 #endif
 BP_WEAK int gpu_barun_init(void);
 BP_WEAK int gpu_barun_ready(void);
+BP_WEAK void gpu_barun_mark_weights_dirty(void);
 BP_WEAK int gpu_barun_matmul(float *y, const float *w, const float *x,
                              int M, int N, int K);
 BP_WEAK int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
@@ -273,8 +274,7 @@ static float head_ce(barun_model_t *m, barun_bp_t *bp,
     float loss = 0;
     for (int s = 0; s < seq - 1; s++) {
         uint16_t target = tokens[s + 1];
-        const float *lg = bp->logits + (size_t)s * BARUN_VOCAB;
-        const float *h = bp->final_h + (size_t)s * D;
+        float *lg = bp->logits + (size_t)s * BARUN_VOCAB;
         float maxv = lg[0];
         for (int v = 1; v < BARUN_VOCAB; v++) if (lg[v] > maxv) maxv = lg[v];
         double sum = 0, lt = 0;
@@ -285,17 +285,48 @@ static float head_ce(barun_model_t *m, barun_bp_t *bp,
         }
         loss += (float)(((double)maxv + log(sum) - lt) / (double)n_pos);
         if (dh_out || demb) {
-            float *dh = dh_out ? dh_out + (size_t)s * D : NULL;
-            for (int v = 0; v < BARUN_VOCAB; v++) {
-                float p = (float)(exp((double)(lg[v] - maxv)) / sum);
-                float g = (p - (v == target ? 1.0f : 0.0f)) / n_pos;
-                if (demb) {
-                    float *ga = demb + (size_t)v * D;
-                    for (int d = 0; d < D; d++) ga[d] += g * h[d];
+            /* convert the logits row in-place into the softmax error
+             * g[s,v] = (p - onehot) / n_pos, then the two gradient
+             * GEMMs (GPU when present):
+             *   dh[s,d]  += sum_v g[s,v] * e[v,d]   (nt: g @ embedding)
+             *   demb[v,d]+= sum_s g[s,v] * h[s,d]   (tx: g^T @ final_h)
+             * The logits are consumed -- nothing needs them after. */
+            for (int v = 0; v < BARUN_VOCAB; v++)
+                lg[v] = (float)(exp((double)(lg[v] - maxv)) / sum
+                                - (v == target ? 1.0 : 0.0)) / n_pos;
+        }
+    }
+    if (dh_out || demb) {
+        int np = seq - 1;
+        if (demb && gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul_tx &&
+            (long)np * BARUN_VOCAB * D >= GPU_MIN_FLOP &&
+            gpu_barun_matmul_tx(demb, bp->logits, bp->final_h, BARUN_VOCAB, D, np)) {
+            /* GPU: demb = g^T @ h */
+        } else if (demb) {
+            for (int s = 0; s < np; s++) {
+                const float *g = bp->logits + (size_t)s * BARUN_VOCAB;
+                const float *h = bp->final_h + (size_t)s * D;
+                float *ga = demb;
+                for (int v = 0; v < BARUN_VOCAB; v++) {
+                    float gv = g[v];
+                    if (gv == 0.0f) continue;
+                    for (int d = 0; d < D; d++) ga[(size_t)v * D + d] += gv * h[d];
                 }
-                if (dh) {
-                    const float *e = m->embedding + (size_t)v * D;
-                    for (int d = 0; d < D; d++) dh[d] += g * e[d];
+            }
+        }
+        if (dh_out && gpu_barun_ready && gpu_barun_ready() && gpu_barun_matmul_nt &&
+            (long)np * BARUN_VOCAB * D >= GPU_MIN_FLOP &&
+            gpu_barun_matmul_nt(dh_out, m->embedding, bp->logits, np, D, BARUN_VOCAB)) {
+            /* GPU: dh = g @ embedding */
+        } else if (dh_out) {
+            for (int s = 0; s < np; s++) {
+                const float *g = bp->logits + (size_t)s * BARUN_VOCAB;
+                float *dh = dh_out + (size_t)s * D;
+                for (int d = 0; d < D; d++) {
+                    float acc = 0;
+                    for (int v = 0; v < BARUN_VOCAB; v++)
+                        acc += g[v] * m->embedding[(size_t)v * D + d];
+                    dh[d] += acc;
                 }
             }
         }
@@ -1073,5 +1104,7 @@ int barun_bp_muon_step(barun_model_t *m, barun_train_t *tr,
         adamw_update(w, tr->norm_g[i], tr->norm_m[i], tr->norm_v[i],
                      (size_t)sz, ad_lr, wd, step);
     }
+    /* the weights changed: the GPU cache re-uploads on the next matmul */
+    if (gpu_barun_mark_weights_dirty) gpu_barun_mark_weights_dirty();
     return 0;
 }

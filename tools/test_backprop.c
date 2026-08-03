@@ -12,6 +12,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include "gpu_barun.h"   /* the weight-cache dirty mark for the FD perturbations */
 #include <string.h>
 #include <math.h>
 #include "wubu_barun.h"
@@ -112,9 +113,14 @@ static int fd_check(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
 {
     const float h = 1e-2f;
     float orig = *pw;
+    /* the perturbation is a weight change: tell the GPU weight cache
+     * after EVERY perturb, or the second forward reuses the cached
+     * first value and lp == lm exactly (the DA catch) */
     *pw = orig + h;
+    if (gpu_barun_mark_weights_dirty) gpu_barun_mark_weights_dirty();
     float lp = barun_bp_forward(m, b, bp, tokens, n);
     *pw = orig - h;
+    if (gpu_barun_mark_weights_dirty) gpu_barun_mark_weights_dirty();
     float lm = barun_bp_forward(m, b, bp, tokens, n);
     *pw = orig;
     float num = (lp - lm) / (2.0f * h);

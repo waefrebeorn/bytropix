@@ -22,7 +22,44 @@
 static cublasHandle_t g_cublas = NULL;
 static int g_ready = 0;
 
+/* ---- weight cache: the model weights are re-uploaded on every
+ * matmul call, but they only change when the optimizer steps. A small
+ * open-address cache keyed by (pointer, bytes) with a generation
+ * counter kills ~140MB of per-step H2D traffic. ---- */
+#define WCACHE_ENTRIES 192
+typedef struct { const void *ptr; size_t bytes; float *d; unsigned gen; } wc_entry_t;
+static wc_entry_t g_wc[WCACHE_ENTRIES];
+static unsigned g_wgen = 1;
+
+static float *wc_get(const void *ptr, size_t bytes)
+{
+    if (!ptr || bytes == 0) return NULL;
+    unsigned h = (unsigned)(((uintptr_t)ptr >> 6) ^ (uintptr_t)ptr) & (WCACHE_ENTRIES - 1);
+    for (int i = 0; i < WCACHE_ENTRIES; i++) {
+        wc_entry_t *e = &g_wc[(h + i) & (WCACHE_ENTRIES - 1)];
+        if (e->ptr == ptr) {
+            if (e->gen != g_wgen) {   /* the optimizer moved the weights */
+                cudaMemcpy(e->d, ptr, bytes, cudaMemcpyHostToDevice);
+                e->gen = g_wgen;
+            }
+            return e->d;
+        }
+        if (!e->ptr) {                /* empty slot */
+            float *d = NULL;
+            if (cudaMalloc(&d, bytes) != cudaSuccess) return NULL;
+            cudaMemcpy(d, ptr, bytes, cudaMemcpyHostToDevice);
+            e->ptr = ptr; e->bytes = bytes; e->d = d; e->gen = g_wgen;
+            return d;
+        }
+    }
+    return NULL;                      /* cache full: caller falls back */
+}
+
 extern "C" {
+
+/* call after the optimizer updates the weights: the GPU weight cache
+ * re-uploads on the next matmul */
+void gpu_barun_mark_weights_dirty(void) { g_wgen++; }
 
 int gpu_barun_init(void)
 {
@@ -64,9 +101,10 @@ int gpu_barun_matmul(float *y, const float *w, const float *x,
         if (d_y) cudaFree(d_y);
         cudaMalloc(&d_y, ny * sizeof(float)); cap_y = ny;
     }
-    if (!d_x || !d_w || !d_y) return 0;
+    if (!d_x || !d_y) return 0;
+    float *d_wu = wc_get(w, nw * sizeof(float));
+    if (!d_wu) return 0;
     cudaMemcpy(d_x, x, nx * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_w, w, nw * sizeof(float), cudaMemcpyHostToDevice);
     /* The caller's CPU loop is out[s,o] = sum_i w[o,i] * x[s,i] where w
      * is stored [out,in] row-major (w[o*in+i]) -- i.e. out = x @ w^T.
      * cuBLAS: C^T = B^T @ A^T ; we need C = x @ w^T so:
@@ -75,7 +113,7 @@ int gpu_barun_matmul(float *y, const float *w, const float *x,
      *   matches the CPU loop to <1e-4. */
     float alpha = 1.0f, beta = 0.0f;
     cublasSgemm(g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
-                N, M, K, &alpha, d_w, K, d_x, K, &beta, d_y, N);
+                N, M, K, &alpha, d_wu, K, d_x, K, &beta, d_y, N);
     cudaMemcpy(y, d_y, ny * sizeof(float), cudaMemcpyDeviceToHost);
     return 1;
 }
@@ -109,10 +147,11 @@ int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
     }
     if (!d_a || !d_b || !d_y) return 0;
     cudaMemcpy(d_a, a, na * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b, b, nb * sizeof(float), cudaMemcpyHostToDevice);
+    float *d_bu = wc_get(b, nb * sizeof(float));
+    if (!d_bu) return 0;
     float alpha = 1.0f, beta = 0.0f;
     cublasSgemm(g_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
-                N, M, K, &alpha, d_b, N, d_a, M, &beta, d_y, N);
+                N, M, K, &alpha, d_bu, N, d_a, M, &beta, d_y, N);
     cudaMemcpy(y, d_y, ny * sizeof(float), cudaMemcpyDeviceToHost);
     return 1;
 }
@@ -140,15 +179,16 @@ int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
         if (d_y) cudaFree(d_y);
         cudaMalloc(&d_y, ny * sizeof(float)); cap_y = ny;
     }
-    if (!d_x || !d_w || !d_y) return 0;
+    if (!d_x || !d_y) return 0;
+    float *d_wu = wc_get(w, nw * sizeof(float));
+    if (!d_wu) return 0;
     cudaMemcpy(d_x, x, nx * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_w, w, nw * sizeof(float), cudaMemcpyHostToDevice);
     /* x row-major [M,K] lda=K == col-major [K,M]; w row-major [K,N]
      * lda=N == col-major [N,K]; y row-major [M,N] lda=N == [N,M].
      * C[N,M] = op(A)[N,K] @ op(B)[K,M] with op(A)=N, op(B)=N. */
     float alpha = 1.0f, beta = 0.0f;
     cublasSgemm(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
-                N, M, K, &alpha, d_w, N, d_x, K, &beta, d_y, N);
+                N, M, K, &alpha, d_wu, N, d_x, K, &beta, d_y, N);
     cudaMemcpy(y, d_y, ny * sizeof(float), cudaMemcpyDeviceToHost);
     return 1;
 }

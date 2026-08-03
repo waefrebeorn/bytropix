@@ -13,6 +13,9 @@ extern "C" {
 int gpu_barun_init(void);
 void gpu_barun_free(void);
 int gpu_barun_ready(void);
+/* call after the optimizer updates the weights: the GPU weight cache
+ * re-uploads on the next matmul */
+void gpu_barun_mark_weights_dirty(void);
 
 /* y[M,N] = x[M,K] @ w[K,N]  (row-major F32). Returns 1 on success
  * (GPU used), 0 if the GPU path is unavailable (caller falls back). */

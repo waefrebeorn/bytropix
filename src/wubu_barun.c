@@ -14,6 +14,7 @@
  * 64 head dims.
  */
 #include "wubu_barun.h"
+#include "wubu_foldmath.h"
 #include "safetensors_reader.h"
 #include "wubu_moe2.h"
 #include <stdio.h>
@@ -42,10 +43,14 @@ static void build_rope_tables(float *cos_tbl, float *sin_tbl, int max_seq,
         for (int i = 0; i < rope_dim / 2; i++) {
             float inv = powf(theta, -(float)(2 * i) / (float)rope_dim);
             float ang = (float)pos * inv;
-            cos_tbl[pos * rope_dim + i] = cosf(ang);
-            cos_tbl[pos * rope_dim + rope_dim / 2 + i] = cosf(ang);
-            sin_tbl[pos * rope_dim + i] = sinf(ang);
-            sin_tbl[pos * rope_dim + rope_dim / 2 + i] = sinf(ang);
+            float s, c;
+            wubu_fold_sincos(ang, &s, &c);   /* the folded math: no libm,
+                                                deterministic, portable to
+                                                the GPU kernels + bare metal */
+            cos_tbl[pos * rope_dim + i] = c;
+            cos_tbl[pos * rope_dim + rope_dim / 2 + i] = c;
+            sin_tbl[pos * rope_dim + i] = s;
+            sin_tbl[pos * rope_dim + rope_dim / 2 + i] = s;
         }
     }
 }
