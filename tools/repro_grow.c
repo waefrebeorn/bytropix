@@ -56,9 +56,9 @@ int main(void)
     barun_train_t tr;
     if (barun_train_init(&tr, &m) != 0) { printf("  train init FAIL\n"); return 1; }
     barun_bp_t bp;
-    if (barun_bp_alloc(&bp, 16) != 0) { printf("  bp alloc FAIL\n"); return 1; }
+    if (barun_bp_alloc(&bp, 256) != 0) { printf("  bp alloc FAIL\n"); return 1; }
     barun_buf_t b;
-    if (barun_buf_alloc(&b, 16) != 0) { printf("  buf alloc FAIL\n"); return 1; }
+    if (barun_buf_alloc(&b, 256) != 0) { printf("  buf alloc FAIL\n"); return 1; }
     barun_train_cfg_t cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.lr = 1e-3f; cfg.muon_lr = 1e-3f; cfg.adam_lr = 1e-3f;
@@ -66,8 +66,20 @@ int main(void)
     cfg.muon_momentum = 0.95f;
     cfg.warmup_steps = 0; cfg.max_steps = 10000;
 
-    uint16_t toks[8];
-    for (int i = 0; i < 8; i++) toks[i] = (uint16_t)(i * 3 % 512 + 10);
+    uint16_t toks[256];
+    /* Real corpus tokens: the synthetic dense-random sequence
+     * overfits in 350 steps (256 tokens, 350 training steps)
+     * → loss collapses to 0 → zero gradients → NS5 early-returns
+     * and never exercises its math. The real finemath corpus has
+     * 4M diverse tokens; a 256-token window never overfits. */
+    FILE *corp = fopen("/home/wubu/models/corpus/finemath-live.tok", "rb");
+    if (!corp) { printf("  cannot open corpus\n"); return 1; }
+    /* Read a random 256-token slice from the middle of the corpus
+     * (avoids the trivial ASCII prefix "http://questio..."). */
+    long offset = 100000;  /* skip the first 100k tokens */
+    fseek(corp, offset * sizeof(uint16_t), SEEK_SET);
+    if (fread(toks, sizeof(uint16_t), 256, corp) != 256) { printf("  corpus short\n"); return 1; }
+    fclose(corp);
 
     m.n_layers = 2;
     const char *mode = getenv("REPRO_MODE");   /* fwd | fb | full | ns5probe (default full) */
@@ -85,10 +97,10 @@ int main(void)
          *   ns5probe = like full but the last grow's muon runs with the
          *              ns5 ENABLED (REPRO_SKIP is unset for it) */
         for (int s = 0; s < 50; s++) {
-            float loss = barun_bp_forward(&m, &b, &bp, toks, 8);
+            float loss = barun_bp_forward(&m, &b, &bp, toks, 256);
             if (mode && strcmp(mode, "fwd") == 0) continue;
             barun_train_zero_grad(&tr);
-            barun_bp_backward(&m, &b, &bp, &tr, toks, 8);
+            barun_bp_backward(&m, &b, &bp, &tr, toks, 256);
             if (mode && strcmp(mode, "fb") == 0) continue;
             int probe = (mode && strcmp(mode, "ns5probe") == 0 && n == 8 && s >= 48);
             if (probe) unsetenv("REPRO_SKIP");
@@ -104,11 +116,11 @@ int main(void)
      * on the final 9-layer model to cross the crash point. */
     fprintf(stderr, "--- extended tail: 60 more steps on the 9-layer model ---\n");
     for (int s = 0; s < 60; s++) {
-        float loss = barun_bp_forward(&m, &b, &bp, toks, 8);
+        float loss = barun_bp_forward(&m, &b, &bp, toks, 256);
         barun_train_zero_grad(&tr);
-        barun_bp_backward(&m, &b, &bp, &tr, toks, 8);
-        barun_bp_muon_step(&m, &tr, &cfg, (uint32_t)(900 + s));
-        if (s % 20 == 0)
+        barun_bp_backward(&m, &b, &bp, &tr, toks, 256);
+        barun_bp_muon_step(&m, &tr, &cfg, (uint32_t)(100 + s));  /* NO skip — NS5 on */
+        if (s % 10 == 0)
             fprintf(stderr, "  tail %d/60: loss=%.4f\n", s, loss);
     }
     fprintf(stderr, "ALL 7 GROWTHS + 350 STEPS + 60 TAIL OK (mode=%s)\n", mode ? mode : "full");
