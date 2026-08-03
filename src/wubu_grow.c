@@ -1,4 +1,5 @@
 /* wubu_grow.c -- the model-growth operator. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "wubu_grow.h"
@@ -50,6 +51,10 @@ int wubu_grow_insert_block(barun_model_t *m, int pos)
     if (m->n_layers >= BARUN_LAYERS) return 0;
     barun_block_t z = zero_block();
     if (!z.q_proj) return 0;
+    /* NOTE: the displaced block at [n_layers] is overwritten by the
+     * shift -- its buffers are the caller's ownership question (the CLI
+     * runs short-lived; the test re-grows the same model, so a free here
+     * would be a use-after-free for the test's owned buffers) */
     /* shift the blocks [pos..n) and their is_full rhythm up by one */
     for (int l = m->n_layers; l > pos; l--) {
         m->blocks[l] = m->blocks[l - 1];
@@ -144,7 +149,13 @@ int wubu_train_grow(barun_train_t *tr, int pos, int n_layers)
     SHIFT_ARR(tr->g_proj_m, q); SHIFT_ARR(tr->gate_up_m, f);
     SHIFT_ARR(tr->down_m, d);
 #undef SHIFT_ARR
-    /* the AdamW norm slots [4l+0..3]: shift + allocate the new block's */
+    /* the AdamW norm slots [4l+0..3]: free the displaced (the first
+     * inactive block's slots), shift, then allocate the new block's */
+    for (int k = 0; k < 4; k++) {
+        free(tr->norm_g[4 * n_layers + k]);
+        free(tr->norm_m[4 * n_layers + k]);
+        free(tr->norm_v[4 * n_layers + k]);
+    }
     for (int l = n_layers; l > pos; l--)
         for (int k = 0; k < 4; k++) {
             tr->norm_g[4 * l + k] = tr->norm_g[4 * (l - 1) + k];
