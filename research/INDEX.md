@@ -549,8 +549,8 @@ Status: `wired` (wubu_freeenergy, test_freeenergy PASSES)
 ## Theme IO: KV-cache eviction / compression 2026 frontier
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (2603.20397 KV survey; KeyDiff 2504.15364; KVQuant NeurIPS 2024)
-- IO01 H2O heavy-hitter token retention (accumulated-attention greedy eviction) `open`
-- IO02 StreamingLLM attention-sink keep + rolling window `open` (ties L-theme)
+- IO01 H2O heavy-hitter token retention (accumulated-attention greedy eviction) `wired` (wubu_evict2026c, test PASSES)
+- IO02 StreamingLLM attention-sink keep + rolling window `wired` (wubu_evict2026c, test PASSES) (ties L-theme)
 - IO03 SnapKV observation-window pooling + important-prefix retention `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO04 Proxy-token one-shot eviction (softmax-probability batch discard) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO05 InfiniPot novelty distillation (novelty-weighted retain at capacity) `wired` (wubu_evict2026, test_evict2026 PASSES)
@@ -558,21 +558,21 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IO07 RocketKV two-stage coarse eviction + dynamic sparse selection `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO08 Ada-KV head-adaptive budget (eviction-loss upper bound, head-sparse reallocation) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO09 KeyDiff key-similarity eviction (attention-sink position varies per head/layer) `wired` (wubu_evict2026, test_evict2026 PASSES)
-- IO10 KVQuant attention-sink-aware quantization + outlier sparse store (3-bit, 4.8x ctx) `open`
+- IO10 KVQuant attention-sink-aware quantization + outlier sparse store (3-bit, 4.8x ctx) `wired` (wubu_evict2026c, test PASSES)
 - IO11 Semantic-sponsorship KV retention (semantic importance, not score) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO12 Pyramidal/block-wise eviction under block prompt processing (eviction-error compounding) `wired` (wubu_evict2026, test_evict2026 PASSES)
-- IO13 Accumulated-attention tracker with per-token running sums (O(1) update) `open`
+- IO13 Accumulated-attention tracker with per-token running sums (O(1) update) `wired` (wubu_evict2026c, test PASSES)
 - IO14 Eviction-loss upper-bound model (formal eviction-error budget) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO15 Per-head sink-token discovery (sink position varies across heads/layers) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO16 Coarse-to-fine two-stage selection (RocketKV-style page granularity) `wired` (wubu_evict2026, test_evict2026 PASSES)
-- IO17 KV-reconstruction autoencoder importance (regenerate-input criticality) `open`
+- IO17 KV-reconstruction autoencoder importance (regenerate-input criticality) `wired` (wubu_evict2026c, test PASSES)
 - IO18 LSH bucket refresh policy (hamming-distance threshold adaptation) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO19 Novelty scoring by embedding distance to the retained set `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO20 Pooled observation window (SnapKV 1D pooling, cluster context) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO21 Proxy-token selection via compressed cue (small subset scoring) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO22 Eviction + quantization hybrid budget (evict OR compress by value) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO23 Sink-token FP16 reservation within quantized caches `wired` (wubu_evict2026, test_evict2026 PASSES)
-- IO24 Outlier channel sparse store (top-1% outlier KV in raw precision) `open`
+- IO24 Outlier channel sparse store (top-1% outlier KV in raw precision) `wired` (wubu_evict2026c, test PASSES)
 - IO25 Per-layer eviction budget allocation (attention-sparse vs dispersed layers) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO26 Per-head retention count adaptation (variable critical tokens per head) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO27 Streaming-aware eviction (evict under continuous generation, not just prefill) `wired` (wubu_evict2026, test_evict2026 PASSES)
@@ -583,38 +583,38 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - IO32 Cache-budget renegotiation on OOM (graceful eviction cascade) `wired` (wubu_evict2026b, test PASSES)
 - IO33 Hierarchical eviction: hot RAM / warm DRAM / cold NVMe (ties A06) `wired` (wubu_evict2026b, test PASSES)
 - IO34 Eviction feedback to the AGI ledger (per-token retention telemetry) `wired` (wubu_evict2026b, test PASSES)
-- IO35 Reconstruction-based importance at the page granularity `open`
+- IO35 Reconstruction-based importance at the page granularity `wired` (wubu_evict2026c, test PASSES)
 - IO36 KV-compression ratio governor (target-ratio eviction scheduler) `wired` (wubu_evict2026b, test PASSES)
 - IO37 Attention-sink reserve (never evict the first-k tokens regardless of score) `wired` (wubu_evict2026b, test PASSES)
-- IO38 LSH distance threshold tuning by observed attention correlation `open`
-- IO39 Proxy-token count adaptation by prompt length `open`
+- IO38 LSH distance threshold tuning by observed attention correlation `wired` (wubu_evict2026c, test PASSES)
+- IO39 Proxy-token count adaptation by prompt length `wired` (wubu_evict2026c, test PASSES)
 - IO40 Eviction-batch grouping (one-shot discard sets, not per-token) `wired` (wubu_evict2026b, test PASSES)
 - IO41 Pooling kernel for SnapKV-style context clustering `wired` (wubu_evict2026b, test PASSES)
 - IO42 Retention priority queue (heap-based, O(log n) evict) `wired` (wubu_evict2026b, test PASSES)
-- IO43 Eviction-aware RoPE (position re-encode after eviction) `open`
-- IO44 Compressed-cache correctness audit (perplexity guard after heavy eviction) `open`
+- IO43 Eviction-aware RoPE (position re-encode after eviction) `wired` (wubu_evict2026c, test PASSES)
+- IO44 Compressed-cache correctness audit (perplexity guard after heavy eviction) `wired` (wubu_evict2026c, test PASSES)
 - IO45 Eviction decision caching (reuse scores across decode steps) `wired` (wubu_evict2026b, test PASSES)
 - IO46 Attention-score streaming aggregator (running softmax without full matrix) `wired` (wubu_evict2026, test_evict2026 PASSES)
-- IO47 Block-paged eviction aligned to the paged-KV table (ties HH02) `open`
+- IO47 Block-paged eviction aligned to the paged-KV table (ties HH02) `wired` (wubu_evict2026c, test PASSES)
 - IO48 Importance-vs-novelty dual score (H2O x InfiniPot fusion) `wired` (wubu_evict2026b, test PASSES)
-- IO49 Eviction under batched requests (shared cache, per-request criticality) `open`
+- IO49 Eviction under batched requests (shared cache, per-request criticality) `wired` (wubu_evict2026c, test PASSES)
 - IO50 Sink-token count adaptation per model (calibration probe) `wired` (wubu_evict2026b, test PASSES)
-- IO51 KVQuant-style 3-bit + outlier split encode/decode kernels `open`
+- IO51 KVQuant-style 3-bit + outlier split encode/decode kernels `wired` (wubu_evict2026c, test PASSES)
 - IO52 Eviction telemetry to the operator (retained-vs-evicted quality delta) `wired` (wubu_evict2026b, test PASSES)
 - IO53 Budget-constrained eviction via the energy ledger (ties IJ) `wired` (wubu_evict2026b, test PASSES)
 - IO54 Eviction threshold hysteresis (avoid evict/keep oscillation) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO55 Cross-session cache reuse (eviction-aware persistence, ties AV03) `wired` (wubu_evict2026b, test PASSES)
-- IO56 Semantic eviction via the ANN index (ties AV04) `open`
-- IO57 Eviction + speculative-decoding interaction (draft cache retention) `open`
-- IO58 Eviction-aware attention scaling (post-eviction normalization) `open`
+- IO56 Semantic eviction via the ANN index (ties AV04) `wired` (wubu_evict2026c, test PASSES)
+- IO57 Eviction + speculative-decoding interaction (draft cache retention) `wired` (wubu_evict2026c, test PASSES)
+- IO58 Eviction-aware attention scaling (post-eviction normalization) `wired` (wubu_evict2026c, test PASSES)
 - IO59 Head-disparity monitor (which heads need the most retention) `wired` (wubu_evict2026, test_evict2026 PASSES)
 - IO60 Eviction policy selector (auto-pick policy by head/block profile) `wired` (wubu_evict2026b, test PASSES)
 - IO61 Cache compaction (defragment retained KV pages) `wired` (wubu_evict2026b, test PASSES)
-- IO62 Eviction under 1M+ context (cost-modeled retention) `open`
+- IO62 Eviction under 1M+ context (cost-modeled retention) `wired` (wubu_evict2026c, test PASSES)
 - IO63 Per-layer KV budget governor (layer-wise OOM safety) `wired` (wubu_evict2026b, test PASSES)
 - IO64 Eviction-score calibration on a probe set (threshold fitting) `wired` (wubu_evict2026b, test PASSES)
-- IO65 Reconstruction-aware eviction in hybrid attention (ties JA) `open`
-- IO66 Eviction for multimodal tokens (vision token criticality, ties JB) `open`
+- IO65 Reconstruction-aware eviction in hybrid attention (ties JA) `wired` (wubu_evict2026c, test PASSES)
+- IO66 Eviction for multimodal tokens (vision token criticality, ties JB) `wired` (wubu_evict2026c, test PASSES)
 - IO67 Eviction ledger integration (which tokens were dropped and why) `wired` (wubu_evict2026b, test PASSES)
 Status: `open` (67 gaps; each = a real mechanism from the surveyed literature)
 
