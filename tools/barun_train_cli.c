@@ -157,6 +157,7 @@ int main(int argc, char **argv)
     int seq = arg_int(argc, argv, "--seq", 128);
     int ckpt_every = arg_int(argc, argv, "--ckpt", 10);
     int grow_check = arg_int(argc, argv, "--grow-check", 0);
+    int base_layers = arg_int(argc, argv, "--base-layers", 0);
 
     barun_model_t m;
     if (resume) {
@@ -173,6 +174,11 @@ int main(int argc, char **argv)
         }
     }
     printf("barun_train_cli: %ld parameters\n", barun_parameter_count(&m));
+    if (base_layers > 0) {
+        if (base_layers > BARUN_LAYERS) base_layers = BARUN_LAYERS;
+        m.n_layers = base_layers;   /* the progressive start (Bu: start small) */
+        printf("barun_train_cli: progressive start at %d layers\n", m.n_layers);
+    }
 
     /* load the corpus (expand the glob via a helper: we accept ONE file
      * for now; the multi-file loop is the next step) */
