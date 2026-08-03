@@ -49,6 +49,7 @@ BP_WEAK int gpu_barun_matmul_tx(float *y, const float *a, const float *b,
 BP_WEAK int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
                                 int M, int N, int K);
 BP_WEAK int gpu_barun_ns5(float *X, int rows, int cols);
+BP_WEAK int gpu_barun_ns5_gram(float *X, int rows, int cols);
 static int g_gpu_tried = 0;
 /* tiny matmuls cost more in upload/launch than they save -- the GPU
  * threshold from the hardware table (RTX 4050, 6GB) */
@@ -1004,11 +1005,18 @@ static void muon_matrix(float *w, float *g, float *mom, int rows, int cols,
     /* the NS5 orthogonalization: GPU when present (the optimizer was
      * the last CPU bottleneck -- ~61 GFLOP/step of NS5), CPU otherwise.
      * The NS5 does 15 GEMMs per call, so even a 448x448 matrix
-     * (~1.35 GFLOP) is worth the upload -- the threshold is tiny. */
-    if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_ns5 &&
-        (size_t)rows * cols >= 4096 &&
-        gpu_barun_ns5(look, rows, cols)) {
-        /* GPU path: look is already orthogonalized */
+     * (~1.35 GFLOP) is worth the upload -- the threshold is tiny.
+     * The Gram variant (the square-space iteration, Tri Dao 2026) is
+     * preferred: ~5x fewer rectangular FLOPs, identical math. */
+    if (gpu_barun_ready && gpu_barun_ready() && (gpu_barun_ns5_gram || gpu_barun_ns5) &&
+        (size_t)rows * cols >= 4096) {
+        if (gpu_barun_ns5_gram && gpu_barun_ns5_gram(look, rows, cols)) {
+            /* the Gram path: look is already orthogonalized */
+        } else if (gpu_barun_ns5 && gpu_barun_ns5(look, rows, cols)) {
+            /* the standard path */
+        } else {
+            ns5_inplace(look, rows, cols, scratch, trans);
+        }
     } else {
         ns5_inplace(look, rows, cols, scratch, trans);
     }

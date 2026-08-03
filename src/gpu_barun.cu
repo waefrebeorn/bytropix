@@ -291,6 +291,171 @@ int gpu_barun_ns5(float *X, int rows, int cols)
     return 1;
 }
 
+/* ---- Gram Newton-Schulz (Zhang/Amsel/Chen/Dao 2026): the square-space
+ * iteration. Instead of iterating the rectangular X (10 rectangular GEMMs
+ * per NS5), precompute the square Gram G = X X^T once and iterate
+ *   G <- P G P^T,  R <- P R   (R starts at I, tracks the composition)
+ * with P = aI + bG + cG^2. One rectangular GEMM at the end: X = R X_0.
+ * Mathematically identical to the standard NS up to float error; the
+ * rectangular FLOPs drop ~5x (2.3G vs 4.9G MACs for the gate_up shape).
+ * Per-iteration Frobenius renormalization kept (the fp32 stability fix):
+ * s = ||X||_F = sqrt(tr(G)); G <- G/s^2, R <- R/s before each step. */
+
+__global__ static void gns_trace_norm(float *G, float *R, int n)
+{
+    /* s = sqrt(sum_i G[i*n+i]); G /= s^2 ; R /= s -- the WHOLE
+     * matrices (scaling only the diagonal was the divergence bug:
+     * the off-diagonal stays huge and P = aI + bG + cG^2 explodes) */
+    __shared__ float red[1024];
+    int t = threadIdx.x;
+    if (n <= 1024) {
+        float v = (t < n) ? G[(size_t)t * n + t] : 0.0f;
+        red[t] = v;
+        __syncthreads();
+        for (int s = 512; s > 0; s >>= 1) {
+            if (t < s) red[t] += red[t + s];
+            __syncthreads();
+        }
+        __shared__ float sgv, srv;
+        if (t == 0) {
+            float s = sqrtf(fmaxf(red[0], 1e-12f));
+            sgv = 1.0f / (s * s);
+            srv = 1.0f / s;
+        }
+        __syncthreads();
+        size_t nn = (size_t)n * n;
+        for (size_t i = (size_t)t; i < nn; i += 1024) {
+            G[i] *= sgv;
+            R[i] *= srv;
+        }
+    }
+}
+
+__global__ static void gns_diag_add(float *P, float a, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) P[(size_t)i * n + i] += a;
+}
+
+int gpu_barun_ns5_gram(float *X, int rows, int cols)
+{
+    if (!g_ready) return 0;
+    if (rows <= 0 || cols <= 0) return 0;
+    int trows = rows, tcols = cols;
+    if (rows > cols) { trows = cols; tcols = rows; }
+    size_t n = (size_t)rows * cols;
+    size_t nsq = (size_t)trows * trows;
+    static float *d_m = NULL, *d_x0 = NULL, *d_g = NULL, *d_a2 = NULL,
+                 *d_p = NULL, *d_r = NULL, *d_t = NULL;
+    static size_t cap_m = 0, cap_q = 0, cap_t = 0;
+    if (n > cap_m) {
+        if (d_m) cudaFree(d_m);
+        if (d_x0) cudaFree(d_x0);
+        cudaMalloc(&d_m, n * sizeof(float)); cap_m = n;
+        cudaMalloc(&d_x0, n * sizeof(float));
+    }
+    if (nsq > cap_q) {
+        for (float **p : { &d_g, &d_a2, &d_p, &d_r })
+            if (*p) cudaFree(*p);
+        cudaMalloc(&d_g, nsq * sizeof(float)); cap_q = nsq;
+        cudaMalloc(&d_a2, nsq * sizeof(float));
+        cudaMalloc(&d_p, nsq * sizeof(float));
+        cudaMalloc(&d_r, nsq * sizeof(float));
+    }
+    /* d_t holds the RECTANGULAR outputs too: the transposed M (tall),
+     * the final X = R X_0 -- up to n floats. Allocating it at only nsq
+     * was the heap-overflow bug: the wide GEMM wrote n floats into a
+     * 200K buffer and clobbered the neighbouring allocations (d_x0). */
+    if (n > cap_t) {
+        if (d_t) cudaFree(d_t);
+        cudaMalloc(&d_t, n * sizeof(float)); cap_t = n;
+    }
+    if (!d_m || !d_x0 || !d_g || !d_a2 || !d_p || !d_r || !d_t) return 0;
+    cudaMemcpy(d_m, X, n * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_x0, d_m, n * sizeof(float), cudaMemcpyDeviceToDevice);
+    float *M = d_m;
+    if (rows > cols) {
+        float one = 1.0f, zero = 0.0f;
+        cublasStatus_t st = cublasSgeam(g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                                        rows, cols, &one, d_m, cols, &zero,
+                                        d_m, rows, d_t, rows);
+        if (st != CUBLAS_STATUS_SUCCESS) return 0;
+        M = d_t;
+    }
+    cublasStatus_t st;
+    float one = 1.0f, zero = 0.0f;
+    /* G = M M^T  (one rectangular GEMM) */
+    st = cublasSgemm(g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                     trows, trows, tcols, &one, M, tcols, M, tcols,
+                     &zero, d_g, trows);
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    /* R = I */
+    cudaMemset(d_r, 0, nsq * sizeof(float));
+    gns_diag_add<<<1, 1024>>>(d_r, 1.0f, trows);
+    cudaDeviceSynchronize();
+    cudaError_t ce = cudaGetLastError();
+    if (ce != cudaSuccess) { fprintf(stderr, "gram: kernel err: %s\n", cudaGetErrorString(ce)); return 0; }
+    const float a = 3.4445f, b = -4.7750f, c = 2.0315f;
+    for (int it = 0; it < 5; it++) {
+        gns_trace_norm<<<1, 1024>>>(d_g, d_r, trows);
+        cudaDeviceSynchronize();
+        ce = cudaGetLastError();
+        if (ce != cudaSuccess) { fprintf(stderr, "gram: trace_norm err: %s\n", cudaGetErrorString(ce)); return 0; }
+        /* A2 = G G */
+        st = cublasSgemm(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                         trows, trows, trows, &one, d_g, trows, d_g, trows,
+                         &zero, d_a2, trows);
+        if (st != CUBLAS_STATUS_SUCCESS) return 0;
+        /* P = aI + bG + cG^2  (B = bG + cA2, then add a on the diagonal) */
+        st = cublasSgeam(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                         trows, trows, &b, d_g, trows, &c, d_a2, trows,
+                         d_p, trows);
+        if (st != CUBLAS_STATUS_SUCCESS) return 0;
+        gns_diag_add<<<1, 1024>>>(d_p, a, trows);
+        cudaDeviceSynchronize();
+        /* T = P G  (the P G P^T needs a temp; d_t is free for wide, but
+         * for tall M lives in d_t -- use d_a2 as the temp instead) */
+        st = cublasSgemm(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                         trows, trows, trows, &one, d_p, trows, d_g, trows,
+                         &zero, d_a2, trows);
+        if (st != CUBLAS_STATUS_SUCCESS) return 0;
+        /* G = (PG) P^T -- the working A=MM^T pattern: C = A B^T needs
+         * sgemm(OP_T, OP_N, ..., B, lda, A, lda, C) with B as the
+         * OP_T operand FIRST (the DA-caught reversal) */
+        st = cublasSgemm(g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                         trows, trows, trows, &one, d_p, trows, d_a2, trows,
+                         &zero, d_g, trows);
+        if (st != CUBLAS_STATUS_SUCCESS) return 0;
+        /* R = P R  (temp d_t; for tall M lives in d_t -- copy out first) */
+        st = cublasSgemm(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                         trows, trows, trows, &one, d_p, trows, d_r, trows,
+                         &zero, d_t, trows);
+        if (st != CUBLAS_STATUS_SUCCESS) return 0;
+        cudaMemcpy(d_r, d_t, nsq * sizeof(float), cudaMemcpyDeviceToDevice);
+    }
+    /* X = R X_0  (one rectangular GEMM) -- the [trows,tcols] output is
+     * [tcols,trows] in the cuBLAS view: C' = X0' @ R' (the verified
+     * T=BM pattern: the FIRST operand is the [trows,*] matrix with
+     * lda=tcols; the square case hid the A/B order via self-duality,
+     * the wide case exposed it -- the DA catch). Into d_t so the
+     * transpose-back below has a separate source. */
+    st = cublasSgemm(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                     tcols, trows, trows, &one, d_x0, tcols, d_r, trows,
+                     &zero, d_t, tcols);
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    if (rows > cols) {
+        float one = 1.0f, zero = 0.0f;
+        st = cublasSgeam(g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                         cols, rows, &one, d_t, rows, &zero, d_t, cols,
+                         d_m, cols);
+        if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    } else {
+        cudaMemcpy(d_m, d_t, n * sizeof(float), cudaMemcpyDeviceToDevice);
+    }
+    cudaMemcpy(X, d_m, n * sizeof(float), cudaMemcpyDeviceToHost);
+    return 1;
+}
+
 /* The hybrid attention score: not the kernel (the trainer runs it on
  * CPU for now); this is the GPU-side stub that proves the dispatch. */
 int gpu_barun_attn_ready(void) { return g_ready; }

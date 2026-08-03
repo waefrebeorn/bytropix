@@ -67,7 +67,8 @@ int main(void)
         int rows = shapes[s][0], cols = shapes[s][1];
         float *g = (float *)malloc((size_t)rows * cols * sizeof(float));
         float *c = (float *)malloc((size_t)rows * cols * sizeof(float));
-        for (int i = 0; i < rows * cols; i++) g[i] = c[i] = (float)((rand() % 2000) - 1000) / 100.0f;
+        float *orig2 = malloc((size_t)rows * cols * sizeof(float));
+        for (int i = 0; i < rows * cols; i++) g[i] = c[i] = orig2[i] = (float)((rand() % 2000) - 1000) / 100.0f;
         double t0 = now_s();
         int ok = gpu_barun_ns5(g, rows, cols);
         double t1 = now_s();
@@ -80,12 +81,30 @@ int main(void)
             sumg += fabs(g[i]); sumc += fabs(c[i]);
         }
         int pass = ok == 1 && maxd < 0.05 * (sumg / (rows * cols)) * 100;
-        printf("  %dx%d: rc=%d gpu %.1fms cpu %.1fms  max|g-c|=%.3e %s\n",
+        printf("  %dx%d: std rc=%d gpu %.1fms cpu %.1fms  max|g-c|=%.3e %s\n",
                rows, cols, ok, (t1 - t0) * 1000.0, (t2 - t1) * 1000.0, maxd,
                pass ? "OK" : "FAIL");
-        free(g); free(c);
-        if (!pass) return 1;
+        if (!pass) { free(orig2); free(g); free(c); return 1; }
+
+        /* the Gram variant (the square-space iteration, Tri Dao 2026) */
+        float *gr = malloc((size_t)rows * cols * sizeof(float));
+        for (int i = 0; i < rows * cols; i++) gr[i] = orig2[i];
+        double tg0 = now_s();
+        int gok = gpu_barun_ns5_gram(gr, rows, cols);
+        double tg1 = now_s();
+        maxd = 0; sumg = 0;
+        for (int i = 0; i < rows * cols; i++) {
+            double d = fabs((double)gr[i] - (double)c[i]);
+            if (d > maxd) maxd = d;
+            sumg += fabs(gr[i]);
+        }
+        int gpass = gok == 1 && maxd < 0.05 * (sumg / (rows * cols)) * 100;
+        printf("  %dx%d: gram rc=%d gpu %.1fms  max|gram-cpu|=%.3e %s\n",
+               rows, cols, gok, (tg1 - tg0) * 1000.0, maxd,
+               gpass ? "OK" : "FAIL");
+        free(orig2); free(g); free(c); free(gr);
+        if (!gpass) return 1;
     }
-    printf("ALL GPU NS5 TESTS PASSED -- the orthogonalization matches the CPU reference\n");
+    printf("ALL GPU NS5 TESTS PASSED -- the standard + Gram orthogonalization match the CPU reference\n");
     return 0;
 }

@@ -37,6 +37,12 @@ int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
  * Returns 1 on success, 0 otherwise (caller falls back to CPU). */
 int gpu_barun_ns5(float *X, int rows, int cols);
 
+/* The Gram Newton-Schulz (Zhang/Amsel/Chen/Dao 2026): the square-space
+ * iteration -- one rectangular GEMM at each end, square GEMMs inside.
+ * Mathematically identical to the standard NS; ~5x fewer rectangular
+ * FLOPs. Returns 1 on success, 0 otherwise. */
+int gpu_barun_ns5_gram(float *X, int rows, int cols);
+
 #ifdef __cplusplus
 }
 #endif
