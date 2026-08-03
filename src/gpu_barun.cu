@@ -662,10 +662,6 @@ __global__ static void gattn_ds(const float *P, const float *dP, float *dS,
     /* the dP GEMM stores the transposed C' (the same as S): the
      * element [s,t] lives at the flat index h*ns + t*seq + s */
     size_t dp_i = (size_t)h * (size_t)seq * seq + (size_t)t * seq + (size_t)s;
-    if (i == 2 * 16384 + 123 * 128 + 28)
-        printf("KERNEL i=%d h=%d s=%d t=%d P=%f dP=%f rs=%f -> %f\n",
-               i, h, s, t, P[i], dP[dp_i], rs[(size_t)h * seq + s],
-               P[i] * (dP[dp_i] - rs[(size_t)h * seq + s]) * inv);
     dS[i] = P[i] * (dP[dp_i] - rs[(size_t)h * seq + s]) * inv;
 }
 
