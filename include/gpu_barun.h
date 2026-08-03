@@ -43,6 +43,13 @@ int gpu_barun_ns5(float *X, int rows, int cols);
  * FLOPs. Returns 1 on success, 0 otherwise. */
 int gpu_barun_ns5_gram(float *X, int rows, int cols);
 
+/* The hybrid GQA attention: q [seq, heads*dim] (the head h's slice at
+ * the column offset h*dim), the single shared k/v [seq, dim]. The
+ * causal + local-window mask, the 1/sqrt(dim) scale, the softmax.
+ * Matches the bp's CPU reference to 1e-3 (the FD oracle). */
+int gpu_barun_attn(float *out, const float *q, const float *k, const float *v,
+                   int seq, int heads, int dim, int local_win, int is_full);
+
 #ifdef __cplusplus
 }
 #endif

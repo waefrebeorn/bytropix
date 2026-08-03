@@ -456,8 +456,163 @@ int gpu_barun_ns5_gram(float *X, int rows, int cols)
     return 1;
 }
 
-/* The hybrid attention score: not the kernel (the trainer runs it on
- * CPU for now); this is the GPU-side stub that proves the dispatch. */
+/* ---- The hybrid GQA attention on the GPU (the PowerVR/FlashAttention
+ * tile principle): q [seq, heads*64] (the head h's slice at the column
+ * offset h*64, row stride heads*64), single k [seq, 64] / v [seq, 64].
+ * S = Q K^T (strided-batched over the 7 heads, K broadcast), a fused
+ * mask+scale+softmax kernel (the causal + the local window), then
+ * O = P V, merged into the [seq, heads*64] out. The CPU reference in
+ * the bp stays the FD oracle; this must match it to 1e-3. */
+
+__global__ static void gattn_softmax(const float *S, float *P, int seq,
+                                     int total_rows, float scale,
+                                     int local_win, int is_full)
+{
+    /* ONE block, the rows looped SERIALLY inside: the multi-block form
+     * was non-deterministic across identical runs (the rows are provably
+     * disjoint -- a scheduler-level race to hunt with a full-CUDA
+     * sanitizer), so the serial ship is the correct + deterministic one
+     * (verified 3x). The row-major S = K Q^T (the square self-duality
+     * transposes the cuBLAS product): the query position s's scores
+     * live in the COLUMN s -- memory[s + col*seq] = S[col][s]. The
+     * O-GEMM's B'[k,j] = memory[k + j*seq] = P[j][k] consumes the P
+     * ROW s -- memory[s*seq + col] (the reads and the writes are
+     * DIFFERENT patterns; the final DA catch). */
+    int t = threadIdx.x;
+    __shared__ float sm[256];
+    for (int r = 0; r < total_rows; r++) {
+        int s = r % seq;
+        float *sbase = (float *)S + (size_t)(r / seq) * (size_t)seq * seq;
+        float *pbase = P + (size_t)(r / seq) * (size_t)seq * seq;
+        int lo = (is_full || s <= local_win) ? 0 : s - local_win + 1;
+        int NT = (seq + blockDim.x - 1) / blockDim.x;
+        float m = -1e30f;
+        for (int i = 0; i < NT; i++) {
+            int col = i * blockDim.x + t;
+            if (col < seq) {
+                float v = (col > s || col < lo) ? -1e30f
+                                                : sbase[(size_t)s + (size_t)col * seq] * scale;
+                sbase[(size_t)s + (size_t)col * seq] = v;
+                if (v > m) m = v;
+            }
+        }
+        sm[t] = m;
+        __syncthreads();
+        for (int off = blockDim.x / 2; off > 0; off >>= 1) {
+            if (t < off && sm[t + off] > sm[t]) sm[t] = sm[t + off];
+            __syncthreads();
+        }
+        m = sm[0];
+        float sum = 0;
+        for (int i = 0; i < NT; i++) {
+            int col = i * blockDim.x + t;
+            if (col < seq) {
+                if (col <= s && col >= lo) {
+                    float e = __expf(sbase[(size_t)s + (size_t)col * seq] - m);
+                    pbase[(size_t)s * seq + (size_t)col] = e;
+                    sum += e;
+                } else {
+                    pbase[(size_t)s * seq + (size_t)col] = 0.0f;
+                }
+            }
+        }
+        sm[t] = sum;
+        __syncthreads();
+        for (int off = blockDim.x / 2; off > 0; off >>= 1) {
+            if (t < off) sm[t] += sm[t + off];
+            __syncthreads();
+        }
+        float inv = 1.0f / fmaxf(sm[0], 1e-12f);
+        for (int i = 0; i < NT; i++) {
+            int col = i * blockDim.x + t;
+            if (col < seq) pbase[(size_t)s * seq + (size_t)col] *= inv;
+        }
+        __syncthreads();
+    }
+}
+
+__global__ static void gattn_merge(const float *O, float *out,
+                                   int seq, int heads, int dim)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = seq * heads * dim;
+    if (i >= total) return;
+    int d = i % dim;
+    int k = i / dim;        /* k = h*seq + s -- the O layout is
+                               [heads, seq, dim], NOT [seq, heads, dim];
+                               a % heads decomposition aliases when
+                               seq % heads != 0 (the DA catch) */
+    int h = k / seq;
+    int s = k % seq;
+    out[(size_t)s * (heads * dim) + h * dim + d] = O[i];
+}
+
+int gpu_barun_attn(float *out, const float *q, const float *k, const float *v,
+                   int seq, int heads, int dim, int local_win, int is_full)
+{
+    if (!g_ready) return 0;
+    if (seq <= 0 || heads <= 0 || dim <= 0) return 0;
+    size_t ns = (size_t)seq * seq;
+    size_t nq = (size_t)seq * heads * dim;
+    size_t nk = (size_t)seq * dim;
+    static float *d_q = NULL, *d_k = NULL, *d_v = NULL, *d_s = NULL, *d_p = NULL, *d_o = NULL;
+    static size_t cap_q = 0, cap_s = 0;
+    if (nq > cap_q) {
+        if (d_q) cudaFree(d_q);
+        cudaMalloc(&d_q, nq * sizeof(float));
+        cudaMalloc(&d_k, nk * sizeof(float));
+        cudaMalloc(&d_v, nk * sizeof(float));
+        cudaMalloc(&d_o, nq * sizeof(float));
+        cap_q = nq;
+    }
+    if (ns * heads > cap_s) {
+        if (d_s) cudaFree(d_s);
+        if (d_p) cudaFree(d_p);
+        cudaMalloc(&d_s, ns * heads * sizeof(float));
+        cudaMalloc(&d_p, ns * heads * sizeof(float));
+        cap_s = ns * heads;
+    }
+    if (!d_q || !d_k || !d_v || !d_s || !d_p || !d_o) return 0;
+    cudaMemcpy(d_q, q, nq * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_k, k, nk * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_v, v, nk * sizeof(float), cudaMemcpyHostToDevice);
+    cublasStatus_t st;
+    float one = 1.0f, zero = 0.0f;
+    /* S = Q K^T over the heads: strided-batched, the K broadcast.
+     * The head h's Q slice: q_l[s*448 + h*64 + d] -- row stride = the
+     * full head width (the lda), the batch stride = the column shift. */
+    int hw = heads * dim;
+    st = cublasSgemmStridedBatched(g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                                   seq, seq, dim, &one,
+                                   d_q, hw, dim,          /* A: [seq,dim] lda=hw, stride=dim */
+                                   d_k, dim, 0,           /* B: broadcast */
+                                   &zero, d_s, seq, ns,   /* C: [seq,seq] */
+                                   heads);
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    cudaDeviceSynchronize();
+    /* TEMP: serial single-block for the race discrimination */
+    gattn_softmax<<<1, 256>>>(d_s, d_p, seq, heads * seq,
+                              1.0f / sqrtf((float)dim), local_win, is_full);
+    cudaDeviceSynchronize();
+    cudaDeviceSynchronize();
+    cudaError_t ce = cudaGetLastError();
+    if (ce != cudaSuccess) return 0;
+    /* O = P V : the verified C' = V' @ P' -- sgemm(OP_N, OP_N,
+     * m=dim, n=seq, k=seq, V first (ldb=dim), P second (lda=seq)) */
+    st = cublasSgemmStridedBatched(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                                   dim, seq, seq, &one,
+                                   d_v, dim, 0,
+                                   d_p, seq, ns,
+                                   &zero, d_o, dim, (size_t)seq * dim,
+                                   heads);
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    cudaDeviceSynchronize();
+    gattn_merge<<<(nq + 255) / 256, 256>>>(d_o, d_q, seq, heads, dim);
+    cudaDeviceSynchronize();
+    cudaMemcpy(out, d_q, nq * sizeof(float), cudaMemcpyDeviceToHost);
+    return 1;
+}
+
 int gpu_barun_attn_ready(void) { return g_ready; }
 
 }

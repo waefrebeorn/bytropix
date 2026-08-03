@@ -50,6 +50,9 @@ BP_WEAK int gpu_barun_matmul_nt(float *y, const float *w, const float *x,
                                 int M, int N, int K);
 BP_WEAK int gpu_barun_ns5(float *X, int rows, int cols);
 BP_WEAK int gpu_barun_ns5_gram(float *X, int rows, int cols);
+BP_WEAK int gpu_barun_attn(float *out, const float *q, const float *k,
+                           const float *v, int seq, int heads, int dim,
+                           int local_win, int is_full);
 static int g_gpu_tried = 0;
 /* tiny matmuls cost more in upload/launch than they save -- the GPU
  * threshold from the hardware table (RTX 4050, 6GB) */
@@ -342,6 +345,48 @@ static int is_sel(int l)
            ((l + 1) / BARUN_SELECT_EVERY - 1 < BARUN_SELECTORS);
 }
 
+/* The hybrid GQA attention on the CPU: the FD oracle (the FD tests
+ * verify the grads through this exact math) AND the fallback when the
+ * GPU tile is absent. OpenMP over the positions (each row is
+ * independent). */
+static void cpu_attn_loop(float *acc, const float *q, const float *k,
+                          const float *v, int seq, int is_full)
+{
+    const int hwd = BARUN_HEADS * 64;   /* NOT 'D' -- the bp #defines D */
+#pragma omp parallel for schedule(static)
+    for (int s = 0; s < seq; s++) {
+        float *acc_s = acc + (size_t)s * hwd;
+        memset(acc_s, 0, hwd * sizeof(float));
+        for (int h = 0; h < BARUN_HEADS; h++) {
+            const float *qrow = q + (size_t)s * hwd + (size_t)h * 64;
+            float maxv = -1e30f;
+            int lo = is_full ? 0
+                             : (s > BARUN_LOCAL_WIN ? s - BARUN_LOCAL_WIN + 1 : 0);
+            int kv_n = 0;
+            float probs[BARUN_LOCAL_WIN + 2];
+            for (int t = lo; t <= s; t++) {
+                const float *krow = k + (size_t)t * 64;
+                float dot = 0;
+                for (int i = 0; i < 64; i++) dot += qrow[i] * krow[i];
+                dot *= 1.0f / sqrtf(64.0f);
+                if (dot > maxv) maxv = dot;
+                probs[kv_n++] = dot;
+            }
+            float sum = 0;
+            for (int i = 0; i < kv_n; i++) {
+                probs[i] = expf(probs[i] - maxv);
+                sum += probs[i];
+            }
+            for (int i = 0; i < kv_n; i++) probs[i] /= sum;
+            for (int i = 0; i < kv_n; i++) {
+                const float *vrow = v + (size_t)(lo + i) * 64;
+                for (int d = 0; d < 64; d++)
+                    acc_s[h * 64 + d] += probs[i] * vrow[d];
+            }
+        }
+    }
+}
+
 float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
                        const uint16_t *tokens, int n_tokens)
 {
@@ -404,38 +449,24 @@ float barun_bp_forward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
         rope_q(q_l, seq, b->cos_tbl, b->sin_tbl);
         rope_k(k_l, seq, b->cos_tbl, b->sin_tbl);
 
-        /* GQA attention (7 Q heads share the single KV head) */
+        /* GQA attention (7 Q heads share the single KV head). The GPU
+         * tile (the PowerVR/FlashAttention principle) when ready and
+         * the sequence is worth the upload; the CPU loop below stays
+         * the FD oracle and the fallback. */
         int is_full = ((l + 1) % BARUN_FULL_EVERY == 0);
-        for (int s = 0; s < seq; s++) {
-            float *acc = ao_l + (size_t)s * D;
-            memset(acc, 0, D * sizeof(float));
-            for (int h = 0; h < BARUN_HEADS; h++) {
-                const float *qrow = q_l + (size_t)s * D + (size_t)h * 64;
-                float maxv = -1e30f;
-                int lo = is_full ? 0
-                                 : (s > BARUN_LOCAL_WIN ? s - BARUN_LOCAL_WIN + 1 : 0);
-                int kv_n = 0;
-                float probs[BARUN_LOCAL_WIN + 2];
-                for (int t = lo; t <= s; t++) {
-                    const float *krow = k_l + (size_t)t * 64;
-                    float dot = 0;
-                    for (int i = 0; i < 64; i++) dot += qrow[i] * krow[i];
-                    dot *= 1.0f / sqrtf(64.0f);
-                    if (dot > maxv) maxv = dot;
-                    probs[kv_n++] = dot;
-                }
-                float sum = 0;
-                for (int i = 0; i < kv_n; i++) {
-                    probs[i] = expf(probs[i] - maxv);
-                    sum += probs[i];
-                }
-                for (int i = 0; i < kv_n; i++) probs[i] /= sum;
-                for (int i = 0; i < kv_n; i++) {
-                    const float *vrow = v_l + (size_t)(lo + i) * 64;
-                    for (int d = 0; d < 64; d++)
-                        acc[h * 64 + d] += probs[i] * vrow[d];
-                }
+        if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_attn &&
+            seq >= 32) {
+            float *acc = ao_l;
+            if (gpu_barun_attn(acc, q_l, k_l, v_l, seq, BARUN_HEADS, 64,
+                               BARUN_LOCAL_WIN, is_full)) {
+                /* the GPU tile path: ao_l holds the attention output */
+            } else {
+                memset(acc, 0, (size_t)seq * D * sizeof(float));
+                cpu_attn_loop(acc, q_l, k_l, v_l, seq, is_full);
             }
+        } else {
+            memset(ao_l, 0, (size_t)seq * D * sizeof(float));
+            cpu_attn_loop(ao_l, q_l, k_l, v_l, seq, is_full);
         }
         /* o_proj + gate; gated residual: x = x + o * sigmoid(g) */
         mm(o_l, blk->o_proj, ao_l, D, D, seq);
