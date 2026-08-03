@@ -53,6 +53,11 @@ BP_WEAK int gpu_barun_ns5_gram(float *X, int rows, int cols);
 BP_WEAK int gpu_barun_attn(float *out, const float *q, const float *k,
                            const float *v, int seq, int heads, int dim,
                            int local_win, int is_full);
+BP_WEAK int gpu_barun_attn_backward(float *dq, float *dk, float *dv,
+                                    const float *q, const float *k,
+                                    const float *v, const float *o,
+                                    const float *dao, int seq, int heads,
+                                    int dim, int local_win, int is_full);
 static int g_gpu_tried = 0;
 /* tiny matmuls cost more in upload/launch than they save -- the GPU
  * threshold from the hardware table (RTX 4050, 6GB) */
@@ -384,6 +389,79 @@ static void cpu_attn_loop(float *acc, const float *q, const float *k,
                     acc_s[h * 64 + d] += probs[i] * vrow[d];
             }
         }
+    }
+}
+
+/* The hybrid GQA attention backward on the CPU: the FD oracle (the
+ * same math the FD tests verify) AND the fallback when the GPU tile is
+ * absent. OpenMP over the positions (each row is independent). */
+static void cpu_attn_backward_loop(float *dq, float *dk, float *dv,
+                                   const float *q, const float *k,
+                                   const float *v, const float *dao,
+                                   int seq, int is_full)
+{
+    const int hwd = BARUN_HEADS * 64;
+    float inv = 1.0f / sqrtf(64.0f);
+    /* the dk/dv accumulate ACROSS rows (the shared KV!) -- the naive
+     * parallel-for raced on them; each thread owns its partials */
+#pragma omp parallel
+    {
+        float *dk_part = (float *)calloc((size_t)seq * 64, sizeof(float));
+        float *dv_part = (float *)calloc((size_t)seq * 64, sizeof(float));
+#pragma omp for schedule(static)
+        for (int s = 0; s < seq; s++) {
+        for (int h = 0; h < BARUN_HEADS; h++) {
+            const float *qrow = q + (size_t)s * hwd + (size_t)h * 64;
+            int lo = is_full ? 0
+                             : (s > BARUN_LOCAL_WIN ? s - BARUN_LOCAL_WIN + 1 : 0);
+            int kv_n = 0;
+            float probs[BARUN_LOCAL_WIN + 2];
+            float maxv = -1e30f;
+            for (int t = lo; t <= s; t++) {
+                const float *krow = k + (size_t)t * 64;
+                float dot = 0;
+                for (int i = 0; i < 64; i++) dot += qrow[i] * krow[i];
+                dot *= inv;
+                if (dot > maxv) maxv = dot;
+                probs[kv_n++] = dot;
+            }
+            float sum = 0;
+            for (int i = 0; i < kv_n; i++) { probs[i] = expf(probs[i] - maxv); sum += probs[i]; }
+            for (int i = 0; i < kv_n; i++) probs[i] /= sum;
+            const float *dao_h = dao + (size_t)s * hwd + (size_t)h * 64;
+            float *dq_h  = dq  + (size_t)s * hwd + (size_t)h * 64;
+            float mean = 0;
+            for (int i = 0; i < kv_n; i++) {
+                const float *vrow = v + (size_t)(lo + i) * 64;
+                float dvdot = 0;
+                for (int d = 0; d < 64; d++) dvdot += dao_h[d] * vrow[d];
+                mean += probs[i] * dvdot;
+            }
+            for (int i = 0; i < kv_n; i++) {
+                const float *krow = k + (size_t)(lo + i) * 64;
+                const float *vrow = v + (size_t)(lo + i) * 64;
+                float dvdot = 0;
+                for (int d = 0; d < 64; d++) dvdot += dao_h[d] * vrow[d];
+                float dscore = probs[i] * (dvdot - mean) * inv;
+                float *dk_t = dk_part + (size_t)(lo + i) * 64;
+                float *dv_t = dv_part + (size_t)(lo + i) * 64;
+                for (int d = 0; d < 64; d++) {
+                    dq_h[d]  += dscore * krow[d];
+                    dk_t[d]  += dscore * qrow[d];
+                    dv_t[d]  += probs[i] * dao_h[d];
+                }
+            }
+        }
+        }
+#pragma omp critical
+        {
+            for (int i = 0; i < seq * 64; i++) {
+                dk[i] += dk_part[i];
+                dv[i] += dv_part[i];
+            }
+        }
+        free(dk_part);
+        free(dv_part);
     }
 }
 
@@ -783,58 +861,27 @@ float barun_bp_backward(barun_model_t *m, barun_buf_t *b, barun_bp_t *bp,
         mm_t(dod, blk->g_proj, dgd, D, D, seq);        /* into scratch, then dan += */
         wg_t(tr->g_proj_g[l], dgd, an_l, D, D, seq);
         for (int i = 0; i < seq * D; i++) dan[i] += dod[i];
-        /* attention backward (GQA: all heads share the KV rows) */
+        /* attention backward (GQA: all heads share the KV rows). The
+         * GPU tile when ready (the FD oracle is the CPU loop below --
+         * the fallback AND the reference the tests run through). */
         int is_full = ((l + 1) % BARUN_FULL_EVERY == 0);
         memset(dq, 0, (size_t)seq * D * sizeof(float));
         memset(dk, 0, (size_t)seq * 64 * sizeof(float));
         memset(dv, 0, (size_t)seq * 64 * sizeof(float));
-        {
-            float inv = 1.0f / sqrtf(64.0f);
-            for (int s = 0; s < seq; s++) {
-                for (int h = 0; h < BARUN_HEADS; h++) {
-                    const float *qrow = q_l + (size_t)s * D + (size_t)h * 64;
-                    int lo = is_full ? 0
-                                     : (s > BARUN_LOCAL_WIN ? s - BARUN_LOCAL_WIN + 1 : 0);
-                    int kv_n = 0;
-                    float probs[BARUN_LOCAL_WIN + 2];
-                    float maxv = -1e30f;
-                    for (int t = lo; t <= s; t++) {
-                        const float *krow = k_l + (size_t)t * 64;
-                        float dot = 0;
-                        for (int i = 0; i < 64; i++) dot += qrow[i] * krow[i];
-                        dot *= inv;
-                        if (dot > maxv) maxv = dot;
-                        probs[kv_n++] = dot;
-                    }
-                    float sum = 0;
-                    for (int i = 0; i < kv_n; i++) { probs[i] = expf(probs[i] - maxv); sum += probs[i]; }
-                    for (int i = 0; i < kv_n; i++) probs[i] /= sum;
-                    float *dao_h = dao + (size_t)s * D + (size_t)h * 64;
-                    float *dq_h  = dq  + (size_t)s * D + (size_t)h * 64;
-                    /* dvdot_i = <dao_h, v[t_i]> ; dscore = p*(dvdot-mean) */
-                    float mean = 0;
-                    for (int i = 0; i < kv_n; i++) {
-                        const float *vrow = v_l + (size_t)(lo + i) * 64;
-                        float dvdot = 0;
-                        for (int d = 0; d < 64; d++) dvdot += dao_h[d] * vrow[d];
-                        mean += probs[i] * dvdot;
-                    }
-                    for (int i = 0; i < kv_n; i++) {
-                        const float *krow = k_l + (size_t)(lo + i) * 64;
-                        const float *vrow = v_l + (size_t)(lo + i) * 64;
-                        float dvdot = 0;
-                        for (int d = 0; d < 64; d++) dvdot += dao_h[d] * vrow[d];
-                        float dscore = probs[i] * (dvdot - mean) * inv;
-                        float *dk_t = dk + (size_t)(lo + i) * 64;
-                        float *dv_t = dv + (size_t)(lo + i) * 64;
-                        for (int d = 0; d < 64; d++) {
-                            dq_h[d]  += dscore * krow[d];
-                            dk_t[d]  += dscore * qrow[d];
-                            dv_t[d]  += probs[i] * dao_h[d];
-                        }
-                    }
-                }
+        if (gpu_barun_ready && gpu_barun_ready() && gpu_barun_attn_backward &&
+            seq >= 32) {
+            if (!gpu_barun_attn_backward(dq, dk, dv, q_l, k_l, v_l, ao_l, dao,
+                                         seq, BARUN_HEADS, 64,
+                                         BARUN_LOCAL_WIN, is_full)) {
+                memset(dq, 0, (size_t)seq * D * sizeof(float));
+                memset(dk, 0, (size_t)seq * 64 * sizeof(float));
+                memset(dv, 0, (size_t)seq * 64 * sizeof(float));
+                cpu_attn_backward_loop(dq, dk, dv, q_l, k_l, v_l, dao,
+                                       seq, is_full);
             }
+        } else {
+            cpu_attn_backward_loop(dq, dk, dv, q_l, k_l, v_l, dao,
+                                   seq, is_full);
         }
         /* rope backward, then the qk-norm backward (needs the pre-norm
          * q/k saved by the forward) */

@@ -50,6 +50,16 @@ int gpu_barun_ns5_gram(float *X, int rows, int cols);
 int gpu_barun_attn(float *out, const float *q, const float *k, const float *v,
                    int seq, int heads, int dim, int local_win, int is_full);
 
+/* The attention backward: dq [seq, heads*dim], the summed dk/dv
+ * [seq, dim] (the single KV shares the 7 heads' grads), given the
+ * forward's o [seq, heads*dim] and the dao. Recomputes the softmax
+ * (the serial ship). */
+int gpu_barun_attn_backward(float *dq, float *dk, float *dv,
+                            const float *q, const float *k, const float *v,
+                            const float *o, const float *dao,
+                            int seq, int heads, int dim,
+                            int local_win, int is_full);
+
 #ifdef __cplusplus
 }
 #endif

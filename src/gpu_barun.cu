@@ -613,6 +613,198 @@ int gpu_barun_attn(float *out, const float *q, const float *k, const float *v,
     return 1;
 }
 
+/* ---- The attention BACKWARD on the GPU: given dO [seq, heads*dim],
+ * recompute S = Q K^T (the same strided-batched call), P (the serial
+ * softmax), then
+ *   dP = dO V^T, rs = rowsum(dO o O), dS = P o (dP - rs) * inv,
+ *   dQ = dS K, dK = sum_h dS^T Q, dV = sum_h P^T dO
+ * (the single KV shares the summed grads across the 7 heads). The pure
+ * elementwise/reduction kernels are multi-block SAFE (no shared-buffer
+ * mutation -- unlike the softmax's in-place S column); the softmax is
+ * the serial ship. The CPU loop in the bp stays the FD oracle. */
+
+__global__ static void gattn_rowsum(const float *dO, const float *O,
+                                    float *rs, int seq, int heads, int dim)
+{
+    /* one block per (head, position): the reads are disjoint, the rs
+     * writes disjoint -- no shared mutation, multi-block safe */
+    int r = blockIdx.x;
+    int s = r % seq;
+    int h = r / seq;
+    int t = threadIdx.x;
+    /* the dO/O are [seq, heads*dim] -- the head h's slice at the
+     * column offset h*dim (NOT the head-major [heads, seq, dim]) */
+    size_t hw = (size_t)heads * dim;
+    const float *drow = dO + (size_t)s * hw + (size_t)h * dim;
+    const float *orow = O + (size_t)s * hw + (size_t)h * dim;
+    __shared__ float sm[256];
+    float acc = 0;
+    for (int i = t; i < dim; i += blockDim.x) acc += drow[i] * orow[i];
+    sm[t] = acc;
+    __syncthreads();
+    for (int off = blockDim.x / 2; off > 0; off >>= 1) {
+        if (t < off) sm[t] += sm[t + off];
+        __syncthreads();
+    }
+    if (t == 0) rs[r] = sm[0];
+}
+
+__global__ static void gattn_ds(const float *P, const float *dP, float *dS,
+                                const float *rs, int seq, int heads,
+                                float inv)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t total = (size_t)heads * seq * seq;
+    if ((size_t)i >= total) return;
+    int h = i / (seq * seq);
+    int s = (i / seq) % seq;
+    int t = i % seq;
+    /* the dP GEMM stores the transposed C' (the same as S): the
+     * element [s,t] lives at the flat index h*ns + t*seq + s */
+    size_t dp_i = (size_t)h * (size_t)seq * seq + (size_t)t * seq + (size_t)s;
+    if (i == 2 * 16384 + 123 * 128 + 28)
+        printf("KERNEL i=%d h=%d s=%d t=%d P=%f dP=%f rs=%f -> %f\n",
+               i, h, s, t, P[i], dP[dp_i], rs[(size_t)h * seq + s],
+               P[i] * (dP[dp_i] - rs[(size_t)h * seq + s]) * inv);
+    dS[i] = P[i] * (dP[dp_i] - rs[(size_t)h * seq + s]) * inv;
+}
+
+__global__ static void gattn_sumheads(const float *acc, float *out,
+                                      int seq, int heads, int dim)
+{
+    /* out[t,d] = sum_h acc[h,t,d] ; one thread per (t,d) */
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = seq * dim;
+    if (i >= total) return;
+    float s = 0;
+    for (int h = 0; h < heads; h++) s += acc[(size_t)h * seq * dim + i];
+    out[i] = s;
+}
+
+int gpu_barun_attn_backward(float *dq, float *dk, float *dv,
+                            const float *q, const float *k, const float *v,
+                            const float *o, const float *dao,
+                            int seq, int heads, int dim,
+                            int local_win, int is_full)
+{
+    if (!g_ready) return 0;
+    if (seq <= 0 || heads <= 0 || dim <= 0) return 0;
+    size_t ns = (size_t)seq * seq;
+    size_t nq = (size_t)seq * heads * dim;
+    size_t nk = (size_t)seq * dim;
+    static float *d_q = NULL, *d_k = NULL, *d_v = NULL, *d_o = NULL, *d_dao = NULL;
+    static float *d_s = NULL, *d_p = NULL, *d_dp = NULL, *d_ds = NULL, *d_rs = NULL;
+    static float *d_dq = NULL, *d_dk = NULL, *d_dv = NULL;
+    static size_t cap_q = 0, cap_s = 0;
+    if (nq > cap_q) {
+        for (float **p : { &d_q, &d_k, &d_v, &d_o, &d_dao, &d_dq, &d_dk, &d_dv })
+            if (*p) cudaFree(*p);
+        cudaMalloc(&d_q, nq * sizeof(float));
+        cudaMalloc(&d_k, nk * sizeof(float));
+        cudaMalloc(&d_v, nk * sizeof(float));
+        cudaMalloc(&d_o, nq * sizeof(float));
+        cudaMalloc(&d_dao, nq * sizeof(float));
+        cudaMalloc(&d_dq, nq * sizeof(float));
+        /* the dK_h/dV_h GEMMs write heads * (dim*seq) floats -- the
+         * per-batch C' at d_dk + h*(seq*dim) -- NOT nk (the pre-fix
+         * nk-sized allocs overflowed and clobbered the d_s/d_p/d_dv). */
+        cudaMalloc(&d_dk, (size_t)heads * seq * dim * sizeof(float));
+        cudaMalloc(&d_dv, (size_t)heads * seq * dim * sizeof(float));
+        cap_q = nq;
+    }
+    if (ns * heads > cap_s) {
+        for (float **p : { &d_s, &d_p, &d_dp, &d_ds, &d_rs })
+            if (*p) cudaFree(*p);
+        cudaMalloc(&d_s, ns * heads * sizeof(float));
+        cudaMalloc(&d_p, ns * heads * sizeof(float));
+        cudaMalloc(&d_dp, ns * heads * sizeof(float));
+        cudaMalloc(&d_ds, ns * heads * sizeof(float));
+        cudaMalloc(&d_rs, (size_t)heads * seq * sizeof(float));
+        cap_s = ns * heads;
+    }
+    if (!d_q || !d_k || !d_v || !d_o || !d_dao || !d_s || !d_p || !d_dp ||
+        !d_ds || !d_rs || !d_dq || !d_dk || !d_dv) return 0;
+    cudaMemcpy(d_q, q, nq * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_k, k, nk * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_v, v, nk * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_o, o, nq * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_dao, dao, nq * sizeof(float), cudaMemcpyHostToDevice);
+    cublasStatus_t st;
+    float one = 1.0f, zero = 0.0f;
+    int hw = heads * dim;
+    float inv = 1.0f / sqrtf((float)dim);
+    /* S = Q K^T (the same as the forward) */
+    st = cublasSgemmStridedBatched(g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                                   seq, seq, dim, &one,
+                                   d_q, hw, dim, d_k, dim, 0,
+                                   &zero, d_s, seq, ns, heads);
+    if (st != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "BACKWARD GEMM FAIL: S = Q K^T st=%d\n", st); return 0; }
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    /* P = softmax(S) -- the serial ship (same as the forward) */
+    gattn_softmax<<<1, 256>>>(d_s, d_p, seq, heads * seq, inv,
+                              local_win, is_full);
+    cudaDeviceSynchronize();
+    if (cudaGetLastError() != cudaSuccess) return 0;
+    /* dP = dO V^T -- the same shape as S (the dO plays the Q's role) */
+    st = cublasSgemmStridedBatched(g_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                                   seq, seq, dim, &one,
+                                   d_dao, hw, dim, d_v, dim, 0,
+                                   &zero, d_dp, seq, ns, heads);
+    if (st != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "BACKWARD GEMM FAIL: dP = dO V^T st=%d\n", st); return 0; }
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    /* rs = rowsum(dO o O) (the O passed in -- the forward's attn_out) */
+    gattn_rowsum<<<heads * seq, 256>>>(d_dao, d_o, d_rs, seq, heads, dim);
+    cudaDeviceSynchronize();
+    if (cudaGetLastError() != cudaSuccess) return 0;
+    /* dS = P o (dP - rs) * inv (in-place on the dP) */
+    /* the dS into its OWN buffer: the in-place form was a clobbering
+     * race -- the transposed dP layout maps dS[i]'s write onto another
+     * dS thread's dP read (the masked-zero writes destroyed the live
+     * dP values). */
+    gattn_ds<<<(heads * ns + 255) / 256, 256>>>(d_p, d_dp, d_ds, d_rs,
+                                                seq, heads, inv);
+    cudaDeviceSynchronize();
+    if (cudaGetLastError() != cudaSuccess) return 0;
+    /* dQ = dS K -- the transposed-C' form (the cuBLAS ldc >= m rule):
+     * C'[i,j] = sum_t K[t,i] dS[j,t] = dQ[j,i]. The dQ lives in the
+     * INTERLEAVED [seq, heads*dim] (the head h at the column offset
+     * h*dim, row stride hw) -- the ldc is hw, the batch stride is dim
+     * (the head shift). */
+    st = cublasSgemmStridedBatched(g_cublas, CUBLAS_OP_N, CUBLAS_OP_N,
+                                   dim, seq, seq, &one,
+                                   d_k, dim, 0, d_ds, seq, ns,
+                                   &zero, d_dq, hw, dim, heads);
+    if (st != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "BACKWARD GEMM FAIL: dQ = dS K st=%d\n", st); return 0; }
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    /* dK_h = dS^T Q : the [seq,dim] output is the transposed C' --
+     * the cuBLAS needs ldc >= m, so the C' is [dim, seq] (the dQ
+     * call's legal form): C'[i,j] = sum_s Q[s,i] dS[s,j] = dK[j,i].
+     * A = Q (OP_N, the [seq,dim] slice lda=hw), B = dS (OP_T). */
+    st = cublasSgemmStridedBatched(g_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
+                                   dim, seq, seq, &one,
+                                   d_q, hw, dim, d_ds, seq, ns,
+                                   &zero, d_dk, dim, (size_t)seq * dim, heads);
+    if (st != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "BACKWARD GEMM FAIL: dK_h st=%d\n", st); return 0; }
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    /* dV_h = P^T dO : the same transposed-C' form --
+     * C'[i,j] = sum_s dO[s,i] P[s,j] = dV[j,i].
+     * A = dO (OP_N, lda=hw), B = P (OP_T). */
+    st = cublasSgemmStridedBatched(g_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
+                                   dim, seq, seq, &one,
+                                   d_dao, hw, dim, d_p, seq, ns,
+                                   &zero, d_dv, dim, (size_t)seq * dim, heads);
+    if (st != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "BACKWARD GEMM FAIL: dV_h st=%d\n", st); return 0; }
+    if (st != CUBLAS_STATUS_SUCCESS) return 0;
+    /* the single KV: sum the head grads */
+    cudaMemcpy(dq, d_dq, nq * sizeof(float), cudaMemcpyDeviceToHost);
+    gattn_sumheads<<<(nk + 255) / 256, 256>>>(d_dk, d_dk, seq, heads, dim);
+    gattn_sumheads<<<(nk + 255) / 256, 256>>>(d_dv, d_dv, seq, heads, dim);
+    cudaDeviceSynchronize();
+    cudaMemcpy(dk, d_dk, nk * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(dv, d_dv, nk * sizeof(float), cudaMemcpyDeviceToHost);
+    return 1;
+}
+
 int gpu_barun_attn_ready(void) { return g_ready; }
 
 }
