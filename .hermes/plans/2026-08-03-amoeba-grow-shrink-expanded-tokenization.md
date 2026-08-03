@@ -235,3 +235,110 @@ Every task: **write failing test → run to see it fail → implement → run to
 # Execution order
 
 Phase 0 audit (done above) → 1.5 dim-runtime FIRST → 1.1/1.2/1.3/1.4/1.9 (depth shrink) → 1.6/1.7/1.8 (width/FFN/vocab/selectors) → Phase 2.1/2.2/2.3 (BLT core) → 2.4/2.5 (MTP + BPE-dropout) → 2.6 (amoeba integration) → Phase 3 (hive-fast + benchmarks).
+
+---
+
+# PHASE 4 — Precision morphing (the Escha axis): bit-width is an amoeba parameter
+
+Research anchor: **Escha W2 vs released 35B** (llm.ciru.ai/research/escha-vs-35b/, 2026-08-03):
+a 2-bit-class Qwen3.6-35B-A3B MoE at **12.3 GB** (vs 19-37 GB for the field) posts the
+**#1 HermesAgent-20 score (90/100)** and stays within **2.4pp of the best HumanEval+**
+and **1.9pp of the best MBPP+**. The format is NOT one uniform bit-width — it is
+**heterogeneous per matrix family**: `2b gate/up · 3b down · INT8 dense`. The MoE gate
+and up-projection tolerate 2 bits (their output is filtered by the router/activation),
+the down-projection needs 3 (it writes back into the residual stream), and the dense
+parts stay INT8. **Quality density = the right bits on the right matrices.**
+
+This is the third morphing axis of the true amoeba:
+1. **Structure** (depth/width/FFN/vocab/selectors — Phase 1)
+2. **Compute** (patch size — Phase 2)
+3. **Precision** (per-family bit-width — THIS phase) — and it doubles as the
+   **"run on all hardware"** mechanism: the model carries ONE canonical fp32/bf16
+   artifact and materializes the precision ladder that fits the device.
+
+## Task 4.1 — per-family precision plan (`wubu_precision_plan`)
+
+**Objective:** a table mapping each parameter family to a bit-width + block size,
+mirroring Escha: gate/up → 2b, down → 3b, dense (q/k/v/o/g) → INT8, norms/selectors
+→ fp32 (1-D, negligible), embedding → INT8 (dense). Everything below the per-family
+`WUBU_PRECISION_*` defaults but overridable per model via `config.json`.
+
+**Files:** new `src/wubu_precision.c` + `include/wubu_precision.h`; test `tools/test_precision.c`
+**Oracle:** the plan table round-trips; each family's default matches the Escha pattern;
+overriding one family doesn't leak into others.
+
+## Task 4.2 — hardware profile → precision ladder (`wubu_hw_profile`)
+
+**Objective:** detect the device once at load: CPU SIMD (AVX512/AVX2/NEON — extend the
+existing `wubu_gemv_detect` cpuid), RAM size, GPU presence (/dev/dxg, CUDA), storage
+speed. Then pick the precision ladder that fits: big-RAM fast-CPU → full INT8+2b/3b
+(Escha quality), small-RAM → drop dense to INT4 (AWQ saliency), no-SIMD → fall back
+to fp32 GEMV (correctness first). The ladder is a pure function of the profile —
+deterministic, testable, no device-specific code in the hot loop.
+
+**Files:** `src/wubu_gemv_tune.c` (extend), new `src/wubu_hw_profile.c` + header;
+test `tools/test_hw_profile.c`
+**Oracle:** on this WSL box (AVX512? RTX 4050 via /dev/dxg, 6GB) the profile reports
+the expected caps; the ladder for 12.3GB-class weights fits the 6GB GPU → the
+CPU/DRAM path is chosen with INT8 dense (the "all hardware" story: every device gets
+a working precision, not just the big ones).
+
+## Task 4.3 — per-family quant GEMV dispatch (INT8 dense + 2b/3b MoE-style)
+
+**Objective:** the packed layouts + GEMV kernels for the three classes, reusing the
+existing quant machinery (`quantized_matmul.c`, `wubu_gemv_tune.c`, IQ2 grids):
+- INT8 dense: block-32 absmax (the existing int8 path).
+- 2-bit gate/up: IQ2-class 4-bit-in-2 or the 2-bit tri-value + scale pack (reuse
+  `iq2xxs_grid_data.inc` style); dequant + GEMV on the fly.
+- 3-bit down: 3-bit pack (2×3b + 2 spare bits per byte-triple) or Q3_K reuse.
+
+**Files:** `src/wubu_precision.c`, `quantized_matmul.c` (extend), test in `tools/test_precision.c`
+**Oracle:** FD check — packed-GEMV output ≈ fp32 matmul within the family tolerance
+(2b: 1e-1 rel, 3b: 5e-2, INT8: 1e-2); ASan-clean.
+
+## Task 4.4 — the quality-density gate (Escha-style evaluation harness)
+
+**Objective:** score any precision plan the way the Ciru lab scored Escha: held-out
+loss + a small coding/tool probe (we have HumanEval-style tests? use the corpus
+held-out + the existing test suite as the proxy). Gate: a plan is accepted only if
+its quality/byte ratio beats the current plan (density ↑).
+
+**Files:** `tools/bench_precision.c`; test hook in `tools/test_precision.c`
+**Oracle:** the INT8+2b/3b plan beats uniform INT8 on quality-per-byte for the same
+model (the Escha result reproduced at 35M scale).
+
+---
+
+# PHASE 5 — The priority intelligence store (the AGI's memory of what matters)
+
+The amoeba doesn't just mutate — it REMEMBERS what it learned about itself:
+- **BI scores** (which layers matter — Phase 1.3)
+- **Fisher importance** per parameter family (EWC — extend `wubu_ewc` from the 15-dim
+  sweep space to per-block/per-family; arXiv 2603.18596 logits-reversal already applied)
+- **Per-family precision deltas** (which matrices survived 2b and which needed 3b —
+  the empirical answer to "what is this model's weak point")
+- **Mutation ledger** (every grow/shrink/precision change: what, when, fitness delta)
+
+**Task 5.1** — `wubu_priority_store`: a persisted (safetensors sidecar `priority.safetensors`)
+record: per-block BI, per-family Fisher, precision plan, mutation ledger. Survives
+checkpoints; the amoeba reads it to decide the NEXT mutation (don't re-shrink a layer
+that already proved critical; don't 2-bit a family whose 3-bit was needed).
+**Task 5.2** — wire the store into `wubu_amoeba` diagnose/mutate: the immune system
+consults the ledger before acting (the AGI's institutional memory).
+**Files:** new `src/wubu_priority.c` + header (uses `safetensors_reader/writer`),
+extend `wubu_ewc.h`, `wubu_amoeba.c`; test `tools/test_priority.c`
+**Oracle:** store round-trips; after a shrink is rejected by the fitness gate, the
+ledger marks that layer protected (BI=0 excluded) and the next diagnose does NOT
+propose it; all ASan-clean.
+
+---
+
+# The true amoeba — one sentence per axis
+
+| Axis | Grow | Shrink | What it means |
+|---|---|---|---|
+| structure | zero-insert / stack / Net2Net | BI-remove / LaCo-merge / prune | the body changes shape |
+| compute | lower entropy threshold (short patches) | raise it (long patches) | work per token morphs |
+| precision | raise a family's bits (recover quality) | lower them (fit the device) | the body runs on ALL hardware |
+| memory | accept a mutation, archive | reject, roll back | the AGI's priority intelligence persists |
+
