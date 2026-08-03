@@ -719,6 +719,18 @@ test_ngram: tools/test_ngram.c src/wubu_ngram.o
 
 # G04: Hive data structure test (linked fixed blocks + skipfield + freelist)
 test_hive: tools/test_hive.c src/wubu_hive.o $(CPU_OBJ)
+test_nest: tools/test_nest.c src/wubu_nest.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
+test_deltanet: tools/test_deltanet.c src/wubu_deltanet.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
+test_prover2: tools/test_prover2.c src/wubu_prover2.o src/wubu_hyper.o $(CPU_OBJ)
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -fopenmp
 	./$@
 
