@@ -62,7 +62,9 @@ int main(void)
     barun_train_cfg_t cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.lr = 1e-3f; cfg.muon_lr = 1e-3f; cfg.adam_lr = 1e-3f;
-    cfg.weight_decay = 0.1f; cfg.grad_clip = 0.0f;
+    cfg.weight_decay = 0.1f; cfg.grad_clip = 1.0f;  /* match CLI */
+    cfg.muon_momentum = 0.95f;
+    cfg.warmup_steps = 0; cfg.max_steps = 10000;
 
     uint16_t toks[8];
     for (int i = 0; i < 8; i++) toks[i] = (uint16_t)(i * 3 % 512 + 10);
@@ -97,6 +99,18 @@ int main(void)
         }
         fprintf(stderr, "  ok: n_layers=%d\n", m.n_layers);
     }
-    fprintf(stderr, "ALL 7 GROWTHS + 350 STEPS OK (mode=%s)\n", mode ? mode : "full");
+    /* EXTENDED TAIL: the original CLI crashed at step ~405, i.e. ~55
+     * steps AFTER grow#7 (which ends at step 350). Run 60 more steps
+     * on the final 9-layer model to cross the crash point. */
+    fprintf(stderr, "--- extended tail: 60 more steps on the 9-layer model ---\n");
+    for (int s = 0; s < 60; s++) {
+        float loss = barun_bp_forward(&m, &b, &bp, toks, 8);
+        barun_train_zero_grad(&tr);
+        barun_bp_backward(&m, &b, &bp, &tr, toks, 8);
+        barun_bp_muon_step(&m, &tr, &cfg, (uint32_t)(900 + s));
+        if (s % 20 == 0)
+            fprintf(stderr, "  tail %d/60: loss=%.4f\n", s, loss);
+    }
+    fprintf(stderr, "ALL 7 GROWTHS + 350 STEPS + 60 TAIL OK (mode=%s)\n", mode ? mode : "full");
     return 0;
 }
