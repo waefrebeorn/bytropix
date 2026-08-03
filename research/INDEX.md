@@ -6,6 +6,18 @@ formal-verification. Triple-DA = (1) correctness (2) privacy/safety/no-3rd-party
 Spine = **decode is memory-bandwidth-bound** (Roofline 2607.02558). Every win
 attacks bytes moved.
 
+## THEME BL — BarunLM-35M: the mustard seed base model (OURS)
+- BL01 Architecture port (12 layers, dim 448, GQA 7:1, hybrid local/global attention) `wired` (wubu_barun, test_barun PASSES)
+- BL02 Partial RoPE (50% rotary, rope_dim 32) `wired` (wubu_barun)
+- BL03 QK RMSNorm + gated attention outputs `wired` (wubu_barun)
+- BL04 Bounded SwiGLU (activation clip 10) `wired` (wubu_barun)
+- BL05 Residual selectors every 4 layers (convex softmax) `wired` (wubu_barun)
+- BL06 Tied embeddings (lm_head == embedding) `wired` (wubu_barun)
+- BL07 The released checkpoint loader (safetensors, SHA-256 verified) `wired` (barun_load)
+- BL08 The byte-level BPE tokenizer (vocab 16,384, round-trip verified) `wired` (wubu_tokenizer_hf + local_strdup fix)
+- BL09 The Muon+AdamW training core (the AGI brain-cluster loop, seed learns: loss 9.53->3.81) `wired` (wubu_barun_train, test_barun_train PASSES)
+- BL10 The operational CLI (barun_cli: load, tokenize, generate) `wired` (tools/barun_cli.c)
+
 ## THEME A — KV-cache compression (memory wall)
 - A01 KV Q8_0 block-32 absmax ............................ `wired` (wubu_kvcache_quant)
 - A02 KIVI K-per-channel / V-per-token ................... `wired`

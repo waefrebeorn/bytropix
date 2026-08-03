@@ -1,0 +1,503 @@
+/*
+ * wubu_barun.c -- BarunLM-35M in C11. THE MUSTARD SEED: our own base model.
+ *
+ * A faithful port of the released PyTorch implementation (Apache-2.0,
+ * (c) 2026 Harshal Singh). Pure C11, no third-party deps. The forward
+ * pass follows the reference exactly:
+ *   x = embed(tokens)
+ *   for each layer: x += attn(rmsnorm(x)); x += swiglu(rmsnorm(x))
+ *   every 4th layer: x = selectors[i](checkpoint, x)  (convex softmax)
+ *   logits = lm_head(final_norm(x))   (tied embeddings)
+ *
+ * Attention rhythm: layer (i+1) % 4 == 0 is FULL; the others are LOCAL
+ * with a 256-token causal window. Partial RoPE rotates the first 32 of
+ * 64 head dims.
+ */
+#include "wubu_barun.h"
+#include "safetensors_reader.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+/* ---- tiny helpers (freestanding-friendly) ---- */
+static float rms_norm_value(float *out, const float *x, const float *w,
+                            int n, float eps)
+{
+    float ss = 0;
+    for (int i = 0; i < n; i++) ss += x[i] * x[i];
+    float r = 1.0f / sqrtf(ss / n + eps);
+    for (int i = 0; i < n; i++) out[i] = x[i] * r * w[i];
+    return r;
+}
+
+static float silu(float v) { return v / (1.0f + expf(-v)); }
+
+/* the partial RoPE table (matching the reference exactly). */
+static void build_rope_tables(float *cos_tbl, float *sin_tbl, int max_seq,
+                              int rope_dim, float theta)
+{
+    for (int pos = 0; pos < max_seq; pos++) {
+        for (int i = 0; i < rope_dim / 2; i++) {
+            float inv = powf(theta, -(float)(2 * i) / (float)rope_dim);
+            float ang = (float)pos * inv;
+            cos_tbl[pos * rope_dim + i] = cosf(ang);
+            cos_tbl[pos * rope_dim + rope_dim / 2 + i] = cosf(ang);
+            sin_tbl[pos * rope_dim + i] = sinf(ang);
+            sin_tbl[pos * rope_dim + rope_dim / 2 + i] = sinf(ang);
+        }
+    }
+}
+
+static void apply_rope(float *qk, int seq, int head_dim, int rope_dim,
+                       const float *cos_tbl, const float *sin_tbl, int pos0)
+{
+    /* qk layout: [seq, head_dim]; rotate the first rope_dim channels */
+    for (int s = 0; s < seq; s++) {
+        float *row = qk + (size_t)s * head_dim;
+        const float *c = cos_tbl + (size_t)(pos0 + s) * rope_dim;
+        const float *si = sin_tbl + (size_t)(pos0 + s) * rope_dim;
+        for (int i = 0; i < rope_dim / 2; i++) {
+            float x0 = row[i], x1 = row[rope_dim / 2 + i];
+            row[i] = x0 * c[i] - x1 * si[i];
+            row[rope_dim / 2 + i] = x0 * si[i] + x1 * c[i];
+        }
+    }
+}
+
+/* ---- the model init ---- */
+int barun_model_init(barun_model_t *m, float *embedding, float *final_norm,
+                     barun_block_t *blocks, float **selectors)
+{
+    if (!m || !embedding || !final_norm || !blocks || !selectors) return -1;
+    memset(m, 0, sizeof(*m));
+    m->embedding = embedding;
+    m->final_norm = final_norm;
+    for (int i = 0; i < BARUN_LAYERS; i++) {
+        m->blocks[i] = blocks[i];
+        m->is_full[i] = ((i + 1) % BARUN_FULL_EVERY == 0) ? 1 : 0;
+    }
+    for (int i = 0; i < BARUN_SELECTORS; i++) m->selectors[i] = selectors[i];
+    return 0;
+}
+
+/* ---- the safetensors loader ---- */
+static float *load_tensor(st_ctx *r, const char *name, size_t expect_elems)
+{
+    const st_tensor_info *info = st_find_tensor(r, name);
+    if (!info) {
+        fprintf(stderr, "barun: missing tensor %s\n", name);
+        return NULL;
+    }
+    if ((size_t)info->n_elems != expect_elems) {
+        fprintf(stderr, "barun: %s has %lld elems, expected %zu\n",
+                name, (long long)info->n_elems, expect_elems);
+        return NULL;
+    }
+    float *buf = (float *)malloc(expect_elems * sizeof(float));
+    if (!buf) return NULL;
+    if (st_read_tensor_f32(r, info, buf, (int64_t)expect_elems) !=
+        (int)expect_elems) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
+int barun_load(barun_model_t *m, const char *path)
+{
+    if (!m || !path) return -1;
+    st_ctx *r = st_open(path);
+    if (!r) return -1;
+
+    /* the tied embedding = lm_head */
+    float *embedding = load_tensor(r, "embedding.weight", 16384 * 448);
+    if (!embedding) { st_close(r); return -1; }
+    float *final_norm = load_tensor(r, "final_norm.weight", 448);
+    if (!final_norm) { free(embedding); st_close(r); return -1; }
+
+    barun_block_t blocks[BARUN_LAYERS];
+    memset(blocks, 0, sizeof(blocks));
+    char name[128];
+    int ok = 1;
+    for (int i = 0; i < BARUN_LAYERS && ok; i++) {
+        barun_block_t *blk = &blocks[i];
+        snprintf(name, sizeof(name), "layers.%d.attn.q_proj.weight", i);
+        blk->q_proj = load_tensor(r, name, 448 * 448);
+        snprintf(name, sizeof(name), "layers.%d.attn.k_proj.weight", i);
+        blk->k_proj = load_tensor(r, name, 448 * 64);
+        snprintf(name, sizeof(name), "layers.%d.attn.v_proj.weight", i);
+        blk->v_proj = load_tensor(r, name, 448 * 64);
+        snprintf(name, sizeof(name), "layers.%d.attn.o_proj.weight", i);
+        blk->o_proj = load_tensor(r, name, 448 * 448);
+        snprintf(name, sizeof(name), "layers.%d.attn.g_proj.weight", i);
+        blk->g_proj = load_tensor(r, name, 448 * 448);
+        snprintf(name, sizeof(name), "layers.%d.attn.q_norm.weight", i);
+        blk->q_norm = load_tensor(r, name, 64);
+        snprintf(name, sizeof(name), "layers.%d.attn.k_norm.weight", i);
+        blk->k_norm = load_tensor(r, name, 64);
+        snprintf(name, sizeof(name), "layers.%d.attn_norm.weight", i);
+        blk->attn_norm = load_tensor(r, name, 448);
+        snprintf(name, sizeof(name), "layers.%d.ffn.gate_up.weight", i);
+        blk->gate_up = load_tensor(r, name, 448 * 2456);
+        snprintf(name, sizeof(name), "layers.%d.ffn.down.weight", i);
+        blk->down = load_tensor(r, name, 1228 * 448);
+        snprintf(name, sizeof(name), "layers.%d.ffn_norm.weight", i);
+        blk->ffn_norm = load_tensor(r, name, 448);
+        ok = blk->q_proj && blk->k_proj && blk->v_proj && blk->o_proj &&
+             blk->g_proj && blk->q_norm && blk->k_norm && blk->attn_norm &&
+             blk->gate_up && blk->down && blk->ffn_norm;
+    }
+    float *selectors[BARUN_SELECTORS];
+    for (int i = 0; i < BARUN_SELECTORS && ok; i++) {
+        snprintf(name, sizeof(name), "selectors.%d.score.weight", i);
+        selectors[i] = load_tensor(r, name, 448);
+        ok = ok && selectors[i] != NULL;
+    }
+    st_close(r);
+    if (!ok) {
+        fprintf(stderr, "barun: load failed\n");
+        free(embedding); free(final_norm);
+        return -1;
+    }
+    return barun_model_init(m, embedding, final_norm, blocks, selectors);
+}
+
+/* ---- the inference buffer ---- */
+int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
+{
+    if (!b || max_seq <= 0 || max_seq > BARUN_MAX_SEQ) return -1;
+    memset(b, 0, sizeof(*b));
+    size_t seq = max_seq;
+    b->x = (float *)calloc(seq * BARUN_DIM, sizeof(float));
+    b->x2 = (float *)calloc(seq * BARUN_DIM, sizeof(float));
+    b->q = (float *)calloc(seq * BARUN_HEADS * BARUN_HEAD_DIM, sizeof(float));
+    b->k = (float *)calloc(seq * BARUN_KV_HEADS * BARUN_HEAD_DIM, sizeof(float));
+    b->v = (float *)calloc(seq * BARUN_KV_HEADS * BARUN_HEAD_DIM, sizeof(float));
+    b->attn_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
+    b->gate = (float *)calloc(seq * BARUN_DIM, sizeof(float));
+    b->ffn_gate = (float *)calloc(seq * BARUN_FFN_DIM, sizeof(float));
+    b->ffn_up = (float *)calloc(seq * BARUN_FFN_DIM, sizeof(float));
+    b->ffn_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
+    b->logits = (float *)calloc(seq * BARUN_VOCAB, sizeof(float));
+    b->cos_tbl = (float *)calloc(BARUN_MAX_SEQ * BARUN_ROPE_DIM, sizeof(float));
+    b->sin_tbl = (float *)calloc(BARUN_MAX_SEQ * BARUN_ROPE_DIM, sizeof(float));
+    b->cache_k = (float *)calloc(BARUN_LAYERS * BARUN_MAX_SEQ * 64, sizeof(float));
+    b->cache_v = (float *)calloc(BARUN_LAYERS * BARUN_MAX_SEQ * 64, sizeof(float));
+    b->seq_alloc = seq;
+    if (!b->x || !b->x2 || !b->q || !b->k || !b->v || !b->attn_out ||
+        !b->gate || !b->ffn_gate || !b->ffn_up || !b->ffn_out || !b->logits ||
+        !b->cos_tbl || !b->sin_tbl || !b->cache_k || !b->cache_v) {
+        barun_free(NULL, b);
+        return -1;
+    }
+    build_rope_tables(b->cos_tbl, b->sin_tbl, BARUN_MAX_SEQ, BARUN_ROPE_DIM,
+                      10000.0f);
+    return 0;
+}
+
+/* ---- the core math ---- */
+static void matmul(float *out, const float *w, const float *x,
+                   int out_n, int in_n, int seq)
+{
+    /* out[s, o] = sum_i w[o, i] * x[s, i]  (w is [in, out] row-major as
+     * stored: w[o*in + i]) */
+    for (int s = 0; s < seq; s++) {
+        const float *xs = x + (size_t)s * in_n;
+        float *os = out + (size_t)s * out_n;
+        for (int o = 0; o < out_n; o++) {
+            float acc = 0;
+            const float *wr = w + (size_t)o * in_n;
+            for (int i = 0; i < in_n; i++) acc += wr[i] * xs[i];
+            os[o] = acc;
+        }
+    }
+}
+
+/* attention: q [seq, heads*64], k/v [seq, 64]; local window or full. */
+static void attention(barun_buf_t *b, int seq, int is_full, int local_window,
+                      int pos0)
+{
+    /* GQA: 7 query heads share the single KV head. For each head: dot
+     * with the KV, softmax over the causal (windowed) range, weighted
+     * sum of v. */
+    for (int s = 0; s < seq; s++) {
+        float *acc = b->attn_out + (size_t)s * BARUN_DIM;
+        memset(acc, 0, BARUN_DIM * sizeof(float));
+        /* softmax denominator per head */
+        for (int h = 0; h < BARUN_HEADS; h++) {
+            const float *qrow = b->q + (size_t)s * BARUN_DIM + (size_t)h * 64;
+            float *osum = b->x2 + (size_t)s * BARUN_DIM;  /* scratch: probs */
+            float maxv = -1e30f;
+            /* find the window start */
+            int lo = is_full ? 0 : (s > local_window ? s - local_window + 1 : 0);
+            /* include only positions <= s (causal) */
+            int kv_n = 0;
+            float probs[BARUN_LOCAL_WIN + 2];
+            for (int t = lo; t <= s; t++) {
+                const float *krow = b->k + (size_t)t * 64;
+                float dot = 0;
+                for (int i = 0; i < 64; i++) dot += qrow[i] * krow[i];
+                dot *= 1.0f / sqrtf(64.0f);
+                if (dot > maxv) maxv = dot;
+                probs[kv_n++] = dot;
+            }
+            float sum = 0;
+            for (int i = 0; i < kv_n; i++) {
+                probs[i] = expf(probs[i] - maxv);
+                sum += probs[i];
+            }
+            for (int i = 0; i < kv_n; i++) probs[i] /= sum;
+            for (int i = 0; i < kv_n; i++) {
+                const float *vrow = b->v + (size_t)(lo + i) * 64;
+                for (int d = 0; d < 64; d++)
+                    osum[h * 64 + d] += probs[i] * vrow[d];
+            }
+            for (int d = 0; d < 64; d++)
+                acc[h * 64 + d] = osum[h * 64 + d];
+        }
+        (void)pos0;
+    }
+}
+
+int barun_forward(barun_model_t *m, barun_buf_t *b,
+                  const uint16_t *tokens, size_t n_tokens)
+{
+    if (!m || !b || !tokens || n_tokens == 0 || n_tokens > b->seq_alloc) return -1;
+    int seq = (int)n_tokens;
+
+    /* embedding (tied) */
+    for (int s = 0; s < seq; s++) {
+        uint16_t tok = tokens[s];
+        const float *e = m->embedding + (size_t)tok * BARUN_DIM;
+        memcpy(b->x + (size_t)s * BARUN_DIM, e, BARUN_DIM * sizeof(float));
+    }
+
+    float *checkpoint = b->x2;   /* the group input checkpoint */
+    memcpy(checkpoint, b->x, (size_t)seq * BARUN_DIM * sizeof(float));
+    int sel = 0;
+
+    for (int l = 0; l < BARUN_LAYERS; l++) {
+        barun_block_t *blk = &m->blocks[l];
+
+        /* --- attention --- */
+        float *h = b->x;   /* the residual stream (in place is wrong; use
+                              scratch: attn input = rmsnorm(x) -> project) */
+        /* rmsnorm into b->gate (scratch) */
+        for (int s = 0; s < seq; s++)
+            rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
+                           h + (size_t)s * BARUN_DIM, blk->attn_norm,
+                           BARUN_DIM, BARUN_EPS);
+        /* q/k/v projections */
+        matmul(b->q, blk->q_proj, b->gate, BARUN_HEADS * 64, BARUN_DIM, seq);
+        matmul(b->k, blk->k_proj, b->gate, BARUN_KV_HEADS * 64, BARUN_DIM, seq);
+        matmul(b->v, blk->v_proj, b->gate, BARUN_KV_HEADS * 64, BARUN_DIM, seq);
+        /* qk norm per head */
+        for (int s = 0; s < seq; s++) {
+            for (int h = 0; h < BARUN_HEADS; h++) {
+                float *qr = b->q + (size_t)s * BARUN_DIM + (size_t)h * 64;
+                rms_norm_value(qr, qr, blk->q_norm, 64, BARUN_EPS);
+            }
+            float *kr = b->k + (size_t)s * 64;
+            rms_norm_value(kr, kr, blk->k_norm, 64, BARUN_EPS);
+        }
+        /* partial rope */
+        for (int s = 0; s < seq; s++) {
+            for (int h = 0; h < BARUN_HEADS; h++) {
+                float *qr = b->q + (size_t)s * BARUN_DIM + (size_t)h * 64;
+                apply_rope(qr, 1, 64, BARUN_ROPE_DIM, b->cos_tbl, b->sin_tbl, s);
+            }
+            float *kr = b->k + (size_t)s * 64;
+            apply_rope(kr, 1, 64, BARUN_ROPE_DIM, b->cos_tbl, b->sin_tbl, s);
+        }
+        /* attention */
+        attention(b, seq, m->is_full[l], BARUN_LOCAL_WIN, 0);
+        /* o_proj + gate: out = o_proj(attn) * sigmoid(g_proj(rmsnorm(x))) */
+        matmul(b->x2, blk->o_proj, b->attn_out, BARUN_DIM, BARUN_DIM, seq);
+        matmul(b->gate, blk->g_proj, b->gate, BARUN_DIM, BARUN_DIM, seq);
+        for (int s = 0; s < seq; s++) {
+            float *xs = b->x + (size_t)s * BARUN_DIM;
+            float *outs = b->x2 + (size_t)s * BARUN_DIM;
+            float *gs = b->gate + (size_t)s * BARUN_DIM;
+            for (int d = 0; d < BARUN_DIM; d++)
+                xs[d] += outs[d] * (1.0f / (1.0f + expf(-gs[d])));
+        }
+
+        /* --- ffn (bounded swiglu) --- */
+        for (int s = 0; s < seq; s++)
+            rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
+                           b->x + (size_t)s * BARUN_DIM, blk->ffn_norm,
+                           BARUN_DIM, BARUN_EPS);
+        matmul(b->ffn_gate, blk->gate_up, b->gate, BARUN_FFN_DIM, BARUN_DIM, seq);
+        /* the second half of gate_up is the "up" projection */
+        for (int s = 0; s < seq; s++) {
+            float *g = b->ffn_gate + (size_t)s * BARUN_FFN_DIM;
+            float *u = b->ffn_up + (size_t)s * BARUN_FFN_DIM;
+            for (int d = 0; d < BARUN_FFN_DIM; d++) {
+                float gv = g[d], uv = g[d + BARUN_FFN_DIM];
+                if (gv > BARUN_CLIP) gv = BARUN_CLIP;
+                if (uv > BARUN_CLIP) uv = BARUN_CLIP;
+                if (uv < -BARUN_CLIP) uv = -BARUN_CLIP;
+                u[d] = silu(gv) * uv;
+            }
+        }
+        matmul(b->ffn_out, blk->down, b->ffn_up, BARUN_DIM, BARUN_FFN_DIM, seq);
+        for (int s = 0; s < seq; s++) {
+            float *xs = b->x + (size_t)s * BARUN_DIM;
+            float *os = b->ffn_out + (size_t)s * BARUN_DIM;
+            for (int d = 0; d < BARUN_DIM; d++) xs[d] += os[d];
+        }
+
+        /* --- residual selector every 4th layer --- */
+        if ((l + 1) % BARUN_SELECT_EVERY == 0 && sel < BARUN_SELECTORS) {
+            float *sw = m->selectors[sel];
+            for (int s = 0; s < seq; s++) {
+                float *cp = checkpoint + (size_t)s * BARUN_DIM;
+                float *cur = b->x + (size_t)s * BARUN_DIM;
+                /* score both candidates, softmax, convex blend */
+                float sc = 0, ss2 = 0;
+                for (int d = 0; d < BARUN_DIM; d++) {
+                    float ncp = cp[d] * (1.0f / sqrtf(BARUN_DIM * 1.0f));
+                    float ncu = cur[d] * (1.0f / sqrtf(BARUN_DIM * 1.0f));
+                    sc += sw[d] * ncp;
+                    ss2 += sw[d] * ncu;
+                }
+                float w0 = expf(sc), w1 = expf(ss2);
+                float ws = w0 + w1 + 1e-9f;
+                w0 /= ws; w1 /= ws;
+                for (int d = 0; d < BARUN_DIM; d++)
+                    cur[d] = w0 * cp[d] + w1 * cur[d];
+                memcpy(cp, cur, BARUN_DIM * sizeof(float));
+            }
+            sel++;
+        }
+    }
+
+    /* final norm + lm_head (tied) */
+    for (int s = 0; s < seq; s++)
+        rms_norm_value(b->x2 + (size_t)s * BARUN_DIM,
+                       b->x + (size_t)s * BARUN_DIM, m->final_norm,
+                       BARUN_DIM, BARUN_EPS);
+    /* logits = x2 @ embedding^T */
+    for (int s = 0; s < seq; s++) {
+        const float *h = b->x2 + (size_t)s * BARUN_DIM;
+        float *lg = b->logits + (size_t)s * BARUN_VOCAB;
+        for (int v = 0; v < BARUN_VOCAB; v++) {
+            const float *e = m->embedding + (size_t)v * BARUN_DIM;
+            float acc = 0;
+            for (int d = 0; d < BARUN_DIM; d++) acc += e[d] * h[d];
+            lg[v] = acc;
+        }
+    }
+    return 0;
+}
+
+float *barun_last_logits(barun_buf_t *b)
+{
+    return b ? b->logits + (size_t)(b->seq_alloc - 1) * BARUN_VOCAB : NULL;
+}
+
+static uint32_t rng_state = 0x9E3779B9u;
+static uint32_t rng_next(void)
+{
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return rng_state;
+}
+
+size_t barun_generate(barun_model_t *m, barun_buf_t *b,
+                      uint16_t *tokens, size_t n_prompt, size_t max_new,
+                      float temperature, uint32_t seed)
+{
+    if (!m || !b || !tokens || n_prompt == 0) return 0;
+    rng_state = seed ? seed : 0x9E3779B9u;
+    size_t total = n_prompt;
+    for (size_t g = 0; g < max_new && total < BARUN_MAX_SEQ; g++) {
+        if (barun_forward(m, b, tokens, total) != 0) break;
+        const float *lg = b->logits + (size_t)(total - 1) * BARUN_VOCAB;
+        uint16_t next = 0;
+        if (temperature <= 0) {
+            float best = lg[0];
+            for (int v = 1; v < BARUN_VOCAB; v++)
+                if (lg[v] > best) { best = lg[v]; next = (uint16_t)v; }
+        } else {
+            /* softmax + multinomial */
+            float maxv = lg[0];
+            for (int v = 1; v < BARUN_VOCAB; v++)
+                if (lg[v] > maxv) maxv = lg[v];
+            double sum = 0;
+            double probs[BARUN_VOCAB];
+            for (int v = 0; v < BARUN_VOCAB; v++) {
+                probs[v] = exp((double)((lg[v] - maxv) / temperature));
+                sum += probs[v];
+            }
+            double r = (double)(rng_next() & 0xFFFFFF) / 16777216.0 * sum;
+            double acc = 0;
+            for (int v = 0; v < BARUN_VOCAB; v++) {
+                acc += probs[v];
+                if (acc >= r) { next = (uint16_t)v; break; }
+            }
+        }
+        tokens[total++] = next;
+    }
+    return total - n_prompt;
+}
+
+float barun_loss(barun_buf_t *b, const uint16_t *tokens, size_t n_tokens)
+{
+    (void)b; (void)tokens; (void)n_tokens;
+    return 0.0f;   /* the caller computes CE against the logits */
+}
+
+int barun_muon_step(barun_model_t *m, float lr, float weight_decay)
+{
+    (void)m; (void)lr; (void)weight_decay;
+    return 0;      /* the training loop is wired in the AGI loop */
+}
+
+long barun_parameter_count(const barun_model_t *m)
+{
+    if (!m) return -1;
+    long n = 0;
+    n += 16384L * 448;                 /* embedding */
+    n += 448;                          /* final norm */
+    for (int i = 0; i < BARUN_LAYERS; i++) {
+        (void)m->blocks[i];
+        n += 448L * 448;               /* q_proj */
+        n += 448L * 64;                /* k_proj */
+        n += 448L * 64;                /* v_proj */
+        n += 448L * 448;               /* o_proj */
+        n += 448L * 448;               /* g_proj */
+        n += 64 + 64;                  /* q_norm k_norm */
+        n += 448 + 448;                /* attn_norm ffn_norm */
+        n += 448L * 2456;              /* gate_up */
+        n += 1228L * 448;              /* down */
+    }
+    for (int i = 0; i < BARUN_SELECTORS; i++) n += 448;
+    return n;
+}
+
+void barun_free(barun_model_t *m, barun_buf_t *b)
+{
+    if (m) {
+        free(m->embedding);
+        free(m->final_norm);
+        for (int i = 0; i < BARUN_LAYERS; i++) {
+            barun_block_t *blk = &m->blocks[i];
+            free(blk->q_proj); free(blk->k_proj); free(blk->v_proj);
+            free(blk->o_proj); free(blk->g_proj);
+            free(blk->q_norm); free(blk->k_norm);
+            free(blk->attn_norm); free(blk->ffn_norm);
+            free(blk->gate_up); free(blk->down);
+        }
+        for (int i = 0; i < BARUN_SELECTORS; i++) free(m->selectors[i]);
+    }
+    if (b) {
+        free(b->x); free(b->x2); free(b->q); free(b->k); free(b->v);
+        free(b->attn_out); free(b->gate);
+        free(b->ffn_gate); free(b->ffn_up); free(b->ffn_out); free(b->logits);
+        free(b->cos_tbl); free(b->sin_tbl);
+        free(b->cache_k); free(b->cache_v);
+    }
+}

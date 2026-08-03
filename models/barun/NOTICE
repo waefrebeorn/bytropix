@@ -1,0 +1,29 @@
+BarunLM-35M — Upstream Notices
+===============================
+
+The BarunLM-35M source code and released model weights are licensed
+under the Apache License 2.0, Copyright 2026 Harshal Singh.
+
+Upstream:
+  https://github.com/harrrshall/barunlm-35m
+  https://huggingface.co/harrrshall/BarunLM-35M
+
+The released checkpoint (model.safetensors, SHA-256
+f2a7c88b9f2c2e3584809081407ab136795d82e30e89b730e007781c45d01447)
+is reproduced here for research and local prototyping under the
+WaefreBeorn Umbrella License v3.0 addendum (LICENSE-BARUN.md).
+
+Training datasets used by the upstream release (NOT redistributed here)
+retain their own licenses and terms:
+- HuggingFaceTB/smollm-corpus (FineWeb-Edu, Cosmopedia v2): ODC-By 1.0
+  (+ applicable Common Crawl terms for FineWeb-derived material)
+- HuggingFaceTB/finemath (FineMath-4+): ODC-By 1.0 and Common Crawl terms
+- mlfoundations/dclm-baseline-1.0-parquet: ODC-By 1.0
+- code-search-net/code_search_net: MIT
+- codeparrot/codeparrot-clean: (per CodeParrot release terms)
+
+The C11 port (wubu_barun.c/h, wubu_barun_train.c/h, barun_cli.c,
+test_barun*.c) is original WaefreBeorn work implementing the released
+architecture from its public specification. The training core follows
+the reference recipe (Muon optimizer, lr 1e-4, weight decay 0.1,
+batch 48, seq 2048, 5.70B tokens).

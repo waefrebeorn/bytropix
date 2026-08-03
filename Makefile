@@ -1141,6 +1141,17 @@ test_compress: tools/test_compress.c src/wubu_compress.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+barun_cli: tools/barun_cli.c src/wubu_barun.o src/safetensors_reader.o src/wubu_tokenizer_hf.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+
+test_barun: tools/test_barun.c src/wubu_barun.o src/safetensors_reader.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@ models/barun/model.safetensors
+
+test_barun_train: tools/test_barun_train.c src/wubu_barun.o src/wubu_barun_train.o src/safetensors_reader.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@ models/barun/model.safetensors
+
 moondream_cli: tools/moondream_cli.c src/wubu_moondream.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 
@@ -1153,17 +1164,6 @@ test_hybrid: tools/test_hybrid.c src/wubu_hybrid.o
 	./$@
 
 test_vision: tools/test_vision.c src/wubu_vision.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
-	./$@
-
-moondream_cli: tools/moondream_cli.c src/wubu_moondream.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
-
-test_moondream: tools/test_moondream.c src/wubu_moondream.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
-	./$@
-
-test_hybrid: tools/test_hybrid.c src/wubu_hybrid.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 

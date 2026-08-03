@@ -14,6 +14,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* strdup is POSIX, not C11 -- under -std=c11 without _POSIX_C_SOURCE it
+ * gets implicitly declared, returns int garbage, and every caller's
+ * pointer is invalid (the BarunLM port crashed here under ASan). The
+ * no-third-party doctrine: provide it locally, freestanding-safe. */
+static char *local_strdup(const char *s)
+{
+    if (!s) return NULL;
+    size_t n = strlen(s) + 1;
+    char *out = (char *)malloc(n);
+    if (!out) return NULL;
+    memcpy(out, s, n);
+    return out;
+}
+
 #define MAX_OPS 200000000L   /* hard safety cap; real files finish in far less */
 
 typedef struct {
@@ -173,7 +187,7 @@ static void ensure_bl(void) {
         else if (cp < 0x800) { buf[k++] = (char)(0xC0 | (cp >> 6)); buf[k++] = (char)(0x80 | (cp & 0x3F)); }
         else { buf[k++] = (char)(0xE0 | (cp >> 12)); buf[k++] = (char)(0x80 | ((cp >> 6) & 0x3F)); buf[k++] = (char)(0x80 | (cp & 0x3F)); }
         buf[k] = '\0';
-        BYTE_TO_BL[i] = strdup(buf);
+        BYTE_TO_BL[i] = local_strdup(buf);
     }
     bl_ready = 1;
 }
@@ -387,7 +401,7 @@ int wubu_tok_hf_encode(const wubu_tok_hf_t *t, const char *text, int *out_ids, i
     for (const unsigned char *q = (const unsigned char *)text; *q; q++) {
         const char *bl = BYTE_TO_BL[*q];
         if (!bl) { static char tmp[2]; tmp[0] = (char)*q; tmp[1] = 0; bl = tmp; }
-        syms[n++] = strdup(bl);
+        syms[n++] = local_strdup(bl);
     }
     n = apply_bpe(t, syms, n);
     int cnt = 0;
