@@ -97,3 +97,44 @@ make test_barun_train  # the seed learns
 - `src/wubu_tokenizer_hf.c` — the `strdup` fix (C11 no-POSIX crash)
 - `models/barun/` — weights, tokenizer, config, license, NOTICE
 - `research/INDEX.md` — THEME BL (10 gaps wired)
+
+## The deep-training milestone (2026-08-03): REAL backprop + REAL Muon
+
+The audit's three findings are CLOSED (research/041 RC01, INDEX THEME RC):
+1. **The REAL per-layer backward** (`wubu_barun_backprop.c`, BP2): the
+   analytic chain through EVERY path — rope → qk-norm → softmax →
+   GQA → o/g projections → the gated residual → bounded SwiGLU →
+   gate_up/down → the ffn/attn norms → the residual selectors → the
+   final norm → the tied head. Every layer gets its own gradient (the
+   old shared proxy gave every layer the identical update).
+2. **The REAL Muon** (BP4): Nesterov momentum 0.95 → Newton-Schulz 5
+   (a=3.4445, b=-4.7750, c=2.0315, tall-transpose) → the Moonlight
+   RMS-0.2 scaled step. The old `muon_update` was momentum SGD.
+   Pitfall found: the NS5 polynomial diverges in fp32 on spread
+   singular-value spectra — fixed with a per-iteration Frobenius
+   renormalization.
+3. **AdamW for the 1-D params** (norms + selectors + embedding, betas
+   (0.9, 0.95)) — the old trainer never trained the norms at all.
+
+**Proving forward parity caught FIVE real buffer-aliasing bugs in the
+released `wubu_barun.c` forward** (the seed's FFN up-branch was
+effectively dead before this): the ffn_gate width (OOB up half), the
+checkpoint aliasing b->x2, the unzeroed attention osum scratch, the
+in-place g_proj matmul, and the SwiGLU row stride. The recording
+forward now matches the released forward to 1e-7 (loss parity
+9.000105 vs 9.000105).
+
+Verified the DA way: `tools/test_backprop.c` checks the analytic
+gradients against finite differences for one weight of every parameter
+type (17 checks) — all match; layers specialize; ASan/UBSan clean;
+`make test_all` green (268 targets); `test_barun_train` proves the
+seed learns (loss 8.76 → 5.96).
+
+## Run it (updated)
+
+```bash
+make test_backprop     # the finite-difference verifier (17 param types)
+make test_barun_train  # the seed learns with REAL gradients
+./barun_train --model models/barun/model.safetensors --tok <corpus.tok> \
+  --steps 60 --lr 1e-4 --muon-lr 2e-3 --adam-lr 2e-3   # the recipe split
+```
