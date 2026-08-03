@@ -197,11 +197,33 @@ int barun_buf_alloc(barun_buf_t *b, size_t max_seq)
 }
 
 /* ---- the core math ---- */
+/* The DA pass: the wizard already has a cuBLAS GPU path (gpu_barun);
+ * the trainer should ride it. This matmul dispatches through the GPU
+ * backend when available and falls back to the CPU loop otherwise
+ * (the wubu_model.h hwaccel pattern). The GPU symbols are weak so a
+ * CPU-only link (no -lcublas) still works: missing symbols resolve
+ * to NULL. */
+#include "gpu_barun.h"
+#if defined(__GNUC__)
+#define WEAK __attribute__((weak))
+#else
+#define WEAK
+#endif
+WEAK int gpu_barun_init(void);
+WEAK int gpu_barun_ready(void);
+WEAK int gpu_barun_matmul(float *y, const float *w, const float *x,
+                          int M, int N, int K);
+static int g_gpu_tried = 0;
+
 static void matmul(float *out, const float *w, const float *x,
                    int out_n, int in_n, int seq)
 {
     /* out[s, o] = sum_i w[o, i] * x[s, i]  (w is [in, out] row-major as
      * stored: w[o*in + i]) */
+    if (gpu_barun_init && !g_gpu_tried) { gpu_barun_init(); g_gpu_tried = 1; }
+    if (gpu_barun_ready && gpu_barun_ready() &&
+        gpu_barun_matmul && gpu_barun_matmul(out, w, x, seq, out_n, in_n))
+        return;
     for (int s = 0; s < seq; s++) {
         const float *xs = x + (size_t)s * in_n;
         float *os = out + (size_t)s * out_n;

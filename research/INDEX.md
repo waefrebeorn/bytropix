@@ -6,6 +6,11 @@ formal-verification. Triple-DA = (1) correctness (2) privacy/safety/no-3rd-party
 Spine = **decode is memory-bandwidth-bound** (Roofline 2607.02558). Every win
 attacks bytes moved.
 
+## THEME WB — the WuBu Model (model creators, the grown seed)
+- WB01 The blueprint (docs/wubu-model-blueprint.md -- the full lineage: seed + nesting + MoE + sparse attention + math-RL) `wired` (docs)
+- WB02 The hyperbolic layer -- OUR Lean-verified math in C11 (MobiusAdd/PoincareBall/HyperbolicGyration theorems ported; ball closure, exp/log identity, gyroassoc verified) `wired` (wubu_hyper, test_hyper PASSES)
+- WB03 The mixed-agents router -- fine-grained MoE for the 35M seed (8 experts/2 active + shared expert; router softmax top-k; specialization verified) `wired` (wubu_moe2, test_moe2 PASSES)
+
 ## THEME BL — BarunLM-35M: the mustard seed base model (OURS)
 - BL01 Architecture port (12 layers, dim 448, GQA 7:1, hybrid local/global attention) `wired` (wubu_barun, test_barun PASSES)
 - BL02 Partial RoPE (50% rotary, rope_dim 32) `wired` (wubu_barun)

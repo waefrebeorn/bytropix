@@ -150,7 +150,50 @@ struct wubu_tok_hf {
     char **merge_a, **merge_b;
     int n_merges;
     int bos_id, eos_id;
+    /* the pair->rank hash table: the BPE merge loop is O(n^2) when it
+     * scans all merges per adjacent pair; the hash makes each lookup
+     * O(1). This is the difference between a 640MB corpus taking
+     * hours and taking minutes. */
+    uint32_t *pair_hash;   /* [PAIR_CAP] the key hash */
+    int      *pair_rank;   /* [PAIR_CAP] the merge rank (-1 = empty) */
 };
+
+#define PAIR_CAP 65536
+#define PAIR_EMPTY 0xFFFFFFFFu
+
+static uint32_t pair_fnv(const char *a, const char *b)
+{
+    uint32_t h = 2166136261u;
+    for (const char *p = a; *p; p++) { h ^= (uint8_t)*p; h *= 16777619u; }
+    h ^= 0x1F3Du;
+    for (const char *p = b; *p; p++) { h ^= (uint8_t)*p; h *= 16777619u; }
+    return h;
+}
+
+/* insert a pair (rank) into the hash; collision -> linear probe. */
+static void pair_insert(wubu_tok_hf_t *t, const char *a, const char *b, int rank)
+{
+    uint32_t h = pair_fnv(a, b);
+    uint32_t slot = h & (PAIR_CAP - 1);
+    while (t->pair_hash[slot] != PAIR_EMPTY &&
+           t->pair_hash[slot] != h) {
+        slot = (slot + 1) & (PAIR_CAP - 1);
+    }
+    t->pair_hash[slot] = h;
+    t->pair_rank[slot] = rank;
+}
+
+/* look up a pair; returns the rank or -1. */
+static int pair_lookup(const wubu_tok_hf_t *t, const char *a, const char *b)
+{
+    uint32_t h = pair_fnv(a, b);
+    uint32_t slot = h & (PAIR_CAP - 1);
+    while (t->pair_hash[slot] != PAIR_EMPTY) {
+        if (t->pair_hash[slot] == h) return t->pair_rank[slot];
+        slot = (slot + 1) & (PAIR_CAP - 1);
+    }
+    return -1;
+}
 
 /* byte-level BPE helpers (HuggingFace ByteLevel, exact bytes_to_unicode) */
 static char *BYTE_TO_BL[256];    /* byte -> UTF-8 string (owned) */
@@ -199,18 +242,15 @@ static int vocab_find(wubu_tok_hf_t *t, const char *s) {
     return -1;
 }
 
-/* apply BPE merges to a symbol list; returns new count */
+/* apply BPE merges to a symbol list; returns new count.
+ * The pair->rank hash makes each merge selection O(n) not O(n*merges). */
 static int apply_bpe(wubu_tok_hf_t *t, char **syms, int n) {
     int changed = 1;
     while (changed) {
         changed = 0;
         int best_rank = -1, best_i = -1;
         for (int i = 0; i + 1 < n; i++) {
-            int rank = -1;
-            for (int r = 0; r < t->n_merges; r++) {
-                if (strcmp(syms[i], t->merge_a[r]) == 0 &&
-                    strcmp(syms[i + 1], t->merge_b[r]) == 0) { rank = r; break; }
-            }
+            int rank = pair_lookup(t, syms[i], syms[i + 1]);
             if (rank >= 0 && (best_rank < 0 || rank < best_rank)) { best_rank = rank; best_i = i; }
         }
         if (best_i < 0) break;
@@ -389,6 +429,13 @@ wubu_tok_hf_t *wubu_tok_hf_load(const char *path) {
     free(buf);
     ensure_bl();
     if (t->vocab_size == 0) { wubu_tok_hf_free(t); return NULL; }
+    /* build the pair->rank hash: O(merges) once, O(1) per lookup. */
+    t->pair_hash = (uint32_t *)calloc(PAIR_CAP, sizeof(uint32_t));
+    t->pair_rank = (int *)calloc(PAIR_CAP, sizeof(int));
+    if (!t->pair_hash || !t->pair_rank) { wubu_tok_hf_free(t); return NULL; }
+    for (int i = 0; i < PAIR_CAP; i++) t->pair_hash[i] = PAIR_EMPTY;
+    for (int i = 0; i < t->n_merges; i++)
+        pair_insert(t, t->merge_a[i], t->merge_b[i], i);
     return t;
 }
 
@@ -451,6 +498,7 @@ void wubu_tok_hf_free(wubu_tok_hf_t *t) {
     free(t->vocab_str);
     for (int i = 0; i < t->n_merges; i++) { free(t->merge_a[i]); free(t->merge_b[i]); }
     free(t->merge_a); free(t->merge_b);
+    free(t->pair_hash); free(t->pair_rank);
     free(t);
 }
 

@@ -1141,6 +1141,33 @@ test_compress: tools/test_compress.c src/wubu_compress.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
+# the Barun corpus pipeline (SD card -> tokens -> trainer)
+barun_tokenc: tools/barun_tokenc.c src/wubu_tokenizer_hf.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+
+# the GPU-accelerated trainer (cuBLAS; falls back to CPU without CUDA)
+gpu_barun.o: src/gpu_barun.cu
+	nvcc -O2 -c src/gpu_barun.cu -o $@ -Xcompiler -fPIC
+
+barun_train: tools/barun_train_cli.c src/wubu_barun.o src/wubu_barun_train.o src/safetensors_reader.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+
+test_barun_save: tools/test_barun_save.c src/wubu_barun.o src/safetensors_reader.o src/safetensors_writer.o src/barun_save.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@ models/barun/model.safetensors
+
+test_gpu_matmul: tools/gpu_matmul_check.c gpu_barun.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/gpu_matmul_check.c gpu_barun.o -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart -Wl,-rpath,/usr/local/cuda-13.1/lib64
+	./$@
+
+test_hyper: tools/test_hyper.c src/wubu_hyper.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
+test_moe2: tools/test_moe2.c src/wubu_moe2.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+
 barun_cli: tools/barun_cli.c src/wubu_barun.o src/safetensors_reader.o src/wubu_tokenizer_hf.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 
