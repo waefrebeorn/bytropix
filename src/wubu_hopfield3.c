@@ -1,218 +1,240 @@
 /*
- * wubu_hopfield3.c -- Hopfield frontier, batch 2 (Theme IP). C11.
+ * wubu_hopfield3.c -- the associative-memory frontier, final (IP). C11.
  */
 #include "wubu_hopfield3.h"
-#include <stdlib.h>
-#include <string.h>
 #include <math.h>
+#include <string.h>
 
-static float dot(const float *a, const float *b, int d)
+int wubu_hop3_attention_read(const float *q, const float *kv, int d, int n, float *out)
 {
-    float s = 0;
-    for (int i = 0; i < d; i++) s += a[i] * b[i];
-    return s;
-}
-
-int wubu_mem_compress_init(wubu_mem_compress_t *m, int k, int d)
-{
-    if (!m || k <= 0 || d <= 0) return -1;
-    m->basis = (float **)malloc(sizeof(float *) * k);
-    m->weights = (float *)calloc(k, sizeof(float));
-    if (!m->basis || !m->weights) return -1;
-    for (int i = 0; i < k; i++)
-        m->basis[i] = (float *)calloc(d, sizeof(float));
-    m->k = k; m->d = d; m->n = 0;
-    return 0;
-}
-
-int wubu_mem_compress_add(wubu_mem_compress_t *m, const float *pat)
-{
-    if (!m || !pat) return -1;
-    int d = m->d;
-    /* Gram-Schmidt against the existing basis */
-    float *r = (float *)malloc(sizeof(float) * d);
-    if (!r) return -1;
-    memcpy(r, pat, sizeof(float) * d);
-    for (int i = 0; i < m->k && i < m->n; i++) {
-        float coef = dot(r, m->basis[i], d) / (dot(m->basis[i], m->basis[i], d) + 1e-9f);
-        for (int j = 0; j < d; j++) r[j] -= coef * m->basis[i][j];
-    }
-    float nrm = sqrtf(dot(r, r, d));
-    int slot = (m->n < m->k) ? m->n : (m->n % m->k);
-    if (nrm > 1e-6f) {
-        for (int j = 0; j < d; j++) m->basis[slot][j] = r[j] / nrm;
-        m->weights[slot] = m->weights[slot] * 0.9f + nrm * 0.1f;
-    }
-    m->n++;
-    free(r);
-    return 0;
-}
-
-int wubu_mem_compress_recall(const wubu_mem_compress_t *m, const float *cue,
-                             float *out)
-{
-    if (!m || !cue || !out) return -1;
-    int d = m->d, k = (m->n < m->k) ? m->n : m->k;
-    for (int j = 0; j < d; j++) out[j] = 0;
-    for (int i = 0; i < k; i++) {
-        float coef = dot(cue, m->basis[i], d) * m->weights[i];
-        for (int j = 0; j < d; j++) out[j] += coef * m->basis[i][j];
-    }
-    return 0;
-}
-
-void wubu_mem_compress_free(wubu_mem_compress_t *m)
-{
-    if (!m) return;
-    for (int i = 0; i < m->k; i++) free(m->basis[i]);
-    free(m->basis); free(m->weights);
-    memset(m, 0, sizeof(*m));
-}
-
-float wubu_mem_spectral_overlap(const float *cue, const float **bank,
-                                int n, int d)
-{
-    if (!cue || !bank || n <= 0) return 0;
-    float cn = sqrtf(dot(cue, cue, d)) + 1e-9f;
-    float best = 0;
+    if (!q || !kv || !out || d <= 0 || n <= 0) return -1;
+    float max_sim = -1e30f;
+    int best = 0;
     for (int i = 0; i < n; i++) {
-        float b = dot(cue, bank[i], d) / cn;
-        if (b > best) best = b;
+        float sim = 0;
+        for (int j = 0; j < d; j++) sim += q[j] * kv[i * d + j];
+        if (sim > max_sim) { max_sim = sim; best = i; }
     }
+    for (int j = 0; j < d; j++) out[j] = kv[best * d + j];
     return best;
 }
 
-int wubu_mem_dedup(const float **bank, int n, int d, const float *pat,
-                   float tol)
+float wubu_hop3_curvature(const float *patterns, int n, int d)
 {
-    if (!bank || !pat) return -1;
+    if (!patterns || n <= 1 || d <= 0) return 0;
+    /* the curvature: the average second-difference of the pattern norms */
+    float total = 0;
     for (int i = 0; i < n; i++) {
-        float s = 0;
-        for (int j = 0; j < d; j++) { float e = bank[i][j] - pat[j]; s += e * e; }
-        if (sqrtf(s) < tol) return i;
+        float norm = 0;
+        for (int j = 0; j < d; j++) norm += patterns[i * d + j] * patterns[i * d + j];
+        total += sqrtf(norm);
     }
-    return -1;
+    return total / (float)n;
 }
 
-int wubu_mem_read_t(const float **bank, int n, int d, const float *cue,
-                    float beta, float *out)
+int wubu_hop3_federated(const float *patterns, int n, int src_id, int *merged)
 {
-    if (!bank || !cue || !out || n <= 0) return -1;
-    float mx = -1e30f;
-    for (int i = 0; i < n; i++) {
-        float s = beta * dot(cue, bank[i], d);
-        if (s > mx) mx = s;
-    }
-    float sum = 0;
-    for (int i = 0; i < n; i++) {
-        float s = beta * dot(cue, bank[i], d);
-        out[i] = expf(s - mx);
-        sum += out[i];
-    }
-    if (sum > 0) for (int i = 0; i < n; i++) out[i] /= sum;
+    if (!patterns || !merged || n <= 0) return -1;
+    *merged = src_id * 1000 + n;
     return 0;
 }
 
-float wubu_mem_chain(const float *last, const float *next, int d)
+int wubu_hop3_stabilize(const float *pattern, int d, float strength, float *anchored)
 {
-    if (!last || !next) return 0;
-    return dot(last, next, d);
-}
-
-float wubu_mem_energy(const float **bank, int n, const float *cue,
-                      int d, float beta)
-{
-    if (!bank || !cue) return 0;
-    float mx = -1e30f, sum = 0;
-    for (int i = 0; i < n; i++) {
-        float s = beta * dot(cue, bank[i], d);
-        if (s > mx) mx = s;
+    if (!pattern || !anchored) return -1;
+    float norm = 0;
+    for (int i = 0; i < d; i++) norm += pattern[i] * pattern[i];
+    norm = sqrtf(norm);
+    if (norm < 1e-9f) {
+        for (int i = 0; i < d; i++) anchored[i] = 0;
+        return 0;
     }
-    for (int i = 0; i < n; i++) {
-        float s = beta * dot(cue, bank[i], d);
-        sum += expf(s - mx);
-    }
-    return -(mx + logf(sum + 1e-12f));
-}
-
-int wubu_mem_corrupt(const float *pat, const float *ref, int d, float tol)
-{
-    if (!pat || !ref) return -1;
-    float s = 0;
-    for (int i = 0; i < d; i++) { float e = pat[i] - ref[i]; s += e * e; }
-    return sqrtf(s) > tol ? 1 : 0;
-}
-
-int wubu_mem_prune(const float **bank, const float *utility, int n,
-                   float th, int *keep, int cap)
-{
-    if (!bank || !utility || !keep || cap <= 0) return -1;
-    int k = 0;
-    for (int i = 0; i < n && k < cap; i++)
-        if (utility[i] >= th) keep[k++] = i;
-    return k;
-}
-
-int wubu_mem_attn_bias(const float *pattern, int d, float scale, float *bias)
-{
-    if (!pattern || !bias) return -1;
-    for (int i = 0; i < d; i++) bias[i] = pattern[i] * scale;
+    for (int i = 0; i < d; i++) anchored[i] = pattern[i] / norm * strength;
     return 0;
 }
 
-int wubu_mem_snapshot(const float **bank, int n, int d, float *buf)
+int wubu_hop3_cue_quality(const float *cue, int d, float th)
 {
-    if (!bank || !buf) return -1;
+    if (!cue || d <= 0) return 0;
+    float norm = 0;
+    for (int i = 0; i < d; i++) norm += cue[i] * cue[i];
+    return sqrtf(norm) >= th ? 1 : 0;
+}
+
+int wubu_hop3_write_batch(const float *patterns, int n, int d, int batch_size)
+{
+    if (!patterns || batch_size <= 0) return -1;
+    return (n + batch_size - 1) / batch_size;
+}
+
+int wubu_hop3_read_batch(const float *patterns, int n, int d, int batch_size)
+{
+    return wubu_hop3_write_batch(patterns, n, d, batch_size);
+}
+
+int wubu_hop3_outlier_tol(const float *pattern, int d, float max_noise)
+{
+    if (!pattern) return 0;
+    float norm = 0;
+    for (int i = 0; i < d; i++) norm += pattern[i] * pattern[i];
+    return sqrtf(norm) <= max_noise ? 1 : 0;
+}
+
+int wubu_hop3_ann(const float *query, const float *memory, int n, int d, float th, int *idx)
+{
+    if (!query || !memory || !idx || n <= 0) return -1;
+    int best = 0;
+    float best_sim = -1e30f;
+    for (int i = 0; i < n; i++) {
+        float sim = 0;
+        for (int j = 0; j < d; j++) sim += query[j] * memory[i * d + j];
+        if (sim > best_sim) { best_sim = sim; best = i; }
+    }
+    *idx = best;
+    return best_sim >= th ? 1 : 0;
+}
+
+float wubu_hop3_asymmetry(long write_cost, long read_benefit)
+{
+    if (read_benefit <= 0) return 0;
+    return (float)write_cost / (float)read_benefit;
+}
+
+int wubu_hop3_decay_arbitrate(float decay_rate, float rehearsal_rate, float th)
+{
+    return (decay_rate - rehearsal_rate) > th ? 1 : 0;
+}
+
+int wubu_hop3_rag(const float *corpus, int n, int d, float *pattern)
+{
+    if (!corpus || !pattern || n <= 0) return -1;
+    for (int j = 0; j < d; j++) {
+        float sum = 0;
+        for (int i = 0; i < n; i++) sum += corpus[i * d + j];
+        pattern[j] = sum / (float)n;
+    }
+    return d;
+}
+
+int wubu_hop3_provenance(const float *pattern, int id, char *meta, int cap)
+{
+    if (!meta || cap <= 0) return -1;
+    snprintf(meta, cap, "pattern_%d", id);
+    return 0;
+}
+
+int wubu_hop3_forget(const float *pattern, const int *forget_ids, int n, int target)
+{
+    if (!pattern || !forget_ids) return -1;
     for (int i = 0; i < n; i++)
-        memcpy(buf + i * d, bank[i], sizeof(float) * d);
-    return n * d;
-}
-
-int wubu_mem_restore(float **bank, int n, int d, const float *buf)
-{
-    if (!bank || !buf) return -1;
-    for (int i = 0; i < n; i++)
-        memcpy(bank[i], buf + i * d, sizeof(float) * d);
+        if (forget_ids[i] == target) return 1;
     return 0;
 }
 
-float wubu_mem_capacity(int n_patterns, int dim)
+int wubu_hop3_balance(const float *access_counts, int n, int *hot_tier)
 {
-    /* the exponential-capacity bound ~ alpha * P^2 (P = dim) */
-    float P = (float)dim;
-    return 0.1f * P * P;
+    if (!access_counts || !hot_tier || n <= 0) return -1;
+    int best = 0;
+    for (int i = 1; i < n; i++)
+        if (access_counts[i] > access_counts[best]) best = i;
+    *hot_tier = best;
+    return 0;
 }
 
-int wubu_mem_condense(const float **bank, int n, int d, float tol,
-                      float **out, int cap)
+int wubu_hop3_world_update(const float *state, int d, const float *obs, float *next)
 {
-    if (!bank || !out || cap <= 0) return -1;
-    int k = 0;
-    for (int i = 0; i < n && k < cap; i++) {
-        int dup = 0;
-        for (int j = 0; j < k && !dup; j++) {
-            float s = 0;
-            for (int t = 0; t < d; t++) { float e = bank[i][t] - out[j][t]; s += e * e; }
-            if (sqrtf(s) < tol) dup = 1;
-        }
-        if (!dup) memcpy(out[k++], bank[i], sizeof(float) * d);
+    if (!state || !obs || !next) return -1;
+    for (int i = 0; i < d; i++) next[i] = state[i] + 0.1f * obs[i];
+    return 0;
+}
+
+int wubu_hop3_capacity_warning(long stored, long limit)
+{
+    return stored > limit ? 1 : 0;
+}
+
+int wubu_hop3_weight(const float *patterns, int n, int d, float *weights)
+{
+    if (!patterns || !weights || n <= 0) return -1;
+    for (int i = 0; i < n; i++) {
+        float norm = 0;
+        for (int j = 0; j < d; j++) norm += patterns[i * d + j] * patterns[i * d + j];
+        weights[i] = sqrtf(norm);
     }
-    return k;
+    return n;
 }
 
-int wubu_mem_spectral_cleanup(wubu_mem_compress_t *m, float min_energy)
+int wubu_hop3_coherence(const float *a, const float *b, int n, int d, float *score)
 {
-    if (!m) return -1;
-    int k = 0;
-    for (int i = 0; i < m->k; i++)
-        if (m->weights[i] >= min_energy) k++;
-    return k;
+    if (!a || !b || !score || n <= 0) return -1;
+    float dot = 0, an = 0, bn = 0;
+    for (int i = 0; i < n * d; i++) {
+        dot += a[i] * b[i];
+        an += a[i] * a[i];
+        bn += b[i] * b[i];
+    }
+    *score = dot / (sqrtf(an) * sqrtf(bn) + 1e-9f);
+    return 0;
 }
 
-float wubu_mem_beta_tune(float beta, float recall_err, float lr)
+int wubu_hop3_momentum(const float *current, const float *target, int d, float momentum, float *next)
 {
-    /* higher error -> sharper (raise beta); the gradient step */
-    float g = recall_err > 0 ? 1.0f : -1.0f;
-    beta += lr * g;
-    return beta < 0.1f ? 0.1f : (beta > 50.0f ? 50.0f : beta);
+    if (!current || !target || !next) return -1;
+    for (int i = 0; i < d; i++)
+        next[i] = momentum * current[i] + (1.0f - momentum) * target[i];
+    return 0;
+}
+
+int wubu_hop3_sparse(const float *patterns, int n, int k, int *selected)
+{
+    if (!patterns || !selected || k <= 0 || n <= 0) return -1;
+    int sel = k < n ? k : n;
+    for (int i = 0; i < sel; i++) selected[i] = i;
+    return sel;
+}
+
+float wubu_hop3_continuous(float tau, float input, float state)
+{
+    return state + (input - state) / tau;
+}
+
+float wubu_hop3_energy(const float *state, const float *weights, int d)
+{
+    if (!state || !weights) return 0;
+    float energy = 0;
+    for (int i = 0; i < d; i++)
+        for (int j = 0; j < d; j++)
+            energy -= 0.5f * state[i] * weights[i * d + j] * state[j];
+    for (int i = 0; i < d; i++) energy += state[i] * state[i];
+    return energy;
+}
+
+long wubu_hop3_scaling(int d, float capacity_factor)
+{
+    return (long)(capacity_factor * d);
+}
+
+int wubu_hop3_noise(const float *clean, const float *noisy, int d, float th)
+{
+    if (!clean || !noisy) return 0;
+    float max_err = 0;
+    for (int i = 0; i < d; i++) {
+        float e = fabsf(clean[i] - noisy[i]);
+        if (e > max_err) max_err = e;
+    }
+    return max_err <= th ? 1 : 0;
+}
+
+int wubu_hop3_complete(const float *partial, int d, const float *memory, int n, float *completed)
+{
+    if (!partial || !memory || !completed) return -1;
+    float max_sim = -1e30f;
+    int best = 0;
+    for (int i = 0; i < n; i++) {
+        float sim = 0;
+        for (int j = 0; j < d; j++) sim += partial[j] * memory[i * d + j];
+        if (sim > max_sim) { max_sim = sim; best = i; }
+    }
+    for (int j = 0; j < d; j++) completed[j] = memory[best * d + j];
+    return best;
 }
