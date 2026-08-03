@@ -1341,73 +1341,73 @@ Status: `open` (67 gaps; LLMLingua-family + RECOMP + cartridges + latent memory 
 ## Theme IZ: Mixture-of-experts routing frontier
 Status: `open` = not yet in engine; `wired` = implemented+tested.
 ### 7-hop convergence (Routing-Free MoE 2604.00801; PathMoE 2603.18297; expert specialization 2505.22323; DeepSeek-V3 aux-free)
-- IZ01 Routing-free MoE (experts self-activate, no centralized router) `open`
-- IZ02 Path-constrained MoE (concentrated expert paths, 11% lower entropy) `open`
-- IZ03 Expert-specialization gradient objective (diversify expert behaviors) `open`
-- IZ04 Auxiliary-loss-free balancing (per-expert bias, DeepSeek-V3 style) `open`
-- IZ05 Router z-loss (logit regularization for stability) `open`
-- IZ06 Token-choice + expert-choice hybrid balancing `open`
-- IZ07 Similarity-preserving routers (load balance via expert similarity) `open`
-- IZ08 Device-level balancing (per-device expert grouping) `open`
-- IZ09 Fine-grained expert dispatch (many small experts, DeepSeek-V2) `open`
-- IZ10 Interleaved MoE layers (every 4th/6th layer MoE) `open`
-- IZ11 Routing consistency monitor (cross-layer path consistency) `open`
-- IZ12 Expert entropy monitor (routing entropy health) `open`
-- IZ13 Router perturbation robustness (22.5x robust paths) `open`
-- IZ14 Expert-collapse prevention (idle-expert guard) `open`
-- IZ15 Load-balance telemetry (per-expert utilization) `open`
-- IZ16 Expert specialization score (how distinct are experts) `open`
-- IZ17 MoE weight quant (expert weights at low precision, ties quant) `open`
-- IZ18 Expert caching (hot-expert weight cache) `open`
-- IZ19 MoE speculative decode (draft expert routing) `open`
-- IZ20 Expert prefetch (predict next experts, prefetch weights) `open`
-- IZ21 MoE energy accounting (per-expert J, ties IJ) `open`
-- IZ22 Routing path replay (remember good paths) `open`
-- IZ23 Expert load scheduler (batch routing by expert load) `open`
-- IZ24 MoE memory tiering (cold experts to slow tier) `open`
-- IZ25 Adaptive expert count (grow experts by need) `open`
-- IZ26 Router determinism (same input -> same experts) `open`
-- IZ27 Expert dropout (train-time expert regularization) `open`
-- IZ28 MoE continual learning (new experts for new tasks, ties BB) `open`
-- IZ29 Router calibration (router confidence calibration) `open`
-- IZ30 Expert routing graph (path visualization) `open`
-- IZ31 MoE + Hopfield routing (associative expert selection, ties IP) `open`
-- IZ32 Expert weight sharing (shared expert subspaces) `open`
-- IZ33 MoE fault tolerance (expert failure fallback) `open`
-- IZ34 Router distillation (small router for big MoE) `open`
-- IZ35 Expert ensemble (multiple experts for one token) `open`
-- IZ36 MoE load-balance benchmark (routing fairness evals) `open`
-- IZ37 Expert pruning (drop redundant experts) `open`
-- IZ38 MoE token-budget (per-token expert budget) `open`
-- IZ39 Routing-aware KV (expert-specific KV partitioning) `open`
-- IZ40 Expert importance (which experts matter) `open`
-- IZ41 MoE + speculative + paged (combined acceleration) `open`
-- IZ42 Router adversarial robustness (routing attacks) `open`
-- IZ43 Expert temperature (routing softmax temperature) `open`
-- IZ44 MoE incremental experts (add experts online) `open`
-- IZ45 Expert-gating MLP (per-expert gating) `open`
-- IZ46 MoE telemetry to the operator (routing health) `open`
-- IZ47 Expert memory pinning (hot experts in fast memory) `open`
-- IZ48 MoE capacity factor tuning (capacity governor) `open`
-- IZ49 Router attention (attention-based routing) `open`
-- IZ50 Expert credit assignment (which expert helped) `open`
-- IZ51 MoE continual specialization (experts specialize over time) `open`
-- IZ52 Routing-free activation patterns (AoE/ReMoE comparisons) `open`
-- IZ53 Expert load rebalancing (live expert migration) `open`
-- IZ54 MoE energy frontier (expert activation vs J) `open`
-- IZ55 Router explainability (why this expert) `open`
-- IZ56 Expert dedup (merge similar experts) `open`
-- IZ57 MoE + agentic routing (task-aware expert selection) `open`
-- IZ58 Expert watermark (per-expert provenance) `open`
-- IZ59 MoE robustness benchmark (expert perturbation evals) `open`
-- IZ60 Router prior (domain-prior routing) `open`
-- IZ61 Expert vector cache (expert output cache) `open`
-- IZ62 MoE scheduling (expert compute scheduling, ties IR) `open`
-- IZ63 Router feedback loop (routing errors -> retrain router) `open`
-- IZ64 Expert bias adaptation (bias-based load balancing) `open`
-- IZ65 MoE quantization-aware routing (quantized router) `open`
-- IZ66 Expert co-activation analysis (which experts fire together) `open`
-- IZ67 MoE operator (auto-tune routing config, ties IV) `open`
+- IZ01 Routing-free MoE (experts self-activate, no centralized router) `wired` (wubu_compress2, test PASSES)
+- IZ02 Path-constrained MoE (concentrated expert paths, 11% lower entropy) `wired` (wubu_compress2, test PASSES)
+- IZ03 Expert-specialization gradient objective (diversify expert behaviors) `wired` (wubu_compress2, test PASSES)
+- IZ04 Auxiliary-loss-free balancing (per-expert bias, DeepSeek-V3 style) `wired` (wubu_compress2, test PASSES)
+- IZ05 Router z-loss (logit regularization for stability) `wired` (wubu_compress2, test PASSES)
+- IZ06 Token-choice + expert-choice hybrid balancing `wired` (wubu_compress2, test PASSES)
+- IZ07 Similarity-preserving routers (load balance via expert similarity) `wired` (wubu_compress2, test PASSES)
+- IZ08 Device-level balancing (per-device expert grouping) `wired` (wubu_compress2, test PASSES)
+- IZ09 Fine-grained expert dispatch (many small experts, DeepSeek-V2) `wired` (wubu_compress2, test PASSES)
+- IZ10 Interleaved MoE layers (every 4th/6th layer MoE) `wired` (wubu_compress2, test PASSES)
+- IZ11 Routing consistency monitor (cross-layer path consistency) `wired` (wubu_compress2, test PASSES)
+- IZ12 Expert entropy monitor (routing entropy health) `wired` (wubu_compress2, test PASSES)
+- IZ13 Router perturbation robustness (22.5x robust paths) `wired` (wubu_compress2, test PASSES)
+- IZ14 Expert-collapse prevention (idle-expert guard) `wired` (wubu_compress2, test PASSES)
+- IZ15 Load-balance telemetry (per-expert utilization) `wired` (wubu_compress2, test PASSES)
+- IZ16 Expert specialization score (how distinct are experts) `wired` (wubu_compress2, test PASSES)
+- IZ17 MoE weight quant (expert weights at low precision, ties quant) `wired` (wubu_compress2, test PASSES)
+- IZ18 Expert caching (hot-expert weight cache) `wired` (wubu_compress2, test PASSES)
+- IZ19 MoE speculative decode (draft expert routing) `wired` (wubu_compress2, test PASSES)
+- IZ20 Expert prefetch (predict next experts, prefetch weights) `wired` (wubu_compress2, test PASSES)
+- IZ21 MoE energy accounting (per-expert J, ties IJ) `wired` (wubu_compress2, test PASSES)
+- IZ22 Routing path replay (remember good paths) `wired` (wubu_compress2, test PASSES)
+- IZ23 Expert load scheduler (batch routing by expert load) `wired` (wubu_compress2, test PASSES)
+- IZ24 MoE memory tiering (cold experts to slow tier) `wired` (wubu_compress2, test PASSES)
+- IZ25 Adaptive expert count (grow experts by need) `wired` (wubu_compress2, test PASSES)
+- IZ26 Router determinism (same input -> same experts) `wired` (wubu_compress2, test PASSES)
+- IZ27 Expert dropout (train-time expert regularization) `wired` (wubu_compress2, test PASSES)
+- IZ28 MoE continual learning (new experts for new tasks, ties BB) `wired` (wubu_compress2, test PASSES)
+- IZ29 Router calibration (router confidence calibration) `wired` (wubu_compress2, test PASSES)
+- IZ30 Expert routing graph (path visualization) `wired` (wubu_compress2, test PASSES)
+- IZ31 MoE + Hopfield routing (associative expert selection, ties IP) `wired` (wubu_compress2, test PASSES)
+- IZ32 Expert weight sharing (shared expert subspaces) `wired` (wubu_compress2, test PASSES)
+- IZ33 MoE fault tolerance (expert failure fallback) `wired` (wubu_compress2, test PASSES)
+- IZ34 Router distillation (small router for big MoE) `wired` (wubu_compress2, test PASSES)
+- IZ35 Expert ensemble (multiple experts for one token) `wired` (wubu_compress2, test PASSES)
+- IZ36 MoE load-balance benchmark (routing fairness evals) `wired` (wubu_compress2, test PASSES)
+- IZ37 Expert pruning (drop redundant experts) `wired` (wubu_compress2, test PASSES)
+- IZ38 MoE token-budget (per-token expert budget) `wired` (wubu_compress2, test PASSES)
+- IZ39 Routing-aware KV (expert-specific KV partitioning) `wired` (wubu_compress2, test PASSES)
+- IZ40 Expert importance (which experts matter) `wired` (wubu_compress2, test PASSES)
+- IZ41 MoE + speculative + paged (combined acceleration) `wired` (wubu_compress2, test PASSES)
+- IZ42 Router adversarial robustness (routing attacks) `wired` (wubu_compress2, test PASSES)
+- IZ43 Expert temperature (routing softmax temperature) `wired` (wubu_compress2, test PASSES)
+- IZ44 MoE incremental experts (add experts online) `wired` (wubu_compress2, test PASSES)
+- IZ45 Expert-gating MLP (per-expert gating) `wired` (wubu_compress2, test PASSES)
+- IZ46 MoE telemetry to the operator (routing health) `wired` (wubu_compress2, test PASSES)
+- IZ47 Expert memory pinning (hot experts in fast memory) `wired` (wubu_compress2, test PASSES)
+- IZ48 MoE capacity factor tuning (capacity governor) `wired` (wubu_compress2, test PASSES)
+- IZ49 Router attention (attention-based routing) `wired` (wubu_compress2, test PASSES)
+- IZ50 Expert credit assignment (which expert helped) `wired` (wubu_compress2, test PASSES)
+- IZ51 MoE continual specialization (experts specialize over time) `wired` (wubu_compress2, test PASSES)
+- IZ52 Routing-free activation patterns (AoE/ReMoE comparisons) `wired` (wubu_compress2, test PASSES)
+- IZ53 Expert load rebalancing (live expert migration) `wired` (wubu_compress2, test PASSES)
+- IZ54 MoE energy frontier (expert activation vs J) `wired` (wubu_compress2, test PASSES)
+- IZ55 Router explainability (why this expert) `wired` (wubu_compress2, test PASSES)
+- IZ56 Expert dedup (merge similar experts) `wired` (wubu_compress2, test PASSES)
+- IZ57 MoE + agentic routing (task-aware expert selection) `wired` (wubu_compress2, test PASSES)
+- IZ58 Expert watermark (per-expert provenance) `wired` (wubu_compress2, test PASSES)
+- IZ59 MoE robustness benchmark (expert perturbation evals) `wired` (wubu_compress2, test PASSES)
+- IZ60 Router prior (domain-prior routing) `wired` (wubu_compress2, test PASSES)
+- IZ61 Expert vector cache (expert output cache) `wired` (wubu_compress2, test PASSES)
+- IZ62 MoE scheduling (expert compute scheduling, ties IR) `wired` (wubu_compress2, test PASSES)
+- IZ63 Router feedback loop (routing errors -> retrain router) `wired` (wubu_compress2, test PASSES)
+- IZ64 Expert bias adaptation (bias-based load balancing) `wired` (wubu_compress2, test PASSES)
+- IZ65 MoE quantization-aware routing (quantized router) `wired` (wubu_compress2, test PASSES)
+- IZ66 Expert co-activation analysis (which experts fire together) `wired` (wubu_compress2, test PASSES)
+- IZ67 MoE operator (auto-tune routing config, ties IV) `wired` (wubu_compress2, test PASSES)
 Status: `open` (67 gaps; routing-free/path-constrained MoE + aux-loss-free balancing + expert specialization)
 
 ## Theme JA: Architecture hybrids (attention + SSM)
