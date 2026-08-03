@@ -438,7 +438,7 @@ int barun_set_wubu_mode(barun_model_t *m, int mode, void *moe)
     return 0;
 }
 
-static int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
+int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
                               const uint16_t *tokens, int seq)
 {
     /* the embedding (tied) */
@@ -470,8 +470,8 @@ static int barun_forward_wubu(barun_model_t *m, barun_buf_t *b,
         matmul(b->k, blk->k_proj, b->gate, 64, BARUN_DIM, seq);
         matmul(b->v, blk->v_proj, b->gate, 64, BARUN_DIM, seq);
         /* partial RoPE on q/k */
-        apply_rope(b->q, seq, BARUN_HEADS, 0);
-        apply_rope(b->k, seq, 1, 0);
+        apply_rope(b->q, seq, BARUN_HEADS, 64, b->cos_tbl, b->sin_tbl, 0);
+        apply_rope(b->k, seq, 1, 64, b->cos_tbl, b->sin_tbl, 0);
         /* the hyperbolic lift: when the ball is active, the queries are
          * gyro-rotated against the keys before the dot product. This is
          * the blueprint's phase-1 hook -- the lean-verified wubu_hyper
