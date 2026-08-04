@@ -2,6 +2,10 @@
 
 > 2026-08-02. The AGI is named **WuBu** (~ WuBu ~). The base model is
 > **WuBu-35M**, published at https://huggingface.co/WaefreBeorn/WuBu-35M
+>
+> **Support the home-built AGI** — scan the QR in
+> [docs/support/SUPPORT.md](docs/support/SUPPORT.md) (X profile). We are
+> a one-person lab; funding buys storage, compute, and time.
 > (renamed from WuBu-Seed-35M).
 
 ## ⚠️ DISCLOSURE: THIS IS AN AGI PROJECT
