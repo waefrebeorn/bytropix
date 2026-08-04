@@ -10,8 +10,8 @@
  *
  * C11, self-contained.
  */
-#define _GNU_SOURCE 1   /* M_PI under -std=c11 */
 #include "wubu_gravity.h"
+#include "wubu_std.h"        /* M_PI without _GNU_SOURCE (no GNU dep) */
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>

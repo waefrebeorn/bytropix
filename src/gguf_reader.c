@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "gguf_reader.h"
 #include <stdio.h>
 #include <stdlib.h>

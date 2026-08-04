@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "wubu_tokenizer.h"
 #include "wubu_spawn.h"
 #include "gguf_reader.h"
