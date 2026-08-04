@@ -19,8 +19,14 @@ void wubu_dims_finalize(wubu_dims_t *d) {
     /* Derive the cross-products the forward expects. */
     if (d->ssm_k_heads > 0 && d->ssm_d_state > 0)
         d->key_dim = d->ssm_d_state * d->ssm_k_heads;
-    if (d->ssm_k_heads > 0 && d->ssm_v_heads > 0 && d->ssm_d_state > 0)
+    if (d->ssm_k_heads > 0 && d->ssm_v_heads > 0 && d->ssm_d_state > 0) {
         d->conv_dim = d->key_dim * 2 + (d->ssm_d_state * d->ssm_v_heads);
+        /* value_dim is the SSM value-projection output width = v_heads * d_state.
+           Without this, VALUE_DIM stays 0 -> v_conv is a 0-byte alloc in
+           wubu_ssm_forward -> SIGSEGV in wubu_ssm_chunked_recurrence. Mirrors the
+           derivation already done in wubu_dims_default() (d.value_dim = d.ssm_d_state * d.ssm_v_heads). */
+        d->value_dim = d->ssm_d_state * d->ssm_v_heads;
+    }
     if (d->gqa_kv_heads > 0 && d->gqa_head_dim > 0)
         d->gqa_kv_dim = d->gqa_kv_heads * d->gqa_head_dim;
 }

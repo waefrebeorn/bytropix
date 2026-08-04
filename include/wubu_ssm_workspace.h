@@ -44,5 +44,8 @@ typedef struct {
 int  wubu_ssm_workspace_init(int max_layers, int B, int T);
 void wubu_ssm_workspace_shutdown(void);
 wubu_ssm_workspace_t *wubu_ssm_workspace_get(int layer_idx);
+/* Notify the pool of the active sequence length so its scratch buffers grow to
+   the MAX T ever requested (prefill T > decode-init T). Call before _get(). */
+void wubu_ssm_workspace_set_t(int T);
 
 #endif /* WUBU_SSM_WORKSPACE_H */

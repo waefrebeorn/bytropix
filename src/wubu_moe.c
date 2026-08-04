@@ -37,8 +37,10 @@ int wubu_moe_load_layer(gguf_ctx *ctx, int layer, moe_weights_t *moe, int d_mode
     // Note: we don't have access to g_adapter here, so we use the resolved names from wubu_model.c
 
     // Router: ffn_gate_inp.weight [D_MODEL, N_EXPERTS]
+    // Some GGUF exports name this ffn_gate.weight (no _inp). Try both.
     snprintf(name, sizeof(name), "%s%d.ffn_gate_inp.weight", prefix, layer);
     gguf_tensor_info *t = gguf_find_tensor(ctx, name);
+    if (!t) { snprintf(name, sizeof(name), "%s%d.ffn_gate.weight", prefix, layer); t = gguf_find_tensor(ctx, name); }
     if (!t) { fprintf(stderr, "MoE load: missing %s\n", name); return 0; }
     moe->ffn_gate_inp = (float *)malloc((size_t)d_model * n_experts * sizeof(float));
     if (!gguf_read_tensor_f32(ctx, t, moe->ffn_gate_inp, d_model * n_experts))

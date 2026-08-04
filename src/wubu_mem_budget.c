@@ -9,8 +9,19 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ---- /proc/meminfo reader ---- */
+/* ---- RAM detection (cross-platform) ---- */
 
+#if defined(_WIN32)
+#include <windows.h>
+size_t wubu_mem_detect_available_ram(void) {
+    /* Windows: use GlobalMemoryStatusEx — /proc/meminfo does not exist here. */
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (!GlobalMemoryStatusEx(&ms)) return 0;
+    /* ullAvailPhys = physically installed memory available to processes. */
+    return (size_t)ms.ullAvailPhys;
+}
+#else
 size_t wubu_mem_detect_available_ram(void) {
     FILE *f = fopen("/proc/meminfo", "r");
     if (!f) return 0;
@@ -33,6 +44,7 @@ size_t wubu_mem_detect_available_ram(void) {
         mem_available = (size_t)(mem_total * 0.8);
     return mem_available;
 }
+#endif /* !_WIN32 */
 
 /* ---- Budget calculator ---- */
 

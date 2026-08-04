@@ -660,13 +660,17 @@ int max_s = 1;
             moe_weights_t *moe = &layer->moe;
 
             // Router is F32 — direct pointer from blob
+            // Qwen3.6-family GGUFs name these ffn_gate.weight / ffn_up.weight /
+            // ffn_down.weight (no _inp suffix); some exports use _inp_inp. Try both.
             snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp.weight", l);
             t = gguf_find_tensor(ctx, name);
+            if (!t) { snprintf(name, sizeof(name), "blk.%d.ffn_gate.weight", l); t = gguf_find_tensor(ctx, name); }
             if (t && blob) { moe->ffn_gate_inp = (float *)(blob + t->data_offset); }
 
             // Shared expert gate weight (F32)
             snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp_shexp.weight", l);
             t = gguf_find_tensor(ctx, name);
+            if (!t) { snprintf(name, sizeof(name), "blk.%d.ffn_gate_shexp.weight", l); t = gguf_find_tensor(ctx, name); }
             if (t && blob) { moe->ffn_gate_inp_shexp = (float *)(blob + t->data_offset); }
 
             snprintf(name, sizeof(name), "blk.%d.ffn_gate_exps.weight", l);

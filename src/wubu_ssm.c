@@ -388,6 +388,7 @@ void wubu_ssm_forward(const float *x, int B, int T,
     
     // Allocate temporaries from workspace pool when available,
     // otherwise fall back to per-call malloc.
+    wubu_ssm_workspace_set_t(T);  /* grow scratch to the MAX T seen (prefill>decode) */
     wubu_ssm_workspace_t *ws = wubu_ssm_workspace_get(0); /* caller sets layer idx */
     float *qkv_all, *z_all, *beta_raw, *alpha_raw;
     float *conv_input, *conv_output, *q_conv, *k_conv, *v_conv;

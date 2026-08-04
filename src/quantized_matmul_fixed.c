@@ -12,7 +12,8 @@ void quantized_matmul_from_q8(const void *q8_x,
     if (weight_type == GGML_TYPE_IQ1_M || weight_type == GGML_TYPE_IQ1_S ||
         weight_type == GGML_TYPE_IQ2_S || weight_type == GGML_TYPE_IQ2_XS ||
         weight_type == GGML_TYPE_IQ3_S ||
-        weight_type == GGML_TYPE_Q2_K || weight_type == GGML_TYPE_Q3_K) {
+        weight_type == GGML_TYPE_Q2_K || weight_type == GGML_TYPE_Q3_K ||
+        weight_type == GGML_TYPE_Q8_0) {
         int64_t total_elems = n_rows * n_cols;
         float *f32_w = (float *)malloc(total_elems * sizeof(float));
         if (!f32_w) { fprintf(stderr, "quantized_matmul_from_q8: alloc %lld failed\n", (long long)total_elems); return; }
