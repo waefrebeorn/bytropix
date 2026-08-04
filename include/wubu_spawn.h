@@ -23,6 +23,14 @@ int wubu_spawn_capture(const char *file, char *const argv[],
  */
 int wubu_spawn_wait(const char *file, char *const argv[], bool silent);
 
+/* Win32 implementations (wubu_spawn_win.c) — used when _WIN32 is defined and
+ * the POSIX fork/exec path is unavailable. Same contract as above. */
+#if defined(_WIN32)
+int wubu_spawn_win_capture(const char *file, char *const argv[],
+                           char *out_buf, size_t out_cap, int *out_exit);
+int wubu_spawn_win_wait(const char *file, char *const argv[], int silent);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

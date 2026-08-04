@@ -2,6 +2,7 @@
 #include "wubu_mobius.h"
 #include "gguf_reader.h"
 #include "safetensors_reader.h"
+#include "wubu_rotate.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>

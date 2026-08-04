@@ -1996,8 +1996,8 @@ gqa_attn_done:;
                     wubu_4kv_quant_K(K_norm, qbuf, scales, N, kv_dim);
                     wubu_4kv_quant_V3(V, qbuf + (size_t)N * val_dim, scales, N, kv_dim);
                 }
-                kv_cache_write_head(k_out, 0, qbuf, N * val_dim);
-                kv_cache_write_head(v_out, 0, qbuf + (size_t)N * val_dim, N * val_dim);
+                kv_cache_write_head(k_out, 0, (const float *)qbuf, N * val_dim);
+                kv_cache_write_head(v_out, 0, (const float *)(qbuf + (size_t)N * val_dim), N * val_dim);
                 /* Store scales in a sidecar (simplified: write to end of cache) */
                 /* TODO: proper sidecar storage for per-block scales */
             }

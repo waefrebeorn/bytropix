@@ -37,8 +37,10 @@
 #include <time.h>
 #include <signal.h>
 #include <stdbool.h>
+#if !defined(_WIN32)
 #include <sys/resource.h>
 #include <sys/prctl.h>
+#endif
 
 // GPU support — compiled only in gen_text_gpu target (-DGPU_SUPPORT)
 #ifdef GPU_SUPPORT
@@ -233,12 +235,14 @@ int main(int argc, char **argv) {
 
     signal(SIGINT, handle_sigint);
 
-    // Disable core dumps to avoid 16GB+ crash files
+    // Disable core dumps to avoid 16GB+ crash files (Linux only; no-op on Win)
+#if !defined(_WIN32)
     {
         struct rlimit rl = {0, 0};
         setrlimit(RLIMIT_CORE, &rl);
         prctl(PR_SET_DUMPABLE, 0);
     }
+#endif
 
     wubu_model_t mdl;
     if (!init_model(&mdl, model_path)) return 1;

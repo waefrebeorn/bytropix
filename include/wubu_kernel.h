@@ -95,6 +95,7 @@ typedef struct wubu_kernel_backend {
 
 /* ---- init/shutdown ---- */
 int    wubu_kernel_init(void);
+void   wubu_kernel_register_backends(void);
 void   wubu_kernel_shutdown(void);
 
 /* ---- backend registration ---- */

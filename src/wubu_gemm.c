@@ -28,7 +28,7 @@
 #if defined(__AVX2__)
 #    define WUBU_HAVE_AVX2 1
 #  endif
-#  if defined(__AVX512F__)
+#  if defined(__AVX512F__) && !defined(WUBU_NO_AVX512)
 #    define WUBU_HAVE_AVX512 1
 #  endif
 #endif
@@ -327,7 +327,7 @@ void wubu_gemv_f32_tiled(const float *A, const float *x, float *y,
         const float *ar = A + (size_t)m * K;
         float s = 0.0f;
         int k = 0;
-#if WUBU_HAVE_AVX2
+#if WUBU_HAVE_AVX2 && defined(WUBU_HAVE_AVX512)
         if (k_unroll >= 16 && cpu_has_avx512()) {
             __m512 acc = _mm512_setzero_ps();
             for (; k + 16 <= K; k += 16) {

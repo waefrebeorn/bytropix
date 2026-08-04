@@ -17,6 +17,7 @@
 
 #include "wubu_rope_prefetch.h"
 #include <string.h>
+#include <math.h>
 
 /* Prefetch KV blocks for nearby positions (software prefetch).
  * store:     cache-line aligned KV store

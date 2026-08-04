@@ -5,6 +5,13 @@
  */
 #include "wubu_dims.h"
 
+/* CPU-only stub for the GPU mirror call. When GPU_SUPPORT is defined the real
+ * definition lives in wubu_dims_gpu.cu (which mirrors to a CUDA __constant__).
+ * On a CPU/Windows build there is no device to mirror to, so this is a no-op. */
+#ifndef GPU_SUPPORT
+void wubu_dims_sync_gpu(void) { /* no GPU: nothing to mirror */ }
+#endif
+
 wubu_dims_t WUBU_DIMS = {0};
 
 void wubu_dims_set(const wubu_dims_t *d) {
