@@ -35,6 +35,12 @@ enum ggml_type {
     GGML_TYPE_IQ4_XS  = 23,
     GGML_TYPE_IQ1_M   = 29,
     GGML_TYPE_BF16    = 30,  // bfloat16 (IEEE)
+    /* TurboQuant family (IDs per TheTom/llama-cpp-turboquant tom/merge-upstream-dsv4) */
+    GGML_TYPE_TQ1_0   = 34,
+    GGML_TYPE_TQ2_0   = 35,
+    GGML_TYPE_TQ3_1S  = 45,  // WHT-rotated 3-bit Lloyd-Max, block 32, 16 B
+    GGML_TYPE_TQ4_1S  = 46,  // WHT-rotated 4-bit Lloyd-Max, block 32, 20 B
+    GGML_TYPE_Q2_0    = 47,  // 2-bit, block 64, 18 B (branch Q2_0; legacy alias 42)
 };
 
 // GGUF tensor info
@@ -69,6 +75,11 @@ typedef struct {
 
     // Track if data_blob is mmap'd (for proper cleanup)
     int data_blob_is_mmap;
+
+    // File size (for clamping) + per-tensor raw byte spans derived from the
+    // file's own data offsets (the byte truth for unknown/TurboQuant types)
+    long file_size;
+    int64_t *tensor_raw_bytes;   // n_tensors entries
 } gguf_ctx;
 
 // Open GGUF file and parse headers

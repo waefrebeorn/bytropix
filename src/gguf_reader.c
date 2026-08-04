@@ -578,10 +578,16 @@ static float f16_to_f32(uint16_t h) {
 
     if (exp == 0) {
         if (mant == 0) return sign ? -0.0f : 0.0f;
-        // Subnormal: shift until mant has bit 10 set
-        const int shift = __builtin_clz(mant) - 21;
-        const uint32_t new_exp = exp + 1 - shift;
-        fp32.u = (sign << 31) | (new_exp << 23) | (mant << (13 + shift));
+        /* Subnormal: value = mant * 2^-24. Normalize into fp32 (llama.cpp
+           reference): exponent field starts at 112 (127-15), shift the
+           mantissa left until bit 10 is set, decrementing per shift.
+           (HIVE 2026-08-04: the old `exp+1-shift` formula underflowed to a
+           negative exponent -> 0xFF exponent -> NaN on subnormal scales,
+           e.g. Q6_K block d=0x00cd in the Qwen3.6 UD file.) */
+        uint32_t e = 112;
+        uint32_t m = mant;
+        while ((m & 0x400) == 0) { m <<= 1; e--; }
+        fp32.u = (sign << 31) | (e << 23) | ((m & 0x3FF) << 13);
         return fp32.f;
     }
     if (exp == 31) {
@@ -660,6 +666,11 @@ gguf_ctx* gguf_open(const char *path) {
             ctx->tensors[i].dims[d] = read_i64(f);
         }
         ctx->tensors[i].ggml_type = read_i32(f);
+        /* TurboQuant-branch compatibility (PACE 2026-08-04): the Config-I file
+           was written by a branch whose Q2_0 carries id 47; canonical/legacy
+           aliases (42) are remapped to the same slot so stock-ish files load. */
+        if (ctx->tensors[i].ggml_type == 42)
+            ctx->tensors[i].ggml_type = GGML_TYPE_Q2_0;
         ctx->tensors[i].data_offset = read_u64(f);
     }
     
@@ -667,6 +678,19 @@ gguf_ctx* gguf_open(const char *path) {
     long data_start = ftell(f);
     long pad = (ctx->alignment - (data_start % ctx->alignment)) % ctx->alignment;
     ctx->data_blob_offset = data_start + pad;
+
+    // File size + per-tensor raw byte spans: for any type our size table does
+    // not know, the delta to the next tensor's data_offset IS the byte truth.
+    fseek(f, 0, SEEK_END);
+    ctx->file_size = ftell(f);
+    fseek(f, data_start, SEEK_SET);
+    uint64_t blob_end = (uint64_t)(ctx->file_size - (long)ctx->data_blob_offset);
+    ctx->tensor_raw_bytes = calloc(ctx->n_tensors, sizeof(int64_t));
+    for (int64_t i = 0; i < ctx->n_tensors; i++) {
+        uint64_t off = ctx->tensors[i].data_offset;
+        uint64_t next = (i + 1 < ctx->n_tensors) ? ctx->tensors[i+1].data_offset : blob_end;
+        ctx->tensor_raw_bytes[i] = (int64_t)(next - off);
+    }
     
     fprintf(stderr, "Tensor info end at offset %ld, aligned to %lu (pad=%ld, alignment=%ld)\n", 
             data_start, ctx->data_blob_offset, pad, ctx->alignment);
@@ -854,6 +878,105 @@ void dequantize_q6_K_row(const uint8_t *data, float *output, int64_t n_elems) {
 static void dequantize_q2_K_row(const uint8_t *data, float *output, int64_t n_elems);
 static void dequantize_q3_K_row(const uint8_t *data, float *output, int64_t n_elems);
 
+/* ========== TurboQuant: Q2_0 + TQ3_1S + TQ4_1S dequantization ==========
+   Layouts verified against TheTom/llama-cpp-turboquant tom/merge-upstream-dsv4
+   (ggml-common.h block defs + ggml-turbo-quant.c dequant impls, 2026-08-04). */
+
+#define QK2_0 64
+static void dequantize_q2_0_row(const uint8_t *data, float *output, int64_t n_elems) {
+    /* block_q2_0: d(fp16) + qs[QK2_0/4] = 18 B per 64 elems (2.25 bpw).
+       00=-1, 01=0, 10=+1, 11=+2  ->  y = ((int)q - 1) * d */
+    int64_t n_blocks = (n_elems + QK2_0 - 1) / QK2_0;
+    for (int64_t b = 0; b < n_blocks; b++) {
+        const uint8_t *blk = data + b * 18;
+        uint16_t d_bits; memcpy(&d_bits, blk, 2);
+        float d = f16_to_f32(d_bits);
+        for (int j = 0; j < QK2_0 && b*QK2_0 + j < n_elems; j++) {
+            int byte = j / 4, bit = (j % 4) * 2;
+            int q = (blk[2 + byte] >> bit) & 3;
+            output[b*QK2_0 + j] = (float)(q - 1) * d;
+        }
+    }
+}
+
+/* TQ3_1S: WHT-rotated 3-bit Lloyd-Max. block_tq3_1s: d0(fp16) + d1(fp16) +
+   3-bit indices packed (12 B) = 16 B per 32 elems (4.0 bpw). */
+#define QK_TQ3 32
+static const float TQ3_0_CENTROIDS[8] = {
+    -1.996684f, -1.291398f, -0.740341f, -0.247508f,
+     0.230106f,  0.725222f,  1.277503f,  1.988943f
+};
+static const float TQ3_0_SIGNS[32] = {
+    +1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+    -1.0f, +1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f
+};
+#define TQ_INV_SQRT32 0.17677669529663688f  /* 1/sqrt(32) */
+static void tq_rht_inverse(float *buf) {
+    /* WHT butterfly -> normalize + unsign (inverse RHT) */
+    for (int step = 1; step < QK_TQ3; step <<= 1)
+        for (int i = 0; i < QK_TQ3; i += step << 1)
+            for (int j = i; j < i + step; j++) {
+                float a = buf[j], b = buf[j + step];
+                buf[j] = a + b; buf[j + step] = a - b;
+            }
+    for (int i = 0; i < QK_TQ3; i++) buf[i] *= TQ_INV_SQRT32 * TQ3_0_SIGNS[i];
+}
+static void dequantize_tq3_1s_row(const uint8_t *data, float *output, int64_t n_elems) {
+    int64_t n_blocks = (n_elems + QK_TQ3 - 1) / QK_TQ3;
+    for (int64_t b = 0; b < n_blocks; b++) {
+        const uint8_t *blk = data + b * 16;
+        uint16_t d0b, d1b; memcpy(&d0b, blk, 2); memcpy(&d1b, blk + 2, 2);
+        float d0 = f16_to_f32(d0b), d1 = f16_to_f32(d1b);
+        float buf[32];
+        for (int g = 0; g < 4; g++) {
+            const uint8_t *qp = blk + 4 + g * 3;
+            uint8_t idx[8];
+            idx[0] =  qp[0]       & 7;
+            idx[1] = (qp[0] >> 3) & 7;
+            idx[2] = ((qp[0] >> 6) | (qp[1] << 2)) & 7;
+            idx[3] = (qp[1] >> 1) & 7;
+            idx[4] = (qp[1] >> 4) & 7;
+            idx[5] = ((qp[1] >> 7) | (qp[2] << 1)) & 7;
+            idx[6] = (qp[2] >> 2) & 7;
+            idx[7] = (qp[2] >> 5) & 7;
+            for (int i = 0; i < 8; i++) {
+                int j = g * 8 + i;
+                float d = (j < 16) ? d0 : d1;
+                buf[j] = TQ3_0_CENTROIDS[idx[i]] * d;
+            }
+        }
+        tq_rht_inverse(buf);
+        int64_t base = b * QK_TQ3;
+        for (int j = 0; j < QK_TQ3 && base + j < n_elems; j++) output[base + j] = buf[j];
+    }
+}
+
+/* TQ4_1S: WHT-rotated 4-bit Lloyd-Max. d0 + d1 + 16 nibble bytes = 20 B per 32. */
+static const float TQ4_0_CENTROIDS[16] = {
+    -2.732590f, -2.069017f, -1.618046f, -1.256231f,
+    -0.942340f, -0.656759f, -0.388048f, -0.128395f,
+     0.128395f,  0.388048f,  0.656759f,  0.942340f,
+     1.256231f,  1.618046f,  2.069017f,  2.732590f
+};
+static void dequantize_tq4_1s_row(const uint8_t *data, float *output, int64_t n_elems) {
+    int64_t n_blocks = (n_elems + QK_TQ3 - 1) / QK_TQ3;
+    for (int64_t b = 0; b < n_blocks; b++) {
+        const uint8_t *blk = data + b * 20;
+        uint16_t d0b, d1b; memcpy(&d0b, blk, 2); memcpy(&d1b, blk + 2, 2);
+        float d0 = f16_to_f32(d0b), d1 = f16_to_f32(d1b);
+        float buf[32];
+        for (int j = 0; j < 32; j++) {
+            int nib = (blk[4 + j/2] >> ((j & 1) ? 4 : 0)) & 0xF;
+            buf[j] = TQ4_0_CENTROIDS[nib] * ((j < 16) ? d0 : d1);
+        }
+        tq_rht_inverse(buf);
+        int64_t base = b * QK_TQ3;
+        for (int j = 0; j < QK_TQ3 && base + j < n_elems; j++) output[base + j] = buf[j];
+    }
+}
+
 int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output, int64_t max_elems) {
     if (getenv("WUBU_DEBUG")) if (getenv("WUBU_DEBUG")) fprintf(stderr, "DEBUG gguf_read_tensor_f32: START tensor=%s, n_elems=?, type=%d\n", tensor->name, tensor->ggml_type);
     // Calculate total elements
@@ -910,9 +1033,23 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
         // Calculate raw size and read into heap buffer
         int64_t raw_size = gguf_raw_size(tensor->ggml_type, n_elems);
         if (raw_size <= 0) {
-            fprintf(stderr, "Error: unknown type %d (cannot determine raw size)\n", tensor->ggml_type);
-            return 0;
+            /* Fallback: derive the raw span from the file's own data offsets.
+               Covers TurboQuant variants our size table has no entry for —
+               the delta to the next tensor's data_offset IS the byte truth. */
+            int64_t idx = tensor - ctx->tensors;   /* contiguous array */
+            if (ctx->tensor_raw_bytes && idx >= 0 && idx < ctx->n_tensors)
+                raw_size = ctx->tensor_raw_bytes[idx];
+            if (raw_size <= 0) {
+                fprintf(stderr, "Error: unknown type %d (cannot determine raw size)\n", tensor->ggml_type);
+                return 0;
+            }
+            fprintf(stderr, "note: type %d raw size derived from file offsets: %ld bytes\n",
+                    tensor->ggml_type, (long)raw_size);
         }
+        /* clamp to file end (last tensor / split boundary) */
+        if ((uint64_t)tensor_pos + (uint64_t)raw_size > (uint64_t)ctx->file_size)
+            raw_size = ctx->file_size - (long)tensor_pos;
+        if (raw_size <= 0) { fprintf(stderr, "Error: bad raw size for %s\n", tensor->name); return 0; }
         raw_heap = (uint8_t *)malloc(raw_size);
         if (!raw_heap) return 0;
         fseek(ctx->file, tensor_pos, SEEK_SET);
@@ -995,6 +1132,15 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
             uint32_t bits = (uint32_t)b16[i] << 16;
             memcpy(&output[i], &bits, sizeof(float));
         }
+    }
+    else if (tensor->ggml_type == GGML_TYPE_Q2_0) {
+        dequantize_q2_0_row(src, output, n_elems);
+    }
+    else if (tensor->ggml_type == GGML_TYPE_TQ3_1S) {
+        dequantize_tq3_1s_row(src, output, n_elems);
+    }
+    else if (tensor->ggml_type == GGML_TYPE_TQ4_1S) {
+        dequantize_tq4_1s_row(src, output, n_elems);
     }
     else {
         fprintf(stderr, "Error: unsupported GGML type %d for %s\n", tensor->ggml_type, tensor->name);
@@ -1081,6 +1227,7 @@ void gguf_close(gguf_ctx *ctx) {
             }
         }
         free(ctx->tensors);
+        free(ctx->tensor_raw_bytes);
         free(ctx);
     }
 }
@@ -1249,6 +1396,9 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_IQ4_XS: return n_blocks * 136;  // d[2] + scales_h[2] + scales_l[4] + qs[128]
         case GGML_TYPE_Q4_K:  return n_blocks * 144;  // d[2] + dmin[2] + scales[12] + qs[128]
         case GGML_TYPE_Q4_0:  return ((n_elems + 31) / 32) * 18;  // d[2] + qs[16], block=32
+        case GGML_TYPE_Q2_0:  return ((n_elems + 63) / 64) * 18;  // d[2] + qs 2-bit[16], block=64
+        case GGML_TYPE_TQ3_1S: return ((n_elems + 31) / 32) * 16; // d0[2] + d1[2] + 3-bit[12], block=32
+        case GGML_TYPE_TQ4_1S: return ((n_elems + 31) / 32) * 20; // d0[2] + d1[2] + 4-bit[16], block=32
         case GGML_TYPE_Q2_K:  return n_blocks * 84;   // scales[16] + qs[64] + d[2] + dmin[2]
         case GGML_TYPE_Q3_K:  return n_blocks * 110;  // hmask[32] + qs[64] + scales[12] + d[2]
         case 30:              return n_elems * 2;     // BF16 (bfloat16)

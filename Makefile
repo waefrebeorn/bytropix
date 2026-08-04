@@ -603,6 +603,13 @@ test_tensor_store: tools/test_tensor_store.c src/wubu_tensor_store.o src/safeten
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+test_gguf_tq: tools/test_gguf_tq.c src/gguf_reader.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
+test_gguf_load: tools/test_gguf_load.c src/gguf_reader.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 test_wubu_mhc_mh: tools/test_wubu_mhc_mh.c src/wubu_mhc_mh.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
@@ -648,7 +655,7 @@ test_affinity: tools/test_affinity.c src/wubu_affinity.o
 test_400: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
           test_ssm_scan test_q8 test_cuda_graph test_scheduler test_affinity \
           test_roofline test_cache_advice test_kereq test_pd_split \
-          test_delta_net test_mhc test_hashrouter test_dsa test_tensor_store test_wubu_mhc_mh test_cla test_mega test_yarn \
+          test_delta_net test_mhc test_hashrouter test_dsa test_tensor_store test_gguf_tq test_wubu_mhc_mh test_cla test_mega test_yarn \
           test_kda test_attnres test_latentmoe test_mxfp4 \
           test_kv_tier test_kv_tier_evict
 	@echo "ALL 400-IMPROVEMENT UNIT TESTS PASSED"
