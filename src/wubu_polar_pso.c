@@ -53,7 +53,7 @@ static void fwht(float *v, int d) {
  * Recursion levels reuse pre-allocated buffers. */
 static void rambus_decode_recursive_nomalloc(
     wubu_bit_reader_t *br,
-    int n, const float *cos_tbl, const float *sin_tbl,
+    int n, int d_orig, const float *cos_tbl, const float *sin_tbl,
     int bits, float final_r, float *x_out,
     int *scratch_angles, float *scratch_radii) {
     if (n <= 1) {
@@ -64,6 +64,7 @@ static void rambus_decode_recursive_nomalloc(
     int n_pairs = n / 2;
     int rem = n - n_pairs * 2;
     int levels = 1 << bits;
+    int is_level0 = (n == d_orig); /* Level 0: full circle; deeper: half range */
 
     /* Read angles from serial bitstream — no malloc */
     for (int p = 0; p < n_pairs; p++) {
@@ -73,23 +74,31 @@ static void rambus_decode_recursive_nomalloc(
     /* Recursive: decode the radii using remaining scratch */
     float *sub_radii = scratch_radii + n_pairs;  /* nested space */
     if (n_pairs > 1) {
-        rambus_decode_recursive_nomalloc(br, n_pairs, cos_tbl, sin_tbl,
+        rambus_decode_recursive_nomalloc(br, n_pairs, d_orig, cos_tbl, sin_tbl,
                                          bits, final_r, scratch_radii,
                                          scratch_angles + n_pairs, sub_radii);
     } else {
         scratch_radii[0] = final_r;
     }
 
-    /* Reconstruct (x, y) using precomputed trig tables */
+    /* Reconstruct (x, y) using precomputed trig tables.
+     * Level 0: theta = idx/levels * 2π − π  (full circle [-π,π])
+     * Levels ≥1: theta = idx/levels * π − π/2  (half range [-π/2,π/2])
+     * Match the angle normalization used by polar_encode_recursive. */
     for (int p = 0; p < n_pairs; p++) {
         int idx = scratch_angles[p];
+        if (idx >= levels) idx = levels - 1;
+        if (idx < 0) idx = 0;
         float c, s;
-        if (cos_tbl) {
+        if (cos_tbl && is_level0) {
+            /* Full-circle table valid only at level 0 */
             c = cos_tbl[idx];
             s = sin_tbl[idx];
         } else {
-            float theta = ((float)idx / (float)levels) * 2.0f * (float)M_PI
-                          - (float)M_PI;
+            float norm_a = (float)idx / (float)levels;
+            float theta = is_level0
+                ? (norm_a * 2.0f * (float)M_PI - (float)M_PI)
+                : (norm_a * (float)M_PI - (float)M_PI / 2.0f);
             c = cosf(theta);
             s = sinf(theta);
         }
@@ -165,7 +174,7 @@ static void pso_decode_fast(
     const float *sin_tbl = tl_pso ? tl_pso->sin_table : NULL;
 
     /* Decode using thread-local scratch (NO MALLOC) */
-    rambus_decode_recursive_nomalloc(&br, d, cos_tbl, sin_tbl,
+    rambus_decode_recursive_nomalloc(&br, d, d, cos_tbl, sin_tbl,
         bits, final_r, out,
         g_scratch.angles_buf, g_scratch.radii_buf);
 

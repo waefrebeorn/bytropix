@@ -738,4 +738,11 @@ void wubu_fast_attn_decode_q8(
         }
     }
 
+    float inv = 1.0f / (sum_exp + 1e-10f);
+    for (int qh = 0; qh < n_q; qh++) {
+        float *oh = out + (size_t)qh * hd;
+        const float *oacc = out_acc + (size_t)qh * hd;
+        for (int d = 0; d < hd; d++)
+            oh[d] = oacc[d] * inv;
+    }
 }
