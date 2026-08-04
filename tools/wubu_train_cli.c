@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <glob.h>
+#include <sys/stat.h>
 #include "wubu.h"
 #include "wubu_train.h"
 #include "wubu_grow.h"
@@ -152,6 +154,52 @@ static int save_checkpoint(const wubu_model_t *m, const char *path)
     return 0;
 }
 
+/* Rolling checkpoint retention (the file-bloat fix, 2026-08-04): after a
+ * step checkpoint is saved, prune this out_path line down to the newest
+ * `keep` step checkpoints. keep = 3 normally; if the line's step
+ * checkpoints exceed CKPT_LARGE_BYTES (~1 GiB) tighten to 2. The final
+ * checkpoint (out_path itself, no -NNNN.st suffix) is the anchor and is
+ * never pruned. Without this, a long run accumulates every step
+ * checkpoint forever (103 files / 14 GiB of stale seed-40..47 lines). */
+#define CKPT_KEEP_DEFAULT 3
+#define CKPT_KEEP_TIGHT   2
+#define CKPT_LARGE_BYTES  (1024LL * 1024 * 1024)
+
+static int cmp_step(const void *a, const void *b)
+{
+    const char *fa = *(const char *const *)a;
+    const char *fb = *(const char *const *)b;
+    const char *sa = strrchr(fa, '-');
+    const char *sb = strrchr(fb, '-');
+    long ia = sa ? atol(sa + 1) : 0;
+    long ib = sb ? atol(sb + 1) : 0;
+    return (ia > ib) - (ia < ib);
+}
+
+static void prune_step_checkpoints(const char *out_path)
+{
+    char pattern[576];
+    snprintf(pattern, sizeof(pattern), "%s-*.st", out_path);
+    glob_t g;
+    if (glob(pattern, 0, NULL, &g) != 0 || g.gl_pathc == 0) {
+        if (g.gl_pathc) globfree(&g);
+        return;
+    }
+    qsort(g.gl_pathv, g.gl_pathc, sizeof(char *), cmp_step);
+    long long total = 0;
+    for (size_t i = 0; i < g.gl_pathc; i++) {
+        struct stat st;
+        if (stat(g.gl_pathv[i], &st) == 0) total += (long long)st.st_size;
+    }
+    int keep = (total > CKPT_LARGE_BYTES) ? CKPT_KEEP_TIGHT : CKPT_KEEP_DEFAULT;
+    if ((int)g.gl_pathc <= keep) { globfree(&g); return; }
+    for (size_t i = 0; i + (size_t)keep < g.gl_pathc; i++) {
+        if (remove(g.gl_pathv[i]) == 0)
+            printf("  prune -> %s (rolling keep %d)\n", g.gl_pathv[i], keep);
+    }
+    globfree(&g);
+}
+
 int main(int argc, char **argv)
 {
     const char *model_path = arg_get(argc, argv, "--model",
@@ -274,8 +322,10 @@ int main(int argc, char **argv)
         if (step % ckpt_every == 0) {
             char ck[512];
             snprintf(ck, sizeof(ck), "%s-%04d.st", out_path, step);
-            if (save_checkpoint(&m, ck) == 0)
+            if (save_checkpoint(&m, ck) == 0) {
                 printf("  checkpoint -> %s\n", ck);
+                prune_step_checkpoints(out_path);  /* rolling keep 3 (2 if large) */
+            }
         }
     }
     if (save_checkpoint(&m, out_path) == 0)
