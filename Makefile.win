@@ -24,7 +24,7 @@ LDLIBS  = -L$(CUDA_LIB) -lcudart -lcublas \
           -lws2_32 -ladvapi32 -lkernel32 -luser32 \
           -fopenmp -lm
 
-CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_ssm.o \
+CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu_stub.o src/wubu_ssm.o \
   src/wubu_ssm_workspace.o src/wubu_ssm_chunked.o src/wubu_mobius.o \
   src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o \
   src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o \
