@@ -103,6 +103,10 @@ float wubu_diag_zscore(const wubu_diag_t *d, wubu_diag_kind kind,
  * *grow / *shrink receive counts (0 if NULL). Returns 0 on success. */
 int wubu_diag_classify(wubu_diag_t *d, float *grow, float *shrink);
 
+/* ---- REAL-GRAD BRIDGE (milestone 2) ---- */
+#include "wubu_train.h"
+int wubu_diag_record_grads(wubu_diag_t *d, const wubu_train_t *tr);
+
 /* THE CAUSAL WALKER: on a fitness drop (held-out loss past loss_tol),
  * find the EARLIEST out-of-family measurement that precedes it -- the
  * root cause candidate. report[] gets a human-readable diagnosis, or the

@@ -8,17 +8,17 @@
 static size_t block_bytes(void)
 {
     size_t s = 0;
-    s += (size_t)BARUN_DIM * BARUN_HEADS * 64 * sizeof(float);      /* q */
-    s += (size_t)BARUN_DIM * BARUN_KV_HEADS * 64 * sizeof(float);   /* k */
-    s += (size_t)BARUN_DIM * BARUN_KV_HEADS * 64 * sizeof(float);   /* v */
-    s += (size_t)BARUN_DIM * BARUN_HEADS * 64 * sizeof(float);      /* o */
-    s += (size_t)BARUN_DIM * BARUN_HEADS * 64 * sizeof(float);      /* g */
-    s += (size_t)BARUN_KV_HEADS * 64 * sizeof(float);               /* q_norm */
-    s += (size_t)BARUN_KV_HEADS * 64 * sizeof(float);               /* k_norm */
-    s += (size_t)BARUN_DIM * sizeof(float);                         /* attn_norm */
-    s += (size_t)BARUN_DIM * BARUN_FFN_DIM * 2 * sizeof(float);         /* gate_up */
-    s += (size_t)BARUN_FFN_DIM * BARUN_DIM * sizeof(float);             /* down */
-    s += (size_t)BARUN_DIM * sizeof(float);                         /* ffn_norm */
+    s += (size_t)WUBU_DIM * WUBU_HEADS * 64 * sizeof(float);      /* q */
+    s += (size_t)WUBU_DIM * WUBU_KV_HEADS * 64 * sizeof(float);   /* k */
+    s += (size_t)WUBU_DIM * WUBU_KV_HEADS * 64 * sizeof(float);   /* v */
+    s += (size_t)WUBU_DIM * WUBU_HEADS * 64 * sizeof(float);      /* o */
+    s += (size_t)WUBU_DIM * WUBU_HEADS * 64 * sizeof(float);      /* g */
+    s += (size_t)WUBU_KV_HEADS * 64 * sizeof(float);               /* q_norm */
+    s += (size_t)WUBU_KV_HEADS * 64 * sizeof(float);               /* k_norm */
+    s += (size_t)WUBU_DIM * sizeof(float);                         /* attn_norm */
+    s += (size_t)WUBU_DIM * WUBU_FFN_DIM * 2 * sizeof(float);         /* gate_up */
+    s += (size_t)WUBU_FFN_DIM * WUBU_DIM * sizeof(float);             /* down */
+    s += (size_t)WUBU_DIM * sizeof(float);                         /* ffn_norm */
     return s;
 }
 
@@ -29,17 +29,17 @@ static wubu_block_t zero_block(void)
     /* allocate each buffer independently so wubu_free's per-field
      * free() calls work correctly (a single calloc with offset
      * pointers would crash wubu_free's free(k_proj) etc.) */
-    z.q_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_HEADS * 64,    sizeof(float));
-    z.k_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_KV_HEADS * 64,  sizeof(float));
-    z.v_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_KV_HEADS * 64,  sizeof(float));
-    z.o_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_HEADS * 64,    sizeof(float));
-    z.g_proj    = (float *)calloc((size_t)BARUN_DIM * BARUN_HEADS * 64,    sizeof(float));
-    z.q_norm    = (float *)calloc((size_t)BARUN_KV_HEADS * 64,             sizeof(float));
-    z.k_norm    = (float *)calloc((size_t)BARUN_KV_HEADS * 64,             sizeof(float));
-    z.attn_norm = (float *)calloc((size_t)BARUN_DIM,                       sizeof(float));
-    z.gate_up   = (float *)calloc((size_t)BARUN_DIM * BARUN_FFN_DIM * 2,    sizeof(float));
-    z.down      = (float *)calloc((size_t)BARUN_FFN_DIM * BARUN_DIM,        sizeof(float));
-    z.ffn_norm  = (float *)calloc((size_t)BARUN_DIM,                       sizeof(float));
+    z.q_proj    = (float *)calloc((size_t)WUBU_DIM * WUBU_HEADS * 64,    sizeof(float));
+    z.k_proj    = (float *)calloc((size_t)WUBU_DIM * WUBU_KV_HEADS * 64,  sizeof(float));
+    z.v_proj    = (float *)calloc((size_t)WUBU_DIM * WUBU_KV_HEADS * 64,  sizeof(float));
+    z.o_proj    = (float *)calloc((size_t)WUBU_DIM * WUBU_HEADS * 64,    sizeof(float));
+    z.g_proj    = (float *)calloc((size_t)WUBU_DIM * WUBU_HEADS * 64,    sizeof(float));
+    z.q_norm    = (float *)calloc((size_t)WUBU_KV_HEADS * 64,             sizeof(float));
+    z.k_norm    = (float *)calloc((size_t)WUBU_KV_HEADS * 64,             sizeof(float));
+    z.attn_norm = (float *)calloc((size_t)WUBU_DIM,                       sizeof(float));
+    z.gate_up   = (float *)calloc((size_t)WUBU_DIM * WUBU_FFN_DIM * 2,    sizeof(float));
+    z.down      = (float *)calloc((size_t)WUBU_FFN_DIM * WUBU_DIM,        sizeof(float));
+    z.ffn_norm  = (float *)calloc((size_t)WUBU_DIM,                       sizeof(float));
     if (!z.q_proj) { memset(&z, 0, sizeof z); return z; }
     return z;
 }
@@ -62,7 +62,7 @@ static void block_free(wubu_block_t *blk)
 int wubu_grow_insert_block(wubu_model_t *m, int pos)
 {
     if (!m || pos < 0 || pos > m->n_layers) return 0;
-    if (m->n_layers >= BARUN_LAYERS) return 0;
+    if (m->n_layers >= WUBU_LAYERS) return 0;
     wubu_block_t z = zero_block();
     if (!z.q_proj) return 0;
     /* the displaced block at [n_layers] is overwritten by the shift.
@@ -86,7 +86,7 @@ int wubu_grow_insert_block(wubu_model_t *m, int pos)
      * position's natural rhythm so the future growths stay consistent;
      * it never fires the residual selector (the identity blend is
      * harmless, but NOT firing keeps the selector order aligned) */
-    m->is_full[pos] = ((pos + 1) % BARUN_FULL_EVERY == 0) ? 1 : 0;
+    m->is_full[pos] = ((pos + 1) % WUBU_FULL_EVERY == 0) ? 1 : 0;
     m->fire_sel[pos] = 0;
     m->n_layers++;
     return 1;
@@ -95,28 +95,28 @@ int wubu_grow_insert_block(wubu_model_t *m, int pos)
 int wubu_grow_stack_block(wubu_model_t *m, int src)
 {
     if (!m || src < 0 || src >= m->n_layers) return 0;
-    if (m->n_layers >= BARUN_LAYERS) return 0;
+    if (m->n_layers >= WUBU_LAYERS) return 0;
     wubu_block_t z = zero_block();
     if (!z.q_proj) return 0;
     /* the G_stack copy: every weight buffer of the source block copied */
     wubu_block_t *s = &m->blocks[src];
-    size_t q = (size_t)BARUN_DIM * BARUN_HEADS * 64;
-    size_t k = (size_t)BARUN_DIM * BARUN_KV_HEADS * 64;
-    size_t f = (size_t)BARUN_DIM * BARUN_FFN_DIM * 2;
-    size_t d = (size_t)BARUN_FFN_DIM * BARUN_DIM;
+    size_t q = (size_t)WUBU_DIM * WUBU_HEADS * 64;
+    size_t k = (size_t)WUBU_DIM * WUBU_KV_HEADS * 64;
+    size_t f = (size_t)WUBU_DIM * WUBU_FFN_DIM * 2;
+    size_t d = (size_t)WUBU_FFN_DIM * WUBU_DIM;
     memcpy(z.q_proj, s->q_proj, q * sizeof(float));
     memcpy(z.k_proj, s->k_proj, k * sizeof(float));
     memcpy(z.v_proj, s->v_proj, k * sizeof(float));
     memcpy(z.o_proj, s->o_proj, q * sizeof(float));
     memcpy(z.g_proj, s->g_proj, q * sizeof(float));
-    memcpy(z.q_norm, s->q_norm, (size_t)BARUN_KV_HEADS * 64 * sizeof(float));
-    memcpy(z.k_norm, s->k_norm, (size_t)BARUN_KV_HEADS * 64 * sizeof(float));
-    memcpy(z.attn_norm, s->attn_norm, (size_t)BARUN_DIM * sizeof(float));
+    memcpy(z.q_norm, s->q_norm, (size_t)WUBU_KV_HEADS * 64 * sizeof(float));
+    memcpy(z.k_norm, s->k_norm, (size_t)WUBU_KV_HEADS * 64 * sizeof(float));
+    memcpy(z.attn_norm, s->attn_norm, (size_t)WUBU_DIM * sizeof(float));
     memcpy(z.gate_up, s->gate_up, f * sizeof(float));
     memcpy(z.down, s->down, d * sizeof(float));
-    memcpy(z.ffn_norm, s->ffn_norm, (size_t)BARUN_DIM * sizeof(float));
+    memcpy(z.ffn_norm, s->ffn_norm, (size_t)WUBU_DIM * sizeof(float));
     m->blocks[m->n_layers] = z;
-    m->is_full[m->n_layers] = ((m->n_layers + 1) % BARUN_FULL_EVERY == 0) ? 1 : 0;
+    m->is_full[m->n_layers] = ((m->n_layers + 1) % WUBU_FULL_EVERY == 0) ? 1 : 0;
     m->fire_sel[m->n_layers] = 0;
     m->n_layers++;
     return 1;
@@ -148,7 +148,7 @@ int wubu_grow_events(int T, int base_layers, int max_layers, float step_frac)
 
 int wubu_train_grow(wubu_train_t *tr, int pos, int n_layers)
 {
-    if (!tr || pos < 0 || pos > n_layers || n_layers >= BARUN_LAYERS) return 0;
+    if (!tr || pos < 0 || pos > n_layers || n_layers >= WUBU_LAYERS) return 0;
     /* the per-block pointer arrays: shift up then allocate the new slot */
 #define SHIFT_ARR(ARR, SZ) do {                                        \
         if (ARR[n_layers]) free(ARR[n_layers]); /* the displaced unused */ \
@@ -156,10 +156,10 @@ int wubu_train_grow(wubu_train_t *tr, int pos, int n_layers)
         ARR[pos] = (float *)calloc((size_t)(SZ), sizeof(float));         \
         if (!ARR[pos]) return 0;                                         \
     } while (0)
-    size_t q = (size_t)BARUN_DIM * BARUN_HEADS * 64;
-    size_t k = (size_t)BARUN_DIM * BARUN_KV_HEADS * 64;
-    size_t f = (size_t)BARUN_DIM * BARUN_FFN_DIM * 2;
-    size_t d = (size_t)BARUN_FFN_DIM * BARUN_DIM;
+    size_t q = (size_t)WUBU_DIM * WUBU_HEADS * 64;
+    size_t k = (size_t)WUBU_DIM * WUBU_KV_HEADS * 64;
+    size_t f = (size_t)WUBU_DIM * WUBU_FFN_DIM * 2;
+    size_t d = (size_t)WUBU_FFN_DIM * WUBU_DIM;
     SHIFT_ARR(tr->q_proj_g, q); SHIFT_ARR(tr->k_proj_g, k);
     SHIFT_ARR(tr->v_proj_g, k); SHIFT_ARR(tr->o_proj_g, q);
     SHIFT_ARR(tr->g_proj_g, q); SHIFT_ARR(tr->gate_up_g, f);
@@ -182,7 +182,7 @@ int wubu_train_grow(wubu_train_t *tr, int pos, int n_layers)
             tr->norm_m[4 * l + k] = tr->norm_m[4 * (l - 1) + k];
             tr->norm_v[4 * l + k] = tr->norm_v[4 * (l - 1) + k];
         }
-    int sz[4] = { BARUN_DIM, BARUN_DIM, 64, 64 };
+    int sz[4] = { WUBU_DIM, WUBU_DIM, 64, 64 };
     for (int k = 0; k < 4; k++) {
         tr->norm_g[4 * pos + k] = (float *)calloc((size_t)sz[k], sizeof(float));
         tr->norm_m[4 * pos + k] = (float *)calloc((size_t)sz[k], sizeof(float));

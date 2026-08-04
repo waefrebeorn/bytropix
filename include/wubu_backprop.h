@@ -32,8 +32,8 @@
  *     DA doctrine: tests != correct, so the analytic gradients are
  *     checked against numerical gradients on a tiny model.
  */
-#ifndef WUBU_BARUN_BACKPROP_H
-#define WUBU_BARUN_BACKPROP_H
+#ifndef WUBU_BACKPROP_H
+#define WUBU_BACKPROP_H
 
 #include "wubu.h"
 #include "wubu_train.h"
@@ -42,7 +42,7 @@
  * one of these; the forward fills it, the backward consumes it. */
 typedef struct wubu_bp_t {
     int seq;
-    int layers;   /* BARUN_LAYERS */
+    int layers;   /* WUBU_LAYERS */
     int cap_seq;  /* the allocated sequence capacity (>= any seq used) */
     /* per-layer residual-stream snapshots: x BEFORE the layer */
     float *x_in;      /* [L, seq, 448] (the layer output survives) */

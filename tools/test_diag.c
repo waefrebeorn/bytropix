@@ -17,6 +17,8 @@
 #include <math.h>
 #include "wubu_diag.h"
 #include "wubu_hive.h"
+#include "wubu.h"
+#include "wubu_train.h"
 
 static int failures = 0;
 #define CHECK(c, m) do { if (!(c)) { printf("  FAIL: %s\n", m); failures++; } else { printf("  ok: %s\n", m); } } while (0)
@@ -196,6 +198,59 @@ int main(void)
             fclose(sf);
             CHECK(strstr(buf, "\"LOSS\"") != NULL, "snapshot has LOSS aggregate");
             CHECK(strstr(buf, "\"cells\"") != NULL, "snapshot has cells");
+        }
+    }
+
+    /* --- oracle 7: THE REAL-GRAD BRIDGE (milestone 2) ---
+     * the trainer's ACTUAL per-layer gradients become GRAD cells.
+     * cell = layer index; the diagnostic sees the REAL training signal. */
+    {
+        printf("[oracle 7] real backprop grads -> GRAD cells\n");
+        wubu_model_t m;
+        if (wubu_load(&m, "models/wubu/model.safetensors") != 0) {
+            printf("  FAIL: cannot load the seed model for oracle 7\n");
+            failures++;
+        } else {
+            wubu_buf_t b;
+            wubu_hive_t hive;
+            wubu_hive_init(&hive);
+            wubu_diag_t *d = wubu_diag_init(&hive, 0);
+            CHECK(wubu_buf_alloc(&b, 64) == 0, "buf alloc");
+            wubu_train_t tr;
+            CHECK(wubu_train_init(&tr, &m) == 0, "train init");
+            wubu_train_zero_grad(&tr);
+            /* one real microbatch: a short synthetic sequence */
+            uint16_t tok[48];
+            for (int i = 0; i < 48; i++) tok[i] = (uint16_t)(10 + (i * 7) % 60);
+            float loss = wubu_train_microbatch(&m, &tr, &b, tok, 48);
+            printf("  (microbatch loss=%.4f)\n", loss);
+            CHECK(isfinite(loss), "loss finite");
+            /* the bridge: real grads -> GRAD cells */
+            int n_rec = wubu_diag_record_grads(d, &tr);
+            CHECK(n_rec == WUBU_LAYERS + 1, "one GRAD cell per layer + embedding");
+            printf("  (recorded %d GRAD cells: layers 0..%d + emb)\n",
+                   n_rec, WUBU_LAYERS - 1);
+            /* the cells are populated with REAL norms (nonzero, finite) */
+            int live = 0, finite_ok = 1;
+            for (wubu_hive_block_t *blk = hive.head; blk; blk = blk->next)
+                for (size_t i = 0; i < blk->cap; i++) {
+                    if (blk->skip[i]) continue;
+                    wubu_diag_cell *c = (wubu_diag_cell *)blk->slots[i];
+                    if (c->kind == WUBU_DIAG_GRAD) {
+                        live++;
+                        if (!isfinite(c->value) || c->value < 0) finite_ok = 0;
+                    }
+                }
+            CHECK(live == WUBU_LAYERS + 1, "all grad cells live");
+            CHECK(finite_ok, "all grad norms finite and non-negative");
+            /* classify runs over real grads without crashing */
+            float grow = -1, shrink = -1;
+            CHECK(wubu_diag_classify(d, &grow, &shrink) == 0, "classify over real grads");
+            printf("  (classify: grow=%.0f shrink=%.0f)\n", grow, shrink);
+            wubu_diag_free(d);
+            wubu_hive_clear(&hive);
+            wubu_train_zero_grad(&tr);
+            wubu_free(&m, &b);
         }
     }
 

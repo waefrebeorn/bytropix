@@ -1,6 +1,6 @@
-/* wubu_save.h -- export trained Barun checkpoints as real safetensors. */
-#ifndef BARUN_SAVE_H
-#define BARUN_SAVE_H
+/* wubu_save.h -- export trained WuBu checkpoints as real safetensors. */
+#ifndef WUBU_SAVE_H
+#define WUBU_SAVE_H
 
 #include "wubu.h"
 

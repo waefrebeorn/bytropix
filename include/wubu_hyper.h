@@ -55,7 +55,7 @@ double wubu_hyper_dist(double c, const double *x, const double *y, int n);
 
 /* The hyperbolic lift block: x (Euclidean, [n]) -> lift into the ball
  * with curvature c, gyro-rotate the query/key for attention, project
- * back. This is the layer the Barun blocks call when hyperbolic mode
+ * back. This is the layer the WuBu blocks call when hyperbolic mode
  * is on. Returns 0 on success. */
 typedef struct {
     double c;        /* learnable curvature (> 0) */

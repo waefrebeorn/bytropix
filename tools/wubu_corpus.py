@@ -2,7 +2,7 @@
 """
 wubu_corpus.py -- the AGI corpus acquisition + tokenization pipeline.
 
-Downloads the smollm-corpus shards (the exact corpus BarunLM was trained
+Downloads the smollm-corpus shards (the exact corpus WuBu was trained
 on) to the SD card, extracts the text, tokenizes with the byte-level BPE
 tokenizer, and writes compact uint16 token streams (.tok) that the C11
 trainer consumes.

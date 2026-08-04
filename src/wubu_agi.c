@@ -66,7 +66,7 @@ int wubu_agi_think(wubu_agi_t *agi, uint16_t *out_tokens, int max_out)
     float *logits = wubu_last_logits(agi->buf);
     if (!logits) return -1;
     int best = 0;
-    for (int i = 1; i < BARUN_VOCAB && i < max_out; i++)
+    for (int i = 1; i < WUBU_VOCAB && i < max_out; i++)
         if (logits[i] > logits[best]) best = i;
     out_tokens[0] = (uint16_t)best;
     return 1;

@@ -47,7 +47,7 @@ Practical rule for WuBu-35M: **train on every token you have; repeat up to 4 epo
 
 **Schedule:** cosine to 10% of peak (nanoGPT; GPT-3), or **WSD** (warmup-stable-decay — [MiniCPM](https://arxiv.org/abs/2404.06395)): smolLM2-1.7B used WSD, 2000-step warmup, lr 5e-4, **10% linear decay to 0**; the 135M/360M used **20% decay, lr 3e-3** ([smolLM2 §6, App. A](https://arxiv.org/abs/2502.02737)). DeepSeek-V3: warmup 2K steps → constant 2.2e-4 until 10T tokens → cosine to 2.2e-5 over 4.3T → final 500B at 2.2e-5 then 7.3e-6 ([V3 §4.2](https://arxiv.org/abs/2412.19437)). Moonlight: warmup 2K steps to 4.2e-4, cosine to 4.2e-5, then a **cooldown stage**: lr up to 1e-4 in 100 steps, linear to 0 over 500B tokens on math/code/reasoning data ([Muon is Scalable, App. D](https://arxiv.org/abs/2502.16982)).
 
-**Context-length curriculum.** DeepSeek-V3 pretrains at 4K, then two long-context phases (32K → 128K) at constant LR 7.3e-6 ([§4.3](https://arxiv.org/abs/2412.19437)). For WuBu-35M: pretrain at 1024, extend to 2048 for the last ~20–30% of tokens (or WSD-decay stage). For BarunLM's hybrid local/global attention: modded-nanogpt uses **long-short sliding-window attention with window-size warmup + YaRN** (Gemma-2-inspired) ([modded-nanogpt README](https://github.com/KellerJordan/modded-nanogpt)) — warm the local window up from small→full rather than starting full.
+**Context-length curriculum.** DeepSeek-V3 pretrains at 4K, then two long-context phases (32K → 128K) at constant LR 7.3e-6 ([§4.3](https://arxiv.org/abs/2412.19437)). For WuBu-35M: pretrain at 1024, extend to 2048 for the last ~20–30% of tokens (or WSD-decay stage). For WuBu's hybrid local/global attention: modded-nanogpt uses **long-short sliding-window attention with window-size warmup + YaRN** (Gemma-2-inspired) ([modded-nanogpt README](https://github.com/KellerJordan/modded-nanogpt)) — warm the local window up from small→full rather than starting full.
 
 ### Stage 2 — SFT (cheap at 35M; do it)
 
@@ -74,7 +74,7 @@ Practical rule for WuBu-35M: **train on every token you have; repeat up to 4 epo
 
 ---
 
-## 3. Muon — correct usage, and confirm/correct for the Barun trainer
+## 3. Muon — correct usage, and confirm/correct for the WuBu trainer
 
 ### The algorithm (authoritative)
 
@@ -90,13 +90,13 @@ W_t = W_{t-1} − η·O_t                        # no bias correction, no per-pa
   coefficients **(a,b,c) = (3.4445, −4.7750, 2.0315)**; normalize `X = G/‖G‖_F`; **transpose if rows > cols**; run the iteration in **bf16** (it's numerically stable there, unlike coupled-Newton) with eps 1e-7 ([blog](https://kellerjordan.github.io/posts/muon/); original speedrun code `newtonschulz5`).
 - **Momentum 0.95**, Nesterov-style (`nesterov=True` in the speedrun; Moonlight also applies NS to `μ·m + g`).
 - **No bias correction** (unlike Adam).
-- **Param split (the part Barun already implements — confirmed correct):** 2D matrices of *hidden* layers (attention q/k/v/o, MLP in/out/gate) → Muon. **Embeddings, lm_head, RMSNorm weights, biases, all 1-D params → AdamW.** Both Keller ("scalar and vector parameters… as well as the input and output layers, should be optimized by a standard method such as AdamW" — [blog](https://kellerjordan.github.io/posts/muon/)) and Moonlight ("AdamW is used in couple with Muon to handle non-matrix based parameters, like RMSNorm, LM head, and embedding parameters" — [§2.2](https://arxiv.org/abs/2502.16982)) are explicit. Muon on embed/head **hurts** — this is the most common Muon bug.
+- **Param split (the part WuBu already implements — confirmed correct):** 2D matrices of *hidden* layers (attention q/k/v/o, MLP in/out/gate) → Muon. **Embeddings, lm_head, RMSNorm weights, biases, all 1-D params → AdamW.** Both Keller ("scalar and vector parameters… as well as the input and output layers, should be optimized by a standard method such as AdamW" — [blog](https://kellerjordan.github.io/posts/muon/)) and Moonlight ("AdamW is used in couple with Muon to handle non-matrix based parameters, like RMSNorm, LM head, and embedding parameters" — [§2.2](https://arxiv.org/abs/2502.16982)) are explicit. Muon on embed/head **hurts** — this is the most common Muon bug.
 - **LRs:** canonical example from the Muon repo: Muon group **lr 0.02**, AdamW group **lr 3e-4** with betas (0.90, 0.95), wd 0.01 both ([Muon README](https://github.com/KellerJordan/Muon)). The original speedrun (124M, 3.28 FineWeb loss): **Muon lr 0.05**, and three separate Adam groups with betas (0.8, 0.95): embeddings 0.6, lm_head 0.008, scalars 0.04 ([train_gpt2.py @ 9730304](https://github.com/KellerJordan/modded-nanogpt/blob/973030408364f8738b4ad9e8f912d8cbbf56e4d4/train_gpt2.py)) — those are speedrun-tuned, not defaults.
 - **Weight decay:** the canonical example uses wd 0.01; Moonlight found **wd 0.1 is essential at scale** — without it, weight and layer-output RMS grow beyond bf16 range (their fix #1) ([§2.2](https://arxiv.org/abs/2502.16982)). The original speedrun used wd 0 and added "standard weight decay" later ([record history](https://github.com/KellerJordan/modded-nanogpt)). **Recommendation for 35M: wd 0.1 on both groups** (0.01–0.1 is the safe band; some labs zero wd on embeddings).
-- **Per-matrix update scale (Moonlight fix #2, optional at 35M):** either normalize each NS update so its RMS = 0.2, or scale LR per matrix by `0.2·√max(A,B)`. This lets Muon reuse AdamW-tuned LR/wd and prevents instability on tiny/odd-shaped matrices (e.g. individual GQA KV heads) ([§2.2](https://arxiv.org/abs/2502.16982)). If BarunLM's 8Q/1KV GQA or hybrid-attention projections misbehave, apply this.
+- **Per-matrix update scale (Moonlight fix #2, optional at 35M):** either normalize each NS update so its RMS = 0.2, or scale LR per matrix by `0.2·√max(A,B)`. This lets Muon reuse AdamW-tuned LR/wd and prevents instability on tiny/odd-shaped matrices (e.g. individual GQA KV heads) ([§2.2](https://arxiv.org/abs/2502.16982)). If WuBu's 8Q/1KV GQA or hybrid-attention projections misbehave, apply this.
 - **Grad clip 1.0; momentum buffer in fp32** (the speedrun comment: "FP32 for precision").
 
-### Confirm/correct checklist for the Barun trainer
+### Confirm/correct checklist for the WuBu trainer
 
 | Item | Correct practice | Status to check |
 |---|---|---|
@@ -124,7 +124,7 @@ W_t = W_{t-1} − η·O_t                        # no bias correction, no per-pa
 7. **Newton-Schulz implementation bugs:** <5 iterations, missing Frobenius normalization, no tall-matrix transpose, fp32 (slow) or fp16 (unstable) instead of bf16, wrong coefficients. All spelled out in the reference code. ([newtonschulz5](https://github.com/KellerJordan/modded-nanogpt/blob/973030408364f8738b4ad9e8f912d8cbbf56e4d4/train_gpt2.py))
 8. **Tokenizer/corpus mismatch.** A 16K vocab BPE trained on the wrong corpus wastes ~21% of the model on embeddings and caps quality; verify bytes/token on the actual corpus; tie embed+head. ([modded-nanogpt README](https://github.com/KellerJordan/modded-nanogpt))
 9. **No eval discipline.** Evaluate every 125–500 steps on held-out data; at 35M benchmarks are near-chance noise — trust the val-loss curve, watch the train/val gap when repeating data. ([modded-nanogpt](https://github.com/KellerJordan/modded-nanogpt))
-10. **Scheduler/cooldown mistakes.** Cosine to 0 with no min (use 10% floor — nanoGPT); or WSD without a decay stage at all (the decay/cooldown is where the model actually converges — smolLM2 used 10–20% of tokens for it; TinyLlama substitutes a 4× batch-size cooldown). Plus: **hybrid-attention misconfig** — BarunLM's local/global attention needs the local window warmed up and loss on global tokens; skip this and long-range/global capacity silently dies. ([nanoGPT train.py](https://github.com/karpathy/nanoGPT/blob/master/train.py), [smolLM2 App. A](https://arxiv.org/abs/2502.02737), [TinyLlama §2.4](https://arxiv.org/abs/2401.02385), [modded-nanogpt README](https://github.com/KellerJordan/modded-nanogpt))
+10. **Scheduler/cooldown mistakes.** Cosine to 0 with no min (use 10% floor — nanoGPT); or WSD without a decay stage at all (the decay/cooldown is where the model actually converges — smolLM2 used 10–20% of tokens for it; TinyLlama substitutes a 4× batch-size cooldown). Plus: **hybrid-attention misconfig** — WuBu's local/global attention needs the local window warmed up and loss on global tokens; skip this and long-range/global capacity silently dies. ([nanoGPT train.py](https://github.com/karpathy/nanoGPT/blob/master/train.py), [smolLM2 App. A](https://arxiv.org/abs/2502.02737), [TinyLlama §2.4](https://arxiv.org/abs/2401.02385), [modded-nanogpt README](https://github.com/KellerJordan/modded-nanogpt))
 
 ---
 

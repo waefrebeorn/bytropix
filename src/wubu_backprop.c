@@ -63,8 +63,8 @@ static int g_gpu_tried = 0;
  * threshold from the hardware table (RTX 4050, 6GB) */
 #define GPU_MIN_FLOP 1000000
 
-#define D  BARUN_DIM
-#define FF BARUN_FFN_DIM
+#define D  WUBU_DIM
+#define FF WUBU_FFN_DIM
 
 static float *calloc_f(size_t n)
 {
@@ -75,7 +75,7 @@ int wubu_bp_alloc(wubu_bp_t *bp, int max_seq)
 {
     if (!bp || max_seq <= 0) return -1;
     memset(bp, 0, sizeof(*bp));
-    int L = BARUN_LAYERS;
+    int L = WUBU_LAYERS;
     size_t sd = (size_t)max_seq * D;
     bp->layers = L;
     bp->cap_seq = max_seq;
@@ -98,7 +98,7 @@ int wubu_bp_alloc(wubu_bp_t *bp, int max_seq)
     bp->ckpt      = calloc_f(sd);
     bp->sel_w0    = calloc_f((size_t)L);
     bp->final_h   = calloc_f(sd);
-    bp->logits    = calloc_f((size_t)max_seq * BARUN_VOCAB);
+    bp->logits    = calloc_f((size_t)max_seq * WUBU_VOCAB);
     bp->s_dq      = calloc_f(sd);
     bp->s_dk      = calloc_f((size_t)max_seq * 64);
     bp->s_dv      = calloc_f((size_t)max_seq * 64);
@@ -148,7 +148,7 @@ static float rms_norm(float *out, const float *x, const float *w, int n)
 {
     float ss = 0;
     for (int i = 0; i < n; i++) ss += x[i] * x[i];
-    float r = 1.0f / sqrtf(ss / n + BARUN_EPS);
+    float r = 1.0f / sqrtf(ss / n + WUBU_EPS);
     for (int i = 0; i < n; i++) out[i] = x[i] * r * w[i];
     return r;
 }
@@ -190,14 +190,14 @@ static void rope_q(float *q, int seq, const float *cos_tbl,
                    const float *sin_tbl)
 {
     for (int s = 0; s < seq; s++) {
-        for (int h = 0; h < BARUN_HEADS; h++) {
+        for (int h = 0; h < WUBU_HEADS; h++) {
             float *row = q + ((size_t)s * D + (size_t)h * 64);
-            const float *c = cos_tbl + (size_t)s * BARUN_ROPE_DIM;
-            const float *si = sin_tbl + (size_t)s * BARUN_ROPE_DIM;
-            for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
-                float x0 = row[i], x1 = row[BARUN_ROPE_DIM / 2 + i];
+            const float *c = cos_tbl + (size_t)s * WUBU_ROPE_DIM;
+            const float *si = sin_tbl + (size_t)s * WUBU_ROPE_DIM;
+            for (int i = 0; i < WUBU_ROPE_DIM / 2; i++) {
+                float x0 = row[i], x1 = row[WUBU_ROPE_DIM / 2 + i];
                 row[i] = x0 * c[i] - x1 * si[i];
-                row[BARUN_ROPE_DIM / 2 + i] = x0 * si[i] + x1 * c[i];
+                row[WUBU_ROPE_DIM / 2 + i] = x0 * si[i] + x1 * c[i];
             }
         }
     }
@@ -207,12 +207,12 @@ static void rope_k(float *k, int seq, const float *cos_tbl,
 {
     for (int s = 0; s < seq; s++) {
         float *row = k + (size_t)s * 64;
-        const float *c = cos_tbl + (size_t)s * BARUN_ROPE_DIM;
-        const float *si = sin_tbl + (size_t)s * BARUN_ROPE_DIM;
-        for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
-            float x0 = row[i], x1 = row[BARUN_ROPE_DIM / 2 + i];
+        const float *c = cos_tbl + (size_t)s * WUBU_ROPE_DIM;
+        const float *si = sin_tbl + (size_t)s * WUBU_ROPE_DIM;
+        for (int i = 0; i < WUBU_ROPE_DIM / 2; i++) {
+            float x0 = row[i], x1 = row[WUBU_ROPE_DIM / 2 + i];
             row[i] = x0 * c[i] - x1 * si[i];
-            row[BARUN_ROPE_DIM / 2 + i] = x0 * si[i] + x1 * c[i];
+            row[WUBU_ROPE_DIM / 2 + i] = x0 * si[i] + x1 * c[i];
         }
     }
 }
@@ -221,14 +221,14 @@ static void unrope_q(float *dq, int seq, const float *cos_tbl,
                      const float *sin_tbl)
 {
     for (int s = 0; s < seq; s++) {
-        for (int h = 0; h < BARUN_HEADS; h++) {
+        for (int h = 0; h < WUBU_HEADS; h++) {
             float *row = dq + ((size_t)s * D + (size_t)h * 64);
-            const float *c = cos_tbl + (size_t)s * BARUN_ROPE_DIM;
-            const float *si = sin_tbl + (size_t)s * BARUN_ROPE_DIM;
-            for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
-                float g0 = row[i], g1 = row[BARUN_ROPE_DIM / 2 + i];
+            const float *c = cos_tbl + (size_t)s * WUBU_ROPE_DIM;
+            const float *si = sin_tbl + (size_t)s * WUBU_ROPE_DIM;
+            for (int i = 0; i < WUBU_ROPE_DIM / 2; i++) {
+                float g0 = row[i], g1 = row[WUBU_ROPE_DIM / 2 + i];
                 row[i] = g0 * c[i] + g1 * si[i];
-                row[BARUN_ROPE_DIM / 2 + i] = -g0 * si[i] + g1 * c[i];
+                row[WUBU_ROPE_DIM / 2 + i] = -g0 * si[i] + g1 * c[i];
             }
         }
     }
@@ -238,12 +238,12 @@ static void unrope_k(float *dk, int seq, const float *cos_tbl,
 {
     for (int s = 0; s < seq; s++) {
         float *row = dk + (size_t)s * 64;
-        const float *c = cos_tbl + (size_t)s * BARUN_ROPE_DIM;
-        const float *si = sin_tbl + (size_t)s * BARUN_ROPE_DIM;
-        for (int i = 0; i < BARUN_ROPE_DIM / 2; i++) {
-            float g0 = row[i], g1 = row[BARUN_ROPE_DIM / 2 + i];
+        const float *c = cos_tbl + (size_t)s * WUBU_ROPE_DIM;
+        const float *si = sin_tbl + (size_t)s * WUBU_ROPE_DIM;
+        for (int i = 0; i < WUBU_ROPE_DIM / 2; i++) {
+            float g0 = row[i], g1 = row[WUBU_ROPE_DIM / 2 + i];
             row[i] = g0 * c[i] + g1 * si[i];
-            row[BARUN_ROPE_DIM / 2 + i] = -g0 * si[i] + g1 * c[i];
+            row[WUBU_ROPE_DIM / 2 + i] = -g0 * si[i] + g1 * c[i];
         }
     }
 }
@@ -257,7 +257,7 @@ static void rms_norm_backward(const float *x, const float *w,
 {
     float ss = 0;
     for (int i = 0; i < n; i++) ss += x[i] * x[i];
-    float r = 1.0f / sqrtf(ss / n + BARUN_EPS);
+    float r = 1.0f / sqrtf(ss / n + WUBU_EPS);
     float dot = 0;
     for (int i = 0; i < n; i++) dot += dy[i] * w[i] * x[i];
     float c = -r * r * r * dot / (float)n;
@@ -283,11 +283,11 @@ static float head_ce(wubu_model_t *m, wubu_bp_t *bp,
     float loss = 0;
     for (int s = 0; s < seq - 1; s++) {
         uint16_t target = tokens[s + 1];
-        float *lg = bp->logits + (size_t)s * BARUN_VOCAB;
+        float *lg = bp->logits + (size_t)s * WUBU_VOCAB;
         float maxv = lg[0];
-        for (int v = 1; v < BARUN_VOCAB; v++) if (lg[v] > maxv) maxv = lg[v];
+        for (int v = 1; v < WUBU_VOCAB; v++) if (lg[v] > maxv) maxv = lg[v];
         double sum = 0, lt = 0;
-        for (int v = 0; v < BARUN_VOCAB; v++) {
+        for (int v = 0; v < WUBU_VOCAB; v++) {
             double p = exp((double)(lg[v] - maxv));
             if (v == target) lt = (double)lg[v];
             sum += p;
@@ -300,7 +300,7 @@ static float head_ce(wubu_model_t *m, wubu_bp_t *bp,
              *   dh[s,d]  += sum_v g[s,v] * e[v,d]   (nt: g @ embedding)
              *   demb[v,d]+= sum_s g[s,v] * h[s,d]   (tx: g^T @ final_h)
              * The logits are consumed -- nothing needs them after. */
-            for (int v = 0; v < BARUN_VOCAB; v++)
+            for (int v = 0; v < WUBU_VOCAB; v++)
                 lg[v] = (float)(exp((double)(lg[v] - maxv)) / sum
                                 - (v == target ? 1.0 : 0.0)) / n_pos;
         }
@@ -308,15 +308,15 @@ static float head_ce(wubu_model_t *m, wubu_bp_t *bp,
     if (dh_out || demb) {
         int np = seq - 1;
         if (demb && gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_matmul_tx &&
-            (long)np * BARUN_VOCAB * D >= GPU_MIN_FLOP &&
-            gpu_wubu_matmul_tx(demb, bp->logits, bp->final_h, BARUN_VOCAB, D, np)) {
+            (long)np * WUBU_VOCAB * D >= GPU_MIN_FLOP &&
+            gpu_wubu_matmul_tx(demb, bp->logits, bp->final_h, WUBU_VOCAB, D, np)) {
             /* GPU: demb = g^T @ h */
         } else if (demb) {
             for (int s = 0; s < np; s++) {
-                const float *g = bp->logits + (size_t)s * BARUN_VOCAB;
+                const float *g = bp->logits + (size_t)s * WUBU_VOCAB;
                 const float *h = bp->final_h + (size_t)s * D;
                 float *ga = demb;
-                for (int v = 0; v < BARUN_VOCAB; v++) {
+                for (int v = 0; v < WUBU_VOCAB; v++) {
                     float gv = g[v];
                     if (gv == 0.0f) continue;
                     for (int d = 0; d < D; d++) ga[(size_t)v * D + d] += gv * h[d];
@@ -324,16 +324,16 @@ static float head_ce(wubu_model_t *m, wubu_bp_t *bp,
             }
         }
         if (dh_out && gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_matmul_nt &&
-            (long)np * BARUN_VOCAB * D >= GPU_MIN_FLOP &&
-            gpu_wubu_matmul_nt(dh_out, m->embedding, bp->logits, np, D, BARUN_VOCAB)) {
+            (long)np * WUBU_VOCAB * D >= GPU_MIN_FLOP &&
+            gpu_wubu_matmul_nt(dh_out, m->embedding, bp->logits, np, D, WUBU_VOCAB)) {
             /* GPU: dh = g @ embedding */
         } else if (dh_out) {
             for (int s = 0; s < np; s++) {
-                const float *g = bp->logits + (size_t)s * BARUN_VOCAB;
+                const float *g = bp->logits + (size_t)s * WUBU_VOCAB;
                 float *dh = dh_out + (size_t)s * D;
                 for (int d = 0; d < D; d++) {
                     float acc = 0;
-                    for (int v = 0; v < BARUN_VOCAB; v++)
+                    for (int v = 0; v < WUBU_VOCAB; v++)
                         acc += g[v] * m->embedding[(size_t)v * D + d];
                     dh[d] += acc;
                 }
@@ -356,18 +356,18 @@ static int is_sel(const wubu_model_t *m, int l)
 static void cpu_attn_loop(float *acc, const float *q, const float *k,
                           const float *v, int seq, int is_full)
 {
-    const int hwd = BARUN_HEADS * 64;   /* NOT 'D' -- the bp #defines D */
+    const int hwd = WUBU_HEADS * 64;   /* NOT 'D' -- the bp #defines D */
 #pragma omp parallel for schedule(static)
     for (int s = 0; s < seq; s++) {
         float *acc_s = acc + (size_t)s * hwd;
         memset(acc_s, 0, hwd * sizeof(float));
-        for (int h = 0; h < BARUN_HEADS; h++) {
+        for (int h = 0; h < WUBU_HEADS; h++) {
             const float *qrow = q + (size_t)s * hwd + (size_t)h * 64;
             float maxv = -1e30f;
             int lo = is_full ? 0
-                             : (s > BARUN_LOCAL_WIN ? s - BARUN_LOCAL_WIN + 1 : 0);
+                             : (s > WUBU_LOCAL_WIN ? s - WUBU_LOCAL_WIN + 1 : 0);
             int kv_n = 0;
-            float probs[BARUN_LOCAL_WIN + 2];
+            float probs[WUBU_LOCAL_WIN + 2];
             for (int t = lo; t <= s; t++) {
                 const float *krow = k + (size_t)t * 64;
                 float dot = 0;
@@ -399,7 +399,7 @@ static void cpu_attn_backward_loop(float *dq, float *dk, float *dv,
                                    const float *v, const float *dao,
                                    int seq, int is_full)
 {
-    const int hwd = BARUN_HEADS * 64;
+    const int hwd = WUBU_HEADS * 64;
     float inv = 1.0f / sqrtf(64.0f);
     /* the dk/dv accumulate ACROSS rows (the shared KV!) -- the naive
      * parallel-for raced on them; each thread owns its partials */
@@ -409,12 +409,12 @@ static void cpu_attn_backward_loop(float *dq, float *dk, float *dv,
         float *dv_part = (float *)calloc((size_t)seq * 64, sizeof(float));
 #pragma omp for schedule(static)
         for (int s = 0; s < seq; s++) {
-        for (int h = 0; h < BARUN_HEADS; h++) {
+        for (int h = 0; h < WUBU_HEADS; h++) {
             const float *qrow = q + (size_t)s * hwd + (size_t)h * 64;
             int lo = is_full ? 0
-                             : (s > BARUN_LOCAL_WIN ? s - BARUN_LOCAL_WIN + 1 : 0);
+                             : (s > WUBU_LOCAL_WIN ? s - WUBU_LOCAL_WIN + 1 : 0);
             int kv_n = 0;
-            float probs[BARUN_LOCAL_WIN + 2];
+            float probs[WUBU_LOCAL_WIN + 2];
             float maxv = -1e30f;
             for (int t = lo; t <= s; t++) {
                 const float *krow = k + (size_t)t * 64;
@@ -471,7 +471,7 @@ float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
         n_tokens > bp->cap_seq) return 0;
     int seq = n_tokens;
     bp->seq = seq;
-    memset(bp->sel_w0, 0, (size_t)BARUN_LAYERS * sizeof(float));
+    memset(bp->sel_w0, 0, (size_t)WUBU_LAYERS * sizeof(float));
 
     /* embedding -> x_in[0] (saved to emb_in for layer 0's backward
      * and the first selector's checkpoint) */
@@ -510,14 +510,14 @@ float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
             rms_norm(an_l + (size_t)s * D, x_in_l + (size_t)s * D,
                      blk->attn_norm, D);
         /* q/k/v projections (save the pre-norm q/k for the backward) */
-        mm(q_pre_l, blk->q_proj, an_l, BARUN_HEADS * 64, D, seq);
+        mm(q_pre_l, blk->q_proj, an_l, WUBU_HEADS * 64, D, seq);
         mm(k_pre_l, blk->k_proj, an_l, 64, D, seq);
         mm(v_l, blk->v_proj, an_l, 64, D, seq);
         memcpy(q_l, q_pre_l, (size_t)seq * D * sizeof(float));
         memcpy(k_l, k_pre_l, (size_t)seq * 64 * sizeof(float));
         /* qk-norm + rope */
         for (int s = 0; s < seq; s++) {
-            for (int h = 0; h < BARUN_HEADS; h++) {
+            for (int h = 0; h < WUBU_HEADS; h++) {
                 float *qr = q_l + (size_t)s * D + (size_t)h * 64;
                 rms_norm(qr, qr, blk->q_norm, 64);
             }
@@ -531,12 +531,12 @@ float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
          * tile (the PowerVR/FlashAttention principle) when ready and
          * the sequence is worth the upload; the CPU loop below stays
          * the FD oracle and the fallback. */
-        int is_full = ((l + 1) % BARUN_FULL_EVERY == 0);
+        int is_full = ((l + 1) % WUBU_FULL_EVERY == 0);
         if (gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_attn &&
             seq >= 32) {
             float *acc = ao_l;
-            if (gpu_wubu_attn(acc, q_l, k_l, v_l, seq, BARUN_HEADS, 64,
-                               BARUN_LOCAL_WIN, is_full)) {
+            if (gpu_wubu_attn(acc, q_l, k_l, v_l, seq, WUBU_HEADS, 64,
+                               WUBU_LOCAL_WIN, is_full)) {
                 /* the GPU tile path: ao_l holds the attention output */
             } else {
                 memset(acc, 0, (size_t)seq * D * sizeof(float));
@@ -566,9 +566,9 @@ float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
             float *u = fu_l + (size_t)s * FF;
             for (int d = 0; d < FF; d++) {
                 float gv = g[d], uv = g[d + FF];
-                if (gv > BARUN_CLIP) gv = BARUN_CLIP;
-                if (uv > BARUN_CLIP) uv = BARUN_CLIP;
-                if (uv < -BARUN_CLIP) uv = -BARUN_CLIP;
+                if (gv > WUBU_CLIP) gv = WUBU_CLIP;
+                if (uv > WUBU_CLIP) uv = WUBU_CLIP;
+                if (uv < -WUBU_CLIP) uv = -WUBU_CLIP;
                 u[d] = silu(gv) * uv;
             }
         }
@@ -580,7 +580,7 @@ float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
         /* residual selector: blend into sel_out[l]; x_in[l] keeps the
          * layer's REAL output (the backward needs it exact). */
         if (is_sel(m, l)) {
-            float *sw = m->selectors[(l + 1) / BARUN_SELECT_EVERY - 1];
+            float *sw = m->selectors[(l + 1) / WUBU_SELECT_EVERY - 1];
             float w0sum = 0;
             for (int s = 0; s < seq; s++) {
                 float *cp = bp->ckpt + (size_t)s * D;
@@ -621,7 +621,7 @@ float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
                  m->final_norm, D);
     /* the head logits: ONE GEMM (GPU when present) -- head_ce only
      * reads them, so the per-step cost is a single pass over the vocab */
-    mm(bp->logits, m->embedding, bp->final_h, BARUN_VOCAB, D, seq);
+    mm(bp->logits, m->embedding, bp->final_h, WUBU_VOCAB, D, seq);
     return head_ce(m, bp, tokens, n_tokens, NULL, NULL);
 }
 
@@ -691,7 +691,7 @@ float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
     for (int s = 0; s < seq; s++)
         rms_norm_backward(xlast + (size_t)s * D, m->final_norm,
                           dh_final + (size_t)s * D,
-                          dlast + (size_t)s * D, tr->norm_g[4 * BARUN_LAYERS], D);
+                          dlast + (size_t)s * D, tr->norm_g[4 * WUBU_LAYERS], D);
 
     /* ---- per-layer backward (REVERSED) ---- */
     for (int l = m->n_layers - 1; l >= 0; l--) {
@@ -740,16 +740,16 @@ float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
         /* ---- residual selector: route the blend gradient into the
          * layer (w1) and the checkpoint (w0) ---- */
         if (is_sel(m, l)) {
-            int sel = (l + 1) / BARUN_SELECT_EVERY - 1;
+            int sel = (l + 1) / WUBU_SELECT_EVERY - 1;
             float *sw = m->selectors[sel];
             /* selectors are 1-D params -> their grad lives in the
              * AdamW norm slots ([4*L + 1 + sel]) */
-            float *sg = tr->norm_g[4 * BARUN_LAYERS + 1 + sel];
+            float *sg = tr->norm_g[4 * WUBU_LAYERS + 1 + sel];
             /* the checkpoint BEFORE this blend = the previous selector
              * blend, or the embedding for the first selector */
-            float *ckpt_pre = (l == BARUN_SELECT_EVERY - 1)
+            float *ckpt_pre = (l == WUBU_SELECT_EVERY - 1)
                                   ? bp->emb_in
-                                  : bp->sel_out + (size_t)(l - BARUN_SELECT_EVERY) * seq * D;
+                                  : bp->sel_out + (size_t)(l - WUBU_SELECT_EVERY) * seq * D;
             for (int s = 0; s < seq; s++) {
                 float *cp = ckpt_pre + (size_t)s * D;
                 float *cur = x_in_l + (size_t)s * D;
@@ -798,11 +798,11 @@ float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
             float *dgu = dfg + (size_t)s * 2 * FF;
             for (int d = 0; d < FF; d++) {
                 float g_raw = fg[d], u_raw = fg[d + FF];
-                float gv = g_raw > BARUN_CLIP ? BARUN_CLIP : g_raw;
-                float uv = u_raw > BARUN_CLIP ? BARUN_CLIP : u_raw;
-                if (uv < -BARUN_CLIP) uv = -BARUN_CLIP;
-                float g_ok = (g_raw <= BARUN_CLIP) ? 1.0f : 0.0f;
-                float u_ok = (u_raw <= BARUN_CLIP && u_raw >= -BARUN_CLIP)
+                float gv = g_raw > WUBU_CLIP ? WUBU_CLIP : g_raw;
+                float uv = u_raw > WUBU_CLIP ? WUBU_CLIP : u_raw;
+                if (uv < -WUBU_CLIP) uv = -WUBU_CLIP;
+                float g_ok = (g_raw <= WUBU_CLIP) ? 1.0f : 0.0f;
+                float u_ok = (u_raw <= WUBU_CLIP && u_raw >= -WUBU_CLIP)
                                  ? 1.0f : 0.0f;
                 dgu[d]        = silu_deriv(gv) * uv * du[d] * g_ok;
                 dgu[d + FF]   = silu(gv) * du[d] * u_ok;
@@ -866,15 +866,15 @@ float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
         /* attention backward (GQA: all heads share the KV rows). The
          * GPU tile when ready (the FD oracle is the CPU loop below --
          * the fallback AND the reference the tests run through). */
-        int is_full = ((l + 1) % BARUN_FULL_EVERY == 0);
+        int is_full = ((l + 1) % WUBU_FULL_EVERY == 0);
         memset(dq, 0, (size_t)seq * D * sizeof(float));
         memset(dk, 0, (size_t)seq * 64 * sizeof(float));
         memset(dv, 0, (size_t)seq * 64 * sizeof(float));
         if (gpu_wubu_ready && gpu_wubu_ready() && gpu_wubu_attn_backward &&
             seq >= 32) {
             if (!gpu_wubu_attn_backward(dq, dk, dv, q_l, k_l, v_l, ao_l, dao,
-                                         seq, BARUN_HEADS, 64,
-                                         BARUN_LOCAL_WIN, is_full)) {
+                                         seq, WUBU_HEADS, 64,
+                                         WUBU_LOCAL_WIN, is_full)) {
                 memset(dq, 0, (size_t)seq * D * sizeof(float));
                 memset(dk, 0, (size_t)seq * 64 * sizeof(float));
                 memset(dv, 0, (size_t)seq * 64 * sizeof(float));
@@ -890,7 +890,7 @@ float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
         unrope_q(dq, seq, cos_tbl, sin_tbl);
         unrope_k(dk, seq, cos_tbl, sin_tbl);
         for (int s = 0; s < seq; s++) {
-            for (int h = 0; h < BARUN_HEADS; h++)
+            for (int h = 0; h < WUBU_HEADS; h++)
                 rms_norm_backward(q_pre_l + (size_t)s * D + (size_t)h * 64,
                                   blk->q_norm,
                                   dq + (size_t)s * D + (size_t)h * 64,
@@ -901,8 +901,8 @@ float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
                               tr->norm_g[4 * l + 3], 64);
         }
         /* q/k/v projection grads + dL/dan from the attention path */
-        mm_t(dod, blk->q_proj, dq, BARUN_HEADS * 64, D, seq);
-        wg_t(tr->q_proj_g[l], dq, an_l, BARUN_HEADS * 64, D, seq);
+        mm_t(dod, blk->q_proj, dq, WUBU_HEADS * 64, D, seq);
+        wg_t(tr->q_proj_g[l], dq, an_l, WUBU_HEADS * 64, D, seq);
         for (int i = 0; i < seq * D; i++) dan[i] += dod[i];
         mm_t(dod, blk->k_proj, dk, 64, D, seq);
         wg_t(tr->k_proj_g[l], dk, an_l, 64, D, seq);
@@ -1046,7 +1046,7 @@ static void ns5_inplace(float *X, int rows, int cols, float *scratch,
 /* the 1-D AdamW slots (norms + selectors): weight pointer + size */
 static float *norm_slot_weight(wubu_model_t *m, int slot, int *size)
 {
-    int L = BARUN_LAYERS;
+    int L = WUBU_LAYERS;
     if (slot < 4 * L) {
         int l = slot / 4, k = slot % 4;
         wubu_block_t *blk = &m->blocks[l];
@@ -1138,7 +1138,7 @@ int wubu_bp_muon_step(wubu_model_t *m, wubu_train_t *tr,
             n2 += dot_grad(tr->down_g[i], 1228 * 448);
         }
         n2 += dot_grad(tr->emb_g, 16384 * 448);
-        for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
+        for (int i = 0; i < WUBU_NORM_SLOTS; i++) {
             int sz = 0;
             (void)norm_slot_weight(m, i, &sz);
             n2 += dot_grad(tr->norm_g[i], (size_t)sz);
@@ -1156,7 +1156,7 @@ int wubu_bp_muon_step(wubu_model_t *m, wubu_train_t *tr,
                 scale_grad(tr->down_g[i], 1228 * 448, s);
             }
             scale_grad(tr->emb_g, 16384 * 448, s);
-            for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
+            for (int i = 0; i < WUBU_NORM_SLOTS; i++) {
                 int sz = 0;
                 (void)norm_slot_weight(m, i, &sz);
                 scale_grad(tr->norm_g[i], (size_t)sz, s);
@@ -1191,7 +1191,7 @@ int wubu_bp_muon_step(wubu_model_t *m, wubu_train_t *tr,
     if (!skip || strcmp(skip, "adam") != 0) {
     adamw_update(m->embedding, tr->emb_g, tr->emb_m, tr->emb_v,
                  16384 * 448, ad_lr, wd, step);
-    for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
+    for (int i = 0; i < WUBU_NORM_SLOTS; i++) {
         int sz = 0;
         float *w = norm_slot_weight(m, i, &sz);
         if (!w) continue;

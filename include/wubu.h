@@ -1,7 +1,7 @@
 /*
- * wubu.h -- BarunLM-35M, our base model, ported to C11. THE MUSTARD SEED.
+ * wubu.h -- WuBu-35M, our base model, ported to C11. THE MUSTARD SEED.
  *
- * BarunLM-35M (Apache-2.0, (c) 2026 Harshal Singh) is a 35,072,768-parameter
+ * WuBu-35M (Apache-2.0, (c) 2026 Harshal Singh) is a 35,072,768-parameter
  * decoder-only base language model. We port it into the wubuwizard engine as
  * our own second brain: the seed that grows via the AGI brain-cluster loop --
  * more tokens, more parameters, more knowledge, all designed and trained
@@ -19,31 +19,31 @@
  * Pure C11, opaque struct, no third-party deps. The forward pass runs on
  * CPU (hosted) and will run on metal via the same kernel-dispatch path.
  */
-#ifndef WUBU_BARUN_H
-#define WUBU_BARUN_H
+#ifndef WUBU_H
+#define WUBU_H
 
 #include <stdint.h>
 #include <stddef.h>
 
 /* The released configuration (wubu_config.json). */
-#define BARUN_VOCAB       16384
-#define BARUN_DIM         448
-#define BARUN_LAYERS      12
-#define BARUN_HEADS       7
-#define BARUN_KV_HEADS    1
-#define BARUN_HEAD_DIM    64
-#define BARUN_ROPE_DIM    32
-#define BARUN_FFN_DIM     1228
-#define BARUN_MAX_SEQ     2048
-#define BARUN_LOCAL_WIN   256
-#define BARUN_FULL_EVERY  4
-#define BARUN_SELECT_EVERY 4
-#define BARUN_CLIP        10.0f
-#define BARUN_EPS         1e-6f
-#define BARUN_SELECTORS   3   /* 12 / 4 */
+#define WUBU_VOCAB       16384
+#define WUBU_DIM         448
+#define WUBU_LAYERS      12
+#define WUBU_HEADS       7
+#define WUBU_KV_HEADS    1
+#define WUBU_HEAD_DIM    64
+#define WUBU_ROPE_DIM    32
+#define WUBU_FFN_DIM     1228
+#define WUBU_MAX_SEQ     2048
+#define WUBU_LOCAL_WIN   256
+#define WUBU_FULL_EVERY  4
+#define WUBU_SELECT_EVERY 4
+#define WUBU_CLIP        10.0f
+#define WUBU_EPS         1e-6f
+#define WUBU_SELECTORS   3   /* 12 / 4 */
 
 /* the exact released parameter count */
-#define BARUN_PARAMS      35072768
+#define WUBU_PARAMS      35072768
 
 /* A single transformer block's weights (local OR full attention). */
 typedef struct {
@@ -66,16 +66,16 @@ typedef struct {
 typedef struct {
     float *embedding;       /* [16384, 448] (tied with lm_head) */
     float *final_norm;      /* [448] */
-    wubu_block_t blocks[BARUN_LAYERS];
-    float *selectors[BARUN_SELECTORS];  /* [448] each (score weight) */
-    int    is_full[BARUN_LAYERS];       /* attention rhythm */
-    int    fire_sel[BARUN_LAYERS];     /* the residual-selector rhythm
+    wubu_block_t blocks[WUBU_LAYERS];
+    float *selectors[WUBU_SELECTORS];  /* [448] each (score weight) */
+    int    is_full[WUBU_LAYERS];       /* attention rhythm */
+    int    fire_sel[WUBU_LAYERS];     /* the residual-selector rhythm
                                           (per-block like is_full: the
                                           growth operator shifts it) */
     int    n_layers;                   /* the ACTIVE layer count (the
                                           growth operator's contract; the
-                                          released model = BARUN_LAYERS) */
-    /* the WuBu mode (the blueprint phases 1-2): 0 = the released BarunLM
+                                          released model = WUBU_LAYERS) */
+    /* the WuBu mode (the blueprint phases 1-2): 0 = the released WuBu
      * path (exact parity); 1 = hyperbolic lift/rotation + mixed agents.
      * Set with wubu_set_wubu_mode(). */
     int    wubu_mode;

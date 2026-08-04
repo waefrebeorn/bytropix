@@ -17,10 +17,10 @@ int main(void) {
     /* alloc model blocks like wubu_train_cli does */
     float *embedding = (float *)malloc(sizeof(float) * 16384 * 448);
     float *final_norm = (float *)malloc(sizeof(float) * 448);
-    float **sel = (float **)calloc(BARUN_SELECTORS, sizeof(float *));
-    wubu_block_t *blocks = (wubu_block_t *)calloc(BARUN_LAYERS, sizeof(wubu_block_t));
-    for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = (float *)malloc(sizeof(float) * 448);
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    float **sel = (float **)calloc(WUBU_SELECTORS, sizeof(float *));
+    wubu_block_t *blocks = (wubu_block_t *)calloc(WUBU_LAYERS, sizeof(wubu_block_t));
+    for (int i = 0; i < WUBU_SELECTORS; i++) sel[i] = (float *)malloc(sizeof(float) * 448);
+    for (int i = 0; i < WUBU_LAYERS; i++) {
         blocks[i].q_proj   = (float *)calloc(448*448, sizeof(float));
         blocks[i].k_proj   = (float *)calloc(448*64, sizeof(float));
         blocks[i].v_proj   = (float *)calloc(448*64, sizeof(float));
@@ -36,7 +36,7 @@ int main(void) {
     wubu_model_init(&m, embedding, final_norm, blocks, sel);
     m.n_layers = 2;
 
-    if (wubu_buf_alloc(&b, BARUN_MAX_SEQ) != 0) { printf("buf OOM\n"); return 1; }
+    if (wubu_buf_alloc(&b, WUBU_MAX_SEQ) != 0) { printf("buf OOM\n"); return 1; }
     if (wubu_train_init(&tr, &m) != 0) { printf("train OOM\n"); return 1; }
 
     printf("pre-grow: n_layers=%d\n", m.n_layers);

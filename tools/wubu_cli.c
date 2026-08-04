@@ -1,5 +1,5 @@
 /*
- * wubu_cli.c -- BarunLM-35M operational runner (the mustard seed CLI).
+ * wubu_cli.c -- WuBu-35M operational runner (the mustard seed CLI).
  *
  * Loads the real released checkpoint + the byte-level BPE tokenizer,
  * and generates text. This is the base model that grows: the AGI
@@ -49,7 +49,7 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("wubu: parameters = %ld (the release: %d)\n",
-           wubu_parameter_count(&m), BARUN_PARAMS);
+           wubu_parameter_count(&m), WUBU_PARAMS);
 
     printf("wubu: loading %s ...\n", tok_path);
     wubu_tok_hf_t *tok = wubu_tok_hf_load(tok_path);
@@ -60,8 +60,8 @@ int main(int argc, char **argv)
     }
     printf("wubu: vocab = %d\n", wubu_tok_hf_vocab_size(tok));
 
-    int *ids = (int *)malloc(sizeof(int) * (BARUN_MAX_SEQ));
-    int n_prompt = wubu_tok_hf_encode(tok, prompt, ids, BARUN_MAX_SEQ - 16);
+    int *ids = (int *)malloc(sizeof(int) * (WUBU_MAX_SEQ));
+    int n_prompt = wubu_tok_hf_encode(tok, prompt, ids, WUBU_MAX_SEQ - 16);
     if (n_prompt <= 0) {
         fprintf(stderr, "wubu: prompt encoded to 0 tokens\n");
         wubu_free(&m, NULL); wubu_tok_hf_free(tok); free(ids);
@@ -70,14 +70,14 @@ int main(int argc, char **argv)
     printf("wubu: prompt = %d tokens\n", n_prompt);
 
     wubu_buf_t b;
-    if (wubu_buf_alloc(&b, BARUN_MAX_SEQ) != 0) {
+    if (wubu_buf_alloc(&b, WUBU_MAX_SEQ) != 0) {
         fprintf(stderr, "wubu: failed to allocate the buffer\n");
         wubu_free(&m, NULL); wubu_tok_hf_free(tok); free(ids);
         return 1;
     }
 
     /* the prompt (uint16 ids) */
-    uint16_t *gen = (uint16_t *)malloc(sizeof(uint16_t) * BARUN_MAX_SEQ);
+    uint16_t *gen = (uint16_t *)malloc(sizeof(uint16_t) * WUBU_MAX_SEQ);
     for (int i = 0; i < n_prompt; i++) gen[i] = (uint16_t)ids[i];
 
     printf("wubu: generating %d tokens (temp %.1f, seed %u) ...\n",

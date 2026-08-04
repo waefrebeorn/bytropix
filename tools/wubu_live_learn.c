@@ -5,9 +5,9 @@
  * nvidia cloud keys"):
  *
  *   1. LOAD the WuBu model (the SAME path the trainer uses — wubu_load,
- *      which handles the Barun architecture; gen_text's generic loader
+ *      which handles the WuBu architecture; gen_text's generic loader
  *      does NOT).
- *   2. GENERATE a draft from a prompt (wubu_generate, Barun-native).
+ *   2. GENERATE a draft from a prompt (wubu_generate, WuBu-native).
  *   3. (feedback) the NVIDIA NIM oracle (tools/nvidia_nim.py score_draft)
  *      scores the draft; the critique is the SFT target.
  *   4. ACCUMULATE (prompt, draft, critique, score) into a JSONL buffer
@@ -45,7 +45,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--temp"))  temp  = (float)atof(argv[i+1]);
     }
 
-    /* 1. LOAD (the trainer path — Barun-arch aware) */
+    /* 1. LOAD (the trainer path — WuBu-arch aware) */
     wubu_model_t m;
     if (wubu_load(&m, model_path) != 0) {
         fprintf(stderr, "cannot load %s\n", model_path);
@@ -60,15 +60,15 @@ int main(int argc, char **argv)
      * or via wubu_tokenizer; see the wrapper script for the full path. */
 
     wubu_buf_t b;
-    if (wubu_buf_alloc(&b, BARUN_MAX_SEQ) != 0) return 1;
+    if (wubu_buf_alloc(&b, WUBU_MAX_SEQ) != 0) return 1;
 
     /* read the prompt as a token stream (uint16) — simplest robust path:
      * the wrapper tokenizes with wubu_tokenc and feeds the .tok bytes. */
     FILE *f = fopen(prompt_path, "rb");
     if (!f) { fprintf(stderr, "cannot open %s\n", prompt_path); return 1; }
-    uint16_t tokens[BARUN_MAX_SEQ];
+    uint16_t tokens[WUBU_MAX_SEQ];
     size_t n_prompt = 0;
-    while (n_prompt < BARUN_MAX_SEQ && fread(&tokens[n_prompt], 2, 1, f) == 1)
+    while (n_prompt < WUBU_MAX_SEQ && fread(&tokens[n_prompt], 2, 1, f) == 1)
         n_prompt++;
     fclose(f);
     fprintf(stderr, "live_learn: %zu prompt tokens\n", n_prompt);

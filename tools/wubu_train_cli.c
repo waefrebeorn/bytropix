@@ -2,7 +2,7 @@
  * wubu_train_cli.c -- the AGI training loop runner (the seed grows).
  *
  * Reads uint16 token streams (.tok, produced by wubu_tokenc from the
- * corpus on the SD card), trains BarunLM-35M with the reference recipe
+ * corpus on the SD card), trains WuBu-35M with the reference recipe
  * (Muon for matrices, AdamW for the embedding/norms, mean-reduced CE),
  * and checkpoints to the SD card every N steps.
  *
@@ -53,19 +53,19 @@ static int load_checkpoint(wubu_model_t *m, const char *path)
     int nl = 0;
     if (magic == 0xBA000002u) {
         if (fread(&nl, 4, 1, f) != 1) { fclose(f); return -1; }
-        if (nl < 1 || nl > BARUN_LAYERS) { fclose(f); return -1; }
+        if (nl < 1 || nl > WUBU_LAYERS) { fclose(f); return -1; }
     }
     long n = 0;
     if (fread(&n, sizeof(long), 1, f) != 1) { fclose(f); return -1; }
     /* build the model from fresh buffers (the released sizes) */
     float *embedding = (float *)malloc(sizeof(float) * 16384 * 448);
     float *final_norm = (float *)malloc(sizeof(float) * 448);
-    float **sel = (float **)calloc(BARUN_SELECTORS, sizeof(float *));
-    wubu_block_t *blocks = (wubu_block_t *)calloc(BARUN_LAYERS, sizeof(wubu_block_t));
+    float **sel = (float **)calloc(WUBU_SELECTORS, sizeof(float *));
+    wubu_block_t *blocks = (wubu_block_t *)calloc(WUBU_LAYERS, sizeof(wubu_block_t));
     if (!embedding || !final_norm || !sel || !blocks) { fclose(f); return -1; }
-    for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = (float *)malloc(sizeof(float) * 448);
+    for (int i = 0; i < WUBU_SELECTORS; i++) sel[i] = (float *)malloc(sizeof(float) * 448);
     wubu_block_t *b = blocks;
-    for (int i = 0; i < BARUN_LAYERS; i++, b++) {
+    for (int i = 0; i < WUBU_LAYERS; i++, b++) {
         b->q_proj    = (float *)malloc(sizeof(float) * 448 * 448);
         b->k_proj    = (float *)malloc(sizeof(float) * 448 * 64);
         b->v_proj    = (float *)malloc(sizeof(float) * 448 * 64);
@@ -84,7 +84,7 @@ static int load_checkpoint(wubu_model_t *m, const char *path)
     if (fread(embedding, sizeof(float), 16384 * 448, f) != 16384 * 448 ||
         fread(final_norm, sizeof(float), 448, f) != 448) { fclose(f); return -1; }
     b = blocks;
-    for (int i = 0; i < BARUN_LAYERS; i++, b++) {
+    for (int i = 0; i < WUBU_LAYERS; i++, b++) {
         if (fread(b->q_proj, sizeof(float), 448 * 448, f) != 448 * 448 ||
             fread(b->k_proj, sizeof(float), 448 * 64, f) != 448 * 64 ||
             fread(b->v_proj, sizeof(float), 448 * 64, f) != 448 * 64 ||
@@ -97,7 +97,7 @@ static int load_checkpoint(wubu_model_t *m, const char *path)
             fread(b->down, sizeof(float), 1228 * 448, f) != 1228 * 448 ||
             fread(b->ffn_norm, sizeof(float), 448, f) != 448) { fclose(f); return -1; }
     }
-    for (int i = 0; i < BARUN_SELECTORS; i++)
+    for (int i = 0; i < WUBU_SELECTORS; i++)
         if (fread(sel[i], sizeof(float), 448, f) != 448) { fclose(f); return -1; }
     fclose(f);
     if (wubu_model_init(m, embedding, final_norm, blocks, sel) != 0) return -1;
@@ -134,7 +134,7 @@ static int save_checkpoint(const wubu_model_t *m, const char *path)
     fwrite(&n, sizeof(long), 1, f);
     fwrite(m->embedding, sizeof(float), 16384 * 448, f);
     fwrite(m->final_norm, sizeof(float), 448, f);
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    for (int i = 0; i < WUBU_LAYERS; i++) {
         wubu_block_t *b = (wubu_block_t *)&m->blocks[i];
         fwrite(b->q_proj, sizeof(float), 448 * 448, f);
         fwrite(b->k_proj, sizeof(float), 448 * 64, f);
@@ -148,7 +148,7 @@ static int save_checkpoint(const wubu_model_t *m, const char *path)
         fwrite(b->down, sizeof(float), 1228 * 448, f);
         fwrite(b->ffn_norm, sizeof(float), 448, f);
     }
-    for (int i = 0; i < BARUN_SELECTORS; i++)
+    for (int i = 0; i < WUBU_SELECTORS; i++)
         fwrite(m->selectors[i], sizeof(float), 448, f);
     fclose(f);
     return 0;
@@ -234,7 +234,7 @@ int main(int argc, char **argv)
     }
     printf("wubu_train_cli: %ld parameters\n", wubu_parameter_count(&m));
     if (base_layers > 0) {
-        if (base_layers > BARUN_LAYERS) base_layers = BARUN_LAYERS;
+        if (base_layers > WUBU_LAYERS) base_layers = WUBU_LAYERS;
         m.n_layers = base_layers;   /* the progressive start (Bu: start small) */
         printf("wubu_train_cli: progressive start at %d layers\n", m.n_layers);
     }
@@ -252,7 +252,7 @@ int main(int argc, char **argv)
     printf("wubu_train_cli: corpus %ld tokens\n", corpus_n);
 
     wubu_buf_t b;
-    if (wubu_buf_alloc(&b, BARUN_MAX_SEQ) != 0) return 1;
+    if (wubu_buf_alloc(&b, WUBU_MAX_SEQ) != 0) return 1;
     wubu_train_t tr;
     if (wubu_train_init(&tr, &m) != 0) return 1;
 
@@ -271,7 +271,7 @@ int main(int argc, char **argv)
     cfg.max_steps = (uint32_t)max_steps;
 
     /* the training loop: sliding windows over the corpus */
-    uint16_t win[BARUN_MAX_SEQ];
+    uint16_t win[WUBU_MAX_SEQ];
     long pos = 0;
     double loss_ema = -1;
     float loss_hist[64];
@@ -293,7 +293,7 @@ int main(int argc, char **argv)
             loss_hist[hist_n++] = (float)loss_ema;
         }
         if (grow_check > 0 && step % grow_check == 0) {
-            if (hist_n >= 32 && m.n_layers < BARUN_LAYERS &&
+            if (hist_n >= 32 && m.n_layers < WUBU_LAYERS &&
                 /* the adaptive threshold: the absolute floor OR 0.5% of
                  * the loss magnitude -- the 0.001 floor alone sat below
                  * the fine-tune-scale noise (~2.8 loss, ~0.02 slope

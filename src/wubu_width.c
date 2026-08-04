@@ -58,39 +58,39 @@ int wubu_width_expand(wubu_model_t *m)
 
     /* the embedding: [vocab, 448] -> [vocab, 896], right half zero */
     {
-        float *e = (float *)calloc((size_t)BARUN_VOCAB * BARUN_DIM * 2, sizeof(float));
+        float *e = (float *)calloc((size_t)WUBU_VOCAB * WUBU_DIM * 2, sizeof(float));
         if (!e) return 0;
-        for (int r = 0; r < BARUN_VOCAB; r++)
-            memcpy(&e[r * BARUN_DIM * 2], &m->embedding[r * BARUN_DIM],
-                   (size_t)BARUN_DIM * sizeof(float));
+        for (int r = 0; r < WUBU_VOCAB; r++)
+            memcpy(&e[r * WUBU_DIM * 2], &m->embedding[r * WUBU_DIM],
+                   (size_t)WUBU_DIM * sizeof(float));
         free(m->embedding);
         m->embedding = e;
     }
     /* the final norm + the selectors: [448] -> [896] (identity half) */
-    if (!expand_norm(&m->final_norm, m->final_norm, BARUN_DIM)) return 0;
-    for (int s = 0; s < BARUN_SELECTORS; s++)
-        if (!expand_norm(&m->selectors[s], m->selectors[s], BARUN_DIM)) return 0;
+    if (!expand_norm(&m->final_norm, m->final_norm, WUBU_DIM)) return 0;
+    for (int s = 0; s < WUBU_SELECTORS; s++)
+        if (!expand_norm(&m->selectors[s], m->selectors[s], WUBU_DIM)) return 0;
 
     for (int l = 0; l < m->n_layers; l++) {
         wubu_block_t *b = &m->blocks[l];
         /* q/o/g: [448, 448] -> [896, 896] (square) */
-        if (!expand_mat(&b->q_proj, b->q_proj, BARUN_DIM, BARUN_DIM)) return 0;
-        if (!expand_mat(&b->o_proj, b->o_proj, BARUN_DIM, BARUN_DIM)) return 0;
-        if (!expand_mat(&b->g_proj, b->g_proj, BARUN_DIM, BARUN_DIM)) return 0;
+        if (!expand_mat(&b->q_proj, b->q_proj, WUBU_DIM, WUBU_DIM)) return 0;
+        if (!expand_mat(&b->o_proj, b->o_proj, WUBU_DIM, WUBU_DIM)) return 0;
+        if (!expand_mat(&b->g_proj, b->g_proj, WUBU_DIM, WUBU_DIM)) return 0;
         /* k/v: [448, 64] -> [896, 64] (rows = the width) */
-        if (!expand_rows(&b->k_proj, b->k_proj, BARUN_DIM,
-                         BARUN_KV_HEADS * BARUN_HEAD_DIM)) return 0;
-        if (!expand_rows(&b->v_proj, b->v_proj, BARUN_DIM,
-                         BARUN_KV_HEADS * BARUN_HEAD_DIM)) return 0;
+        if (!expand_rows(&b->k_proj, b->k_proj, WUBU_DIM,
+                         WUBU_KV_HEADS * WUBU_HEAD_DIM)) return 0;
+        if (!expand_rows(&b->v_proj, b->v_proj, WUBU_DIM,
+                         WUBU_KV_HEADS * WUBU_HEAD_DIM)) return 0;
         /* gate_up: [448, 2*1228] -> [896, 2*2456] */
-        if (!expand_mat(&b->gate_up, b->gate_up, BARUN_DIM, BARUN_FFN_DIM * 2)) return 0;
+        if (!expand_mat(&b->gate_up, b->gate_up, WUBU_DIM, WUBU_FFN_DIM * 2)) return 0;
         /* down: [1228, 448] -> [2456, 896] (square-ish; rows = ffn) */
-        if (!expand_mat(&b->down, b->down, BARUN_FFN_DIM, BARUN_DIM)) return 0;
+        if (!expand_mat(&b->down, b->down, WUBU_FFN_DIM, WUBU_DIM)) return 0;
         /* the norms: [448] -> [896] */
-        if (!expand_norm(&b->attn_norm, b->attn_norm, BARUN_DIM)) return 0;
-        if (!expand_norm(&b->ffn_norm, b->ffn_norm, BARUN_DIM)) return 0;
-        if (!expand_norm(&b->q_norm, b->q_norm, BARUN_KV_HEADS * BARUN_HEAD_DIM)) return 0;
-        if (!expand_norm(&b->k_norm, b->k_norm, BARUN_KV_HEADS * BARUN_HEAD_DIM)) return 0;
+        if (!expand_norm(&b->attn_norm, b->attn_norm, WUBU_DIM)) return 0;
+        if (!expand_norm(&b->ffn_norm, b->ffn_norm, WUBU_DIM)) return 0;
+        if (!expand_norm(&b->q_norm, b->q_norm, WUBU_KV_HEADS * WUBU_HEAD_DIM)) return 0;
+        if (!expand_norm(&b->k_norm, b->k_norm, WUBU_KV_HEADS * WUBU_HEAD_DIM)) return 0;
     }
     return 1;
 }

@@ -1,7 +1,7 @@
 /*
- * wubu_train.c -- the BarunLM training core (the AGI brain-cluster loop).
+ * wubu_train.c -- the WuBu training core (the AGI brain-cluster loop).
  *
- * The wizard becomes a TRAINING engine. The mustard seed (BarunLM-35M)
+ * The wizard becomes a TRAINING engine. The mustard seed (WuBu-35M)
  * grows here: the REAL backprop (wubu_backprop) + the REAL Muon
  * (Newton-Schulz 5) + AdamW for the 1-D params, next-token
  * cross-entropy, the confirmed reference recipe. The gradient of
@@ -29,7 +29,7 @@ int wubu_train_init(wubu_train_t *tr, const wubu_model_t *m)
 {
     if (!tr || !m) return -1;
     memset(tr, 0, sizeof(*tr));
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    for (int i = 0; i < WUBU_LAYERS; i++) {
         tr->q_proj_g[i] = calloc_f(448 * 448);
         tr->k_proj_g[i] = calloc_f(448 * 64);
         tr->v_proj_g[i] = calloc_f(448 * 64);
@@ -58,9 +58,9 @@ int wubu_train_init(wubu_train_t *tr, const wubu_model_t *m)
     tr->emb_v = calloc_f(16384 * 448);
     if (!tr->emb_g || !tr->emb_m || !tr->emb_v) { wubu_train_free(tr); return -1; }
     /* the 1-D AdamW slots: the per-layer norms, the final norm, the
-     * selectors (sizes per the BARUN_NORM_SLOTS layout) */
-    for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
-        int sz = (i % 4 == 2 || i % 4 == 3) && (i < 4 * BARUN_LAYERS) ? 64 : 448;
+     * selectors (sizes per the WUBU_NORM_SLOTS layout) */
+    for (int i = 0; i < WUBU_NORM_SLOTS; i++) {
+        int sz = (i % 4 == 2 || i % 4 == 3) && (i < 4 * WUBU_LAYERS) ? 64 : 448;
         tr->norm_g[i] = calloc_f((size_t)sz);
         tr->norm_m[i] = calloc_f((size_t)sz);
         tr->norm_v[i] = calloc_f((size_t)sz);
@@ -76,7 +76,7 @@ int wubu_train_init(wubu_train_t *tr, const wubu_model_t *m)
 void wubu_train_free(wubu_train_t *tr)
 {
     if (!tr) return;
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    for (int i = 0; i < WUBU_LAYERS; i++) {
         free_mat(tr->q_proj_g[i]); free_mat(tr->k_proj_g[i]);
         free_mat(tr->v_proj_g[i]); free_mat(tr->o_proj_g[i]);
         free_mat(tr->g_proj_g[i]); free_mat(tr->gate_up_g[i]);
@@ -86,7 +86,7 @@ void wubu_train_free(wubu_train_t *tr)
         free_mat(tr->g_proj_m[i]); free_mat(tr->gate_up_m[i]);
         free_mat(tr->down_m[i]);
     }
-    for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
+    for (int i = 0; i < WUBU_NORM_SLOTS; i++) {
         free_mat(tr->norm_g[i]); free_mat(tr->norm_m[i]);
         free_mat(tr->norm_v[i]);
     }
@@ -98,7 +98,7 @@ void wubu_train_free(wubu_train_t *tr)
 int wubu_train_zero_grad(wubu_train_t *tr)
 {
     if (!tr) return -1;
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    for (int i = 0; i < WUBU_LAYERS; i++) {
         memset(tr->q_proj_g[i], 0, 448 * 448 * sizeof(float));
         memset(tr->k_proj_g[i], 0, 448 * 64 * sizeof(float));
         memset(tr->v_proj_g[i], 0, 448 * 64 * sizeof(float));
@@ -108,8 +108,8 @@ int wubu_train_zero_grad(wubu_train_t *tr)
         memset(tr->down_g[i], 0, 1228 * 448 * sizeof(float));
     }
     memset(tr->emb_g, 0, 16384 * 448 * sizeof(float));
-    for (int i = 0; i < BARUN_NORM_SLOTS; i++) {
-        int sz = (i % 4 == 2 || i % 4 == 3) && (i < 4 * BARUN_LAYERS) ? 64 : 448;
+    for (int i = 0; i < WUBU_NORM_SLOTS; i++) {
+        int sz = (i % 4 == 2 || i % 4 == 3) && (i < 4 * WUBU_LAYERS) ? 64 : 448;
         memset(tr->norm_g[i], 0, (size_t)sz * sizeof(float));
     }
     tr->micro_steps = 0;

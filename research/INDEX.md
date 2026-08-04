@@ -13,7 +13,7 @@ attacks bytes moved.
 - WB04 THE HIVE -- the AGI's memory (the user's diagram: vector vs list vs hive). Linked fixed blocks + skipfield + freelist: erase = skip-mark + LIFO freelist push (O(1), no compaction), insert = freelist pop or new block (O(1), no reallocation), iterate jumps skips (cache-friendly, exact live counts), stable pointers with vector-like locality. DA caught 2 real bugs (append wrote slot 0 repeatedly; fresh blocks must init skip=1 so foreach skips never-written slots). ASan-clean `wired` (wubu_hive, test_hive PASSES)
 - WB03 The mixed-agents router -- fine-grained MoE for the 35M seed (8 experts/2 active + shared expert; router softmax top-k; specialization verified) `wired` (wubu_moe2, test_moe2 PASSES)
 
-## THEME BL — BarunLM-35M: the mustard seed base model (OURS)
+## THEME BL — WuBu-35M: the mustard seed base model (OURS)
 - BL01 Architecture port (12 layers, dim 448, GQA 7:1, hybrid local/global attention) `wired` (wubu, test_wubu PASSES)
 - BL02 Partial RoPE (50% rotary, rope_dim 32) `wired` (wubu)
 - BL03 QK RMSNorm + gated attention outputs `wired` (wubu)

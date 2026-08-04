@@ -1,8 +1,8 @@
 /*
- * gpu_wubu.cu -- CUDA kernels for BarunLM training (the seed grows fast).
+ * gpu_wubu.cu -- CUDA kernels for WuBu training (the seed grows fast).
  *
  * The DA pass found: the wizard already has cuBLAS + GPU kernels, but
- * the Barun training loop was pure CPU. This module gives the trainer
+ * the WuBu training loop was pure CPU. This module gives the trainer
  * a GPU backend: SGEMM (cuBLAS) for the big matrix products and a
  * fused attention kernel for the hybrid local/global pattern. The
  * trainer calls these through a pluggable dispatch -- CPU when no GPU,

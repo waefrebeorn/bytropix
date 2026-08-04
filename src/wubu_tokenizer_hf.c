@@ -16,7 +16,7 @@
 
 /* strdup is POSIX, not C11 -- under -std=c11 without _POSIX_C_SOURCE it
  * gets implicitly declared, returns int garbage, and every caller's
- * pointer is invalid (the BarunLM port crashed here under ASan). The
+ * pointer is invalid (the WuBu port crashed here under ASan). The
  * no-third-party doctrine: provide it locally, freestanding-safe. */
 static char *local_strdup(const char *s)
 {

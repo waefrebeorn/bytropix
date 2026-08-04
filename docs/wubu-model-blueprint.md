@@ -2,7 +2,7 @@
 
 > 2026-08-02. We are the model creators. This is the design of OUR
 > model — every piece sourced from what we built and learned:
-> the BarunLM seed (ported, training), the WuBu Nesting math
+> the WuBu seed (ported, training), the WuBu Nesting math
 > (Lean-verified), the mixed-agents MoE research, the sparse-attention
 > lineage, the math-reasoning papers, and the wizard's 1400+ wired
 > gaps. The mustard seed grows into this tree.
@@ -13,7 +13,7 @@
 
 | Source | What it contributes to OUR model |
 | --- | --- |
-| **BarunLM-35M** (the seed) | the base: 12 layers/448 dim, GQA 7:1, hybrid 3-local+1-full attention, 50% partial RoPE, QK-norm, gated attention, bounded SwiGLU, residual selectors, tied embeddings — ported to C11, checkpoint verified, TRAINING (loss 9.5→3.8) |
+| **WuBu-35M** (the seed) | the base: 12 layers/448 dim, GQA 7:1, hybrid 3-local+1-full attention, 50% partial RoPE, QK-norm, gated attention, bounded SwiGLU, residual selectors, tied embeddings — ported to C11, checkpoint verified, TRAINING (loss 9.5→3.8) |
 | **WuBu Nesting (層疊嵌套)** — OUR theory | nested hyperbolic spaces `H^n1_c1,s1 ⊃ H^n2_c2,s2 ⊃ ...` with learnable dim/curvature/scale; boundary sub-manifolds; tangent-space quaternion rotations between levels; level descriptors `ld_i`; spread `σ_i` — the hierarchical inductive bias no Euclidean model has |
 | **MATH/lean proofs** — OUR formal math | Möbius addition preserves the Poincaré ball (formally proved), hyperbolic gyration, MLA compression — the geometry is PROVEN, not assumed |
 | **WuBu Formalism** `Q = Σ q Π α^E` | the calculus of irreducible structure — the model's compositional prior |
@@ -106,7 +106,7 @@ input tokens
 
 | Phase | What | Evidence |
 | --- | --- | --- |
-| **0 (done)** | BarunLM port + training loop | loss 9.5→3.8, GPU wired, safetensors export verified |
+| **0 (done)** | WuBu port + training loop | loss 9.5→3.8, GPU wired, safetensors export verified |
 | **1 (now)** | hyperbolic lift/rotation layer in C11 (Lean-verified math) | `wubu_hyper` module + tests |
 | **2** | mixed-agents MoE router (8 experts/2 active) | `wubu_moe2` module + tests |
 | **3** | nesting transitions (quaternion SO(4)) | the WuBu Nesting block |
@@ -130,4 +130,4 @@ grown in the loop, and checked against the ledger.
 - the research: `wubuwizard/research/` (1400+ wired gaps) + `THEORY/papers/` (the lineage)
 - the corpus: `/home/wubu/sdcard/corpus/` (raw/text/tokens/checkpoints)
 - the safety: WuBuOS `wubu_recovery` (5+1) + Live Colonel
-- the license: `models/wubu/LICENSE-BARUN.md` (WaefreBeorn umbrella)
+- the license: `models/wubu/LICENSE-WUBU.md` (WaefreBeorn umbrella)

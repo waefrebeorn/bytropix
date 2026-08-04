@@ -1,10 +1,10 @@
 /*
- * gpu_wubu.h -- the GPU backend for BarunLM training (C linkage).
+ * gpu_wubu.h -- the GPU backend for WuBu training (C linkage).
  * The trainer dispatches through this: CPU fallback when no GPU,
  * cuBLAS SGEMM when CUDA is present.
  */
-#ifndef GPU_BARUN_H
-#define GPU_BARUN_H
+#ifndef GPU_WUBU_H
+#define GPU_WUBU_H
 
 #ifdef __cplusplus
 extern "C" {

@@ -14,7 +14,7 @@
  * through the o_proj's zeroed new columns.)
  *
  * The engine-side threading (wubu_buf_t, forward, backprop, train
- * state, checkpoint format all carry the fixed BARUN_DIM) is the
+ * state, checkpoint format all carry the fixed WUBU_DIM) is the
  * dynamic-dims refactor; this module produces the weight-level
  * expansion that refactor consumes. */
 #ifndef WUBU_WIDTH_H
@@ -22,7 +22,7 @@
 
 #include "wubu.h"
 
-/* Expand the model's hidden width by doubling it (BARUN_DIM *= 2).
+/* Expand the model's hidden width by doubling it (WUBU_DIM *= 2).
  * Returns 1 on success, 0 on allocation failure.
  * Expands: every block's weights (attn q/k/v/o/g, gate_up, down,
  * norms), the embedding (right half zero), the final norm, and the

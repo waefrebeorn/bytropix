@@ -1,5 +1,5 @@
 /*
- * test_wubu_train.c -- the BarunLM training core test (the AGI loop).
+ * test_wubu_train.c -- the WuBu training core test (the AGI loop).
  *
  * Proves the training loop: the seed model takes synthetic sequences,
  * the loss is computed, Muon+AdamW updates the weights, and the loss
@@ -89,7 +89,7 @@ int main(int argc, char **argv)
     wubu_train_free(&tr);
     wubu_free(&m, &b);
 
-    if (failures == 0) printf("ALL BARUN_TRAIN TESTS PASSED -- the seed learns\n");
-    else printf("%d BARUN_TRAIN FAILURES\n", failures);
+    if (failures == 0) printf("ALL WUBU_TRAIN TESTS PASSED -- the seed learns\n");
+    else printf("%d WUBU_TRAIN FAILURES\n", failures);
     return failures ? 1 : 0;
 }

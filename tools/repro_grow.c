@@ -25,29 +25,29 @@ static wubu_block_t make_block(unsigned *seed)
 {
     wubu_block_t blk;
     memset(&blk, 0, sizeof blk);
-    blk.q_proj    = mk(BARUN_DIM * BARUN_HEADS * 64, seed);
-    blk.k_proj    = mk(BARUN_DIM * BARUN_KV_HEADS * 64, seed);
-    blk.v_proj    = mk(BARUN_DIM * BARUN_KV_HEADS * 64, seed);
-    blk.o_proj    = mk(BARUN_DIM * BARUN_HEADS * 64, seed);
-    blk.g_proj    = mk(BARUN_DIM * BARUN_HEADS * 64, seed);
-    blk.q_norm    = mk(BARUN_KV_HEADS * 64, seed);
-    blk.k_norm    = mk(BARUN_KV_HEADS * 64, seed);
-    blk.attn_norm = mk(BARUN_DIM, seed);
-    blk.gate_up   = mk(BARUN_DIM * BARUN_FFN_DIM * 2, seed);
-    blk.down      = mk(BARUN_FFN_DIM * BARUN_DIM, seed);
-    blk.ffn_norm  = mk(BARUN_DIM, seed);
+    blk.q_proj    = mk(WUBU_DIM * WUBU_HEADS * 64, seed);
+    blk.k_proj    = mk(WUBU_DIM * WUBU_KV_HEADS * 64, seed);
+    blk.v_proj    = mk(WUBU_DIM * WUBU_KV_HEADS * 64, seed);
+    blk.o_proj    = mk(WUBU_DIM * WUBU_HEADS * 64, seed);
+    blk.g_proj    = mk(WUBU_DIM * WUBU_HEADS * 64, seed);
+    blk.q_norm    = mk(WUBU_KV_HEADS * 64, seed);
+    blk.k_norm    = mk(WUBU_KV_HEADS * 64, seed);
+    blk.attn_norm = mk(WUBU_DIM, seed);
+    blk.gate_up   = mk(WUBU_DIM * WUBU_FFN_DIM * 2, seed);
+    blk.down      = mk(WUBU_FFN_DIM * WUBU_DIM, seed);
+    blk.ffn_norm  = mk(WUBU_DIM, seed);
     return blk;
 }
 
 int main(void)
 {
     unsigned seed = 99;
-    wubu_block_t blocks[BARUN_LAYERS];
-    for (int i = 0; i < BARUN_LAYERS; i++) blocks[i] = make_block(&seed);
-    float *embedding = mk(BARUN_VOCAB * BARUN_DIM, &seed);
-    float *final_norm = mk(BARUN_DIM, &seed);
-    float *sel[BARUN_SELECTORS];
-    for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = mk(BARUN_DIM, &seed);
+    wubu_block_t blocks[WUBU_LAYERS];
+    for (int i = 0; i < WUBU_LAYERS; i++) blocks[i] = make_block(&seed);
+    float *embedding = mk(WUBU_VOCAB * WUBU_DIM, &seed);
+    float *final_norm = mk(WUBU_DIM, &seed);
+    float *sel[WUBU_SELECTORS];
+    for (int i = 0; i < WUBU_SELECTORS; i++) sel[i] = mk(WUBU_DIM, &seed);
 
     wubu_model_t m;
     if (wubu_model_init(&m, embedding, final_norm, blocks, sel) != 0) {

@@ -1,14 +1,14 @@
-# BarunLM-35M: the Mustard Seed — Base Model, Training AGI Core, and License
+# WuBu-35M: the Mustard Seed — Base Model, Training AGI Core, and License
 
 > 2026-08-02. The wizard is no longer an inference-only engine: the
-> **training AGI core** is live. BarunLM-35M is the mustard seed — a
+> **training AGI core** is live. WuBu-35M is the mustard seed — a
 > 35,072,768-parameter decoder-only base model, ported to C11 in-house
 > (the "there is no third party" doctrine: we built it, we own it, it
 > grows in our loop).
 
 ## What the seed is
 
-BarunLM-35M (Apache-2.0, © 2026 Harshal Singh) is a parameter-efficient
+WuBu-35M (Apache-2.0, © 2026 Harshal Singh) is a parameter-efficient
 base language model. On a fixed nine-task zero-shot suite it scores
 **41.01%**, beating LFM2.5-230M-Base with **6.55× fewer parameters**.
 The design:
@@ -58,13 +58,12 @@ next deepening — the loop already converges, the loop gets deeper.
 
 ## The license
 
-- **The seed + the port**: WaefreBeorn Umbrella License v3.0 (see
-  `models/wubu/LICENSE-BARUN.md`).
-- **Upstream**: BarunLM-35M keeps its Apache-2.0 terms + attribution
-  (`models/wubu/NOTICE`).
+- **The seed + the port + the tree**: all original WaefreBeorn work
+  under the WaefreBeorn Umbrella License v3.0 (see
+  `models/wubu/LICENSE-WUBU.md`). No third-party model license applies.
 - **The tree**: any model grown from this seed — fine-tunes, parameter
   extensions, the AGI brain-cluster variants — is original WaefreBeorn
-  work under the umbrella, with the seed attribution preserved.
+  work under the umbrella.
 
 ## The growth path (the AGI loop)
 

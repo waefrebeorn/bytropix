@@ -1,5 +1,5 @@
 /*
- * wubu_save.c -- save BarunLM checkpoints as REAL safetensors.
+ * wubu_save.c -- save WuBu checkpoints as REAL safetensors.
  *
  * The DA pass found: we could read safetensors but never write them --
  * every trained checkpoint was a private .st dump no standard tooling
@@ -44,7 +44,7 @@ int wubu_save_safetensors(const wubu_model_t *m, const char *path)
     t[n].dims[0] = 448; t[n].n_dims = 1;
     n++;
     char name[128];
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    for (int i = 0; i < WUBU_LAYERS; i++) {
         const wubu_block_t *b = &m->blocks[i];
         struct { const char *suffix; const float *data; int64_t r, c; } w[11] = {
             { "attn.q_proj.weight", b->q_proj, 448, 448 },
@@ -70,7 +70,7 @@ int wubu_save_safetensors(const wubu_model_t *m, const char *path)
             n++;
         }
     }
-    for (int i = 0; i < BARUN_SELECTORS && n < MAX_T; i++) {
+    for (int i = 0; i < WUBU_SELECTORS && n < MAX_T; i++) {
         snprintf(name, sizeof(name), "selectors.%d.score.weight", i);
         t[n].name = local_strdup(name);
         if (!t[n].name) return -1;

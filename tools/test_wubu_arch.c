@@ -1,5 +1,5 @@
 /*
- * test_wubu.c -- BarunLM-35M: the mustard seed test.
+ * test_wubu.c -- WuBu-35M: the mustard seed test.
  * Loads the REAL released checkpoint, verifies the parameter count
  * (35,072,768), runs a forward pass, and generates text.
  */
@@ -18,7 +18,7 @@ static const uint16_t k_prompt[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
 int main(int argc, char **argv)
 {
     const char *path = (argc > 1) ? argv[1] : "models/wubu/model.safetensors";
-    printf("=== test_wubu (BarunLM-35M, the mustard seed) ===\n");
+    printf("=== test_wubu (WuBu-35M, the mustard seed) ===\n");
 
     wubu_model_t m;
     if (wubu_load(&m, path) != 0) {
@@ -29,8 +29,8 @@ int main(int argc, char **argv)
 
     /* the released parameter count: 35,072,768 */
     long params = wubu_parameter_count(&m);
-    printf("  parameters: %ld (release: %d)\n", params, BARUN_PARAMS);
-    CHECK(params == BARUN_PARAMS, "parameter count == 35,072,768");
+    printf("  parameters: %ld (release: %d)\n", params, WUBU_PARAMS);
+    CHECK(params == WUBU_PARAMS, "parameter count == 35,072,768");
 
     /* the buffer + forward */
     wubu_buf_t b;
@@ -42,7 +42,7 @@ int main(int argc, char **argv)
         const float *lg = b.logits;
         int finite = 1;
         float maxv = -1e30f;
-        for (int i = 0; i < 8 * BARUN_VOCAB; i++) {
+        for (int i = 0; i < 8 * WUBU_VOCAB; i++) {
             if (lg[i] != lg[i]) { finite = 0; break; }
             if (lg[i] > maxv) maxv = lg[i];
         }
@@ -62,12 +62,12 @@ int main(int argc, char **argv)
     /* the generated tokens must be valid vocab ids */
     int valid = 1;
     for (size_t i = 0; i < made; i++)
-        if (gen[8 + i] >= BARUN_VOCAB) valid = 0;
+        if (gen[8 + i] >= WUBU_VOCAB) valid = 0;
     CHECK(valid, "tokens in vocab range");
 
     wubu_free(&m, &b);
 
-    if (failures == 0) printf("ALL BARUN TESTS PASSED -- the seed is alive\n");
-    else printf("%d BARUN FAILURES\n", failures);
+    if (failures == 0) printf("ALL WUBU TESTS PASSED -- the seed is alive\n");
+    else printf("%d WUBU FAILURES\n", failures);
     return failures ? 1 : 0;
 }

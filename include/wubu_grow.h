@@ -15,7 +15,7 @@
  * weights and their is_full rhythm; the new block's weights are all
  * zero -- its residual branch contributes 0, so the model's function is
  * UNCHANGED (verifiable: run the forward before and after, compare).
- * Returns 1 on success, 0 when the model is already at BARUN_LAYERS. */
+ * Returns 1 on success, 0 when the model is already at WUBU_LAYERS. */
 int wubu_grow_insert_block(wubu_model_t *m, int pos);
 
 /* Stack a COPY of the block at src into a new block appended at the END

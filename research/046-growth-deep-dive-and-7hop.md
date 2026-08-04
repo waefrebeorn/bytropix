@@ -91,7 +91,7 @@ The engine close (`src/wubu_grow.c` + `test_grow`):
 - `wubu_grow_schedule` -- the Bu schedule (expand every 10%; the event
   count = T/step_frac); the test: monotonic 2→12 with 10 events.
 - The model's `n_layers` active-count contract (the forward + the
-  parameter count respect it; the released model = BARUN_LAYERS, the
+  parameter count respect it; the released model = WUBU_LAYERS, the
   parity untouched).
 
 ## The next closes (the growth avenue)

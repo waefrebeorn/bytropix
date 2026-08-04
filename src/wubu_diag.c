@@ -11,6 +11,8 @@
  * C11, self-contained, wraps wubu_hive only.
  */
 #include "wubu_diag.h"
+#include "wubu.h"          /* WUBU_* dims for the real-grad bridge */
+#include "wubu_train.h"    /* wubu_train_t gradient accumulators */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -172,6 +174,47 @@ int wubu_diag_classify(wubu_diag_t *d, float *grow, float *shrink)
     if (grow)   *grow = g;
     if (shrink) *shrink = s;
     return 0;
+}
+
+/* ---- THE REAL-GRAD BRIDGE (milestone 2) ----
+ * Record the trainer's ACTUAL per-layer gradient norms as GRAD cells.
+ * cell = layer index; value = Frobenius norm of the layer's accumulated
+ * matrix grads (q/k/v/o/g + gate_up + down). Cell -2 = the embedding
+ * grad norm (a global). This is what makes the diagnostic measure the
+ * REAL training signal, not toy tasks.
+ */
+static double fro_norm(const float *g, size_t n)
+{
+    double s = 0.0;
+    for (size_t i = 0; i < n; i++) s += (double)g[i] * g[i];
+    return s;
+}
+
+int wubu_diag_record_grads(wubu_diag_t *d, const struct wubu_train *tr)
+{
+    if (!d || !tr) return -1;
+    int n_rec = 0;
+    const int L = WUBU_LAYERS;
+    const int D = WUBU_DIM, KV = WUBU_KV_HEADS * 64, FF = WUBU_FFN_DIM;
+    for (int l = 0; l < L; l++) {
+        double s = 0.0;
+        s += fro_norm(tr->q_proj_g[l], (size_t)D * D);
+        s += fro_norm(tr->k_proj_g[l], (size_t)D * KV);
+        s += fro_norm(tr->v_proj_g[l], (size_t)D * KV);
+        s += fro_norm(tr->o_proj_g[l], (size_t)D * D);
+        s += fro_norm(tr->g_proj_g[l], (size_t)D * D);
+        s += fro_norm(tr->gate_up_g[l], (size_t)D * (2 * FF));
+        s += fro_norm(tr->down_g[l], (size_t)FF * D);
+        float norm = (float)sqrt(s);
+        if (wubu_diag_record(d, WUBU_DIAG_GRAD, l, norm, 0.0f) != 0) return -1;
+        n_rec++;
+    }
+    if (tr->emb_g) {
+        float en = (float)sqrt(fro_norm(tr->emb_g, (size_t)16384 * D));
+        if (wubu_diag_record(d, WUBU_DIAG_GRAD, -2, en, 0.0f) != 0) return -1;
+        n_rec++;
+    }
+    return n_rec;
 }
 
 /* ---- the causal walker ----

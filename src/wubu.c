@@ -1,5 +1,5 @@
 /*
- * wubu.c -- BarunLM-35M in C11. THE MUSTARD SEED: our own base model.
+ * wubu.c -- WuBu-35M in C11. THE MUSTARD SEED: our own base model.
  *
  * A faithful port of the released PyTorch implementation (Apache-2.0,
  * (c) 2026 Harshal Singh). Pure C11, no third-party deps. The forward
@@ -79,13 +79,13 @@ int wubu_model_init(wubu_model_t *m, float *embedding, float *final_norm,
     memset(m, 0, sizeof(*m));
     m->embedding = embedding;
     m->final_norm = final_norm;
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    for (int i = 0; i < WUBU_LAYERS; i++) {
         m->blocks[i] = blocks[i];
-        m->is_full[i] = ((i + 1) % BARUN_FULL_EVERY == 0) ? 1 : 0;
-        m->fire_sel[i] = ((i + 1) % BARUN_SELECT_EVERY == 0) ? 1 : 0;
+        m->is_full[i] = ((i + 1) % WUBU_FULL_EVERY == 0) ? 1 : 0;
+        m->fire_sel[i] = ((i + 1) % WUBU_SELECT_EVERY == 0) ? 1 : 0;
     }
-    m->n_layers = BARUN_LAYERS;
-    for (int i = 0; i < BARUN_SELECTORS; i++) m->selectors[i] = selectors[i];
+    m->n_layers = WUBU_LAYERS;
+    for (int i = 0; i < WUBU_SELECTORS; i++) m->selectors[i] = selectors[i];
     return 0;
 }
 
@@ -124,11 +124,11 @@ int wubu_load(wubu_model_t *m, const char *path)
     float *final_norm = load_tensor(r, "final_norm.weight", 448);
     if (!final_norm) { free(embedding); st_close(r); return -1; }
 
-    wubu_block_t blocks[BARUN_LAYERS];
+    wubu_block_t blocks[WUBU_LAYERS];
     memset(blocks, 0, sizeof(blocks));
     char name[128];
     int ok = 1;
-    for (int i = 0; i < BARUN_LAYERS && ok; i++) {
+    for (int i = 0; i < WUBU_LAYERS && ok; i++) {
         wubu_block_t *blk = &blocks[i];
         snprintf(name, sizeof(name), "layers.%d.attn.q_proj.weight", i);
         blk->q_proj = load_tensor(r, name, 448 * 448);
@@ -156,8 +156,8 @@ int wubu_load(wubu_model_t *m, const char *path)
              blk->g_proj && blk->q_norm && blk->k_norm && blk->attn_norm &&
              blk->gate_up && blk->down && blk->ffn_norm;
     }
-    float *selectors[BARUN_SELECTORS];
-    for (int i = 0; i < BARUN_SELECTORS && ok; i++) {
+    float *selectors[WUBU_SELECTORS];
+    for (int i = 0; i < WUBU_SELECTORS && ok; i++) {
         snprintf(name, sizeof(name), "selectors.%d.score.weight", i);
         selectors[i] = load_tensor(r, name, 448);
         ok = ok && selectors[i] != NULL;
@@ -174,26 +174,26 @@ int wubu_load(wubu_model_t *m, const char *path)
 /* ---- the inference buffer ---- */
 int wubu_buf_alloc(wubu_buf_t *b, size_t max_seq)
 {
-    if (!b || max_seq <= 0 || max_seq > BARUN_MAX_SEQ) return -1;
+    if (!b || max_seq <= 0 || max_seq > WUBU_MAX_SEQ) return -1;
     memset(b, 0, sizeof(*b));
     size_t seq = max_seq;
-    b->x = (float *)calloc(seq * BARUN_DIM, sizeof(float));
-    b->x2 = (float *)calloc(seq * BARUN_DIM, sizeof(float));
-    b->q = (float *)calloc(seq * BARUN_HEADS * BARUN_HEAD_DIM, sizeof(float));
-    b->k = (float *)calloc(seq * BARUN_KV_HEADS * BARUN_HEAD_DIM, sizeof(float));
-    b->v = (float *)calloc(seq * BARUN_KV_HEADS * BARUN_HEAD_DIM, sizeof(float));
-    b->attn_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
-    b->gate = (float *)calloc(seq * BARUN_DIM, sizeof(float));
-    b->g_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
-    b->ffn_gate = (float *)calloc(seq * 2 * BARUN_FFN_DIM, sizeof(float));
-    b->ffn_up = (float *)calloc(seq * BARUN_FFN_DIM, sizeof(float));
-    b->ffn_out = (float *)calloc(seq * BARUN_DIM, sizeof(float));
-    b->logits = (float *)calloc(seq * BARUN_VOCAB, sizeof(float));
-    b->checkpoint = (float *)calloc(BARUN_MAX_SEQ * BARUN_DIM, sizeof(float));
-    b->cos_tbl = (float *)calloc(BARUN_MAX_SEQ * BARUN_ROPE_DIM, sizeof(float));
-    b->sin_tbl = (float *)calloc(BARUN_MAX_SEQ * BARUN_ROPE_DIM, sizeof(float));
-    b->cache_k = (float *)calloc(BARUN_LAYERS * BARUN_MAX_SEQ * 64, sizeof(float));
-    b->cache_v = (float *)calloc(BARUN_LAYERS * BARUN_MAX_SEQ * 64, sizeof(float));
+    b->x = (float *)calloc(seq * WUBU_DIM, sizeof(float));
+    b->x2 = (float *)calloc(seq * WUBU_DIM, sizeof(float));
+    b->q = (float *)calloc(seq * WUBU_HEADS * WUBU_HEAD_DIM, sizeof(float));
+    b->k = (float *)calloc(seq * WUBU_KV_HEADS * WUBU_HEAD_DIM, sizeof(float));
+    b->v = (float *)calloc(seq * WUBU_KV_HEADS * WUBU_HEAD_DIM, sizeof(float));
+    b->attn_out = (float *)calloc(seq * WUBU_DIM, sizeof(float));
+    b->gate = (float *)calloc(seq * WUBU_DIM, sizeof(float));
+    b->g_out = (float *)calloc(seq * WUBU_DIM, sizeof(float));
+    b->ffn_gate = (float *)calloc(seq * 2 * WUBU_FFN_DIM, sizeof(float));
+    b->ffn_up = (float *)calloc(seq * WUBU_FFN_DIM, sizeof(float));
+    b->ffn_out = (float *)calloc(seq * WUBU_DIM, sizeof(float));
+    b->logits = (float *)calloc(seq * WUBU_VOCAB, sizeof(float));
+    b->checkpoint = (float *)calloc(WUBU_MAX_SEQ * WUBU_DIM, sizeof(float));
+    b->cos_tbl = (float *)calloc(WUBU_MAX_SEQ * WUBU_ROPE_DIM, sizeof(float));
+    b->sin_tbl = (float *)calloc(WUBU_MAX_SEQ * WUBU_ROPE_DIM, sizeof(float));
+    b->cache_k = (float *)calloc(WUBU_LAYERS * WUBU_MAX_SEQ * 64, sizeof(float));
+    b->cache_v = (float *)calloc(WUBU_LAYERS * WUBU_MAX_SEQ * 64, sizeof(float));
     b->seq_alloc = seq;
     if (!b->x || !b->x2 || !b->q || !b->k || !b->v || !b->attn_out ||
         !b->gate || !b->g_out || !b->ffn_gate || !b->ffn_up || !b->ffn_out ||
@@ -202,7 +202,7 @@ int wubu_buf_alloc(wubu_buf_t *b, size_t max_seq)
         wubu_free(NULL, b);
         return -1;
     }
-    build_rope_tables(b->cos_tbl, b->sin_tbl, BARUN_MAX_SEQ, BARUN_ROPE_DIM,
+    build_rope_tables(b->cos_tbl, b->sin_tbl, WUBU_MAX_SEQ, WUBU_ROPE_DIM,
                       10000.0f);
     return 0;
 }
@@ -255,19 +255,19 @@ static void attention(wubu_buf_t *b, int seq, int is_full, int local_window,
      * with the KV, softmax over the causal (windowed) range, weighted
      * sum of v. */
     for (int s = 0; s < seq; s++) {
-        float *acc = b->attn_out + (size_t)s * BARUN_DIM;
-        memset(acc, 0, BARUN_DIM * sizeof(float));
-        float *osum = b->x2 + (size_t)s * BARUN_DIM;  /* scratch: probs */
-        memset(osum, 0, BARUN_DIM * sizeof(float));   /* zeroed: the
+        float *acc = b->attn_out + (size_t)s * WUBU_DIM;
+        memset(acc, 0, WUBU_DIM * sizeof(float));
+        float *osum = b->x2 + (size_t)s * WUBU_DIM;  /* scratch: probs */
+        memset(osum, 0, WUBU_DIM * sizeof(float));   /* zeroed: the
             buffer held the previous layer's o_proj output */
-        for (int h = 0; h < BARUN_HEADS; h++) {
-            const float *qrow = b->q + (size_t)s * BARUN_DIM + (size_t)h * 64;
+        for (int h = 0; h < WUBU_HEADS; h++) {
+            const float *qrow = b->q + (size_t)s * WUBU_DIM + (size_t)h * 64;
             float maxv = -1e30f;
             /* find the window start */
             int lo = is_full ? 0 : (s > local_window ? s - local_window + 1 : 0);
             /* include only positions <= s (causal) */
             int kv_n = 0;
-            float probs[BARUN_LOCAL_WIN + 2];
+            float probs[WUBU_LOCAL_WIN + 2];
             for (int t = lo; t <= s; t++) {
                 const float *krow = b->k + (size_t)t * 64;
                 float dot = 0;
@@ -302,7 +302,7 @@ int wubu_forward(wubu_model_t *m, wubu_buf_t *b,
 
     /* the WuBu mode: when m->wubu_mode != 0, the blocks run through the
      * hyperbolic lift/rotation + the mixed-agents FFN (the blueprint's
-     * phases 1-2). Mode 0 = the released BarunLM path (exact parity). */
+     * phases 1-2). Mode 0 = the released WuBu path (exact parity). */
     if (m->wubu_mode) {
         return wubu_forward_wubu(m, b, tokens, seq);
     }
@@ -310,15 +310,15 @@ int wubu_forward(wubu_model_t *m, wubu_buf_t *b,
     /* embedding (tied) */
     for (int s = 0; s < seq; s++) {
         uint16_t tok = tokens[s];
-        const float *e = m->embedding + (size_t)tok * BARUN_DIM;
-        memcpy(b->x + (size_t)s * BARUN_DIM, e, BARUN_DIM * sizeof(float));
+        const float *e = m->embedding + (size_t)tok * WUBU_DIM;
+        memcpy(b->x + (size_t)s * WUBU_DIM, e, WUBU_DIM * sizeof(float));
     }
 
     float *checkpoint = b->checkpoint;   /* the group input checkpoint
                                             (dedicated buffer: b->x2 is
                                             reused as the o_proj output
                                             and the attention scratch) */
-    memcpy(checkpoint, b->x, (size_t)seq * BARUN_DIM * sizeof(float));
+    memcpy(checkpoint, b->x, (size_t)seq * WUBU_DIM * sizeof(float));
     int sel = 0;
 
     for (int l = 0; l < m->n_layers; l++) {
@@ -329,90 +329,90 @@ int wubu_forward(wubu_model_t *m, wubu_buf_t *b,
                               scratch: attn input = rmsnorm(x) -> project) */
         /* rmsnorm into b->gate (scratch) */
         for (int s = 0; s < seq; s++)
-            rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
-                           h + (size_t)s * BARUN_DIM, blk->attn_norm,
-                           BARUN_DIM, BARUN_EPS);
+            rms_norm_value(b->gate + (size_t)s * WUBU_DIM,
+                           h + (size_t)s * WUBU_DIM, blk->attn_norm,
+                           WUBU_DIM, WUBU_EPS);
         /* q/k/v projections */
-        matmul(b->q, blk->q_proj, b->gate, BARUN_HEADS * 64, BARUN_DIM, seq);
-        matmul(b->k, blk->k_proj, b->gate, BARUN_KV_HEADS * 64, BARUN_DIM, seq);
-        matmul(b->v, blk->v_proj, b->gate, BARUN_KV_HEADS * 64, BARUN_DIM, seq);
+        matmul(b->q, blk->q_proj, b->gate, WUBU_HEADS * 64, WUBU_DIM, seq);
+        matmul(b->k, blk->k_proj, b->gate, WUBU_KV_HEADS * 64, WUBU_DIM, seq);
+        matmul(b->v, blk->v_proj, b->gate, WUBU_KV_HEADS * 64, WUBU_DIM, seq);
         /* qk norm per head */
         for (int s = 0; s < seq; s++) {
-            for (int h = 0; h < BARUN_HEADS; h++) {
-                float *qr = b->q + (size_t)s * BARUN_DIM + (size_t)h * 64;
-                rms_norm_value(qr, qr, blk->q_norm, 64, BARUN_EPS);
+            for (int h = 0; h < WUBU_HEADS; h++) {
+                float *qr = b->q + (size_t)s * WUBU_DIM + (size_t)h * 64;
+                rms_norm_value(qr, qr, blk->q_norm, 64, WUBU_EPS);
             }
             float *kr = b->k + (size_t)s * 64;
-            rms_norm_value(kr, kr, blk->k_norm, 64, BARUN_EPS);
+            rms_norm_value(kr, kr, blk->k_norm, 64, WUBU_EPS);
         }
         /* partial rope */
         for (int s = 0; s < seq; s++) {
-            for (int h = 0; h < BARUN_HEADS; h++) {
-                float *qr = b->q + (size_t)s * BARUN_DIM + (size_t)h * 64;
-                apply_rope(qr, 1, 64, BARUN_ROPE_DIM, b->cos_tbl, b->sin_tbl, s);
+            for (int h = 0; h < WUBU_HEADS; h++) {
+                float *qr = b->q + (size_t)s * WUBU_DIM + (size_t)h * 64;
+                apply_rope(qr, 1, 64, WUBU_ROPE_DIM, b->cos_tbl, b->sin_tbl, s);
             }
             float *kr = b->k + (size_t)s * 64;
-            apply_rope(kr, 1, 64, BARUN_ROPE_DIM, b->cos_tbl, b->sin_tbl, s);
+            apply_rope(kr, 1, 64, WUBU_ROPE_DIM, b->cos_tbl, b->sin_tbl, s);
         }
         /* attention */
-        attention(b, seq, m->is_full[l], BARUN_LOCAL_WIN, 0);
+        attention(b, seq, m->is_full[l], WUBU_LOCAL_WIN, 0);
         /* o_proj + gate: out = o_proj(attn) * sigmoid(g_proj(rmsnorm(x))) */
-        matmul(b->x2, blk->o_proj, b->attn_out, BARUN_DIM, BARUN_DIM, seq);
-        matmul(b->g_out, blk->g_proj, b->gate, BARUN_DIM, BARUN_DIM, seq);
+        matmul(b->x2, blk->o_proj, b->attn_out, WUBU_DIM, WUBU_DIM, seq);
+        matmul(b->g_out, blk->g_proj, b->gate, WUBU_DIM, WUBU_DIM, seq);
         for (int s = 0; s < seq; s++) {
-            float *xs = b->x + (size_t)s * BARUN_DIM;
-            float *outs = b->x2 + (size_t)s * BARUN_DIM;
-            float *gs = b->g_out + (size_t)s * BARUN_DIM;
-            for (int d = 0; d < BARUN_DIM; d++)
+            float *xs = b->x + (size_t)s * WUBU_DIM;
+            float *outs = b->x2 + (size_t)s * WUBU_DIM;
+            float *gs = b->g_out + (size_t)s * WUBU_DIM;
+            for (int d = 0; d < WUBU_DIM; d++)
                 xs[d] += outs[d] * (1.0f / (1.0f + expf(-gs[d])));
         }
 
         /* --- ffn (bounded swiglu) --- */
         for (int s = 0; s < seq; s++)
-            rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
-                           b->x + (size_t)s * BARUN_DIM, blk->ffn_norm,
-                           BARUN_DIM, BARUN_EPS);
-        matmul(b->ffn_gate, blk->gate_up, b->gate, 2 * BARUN_FFN_DIM, BARUN_DIM, seq);
+            rms_norm_value(b->gate + (size_t)s * WUBU_DIM,
+                           b->x + (size_t)s * WUBU_DIM, blk->ffn_norm,
+                           WUBU_DIM, WUBU_EPS);
+        matmul(b->ffn_gate, blk->gate_up, b->gate, 2 * WUBU_FFN_DIM, WUBU_DIM, seq);
         /* the second half of gate_up is the "up" projection */
         for (int s = 0; s < seq; s++) {
-            float *g = b->ffn_gate + (size_t)s * 2 * BARUN_FFN_DIM;
-            float *u = b->ffn_up + (size_t)s * BARUN_FFN_DIM;
-            for (int d = 0; d < BARUN_FFN_DIM; d++) {
-                float gv = g[d], uv = g[d + BARUN_FFN_DIM];
-                if (gv > BARUN_CLIP) gv = BARUN_CLIP;
-                if (uv > BARUN_CLIP) uv = BARUN_CLIP;
-                if (uv < -BARUN_CLIP) uv = -BARUN_CLIP;
+            float *g = b->ffn_gate + (size_t)s * 2 * WUBU_FFN_DIM;
+            float *u = b->ffn_up + (size_t)s * WUBU_FFN_DIM;
+            for (int d = 0; d < WUBU_FFN_DIM; d++) {
+                float gv = g[d], uv = g[d + WUBU_FFN_DIM];
+                if (gv > WUBU_CLIP) gv = WUBU_CLIP;
+                if (uv > WUBU_CLIP) uv = WUBU_CLIP;
+                if (uv < -WUBU_CLIP) uv = -WUBU_CLIP;
                 u[d] = silu(gv) * uv;
             }
         }
-        matmul(b->ffn_out, blk->down, b->ffn_up, BARUN_DIM, BARUN_FFN_DIM, seq);
+        matmul(b->ffn_out, blk->down, b->ffn_up, WUBU_DIM, WUBU_FFN_DIM, seq);
         for (int s = 0; s < seq; s++) {
-            float *xs = b->x + (size_t)s * BARUN_DIM;
-            float *os = b->ffn_out + (size_t)s * BARUN_DIM;
-            for (int d = 0; d < BARUN_DIM; d++) xs[d] += os[d];
+            float *xs = b->x + (size_t)s * WUBU_DIM;
+            float *os = b->ffn_out + (size_t)s * WUBU_DIM;
+            for (int d = 0; d < WUBU_DIM; d++) xs[d] += os[d];
         }
 
         /* --- residual selector (per-block rhythm: the growth operator
          * shifts the flag with the block, so the function is preserved) */
-        if (m->fire_sel[l] && sel < BARUN_SELECTORS) {
+        if (m->fire_sel[l] && sel < WUBU_SELECTORS) {
             float *sw = m->selectors[sel];
             for (int s = 0; s < seq; s++) {
-                float *cp = checkpoint + (size_t)s * BARUN_DIM;
-                float *cur = b->x + (size_t)s * BARUN_DIM;
+                float *cp = checkpoint + (size_t)s * WUBU_DIM;
+                float *cur = b->x + (size_t)s * WUBU_DIM;
                 /* score both candidates, softmax, convex blend */
                 float sc = 0, ss2 = 0;
-                for (int d = 0; d < BARUN_DIM; d++) {
-                    float ncp = cp[d] * (1.0f / sqrtf(BARUN_DIM * 1.0f));
-                    float ncu = cur[d] * (1.0f / sqrtf(BARUN_DIM * 1.0f));
+                for (int d = 0; d < WUBU_DIM; d++) {
+                    float ncp = cp[d] * (1.0f / sqrtf(WUBU_DIM * 1.0f));
+                    float ncu = cur[d] * (1.0f / sqrtf(WUBU_DIM * 1.0f));
                     sc += sw[d] * ncp;
                     ss2 += sw[d] * ncu;
                 }
                 float w0 = expf(sc), w1 = expf(ss2);
                 float ws = w0 + w1 + 1e-9f;
                 w0 /= ws; w1 /= ws;
-                for (int d = 0; d < BARUN_DIM; d++)
+                for (int d = 0; d < WUBU_DIM; d++)
                     cur[d] = w0 * cp[d] + w1 * cur[d];
-                memcpy(cp, cur, BARUN_DIM * sizeof(float));
+                memcpy(cp, cur, WUBU_DIM * sizeof(float));
             }
             sel++;
         }
@@ -420,17 +420,17 @@ int wubu_forward(wubu_model_t *m, wubu_buf_t *b,
 
     /* final norm + lm_head (tied) */
     for (int s = 0; s < seq; s++)
-        rms_norm_value(b->x2 + (size_t)s * BARUN_DIM,
-                       b->x + (size_t)s * BARUN_DIM, m->final_norm,
-                       BARUN_DIM, BARUN_EPS);
+        rms_norm_value(b->x2 + (size_t)s * WUBU_DIM,
+                       b->x + (size_t)s * WUBU_DIM, m->final_norm,
+                       WUBU_DIM, WUBU_EPS);
     /* logits = x2 @ embedding^T */
     for (int s = 0; s < seq; s++) {
-        const float *h = b->x2 + (size_t)s * BARUN_DIM;
-        float *lg = b->logits + (size_t)s * BARUN_VOCAB;
-        for (int v = 0; v < BARUN_VOCAB; v++) {
-            const float *e = m->embedding + (size_t)v * BARUN_DIM;
+        const float *h = b->x2 + (size_t)s * WUBU_DIM;
+        float *lg = b->logits + (size_t)s * WUBU_VOCAB;
+        for (int v = 0; v < WUBU_VOCAB; v++) {
+            const float *e = m->embedding + (size_t)v * WUBU_DIM;
             float acc = 0;
-            for (int d = 0; d < BARUN_DIM; d++) acc += e[d] * h[d];
+            for (int d = 0; d < WUBU_DIM; d++) acc += e[d] * h[d];
             lg[v] = acc;
         }
     }
@@ -458,12 +458,12 @@ int wubu_forward_wubu(wubu_model_t *m, wubu_buf_t *b,
     /* the embedding (tied) */
     for (int s = 0; s < seq; s++) {
         uint16_t tok = tokens[s];
-        const float *e = m->embedding + (size_t)tok * BARUN_DIM;
-        memcpy(b->x + (size_t)s * BARUN_DIM, e, BARUN_DIM * sizeof(float));
+        const float *e = m->embedding + (size_t)tok * WUBU_DIM;
+        memcpy(b->x + (size_t)s * WUBU_DIM, e, WUBU_DIM * sizeof(float));
     }
     /* the attention rhythm */
-    int is_full[BARUN_LAYERS];
-    for (int l = 0; l < BARUN_LAYERS; l++)
+    int is_full[WUBU_LAYERS];
+    for (int l = 0; l < WUBU_LAYERS; l++)
         is_full[l] = ((l + 1) % 4 == 0);
     /* the checkpoint lives in the buffer (heap), not on the stack:
      * 2048*448*4 = 3.6MB would overflow a kernel stack. */
@@ -471,20 +471,20 @@ int wubu_forward_wubu(wubu_model_t *m, wubu_buf_t *b,
     int sel = 0;
     for (int l = 0; l < m->n_layers; l++) {
         wubu_block_t *blk = &m->blocks[l];
-        if ((l + 1) % BARUN_SELECT_EVERY == 0)
-            memcpy(checkpoint, b->x, (size_t)seq * BARUN_DIM * sizeof(float));
+        if ((l + 1) % WUBU_SELECT_EVERY == 0)
+            memcpy(checkpoint, b->x, (size_t)seq * WUBU_DIM * sizeof(float));
 
         /* attention_norm */
         for (int s = 0; s < seq; s++)
-            rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
-                           b->x + (size_t)s * BARUN_DIM, blk->attn_norm,
-                           BARUN_DIM, BARUN_EPS);
+            rms_norm_value(b->gate + (size_t)s * WUBU_DIM,
+                           b->x + (size_t)s * WUBU_DIM, blk->attn_norm,
+                           WUBU_DIM, WUBU_EPS);
         /* q/k/v projections */
-        matmul(b->q, blk->q_proj, b->gate, BARUN_HEADS * 64, BARUN_DIM, seq);
-        matmul(b->k, blk->k_proj, b->gate, 64, BARUN_DIM, seq);
-        matmul(b->v, blk->v_proj, b->gate, 64, BARUN_DIM, seq);
+        matmul(b->q, blk->q_proj, b->gate, WUBU_HEADS * 64, WUBU_DIM, seq);
+        matmul(b->k, blk->k_proj, b->gate, 64, WUBU_DIM, seq);
+        matmul(b->v, blk->v_proj, b->gate, 64, WUBU_DIM, seq);
         /* partial RoPE on q/k */
-        apply_rope(b->q, seq, BARUN_HEADS, 64, b->cos_tbl, b->sin_tbl, 0);
+        apply_rope(b->q, seq, WUBU_HEADS, 64, b->cos_tbl, b->sin_tbl, 0);
         apply_rope(b->k, seq, 1, 64, b->cos_tbl, b->sin_tbl, 0);
         /* the hyperbolic lift: when the ball is active, the queries are
          * gyro-rotated against the keys before the dot product. This is
@@ -494,8 +494,8 @@ int wubu_forward_wubu(wubu_model_t *m, wubu_buf_t *b,
         if (m->wubu_mode) {
             for (int s = 0; s < seq; s++) {
                 const float *k0 = b->k + (size_t)s * 64;
-                float *q0 = b->q + (size_t)s * BARUN_DIM;
-                for (int h = 0; h < BARUN_HEADS; h++) {
+                float *q0 = b->q + (size_t)s * WUBU_DIM;
+                for (int h = 0; h < WUBU_HEADS; h++) {
                     const float *kh = k0;
                     float *qh = q0 + (size_t)h * 64;
                     /* approximate gyro alignment: q' = q - (q·k)k/|k|²
@@ -509,86 +509,86 @@ int wubu_forward_wubu(wubu_model_t *m, wubu_buf_t *b,
             }
         }
         /* attention */
-        attention(b, seq, is_full[l], BARUN_LOCAL_WIN, 0);
+        attention(b, seq, is_full[l], WUBU_LOCAL_WIN, 0);
         /* o_proj + the attention gate */
-        matmul(b->x2, blk->o_proj, b->attn_out, BARUN_DIM, BARUN_DIM, seq);
-        matmul(b->g_out, blk->g_proj, b->gate, BARUN_DIM, BARUN_DIM, seq);
+        matmul(b->x2, blk->o_proj, b->attn_out, WUBU_DIM, WUBU_DIM, seq);
+        matmul(b->g_out, blk->g_proj, b->gate, WUBU_DIM, WUBU_DIM, seq);
         /* gated attention output */
         for (int s = 0; s < seq; s++) {
-            float *xs = b->x + (size_t)s * BARUN_DIM;
-            float *outs = b->x2 + (size_t)s * BARUN_DIM;
-            float *gs = b->g_out + (size_t)s * BARUN_DIM;
-            for (int d = 0; d < BARUN_DIM; d++)
+            float *xs = b->x + (size_t)s * WUBU_DIM;
+            float *outs = b->x2 + (size_t)s * WUBU_DIM;
+            float *gs = b->g_out + (size_t)s * WUBU_DIM;
+            for (int d = 0; d < WUBU_DIM; d++)
                 xs[d] += outs[d] * (1.0f / (1.0f + expf(-gs[d])));
         }
         /* ffn_norm */
         for (int s = 0; s < seq; s++)
-            rms_norm_value(b->gate + (size_t)s * BARUN_DIM,
-                           b->x + (size_t)s * BARUN_DIM, blk->ffn_norm,
-                           BARUN_DIM, BARUN_EPS);
+            rms_norm_value(b->gate + (size_t)s * WUBU_DIM,
+                           b->x + (size_t)s * WUBU_DIM, blk->ffn_norm,
+                           WUBU_DIM, WUBU_EPS);
         if (m->wubu_moe) {
             /* the mixed-agents FFN: the router (wubu_moe2) replaces the
              * second projection -- the blueprint's phase-2 hook. */
             for (int s = 0; s < seq; s++)
                 wubu_moe2_forward((const wubu_moe2_t *)m->wubu_moe,
-                                  b->gate + (size_t)s * BARUN_DIM,
-                                  b->ffn_out + (size_t)s * BARUN_DIM);
+                                  b->gate + (size_t)s * WUBU_DIM,
+                                  b->ffn_out + (size_t)s * WUBU_DIM);
         } else {
             /* the released bounded-swiglu FFN */
-            matmul(b->ffn_gate, blk->gate_up, b->gate, 2 * BARUN_FFN_DIM, BARUN_DIM, seq);
+            matmul(b->ffn_gate, blk->gate_up, b->gate, 2 * WUBU_FFN_DIM, WUBU_DIM, seq);
             for (int s = 0; s < seq; s++) {
-                float *g = b->ffn_gate + (size_t)s * 2 * BARUN_FFN_DIM;
-                float *u = b->ffn_up + (size_t)s * BARUN_FFN_DIM;
-                for (int d = 0; d < BARUN_FFN_DIM; d++) {
-                    float gv = g[d], uv = g[d + BARUN_FFN_DIM];
-                    if (gv > BARUN_CLIP) gv = BARUN_CLIP;
-                    if (uv > BARUN_CLIP) uv = BARUN_CLIP;
-                    if (uv < -BARUN_CLIP) uv = -BARUN_CLIP;
+                float *g = b->ffn_gate + (size_t)s * 2 * WUBU_FFN_DIM;
+                float *u = b->ffn_up + (size_t)s * WUBU_FFN_DIM;
+                for (int d = 0; d < WUBU_FFN_DIM; d++) {
+                    float gv = g[d], uv = g[d + WUBU_FFN_DIM];
+                    if (gv > WUBU_CLIP) gv = WUBU_CLIP;
+                    if (uv > WUBU_CLIP) uv = WUBU_CLIP;
+                    if (uv < -WUBU_CLIP) uv = -WUBU_CLIP;
                     u[d] = silu(gv) * uv;
                 }
             }
-            matmul(b->ffn_out, blk->down, b->ffn_up, BARUN_DIM, BARUN_FFN_DIM, seq);
+            matmul(b->ffn_out, blk->down, b->ffn_up, WUBU_DIM, WUBU_FFN_DIM, seq);
         }
         for (int s = 0; s < seq; s++) {
-            float *xs = b->x + (size_t)s * BARUN_DIM;
-            float *os = b->ffn_out + (size_t)s * BARUN_DIM;
-            for (int d = 0; d < BARUN_DIM; d++) xs[d] += os[d];
+            float *xs = b->x + (size_t)s * WUBU_DIM;
+            float *os = b->ffn_out + (size_t)s * WUBU_DIM;
+            for (int d = 0; d < WUBU_DIM; d++) xs[d] += os[d];
         }
         /* residual selector every 4th layer */
-        if ((l + 1) % BARUN_SELECT_EVERY == 0 && sel < BARUN_SELECTORS) {
+        if ((l + 1) % WUBU_SELECT_EVERY == 0 && sel < WUBU_SELECTORS) {
             float *sw = m->selectors[sel];
             for (int s = 0; s < seq; s++) {
-                float *cp = checkpoint + (size_t)s * BARUN_DIM;
-                float *cur = b->x + (size_t)s * BARUN_DIM;
+                float *cp = checkpoint + (size_t)s * WUBU_DIM;
+                float *cur = b->x + (size_t)s * WUBU_DIM;
                 float sc = 0, ss2 = 0;
-                for (int d = 0; d < BARUN_DIM; d++) {
-                    float ncp = cp[d] * (1.0f / sqrtf(BARUN_DIM * 1.0f));
-                    float ncu = cur[d] * (1.0f / sqrtf(BARUN_DIM * 1.0f));
+                for (int d = 0; d < WUBU_DIM; d++) {
+                    float ncp = cp[d] * (1.0f / sqrtf(WUBU_DIM * 1.0f));
+                    float ncu = cur[d] * (1.0f / sqrtf(WUBU_DIM * 1.0f));
                     sc += sw[d] * ncp;
                     ss2 += sw[d] * ncu;
                 }
                 float w0 = expf(sc), w1 = expf(ss2);
                 float ws = w0 + w1 + 1e-9f;
                 w0 /= ws; w1 /= ws;
-                for (int d = 0; d < BARUN_DIM; d++)
+                for (int d = 0; d < WUBU_DIM; d++)
                     cur[d] = w0 * cp[d] + w1 * cur[d];
-                memcpy(cp, cur, BARUN_DIM * sizeof(float));
+                memcpy(cp, cur, WUBU_DIM * sizeof(float));
             }
             sel++;
         }
     }
     /* final norm + lm_head (tied) */
     for (int s = 0; s < seq; s++)
-        rms_norm_value(b->x2 + (size_t)s * BARUN_DIM,
-                       b->x + (size_t)s * BARUN_DIM, m->final_norm,
-                       BARUN_DIM, BARUN_EPS);
+        rms_norm_value(b->x2 + (size_t)s * WUBU_DIM,
+                       b->x + (size_t)s * WUBU_DIM, m->final_norm,
+                       WUBU_DIM, WUBU_EPS);
     for (int s = 0; s < seq; s++) {
-        const float *h = b->x2 + (size_t)s * BARUN_DIM;
-        float *lg = b->logits + (size_t)s * BARUN_VOCAB;
-        for (int v = 0; v < BARUN_VOCAB; v++) {
-            const float *e = m->embedding + (size_t)v * BARUN_DIM;
+        const float *h = b->x2 + (size_t)s * WUBU_DIM;
+        float *lg = b->logits + (size_t)s * WUBU_VOCAB;
+        for (int v = 0; v < WUBU_VOCAB; v++) {
+            const float *e = m->embedding + (size_t)v * WUBU_DIM;
             float acc = 0;
-            for (int d = 0; d < BARUN_DIM; d++) acc += e[d] * h[d];
+            for (int d = 0; d < WUBU_DIM; d++) acc += e[d] * h[d];
             lg[v] = acc;
         }
     }
@@ -597,7 +597,7 @@ int wubu_forward_wubu(wubu_model_t *m, wubu_buf_t *b,
 
 float *wubu_last_logits(wubu_buf_t *b)
 {
-    return b ? b->logits + (size_t)(b->seq_alloc - 1) * BARUN_VOCAB : NULL;
+    return b ? b->logits + (size_t)(b->seq_alloc - 1) * WUBU_VOCAB : NULL;
 }
 
 static uint32_t rng_state = 0x9E3779B9u;
@@ -616,28 +616,28 @@ size_t wubu_generate(wubu_model_t *m, wubu_buf_t *b,
     if (!m || !b || !tokens || n_prompt == 0) return 0;
     rng_state = seed ? seed : 0x9E3779B9u;
     size_t total = n_prompt;
-    for (size_t g = 0; g < max_new && total < BARUN_MAX_SEQ; g++) {
+    for (size_t g = 0; g < max_new && total < WUBU_MAX_SEQ; g++) {
         if (wubu_forward(m, b, tokens, total) != 0) break;
-        const float *lg = b->logits + (size_t)(total - 1) * BARUN_VOCAB;
+        const float *lg = b->logits + (size_t)(total - 1) * WUBU_VOCAB;
         uint16_t next = 0;
         if (temperature <= 0) {
             float best = lg[0];
-            for (int v = 1; v < BARUN_VOCAB; v++)
+            for (int v = 1; v < WUBU_VOCAB; v++)
                 if (lg[v] > best) { best = lg[v]; next = (uint16_t)v; }
         } else {
             /* softmax + multinomial */
             float maxv = lg[0];
-            for (int v = 1; v < BARUN_VOCAB; v++)
+            for (int v = 1; v < WUBU_VOCAB; v++)
                 if (lg[v] > maxv) maxv = lg[v];
             double sum = 0;
-            double probs[BARUN_VOCAB];
-            for (int v = 0; v < BARUN_VOCAB; v++) {
+            double probs[WUBU_VOCAB];
+            for (int v = 0; v < WUBU_VOCAB; v++) {
                 probs[v] = exp((double)((lg[v] - maxv) / temperature));
                 sum += probs[v];
             }
             double r = (double)(rng_next() & 0xFFFFFF) / 16777216.0 * sum;
             double acc = 0;
-            for (int v = 0; v < BARUN_VOCAB; v++) {
+            for (int v = 0; v < WUBU_VOCAB; v++) {
                 acc += probs[v];
                 if (acc >= r) { next = (uint16_t)v; break; }
             }
@@ -677,7 +677,7 @@ long wubu_parameter_count(const wubu_model_t *m)
         n += 448L * 2456;              /* gate_up */
         n += 1228L * 448;              /* down */
     }
-    for (int i = 0; i < BARUN_SELECTORS; i++) n += 448;
+    for (int i = 0; i < WUBU_SELECTORS; i++) n += 448;
     return n;
 }
 
@@ -686,7 +686,7 @@ void wubu_free(wubu_model_t *m, wubu_buf_t *b)
     if (m) {
         free(m->embedding);
         free(m->final_norm);
-        for (int i = 0; i < BARUN_LAYERS; i++) {
+        for (int i = 0; i < WUBU_LAYERS; i++) {
             wubu_block_t *blk = &m->blocks[i];
             free(blk->q_proj); free(blk->k_proj); free(blk->v_proj);
             free(blk->o_proj); free(blk->g_proj);
@@ -694,7 +694,7 @@ void wubu_free(wubu_model_t *m, wubu_buf_t *b)
             free(blk->attn_norm); free(blk->ffn_norm);
             free(blk->gate_up); free(blk->down);
         }
-        for (int i = 0; i < BARUN_SELECTORS; i++) free(m->selectors[i]);
+        for (int i = 0; i < WUBU_SELECTORS; i++) free(m->selectors[i]);
     }
     if (b) {
         free(b->x); free(b->x2); free(b->q); free(b->k); free(b->v);

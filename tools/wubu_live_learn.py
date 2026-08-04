@@ -6,7 +6,7 @@ is more proper LLM corpus and we feedback loop with nvidia cloud keys."
 
 The loop (one iteration = one live learning event):
   1. take a prompt from the corpus (SFT/agentic pack) or stdin
-  2. WuBu (the C live_learn binary, Barun-arch load) GENERATES a draft
+  2. WuBu (the C live_learn binary, WuBu-arch load) GENERATES a draft
   3. the NVIDIA NIM oracle (tools/nvidia_nim.py score_draft) SCORES the
      draft 0-100 + gives a critique (the R1 pattern, live oracle)
   4. ACCUMULATE {prompt, draft, critique, score} into the live-SFT
@@ -90,7 +90,18 @@ def live_step(model, tokenizer, prompt, steps, temp, out_path):
         print(f"  live_learn rc={r.returncode}: {r.stderr.decode()[:200]}")
         return None
     gen = struct.unpack("<%dH" % (len(r.stdout) // 2), r.stdout)
-    draft = decode_tokens(tokenizer, list(gen))
+    # The C binary decodes the draft with the model's OWN HF tokenizer and
+    # prints it to stderr as "live_learn DRAFT: <text>". Prefer that (it
+    # always works — no transformers dependency). Fall back to the python
+    # decode only when the C line is missing.
+    draft = None
+    err_txt = r.stderr.decode("utf-8", errors="replace")
+    for line in err_txt.splitlines():
+        if "live_learn DRAFT:" in line:
+            draft = line.split("live_learn DRAFT:", 1)[1].strip()
+            break
+    if draft is None:
+        draft = decode_tokens(tokenizer, list(gen))
     if not draft or draft.startswith("[tokens"):
         draft = "[draft:%d tokens]" % len(gen)
     score, critique, err = score_via_nvidia(prompt, draft)

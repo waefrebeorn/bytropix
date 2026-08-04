@@ -32,7 +32,7 @@ int main(int argc, char **argv)
     CHECK(bad == 0, "embedding byte-identical");
     printf("  embedding: %ld elems, %ld diffs\n", 16384L * 448, bad);
 
-    for (int i = 0; i < BARUN_LAYERS; i++) {
+    for (int i = 0; i < WUBU_LAYERS; i++) {
         const wubu_block_t *x = &m.blocks[i];
         const wubu_block_t *y = &m2.blocks[i];
         if (memcmp(x->q_proj, y->q_proj, 448 * 448 * sizeof(float)) != 0) { bad++; break; }
@@ -44,7 +44,7 @@ int main(int argc, char **argv)
 
     wubu_free(&m, NULL);
     wubu_free(&m2, NULL);
-    if (failures == 0) printf("ALL BARUN_SAVE TESTS PASSED\n");
-    else printf("%d BARUN_SAVE FAILURES\n", failures);
+    if (failures == 0) printf("ALL WUBU_SAVE TESTS PASSED\n");
+    else printf("%d WUBU_SAVE FAILURES\n", failures);
     return failures ? 1 : 0;
 }

@@ -26,25 +26,25 @@ int main(void)
     int fails = 0;
 
     /* build a small model (2 active layers) with known weights */
-    wubu_block_t blocks[BARUN_LAYERS];
+    wubu_block_t blocks[WUBU_LAYERS];
     memset(blocks, 0, sizeof blocks);
-    for (int i = 0; i < BARUN_LAYERS; i++) {
-        blocks[i].q_proj    = mk(BARUN_DIM * BARUN_HEADS * 64, &seed);
-        blocks[i].k_proj    = mk(BARUN_DIM * BARUN_KV_HEADS * 64, &seed);
-        blocks[i].v_proj    = mk(BARUN_DIM * BARUN_KV_HEADS * 64, &seed);
-        blocks[i].o_proj    = mk(BARUN_DIM * BARUN_HEADS * 64, &seed);
-        blocks[i].g_proj    = mk(BARUN_DIM * BARUN_HEADS * 64, &seed);
-        blocks[i].q_norm    = mk(BARUN_KV_HEADS * 64, &seed);
-        blocks[i].k_norm    = mk(BARUN_KV_HEADS * 64, &seed);
-        blocks[i].attn_norm = mk(BARUN_DIM, &seed);
-        blocks[i].gate_up   = mk(BARUN_DIM * BARUN_FFN_DIM * 2, &seed);
-        blocks[i].down      = mk(BARUN_FFN_DIM * BARUN_DIM, &seed);
-        blocks[i].ffn_norm  = mk(BARUN_DIM, &seed);
+    for (int i = 0; i < WUBU_LAYERS; i++) {
+        blocks[i].q_proj    = mk(WUBU_DIM * WUBU_HEADS * 64, &seed);
+        blocks[i].k_proj    = mk(WUBU_DIM * WUBU_KV_HEADS * 64, &seed);
+        blocks[i].v_proj    = mk(WUBU_DIM * WUBU_KV_HEADS * 64, &seed);
+        blocks[i].o_proj    = mk(WUBU_DIM * WUBU_HEADS * 64, &seed);
+        blocks[i].g_proj    = mk(WUBU_DIM * WUBU_HEADS * 64, &seed);
+        blocks[i].q_norm    = mk(WUBU_KV_HEADS * 64, &seed);
+        blocks[i].k_norm    = mk(WUBU_KV_HEADS * 64, &seed);
+        blocks[i].attn_norm = mk(WUBU_DIM, &seed);
+        blocks[i].gate_up   = mk(WUBU_DIM * WUBU_FFN_DIM * 2, &seed);
+        blocks[i].down      = mk(WUBU_FFN_DIM * WUBU_DIM, &seed);
+        blocks[i].ffn_norm  = mk(WUBU_DIM, &seed);
     }
-    float *embedding = mk(BARUN_VOCAB * BARUN_DIM, &seed);
-    float *final_norm = mk(BARUN_DIM, &seed);
-    float *sel[BARUN_SELECTORS];
-    for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = mk(BARUN_DIM, &seed);
+    float *embedding = mk(WUBU_VOCAB * WUBU_DIM, &seed);
+    float *final_norm = mk(WUBU_DIM, &seed);
+    float *sel[WUBU_SELECTORS];
+    for (int i = 0; i < WUBU_SELECTORS; i++) sel[i] = mk(WUBU_DIM, &seed);
 
     wubu_model_t m;
     if (wubu_model_init(&m, embedding, final_norm, blocks, sel) != 0) {
@@ -54,25 +54,25 @@ int main(void)
 
     /* snapshot the old weights for the exactness checks (the expansion
      * FREES the originals -- wubu_model_init references, doesn't copy) */
-    float *old_q = (float *)malloc((size_t)BARUN_DIM * BARUN_DIM * sizeof(float));
-    float *old_k = (float *)malloc((size_t)BARUN_DIM * BARUN_KV_HEADS * BARUN_HEAD_DIM * sizeof(float));
-    float *old_gu = (float *)malloc((size_t)BARUN_DIM * BARUN_FFN_DIM * 2 * sizeof(float));
-    float *old_dn = (float *)malloc((size_t)BARUN_FFN_DIM * BARUN_DIM * sizeof(float));
-    float *old_emb = (float *)malloc((size_t)16 * BARUN_DIM * sizeof(float));
-    float *old_an = (float *)malloc((size_t)BARUN_DIM * sizeof(float));
-    float *old_fn = (float *)malloc((size_t)BARUN_DIM * sizeof(float));
-    memcpy(old_q, m.blocks[0].q_proj, (size_t)BARUN_DIM * BARUN_DIM * sizeof(float));
-    memcpy(old_k, m.blocks[0].k_proj, (size_t)BARUN_DIM * BARUN_KV_HEADS * BARUN_HEAD_DIM * sizeof(float));
-    memcpy(old_gu, m.blocks[0].gate_up, (size_t)BARUN_DIM * BARUN_FFN_DIM * 2 * sizeof(float));
-    memcpy(old_dn, m.blocks[0].down, (size_t)BARUN_FFN_DIM * BARUN_DIM * sizeof(float));
-    memcpy(old_emb, m.embedding, (size_t)16 * BARUN_DIM * sizeof(float));
-    memcpy(old_an, m.blocks[0].attn_norm, (size_t)BARUN_DIM * sizeof(float));
-    memcpy(old_fn, m.final_norm, (size_t)BARUN_DIM * sizeof(float));
+    float *old_q = (float *)malloc((size_t)WUBU_DIM * WUBU_DIM * sizeof(float));
+    float *old_k = (float *)malloc((size_t)WUBU_DIM * WUBU_KV_HEADS * WUBU_HEAD_DIM * sizeof(float));
+    float *old_gu = (float *)malloc((size_t)WUBU_DIM * WUBU_FFN_DIM * 2 * sizeof(float));
+    float *old_dn = (float *)malloc((size_t)WUBU_FFN_DIM * WUBU_DIM * sizeof(float));
+    float *old_emb = (float *)malloc((size_t)16 * WUBU_DIM * sizeof(float));
+    float *old_an = (float *)malloc((size_t)WUBU_DIM * sizeof(float));
+    float *old_fn = (float *)malloc((size_t)WUBU_DIM * sizeof(float));
+    memcpy(old_q, m.blocks[0].q_proj, (size_t)WUBU_DIM * WUBU_DIM * sizeof(float));
+    memcpy(old_k, m.blocks[0].k_proj, (size_t)WUBU_DIM * WUBU_KV_HEADS * WUBU_HEAD_DIM * sizeof(float));
+    memcpy(old_gu, m.blocks[0].gate_up, (size_t)WUBU_DIM * WUBU_FFN_DIM * 2 * sizeof(float));
+    memcpy(old_dn, m.blocks[0].down, (size_t)WUBU_FFN_DIM * WUBU_DIM * sizeof(float));
+    memcpy(old_emb, m.embedding, (size_t)16 * WUBU_DIM * sizeof(float));
+    memcpy(old_an, m.blocks[0].attn_norm, (size_t)WUBU_DIM * sizeof(float));
+    memcpy(old_fn, m.final_norm, (size_t)WUBU_DIM * sizeof(float));
 
     if (!wubu_width_expand(&m)) { printf("  expand FAIL\n"); return 1; }
 
-    const int D = BARUN_DIM, D2 = BARUN_DIM * 2;
-    const int F = BARUN_FFN_DIM, F2 = BARUN_FFN_DIM * 2;
+    const int D = WUBU_DIM, D2 = WUBU_DIM * 2;
+    const int F = WUBU_FFN_DIM, F2 = WUBU_FFN_DIM * 2;
 
     /* 1. q_proj: [D,D] -> [D2,D2], top-left exact, new rows/cols zero */
     for (int r = 0; r < D; r++)
@@ -84,7 +84,7 @@ int main(void)
     if (fails) { printf("  q_proj layout FAIL (%d)\n", fails); ok = 0; fails = 0; }
 
     /* 2. k_proj: [D, 64] -> [D2, 64], old rows exact, new rows zero */
-    const int kv = BARUN_KV_HEADS * BARUN_HEAD_DIM;
+    const int kv = WUBU_KV_HEADS * WUBU_HEAD_DIM;
     for (int r = 0; r < D; r++)
         for (int c = 0; c < kv; c++)
             if (m.blocks[0].k_proj[r * kv + c] != old_k[r * kv + c]) fails++;

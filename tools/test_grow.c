@@ -27,29 +27,29 @@ static wubu_block_t make_block(unsigned *seed)
 {
     wubu_block_t blk;
     memset(&blk, 0, sizeof blk);
-    blk.q_proj    = rnd(BARUN_DIM * BARUN_HEADS * 64, seed);
-    blk.k_proj    = rnd(BARUN_DIM * BARUN_KV_HEADS * 64, seed);
-    blk.v_proj    = rnd(BARUN_DIM * BARUN_KV_HEADS * 64, seed);
-    blk.o_proj    = rnd(BARUN_DIM * BARUN_HEADS * 64, seed);
-    blk.g_proj    = rnd(BARUN_DIM * BARUN_HEADS * 64, seed);
-    blk.q_norm    = rnd(BARUN_KV_HEADS * 64, seed);
-    blk.k_norm    = rnd(BARUN_KV_HEADS * 64, seed);
-    blk.attn_norm = rnd(BARUN_DIM, seed);
-    blk.gate_up   = rnd(BARUN_DIM * BARUN_FFN_DIM * 2, seed);
-    blk.down      = rnd(BARUN_FFN_DIM * BARUN_DIM, seed);
-    blk.ffn_norm  = rnd(BARUN_DIM, seed);
+    blk.q_proj    = rnd(WUBU_DIM * WUBU_HEADS * 64, seed);
+    blk.k_proj    = rnd(WUBU_DIM * WUBU_KV_HEADS * 64, seed);
+    blk.v_proj    = rnd(WUBU_DIM * WUBU_KV_HEADS * 64, seed);
+    blk.o_proj    = rnd(WUBU_DIM * WUBU_HEADS * 64, seed);
+    blk.g_proj    = rnd(WUBU_DIM * WUBU_HEADS * 64, seed);
+    blk.q_norm    = rnd(WUBU_KV_HEADS * 64, seed);
+    blk.k_norm    = rnd(WUBU_KV_HEADS * 64, seed);
+    blk.attn_norm = rnd(WUBU_DIM, seed);
+    blk.gate_up   = rnd(WUBU_DIM * WUBU_FFN_DIM * 2, seed);
+    blk.down      = rnd(WUBU_FFN_DIM * WUBU_DIM, seed);
+    blk.ffn_norm  = rnd(WUBU_DIM, seed);
     return blk;
 }
 
 int main(void)
 {
     unsigned seed = 42;
-    wubu_block_t blocks[BARUN_LAYERS];
-    for (int i = 0; i < BARUN_LAYERS; i++) blocks[i] = make_block(&seed);
-    float *embedding = rnd(16384 * BARUN_DIM, &seed);
-    float *final_norm = rnd(BARUN_DIM, &seed);
-    float *sel[BARUN_SELECTORS];
-    for (int i = 0; i < BARUN_SELECTORS; i++) sel[i] = rnd(BARUN_DIM, &seed);
+    wubu_block_t blocks[WUBU_LAYERS];
+    for (int i = 0; i < WUBU_LAYERS; i++) blocks[i] = make_block(&seed);
+    float *embedding = rnd(16384 * WUBU_DIM, &seed);
+    float *final_norm = rnd(WUBU_DIM, &seed);
+    float *sel[WUBU_SELECTORS];
+    for (int i = 0; i < WUBU_SELECTORS; i++) sel[i] = rnd(WUBU_DIM, &seed);
 
     wubu_model_t m;
     if (wubu_model_init(&m, embedding, final_norm, blocks, sel) != 0) {
@@ -122,9 +122,9 @@ int main(void)
          * must still depend on the weights through the grown stack. */
         float *w = m.embedding;
         float *wg = tr.emb_g;
-        size_t brow = (size_t)toks[3] * BARUN_DIM;
+        size_t brow = (size_t)toks[3] * WUBU_DIM;
         size_t bd = 0;
-        for (int d = 1; d < BARUN_DIM; d++)
+        for (int d = 1; d < WUBU_DIM; d++)
             if (fabs((double)wg[brow + d]) > fabs((double)wg[brow + bd])) bd = d;
         size_t bi = brow + bd;
         float save = w[bi];

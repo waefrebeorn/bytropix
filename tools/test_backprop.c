@@ -50,9 +50,9 @@ static int make_model(wubu_model_t *m)
     fill_rand(emb, 16384 * 448, 0.02f);
     for (int i = 0; i < 448; i++) final_norm[i] = 1.0f + 0.01f * frand();
 
-    wubu_block_t blocks[BARUN_LAYERS];
+    wubu_block_t blocks[WUBU_LAYERS];
     memset(blocks, 0, sizeof(blocks));
-    for (int l = 0; l < BARUN_LAYERS; l++) {
+    for (int l = 0; l < WUBU_LAYERS; l++) {
         wubu_block_t *blk = &blocks[l];
         blk->q_proj   = (float *)malloc(448 * 448 * sizeof(float));
         blk->k_proj   = (float *)malloc(448 * 64 * sizeof(float));
@@ -82,8 +82,8 @@ static int make_model(wubu_model_t *m)
             blk->ffn_norm[i]  = 1.0f + 0.01f * frand();
         }
     }
-    float *selectors[BARUN_SELECTORS];
-    for (int i = 0; i < BARUN_SELECTORS; i++) {
+    float *selectors[WUBU_SELECTORS];
+    for (int i = 0; i < WUBU_SELECTORS; i++) {
         selectors[i] = (float *)malloc(448 * sizeof(float));
         fill_rand(selectors[i], 448, 0.02f);
     }
@@ -96,11 +96,11 @@ static float ref_loss(const wubu_model_t *m, const wubu_buf_t *b,
 {
     float loss = 0, n_pos = (float)(n - 1);
     for (int s = 0; s < n - 1; s++) {
-        const float *lg = b->logits + (size_t)s * BARUN_VOCAB;
+        const float *lg = b->logits + (size_t)s * WUBU_VOCAB;
         float maxv = lg[0];
-        for (int v = 1; v < BARUN_VOCAB; v++) if (lg[v] > maxv) maxv = lg[v];
+        for (int v = 1; v < WUBU_VOCAB; v++) if (lg[v] > maxv) maxv = lg[v];
         double sum = 0;
-        for (int v = 0; v < BARUN_VOCAB; v++) sum += exp((double)(lg[v] - maxv));
+        for (int v = 0; v < WUBU_VOCAB; v++) sum += exp((double)(lg[v] - maxv));
         loss += (float)(((double)maxv + log(sum) - (double)lg[tokens[s + 1]]) / n_pos);
     }
     return loss;
@@ -217,9 +217,9 @@ int main(void)
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[7].q_norm[50], tr.norm_g[4 * 7 + 2][50], "q_norm[7]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[0].k_norm[31], tr.norm_g[4 * 0 + 3][31], "k_norm[0]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.blocks[5].k_norm[10], tr.norm_g[4 * 5 + 3][10], "k_norm[5]");
-    ok &= fd_check(&m, &b, &bp, tok, 24, &m.final_norm[3], tr.norm_g[4 * BARUN_LAYERS][3], "final_norm");
-    ok &= fd_check(&m, &b, &bp, tok, 24, &m.selectors[1][4], tr.norm_g[4 * BARUN_LAYERS + 1 + 1][4], "selectors[1]");
-    ok &= fd_check(&m, &b, &bp, tok, 24, &m.selectors[2][100], tr.norm_g[4 * BARUN_LAYERS + 1 + 2][100], "selectors[2]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.final_norm[3], tr.norm_g[4 * WUBU_LAYERS][3], "final_norm");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.selectors[1][4], tr.norm_g[4 * WUBU_LAYERS + 1 + 1][4], "selectors[1]");
+    ok &= fd_check(&m, &b, &bp, tok, 24, &m.selectors[2][100], tr.norm_g[4 * WUBU_LAYERS + 1 + 2][100], "selectors[2]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.embedding[13 * 448 + 25], tr.emb_g[13 * 448 + 25], "embedding[13]");
     ok &= fd_check(&m, &b, &bp, tok, 24, &m.embedding[27 * 448 + 300], tr.emb_g[27 * 448 + 300], "embedding[27]");
     /* the INPUT path: rows that ARE input tokens (both input grad and,

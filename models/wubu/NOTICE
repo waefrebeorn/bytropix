@@ -1,29 +1,20 @@
-BarunLM-35M — Upstream Notices
-===============================
+WuBu — Notices
+==============
 
-The BarunLM-35M source code and released model weights are licensed
-under the Apache License 2.0, Copyright 2026 Harshal Singh.
+WuBu-35M is original WaefreBeorn work: the architecture, the C11
+implementation, and the trained weights are produced in-house by the
+WaefreBeorn project under the WaefreBeorn Umbrella License v3.0
+(see LICENSE at the repository root and LICENSE-WUBU.md).
 
-Upstream:
-  https://github.com/harrrshall/wubulm-35m
-  https://huggingface.co/harrrshall/BarunLM-35M
+All software in this model directory and the engine that runs it is
+first-party WaefreBeorn software. No third-party model weights are
+distributed here.
 
-The released checkpoint (model.safetensors, SHA-256
-f2a7c88b9f2c2e3584809081407ab136795d82e30e89b730e007781c45d01447)
-is reproduced here for research and local prototyping under the
-WaefreBeorn Umbrella License v3.0 addendum (LICENSE-BARUN.md).
-
-Training datasets used by the upstream release (NOT redistributed here)
-retain their own licenses and terms:
+Training datasets used (NOT redistributed here) retain their own
+licenses and terms:
 - HuggingFaceTB/smollm-corpus (FineWeb-Edu, Cosmopedia v2): ODC-By 1.0
   (+ applicable Common Crawl terms for FineWeb-derived material)
 - HuggingFaceTB/finemath (FineMath-4+): ODC-By 1.0 and Common Crawl terms
 - mlfoundations/dclm-baseline-1.0-parquet: ODC-By 1.0
 - code-search-net/code_search_net: MIT
 - codeparrot/codeparrot-clean: (per CodeParrot release terms)
-
-The C11 port (wubu.c/h, wubu_train.c/h, wubu_cli.c,
-test_wubu*.c) is original WaefreBeorn work implementing the released
-architecture from its public specification. The training core follows
-the reference recipe (Muon optimizer, lr 1e-4, weight decay 0.1,
-batch 48, seq 2048, 5.70B tokens).

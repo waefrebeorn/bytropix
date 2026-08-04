@@ -1,8 +1,8 @@
 /*
- * wubu_train.h -- the BarunLM training core (the AGI brain-cluster loop).
+ * wubu_train.h -- the WuBu training core (the AGI brain-cluster loop).
  *
  * The wizard is an INFERENCE engine today; this module makes it a
- * TRAINING engine too. BarunLM-35M is the mustard seed: the training
+ * TRAINING engine too. WuBu-35M is the mustard seed: the training
  * loop grows it -- more tokens from the research repos, more
  * parameters, more knowledge -- all designed and trained in-house.
  *
@@ -16,8 +16,8 @@
  * Training is memory-bound: we accumulate gradients over micro-batches
  * and update with Muon. Pure C11, no third-party deps.
  */
-#ifndef WUBU_BARUN_TRAIN_H
-#define WUBU_BARUN_TRAIN_H
+#ifndef WUBU_TRAIN_H
+#define WUBU_TRAIN_H
 
 #include "wubu.h"
 
@@ -44,36 +44,36 @@ typedef struct {
  *   [4*L]     = final_norm
  *   [4*L+1+i] = selectors[i]                        (i in 0..S-1)
  */
-#define BARUN_NORM_SLOTS (4 * BARUN_LAYERS + 1 + BARUN_SELECTORS)
+#define WUBU_NORM_SLOTS (4 * WUBU_LAYERS + 1 + WUBU_SELECTORS)
 
 /* Gradient accumulators: one float per weight, only for the Muon-updated
  * matrices (the big ones). The norms + embeddings + selectors use
  * AdamW states. */
-typedef struct {
+typedef struct wubu_train {
     /* per-block matrix gradients */
-    float *q_proj_g[BARUN_LAYERS];  /* [448,448] */
-    float *k_proj_g[BARUN_LAYERS];  /* [448,64] */
-    float *v_proj_g[BARUN_LAYERS];
-    float *o_proj_g[BARUN_LAYERS];
-    float *g_proj_g[BARUN_LAYERS];
-    float *gate_up_g[BARUN_LAYERS]; /* [448,2456] */
-    float *down_g[BARUN_LAYERS];    /* [1228,448] */
+    float *q_proj_g[WUBU_LAYERS];  /* [448,448] */
+    float *k_proj_g[WUBU_LAYERS];  /* [448,64] */
+    float *v_proj_g[WUBU_LAYERS];
+    float *o_proj_g[WUBU_LAYERS];
+    float *g_proj_g[WUBU_LAYERS];
+    float *gate_up_g[WUBU_LAYERS]; /* [448,2456] */
+    float *down_g[WUBU_LAYERS];    /* [1228,448] */
     /* AdamW states for the embedding */
     float *emb_g;   /* [16384,448] the gradient accumulator */
     float *emb_m;   /* [16384,448] the AdamW first moment */
     float *emb_v;   /* [16384,448] the AdamW second moment */
     /* the 1-D params (norms + selectors) -> AdamW: gradient + states */
-    float *norm_g[BARUN_NORM_SLOTS];
-    float *norm_m[BARUN_NORM_SLOTS];
-    float *norm_v[BARUN_NORM_SLOTS];
+    float *norm_g[WUBU_NORM_SLOTS];
+    float *norm_m[WUBU_NORM_SLOTS];
+    float *norm_v[WUBU_NORM_SLOTS];
     /* Muon states: the momentum per matrix (Newton-Schulz iteration) */
-    float *q_proj_m[BARUN_LAYERS];
-    float *k_proj_m[BARUN_LAYERS];
-    float *v_proj_m[BARUN_LAYERS];
-    float *o_proj_m[BARUN_LAYERS];
-    float *g_proj_m[BARUN_LAYERS];
-    float *gate_up_m[BARUN_LAYERS];
-    float *down_m[BARUN_LAYERS];
+    float *q_proj_m[WUBU_LAYERS];
+    float *k_proj_m[WUBU_LAYERS];
+    float *v_proj_m[WUBU_LAYERS];
+    float *o_proj_m[WUBU_LAYERS];
+    float *g_proj_m[WUBU_LAYERS];
+    float *gate_up_m[WUBU_LAYERS];
+    float *down_m[WUBU_LAYERS];
     /* the REAL backprop recorder (owned by the trainer; allocated on
      * first use, grown as the sequence grows) */
     struct wubu_bp_t *bp_rec;

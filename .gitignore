@@ -152,7 +152,7 @@ tools/agent_gauntlet/download_colonels.out
 # compiled binaries (make outputs; rebuild from source)
 /gen_text*
 /gen_fixture*
-/barun_train_gpu
+/wubu_train_gpu
 /bench_gemm
 /gauntlet
 /layer_cos_sim

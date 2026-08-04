@@ -51,7 +51,7 @@ slots — whatever needs stable pointers with O(1) churn.
 
 ## The lineage
 
-- the seed architecture: BarunLM-35M (Apache-2.0, © 2026 Harshal Singh)
+- the seed architecture: WuBu-35M (Apache-2.0, © 2026 Harshal Singh)
 - the geometry: WuBu Nesting (層疊嵌套) — our Lean-verified hyperbolic math
 - the agents: mixed-agents MoE (fine-grained experts)
 - the training: our Muon/AdamW loop, the SD-card corpus

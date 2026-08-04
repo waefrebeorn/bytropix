@@ -46,7 +46,7 @@ static int write_stdump(const char *path)
     if (!w) return -1;
     uint32_t magic = 0xBA000002u;
     int nl = ST_N_LAYERS;
-    long n = 35072768L; /* BARUN_PARAMS */
+    long n = 35072768L; /* WUBU_PARAMS */
     fwrite(&magic, 4, 1, w);
     fwrite(&nl, 4, 1, w);
     fwrite(&n, sizeof(long), 1, w);

@@ -754,8 +754,8 @@ test_ngram: tools/test_ngram.c src/wubu_ngram.o
 
 # G04: Hive data structure test (linked fixed blocks + skipfield + freelist)
 test_hive: tools/test_hive.c src/wubu_hive.o $(CPU_OBJ)
-test_diag: tools/test_diag.c src/wubu_diag.o src/wubu_hive.o $(CPU_OBJ)
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+test_diag: tools/test_diag.c src/wubu_diag.o src/wubu_hive.o src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@
 test_amoeba: tools/test_amoeba.c src/wubu_amoeba.o src/wubu_hive.o src/wubu_moe2.o src/wubu_prover2.o src/wubu_hyper.o $(CPU_OBJ)
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
@@ -1206,7 +1206,7 @@ test_compress: tools/test_compress.c src/wubu_compress.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
-# the Barun corpus pipeline (SD card -> tokens -> trainer)
+# the WuBu corpus pipeline (SD card -> tokens -> trainer)
 wubu_tokenc: tools/wubu_tokenc.c src/wubu_tokenizer_hf.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 
