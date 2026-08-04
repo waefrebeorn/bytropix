@@ -190,11 +190,21 @@ WuBuFW (src/firmware) measures the kernel
    `wubuos/docs/compendium/03-learned/`.
 5. **Model artifacts** (weights, cards) go on HuggingFace under
    `WaefreBeorn/`; the local copies live in `wubuwizard/models/`.
-6. **Corpus data** lives on the SD card (`/home/wubu/sdcard/corpus/`),
-   never in a repo (238GB, drvfs).
+6. **Corpus data**: ACTIVE working copies live on the SSD at
+   `/home/wubu/models/corpus/` (master manifest `CORPUS.md` there:
+   Tier 0 pretrain tokens, Tier 1 SFT pack, Tier 2 agentic pack).
+   The SD card (`/home/wubu/sdcard/corpus/`) is the COLD raw archive;
+   `/home/wubu/sdcard/archive/` holds finalized cold tarballs
+   (research ponds, qwen36 embeddings). Never clone git or write
+   active work on the SD card (drvfs has no chmod; 256KB clusters).
+   Nothing corpus goes in a repo.
 7. **Secrets** live in `~/.hermes/profiles/mind-palace/secrets/`
    (0600), NEVER in any repo.
 8. **Test binaries** are never committed (gitignore covers `/test_*`).
+9. **The research ponds** (701 MB pure text, 7 ponds × 100 MB) are the
+   READING substrate — `/home/wubu/research-ponds-work/` (SSD active,
+   SD `archive/` cold). PONDS.md is the catalog; grep the ponds for
+   the failing subject, sources.json maps file → paper/repo.
 
 ## 5. THE AUDIT FINDINGS (2026-08-03, from the full-repo survey)
 
