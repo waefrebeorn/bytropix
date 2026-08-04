@@ -33,6 +33,11 @@ enum ggml_type {
     GGML_TYPE_IQ3_S   = 21,
     GGML_TYPE_IQ2_S   = 22,
     GGML_TYPE_IQ4_XS  = 23,
+    GGML_TYPE_I8      = 24,
+    GGML_TYPE_I16     = 25,
+    GGML_TYPE_I32     = 26,
+    GGML_TYPE_I64     = 27,
+    GGML_TYPE_F64     = 28,
     GGML_TYPE_IQ1_M   = 29,
     GGML_TYPE_BF16    = 30,  // bfloat16 (IEEE)
     /* TurboQuant family (IDs per TheTom/llama-cpp-turboquant tom/merge-upstream-dsv4) */

@@ -636,6 +636,9 @@ gguf_ctx* gguf_open(const char *path) {
             case 4: case 5: case 6: fseek(f, 4, SEEK_CUR); break; // u32/i32/f32
             case 7: fseek(f, 1, SEEK_CUR); break; // bool
             case 10: case 11: fseek(f, 8, SEEK_CUR); break; // u64/i64
+            case 12: fseek(f, 8, SEEK_CUR); break; // f64
+            case 0: case 1: fseek(f, 1, SEEK_CUR); break; // u8/i8
+            case 2: case 3: fseek(f, 2, SEEK_CUR); break; // u16/i16
             case 9: { // array
                 int32_t arr_type = read_i32(f);
                 uint64_t arr_len = read_u64(f);
@@ -1133,6 +1136,11 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
             memcpy(&output[i], &bits, sizeof(float));
         }
     }
+    else if (tensor->ggml_type == GGML_TYPE_I8 || tensor->ggml_type == GGML_TYPE_I16 ||
+             tensor->ggml_type == GGML_TYPE_I32 || tensor->ggml_type == GGML_TYPE_I64 ||
+             tensor->ggml_type == GGML_TYPE_F64) {
+        gguf_dequantize(src, tensor->ggml_type, n_elems, output);
+    }
     else if (tensor->ggml_type == GGML_TYPE_Q2_0) {
         dequantize_q2_0_row(src, output, n_elems);
     }
@@ -1319,6 +1327,32 @@ void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float 
             }
             break;
         }
+        case GGML_TYPE_I8: {
+            const int8_t *v = (const int8_t *)data;
+            for (int64_t i = 0; i < n_elems; i++) output[i] = (float)v[i];
+            break;
+        }
+        case GGML_TYPE_I16: {
+            const int16_t *v = (const int16_t *)data;
+            for (int64_t i = 0; i < n_elems; i++) output[i] = (float)v[i];
+            break;
+        }
+        case GGML_TYPE_I32: {
+            /* index tables (e.g. deepseek4 ffn_gate_tid2eid hash-router map) */
+            const int32_t *v = (const int32_t *)data;
+            for (int64_t i = 0; i < n_elems; i++) output[i] = (float)v[i];
+            break;
+        }
+        case GGML_TYPE_I64: {
+            const int64_t *v = (const int64_t *)data;
+            for (int64_t i = 0; i < n_elems; i++) output[i] = (float)v[i];
+            break;
+        }
+        case GGML_TYPE_F64: {
+            const double *v = (const double *)data;
+            for (int64_t i = 0; i < n_elems; i++) output[i] = (float)v[i];
+            break;
+        }
         case GGML_TYPE_Q6_K: dequantize_q6_K_row(data, output, n_elems); break;
         case GGML_TYPE_Q5_K: dequantize_q5_K_row(data, output, n_elems); break;
         case GGML_TYPE_Q8_0: {
@@ -1396,6 +1430,11 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_IQ4_XS: return n_blocks * 136;  // d[2] + scales_h[2] + scales_l[4] + qs[128]
         case GGML_TYPE_Q4_K:  return n_blocks * 144;  // d[2] + dmin[2] + scales[12] + qs[128]
         case GGML_TYPE_Q4_0:  return ((n_elems + 31) / 32) * 18;  // d[2] + qs[16], block=32
+        case GGML_TYPE_I8:    return n_elems * 1;
+        case GGML_TYPE_I16:   return n_elems * 2;
+        case GGML_TYPE_I32:   return n_elems * 4;
+        case GGML_TYPE_I64:   return n_elems * 8;
+        case GGML_TYPE_F64:   return n_elems * 8;
         case GGML_TYPE_Q2_0:  return ((n_elems + 63) / 64) * 18;  // d[2] + qs 2-bit[16], block=64
         case GGML_TYPE_TQ3_1S: return ((n_elems + 31) / 32) * 16; // d0[2] + d1[2] + 3-bit[12], block=32
         case GGML_TYPE_TQ4_1S: return ((n_elems + 31) / 32) * 20; // d0[2] + d1[2] + 4-bit[16], block=32
