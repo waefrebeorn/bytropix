@@ -74,6 +74,7 @@ def audit(repo):
     if os.path.exists(mf) and os.path.exists(readme):
         mk = open(mf).read()
         claims = set(re.findall(r"make\s+([\w_\-/]+)", open(readme).read()))
+        claims -= {"targets", "it", "sure", "the", "a", "an", "docs", "all", "test", "test_", "hosted"}  # prose noise
         missing = sorted(c for c in claims if not re.search(rf"^{re.escape(c)}\s*:", mk, re.M))
         print(f"  README make-claims: {len(claims)} | missing from Makefile: {missing or 'none'}")
     return {"tracked": len(tracked), "elf": len(els)}
