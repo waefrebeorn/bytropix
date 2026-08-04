@@ -2,6 +2,7 @@
 #include "gguf_reader.h"
 #include "safetensors_reader.h"
 #include "wubu_affinity.h"
+#include "wubu_kv_styx.h"  // KV cache /n/kv/ export (styx)
 #include "wubu_rotate.h"   // doc 013: wubu_rotate_input for lm_head Hadamard fuse
 #include "wubu_mem_budget.h" // OOM-proof memory budget calculator
 #include "wubu_hwcaps.h"   // HW-accel: SIMD ladder detection
@@ -549,7 +550,9 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         // Tied output: use token_embd.weight (common for Gemma, LLaMA, etc.)
         gguf_tensor_info *t_embd = gguf_find_tensor(ctx, "token_embd.weight");
         if (t_embd) {
-            model->output_weight_q = t_embd;  // will get blob pointer below
+            // Placeholder; the real Q4_K blob pointer is filled below once the
+            // GGUF buffer is mapped (blob + t_embd->data_offset).
+            model->output_weight_q = NULL;
             model->output_weight_type = t_embd->ggml_type;
             model->tied_output = true;
             fprintf(stderr, "  Output weight: TIED to token_embd.weight\n");

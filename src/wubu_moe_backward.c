@@ -10,8 +10,10 @@
 #include <string.h>
 #include <math.h>
 #include <stdbool.h>
+#if !defined(_WIN32)
 #include <sys/resource.h>
 #include <sys/prctl.h>
+#endif
 
 static inline float silu_f(float x) {
     if (x < -80.0f) return 0.0f;

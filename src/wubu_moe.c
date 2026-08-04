@@ -6,7 +6,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <assert.h>
-#include <alloca.h>
+/* <alloca.h> is Linux-only and unused here (scratch uses heap); dropped for Win. */
 
 // GPU MoE expert forward (declared in wubu_model_gpu.cu, C linkage)
 #ifdef GPU_SUPPORT

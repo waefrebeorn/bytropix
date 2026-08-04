@@ -6,14 +6,30 @@
  * goes through an intermediate shell (no injection, no SIGPIPE races,
  * exit-code is the child's wait status, no intermediate fd sharing).
  *
- * This module is the single bridge between wubuwizard and the host OS
- * for any subprocess that UTF-8 output into an internal buffer.
+ * On Windows (_WIN32) the POSIX fork/exec path is unavailable, so the
+ * real work is done by wubu_spawn_win.c (CreateProcess-backed); these
+ * wrappers just forward to it.
  */
-#define _POSIX_C_SOURCE 200809L
 #include "wubu_spawn.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(_WIN32)
+
+int wubu_spawn_capture(const char *file, char *const argv[],
+                       char *out_buf, size_t out_cap, int *out_exit)
+{
+    return wubu_spawn_win_capture(file, argv, out_buf, out_cap, out_exit);
+}
+
+int wubu_spawn_wait(const char *file, char *const argv[], bool silent)
+{
+    return wubu_spawn_win_wait(file, argv, silent ? 1 : 0);
+}
+
+#else /* POSIX / Linux */
+
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -76,3 +92,5 @@ int wubu_spawn_wait(const char *file, char *const argv[], bool silent)
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return -1;
 }
+
+#endif /* _WIN32 */

@@ -618,7 +618,7 @@ int wubu_tokenizer_encode_python(wubu_tokenizer_t *tok,
     write(fd, script, slen);
     close(fd);
     
-    const char *py_argv[] = {
+    char *py_argv[] = {
         "python3", script_path, NULL
     };
 

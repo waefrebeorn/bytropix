@@ -1452,11 +1452,20 @@ int gguf_buffer_data(gguf_ctx *ctx) {
     if (ctx->data_blob) return 1;
 
     struct stat st;
+    uint64_t file_size = 0;
+#if defined(_WIN32)
+    /* MSYS stdio: fstat(fileno()) and fseeko(SEEK_END) can both fail; derive
+       size directly from the fd via _filelengthi64 (no seek needed). */
+    long long fsz = _filelengthi64(fileno(ctx->file));
+    if (fsz < 0) { fprintf(stderr, "gguf_buffer_data: _filelengthi64 failed\n"); return 0; }
+    file_size = (uint64_t)fsz;
+#else
     if (fstat(fileno(ctx->file), &st) != 0) {
         fprintf(stderr, "gguf_buffer_data: fstat failed\n");
         return 0;
     }
-    uint64_t file_size = (uint64_t)st.st_size;
+    file_size = (uint64_t)st.st_size;
+#endif
     uint64_t blob_size = file_size - ctx->data_blob_offset;
     if (blob_size == 0) { ctx->data_blob_size = 0; return 1; }
 
