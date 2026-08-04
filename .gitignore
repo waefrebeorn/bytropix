@@ -147,3 +147,20 @@ err.log
 
 # live download log
 tools/agent_gauntlet/download_colonels.out
+
+# ---- build artifacts (repo hygiene 2026-08-04) ----
+# compiled binaries (make outputs; rebuild from source)
+/gen_text* /gen_fixture* /barun_train_gpu /bench_gemm /gauntlet
+/layer_cos_sim /probe_ssm_bisect /ref_* /wubu_train* /wubu_live_learn
+/wubu_tokenc /infer_* /train_integrated /tb_* /check_alignment
+/test_dsa /test_hashrouter /test_mhc /test_tensor_store /test_gguf_tq
+/tools/api_server /tools/check_* /tools/debug_* /tools/dump_* /tools/extract_*
+/tools/find_* /tools/layer_cos_sim /tools/ref_* /tools/test_*
+/ENCODERS/hash-mind/c/train
+*.o
+# model weights (canonical copies on HF WaefreBeorn/WuBu-35M; tensor store rebuilds)
+/models/wubu/*.safetensors
+/models/wubu/model-mixed.gguf
+fixture*.safetensors
+# personal agent profile (mind palace) — not part of the repo
+/.hermes/
