@@ -132,40 +132,35 @@ def map_rows(repo, m):
     return rows
 
 def readme_sections(repo, m, cfg):
+    """Compact module index for the README; the FULL table lives in docs/MODULES.md.
+    (DA 2026-08-04: bolting 300+ rows onto the README drowned the hand-written
+    prose — keep README tight, full table in MODULES.md.)"""
     mk = open(os.path.join(repo, "Makefile")).read()
     targets = sorted(set(re.findall(r"^([\w_\-/]+)\s*:", mk, re.M)))
     tests = [t for t in targets if t.startswith("test_")]
-    rows = map_rows(repo, m)
-    trows = "\n".join(f"| `{f}` | {d[:90]} |" for f, d in m["src"])
     rrows = "\n".join(f"| [{f}](research/{f}) | {t[:90]} |" for f, t in m["research"])
     sec = f"""
-## Source modules (auto-generated {datetime.date.today()})
+## Module index (auto-generated {datetime.date.today()})
+
+- **{len(m['src'])} C modules** — full annotated table: [docs/MODULES.md](docs/MODULES.md)
+- **{len(m['tests'])} test tools** (make targets `test_*`, e.g. `{', '.join(tests[:10])}...`)
+- **{len(m['research'])} research docs** — full ledger: [research/INDEX.md](research/INDEX.md)
+
+Regenerate with: `python3 tools/repodoc/repodoc.py . --readme`
+"""
+    return sec
+
+def modules_md(repo, m):
+    rows = "\n".join(f"| `{f}` | {d[:90]} |" for f, d in m["src"])
+    return f"""# Module Map (auto-generated {datetime.date.today()})
+
+Full annotated table of `src/` modules. Regenerate with
+`python3 tools/repodoc/repodoc.py . --modules`.
 
 | File | Purpose |
 |---|---|
-{trows}
-
-## Tests (make targets)
-
-`{', '.join(tests[:40])}` — run the full gate with `make test_all` (subset) / the
-target's own `make <target>`.
-
-## Research ledger
-
-| Doc | Topic |
-|---|---|
-{rrows}
-
-## Build
-
-```bash
-make <target>     # any target above; C11, GCC/Clang, optional nvcc
-make test_all     # full test gate (see Makefile target lists)
-```
-
-*Repo hygiene: {len(m['src'])} C modules, {len(m['tests'])} test tools, {len(m['research'])} research docs (auto-audited — run `tools/repodoc/repodoc.py .` to refresh).*
+{rows}
 """
-    return sec
 
 def write_section(path, section):
     """Insert/replace the repodoc block in a markdown file, preserving prose."""
@@ -201,10 +196,11 @@ def main():
     if "readme" in want or "all" in want:
         sec = readme_sections(repo, m, cfg)
         write_section(os.path.join(repo, "README.md"), sec)
-    if "topology" in want or "all" in want:
+    if "modules" in want or "all" in want:
         os.makedirs(os.path.join(repo, "docs"), exist_ok=True)
-        write_section(os.path.join(repo, "docs", "TOPOLOGY.md"),
-                      "## Module map (auto-generated)\n\n" + "\n".join(map_rows(repo, m)))
+        write_section(os.path.join(repo, "docs", "MODULES.md"), modules_md(repo, m))
+    # TOPOLOGY.md is a CURATED document — repodoc never rewrites it (DA 2026-08-04:
+    # bolting a machine table onto the curated map destroyed its signal).
     if push_msg:
         subprocess.run(["git", "add", "-A"], cwd=repo)
         r = subprocess.run(["git", "commit", "-q", "-m", push_msg], cwd=repo, capture_output=True, text=True)
