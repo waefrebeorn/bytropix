@@ -1,17 +1,21 @@
 # research/059 — DeepSeek-V4-Flash-0731 Config-I: the architecture, from the file
 
-> 2026-08-04. The REAL header of `DeepSeek-V4-Flash-0731-ConfigI-00001-of-00003.gguf`
-> (thetom-ai, turboquant branch, 566 tensors / 60 KV / v3) parsed by our own
-> loader (test_gguf_load) after the hive fixes. THE FILE IS THE TRUTH — the
-> README's "284B/43 layers" marketing numbers do not match the artifact.
+> 2026-08-04. The REAL headers of all three `DeepSeek-V4-Flash-0731-ConfigI` GGUF
+> parts (thetom-ai, turboquant branch) parsed by our own loader (test_gguf_load)
+> after the hive fixes. THE FILE IS THE TRUTH: the artifact is **43 layers,
+> 284.3B params, 1328 tensors** across the 3 split files — matching the
+> README/card (284B). Each split carries a DISJOINT tensor set: part 1 = blk.0-18
+> (566 tensors), part 2 = blk.18-36 (592), part 3 = blk.37-42 + head (170).
+> (A first pass over part 1 alone looked like "19 blocks / 121.9B" — a
+> split artifact, corrected by merging all three headers.)
 
-## Verified facts (from the GGUF header)
+## Verified facts (from the GGUF headers)
 
-- **Total params: 121.9B** (sum of all tensor shapes) — not 284B.
-- **19 blocks** (blk.0..blk.18). blk.18 is REDUCED: attn + compressor +
-  down_exps + down_shexp only — no gate/up_exps, no gate_inp, no hc_*.
+- **Total params: 284.3B** (sum of all 1328 tensor shapes) — README's 284B ✓.
+- **43 blocks** (blk.0..blk.42). The tensor set per block varies by split —
+  e.g. blk.18's attn lives in part 1 while its ffn gate/up live in part 2.
 - hidden = 4096, vocab = 129280 (token_embd + output both (4096,129280)).
-- **Type histogram (7 types, zero unknown):**
+- **Type histogram (7 types, zero unknown across all parts):**
   F32 272 · TQ3_1S 45 · Q2_0 47 · BF16 30 · I32 26 · Q8_0 8 · Q6_K 14
 
 ## Per-layer layout (blk.0 as the template)
