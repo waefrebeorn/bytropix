@@ -407,11 +407,47 @@ static int ts_export_safetensors(const wubu_tensor_store_t *ts, const char *out)
     return 0;
 }
 
+/* IEEE-754 f32 -> fp16 (round-to-nearest-even not required; the Q8_0
+ * scale is only 8-bit precision, so truncation-level is fine). */
+static uint16_t f32_to_f16(float x)
+{
+    uint32_t u;
+    memcpy(&u, &x, 4);
+    uint32_t sign = (u >> 16) & 0x8000u;
+    int32_t exp = (int32_t)((u >> 23) & 0xffu);
+    uint32_t mant = u & 0x7fffffu;
+    if (exp == 0xff) return (uint16_t)(sign | 0x7c00u);      /* inf/nan */
+    int32_t e = exp - 127 + 15;
+    if (e >= 31) return (uint16_t)(sign | 0x7c00u);          /* overflow -> inf */
+    if (e <= 0) {                                             /* subnormal half */
+        if (e < -10) return (uint16_t)sign;
+        mant |= 0x800000u;
+        uint32_t shift = 14u - (uint32_t)e;
+        return (uint16_t)(sign | (mant >> shift));
+    }
+    return (uint16_t)(sign | ((uint32_t)e << 10) | (mant >> 13));
+}
+
+static void iq2xxs_encode_block(const float *v, uint8_t *blk);
+
 /* minimal GGUF v3 writer: all tensors as F32, one KV (general.name). */
+static int ts_export_gguf_typed(const wubu_tensor_store_t *ts,
+                                const char *out, int ggml_type);
 static int ts_export_gguf(const wubu_tensor_store_t *ts, const char *out)
+{
+    return ts_export_gguf_typed(ts, out, 0 /* F32 */);
+}
+
+/* Q8_0 GGUF export: the storage-reduction path. Each 32-element block is
+ * [d: f32][qs: 32 x int8] with d = amax/127 (36 bytes vs 128 -> 3.55x).
+ * Block-major over the flat tensor (ceil(n/32) blocks; the tail block is
+ * zero-padded). gguf_open + gguf_dequantize read it back (type 7). */
+static int ts_export_gguf_typed(const wubu_tensor_store_t *ts,
+                                const char *out, int ggml_type)
 {
     FILE *w = fopen(out, "wb");
     if (!w) return -1;
+    const int q8 = (ggml_type == GGML_TYPE_Q8_0);
     fwrite("GGUF", 4, 1, w);
     uint32_t ver = 3;
     fwrite(&ver, 4, 1, w);
@@ -444,11 +480,12 @@ static int ts_export_gguf(const wubu_tensor_store_t *ts, const char *out)
             uint64_t dim = e->dims[d] ? e->dims[d] : e->n_elems;
             fwrite(&dim, 8, 1, w);
         }
-        uint32_t gtype = 0; /* F32 */
+        uint32_t gtype = (uint32_t)ggml_type;
         fwrite(&gtype, 4, 1, w);
         uint64_t off = (uint64_t)data_off;
         fwrite(&off, 8, 1, w);
-        int64_t bytes = e->n_elems * 4;
+        int64_t bytes = q8 ? ((e->n_elems + 31) / 32) * 34
+                           : e->n_elems * 4;
         data_off += bytes;
         if (data_off % alignment) data_off += alignment - data_off % alignment;
     }
@@ -463,9 +500,49 @@ static int ts_export_gguf(const wubu_tensor_store_t *ts, const char *out)
         if (wubu_ts_get_f32(ts, e->name, buf, e->n_elems) != 0) {
             free(buf); fclose(w); return -1;
         }
-        fwrite(buf, sizeof(float), (size_t)e->n_elems, w);
+        if (q8) {
+            /* Q8_0: per-32-block [d: fp16][32 x int8] = 34 bytes, d = amax/127
+             * (the llama.cpp block_q8_0 layout -- the reader's gguf_raw_size
+             * returns 34/block, so we MUST match it, not 36). */
+            int64_t nb = (e->n_elems + 31) / 32;
+            uint16_t *dbuf = (uint16_t *)malloc((size_t)nb * sizeof(uint16_t));
+            int8_t *qbuf = (int8_t *)malloc((size_t)nb * 32);
+            if (!dbuf || !qbuf) { free(buf); free(dbuf); free(qbuf); fclose(w); return -1; }
+            for (int64_t b = 0; b < nb; b++) {
+                float amax = 0.0f;
+                for (int j = 0; j < 32; j++) {
+                    int64_t idx = b * 32 + j;
+                    float v = (idx < e->n_elems) ? buf[idx] : 0.0f;
+                    float a = fabsf(v);
+                    if (a > amax) amax = a;
+                }
+                float d = (amax > 0.0f) ? amax / 127.0f : 0.0f;
+                dbuf[b] = f32_to_f16(d);
+                for (int j = 0; j < 32; j++) {
+                    int64_t idx = b * 32 + j;
+                    float v = (idx < e->n_elems) ? buf[idx] : 0.0f;
+                    qbuf[b * 32 + j] = (d > 0.0f)
+                        ? (int8_t)(v / d < 0 ? -1 - (int)(-v / d) : (int)(v / d + 0.5f))
+                        : 0;
+                }
+            }
+            /* INTERLEAVED: [d16][32 x int8] per block (34 B) */
+            {
+                uint8_t *blk = (uint8_t *)malloc((size_t)nb * 34);
+                if (!blk) { free(buf); free(dbuf); free(qbuf); fclose(w); return -1; }
+                for (int64_t b = 0; b < nb; b++) {
+                    memcpy(blk + b * 34, &dbuf[b], 2);
+                    memcpy(blk + b * 34 + 2, qbuf + b * 32, 32);
+                }
+                fwrite(blk, 1, (size_t)nb * 34, w);
+                free(blk);
+            }
+            free(dbuf); free(qbuf);
+        } else {
+            fwrite(buf, sizeof(float), (size_t)e->n_elems, w);
+        }
         free(buf);
-        long rem = (long)(e->n_elems * 4) % alignment;
+        long rem = (long)((q8 ? ((e->n_elems + 31) / 32) * 34 : e->n_elems * 4)) % alignment;
         if (rem) { long need = alignment - rem; while (need--) fputc(0, w); }
     }
     fclose(w);
@@ -480,6 +557,368 @@ int wubu_ts_export(const wubu_tensor_store_t *ts, wubu_ts_fmt target,
     if (target == WUBU_TS_SAFETENSORS) return ts_export_safetensors(ts, out_path);
     if (target == WUBU_TS_GGUF)        return ts_export_gguf(ts, out_path);
     return -1;
+}
+
+/* Q8_0-quantized GGUF export: the storage-reduction path (~3.55x smaller
+ * than F32). The output is a valid GGUF v3 (tensors typed Q8_0) readable
+ * by gguf_open/gguf_dequantize and the engine's GGUF loader. */
+int wubu_ts_export_q8(const wubu_tensor_store_t *ts, const char *out_path)
+{
+    if (!ts || !out_path) return -1;
+    return ts_export_gguf_typed(ts, out_path, GGML_TYPE_Q8_0);
+}
+
+/* ------------------------------------------------------ MIXED EXPORT
+ * The Unsloth/quality-density doctrine (research/057): compression is a
+ * LADDER over roles, never a uniform bit-width. Keep maximum elements
+ * where signal lives (embeddings, attention, head), minimize where
+ * saturation eats the bits (expert weights), exact for norms/routers.
+ * Quant encoders owned here: F32, Q8_0 (fp16 d + int8, 34 B/32 el),
+ * Q4_0 (fp16 d + 4-bit nibbles, 18 B/32 el). IQ2_XXS/IQ3_XXS/IQ4_NL
+ * encoders are the next wave (the grids + dequants are in-tree). */
+
+typedef enum {
+    ROLE_EMBED, ROLE_HEAD, ROLE_ATTN, ROLE_EXPERT_GU, ROLE_EXPERT_DOWN,
+    ROLE_SHARED, ROLE_EXACT
+} wubu_ts_role;
+
+static wubu_ts_role role_of(const wubu_ts_entry *e)
+{
+    const char *n = e->name;
+    /* exact-first: tiny tensors + norms + routers stay F32 */
+    if (e->n_elems < 4096) return ROLE_EXACT;
+    if (strstr(n, "norm") || strstr(n, "gate_inp") || strstr(n, "router"))
+        return ROLE_EXACT;
+    if (strstr(n, "embed") || strstr(n, "embd")) return ROLE_EMBED;
+    if (strstr(n, "head") || strstr(n, "output")) return ROLE_HEAD;
+    if (strstr(n, "attn") || strstr(n, "qkv")) return ROLE_ATTN;
+    if (strstr(n, "shexp")) return ROLE_SHARED;
+    if (strstr(n, "down")) return ROLE_EXPERT_DOWN;
+    if (strstr(n, "gate") || strstr(n, "up")) return ROLE_EXPERT_GU;
+    return ROLE_ATTN; /* default: keep max */
+}
+
+/* per-role quant: the Unsloth ladder shape (Q8_0/Q4_0 are the encoders
+ * we own; IQ2_XXS/IQ3_XXS slot into GU/SHARED when the encoders land) */
+static int quant_for_role(wubu_ts_role r)
+{
+    switch (r) {
+        case ROLE_EXACT:      return 0;  /* F32 */
+        case ROLE_EMBED:      return GGML_TYPE_Q8_0;
+        case ROLE_HEAD:       return GGML_TYPE_Q8_0;
+        case ROLE_ATTN:       return GGML_TYPE_Q8_0;
+        case ROLE_EXPERT_GU:  return GGML_TYPE_IQ2_XXS;
+        case ROLE_EXPERT_DOWN:return GGML_TYPE_Q4_0;
+        case ROLE_SHARED:     return GGML_TYPE_IQ2_XXS;
+    }
+    return 0;
+}
+
+static int64_t q_bytes(int type, int64_t n_elems)
+{
+    if (type == 0) return n_elems * 4;
+    if (type == GGML_TYPE_Q8_0) return ((n_elems + 31) / 32) * 34;
+    if (type == GGML_TYPE_Q4_0) return ((n_elems + 31) / 32) * 18;
+    if (type == GGML_TYPE_IQ2_XXS) return ((n_elems + 255) / 256) * 66;
+    return -1;
+}
+
+static int write_quant_block(FILE *w, int type, const float *buf, int64_t n_elems)
+{
+    int64_t nb = (n_elems + 31) / 32;
+    if (type == 0) {
+        return fwrite(buf, sizeof(float), (size_t)n_elems, w) == (size_t)n_elems ? 0 : -1;
+    }
+    if (type == GGML_TYPE_Q8_0) {
+        uint16_t *d16 = (uint16_t *)malloc((size_t)nb * 2);
+        int8_t *qs = (int8_t *)malloc((size_t)nb * 32);
+        uint8_t *blk = (uint8_t *)malloc((size_t)nb * 34);
+        if (!d16 || !qs || !blk) { free(d16); free(qs); free(blk); return -1; }
+        for (int64_t b = 0; b < nb; b++) {
+            float amax = 0.0f;
+            for (int j = 0; j < 32; j++) {
+                float v = (b * 32 + j < n_elems) ? buf[b * 32 + j] : 0.0f;
+                float a = fabsf(v); if (a > amax) amax = a;
+            }
+            float d = (amax > 0.0f) ? amax / 127.0f : 0.0f;
+            d16[b] = f32_to_f16(d);
+            for (int j = 0; j < 32; j++) {
+                float v = (b * 32 + j < n_elems) ? buf[b * 32 + j] : 0.0f;
+                qs[b * 32 + j] = (d > 0.0f)
+                    ? (int8_t)(v / d < 0 ? -1 - (int)(-v / d) : (int)(v / d + 0.5f)) : 0;
+            }
+        }
+        /* INTERLEAVED blocks: [d16][32 x int8] per block -- writing all
+         * d16s then all qs as two chunks drifts every block after 0. */
+        for (int64_t b = 0; b < nb; b++) {
+            memcpy(blk + b * 34, &d16[b], 2);
+            memcpy(blk + b * 34 + 2, qs + b * 32, 32);
+        }
+        int rc = (fwrite(blk, 1, (size_t)nb * 34, w) == (size_t)nb * 34) ? 0 : -1;
+        free(d16); free(qs); free(blk);
+        return rc;
+    }
+    if (type == GGML_TYPE_IQ2_XXS) {
+        int64_t nb = (n_elems + 255) / 256;
+        uint8_t *blk = (uint8_t *)malloc((size_t)nb * 66);
+        if (!blk) return -1;
+        for (int64_t b = 0; b < nb; b++) {
+            float tmp[256];
+            for (int j = 0; j < 256; j++)
+                tmp[j] = (b * 256 + j < n_elems) ? buf[b * 256 + j] : 0.0f;
+            iq2xxs_encode_block(tmp, blk + b * 66);
+        }
+        int rc = (fwrite(blk, 1, (size_t)nb * 66, w) == (size_t)nb * 66) ? 0 : -1;
+        free(blk);
+        return rc;
+    }
+    if (type == GGML_TYPE_Q4_0) {
+        uint16_t *d16 = (uint16_t *)malloc((size_t)nb * 2);
+        uint8_t *q4 = (uint8_t *)malloc((size_t)nb * 16);
+        uint8_t *blk = (uint8_t *)malloc((size_t)nb * 18);
+        if (!d16 || !q4 || !blk) { free(d16); free(q4); free(blk); return -1; }
+        for (int64_t b = 0; b < nb; b++) {
+            float amax = 0.0f;
+            for (int j = 0; j < 32; j++) {
+                float v = (b * 32 + j < n_elems) ? buf[b * 32 + j] : 0.0f;
+                float a = fabsf(v); if (a > amax) amax = a;
+            }
+            float d = (amax > 0.0f) ? amax / 8.0f : 0.0f;
+            d16[b] = f32_to_f16(d);
+            for (int j = 0; j < 32; j += 2) {
+                float v0 = (b * 32 + j     < n_elems) ? buf[b * 32 + j] : 0.0f;
+                float v1 = (b * 32 + j + 1 < n_elems) ? buf[b * 32 + j + 1] : 0.0f;
+                int q0 = (d > 0.0f) ? (int)(v0 / d + (v0 >= 0 ? 0.5f : -0.5f)) : 0;
+                int q1 = (d > 0.0f) ? (int)(v1 / d + (v1 >= 0 ? 0.5f : -0.5f)) : 0;
+                if (q0 < -8) q0 = -8; if (q0 > 7) q0 = 7;
+                if (q1 < -8) q1 = -8; if (q1 > 7) q1 = 7;
+                /* reader: even j -> HIGH nibble, odd j -> LOW nibble,
+                 * value = (nibble) - 8  => store nibble = q + 8 */
+                q4[b * 16 + j / 2] = (uint8_t)(((q0 + 8) << 4) | ((q1 + 8) & 0xF));
+            }
+        }
+        /* INTERLEAVED: [d16][16 nibbles] per block (18 bytes) */
+        for (int64_t b = 0; b < nb; b++) {
+            memcpy(blk + b * 18, &d16[b], 2);
+            memcpy(blk + b * 18 + 2, q4 + b * 16, 16);
+        }
+        int rc = (fwrite(blk, 1, (size_t)nb * 18, w) == (size_t)nb * 18) ? 0 : -1;
+        free(d16); free(q4); free(blk);
+        return rc;
+    }
+    return -1;
+}
+
+int wubu_ts_export_mixed(const wubu_tensor_store_t *ts, const char *out_path)
+{
+    if (!ts || !out_path) return -1;
+    const uint32_t alignment = 32;
+    int n = ts->n;
+    int *types = (int *)malloc((size_t)n * sizeof(int));
+    int64_t *bytes = (int64_t *)malloc((size_t)n * sizeof(int64_t));
+    if (!types || !bytes) { free(types); free(bytes); return -1; }
+    int64_t data_off = 0;
+    for (int i = 0; i < n; i++) {
+        types[i] = quant_for_role(role_of(&ts->entries[i]));
+        bytes[i] = q_bytes(types[i], ts->entries[i].n_elems);
+        if (bytes[i] < 0) { free(types); free(bytes); return -1; }
+        data_off += bytes[i];
+        if (data_off % alignment) data_off += alignment - data_off % alignment;
+    }
+    FILE *w = fopen(out_path, "wb");
+    if (!w) { free(types); free(bytes); return -1; }
+    fwrite("GGUF", 4, 1, w);
+    uint32_t ver = 3; fwrite(&ver, 4, 1, w);
+    uint64_t n_t = (uint64_t)n, n_kv = 1;
+    fwrite(&n_t, 8, 1, w); fwrite(&n_kv, 8, 1, w);
+    const char *name = strrchr(ts->path, '/');
+    name = name ? name + 1 : ts->path;
+    uint64_t klen = strlen("general.name"), slen = strlen(name);
+    fwrite(&klen, 8, 1, w); fwrite("general.name", 1, klen, w);
+    uint32_t vtype = 8; fwrite(&vtype, 4, 1, w);
+    fwrite(&slen, 8, 1, w); fwrite(name, 1, slen, w);
+    data_off = 0;
+    for (int i = 0; i < n; i++) {
+        const wubu_ts_entry *e = &ts->entries[i];
+        uint64_t tlen = strlen(e->name);
+        fwrite(&tlen, 8, 1, w); fwrite(e->name, 1, tlen, w);
+        uint32_t nd = e->n_dims ? e->n_dims : 1;
+        fwrite(&nd, 4, 1, w);
+        for (int d = 0; d < (int)nd; d++) {
+            uint64_t dim = e->dims[d] ? e->dims[d] : e->n_elems;
+            fwrite(&dim, 8, 1, w);
+        }
+        uint32_t gtype = (uint32_t)types[i];
+        fwrite(&gtype, 4, 1, w);
+        fwrite(&data_off, 8, 1, w);
+        data_off += bytes[i];
+        if (data_off % alignment) data_off += alignment - data_off % alignment;
+    }
+    long pos = ftell(w);
+    long pad_to = ((pos + alignment - 1) / alignment) * alignment;
+    while (ftell(w) < pad_to) fputc(0, w);
+    for (int i = 0; i < n; i++) {
+        const wubu_ts_entry *e = &ts->entries[i];
+        float *buf = (float *)malloc((size_t)e->n_elems * sizeof(float));
+        if (!buf) { fclose(w); free(types); free(bytes); return -1; }
+        if (wubu_ts_get_f32(ts, e->name, buf, e->n_elems) != 0) {
+            free(buf); fclose(w); free(types); free(bytes); return -1;
+        }
+        if (write_quant_block(w, types[i], buf, e->n_elems) != 0) {
+            free(buf); fclose(w); free(types); free(bytes); return -1;
+        }
+        free(buf);
+        long rem = (long)(bytes[i] % alignment);
+        if (rem) { long need = alignment - rem; while (need--) fputc(0, w); }
+    }
+    fclose(w);
+    free(types); free(bytes);
+    return 0;
+}
+
+/* iq2xxs_grid[256] -- the IQ2_XXS 8-dim codebook (copied from
+ * src/dequant_iq2_xxs.c; each uint64 packs 8 small-int magnitudes). */
+static const uint64_t IQ2XXS_GRID[256] = {
+    0x0808080808080808, 0x080808080808082b, 0x0808080808081919, 0x0808080808082b08,
+    0x0808080808082b2b, 0x0808080808190819, 0x0808080808191908, 0x08080808082b0808,
+    0x08080808082b082b, 0x08080808082b2b08, 0x08080808082b2b2b, 0x0808080819080819,
+    0x0808080819081908, 0x0808080819190808, 0x0808080819192b08, 0x08080808192b0819,
+    0x08080808192b1908, 0x080808082b080808, 0x080808082b08082b, 0x080808082b082b2b,
+    0x080808082b2b082b, 0x0808081908080819, 0x0808081908081908, 0x0808081908190808,
+    0x0808081908191919, 0x0808081919080808, 0x080808192b081908, 0x080808192b192b08,
+    0x0808082b08080808, 0x0808082b0808082b, 0x0808082b082b082b, 0x0808082b2b08082b,
+    0x0808190808080819, 0x0808190808081908, 0x0808190808190808, 0x08081908082b0819,
+    0x08081908082b1908, 0x0808190819080808, 0x080819081908082b, 0x0808190819082b08,
+    0x08081908192b0808, 0x080819082b080819, 0x080819082b081908, 0x080819082b190808,
+    0x080819082b2b1908, 0x0808191908080808, 0x080819190808082b, 0x0808191908082b08,
+    0x08081919082b0808, 0x080819191908192b, 0x08081919192b2b19, 0x080819192b080808,
+    0x080819192b190819, 0x0808192b08082b19, 0x0808192b08190808, 0x0808192b19080808,
+    0x0808192b2b081908, 0x0808192b2b2b1908, 0x08082b0808080808, 0x08082b0808081919,
+    0x08082b0808082b08, 0x08082b0808191908, 0x08082b08082b2b08, 0x08082b0819080819,
+    0x08082b0819081908, 0x08082b0819190808, 0x08082b081919082b, 0x08082b082b082b08,
+    0x08082b1908081908, 0x08082b1919080808, 0x08082b2b0808082b, 0x08082b2b08191908,
+    0x0819080808080819, 0x0819080808081908, 0x0819080808190808, 0x08190808082b0819,
+    0x0819080819080808, 0x08190808192b0808, 0x081908082b081908, 0x081908082b190808,
+    0x081908082b191919, 0x0819081908080808, 0x0819081908082b08, 0x08190819082b0808,
+    0x0819081919190808, 0x0819081919192b2b, 0x081908192b080808, 0x0819082b082b1908,
+    0x0819082b19081919, 0x0819190808080808, 0x0819190808082b08, 0x08191908082b0808,
+    0x08191908082b1919, 0x0819190819082b19, 0x081919082b080808, 0x0819191908192b08,
+    0x08191919192b082b, 0x0819192b08080808, 0x0819192b0819192b, 0x08192b0808080819,
+    0x08192b0808081908, 0x08192b0808190808, 0x08192b0819080808, 0x08192b082b080819,
+    0x08192b1908080808, 0x08192b1908081919, 0x08192b192b2b0808, 0x08192b2b19190819,
+    0x082b080808080808, 0x082b08080808082b, 0x082b080808082b2b, 0x082b080819081908,
+    0x082b0808192b0819, 0x082b08082b080808, 0x082b08082b08082b, 0x082b0819082b2b19,
+    0x082b081919082b08, 0x082b082b08080808, 0x082b082b0808082b, 0x082b190808080819,
+    0x082b190808081908, 0x082b190808190808, 0x082b190819080808, 0x082b19081919192b,
+    0x082b191908080808, 0x082b191919080819, 0x082b1919192b1908, 0x082b192b2b190808,
+    0x082b2b0808082b08, 0x082b2b08082b0808, 0x082b2b082b191908, 0x082b2b2b19081908,
+    0x1908080808080819, 0x1908080808081908, 0x1908080808190808, 0x1908080808192b08,
+    0x19080808082b0819, 0x19080808082b1908, 0x1908080819080808, 0x1908080819082b08,
+    0x190808081919192b, 0x19080808192b0808, 0x190808082b080819, 0x190808082b081908,
+    0x190808082b190808, 0x1908081908080808, 0x19080819082b0808, 0x19080819192b0819,
+    0x190808192b080808, 0x190808192b081919, 0x1908082b08080819, 0x1908082b08190808,
+    0x1908082b19082b08, 0x1908082b1919192b, 0x1908082b192b2b08, 0x1908190808080808,
+    0x1908190808082b08, 0x19081908082b0808, 0x190819082b080808, 0x190819082b192b19,
+    0x190819190819082b, 0x19081919082b1908, 0x1908192b08080808, 0x19082b0808080819,
+    0x19082b0808081908, 0x19082b0808190808, 0x19082b0819080808, 0x19082b0819081919,
+    0x19082b1908080808, 0x19082b1919192b08, 0x19082b19192b0819, 0x19082b192b08082b,
+    0x19082b2b19081919, 0x19082b2b2b190808, 0x1919080808080808, 0x1919080808082b08,
+    0x1919080808190819, 0x1919080808192b19, 0x19190808082b0808, 0x191908082b080808,
+    0x191908082b082b08, 0x1919081908081908, 0x191908191908082b, 0x191908192b2b1908,
+    0x1919082b2b190819, 0x191919082b190808, 0x191919082b19082b, 0x1919191908082b2b,
+    0x1919192b08080819, 0x1919192b19191908, 0x19192b0808080808, 0x19192b0808190819,
+    0x19192b0808192b19, 0x19192b08192b1908, 0x19192b1919080808, 0x19192b2b08082b08,
+    0x192b080808081908, 0x192b080808190808, 0x192b080819080808, 0x192b0808192b2b08,
+    0x192b081908080808, 0x192b081919191919, 0x192b082b08192b08, 0x192b082b192b0808,
+    0x192b190808080808, 0x192b190808081919, 0x192b191908190808, 0x192b19190819082b,
+    0x192b19192b081908, 0x192b2b081908082b, 0x2b08080808080808, 0x2b0808080808082b,
+    0x2b08080808082b2b, 0x2b08080819080819, 0x2b0808082b08082b, 0x2b08081908081908,
+    0x2b08081908192b08, 0x2b08081919080808, 0x2b08082b08190819, 0x2b08190808080819,
+    0x2b08190808081908, 0x2b08190808190808, 0x2b08190808191919, 0x2b08190819080808,
+    0x2b081908192b0808, 0x2b08191908080808, 0x2b0819191908192b, 0x2b0819192b191908,
+    0x2b08192b08082b19, 0x2b08192b19080808, 0x2b08192b192b0808, 0x2b082b080808082b,
+    0x2b082b1908081908, 0x2b082b2b08190819, 0x2b19080808081908, 0x2b19080808190808,
+    0x2b190808082b1908, 0x2b19080819080808, 0x2b1908082b2b0819, 0x2b1908190819192b,
+    0x2b1908192b080808, 0x2b19082b19081919, 0x2b19190808080808, 0x2b191908082b082b,
+    0x2b19190819081908, 0x2b19191919190819, 0x2b192b082b080819, 0x2b192b19082b0808,
+    0x2b2b08080808082b, 0x2b2b080819190808, 0x2b2b08082b081919, 0x2b2b081908082b19,
+    0x2b2b082b08080808, 0x2b2b190808192b08, 0x2b2b2b0819190808, 0x2b2b2b1908081908,
+};
+
+
+
+/* ------------------------------------------------------ IQ2_XXS (2.06 bpw)
+ * The 2-bit slot of the mixed ladder (research/057-058). Block layout
+ * (66 bytes -> 256 floats, matching dequant_iq2_xxs.c):
+ *   [0:2]  d  fp16  (the base scale)
+ *   [2:66] qs 64 bytes = 8 sub-blocks of 32 values:
+ *          per 32: aux32[0] = 4 x 1-byte grid indices (l=0..3, 8 values each)
+ *                  aux32[1] = (scale_factor<<28) | sign3<<21 | sign2<<14 |
+ *                             sign1<<7 | sign0   (7 sign bits per 8-group)
+ *   value = +- d * (0.5+sf)*0.25 * grid[g][j]
+ * ENCODE (scale-first + sign-folded): d from block amax; per 8-group the
+ * optimal sign is sign(v) (grid magnitudes are non-negative), leaving a
+ * pure magnitude search over the 256-entry codebook; per 32 sub-block a
+ * 4-bit scale sweep. Deterministic, self-contained. */
+static void iq2xxs_encode_block(const float *v, uint8_t *blk)
+{
+    /* d = amax / (max grid 43 * max scale 3.875) */
+    float amax = 0.0f;
+    for (int i = 0; i < 256; i++) { float a = fabsf(v[i]); if (a > amax) amax = a; }
+    float d = (amax > 0.0f) ? amax / (43.0f * 3.875f) : 0.0f;
+    uint16_t d16 = f32_to_f16(d);
+    memcpy(blk, &d16, 2);
+    /* per sub-block: choose sf in 0..15 minimizing reconstruction error */
+    for (int ib = 0; ib < 8; ib++) {
+        const float *s = v + ib * 32;
+        float mags[32];
+        for (int j = 0; j < 32; j++) mags[j] = fabsf(s[j]);
+        int best_sf = 0; float best_err = 1e30f;
+        uint8_t best_idx[4]; uint32_t best_signs = 0;
+        for (int sf = 0; sf < 16; sf++) {
+            float db = (d > 0.0f) ? d * (0.5f + (float)sf) * 0.25f : 0.0f;
+            uint8_t idx[4]; uint32_t signs = 0; float err = 0.0f;
+            if (db > 0.0f) {
+                for (int l = 0; l < 4; l++) {
+                    /* sign-folded magnitude search over the 256 codebook */
+                    float bg = 1e30f; int bg_idx = 0; uint32_t sg = 0;
+                    for (int g = 0; g < 256; g++) {
+                        const uint8_t *cv = (const uint8_t *)(&IQ2XXS_GRID[g]);
+                        float e = 0.0f;
+                        for (int j = 0; j < 8; j++) {
+                            float diff = mags[l * 8 + j] - db * (float)cv[j];
+                            e += diff * diff;
+                        }
+                        if (e < bg) { bg = e; bg_idx = g; }
+                    }
+                    idx[l] = (uint8_t)bg_idx;
+                    for (int j = 0; j < 8; j++)
+                        if (s[l * 8 + j] < 0.0f) sg |= (1u << j);
+                    /* re-encode error with the chosen codebook + signs */
+                    const uint8_t *cv = (const uint8_t *)(&IQ2XXS_GRID[bg_idx]);
+                    for (int j = 0; j < 8; j++) {
+                        float rec = db * (float)cv[j];
+                        if (sg & (1u << j)) rec = -rec;
+                        float diff = s[l * 8 + j] - rec;
+                        err += diff * diff;
+                    }
+                    signs |= (sg << (7 * l));
+                }
+            } else {
+                memset(idx, 0, 4);
+            }
+            if (err < best_err) {
+                best_err = err; best_sf = sf;
+                memcpy(best_idx, idx, 4);
+                best_signs = signs;
+            }
+        }
+        uint32_t aux0 = (uint32_t)best_idx[0] | ((uint32_t)best_idx[1] << 8) |
+                        ((uint32_t)best_idx[2] << 16) | ((uint32_t)best_idx[3] << 24);
+        uint32_t aux1 = ((uint32_t)best_sf << 28) | (best_signs & 0x0FFFFFFFu);
+        memcpy(blk + 2 + ib * 8, &aux0, 4);
+        memcpy(blk + 2 + ib * 8 + 4, &aux1, 4);
+    }
 }
 
 void wubu_ts_close(wubu_tensor_store_t *ts)

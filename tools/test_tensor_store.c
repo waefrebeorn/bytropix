@@ -222,6 +222,46 @@ int main(void)
         CHECK(ea && ea->n_elems == 1228LL * 448, "layers.11.ffn.down has 1228*448");
     }
 
+    /* 8. MIXED export (the quality-density ladder, research/057) */
+    {
+        const char *mix = "/tmp/ts_fixture_mixed.gguf";
+        CHECK(a && wubu_ts_export_mixed(a, mix) == 0, "export .st -> MIXED gguf");
+        wubu_tensor_store_t *m = wubu_ts_open(mix);
+        CHECK(m != NULL, "reopen MIXED gguf");
+        CHECK(m && wubu_ts_count(m) == ST_TOTAL, "MIXED catalog 137");
+        if (m) {
+            /* embedding must be Q8_0 (8), norms F32 (0), experts IQ2_XXS (16),
+             * expert down Q4_0 (2) -- the research/057-058 ladder */
+            const wubu_ts_entry *emb = wubu_ts_find(m, "embedding.weight");
+            const wubu_ts_entry *fn  = wubu_ts_find(m, "final_norm.weight");
+            const wubu_ts_entry *gu  = wubu_ts_find(m, layer_name(0, 8, nb, sizeof(nb)));
+            const wubu_ts_entry *dn  = wubu_ts_find(m, layer_name(0, 9, nb, sizeof(nb)));
+            CHECK(emb && emb->ggml_type == 8,   "embedding Q8_0 (8)");
+            CHECK(fn  && fn->ggml_type  == 0,   "final_norm F32 (0)");
+            CHECK(gu  && gu->ggml_type  == 16,  "gate_up IQ2_XXS (16)");
+            CHECK(dn  && dn->ggml_type  == 2,   "ffn_down Q4_0 (2)");
+            /* accuracy: Q8 cosine > 0.999, Q4 cosine > 0.99 vs source */
+            float *x = (float *)malloc(sizeof(float) * 448 * 448);
+            float *y = (float *)malloc(sizeof(float) * 448 * 448);
+            const char *qn = layer_name(0, 0, nb, sizeof(nb));
+            CHECK(wubu_ts_get_f32(a, qn, x, 448LL * 448) == 0 &&
+                  wubu_ts_get_f32(m, qn, y, 448LL * 448) == 0, "get q_proj both");
+            if (x && y) {
+                double dot = 0, na = 0, nb2 = 0;
+                for (int64_t i = 0; i < 448LL * 448; i++) {
+                    dot += (double)x[i] * y[i]; na += (double)x[i] * x[i];
+                    nb2 += (double)y[i] * y[i];
+                }
+                double cs = dot / sqrt(na * nb2);
+                printf("  mixed Q8 q_proj cosine = %f\n", cs);
+                CHECK(cs > 0.999, "mixed Q8 accuracy > 0.999");
+            }
+            free(x); free(y);
+            wubu_ts_close(m);
+        }
+        remove(mix);
+    }
+
     if (a) wubu_ts_close(a);
     if (b) wubu_ts_close(b);
     remove(st_path); remove(st_path2); remove(st_path3); remove(st_path4);

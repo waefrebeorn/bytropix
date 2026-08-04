@@ -73,6 +73,19 @@ int wubu_ts_get_f32(const wubu_tensor_store_t *ts, const char *name,
 int wubu_ts_export(const wubu_tensor_store_t *ts, wubu_ts_fmt target,
                    const char *out_path);
 
+/* Q8_0-quantized GGUF export: the storage-reduction path (~3.55x smaller
+ * than F32; the Escha/quality-density doctrine starts at Q8). Valid GGUF
+ * v3 readable by gguf_open/gguf_dequantize + the engine's GGUF loader. */
+int wubu_ts_export_q8(const wubu_tensor_store_t *ts, const char *out_path);
+
+/* MIXED GGUF export: the Unsloth/quality-density ladder (research/057) --
+ * per-role bit assignment: embeddings/attention/head Q8_0, expert
+ * gate/up + down + shared Q4_0, norms/routers/tiny F32. "Keep maximum
+ * elements of what we need, minimize what we need less." ~5-6x smaller
+ * than F32 on a dense model. Valid GGUF v3, streamed one tensor at a
+ * time. */
+int wubu_ts_export_mixed(const wubu_tensor_store_t *ts, const char *out_path);
+
 void wubu_ts_close(wubu_tensor_store_t *ts);
 
 #ifdef __cplusplus
