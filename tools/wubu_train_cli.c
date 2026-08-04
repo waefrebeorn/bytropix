@@ -193,8 +193,10 @@ int main(int argc, char **argv)
 
     /* load the corpus (expand the glob via a helper: we accept ONE file
      * for now; the multi-file loop is the next step) */
-    uint16_t *corpus = (uint16_t *)malloc(sizeof(uint16_t) * (1 << 22));
-    long corpus_n = read_tokens(tok_glob, corpus, 1 << 22);
+    /* cap 1<<24 = 16M tokens (32MB): the SFT pack is 12M tokens; the old
+     * 1<<22 = 4M cap silently truncated it (research/052). */
+    uint16_t *corpus = (uint16_t *)malloc(sizeof(uint16_t) * (1 << 24));
+    long corpus_n = read_tokens(tok_glob, corpus, 1 << 24);
     if (corpus_n <= 0) {
         fprintf(stderr, "cannot read corpus %s\n", tok_glob);
         return 1;

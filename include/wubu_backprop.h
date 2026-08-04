@@ -109,12 +109,26 @@ int wubu_bp_alloc(wubu_bp_t *bp, int max_seq);
 float wubu_bp_forward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
                        const uint16_t *tokens, int n_tokens);
 
+/* BP2b: same, but with an optional per-position loss mask (SFT
+ * user-turn masking — the Smol Training Playbook's chat-template rule:
+ * loss only on assistant tokens). mask[i] != 0 => position i is trained;
+ * mask == NULL => train all positions (pretraining behavior). The mask
+ * indexes the TARGET position (tokens[i] is predicted from tokens[i-1]). */
+float wubu_bp_forward_masked(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
+                             const uint16_t *tokens, int n_tokens,
+                             const uint8_t *mask);
+
 /* BP3: the analytic backward. Accumulates the REAL gradients into
  * tr (wubu_train_t), exactly like wubu_train_microbatch does.
  * Returns the loss (for the trainer's telemetry). */
 float wubu_bp_backward(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
                         wubu_train_t *tr, const uint16_t *tokens,
                         int n_tokens);
+
+/* BP3b: backward with the SFT user-turn mask (see wubu_bp_forward_masked). */
+float wubu_bp_backward_masked(wubu_model_t *m, wubu_buf_t *b, wubu_bp_t *bp,
+                              wubu_train_t *tr, const uint16_t *tokens,
+                              int n_tokens, const uint8_t *mask);
 
 /* BP4: the real optimizer step: Muon (Newton-Schulz 5) for the 2D
  * hidden matrices, AdamW for the embeddings, the norms and the

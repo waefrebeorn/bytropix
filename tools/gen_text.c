@@ -394,8 +394,14 @@ int main(int argc, char **argv) {
     }
     FILE *emb_file = NULL;
     if (mdl.use_embedding_file) {
+        /* The external embedding dump is OPTIONAL (data/qwen36_embeddings_c.bin.raw
+         * was cold-archived off the SSD). If it is gone, fall back to the model's
+         * own token_embd — read_embedding already handles mdl->token_embd. */
         emb_file = fopen("data/qwen36_embeddings_c.bin.raw", "rb");
-        if (!emb_file) { free(embd); return 1; }
+        if (!emb_file) {
+            fprintf(stderr, "[embed] external embedding dump missing; using model token_embd\n");
+            mdl.use_embedding_file = false;
+        }
     }
     for (int i = 0; i < n_prompt; i++)
         if (!read_embedding(&mdl, prompt_tokens[i], embd + i * D, emb_file))

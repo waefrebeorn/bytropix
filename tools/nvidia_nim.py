@@ -34,6 +34,9 @@ def get_key():
         "~/.hermes/profiles/mind-palace/secrets/hf.env")
     if os.path.exists(secrets):
         for line in open(secrets):
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[len("export "):]
             if line.startswith("NVIDIA_API_KEY="):
                 return line.split("=", 1)[1].strip().strip('"')
     return ""
