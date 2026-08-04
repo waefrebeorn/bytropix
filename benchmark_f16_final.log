@@ -1,6 +1,0 @@
-GGUF v3, 426 tensors, 36 KV pairs
-Tensor info end at offset 10968739, aligned to 10968768 (pad=29, alignment=32)
-Missing blk.0.ssm_a.weight
-Allocating 32 layers...
-  Model dims: d_model=2560, head_dim=256
-  Naming: Qwen (blk.N.*)
