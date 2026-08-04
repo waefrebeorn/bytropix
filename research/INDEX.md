@@ -119,7 +119,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - L01 StreamingLLM attention-sink (keep first 4 + rolling window) ... `wired` (wubu_stream_kv + test_stream_kv) ← 7-hop StreamingLLM 2309.17453
 - L02 Attention-sink + KIVI 2-bit compose for 1M+ ctx ............. `wired` (L01 stream_kv + A04 kivi compose via capacity wall, ties L01+A04)
 - L03 H2O heavy-hitter eviction (keep top-p% attention) ........... `wired` (wubu_kv_evict track_attn + select_h2o + test_kv_evict_h2o)
-- L04 InfiniGen KV prefetch (predict hot KV to fast tier) ......... `wired` (wubu_infiniten_prefetch, ties A06) (ties A06)
+- L04 InfiniGen KV prefetch (predict hot KV to fast tier) ......... `open` (wubu_infiniten_prefetch does NOT exist — DA 2026-08-04 survey; ties A06)
 - L05 CacheBlend cross-request KV stitch .......................... `wired` (wubu_misc_gaps lcp_len)
 - L06 Quest blockwise top-k KV retrieval (sub-linear attn) ........ `wired` (wubu_attn_tune quest_topk)
 - L07 SnapKV cluster-based KV compression at layer depth ........... `wired` (wubu_kv_compress keep_clusters)
@@ -223,7 +223,7 @@ the next halvings on top of shipped B01/B02/A01/A02.
 - P17 Layer-stream resume (streaming load) .................. `wired` (D04)
 - P18 Hug-page KV pool (arena) .............................. `wired` (wubu_hugepage, ties O02) (ties O02)
 - P19 Weak-symbol CUDA stub (link-clean) .................... `wired`
-- P20 Trace/span operator hook (DA-3) ........................ `wired` (wubu_selfimprove)
+- P20 Trace/span operator hook (DA-3) ........................ `open` (wubu_selfimprove does NOT exist — DA 2026-08-04 survey)
 
 
 ## Theme Q-T: 2026 KV-cache / test-time-compute research sweep (fresh gaps)
@@ -1668,7 +1668,7 @@ Status: `open` = not yet in engine; `wired` = implemented+tested.
 - JD18 Calibration telemetry (session-level calibration tracking) `wired` (wubu_metacog, test_metacog PASSES) (driver: wubu_credit)
 - JD19 Competence-difficulty gap (agent competence vs task difficulty) `wired` (wubu_metacog, test_metacog PASSES) (driver: wubu_resource)
 - JD20 Metacognitive reflection prompts (structured self-reflection) `wired` (wubu_metagame2, test PASSES) (driver: wubu_metagame2)
-- JD21 Self-monitoring loop (monitor -> regulate -> re-measure) `wired` (wubu_metacog, test_metacog PASSES) (driver: wubu_selfimprove)
+- JD21 Self-monitoring loop (monitor -> regulate -> re-measure) `wired` (wubu_metacog, test_metacog PASSES) (driver: wubu_selfimprove — DOES NOT EXIST, DA 2026-08-04)
 - JD22 Capability asymmetry detection (which agents differ) `wired` (wubu_metagame2, test PASSES) (driver: wubu_agentic_os)
 - JD23 Strategy-exploration under uncertainty (metacog-driven exploration) `wired` (wubu_metacog, test_metacog PASSES) (driver: wubu_bandit)
 - JD24 Confidence-calibrated sampling (confidence-scaled decode) `wired` (wubu_metacog, test_metacog PASSES) (driver: wubu_model)

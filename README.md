@@ -1,98 +1,87 @@
-# wubuwizard
+# wubuwizard — the BRAIN of the WuBu AGI
 
-C11 inference engine ("the Colonel") — **the BRAIN of the WuBu AGI**. No
-external ML dependencies; quantization, matmul, tokenizer, and model loaders
-are implemented in-tree. The Body (`wubuos`) hosts this engine on metal via the
-Live Colonel. Doctrine: the standing loop
-`corpus → train → diagnose → mutate → validate → archive → RLHF oracle → repeat`
-([TOPOLOGY](docs/TOPOLOGY.md), [ARCHITECTURE](docs/ARCHITECTURE.md),
-[BUILDING](docs/BUILDING.md)).
+**From-scratch C11 inference + training engine.** No libggml, no Triton, no
+third-party BLAS: quantization, matmul, tokenizers, model loaders, and the
+training core are all in-tree. This is the backbone of an AGI — a colony of
+specialized experts on nested spheres, watched by a diagnostic hive that grows
+overworked cells, shrinks dead ones, and archives every validated mutation.
 
-## Layout
+- **Code lives on GitHub** — [`waefrebeorn/wubuwizard`](https://github.com/waefrebeorn/wubuwizard)
+- **Models + datasets live on HuggingFace** — the [`WaefreBeorn` org](https://huggingface.co/WaefreBeorn):
+  the [**WuBu-35M**](https://huggingface.co/WaefreBeorn/WuBu-35M) seed (weights,
+  tokenizer, config, checkpoints, AGI-disclosure card), plus the bytropix registry
+  dataset. **Weights are never committed to git** — they ship on HF.
 
-| Path | Contents |
-|------|----------|
-| `src/` | Core engine: model loaders, SSM/GQA/MLA/MoE forward, quant matmul, GGUF + safetensors readers, tensor store, CUDA kernels (305 C + 21 CUDA). |
-| `include/` | Public headers (opaque structs, minimal includes) — 302 headers. |
-| `tools/` | `gen_text` (CPU generation), 348 test tools, CLIs, API server, `repodoc/` doc generator. |
-| `research/` | The gap ledger: `INDEX.md` (AN01-AN11) + 45 numbered notes, each with Triple-DA + `wired` status. |
-| `THEORY/` `MATH/` | Our papers + Lean-verified proofs (Poincaré ball, Möbius, gyration, MLA compression). |
-| `docs/` | The docs: [TOPOLOGY](docs/TOPOLOGY.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [BUILDING](docs/BUILDING.md), [MODULES](docs/MODULES.md), model blueprint + card. |
-| `models/wubu/` | The WuBu-35M seed (weights untracked in git — canonical on HF). |
+## The standing loop (the doctrine in one line)
 
-## Build
-
-```bash
-make gen_text          # CPU inference binary
-make wubu_train        # the trainer
-make test_all          # full test gate (299 targets)
-make api_server        # OpenAI-compatible HTTP server
+```
+corpus → train → diagnose → mutate → validate → archive → RLHF oracle → repeat
 ```
 
-C11, GCC/Clang. CUDA paths require `nvcc` (optional). Full details:
-[docs/BUILDING.md](docs/BUILDING.md). Module table: [docs/MODULES.md](docs/MODULES.md).
+Every batch closes gaps ON this loop. WuBu is the amoeba (grows/shrinks by
+measured cell fitness), the hive IS the diagnostic system (research/056), and
+the Body (`wubuos`) hosts this engine on metal via the Live Colonel. The full
+map: [docs/TOPOLOGY.md](docs/TOPOLOGY.md).
 
-## Model support
+## Quick start
 
-Loaders: safetensors, GGUF (incl. TurboQuant Q2_0/TQ3_1S/TQ4_1S + multi-split),
-`.st` dumps — all through the catalog doctrine (`wubu_tensor_store.c`: a format
-is a catalog over the same bytes). Per-model status is in [STATUS.md](STATUS.md).
+```bash
+make gen_text            # CPU inference binary
+make wubu_train          # the trainer (real backward + Muon)
+make test_all            # the full test gate (299 targets)
+make api_server          # OpenAI-compatible HTTP server
 
-### Supported architectures
+./gen_text "<prompt>"    # generate (needs weights — see Models)
+```
 
-| Architecture | What it is | Key files |
+C11 (GCC/Clang), `-std=c11`, opaque structs, minimal includes. CUDA paths need
+`nvcc` (optional). Details: [docs/BUILDING.md](docs/BUILDING.md).
+
+## What the engine does
+
+| Layer | What | Modules |
 |---|---|---|
-| **Gated-DeltaNet hybrid** (SSM + GQA + MLP) | Qwen3.x / Agents-A1; per-layer `layer_types` | `src/wubu_ssm.c`, `src/wubu_model_safetensors_bridge.c` |
-| **Qwen3.x MoE** (256 experts) | Deep MoE + shared expert; SSD-paged | `src/wubu_moe.c`, `src/wubu_ssd_moe.c` |
-| **MLA + MoE + mHC + DSA** (DeepSeek-V4-Flash Config-I) | 43L, 284.3B, 256×top-6, hash router (blk 0-2), mHC, DSA indexer, KV compressor — **load gate PASSED**; forward next | `src/wubu_mla.c`, `wubu_moe*.c`, `wubu_hashrouter.c`, `wubu_dsa.c`, `wubu_mhc_mh.c` |
-| **Dense hybrid** (Qwen3.6-27B) | 64-layer dense, SSM+GQA per layer | `src/wubu_ssm.c` |
-| **LoRA adapters** | BTL-3 rank-32 alpha-64 on Qwen3.6-27B base | `src/wubu_lora.c` |
+| **Loaders** | safetensors, GGUF (incl. TurboQuant Q2_0/TQ3_1S/TQ4_1S + 3-part splits), `.st` dumps — the catalog doctrine: a format is a catalog over the same bytes | `gguf_reader.c`, `safetensors_reader.c`, `wubu_tensor_store.c` |
+| **Quantization** | Q4_K…IQ4_XS + Q8_0 + TurboQuant; **mixed per-role ladders** (research/057-058): keep the sensitive (attn/embd Q8_0), crush the saturated (experts 2-bit) — 5.12× on the seed | `quantized_matmul.c`, `dequant_iq2_xxs.c`, … |
+| **Attention** | GQA, **MLA** (latent KV), SSM-Gated-DeltaNet hybrid, ring/paged KV | `wubu_mla.c`, `wubu_ssm.c`, `wubu_kv_cache.c` |
+| **MoE** | 256-expert routing + shared expert; **hash routing**; SSD-paged experts for small RAM | `wubu_moe.c`, `wubu_hashrouter.c`, `wubu_ssd_moe.c` |
+| **Training** | real backward through every path, Muon + AdamW, rolling checkpoints | `wubu_train.c`, `wubu_backprop.c` |
+| **The AGI organs** | amoeba + hive (diagnostics), mHC hyper-connections, DSA indexer, prover | `wubu_amoeba.c`, `wubu_hive.c`, `wubu_mhc_mh.c`, `wubu_dsa.c` |
 
-### Model status matrix
+Fresh counts (2026-08-04): **305 C modules, 21 CUDA, 302 headers, 553 tools,
+299 test targets, 45 research docs.** The full annotated module table:
+[docs/MODULES.md](docs/MODULES.md).
+
+## Models
 
 | Model | Form | Status |
 |---|---|---|
-| **WuBu-35M (the seed)** | safetensors / .st | training loop runs (SFT 8.04→7.32); mixed export 5.12× |
-| **Agents-A1-4B** | safetensors (SD) | real SSM forward verified ✅ |
-| **KAT-Coder-V2.5-Dev** | safetensors (SD) | 13/13 shards; SSD slot-bank works |
-| **Qwen3.6-27B** | safetensors (SD) | adapter derives dims; SSM forward finite ✅ |
-| **Qwen3.6-35B-A3B-UD-IQ2_M** | GGUF (SSD) | 753 tensors dissected; 12 types NaN-free |
-| **DeepSeek-V4-Flash-0731 Config-I** | GGUF 3-split (SSD, downloading) | load gate PASSED (1328 tensors, 7 types, 0 mismatches) |
+| [**WuBu-35M**](https://huggingface.co/WaefreBeorn/WuBu-35M) (the seed) | safetensors / .st (HF) | training loop runs (SFT 8.04→7.32); mixed export 5.12× |
+| Agents-A1-4B (dense hybrid) | safetensors (SD card) | real SSM forward verified ✅ |
+| KAT-Coder-V2.5-Dev (MoE 256) | safetensors (SD card) | 13/13 shards; SSD slot-bank pages experts |
+| Qwen3.6-27B (dense hybrid) | safetensors (SD card) | adapter derives dims; SSM forward finite ✅ |
+| Qwen3.6-35B-A3B-UD-IQ2_M | GGUF (SSD) | 753 tensors dissected; 12 types NaN-free |
+| **DeepSeek-V4-Flash-0731 Config-I** | GGUF 3-split (SSD) | **load gate PASSED**: 43L, 284.3B, 1328 tensors, 7 types, 0 mismatches — forward wiring next |
 
-> Weights policy: GGUF lives on the SSD; safetensors model dirs are COLD
-> STORAGE on the SD card (`/home/wubu/sdcard/models/` — mount `D:` first:
-> `sudo mount -t drvfs D: /home/wubu/sdcard`). All tensor loading goes through
-> the bridge + tensor store; the lazy BF16 path keeps 27B-class models under
-> 13 GB RAM.
+**Weights policy**: GGUF lives on the SSD (`/home/wubu/models/`); safetensors
+model dirs are COLD STORAGE on the SD card (`/home/wubu/sdcard/models/` —
+mount `D:` first: `sudo mount -t drvfs D: /home/wubu/sdcard`).
 
-## Subsystems
+## Docs
 
-- **Tensor store** (`wubu_tensor_store.c`): catalog interchange — .st ↔
-  safetensors ↔ GGUF by streaming; mixed per-role export (Q8_0/Q4_0/IQ2_XXS/F32).
-- **Loaders**: safetensors, GGUF (TurboQuant dequants + multi-split resolve),
-  HF tokenizers — `test_gguf_load` is the load gate.
-- **SSM forward** (`wubu_ssm.c`): Gated DeltaNet recurrence, conv1d, GQA, QK-norm.
-- **MoE** (`wubu_moe.c`): router, shared expert, quantized experts; SSD-paged
-  variant (`wubu_ssd_moe.c`) backed by the slot-bank. Hash routing:
-  `wubu_hashrouter.c` (token/pos/salt hashing, TID→EID tables).
-- **MLA** (`wubu_mla.c`): latent-KV multi-head attention (deepseek4).
-- **mHC** (`wubu_mhc.c` + `wubu_mhc_mh.c`): manifold-constrained hyper-connections,
-  multi-head form (2512.24880) verified maxdiff=0.
-- **DSA** (`wubu_dsa.c`): coarse-to-fine indexer (the lightning indexer).
-- **Quantization**: Q4_K/Q5_K/Q6_K/IQ2_XXS/IQ3_XXS/IQ4_XS/IQ2_S/IQ1_S/IQ1_M +
-  Q8_0 + TurboQuant Q2_0/TQ3_1S/TQ4_1S, self-hosted `vec_dot` (no libggml).
-- **The AGI organs**: `wubu_amoeba` + `wubu_hive` (the diagnostic hive),
-  `wubu_prover2` (verifier), `wubu_agi` (the loop), `wubu_dgm` (the gate).
-- **Training**: `wubu_train` + `wubu_backprop` (real backward + Muon),
-  rolling checkpoints (`tools/wubu_ckpt_roll.py`).
-- **Sampling**: temp/top_p, repetition + DRY penalties.
+- [docs/TOPOLOGY.md](docs/TOPOLOGY.md) — the master map of BOTH repos (Brain/Body split, boundaries, placement rules)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the engine spine: data flow, layers, guarantees
+- [docs/BUILDING.md](docs/BUILDING.md) — build, run, train
+- [docs/MODULES.md](docs/MODULES.md) — full annotated module table (auto-generated)
+- [STATUS.md](STATUS.md) — verified claims, per wave
+- [research/INDEX.md](research/INDEX.md) — the gap ledger (AN01-AN11, 45 notes)
+- [docs/wubu-model-card.md](docs/wubu-model-card.md) + [docs/wubu-model-blueprint.md](docs/wubu-model-blueprint.md) — the model
+- [THEORY/](THEORY/) + [MATH/lean/](MATH/lean/) — the papers + Lean-verified proofs
 
-## Vault
+## License
 
-The `THEORY/` and `vault/` trees hold the underlying math: Poincaré/hyperbolic
-embeddings, GAAD (Golden Aspect Adaptive Decomposition), DFT/DCT spectral
-encoders, the tailslayer hedged-read system, and the DeepSeek MoE/sparse-attention
-paper set. `THEORY/math_viz/` contains runnable numerical proofs.
+[Waefrebeorn Umbrella License v3.0](LICENSE) — source-available, not OSI/FSF
+approved.
 
 <!-- repodoc:BEGIN -->
 ## Module index (auto-generated 2026-08-04)
