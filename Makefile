@@ -655,7 +655,7 @@ test_affinity: tools/test_affinity.c src/wubu_affinity.o
 test_400: test_spec_decode test_kvquant test_paged_kv test_moe_grouped \
           test_ssm_scan test_q8 test_cuda_graph test_scheduler test_affinity \
           test_roofline test_cache_advice test_kereq test_pd_split \
-          test_delta_net test_mhc test_hashrouter test_dsa test_tensor_store test_diag test_gravity test_gguf_tq test_wubu_mhc_mh test_cla test_mega test_yarn \
+          test_delta_net test_mhc test_hashrouter test_dsa test_tensor_store test_diag test_gravity test_orbits test_gguf_tq test_wubu_mhc_mh test_cla test_mega test_yarn \
           test_kda test_attnres test_latentmoe test_mxfp4 \
           test_kv_tier test_kv_tier_evict
 	@echo "ALL 400-IMPROVEMENT UNIT TESTS PASSED"
@@ -758,6 +758,9 @@ test_diag: tools/test_diag.c src/wubu_diag.o src/wubu_hive.o src/wubu.o src/wubu
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@
 test_gravity: tools/test_gravity.c src/wubu_gravity.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
+	./$@
+test_orbits: tools/test_orbits.c src/wubu_orbits.o src/wubu_hive.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 test_amoeba: tools/test_amoeba.c src/wubu_amoeba.o src/wubu_hive.o src/wubu_moe2.o src/wubu_prover2.o src/wubu_hyper.o $(CPU_OBJ)

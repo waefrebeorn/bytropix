@@ -214,16 +214,21 @@ The organizing force as a standalone tested module:
 - the boot image is the ring-0 brain (the Live Colonel in wubuos)
 - Q8/F32 only (the drivers-may-not-be-proper rule — no exotic quant)
 
-### Wave 3: the nested-sphere memory — `wubu_orbits`
+### Wave 3 (landed 2026-08-04): the nested-sphere memory — `wubu_orbits`
+- DONE: src/wubu_orbits.c + include/wubu_orbits.h + test_orbits
+  (6 oracles PASS + ASan clean)
 - memory items = points in nested Poincaré balls = polar-recursion
-  paths (radius+angles down the nesting tree — the polarquant
-  recursion repurposed as the address space)
-- spheres in orbits (rotation R_i = orbital motion) + spheres inside
-  spheres (THEORY/03 nesting)
+  paths (the leading 2-D pair per level -> (r, θ) — the fractal
+  stacking; spheres in orbits = the angle, spheres inside spheres =
+  the radius recursion)
 - the hive as the physical backing; the nested ball as the logical
-  address space; capacity bounded per level, depth unbounded
-- the walker (AN08) diagnoses which sphere lost coherence → the 5+1
-  rolls back that sphere only
+  address space; ring-bounded per level (capacity), depth unbounded
+  (nest() grows the recursion — infinite memory by construction)
+- DA catches: (1) the slot's addr is a struct FIELD, not a heap
+  wrapper — freeing it via wubu_orbits_addr_free double-freed the slot
+  (free(&slot->addr) then free(slot)); slots use slot_addr_free (arrays
+  only). (2) the fractal oracle needs depth >= 2 (an inner sphere must
+  exist to differ in) — nest before the check.
 
 ### Wave 4: the full amoeba-weights training
 - the seed (WuBu-35M) = the Colonel core + one outer sphere
