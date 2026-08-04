@@ -1223,6 +1223,9 @@ wubu_train: tools/wubu_train_cli.c src/wubu.o src/wubu_train.o src/wubu_backprop
 wubu_live_learn: tools/wubu_live_learn.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 
+wubu_boot: tools/wubu_boot.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_bi.o src/wubu_moe2.o src/safetensors_reader.o src/safetensors_writer.o src/wubu_tensor_store.o src/gguf_reader.o gpu_wubu.o
+	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
+
 # the GPU-accelerated trainer: same CLI, weak-linked cuBLAS dispatch.
 wubu_train_gpu: tools/wubu_train_cli.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_grow.o src/wubu_plateau.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart -Wl,-rpath,/usr/local/cuda-13.1/lib64
