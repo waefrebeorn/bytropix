@@ -327,43 +327,48 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
          * read attention K/V data as files. */
         /* Mirror REAL K/V cache tensors through the namespace — this is the
          * core of "the KV cache IS a file system". For each GQA layer,
-         * mount /kv/L/layer_NN/k and .v and write the actual gqa_k_cache
-         * and gqa_v_cache rows at the final position. 9P clients can then
-         * read attention K/V data as files. */
+         * mount /kv/L/layer_NN/k and .v and write the FULL cached span
+         * (all positions, not just the last). 9P clients can then read
+         * every attention K/V vector as a file. */
         if (kv_base && model->gqa_k_cache && model->gqa_v_cache &&
-            model->n_gqa_layers > 0) {
+            model->n_gqa_layers > 0 && seqlen > 0) {
             float *k_cache = (float *)model->gqa_k_cache;
             float *v_cache = (float *)model->gqa_v_cache;
             int gl = 0;  /* GQA layer index */
-            /* Read from the last written position. Forward resets cache_len
-             * to 0 and writes fresh, so pos = cache_len (fresh) or cache_len-1. */
-            int pos = model->gqa_cache_len > 0 ?
-                      model->gqa_cache_len - 1 : 0;
+            /* The forward writes the whole sequence fresh each call, so the
+             * cache holds positions [0, seqlen). Mirror all of them. */
+            int npos = seqlen < model->gqa_max_ctx ? seqlen : model->gqa_max_ctx;
             for (int l = 0; l < model->n_layers; l++) {
                 int kv_dim = model->layers[l].gqa.kv_dim;
                 if (kv_dim <= 0 || kv_dim > 1024 || gl >= model->n_gqa_layers)
                     continue;
-                float *k_row = k_cache + (size_t)gl * model->gqa_max_ctx * kv_dim
-                               + (size_t)pos * kv_dim;
-                float *v_row = v_cache + (size_t)gl * model->gqa_max_ctx * kv_dim
-                               + (size_t)pos * kv_dim;
+                /* Bounds: cache layout is [n_gqa_layers][gqa_max_ctx][kv_dim] */
+                if ((int64_t)gl * model->gqa_max_ctx * kv_dim +
+                    (int64_t)npos * kv_dim >
+                    (int64_t)model->n_gqa_layers * model->gqa_max_ctx * kv_dim)
+                    continue;
+                float *k_span = k_cache + (size_t)gl * model->gqa_max_ctx * kv_dim;
+                float *v_span = v_cache + (size_t)gl * model->gqa_max_ctx * kv_dim;
+                int span = npos * kv_dim;
                 char kpath[80], vpath[80];
                 snprintf(kpath, sizeof(kpath), "/kv/L/layer_%02d/k", l);
                 snprintf(vpath, sizeof(vpath), "/kv/L/layer_%02d/v", l);
                 wubu_kvfs_unmount(kvfs, kpath);
                 wubu_kvfs_unmount(kvfs, vpath);
-                wubu_kvfs_mount(kvfs, kpath, 512 + gl * 64, kv_dim);
-                wubu_kvfs_mount(kvfs, vpath, 512 + gl * 64 + 32, kv_dim);
-                wubu_kvfs_write(kvfs, kpath, kv_base, k_row, kv_dim);
-                wubu_kvfs_write(kvfs, vpath, kv_base, v_row, kv_dim);
+                wubu_kvfs_mount(kvfs, kpath, 512 + gl * 128, span);
+                wubu_kvfs_mount(kvfs, vpath, 512 + gl * 128 + 64, span);
+                wubu_kvfs_write(kvfs, kpath, kv_base, k_span, span);
+                wubu_kvfs_write(kvfs, vpath, kv_base, v_span, span);
                 /* Read back to verify real K/V data is in the namespace */
-                float *rb = (float *)malloc(kv_dim * sizeof(float));
-                if (rb && wubu_kvfs_read(kvfs, kpath, kv_base, rb, kv_dim) == 0) {
-                    float chk = 0;
-                    for (int i = 0; i < kv_dim; i++) chk += rb[i] * rb[i];
-                    fprintf(stderr, "[kvfs] K/V writeback verified: layer %d "
-                            "gqa_idx=%d kv_dim=%d energy=%.3f\n",
-                            l, gl, kv_dim, (double)chk);
+                float *rb = (float *)malloc((size_t)span * sizeof(float));
+                if (rb && wubu_kvfs_read(kvfs, kpath, kv_base, rb, span) == 0) {
+                    double chk = 0, chk2 = 0;
+                    for (int i = 0; i < span; i++) { chk += rb[i] * rb[i]; }
+                    wubu_kvfs_read(kvfs, vpath, kv_base, rb, span);
+                    for (int i = 0; i < span; i++) { chk2 += rb[i] * rb[i]; }
+                    fprintf(stderr, "[kvfs] K/V mirror: layer %d gqa_idx=%d "
+                            "kv_dim=%d npos=%d k_energy=%.3f v_energy=%.3f\n",
+                            l, gl, kv_dim, npos, chk, chk2);
                 }
                 free(rb);
                 gl++;
