@@ -57,7 +57,7 @@ CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu_stub.o src/wubu_ss
   src/wubu_mmrope.o \
   src/wubu_hashrouter.o src/wubu_dsa.o src/wubu_kvfs.o \
   src/wubu_enc_h3.o src/wubu_mxfp4.o \
-  src/wubu_dsv4.o src/wubu_megakernel.o src/wubu_lfm.o \
+  src/wubu_dsv4.o src/wubu_megakernel.o src/wubu_lfm.o src/wubu_dsv4_layer.o \
   src/wubu_equiv_check.o src/wubu_integrate.o src/wubu_capzero.o src/wubu_latency.o \
   src/wubu_ctxvm.o src/wubu_safekern.o src/wubu_loopguard.o src/wubu_planediv.o \
   src/wubu_coord.o src/wubu_metagame.o src/wubu_credit.o src/wubu_metagame2.o \
@@ -105,7 +105,7 @@ lfm2_gen: tools/lfm2_gen.c $(CORE_OBJ) $(LFM2_OBJ) src/wubu_tokenizer.o src/wubu
 clean:
 	rm -f src/*.o gen_text_win lfm2_test lfm2_gen h3_norm_test \
 	test_dsa test_hashrouter test_mxfp4 test_kvfs \
-	test_dsv4 test_lfm test_megakernel test_enc_h3 \
+	test_dsv4 test_lfm test_megakernel test_enc_h3 test_dsv4_layer \
 	test_fp4 test_nf4 test_mla $(LFM2_OBJ)
 
 h3_norm_test: tools/test_h3_norm.c src/wubu_h3_norm.o src/wubu_dequant_nf4.o src/wubu_win.o src/wubu_dequant_fp4.o
@@ -166,3 +166,7 @@ test_megakernel: tools/test_megakernel.c src/wubu_megakernel.o src/wubu_win.o
 test_enc_h3: tools/test_enc_h3.c src/wubu_enc_h3.o src/wubu_rotate.o src/wubu_fp8.o src/wubu_nvfp4.o src/wubu_win.o
 	$(CC) $(CFLAGS) -o $@ tools/test_enc_h3.c src/wubu_enc_h3.o src/wubu_rotate.o src/wubu_fp8.o src/wubu_nvfp4.o src/wubu_win.o -lm $(LDLIBS)
 	@echo "test_enc_h3 built"
+
+test_dsv4_layer: tools/test_dsv4_layer.c src/wubu_dsv4_layer.o src/wubu_mla.o src/wubu_win.o
+	$(CC) $(CFLAGS) -o $@ tools/test_dsv4_layer.c src/wubu_dsv4_layer.o src/wubu_mla.o src/wubu_win.o -lm $(LDLIBS)
+	@echo "test_dsv4_layer built"
