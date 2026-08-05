@@ -7,9 +7,11 @@
  *     it, and verifies the binary exists + passes a smoke test.
  */
 #include "wubu_synth.h"
+#include "wubu_spawn.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define WUBU_SYNTH_MAX_TEMPLATES 32
 #define WUBU_SYNTH_MAX_OUTPUT 8192
@@ -64,12 +66,18 @@ int wubu_synth_compile_verify(const char *source, const char *func_name) {
     fprintf(f, "#include <stdio.h>\n%s\nint main(){ printf(\"%%d\\n\", %s(2,3)); return 0; }", source, func_name);
     fclose(f);
 
-    char cmd[WUBU_SYNTH_MAX_OUTPUT];
-    snprintf(cmd, sizeof(cmd), "gcc -O2 -o /tmp/wubu_synth_tmp %s 2>/dev/null", path);
-    int rc = system(cmd);
+    char *argv[] = { "gcc", "-O2", "-o", "/tmp/wubu_synth_tmp",
+                     (char *)path, NULL };
+    int rc = wubu_spawn_wait("gcc", (char *const *)argv, true);
     if (rc != 0) { unlink(path); unlink("/tmp/wubu_synth_tmp"); return 0; }
 
-    rc = system("/tmp/wubu_synth_tmp 2>/dev/null | grep -q '^5$'");
+    char out_buf[256];
+    int exit_code = -1;
+    int n = wubu_spawn_capture("/tmp/wubu_synth_tmp",
+                               (char *const[]){(char *)"/tmp/wubu_synth_tmp", NULL},
+                               out_buf, sizeof(out_buf), &exit_code);
     unlink(path); unlink("/tmp/wubu_synth_tmp");
-    return (rc == 0) ? 1 : 0;
+    if (exit_code != 0 || n < 0) return 0;
+    out_buf[sizeof(out_buf) - 1] = '\0';
+    return (strstr(out_buf, "5") != NULL) ? 1 : 0;
 }

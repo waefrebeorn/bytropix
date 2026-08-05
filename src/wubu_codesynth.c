@@ -6,6 +6,8 @@
  *     generates C11 source from a template, compiles it, and reports.
  */
 #include "wubu_codesynth.h"
+#include "wubu_spawn.h"
+#include <unistd.h>
 
 static const char *gen_templates[] = {
     /* operation: "add" → int {name}(int a, int b) { return a + b; } */
@@ -59,9 +61,9 @@ int wubu_codesynth_compile(const wubu_codesynth_t *cs, const char *src) {
     fprintf(f, "#include <stdio.h>\n%s\nint main(){printf(\"%%d\\n\", %s(2,3)); return 0;}",
             src, strstr(cs->spec, "func:") ? "generated_func" : "generated_func");
     fclose(f);
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "gcc -O2 -Wall -o /tmp/wubu_codesynth_tmp %s 2>/dev/null", path);
-    int rc = system(cmd);
+    char *argv[] = { "gcc", "-O2", "-Wall", "-o", "/tmp/wubu_codesynth_tmp",
+                     (char *)path, NULL };
+    int rc = wubu_spawn_wait("gcc", (char *const *)argv, true);
     unlink(path);
     unlink("/tmp/wubu_codesynth_tmp");
     return rc == 0 ? 1 : 0;

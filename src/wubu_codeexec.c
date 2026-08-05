@@ -7,10 +7,12 @@
  *     doesn't exceed latency budget, passes safety kernel checks.
  */
 #include "wubu_codeexec.h"
+#include "wubu_spawn.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 int wubu_codeexec_init(wubu_codeexec_t *ce) {
     if (!ce) return -1;
@@ -44,9 +46,9 @@ int wubu_codeexec_run_regression(const char *source, int *out_rc,
     fprintf(f, "%s", source);
     fclose(f);
 
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "gcc -O2 -o /tmp/wubu_ce_tmp %s 2>/dev/null", path);
-    *out_rc = system(cmd);
+    char *argv[] = { "gcc", "-O2", "-o", "/tmp/wubu_ce_tmp",
+                     (char *)path, NULL };
+    *out_rc = wubu_spawn_wait("gcc", (char *const *)argv, true);
     *out_oom = 0;
     *out_latency_us = 0;
 
@@ -54,7 +56,9 @@ int wubu_codeexec_run_regression(const char *source, int *out_rc,
         /* Run smoke test and time it */
         struct timespec ts_start, ts_end;
         clock_gettime(CLOCK_MONOTONIC, &ts_start);
-        int smoke_rc = system("/tmp/wubu_ce_tmp 2>/dev/null");
+        int smoke_rc = wubu_spawn_wait("/tmp/wubu_ce_tmp",
+                                       (char *const[]){(char *)"/tmp/wubu_ce_tmp", NULL},
+                                       true);
         clock_gettime(CLOCK_MONOTONIC, &ts_end);
         long elapsed = (ts_end.tv_sec - ts_start.tv_sec) * 1000000L +
                        (ts_end.tv_nsec - ts_start.tv_nsec) / 1000L;
