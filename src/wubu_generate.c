@@ -381,6 +381,26 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
             fprintf(stderr, "[kvfs] namespace: %s\n", snap);
             free(snap);
         }
+
+        /* Register each GQA layer's K cache with the Styx 9P
+         * registry so external WuBuOS 9P clients can walk
+         * /kv/ as a real filesystem — the KV cache IS a
+         * filesystem, fully exposed to the namespace. */
+        if (kvfs && model->n_gqa_layers > 0) {
+            int gl = 0;
+            for (int l = 0; l < model->n_layers; l++) {
+                if (model->layers[l].is_ssm) continue;
+                int kv_dim = model->layers[l].gqa.kv_dim;
+                if (kv_dim <= 0 || kv_dim > 1024) { gl++; continue; }
+                size_t span = (size_t)model->gqa_max_ctx * kv_dim;
+                float *k_ptr = (float *)model->gqa_k_cache +
+                    (size_t)gl * model->gqa_max_ctx * kv_dim;
+                char kpath[256];
+                snprintf(kpath, sizeof(kpath), "/kv/L/layer_%02d", l);
+                wubu_kv_styx_register(kpath, k_ptr, span);
+                gl++;
+            }
+        }
         wubu_kvfs_free(kvfs);
         if (kv_base) free(kv_base);
     }
