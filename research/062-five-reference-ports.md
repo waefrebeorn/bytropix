@@ -96,7 +96,17 @@
 #   [kvfs] namespace: {"block_size":64,"total_blocks":1024,"used_blocks":392,
 #     "registered":6,"mounts":[{"/kv/L/layer_00"},{"/kv/L/layer_01"},
 #     {"/kv/in"},{"/kv/synth"},{"/kv/mem"},{"/kv/meta"}]}
-#   Decode: 4 tok [n-gram spec-k=3]
+#   Decode: 4 tok [n-gram spec-k=4]
+#
+# In-forward kernel probe (env-gated, WUBU_REF_KERNELS=1): every ported
+# kernel executes against the REAL hidden state during wubu_model_forward:
+#   $ env WUBU_REF_KERNELS=1 ./gen_text fixture_model.safetensors "test" 4
+#   [ref-kernels] enc_h3 (ConvRot un-rotate) OK
+#   [ref-kernels] dsv4 (hyper-residual + sinkhorn) OK
+#   [ref-kernels] lfm (DeltaNet hybrid attn) OK
+#   [ref-kernels] megakernel (fused PSO decode) OK
+# Zero cost when gate off (verified: no probe output, no behavior change).
+# All four modules linked into CORE_OBJ — gen_text ships all five kernels.
 #
 # The KV cache IS a file system — verified live: the generate loop wrote
 # seqlen/emitted into /kv/meta, per-layer records into /kv/L/layer_NN, and
