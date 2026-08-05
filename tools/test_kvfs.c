@@ -1,12 +1,12 @@
 /* tools/test_kvfs.c — triple-DA test for wubu_kvfs
  *
- * P1 (correctness): create, mount, lookup, unmount, snapshot —
+ * P1 (correctness): create, mount, lookup, read, write, unmount, snapshot —
  *   all operations produce the documented results.
  * P2 (privacy/no third-party): no external calls, no network,
  *   no telemetry. Pure C11 + stdlib.
  * P3 (robustness): NULL fs, NULL path, duplicate mount,
  *   out-of-bounds blocks, unmount nonexistent path, snapshot
- *   of empty namespace.
+ *   of empty namespace, read/write bounds checking.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,7 +60,7 @@ static void test_duplicate_mount_fails(void) {
 static void test_out_of_bounds_fails(void) {
     wubu_kvfs_t *fs = wubu_kvfs_create(16, 1024);
     assert(fs);
-    /* 1000 blocks but only 1024 total — should fail */
+    /* 1000 blocks but only 1024 total — should succeed */
     assert(wubu_kvfs_mount(fs, "/kv/in", 0, 1000) == 0);
     /* now only 24 left — mounting 100 more should fail */
     assert(wubu_kvfs_mount(fs, "/kv/synth", 1000, 100) == -1);
@@ -117,6 +117,56 @@ static void test_empty_snapshot(void) {
     wubu_kvfs_free(fs);
 }
 
+static void test_read_write(void) {
+    wubu_kvfs_t *fs = wubu_kvfs_create(16, 1024);
+    assert(fs);
+
+    /* mount a region */
+    assert(wubu_kvfs_mount(fs, "/kv/in", 0, 64) == 0);
+
+    /* allocate a flat KV tensor */
+    size_t total_floats = 1024 * 16; /* 1024 blocks × 16 floats/block */
+    float *kv_tensor = (float *)calloc(total_floats, sizeof(float));
+    assert(kv_tensor);
+
+    /* write data to /kv/in */
+    float write_buf[16];
+    for (int i = 0; i < 16; i++) write_buf[i] = (float)i;
+    assert(wubu_kvfs_write(fs, "/kv/in", kv_tensor, write_buf, 16) == 0);
+
+    /* read it back */
+    float read_buf[16];
+    assert(wubu_kvfs_read(fs, "/kv/in", kv_tensor, read_buf, 16) == 0);
+    for (int i = 0; i < 16; i++) {
+        assert(read_buf[i] == (float)i);
+    }
+
+    /* read/write out of bounds should fail */
+    assert(wubu_kvfs_read(fs, "/kv/in", kv_tensor, read_buf, 1025) == -1);
+    assert(wubu_kvfs_write(fs, "/kv/in", kv_tensor, write_buf, 1025) == -1);
+
+    /* nonexistent path should fail */
+    assert(wubu_kvfs_read(fs, "/kv/mem", kv_tensor, read_buf, 1) == -1);
+    assert(wubu_kvfs_write(fs, "/kv/mem", kv_tensor, write_buf, 1) == -1);
+
+    free(kv_tensor);
+    wubu_kvfs_free(fs);
+}
+
+static void test_prefix_lookup(void) {
+    wubu_kvfs_t *fs = wubu_kvfs_create(16, 1024);
+    assert(fs);
+
+    assert(wubu_kvfs_mount(fs, "/kv", 0, 256) == 0);
+
+    /* /kv/in is a prefix of /kv/in/layer_00 — should match /kv */
+    uint32_t block = 0; size_t offset = 0;
+    assert(wubu_kvfs_lookup(fs, "/kv/in/layer_00", &block, &offset) == 0);
+    assert(block == 0); /* matches /kv mount */
+
+    wubu_kvfs_free(fs);
+}
+
 int main(void) {
     printf("test_kvfs: starting...\n");
     test_create_free();
@@ -135,6 +185,10 @@ int main(void) {
     printf("  [PASS] NULL fs handling\n");
     test_empty_snapshot();
     printf("  [PASS] empty snapshot\n");
+    test_read_write();
+    printf("  [PASS] read/write\n");
+    test_prefix_lookup();
+    printf("  [PASS] prefix lookup\n");
     printf("test_kvfs: ALL PASSED\n");
     return 0;
 }

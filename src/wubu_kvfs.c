@@ -1,10 +1,14 @@
 /* wubu_kvfs.c — KV namespace layer (G1 implementation)
  *
- * Path-addressable KV mount table. Every mount is a
- * directory entry mapping a path prefix to a contiguous
- * block range in the paged KV. Lookup walks the mount
- * list for the longest matching prefix — the same
- * algorithm as RadixAttention (SGLang), just simpler.
+ * Path-addressable KV cache. Every mount is a directory
+ * entry mapping a path prefix to a contiguous block range
+ * in the flat KV tensor. Read and write route through
+ * the mount table — the same address translation as
+ * PagedAttention (SOSP'23), just exposed as a filesystem.
+ *
+ * The read/write API takes the KV tensor base pointer
+ * so the namespace can compute absolute offsets and
+ * copy data directly into/out of the KV cache.
  *
  * C11, opaque struct, minimal includes. No third-party deps.
  */
@@ -72,7 +76,6 @@ int wubu_kvfs_unmount(wubu_kvfs_t *fs, const char *path) {
     for (int i = 0; i < fs->n_mounts; i++) {
         if (strcmp(fs->mounts[i].path, path) == 0) {
             fs->used_blocks -= fs->mounts[i].n_blocks;
-            /* shift remaining */
             for (int j = i; j < fs->n_mounts - 1; j++)
                 fs->mounts[j] = fs->mounts[j + 1];
             fs->n_mounts--;
@@ -102,6 +105,58 @@ int wubu_kvfs_lookup(const wubu_kvfs_t *fs, const char *path,
     if (!best) return -1;
     if (out_block) *out_block = best->start_block;
     if (out_offset) *out_offset = 0;
+    return 0;
+}
+
+/* Find the mount that owns this path. Returns NULL if not found. */
+static const wubu_kvfs_mount_t *find_mount(const wubu_kvfs_t *fs,
+                                               const char *path) {
+    if (!fs || !path) return NULL;
+    const wubu_kvfs_mount_t *best = NULL;
+    size_t best_len = 0;
+    for (int i = 0; i < fs->n_mounts; i++) {
+        const wubu_kvfs_mount_t *m = &fs->mounts[i];
+        size_t plen = strlen(m->path);
+        if (plen > best_len && strncmp(path, m->path, plen) == 0 &&
+            (path[plen] == '/' || path[plen] == '\0')) {
+            best = m;
+            best_len = plen;
+        }
+    }
+    return best;
+}
+
+/* Read KV data from a path into dst. Copies n_floats floats
+ * from the KV tensor at the resolved mount offset into dst.
+ * kv_base is the base pointer of the flat KV tensor (float*).
+ * The read is bounded by the mount's block range. */
+int wubu_kvfs_read(const wubu_kvfs_t *fs, const char *path,
+                       const float *kv_base, float *dst, size_t n_floats) {
+    if (!fs || !path || !kv_base || !dst || n_floats == 0) return -1;
+    const wubu_kvfs_mount_t *m = find_mount(fs, path);
+    if (!m) return -1;
+    size_t abs_offset = (size_t)m->start_block * m->block_size;
+    if (abs_offset + n_floats > (size_t)m->start_block * m->block_size +
+                                   (size_t)m->n_blocks * m->block_size)
+        return -1; /* read would exceed the mount */
+    memcpy(dst, kv_base + abs_offset, n_floats * sizeof(float));
+    return 0;
+}
+
+/* Write KV data from src into a path. Copies n_floats floats
+ * from src into the KV tensor at the resolved mount offset.
+ * kv_base is the base pointer of the flat KV tensor (float*).
+ * The write is bounded by the mount's block range. */
+int wubu_kvfs_write(wubu_kvfs_t *fs, const char *path,
+                        float *kv_base, const float *src, size_t n_floats) {
+    if (!fs || !path || !kv_base || !src || n_floats == 0) return -1;
+    const wubu_kvfs_mount_t *m = find_mount(fs, path);
+    if (!m) return -1;
+    size_t abs_offset = (size_t)m->start_block * m->block_size;
+    if (abs_offset + n_floats > (size_t)m->start_block * m->block_size +
+                                   (size_t)m->n_blocks * m->block_size)
+        return -1; /* write would exceed the mount */
+    memcpy(kv_base + abs_offset, src, n_floats * sizeof(float));
     return 0;
 }
 
