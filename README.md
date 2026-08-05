@@ -48,9 +48,11 @@ C11 (GCC/Clang), `-std=c11`, opaque structs, minimal includes. CUDA paths need
 | **Training** | real backward through every path, Muon + AdamW, rolling checkpoints | `wubu_train.c`, `wubu_backprop.c` |
 | **The AGI organs** | amoeba + hive (diagnostics), mHC hyper-connections, DSA indexer, prover | `wubu_amoeba.c`, `wubu_hive.c`, `wubu_mhc_mh.c`, `wubu_dsa.c` |
 
-Fresh counts (2026-08-04): **305 C modules, 21 CUDA, 302 headers, 553 tools,
-299 test targets, 45 research docs.** The full annotated module table:
-[docs/MODULES.md](docs/MODULES.md).
+Fresh counts (2026-08-04): **317 C modules, 316 headers, 77,473 LOC, 302
+test targets, 45 research docs.** The LFM2.5 on-device engine is now live
+(`src/lfm2_*.c`, 6 self-contained C11 modules; `make -f Makefile.lfm2`) — scale-gap
+fixed per the HuggingFace `modeling_lfm2.py` spec (embedding_norm once after layers,
+no final_norm). The full annotated module table: [docs/MODULES.md](docs/MODULES.md).
 
 ## Models
 
