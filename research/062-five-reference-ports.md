@@ -108,4 +108,11 @@
 #  - wubu_enc_h3 dequant: nibble read order matched to block_quantize
 #  - wubu_dsv4 MXFP4 pack: uses wubu_mxfp4_pack directly (OCP scale-at-end)
 #  - test tolerances account for Hadamard amplification (sqrt(P) worst case)
+#  - wubu_win.h clock_gettime: Angel Coder fix — shim used 4-byte long for
+#    tv_sec but native struct timespec has 8-byte __time64_t, corrupting
+#    tv_nsec via struct layout mismatch. Also CLOCK_REALTIME now uses
+#    GetSystemTimeAsFileTime instead of returning QPC values.
+#    Impact: test_uuid now passes 25/25 (was 22/25 — monotonicity broken).
+#    Root cause: QPC-based CLOCK_REALTIME was identical to CLOCK_MONOTONIC,
+#    so epoch_offset was 0, making timestamps non-monotonic across calls.
 #
