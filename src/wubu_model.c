@@ -16,6 +16,7 @@
 #include "wubu_dsv4.h"        // DeepSeek-V4: hyper-residual + sinkhorn + hash route
 #include "wubu_lfm.h"         // LFM2.5: hybrid linear/softmax attention
 #include "wubu_megakernel.h"  // Photon 2.0: fused PSO decode
+#include "wubu_multiteach.h"  // mr_r0b0t multi-teacher distillation kernel
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1475,6 +1476,37 @@ layer_timing:
                                            n1, n2, kv, 0, out32) == 0)
                     fprintf(stderr, "[ref-kernels] megakernel (fused PSO decode) OK\n");
                 wubu_megakernel_free(mk);
+            }
+        }
+
+        /* Probe 5: multi-teacher distillation (mr_r0b0t dataset) — fused
+         * ensemble KL against synthetic Qwen3.8/GLM5.2/KimiK3 teacher
+         * logits seeded from the real hidden state. */
+        {
+            int vs = 64;
+            wubu_multiteach_cfg_t mcfg = { .vocab_size = vs,
+                                           .temperature = 1.0f,
+                                           .distill_alpha = 0.5f,
+                                           .tool_head_weight = 0.1f };
+            mcfg.teachers[0] = (wubu_teacher_weight_t){ .weight = 0.5f, .quality = 0.9f, .n_traces = 20000 };
+            mcfg.teachers[1] = (wubu_teacher_weight_t){ .weight = 0.3f, .quality = 0.85f, .n_traces = 18000 };
+            mcfg.teachers[2] = (wubu_teacher_weight_t){ .weight = 0.2f, .quality = 0.8f, .n_traces = 19937 };
+            wubu_multiteach_t *mt = wubu_multiteach_create(&mcfg);
+            if (mt) {
+                float slog[64], tlog[3 * 64], ens[64], tmask[64];
+                for (int i = 0; i < 64; i++) {
+                    slog[i] = h[i % d] * 0.1f;
+                    for (int j = 0; j < 3; j++)
+                        tlog[j * 64 + i] = h[(i + j) % d] * 0.1f + (float)(j + 1);
+                    tmask[i] = (i % 8 == 0) ? 1.0f : 0.0f;
+                }
+                float weights[3] = {0.5f, 0.3f, 0.2f};
+                float kl = wubu_multiteach_kl_loss(slog, tlog, 64, 1.0f, weights, ens);
+                float total = wubu_multiteach_total_loss(mt, 1.0f, slog, tlog,
+                                                         64, tmask, 0.25f);
+                if (kl >= 0.0f && total >= 1.0f && isfinite(kl))
+                    fprintf(stderr, "[ref-kernels] multiteach (3-teacher ensemble KL) OK\n");
+                wubu_multiteach_free(mt);
             }
         }
     }
