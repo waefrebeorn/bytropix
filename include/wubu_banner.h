@@ -13,6 +13,11 @@
 #include <stdio.h>
 #include <stdarg.h>     /* wubu_print_stat() variadic */
 
+/* Centralize visual identity: wubu_tokens.h is the single source of truth
+ * for colors, spacing, and layout tokens shared across CLI + GUI + themes.
+ * (Adopts research 066-J3: design token file, Theme J rank-3.) */
+#include "wubu_tokens.h"
+
 /* Tool name + version string — set at compile time via Makefile. */
 #ifndef WUBU_TOOL_NAME
 #define WUBU_TOOL_NAME "wubu"
@@ -23,10 +28,11 @@
 
 static inline void wubu_print_banner(const char *tag, const char *extra)
 {
-    /* Tag is e.g. "Local Inference API Server" or "CLI Runner". */
+    /* Tag is e.g. "Local Inference API Server" or "CLI Runner".
+     * Green accent from wubu_tokens.h (single source of truth, J3). */
     printf("\n");
-    printf("  ╔══════════════════════════════════════════════════════╗\n");
-    printf("  ║  %-52s║\n", WUBU_TOOL_NAME " " WUBU_TOOL_VERSION);
+    printf("  %s╔══════════════════════════════════════════════════════╗%s\n", WUBU_TOKEN_GREEN_ANSI, WUBU_TOKEN_RESET);
+    printf("  %s║  %-52s%s║\n", WUBU_TOKEN_GREEN_ANSI, WUBU_TOOL_NAME " " WUBU_TOOL_VERSION, WUBU_TOKEN_RESET);
     printf("  ║  %-52s║\n", tag);
     if (extra && extra[0])
         printf("  ║  %-52s║\n", extra);

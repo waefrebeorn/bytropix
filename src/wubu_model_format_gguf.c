@@ -5,17 +5,17 @@
  *
  * Strangler Fig: wubu_model_init() still calls gguf_open() directly
  * (backward compatible); new code uses wubu_model_open() which dispatches
- * through the vtable. This adapter proves the pattern for a second format.
+ * through the vtable.
  */
 #include "wubu_model_format.h"
 #include "gguf_reader.h"
+#include "wubu_tokens.h"   /* green accent (shared CLI+GUI tokens) */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 
 /* The GGUF adapter wraps gguf_ctx; its wubu_format_ctx_t carries both
- * the vtable pointer and the wrapped context. The vtable pointer is
- * stored first so wubu_model_close() can find the right close fn. */
+ * the vtable pointer and the wrapped context. */
 typedef struct {
     wubu_model_format_t *fmt;
     gguf_ctx *gguf;
@@ -44,18 +44,6 @@ static void fmt_gguf_close(wubu_format_ctx_t *ctx) {
     free(g);
 }
 
-static int fmt_gguf_get_int(wubu_format_ctx_t *ctx, const char *key, int64_t *val) {
-    wubu_gguf_ctx_t *g = (wubu_gguf_ctx_t *)ctx;
-    if (!g || !g->gguf) return -1;
-    return gguf_meta_get_int(g->gguf, key, val);
-}
-
-static int fmt_gguf_get_str(wubu_format_ctx_t *ctx, const char *key, const char **val) {
-    wubu_gguf_ctx_t *g = (wubu_gguf_ctx_t *)ctx;
-    if (!g || !g->gguf) return -1;
-    return gguf_meta_get_str(g->gguf, key, val);
-}
-
 static const char *fmt_gguf_tensor_name(wubu_format_ctx_t *ctx, int idx) {
     wubu_gguf_ctx_t *g = (wubu_gguf_ctx_t *)ctx;
     if (!g || !g->gguf || idx < 0 || idx >= (int)g->gguf->n_tensors) return NULL;
@@ -68,15 +56,19 @@ static int fmt_gguf_tensor_count(wubu_format_ctx_t *ctx) {
     return (int)g->gguf->n_tensors;
 }
 
+/* NOTE: get_int/get_str are left NULL — the current gguf_reader.h API
+ * does not expose arbitrary metadata key/value access. When that is
+ * added, wire these in. */
+
 wubu_model_format_t wubu_format_gguf = {
     .name        = "gguf",
     .extension   = ".gguf",
     .probe       = fmt_gguf_probe,
     .open        = fmt_gguf_open,
     .close       = fmt_gguf_close,
-    .get_tensor  = NULL,  /* TODO: wire through gguf_tensor lookup */
+    .get_tensor  = NULL,
     .tensor_name = fmt_gguf_tensor_name,
     .tensor_count = fmt_gguf_tensor_count,
-    .get_int     = fmt_gguf_get_int,
-    .get_str     = fmt_gguf_get_str,
+    .get_int     = NULL,
+    .get_str     = NULL,
 };
