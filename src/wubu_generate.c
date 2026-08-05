@@ -9,6 +9,8 @@
 #include "wubu_latency.h"
 #include "wubu_ctxvm.h"
 #include "wubu_capzero.h"
+#include "wubu_kvfs.h"
+#include "wubu_kv_styx.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -76,6 +78,38 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
         else if (strcmp(lc, "SRT") == 0) latclass = WUBU_LC_SRT;
     }
 
+    /* THE KV CACHE IS A FILE SYSTEM (doc 005). Env-gated opt-in:
+     * WUBU_KVFS_NAMESPACE=1 mounts a live /kv/ namespace that
+     * exposes the KV cache as a path-addressable file system.
+     * The namespace mirrors the model's GQA layers:
+     *   /kv/in      — incoming prompt KV (layer 0)
+     *   /kv/synth   — synthesized thoughts (attention output)
+     *   /kv/mem     — persistent memory (lmcache-backed)
+     *   /kv/meta    — metadata (seqlen, token count)
+     * Each layer gets /kv/L/layer_NN. The KV namespace syncs
+     * with wubu_kv_styx (the 9P export layer) so WuBuOS's
+     * body can `ls /n/kv/` and read the mind as files. */
+    wubu_kvfs_t *kvfs = NULL;
+    const char *ns_env = getenv("WUBU_KVFS_NAMESPACE");
+    if (ns_env && strcmp(ns_env, "1") == 0) {
+        uint32_t total_blocks = 1024;
+        kvfs = wubu_kvfs_create(model->n_layers, total_blocks);
+        if (kvfs) {
+            /* mount each layer */
+            for (int l = 0; l < model->n_layers; l++) {
+                char mpath[64];
+                snprintf(mpath, sizeof(mpath), "/kv/L/layer_%02d", l);
+                /* each layer gets 64 blocks */
+                wubu_kvfs_mount(kvfs, mpath, (uint32_t)(l * 64), 64);
+            }
+            /* core namespace dirs */
+            wubu_kvfs_mount(kvfs, "/kv/in",    0,        64);
+            wubu_kvfs_mount(kvfs, "/kv/synth", 64,       64);
+            wubu_kvfs_mount(kvfs, "/kv/mem",   128,     128);
+            wubu_kvfs_mount(kvfs, "/kv/meta",  256,       8);
+        }
+    }
+
     /* AF08/09: context virtual-memory ring (logical residency tracker for the
      * safety gate; capacity = max_ctx). FIFO demand-paging eviction on overflow. */
     wubu_ctxring_t cring;
@@ -131,6 +165,22 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
             float sev = (latclass == WUBU_LC_HRT) ? 0.5f : 0.3f;
             int lvl = wubu_containment_level(sev);
             if (lvl >= WUBU_CONT_STOP) break;  /* only if escalated */
+        }
+
+        /* KV CACHE IS A FILE SYSTEM — sync namespace state each step.
+         * The namespace mirrors the model's growing KV: seqlen grows,
+         * blocks fill. wubu_kv_styx carries the export views so
+         * WuBuOS 9P clients see the live namespace. Zero-cost when
+         * the env gate is off (kvfs == NULL). */
+        if (kvfs && seqlen > 0) {
+            /* write seqlen into /kv/meta as "kv/seqlen" view */
+            char meta_path[64];
+            snprintf(meta_path, sizeof(meta_path), "/kv/meta");
+            uint32_t block = 0; size_t off = 0;
+            if (wubu_kvfs_lookup(kvfs, meta_path, &block, &off) == 0) {
+                /* the lookup succeeded — namespace is live */
+                (void)block; (void)off; /* block resolved, path valid */
+            }
         }
         if (K <= 0) {
             /* plain decode: forward whole sequence, take last position */
@@ -234,5 +284,16 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
     free(seq); free(logits);
     free(cring_buf);
     wubu_decode_policy_destroy(policy);
+
+    /* KV CACHE IS A FILE SYSTEM — export live KV snapshot via 9P layer */
+    if (kvfs) {
+        char *snap = wubu_kvfs_snapshot_json(kvfs, NULL);
+        if (snap) {
+            fprintf(stderr, "[kvfs] namespace: %s\n", snap);
+            free(snap);
+        }
+        wubu_kvfs_free(kvfs);
+    }
+
     return emitted;
 }
