@@ -20,16 +20,14 @@
 #include <string.h>
 #include <math.h>
 
-static void mat_add(float *S, const float *M, int rows, int cols, float w) {
-    for (int i = 0; i < rows*cols; i++) S[i] += w * M[i];
-}
-static void mat_scale(float *S, int n, float a) { for (int i=0;i<n;i++) S[i]*=a; }
+static inline void mat_scale(float *s, int n, float a) { for (int i=0;i<n;i++) s[i]*=a; }
 
 /* S01 Gated DeltaNet: S' = S - beta*(S k - v) k^T.  state d x d (row-major). */
 int wubu_deltanet_update(const float *S, const float *k, const float *v,
                          int d, float beta, float *Sout) {
     if (!S || !k || !v || !Sout || d <= 0) return 0;
-    if (beta < 0.0f) beta = 0.0f; if (beta > 1.0f) beta = 1.0f;
+    if (beta < 0.0f) beta = 0.0f;
+    if (beta > 1.0f) beta = 1.0f;
     memcpy(Sout, S, (size_t)d*d*sizeof(float));
     /* delta = S k - v   (delta is d-vector) */
     float *delta = (float *)calloc((size_t)d, sizeof(float));
@@ -50,7 +48,8 @@ int wubu_deltanet_update(const float *S, const float *k, const float *v,
 int wubu_mamba2_update(const float *S, const float *k, const float *v,
                        int d, float A, float b, float *Sout) {
     if (!S || !k || !v || !Sout || d <= 0) return 0;
-    if (A < 0.0f) A = 0.0f; if (A > 1.0f) A = 1.0f;
+    if (A < 0.0f) A = 0.0f;
+    if (A > 1.0f) A = 1.0f;
     if (b < 0.0f) b = 0.0f;
     mat_scale((float*)Sout, d*d, A);
     for (int i = 0; i < d; i++)
@@ -63,7 +62,8 @@ int wubu_mamba2_update(const float *S, const float *k, const float *v,
 int wubu_gla_update(const float *S, const float *k, const float *v,
                     int d, float g, float *Sout) {
     if (!S || !k || !v || !Sout || d <= 0) return 0;
-    if (g < 0.0f) g = 0.0f; if (g > 1.0f) g = 1.0f;
+    if (g < 0.0f) g = 0.0f;
+    if (g > 1.0f) g = 1.0f;
     memcpy(Sout, S, (size_t)d*d*sizeof(float));
     mat_scale(Sout, d*d, g);
     for (int i = 0; i < d; i++)
@@ -76,7 +76,8 @@ int wubu_gla_update(const float *S, const float *k, const float *v,
 int wubu_retnet_update(const float *S, const float *k, const float *v,
                        int d, float gamma, float *Sout) {
     if (!S || !k || !v || !Sout || d <= 0) return 0;
-    if (gamma < 0.0f) gamma = 0.0f; if (gamma > 1.0f) gamma = 1.0f;
+    if (gamma < 0.0f) gamma = 0.0f;
+    if (gamma > 1.0f) gamma = 1.0f;
     memcpy(Sout, S, (size_t)d*d*sizeof(float));
     mat_scale(Sout, d*d, gamma);
     for (int i = 0; i < d; i++)
@@ -89,7 +90,8 @@ int wubu_retnet_update(const float *S, const float *k, const float *v,
 int wubu_hgrn2_update(const float *S, const float *k, const float *v,
                       int d, float g, float *Sout) {
     if (!S || !k || !v || !Sout || d <= 0) return 0;
-    if (g < 0.0f) g = 0.0f; if (g > 1.0f) g = 1.0f;
+    if (g < 0.0f) g = 0.0f;
+    if (g > 1.0f) g = 1.0f;
     float keep = 1.0f - g;
     memcpy(Sout, S, (size_t)d*d*sizeof(float));
     for (int i = 0; i < d*d; i++) Sout[i] = keep * Sout[i];
