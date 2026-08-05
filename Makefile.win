@@ -83,13 +83,16 @@ src/wubu_tokenizer_hf.o: src/wubu_tokenizer_hf.c include/wubu_tokenizer_hf.h
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-lfm2_test: tools/lfm2_test.c $(CORE_OBJ) src/wubu_lfm2.o src/wubu_tokenizer.o src/wubu_tokenizer_hf.o
-	$(CC) $(CFLAGS) -o $@ tools/lfm2_test.c src/wubu_lfm2.o $(CORE_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDLIBS)
+LFM2_OBJ = src/lfm2_math.o src/lfm2_conv.o src/lfm2_attn.o src/lfm2_ffn.o \
+  src/lfm2_load.o src/lfm2_forward.o
+
+lfm2_test: tools/lfm2_test.c $(CORE_OBJ) $(LFM2_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o
+	$(CC) $(CFLAGS) -o $@ tools/lfm2_test.c $(LFM2_OBJ) $(CORE_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDLIBS)
 	@echo "lfm2_test built"
 
-lfm2_gen: tools/lfm2_gen.c $(CORE_OBJ) src/wubu_lfm2.o src/wubu_tokenizer.o src/wubu_tokenizer_hf.o
-	$(CC) $(CFLAGS) -o $@ tools/lfm2_gen.c src/wubu_lfm2.o $(CORE_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDLIBS)
+lfm2_gen: tools/lfm2_gen.c $(CORE_OBJ) $(LFM2_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o
+	$(CC) $(CFLAGS) -o $@ tools/lfm2_gen.c $(LFM2_OBJ) $(CORE_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o $(LDLIBS)
 	@echo "lfm2_gen built"
 
 clean:
-	rm -f src/*.o gen_text_win lfm2_test lfm2_gen wubu_lfm2.o
+	rm -f src/*.o gen_text_win lfm2_test lfm2_gen $(LFM2_OBJ)
