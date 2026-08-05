@@ -482,6 +482,10 @@ test_kvfs: tools/test_kvfs.c src/wubu_kvfs.o
 	$(CC) $(CFLAGS) -o $@ tools/test_kvfs.c src/wubu_kvfs.o $(LDFLAGS)
 	./test_kvfs
 
+test_enc_h3: tools/test_enc_h3.c src/wubu_enc_h3.o src/wubu_rotate.o src/wubu_fp8.o src/wubu_nvfp4.o
+	$(CC) $(CFLAGS) -o $@ tools/test_enc_h3.c src/wubu_enc_h3.o src/wubu_rotate.o src/wubu_fp8.o src/wubu_nvfp4.o $(LDFLAGS)
+	./test_enc_h3
+
 test_kivi_roundtrip: tools/test_kivi_roundtrip.c src/wubu_kvcache_quant.o
 	$(CC) $(CFLAGS) -o test_kivi_roundtrip $< src/wubu_kvcache_quant.o $(LDFLAGS) -lm
 	./test_kivi_roundtrip
