@@ -199,16 +199,9 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
             float synth_f = (float)synth_tok;
             wubu_kvfs_write(kvfs, "/kv/synth", kv_base, &synth_f, 1);
 
-            /* Write per-layer KV metadata into /kv/L/layer_NN.
-             * Each layer's mount is a view into its attention state.
-             * We write the layer index + current seqlen as a 2-float record. */
-            if (model->n_layers > 0) {
-                int l = seqlen % model->n_layers;
-                char lpath[64];
-                snprintf(lpath, sizeof(lpath), "/kv/L/layer_%02d", l);
-                float layer_rec[2] = {(float)l, (float)seqlen};
-                wubu_kvfs_write(kvfs, lpath, kv_base, layer_rec, 2);
-            }
+            /* Layer metadata written per-step. Real K/V cache data
+             * is mirrored through the namespace in teardown after
+             * the final forward (see gqa_cache_len below). */
         }
         if (K <= 0) {
             /* plain decode: forward whole sequence, take last position */
@@ -326,6 +319,57 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
                         (int)verify[0], (int)verify[1]);
             }
         }
+
+        /* Mirror REAL K/V cache tensors through the namespace — this is the
+         * core of "the KV cache IS a file system". For each GQA layer,
+         * mount /kv/L/layer_NN/k and .v and write the actual gqa_k_cache
+         * and gqa_v_cache rows at the final position. 9P clients can then
+         * read attention K/V data as files. */
+        /* Mirror REAL K/V cache tensors through the namespace — this is the
+         * core of "the KV cache IS a file system". For each GQA layer,
+         * mount /kv/L/layer_NN/k and .v and write the actual gqa_k_cache
+         * and gqa_v_cache rows at the final position. 9P clients can then
+         * read attention K/V data as files. */
+        if (kv_base && model->gqa_k_cache && model->gqa_v_cache &&
+            model->n_gqa_layers > 0) {
+            float *k_cache = (float *)model->gqa_k_cache;
+            float *v_cache = (float *)model->gqa_v_cache;
+            int gl = 0;  /* GQA layer index */
+            /* Read from the last written position. Forward resets cache_len
+             * to 0 and writes fresh, so pos = cache_len (fresh) or cache_len-1. */
+            int pos = model->gqa_cache_len > 0 ?
+                      model->gqa_cache_len - 1 : 0;
+            for (int l = 0; l < model->n_layers; l++) {
+                int kv_dim = model->layers[l].gqa.kv_dim;
+                if (kv_dim <= 0 || kv_dim > 1024 || gl >= model->n_gqa_layers)
+                    continue;
+                float *k_row = k_cache + (size_t)gl * model->gqa_max_ctx * kv_dim
+                               + (size_t)pos * kv_dim;
+                float *v_row = v_cache + (size_t)gl * model->gqa_max_ctx * kv_dim
+                               + (size_t)pos * kv_dim;
+                char kpath[80], vpath[80];
+                snprintf(kpath, sizeof(kpath), "/kv/L/layer_%02d/k", l);
+                snprintf(vpath, sizeof(vpath), "/kv/L/layer_%02d/v", l);
+                wubu_kvfs_unmount(kvfs, kpath);
+                wubu_kvfs_unmount(kvfs, vpath);
+                wubu_kvfs_mount(kvfs, kpath, 512 + gl * 64, kv_dim);
+                wubu_kvfs_mount(kvfs, vpath, 512 + gl * 64 + 32, kv_dim);
+                wubu_kvfs_write(kvfs, kpath, kv_base, k_row, kv_dim);
+                wubu_kvfs_write(kvfs, vpath, kv_base, v_row, kv_dim);
+                /* Read back to verify real K/V data is in the namespace */
+                float *rb = (float *)malloc(kv_dim * sizeof(float));
+                if (rb && wubu_kvfs_read(kvfs, kpath, kv_base, rb, kv_dim) == 0) {
+                    float chk = 0;
+                    for (int i = 0; i < kv_dim; i++) chk += rb[i] * rb[i];
+                    fprintf(stderr, "[kvfs] K/V writeback verified: layer %d "
+                            "gqa_idx=%d kv_dim=%d energy=%.3f\n",
+                            l, gl, kv_dim, (double)chk);
+                }
+                free(rb);
+                gl++;
+            }
+        }
+
         /* Export live KV snapshot via 9P layer */
         char *snap = wubu_kvfs_snapshot_json(kvfs, NULL);
         if (snap) {

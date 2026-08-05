@@ -218,8 +218,18 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     for (int l = 0; l < nL; l++) {
         wubu_layer_t *ly = &m->layers[l];
         /* Hybrid: layer_types[l]==0 -> linear_attention (SSM+GQA),
-         *                    ==1 -> full_attention (GQA only, no SSM). */
-        bool ssm_layer = ad->is_hybrid ? (l < 256 && ad->layer_types[l] == 0) : true;
+         *                    ==1 -> full_attention (GQA only, no SSM).
+         * If is_hybrid is unset, probe for self_attn.q_proj to detect GQA. */
+        bool ssm_layer;
+        if (ad->is_hybrid && l < 256)
+            ssm_layer = (ad->layer_types[l] == 0);
+        else if (!ad->is_hybrid) {
+            char qn[256];
+            snprintf(qn, sizeof(qn),
+                     "model.language_model.layers.%d.self_attn.q_proj.weight", l);
+            ssm_layer = !wubu_shard_has(sc, qn);
+        } else
+            ssm_layer = true;
         ly->is_ssm = ssm_layer ? 1 : 0;
 
         /* ---- GQA (self_attn.*_proj) ----
@@ -268,7 +278,12 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
             ly->gqa.attn_v_weight_q = NULL; ly->gqa.attn_output_weight_q = NULL;
         } else {
             /* SSM layers: GQA fields stay NULL (use SSM for QKV). */
-            ly->gqa.q_heads = qh; ly->gqa.kv_heads = kvh; ly->gqa.head_dim = hd;
+            ly->gqa.q_heads = qh; ly->gqa.kv_heads = kvh;
+            ly->gqa.head_dim = hd;
+            /* kv_dim may be 0 if geometry is unusual; derive from k_proj shape */
+            ly->gqa.kv_dim = (kvdim > 0) ? kvdim : (qh > 0 ? qh * hd : 0);
+            ly->gqa.q_dim = (qdim > 0) ? qdim : (qh > 0 ? qh * hd : 0);
+            ly->gqa.out_dim = D;
         }
 
         /* ---- SSM (linear_attn.*) -> F32 path ----
@@ -407,8 +422,10 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
         tn(nm, sizeof(nm), "model.language_model.layers.%d.post_attention_layernorm.weight", l);
         ly->post_attn_norm_weight = wubu_shard_load_f32(sc, nm, &(int64_t){0}); /* [D] */
 
-        /* Per-layer GQA geometry the forward reads (kv_dim/q_dim/out_dim). */
-        ly->gqa.kv_dim = kvh * hd;
+        /* Per-layer GQA geometry the forward reads (kv_dim/q_dim/out_dim).
+         * For toy models where head_dim inference yields kvh=0, derive
+         * kv_dim directly from the k_proj tensor's output dimension. */
+        ly->gqa.kv_dim = (kvh > 0) ? (kvh * hd) : kvdim;
         ly->gqa.q_dim  = qh * hd;
         ly->gqa.out_dim = qh * hd;
         /* MoE is resident (dense nE=1 or routed): mark loaded so the FFN
@@ -456,12 +473,15 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
         if (mc_env) { int mc = atoi(mc_env); if (mc > 0) runtime_max_ctx = mc; }
     }
     int64_t total_cache_elems = 0;
+    int n_gqa = 0;
     for (int l = 0; l < nL; l++) {
         if (!m->layers[l].is_ssm) {
             int kv_dim = m->layers[l].gqa.kv_dim;
             total_cache_elems += (int64_t)runtime_max_ctx * kv_dim;
+            n_gqa++;
         }
     }
+    m->n_gqa_layers = n_gqa;
     // Auto-select KV precision (Roofline) for this model before sizing cache.
     {
         int ghd = 128, gnkv = 1;
