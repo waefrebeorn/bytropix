@@ -52,6 +52,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#include "wubu_banner.h"   /* UX: consistent banner + stats formatting */
 #include <fcntl.h>
 #include <ctype.h>
 #include "wubu_core_dumps.h"
@@ -109,16 +110,15 @@ static void handle_signal(int sig) {
  * ================================================================ */
 
 static void print_banner(void) {
+    wubu_print_banner("Local Inference API Server",
+                      "OpenAI-compatible · Research-only");
+    wubu_print_stat("Port", "%d", g_port);
+    wubu_print_stat("TLS", "%s", g_use_tls ? "yes" : "no");
+    wubu_print_stat("Sandbox", "%s", g_sandbox ? "yes" : "no");
+    wubu_print_stat("Model", "%s", g_model_path);
+    wubu_print_stat("Infer", "%s", g_infer_bin);
+    wubu_print_stat("Auth", "%s", g_auth_key[0] ? "enabled" : "none (open)");
     printf("\n");
-    printf("  ╔══════════════════════════════════════════════════════╗\n");
-    printf("  ║       wubuwizard Local Inference API Server          ║\n");
-    printf("  ║       EDUCATIONAL / RESEARCH USE ONLY              ║\n");
-    printf("  ╚══════════════════════════════════════════════════════╝\n");
-    printf("  Port: %d  |  TLS: %s  |  Sandbox: %s\n",
-           g_port, g_use_tls ? "yes" : "no", g_sandbox ? "yes" : "no");
-    printf("  Model: %s\n", g_model_path);
-    printf("  Infer: %s\n", g_infer_bin);
-    printf("  Auth:  %s\n\n", g_auth_key[0] ? "enabled" : "none (open)");
 }
 
 /* ================================================================

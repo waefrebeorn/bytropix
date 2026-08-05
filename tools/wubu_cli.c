@@ -15,6 +15,7 @@
 #include <string.h>
 #include "wubu.h"
 #include "wubu_tokenizer_hf.h"
+#include "wubu_banner.h"
 
 static const char *arg_get(int argc, char **argv, const char *name,
                            const char *def)
@@ -32,6 +33,8 @@ static int arg_int(int argc, char **argv, const char *name, int def)
 
 int main(int argc, char **argv)
 {
+    wubu_print_banner("CLI Runner — WuBu-35M", "Base model · byte-level BPE");
+
     const char *model_path = arg_get(argc, argv, "--model",
                                      "models/wubu/model.safetensors");
     const char *tok_path = arg_get(argc, argv, "--tok",
@@ -48,8 +51,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "wubu: failed to load the model\n");
         return 1;
     }
-    printf("wubu: parameters = %ld (the release: %d)\n",
-           wubu_parameter_count(&m), WUBU_PARAMS);
+    wubu_print_stat("Parameters", "%ld (release: %d)",
+                    wubu_parameter_count(&m), WUBU_PARAMS);
 
     printf("wubu: loading %s ...\n", tok_path);
     wubu_tok_hf_t *tok = wubu_tok_hf_load(tok_path);
@@ -58,7 +61,7 @@ int main(int argc, char **argv)
         wubu_free(&m, NULL);
         return 1;
     }
-    printf("wubu: vocab = %d\n", wubu_tok_hf_vocab_size(tok));
+    wubu_print_stat("Vocab", "%d", wubu_tok_hf_vocab_size(tok));
 
     int *ids = (int *)malloc(sizeof(int) * (WUBU_MAX_SEQ));
     int n_prompt = wubu_tok_hf_encode(tok, prompt, ids, WUBU_MAX_SEQ - 16);
@@ -83,14 +86,16 @@ int main(int argc, char **argv)
     printf("wubu: generating %d tokens (temp %.1f, seed %u) ...\n",
            max_new, temp, seed);
     size_t made = wubu_generate(&m, &b, gen, (size_t)n_prompt,
-                                 (size_t)max_new, temp, seed);
+                                (size_t)max_new, temp, seed);
 
     /* decode the full sequence */
     int *all = (int *)malloc(sizeof(int) * (n_prompt + (int)made));
     for (int i = 0; i < n_prompt + (int)made; i++) all[i] = gen[i];
     char *text = wubu_tok_hf_decode(tok, all, n_prompt + (int)made);
     if (text) {
-        printf("--- wubu output ---\n%s\n--------------------\n", text);
+        printf("\n");
+        wubu_print_section("Output");
+        printf("%s\n", text);
         free(text);
     } else {
         printf("wubu: (decode failed -- tokens %d)\n", n_prompt + (int)made);

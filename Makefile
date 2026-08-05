@@ -1,5 +1,6 @@
 CC = gcc
 CXX = g++
+WUBU_VERSION = 1.0.0
 # CUDA layout on this WSL2 box (2026-08-03, verified): the GPU is an
 # NVIDIA GeForce RTX 4050 Laptop (sm_89, 6GB) exposed via WSL /dev/dxg.
 # nvcc lives in the partial .run install at /usr/local/cuda-13.1/bin;
@@ -35,7 +36,7 @@ cuda_check:
 all: test_nested_ssm test_nested_ssm_backward load_model test_model test_cpu_timing test_model_adapter infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated test_chunked_ssm api_server test_st_bridge test_btl3_lora
 
 api_server: tools/api_server.c
-	$(CC) -O2 -g -Wall -I include -o $@ $< -lssl -lcrypto -lm
+	$(CC) -O2 -g -Wall -DWUBU_TOOL_VERSION=\"$(WUBU_VERSION)\" -I include -o $@ $< -lssl -lcrypto -lm
 
 # Object files
 CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ssm.o src/wubu_ssm_workspace.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o src/wubu_gemm.o src/wubu_kvcache_quant.o src/wubu_ssm_scan.o src/wubu_roofline.o src/wubu_kv_select.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o src/wubu_mem_budget.o src/wubu_prefix_cache.o src/wubu_paged_kv.o src/wubu_q4k_m.o src/wubu_delta_net.o src/wubu_scheduler.o src/wubu_ngram.o src/wubu_self_cascade.o src/wubu_spec_cascade.o src/wubu_spawn.o src/wubu_kv_styx.o src/wubu_kv_tier.o src/wubu_kvfs.o src/wubu_attn_gate.o src/wubu_layer_skip.o src/wubu_kv_adaptive.o src/wubu_awq.o src/wubu_gptq.o src/wubu_soa.o src/wubu_flash_prefill.o src/wubu_kv_cacheline.o src/wubu_rope_prefetch.o src/wubu_numerical_audit.o src/wubu_mla.o src/wubu_expert_choice.o src/wubu_chunked_prefill.o src/wubu_smt_check.o src/wubu_lmcache.o src/wubu_kernel.o src/wubu_kernel_backends.o src/wubu_fast_attn.o src/wubu_4kv.o src/wubu_polarquant.o src/wubu_eagle.o src/wubu_kv_evict.o src/wubu_thread_spec.o src/wubu_early_exit.o src/wubu_hwcaps.o src/wubu_tandem.o src/wubu_rambus.o src/wubu_gamebud.o src/wubu_fp8.o src/wubu_ecs.o src/wubu_nvfp4.o src/wubu_hadamard.o src/wubu_expert_allreduce.o src/wubu_equiv_check.o src/wubu_integrate.o src/wubu_capzero.o src/wubu_latency.o src/wubu_ctxvm.o src/wubu_safekern.o src/wubu_loopguard.o src/wubu_planediv.o src/wubu_coord.o src/wubu_metagame.o src/wubu_credit.o src/wubu_metagame2.o src/wubu_resource.o src/wubu_worldmodel.o src/wubu_agentauth.o src/wubu_vecsearch.o src/wubu_causal.o src/wubu_symbolic.o src/wubu_dgm.o src/wubu_tooluse.o src/wubu_synth.o src/wubu_evolve.o src/wubu_codeexec.o src/wubu_sandbox_safekern.o src/wubu_codesynth.o src/wubu_verify.o src/wubu_experibuf.o src/wubu_ewc.o src/wubu_taskbd.o src/wubu_distill.o src/wubu_imgenc.o src/wubu_audio.o src/wubu_mm_align.o src/wubu_mm_adapter.o src/wubu_mm_kv.o src/wubu_bft.o src/wubu_threshsig.o src/wubu_agentid.o src/wubu_semcons.o src/wubu_fraud.o src/wubu_symreg.o src/wubu_sindy.o src/wubu_cegis.o src/wubu_prover.o src/wubu_invariant.o src/wubu_gp.o src/wubu_acq.o src/wubu_bo.o src/wubu_uq.o src/wubu_active.o src/wubu_bandit.o src/wubu_reinforce.o src/wubu_policy.o src/wubu_actor_critic.o src/wubu_ppo.o src/wubu_dqn.o src/wubu_value.o src/wubu_specdec.o src/wubu_pagedkv.o src/wubu_moeroute.o src/wubu_contbatch.o src/wubu_medusa.o src/wubu_quantkv.o src/wubu_hashrouter.o src/wubu_dsa.o src/wubu_tensor_store.o src/wubu_mhc_mh.o src/wubu_mxfp4.o src/wubu_linear_attn.o src/wubu_enc_h3.o src/wubu_dsv4.o src/wubu_lfm.o src/wubu_megakernel.o src/wubu_multiteach.o src/wubu_dequant_fp4.o src/wubu_dequant_nf4.o
@@ -1271,8 +1272,8 @@ test_moe2: tools/test_moe2.c src/wubu_moe2.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
-wubu_cli: tools/wubu_cli.c src/wubu.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o gpu_wubu.o
-	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
+wubu_cli: tools/wubu_cli.c src/wubu.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o src/wubu_dequant_nf4.o gpu_wubu.o
+	$(CC) $(CFLAGS) -DWUBU_TOOL_VERSION=\"$(WUBU_VERSION)\" -I include -o $@ $^ -lm $(CUDA_LIBS)
 
 test_wubu: tools/test_wubu.c src/wubu.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
@@ -1570,7 +1571,7 @@ test_rope_t2: tools/test_rope_t2.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 gen_text: tools/gen_text.c $(CPU_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o src/wubu_kernel_cuda.o
-	$(CXX) $(CFLAGS) -DWUBU_ENABLE_CUDA -I include -o $@ $< $(CPU_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o src/wubu_kernel_cuda.o $(LDFLAGS) -L$(CUDA_LIBDIR) -lcudart -lstdc++
+	$(CXX) $(CFLAGS) -DWUBU_TOOL_VERSION=\"$(WUBU_VERSION)\" -DWUBU_ENABLE_CUDA -I include -o $@ $< $(CPU_OBJ) src/wubu_tokenizer.o src/wubu_tokenizer_hf.o src/wubu_kernel_cuda.o $(LDFLAGS) -L$(CUDA_LIBDIR) -lcudart -lstdc++
 
 # CPU-only gen_text (recompiles wubu_model + wubu_moe without GPU_SUPPORT)
 gen_text_cpu: CFLAGS_FILTERED = $(filter-out -I$(CUDA_INC),$(CFLAGS))

@@ -28,6 +28,7 @@
 #include "wubu_rambus.h"       /* HW-accel: RDRAM-interleaved KV */
 #include "wubu_tandem.h"       /* HW-accel: N64 RCP two-stage pipeline */
 #include "wubu_gamebud.h"      /* HW-accel: game frame-budget governor */
+#include "wubu_banner.h"       /* UX: consistent banner + stats formatting */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -207,6 +208,7 @@ static int init_model(wubu_model_t *mdl, const char *path) {
 }
 
 int main(int argc, char **argv) {
+    wubu_print_banner("Text Generation", "KV-FS namespace · Ref kernels · Spec decode");
 
     /* Initialize kernel dispatch table (registers CUDA backend if compiled in) */
     wubu_kernel_init();
@@ -316,7 +318,8 @@ int main(int argc, char **argv) {
         if (tf) { fclose(tf); hf_tok = wubu_tok_hf_load(hf_path); }
     }
     if (hf_tok) {
-        printf("Using HF tokenizer.json\n");
+        wubu_print_stat("Tokenizer", "HF tokenizer.json (%d tokens)",
+                        wubu_tok_hf_vocab_size(hf_tok));
         /* minimal wubu_tokenizer_t compatibility shim */
         tok.bos_id = wubu_tok_hf_bos_id(hf_tok);
         tok.eos_id = wubu_tok_hf_eos_id(hf_tok);
@@ -373,7 +376,7 @@ int main(int argc, char **argv) {
                           : wubu_tokenizer_encode(&tok, prompt, prompt_tokens, 1024);
         if (n_prompt <= 0) { prompt_tokens[0] = tok.bos_id >= 0 ? tok.bos_id : 248044; n_prompt = 1; }
     }
-    printf("Prompt: %d tokens\n", n_prompt);
+    printf("wubu: prompt = %d tokens\n", n_prompt);
 
     // Embeddings — OOM guard: only allocate embed buffer if NOT using chunked prefill.
     // Chunked prefill (wubu_model_forward_chunked) takes raw token_ids and does
@@ -594,7 +597,7 @@ int main(int argc, char **argv) {
 
     { char *ibuf = hf_tok ? wubu_tok_hf_decode(hf_tok, prompt_tokens, n_prompt)
                                 : NULL;
-      if (ibuf) { printf("Input: %s\n", ibuf); free(ibuf); } }
+      if (ibuf) { printf("wubu: input = %s\n", ibuf); free(ibuf); } }
 
     // Decode loop
     xrng_t rng = { { 0x9E3779B97F4A7C15ULL, 0xD1B54A32D192ED03ULL } };
@@ -628,10 +631,11 @@ int main(int argc, char **argv) {
         }
         fflush(stdout);
         free(spec_out);
-        printf("\n\n--- Stats ---\n");
-        printf("Prefill: %d tok in %.2fs (%.1f tok/s)\n", n_prompt, t_prefill, n_prompt / t_prefill);
+        printf("\n");
+        wubu_print_section("Stats");
+        wubu_print_stat("Prefill", "%d tok in %.2fs (%.1f tok/s)", n_prompt, t_prefill, n_prompt / t_prefill);
         if (generated > 0 && t_spec > 0)
-            printf("Decode:  %d tok in %.2fs (%.1f tok/s) [n-gram spec-k=%d]\n",
+            wubu_print_stat("Decode", "%d tok in %.2fs (%.1f tok/s) [n-gram spec-k=%d]",
                    generated, t_spec, generated / t_spec, cfg.spec_k);
         free(logits); free(embd);
         if (emb_file) fclose(emb_file);
@@ -669,10 +673,11 @@ int main(int argc, char **argv) {
                     if (piece) free(piece);
                 }
                 fflush(stdout);
-                printf("\n\n--- Stats ---\n");
-                printf("Prefill: %d tok in %.2fs (%.1f tok/s)\n", n_prompt, t_prefill, n_prompt / t_prefill);
+                printf("\n");
+                wubu_print_section("Stats");
+                wubu_print_stat("Prefill", "%d tok in %.2fs (%.1f tok/s)", n_prompt, t_prefill, n_prompt / t_prefill);
                 if (eagle_n > 0 && t_eagle > 0)
-                    printf("Decode:  %d tok in %.2fs (%.1f tok/s) [eagle-%dlayers]\n",
+                    wubu_print_stat("Decode", "%d tok in %.2fs (%.1f tok/s) [eagle-%dlayers]",
                            eagle_n, t_eagle, eagle_n / t_eagle, draft_layers);
                 free(eagle_out);
                 free(logits); free(embd);
@@ -744,18 +749,19 @@ int main(int argc, char **argv) {
     printf("\n");
 
     double t_total = clock_seconds() - t0;
-    printf("\n--- Stats ---\n");
-    printf("Prefill: %d tok in %.2fs (%.1f tok/s)\n", n_prompt, t_prefill, n_prompt / t_prefill);
+    printf("\n");
+    wubu_print_section("Stats");
+    wubu_print_stat("Prefill", "%d tok in %.2fs (%.1f tok/s)", n_prompt, t_prefill, n_prompt / t_prefill);
     double t_decode = t_total - t_prefill;
     if (generated > 0 && t_decode > 0)
-        printf("Decode:  %d tok in %.2fs (%.1f tok/s)\n", generated, t_decode, generated / t_decode);
+        wubu_print_stat("Decode", "%d tok in %.2fs (%.1f tok/s)", generated, t_decode, generated / t_decode);
 
     /* HW-accel stats */
     if (mdl.gamebud) {
         uint64_t gf = 0, go = 0, ga = 0, gp = 0, gt = 0;
         wubu_gamebud_stats((const wubu_gamebud_t *)mdl.gamebud,
                            &gf, &go, &ga, &gp, &gt);
-        printf("HW-accel: gamebud frames=%llu overruns=%llu avg=%.1fus peak=%.1fus\n",
+        wubu_print_stat("HW-accel", "gamebud frames=%llu overruns=%llu avg=%.1fus peak=%.1fus",
                (unsigned long long)gf, (unsigned long long)go,
                (double)ga, (double)gp);
     }
