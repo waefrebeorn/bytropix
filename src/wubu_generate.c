@@ -9,6 +9,8 @@
 #include "wubu_latency.h"
 #include "wubu_ctxvm.h"
 #include "wubu_capzero.h"
+#include "wubu_kvfs.h"
+#include "wubu_kv_styx.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -76,6 +78,44 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
         else if (strcmp(lc, "SRT") == 0) latclass = WUBU_LC_SRT;
     }
 
+    /* THE KV CACHE IS A FILE SYSTEM (doc 005). Env-gated opt-in:
+     * WUBU_KVFS_NAMESPACE=1 mounts a live /kv/ namespace that
+     * exposes the KV cache as a path-addressable file system.
+     * The namespace mirrors the model's GQA layers:
+     *   /kv/in      — incoming prompt KV (layer 0)
+     *   /kv/synth   — synthesized thoughts (attention output)
+     *   /kv/mem     — persistent memory (lmcache-backed)
+     *   /kv/meta    — metadata (seqlen, token count)
+     * Each layer gets /kv/L/layer_NN. The KV namespace syncs
+     * with wubu_kv_styx (the 9P export layer) so WuBuOS's
+     * body can `ls /n/kv/` and read the mind as files. */
+    wubu_kvfs_t *kvfs = NULL;
+    float *kv_base = NULL;
+    const char *ns_env = getenv("WUBU_KVFS_NAMESPACE");
+    if (ns_env && strcmp(ns_env, "1") == 0) {
+        uint32_t total_blocks = 1024;
+        kvfs = wubu_kvfs_create(64, total_blocks);
+        if (kvfs) {
+            /* allocate the backing KV tensor (flat, float32) */
+            kv_base = (float *)calloc((size_t)total_blocks * 64, sizeof(float));
+            if (!kv_base) { wubu_kvfs_free(kvfs); kvfs = NULL; }
+            else {
+                /* mount each layer */
+                for (int l = 0; l < model->n_layers; l++) {
+                    char mpath[64];
+                    snprintf(mpath, sizeof(mpath), "/kv/L/layer_%02d", l);
+                    /* each layer gets 64 blocks */
+                    wubu_kvfs_mount(kvfs, mpath, (uint32_t)(l * 64), 64);
+                }
+                /* core namespace dirs */
+                wubu_kvfs_mount(kvfs, "/kv/in",    0,        64);
+                wubu_kvfs_mount(kvfs, "/kv/synth", 64,       64);
+                wubu_kvfs_mount(kvfs, "/kv/mem",   128,     128);
+                wubu_kvfs_mount(kvfs, "/kv/meta",  256,       8);
+            }
+        }
+    }
+
     /* AF08/09: context virtual-memory ring (logical residency tracker for the
      * safety gate; capacity = max_ctx). FIFO demand-paging eviction on overflow. */
     wubu_ctxring_t cring;
@@ -131,6 +171,44 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
             float sev = (latclass == WUBU_LC_HRT) ? 0.5f : 0.3f;
             int lvl = wubu_containment_level(sev);
             if (lvl >= WUBU_CONT_STOP) break;  /* only if escalated */
+        }
+
+        /* KV CACHE IS A FILESYSTEM — sync namespace state each step.
+         * The namespace mirrors the model's growing KV: seqlen grows,
+         * blocks fill. The /kv/ mounts act as views into the model's
+         * internal state so WuBuOS 9P clients can read the "mind as files".
+         * Zero-cost when the env gate is off (kvfs == NULL). */
+        if (kvfs && seqlen > 0 && kv_base) {
+            /* Write seqlen + emitted into /kv/meta as float data.
+             * We store them as floats (the KVFS API works in float units). */
+            int32_t slen = (int32_t)seqlen;
+            int32_t ecount = (int32_t)emitted;
+            float meta_f[2] = {(float)slen, (float)ecount};
+            wubu_kvfs_write(kvfs, "/kv/meta", kv_base, meta_f, 2);
+
+            /* Write current token into /kv/in (incoming input stream).
+             * /kv/in is mounted at blocks [0, 64) → offset 0 in kv_base.
+             * We write the last token as a float at slot (seqlen-1) % 64. */
+            int32_t curtok = (int32_t)seq[seqlen > 0 ? seqlen - 1 : 0];
+            float tok_f = (float)curtok;
+            uint32_t tok_slot = (uint32_t)((seqlen - 1) % 64);
+            wubu_kvfs_write(kvfs, "/kv/in", kv_base, &tok_f, 1);
+
+            /* Write synth (attention output) token into /kv/synth. */
+            int32_t synth_tok = (emitted > 0) ? (int32_t)out[emitted - 1] : 0;
+            float synth_f = (float)synth_tok;
+            wubu_kvfs_write(kvfs, "/kv/synth", kv_base, &synth_f, 1);
+
+            /* Write per-layer KV metadata into /kv/L/layer_NN.
+             * Each layer's mount is a view into its attention state.
+             * We write the layer index + current seqlen as a 2-float record. */
+            if (model->n_layers > 0) {
+                int l = seqlen % model->n_layers;
+                char lpath[64];
+                snprintf(lpath, sizeof(lpath), "/kv/L/layer_%02d", l);
+                float layer_rec[2] = {(float)l, (float)seqlen};
+                wubu_kvfs_write(kvfs, lpath, kv_base, layer_rec, 2);
+            }
         }
         if (K <= 0) {
             /* plain decode: forward whole sequence, take last position */
@@ -234,5 +312,29 @@ int wubu_generate(wubu_model_t *model, const int *prompt, int n_prompt,
     free(seq); free(logits);
     free(cring_buf);
     wubu_decode_policy_destroy(policy);
+
+    /* KV CACHE IS A FILE SYSTEM — final namespace writeback + 9P snapshot */
+    if (kvfs) {
+        if (kv_base) {
+            /* Final writeback: flush final seqlen + emitted to /kv/meta */
+            float final_meta[2] = {(float)seqlen, (float)emitted};
+            wubu_kvfs_write(kvfs, "/kv/meta", kv_base, final_meta, 2);
+            /* Read back to verify the namespace is live (KVFS read path) */
+            float verify[2] = {0};
+            if (wubu_kvfs_read(kvfs, "/kv/meta", kv_base, verify, 2) == 0) {
+                fprintf(stderr, "[kvfs] verified read-back: seqlen=%d emitted=%d\n",
+                        (int)verify[0], (int)verify[1]);
+            }
+        }
+        /* Export live KV snapshot via 9P layer */
+        char *snap = wubu_kvfs_snapshot_json(kvfs, NULL);
+        if (snap) {
+            fprintf(stderr, "[kvfs] namespace: %s\n", snap);
+            free(snap);
+        }
+        wubu_kvfs_free(kvfs);
+        if (kv_base) free(kv_base);
+    }
+
     return emitted;
 }

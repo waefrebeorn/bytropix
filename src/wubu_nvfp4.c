@@ -22,6 +22,7 @@ uint8_t wubu_nvfp4_from_f32(float x) {
 }
 
 float wubu_nvfp4_to_f32(uint8_t b) {
+    if (b == 0) return 0.0f;
     int sign = (b & 0x8) ? -1 : 1;
     int exp = (b >> 1) & 0x3;
     int mant = b & 0x1;
