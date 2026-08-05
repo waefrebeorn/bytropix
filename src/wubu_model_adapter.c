@@ -240,7 +240,15 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
         return true;
     }
 
-    // Dense Qwen-family (Qwen3.6 / Agents-A1)
+    // Dense Qwen-family (Qwen3.6, Agents-A1)
+    // LFM2.5: model_type "lfm2" with hybrid layer_types (conv + full_attention)
+    if (mt && memmem(buf, (size_t)(end - buf), "lfm2", 4)) {
+        out->arch = WUBU_ARCH_LFM25;
+        out->is_hybrid = true;       // LFM2.5 mixes conv + full_attention layers
+        out->ok = true;
+        free(buf);
+        return true;
+    }
     out->arch = WUBU_ARCH_QWEN_FAMILY;
     out->ok = true;
     free(buf);
@@ -329,6 +337,25 @@ bool wubu_adapter_resolve_name(wubu_adapter_t *out, const char *name) {
         out->ok = true;
         return true;
     }
+    /* LFM2.5: 2.6B dense hybrid Mamba2 (conv + full_attention) */
+    if (strstr(n, "LFM2.5") || strstr(n, "lfm2.5") || strstr(n, "Lfm2")) {
+        out->arch = WUBU_ARCH_LFM25;
+        out->is_hybrid = true;
+        out->d_model = 2048;        /* from config */
+        out->n_layers = 30;
+        out->d_ff = 10752;
+        out->gqa_q_heads = 32;
+        out->gqa_kv_heads = 8;
+        out->gqa_head_dim = 64;     /* 2048 / 32 */
+        out->rope_theta = 1e7f;     /* 10M rope_theta */
+        out->vocab_size = 128000;
+        out->ssm_d_state = 128;     /* Mamba2 state */
+        out->ssm_conv_kernel = 4;   /* LFM2 conv kernel */
+        out->conv_dim = 2048;       /* block_dim */
+        out->shared_expert_ff = 10752;
+        out->ok = true;
+        return true;
+    }
     return false;
 }
 
@@ -364,6 +391,7 @@ const char *wubu_arch_name(wubu_arch_t a) {
         case WUBU_ARCH_KAT_MOE:       return "KAT-Coder MoE";
         case WUBU_ARCH_BTL3_LORA:    return "BTL-3 LoRA";
         case WUBU_ARCH_DEEPSEEK_V4_MOE: return "DeepSeek-V4-Flash MoE";
-        default:                      return "unknown";
+        case WUBU_ARCH_LFM25:           return "Liquid AI LFM2.5 (hybrid Mamba2)";
+        default:                        return "unknown";
     }
 }

@@ -30,7 +30,8 @@ typedef enum {
     WUBU_ARCH_QWEN_FAMILY,      // generic Qwen-family dense
     WUBU_ARCH_KAT_MOE,          // KAT-Coder MoE on Qwen3.6
     WUBU_ARCH_BTL3_LORA,        // BTL-3 LoRA-on-Qwen3.6-27B
-    WUBU_ARCH_DEEPSEEK_V4_MOE   // DeepSeek-V4-Flash: 284B MXFP4 MoE + MLA
+    WUBU_ARCH_DEEPSEEK_V4_MOE,  // DeepSeek-V4-Flash: 284B MXFP4 MoE + MLA
+    WUBU_ARCH_LFM25              // Liquid AI LFM2.5: dense Mamba2 hybrid (2.6B)
 } wubu_arch_t;
 
 typedef struct {
@@ -54,6 +55,7 @@ typedef struct {
     int   ssm_k_heads;       // linear_num_key_heads (16)
     int   ssm_value_head_dim;// linear_value_head_dim (128)
     int   ssm_conv_kernel;   // linear_conv_kernel_dim (4)
+    int   conv_dim;           // block_dim (LFM2.5: 2048)
     int   ssm_d_state;       // SSM_D_STATE (128)
     int   shared_expert_ff;  // shared_expert_intermediate_size (512)
     int   full_attention_interval; // hybrid: every Nth layer is full_attention
