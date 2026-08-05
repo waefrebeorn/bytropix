@@ -125,48 +125,34 @@ void wubu_h3_norm_apply(const wubu_h3_norm_t *ctx,
     long out_dim = ctx->out_dim;
 
     if (ctx->nf4) {
-        /* NF4 path: dequantize one row of gate/up weights, then matmul.
+        /* NF4 path: dequantize one row of gate/up weights at a time, then matmul.
          * NF4 packs 2 elements per byte; row bytes = ceil(in_dim / 2). */
         long row_bytes = (in_dim + 1) / 2;
-        const uint8_t *gw = (const uint8_t *)(ctx->gate_raw + (size_t)0 * row_bytes);
-        const uint8_t *uw = (const uint8_t *)(ctx->up_raw + (size_t)0 * row_bytes);
+        /* Workspace: one dequantized row of size in_dim. */
+        float *wk = (float *)malloc((size_t)in_dim * sizeof(float));
+        if (!wk) return;
 
-        /* Dequant full rows (all out_dim rows dequantized for simplicity;
-         * production code would dequant per-row in the matmul loop). */
-        {
-            /* Dequant gate row 0 and up row 0 — but we need all rows.
-             * For now, dequant all out_dim rows into buf_gate/buf_up. */
-            /* This is O(out_dim * in_dim) which is the matmul cost — acceptable. */
-            /* Actually, we need to dequant the ENTIRE weight matrix (out_dim x in_dim),
-             * not just one row. So we need to allocate enough space. */
-            /* Fix: allocate per-row dequant workspace inside the matmul loop. */
-            float *wk = (float *)malloc((size_t)in_dim * sizeof(float));
-            if (!wk) return;
+        for (long o = 0; o < out_dim; o++) {
+            /* Dequant gate row o */
+            const uint8_t *grow = ctx->gate_raw + (size_t)o * row_bytes;
+            nf4_dequantize_row(grow, wk, ctx->gate_scale, in_dim);
+            /* Compute gate[o] = W_gate[o] · x + b_gate[o] */
+            float g = 0.0f;
+            for (long i = 0; i < in_dim; i++) g += wk[i] * x[i];
+            if (ctx->gate_b) g += ctx->gate_b[o];
+            ctx->buf_x[o] = g;
 
-            for (long o = 0; o < out_dim; o++) {
-                /* Dequant gate row o */
-                const uint8_t *grow = ctx->gate_raw + (size_t)o * row_bytes;
-                nf4_dequantize_row(grow, wk, ctx->gate_scale, in_dim);
-
-                /* Compute gate[o] = W_gate[o] · x + b_gate[o] */
-                float g = 0.0f;
-                for (long i = 0; i < in_dim; i++) g += wk[i] * x[i];
-                if (ctx->gate_b) g += ctx->gate_b[o];
-                ctx->buf_x[o] = g;
-
-                /* Dequant up row o */
-                const uint8_t *urow = ctx->up_raw + (size_t)o * row_bytes;
-                nf4_dequantize_row(urow, wk, ctx->up_scale, in_dim);
-
-                /* Compute up[o] = W_up[o] · x + b_up[o] */
-                float u = 0.0f;
-                for (long i = 0; i < in_dim; i++) u += wk[i] * x[i];
-                if (ctx->up_b) u += ctx->up_b[o];
-                ctx->buf_gate[o] = g;
-                ctx->buf_up[o]   = u;
-            }
-            free(wk);
+            /* Dequant up row o */
+            const uint8_t *urow = ctx->up_raw + (size_t)o * row_bytes;
+            nf4_dequantize_row(urow, wk, ctx->up_scale, in_dim);
+            /* Compute up[o] = W_up[o] · x + b_up[o] */
+            float u = 0.0f;
+            for (long i = 0; i < in_dim; i++) u += wk[i] * x[i];
+            if (ctx->up_b) u += ctx->up_b[o];
+            ctx->buf_gate[o] = g;
+            ctx->buf_up[o]   = u;
         }
+        free(wk);
     } else {
         /* F32 path: direct matrix-vector multiply. */
         for (long o = 0; o < out_dim; o++) {
