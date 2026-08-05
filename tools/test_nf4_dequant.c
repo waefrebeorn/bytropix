@@ -52,7 +52,7 @@ int main(void) {
      */
     printf("--- Test 1: All 16 NF4 codes, scale=1.0 ---\n");
     unsigned char codes[8] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
-    float out[16];
+    float out[32];  /* large enough for all tests including odd-count (17) */
     nf4_dequantize_row(codes, out, 1.0f, 16);
     for (int i = 0; i < 16; i++) {
         char name[64];
