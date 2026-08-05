@@ -38,6 +38,11 @@ typedef struct {
     int gqa_kv_heads; /* attention kv heads (GQA)          */
     int gqa_head_dim; /* attention head dim                */
     int gqa_kv_dim;   /* kv_heads * head_dim               */
+    /* MLA (Multi-Latent Attention, DeepSeek-V2/V4): latent compression */
+    int q_lora_rank;   /* Q down-projection rank          */
+    int kv_lora_rank;  /* KV down-projection rank         */
+    int rope_head_dim; /* RoPE dimension per head         */
+    int head_dim_full; /* head_dim + rope_head_dim (MLA K) */
 } wubu_dims_t;
 
 /* The single active dimension set. The loader calls wubu_dims_set() right
@@ -101,5 +106,10 @@ void wubu_dims_default(void);
 #define GQA_KV_HEADS  WUBU_DIMS.gqa_kv_heads
 #define GQA_HEAD_DIM  WUBU_DIMS.gqa_head_dim
 #define GQA_KV_DIM    WUBU_DIMS.gqa_kv_dim
+/* MLA (Multi-Latent Attention) dims */
+#define Q_LORA_RANK   WUBU_DIMS.q_lora_rank
+#define KV_LORA_RANK  WUBU_DIMS.kv_lora_rank
+#define ROPE_HEAD_DIM WUBU_DIMS.rope_head_dim
+#define HEAD_DIM_FULL (WUBU_DIMS.head_dim_full)
 
 #endif /* WUBU_DIMS_H */

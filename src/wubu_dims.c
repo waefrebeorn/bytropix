@@ -29,6 +29,11 @@ void wubu_dims_finalize(wubu_dims_t *d) {
     }
     if (d->gqa_kv_heads > 0 && d->gqa_head_dim > 0)
         d->gqa_kv_dim = d->gqa_kv_heads * d->gqa_head_dim;
+    /* MLA derived: head_dim_full = head_dim + rope_head_dim */
+    if (d->rope_head_dim > 0 && d->gqa_head_dim > 0)
+        d->head_dim_full = d->gqa_head_dim + d->rope_head_dim;
+    else if (d->gqa_head_dim > 0)
+        d->head_dim_full = d->gqa_head_dim * 2; /* fallback: no RoPE split */
 }
 
 void wubu_dims_default(void) {
@@ -47,6 +52,11 @@ void wubu_dims_default(void) {
     d.conv_dim = d.key_dim * 2 + (d.ssm_d_state * d.ssm_v_heads); /* 8192 */
     d.gqa_kv_dim = d.gqa_kv_heads * d.gqa_head_dim;       /* 512  */
     d.value_dim = d.ssm_d_state * d.ssm_v_heads;          /* 4096 */
+    /* MLA defaults (DeepSeek-V2 style: q_lora=1536, kv_lora=512, rope=64) */
+    d.q_lora_rank = 1536;
+    d.kv_lora_rank = 512;
+    d.rope_head_dim = 64;
+    d.head_dim_full = d.gqa_head_dim + 64;
     WUBU_DIMS = d;
     wubu_dims_sync_gpu();
 }

@@ -232,6 +232,15 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
                 : out->d_ff;
             /* DeepSeek V4 MLA attention: Q uses latent dim, KV uses grouped-decomp */
             out->is_hybrid = false;  /* MLA is not SSM+GQA hybrid */
+            /* DeepSeek V4 MLA dimensions from config */
+            out->q_lora_rank = (int)find_int(buf, end, "q_lora_rank", 0);
+            out->kv_lora_rank = (int)find_int(buf, end, "kv_lora_rank", 0);
+            out->rope_head_dim = (int)find_int(buf, end, "rope_head_dim", 0);
+            /* DeepSeek V4 Flash specific defaults (if not in config) */
+            if (!out->q_lora_rank)   out->q_lora_rank = 1536;
+            if (!out->kv_lora_rank)  out->kv_lora_rank = 512;
+            if (!out->rope_head_dim) out->rope_head_dim = 64;
+            out->head_dim_full = out->gqa_head_dim + out->rope_head_dim;
         } else {
             out->arch = WUBU_ARCH_KAT_MOE;
         }
@@ -334,6 +343,11 @@ bool wubu_adapter_resolve_name(wubu_adapter_t *out, const char *name) {
         out->rope_theta = 1e8f;  /* 100M rope_theta for MLA */
         out->vocab_size = 129280;
         out->partial_rotary_factor = 0.5f;
+        /* DeepSeek V4 Flash MLA defaults */
+        out->q_lora_rank = 1536;
+        out->kv_lora_rank = 512;
+        out->rope_head_dim = 64;
+        out->head_dim_full = 128 + 64;  /* q_heads=128, rope=64, head_dim=128 */
         out->ok = true;
         return true;
     }

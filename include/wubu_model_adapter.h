@@ -57,6 +57,11 @@ typedef struct {
     int   ssm_conv_kernel;   // linear_conv_kernel_dim (4)
     int   conv_dim;           // block_dim (LFM2.5: 2048)
     int   ssm_d_state;       // SSM_D_STATE (128)
+    /* MLA (Multi-Latent Attention, DeepSeek-V2/V4) */
+    int   q_lora_rank;      // Q down-projection rank (e.g. 1536)
+    int   kv_lora_rank;     // KV down-projection rank (e.g. 512)
+    int   rope_head_dim;    // RoPE dimension per head (e.g. 64)
+    int   head_dim_full;    // head_dim + rope_head_dim (full K for attention)
     int   shared_expert_ff;  // shared_expert_intermediate_size (512)
     int   full_attention_interval; // hybrid: every Nth layer is full_attention
     bool  attn_output_gate;  // attn_output_gate (true for both)
