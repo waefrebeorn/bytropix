@@ -47,6 +47,11 @@ static int test_one(const char *path, const char *label,
     f += check("fa_interval",    a.full_attention_interval, fa_int);
     f += check("is_moe",         a.is_moe ? 1 : 0, is_moe);
     f += check("is_hybrid",      a.is_hybrid ? 1 : 0, is_hybrid);
+    /* If DeepSeek V4, print MLA dims */
+    if (a.arch == WUBU_ARCH_DEEPSEEK_V4_MOE) {
+        printf("  MLA dims: q_lora=%d, kv_lora=%d, rope_head_dim=%d, head_dim_full=%d\n",
+               a.q_lora_rank, a.kv_lora_rank, a.rope_head_dim, a.head_dim_full);
+    }
     /* hybrid layer_types: every fa_interval-th layer must be full_attention */
     if (is_hybrid && a.full_attention_interval > 0) {
         int bad = 0;
@@ -84,6 +89,26 @@ int main(void) {
     } else {
         fails += test_one(path, "Qwen3.6-27B",
             5120, 64, 0, 0, 16, 48, 128, 4, 0, 4, 0, 1);
+    }
+
+    /* DeepSeek-V4-Flash: 284B MoE, MLA attention, 129280 vocab */
+    snprintf(path, sizeof(path), "%s/DeepSeek-V4-Flash-0731-GGUF/config.json", md);
+    if (!exists(path)) {
+        printf("=== DeepSeek-V4-Flash ===\n  SKIP: config absent at %s (download pending)\n", path);
+        skipped++;
+    } else {
+        fails += test_one(path, "DeepSeek-V4-Flash",
+            7168, 43, 256, 6, 0, 0, 0, 4, 18432, 0, 1, 0);
+    }
+
+    /* LFM2.5: 2.6B dense hybrid Mamba2 */
+    snprintf(path, sizeof(path), "%s/LFM2.5-2.6B/config.json", md);
+    if (!exists(path)) {
+        printf("=== LFM2.5-2.6B ===\n  SKIP: config absent at %s (download pending)\n", path);
+        skipped++;
+    } else {
+        fails += test_one(path, "LFM2.5-2.6B",
+            2048, 30, 0, 0, 0, 0, 0, 4, 10752, 0, 0, 1);
     }
 
     if (fails) { printf("\nFAIL: %d checks wrong (%d skipped)\n", fails, skipped); return 1; }
