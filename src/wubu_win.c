@@ -93,13 +93,8 @@ void *wubu_mmap(void *addr, size_t len, int prot, int flags, int fd, long off) {
 int wubu_munmap(void *addr, size_t len) {
     (void)len;
     if (!addr) return -1;
-    /* anonymous? */
-    unsigned *pfx = (unsigned *)((char *)addr - sizeof(WUBU_MM_MAGIC));
-    if (*pfx == WUBU_MM_MAGIC) {
-        VirtualFree(pfx, 0, MEM_RELEASE);
-        return 0;
-    }
-    /* file-backed: find in table */
+    /* File-backed: find in table FIRST. For file maps `addr` is the raw
+     * view base (no magic prefix), so we must NOT deref memory before it. */
     mm_lock();
     wubu_mm_node **pp = &g_mm_used;
     while (*pp) {
@@ -117,6 +112,12 @@ int wubu_munmap(void *addr, size_t len) {
         pp = &(*pp)->next;
     }
     mm_unlock();
+    /* Not file-backed: must be an anonymous allocation with a magic prefix. */
+    unsigned *pfx = (unsigned *)((char *)addr - sizeof(WUBU_MM_MAGIC));
+    if (*pfx == WUBU_MM_MAGIC) {
+        VirtualFree(pfx, 0, MEM_RELEASE);
+        return 0;
+    }
     return -1;
 }
 
