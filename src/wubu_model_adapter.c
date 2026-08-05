@@ -16,6 +16,9 @@
 #include <sys/stat.h>
 #include <stdio.h>
 
+/* memmem() is provided by wubu_win.h (force-included on Win32 builds)
+ * or by glibc <string.h> (Linux builds). No fallback needed here. */
+
 /* ---- minimal JSON scalar reader (matches "key" : value) ---- */
 static const char *find_str(const char *p, const char *end, const char *key) {
     size_t klen = strlen(key);
