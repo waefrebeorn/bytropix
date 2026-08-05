@@ -30,7 +30,7 @@ extern "C" {
 #define D_MODEL         WUBU_DIMS.d_model   // runtime; was DEF_D_MODEL (2048)
 
 // MoE weights for one layer (dimensions now dynamic from model)
-typedef struct {
+typedef struct moe_weights_t {
     // Router
     float *ffn_gate_inp;      // [D_MODEL, N_EXPERTS] — router weight
     
