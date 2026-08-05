@@ -81,3 +81,31 @@
 #
 # All modules follow C11 discipline: opaque structs, minimal includes,
 # no god headers, self-contained, WUBU_ prefix, triple-DA test.
+#
+# STATUS: ALL 5 PORTS COMPLETE + RUNNING (verified 2026-08-05)
+#
+#  1. wubu_enc_h3.c  — MiniMax H3 encoder kernel   -> test_enc_h3:  ALL PASSED
+#  2. wubu_dsv4.c    — DeepSeek-V4 hybrid layer    -> test_dsv4:    ALL PASSED
+#  3. wubu_lfm.c     — LFM2.5 hybrid attention     -> test_lfm:     ALL PASSED
+#  4. wubu_megakernel.c — Photon 2.0 fused decode  -> test_megakernel: ALL PASSED
+#  5. Moondream      — already in-tree             -> test_moondream: ALL PASSED
+#
+# KVFS live through the model forward (env-gated, WUBU_KVFS_NAMESPACE=1):
+#   $ env WUBU_SPEC_DECODE=1 WUBU_KVFS_NAMESPACE=1 ./gen_text fixture_model.safetensors "test" 4
+#   [kvfs] verified read-back: seqlen=6 emitted=4
+#   [kvfs] namespace: {"block_size":64,"total_blocks":1024,"used_blocks":392,
+#     "registered":6,"mounts":[{"/kv/L/layer_00"},{"/kv/L/layer_01"},
+#     {"/kv/in"},{"/kv/synth"},{"/kv/mem"},{"/kv/meta"}]}
+#   Decode: 4 tok [n-gram spec-k=3]
+#
+# The KV cache IS a file system — verified live: the generate loop wrote
+# seqlen/emitted into /kv/meta, per-layer records into /kv/L/layer_NN, and
+# read them back through the KVFS read path. The namespace snapshot exports
+# the 9P view for WuBuOS clients. 392/1024 blocks used after 6 tokens.
+#
+# Bug fixes along the way:
+#  - wubu_nvfp4_to_f32: zero code now decodes to 0.0 (was 0.5)
+#  - wubu_enc_h3 dequant: nibble read order matched to block_quantize
+#  - wubu_dsv4 MXFP4 pack: uses wubu_mxfp4_pack directly (OCP scale-at-end)
+#  - test tolerances account for Hadamard amplification (sqrt(P) worst case)
+#
