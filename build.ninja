@@ -1,0 +1,512 @@
+ninja_required_version = 1.5
+cc = gcc
+cxx = g++
+cflags = -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -fopenmp
+
+build src/wubu_model.o: cc src/wubu_model.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_model.o src/wubu_model.c
+
+build src/wubu_dims.o: cc src/wubu_dims.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -c src/wubu_dims.c -o src/wubu_dims.o
+
+build src/wubu_ssm.o: cc src/wubu_ssm.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_ssm.o src/wubu_ssm.c
+
+build src/wubu_ssm_workspace.o: cc src/wubu_ssm_workspace.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ssm_workspace.o src/wubu_ssm_workspace.c
+
+build src/wubu_ssm_chunked.o: cc src/wubu_ssm_chunked.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_ssm_chunked.o src/wubu_ssm_chunked.c
+
+build src/wubu_mobius.o: cc src/wubu_mobius.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_mobius.o src/wubu_mobius.c
+
+build src/wubu_nested_ssm.o: cc src/wubu_nested_ssm.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_nested_ssm.o src/wubu_nested_ssm.c
+
+build src/wubu_nested_ssm_backward.o: cc src/wubu_nested_ssm_backward.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_nested_ssm_backward.o src/wubu_nested_ssm_backward.c
+
+build src/wubu_moe.o: cc src/wubu_moe.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_moe.o src/wubu_moe.c
+
+build src/wubu_moe_backward.o: cc src/wubu_moe_backward.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_moe_backward.o src/wubu_moe_backward.c
+
+build src/wubu_moe_hyperbolic.o: cc src/wubu_moe_hyperbolic.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_moe_hyperbolic.o src/wubu_moe_hyperbolic.c
+
+build src/wubu_poincare_ssm_backward.o: cc src/wubu_poincare_ssm_backward.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_poincare_ssm_backward.o src/wubu_poincare_ssm_backward.c
+
+build src/wubu_poincare_gqa.o: cc src/wubu_poincare_gqa.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_poincare_gqa.o src/wubu_poincare_gqa.c
+
+build src/wubu_poincare_gqa_backward.o: cc src/wubu_poincare_gqa_backward.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_poincare_gqa_backward.o src/wubu_poincare_gqa_backward.c
+
+build src/wubu_mobius_linear.o: cc src/wubu_mobius_linear.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_mobius_linear.o src/wubu_mobius_linear.c
+
+build src/wubu_hyperbolic_output_proj.o: cc src/wubu_hyperbolic_output_proj.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_hyperbolic_output_proj.o src/wubu_hyperbolic_output_proj.c
+
+build src/wubu_vision.o: cc src/wubu_vision.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_vision.o src/wubu_vision.c
+
+build src/gguf_reader.o: cc src/gguf_reader.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/gguf_reader.o src/gguf_reader.c
+
+build src/qlearner.o: cc src/qlearner.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/qlearner.o src/qlearner.c
+
+build src/rsgd.o: cc src/rsgd.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/rsgd.o src/rsgd.c
+
+build src/wubu_tst.o: cc src/wubu_tst.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_tst.o src/wubu_tst.c
+
+build src/dequant_iq2_xxs.o: cc src/dequant_iq2_xxs.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/dequant_iq2_xxs.o src/dequant_iq2_xxs.c
+
+build src/quantized_matmul.o: cc src/quantized_matmul.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/quantized_matmul.o src/quantized_matmul.c
+
+build src/quantized_dot_generic.o: cc src/quantized_dot_generic.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/quantized_dot_generic.o src/quantized_dot_generic.c
+
+build src/safetensors_reader.o: cc src/safetensors_reader.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/safetensors_reader.o src/safetensors_reader.c
+
+build src/wubu_repetition.o: cc src/wubu_repetition.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_repetition.o src/wubu_repetition.c
+
+build src/wubu_lora.o: cc src/wubu_lora.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_lora.o src/wubu_lora.c
+
+build src/wubu_model_adapter.o: cc src/wubu_model_adapter.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_model_adapter.o src/wubu_model_adapter.c
+
+build src/wubu_model_safetensors_bridge.o: cc src/wubu_model_safetensors_bridge.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_model_safetensors_bridge.o src/wubu_model_safetensors_bridge.c
+
+build src/wubu_safetensors_shard.o: cc src/wubu_safetensors_shard.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_safetensors_shard.o src/wubu_safetensors_shard.c
+
+build src/wubu_ssd_moe.o: cc src/wubu_ssd_moe.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_ssd_moe.o src/wubu_ssd_moe.c
+
+build src/wubu_gemm.o: cc src/wubu_gemm.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gemm.o src/wubu_gemm.c
+
+build src/wubu_kvcache_quant.o: cc src/wubu_kvcache_quant.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kvcache_quant.o src/wubu_kvcache_quant.c
+
+build src/wubu_ssm_scan.o: cc src/wubu_ssm_scan.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ssm_scan.o src/wubu_ssm_scan.c
+
+build src/wubu_roofline.o: cc src/wubu_roofline.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_roofline.o src/wubu_roofline.c
+
+build src/wubu_kv_select.o: cc src/wubu_kv_select.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_select.o src/wubu_kv_select.c
+
+build src/wubu_kv_runtime.o: cc src/wubu_kv_runtime.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_kv_runtime.o src/wubu_kv_runtime.c
+
+build src/wubu_gemv_tune.o: cc src/wubu_gemv_tune.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gemv_tune.o src/wubu_gemv_tune.c
+
+build src/wubu_affinity.o: cc src/wubu_affinity.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_affinity.o src/wubu_affinity.c
+
+build src/wubu_rotate.o: cc src/wubu_rotate.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_rotate.o src/wubu_rotate.c
+
+build src/wubu_flashdecode.o: cc src/wubu_flashdecode.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_flashdecode.o src/wubu_flashdecode.c
+
+build src/wubu_kvvq.o: cc src/wubu_kvvq.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kvvq.o src/wubu_kvvq.c
+
+build src/wubu_spec_decode.o: cc src/wubu_spec_decode.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_spec_decode.o src/wubu_spec_decode.c
+
+build src/wubu_generate.o: cc src/wubu_generate.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_generate.o src/wubu_generate.c
+
+build src/wubu_ternary.o: cc src/wubu_ternary.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_ternary.o src/wubu_ternary.c
+
+build src/wubu_smoothquant.o: cc src/wubu_smoothquant.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_smoothquant.o src/wubu_smoothquant.c
+
+build src/wubu_arena.o: cc src/wubu_arena.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_arena.o src/wubu_arena.c
+
+build src/wubu_mem_budget.o: cc src/wubu_mem_budget.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_mem_budget.o src/wubu_mem_budget.c
+
+build src/wubu_prefix_cache.o: cc src/wubu_prefix_cache.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -c -o src/wubu_prefix_cache.o src/wubu_prefix_cache.c
+
+build src/wubu_paged_kv.o: cc src/wubu_paged_kv.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_paged_kv.o src/wubu_paged_kv.c
+
+build src/wubu_q4k_m.o: cc src/wubu_q4k_m.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_q4k_m.o src/wubu_q4k_m.c
+
+build src/wubu_delta_net.o: cc src/wubu_delta_net.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_delta_net.o src/wubu_delta_net.c
+
+build src/wubu_scheduler.o: cc src/wubu_scheduler.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_scheduler.o src/wubu_scheduler.c
+
+build src/wubu_ngram.o: cc src/wubu_ngram.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_ngram.o src/wubu_ngram.c
+
+build src/wubu_self_cascade.o: cc src/wubu_self_cascade.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_self_cascade.o src/wubu_self_cascade.c
+
+build src/wubu_spec_cascade.o: cc src/wubu_spec_cascade.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_spec_cascade.o src/wubu_spec_cascade.c
+
+build src/wubu_spawn.o: cc src/wubu_spawn.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_spawn.o src/wubu_spawn.c
+
+build src/wubu_kv_styx.o: cc src/wubu_kv_styx.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_styx.o src/wubu_kv_styx.c
+
+build src/wubu_kv_tier.o: cc src/wubu_kv_tier.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -c -o src/wubu_kv_tier.o src/wubu_kv_tier.c
+
+build src/wubu_kvfs.o: cc src/wubu_kvfs.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kvfs.o src/wubu_kvfs.c
+
+build src/wubu_attn_gate.o: cc src/wubu_attn_gate.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_attn_gate.o src/wubu_attn_gate.c
+
+build src/wubu_layer_skip.o: cc src/wubu_layer_skip.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_layer_skip.o src/wubu_layer_skip.c
+
+build src/wubu_kv_adaptive.o: cc src/wubu_kv_adaptive.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_adaptive.o src/wubu_kv_adaptive.c
+
+build src/wubu_awq.o: cc src/wubu_awq.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_awq.o src/wubu_awq.c
+
+build src/wubu_gptq.o: cc src/wubu_gptq.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gptq.o src/wubu_gptq.c
+
+build src/wubu_soa.o: cc src/wubu_soa.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_soa.o src/wubu_soa.c
+
+build src/wubu_flash_prefill.o: cc src/wubu_flash_prefill.c
+  command = gcc -O3 -march=native -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -c -o src/wubu_flash_prefill.o src/wubu_flash_prefill.c
+
+build src/wubu_kv_cacheline.o: cc src/wubu_kv_cacheline.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_cacheline.o src/wubu_kv_cacheline.c
+
+build src/wubu_rope_prefetch.o: cc src/wubu_rope_prefetch.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_rope_prefetch.o src/wubu_rope_prefetch.c
+
+build src/wubu_numerical_audit.o: cc src/wubu_numerical_audit.c
+  command = gcc -O3 -march=native -funroll-loops -Wall -Wextra -Wno-unused-parameter -I include -c -o src/wubu_numerical_audit.o src/wubu_numerical_audit.c
+
+build src/wubu_mla.o: cc src/wubu_mla.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mla.o src/wubu_mla.c
+
+build src/wubu_expert_choice.o: cc src/wubu_expert_choice.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_expert_choice.o src/wubu_expert_choice.c
+
+build src/wubu_chunked_prefill.o: cc src/wubu_chunked_prefill.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_chunked_prefill.o src/wubu_chunked_prefill.c
+
+build src/wubu_smt_check.o: cc src/wubu_smt_check.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_smt_check.o src/wubu_smt_check.c
+
+build src/wubu_lmcache.o: cc src/wubu_lmcache.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_lmcache.o src/wubu_lmcache.c
+
+build src/wubu_kernel.o: cc src/wubu_kernel.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kernel.o src/wubu_kernel.c
+
+build src/wubu_kernel_backends.o: cc src/wubu_kernel_backends.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_kernel_backends.o src/wubu_kernel_backends.c
+
+build src/wubu_fast_attn.o: cc src/wubu_fast_attn.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -fopenmp -I include -c -o src/wubu_fast_attn.o src/wubu_fast_attn.c
+
+build src/wubu_4kv.o: cc src/wubu_4kv.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_4kv.o src/wubu_4kv.c
+
+build src/wubu_polarquant.o: cc src/wubu_polarquant.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_polarquant.o src/wubu_polarquant.c
+
+build src/wubu_eagle.o: cc src/wubu_eagle.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_eagle.o src/wubu_eagle.c
+
+build src/wubu_kv_evict.o: cc src/wubu_kv_evict.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_evict.o src/wubu_kv_evict.c
+
+build src/wubu_thread_spec.o: cc src/wubu_thread_spec.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_thread_spec.o src/wubu_thread_spec.c
+
+build src/wubu_early_exit.o: cc src/wubu_early_exit.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_early_exit.o src/wubu_early_exit.c
+
+build src/wubu_hwcaps.o: cc src/wubu_hwcaps.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_hwcaps.o src/wubu_hwcaps.c
+
+build src/wubu_tandem.o: cc src/wubu_tandem.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_tandem.o src/wubu_tandem.c
+
+build src/wubu_rambus.o: cc src/wubu_rambus.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_rambus.o src/wubu_rambus.c
+
+build src/wubu_gamebud.o: cc src/wubu_gamebud.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gamebud.o src/wubu_gamebud.c
+
+build src/wubu_fp8.o: cc src/wubu_fp8.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_fp8.o src/wubu_fp8.c
+
+build src/wubu_ecs.o: cc src/wubu_ecs.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ecs.o src/wubu_ecs.c
+
+build src/wubu_nvfp4.o: cc src/wubu_nvfp4.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_nvfp4.o src/wubu_nvfp4.c
+
+build src/wubu_hadamard.o: cc src/wubu_hadamard.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_hadamard.o src/wubu_hadamard.c
+
+build src/wubu_expert_allreduce.o: cc src/wubu_expert_allreduce.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_expert_allreduce.o src/wubu_expert_allreduce.c
+
+build src/wubu_equiv_check.o: cc src/wubu_equiv_check.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_equiv_check.o src/wubu_equiv_check.c
+
+build src/wubu_integrate.o: cc src/wubu_integrate.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_integrate.o src/wubu_integrate.c
+
+build src/wubu_capzero.o: cc src/wubu_capzero.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_capzero.o src/wubu_capzero.c
+
+build src/wubu_latency.o: cc src/wubu_latency.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_latency.o src/wubu_latency.c
+
+build src/wubu_ctxvm.o: cc src/wubu_ctxvm.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_ctxvm.o src/wubu_ctxvm.c
+
+build src/wubu_safekern.o: cc src/wubu_safekern.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_safekern.o src/wubu_safekern.c
+
+build src/wubu_loopguard.o: cc src/wubu_loopguard.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_loopguard.o src/wubu_loopguard.c
+
+build src/wubu_planediv.o: cc src/wubu_planediv.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_planediv.o src/wubu_planediv.c
+
+build src/wubu_coord.o: cc src/wubu_coord.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_coord.o src/wubu_coord.c
+
+build src/wubu_metagame.o: cc src/wubu_metagame.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_metagame.o src/wubu_metagame.c
+
+build src/wubu_credit.o: cc src/wubu_credit.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_credit.o src/wubu_credit.c
+
+build src/wubu_metagame2.o: cc src/wubu_metagame2.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_metagame2.o src/wubu_metagame2.c
+
+build src/wubu_resource.o: cc src/wubu_resource.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_resource.o src/wubu_resource.c
+
+build src/wubu_worldmodel.o: cc src/wubu_worldmodel.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_worldmodel.o src/wubu_worldmodel.c
+
+build src/wubu_agentauth.o: cc src/wubu_agentauth.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_agentauth.o src/wubu_agentauth.c
+
+build src/wubu_vecsearch.o: cc src/wubu_vecsearch.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_vecsearch.o src/wubu_vecsearch.c
+
+build src/wubu_causal.o: cc src/wubu_causal.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_causal.o src/wubu_causal.c
+
+build src/wubu_symbolic.o: cc src/wubu_symbolic.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_symbolic.o src/wubu_symbolic.c
+
+build src/wubu_dgm.o: cc src/wubu_dgm.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dgm.o src/wubu_dgm.c
+
+build src/wubu_tooluse.o: cc src/wubu_tooluse.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_tooluse.o src/wubu_tooluse.c
+
+build src/wubu_synth.o: cc src/wubu_synth.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_synth.o src/wubu_synth.c
+
+build src/wubu_evolve.o: cc src/wubu_evolve.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_evolve.o src/wubu_evolve.c
+
+build src/wubu_codeexec.o: cc src/wubu_codeexec.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_codeexec.o src/wubu_codeexec.c
+
+build src/wubu_sandbox_safekern.o: cc src/wubu_sandbox_safekern.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_sandbox_safekern.o src/wubu_sandbox_safekern.c
+
+build src/wubu_codesynth.o: cc src/wubu_codesynth.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_codesynth.o src/wubu_codesynth.c
+
+build src/wubu_verify.o: cc src/wubu_verify.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_verify.o src/wubu_verify.c
+
+build src/wubu_experibuf.o: cc src/wubu_experibuf.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_experibuf.o src/wubu_experibuf.c
+
+build src/wubu_ewc.o: cc src/wubu_ewc.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ewc.o src/wubu_ewc.c
+
+build src/wubu_taskbd.o: cc src/wubu_taskbd.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_taskbd.o src/wubu_taskbd.c
+
+build src/wubu_distill.o: cc src/wubu_distill.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_distill.o src/wubu_distill.c
+
+build src/wubu_imgenc.o: cc src/wubu_imgenc.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_imgenc.o src/wubu_imgenc.c
+
+build src/wubu_audio.o: cc src/wubu_audio.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_audio.o src/wubu_audio.c
+
+build src/wubu_mm_align.o: cc src/wubu_mm_align.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mm_align.o src/wubu_mm_align.c
+
+build src/wubu_mm_adapter.o: cc src/wubu_mm_adapter.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mm_adapter.o src/wubu_mm_adapter.c
+
+build src/wubu_mm_kv.o: cc src/wubu_mm_kv.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mm_kv.o src/wubu_mm_kv.c
+
+build src/wubu_bft.o: cc src/wubu_bft.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_bft.o src/wubu_bft.c
+
+build src/wubu_threshsig.o: cc src/wubu_threshsig.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_threshsig.o src/wubu_threshsig.c
+
+build src/wubu_agentid.o: cc src/wubu_agentid.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_agentid.o src/wubu_agentid.c
+
+build src/wubu_semcons.o: cc src/wubu_semcons.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_semcons.o src/wubu_semcons.c
+
+build src/wubu_fraud.o: cc src/wubu_fraud.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_fraud.o src/wubu_fraud.c
+
+build src/wubu_symreg.o: cc src/wubu_symreg.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_symreg.o src/wubu_symreg.c
+
+build src/wubu_sindy.o: cc src/wubu_sindy.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_sindy.o src/wubu_sindy.c
+
+build src/wubu_cegis.o: cc src/wubu_cegis.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_cegis.o src/wubu_cegis.c
+
+build src/wubu_prover.o: cc src/wubu_prover.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_prover.o src/wubu_prover.c
+
+build src/wubu_invariant.o: cc src/wubu_invariant.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_invariant.o src/wubu_invariant.c
+
+build src/wubu_gp.o: cc src/wubu_gp.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gp.o src/wubu_gp.c
+
+build src/wubu_acq.o: cc src/wubu_acq.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_acq.o src/wubu_acq.c
+
+build src/wubu_bo.o: cc src/wubu_bo.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_bo.o src/wubu_bo.c
+
+build src/wubu_uq.o: cc src/wubu_uq.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_uq.o src/wubu_uq.c
+
+build src/wubu_active.o: cc src/wubu_active.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_active.o src/wubu_active.c
+
+build src/wubu_bandit.o: cc src/wubu_bandit.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_bandit.o src/wubu_bandit.c
+
+build src/wubu_reinforce.o: cc src/wubu_reinforce.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_reinforce.o src/wubu_reinforce.c
+
+build src/wubu_policy.o: cc src/wubu_policy.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_policy.o src/wubu_policy.c
+
+build src/wubu_actor_critic.o: cc src/wubu_actor_critic.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_actor_critic.o src/wubu_actor_critic.c
+
+build src/wubu_ppo.o: cc src/wubu_ppo.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ppo.o src/wubu_ppo.c
+
+build src/wubu_dqn.o: cc src/wubu_dqn.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dqn.o src/wubu_dqn.c
+
+build src/wubu_value.o: cc src/wubu_value.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_value.o src/wubu_value.c
+
+build src/wubu_specdec.o: cc src/wubu_specdec.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_specdec.o src/wubu_specdec.c
+
+build src/wubu_pagedkv.o: cc src/wubu_pagedkv.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_pagedkv.o src/wubu_pagedkv.c
+
+build src/wubu_moeroute.o: cc src/wubu_moeroute.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_moeroute.o src/wubu_moeroute.c
+
+build src/wubu_contbatch.o: cc src/wubu_contbatch.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_contbatch.o src/wubu_contbatch.c
+
+build src/wubu_medusa.o: cc src/wubu_medusa.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_medusa.o src/wubu_medusa.c
+
+build src/wubu_quantkv.o: cc src/wubu_quantkv.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_quantkv.o src/wubu_quantkv.c
+
+build src/wubu_hashrouter.o: cc src/wubu_hashrouter.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_hashrouter.o src/wubu_hashrouter.c
+
+build src/wubu_dsa.o: cc src/wubu_dsa.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dsa.o src/wubu_dsa.c
+
+build src/wubu_tensor_store.o: cc src/wubu_tensor_store.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_tensor_store.o src/wubu_tensor_store.c
+
+build src/wubu_mhc_mh.o: cc src/wubu_mhc_mh.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mhc_mh.o src/wubu_mhc_mh.c
+
+build src/wubu_mxfp4.o: cc src/wubu_mxfp4.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mxfp4.o src/wubu_mxfp4.c
+
+build src/wubu_linear_attn.o: cc src/wubu_linear_attn.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_linear_attn.o src/wubu_linear_attn.c
+
+build src/wubu_enc_h3.o: cc src/wubu_enc_h3.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_enc_h3.o src/wubu_enc_h3.c
+
+build src/wubu_dsv4.o: cc src/wubu_dsv4.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dsv4.o src/wubu_dsv4.c
+
+build src/wubu_lfm.o: cc src/wubu_lfm.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_lfm.o src/wubu_lfm.c
+
+build src/wubu_megakernel.o: cc src/wubu_megakernel.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_megakernel.o src/wubu_megakernel.c
+
+build src/wubu_multiteach.o: cc src/wubu_multiteach.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_multiteach.o src/wubu_multiteach.c
+
+build src/wubu_dequant_fp4.o: cc src/wubu_dequant_fp4.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dequant_fp4.o src/wubu_dequant_fp4.c
+
+build src/wubu_dequant_nf4.o: cc src/wubu_dequant_nf4.c
+  command = gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dequant_nf4.o src/wubu_dequant_nf4.c
+

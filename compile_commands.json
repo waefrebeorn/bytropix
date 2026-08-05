@@ -1,0 +1,1016 @@
+[
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_model.o src/wubu_model.c",
+    "file": "src/wubu_model.c",
+    "output": "src/wubu_model.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -c src/wubu_dims.c -o src/wubu_dims.o",
+    "file": "src/wubu_dims.c",
+    "output": "src/wubu_dims.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_ssm.o src/wubu_ssm.c",
+    "file": "src/wubu_ssm.c",
+    "output": "src/wubu_ssm.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ssm_workspace.o src/wubu_ssm_workspace.c",
+    "file": "src/wubu_ssm_workspace.c",
+    "output": "src/wubu_ssm_workspace.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_ssm_chunked.o src/wubu_ssm_chunked.c",
+    "file": "src/wubu_ssm_chunked.c",
+    "output": "src/wubu_ssm_chunked.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_mobius.o src/wubu_mobius.c",
+    "file": "src/wubu_mobius.c",
+    "output": "src/wubu_mobius.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_nested_ssm.o src/wubu_nested_ssm.c",
+    "file": "src/wubu_nested_ssm.c",
+    "output": "src/wubu_nested_ssm.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_nested_ssm_backward.o src/wubu_nested_ssm_backward.c",
+    "file": "src/wubu_nested_ssm_backward.c",
+    "output": "src/wubu_nested_ssm_backward.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_moe.o src/wubu_moe.c",
+    "file": "src/wubu_moe.c",
+    "output": "src/wubu_moe.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_moe_backward.o src/wubu_moe_backward.c",
+    "file": "src/wubu_moe_backward.c",
+    "output": "src/wubu_moe_backward.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_moe_hyperbolic.o src/wubu_moe_hyperbolic.c",
+    "file": "src/wubu_moe_hyperbolic.c",
+    "output": "src/wubu_moe_hyperbolic.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_poincare_ssm_backward.o src/wubu_poincare_ssm_backward.c",
+    "file": "src/wubu_poincare_ssm_backward.c",
+    "output": "src/wubu_poincare_ssm_backward.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_poincare_gqa.o src/wubu_poincare_gqa.c",
+    "file": "src/wubu_poincare_gqa.c",
+    "output": "src/wubu_poincare_gqa.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_poincare_gqa_backward.o src/wubu_poincare_gqa_backward.c",
+    "file": "src/wubu_poincare_gqa_backward.c",
+    "output": "src/wubu_poincare_gqa_backward.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_mobius_linear.o src/wubu_mobius_linear.c",
+    "file": "src/wubu_mobius_linear.c",
+    "output": "src/wubu_mobius_linear.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_hyperbolic_output_proj.o src/wubu_hyperbolic_output_proj.c",
+    "file": "src/wubu_hyperbolic_output_proj.c",
+    "output": "src/wubu_hyperbolic_output_proj.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_vision.o src/wubu_vision.c",
+    "file": "src/wubu_vision.c",
+    "output": "src/wubu_vision.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/gguf_reader.o src/gguf_reader.c",
+    "file": "src/gguf_reader.c",
+    "output": "src/gguf_reader.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/qlearner.o src/qlearner.c",
+    "file": "src/qlearner.c",
+    "output": "src/qlearner.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/rsgd.o src/rsgd.c",
+    "file": "src/rsgd.c",
+    "output": "src/rsgd.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_tst.o src/wubu_tst.c",
+    "file": "src/wubu_tst.c",
+    "output": "src/wubu_tst.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/dequant_iq2_xxs.o src/dequant_iq2_xxs.c",
+    "file": "src/dequant_iq2_xxs.c",
+    "output": "src/dequant_iq2_xxs.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/quantized_matmul.o src/quantized_matmul.c",
+    "file": "src/quantized_matmul.c",
+    "output": "src/quantized_matmul.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/quantized_dot_generic.o src/quantized_dot_generic.c",
+    "file": "src/quantized_dot_generic.c",
+    "output": "src/quantized_dot_generic.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/safetensors_reader.o src/safetensors_reader.c",
+    "file": "src/safetensors_reader.c",
+    "output": "src/safetensors_reader.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_repetition.o src/wubu_repetition.c",
+    "file": "src/wubu_repetition.c",
+    "output": "src/wubu_repetition.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_lora.o src/wubu_lora.c",
+    "file": "src/wubu_lora.c",
+    "output": "src/wubu_lora.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_model_adapter.o src/wubu_model_adapter.c",
+    "file": "src/wubu_model_adapter.c",
+    "output": "src/wubu_model_adapter.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_model_safetensors_bridge.o src/wubu_model_safetensors_bridge.c",
+    "file": "src/wubu_model_safetensors_bridge.c",
+    "output": "src/wubu_model_safetensors_bridge.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_safetensors_shard.o src/wubu_safetensors_shard.c",
+    "file": "src/wubu_safetensors_shard.c",
+    "output": "src/wubu_safetensors_shard.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_ssd_moe.o src/wubu_ssd_moe.c",
+    "file": "src/wubu_ssd_moe.c",
+    "output": "src/wubu_ssd_moe.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gemm.o src/wubu_gemm.c",
+    "file": "src/wubu_gemm.c",
+    "output": "src/wubu_gemm.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kvcache_quant.o src/wubu_kvcache_quant.c",
+    "file": "src/wubu_kvcache_quant.c",
+    "output": "src/wubu_kvcache_quant.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ssm_scan.o src/wubu_ssm_scan.c",
+    "file": "src/wubu_ssm_scan.c",
+    "output": "src/wubu_ssm_scan.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_roofline.o src/wubu_roofline.c",
+    "file": "src/wubu_roofline.c",
+    "output": "src/wubu_roofline.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_select.o src/wubu_kv_select.c",
+    "file": "src/wubu_kv_select.c",
+    "output": "src/wubu_kv_select.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_kv_runtime.o src/wubu_kv_runtime.c",
+    "file": "src/wubu_kv_runtime.c",
+    "output": "src/wubu_kv_runtime.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gemv_tune.o src/wubu_gemv_tune.c",
+    "file": "src/wubu_gemv_tune.c",
+    "output": "src/wubu_gemv_tune.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_affinity.o src/wubu_affinity.c",
+    "file": "src/wubu_affinity.c",
+    "output": "src/wubu_affinity.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_rotate.o src/wubu_rotate.c",
+    "file": "src/wubu_rotate.c",
+    "output": "src/wubu_rotate.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_flashdecode.o src/wubu_flashdecode.c",
+    "file": "src/wubu_flashdecode.c",
+    "output": "src/wubu_flashdecode.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kvvq.o src/wubu_kvvq.c",
+    "file": "src/wubu_kvvq.c",
+    "output": "src/wubu_kvvq.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_spec_decode.o src/wubu_spec_decode.c",
+    "file": "src/wubu_spec_decode.c",
+    "output": "src/wubu_spec_decode.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_generate.o src/wubu_generate.c",
+    "file": "src/wubu_generate.c",
+    "output": "src/wubu_generate.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_ternary.o src/wubu_ternary.c",
+    "file": "src/wubu_ternary.c",
+    "output": "src/wubu_ternary.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_smoothquant.o src/wubu_smoothquant.c",
+    "file": "src/wubu_smoothquant.c",
+    "output": "src/wubu_smoothquant.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_arena.o src/wubu_arena.c",
+    "file": "src/wubu_arena.c",
+    "output": "src/wubu_arena.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_mem_budget.o src/wubu_mem_budget.c",
+    "file": "src/wubu_mem_budget.c",
+    "output": "src/wubu_mem_budget.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -c -o src/wubu_prefix_cache.o src/wubu_prefix_cache.c",
+    "file": "src/wubu_prefix_cache.c",
+    "output": "src/wubu_prefix_cache.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_paged_kv.o src/wubu_paged_kv.c",
+    "file": "src/wubu_paged_kv.c",
+    "output": "src/wubu_paged_kv.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_q4k_m.o src/wubu_q4k_m.c",
+    "file": "src/wubu_q4k_m.c",
+    "output": "src/wubu_q4k_m.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_delta_net.o src/wubu_delta_net.c",
+    "file": "src/wubu_delta_net.c",
+    "output": "src/wubu_delta_net.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_scheduler.o src/wubu_scheduler.c",
+    "file": "src/wubu_scheduler.c",
+    "output": "src/wubu_scheduler.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_ngram.o src/wubu_ngram.c",
+    "file": "src/wubu_ngram.c",
+    "output": "src/wubu_ngram.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_self_cascade.o src/wubu_self_cascade.c",
+    "file": "src/wubu_self_cascade.c",
+    "output": "src/wubu_self_cascade.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_spec_cascade.o src/wubu_spec_cascade.c",
+    "file": "src/wubu_spec_cascade.c",
+    "output": "src/wubu_spec_cascade.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_spawn.o src/wubu_spawn.c",
+    "file": "src/wubu_spawn.c",
+    "output": "src/wubu_spawn.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_styx.o src/wubu_kv_styx.c",
+    "file": "src/wubu_kv_styx.c",
+    "output": "src/wubu_kv_styx.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -c -o src/wubu_kv_tier.o src/wubu_kv_tier.c",
+    "file": "src/wubu_kv_tier.c",
+    "output": "src/wubu_kv_tier.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kvfs.o src/wubu_kvfs.c",
+    "file": "src/wubu_kvfs.c",
+    "output": "src/wubu_kvfs.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_attn_gate.o src/wubu_attn_gate.c",
+    "file": "src/wubu_attn_gate.c",
+    "output": "src/wubu_attn_gate.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_layer_skip.o src/wubu_layer_skip.c",
+    "file": "src/wubu_layer_skip.c",
+    "output": "src/wubu_layer_skip.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_adaptive.o src/wubu_kv_adaptive.c",
+    "file": "src/wubu_kv_adaptive.c",
+    "output": "src/wubu_kv_adaptive.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_awq.o src/wubu_awq.c",
+    "file": "src/wubu_awq.c",
+    "output": "src/wubu_awq.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gptq.o src/wubu_gptq.c",
+    "file": "src/wubu_gptq.c",
+    "output": "src/wubu_gptq.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_soa.o src/wubu_soa.c",
+    "file": "src/wubu_soa.c",
+    "output": "src/wubu_soa.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -c -o src/wubu_flash_prefill.o src/wubu_flash_prefill.c",
+    "file": "src/wubu_flash_prefill.c",
+    "output": "src/wubu_flash_prefill.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_cacheline.o src/wubu_kv_cacheline.c",
+    "file": "src/wubu_kv_cacheline.c",
+    "output": "src/wubu_kv_cacheline.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_rope_prefetch.o src/wubu_rope_prefetch.c",
+    "file": "src/wubu_rope_prefetch.c",
+    "output": "src/wubu_rope_prefetch.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -funroll-loops -Wall -Wextra -Wno-unused-parameter -I include -c -o src/wubu_numerical_audit.o src/wubu_numerical_audit.c",
+    "file": "src/wubu_numerical_audit.c",
+    "output": "src/wubu_numerical_audit.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mla.o src/wubu_mla.c",
+    "file": "src/wubu_mla.c",
+    "output": "src/wubu_mla.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_expert_choice.o src/wubu_expert_choice.c",
+    "file": "src/wubu_expert_choice.c",
+    "output": "src/wubu_expert_choice.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_chunked_prefill.o src/wubu_chunked_prefill.c",
+    "file": "src/wubu_chunked_prefill.c",
+    "output": "src/wubu_chunked_prefill.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_smt_check.o src/wubu_smt_check.c",
+    "file": "src/wubu_smt_check.c",
+    "output": "src/wubu_smt_check.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_lmcache.o src/wubu_lmcache.c",
+    "file": "src/wubu_lmcache.c",
+    "output": "src/wubu_lmcache.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kernel.o src/wubu_kernel.c",
+    "file": "src/wubu_kernel.c",
+    "output": "src/wubu_kernel.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -DWUBU_ENABLE_CUDA -c -o src/wubu_kernel_backends.o src/wubu_kernel_backends.c",
+    "file": "src/wubu_kernel_backends.c",
+    "output": "src/wubu_kernel_backends.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -fopenmp -I include -c -o src/wubu_fast_attn.o src/wubu_fast_attn.c",
+    "file": "src/wubu_fast_attn.c",
+    "output": "src/wubu_fast_attn.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_4kv.o src/wubu_4kv.c",
+    "file": "src/wubu_4kv.c",
+    "output": "src/wubu_4kv.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_polarquant.o src/wubu_polarquant.c",
+    "file": "src/wubu_polarquant.c",
+    "output": "src/wubu_polarquant.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_eagle.o src/wubu_eagle.c",
+    "file": "src/wubu_eagle.c",
+    "output": "src/wubu_eagle.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_kv_evict.o src/wubu_kv_evict.c",
+    "file": "src/wubu_kv_evict.c",
+    "output": "src/wubu_kv_evict.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_thread_spec.o src/wubu_thread_spec.c",
+    "file": "src/wubu_thread_spec.c",
+    "output": "src/wubu_thread_spec.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_early_exit.o src/wubu_early_exit.c",
+    "file": "src/wubu_early_exit.c",
+    "output": "src/wubu_early_exit.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_hwcaps.o src/wubu_hwcaps.c",
+    "file": "src/wubu_hwcaps.c",
+    "output": "src/wubu_hwcaps.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_tandem.o src/wubu_tandem.c",
+    "file": "src/wubu_tandem.c",
+    "output": "src/wubu_tandem.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_rambus.o src/wubu_rambus.c",
+    "file": "src/wubu_rambus.c",
+    "output": "src/wubu_rambus.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gamebud.o src/wubu_gamebud.c",
+    "file": "src/wubu_gamebud.c",
+    "output": "src/wubu_gamebud.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_fp8.o src/wubu_fp8.c",
+    "file": "src/wubu_fp8.c",
+    "output": "src/wubu_fp8.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ecs.o src/wubu_ecs.c",
+    "file": "src/wubu_ecs.c",
+    "output": "src/wubu_ecs.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_nvfp4.o src/wubu_nvfp4.c",
+    "file": "src/wubu_nvfp4.c",
+    "output": "src/wubu_nvfp4.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_hadamard.o src/wubu_hadamard.c",
+    "file": "src/wubu_hadamard.c",
+    "output": "src/wubu_hadamard.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_expert_allreduce.o src/wubu_expert_allreduce.c",
+    "file": "src/wubu_expert_allreduce.c",
+    "output": "src/wubu_expert_allreduce.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_equiv_check.o src/wubu_equiv_check.c",
+    "file": "src/wubu_equiv_check.c",
+    "output": "src/wubu_equiv_check.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_integrate.o src/wubu_integrate.c",
+    "file": "src/wubu_integrate.c",
+    "output": "src/wubu_integrate.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_capzero.o src/wubu_capzero.c",
+    "file": "src/wubu_capzero.c",
+    "output": "src/wubu_capzero.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_latency.o src/wubu_latency.c",
+    "file": "src/wubu_latency.c",
+    "output": "src/wubu_latency.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_ctxvm.o src/wubu_ctxvm.c",
+    "file": "src/wubu_ctxvm.c",
+    "output": "src/wubu_ctxvm.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_safekern.o src/wubu_safekern.c",
+    "file": "src/wubu_safekern.c",
+    "output": "src/wubu_safekern.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_loopguard.o src/wubu_loopguard.c",
+    "file": "src/wubu_loopguard.c",
+    "output": "src/wubu_loopguard.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_planediv.o src/wubu_planediv.c",
+    "file": "src/wubu_planediv.c",
+    "output": "src/wubu_planediv.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_coord.o src/wubu_coord.c",
+    "file": "src/wubu_coord.c",
+    "output": "src/wubu_coord.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_metagame.o src/wubu_metagame.c",
+    "file": "src/wubu_metagame.c",
+    "output": "src/wubu_metagame.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_credit.o src/wubu_credit.c",
+    "file": "src/wubu_credit.c",
+    "output": "src/wubu_credit.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_metagame2.o src/wubu_metagame2.c",
+    "file": "src/wubu_metagame2.c",
+    "output": "src/wubu_metagame2.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_resource.o src/wubu_resource.c",
+    "file": "src/wubu_resource.c",
+    "output": "src/wubu_resource.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_worldmodel.o src/wubu_worldmodel.c",
+    "file": "src/wubu_worldmodel.c",
+    "output": "src/wubu_worldmodel.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_agentauth.o src/wubu_agentauth.c",
+    "file": "src/wubu_agentauth.c",
+    "output": "src/wubu_agentauth.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_vecsearch.o src/wubu_vecsearch.c",
+    "file": "src/wubu_vecsearch.c",
+    "output": "src/wubu_vecsearch.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_causal.o src/wubu_causal.c",
+    "file": "src/wubu_causal.c",
+    "output": "src/wubu_causal.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_symbolic.o src/wubu_symbolic.c",
+    "file": "src/wubu_symbolic.c",
+    "output": "src/wubu_symbolic.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dgm.o src/wubu_dgm.c",
+    "file": "src/wubu_dgm.c",
+    "output": "src/wubu_dgm.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_tooluse.o src/wubu_tooluse.c",
+    "file": "src/wubu_tooluse.c",
+    "output": "src/wubu_tooluse.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_synth.o src/wubu_synth.c",
+    "file": "src/wubu_synth.c",
+    "output": "src/wubu_synth.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_evolve.o src/wubu_evolve.c",
+    "file": "src/wubu_evolve.c",
+    "output": "src/wubu_evolve.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_codeexec.o src/wubu_codeexec.c",
+    "file": "src/wubu_codeexec.c",
+    "output": "src/wubu_codeexec.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_sandbox_safekern.o src/wubu_sandbox_safekern.c",
+    "file": "src/wubu_sandbox_safekern.c",
+    "output": "src/wubu_sandbox_safekern.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_codesynth.o src/wubu_codesynth.c",
+    "file": "src/wubu_codesynth.c",
+    "output": "src/wubu_codesynth.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_verify.o src/wubu_verify.c",
+    "file": "src/wubu_verify.c",
+    "output": "src/wubu_verify.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_experibuf.o src/wubu_experibuf.c",
+    "file": "src/wubu_experibuf.c",
+    "output": "src/wubu_experibuf.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ewc.o src/wubu_ewc.c",
+    "file": "src/wubu_ewc.c",
+    "output": "src/wubu_ewc.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_taskbd.o src/wubu_taskbd.c",
+    "file": "src/wubu_taskbd.c",
+    "output": "src/wubu_taskbd.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_distill.o src/wubu_distill.c",
+    "file": "src/wubu_distill.c",
+    "output": "src/wubu_distill.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_imgenc.o src/wubu_imgenc.c",
+    "file": "src/wubu_imgenc.c",
+    "output": "src/wubu_imgenc.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_audio.o src/wubu_audio.c",
+    "file": "src/wubu_audio.c",
+    "output": "src/wubu_audio.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mm_align.o src/wubu_mm_align.c",
+    "file": "src/wubu_mm_align.c",
+    "output": "src/wubu_mm_align.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mm_adapter.o src/wubu_mm_adapter.c",
+    "file": "src/wubu_mm_adapter.c",
+    "output": "src/wubu_mm_adapter.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mm_kv.o src/wubu_mm_kv.c",
+    "file": "src/wubu_mm_kv.c",
+    "output": "src/wubu_mm_kv.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_bft.o src/wubu_bft.c",
+    "file": "src/wubu_bft.c",
+    "output": "src/wubu_bft.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_threshsig.o src/wubu_threshsig.c",
+    "file": "src/wubu_threshsig.c",
+    "output": "src/wubu_threshsig.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_agentid.o src/wubu_agentid.c",
+    "file": "src/wubu_agentid.c",
+    "output": "src/wubu_agentid.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_semcons.o src/wubu_semcons.c",
+    "file": "src/wubu_semcons.c",
+    "output": "src/wubu_semcons.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_fraud.o src/wubu_fraud.c",
+    "file": "src/wubu_fraud.c",
+    "output": "src/wubu_fraud.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_symreg.o src/wubu_symreg.c",
+    "file": "src/wubu_symreg.c",
+    "output": "src/wubu_symreg.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_sindy.o src/wubu_sindy.c",
+    "file": "src/wubu_sindy.c",
+    "output": "src/wubu_sindy.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_cegis.o src/wubu_cegis.c",
+    "file": "src/wubu_cegis.c",
+    "output": "src/wubu_cegis.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_prover.o src/wubu_prover.c",
+    "file": "src/wubu_prover.c",
+    "output": "src/wubu_prover.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_invariant.o src/wubu_invariant.c",
+    "file": "src/wubu_invariant.c",
+    "output": "src/wubu_invariant.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_gp.o src/wubu_gp.c",
+    "file": "src/wubu_gp.c",
+    "output": "src/wubu_gp.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_acq.o src/wubu_acq.c",
+    "file": "src/wubu_acq.c",
+    "output": "src/wubu_acq.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_bo.o src/wubu_bo.c",
+    "file": "src/wubu_bo.c",
+    "output": "src/wubu_bo.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_uq.o src/wubu_uq.c",
+    "file": "src/wubu_uq.c",
+    "output": "src/wubu_uq.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_active.o src/wubu_active.c",
+    "file": "src/wubu_active.c",
+    "output": "src/wubu_active.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_bandit.o src/wubu_bandit.c",
+    "file": "src/wubu_bandit.c",
+    "output": "src/wubu_bandit.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_reinforce.o src/wubu_reinforce.c",
+    "file": "src/wubu_reinforce.c",
+    "output": "src/wubu_reinforce.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_policy.o src/wubu_policy.c",
+    "file": "src/wubu_policy.c",
+    "output": "src/wubu_policy.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_actor_critic.o src/wubu_actor_critic.c",
+    "file": "src/wubu_actor_critic.c",
+    "output": "src/wubu_actor_critic.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_ppo.o src/wubu_ppo.c",
+    "file": "src/wubu_ppo.c",
+    "output": "src/wubu_ppo.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dqn.o src/wubu_dqn.c",
+    "file": "src/wubu_dqn.c",
+    "output": "src/wubu_dqn.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_value.o src/wubu_value.c",
+    "file": "src/wubu_value.c",
+    "output": "src/wubu_value.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_specdec.o src/wubu_specdec.c",
+    "file": "src/wubu_specdec.c",
+    "output": "src/wubu_specdec.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_pagedkv.o src/wubu_pagedkv.c",
+    "file": "src/wubu_pagedkv.c",
+    "output": "src/wubu_pagedkv.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_moeroute.o src/wubu_moeroute.c",
+    "file": "src/wubu_moeroute.c",
+    "output": "src/wubu_moeroute.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_contbatch.o src/wubu_contbatch.c",
+    "file": "src/wubu_contbatch.c",
+    "output": "src/wubu_contbatch.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_medusa.o src/wubu_medusa.c",
+    "file": "src/wubu_medusa.c",
+    "output": "src/wubu_medusa.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_quantkv.o src/wubu_quantkv.c",
+    "file": "src/wubu_quantkv.c",
+    "output": "src/wubu_quantkv.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_hashrouter.o src/wubu_hashrouter.c",
+    "file": "src/wubu_hashrouter.c",
+    "output": "src/wubu_hashrouter.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dsa.o src/wubu_dsa.c",
+    "file": "src/wubu_dsa.c",
+    "output": "src/wubu_dsa.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_tensor_store.o src/wubu_tensor_store.c",
+    "file": "src/wubu_tensor_store.c",
+    "output": "src/wubu_tensor_store.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mhc_mh.o src/wubu_mhc_mh.c",
+    "file": "src/wubu_mhc_mh.c",
+    "output": "src/wubu_mhc_mh.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_mxfp4.o src/wubu_mxfp4.c",
+    "file": "src/wubu_mxfp4.c",
+    "output": "src/wubu_mxfp4.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp -I include -c -o src/wubu_linear_attn.o src/wubu_linear_attn.c",
+    "file": "src/wubu_linear_attn.c",
+    "output": "src/wubu_linear_attn.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_enc_h3.o src/wubu_enc_h3.c",
+    "file": "src/wubu_enc_h3.c",
+    "output": "src/wubu_enc_h3.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dsv4.o src/wubu_dsv4.c",
+    "file": "src/wubu_dsv4.c",
+    "output": "src/wubu_dsv4.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_lfm.o src/wubu_lfm.c",
+    "file": "src/wubu_lfm.c",
+    "output": "src/wubu_lfm.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_megakernel.o src/wubu_megakernel.c",
+    "file": "src/wubu_megakernel.c",
+    "output": "src/wubu_megakernel.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_multiteach.o src/wubu_multiteach.c",
+    "file": "src/wubu_multiteach.c",
+    "output": "src/wubu_multiteach.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dequant_fp4.o src/wubu_dequant_fp4.c",
+    "file": "src/wubu_dequant_fp4.c",
+    "output": "src/wubu_dequant_fp4.o"
+  },
+  {
+    "directory": "/home/wubu/wubuwizard",
+    "command": "gcc -O3 -march=native -ffast-math -funroll-loops -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include -I/usr/include -fopenmp   -c -o src/wubu_dequant_nf4.o src/wubu_dequant_nf4.c",
+    "file": "src/wubu_dequant_nf4.c",
+    "output": "src/wubu_dequant_nf4.o"
+  }
+]

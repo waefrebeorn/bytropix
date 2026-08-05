@@ -1,5 +1,13 @@
 CC = gcc
 CXX = g++
+# ccache for faster rebuilds (research 066-C5). CCACHE=0 to disable.
+# Uses CCACHE=1 (default) only if ccache binary exists; falls back to bare CC.
+ifneq ($(CCACHE),0)
+  ifneq ($(shell command -v ccache 2>/dev/null),)
+    CC := ccache $(CC)
+    CXX := ccache $(CXX)
+  endif
+endif
 WUBU_VERSION = 1.0.0
 # CUDA layout on this WSL2 box (2026-08-03, verified): the GPU is an
 # NVIDIA GeForce RTX 4050 Laptop (sm_89, 6GB) exposed via WSL /dev/dxg.
@@ -31,9 +39,63 @@ cuda_check:
 	@if [ ! -f "$(WSL_LIB)/libcuda.so.1" ]; then echo "FATAL: WSL GPU passthrough missing ($(WSL_LIB)/libcuda.so.1). Is the Windows NVIDIA driver installed?"; exit 1; fi
 	@echo "CUDA OK: nvcc=$(NVCC) inc=$(CUDA_HOME)/include libdir=$(CUDA_LIBDIR) gpu=$(WSL_LIB)/libcuda.so.1"
 
-.PHONY: all clean
+.PHONY: all clean help ninja test_all
 
 all: test_nested_ssm test_nested_ssm_backward load_model test_model test_cpu_timing test_model_adapter infer_moe infer_moe_lazy infer_unified infer_vision infer_poincare infer_vision_gpu test_256k test_kv_cache infer_vision_text test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated test_chunked_ssm api_server test_st_bridge test_btl3_lora
+
+# Generate compile_commands.json for clangd / IDE / agent tooling (research 066-C1).
+compile_commands.json:
+	@python3 tools/gen_compile_commands.py
+
+# Generate symbol index for agents (research 066-C3).
+symbols.json:
+	@python3 tools/gen_symbols.py > docs/symbols.json
+	@echo "Wrote $$(python3 -c "import json;print(len(json.load(open('docs/symbols.json'))))") symbols"
+
+# Generate build.ninja from compile_commands.json (research 066-C5).
+ninja: compile_commands.json
+	@python3 tools/gen_ninja.py
+
+
+help:
+	@echo "wubuwizard build system (WUBU_VERSION=$(WUBU_VERSION))"
+	@echo ""
+	@echo "  all          - build all tools and test binaries"
+	@echo "  test_all     - build + run the full test gate"
+	@echo "  clean        - remove all build artifacts"
+	@echo "  help         - show this help"
+	@echo ""
+	@echo "  Individual test targets (build+run):"
+	@echo "    test_nested_ssm test_nested_ssm_backward test_poincare_gqa"
+	@echo "    test_lfm test_megakernel test_multiteach test_kvfs"
+	@echo "    test_kv_styx test_kivi_roundtrip test_kv_bw test_decode_path"
+	@echo "    test_chunked_ssm test_polarquant test_ternary test_compress"
+	@echo "    test_compress2 test_eagle test_pga_backward test_mobius_linear"
+	@echo "    test_hyperbolic_output_proj test_rsgd test_backward test_tst"
+	@echo "    test_moe_hyperbolic test_mobius_linear test_256k test_kv_cache"
+	@echo "    test_model test_model_adapter test_cpu_timing"
+	@echo ""
+	@echo "  Individual tool targets:"
+	@echo "    gen_text wubu_cli api_server infer_moe infer_moe_lazy infer_unified"
+	@echo "    infer_vision infer_poincare infer_vision_gpu load_model"
+	@echo "    train_integrated test_chunked_ssm test_st_bridge test_btl3_lora"
+	@echo ""
+	@echo "  Agent workflow:"
+	@echo "    make help          - this help"
+	@echo "    make test_all      - build + run all tests (gate before committing)"
+	@echo "    make test_<name>   - build + run one test"
+	@echo "    make <tool>        - build one tool binary"
+	@echo "    make compile_commands.json - generate clangd compile_commands.json"
+	@echo "    make symbols.json  - generate docs/symbols.json symbol index"
+	@echo "    make ninja         - generate build.ninja from compile_commands.json"
+	@echo "    make CCACHE=0      - build without ccache"
+	@echo "    make clean && make all - full rebuild from scratch"
+	@echo ""
+	@echo "  Architecture docs:"
+	@echo "    docs/TOPOLOGY.md  - master map of both repos"
+	@echo "    docs/adr/         - architecture decision records"
+	@echo "    research/INDEX.md - gap ledger (open vs wired)"
+	@echo "    AGENTS.md         - this repo's agent onboarding"
 
 api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -DWUBU_TOOL_VERSION=\"$(WUBU_VERSION)\" -I include -o $@ $< -lssl -lcrypto -lm
