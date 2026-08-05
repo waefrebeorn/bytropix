@@ -50,6 +50,23 @@ This is where the theory gets *inspired* — cross-pollinating with geometric to
 
 This paper bridges pure mathematical analogy and practical design intuition.
 
+### `05-kv-cache-filesystem.md`
+**"THE KV CACHE IS A FILE SYSTEM" — the revaluation of design from the ground up**
+
+The 2026-08-05 doctrine: because the model is OURS, it can be
+modality-agnostic and data-agnostic — all files are data, all inputs are
+encoded (single encoder), and the KV cache is a **namespace**, not a
+context window. The magic computer: downloads (`/kv/in`) live in the
+same space as synthesized data (`/kv/synth`), memory persists
+(`/kv/mem`), diagnostics are files (`/kv/meta`). The serving world
+already converged on every mechanism (PagedAttention block tables,
+RadixAttention prefix trees, MemGPT self-paging, Mooncake's
+disaggregated KV pool, LMCache's persistent KV-chunk files,
+Infini-attention's compressive writes) and half is already in-tree. The
+missing layer — the address layer — is specified in
+`research/061-kv-cache-filesystem-7hop.md` (gaps G1–G6) and carried in
+`docs/wubu-model-blueprint.md` §2.7.
+
 ### `WuBu_Nesting.pdf`
 The full PDF of the WuBu Nesting paper. A typeset, polished version of the ideas in `03-wubu-nesting-paper.md` and then some. If you prefer reading equations in proper LaTeX rendering, start here.
 

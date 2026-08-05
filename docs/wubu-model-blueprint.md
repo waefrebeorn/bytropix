@@ -23,6 +23,8 @@
 | **DeepSeekMath** | math corpus + RL for formal mathematics |
 | **Delta Attention / NSA / Gated Sparse / MISA** | sparse attention: learnable gating over attention patterns, not fixed windows |
 | **Möbius Transformer** | hyperbolic attention over the ball |
+| **Gemma 3 (single-encoder 12B)** | the closest base design for the KV namespace: ONE SigLIP encoder (400M), every modality → soft tokens in ONE sequence space (256 tokens/image), 5:1 local/global interleave slashes KV, 128K ctx — "all inputs are encoded" is a shipped architecture |
+| **The KV-as-storage lineage** | PagedAttention (KV = paged virtual memory, block tables), RadixAttention (KV blocks in a radix tree — prefixes ARE paths), MemGPT (LLM as OS, the model pages its own memory), Mooncake (disaggregated KV pool over CPU/DRAM/SSD), LMCache (tiered persistent KV chunks as files on disk) — the serving world already treats the KV cache like a filesystem; the namespace is the missing address layer |
 | **The wizard's research (1400+ gaps)** | KV entropy/quantization, speculative decoding, cascade draft, layer-skip, QuaRot, FlashDecoding, NUMA pinning, arena allocators — the runtime spine |
 | **The 5+1 recovery + Live Colonel** | the safety spine: rollback slots, Jesus state, ring-0 live development |
 
@@ -100,6 +102,46 @@ input tokens
   arena allocators, NUMA pinning — all apply to the trained model.
 - GPU path: the cuBLAS backend (`gpu_wubu`) already wired.
 
+### 2.7 The KV namespace — THE KV CACHE IS A FILE SYSTEM
+
+The doctrine (THEORY/05): the KV cache is not a context window, it is a
+**namespace**. Because the model is OURS, the working space can be
+addressable, mountable, persistent — every datum a file, every file
+encoded data, same space. The magic computer: downloads and synthesized
+data live together:
+
+```
+/kv/                        the KV cache — the model's whole working space
+  /in/                      external data, encoded on arrival (single encoder)
+  /synth/                   synthesized data — the model's own writes
+  /mem/                     what survives sessions — the persistent layer
+  /meta/                    diagnostics, routes, self-knowledge
+```
+
+Mechanisms — every one already proven in the serving literature, half
+already in-tree:
+
+| Layer | Mechanism | Research | In-tree |
+|---|---|---|---|
+| blocks | paged KV, block tables, CoW sharing | PagedAttention (SOSP'23) | `wubu_kv_cache` paged_kv / ring attention |
+| paths | radix tree over KV blocks — prefixes ARE paths | RadixAttention (2312.07104) | `wubu_orbits` (polar recursion paths) |
+| tiers | hot HBM → warm DRAM → cold NVMe/disk | LMCache (2510.09665), Mooncake (FAST'25) | `wubu_kv_tier` 3-tier EMA-LRU |
+| persistence | KV chunks as files, survive restarts | LMCache local-storage backend | `wubu_lmcache` FNV-1a64 chunks |
+| policy | priority eviction | NVIDIA priority eviction | `wubu_kv_evict` |
+| reads | coarse-to-fine indexer over blocks | DSA / NSA / MoBA | `wubu_dsa` |
+| synthesized writes | compressive memory heads (per-head linear state) | Infini-attention (2404.07143) | `wubu_mla` latent path (seed) |
+| encoding | ONE encoder, every modality → one sequence space | Gemma 3 SigLIP 400M (2503.19786) | **G3 — the gap** |
+| addressing | namespace + mounts + 9P export | the OS body (WuBuOS) | **G1/G2/G5 — the gaps** |
+| self-paging | the model manages its own memory via tool calls | MemGPT (2310.08560) | **G6 — the gap** |
+
+The revaluation: context window → working directory; position → path;
+retrieval → file read; memory → files that persist; synthesis → files
+that are written; a download → an encoded file mounted into `/kv/in/`;
+an image → data in the KV cache. The tensor layer stays (paged/ring KV,
+MLA latent compression, the quant ladders are the backing store); the
+addressing layer is the change. Full implementation path (G1–G6):
+`research/061-kv-cache-filesystem-7hop.md`.
+
 ---
 
 ## 3. The growth plan (the seed → the tree)
@@ -114,6 +156,7 @@ input tokens
 | **5** | sparse attention (gated, learnable) | research lineage |
 | **6** | math-RL loop (Lean-verified CoT) | Prover pattern |
 | **7** | surpass the bigger brother → brother retires | the AGI brain-cluster |
+| **8** | THE KV NAMESPACE — the KV cache is a file system: path-addressable `/kv/` over the paged/tiered/persistent KV, single-encoder modality head (G3), compressive write-back (G4), Styx export at `/n/kv/` (G5), self-paging loop (G6) | THEORY/05 + research/061; the address layer lands on top of already-wired blocks/tiers/persistence |
 
 The model is OURS: the seed is ported (Apache-2.0 upstream, WaefreBeorn
 umbrella), the geometry is OUR theory (Lean-verified), the training is
