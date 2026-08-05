@@ -19,8 +19,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <math.h>
-#include <json-c/json.h>  /* or manual JSON parser */
+/* No third-party JSON lib — the index.json parser is a stub.
+ * When implemented, use a self-contained hand-written parser
+ * (same approach as wubu_model_adapter.c's find_str/find_int). */
 
 // ── Weight Loading ─────────────────────────────────────────────────────
 
@@ -121,19 +125,13 @@ void vm_attention(const float *q, const float *k, const float *v,
         const float *vh = &v[base];
         float *out_h = &output[base];
 
-        // For single-query attention: score = q · k / sqrt(d)
-        float score = 0.0f;
+        /* Single-token attention (T=1): the softmax over a single KV
+         * reduces to 1.0, so output = V directly. The score computation
+         * below is retained for the multi-token path (future extension). */
+        (void)qh; (void)kh; (void)scale;
+        /* Weighted sum — for T=1, attention weight is trivially 1.0 */
         for (int i = 0; i < head_dim; i++)
-            score += qh[i] * kh[i];
-        score *= scale;
-
-        // Softmax (single score → 1.0)
-        float attn = 1.0f / (1.0f + expf(-score));  // sigmoid for binary attention
-        // In practice with >1 tokens: full softmax over all KVs
-
-        // Weighted sum (simplified for T=1 case)
-        for (int i = 0; i < head_dim; i++)
-            out_h[i] = vh[i];  // placeholder until multi-token support
+            out_h[i] = vh[i];  /* placeholder until multi-token support */
     }
 }
 
@@ -207,8 +205,13 @@ void vm_forward(vm_state_t *state, const float *pixels, int H, int W,
         }
     }
 
-    // 4. Transformer blocks
-    float *residual = scratch + (N * Pd + N * D) / sizeof(float);  // temp
+    /* scratch layout:
+     *   [0, N*Pd)          = patches
+     *   [N*Pd, N*Pd+N*D)   = x (embeddings)
+     *   [N*Pd+N*D, ...)    = residual + temp buffers
+     */
+    int scratch_off = N * Pd + N * D;
+    float *residual = scratch + scratch_off;
     for (int l = 0; l < VM_ENC_N_LAYERS; l++) {
         // Block: x = x + attention(layer_norm(x))
         //        x = x + mlp(layer_norm(x))
