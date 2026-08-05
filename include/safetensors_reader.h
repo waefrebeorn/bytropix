@@ -39,6 +39,7 @@ typedef enum {
     ST_DTYPE_I32  = 6,
     ST_DTYPE_I64  = 7,
     ST_DTYPE_BOOL = 8,
+    ST_DTYPE_NF4  = 9,  // bitsandbytes NF4: packed 4-bit codes (2/byte) + per-tensor FP32 scale
     ST_DTYPE_UNKNOWN = 99
 } st_dtype_t;
 

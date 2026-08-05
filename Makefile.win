@@ -51,6 +51,8 @@ CORE_OBJ = src/wubu_model.o src/wubu_dims.o src/wubu_dims_gpu_stub.o src/wubu_ss
   src/wubu_hwcaps.o src/wubu_tandem.o src/wubu_rambus.o src/wubu_gamebud.o src/wubu_fp8.o \
   src/wubu_ecs.o src/wubu_nvfp4.o src/wubu_hadamard.o src/wubu_expert_allreduce.o \
   src/wubu_dequant_fp4.o \
+  src/wubu_dequant_nf4.o \
+  src/wubu_h3_norm.o \
   src/wubu_equiv_check.o src/wubu_integrate.o src/wubu_capzero.o src/wubu_latency.o \
   src/wubu_ctxvm.o src/wubu_safekern.o src/wubu_loopguard.o src/wubu_planediv.o \
   src/wubu_coord.o src/wubu_metagame.o src/wubu_credit.o src/wubu_metagame2.o \
@@ -96,4 +98,8 @@ lfm2_gen: tools/lfm2_gen.c $(CORE_OBJ) $(LFM2_OBJ) src/wubu_tokenizer.o src/wubu
 	@echo "lfm2_gen built"
 
 clean:
-	rm -f src/*.o gen_text_win lfm2_test lfm2_gen $(LFM2_OBJ)
+	rm -f src/*.o gen_text_win lfm2_test lfm2_gen h3_norm_test $(LFM2_OBJ)
+
+h3_norm_test: tools/test_h3_norm.c src/wubu_h3_norm.o src/wubu_dequant_nf4.o src/wubu_win.o src/wubu_dequant_fp4.o
+	$(CC) $(CFLAGS) -o $@ tools/test_h3_norm.c src/wubu_h3_norm.o src/wubu_dequant_nf4.o src/wubu_win.o src/wubu_dequant_fp4.o $(LDLIBS)
+	@echo "h3_norm_test built"

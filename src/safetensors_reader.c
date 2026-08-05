@@ -8,10 +8,12 @@
  */
 
 #include "safetensors_reader.h"
+#include "wubu_dequant_nf4.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+#include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -29,6 +31,7 @@ static st_dtype_t st_dtype_from_str(const char *s) {
     if (strcmp(s, "I32")  == 0) return ST_DTYPE_I32;
     if (strcmp(s, "I64")  == 0) return ST_DTYPE_I64;
     if (strcmp(s, "BOOL") == 0) return ST_DTYPE_BOOL;
+    if (strcmp(s, "NF4")  == 0) return ST_DTYPE_NF4;
     return ST_DTYPE_UNKNOWN;
 }
 
@@ -178,6 +181,7 @@ int st_dtype_size(st_dtype_t dt) {
         case ST_DTYPE_I32:  return 4;
         case ST_DTYPE_I64:  return 8;
         case ST_DTYPE_BOOL: return 1;
+        case ST_DTYPE_NF4:  return 0;  // NF4 is sub-byte: handled via packed dequant, not raw byte-per-element
         default: return 0;
     }
 }
@@ -369,7 +373,7 @@ int st_read_tensor_f32(const st_ctx *ctx, const st_tensor_info *info,
                        float *output, int64_t max_elems) {
     if (!ctx || !info || !output) return 0;
     int esz = st_dtype_size(info->dtype);
-    if (esz == 0) return 0;
+    if (esz == 0 && info->dtype != ST_DTYPE_NF4) return 0;
     int64_t n = info->n_elems;
     if (n > max_elems) n = max_elems;
     const uint8_t *src = ctx->raw + info->data_begin;
@@ -397,6 +401,24 @@ int st_read_tensor_f32(const st_ctx *ctx, const st_tensor_info *info,
         default:
             /* integer / unknown -> reject (caller can use raw path) */
             return 0;
+        case ST_DTYPE_NF4:
+            /* NF4: packed 4-bit codes (2/byte, high nibble first).
+             * Scale is read from companion tensor "<name>.scaling_factor" (FP32).
+             * Falls back to scale=1.0 if absent. */
+            {
+                const uint8_t *src = ctx->raw + info->data_begin;
+                float scale = 1.0f;
+                char scale_name[256];
+                snprintf(scale_name, sizeof(scale_name), "%s.scaling_factor", info->name);
+                const st_tensor_info *st = st_find_tensor(ctx, scale_name);
+                if (st && st->dtype == ST_DTYPE_F32 && st->n_elems >= 1) {
+                    float tmp[1];
+                    st_read_tensor_f32(ctx, st, tmp, 1);
+                    scale = tmp[0];
+                }
+                nf4_dequantize_row(src, output, scale, (long)n);
+                return (int)n;
+            }
     }
 }
 
@@ -422,8 +444,10 @@ int st_dequant_row(const st_tensor_info *info, const uint8_t *raw_base,
     for (int d = 1; d < info->n_dims; d++) row_elems *= info->dims[d];
     if (row_elems <= 0 || row >= info->dims[0]) return 0;
     int esz = st_dtype_size(info->dtype);
-    if (esz == 0) return 0;
-    const uint8_t *src = raw_base + (size_t)row * (size_t)row_elems * esz;
+    if (esz == 0 && info->dtype != ST_DTYPE_NF4) return 0;
+    size_t elem_size = (info->dtype == ST_DTYPE_NF4) ? 0 : (size_t)esz; /* NF4: 2 codes/byte */
+    size_t row_bytes = (elem_size == 0) ? (size_t)((row_elems + 1) / 2) : (size_t)row_elems * elem_size;
+    const uint8_t *src = raw_base + (size_t)row * row_bytes;
     switch (info->dtype) {
         case ST_DTYPE_F32:
             memcpy(out, src, (size_t)row_elems * 4);
@@ -438,6 +462,13 @@ int st_dequant_row(const st_tensor_info *info, const uint8_t *raw_base,
             for (int64_t i = 0; i < row_elems; i++) out[i] = st_bf16_to_f32(s[i]);
             return 1;
         }
+        case ST_DTYPE_NF4:
+            /* NF4 per-row dequant: 2 codes/byte, scale=1.0 (caller should use
+             * st_read_tensor_f32 for full tensor with proper scale lookup) */
+            {
+                nf4_dequantize_row(src, out, 1.0f, row_elems);
+                return 1;
+            }
         default:
             return 0;  /* integer/unknown: unsupported for lazy dequant */
     }
