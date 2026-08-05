@@ -18,6 +18,11 @@
 
 /* ---- Global shared with wubu_ssm.c ---- */
 float g_ssm_l2_eps = 1e-6f;
+/* g_tensor_naming is defined in wubu_ops.c — it governs tensor naming
+ * convention, read/written by wubu_model.c (set) and used by
+ * wubu_moe.c + wubu_is_ssm_layer(). Moved here with wubu_is_ssm_layer
+ * during the Strangler Fig extraction (ADR-002). */
+int g_tensor_naming = 0;
 
 /* ---- Utility ---- */
 int wubu_is_ssm_layer(int layer_idx) {

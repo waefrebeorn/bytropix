@@ -549,6 +549,10 @@ test_enc_h3: tools/test_enc_h3.c src/wubu_enc_h3.o src/wubu_rotate.o src/wubu_fp
 	$(CC) $(CFLAGS) -o $@ tools/test_enc_h3.c src/wubu_enc_h3.o src/wubu_rotate.o src/wubu_fp8.o src/wubu_nvfp4.o $(LDFLAGS)
 	./test_enc_h3
 
+test_ops: tools/test_ops.c src/wubu_ops.o
+	$(CC) $(CFLAGS) -I include -I tools/include -o $@ tools/test_ops.c src/wubu_ops.o -lm
+	./test_ops
+
 test_dsv4: tools/test_dsv4.c src/wubu_dsv4.o src/wubu_hashrouter.o src/wubu_mxfp4.o src/wubu_dsa.o
 	$(CC) $(CFLAGS) -o $@ tools/test_dsv4.c src/wubu_dsv4.o src/wubu_hashrouter.o src/wubu_mxfp4.o src/wubu_dsa.o $(LDFLAGS) -lm
 	./test_dsv4

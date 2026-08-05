@@ -11,7 +11,8 @@
 #include "wubu_kernel.h"   // hardware dispatch table
 // Global tensor naming convention (defined here for CORE_OBJ visibility)
 // 0 = Qwen-style "blk.N.*", 1 = Gemma-style "model.layers.N.*", 2 = pure GQA
-int g_tensor_naming = 0;
+// (g_tensor_naming is now defined in wubu_ops.c — moved with wubu_is_ssm_layer)
+extern int g_tensor_naming;  /* set by wubu_model.c from GGUF config */
 #include <omp.h>
 #include <immintrin.h>  // AVX2/FMA intrinsics for GQA attention
 // GQA_MAX_CTX from wubu_model.h — max KV cache positions (also used for attn stack buf)
