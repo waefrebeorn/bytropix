@@ -119,17 +119,41 @@ static inline int wubu_posix_memalign(void **memptr, size_t alignment, size_t si
 #ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC 1
 #endif
-struct wubu_timespec { long tv_sec; long tv_nsec; };
-static inline int wubu_clock_gettime(int clk, struct wubu_timespec *ts) {
-    (void)clk;
-    LARGE_INTEGER freq, cnt;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&cnt);
-    ts->tv_sec  = (long)(cnt.QuadPart / freq.QuadPart);
-    ts->tv_nsec = (long)(((cnt.QuadPart % freq.QuadPart) * 1000000000) / freq.QuadPart);
-    return 0;
+#ifndef CLOCK_REALTIME
+#define CLOCK_REALTIME 0
+#endif
+
+/* Use the platform's native struct timespec — DO NOT redefine it.
+ * Windows LLP64 has long = 4 bytes but struct timespec.tv_sec is 8
+ * (__time64_t), so we write fields directly to avoid truncation.
+ *
+ * CLOCK_MONOTONIC: QueryPerformanceCounter (high-res, non-decreasing).
+ * CLOCK_REALTIME:  GetSystemTimeAsFileTime (wall-clock, since 1601 epoch).
+ */
+static inline int wubu_clock_gettime(int clk, struct timespec *ts) {
+    if (clk == CLOCK_MONOTONIC) {
+        LARGE_INTEGER freq, cnt;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&cnt);
+        uint64_t secs = (uint64_t)(cnt.QuadPart / freq.QuadPart);
+        uint64_t rem  = (uint64_t)(cnt.QuadPart % freq.QuadPart);
+        ts->tv_sec  = (time_t)secs;
+        ts->tv_nsec = (long)((rem * 1000000000ULL) / (uint64_t)freq.QuadPart);
+        return 0;
+    } else if (clk == CLOCK_REALTIME) {
+        /* GetSystemTimeAsFileTime returns 100ns intervals since 1601-01-01.
+         * Unix epoch is 1970-01-01 → offset = 11644473600 seconds. */
+        FILETIME ft;
+        GetSystemTimeAsFileTime(&ft);
+        uint64_t ft_val = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+        uint64_t unix_hundreds = ft_val - 116444736000000000ULL;
+        ts->tv_sec  = (time_t)(unix_hundreds / 10000000ULL);
+        ts->tv_nsec = (long)((unix_hundreds % 10000000ULL) * 100ULL);
+        return 0;
+    }
+    return -1;
 }
-#define clock_gettime(c, t) wubu_clock_gettime((c), (struct wubu_timespec *)(t))
+#define clock_gettime(c, t) wubu_clock_gettime((c), (t))
 #endif
 
 /* ---- setenv / unsetenv (if MSYS2 lacks them) ------------------------- */
