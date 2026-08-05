@@ -1,30 +1,35 @@
-# MiniMax H3 — Hyperbolic Normalization & NF4 Dequantization Kernel
+# MiniMax H3 — Hyperbolic Normalization, NF4 Dequant, & 3D MM-RoPE Kernel
 
-## Source
-- ModelScope: `DiffSynth-Studio/MiniMax-H3-NF4`
-- MiniMax-H3 is a 33B-parameter video generation DiT model.
-- Uses **bitsandbytes NF4** (Normal Float 4) quantization for compressed inference.
+## Sources
+- HuggingFace: `MiniMaxAI/MiniMax-H3` (33B omni-modal: text, image, video, audio)
+- ModelScope: `DiffSynth-Studio/MiniMax-H3-NF4` (NF4 quantized version)
+- Twitter: `@tono_ken3/status/2084534748534748534415607` (technical commentary, JP)
 
-## H3 Architecture
+## H3 Architecture (Corrected)
 
-### Hyperbolic Activation
-The H3 model replaces the standard SiLU/Swish activation in MLP blocks with a
-**hyperbolic variant**:
+### Overview
+MiniMax H3 is a **33B-parameter dense, single-stream omni-modal transformer**:
+- **H3-Context-IR**: Multimodal instruction interpretation → Context IR
+- **H3-Base**: 33B Omni-Transformer generating video+audio latents at 768p
+- **H3-Regenerate-2K**: In-context 2K upscaling using H3-Base itself
 
-```
-gate = SiLU(W_gate · x + b_gate)    // standard gate (SiLU = x·sigmoid(x))
-up   = tanh (W_up   · x + b_up)     // hyperbolic branch — H3 innovation
-out  = gate * up                    // elementwise gate * up
-```
+### H3-Encoder
+- Uses full pretrained **Qwen3-VL-32B** weights (50th layer hidden states)
+- Adds special tokens like `<d>`
 
-Key insight: the `up` projection uses `tanh` instead of SiLU. This bounds the
-upward contribution to [-1, 1], creating a "hyperbolic" activation profile that
-differs from standard SwiGLU.
+### H3-VisualVAE
+- Temporal-causal video VAE: 16× spatial, 4× temporal compression, 24 latent channels
+- Latent patches: `1×2×2` (time, height, width) → effective 32× spatial, 4× temporal
 
-### H3 Position Embedding
-H3 (Hyperbolic, Hybrid, Hierarchical) is a reparameterization of RNNs that
-generalizes S4/SSM architectures. The name derives from the hyperbolic
-structure of the state transition operator (Merrill & Sabharwal, 2024).
+### H3-AudioVAE
+- Stereo audio processing (independent channels, recombined)
+- 32 kHz audio compressed to 40 Hz latent tokens
+
+### H3-Omni-Transformer (33B)
+- Dense, single-stream Transformer (~13B params in AdaLN branches — precomputed/cached)
+- **3D MM-RoPE**: Positional encoding across `(t, h, w)` dimensions
+- Native sparse attention (not in initial OSS release)
+- No modality-specific attention/FFN — only in input/output layers + AdaLN branches
 
 ## NF4 Quantization Format
 
@@ -113,7 +118,37 @@ for each element i in [0, n):
 
 ## Integration Points
 - `safetensors_reader.c`: `st_read_tensor_f32()` now handles `ST_DTYPE_NF4`
-- `Makefile.win`: `src/wubu_dequant_nf4.o` and `src/wubu_h3_norm.o` in `CORE_OBJ`
+- `wubu_model_adapter.c`: Added `WUBU_ARCH_LFM25` detection (model_type="lfm2")
+- `Makefile.win`: `src/wubu_dequant_nf4.o`, `src/wubu_h3_norm.o`, `src/wubu_mmrope.o` in `CORE_OBJ`
+
+## 3D MM-RoPE Kernel
+
+### H3-Omni-Transformer 3D Position Encoding
+The H3-Omni-Transformer uses **3D Multimodal RoPE (MM-RoPE)** to encode positional
+relationships across temporal and two spatial dimensions `(t, h, w)`:
+
+- **head_dim** is split into 3 equal segments
+- Each segment uses independent RoPE with its own base frequency (theta_t, theta_h, theta_w)
+- **Temporal segment** (first 1/3): position varies by video frame
+- **Spatial height segment** (middle 1/3): position varies by row
+- **Spatial width segment** (last 1/3): position varies by column
+
+### Implementation
+- `include/wubu_mmrope.h` + `src/wubu_mmrope.c` — 3D MM-RoPE kernel
+- Splits head_dim into 3 segments, applies standard rotary embedding per segment
+- Each segment uses `cos(pos/theta^(2i/d))` and `sin(pos/theta^(2i/d))`
+- 9/9 tests pass (init, validation, identity, reference match, NULL safety)
+
+### Formula
+```
+For each segment s in {t, h, w}:
+  seg_dim = head_dim / 3
+  half = seg_dim / 2
+  for i in [0, half):
+    freq = pos_s / theta_s^(2i/seg_dim)
+    x_i       = x_i * cos(freq) - x_{i+half} * sin(freq)
+    x_{i+half} = x_i * sin(freq) + x_{i+half} * cos(freq)
+```
 - `gen_text_win`: Automatically picks up new objects via CORE_OBJ
 
 ## References
