@@ -11,14 +11,13 @@ uint8_t wubu_nvfp4_from_f32(float x) {
     int sign = (x < 0.0f) ? 0x8 : 0x0;
     float ax = fabsf(x);
     if (ax > 6.0f) ax = 6.0f;
-    int e; float m = frexpf(ax, &e);   /* m in [0.5,1) */
-    int exp = e;                        /* E2M1 bias = 1: value = (1+mant/2)*2^(e-1) */
-    if (exp <= 0) return (uint8_t)sign; /* below subnormal -> 0 */
-    if (exp > 3) exp = 3;               /* cap exponent */
-    float unit = (float)ldexp(1.0f, exp - 1);  /* 2^(exp-1) */
+    int exp; float m = frexpf(ax, &exp);  /* m in [0.5,1) */
+    int e2m1 = exp;                       /* E2M1 bias = 1: value = (1+mant/2)*2^(e-1) */
+    if (e2m1 <= 0) return (uint8_t)sign;  /* below subnormal -> 0 */
+    if (e2m1 > 3) e2m1 = 3;               /* cap exponent */
     int mant = (int)((m * 2.0f - 1.0f) * 2.0f + 0.5f); /* 0 or 1 */
-    if (mant >= 2) { mant = 0; exp++; if (exp > 3) { exp = 3; mant = 1; } }
-    return (uint8_t)(sign | (exp << 1) | (mant & 0x1));
+    if (mant >= 2) { mant = 0; e2m1++; if (e2m1 > 3) { e2m1 = 3; mant = 1; } }
+    return (uint8_t)(sign | (e2m1 << 1) | (mant & 0x1));
 }
 
 float wubu_nvfp4_to_f32(uint8_t b) {
