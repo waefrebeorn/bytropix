@@ -194,8 +194,8 @@ st_ctx *st_open(const char *path) {
     for (int i = 0; i < 8; i++) header_len |= (uint64_t)hdr_len_buf[i] << (8 * i);
 
     uint64_t raw_off = st_align8(8 + header_len);
-    fseek(f, 0, SEEK_END);
-    uint64_t file_sz = (uint64_t)ftell(f);
+    _fseeki64(f, 0, SEEK_END);
+    uint64_t file_sz = (uint64_t)_ftelli64(f);
     fseek(f, 0, SEEK_SET);
     if (raw_off > file_sz) { fclose(f); return NULL; }
 
