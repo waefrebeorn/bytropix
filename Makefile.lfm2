@@ -1,0 +1,33 @@
+# Makefile.lfm2 -- LFM2.5 engine build (Linux, gcc, C11).
+# Self-contained: depends only on safetensors_reader + standard lib.
+# Matches wubuwizard's C11 creed: -std=c11 -D_POSIX_C_SOURCE=200809L.
+
+CC      ?= gcc
+CFLAGS  := -std=c11 -O2 -g -D_POSIX_C_SOURCE=200809L -Wall -Wextra \
+           -Wno-unused-parameter -Iinclude -Isrc
+LDFLAGS := -lm
+
+LFM2_SRC := src/lfm2_math.c src/lfm2_conv.c src/lfm2_attn.c \
+            src/lfm2_ffn.c src/lfm2_load.c src/lfm2_forward.c
+ST_SRC   := src/safetensors_reader.c
+
+LFM2_OBJ := $(LFM2_SRC:.c=.o)
+ST_OBJ   := $(ST_SRC:.c=.o)
+
+.PHONY: all lfm2_test clean
+
+all: lfm2_test
+
+# Core engine archive (no main)
+liblfm2.a: $(LFM2_OBJ) $(ST_OBJ)
+	$(AR) rcs $@ $^
+
+lfm2_test: tools/lfm2_test.c liblfm2.a
+	$(CC) $(CFLAGS) $< liblfm2.a $(LDFLAGS) -o $@
+
+# Compile rule
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(LFM2_OBJ) $(ST_OBJ) liblfm2.a lfm2_test

@@ -187,3 +187,4 @@ tools/agent_gauntlet/download_colonels.out
 fixture*.safetensors
 # personal agent profile (mind palace) — not part of the repo
 /.hermes/
+lfm2_test
