@@ -1,4 +1,5 @@
 #include "wubu_ssm.h"
+#include "wubu_ops.h"   /* activations, norm, conv moved here (ADR-002) */
 #include "wubu_ssm_workspace.h"
 #include "wubu_4kv.h"
 #include "safetensors_reader.h"
@@ -120,13 +121,6 @@ static inline void avx2_hq(const float *h, const float *q, float *out) {
     }
 }
 
-// ============================================================
-// Utility: Activation Functions
-// ============================================================
-
-// SSM L2 norm epsilon — read from GGUF config (should be 1e-6 for Qwen3.6)
-float g_ssm_l2_eps = 1e-6f;
-
 // Centralized quantized matmul dispatch for SSM/GQA projections.
 // If quantized weight (W_q) is available and type is not F32, uses quantized_matmul.
 // Otherwise falls back to the provided F32 weight with a column loop.
@@ -165,76 +159,6 @@ static void proj_matmul(const float *x, int64_t n_rows, int64_t n_cols,
     }
 }
 
-void wubu_softplus(int n, const float *x, float *out) {
-    #pragma omp parallel for if(n > 100000)
-    for (int i = 0; i < n; i++) {
-        float v = x[i];
-        if (v > 80.0f) out[i] = v;          // linear region
-        else if (v < -80.0f) out[i] = 0.0f; // zero region
-        else out[i] = logf(1.0f + expf(v));
-    }
-}
-
-void wubu_silu(int n, const float *x, float *out) {
-    #pragma omp parallel for if(n > 100000)
-    for (int i = 0; i < n; i++) {
-        float v = x[i];
-        if (v < -80.0f) out[i] = 0.0f;
-        else out[i] = v / (1.0f + expf(-v));
-    }
-}
-
-void wubu_sigmoid(int n, const float *x, float *out) {
-    #pragma omp parallel for if(n > 100000)
-    for (int i = 0; i < n; i++) {
-        float v = x[i];
-        if (v < -80.0f) out[i] = 0.0f;
-        else if (v > 80.0f) out[i] = 1.0f;
-        else out[i] = 1.0f / (1.0f + expf(-v));
-    }
-}
-
-// ============================================================
-// Utility: Normalization
-// ============================================================
-
-void wubu_l2_norm(int B, int T, int n_heads, int d,
-                  const float *x, float eps, float *out) {
-    // x: [B, T, n_heads, d]
-    // out: [B, T, n_heads, d]
-    int seq_len = B * T;
-    #pragma omp parallel for collapse(2) if(seq_len * n_heads > 100)
-    for (int s = 0; s < seq_len; s++) {
-        for (int h = 0; h < n_heads; h++) {
-            const float *inp = x + (s * n_heads + h) * d;
-            float *oup = out + (s * n_heads + h) * d;
-            float sum_sq = 0.0f;
-            for (int i = 0; i < d; i++) sum_sq += inp[i] * inp[i];
-            float scale = 1.0f / sqrtf(sum_sq + eps);
-            for (int i = 0; i < d; i++) oup[i] = inp[i] * scale;
-        }
-    }
-}
-
-void wubu_rms_norm(int B, int T, int d,
-                   const float *x, const float *weight,
-                   float eps, float *out) {
-    // x: [B, T, d]
-    // weight: [d]
-    // out: [B, T, d]
-    int seq_len = B * T;
-    #pragma omp parallel for if(seq_len > 10)
-    for (int s = 0; s < seq_len; s++) {
-        const float *inp = x + s * d;
-        float *oup = out + s * d;
-        float sum_sq = 0.0f;
-        for (int i = 0; i < d; i++) sum_sq += inp[i] * inp[i];
-        float rms = sqrtf(sum_sq / d + eps);
-        float scale = 1.0f / rms;
-        for (int i = 0; i < d; i++) oup[i] = inp[i] * scale * weight[i];
-    }
-}
-
 // ============================================================
 // Utility: Matrix multiply (simple, non-optimized)
 // ============================================================
@@ -253,32 +177,6 @@ static void matmul_nt(int M, int N, int K,
                 sum += A[m * K + k] * B[n * K + k];  // B[N,K] stored row-major
             }
             C[m * N + n] = sum;
-        }
-    }
-}
-
-// ============================================================
-// Utility: 1D Convolution (depthwise, causal)
-// ============================================================
-
-void wubu_conv1d(int B, int T, int C, int k,
-                 const float *input, const float *kernel,
-                 float *output) {
-    // input: [B, T+k-1, C] — already padded with k-1 zeros at start
-    // kernel: [k, C]
-    // output: [B, T, C]
-    #pragma omp parallel for collapse(2) if((int64_t)B * T * C * k > 100000)
-    for (int b = 0; b < B; b++) {
-        for (int t = 0; t < T; t++) {
-            for (int c = 0; c < C; c++) {
-                float sum = 0.0f;
-                for (int ki = 0; ki < k; ki++) {
-                    int t_in = t + ki;  // input already padded with k-1 at start
-                    sum += input[(b * (T + k - 1) + t_in) * C + c] *
-                           kernel[ki + c * k];
-                }
-                output[(b * T + t) * C + c] = sum;
-            }
         }
     }
 }
@@ -2173,188 +2071,6 @@ cleanup_gqa_save:
     free(Q_norm); free(K_norm); free(attn_out); free(gate_sig);
 }
 
-// Poincaré GQA forward is now in src/wubu_poincare_gqa.c
-// (The old tangent-space-approximation stub was removed — the proper
-//  implementation uses full Poincaré distance + Möbius combination.)
-
-// ============================================================
-// Layer Type Helpers
-// ============================================================
-
-int wubu_is_ssm_layer(int layer_idx) {
-    // For pure GQA models (DiffusionGemma/Gemma4), no SSM layers
-    extern int g_tensor_naming;
-    if (g_tensor_naming == 2) return 0; // pure GQA flag
-    // For Qwen35moe: every 4th layer (index 3, 7, 11, ...) is GQA
-    return (layer_idx + 1) % 4 != 0;
-}
-
-// ============================================================
-// Backward Pass — SSM Output Projection (Step 11)
-// ============================================================
-// Forward: output[s,j] = sum_i delta_out[s,i] * W[i,j]
-//          where W = [VALUE_DIM, WUBU_DIMS.d_model]
-// Backward:
-//   d_delta_out += d_output @ W^T   [N,V] = [N,D] @ [D,V]^T
-//   dW += delta_out^T @ d_output   [V,D] = [V,N] @ [N,D]
-void wubu_ssm_backward_output_proj(
-    const float *delta_out,      // [N, VALUE_DIM] forward input (for dW)
-    const float *d_output,       // [N, WUBU_DIMS.d_model] gradient from upstream
-    const float *ssm_out_weight, // [VALUE_DIM, WUBU_DIMS.d_model] forward weight
-    float *d_delta_out,          // [N, VALUE_DIM] gradient to propagate
-    float *d_ssm_out_weight,     // [VALUE_DIM, WUBU_DIMS.d_model] weight grad accum (or NULL)
-    int N)
-{
-    // d_delta_out = d_output @ W^T
-    for (int s = 0; s < N; s++) {
-        for (int i = 0; i < VALUE_DIM; i++) {
-            double sum = 0.0;
-            for (int j = 0; j < WUBU_DIMS.d_model; j++)
-                sum += (double)d_output[s * WUBU_DIMS.d_model + j] * (double)ssm_out_weight[i * WUBU_DIMS.d_model + j];
-            d_delta_out[s * VALUE_DIM + i] += (float)sum;
-        }
-    }
-    // dW = delta_out^T @ d_output  (only if weight grad is requested)
-    if (d_ssm_out_weight) {
-        for (int i = 0; i < VALUE_DIM; i++) {
-            for (int j = 0; j < WUBU_DIMS.d_model; j++) {
-                double sum = 0.0;
-                for (int s = 0; s < N; s++)
-                    sum += (double)delta_out[s * VALUE_DIM + i] * (double)d_output[s * WUBU_DIMS.d_model + j];
-                d_ssm_out_weight[i * WUBU_DIMS.d_model + j] += (float)sum;
-            }
-        }
-    }
-}
-
-// ============================================================
-// Backward Pass — Gated Normalization (Step 10)
-// ============================================================
-// Forward: out[i] = x[i] * scale * w[i] * z[i]
-//   where scale = 1/sqrt(mean(x²)+eps), w = norm_weight, z = silu(z_raw)
-// Backward: see derivation below
-void wubu_ssm_backward_gated_norm(
-    const float *x,          // [N, VALUE_DIM] pre-norm delta_out
-    const float *z_silu,     // [N, VALUE_DIM] silu(z_raw) from forward
-    const float *d_out,      // [N, VALUE_DIM] upstream grad (dL/dout)
-    const float *norm_w,     // [SSM_D_STATE] norm weight (broadcast over V_HEADS)
-    float *d_x,              // [N, VALUE_DIM] grad to propagate
-    float *d_z_silu,         // [N, VALUE_DIM] grad for z_silu
-    int B, int T)
-{
-    const int N = B * T;
-    const int d = SSM_D_STATE;  // 128
-    const int n_heads = SSM_V_HEADS;  // 32
-    
-    for (int s = 0; s < N; s++) {
-        for (int h = 0; h < n_heads; h++) {
-            const float *x_h = x + (s * n_heads + h) * d;
-            const float *z_h = z_silu + (s * n_heads + h) * d;
-            const float *do_h = d_out + (s * n_heads + h) * d;
-            float *dx_h = d_x + (s * n_heads + h) * d;
-            float *dz_h = d_z_silu + (s * n_heads + h) * d;
-            
-            // Compute mean(x²) and rms
-            double sum_sq = 0.0;
-            for (int i = 0; i < d; i++) sum_sq += (double)x_h[i] * (double)x_h[i];
-            float rms = sqrtf((float)(sum_sq / d) + 1e-6f);
-            float s = 1.0f / rms;  // scale
-            float s3 = s * s * s;  // ds/dm = -s³/2
-            
-            // Compute inner = sum_j d_out[j] * x[j] * w[j] * z[j]
-            double inner = 0.0;
-            for (int j = 0; j < d; j++)
-                inner += (double)do_h[j] * (double)x_h[j] * (double)norm_w[j] * (double)z_h[j];
-            
-            // dL/dx[i] = do[i] * w[i] * s * z[i] - (s³/d) * x[i] * inner
-            for (int i = 0; i < d; i++) {
-                float grad = do_h[i] * norm_w[i] * s * z_h[i];
-                grad -= (s3 / d) * x_h[i] * (float)inner;
-                dx_h[i] += grad;
-            }
-            
-            // dL/dz_silu[i] = do[i] * x[i] * w[i] * s
-            for (int i = 0; i < d; i++) {
-                dz_h[i] += do_h[i] * x_h[i] * norm_w[i] * s;
-            }
-        }
-    }
-}
-
-// ============================================================
-// Backward Pass — Gated Norm Weight Gradient
-// ============================================================
-// dL/dw[i] = sum_{s,h} dL/dy[s,h,i] * x[s,h,i] * s[s,h] * z[s,h,i]
-void wubu_ssm_backward_gated_norm_weight(
-    const float *x, const float *z_silu,
-    const float *d_out,
-    float *d_norm_weight, int B, int T)
-{
-    if (!d_norm_weight) return;
-    const int N = B * T;
-    const int d = SSM_D_STATE;
-    const int n_vh = SSM_V_HEADS;
-    for (int s = 0; s < N; s++) {
-        for (int h = 0; h < n_vh; h++) {
-            const float *x_h = x + (s * n_vh + h) * d;
-            const float *z_h = z_silu + (s * n_vh + h) * d;
-            const float *do_h = d_out + (s * n_vh + h) * d;
-            double sum_sq = 0.0;
-            for (int i = 0; i < d; i++) sum_sq += (double)x_h[i] * (double)x_h[i];
-            float s_val = 1.0f / sqrtf((float)(sum_sq / d) + 1e-6f);
-            for (int i = 0; i < d; i++)
-                d_norm_weight[i] += do_h[i] * x_h[i] * s_val * z_h[i];
-        }
-    }
-}
-
-// ============================================================
-// Backward Pass — SiLU activation
-// ============================================================
-// silu(x) = x * sigmoid(x)
-// silu'(x) = silu(x) + sigmoid(x) * (1 - silu(x))
-void wubu_silu_backward(int n, const float *x, const float *y,
-                        const float *dy, float *dx) {
-    for (int i = 0; i < n; i++) {
-        float v = x[i];
-        float sig = 1.0f / (1.0f + expf(-v));
-        float silu = y[i];
-        float silu_grad = silu + sig * (1.0f - silu);
-        dx[i] += dy[i] * silu_grad;
-    }
-}
-
-// ============================================================
-// Backward Pass — L2 Normalization
-// ============================================================
-// Forward: out[i] = x[i] / sqrt(sum(x²) + eps)
-// Backward: see derivation in header comment
-void wubu_l2_norm_backward(int B, int T, int n_heads, int d,
-                           const float *x, float eps,
-                           const float *d_out, float *d_x) {
-    const int N = B * T;
-    for (int s = 0; s < N; s++) {
-        for (int h = 0; h < n_heads; h++) {
-            const float *inp = x + (s * n_heads + h) * d;
-            const float *do_h = d_out + (s * n_heads + h) * d;
-            float *dx = d_x + (s * n_heads + h) * d;
-            
-            double sum_sq = 0.0;
-            for (int i = 0; i < d; i++) sum_sq += (double)inp[i] * (double)inp[i];
-            float norm = sqrtf(sum_sq + eps);
-            float n3 = norm * norm * norm;
-            
-            // d_i = (do_i / norm) - (x_i / n³) * sum_j (do_j * x_j)
-            double dot = 0.0;
-            for (int j = 0; j < d; j++) dot += (double)do_h[j] * (double)inp[j];
-            
-            for (int i = 0; i < d; i++) {
-                dx[i] += (float)((double)do_h[i] / norm - (double)inp[i] * dot / n3);
-            }
-        }
-    }
-}
-
 // ============================================================
 // Backward Pass — SSM Delta Net Recurrence (Step 9)
 // ============================================================
@@ -3170,30 +2886,6 @@ cleanup_gqa:
     free(d_attn_out); free(d_gate);
     free(d_Q_norm); free(d_K_norm); free(d_V);
     free(d_Q_raw); free(d_K_raw); free(d_Q_full);
-}
-
-// ============================================================
-// RMSNorm Backward (model-level helper)
-// ============================================================
-void wubu_rms_norm_backward(int B, int T, int d,
-                            const float *x, const float *weight, float eps,
-                            const float *d_out, float *d_x) {
-    const int N = B * T;
-    for (int s = 0; s < N; s++) {
-        const float *inp = x + s * d;
-        const float *do_h = d_out + s * d;
-        float *dx = d_x + s * d;
-        double sum_sq = 0.0;
-        for (int i = 0; i < d; i++) sum_sq += (double)inp[i] * (double)inp[i];
-        float rms = sqrtf((float)(sum_sq / d) + eps);
-        float r = 1.0f / rms;
-        float r3 = r * r * r;
-        double inner = 0.0;
-        for (int j = 0; j < d; j++)
-            inner += (double)do_h[j] * (double)weight[j] * (double)inp[j];
-        for (int i = 0; i < d; i++)
-            dx[i] += do_h[i] * weight[i] * r - (r3 / d) * inp[i] * (float)inner;
-    }
 }
 
 // ============================================================

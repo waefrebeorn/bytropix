@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "wubu_ops.h"   /* activations, norm, conv — extracted (ADR-002) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -327,18 +328,9 @@ void wubu_ssm_gdn_chunked(int B, int T,
                            float *ssm_state,
                            float *delta_out);
 
-// Utility functions
-int wubu_is_ssm_layer(int layer_idx);
-void wubu_softplus(int n, const float *x, float *out);
-void wubu_silu(int n, const float *x, float *out);
-void wubu_sigmoid(int n, const float *x, float *out);
-void wubu_l2_norm(int B, int T, int n_heads, int d,
-                 const float *x, float eps, float *out);
-void wubu_rms_norm(int B, int T, int d,
-                   const float *x, const float *weight, float eps, float *out);
-void wubu_conv1d(int B, int T, int C, int k,
-                 const float *input, const float *kernel,
-                 float *output);
+/* wubu_is_ssm_layer is now declared in wubu_ops.h (moved from here).
+ * All activation/norm/conv forward+backward declarations moved to
+ * wubu_ops.h during the Strangler Fig extraction (ADR-002). */
 
 // Qwen3.6 MRoPE
 void wubu_rope(int B, int T, int n_heads, int head_dim,
@@ -350,28 +342,13 @@ void wubu_rope(int B, int T, int n_heads, int head_dim,
 // Backward Pass Functions (Phase 4)
 // ============================================================
 
-// Backward through SSM output projection (Step 11)
-void wubu_ssm_backward_output_proj(
-    const float *delta_out, const float *d_output,
-    const float *ssm_out_weight,
-    float *d_delta_out, float *d_ssm_out_weight, int N);
+// Note: Several backward primitives (wubu_ssm_backward_output_proj,
+// wubu_ssm_backward_gated_norm, wubu_silu_backward, wubu_l2_norm_backward,
+// wubu_rms_norm_backward) were extracted to wubu_ops.h during the
+// Strangler Fig split (ADR-002). Declarations remain only for functions
+// that use them... 
 
-// Backward through gated normalization (Step 10)
-void wubu_ssm_backward_gated_norm(
-    const float *x, const float *z_silu,
-    const float *d_out, const float *norm_w,
-    float *d_x, float *d_z_silu, int B, int T);
-
-// Backward through SiLU activation
-void wubu_silu_backward(int n, const float *x, const float *y,
-                        const float *dy, float *dx);
-
-// Backward through L2 normalization
-void wubu_l2_norm_backward(int B, int T, int n_heads, int d,
-                           const float *x, float eps,
-                           const float *d_out, float *d_x);
-
-// Backward through SSM delta net recurrence (Step 9) — BPTT
+// Full SSM layer backward (chains steps 11 through 0)
 void wubu_ssm_backward_recurrence(
     int B, int T,
     const float *saved_states,
@@ -428,10 +405,7 @@ void wubu_gqa_backward(
     float *d_q_norm_weight, float *d_k_norm_weight,
     float *d_out_weight);
 
-// RMSNorm backward helper
-void wubu_rms_norm_backward(int B, int T, int d,
-                            const float *x, const float *weight, float eps,
-                            const float *d_out, float *d_x);
+// wubu_rms_norm_backward moved to wubu_ops.h (Strangler Fig, ADR-002)
 
 #ifdef __cplusplus
 }
