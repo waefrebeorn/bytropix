@@ -29,7 +29,8 @@ typedef enum {
     WUBU_ARCH_QWEN36_HYBRID,   // dense Qwen3.6 (SSM+GQA)
     WUBU_ARCH_QWEN_FAMILY,      // generic Qwen-family dense
     WUBU_ARCH_KAT_MOE,          // KAT-Coder MoE on Qwen3.6
-    WUBU_ARCH_BTL3_LORA         // BTL-3 LoRA-on-Qwen3.6-27B
+    WUBU_ARCH_BTL3_LORA,        // BTL-3 LoRA-on-Qwen3.6-27B
+    WUBU_ARCH_DEEPSEEK_V4_MOE   // DeepSeek-V4-Flash: 284B MXFP4 MoE + MLA
 } wubu_arch_t;
 
 typedef struct {

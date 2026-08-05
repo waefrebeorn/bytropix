@@ -43,9 +43,16 @@ enum ggml_type {
     /* TurboQuant family (IDs per TheTom/llama-cpp-turboquant tom/merge-upstream-dsv4) */
     GGML_TYPE_TQ1_0   = 34,
     GGML_TYPE_TQ2_0   = 35,
-    GGML_TYPE_TQ3_1S  = 45,  // WHT-rotated 3-bit Lloyd-Max, block 32, 16 B
+    /* TurboQuant branch extensions (IDs 36-47, PACE 2026-08-04) */
+    GGML_TYPE_MXFP4   = 39,  /* OCP Microscaling FP4: E2M1 + E8M0 per 32-elm block */
+    GGML_TYPE_NVFP4   = 40,  /* NVIDIA FP4: E2M1 + E4M3 mscale per 16-elm sub-block (64 total) */
+    GGML_TYPE_Q1_0    = 41,  /* 1.5625 bpw: 4-bit code + 1-bit sign per 32-element block */
+    GGML_TYPE_TURBO2_0 = 42, /* TurboQuant 2-bit */
+    GGML_TYPE_TURBO3_0 = 43, /* TurboQuant 3-bit */
+    GGML_TYPE_TURBO4_0 = 44, /* TurboQuant 4-bit */
+    GGML_TYPE_TQ3_1S  = 45,  /* WHT-rotated 3-bit Lloyd-Max, block 32, 16 B */
     GGML_TYPE_TQ4_1S  = 46,  // WHT-rotated 4-bit Lloyd-Max, block 32, 20 B
-    GGML_TYPE_Q2_0    = 47,  // 2-bit, block 64, 18 B (branch Q2_0; legacy alias 42)
+    GGML_TYPE_Q2_0    = 47,  /* 2-bit, block 64, 18 B (branch Q2_0; legacy alias 42) */
 };
 
 // GGUF tensor info

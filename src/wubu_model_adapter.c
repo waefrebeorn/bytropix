@@ -219,10 +219,22 @@ bool wubu_adapter_load(wubu_adapter_t *out, const char *path) {
         return true;
     }
 
-    // Detect MoE
+    // Detect MoE — check for DeepSeek-V4-Flash first (MXFP4 experts)
     if (out->n_experts > 0) {
         out->is_moe = true;
-        out->arch = WUBU_ARCH_KAT_MOE;
+        if (mt && memmem(buf, (size_t)(end - buf), "deepseek_v4", 11)) {
+            out->arch = WUBU_ARCH_DEEPSEEK_V4_MOE;
+            /* DeepSeek V4 Flash uses shared_experts + routed experts.
+             * Shared experts are dense (FP8/BF16), routed are MXFP4.
+             * The GGUF quant_type field tells us at load time which is which. */
+            out->shared_expert_ff = out->shared_expert_ff
+                ? out->shared_expert_ff
+                : out->d_ff;
+            /* DeepSeek V4 MLA attention: Q uses latent dim, KV uses grouped-decomp */
+            out->is_hybrid = false;  /* MLA is not SSM+GQA hybrid */
+        } else {
+            out->arch = WUBU_ARCH_KAT_MOE;
+        }
         out->ok = true;
         free(buf);
         return true;
@@ -298,6 +310,25 @@ bool wubu_adapter_resolve_name(wubu_adapter_t *out, const char *name) {
         out->ok = true;
         return true;
     }
+    /* DeepSeek-V4-Flash: 284B MoE, MXFP4 experts, MLA attention, 1M ctx */
+    if (strstr(n, "DeepSeek-V4") || strstr(n, "deepseek") || strstr(n, "ds4")) {
+        out->arch = WUBU_ARCH_DEEPSEEK_V4_MOE;
+        out->is_moe = true;
+        out->n_experts = 256;
+        out->n_active_experts = 6;
+        out->n_layers = 43;
+        out->d_model = 7168;
+        out->d_ff = 18432;
+        out->shared_expert_ff = 18432;
+        out->gqa_q_heads = 128;
+        out->gqa_kv_heads = 8;
+        out->gqa_head_dim = 128;
+        out->rope_theta = 1e8f;  /* 100M rope_theta for MLA */
+        out->vocab_size = 129280;
+        out->partial_rotary_factor = 0.5f;
+        out->ok = true;
+        return true;
+    }
     return false;
 }
 
@@ -332,6 +363,7 @@ const char *wubu_arch_name(wubu_arch_t a) {
         case WUBU_ARCH_QWEN_FAMILY:   return "Qwen-family dense";
         case WUBU_ARCH_KAT_MOE:       return "KAT-Coder MoE";
         case WUBU_ARCH_BTL3_LORA:    return "BTL-3 LoRA";
+        case WUBU_ARCH_DEEPSEEK_V4_MOE: return "DeepSeek-V4-Flash MoE";
         default:                      return "unknown";
     }
 }

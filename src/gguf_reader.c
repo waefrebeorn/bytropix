@@ -1,4 +1,5 @@
 #include "gguf_reader.h"
+#include "wubu_dequant_fp4.h"  /* MXFP4/NVFP4 dequant row functions */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +8,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+
+/* OCP MXFP4 block params (from llama.cpp ggml-common.h) */
+#define QK_MXFP4 32
+/* NVFP4 block params (from llama.cpp ggml-common.h) */
+#define QK_NVFP4 64
+#define QK_NVFP4_SUB 16
 
 // ========== IQ1_S Grid Table (2048 × uint64) ==========
 // From ggml-common.h — lookup table for 1.5625 bpw dequantization
@@ -1149,6 +1156,12 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
     else if (tensor->ggml_type == GGML_TYPE_TQ4_1S) {
         dequantize_tq4_1s_row(src, output, n_elems);
     }
+    else if (tensor->ggml_type == GGML_TYPE_MXFP4) {
+        dequantize_row_mxfp4(src, output, n_elems);
+    }
+    else if (tensor->ggml_type == GGML_TYPE_NVFP4) {
+        dequantize_row_nvfp4(src, output, n_elems);
+    }
     else {
         fprintf(stderr, "Error: unsupported GGML type %d for %s\n", tensor->ggml_type, tensor->name);
         if (raw_heap) free(raw_heap);
@@ -1402,6 +1415,8 @@ void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float 
             break;
         }
         case GGML_TYPE_Q2_K: dequantize_q2_K_row(data, output, n_elems); break;
+        case GGML_TYPE_MXFP4: dequantize_row_mxfp4(data, output, n_elems); break;  /* type 39 */
+        case GGML_TYPE_NVFP4: dequantize_row_nvfp4(data, output, n_elems); break;  /* type 40 */
         case GGML_TYPE_Q3_K: dequantize_q3_K_row(data, output, n_elems); break;
         default:
             fprintf(stderr, "Dequant: unsupported type %d\n", ggml_type);
@@ -1439,6 +1454,8 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_TQ4_1S: return ((n_elems + 31) / 32) * 20; // d0[2] + d1[2] + 4-bit[16], block=32
         case GGML_TYPE_Q2_K:  return n_blocks * 84;   // scales[16] + qs[64] + d[2] + dmin[2]
         case GGML_TYPE_Q3_K:  return n_blocks * 110;  // hmask[32] + qs[64] + scales[12] + d[2]
+        case GGML_TYPE_MXFP4: return ((n_elems + QK_MXFP4 - 1) / QK_MXFP4) * 17; /* E8M0[1] + E2M1[16] = 17 B per blk */
+        case GGML_TYPE_NVFP4: return ((n_elems + QK_NVFP4 - 1) / QK_NVFP4) * 36; /* UE4M3[4] + E2M1[32] = 36 B per blk */
         case 30:              return n_elems * 2;     // BF16 (bfloat16)
         default: return -1;
     }
