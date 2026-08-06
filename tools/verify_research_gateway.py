@@ -4,7 +4,7 @@ verify_research_gateway.py — Theme J rank-4: research→wired-code verificatio
 
 Verifies that every 'wired'/'tested'/'shipped' gap in research/INDEX.md
 has corresponding source files in the tree or is explicitly marked as
-a cross-repo (wubunos) reference.
+a cross-repo (wubuos) reference.
 
 Usage: python3 tools/verify_research_gateway.py
 Exit: 0 if all wired gaps are backed by real source files, 1 if any are not.
