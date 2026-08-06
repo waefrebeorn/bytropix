@@ -586,6 +586,10 @@ test_kv_tiering: tools/test_kv_tiering.c src/wubu_kv_tiering.o src/wubu_kv_embed
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_tiering.c src/wubu_kv_tiering.o src/wubu_kv_embedding.o src/wubu_kvfs.o $(LDFLAGS)
 	./test_kv_tiering
 
+test_scalable_model: tools/test_scalable_model.c src/wubu_model_scalable.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_scalable_model.c src/wubu_model_scalable.o $(LDFLAGS)
+	./test_scalable_model
+
 test_kv_shell: tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o $(LDFLAGS)
 	./test_kv_shell
