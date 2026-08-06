@@ -12,7 +12,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <time.h>
 #include "wubu_kvfs.h"
+
+static double now_s(void);
+static void benchmark_hash_lookup(void);
+static void benchmark_handle_io(void);
 
 static void test_create_free(void) {
     wubu_kvfs_t *fs = wubu_kvfs_create(16, 1024);
@@ -167,6 +172,100 @@ static void test_prefix_lookup(void) {
     wubu_kvfs_free(fs);
 }
 
+static void test_handle_roundtrip(void) {
+    wubu_kvfs_t *fs = wubu_kvfs_create(16, 1024);
+    assert(fs);
+    assert(wubu_kvfs_mount(fs, "/kv/layer_00", 0, 64) == 0);
+
+    /* resolve once */
+    wubu_kvfs_handle_t *h = wubu_kvfs_open(fs, "/kv/layer_00");
+    assert(h != NULL);
+    assert(wubu_kvfs_handle_offset(h) == 0);
+    assert(wubu_kvfs_handle_capacity(h) == 64 * 16); /* 1024 floats */
+
+    float *kv = (float *)calloc(1024 * 16, sizeof(float));
+    assert(kv);
+
+    /* hot write via handle */
+    float src[16];
+    for (int i = 0; i < 16; i++) src[i] = (float)i * 2.0f;
+    assert(wubu_kvfs_handle_write(h, kv, src, 16) == 0);
+
+    /* hot read via handle */
+    float dst[16];
+    assert(wubu_kvfs_handle_read(h, kv, dst, 16) == 0);
+    for (int i = 0; i < 16; i++) assert(dst[i] == (float)i * 2.0f);
+
+    /* handle bound check: exceeding capacity fails */
+    assert(wubu_kvfs_handle_write(h, kv, src, 1025) == -1);
+    assert(wubu_kvfs_handle_read(h, kv, dst, 1025) == -1);
+
+    /* NULL handle / NULL base */
+    assert(wubu_kvfs_handle_read(NULL, kv, dst, 1) == -1);
+    assert(wubu_kvfs_handle_write(h, NULL, src, 1) == -1);
+
+    wubu_kvfs_handle_close(h);
+    /* closed handle pointer must not be reused by us */
+    free(kv);
+    wubu_kvfs_free(fs);
+}
+
+static void test_handle_unmounted(void) {
+    wubu_kvfs_t *fs = wubu_kvfs_create(16, 1024);
+    assert(fs);
+    assert(wubu_kvfs_open(fs, "/kv/nope") == NULL);
+    wubu_kvfs_free(fs);
+}
+
+static void test_hash_scale(void) {
+    /* Many mounts: hash lookup must stay correct at scale. */
+    const int N = 200;
+    wubu_kvfs_t *fs = wubu_kvfs_create(16, 1 << 20);
+    assert(fs);
+    for (int i = 0; i < N; i++) {
+        char p[64];
+        snprintf(p, sizeof(p), "/kv/layer_%03d", i);
+        assert(wubu_kvfs_mount(fs, p, (uint32_t)i, 1) == 0);
+    }
+    assert(wubu_kvfs_mount_count(fs) == N);
+
+    /* every path resolves, including the last (worst-case old scan) */
+    for (int i = 0; i < N; i++) {
+        char p[64];
+        snprintf(p, sizeof(p), "/kv/layer_%03d", i);
+        uint32_t block = 0; size_t off = 0;
+        assert(wubu_kvfs_lookup(fs, p, &block, &off) == 0);
+        assert(block == (uint32_t)i);
+    }
+
+    /* resolve-once handles at scale */
+    for (int i = 0; i < N; i++) {
+        char p[64];
+        snprintf(p, sizeof(p), "/kv/layer_%03d", i);
+        wubu_kvfs_handle_t *h = wubu_kvfs_open(fs, p);
+        assert(h != NULL);
+        assert(wubu_kvfs_handle_offset(h) == (size_t)i * 16);
+        wubu_kvfs_handle_close(h);
+    }
+
+    /* longest-prefix at scale: the deepest matching mount wins */
+    assert(wubu_kvfs_mount(fs, "/kv", 0, 1) == 0);
+    uint32_t block = 0; size_t off = 0;
+    assert(wubu_kvfs_lookup(fs, "/kv/layer_199/extra/deep", &block, &off) == 0);
+    assert(block == 199); /* deepest prefix: /kv/layer_199 */
+
+    /* unmount at scale then verify removal: the leaf mount is gone, so
+     * longest-prefix now falls back to the /kv parent (block 0). */
+    char last[64];
+    snprintf(last, sizeof(last), "/kv/layer_%03d", N - 1);
+    assert(wubu_kvfs_unmount(fs, last) == 0);
+    assert(wubu_kvfs_lookup(fs, last, &block, &off) == 0);
+    assert(block == 0); /* parent /kv prefix resolves now, not layer_199 */
+    assert(wubu_kvfs_mount_count(fs) == N); /* N layers + /kv - unmounted */
+
+    wubu_kvfs_free(fs);
+}
+
 int main(void) {
     printf("test_kvfs: starting...\n");
     test_create_free();
@@ -189,6 +288,92 @@ int main(void) {
     printf("  [PASS] read/write\n");
     test_prefix_lookup();
     printf("  [PASS] prefix lookup\n");
+    test_handle_roundtrip();
+    printf("  [PASS] handle round-trip\n");
+    test_handle_unmounted();
+    printf("  [PASS] handle unmounted\n");
+    test_hash_scale();
+    printf("  [PASS] hash scale (200 mounts)\n");
+
+    /* ---- speed kernel: numbers, not vibes ---- */
+    benchmark_hash_lookup();
+    benchmark_handle_io();
+
     printf("test_kvfs: ALL PASSED\n");
     return 0;
+}
+
+static double now_s(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+/* O(1) hash lookup vs the old O(n) linear scan: 512 mounts, 1M lookups.
+ * The old find_mount scanned all mounts with strncmp — this measures
+ * the replacement. */
+static void benchmark_hash_lookup(void) {
+    const int N = 512;
+    const int ITERS = 1000000;
+    wubu_kvfs_t *fs = wubu_kvfs_create(16, 1 << 20);
+    assert(fs);
+    for (int i = 0; i < N; i++) {
+        char p[64];
+        snprintf(p, sizeof(p), "/kv/layer_%04d", i);
+        assert(wubu_kvfs_mount(fs, p, (uint32_t)i, 1) == 0);
+    }
+
+    /* warmup */
+    uint32_t block = 0; size_t off = 0;
+    for (int i = 0; i < 1000; i++)
+        wubu_kvfs_lookup(fs, "/kv/layer_0511", &block, &off);
+
+    double t0 = now_s();
+    for (int i = 0; i < ITERS; i++)
+        wubu_kvfs_lookup(fs, "/kv/layer_0511", &block, &off);
+    double dt = now_s() - t0;
+    double ns = dt * 1e9 / ITERS;
+    printf("  [BENCH] lookup /kv/layer_0511 (512 mounts): %.1f ns/op (%.0f M ops/s)\n",
+           ns, ITERS / dt / 1e6);
+    assert(block == 511);
+    wubu_kvfs_free(fs);
+}
+
+/* Resolve-once handle I/O: the hot path is bounds check + memcpy.
+ * 1M × 64-float writes. */
+static void benchmark_handle_io(void) {
+    const int ITERS = 1000000;
+    wubu_kvfs_t *fs = wubu_kvfs_create(64, 1 << 20);
+    assert(fs);
+    assert(wubu_kvfs_mount(fs, "/kv/layer_00", 0, 1024) == 0);
+
+    float *kv = (float *)calloc(1024 * 64, sizeof(float));
+    assert(kv);
+    float src[64];
+    for (int i = 0; i < 64; i++) src[i] = (float)i;
+
+    /* resolve ONCE */
+    wubu_kvfs_handle_t *h = wubu_kvfs_open(fs, "/kv/layer_00");
+    assert(h);
+
+    double t0 = now_s();
+    for (int i = 0; i < ITERS; i++)
+        assert(wubu_kvfs_handle_write(h, kv, src, 64) == 0);
+    double dt = now_s() - t0;
+    double ns = dt * 1e9 / ITERS;
+    printf("  [BENCH] handle write 64 floats: %.1f ns/op (%.1f GB/s)\n",
+           ns, (double)ITERS * 64 * 4 / dt / 1e9);
+
+    t0 = now_s();
+    float dst[64];
+    for (int i = 0; i < ITERS; i++)
+        assert(wubu_kvfs_handle_read(h, kv, dst, 64) == 0);
+    dt = now_s() - t0;
+    ns = dt * 1e9 / ITERS;
+    printf("  [BENCH] handle read 64 floats:  %.1f ns/op (%.1f GB/s)\n",
+           ns, (double)ITERS * 64 * 4 / dt / 1e9);
+
+    wubu_kvfs_handle_close(h);
+    free(kv);
+    wubu_kvfs_free(fs);
 }

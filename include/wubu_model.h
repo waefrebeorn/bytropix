@@ -13,6 +13,14 @@
 #include <math.h>
 #include <string.h>
 
+/* ADR-003 (kv-cache-is-a-filesystem): forward declarations only —
+ * wubu_model.h stays include-free of wubu_kvfs.h. The kvfs handle is
+ * an opaque resolved-path pointer created once and reused for hot I/O;
+ * the layer-handles array gives the speed kernel O(1) per-layer KV
+ * addressing with zero string ops. */
+typedef struct wubu_kvfs wubu_kvfs_t;
+typedef struct wubu_kvfs_handle wubu_kvfs_handle_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -742,6 +750,25 @@ typedef struct wubu_model_t {
     int gqa_kv_heads;     // GQA_KV_HEADS
     int gqa_head_dim;     // GQA_HEAD_DIM
     int rotary_dim;       // ROTARY_DIM (RoPE rotation dim)
+
+    // ---- ADR-003: KV cache is a file system ----
+    // Path-addressable KV namespace (wubu_kvfs). Each GQA layer's KV
+    // block is mounted at /kv/layer_XX; the speed kernel and external
+    // 9P clients read/write KV data by path through this namespace.
+    // NULL until wubu_model_init wires it (allocation failure is
+    // non-fatal — the flat gqa_k_cache/gqa_v_cache tensors remain the
+    // authoritative store).
+    wubu_kvfs_t *kvfs;
+    // Per-layer KV block size (floats per layer = gqa_max_ctx * kv_dim).
+    // Uniform across GQA layers for the mounted namespace; 0 if no kvfs.
+    size_t kvfs_block_floats;
+    int    kvfs_n_layers;  // GQA layers mounted in the namespace
+    // Resolve-once handles: one per GQA layer, created at init by
+    // wubu_kvfs_open("/kv/layer_XX"). The speed kernel grabs the
+    // handle and does bounds-checked memcpy I/O with ZERO string
+    // ops per access. NULL for SSM layers; array NULL if no kvfs.
+    wubu_kvfs_handle_t **kvfs_layer_handles;
+    int kvfs_n_handles;    // allocated handle slots (== n_layers)
 } wubu_model_t;
 
 // Create model, load from GGUF
@@ -749,6 +776,51 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path);
 
 // Free model resources
 void wubu_model_free(wubu_model_t *model);
+
+// ---- ADR-003: KV cache is a file system ----
+// Return the model's KV namespace (NULL until wubu_model_init wires it,
+// or if namespace allocation failed — flat tensors remain authoritative).
+wubu_kvfs_t *wubu_model_kvfs(const wubu_model_t *model);
+
+/* Read KV data by namespace path into dst (floats). Routes through the
+ * active backend (GPU-accelerable), falling back to the flat host KV
+ * tensor. Returns 0 on success, -1 if the path is unmounted, the
+ * namespace is missing, or the read would exceed the mount's range. */
+int wubu_model_kvfs_read(wubu_model_t *model, const char *path,
+                         float *dst, size_t n_floats);
+
+/* Write KV data by namespace path from src (floats). Same routing as
+ * wubu_model_kvfs_read. Returns 0 on success, -1 on failure. */
+int wubu_model_kvfs_write(wubu_model_t *model, const char *path,
+                          const float *src, size_t n_floats);
+
+/* JSON snapshot of the mounted namespace (caller frees). NULL if the
+ * namespace is missing. */
+char *wubu_model_kvfs_snapshot_json(wubu_model_t *model, size_t *out_len);
+
+/* ---- ADR-003 speed-kernel hot path: resolve once, use many ----
+ * The per-layer handles are resolved at init. The speed kernel calls
+ * wubu_model_kvfs_layer_handle(layer) once, then wubu_kvfs_handle_read/
+ * write from wubu_kvfs.h — bounds-checked memcpy, zero string ops.
+ * Returns NULL if the layer is an SSM layer or the namespace is
+ * missing. The handle is owned by the model (do NOT close it). */
+wubu_kvfs_handle_t *wubu_model_kvfs_layer_handle(const wubu_model_t *model,
+                                                 int layer);
+
+/* Resolve an arbitrary namespace path to a model-owned handle, or
+ * NULL if unmounted/namespace missing. Same ownership as above. */
+wubu_kvfs_handle_t *wubu_model_kvfs_open_handle(wubu_model_t *model,
+                                                const char *path);
+
+/* Handle-based read/write with backend routing: tries the active
+ * backend first (device-resident KV), falls back to the flat host
+ * tensor through the handle. 0 on success, -1 on failure. */
+int wubu_model_kvfs_handle_read(wubu_model_t *model,
+                                const wubu_kvfs_handle_t *h,
+                                float *dst, size_t n_floats);
+int wubu_model_kvfs_handle_write(wubu_model_t *model,
+                                 const wubu_kvfs_handle_t *h,
+                                 const float *src, size_t n_floats);
 
 /* ---- HW-acceleration wiring (doc "tandem"/"rambus"/"gamebud"/hwcaps) ----
  * Wire the SIMD-ladder detect + RDRAM-interleaved KV + N64 tandem pipeline +

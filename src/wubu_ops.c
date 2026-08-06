@@ -151,6 +151,106 @@ void wubu_rms_norm_backward(int B, int T, int d,
 }
 
 /* ============================================================
+ * SSM backward primitives (extracted during ADR-002 Strangler Fig
+ * but the definitions never landed in wubu_ops.c — only the
+ * silu/l2_norm backward pair made it. These were the missing third.)
+ * ============================================================ */
+
+void wubu_ssm_backward_output_proj(
+    const float *delta_out,
+    const float *d_output,
+    const float *ssm_out_weight,
+    float *d_delta_out,
+    float *d_ssm_out_weight,
+    int N)
+{
+    for (int s = 0; s < N; s++) {
+        for (int i = 0; i < VALUE_DIM; i++) {
+            double sum = 0.0;
+            for (int j = 0; j < WUBU_DIMS.d_model; j++)
+                sum += (double)d_output[s * WUBU_DIMS.d_model + j] *
+                       (double)ssm_out_weight[i * WUBU_DIMS.d_model + j];
+            d_delta_out[s * VALUE_DIM + i] += (float)sum;
+        }
+    }
+    if (d_ssm_out_weight) {
+        for (int i = 0; i < VALUE_DIM; i++) {
+            for (int j = 0; j < WUBU_DIMS.d_model; j++) {
+                double sum = 0.0;
+                for (int s = 0; s < N; s++)
+                    sum += (double)delta_out[s * VALUE_DIM + i] *
+                           (double)d_output[s * WUBU_DIMS.d_model + j];
+                d_ssm_out_weight[i * WUBU_DIMS.d_model + j] += (float)sum;
+            }
+        }
+    }
+}
+
+void wubu_ssm_backward_gated_norm(
+    const float *x,
+    const float *z_silu,
+    const float *d_out,
+    const float *norm_w,
+    float *d_x,
+    float *d_z_silu,
+    int B, int T)
+{
+    const int N = B * T;
+    const int d = SSM_D_STATE;
+    const int n_heads = SSM_V_HEADS;
+    #pragma omp parallel for collapse(2) if(N * n_heads > 100)
+    for (int s = 0; s < N; s++) {
+        for (int h = 0; h < n_heads; h++) {
+            const float *x_h  = x + (s * n_heads + h) * d;
+            const float *z_h  = z_silu + (s * n_heads + h) * d;
+            const float *do_h = d_out + (s * n_heads + h) * d;
+            float *dx_h  = d_x + (s * n_heads + h) * d;
+            float *dz_h  = d_z_silu + (s * n_heads + h) * d;
+
+            double sum_sq = 0.0;
+            for (int i = 0; i < d; i++) sum_sq += (double)x_h[i] * (double)x_h[i];
+            float rms = sqrtf((float)(sum_sq / d) + 1e-6f);
+            float scale = 1.0f / rms;
+            float scale3 = scale * scale * scale;
+            double inner = 0.0;
+            for (int j = 0; j < d; j++)
+                inner += (double)do_h[j] * (double)x_h[j] *
+                         (double)norm_w[j] * (double)z_h[j];
+
+            for (int i = 0; i < d; i++) {
+                float grad = do_h[i] * norm_w[i] * scale * z_h[i];
+                grad -= (scale3 / d) * x_h[i] * (float)inner;
+                dx_h[i] += grad;
+                dz_h[i] += do_h[i] * x_h[i] * norm_w[i] * scale;
+            }
+        }
+    }
+}
+
+void wubu_ssm_backward_gated_norm_weight(
+    const float *x, const float *z_silu,
+    const float *d_out,
+    float *d_norm_weight, int B, int T)
+{
+    if (!d_norm_weight) return;
+    const int N = B * T;
+    const int d = SSM_D_STATE;
+    const int n_vh = SSM_V_HEADS;
+    for (int s = 0; s < N; s++) {
+        for (int h = 0; h < n_vh; h++) {
+            const float *x_h  = x + (s * n_vh + h) * d;
+            const float *z_h  = z_silu + (s * n_vh + h) * d;
+            const float *do_h = d_out + (s * n_vh + h) * d;
+            double sum_sq = 0.0;
+            for (int i = 0; i < d; i++) sum_sq += (double)x_h[i] * (double)x_h[i];
+            float scale = 1.0f / sqrtf((float)(sum_sq / d) + 1e-6f);
+            for (int i = 0; i < d; i++)
+                d_norm_weight[i] += do_h[i] * x_h[i] * scale * z_h[i];
+        }
+    }
+}
+
+/* ============================================================
  * 1D Convolution (depthwise, causal)
  * ============================================================ */
 void wubu_conv1d(int B, int T, int C, int k,

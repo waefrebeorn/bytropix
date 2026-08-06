@@ -32,6 +32,7 @@ static wubu_format_ctx_t *fmt_gguf_open(const char *path) {
     if (!g) return NULL;
     wubu_gguf_ctx_t *ctx = calloc(1, sizeof(wubu_gguf_ctx_t));
     if (!ctx) { gguf_close(g); return NULL; }
+    extern wubu_model_format_t wubu_format_gguf;
     ctx->fmt = &wubu_format_gguf;
     ctx->gguf = g;
     return (wubu_format_ctx_t *)ctx;

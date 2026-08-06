@@ -342,11 +342,10 @@ void wubu_rope(int B, int T, int n_heads, int head_dim,
 // Backward Pass Functions (Phase 4)
 // ============================================================
 
-// Note: Several backward primitives (wubu_ssm_backward_output_proj,
-// wubu_ssm_backward_gated_norm, wubu_silu_backward, wubu_l2_norm_backward,
-// wubu_rms_norm_backward) were extracted to wubu_ops.h during the
-// Strangler Fig split (ADR-002). Declarations remain only for functions
-// that use them... 
+/* ============================================================
+ * Backward Pass Functions (Phase 4) — wubu_ssm_backward* primitives
+ * live in wubu_ops.c; full-layer wrappers below.
+ * ============================================================ */
 
 // Full SSM layer backward (chains steps 11 through 0)
 void wubu_ssm_backward_recurrence(
@@ -360,6 +359,20 @@ void wubu_ssm_backward_recurrence(
     float *d_v_conv,
     float *d_beta_flat, float *d_gate_flat,
     float *d_state_init);
+
+/* Backward primitives extracted to wubu_ops.c (ADR-002 Strangler Fig:
+ * definitions now live there — previously only declarations leaked
+ * through wubu_ssm.h re-export.) */
+void wubu_ssm_backward_output_proj(
+    const float *delta_out, const float *d_output,
+    const float *ssm_out_weight,
+    float *d_delta_out, float *d_ssm_out_weight, int N);
+void wubu_ssm_backward_gated_norm(
+    const float *x, const float *z_silu, const float *d_out,
+    const float *norm_w, float *d_x, float *d_z_silu, int B, int T);
+void wubu_ssm_backward_gated_norm_weight(
+    const float *x, const float *z_silu, const float *d_out,
+    float *d_norm_weight, int B, int T);
 
 // Full SSM layer backward (chains steps 11 through 0)
 void wubu_ssm_backward(

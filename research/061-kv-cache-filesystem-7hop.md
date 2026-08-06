@@ -76,6 +76,7 @@ existing paged/tiered/persistent KV: paths resolve through a radix tree
 (RadixAttention) whose leaves are KV block ranges (PagedAttention) whose
 backing is tiered (wubu_kv_tier) and persistent (wubu_lmcache chunk
 files). `open("/kv/in/doc-0042")` → block range → attention.
+**`wired` (2026-08-05)** — see "G1 wired" below.
 
 **G2 — the mount table** — `/kv/in` (external data: single-encoder
 output lands here), `/kv/synth` (model writes), `/kv/mem` (persistent,
@@ -115,5 +116,86 @@ interrupts fire at tier high-water marks.
 - NVMe KV offload tiers (HBM ~3.35 TB/s / DRAM ~63 GB/s / NVMe ~7 GB/s)
 - TempleOS docs (MAlloc-a-file, I/O space unified with memory space)
 
-Status: `open` — the namespace layer (G1–G6) is the next implementation
-wave; the doctrine + architecture are wired (THEORY/05 + blueprint §2.7).
+Status: G1 `wired` (2026-08-05) — see the G1-wired note below.
+G2–G6 `open` — the mount table, single-encoder head, synthesized
+write-back, Styx export at /n/kv/, and the self-administering loop are
+the next implementation wave; the doctrine + architecture are wired
+(THEORY/05 + blueprint §2.7).
+
+---
+
+## G1 WIRED — the kvfs address layer shipped (2026-08-05)
+
+This session closed G1: `wubu_kvfs` is implemented, wired into
+`wubu_model_t`, and verified with real numbers.
+
+### What shipped
+
+- **`include/wubu_kvfs.h` / `src/wubu_kvfs.c`** — the namespace module.
+  Mount table is an **FNV-1a 64-bit open-addressing hash table** (linear
+  probe, 50% load cap, tombstones, doubling) — NOT a linear scan.
+  Longest-prefix lookup walks parent path segments (one hash probe per
+  segment): O(path depth), not O(mount count).
+- **Resolve-once handles** — `wubu_kvfs_open()` resolves a path once into
+  an opaque handle carrying the precomputed absolute float offset +
+  capacity; `wubu_kvfs_handle_read/write` are a bounds check + memcpy
+  with **zero string ops**. The mount struct is cold (paths only touched
+  at mount/snapshot time).
+- **Model wiring (ADR-003)** — `wubu_model_t` gains `kvfs`,
+  `kvfs_block_floats`, `kvfs_n_layers`, `kvfs_n_handles`,
+  `kvfs_layer_handles[]` (per-layer resolve-once handles cached at init).
+  Init mounts `/kv/layer_XX` per GQA layer and resolves the handles; free
+  closes them then destroys the namespace. Accessors: `wubu_model_kvfs`,
+  `wubu_model_kvfs_read/write` (path), `wubu_model_kvfs_layer_handle`,
+  `wubu_model_kvfs_open_handle`, `wubu_model_kvfs_handle_read/write`,
+  `wubu_model_kvfs_snapshot_json`.
+- **Backend vtable routing** — `wubu_backend_t` gains `kvfs_read`,
+  `kvfs_write`, `kvfs_snapshot` (+ `set_ssm_hybrid`, `sync_ssm_state_to_gpu`,
+  `chunk_size` for the GPU paths). CPU stub falls through to the flat
+  tensor; CUDA backend implements real methods. `void *stream` in the
+  vtable, never `cudaStream_t` (no CUDA leak into the CPU header).
+
+### Measured (test_kvfs on this box)
+
+```
+[BENCH] lookup /kv/layer_0511 (512 mounts): 16.6 ns/op (60 M ops/s)
+[BENCH] handle write 64 floats: 3.1 ns/op (82.8 GB/s)
+[BENCH] handle read 64 floats:  3.1 ns/op (82.3 GB/s)
+```
+
+The old linear scan over 512 mounts with strncmp would be ~microseconds
+per lookup (~100x slower). Handle I/O is memcpy-bound.
+
+### Pre-existing link errors fixed along the way (do NOT regress)
+
+- `wubu_backend.o` was missing from the Makefile CORE_OBJ → added.
+- `wubu_format_onnx_stub` undefined → created
+  `src/wubu_model_format_onnx.c` (probe-only stub, real symbol) + added
+  to CORE_OBJ.
+- `wubu_ssm_backward_output_proj` / `wubu_ssm_backward_gated_norm` /
+  `wubu_ssm_backward_gated_norm_weight` were "extracted to wubu_ops.c"
+  but never actually moved — recovered from git history and implemented
+  in `src/wubu_ops.c`. `test_ops` now links `wubu_dims.o` +
+  `wubu_dims_gpu_stub.o` for `WUBU_DIMS`.
+- `wubu_model_gpu_chunk_sz` / `wubu_gpu_sync_ssm_state_to_gpu` /
+  `wubu_gpu_set_ssm_hybrid` → routed through the backend vtable instead
+  of direct GPU calls (CPU-only builds link clean).
+
+### Test gates (real, re-run 2026-08-05)
+
+- `test_model_kvfs` — 19/19 PASS (self-contained mock model: init,
+  accessor, mount count, path I/O round-trip, resolve-once handles,
+  bounds checks, open_handle, snapshot JSON, teardown, NULL safety).
+- `test_kvfs` — 13/13 PASS + benchmarks.
+- `test_ops` 6/6, `test_fmt` ALL PASS, `test_enc_h3` 20/20, full
+  `make -j4` 0 errors.
+
+### Test-design lesson (the DA catch this session)
+
+The first version of `test_model_kvfs` wrote `src[i] = i*0.25f` so
+`src[0] = 0.0f` — a silent-write bug was MASKED because both src and dst
+were zero at index 0 and the read-back "matched". Fix: use a non-zero
+pattern `(i+1)*0.25f` AND write to the same layer you read via the
+handle (layer_01 vs layer_02 mismatch was the second trap). Rule: a
+round-trip test must write non-zero data and check the same address on
+both sides.

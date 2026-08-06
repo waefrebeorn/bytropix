@@ -3,6 +3,8 @@
 #include "safetensors_reader.h"
 #include "wubu_affinity.h"
 #include "wubu_kv_styx.h"  // KV cache /n/kv/ export (styx)
+#include "wubu_kvfs.h"     // ADR-003: the KV cache IS a file system (namespace layer)
+#include "wubu_backend.h"  // backend vtable dispatch (replaces #ifdef GPU_SUPPORT)
 #include "wubu_rotate.h"   // doc 013: wubu_rotate_input for lm_head Hadamard fuse
 #include "wubu_mem_budget.h" // OOM-proof memory budget calculator
 #include "wubu_hwcaps.h"   // HW-accel: SIMD ladder detection
@@ -847,6 +849,59 @@ int max_s = 1;
         }
     }
 
+    /* Step 5b (ADR-003): The KV cache IS a file system. Build the
+     * path-addressable namespace: each GQA layer's flat KV block is
+     * mounted at /kv/layer_XX. block_size=1 (float units) because
+     * per-layer kv_dim varies; start_block is the cumulative float
+     * offset into the flat tensor, exactly matching the forward
+     * path's k_offset_bytes computation above. The namespace is an
+     * addressing layer only — it does NOT own the KV tensors. */
+    model->kvfs = wubu_kvfs_create(1, (uint32_t)total_cache_elems);
+    if (model->kvfs) {
+        int64_t cum_off = 0;
+        int mounted = 0;
+        for (int l = 0; l < model->n_layers; l++) {
+            if (!model->layers[l].is_ssm) {
+                int kv_dim = model->layers[l].gqa.kv_dim;
+                char path[128];
+                snprintf(path, sizeof(path), "/kv/layer_%02d", l);
+                if (wubu_kvfs_mount(model->kvfs, path,
+                                    (uint32_t)cum_off,
+                                    (uint32_t)((int64_t)runtime_max_ctx * kv_dim)) == 0) {
+                    mounted++;
+                }
+                cum_off += (int64_t)runtime_max_ctx * kv_dim;
+            }
+        }
+        model->kvfs_block_floats = (size_t)total_cache_elems;
+        model->kvfs_n_layers = mounted;
+        fprintf(stderr, "[kvfs] KV namespace mounted: %d GQA layers at /kv/* "
+                "(%zu floats, %zu MB)\n",
+                mounted, (size_t)total_cache_elems,
+                (size_t)total_cache_elems * sizeof(float) / (1024 * 1024));
+
+        /* Resolve-once handles: one per layer slot (NULL for SSM layers).
+         * The speed kernel grabs wubu_model_kvfs_layer_handle(l) and does
+         * bounds-checked memcpy I/O — zero string ops per access. */
+        model->kvfs_layer_handles = (wubu_kvfs_handle_t **)calloc(
+            (size_t)model->n_layers, sizeof(*model->kvfs_layer_handles));
+        if (model->kvfs_layer_handles) {
+            model->kvfs_n_handles = model->n_layers;
+            for (int l = 0; l < model->n_layers; l++) {
+                if (model->layers[l].is_ssm) continue;
+                char path[128];
+                snprintf(path, sizeof(path), "/kv/layer_%02d", l);
+                model->kvfs_layer_handles[l] =
+                    wubu_kvfs_open(model->kvfs, path);
+            }
+        }
+    } else {
+        /* Non-fatal: flat tensors remain authoritative. */
+        model->kvfs_block_floats = 0;
+        model->kvfs_n_layers = 0;
+        fprintf(stderr, "[kvfs] namespace allocation failed — flat KV only\n");
+    }
+
     return true;
 
 fail:
@@ -928,10 +983,11 @@ void wubu_model_free(wubu_model_t *model) {
     if (!model) return;
     // Tear down HW-accel wiring (tandem/gamebud/rambus) before freeing weights.
     wubu_model_unwire_hwaccel(model);
-    // Free GPU resources first
-#ifdef GPU_SUPPORT
-    wubu_model_gpu_free(model);
-#endif
+    // Free GPU resources first via backend vtable
+    wubu_backend_t *backend = wubu_backend_get(model);
+    if (backend && backend->free) {
+        backend->free(model);
+    }
     for (int l = 0; l < model->n_layers; l++) {
         wubu_layer_t *layer = &model->layers[l];
         free(layer->attn_norm_weight);
@@ -978,6 +1034,26 @@ void wubu_model_free(wubu_model_t *model) {
     }
     free(model->ssm_states);
     free(model->ssm_states_saved);  // frees both ssm_states_saved and conv_states_saved (same alloc)
+    /* ADR-003: tear down the KV namespace (addressing layer only —
+     * does NOT own the tensors, free before the flat caches). */
+    if (model->kvfs) {
+        /* Close model-owned resolve-once handles first. */
+        if (model->kvfs_layer_handles) {
+            for (int i = 0; i < model->kvfs_n_handles; i++) {
+                if (model->kvfs_layer_handles[i]) {
+                    wubu_kvfs_handle_close(model->kvfs_layer_handles[i]);
+                    model->kvfs_layer_handles[i] = NULL;
+                }
+            }
+            free(model->kvfs_layer_handles);
+            model->kvfs_layer_handles = NULL;
+            model->kvfs_n_handles = 0;
+        }
+        wubu_kvfs_free(model->kvfs);
+        model->kvfs = NULL;
+        model->kvfs_block_floats = 0;
+        model->kvfs_n_layers = 0;
+    }
     free(model->gqa_k_cache);
     free(model->gqa_v_cache);
     wubu_mtp_free(&model->mtp);
@@ -988,6 +1064,86 @@ void wubu_model_free(wubu_model_t *model) {
     // Free forward arena (all temp buffers)
     wubu_arena_free(&model->fwd_arena);
     memset(model, 0, sizeof(*model));
+}
+
+// ========== ADR-003: KV cache is a file system ==========
+// The model exposes its KV cache through the wubu_kvfs namespace.
+// Backend-routed I/O with flat-tensor fallback (speed kernel path).
+
+wubu_kvfs_t *wubu_model_kvfs(const wubu_model_t *model) {
+    if (!model) return NULL;
+    return model->kvfs;
+}
+
+int wubu_model_kvfs_read(wubu_model_t *model, const char *path,
+                         float *dst, size_t n_floats) {
+    if (!model || !path || !dst || n_floats == 0) return -1;
+    if (!model->kvfs || !model->gqa_k_cache) return -1;
+    /* Speed kernel: try the active backend first (device-resident KV). */
+    if (wubu_backend_kvfs_read(model, path, dst, n_floats) == 0) return 0;
+    /* Flat-tensor fallback through the namespace addressing layer. */
+    return wubu_kvfs_read(model->kvfs, path,
+                          (const float *)model->gqa_k_cache, dst, n_floats);
+}
+
+int wubu_model_kvfs_write(wubu_model_t *model, const char *path,
+                          const float *src, size_t n_floats) {
+    if (!model || !path || !src || n_floats == 0) return -1;
+    if (!model->kvfs || !model->gqa_k_cache) return -1;
+    /* Speed kernel: try the active backend first (device-resident KV). */
+    if (wubu_backend_kvfs_write(model, path, src, n_floats) == 0) return 0;
+    /* Flat-tensor fallback through the namespace addressing layer. */
+    return wubu_kvfs_write(model->kvfs, path,
+                           (float *)model->gqa_k_cache, src, n_floats);
+}
+
+char *wubu_model_kvfs_snapshot_json(wubu_model_t *model, size_t *out_len) {
+    if (!model || !model->kvfs) return NULL;
+    return wubu_kvfs_snapshot_json(model->kvfs, out_len);
+}
+
+/* ---- ADR-003 speed-kernel hot path: resolve once, use many ---- */
+wubu_kvfs_handle_t *wubu_model_kvfs_layer_handle(const wubu_model_t *model,
+                                                 int layer) {
+    if (!model || layer < 0 || layer >= model->kvfs_n_handles) return NULL;
+    return model->kvfs_layer_handles ? model->kvfs_layer_handles[layer] : NULL;
+}
+
+wubu_kvfs_handle_t *wubu_model_kvfs_open_handle(wubu_model_t *model,
+                                                const char *path) {
+    if (!model || !model->kvfs || !path) return NULL;
+    return wubu_kvfs_open(model->kvfs, path);
+}
+
+int wubu_model_kvfs_handle_read(wubu_model_t *model,
+                                const wubu_kvfs_handle_t *h,
+                                float *dst, size_t n_floats) {
+    if (!model || !h || !dst || n_floats == 0) return -1;
+    /* Speed kernel: try the active backend first (device-resident KV).
+     * The backend resolves the same namespace path internally; on the
+     * CPU path this is a no-op and we fall through to the handle. */
+    if (model->kvfs) {
+        int backend_ok = wubu_backend_kvfs_handle_read(model, h, dst, n_floats);
+        if (backend_ok == 0) return 0;
+    }
+    /* Flat-tensor fallback through the resolved handle: bounds check +
+     * memcpy, zero string ops. */
+    if (!model->gqa_k_cache) return -1;
+    return wubu_kvfs_handle_read(h, (const float *)model->gqa_k_cache,
+                                 dst, n_floats);
+}
+
+int wubu_model_kvfs_handle_write(wubu_model_t *model,
+                                 const wubu_kvfs_handle_t *h,
+                                 const float *src, size_t n_floats) {
+    if (!model || !h || !src || n_floats == 0) return -1;
+    if (model->kvfs) {
+        int backend_ok = wubu_backend_kvfs_handle_write(model, h, src, n_floats);
+        if (backend_ok == 0) return 0;
+    }
+    if (!model->gqa_k_cache) return -1;
+    return wubu_kvfs_handle_write(h, (float *)model->gqa_k_cache,
+                                  src, n_floats);
 }
 
 static double wall_time(void) {
@@ -1179,88 +1335,87 @@ void wubu_model_forward_from_embd(wubu_model_t *model,
             wubu_ssm_ensure_f32(&layer->ssm, model->d_model, CONV_DIM, VALUE_DIM);
             float *ssm_state = model->ssm_states + l * model->ssm_v_heads * model->ssm_d_state * model->ssm_d_state;
             float *conv_state = model->conv_states + l * (CONV_KERNEL - 1) * CONV_DIM;
-#ifdef GPU_SUPPORT
-            if (model->gpu_ctx && N > 1) {
-                // Full GPU SSM forward for prefill (N>1): avoids per-token H2D/D2H
-                int gpu_ok = wubu_model_gpu_ssm_forward_full(model, l, normed, N, attn_out);
-                if (!gpu_ok) {
-                    // Fallback: GPU projections + CPU conv/norm/recurrence
-                    float *gpu_qkv = (float*)malloc(sizeof(float) * N * CONV_DIM);
-                    float *gpu_z = (float*)malloc(sizeof(float) * N * VALUE_DIM);
-                    int alloc_ok = (gpu_qkv && gpu_z);
-                    if (alloc_ok) {
-                        // Batched SSM projection: all N tokens at once (avoids N*H2D/D2H overhead)
-                        wubu_model_gpu_ssm_project(model, l,
-                            normed, N,
-                            gpu_qkv, gpu_z, NULL);
-                        // Set GPU recurrence pointers so wubu_ssm_forward uses GPU
-                        wubu_gpu_set_ssm_hybrid(model->gpu_ctx, l, &layer->ssm);
-                        wubu_ssm_forward(normed, B, T, &layer->ssm,
-                            ssm_state, conv_state, attn_out, gpu_qkv, gpu_z);
-                        // Clear GPU pointers to avoid stale state
-                        layer->ssm.gpu_ssm_state = NULL;
-                        layer->ssm.gpu_stream    = NULL;
+            /* Try GPU backend for SSM forward.
+             * Prefill (N>1): full GPU SSM forward.
+             * Decode (N==1): hybrid — GPU projections + CPU recurrence.
+             * On GPU failure, fall through to CPU path. */
+            if (model->gpu_ctx) {
+                wubu_backend_t *backend = wubu_backend_get(model);
+                if (backend && N > 1 && backend->ssm_forward_prefill) {
+                    int gpu_ok = backend->ssm_forward_prefill(model, l, normed, N, attn_out);
+                    if (gpu_ok == 0) {
+                        /* forward_full succeeded — GPU state already correct */
                     } else {
-                        // Allocation failed, fall back to CPU
-                        wubu_ssm_forward(normed, B, T, &layer->ssm,
-                            ssm_state, conv_state, attn_out, NULL, NULL);
+                        /* Fallback: GPU projections + CPU conv/norm/recurrence */
+                        float *gpu_qkv = (float*)malloc(sizeof(float) * N * CONV_DIM);
+                        float *gpu_z = (float*)malloc(sizeof(float) * N * VALUE_DIM);
+                        if (gpu_qkv && gpu_z) {
+                            backend->ssm_project(model, l, normed, N, gpu_qkv, gpu_z, NULL);
+                            wubu_backend_set_ssm_hybrid(model, l, &layer->ssm);
+                            wubu_ssm_forward(normed, B, T, &layer->ssm,
+                                ssm_state, conv_state, attn_out, gpu_qkv, gpu_z);
+                            layer->ssm.gpu_ssm_state = NULL;
+                            layer->ssm.gpu_stream    = NULL;
+                        } else {
+                            wubu_ssm_forward(normed, B, T, &layer->ssm,
+                                ssm_state, conv_state, attn_out, NULL, NULL);
+                        }
+                        free(gpu_qkv);
+                        free(gpu_z);
+                        wubu_backend_sync_ssm_state_to_gpu(model, l,
+                            ssm_state, conv_state);
                     }
-                    free(gpu_qkv);
-                    free(gpu_z);
-                }
-                // Sync CPU→GPU state after hybrid prefill, so forward_full
-                // decode uses correct accumulated state for subsequent tokens
-                if (gpu_ok) {
-                    // forward_full succeeded — GPU state already correct, no sync needed
-                } else {
-                    wubu_gpu_sync_ssm_state_to_gpu(model->gpu_ctx, l,
+                } else if (backend && backend->ssm_project) {
+                    /* N==1 decode path: hybrid — GPU projections + CPU recurrence */
+                    wubu_backend_sync_ssm_state_to_gpu(model, l,
                         ssm_state, conv_state);
+                    wubu_backend_set_ssm_hybrid(model, l, &layer->ssm);
+                    wubu_ssm_forward(normed, B, T, &layer->ssm,
+                        ssm_state, conv_state, attn_out, NULL, NULL);
+                    layer->ssm.gpu_ssm_state = NULL;
+                    layer->ssm.gpu_stream    = NULL;
+                } else
+                {
+                    wubu_ssm_forward(normed, B, T, &layer->ssm,
+                        ssm_state, conv_state, attn_out, NULL, NULL);
                 }
-            } else if (model->gpu_ctx) {
-                // N==1 decode path: use HYBRID ONLY (GPU quant matmuls + CPU SSM)
-                // Sync CPU state to GPU for hybrid recurrence
-                wubu_gpu_sync_ssm_state_to_gpu(model->gpu_ctx, l,
-                    ssm_state, conv_state);
-                wubu_gpu_set_ssm_hybrid(model->gpu_ctx, l, &layer->ssm);
-                wubu_ssm_forward(normed, B, T, &layer->ssm,
-                    ssm_state, conv_state, attn_out, NULL, NULL);
-                layer->ssm.gpu_ssm_state = NULL;
-                layer->ssm.gpu_stream    = NULL;
-            } else
-#endif
-            {
+            } else {
                 wubu_ssm_forward(normed, B, T, &layer->ssm,
                     ssm_state, conv_state, attn_out, NULL, NULL);
             }
         } else {
             /* Materialize lazy BF16 GQA proj matrices to F32 on first use. */
             wubu_gqa_ensure_f32(&layer->gqa, model->d_model);
-#ifdef GPU_SUPPORT
+            /* Try GPU backend for GQA attention.
+             * On GPU failure, fall through to CPU path with KV cache. */
             if (model->gpu_ctx) {
-                // Use cached GQA layer index to check if GPU attention is beneficial
-                int gqa_use_gpu = 0;
-                if (N > 1) gqa_use_gpu = 1;
-                if (gqa_use_gpu) {
-                    // Batched GQA: process all tokens at once (avoids N*H2D/D2H overhead)
-                    int chunk_sz = wubu_model_gpu_chunk_sz(model);
-                    if (N <= chunk_sz) {
-                        wubu_model_gpu_gqa_forward(model, l, normed, N, attn_out);
-                    } else {
-                        // N exceeds GPU scratch chunk size — process in sub-batches
-                        int remaining = N, offset = 0;
-                        while (remaining > 0) {
-                            int c = remaining < chunk_sz ? remaining : chunk_sz;
-                            wubu_model_gpu_gqa_forward(model, l,
-                                normed + offset * model->d_model, c,
-                                attn_out + offset * model->d_model);
-                            offset += c;
-                            remaining -= c;
+                wubu_backend_t *backend = wubu_backend_get(model);
+                if (backend && backend->gqa_forward) {
+                    int gqa_use_gpu = (N > 1) ? 1 : 0;
+                    if (gqa_use_gpu) {
+                        int chunk_sz = wubu_backend_chunk_size(model);
+                        if (N <= chunk_sz) {
+                            int ok = backend->gqa_forward(model, l,
+                                normed, N, attn_out);
+                            if (ok == 0) goto gqa_done;
+                        } else {
+                            /* N exceeds GPU scratch chunk size —
+                             * process in sub-batches. */
+                            int remaining = N, offset = 0;
+                            while (remaining > 0) {
+                                int c = remaining < chunk_sz ? remaining : chunk_sz;
+                                int ok = backend->gqa_forward(model, l,
+                                    normed + offset * model->d_model, c,
+                                    attn_out + offset * model->d_model);
+                                if (ok != 0) break;
+                                offset += c;
+                                remaining -= c;
+                            }
+                            if (remaining == 0) goto gqa_done;
                         }
                     }
-                    goto gqa_done;
                 }
             }
-#endif
             {  // CPU GQA forward with KV cache
             int l_gqa = 0;  // GQA layer index among GQA layers
             // Count GQA layers up to current to index into cache
@@ -1362,17 +1517,21 @@ layer_timing:
             (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Quantized path: also save selected expert indices for next-layer prefetch
             // GPU MoE (disabled by FORCE_CPU_MOE env var for debug)
-#ifdef GPU_SUPPORT
             if (model->gpu_ctx && !getenv("FORCE_CPU_MOE")) {
-                layer->moe.gpu_ctx = (void *)model;
+                wubu_backend_t *backend = wubu_backend_get(model);
+                if (backend && backend->moe_experts) {
+                    layer->moe.gpu_ctx = (void *)model;
+                }
             }
-#endif
             wubu_moe_forward(normed2, B, T, &layer->moe, ffn_out, have_prev_experts ? prev_experts : NULL,
                              model->n_active_experts, model->n_experts, model->d_model, model->d_ff);
             have_prev_experts = 1;
-#ifdef GPU_SUPPORT
-            layer->moe.gpu_ctx = NULL;  // reset after use
-#endif
+            if (model->gpu_ctx) {
+                wubu_backend_t *backend = wubu_backend_get(model);
+                if (backend) {
+                    layer->moe.gpu_ctx = NULL;  // reset after use
+                }
+            }
         } else if (model->enable_moe && model->gguf_ctx &&
                    (model->moe_max_layers == 0 || l < model->moe_max_layers)) {
             // Fallback: F32 dequant path
