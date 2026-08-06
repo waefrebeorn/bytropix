@@ -101,7 +101,7 @@ api_server: tools/api_server.c
 	$(CC) -O2 -g -Wall -DWUBU_TOOL_VERSION=\"$(WUBU_VERSION)\" -I include -o $@ $< -lssl -lcrypto -lm
 
 # Object files
-CORE_OBJ = src/wubu_model.o src/wubu_mtp.o src/wubu_model_ckpt.o src/wubu_model_format.o src/wubu_model_format_gguf.o src/wubu_model_format_st.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ops.o src/wubu_plugin.o src/wubu_ssm.o src/wubu_ssm_workspace.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o src/wubu_gemm.o src/wubu_kvcache_quant.o src/wubu_ssm_scan.o src/wubu_roofline.o src/wubu_kv_select.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o src/wubu_mem_budget.o src/wubu_prefix_cache.o src/wubu_paged_kv.o src/wubu_q4k_m.o src/wubu_delta_net.o src/wubu_scheduler.o src/wubu_ngram.o src/wubu_self_cascade.o src/wubu_spec_cascade.o src/wubu_spawn.o src/wubu_kv_styx.o src/wubu_kv_tier.o src/wubu_kvfs.o src/wubu_attn_gate.o src/wubu_layer_skip.o src/wubu_kv_adaptive.o src/wubu_awq.o src/wubu_gptq.o src/wubu_soa.o src/wubu_flash_prefill.o src/wubu_kv_cacheline.o src/wubu_rope_prefetch.o src/wubu_numerical_audit.o src/wubu_mla.o src/wubu_expert_choice.o src/wubu_chunked_prefill.o src/wubu_smt_check.o src/wubu_lmcache.o src/wubu_kernel.o src/wubu_kernel_backends.o src/wubu_fast_attn.o src/wubu_4kv.o src/wubu_polarquant.o src/wubu_eagle.o src/wubu_kv_evict.o src/wubu_thread_spec.o src/wubu_early_exit.o src/wubu_hwcaps.o src/wubu_tandem.o src/wubu_rambus.o src/wubu_gamebud.o src/wubu_fp8.o src/wubu_ecs.o src/wubu_nvfp4.o src/wubu_hadamard.o src/wubu_expert_allreduce.o src/wubu_equiv_check.o src/wubu_integrate.o src/wubu_capzero.o src/wubu_latency.o src/wubu_ctxvm.o src/wubu_safekern.o src/wubu_loopguard.o src/wubu_planediv.o src/wubu_coord.o src/wubu_metagame.o src/wubu_credit.o src/wubu_metagame2.o src/wubu_resource.o src/wubu_worldmodel.o src/wubu_agentauth.o src/wubu_vecsearch.o src/wubu_causal.o src/wubu_symbolic.o src/wubu_dgm.o src/wubu_tooluse.o src/wubu_synth.o src/wubu_evolve.o src/wubu_codeexec.o src/wubu_sandbox_safekern.o src/wubu_codesynth.o src/wubu_verify.o src/wubu_experibuf.o src/wubu_ewc.o src/wubu_taskbd.o src/wubu_distill.o src/wubu_imgenc.o src/wubu_audio.o src/wubu_mm_align.o src/wubu_mm_adapter.o src/wubu_mm_kv.o src/wubu_bft.o src/wubu_threshsig.o src/wubu_agentid.o src/wubu_semcons.o src/wubu_fraud.o src/wubu_symreg.o src/wubu_sindy.o src/wubu_cegis.o src/wubu_prover.o src/wubu_invariant.o src/wubu_gp.o src/wubu_acq.o src/wubu_bo.o src/wubu_uq.o src/wubu_active.o src/wubu_bandit.o src/wubu_reinforce.o src/wubu_policy.o src/wubu_actor_critic.o src/wubu_ppo.o src/wubu_dqn.o src/wubu_value.o src/wubu_specdec.o src/wubu_pagedkv.o src/wubu_moeroute.o src/wubu_contbatch.o src/wubu_medusa.o src/wubu_quantkv.o src/wubu_hashrouter.o src/wubu_dsa.o src/wubu_tensor_store.o src/wubu_mhc_mh.o src/wubu_mxfp4.o src/wubu_linear_attn.o src/wubu_enc_h3.o src/wubu_dsv4.o src/wubu_lfm.o src/wubu_megakernel.o src/wubu_multiteach.o src/wubu_dequant_fp4.o src/wubu_dequant_nf4.o
+CORE_OBJ = src/wubu_model.o src/wubu_mtp.o src/wubu_model_ckpt.o src/wubu_model_format.o src/wubu_model_format_gguf.o src/wubu_model_format_st.o src/wubu_model_format_onnx.o src/wubu_dims.o src/wubu_dims_gpu.o src/wubu_ops.o src/wubu_plugin.o src/wubu_ssm.o src/wubu_ssm_workspace.o src/wubu_ssm_chunked.o src/wubu_mobius.o src/wubu_nested_ssm.o src/wubu_nested_ssm_backward.o src/wubu_moe.o src/wubu_moe_backward.o src/wubu_moe_hyperbolic.o src/wubu_poincare_ssm_backward.o src/wubu_poincare_gqa.o src/wubu_poincare_gqa_backward.o src/wubu_mobius_linear.o src/wubu_hyperbolic_output_proj.o src/wubu_vision.o src/gguf_reader.o src/qlearner.o src/rsgd.o src/wubu_tst.o src/dequant_iq2_xxs.o src/quantized_matmul.o src/quantized_dot_generic.o src/safetensors_reader.o src/wubu_repetition.o src/wubu_lora.o src/wubu_model_adapter.o src/wubu_model_safetensors_bridge.o src/wubu_safetensors_shard.o src/wubu_ssd_moe.o src/wubu_gemm.o src/wubu_kvcache_quant.o src/wubu_ssm_scan.o src/wubu_roofline.o src/wubu_kv_select.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o src/wubu_mem_budget.o src/wubu_prefix_cache.o src/wubu_paged_kv.o src/wubu_q4k_m.o src/wubu_delta_net.o src/wubu_scheduler.o src/wubu_ngram.o src/wubu_self_cascade.o src/wubu_spec_cascade.o src/wubu_spawn.o src/wubu_kv_styx.o src/wubu_kv_tier.o src/wubu_kvfs.o src/wubu_attn_gate.o src/wubu_layer_skip.o src/wubu_kv_adaptive.o src/wubu_awq.o src/wubu_gptq.o src/wubu_soa.o src/wubu_flash_prefill.o src/wubu_kv_cacheline.o src/wubu_rope_prefetch.o src/wubu_numerical_audit.o src/wubu_mla.o src/wubu_expert_choice.o src/wubu_chunked_prefill.o src/wubu_smt_check.o src/wubu_lmcache.o src/wubu_kernel.o src/wubu_kernel_backends.o src/wubu_fast_attn.o src/wubu_4kv.o src/wubu_polarquant.o src/wubu_eagle.o src/wubu_kv_evict.o src/wubu_thread_spec.o src/wubu_early_exit.o src/wubu_hwcaps.o src/wubu_tandem.o src/wubu_rambus.o src/wubu_gamebud.o src/wubu_fp8.o src/wubu_ecs.o src/wubu_nvfp4.o src/wubu_hadamard.o src/wubu_expert_allreduce.o src/wubu_equiv_check.o src/wubu_integrate.o src/wubu_capzero.o src/wubu_latency.o src/wubu_ctxvm.o src/wubu_safekern.o src/wubu_loopguard.o src/wubu_planediv.o src/wubu_coord.o src/wubu_metagame.o src/wubu_credit.o src/wubu_metagame2.o src/wubu_resource.o src/wubu_worldmodel.o src/wubu_agentauth.o src/wubu_vecsearch.o src/wubu_causal.o src/wubu_symbolic.o src/wubu_dgm.o src/wubu_tooluse.o src/wubu_synth.o src/wubu_evolve.o src/wubu_codeexec.o src/wubu_sandbox_safekern.o src/wubu_codesynth.o src/wubu_verify.o src/wubu_experibuf.o src/wubu_ewc.o src/wubu_taskbd.o src/wubu_distill.o src/wubu_imgenc.o src/wubu_audio.o src/wubu_mm_align.o src/wubu_mm_adapter.o src/wubu_mm_kv.o src/wubu_bft.o src/wubu_threshsig.o src/wubu_agentid.o src/wubu_semcons.o src/wubu_fraud.o src/wubu_symreg.o src/wubu_sindy.o src/wubu_cegis.o src/wubu_prover.o src/wubu_invariant.o src/wubu_gp.o src/wubu_acq.o src/wubu_bo.o src/wubu_uq.o src/wubu_active.o src/wubu_bandit.o src/wubu_reinforce.o src/wubu_policy.o src/wubu_actor_critic.o src/wubu_ppo.o src/wubu_dqn.o src/wubu_value.o src/wubu_specdec.o src/wubu_pagedkv.o src/wubu_moeroute.o src/wubu_contbatch.o src/wubu_medusa.o src/wubu_quantkv.o src/wubu_hashrouter.o src/wubu_dsa.o src/wubu_tensor_store.o src/wubu_mhc_mh.o src/wubu_mxfp4.o src/wubu_linear_attn.o src/wubu_enc_h3.o src/wubu_dsv4.o src/wubu_lfm.o src/wubu_megakernel.o src/wubu_multiteach.o src/wubu_dequant_fp4.o src/wubu_dequant_nf4.o
 MODEL_OBJ = $(CORE_OBJ)
 CUDA_OBJ = src/cuda_kernels.o src/gpu_output_proj.o src/flash_attn_q4_0_opt.o src/flash_attn_q4_0_prefill_opt.o src/wubu_kernel_cuda.o
 GPU_OBJ = src/wubu_model_gpu.o src/wubu_gpu_weight_cache.o src/gpu_quant_matmul.o src/gpu_quant_matmul_row_major.o src/gpu_moe_kernel.o src/gpu_ssm_recurrence.o src/wubu_kv_runtime.o src/wubu_gemv_tune.o src/wubu_affinity.o src/wubu_rotate.o src/wubu_flashdecode.o src/wubu_kvvq.o src/wubu_spec_decode.o src/wubu_generate.o src/wubu_ternary.o src/wubu_smoothquant.o src/wubu_arena.o
@@ -581,7 +581,7 @@ test_4kv: tools/test_4kv.c src/wubu_4kv.o
 	$(CC) $(CFLAGS) -o $@ $< src/wubu_4kv.o $(LDFLAGS) -lm
 	./$@
 
-test_safetensors: tools/test_safetensors.c src/safetensors_reader.o gen_fixture_safetensors
+test_safetensors: tools/test_safetensors.c src/safetensors_reader.o src/wubu_dequant_nf4.o gen_fixture_safetensors
 	$(CC) $(CFLAGS) -o $@ $< src/safetensors_reader.o $(LDFLAGS)
 	./gen_fixture_safetensors
 	./$@
@@ -622,7 +622,7 @@ test_real_load: tools/test_real_load.c src/wubu_model_adapter.o $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
-test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o src/wubu_safetensors_shard.o src/safetensors_reader.o
+test_ssd_moe: tools/test_ssd_moe.c src/wubu_ssd_moe.o src/wubu_safetensors_shard.o src/safetensors_reader.o src/wubu_dequant_nf4.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ── 100-improvement modules (Areas A/B/C/D/F/H/I/J/K) ───────────────
@@ -688,7 +688,7 @@ test_dsa: tools/test_dsa.c src/wubu_dsa.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
-test_tensor_store: tools/test_tensor_store.c src/wubu_tensor_store.o src/safetensors_reader.o src/gguf_reader.o
+test_tensor_store: tools/test_tensor_store.c src/wubu_tensor_store.o src/safetensors_reader.o src/wubu_dequant_nf4.o src/gguf_reader.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
@@ -843,7 +843,7 @@ test_ngram: tools/test_ngram.c src/wubu_ngram.o
 
 # G04: Hive data structure test (linked fixed blocks + skipfield + freelist)
 test_hive: tools/test_hive.c src/wubu_hive.o $(CPU_OBJ)
-test_diag: tools/test_diag.c src/wubu_diag.o src/wubu_hive.o src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
+test_diag: tools/test_diag.c src/wubu_diag.o src/wubu_hive.o src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@
 test_gravity: tools/test_gravity.c src/wubu_gravity.o
@@ -1226,11 +1226,11 @@ test_causal_symbolic: tools/test_causal_symbolic.c src/wubu_causal.o src/wubu_sy
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
-test_ax: tools/test_ax.c src/wubu_dgm.o src/wubu_tooluse.o src/wubu_synth.o src/wubu_evolve.o src/wubu_codeexec.o src/wubu_sandbox_safekern.o
+test_ax: tools/test_ax.c src/wubu_dgm.o src/wubu_tooluse.o src/wubu_synth.o src/wubu_evolve.o src/wubu_codeexec.o src/wubu_sandbox_safekern.o src/wubu_spawn.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
-test_axi: tools/test_axi.c src/wubu_dgm.o src/wubu_tooluse.o src/wubu_synth.o src/wubu_evolve.o src/wubu_codeexec.o src/wubu_sandbox_safekern.o src/wubu_codesynth.o src/wubu_verify.o
+test_axi: tools/test_axi.c src/wubu_dgm.o src/wubu_tooluse.o src/wubu_synth.o src/wubu_evolve.o src/wubu_codeexec.o src/wubu_sandbox_safekern.o src/wubu_codesynth.o src/wubu_verify.o src/wubu_spawn.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@
 
@@ -1309,20 +1309,20 @@ wubu_tokenc: tools/wubu_tokenc.c src/wubu_tokenizer_hf.o
 gpu_wubu.o: src/gpu_wubu.cu
 	nvcc -O2 -c src/gpu_wubu.cu -o $@ -Xcompiler -fPIC
 
-wubu_train: tools/wubu_train_cli.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_grow.o src/wubu_plateau.o gpu_wubu.o
+wubu_train: tools/wubu_train_cli.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o src/wubu_grow.o src/wubu_plateau.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 
-wubu_live_learn: tools/wubu_live_learn.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o gpu_wubu.o
+wubu_live_learn: tools/wubu_live_learn.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o src/wubu_tokenizer_hf.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 
-wubu_boot: tools/wubu_boot.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_bi.o src/wubu_moe2.o src/safetensors_reader.o src/safetensors_writer.o src/wubu_tensor_store.o src/gguf_reader.o gpu_wubu.o
+wubu_boot: tools/wubu_boot.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_bi.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o src/safetensors_writer.o src/wubu_tensor_store.o src/gguf_reader.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 
 # the GPU-accelerated trainer: same CLI, weak-linked cuBLAS dispatch.
-wubu_train_gpu: tools/wubu_train_cli.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_grow.o src/wubu_plateau.o gpu_wubu.o
+wubu_train_gpu: tools/wubu_train_cli.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o src/wubu_grow.o src/wubu_plateau.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm -L/usr/local/cuda-13.1/lib64 -lcublas -lcudart -Wl,-rpath,/usr/local/cuda-13.1/lib64
 
-test_wubu_save: tools/test_wubu_save.c src/wubu.o src/safetensors_reader.o src/safetensors_writer.o src/wubu_save.o
+test_wubu_save: tools/test_wubu_save.c src/wubu.o src/safetensors_reader.o src/wubu_dequant_nf4.o src/safetensors_writer.o src/wubu_save.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm
 	./$@ models/wubu/model.safetensors
 
@@ -1341,18 +1341,18 @@ test_moe2: tools/test_moe2.c src/wubu_moe2.o
 wubu_cli: tools/wubu_cli.c src/wubu.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_tokenizer_hf.o src/wubu_dequant_nf4.o gpu_wubu.o
 	$(CC) $(CFLAGS) -DWUBU_TOOL_VERSION=\"$(WUBU_VERSION)\" -I include -o $@ $^ -lm $(CUDA_LIBS)
 
-test_wubu: tools/test_wubu.c src/wubu.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
+test_wubu: tools/test_wubu.c src/wubu.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@ models/wubu/model.safetensors
 
-test_wubu_train: tools/test_wubu_train.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
+test_wubu_train: tools/test_wubu_train.c src/wubu.o src/wubu_train.o src/wubu_backprop.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@ models/wubu/model.safetensors
 
 src/wubu_backprop.o: include/wubu_backprop.h include/wubu_train.h include/wubu.h
 src/wubu_train.o: include/wubu_train.h include/wubu.h include/wubu_backprop.h
 
-test_backprop: tools/test_backprop.c src/wubu_backprop.o src/wubu.o src/wubu_train.o src/wubu_moe2.o src/safetensors_reader.o gpu_wubu.o
+test_backprop: tools/test_backprop.c src/wubu_backprop.o src/wubu.o src/wubu_train.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o gpu_wubu.o
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@
 
@@ -1389,7 +1389,7 @@ test_credit_dbstate: tools/test_credit_dbstate.c src/wubu_credit_sft.c src/wubu_
 	./$@
 test_width: tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_moe2.c \
 	include/wubu_width.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_moe2.c src/safetensors_reader.c -lm
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_moe2.c src/safetensors_reader.c src/wubu_dequant_nf4.c -lm
 	./$@
 test_seed: tools/test_seed.c src/wubu_seed.c include/wubu_seed.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_seed.c src/wubu_seed.c
@@ -1431,7 +1431,7 @@ test_plateau: tools/test_plateau.c src/wubu_plateau.c include/wubu_plateau.h
 test_grow: tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_backprop.c src/wubu_train.c \
 	src/safetensors_reader.c src/wubu_moe2.c src/wubu_ubus.c \
 	include/wubu_grow.h include/wubu.h include/wubu_backprop.h include/wubu_train.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_backprop.c src/wubu_train.c src/safetensors_reader.c src/wubu_moe2.c src/wubu_ubus.c -lm
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_backprop.c src/wubu_train.c src/safetensors_reader.c src/wubu_dequant_nf4.c src/wubu_moe2.c src/wubu_ubus.c -lm
 	./$@
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@
