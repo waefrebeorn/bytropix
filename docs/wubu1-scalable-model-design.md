@@ -110,3 +110,46 @@ responsive), while continuously absorbing high-density knowledge into
 the weight tree (the AGI grows toward understanding).
 
 ### WaefreBeorn Umbrella License v3.0
+
+## Appendix: Adapter Framework (AN23-2)
+
+### Frame / Buffer / Shims
+
+The AGI is built from interchangeable parts. Each part is an **adapter** —
+an opaque struct with a dispatch table of function pointers (same pattern
+as `wubu_kernel.h` for hardware kernels).
+
+```
+FRAME:  wubu_adapter.h        — opaque type + ops vtable (C11 vtable)
+BUFFER: wubu_adapter_registry.c — slot map (name → adapter pointer)
+SHIM:   wubu_adapter_compat.c  — version bridge (v1↔v2↔v3 adapters)
+```
+
+**Component types** (all hot-swappable at runtime):
+| Type | Examples of swappable parts |
+|---|---|
+| `WUBU_COMP_ATTN` | local_window, sliding, ALiBi, RoPE-v1/v2, GQA, MQA |
+| `WUBU_COMP_FFN`  | relu, gelu, swiglu, gated_swiglu, moeswiglu |
+| `WUBU_COMP_NORM` | RMSNorm, LayerNorm, ScaleNorm, DeepNorm |
+| `WUBU_COMP_ACT`  | relu, gelu, silu, swiglu, relu_squared |
+| `WUBU_COMP_TOK`  | byte, bpe, unigram, rwkv-tokenizer, custom |
+| `WUBU_COMP_LR`   | cosine, linear, inverse_sqrt, cosine_restarts |
+| `WUBU_COMP_OPT`  | adamw, lion, adan, ranger, sam_adamw |
+| `WUBU_COMP_QUANT`| f32→f16, f32→q4_0, f32→q4_k, f32→q8_k |
+| `WUBU_COMP_KVC`  | dense, ring, stream, paged, sharded |
+
+**Hot-swap example:**
+```c
+wubu_adapter_t *attn = wubu_adapter_lookup("attn.local_window");
+/* ... model is running with local_window attention ... */
+wubu_adapter_t *new_attn = wubu_attn_sliding_create(...);
+wubu_adapter_swap("attn.local_window", new_attn);  // atomic replace
+/* ... model now uses sliding attention, no restart ... */
+```
+
+**Compile for speed, run for operation:**
+- **Colonel-level (C11 design)**: opaque structs + function pointers
+- **Device backends**: CUDA/Metal/Vulkan register their own impls
+  via the same dispatch table — runtime swaps between CPU scalar,
+  SIMD, CUDA, Metal, etc.
+- **Shims**: backward-compat bridges let v1 adapters work with v2 core
