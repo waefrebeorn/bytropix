@@ -18,6 +18,8 @@
 #include <string.h>
 #include "wubu_kv_hierarchy.h"
 #include "wubu_kv_semantic_router.h"
+#include "wubu_kv_shrink.h"
+#include "wubu_kvfs.h"
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -158,6 +160,51 @@ int main(void) {
 
 cleanup_rt:
     wubu_kv_router_free(rt);
+
+    /* T10: KV shrink prunes cold regions */
+    TEST(t10_kv_shrink_prune);
+    wubu_kvfs_t *sfs = wubu_kvfs_create(256, 16);
+    wubu_kv_shrink_t *sz = wubu_kv_shrink_create(sfs, &(wubu_kv_shrink_cfg_t){
+        .util_threshold = 0.01f, .cold_iters = 3, .min_regions = 1
+    });
+    if (!sz) { FAIL("shrink_create returned NULL"); goto cleanup_s10; }
+
+    /* 3 regions: A and B are cold, C is warm */
+    const char *spaths[] = { "/kv/in/a.c", "/kv/in/b.c", "/kv/in/c.c" };
+    float sutil[] = { 0.001f, 0.001f, 0.5f };
+
+    /* Feed 3 cold iterations for A and B, warm for C */
+    for (int iter = 0; iter < 3; iter++) {
+        wubu_kv_shrink_feed(sz, spaths, sutil, 3);
+    }
+
+    char **pruned_paths = NULL;
+    int pruned = wubu_kv_shrink_sweep(sz, &pruned_paths);
+    /* A and B should be pruned (cold_streak >= 3), C stays.
+     * min_regions=1 means we stop at 1 remaining. So 2 pruned. */
+    /* But we only mounted 3 regions via feed (no actual mount).
+     * The shrink operator tracks them but hasn't mounted.
+     * unmount on unmounted path should be safe. Let's just check
+     * the count of pruned regions in the tracking. */
+    if (pruned < 2) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "pruned=%d expected >=2", pruned);
+        FAIL(buf);
+        if (pruned_paths) {
+            for (int i = 0; i < pruned; i++) free(pruned_paths[i]);
+            free(pruned_paths);
+        }
+        goto cleanup_s10;
+    }
+    PASS();
+
+cleanup_s10:
+    if (pruned_paths) {
+        for (int i = 0; i < pruned; i++) free(pruned_paths[i]);
+        free(pruned_paths);
+    }
+    wubu_kv_shrink_free(sz);
+    wubu_kvfs_free(sfs);
 
 summary:
     return tests_failed > 0 ? 1 : 0;

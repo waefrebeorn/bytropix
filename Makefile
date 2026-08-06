@@ -574,8 +574,11 @@ src/wubu_kv_hierarchy.o: src/wubu_kv_hierarchy.c include/wubu_kv_hierarchy.h inc
 src/wubu_kv_semantic_router.o: src/wubu_kv_semantic_router.c include/wubu_kv_semantic_router.h include/wubu_kv_hierarchy.h include/wubu_mobius.h
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_kv_semantic_router.c
 
-test_kv_hierarchy: tools/test_kv_hierarchy.c src/wubu_kv_hierarchy.o src/wubu_mobius.o src/wubu_kv_semantic_router.o
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_hierarchy.c src/wubu_kv_hierarchy.o src/wubu_mobius.o src/wubu_kv_semantic_router.o $(LDFLAGS)
+src/wubu_kv_shrink.o: src/wubu_kv_shrink.c include/wubu_kv_shrink.h include/wubu_kvfs.h
+	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_kv_shrink.c
+
+test_kv_hierarchy: tools/test_kv_hierarchy.c src/wubu_kv_hierarchy.o src/wubu_mobius.o src/wubu_kv_semantic_router.o src/wubu_kv_shrink.o src/wubu_kvfs.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_hierarchy.c src/wubu_kv_hierarchy.o src/wubu_mobius.o src/wubu_kv_semantic_router.o src/wubu_kv_shrink.o src/wubu_kvfs.o $(LDFLAGS)
 	./test_kv_hierarchy
 
 test_backend_dispatch: tools/test_backend_dispatch.c $(MODEL_OBJ)
