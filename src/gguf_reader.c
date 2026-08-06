@@ -1395,7 +1395,7 @@ void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float 
                 float d = f16_to_f32(d_bits);
                 const uint8_t *qs = data + b * 18 + 2;
                 for (int j = 0; j < 32 && b * 32 + j < n_elems; j++) {
-                    int shift = (j & 1) ? 0 : 4;
+                    int shift = (j & 1) ? 4 : 0;
                     int val = (qs[j / 2] >> shift) & 0xF;
                     output[b * 32 + j] = d * (float)(val - 8);
                 }
