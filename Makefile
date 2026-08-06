@@ -597,6 +597,16 @@ test_density_planner: tools/test_density_planner.c src/wubu_density_planner.o sr
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_density_planner.c src/wubu_density_planner.o src/wubu_kv_embedding.o src/wubu_kvfs.o src/wubu_model_scalable.o src/wubu_kv_shrink.o $(LDFLAGS)
 	./test_density_planner
 
+src/wubu_adapter_registry.o: src/wubu_adapter_registry.c include/wubu_adapter.h
+	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_adapter_registry.c
+
+src/wubu_adapter_compat.o: src/wubu_adapter_compat.c include/wubu_adapter_compat.h
+	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_adapter_compat.c
+
+test_adapter: tools/test_adapter.c src/wubu_adapter_registry.o src/wubu_adapter_compat.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_adapter.c src/wubu_adapter_registry.o src/wubu_adapter_compat.o $(LDFLAGS)
+	./test_adapter
+
 test_kv_shell: tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o $(LDFLAGS)
 	./test_kv_shell
