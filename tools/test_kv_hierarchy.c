@@ -17,6 +17,7 @@
 #include <math.h>
 #include <string.h>
 #include "wubu_kv_hierarchy.h"
+#include "wubu_kv_semantic_router.h"
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -108,6 +109,56 @@ int main(void) {
         FAIL(buf);
     } else PASS();
 
-    printf("\n=== %d passed, %d failed ===\n", tests_passed, tests_failed);
+    /* T8: semantic router bias — siblings get higher bias than distant */
+    TEST(t8_router_bias_siblings);
+    const char *router_paths[] = { "/kv/in/foo.c", "/kv/in/bar.c", "/kv/in/src/deep/nested/file.txt" };
+    wubu_kv_router_t *rt = wubu_kv_router_create(kv_root, router_paths, 3, &cfg, 2.0f);
+    if (!rt) { FAIL("router_create returned NULL"); goto summary; }
+    float bias[3];
+    wubu_kv_router_bias(rt, "/kv/in/foo.c", bias);
+    /* foo.c should have highest bias for itself (distance ~0) */
+    if (bias[0] < 1.0f) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "self-bias=%.4f expected ~2.0 (scale*dist~0)", bias[0]);
+        FAIL(buf);
+        goto cleanup_rt;
+    }
+    /* bar.c is a sibling — should be higher than deep/nested/file.txt */
+    if (bias[1] < bias[2]) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "sibling bias=%.4f < distant=%.4f", bias[1], bias[2]);
+        FAIL(buf);
+        goto cleanup_rt;
+    }
+    PASS();
+
+    /* T9: router pair bias — same path = scale (max), different = < scale */
+    TEST(t9_router_pair_bias);
+    float self_bias = wubu_kv_router_bias_pair(rt, "/kv/in/foo.c", "/kv/in/foo.c");
+    float far_bias = wubu_kv_router_bias_pair(rt, "/kv/in/foo.c", "/kv/in/src/deep/nested/file.txt");
+    if (self_bias < 1.9f || self_bias > 2.1f) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "self_bias=%.4f expected ~2.0", self_bias);
+        FAIL(buf);
+        goto cleanup_rt;
+    }
+    if (far_bias >= 0.5f) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "far_bias=%.4f expected < 0.5", far_bias);
+        FAIL(buf);
+        goto cleanup_rt;
+    }
+    if (far_bias <= 0.0f) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "far_bias=%.4f expected > 0", far_bias);
+        FAIL(buf);
+        goto cleanup_rt;
+    }
+    PASS();
+
+cleanup_rt:
+    wubu_kv_router_free(rt);
+
+summary:
     return tests_failed > 0 ? 1 : 0;
 }

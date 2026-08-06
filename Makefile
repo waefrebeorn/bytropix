@@ -571,8 +571,11 @@ src/wubu_grow_kv.o: src/wubu_grow_kv.c include/wubu_grow_kv.h include/wubu_kv_em
 src/wubu_kv_hierarchy.o: src/wubu_kv_hierarchy.c include/wubu_kv_hierarchy.h include/wubu_mobius.h
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_kv_hierarchy.c
 
-test_kv_hierarchy: tools/test_kv_hierarchy.c src/wubu_kv_hierarchy.o src/wubu_mobius.o
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_hierarchy.c src/wubu_kv_hierarchy.o src/wubu_mobius.o $(LDFLAGS)
+src/wubu_kv_semantic_router.o: src/wubu_kv_semantic_router.c include/wubu_kv_semantic_router.h include/wubu_kv_hierarchy.h include/wubu_mobius.h
+	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_kv_semantic_router.c
+
+test_kv_hierarchy: tools/test_kv_hierarchy.c src/wubu_kv_hierarchy.o src/wubu_mobius.o src/wubu_kv_semantic_router.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_hierarchy.c src/wubu_kv_hierarchy.o src/wubu_mobius.o src/wubu_kv_semantic_router.o $(LDFLAGS)
 	./test_kv_hierarchy
 
 test_backend_dispatch: tools/test_backend_dispatch.c $(MODEL_OBJ)
