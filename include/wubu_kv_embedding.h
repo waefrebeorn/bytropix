@@ -108,6 +108,19 @@ int wubu_kv_embedding_region(const wubu_kv_embedding_t *kv,
 /* Free the embedding bridge. Does NOT free fs. */
 void wubu_kv_embedding_free(wubu_kv_embedding_t *kv);
 
+/* Returns the number of files in the path registry. */
+size_t wubu_kv_embedding_file_count(const wubu_kv_embedding_t *kv);
+
+/* Returns the full KV path for the i-th encoded file (e.g. "/kv/in/doc1.txt").
+ * Returns NULL if i is out of range. */
+const char *wubu_kv_embedding_get_path(const wubu_kv_embedding_t *kv, size_t i);
+
+/* Returns the number of tokens for the i-th file, or 0 if out of range. */
+size_t wubu_kv_embedding_get_n_tokens(const wubu_kv_embedding_t *kv, size_t i);
+
+/* Returns the underlying KV namespace (for shell/direct I/O). */
+wubu_kvfs_t *wubu_kv_embedding_get_fs(wubu_kv_embedding_t *kv);
+
 #ifdef __cplusplus
 }
 #endif

@@ -576,6 +576,13 @@ src/wubu_kv_shrink.o: src/wubu_kv_shrink.c include/wubu_kv_shrink.h include/wubu
 src/wubu_kv_coherence_diag.o: src/wubu_kv_coherence_diag.c include/wubu_kv_coherence_diag.h include/wubu_kv_embedding.h include/wubu_coherence_reward.h include/wubu_grow_kv.h include/wubu_kv_shrink.h
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_kv_coherence_diag.c
 
+src/wubu_kv_shell.o: src/wubu_kv_shell.c include/wubu_kv_shell.h include/wubu_kv_embedding.h include/wubu_fs_dataset.h
+	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_kv_shell.c
+
+test_kv_shell: tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o $(LDFLAGS)
+	./test_kv_shell
+
 test_kv_diag: tools/test_kv_diag.c src/wubu_kv_coherence_diag.o src/wubu_kv_embedding.o src/wubu_coherence_reward.o src/wubu_grow_kv.o src/wubu_kv_shrink.o src/wubu_kvfs.o src/wubu_kv_hierarchy.o src/wubu_mobius.o src/wubu_kv_semantic_router.o
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_diag.c src/wubu_kv_coherence_diag.o src/wubu_kv_embedding.o src/wubu_coherence_reward.o src/wubu_grow_kv.o src/wubu_kv_shrink.o src/wubu_kvfs.o src/wubu_kv_hierarchy.o src/wubu_mobius.o src/wubu_kv_semantic_router.o $(LDFLAGS)
 	./test_kv_diag

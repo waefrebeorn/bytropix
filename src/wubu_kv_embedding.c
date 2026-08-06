@@ -68,6 +68,27 @@ void wubu_kv_embedding_free(wubu_kv_embedding_t *kv) {
     free(kv);
 }
 
+size_t wubu_kv_embedding_file_count(const wubu_kv_embedding_t *kv) {
+    if (!kv) return 0;
+    return kv->n_paths;
+}
+
+const char *wubu_kv_embedding_get_path(const wubu_kv_embedding_t *kv, size_t i) {
+    if (!kv || i >= kv->n_paths) return NULL;
+    /* Return pointer to the stored path inside the record */
+    return kv->paths[i].path;
+}
+
+size_t wubu_kv_embedding_get_n_tokens(const wubu_kv_embedding_t *kv, size_t i) {
+    if (!kv || i >= kv->n_paths) return 0;
+    return (size_t)kv->paths[i].n_tokens;
+}
+
+wubu_kvfs_t *wubu_kv_embedding_get_fs(wubu_kv_embedding_t *kv) {
+    if (!kv) return NULL;
+    return kv->fs;
+}
+
 /* ENCODE: file bytes → /kv/in/<path>
  * Each byte becomes one token (uint16_t). The file is mounted into
  * the KV namespace; the executor writes the token floats into the
