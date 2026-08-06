@@ -79,12 +79,34 @@ activation.
 ### Relation to the Hive-Mind Plan (AN21)
 
 The KV-FS hive mind (Phases 1-11) is the **training metabolism**.
-This model design (AN22) is the **architecture** that metabolisms
+This model design (AN22) is the **architecture** that metabolism
 trains. They are coupled:
 
 - KV-FS coherence score → reward signal to refine weight importance ordering
 - Weight tiering → frees memory for more KV cache blocks
 - Grow/shrink operators work on both KV regions AND weight regions
 - Poincaré hierarchy applies to both file paths AND model parameter paths
+
+## Density Planning (AN23-core)
+
+The AGI's resource allocator. After each coherence diagnose cycle:
+
+```
+files → KV namespace → forward → attention → coherence → density
+  → absorb (model weights) / tier (KV cache) / prune (shrink)
+  → next iteration
+```
+
+**density = coherence_score / n_tokens** (bits of understanding per token)
+
+Three bands:
+- **ABSORB** (density >= 0.001): promote to model weights → `wubu_scalable_mark_hot`
+- **KEEP** (density >= 0.0001): remain in KV cache at reduced precision
+- **PRUNE** (below keep): scheduled for `wubu_kv_shrink`
+
+This guarantees **user experience always + AGI always**:
+the density planner keeps the hot path small and F32 (UX stays
+responsive), while continuously absorbing high-density knowledge into
+the weight tree (the AGI grows toward understanding).
 
 ### WaefreBeorn Umbrella License v3.0
