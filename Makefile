@@ -561,9 +561,12 @@ src/wubu_coherence_reward.o: src/wubu_coherence_reward.c include/wubu_coherence_
 src/wubu_fs_dataset.o: src/wubu_fs_dataset.c include/wubu_fs_dataset.h include/wubu_kv_embedding.h
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_fs_dataset.c
 
-test_kv_embedding: tools/test_kv_embedding.c src/wubu_kv_embedding.o src/wubu_kvfs.o src/wubu_coherence_reward.o src/wubu_fs_dataset.o src/wubu_tokenizer_hf.o
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_embedding.c src/wubu_kv_embedding.o src/wubu_kvfs.o src/wubu_coherence_reward.o src/wubu_fs_dataset.o src/wubu_tokenizer_hf.o $(LDFLAGS)
+test_kv_embedding: tools/test_kv_embedding.c src/wubu_kv_embedding.o src/wubu_kvfs.o src/wubu_coherence_reward.o src/wubu_fs_dataset.o src/wubu_grow_kv.o src/wubu_tokenizer_hf.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_embedding.c src/wubu_kv_embedding.o src/wubu_kvfs.o src/wubu_coherence_reward.o src/wubu_fs_dataset.o src/wubu_grow_kv.o src/wubu_tokenizer_hf.o $(LDFLAGS)
 	./test_kv_embedding
+
+src/wubu_grow_kv.o: src/wubu_grow_kv.c include/wubu_grow_kv.h include/wubu_kv_embedding.h include/wubu_kvfs.h
+	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_grow_kv.c
 
 test_backend_dispatch: tools/test_backend_dispatch.c $(MODEL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
