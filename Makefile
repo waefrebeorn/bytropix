@@ -579,6 +579,13 @@ src/wubu_kv_coherence_diag.o: src/wubu_kv_coherence_diag.c include/wubu_kv_coher
 src/wubu_kv_shell.o: src/wubu_kv_shell.c include/wubu_kv_shell.h include/wubu_kv_embedding.h include/wubu_fs_dataset.h
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_kv_shell.c
 
+src/wubu_kv_tiering.o: src/wubu_kv_tiering.c include/wubu_kv_tiering.h include/wubu_kv_embedding.h include/gguf_reader.h
+	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_kv_tiering.c
+
+test_kv_tiering: tools/test_kv_tiering.c src/wubu_kv_tiering.o src/wubu_kv_embedding.o src/wubu_kvfs.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_tiering.c src/wubu_kv_tiering.o src/wubu_kv_embedding.o src/wubu_kvfs.o $(LDFLAGS)
+	./test_kv_tiering
+
 test_kv_shell: tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o $(LDFLAGS)
 	./test_kv_shell
