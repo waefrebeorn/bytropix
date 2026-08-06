@@ -51,7 +51,10 @@ slots — whatever needs stable pointers with O(1) churn.
 
 ## The lineage
 
-- the seed architecture: WuBu-35M (Apache-2.0, © 2026 Harshal Singh)
+- the seed architecture: WuBu-35M — original WaefreBeorn work
+  (WaefreBeorn Umbrella License v3.0), archived 2026-08-06; the base
+  model is now **WuBu1** (docs/wubu1-base-model-design.md), designed
+  from scratch entirely in-house
 - the geometry: WuBu Nesting (層疊嵌套) — our Lean-verified hyperbolic math
 - the agents: mixed-agents MoE (fine-grained experts)
 - the training: our Muon/AdamW loop, the SD-card corpus

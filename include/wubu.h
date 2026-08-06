@@ -1,13 +1,14 @@
 /*
- * wubu.h -- WuBu-35M, our base model, ported to C11. THE MUSTARD SEED.
+ * wubu.h -- WuBu-35M, our base model, in C11. THE MUSTARD SEED.
  *
- * WuBu-35M (Apache-2.0, (c) 2026 Harshal Singh) is a 35,072,768-parameter
- * decoder-only base language model. We port it into the wubuwizard engine as
- * our own second brain: the seed that grows via the AGI brain-cluster loop --
- * more tokens, more parameters, more knowledge, all designed and trained
- * in-house (the "there is no third party" doctrine).
+ * Original WaefreBeorn work under the WaefreBeorn Umbrella License v3.0
+ * (LICENSE at the repo root). WuBu-35M is a 35,072,768-parameter
+ * decoder-only base language model, designed, implemented, and trained
+ * in-house by the WaefreBeorn project (the "there is no third party"
+ * doctrine). It grows via the AGI brain-cluster loop -- more tokens,
+ * more parameters, more knowledge, all in-house.
  *
- * Architecture (faithful to the reference):
+ * Architecture:
  *   - 12 layers, dim 448, 7 query heads, 1 KV head (GQA 7:1)
  *   - hybrid attention: 3 local (256-token window) layers then 1 full layer
  *   - 50% partial RoPE (rotary on the first rope_dim=32 of head_dim=64)

@@ -35,7 +35,14 @@ typedef struct { uint8_t ql[QK_K/2]; uint8_t qh[QK_K/4]; int8_t scales[QK_K/16];
 #pragma pack(pop)
 
 void quantize_row_q8_K(const float *x, block_q8_K *y, int64_t k) {
-    assert(k % QK_K == 0);
+    if (k % QK_K != 0) {
+        /* Non-256-divisible activation dim (e.g. WuBu-35M d_model=448).
+         * Q8_K block layout can't represent a partial block — the caller
+         * must not use the Q8_K dot path for this row. Zero the buffer so
+         * a misrouted dot degrades to zeros instead of reading garbage. */
+        memset(y, 0, (size_t)((k + QK_K - 1) / QK_K) * sizeof(block_q8_K));
+        return;
+    }
     const int64_t nb = k / QK_K;
     for (int64_t i = 0; i < nb; i++) {
         float amax = 0.0f, max_val = 0.0f;

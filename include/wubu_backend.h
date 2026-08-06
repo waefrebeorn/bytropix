@@ -110,7 +110,7 @@ typedef struct wubu_backend_t {
 
 /* Return the active backend for a model (NULL if CPU-only). */
 static inline wubu_backend_t *wubu_backend_get(const wubu_model_t *model) {
-    return (wubu_backend_t *)model->gpu_ctx;
+    return model ? model->backend : NULL;
 }
 
 /* Check whether a backend supports a given capability. */
@@ -252,6 +252,13 @@ static inline int wubu_backend_chunk_size(wubu_model_t *model)
         return backend->chunk_size(model);
     return 0;
 }
+
+/* Backend vtable constructors. The CPU backend is always available
+ * (wubu_backend.c); the CUDA backend is linked only in GPU builds
+ * (wubu_backend_cuda.c). Model init installs the CPU backend by
+ * default; successful GPU init swaps in the CUDA backend. */
+wubu_backend_t *wubu_backend_cpu_get(void);
+wubu_backend_t *wubu_backend_cuda_get(void);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,12 @@
 # THE WUBU MODEL — the AGI's blueprint (the model is WuBu)
 
+> **SUPERSEDED 2026-08-06** — replaced by WuBu1
+> (`docs/wubu1-base-model-design.md`), the redesigned base model built
+> from the autopsy of what sucked (loader naming blindness, dual
+> structs, compile-time dims, under-training, tensor-buffer KV). This
+> blueprint's §2.7 (KV namespace) and the lineage table are carried
+> forward into the WuBu1 design; the rest is historical record.
+>
 > 2026-08-02. We are the model creators. This is the design of OUR
 > model — every piece sourced from what we built and learned:
 > the WuBu seed (ported, training), the WuBu Nesting math
@@ -13,7 +20,7 @@
 
 | Source | What it contributes to OUR model |
 | --- | --- |
-| **WuBu-35M** (the seed) | the base: 12 layers/448 dim, GQA 7:1, hybrid 3-local+1-full attention, 50% partial RoPE, QK-norm, gated attention, bounded SwiGLU, residual selectors, tied embeddings — ported to C11, checkpoint verified, TRAINING (loss 9.5→3.8) |
+| **WuBu-35M** (the seed) | the base: 12 layers/448 dim, GQA 7:1, hybrid 3-local+1-full attention, 50% partial RoPE, QK-norm, gated attention, bounded SwiGLU, residual selectors, tied embeddings — original WaefreBeorn work in C11, checkpoint verified, TRAINING (loss 9.5→3.8) |
 | **WuBu Nesting (層疊嵌套)** — OUR theory | nested hyperbolic spaces `H^n1_c1,s1 ⊃ H^n2_c2,s2 ⊃ ...` with learnable dim/curvature/scale; boundary sub-manifolds; tangent-space quaternion rotations between levels; level descriptors `ld_i`; spread `σ_i` — the hierarchical inductive bias no Euclidean model has |
 | **MATH/lean proofs** — OUR formal math | Möbius addition preserves the Poincaré ball (formally proved), hyperbolic gyration, MLA compression — the geometry is PROVEN, not assumed |
 | **WuBu Formalism** `Q = Σ q Π α^E` | the calculus of irreducible structure — the model's compositional prior |
@@ -158,8 +165,9 @@ addressing layer is the change. Full implementation path (G1–G6):
 | **7** | surpass the bigger brother → brother retires | the AGI brain-cluster |
 | **8** | THE KV NAMESPACE — the KV cache is a file system: path-addressable `/kv/` over the paged/tiered/persistent KV, single-encoder modality head (G3), compressive write-back (G4), Styx export at `/n/kv/` (G5), self-paging loop (G6) | THEORY/05 + research/061; the address layer lands on top of already-wired blocks/tiers/persistence |
 
-The model is OURS: the seed is ported (Apache-2.0 upstream, WaefreBeorn
-umbrella), the geometry is OUR theory (Lean-verified), the training is
+The model is OURS: the seed is original WaefreBeorn work (WaefreBeorn
+umbrella, no external lineage), the geometry is OUR theory
+(Lean-verified), the training is
 OUR loop (Muon/AdamW in C11), the corpus is on OUR SD card, the safety
 is OUR 5+1 recovery. Every new parameter is designed by the research,
 grown in the loop, and checked against the ledger.

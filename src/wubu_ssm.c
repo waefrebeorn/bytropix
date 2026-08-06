@@ -1315,21 +1315,35 @@ void wubu_gqa_forward(const float *x, int B, int T,
     }
     
     // Step 1: Q + gate fused projection via quantized or F32 matmul
-    // Step 2-3: K and V projections — same input x[s], share Q8_K quantization
-    const int n_q8_blocks = (d_model + QK_K - 1) / QK_K;
-    const int q8_buf_size = n_q8_blocks * 292;
-    uint8_t *gqa_q8_buf = (uint8_t *)malloc(q8_buf_size);
-    if (!gqa_q8_buf) { free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
+    // Step 2-3: K and V projections — share quantization buffer
+    // When d_model is not 256-aligned (e.g. WuBu-35M d_model=448),
+    // Q8_K block layout can't represent a partial block — use the
+    // dequant+SGEMM fallback path in quantized_matmul() instead.
+    const int use_q8_gqa = (d_model % QK_K == 0);
+    void *gqa_q8_buf = NULL;
+    if (use_q8_gqa) {
+        const int n_q8_blocks = (d_model + QK_K - 1) / QK_K;
+        gqa_q8_buf = malloc((size_t)n_q8_blocks * 292);
+        if (!gqa_q8_buf) { free(Q_full); free(gate); free(K); free(V); free(Q_norm); free(K_norm); free(attn_out); return; }
+    }
     
     for (int s = 0; s < N; s++) {
         const float *x_s = x + s * d_model;
-        quantize_row_q8_K(x_s, (block_q8_K *)gqa_q8_buf, d_model);
+        if (use_q8_gqa) {
+            quantize_row_q8_K(x_s, (block_q8_K *)gqa_q8_buf, d_model);
+        }
         
         // Q + gate projection
         int q_offset = s * q_dim * 2;
-        quantized_matmul_from_q8(gqa_q8_buf,
-            w->attn_q_weight_q, w->attn_q_weight_type,
-            d_model, q_dim * 2, 0, Q_full + q_offset);
+        if (use_q8_gqa) {
+            quantized_matmul_from_q8(gqa_q8_buf,
+                w->attn_q_weight_q, w->attn_q_weight_type,
+                d_model, q_dim * 2, 0, Q_full + q_offset);
+        } else {
+            quantized_matmul(x_s,
+                w->attn_q_weight_q, w->attn_q_weight_type,
+                d_model, q_dim * 2, 0, Q_full + q_offset);
+        }
         // Extract gate from Q_full — INTERLEAVED per-head layout:
         // Q_full layout: [Q_h0(256) | gate_h0(256) | Q_h1(256) | gate_h1(256) | ...]
         // gate[s * q_dim + j] should get all gate values (second 256 per head)
@@ -1342,15 +1356,27 @@ void wubu_gqa_forward(const float *x, int B, int T,
         }
         
         // K projection
-        quantized_matmul_from_q8(gqa_q8_buf,
-            w->attn_k_weight_q, w->attn_k_weight_type,
-            d_model, kv_dim, 0, K + s * kv_dim);
+        if (use_q8_gqa) {
+            quantized_matmul_from_q8(gqa_q8_buf,
+                w->attn_k_weight_q, w->attn_k_weight_type,
+                d_model, kv_dim, 0, K + s * kv_dim);
+        } else {
+            quantized_matmul(x_s,
+                w->attn_k_weight_q, w->attn_k_weight_type,
+                d_model, kv_dim, 0, K + s * kv_dim);
+        }
         // V projection
-        quantized_matmul_from_q8(gqa_q8_buf,
-            w->attn_v_weight_q, w->attn_v_weight_type,
-            d_model, kv_dim, 0, V + s * kv_dim);
+        if (use_q8_gqa) {
+            quantized_matmul_from_q8(gqa_q8_buf,
+                w->attn_v_weight_q, w->attn_v_weight_type,
+                d_model, kv_dim, 0, V + s * kv_dim);
+        } else {
+            quantized_matmul(x_s,
+                w->attn_v_weight_q, w->attn_v_weight_type,
+                d_model, kv_dim, 0, V + s * kv_dim);
+        }
     }
-    free(gqa_q8_buf);
+    if (gqa_q8_buf) free(gqa_q8_buf);
     
     // DUMP_GQA_DEBUG_DIR: dump Q/K/V projections for 1:1 parity comparison
     {

@@ -26,21 +26,35 @@
 #include <time.h>
 #include <immintrin.h>  // _mm_prefetch for expert prefetch
 
-// Global tensor naming convention (set during model init)
-extern int g_tensor_naming;  // defined in wubu_ssm.c, 0=blk.Qwen 1=model.layers.Gemma 2=pure-GQA
+/* wubu_model.c — WuBu1 loader: role-based tensor resolution.
+ *
+ * The old loader hardcoded Qwen-style "blk.%d.*" names in 160+
+ * places, silently breaking every other convention (Gemma
+ * "model.layers.N.*", HF-style "layers.N.*" with fused gate_up,
+ * full HF "model.language_model.layers.N.*"). WuBu1 uses the
+ * role-based resolver (wubu_gguf_names.c/h) — every weight is a
+ * ROLE, each role carries candidate templates across all known
+ * conventions, and detection scans the file's actual tensor names.
+ * No architecture metadata required; works on any GGUF.
+ *
+ * WuBu1 (WaefreBeorn Umbrella License v3.0) — the redesigned
+ * base model, designed from scratch in-house. */
 
-// ========== GGUF Tensor Names ==========
+/* ========== GGUF Tensor Names (role-based resolver) ========== */
 
-static const char *tensor_name_attn_norm(int layer) {
-    static char buf[64];
-    snprintf(buf, sizeof(buf), "blk.%d.attn_norm.weight", layer);
-    return buf;
+#include "wubu_gguf_names.h"
+
+static wubu_gguf_names_t g_names;  /* detected once at init */
+static int g_max_layer = -1;
+static gguf_ctx *g_gguf_ctx = NULL;
+
+/* Helper: resolve a layer weight by role. Returns NULL if not
+ * found in this GGUF (some models omit optional tensors). */
+static gguf_tensor_info *resolve(int layer, wubu_gguf_role_t role) {
+    return wubu_gguf_find(g_gguf_ctx, layer, role);
 }
-
-static const char *tensor_name_post_attn_norm(int layer) {
-    static char buf[64];
-    snprintf(buf, sizeof(buf), "blk.%d.post_attention_norm.weight", layer);
-    return buf;
+static gguf_tensor_info *resolve_global(wubu_gguf_role_t role) {
+    return wubu_gguf_find(g_gguf_ctx, -1, role);
 }
 
 // ========== Init ==========
@@ -49,6 +63,12 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     memset(model, 0, sizeof(*model));
     model->tied_output = false;
     model->rotate_P = 0;
+
+    /* Install the CPU backend vtable (always present — GPU builds
+     * override it with the CUDA backend after successful GPU init).
+     * Done before the GGUF open so a failed init still leaves the
+     * model with a working (CPU) dispatch path. */
+    model->backend = wubu_backend_cpu_get();
 
     /* Game-console hardware discipline (I05 / NuMA+P-core pinning, +19-21%
      * throughput on multi-socket; non-zero even single-socket via stable
@@ -74,139 +94,78 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     gguf_ctx *ctx = gguf_open(gguf_path);
     if (!ctx) { fprintf(stderr, "Failed to open %s\n", gguf_path); return false; }
 
+    /* Detect tensor naming convention + layer count from the
+     * actual tensor names in this file. No architecture metadata
+     * required — we scan and resolve by role. */
+    wubu_gguf_names_detect(ctx, &g_names);
+    g_max_layer = g_names.max_layer;
+    g_gguf_ctx = ctx;
+    printf("  GGUF convention=%d layers=%d ssm=%d moe=%d gqa=%d\n",
+           g_names.convention, g_names.n_layers,
+           g_names.has_ssm, g_names.has_moe, g_names.has_gqa);
+
     // Initialize forward arena (OOM-safe temp buffers, ~256MB budget).
     // Grown on-demand if forward needs more (rare).
     wubu_arena_init(&model->fwd_arena, 256 * 1024 * 1024, 0);
     wubu_sub_arena_create(&model->fwd_arena, &model->fwd_sub, 256 * 1024 * 1024);
 
-    // Count layers from tensor names
-    // Find max layer index from any blk.N. tensor
-    int max_layer = 0;
-    int has_nextn = 0;
-    for (int i = 0; i < (int)ctx->n_tensors; i++) {
-        const char *name = ctx->tensors[i].name;
-        if (strncmp(name, "blk.", 4) == 0) {
-            int layer = atoi(name + 4);
-            if (layer > max_layer) max_layer = layer;
-            // Check if this is an MTP model (has nextn.* tensors)
-            if (strstr(name, ".nextn.")) has_nextn = 1;
-        }
-    }
-    // For MTP models, the last layer (blk.40) is the MTP prediction head
-    // Only count regular layers (skip MTP head)
-    if (has_nextn) {
-        model->n_layers = max_layer;  // 40 layers (0..39) for MTP model
-        printf("MTP model detected: %d regular layers + 1 MTP head\n", max_layer);
-    } else {
-        model->n_layers = max_layer + 1;  // 41 layers for MTP, 40 for regular
-    }
-    
-    // Allocate layers
-    model->layers = (wubu_layer_t *)calloc(model->n_layers, sizeof(wubu_layer_t));
-    if (!model->layers) { gguf_close(ctx); return false; }
-    
-    printf("Allocating %d layers...\n", model->n_layers);
-
-    // ============================================================
-    // Multi-model dimension extraction from GGUF
-    // ============================================================
-    // Detect tensor naming convention and architecture
-    model->tensor_naming = 0; // default: Qwen (blk.N.*)
-    for (int i = 0; i < (int)ctx->n_tensors; i++) {
-        if (strncmp(ctx->tensors[i].name, "model.layers.", 12) == 0) {
-            model->tensor_naming = 1; // Gemma-style
-            break;
-        }
-    }
-    // Detect pure GQA (no SSM layers) by checking for ssm_beta tensor
-    {
-        const char *ssm_check = (model->tensor_naming == 1) ? "model.layers.0.ssm_beta.weight" : "blk.0.ssm_beta.weight";
-        if (!gguf_find_tensor(ctx, ssm_check)) {
-            model->tensor_naming = 2; // pure GQA (DiffusionGemma/Gemma4)
-        }
-    }
-    g_tensor_naming = model->tensor_naming; // set global for wubu_is_ssm_layer()
-
-    // Extract dynamic dimensions from GGUF tensor shapes
+    // Extract dynamic dimensions from GGUF tensor shapes via resolver
     int d_model = 0;
     {
-        const char *norm_name = (model->tensor_naming == 1) ? "model.layers.0.attn_norm.weight" : "blk.0.attn_norm.weight";
-        gguf_tensor_info *nt = gguf_find_tensor(ctx, norm_name);
+        gguf_tensor_info *nt = resolve(0, WUBU_T_ATTN_NORM);
         if (nt && nt->n_dims >= 1) d_model = (int)nt->dims[0];
     }
     if (d_model == 0) d_model = D_MODEL; // fallback
     model->d_model = d_model;
 
-    // Extract GQA dimensions from tensor shapes
+    // Extract GQA dimensions from tensor shapes via resolver
     int gqa_head_dim = GQA_HEAD_DIM;
     {
-        const char *q_norm_name = (model->tensor_naming == 1) ? "model.layers.0.attn_q_norm.weight" : "blk.0.attn_q_norm.weight";
-        gguf_tensor_info *qn = gguf_find_tensor(ctx, q_norm_name);
+        gguf_tensor_info *qn = resolve(0, WUBU_T_ATTN_Q_NORM);
         if (qn && qn->n_dims >= 1 && qn->dims[0] > 0) {
             gqa_head_dim = (int)qn->dims[0];
         } else {
-            // Fallback 1: try to derive from attn_k.weight shape [d_model, kv_heads * head_dim]
-            const char *k_name = "blk.0.attn_k.weight";
-            gguf_tensor_info *kn = gguf_find_tensor(ctx, k_name);
+            // Fallback 1: derive from attn_k.weight shape
+            gguf_tensor_info *kn = resolve(0, WUBU_T_ATTN_K);
             if (kn && kn->n_dims >= 2) {
                 int kv_dim = (int)kn->dims[1];
-                int kv_heads = (kv_dim > 0) ? (kv_dim / 256) : 10;
-                if (kv_heads > 0) {
-                    gqa_head_dim = kv_dim / kv_heads;
-                }
+                int kv_heads = (kv_dim > 0) ? (kv_dim / gqa_head_dim) : 10;
+                if (kv_heads > 0) gqa_head_dim = kv_dim / kv_heads;
             } else {
-                // Fallback 2: Qwen3.6 uses attn_qkv.weight [d_model, (q_heads + 2*kv_heads) * head_dim]
-                const char *qkv_name = "blk.0.attn_qkv.weight";
-                gguf_tensor_info *qkn = gguf_find_tensor(ctx, qkv_name);
+                // Fallback 2: fused QKV — attn_qkv.weight
+                gguf_tensor_info *qkn = resolve(0, WUBU_T_ATTN_QKV);
                 if (qkn && qkn->n_dims >= 2) {
                     int qkv_dim = (int)qkn->dims[1];
                     int assumed_kv_heads = 4;
-                    if (qkv_dim > assumed_kv_heads * 256) {
-                        gqa_head_dim = 256;
+                    if (qkv_dim > assumed_kv_heads * gqa_head_dim) {
+                        gqa_head_dim = qkv_dim / (assumed_kv_heads * 2);
                     }
                 }
             }
         }
     }
 
-    // Extract SSM dimensions from tensor shapes
+    // Extract SSM dimensions from tensor shapes via resolver
     int ssm_d_state = SSM_D_STATE;
     int ssm_k_heads = SSM_K_HEADS;
     int dt_rank = DT_RANK;
     int ssm_v_heads = SSM_V_HEADS;
     int conv_kernel = CONV_KERNEL;
     {
-        // ssm_norm.weight [SSM_D_STATE]
-        gguf_tensor_info *t = gguf_find_tensor(ctx, "blk.0.ssm_norm.weight");
-        if (t && t->n_dims >= 1) {
-            ssm_d_state = (int)t->dims[0];
-        }
-        // ssm_dt.bias [DT_RANK]
-        t = gguf_find_tensor(ctx, "blk.0.ssm_dt.bias");
-        if (t && t->n_dims >= 1) {
-            dt_rank = (int)t->dims[0];
-        }
-        // ssm_a [DT_RANK]
-        t = gguf_find_tensor(ctx, "blk.0.ssm_a");
-        if (t && t->n_dims >= 1) {
-            dt_rank = (int)t->dims[0];
-        }
-        // ssm_conv1d.weight [CONV_KERNEL, CONV_DIM]
-        t = gguf_find_tensor(ctx, "blk.0.ssm_conv1d.weight");
+        gguf_tensor_info *t = resolve(0, WUBU_T_SSM_NORM);
+        if (t && t->n_dims >= 1) ssm_d_state = (int)t->dims[0];
+        t = resolve(0, WUBU_T_SSM_DT);
+        if (t && t->n_dims >= 1) dt_rank = (int)t->dims[0];
+        t = resolve(0, WUBU_T_SSM_A);
+        if (t && t->n_dims >= 1) dt_rank = (int)t->dims[0];
+        t = resolve(0, WUBU_T_SSM_CONV1D);
         if (t && t->n_dims >= 2) {
             conv_kernel = (int)t->dims[0];
             int conv_dim = (int)t->dims[1];
-            // CONV_DIM = 2 * KEY_DIM + VALUE_DIM
-            // KEY_DIM = SSM_D_STATE * SSM_K_HEADS
-            // VALUE_DIM = SSM_D_STATE * SSM_V_HEADS
-            // We know SSM_D_STATE and CONV_DIM, solve for SSM_V_HEADS
-            // conv_dim = 2 * (ssm_d_state * ssm_k_heads) + ssm_d_state * ssm_v_heads
-            // ssm_v_heads = (conv_dim - 2 * ssm_d_state * ssm_k_heads) / ssm_d_state
             int key_dim = ssm_d_state * ssm_k_heads;
             int value_dim = conv_dim - 2 * key_dim;
-            if (value_dim > 0 && value_dim % ssm_d_state == 0) {
+            if (value_dim > 0 && value_dim % ssm_d_state == 0)
                 ssm_v_heads = value_dim / ssm_d_state;
-            }
         }
     }
 
@@ -227,7 +186,7 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     model->d_inner = VALUE_DIM;
     model->key_dim = KEY_DIM;
     model->conv_dim = CONV_DIM;
-    model->conv_kernel = CONV_KERNEL;
+    model->conv_kernel = conv_kernel;
     model->dt_rank = dt_rank;
     model->ssm_k_heads = ssm_k_heads;
     model->ssm_v_heads = ssm_v_heads;
@@ -244,7 +203,17 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     printf("  SSM dims: d_state=%d, k_heads=%d, v_heads=%d, dt_rank=%d, conv_kernel=%d\n",
            ssm_d_state, ssm_k_heads, ssm_v_heads, dt_rank, conv_kernel);
     printf("  CONV_DIM=%d, VALUE_DIM=%d, KEY_DIM=%d\n", CONV_DIM, VALUE_DIM, KEY_DIM);
-    printf("  Naming: %s\n", model->tensor_naming == 1 ? "Gemma (model.layers.N.*)" : (model->tensor_naming == 2 ? "Pure-GQA (blk.N.*)" : "Qwen (blk.N.*)"));
+    printf("  Layers: %d (convention %d)\n", g_names.n_layers, g_names.convention);
+
+    // Allocate layers from the detected layer count.
+    model->n_layers = g_names.n_layers;
+    if (model->n_layers <= 0) {
+        fprintf(stderr, "No layer tensors found in %s — is this a GGUF model?\n", gguf_path);
+        goto fail;
+    }
+    model->layers = (wubu_layer_t *)calloc((size_t)model->n_layers, sizeof(wubu_layer_t));
+    if (!model->layers) { fprintf(stderr, "Failed to allocate %d layers\n", model->n_layers); goto fail; }
+    printf("  Allocating %d layers...\n", model->n_layers);
 
     // Buffer GGUF data EARLY so all tensor reads use mmap (avoids FILE* issues with large files)
     printf("  Buffering GGUF data via mmap...\n");
@@ -259,13 +228,21 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     for (int l = 0; l < model->n_layers; l++) {
         wubu_layer_t *layer = &model->layers[l];
         layer->layer_idx = l;
-        layer->is_ssm = wubu_is_ssm_layer(l);
+        /* Layer-type classification driven by the resolver's detection,
+         * not the old hardcoded Qwen3.6 3:1 SSM:GQA heuristic. */
+        if (g_names.has_ssm && !g_names.has_gqa) {
+            layer->is_ssm = 1;                       /* all-SSM model */
+        } else if (g_names.has_gqa && !g_names.has_ssm) {
+            layer->is_ssm = 0;                       /* all-GQA model (WuBu-35M) */
+        } else {
+            layer->is_ssm = wubu_is_ssm_layer(l);    /* mixed — legacy heuristic */
+        }
         
         gguf_tensor_info *t;
         char name[256];
 
         // attn_norm.weight (pre-attention RMSNorm)
-        t = gguf_find_tensor(ctx, tensor_name_attn_norm(l));
+        t = resolve(l, WUBU_T_ATTN_NORM);
         if (t) {
             layer->attn_norm_weight = (float *)malloc(model->d_model * sizeof(float));
             if (!gguf_read_tensor_f32(ctx, t, layer->attn_norm_weight, model->d_model))
@@ -274,10 +251,12 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         
         // post_attention_norm.weight (optional — Qwen3-style).
         // Fallbacks: ffn_norm.weight (Qwen2/nanbeige), then attn_norm.weight.
-        t = gguf_find_tensor(ctx, tensor_name_post_attn_norm(l));
+        t = resolve(l, WUBU_T_POST_ATTN_NORM);
         if (!t) {
-            snprintf(name, sizeof(name), "blk.%d.ffn_norm.weight", l);
-            t = gguf_find_tensor(ctx, name);
+            t = resolve(l, WUBU_T_FFN_NORM);
+        }
+        if (!t) {
+            t = resolve(l, WUBU_T_ATTN_NORM);  // fallback: reuse attn_norm
         }
         if (t) {
             layer->post_attn_norm_weight = (float *)malloc(model->d_model * sizeof(float));
@@ -290,103 +269,95 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         }
         
         if (layer->is_ssm) {
-            // Load SSM weights — QUANTIZED-ONLY PATH for large weight matrices.
-            // attn_qkv, attn_gate, ssm_out use quantized blob pointers (set later).
-            // Small tensors (norms, a, dt, conv1d) loaded as F32.
-            int ok = 1;
-            
+            // Load SSM weights via role-based resolver.
+            // Large weights (attn_qkv, attn_gate, ssm_out) use
+            // quantized blob pointers; small tensors (norms, a, dt,
+            // conv1d) are loaded as F32 into CPU memory.
             if (getenv("WUBU_DEBUG")) fprintf(stderr, "DEBUG: Loading SSM layer %d\n", l);
-            
-            // LARGE: attn_qkv_weight — quantized-only (blob pointer)
-            layer->ssm.attn_qkv_weight = NULL;
-            snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            if (t && blob) { layer->ssm.attn_qkv_weight_q = blob + t->data_offset; layer->ssm.attn_qkv_weight_type = t->ggml_type; }
-            
-            // LARGE: attn_gate_weight — quantized-only (blob pointer)
-            layer->ssm.attn_gate_weight = NULL;
-            snprintf(name, sizeof(name), "blk.%d.attn_gate.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-            if (t && blob) { layer->ssm.attn_gate_weight_q = blob + t->data_offset; layer->ssm.attn_gate_weight_type = t->ggml_type; }
-            
-            // Small: ssm_beta.weight — use tensor's actual dims for safe alloc
-            snprintf(name, sizeof(name), "blk.%d.ssm_beta.weight", l);
-                        t = gguf_find_tensor(ctx, name);
-                        if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-                        {
-                            int64_t beta_n_elems = 1;
-                            for (int d = 0; d < t->n_dims; d++) beta_n_elems *= t->dims[d];
-                            layer->ssm.ssm_beta_weight = (float *)malloc((size_t)beta_n_elems * sizeof(float));
-                        }
-                        ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_beta_weight, -1) > 0);
-            
-                        // Small: ssm_alpha.weight [d_model, dt_rank] F32
-                        snprintf(name, sizeof(name), "blk.%d.ssm_alpha.weight", l);
-                        t = gguf_find_tensor(ctx, name);
-                        if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-                        {
-                            int64_t alpha_n_elems = 1;
-                            for (int d = 0; d < t->n_dims; d++) alpha_n_elems *= t->dims[d];
-                            layer->ssm.ssm_alpha_weight = (float *)malloc((size_t)alpha_n_elems * sizeof(float));
-                        }
-                        ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_alpha_weight, -1) > 0);
-            
-                        // Small: ssm_dt.bias [dt_rank] F32
-                        snprintf(name, sizeof(name), "blk.%d.ssm_dt.bias", l);
-                        t = gguf_find_tensor(ctx, name);
-                        if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-                        {
-                            int64_t dt_n_elems = 1;
-                            for (int d = 0; d < t->n_dims; d++) dt_n_elems *= t->dims[d];
-                            layer->ssm.ssm_dt_bias = (float *)malloc((size_t)dt_n_elems * sizeof(float));
-                        }
-                        ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_dt_bias, -1) > 0);
-            
-                        // Small: ssm_a [dt_rank] F32 (Qwen3.6 uses "ssm_a" without .weight suffix)
-                        snprintf(name, sizeof(name), "blk.%d.ssm_a", l);
-                        t = gguf_find_tensor(ctx, name);
-                        if (!t) {
-                            snprintf(name, sizeof(name), "blk.%d.ssm_a.weight", l);
-                            t = gguf_find_tensor(ctx, name);
-                        }
-                        if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-                        {
-                            int64_t a_n_elems = 1;
-                            for (int d = 0; d < t->n_dims; d++) a_n_elems *= t->dims[d];
-                            layer->ssm.ssm_a = (float *)malloc((size_t)a_n_elems * sizeof(float));
-                        }
-                        ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_a, -1) > 0);
-            
-                        // Small: ssm_conv1d.weight [conv_kernel, conv_dim] F32
-                        // Use tensor's actual dims (may differ from compile-time CONV_DIM)
-                        snprintf(name, sizeof(name), "blk.%d.ssm_conv1d.weight", l);
-                        t = gguf_find_tensor(ctx, name);
-                        if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-                        {
-                            int64_t conv_n_elems = 1;
-                            for (int d = 0; d < t->n_dims; d++) conv_n_elems *= t->dims[d];
-                            layer->ssm.ssm_conv1d_weight = (float *)malloc((size_t)conv_n_elems * sizeof(float));
-                        }
-                        ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_conv1d_weight, -1) > 0);
-            
-                        // Small: ssm_norm.weight — use tensor's actual dim
-                        snprintf(name, sizeof(name), "blk.%d.ssm_norm.weight", l);
-                        t = gguf_find_tensor(ctx, name);
-                        if (!t) { fprintf(stderr, "Missing %s\n", name); goto fail; }
-                        {
-                            int ssm_norm_size = (int)t->dims[0];
-                            layer->ssm.ssm_norm_weight = (float *)malloc((size_t)ssm_norm_size * sizeof(float));
-                        }
-                        ok = ok && (gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_norm_weight, -1) > 0);
-            
-            // LARGE: ssm_out.weight — quantized-only (blob pointer)
-            layer->ssm.ssm_out_weight = NULL;
-            
-            if (!ok) { fprintf(stderr, "Failed to load SSM weights for layer %d\n", l); goto fail; }
-            printf("  Layer %d: SSM loaded (quantized attn_qkv/gate/out)\n", l);
-            
+
+            // attn_qkv_weight — quantized-only (blob pointer)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_QKV);
+                if (!t) { fprintf(stderr, "Missing SSM attn_qkv for layer %d\n", l); goto fail; }
+                if (t && blob) { layer->ssm.attn_qkv_weight_q = blob + t->data_offset; layer->ssm.attn_qkv_weight_type = t->ggml_type; }
+            }
+
+            // attn_gate_weight — quantized-only (blob pointer)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_GATE);
+                if (!t) { fprintf(stderr, "Missing SSM attn_gate for layer %d\n", l); goto fail; }
+                if (t && blob) { layer->ssm.attn_gate_weight_q = blob + t->data_offset; layer->ssm.attn_gate_weight_type = t->ggml_type; }
+            }
+
+            // ssm_out_weight — quantized-only (blob pointer)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_SSM_OUT);
+                if (!t) { fprintf(stderr, "Missing SSM ssm_out for layer %d\n", l); goto fail; }
+                if (t && blob) { layer->ssm.ssm_out_weight_q = blob + t->data_offset; layer->ssm.ssm_out_weight_type = t->ggml_type; }
+            }
+
+            // Small tensors: load as F32 into CPU memory.
+            // ssm_beta.weight — use tensor's actual dims for safe alloc
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_SSM_BETA);
+                if (!t) { fprintf(stderr, "Missing SSM ssm_beta for layer %d\n", l); goto fail; }
+                int64_t beta_n_elems = 1;
+                for (int d = 0; d < t->n_dims; d++) beta_n_elems *= t->dims[d];
+                layer->ssm.ssm_beta_weight = (float *)malloc((size_t)beta_n_elems * sizeof(float));
+                gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_beta_weight, -1);
+            }
+
+            // ssm_alpha.weight [d_model, dt_rank] F32
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_SSM_ALPHA);
+                if (!t) { fprintf(stderr, "Missing SSM ssm_alpha for layer %d\n", l); goto fail; }
+                int64_t alpha_n_elems = 1;
+                for (int d = 0; d < t->n_dims; d++) alpha_n_elems *= t->dims[d];
+                layer->ssm.ssm_alpha_weight = (float *)malloc((size_t)alpha_n_elems * sizeof(float));
+                gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_alpha_weight, -1);
+            }
+
+            // ssm_dt.bias [dt_rank] F32
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_SSM_DT);
+                if (!t) { fprintf(stderr, "Missing SSM ssm_dt for layer %d\n", l); goto fail; }
+                int64_t dt_n_elems = 1;
+                for (int d = 0; d < t->n_dims; d++) dt_n_elems *= t->dims[d];
+                layer->ssm.ssm_dt_bias = (float *)malloc((size_t)dt_n_elems * sizeof(float));
+                gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_dt_bias, -1);
+            }
+
+            // ssm_a [dt_rank] F32 (Qwen3.6 uses "ssm_a" without .weight suffix)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_SSM_A);
+                if (!t) { fprintf(stderr, "Missing SSM ssm_a for layer %d\n", l); goto fail; }
+                int64_t a_n_elems = 1;
+                for (int d = 0; d < t->n_dims; d++) a_n_elems *= t->dims[d];
+                layer->ssm.ssm_a = (float *)malloc((size_t)a_n_elems * sizeof(float));
+                gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_a, -1);
+            }
+
+            // ssm_conv1d.weight [conv_kernel, conv_dim] F32
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_SSM_CONV1D);
+                if (!t) { fprintf(stderr, "Missing SSM ssm_conv1d for layer %d\n", l); goto fail; }
+                int64_t conv_n_elems = 1;
+                for (int d = 0; d < t->n_dims; d++) conv_n_elems *= t->dims[d];
+                layer->ssm.ssm_conv1d_weight = (float *)malloc((size_t)conv_n_elems * sizeof(float));
+                gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_conv1d_weight, -1);
+            }
+
+            // ssm_norm.weight — use tensor's actual dim
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_SSM_NORM);
+                if (!t) { fprintf(stderr, "Missing SSM ssm_norm for layer %d\n", l); goto fail; }
+                int ssm_norm_size = (int)t->dims[0];
+                layer->ssm.ssm_norm_weight = (float *)malloc((size_t)ssm_norm_size * sizeof(float));
+                gguf_read_tensor_f32(ctx, t, layer->ssm.ssm_norm_weight, -1);
+            }
+
+            printf("  Layer %d: SSM loaded (quantized attn_qkv/gate/out, F32 norms/conv/a/dt/beta/alpha)\n", l);
+
         } else {
             // Load GQA weights — QUANTIZED-ONLY PATH for large weight matrices.
             // attn_q, attn_k, attn_v, attn_output use quantized blob pointers (set later).
@@ -394,83 +365,107 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
             int ok = 1;
             
             
-            // LARGE: attn_q.weight — quantized-only (blob pointer)
-            layer->gqa.attn_q_weight = NULL;
-            
-            // LARGE: attn_k.weight — quantized-only (blob pointer)
-            layer->gqa.attn_k_weight = NULL;
-            
-            // LARGE: attn_v.weight — quantized-only (blob pointer)
-            layer->gqa.attn_v_weight = NULL;
-            
-            // LARGE: attn_output.weight — quantized-only (blob pointer)
-            layer->gqa.attn_output_weight = NULL;
-            
-            // Small: attn_q_norm.weight [head_dim] F32
-            // Optional: some GGUFs (Qwen-style / Pure-GQA without per-head
-            // norms, e.g. nanbeige) omit blk.N.attn_q_norm.weight entirely.
+            // GQA weights — QUANTIZED-ONLY PATH for large matrices.
+            // attn_q, attn_k, attn_v, attn_output use quantized blob
+            // pointers (set later). Small norms loaded as F32.
+            if (getenv("WUBU_DEBUG")) fprintf(stderr, "DEBUG: Loading GQA layer %d\n", l);
+
+            // attn_q_norm.weight [head_dim] F32 (optional)
             // Treat absence as identity (RMSNorm with all-ones weight).
-            snprintf(name, sizeof(name), "blk.%d.attn_q_norm.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            int layer_head_dim = model->gqa_head_dim;  // Use model-level head_dim as default
-            if (t && t->n_dims >= 1 && t->dims[0] > 0) layer_head_dim = (int)t->dims[0];
-            layer->gqa.head_dim = layer_head_dim;
-            layer->gqa.attn_q_norm_weight = (float *)malloc(layer_head_dim * sizeof(float));
-            if (t) {
-                ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_q_norm_weight, layer_head_dim) > 0);
-            } else {
-                for (int i = 0; i < layer_head_dim; i++) layer->gqa.attn_q_norm_weight[i] = 1.0f;
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_Q_NORM);
+                int layer_head_dim = model->gqa_head_dim;  // default
+                if (t && t->n_dims >= 1 && t->dims[0] > 0) layer_head_dim = (int)t->dims[0];
+                layer->gqa.head_dim = layer_head_dim;
+                layer->gqa.attn_q_norm_weight = (float *)malloc(layer_head_dim * sizeof(float));
+                if (t) {
+                    gguf_read_tensor_f32(ctx, t, layer->gqa.attn_q_norm_weight, layer_head_dim);
+                } else {
+                    for (int i = 0; i < layer_head_dim; i++) layer->gqa.attn_q_norm_weight[i] = 1.0f;
+                }
             }
 
-            // Small: attn_k_norm.weight [head_dim] F32 (optional, see above)
-            snprintf(name, sizeof(name), "blk.%d.attn_k_norm.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            layer->gqa.attn_k_norm_weight = (float *)malloc(layer_head_dim * sizeof(float));
-            if (t) {
-                ok = ok && (gguf_read_tensor_f32(ctx, t, layer->gqa.attn_k_norm_weight, layer_head_dim) > 0);
-            } else {
-                for (int i = 0; i < layer_head_dim; i++) layer->gqa.attn_k_norm_weight[i] = 1.0f;
+            // attn_k_norm.weight [head_dim] F32 (optional)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_K_NORM);
+                layer->gqa.attn_k_norm_weight = (float *)malloc(layer->gqa.head_dim * sizeof(float));
+                if (t) {
+                    gguf_read_tensor_f32(ctx, t, layer->gqa.attn_k_norm_weight, layer->gqa.head_dim);
+                } else {
+                    for (int i = 0; i < layer->gqa.head_dim; i++) layer->gqa.attn_k_norm_weight[i] = 1.0f;
+                }
             }
 
             // Extract per-layer dimensions from GGUF tensor shapes
-            // K weight: [d_model, kv_heads * head_dim] => kv_heads from dims
-            snprintf(name, sizeof(name), "blk.%d.attn_k.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && t->n_dims >= 2 && layer_head_dim > 0) {
-                int kv_dim = (int)t->dims[1];  // kv_heads * head_dim
-                layer->gqa.kv_heads = kv_dim / layer_head_dim;
-            } else {
-                layer->gqa.kv_heads = GQA_KV_HEADS;
+            // via resolver — no hardcoded prefix needed.
+            {
+                gguf_tensor_info *t_k = resolve(l, WUBU_T_ATTN_K);
+                if (t_k && t_k->n_dims >= 2 && layer->gqa.head_dim > 0) {
+                    int kv_dim = (int)t_k->dims[1];  // kv_heads * head_dim
+                    layer->gqa.kv_heads = kv_dim / layer->gqa.head_dim;
+                } else {
+                    layer->gqa.kv_heads = GQA_KV_HEADS;
+                }
+                // Q weight: [d_model, q_heads * head_dim * 2] (fused Q+gate)
+                // => q_heads from dims
+                gguf_tensor_info *t_q = resolve(l, WUBU_T_ATTN_Q);
+                if (t_q && t_q->n_dims >= 2 && layer->gqa.head_dim > 0) {
+                    int q_dim_fused = (int)t_q->dims[1];  // q_heads * head_dim * 2
+                    layer->gqa.q_heads = q_dim_fused / (layer->gqa.head_dim * 2);
+                } else {
+                    layer->gqa.q_heads = GQA_Q_HEADS;
+                }
+                layer->gqa.kv_dim = layer->gqa.kv_heads * layer->gqa.head_dim;
+                layer->gqa.q_dim = layer->gqa.q_heads * layer->gqa.head_dim;
+                layer->gqa.is_large = (layer->gqa.head_dim == 512) ? 1 : 0;
             }
-            // Q weight: [d_model, q_heads * head_dim * 2] (fused Q+gate) => q_heads from dims
-            snprintf(name, sizeof(name), "blk.%d.attn_q.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && t->n_dims >= 2 && layer_head_dim > 0) {
-                int q_dim_fused = (int)t->dims[1];  // q_heads * head_dim * 2
-                layer->gqa.q_heads = q_dim_fused / (layer_head_dim * 2);
-            } else {
-                layer->gqa.q_heads = GQA_Q_HEADS;
-            }
-            layer->gqa.kv_dim = layer->gqa.kv_heads * layer_head_dim;
-            layer->gqa.q_dim = layer->gqa.q_heads * layer_head_dim;
-            layer->gqa.is_large = (layer_head_dim == 512) ? 1 : 0;
 
             // Extract output projection dim from attn_output.weight tensor
-            // For standard models (Qwen): out_dim = q_dim
-            // For DGemma: out_dim = q_dim * 2 (Q+gate fused into output proj)
-            layer->gqa.out_dim = layer->gqa.q_dim;  // default
-            snprintf(name, sizeof(name), "blk.%d.attn_output.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && t->n_dims >= 2) {
-                int out_rows = (int)t->dims[0];  // first dim = input features to output proj
-                if (out_rows != layer->gqa.q_dim) {
-                    layer->gqa.out_dim = out_rows;  // e.g., q_dim*2 for DGemma
+            {
+                gguf_tensor_info *t_out = resolve(l, WUBU_T_ATTN_O);
+                if (t_out && t_out->n_dims >= 2) {
+                    int out_rows = (int)t_out->dims[0];  // first dim = input features
+                    layer->gqa.out_dim = (out_rows != layer->gqa.q_dim) ? out_rows : layer->gqa.q_dim;
+                } else {
+                    layer->gqa.out_dim = layer->gqa.q_dim;
                 }
             }
 
             printf("  Layer %d: GQA loaded, head_dim=%d q_heads=%d kv_heads=%d out_dim=%d%s\n",
-                   l, layer_head_dim, layer->gqa.q_heads, layer->gqa.kv_heads,
+                   l, layer->gqa.head_dim, layer->gqa.q_heads, layer->gqa.kv_heads,
                    layer->gqa.out_dim, layer->gqa.is_large ? " LARGE" : "");
+
+            // LARGE: attn_q.weight — quantized-only (blob pointer)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_Q);
+                if (t && blob) { layer->gqa.attn_q_weight_q = blob + t->data_offset; layer->gqa.attn_q_weight_type = t->ggml_type; }
+            }
+
+            // LARGE: attn_k.weight — quantized-only (blob pointer)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_K);
+                if (t && blob) { layer->gqa.attn_k_weight_q = blob + t->data_offset; layer->gqa.attn_k_weight_type = t->ggml_type; }
+            }
+
+            // LARGE: attn_v.weight — quantized-only (blob pointer)
+            // For Pure-GQA without separate V, share K weight (V=K).
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_V);
+                if (t && blob) {
+                    layer->gqa.attn_v_weight_q = blob + t->data_offset;
+                    layer->gqa.attn_v_weight_type = t->ggml_type;
+                } else {
+                    // LARGE layers: V weight not present, share K weight (V=K)
+                    layer->gqa.attn_v_weight_q = layer->gqa.attn_k_weight_q;
+                    layer->gqa.attn_v_weight_type = layer->gqa.attn_k_weight_type;
+                }
+            }
+
+            // LARGE: attn_output.weight — quantized-only (blob pointer)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_O);
+                if (t && blob) { layer->gqa.attn_output_weight_q = blob + t->data_offset; layer->gqa.attn_output_weight_type = t->ggml_type; }
+            }
         }
         
         // Load MoE (FFN) weights — NOT loaded by default (memory: 3.2 GB/layer)
@@ -479,7 +474,7 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     }
     
     // Load final norm
-    gguf_tensor_info *t = gguf_find_tensor(ctx, "output_norm.weight");
+    gguf_tensor_info *t = resolve(-1, WUBU_T_OUTPUT_NORM);
     if (t) {
         model->norm_weight = (float *)malloc(model->d_model * sizeof(float));
         gguf_read_tensor_f32(ctx, t, model->norm_weight, model->d_model);
@@ -491,9 +486,9 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
     // Embeddings: auto-extract from GGUF if not available, else load from file
     model->use_embedding_file = true;
     model->vocab_size = 0;
-    // Get actual vocab size from GGUF embedding tensor
+    // Get actual vocab size from GGUF embedding tensor via resolver
     {
-        gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
+        gguf_tensor_info *t_emb = resolve(-1, WUBU_T_TOKEN_EMBD);
         if (t_emb && t_emb->n_dims >= 2) {
             int64_t n_emb = 1;
             for (int d = 0; d < t_emb->n_dims; d++) n_emb *= t_emb->dims[d];
@@ -538,7 +533,7 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         model->use_embedding_file = false;
         model->token_embd = NULL;
         // Get quantized token_embd pointer from blob
-        gguf_tensor_info *t_emb = gguf_find_tensor(ctx, "token_embd.weight");
+        gguf_tensor_info *t_emb = resolve(-1, WUBU_T_TOKEN_EMBD);
         if (t_emb && ctx->data_blob) {
             model->token_embd_q = (const uint8_t *)ctx->data_blob + t_emb->data_offset;
             model->token_embd_type = t_emb->ggml_type;
@@ -553,15 +548,13 @@ bool wubu_model_init(wubu_model_t *model, const char *gguf_path) {
         if (model->vocab_size == 0) model->vocab_size = 248320;
     }
     
-    // Load output weight for logit projection — QUANTIZED-ONLY (Q4_K blob pointer)
+    // Output weight — quantized pointer via resolver (no hardcoded name)
     model->output_weight = NULL;
-    gguf_tensor_info *t_out = gguf_find_tensor(ctx, "output.weight");
+    gguf_tensor_info *t_out = resolve(-1, WUBU_T_OUTPUT);
     if (!t_out) {
         // Tied output: use token_embd.weight (common for Gemma, LLaMA, etc.)
-        gguf_tensor_info *t_embd = gguf_find_tensor(ctx, "token_embd.weight");
+        gguf_tensor_info *t_embd = resolve(-1, WUBU_T_TOKEN_EMBD);
         if (t_embd) {
-            // Placeholder; the real Q4_K blob pointer is filled below once the
-            // GGUF buffer is mapped (blob + t_embd->data_offset).
             model->output_weight_q = NULL;
             model->output_weight_type = t_embd->ggml_type;
             model->tied_output = true;
@@ -599,54 +592,18 @@ int max_s = 1;
     printf("  SSM L2 eps: %e\n", g_ssm_l2_eps);
     for (int l = 0; l < model->n_layers; l++) {
             wubu_layer_t *layer = &model->layers[l];
-            gguf_tensor_info *t;
-            char name[256];
             if (layer->is_ssm) {
-                snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", l);
-                t = gguf_find_tensor(ctx, name);
-                if (t && blob) { layer->ssm.attn_qkv_weight_q = blob + t->data_offset; layer->ssm.attn_qkv_weight_type = t->ggml_type; }
-                snprintf(name, sizeof(name), "blk.%d.attn_gate.weight", l);
-                t = gguf_find_tensor(ctx, name);
-                if (t && blob) { layer->ssm.attn_gate_weight_q = blob + t->data_offset; layer->ssm.attn_gate_weight_type = t->ggml_type; }
-                snprintf(name, sizeof(name), "blk.%d.ssm_out.weight", l);
-                t = gguf_find_tensor(ctx, name);
-                if (t && blob) { layer->ssm.ssm_out_weight_q = blob + t->data_offset; layer->ssm.ssm_out_weight_type = t->ggml_type; }
+                // SSM large weights: quantized blob pointers via resolver
+                { gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_QKV); if (t && blob) { layer->ssm.attn_qkv_weight_q = blob + t->data_offset; layer->ssm.attn_qkv_weight_type = t->ggml_type; } }
+                { gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_GATE); if (t && blob) { layer->ssm.attn_gate_weight_q = blob + t->data_offset; layer->ssm.attn_gate_weight_type = t->ggml_type; } }
+                { gguf_tensor_info *t = resolve(l, WUBU_T_SSM_OUT); if (t && blob) { layer->ssm.ssm_out_weight_q = blob + t->data_offset; layer->ssm.ssm_out_weight_type = t->ggml_type; } }
             } else {
-                /* GQA: try separate Q/K/V first, then fused QKV */
-                snprintf(name, sizeof(name), "blk.%d.attn_q.weight", l);
-                t = gguf_find_tensor(ctx, name);
-                if (t && blob) {
-                    layer->gqa.attn_q_weight_q = blob + t->data_offset;
-                    layer->gqa.attn_q_weight_type = t->ggml_type;
-                } else {
-                    /* Fallback: Qwen3.6-style fused QKV: attn_q.weight ==
-                     * attn_qkv.weight — the tensor contains Q|K|V concatenated.
-                     * We store the pointer; proj_matmul adjusts row stride. */
-                    snprintf(name, sizeof(name), "blk.%d.attn_qkv.weight", l);
-                    t = gguf_find_tensor(ctx, name);
-                    if (t && blob) {
-                        layer->gqa.attn_q_weight_q = blob + t->data_offset;
-                        layer->gqa.attn_q_weight_type = t->ggml_type;
-                        layer->gqa.attn_q_weight_raw = layer->gqa.attn_q_weight_q;
-                        layer->gqa.is_large = 1; /* fused QKV marker */
-                    }
-                }
-                snprintf(name, sizeof(name), "blk.%d.attn_k.weight", l);
-                t = gguf_find_tensor(ctx, name);
-                if (t && blob) { layer->gqa.attn_k_weight_q = blob + t->data_offset; layer->gqa.attn_k_weight_type = t->ggml_type; }
-                snprintf(name, sizeof(name), "blk.%d.attn_v.weight", l);
-                t = gguf_find_tensor(ctx, name);
-                if (t && blob) {
-                    layer->gqa.attn_v_weight_q = blob + t->data_offset;
-                    layer->gqa.attn_v_weight_type = t->ggml_type;
-                } else {
-                    /* LARGE layers: V weight not present, share K weight (V=K) */
-                    layer->gqa.attn_v_weight_q = layer->gqa.attn_k_weight_q;
-                    layer->gqa.attn_v_weight_type = layer->gqa.attn_k_weight_type;
-                }
-                snprintf(name, sizeof(name), "blk.%d.attn_output.weight", l);
-                t = gguf_find_tensor(ctx, name);
-                if (t && blob) { layer->gqa.attn_output_weight_q = blob + t->data_offset; layer->gqa.attn_output_weight_type = t->ggml_type; }
+                // GQA large weights: quantized blob pointers via resolver
+                // Try separate Q/K/V first, then fused QKV
+                { gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_Q); if (t && blob) { layer->gqa.attn_q_weight_q = blob + t->data_offset; layer->gqa.attn_q_weight_type = t->ggml_type; } else { gguf_tensor_info *t2 = resolve(l, WUBU_T_ATTN_QKV); if (t2 && blob) { layer->gqa.attn_q_weight_q = blob + t2->data_offset; layer->gqa.attn_q_weight_type = t2->ggml_type; layer->gqa.attn_q_weight_raw = layer->gqa.attn_q_weight_q; layer->gqa.is_large = 1; } } }
+                { gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_K); if (t && blob) { layer->gqa.attn_k_weight_q = blob + t->data_offset; layer->gqa.attn_k_weight_type = t->ggml_type; } }
+                { gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_V); if (t && blob) { layer->gqa.attn_v_weight_q = blob + t->data_offset; layer->gqa.attn_v_weight_type = t->ggml_type; } else { layer->gqa.attn_v_weight_q = layer->gqa.attn_k_weight_q; layer->gqa.attn_v_weight_type = layer->gqa.attn_k_weight_type; } }
+                { gguf_tensor_info *t = resolve(l, WUBU_T_ATTN_O); if (t && blob) { layer->gqa.attn_output_weight_q = blob + t->data_offset; layer->gqa.attn_output_weight_type = t->ggml_type; } }
             }
         }
         if (t_out && blob) {
@@ -654,58 +611,63 @@ int max_s = 1;
             model->output_weight_type = t_out->ggml_type;
             model->tied_output = false;
         } else if (model->tied_output) {
-            // Tied: output_weight_q was set to token_embd tensor info earlier,
-            // but we need the actual blob pointer
-            gguf_tensor_info *t_embd = gguf_find_tensor(ctx, "token_embd.weight");
-            if (t_embd && blob) {
-                model->output_weight_q = blob + t_embd->data_offset;
-            }
-        }
+     // Tied: output_weight_q was set to token_embd tensor info earlier,
+     // but we need the actual blob pointer
+     gguf_tensor_info *t_embd = resolve(-1, WUBU_T_TOKEN_EMBD);
+     if (t_embd && blob) {
+         model->output_weight_q = blob + t_embd->data_offset;
+     }
+ }
 
         // Save MoE quantized pointers for each layer (routed + shared experts)
+        // via role-based resolver — no hardcoded prefix needed.
         for (int l = 0; l < model->n_layers; l++) {
             wubu_layer_t *layer = &model->layers[l];
-            gguf_tensor_info *t;
-            char name[256];
             moe_weights_t *moe = &layer->moe;
 
             // Router is F32 — direct pointer from blob
             // Qwen3.6-family GGUFs name these ffn_gate.weight / ffn_up.weight /
             // ffn_down.weight (no _inp suffix); some exports use _inp_inp. Try both.
-            snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { snprintf(name, sizeof(name), "blk.%d.ffn_gate.weight", l); t = gguf_find_tensor(ctx, name); }
-            if (t && blob) { moe->ffn_gate_inp = (float *)(blob + t->data_offset); }
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_MOE_GATE_INP);
+                if (!t) t = resolve(l, WUBU_T_FFN_GATE);
+                if (t && blob) { moe->ffn_gate_inp = (float *)(blob + t->data_offset); }
+            }
 
             // Shared expert gate weight (F32)
-            snprintf(name, sizeof(name), "blk.%d.ffn_gate_inp_shexp.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (!t) { snprintf(name, sizeof(name), "blk.%d.ffn_gate_shexp.weight", l); t = gguf_find_tensor(ctx, name); }
-            if (t && blob) { moe->ffn_gate_inp_shexp = (float *)(blob + t->data_offset); }
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_MOE_GATE_SHEXP);
+                if (!t) t = resolve(l, WUBU_T_MOE_GATE_SHEXP);
+                if (t && blob) { moe->ffn_gate_inp_shexp = (float *)(blob + t->data_offset); }
+            }
 
-            snprintf(name, sizeof(name), "blk.%d.ffn_gate_exps.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && blob) { moe->ffn_gate_exps_q = blob + t->data_offset; moe->ffn_gate_exps_q_type = t->ggml_type; }
+            // Routed expert weights (quantized)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_MOE_GATE_EXPS);
+                if (t && blob) { moe->ffn_gate_exps_q = blob + t->data_offset; moe->ffn_gate_exps_q_type = t->ggml_type; }
+            }
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_MOE_UP_EXPS);
+                if (t && blob) { moe->ffn_up_exps_q = blob + t->data_offset; moe->ffn_up_exps_q_type = t->ggml_type; }
+            }
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_MOE_DOWN_EXPS);
+                if (t && blob) { moe->ffn_down_exps_q = blob + t->data_offset; moe->ffn_down_exps_q_type = t->ggml_type; }
+            }
 
-            snprintf(name, sizeof(name), "blk.%d.ffn_up_exps.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && blob) { moe->ffn_up_exps_q = blob + t->data_offset; moe->ffn_up_exps_q_type = t->ggml_type; }
-
-            snprintf(name, sizeof(name), "blk.%d.ffn_down_exps.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && blob) { moe->ffn_down_exps_q = blob + t->data_offset; moe->ffn_down_exps_q_type = t->ggml_type; }
-
-            snprintf(name, sizeof(name), "blk.%d.ffn_gate_shexp.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && blob) { moe->ffn_gate_shexp_q = blob + t->data_offset; moe->ffn_gate_shexp_q_type = t->ggml_type; }
-
-            snprintf(name, sizeof(name), "blk.%d.ffn_up_shexp.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && blob) { moe->ffn_up_shexp_q = blob + t->data_offset; moe->ffn_up_shexp_q_type = t->ggml_type; }
-
-            snprintf(name, sizeof(name), "blk.%d.ffn_down_shexp.weight", l);
-            t = gguf_find_tensor(ctx, name);
-            if (t && blob) { moe->ffn_down_shexp_q = blob + t->data_offset; moe->ffn_down_shexp_q_type = t->ggml_type; }
+            // Shared expert weights (quantized)
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_MOE_GATE_SHEXP);
+                if (t && blob) { moe->ffn_gate_shexp_q = blob + t->data_offset; moe->ffn_gate_shexp_q_type = t->ggml_type; }
+            }
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_MOE_UP_SHEXP);
+                if (t && blob) { moe->ffn_up_shexp_q = blob + t->data_offset; moe->ffn_up_shexp_q_type = t->ggml_type; }
+            }
+            {
+                gguf_tensor_info *t = resolve(l, WUBU_T_MOE_DOWN_SHEXP);
+                if (t && blob) { moe->ffn_down_shexp_q = blob + t->data_offset; moe->ffn_down_shexp_q_type = t->ggml_type; }
+            }
 
             // Mark MoE as loaded for quantized path
             if (moe->ffn_gate_exps_q && moe->ffn_up_exps_q && moe->ffn_down_exps_q) {
@@ -1904,7 +1866,7 @@ void wubu_model_forward(wubu_model_t *model,
         }
     } else if (model->token_embd_q) {
         // Large vocab: dequantize per-token from mmap'd GGUF blob
-        gguf_tensor_info *t_emb = gguf_find_tensor(model->gguf_ctx, "token_embd.weight");
+        gguf_tensor_info *t_emb = resolve(-1, WUBU_T_TOKEN_EMBD);
         int bytes_per_token = (int)(model->d_model * sizeof(float));  // default: F32
         if (t_emb) {
             int64_t n_elems = 1;
@@ -1974,7 +1936,7 @@ void wubu_model_forward_chunked(wubu_model_t *model,
                        model->d_model * sizeof(float));
             }
         } else if (model->token_embd_q) {
-            gguf_tensor_info *t_emb = gguf_find_tensor(model->gguf_ctx, "token_embd.weight");
+            gguf_tensor_info *t_emb = resolve(-1, WUBU_T_TOKEN_EMBD);
             int bytes_per_token = (int)(model->d_model * sizeof(float));
             if (t_emb) {
                 int64_t n_elems = 1;

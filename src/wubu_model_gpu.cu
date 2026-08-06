@@ -9,6 +9,7 @@
  *   Quantized mode (future): keep Q5_K on GPU, dequant-on-fly kernel
  */
 #include "wubu_model.h"
+#include "wubu_backend.h"   /* backend vtable install on GPU init/free */
 #include "cuda_kernels.h"
 #include "bench.h"
 #include "gguf_reader.h"
@@ -647,6 +648,7 @@ int wubu_model_gpu_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
     cudaStreamSynchronize(gpu->stream);
     gpu->initialized = true;
     model->gpu_ctx = (void *)gpu;
+    model->backend = wubu_backend_cuda_get();
 
     // Allocate SSM output buffers (reused per-layer, sized for max chunk)
     gpu->d_ssm_qkv_out = wubu_cuda_alloc((size_t)gpu->chunk_sz * gpu->conv_dim * sizeof(float));
@@ -1552,4 +1554,5 @@ void wubu_model_gpu_free(wubu_model_t *model) {
     memset(gpu, 0, sizeof(*gpu));
     free(gpu);
     model->gpu_ctx = NULL;
+    model->backend = wubu_backend_cpu_get();
 }

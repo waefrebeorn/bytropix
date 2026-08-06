@@ -178,7 +178,18 @@ int wubu_kvfs_mount(wubu_kvfs_t *fs, const char *path,
     if (!fs || !path || !*path) return -1;
     if (n_blocks == 0) return -1;
     if ((uint64_t)start_block + n_blocks > fs->total_blocks) return -1;
+    /* Reject paths that won't fit in the mount struct — snprintf
+     * would silently truncate, creating a ghost mount whose path
+     * is unresolvable via find_mount() but whose blocks are still
+     * counted in used_blocks. */
+    if (strlen(path) >= sizeof(((wubu_kvfs_mount_t *)0)->path)) return -1;
     if (hash_find(fs, path) >= 0) return -1; /* duplicate */
+
+    /* keep load factor under 50% — grow BEFORE touching the slot so a
+     * failed grow cannot leave a written-but-unregistered ghost mount. */
+    if (fs->n_live + 1 > fs->n_slots / 2) {
+        if (hash_grow(fs) < 0) return -1;
+    }
 
     /* find a free slot (reuse a dead mount) or append */
     int m_idx = -1;
@@ -203,11 +214,12 @@ int wubu_kvfs_mount(wubu_kvfs_t *fs, const char *path,
     m->abs_offset  = (size_t)start_block * fs->block_size;
     m->abs_limit   = (size_t)(start_block + n_blocks) * fs->block_size;
 
-    /* keep load factor under 50% */
-    if (fs->n_live + 1 > fs->n_slots / 2) {
-        if (hash_grow(fs) < 0) return -1;
+    if (hash_insert(fs, path, m_idx) < 0) {
+        /* roll back the slot write — no ghost mount, no leaked slot */
+        memset(m, 0, sizeof(*m));
+        if (m_idx == fs->n_mounts - 1) fs->n_mounts--; /* un-append */
+        return -1;
     }
-    if (hash_insert(fs, path, m_idx) < 0) return -1;
     fs->n_live++;
     fs->used_blocks += n_blocks;
     return 0;
@@ -218,8 +230,8 @@ int wubu_kvfs_unmount(wubu_kvfs_t *fs, const char *path) {
     int m_idx = hash_remove(fs, path);
     if (m_idx < 0) return -1;
     fs->used_blocks -= fs->mounts[m_idx].n_blocks;
-    fs->mounts[m_idx].path[0] = '\0'; /* mark dead; slot reused later */
     fs->n_live--;
+    fs->mounts[m_idx].path[0] = '\0'; /* mark dead; slot reused later */
     return 0;
 }
 
@@ -302,7 +314,10 @@ int wubu_kvfs_read(const wubu_kvfs_t *fs, const char *path,
     if (!fs || !path || !kv_base || !dst || n_floats == 0) return -1;
     const wubu_kvfs_mount_t *m = find_mount(fs, path);
     if (!m) return -1;
-    if (m->abs_offset + n_floats > m->abs_limit) return -1;
+    /* Subtraction form: abs_offset + n_floats > abs_limit
+     * is equivalent to n_floats > abs_limit - abs_offset,
+     * but avoids overflow when abs_offset is large. */
+    if (n_floats > m->abs_limit - m->abs_offset) return -1;
     memcpy(dst, kv_base + m->abs_offset, n_floats * sizeof(float));
     return 0;
 }
@@ -312,14 +327,17 @@ int wubu_kvfs_write(wubu_kvfs_t *fs, const char *path,
     if (!fs || !path || !kv_base || !src || n_floats == 0) return -1;
     const wubu_kvfs_mount_t *m = find_mount(fs, path);
     if (!m) return -1;
-    if (m->abs_offset + n_floats > m->abs_limit) return -1;
+    /* Subtraction form avoids overflow vs. addition form. */
+    if (n_floats > m->abs_limit - m->abs_offset) return -1;
     memcpy(kv_base + m->abs_offset, src, n_floats * sizeof(float));
     return 0;
 }
 
 char *wubu_kvfs_snapshot_json(const wubu_kvfs_t *fs, size_t *out_len) {
     if (!fs) return NULL;
-    size_t buf_cap = 4096 + fs->n_live * 256;
+    /* Worst-case: every mount is a 255-char path + full JSON
+     * key/value overhead ≈ 120 bytes per mount. */
+    size_t buf_cap = 4096 + fs->n_live * 400;
     char *buf = (char *)malloc(buf_cap);
     if (!buf) return NULL;
     size_t pos = 0;

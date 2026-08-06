@@ -11,8 +11,13 @@
 #include "wubu_backend.h"
 #include "wubu_model_gpu.h"
 #include "wubu_kvfs.h"   /* ADR-003: namespace I/O (flat-tensor route) */
+#include <cuda_runtime.h> /* cudaStream_t — nvcc does not auto-include for .c */
 
 static int cuda_backend_init(wubu_model_t *model, int max_ctx, int chunk_sz) {
+    if (chunk_sz <= 0) {
+        fprintf(stderr, "GPU: invalid chunk_sz=%d (must be >0)\n", chunk_sz);
+        return 0;
+    }
     return wubu_model_gpu_init(model, max_ctx, chunk_sz);
 }
 

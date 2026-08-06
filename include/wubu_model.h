@@ -9,6 +9,7 @@
 #include "wubu_kv_runtime.h"
 #include "wubu_kvvq.h"  /* KB2: VQ codebook for KV compression */
 #include "wubu_arena.h" /* C01: arena allocator for forward-buffer OOM safety */
+#include "wubu_gguf_names.h"  /* role-based tensor resolver */
 #include <stdbool.h>
 #include <math.h>
 #include <string.h>
@@ -705,6 +706,12 @@ typedef struct wubu_model_t {
 
     // GPU acceleration context (opaque pointer, managed by wubu_model_gpu.cu)
     void *gpu_ctx;
+
+    // Active backend vtable (CPU or CUDA). Set at model init;
+    // NULL when no backend is installed yet. Separated from gpu_ctx
+    // because gpu_ctx is the GPU context (wubu_gpu_ctx_t*), while
+    // backend points to the dispatch struct (wubu_backend_t*).
+    struct wubu_backend_t *backend;
 
     // OOM-safe forward arena: allocated once at model init, reset per forward.
     // All temporary buffers (x, normed, attn_out, normed2, ffn_out, prev_experts)

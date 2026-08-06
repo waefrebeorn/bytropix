@@ -22,7 +22,7 @@ Full annotated table of `src/` modules. Regenerate with
 | `src/safetensors_writer.c` | [ uint64 LE header_len ][ header JSON ][ padding to 8 ][ raw blob ] |
 | `src/thread_pool.c` | ── Thread pool using OpenMP ─────────────────────────────────── |
 | `src/tile_manager.c` | - Tiles = 64×64 "pixel" blocks (64 tokens each) |
-| `src/wubu.c` | (c) 2026 Harshal Singh). Pure C11, no third-party deps. The forward |
+| `src/wubu.c` | The WuBu-35M spine in C11 — original WaefreBeorn work (WaefreBeorn Umbrella License v3.0), the archived seed superseded by WuBu1 (docs/wubu1-base-model-design.md). Pure C11, no third-party deps. The forward |
 | `src/wubu_4kv.c` | 1. KV-cache is memory-bandwidth-bound in decode (Roofline 2607.02558). |
 | `src/wubu_acq.c` | - EI(x) = (μ-f*)Φ((μ-f*)/σ) + σ·φ((μ-f*)/σ)  [closed form] |
 | `src/wubu_active.c` | - FF05: uncertainty sampling = query argmax σ(x); QBC = query argmax |

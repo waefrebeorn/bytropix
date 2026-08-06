@@ -14,6 +14,7 @@
 #include "safetensors_reader.h"
 #include "wubu_lora.h"
 #include "wubu_rotate.h"   // doc 013: wubu_pow2_floor / wubu_rotate_fuse_right
+#include "wubu_backend.h"  // wubu_backend_cpu_get() — backend install at bridge create
 #include <stdlib.h>
 #include "wubu_affinity.h"
 #include <string.h>
@@ -455,6 +456,7 @@ int wubu_model_init_safetensors_ssd(wubu_model_t *m, const char *path,
     m->enable_moe   = (nE > 0 || m->shared_expert_ff > 0 || nL > 0) ? true : false;
     m->moe_max_layers = 0;                 /* 0 => all layers */
     m->gpu_ctx      = NULL;
+    m->backend      = wubu_backend_cpu_get();
     m->tied_output  = false;
     m->skip_output_proj = false;
     m->save_last_hidden = NULL;

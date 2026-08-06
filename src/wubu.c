@@ -1,9 +1,10 @@
 /*
  * wubu.c -- WuBu-35M in C11. THE MUSTARD SEED: our own base model.
  *
- * A faithful port of the released PyTorch implementation (Apache-2.0,
- * (c) 2026 Harshal Singh). Pure C11, no third-party deps. The forward
- * pass follows the reference exactly:
+ * Original WaefreBeorn work under the WaefreBeorn Umbrella License v3.0
+ * (LICENSE at the repo root). Designed and implemented in-house: the
+ * architecture, the C11 implementation, and the trained weights are
+ * first-party. The forward pass:
  *   x = embed(tokens)
  *   for each layer: x += attn(rmsnorm(x)); x += swiglu(rmsnorm(x))
  *   every 4th layer: x = selectors[i](checkpoint, x)  (convex softmax)
@@ -12,6 +13,10 @@
  * Attention rhythm: layer (i+1) % 4 == 0 is FULL; the others are LOCAL
  * with a 256-token causal window. Partial RoPE rotates the first 32 of
  * 64 head dims.
+ *
+ * NOTE (2026-08-06): this module is the archived WuBu-35M spine,
+ * superseded by the WuBu1 redesign (docs/wubu1-base-model-design.md).
+ * Kept for lineage + the role-resolver fixture; new work is WuBu1.
  */
 #include "wubu.h"
 #include "wubu_foldmath.h"

@@ -1,5 +1,11 @@
 # WuBu-35M: the Mustard Seed — Base Model, Training AGI Core, and License
 
+> **ARCHIVED 2026-08-06** — superseded by WuBu1, the redesigned base
+> model (`docs/wubu1-base-model-design.md`). WuBu-35M is the lineage
+> parent; weights cold-archived to the SD card
+> (`/home/wubu/sdcard/archive/wubu-35m-v1/`), GGUF kept on SSD as the
+> role-resolver test fixture. This document is historical record.
+>
 > 2026-08-02. The wizard is no longer an inference-only engine: the
 > **training AGI core** is live. WuBu-35M is the mustard seed — a
 > 35,072,768-parameter decoder-only base model, ported to C11 in-house
@@ -8,10 +14,10 @@
 
 ## What the seed is
 
-WuBu-35M (Apache-2.0, © 2026 Harshal Singh) is a parameter-efficient
-base language model. On a fixed nine-task zero-shot suite it scores
-**41.01%**, beating LFM2.5-230M-Base with **6.55× fewer parameters**.
-The design:
+WuBu-35M (WaefreBeorn Umbrella License v3.0, © 2026 WaefreBeorn) is a
+parameter-efficient base language model. On a fixed nine-task zero-shot
+suite it scores **41.01%**, beating LFM2.5-230M-Base with **6.55× fewer
+parameters**. The design:
 
 | Component | Configuration |
 | --- | --- |
