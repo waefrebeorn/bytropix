@@ -590,6 +590,13 @@ test_scalable_model: tools/test_scalable_model.c src/wubu_model_scalable.o
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_scalable_model.c src/wubu_model_scalable.o $(LDFLAGS)
 	./test_scalable_model
 
+src/wubu_density_planner.o: src/wubu_density_planner.c include/wubu_density_planner.h include/wubu_kv_embedding.h include/wubu_coherence_reward.h include/wubu_model_scalable.h include/wubu_kv_tiering.h include/wubu_kv_shrink.h
+	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_density_planner.c
+
+test_density_planner: tools/test_density_planner.c src/wubu_density_planner.o src/wubu_kv_embedding.o src/wubu_kvfs.o src/wubu_model_scalable.o src/wubu_kv_shrink.o
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_density_planner.c src/wubu_density_planner.o src/wubu_kv_embedding.o src/wubu_kvfs.o src/wubu_model_scalable.o src/wubu_kv_shrink.o $(LDFLAGS)
+	./test_density_planner
+
 test_kv_shell: tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_kv_shell.c src/wubu_kv_shell.o src/wubu_kv_embedding.o src/wubu_kvfs.o $(LDFLAGS)
 	./test_kv_shell
