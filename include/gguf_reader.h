@@ -104,6 +104,11 @@ int gguf_buffer_data(gguf_ctx *ctx);
 // Calculate raw (quantized) byte size for a tensor type/element count
 int64_t gguf_raw_size(int ggml_type, int64_t n_elems);
 
+// The ONE canonical half -> float converter. Every dequant path
+// (gguf_dequantize, wubu_weight, quantized_matmul) must call this —
+// inline F16 copies have historically diverged (zero -> 6.1e-5 bug).
+float gguf_f16_to_f32(uint16_t h);
+
 // Dequantize raw quantized bytes to f32
 void gguf_dequantize(const uint8_t *data, int ggml_type, int64_t n_elems, float *output);
 

@@ -62,14 +62,8 @@ int wubu_weight_to_f32(const wubu_weight_t *w, float *out) {
                 return 0;
             case GGML_TYPE_F16: {
                 const uint16_t *src = (const uint16_t *)w->data;
-                for (int64_t i = 0; i < w->n_elems; i++) {
-                    uint32_t sign = (src[i] >> 15) & 1, exp = (src[i] >> 10) & 0x1F,
-                             mant = src[i] & 0x03FF, f32;
-                    if (exp == 0) f32 = (sign<<31)|((uint32_t)(127-15+1)<<23)|(mant<<13);
-                    else if (exp == 31) f32 = (sign<<31)|(0xFF<<23)|(mant<<13);
-                    else f32 = (sign<<31)|((uint32_t)(127-15+exp)<<23)|(mant<<13);
-                    memcpy(&out[i], &f32, 4);
-                }
+                for (int64_t i = 0; i < w->n_elems; i++)
+                    out[i] = gguf_f16_to_f32(src[i]);
                 return 0;
             }
             case GGML_TYPE_BF16: {

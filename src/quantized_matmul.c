@@ -230,12 +230,7 @@ void quantized_matmul(const float *x,
         for (int64_t j = 0; j < n_cols; j++)
             for (int64_t k = 0; k < n_rows; k++) {
                 uint16_t h = w[k + j * stride_elems];
-                uint32_t sign = (h >> 15) & 1, exp = (h >> 10) & 0x1F, mant = h & 0x03FF;
-                uint32_t f32;
-                if (exp == 0) f32 = (sign<<31)|((uint32_t)(127-15+1)<<23)|(mant<<13);
-                else if (exp == 31) f32 = (sign<<31)|(0xFF<<23)|(mant<<13);
-                else f32 = (sign<<31)|((uint32_t)(127-15+exp)<<23)|(mant<<13);
-                memcpy(&w32[k + j*n_rows], &f32, 4);
+                w32[k + j*n_rows] = gguf_f16_to_f32(h);
             }
         wubu_gemv_f32_tiled(w32, x, y, n_cols, n_rows, wubu_gemv_detect().k_unroll);
         /* arena reset happens at step boundary; no explicit free needed */
@@ -318,6 +313,26 @@ void quantized_matmul(const float *x,
     }
     
     // Quantized types: use Q8_K activation quantization + ggml_vec_dot
+    // BUT: Q8_K requires n_rows to be a multiple of QK_K (256). Models
+    // with non-256-divisible dims (e.g. WuBu-35M d_model=448) cannot use
+    // the Q8_K activation path — dequant the weight and SGEMM instead.
+    if (n_rows % QK_K != 0) {
+        int64_t total_elems = n_rows * n_cols;
+        size_t f32_bytes = (size_t)total_elems * sizeof(float);
+        float *f32_w = (float *)gemv_scratch_alloc(f32_bytes);
+        if (!f32_w) { fprintf(stderr, "quantized_matmul: non-QK_K dequant alloc %lld failed\n", (long long)total_elems); return; }
+        gguf_dequantize((const uint8_t *)W, weight_type, total_elems, f32_w);
+        #pragma omp parallel for if(n_cols > 8)
+        for (int64_t j = 0; j < n_cols; j++) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < n_rows; k++) {
+                sum += x[k] * f32_w[k + j * n_rows];
+            }
+            y[j] = sum;
+        }
+        return;
+    }
+
     int64_t n_q8_blocks = (n_rows + QK_K - 1) / QK_K;
     int64_t q8_size = n_q8_blocks * Q8K_BLOCK_SIZE;
     
