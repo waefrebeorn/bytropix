@@ -179,6 +179,8 @@ tools/agent_gauntlet/download_colonels.out
 /tools/layer_cos_sim
 /tools/ref_*
 /tools/test_*
+/tools/test_kv_embedding.c
+/tools/test_kv_hierarchy.c
 /ENCODERS/hash-mind/c/train
 *.o
 # model weights (canonical copies on HF WaefreBeorn/WuBu-35M; tensor store rebuilds)
