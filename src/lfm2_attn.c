@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#if defined(__AVX512F__) || defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 static void rope(float *vec, int hd, int pos, float theta) {
     for (int i = 0; i < hd; i += 2) {
@@ -80,6 +83,7 @@ void lfm2_gqa_q(const float *q_proj, const float *k_proj, const float *v_proj,
     const float scale = 1.0f / sqrtf((float)hd);
     int q_per_kv = nq / nkv;
 
+    #pragma omp parallel for schedule(dynamic, 1) collapse(2) if(T * nq >= 16)
     for (int t = 0; t < T; t++) {
         for (int hh = 0; hh < nq; hh++) {
             int kvh = hh / q_per_kv;
@@ -92,7 +96,26 @@ void lfm2_gqa_q(const float *q_proj, const float *k_proj, const float *v_proj,
                     ? kv_cache_layer + (size_t)tp * kv_dim + kvh * hd
                     : k + (size_t)tp * kv_dim + kvh * hd;
                 float s = 0.0f;
-                for (int i = 0; i < hd; i++) s += Q[i] * K[i];
+                int i = 0;
+#ifdef __AVX512F__
+                __m512 vs = _mm512_setzero_ps();
+                for (; i + 15 < hd; i += 16) {
+                    vs = _mm512_fmadd_ps(_mm512_loadu_ps(Q+i), _mm512_loadu_ps(K+i), vs);
+                }
+                s = _mm512_reduce_add_ps(vs);
+#elif defined(__AVX2__)
+                __m256 vs = _mm256_setzero_ps();
+                for (; i + 7 < hd; i += 8) {
+                    vs = _mm256_fmadd_ps(_mm256_loadu_ps(Q+i), _mm256_loadu_ps(K+i), vs);
+                }
+                __m128 hi = _mm256_extractf128_ps(vs, 1);
+                __m128 lo = _mm256_castps256_ps128(vs);
+                __m128 sum = _mm_add_ps(lo, hi);
+                sum = _mm_hadd_ps(sum, sum);
+                sum = _mm_hadd_ps(sum, sum);
+                s = _mm_cvtss_f32(sum);
+#endif
+                for (; i < hd; i++) s += Q[i] * K[i];
                 s *= scale;
                 scores[tp] = s;
                 if (s > maxs) maxs = s;
@@ -105,7 +128,23 @@ void lfm2_gqa_q(const float *q_proj, const float *k_proj, const float *v_proj,
                     ? kv_cache_layer + (size_t)kv_max_t * kv_dim + (size_t)tp * kv_dim + kvh * hd
                     : v + (size_t)tp * kv_dim + kvh * hd;
                 float wv = scores[tp] * inv;
-                for (int i = 0; i < hd; i++) O[i] += wv * V[i];
+                int i = 0;
+#ifdef __AVX512F__
+                __m512 wvv = _mm512_set1_ps(wv);
+                for (; i + 15 < hd; i += 16) {
+                    __m512 ov = _mm512_loadu_ps(O+i);
+                    ov = _mm512_fmadd_ps(wvv, _mm512_loadu_ps(V+i), ov);
+                    _mm512_storeu_ps(O+i, ov);
+                }
+#elif defined(__AVX2__)
+                __m256 wvv = _mm256_set1_ps(wv);
+                for (; i + 7 < hd; i += 8) {
+                    __m256 ov = _mm256_loadu_ps(O+i);
+                    ov = _mm256_fmadd_ps(wvv, _mm256_loadu_ps(V+i), ov);
+                    _mm256_storeu_ps(O+i, ov);
+                }
+#endif
+                for (; i < hd; i++) O[i] += wv * V[i];
             }
             free(scores);
         }
