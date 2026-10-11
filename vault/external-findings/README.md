@@ -157,9 +157,95 @@ is C11 in wubunos, not Python).
 
 ## 03 — Systems-level comparisons (for the OS/compiler work)
 
-Entries to fill as gaps close. Sources of record:
-- ReactOS (`vendor`-adjacent study trees, NT ordinal tables)
-- ZealOS/TempleOS (identity-mapped kernel model)
-- SteamOS/Proton (the container/exec runtime work)
+### 3.1 ReactOS NT syscall surface — ordinal-driven transliteration
+**Source of record (in-tree):** `wubuos/src/runtime/vsl/vsl_nt_*.c`
+(21 translation units, 67 modules incl. headers) with ordinals taken
+from `reactos-study/reactos/ntoskrnl/sysfuncs.lst` (line = 1-based),
+per `vsl_nt_misc.c:5`. Module headers document Windows 11 24H2
+ordinal ranges where they diverge from the ReactOS table
+(`vsl_nt_alpc.c:411` — "These are Windows 11 (24H2) ordinals, not in
+ReactOS sysfuncs.lst").
+**What they do.** ReactOS reimplements the NT kernel as a free
+Windows-compatible kernel: one syscall dispatcher (`NtSystemCall`),
+a service table (`sysfuncs.lst` — ordinal → handler), and each
+subsystem (objects, I/O, ALPC, worker) as a library behind that
+contract. The ABI is the product.
+**What we do.** The same architecture, hosted on Linux: a VSL
+(Virtual System Layer) NT-bridge whose dispatcher resolves by NT
+ordinal, with ~193 syscalls across 21 modules (process, thread,
+token, job, registry, section, vmem, sync, timer, alpc, atoms,
+wnf, ioring, enclave, worker, ktm, misc...), each a real
+Linux/VSL implementation behind the NT contract. Cap-backed
+authority (`vsl_nt_cap.c`) replaces the NT object manager for
+handle→object resolution.
+**Transferable technique.** The ordinal-table-as-ABI pattern: pin
+the *dispatch contract* (number → behavior) and implement behind
+it freely. That is why our 24H2-only ordinals can live beside the
+ReactOS table without conflict — each module documents its source.
+**Our delta.** We transliterate to Linux syscalls instead of
+reimplementing a kernel; the bridge is a hosted runtime, not a
+bare-metal OS. Authority is capability-based (wubu_cap) rather
+than token/ACL-based, a deliberate security upgrade.
+**Status:** overlap-strong (dispatch-contract design).
 
-*(No entries yet — reserved.)*
+### 3.2 ZealOS/TempleOS — identity-mapped kernel, 1:1 name parity
+**Sources:**
+- zealos_parity.h (in-tree, wubuos/src/kernel/) — 96/96 core
+  functions mapped 100%
+- The header itself states the design rules: snake_case is
+  primary, ZealOS PascalCase is a compile-time #define/typedef
+  alias, zero cost, no conflicts
+**What they do.** TempleOS/ZealOS: single-address-space,
+identity-mapped kernel; HolyC compiled JIT into the same ring-0
+space as the kernel; one language, one ABI, no protection
+boundaries by design. "The compiler IS the OS."
+**What we do.** Same philosophy, hosted and hardened: the HolyD
+("My Seed") compiler in wubunos is a HolyC-family frontend whose
+C11 backend shares our JIT; `zealos_parity.h` gives 1:1 name
+mapping so ZealOS source reads alongside our C port with zero
+mental translation.
+**Transferable technique.** Name-parity tables as a *reading and
+porting* tool: when porting a foreign codebase, a compile-time
+alias header beats renaming — the original literature stays
+citable line-by-line, and the primary implementation evolves
+independently. Also the single-language-kernel idea survives as
+the HolyD→C11→JIT path in our tree.
+**Our delta.** We keep the ring-0/ring-3 split and cgroups v2 +
+seccomp-bpf container isolation (`wubuos/src/runtime/container/`,
+ct_iso_* + wubucontainer) — TempleOS's single-address-space is
+deliberately not copied; the parity is at the API/naming layer
+only.
+**Status:** overlap-partial (philosophy shared, isolation model
+divergent).
+
+### 3.3 Proton/SteamOS — the container/exec runtime posture
+**Source of record (in-tree):** `wubuos/src/runtime/container/`
+(wubucontainer, ct_iso_cgroup/ns/seccomp, oci/), plus the
+user's standing RUN POLICY (memory): third-party software runs ON
+the AGI kernel via exec backends (wine/proton, arch/debian
+containers in-wubuos); booting host Arch + host wine is cheating.
+**What they do.** SteamOS/Proton: a Linux distro whose entire job
+is running foreign Windows binaries in-game: a compat layer
+(wine/proton) translating Win32→Linux, plus containerization
+(Steam Linux Runtime) pinning the userspace so games see a
+stable ABI across host updates. The pattern: *pin the userspace,
+translate the ABI, run untrusted code sandboxed*.
+**What we do.** The same three-part pattern: VSL NT-bridge
+translates the Win32/NT ABI (3.1), wubucontainer + cgroups v2 +
+seccomp-bpf pins and sandboxes the userspace, and the exec
+backends run the payload inside the WuBuOS kernel — never the
+host. The run policy above is the doctrine form of Proton's
+"game runs on SteamOS, not on your distro".
+**Transferable technique.** (a) Pinned runtime containers keyed to
+the payload, not the host — our oci/ + wubucontainer_registry is
+the same idea in C11. (b) ABI translation as a *library layer*
+under the sandbox, so the translation surface can evolve
+independently of the isolation surface. (c) The anti-cheat
+posture: our "runs ON the AGI kernel" rule is the exact analogue
+of Proton's anti-cheat requirement that the game runs under the
+Steam runtime.
+**Our delta.** Proton targets DX/ Win32 games; we target the NT
+surface broadly (3.1) plus general Linux containers. The sandbox
+mechanism is seccomp-bpf + cgroups v2 (kernel-enforced), stronger
+than Proton's userspace-heavy runtime.
+**Status:** overlap-strong (runtime posture + sandbox pattern).
