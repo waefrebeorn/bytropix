@@ -26,17 +26,17 @@ set_option pp.fieldNotation false
 
 noncomputable def poincareExp {n : ℕ} (c : ℝ) (v : EuclideanSpace ℝ (Fin n)) : EuclideanSpace ℝ (Fin n) :=
   if hv : ‖v‖ ≠ 0 then
-    (Real.tanh (Real.sqrt c * ‖v‖)) / (Real.sqrt c * ‖v‖) • v
+    ((Real.tanh (Real.sqrt c * ‖v‖)) / (Real.sqrt c * ‖v‖)) • v
   else 0
 
 noncomputable def poincareLog {n : ℕ} (c : ℝ) (y : EuclideanSpace ℝ (Fin n)) : EuclideanSpace ℝ (Fin n) :=
   if hy : ‖y‖ ≠ 0 then
-    (Real.artanh (Real.sqrt c * ‖y‖)) / (Real.sqrt c * ‖y‖) • y
+    ((Real.artanh (Real.sqrt c * ‖y‖)) / (Real.sqrt c * ‖y‖)) • y
   else 0
 
 /-- The fundamental identity tanh(arctanh(x)) = x for |x| < 1. -/
-lemma tanh_artanh_of_lt_one {x : ℝ} (hx : x < 1) (hx_neg : -1 < x) : Real.tanh (Real.artanh x) = x := by
-  rw [Real.tanh_artanh hx_neg hx]
+lemma tanh_artanh_of_lt_one {x : ℝ} (hx : -1 < x) (hx_lt : x < 1) : Real.tanh (Real.artanh x) = x := by
+  exact tanh_artanh ⟨hx, hx_lt⟩
 
 theorem poincare_ball_identity {n : ℕ} (c : ℝ) (hc : c > 0) (y : EuclideanSpace ℝ (Fin n))
     (hy : ‖y‖ < 1) (h_sqrt_norm : Real.sqrt c * ‖y‖ < 1) : poincareExp c (poincareLog c y) = y := by
@@ -46,7 +46,7 @@ theorem poincare_ball_identity {n : ℕ} (c : ℝ) (hc : c > 0) (y : EuclideanSp
       intro hzero; apply hy0; exact norm_eq_zero.mp hzero
     have hsnorm_pos : Real.sqrt c * ‖y‖ ≠ 0 := by
       refine mul_ne_zero ?_ hnorm_pos
-      exact Real.sqrt_pos.mpr hc
+      positivity
     have h_artanh_dom : -1 < Real.sqrt c * ‖y‖ := by
       have hpos : 0 ≤ Real.sqrt c * ‖y‖ := mul_nonneg (Real.sqrt_nonneg _) (norm_nonneg _)
       linarith
@@ -90,9 +90,9 @@ theorem poincare_ball_identity {n : ℕ} (c : ℝ) (hc : c > 0) (y : EuclideanSp
       _ = y := by
         -- Apply tanh(artanh(x)) = x for |x| < 1
         have htanh_artanh : Real.tanh (Real.artanh (Real.sqrt c * ‖y‖)) = Real.sqrt c * ‖y‖ := by
-          rw [tanh_artanh_of_lt_one h_sqrt_norm (by
+          rw [tanh_artanh_of_lt_one (by
             have : 0 ≤ Real.sqrt c * ‖y‖ := mul_nonneg (Real.sqrt_nonneg _) (norm_nonneg _)
-            linarith)]
+            linarith) h_sqrt_norm]
         simp [htanh_artanh, hsnorm_pos, hnorm_pos]
         -- y = (1 : ℝ) • y
         simp
@@ -108,23 +108,24 @@ theorem poincare_ball_identity {n : ℕ} (c : ℝ) (hc : c > 0) (y : EuclideanSp
 -/
 
 noncomputable def mobiusAdd {n : ℕ} (c : ℝ) (x y : EuclideanSpace ℝ (Fin n)) : EuclideanSpace ℝ (Fin n) :=
-  let num := ((1 + 2*c*⟪x, y⟫ + c*‖y‖^2) • x + (1 - c*‖x‖^2) • y)
-  let den := 1 + 2*c*⟪x, y⟫ + c^2*‖x‖^2*‖y‖^2
+  let ip := inner ℝ x y
+  let num := ((1 + 2*c*ip + c*‖y‖^2) • x + (1 - c*‖x‖^2) • y)
+  let den := 1 + 2*c*ip + c^2*‖x‖^2*‖y‖^2
   (1/den) • num
 
 theorem mobius_add_closure {n : ℕ} (c : ℝ) (hc : c > 0) (x y : EuclideanSpace ℝ (Fin n))
     (hx : ‖x‖ < 1) (hy : ‖y‖ < 1) : ‖mobiusAdd c x y‖ < 1 := by
   have hx_sq_lt_one : c * ‖x‖^2 < 1 := by
-    have : ‖x‖^2 < 1 := by nlinarith
+    have h1 : ‖x‖^2 < 1 := by nlinarith [norm_nonneg x]
     nlinarith
   have hy_sq_lt_one : c * ‖y‖^2 < 1 := by
-    have : ‖y‖^2 < 1 := by nlinarith
+    have h1 : ‖y‖^2 < 1 := by nlinarith [norm_nonneg y]
     nlinarith
-  have hnorm_pos_den : 0 < 1 + 2*c*⟪x, y⟫ + c^2*‖x‖^2*‖y‖^2 := by
-    have hcs : ⟪x, y⟫ ≤ ‖x‖ * ‖y‖ := by simpa using real_inner_le_norm x y
-    have hcs_neg : -⟪x, y⟫ ≤ ‖x‖ * ‖y‖ := by
+  have hnorm_pos_den : 0 < 1 + 2*c*inner ℝ x y + c^2*‖x‖^2*‖y‖^2 := by
+    have hcs : inner ℝ x y ≤ ‖x‖ * ‖y‖ := by simpa using real_inner_le_norm x y
+    have hcs_neg : -inner ℝ x y ≤ ‖x‖ * ‖y‖ := by
       calc
-        -⟪x, y⟫ = ⟪x, -y⟫ := by simp
+        -inner ℝ x y = inner ℝ x (-y) := by simp
         _ ≤ ‖x‖ * ‖-y‖ := real_inner_le_norm x (-y)
         _ = ‖x‖ * ‖y‖ := by simp
     have h_mul_lt_one : c * ‖x‖ * ‖y‖ < 1 := by
@@ -142,8 +143,8 @@ theorem mobius_add_closure {n : ℕ} (c : ℝ) (hc : c > 0) (x y : EuclideanSpac
     have h1 : 0 ≤ 1 - c*‖x‖^2 := by nlinarith
     have h2 : 0 ≤ 1 - c*‖y‖^2 := by nlinarith
     exact mul_nonneg h1 h2
-  have h_mul_pos : 0 < (1 - c*‖x‖^2)*(1 - c*‖y‖^2)*(1 + 2*c*⟪x, y⟫ + c^2*‖x‖^2*‖y‖^2) := by
-    have h_pos_inner : 0 < 1 + 2*c*⟪x, y⟫ + c^2*‖x‖^2*‖y‖^2 := hnorm_pos_den
+  have h_mul_pos : 0 < (1 - c*‖x‖^2)*(1 - c*‖y‖^2)*(1 + 2*c*inner ℝ x y + c^2*‖x‖^2*‖y‖^2) := by
+    have h_pos_inner : 0 < 1 + 2*c*inner ℝ x y + c^2*‖x‖^2*‖y‖^2 := hnorm_pos_den
     have h_pos_first : 0 < 1 - c*‖x‖^2 := by nlinarith
     have h_pos_second : 0 < 1 - c*‖y‖^2 := by nlinarith
     positivity
