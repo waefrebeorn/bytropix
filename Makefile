@@ -1016,6 +1016,11 @@ test_anomaly: tools/test_anomaly.c src/wubu_anomaly.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
+# AGENT #311: causal walker localizes a divergence.
+test_causal_walker: tools/test_causal_walker.c src/wubu_causal_walker.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
