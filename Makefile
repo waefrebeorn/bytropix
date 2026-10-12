@@ -1106,6 +1106,9 @@ test_toolreg: tools/test_toolreg.c src/wubu_toolreg.o src/wubu_trajcell.o src/wu
 test_tool_cap: tools/test_tool_cap.c src/wubu_tool_cap.o src/wubu_tooluse.o src/wubu_agentic_os.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_provider_route: tools/test_provider_route.c src/wubu_provider_route.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 test_blueprint: tools/test_blueprint.c src/wubu_blueprint.o src/wubu_contracts.o src/wubu_hive.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
