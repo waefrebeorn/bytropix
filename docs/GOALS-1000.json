@@ -4075,7 +4075,7 @@
    "n": 507,
    "domain": "UX",
    "tier": "P0",
-   "title": "every drawn control has an input->state path",
+   "title": "every drawn control has an input->state path (DONE)",
    "module": "dosgui_*.c",
    "criterion": "no drawn-but-dead interactions remain"
   },
