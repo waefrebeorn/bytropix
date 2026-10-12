@@ -2468,7 +2468,7 @@
    "n": 307,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "trace span emitted on every promote",
+   "title": "trace span emitted on every promote (DONE)",
    "module": "wubu_trace.c",
    "criterion": "each promotion carries an auditable span"
   },
@@ -2476,7 +2476,7 @@
    "n": 308,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "operator hook applies/restarts/emits directive",
+   "title": "operator hook applies/restarts/emits directive (DONE)",
    "module": "wubu_selfimprove.c",
    "criterion": "operator_fn fires only after DA-3 sign-off"
   },
