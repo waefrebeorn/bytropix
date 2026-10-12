@@ -65,6 +65,7 @@ void *wubu_arena_push(wubu_arena_t *a, const char *name,
     if (off + sz > a->capacity) return NULL;   /* slab overflow = OOM */
     void *p = a->base + off;
     a->pos = off + sz;
+    if (a->pos > a->highwater) a->highwater = a->pos;  /* track peak (survives resets) */
 
     /* Grow slab table if needed. */
     if (a->n_slabs >= a->slab_cap) {
@@ -102,6 +103,14 @@ int wubu_arena_free(wubu_arena_t *a)
 
 size_t wubu_arena_used(const wubu_arena_t *a) {
     return a ? a->pos : 0;
+}
+
+size_t wubu_arena_capacity(const wubu_arena_t *a) {
+    return a ? a->capacity : 0;
+}
+
+size_t wubu_arena_highwater(const wubu_arena_t *a) {
+    return a ? a->highwater : 0;
 }
 
 int wubu_arena_nslabs(const wubu_arena_t *a) {

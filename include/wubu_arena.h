@@ -44,6 +44,7 @@ typedef struct wubu_arena {
     uint8_t      *base;    /* backing allocation (one mem_alloc) */
     size_t        capacity;/* total bytes reserved */
     size_t        pos;     /* bump cursor */
+    size_t        highwater;/* max pos ever reached (survives resets) */
     wubu_slab_t  *slabs;   /* slab table (growable) */
     int           n_slabs;
     int           slab_cap;
@@ -66,6 +67,8 @@ int   wubu_arena_free(wubu_arena_t *a);
 
 /* Introspection (for the byte-budget test / Styx export). */
 size_t wubu_arena_used(const wubu_arena_t *a);
+size_t wubu_arena_capacity(const wubu_arena_t *a);
+size_t wubu_arena_highwater(const wubu_arena_t *a);
 int    wubu_arena_nslabs(const wubu_arena_t *a);
 const wubu_slab_t *wubu_arena_slab(const wubu_arena_t *a, int i);
 const wubu_slab_t *wubu_arena_find(const wubu_arena_t *a, const char *name);
