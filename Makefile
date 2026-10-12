@@ -1011,6 +1011,11 @@ test_rollback: tools/test_rollback.c src/wubu_rollback.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# AGENT #310: hive diagnostic immune system (z-score anomaly).
+test_anomaly: tools/test_anomaly.c src/wubu_anomaly.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
