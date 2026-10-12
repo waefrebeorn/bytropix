@@ -209,10 +209,10 @@ src/wubu_mobius.o: src/wubu_mobius.c include/wubu_mobius.h
 src/wubu_moe.o: src/wubu_moe.c include/wubu_moe.h include/wubu_ssm.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
-src/wubu_moe_hyperbolic.o: src/wubu_moe_hyperbolic.c include/wubu_moe_hyperbolic.h include/wubu_moe.h include/wubu_mobius.h include/wubu_ssm.h
+src/wubu_moe_hyperbolic.o: src/wubu_moe_hyperbolic.c include/wubu_moe_hyperbolic.h include/wubu_moe.h include/wubu_mobius.h include/wubu_ssm.h src/wubu_activations.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
-src/wubu_moe_backward.o: src/wubu_moe_backward.c include/wubu_moe.h include/wubu_ssm.h
+src/wubu_moe_backward.o: src/wubu_moe_backward.c include/wubu_moe.h include/wubu_ssm.h src/wubu_activations.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
 src/wubu_poincare_ssm_backward.o: src/wubu_poincare_ssm_backward.c include/wubu_ssm.h include/wubu_mobius.h
@@ -348,7 +348,7 @@ src/wubu_hopfield2.o: src/wubu_hopfield2.c include/wubu_hopfield2.h
 src/wubu_fuzz2.o: src/wubu_fuzz2.c include/wubu_fuzz2.h
 src/wubu_vision.o: src/wubu_vision.c include/wubu_vision.h
 src/wubu_vision_encoder.o: src/wubu_vision_encoder.c include/wubu_vision_encoder.h include/gguf_reader.h
-src/wubu_moondream.o: src/wubu_moondream.c include/wubu_moondream.h
+src/wubu_moondream.o: src/wubu_moondream.c include/wubu_moondream.h src/wubu_activations.h
 src/wubu_hybrid.o: src/wubu_hybrid.c include/wubu_hybrid.h
 src/wubu_compress2.o: src/wubu_compress2.c include/wubu_compress2.h
 src/wubu_compress.o: src/wubu_compress.c include/wubu_compress.h
@@ -374,7 +374,7 @@ src/wubu_freeenergy.o: src/wubu_freeenergy.c include/wubu_freeenergy.h
 src/wubu_align.o: src/wubu_align.c include/wubu_align.h
 src/wubu_hopfield.o: src/wubu_hopfield.c include/wubu_hopfield.h
 src/wubu_si.o: src/wubu_si.c include/wubu_si.h
-src/wubu_der.o: src/wubu_der.c include/wubu_der.h
+src/wubu_der.o: src/wubu_der.c include/wubu_der.h src/wubu_activations.h
 src/wubu_reverify.o: src/wubu_reverify.c include/wubu_reverify.h
 src/wubu_energy.o: src/wubu_energy.c include/wubu_energy.h
 src/wubu_agentic_os.o: src/wubu_agentic_os.c include/wubu_agentic_os.h
@@ -467,7 +467,7 @@ src/wubu_gguf_tensor.o: src/wubu_gguf_tensor.c include/wubu_gguf_tensor.h includ
 src/wubu_gguf_bridge.o: src/wubu_gguf_bridge.c include/wubu_gguf_tensor.h include/gguf_reader.h
 	$(CC) $(CFLAGS) -DWUBU_ENABLE_CUDA -c -o $@ $<
 
-src/wubu_generate.o: src/wubu_generate.c include/wubu_generate.h include/wubu_model.h include/wubu_spec_decode.h
+src/wubu_generate.o: src/wubu_generate.c include/wubu_generate.h include/wubu_model.h include/wubu_spec_decode.h src/wubu_activations.h
 src/wubu_kvvq.o: src/wubu_kvvq.c include/wubu_kvvq.h
 src/wubu_arena.o: src/wubu_arena.c include/wubu_arena.h
 src/wubu_smoothquant.o: src/wubu_smoothquant.c include/wubu_smoothquant.h
@@ -707,7 +707,7 @@ txt2img_sd: tools/txt2img_sd.c src/wubu_sd_clip.o src/wubu_sd_unet.o src/wubu_sd
 src/wubu_sd_taesd.o: src/wubu_sd_taesd.c include/wubu_sd_taesd.h include/wubu_sd_ops.h include/safetensors_reader.h
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_sd_taesd.c
 
-src/wubu_sd_clip.o: src/wubu_sd_clip.c include/wubu_sd_clip.h include/wubu_sd_ops.h include/gguf_reader.h
+src/wubu_sd_clip.o: src/wubu_sd_clip.c include/wubu_sd_clip.h include/wubu_sd_ops.h include/gguf_reader.h src/wubu_activations.h
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_sd_clip.c
 
 src/wubu_sd_unet.o: src/wubu_sd_unet.c include/wubu_sd_unet.h include/wubu_sd_ops.h include/gguf_reader.h
@@ -1696,7 +1696,7 @@ test_wubu_train: tools/test_wubu_train.c src/wubu_runtime_dims.o src/wubu.o src/
 	$(CC) $(CFLAGS) -I include -o $@ $^ -lm $(CUDA_LIBS)
 	./$@ models/wubu/model.safetensors
 
-src/wubu_backprop.o: include/wubu_backprop.h include/wubu_train.h include/wubu.h
+src/wubu_backprop.o: include/wubu_backprop.h include/wubu_train.h include/wubu.h src/wubu_activations.h
 src/wubu_train.o: include/wubu_train.h include/wubu.h include/wubu_backprop.h
 
 test_backprop: tools/test_backprop.c src/wubu_backprop.o src/wubu_runtime_dims.o src/wubu.o src/wubu_train.o src/wubu_moe2.o src/safetensors_reader.o src/wubu_dequant_nf4.o gpu_wubu.o
@@ -2268,7 +2268,7 @@ WUBU_RUNTIME_DIMS_OBJ = src/wubu_runtime_dims.o src/wubu.o \
 src/wubu_runtime_dims.o: src/wubu_runtime_dims.c include/wubu_runtime_dims.h include/safetensors_reader.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/wubu.o: src/wubu.c include/wubu.h include/wubu_runtime_dims.h include/safetensors_reader.h include/wubu_moe2.h
+src/wubu.o: src/wubu.c include/wubu.h include/wubu_runtime_dims.h include/safetensors_reader.h include/wubu_moe2.h src/wubu_activations.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/wubu_dequant_nf4.o: src/wubu_dequant_nf4.c

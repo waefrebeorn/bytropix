@@ -109,7 +109,7 @@ static void moe_expert_backward(
     for (int j = 0; j < d_ff; j++) {
         float g = gate_out[j];
         float sg = silu_f(g);
-        float dsg = silu_deriv(g, sg);
+        float dsg = silu_deriv_sg(g, sg);
         float d_up = d_act[j] * sg;
         float d_gate_v = d_act[j] * dsg * up_out[j];
         if (d_gate_w) {
@@ -171,7 +171,7 @@ static void moe_shared_backward(
     for (int j = 0; j < d_ff_shared; j++) {
         float g = s_gate[j];
         float sg = silu_f(g);
-        float dsg = silu_deriv(g, sg);
+        float dsg = silu_deriv_sg(g, sg);
         float d_up = d_shared_act_buf[j] * sg;
         float d_gate = d_shared_act_buf[j] * dsg * s_up[j];
         if (d_gate_shexp) {
