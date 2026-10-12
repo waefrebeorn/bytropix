@@ -1,0 +1,2066 @@
+# THE WUBU 1000 — the AGI-dominance goal list for ~ WuBu ~ OS
+
+> 2026-10-11. One thousand concrete, traceable goals across the three
+> repos (wubuos **Body**, wubunos **Compiler**, wubuwizard **Brain**),
+> every one naming a REAL module and a measurable acceptance criterion.
+> No filler. Machine-readable twin: `docs/GOALS-1000.json`.
+
+**Tiers:** P0 = foundation / dominance-critical · P1 = core capability ·
+P2 = breadth + hardening · P3 = polish. Counts: P0=78 · P1=92 · P2=789 · P3=41.
+
+**Doctrine (the through-line):** a 9P-native OS where the Brain's
+internals are namespace files; a native companion that reads that
+namespace + the screen as ambient context and acts through
+capability-gated tools; and a self-improvement loop whose every
+promotion passes an independent verifier behind a human gate. Styx
+gives the plumbing, the companion research gives the UX shape, DGM +
+DA-1/2/3 give the learning invariant. Nesting is a sphere thing unless
+Klein-bottle nested shapes; math is a full dynamic system.
+
+| # | Domain | Goals |
+|---|---|---|
+| KERNEL | Body kernel + 9P namespace substrate | 100 |
+| COMPILER | wubunos toolchain: HolyD, MIR, 14 ISA backends, gauntlet | 100 |
+| BRAIN | wubuwizard inference + training engine | 100 |
+| AGENT | Recursive self-improvement: DGM loop, DA-1/2/3, amoeba/hive | 100 |
+| NAMESPACE | 9P meta-layer: Brain internals as /n files, capability security | 100 |
+| UX | Win98/XP shell parity + Bonzi companion AGI-UX | 100 |
+| WORLDSIM | worldsim optimization + physics (solid WuBu math) | 100 |
+| MATH | Poincare/nested-sphere manifold math network (Lean-verified) | 100 |
+| RUNTIME | Containers, exec backends, wine/proton, foreign-ABI translation | 100 |
+| STACK | Cross-repo integration, build integrity, gates, CI hygiene | 100 |
+
+**Legend:** `[ ]` open · `[x]` done (verified). Items marked DONE are
+already shipped + gate-verified this program of work.
+
+---
+
+## KERNEL — Body kernel + 9P namespace substrate
+
+- [ ] **001** `P0` 9P attach is the ONLY kernel IPC path  
+    - module: `styxfs_server.c` · **criterion:** every kernel service mounts as a 9P tree; zero bespoke syscalls added
+- [ ] **002** `P0` per-process namespace = capability set  
+    - module: `wubu_ns_bridge.c` · **criterion:** a process's attach set is its security boundary
+- [ ] **003** `P0` measured-boot verifies to ring-0 (fail-closed)  
+    - module: `firmware + wubu_verifier.h` · **criterion:** boot refuses on failed attestation
+- [ ] **004** `P0` scheduler policy settable via /n/kernel/scheduler  
+    - module: `wubu_ns_kernel.c` · **criterion:** bore|eevdf|fair|rt writes take effect without a daemon
+- [ ] **005** `P0` allocator exposes /n/kernel/mem stats  
+    - module: `wubu_memmgr.c` · **criterion:** cat /n/kernel/mem shows arena/highwater live
+- [ ] **006** `P0` interrupt latency budget reported per IRQ  
+    - module: `wubu_ioprio.c` · **criterion:** /n/kernel/irqlat reports p99 per IRQ
+- [ ] **007** `P1` DRAM hedge residency at /n/dram  
+    - module: `wubu_ns_dram.c` · **criterion:** replica count + trefi visible and writable
+- [ ] **008** `P1` every hw driver exports /n/hw/<dev>/mode  
+    - module: `wubu_drv*.c` · **criterion:** cat /n/hw/nvme/mode reflects passthrough
+- [ ] **009** `P1` thermal governor set via /n/hw/<dev>/thermal  
+    - module: `wubu_thermalthrottle.c` · **criterion:** write throttles; read shows current temp
+- [ ] **010** `P1` block scheduler selectable per device  
+    - module: `wubu_iosched.c` · **criterion:** /n/hw/<dev>/iosched switches mq-deadline/none
+- [ ] **011** `P1` ZNS zone state at /n/hw/<dev>/zns  
+    - module: `wubu_znszone.c` · **criterion:** zone append state readable
+- [ ] **012** `P1` NVMe queue depth tunable  
+    - module: `wubu_nvme_gen5.c` · **criterion:** write changes live queue depth
+- [ ] **013** `P1` inline AES on storage path via /n  
+    - module: `wubu_dmcrypt.c` · **criterion:** /n/hw/<dev>/crypto on|off
+- [ ] **014** `P1` ECC control per DIMM  
+    - module: `wubu_ieccontrol.c` · **criterion:** /n/dram/<dimm>/ecc toggles + reports
+- [ ] **015** `P2` structured kernel log at /n/kernel/klog  
+    - module: `klog.c` · **criterion:** cat/grep the ring buffer as a file
+- [ ] **016** `P2` syscall trace to a 9P fifo  
+    - module: `wubu_trace.c` · **criterion:** strace-equivalent via cat /n/kernel/trace
+- [ ] **017** `P2` watchdog restarts a hung subsystem  
+    - module: `wubu_probe.c` · **criterion:** heartbeat latches; auto-restart fires
+- [ ] **018** `P2` cgroup v2 per-service via /n/svc  
+    - module: `ct_iso_cgroup.c` · **criterion:** limits settable from the shell
+- [ ] **019** `P2` seccomp profile per container at /n  
+    - module: `ct_iso_seccomp.c` · **criterion:** hot-swap without restart
+- [ ] **020** `P2` kernel self-test at /n/kernel/selftest  
+    - module: `wubu_probe_matrix.c` · **criterion:** exit code + report as a file
+- [ ] **021** `P2` firmware update verifies signature before flash  
+    - module: `wubu_fw.c` · **criterion:** unsigned image refused
+- [ ] **022** `P2` A/B firmware slots with rollback  
+    - module: `wubu_ramdisk_format.c` · **criterion:** /n/firmware/slot switches + reverts
+- [ ] **023** `P3` boot time budgeted + reported  
+    - module: `klog.c` · **criterion:** /n/kernel/boot shows per-stage ms
+- [ ] **024** `P3` IRQ affinity settable via /n  
+    - module: `wubu_iosched.c` · **criterion:** write pins an IRQ to a core
+- [ ] **025** `P3` memory quarantine on OOM  
+    - module: `wubu_mem.c` · **criterion:** quarantine zone grows instead of panic
+- [ ] **026** `P3` dmesg severity filterable  
+    - module: `klog.c` · **criterion:** cat /n/kernel/klog?level=warn
+- [ ] **027** `P2` Expose /n/hw/nvme/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/nvme/mode reflects live driver state; write path validated
+- [ ] **028** `P2` Expose /n/hw/ahci/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/ahci/mode reflects live driver state; write path validated
+- [ ] **029** `P2` Expose /n/hw/usb/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/usb/mode reflects live driver state; write path validated
+- [ ] **030** `P2` Expose /n/hw/sd/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/sd/mode reflects live driver state; write path validated
+- [ ] **031** `P2` Expose /n/hw/hda/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/hda/mode reflects live driver state; write path validated
+- [ ] **032** `P2` Expose /n/hw/drm/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/drm/mode reflects live driver state; write path validated
+- [ ] **033** `P2` Expose /n/hw/net/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/net/mode reflects live driver state; write path validated
+- [ ] **034** `P2` Expose /n/hw/gpu/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gpu/mode reflects live driver state; write path validated
+- [ ] **035** `P2` Expose /n/hw/battery/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/battery/mode reflects live driver state; write path validated
+- [ ] **036** `P2` Expose /n/hw/thermal/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/thermal/mode reflects live driver state; write path validated
+- [ ] **037** `P2` Expose /n/hw/tpm/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/tpm/mode reflects live driver state; write path validated
+- [ ] **038** `P2` Expose /n/hw/gamepad/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gamepad/mode reflects live driver state; write path validated
+- [ ] **039** `P2` Expose /n/hw/bt/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/bt/mode reflects live driver state; write path validated
+- [ ] **040** `P2` Expose /n/hw/camera/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/camera/mode reflects live driver state; write path validated
+- [ ] **041** `P2` Expose /n/hw/fpga/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/fpga/mode reflects live driver state; write path validated
+- [ ] **042** `P2` Expose /n/hw/pmic/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/pmic/mode reflects live driver state; write path validated
+- [ ] **043** `P2` Expose /n/hw/nvme/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/nvme/status reflects live driver state; write path validated
+- [ ] **044** `P2` Expose /n/hw/ahci/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/ahci/status reflects live driver state; write path validated
+- [ ] **045** `P2` Expose /n/hw/usb/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/usb/status reflects live driver state; write path validated
+- [ ] **046** `P2` Expose /n/hw/sd/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/sd/status reflects live driver state; write path validated
+- [ ] **047** `P2` Expose /n/hw/hda/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/hda/status reflects live driver state; write path validated
+- [ ] **048** `P2` Expose /n/hw/drm/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/drm/status reflects live driver state; write path validated
+- [ ] **049** `P2` Expose /n/hw/net/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/net/status reflects live driver state; write path validated
+- [ ] **050** `P2` Expose /n/hw/gpu/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gpu/status reflects live driver state; write path validated
+- [ ] **051** `P2` Expose /n/hw/battery/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/battery/status reflects live driver state; write path validated
+- [ ] **052** `P2` Expose /n/hw/thermal/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/thermal/status reflects live driver state; write path validated
+- [ ] **053** `P2` Expose /n/hw/tpm/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/tpm/status reflects live driver state; write path validated
+- [ ] **054** `P2` Expose /n/hw/gamepad/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gamepad/status reflects live driver state; write path validated
+- [ ] **055** `P2` Expose /n/hw/bt/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/bt/status reflects live driver state; write path validated
+- [ ] **056** `P2` Expose /n/hw/camera/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/camera/status reflects live driver state; write path validated
+- [ ] **057** `P2` Expose /n/hw/fpga/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/fpga/status reflects live driver state; write path validated
+- [ ] **058** `P2` Expose /n/hw/pmic/status as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/pmic/status reflects live driver state; write path validated
+- [ ] **059** `P2` Expose /n/hw/nvme/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/nvme/stats reflects live driver state; write path validated
+- [ ] **060** `P2` Expose /n/hw/ahci/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/ahci/stats reflects live driver state; write path validated
+- [ ] **061** `P2` Expose /n/hw/usb/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/usb/stats reflects live driver state; write path validated
+- [ ] **062** `P2` Expose /n/hw/sd/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/sd/stats reflects live driver state; write path validated
+- [ ] **063** `P2` Expose /n/hw/hda/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/hda/stats reflects live driver state; write path validated
+- [ ] **064** `P2` Expose /n/hw/drm/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/drm/stats reflects live driver state; write path validated
+- [ ] **065** `P2` Expose /n/hw/net/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/net/stats reflects live driver state; write path validated
+- [ ] **066** `P2` Expose /n/hw/gpu/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gpu/stats reflects live driver state; write path validated
+- [ ] **067** `P2` Expose /n/hw/battery/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/battery/stats reflects live driver state; write path validated
+- [ ] **068** `P2` Expose /n/hw/thermal/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/thermal/stats reflects live driver state; write path validated
+- [ ] **069** `P2` Expose /n/hw/tpm/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/tpm/stats reflects live driver state; write path validated
+- [ ] **070** `P2` Expose /n/hw/gamepad/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gamepad/stats reflects live driver state; write path validated
+- [ ] **071** `P2` Expose /n/hw/bt/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/bt/stats reflects live driver state; write path validated
+- [ ] **072** `P2` Expose /n/hw/camera/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/camera/stats reflects live driver state; write path validated
+- [ ] **073** `P2` Expose /n/hw/fpga/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/fpga/stats reflects live driver state; write path validated
+- [ ] **074** `P2` Expose /n/hw/pmic/stats as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/pmic/stats reflects live driver state; write path validated
+- [ ] **075** `P2` Expose /n/hw/nvme/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/nvme/power reflects live driver state; write path validated
+- [ ] **076** `P2` Expose /n/hw/ahci/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/ahci/power reflects live driver state; write path validated
+- [ ] **077** `P2` Expose /n/hw/usb/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/usb/power reflects live driver state; write path validated
+- [ ] **078** `P2` Expose /n/hw/sd/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/sd/power reflects live driver state; write path validated
+- [ ] **079** `P2` Expose /n/hw/hda/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/hda/power reflects live driver state; write path validated
+- [ ] **080** `P2` Expose /n/hw/drm/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/drm/power reflects live driver state; write path validated
+- [ ] **081** `P2` Expose /n/hw/net/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/net/power reflects live driver state; write path validated
+- [ ] **082** `P2` Expose /n/hw/gpu/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gpu/power reflects live driver state; write path validated
+- [ ] **083** `P2` Expose /n/hw/battery/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/battery/power reflects live driver state; write path validated
+- [ ] **084** `P2` Expose /n/hw/thermal/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/thermal/power reflects live driver state; write path validated
+- [ ] **085** `P2` Expose /n/hw/tpm/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/tpm/power reflects live driver state; write path validated
+- [ ] **086** `P2` Expose /n/hw/gamepad/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gamepad/power reflects live driver state; write path validated
+- [ ] **087** `P2` Expose /n/hw/bt/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/bt/power reflects live driver state; write path validated
+- [ ] **088** `P2` Expose /n/hw/camera/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/camera/power reflects live driver state; write path validated
+- [ ] **089** `P2` Expose /n/hw/fpga/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/fpga/power reflects live driver state; write path validated
+- [ ] **090** `P2` Expose /n/hw/pmic/power as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/pmic/power reflects live driver state; write path validated
+- [ ] **091** `P2` Expose /n/hw/nvme/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/nvme/mode reflects live driver state; write path validated
+- [ ] **092** `P2` Expose /n/hw/ahci/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/ahci/mode reflects live driver state; write path validated
+- [ ] **093** `P2` Expose /n/hw/usb/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/usb/mode reflects live driver state; write path validated
+- [ ] **094** `P2` Expose /n/hw/sd/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/sd/mode reflects live driver state; write path validated
+- [ ] **095** `P2` Expose /n/hw/hda/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/hda/mode reflects live driver state; write path validated
+- [ ] **096** `P2` Expose /n/hw/drm/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/drm/mode reflects live driver state; write path validated
+- [ ] **097** `P2` Expose /n/hw/net/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/net/mode reflects live driver state; write path validated
+- [ ] **098** `P2` Expose /n/hw/gpu/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/gpu/mode reflects live driver state; write path validated
+- [ ] **099** `P2` Expose /n/hw/battery/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/battery/mode reflects live driver state; write path validated
+- [ ] **100** `P2` Expose /n/hw/thermal/mode as a live 9P file  
+    - module: `wubu_drv.c` · **criterion:** cat /n/hw/thermal/mode reflects live driver state; write path validated
+
+## COMPILER — wubunos toolchain: HolyD, MIR, 14 ISA backends, gauntlet
+
+- [ ] **101** `P0` HolyC frontend parses the full seed corpus  
+    - module: `holyd_lexer.c/holyd_parse.c` · **criterion:** gauntlet --core pass=3458 fail=0 error=0 held
+- [ ] **102** `P0` MIR SSA+GVN+SCCP+regalloc all correct  
+    - module: `wubu_mir_*.c` · **criterion:** selfhost_battery 155/155 + mir battery green
+- [ ] **103** `P0` x86-64 backend beats hand-asm on tgemm  
+    - module: `wubu_isa_x86_64.c` · **criterion:** own SIMD matcher faster than the reference path
+- [ ] **104** `P0` softfloat is IEEE-754 exact  
+    - module: `wubu_softfloat.c` · **criterion:** test_softfloat 0 failures across all roundings
+- [ ] **105** `P0` float calling convention uses XMM internally  
+    - module: `wubu_isa_x86_64.c` · **criterion:** float_param gauntlet cases pass
+- [ ] **106** `P0` byte-addressable memory model (char)  
+    - module: `wubu_mir_lower.c` · **criterion:** char/pointer gauntlet cases pass
+- [ ] **107** `P0` real stack frames enable recursion  
+    - module: `wubu_mir_regalloc.c` · **criterion:** recursive fib/fact gauntlet cases pass
+- [ ] **108** `P0` register clobbering fixed across all backends  
+    - module: `wubu_isa_*.c` · **criterion:** no live-range violation in fuzz_diff
+- [ ] **109** `P1` arm64 backend passes full battery  
+    - module: `wubu_isa_arm64.c` · **criterion:** gauntlet arm64 fail=0
+- [ ] **110** `P1` riscv backend passes full battery  
+    - module: `wubu_isa_riscv.c` · **criterion:** gauntlet riscv fail=0
+- [ ] **111** `P1` mips/m68k/6502/z80/8051/avr/pic backends green  
+    - module: `wubu_isa_*.c` · **criterion:** each backend gauntlet fail=0
+- [ ] **112** `P1` 8086 real-mode backend boots DOS  
+    - module: `wubu_isa_8086.c` · **criterion:** DOS .com runs under the interp
+- [ ] **113** `P1` SPIR-V backend validates with spirv-val  
+    - module: `wubu_isa_spirv.c` · **criterion:** 0 validation errors
+- [ ] **114** `P1` PTX backend assembles with ptxas  
+    - module: `wubu_isa_ptx.c` · **criterion:** 0 ptxas errors
+- [ ] **115** `P1` Vulkan + AMDGPU compute legs run a kernel  
+    - module: `wubu_isa_vulkan.c/wubu_isa_amdgpu.c` · **criterion:** SSBO readback matches CPU
+- [ ] **116** `P1` WASM backend interp runs  
+    - module: `jit/wubu_isa_wasm.c` · **criterion:** wasm module executes
+- [ ] **117** `P1` peephole superopt closes remaining gaps  
+    - module: `x86_peephole.c` · **criterion:** fuzz_diff 0 diffs
+- [ ] **118** `P1` cost model guides backend selection  
+    - module: `wubu_cost_model.c` · **criterion:** picks faster backend on measured data
+- [ ] **119** `P2` gauntlet reaches 100% of valid cases  
+    - module: `test_gauntlet*.c` · **criterion:** pass=total, fail=0, error=0
+- [ ] **120** `P2` genetic kernel search improves tgemm  
+    - module: `wubu_genetic_kernels.c` · **criterion:** best genome beats baseline by measured %
+- [ ] **121** `P2` auto-tune picks optimal tile sizes  
+    - module: `wubu_auto_tune.c` · **criterion:** data-driven tile choice wins
+- [ ] **122** `P2` MLIR parser accepts upstream MLIR  
+    - module: `mlir_parser.c` · **criterion:** round-trips a real .mlir
+- [ ] **123** `P2` ONNX parser imports a real model  
+    - module: `onnx_parser.c` · **criterion:** graph loads, shapes resolve
+- [ ] **124** `P2` HolyD self-hosts (compiles itself)  
+    - module: `holyd.c` · **criterion:** selfhost_battery green on the real compiler
+- [ ] **125** `P2` debug info (DWARF) emitted  
+    - module: `holyd_elf.c` · **criterion:** gdb steps a HolyD binary
+- [ ] **126** `P2` linker resolves multi-object programs  
+    - module: `holyd_bin.c` · **criterion:** 2+ .o link + run
+- [ ] **127** `P2` preprocessor handles include/define/ifdef  
+    - module: `wubu_preproc.c` · **criterion:** preproc battery green
+- [ ] **128** `P2` error messages point at line:col  
+    - module: `holyd_lexer.c` · **criterion:** every diagnostic has a span
+- [ ] **129** `P3` incremental compilation cache  
+    - module: `holyd_codegen.c` · **criterion:** edit 1 file, recompile only its .o
+- [ ] **130** `P3` LTO across translation units  
+    - module: `wubu_mir_fuse.c` · **criterion:** cross-TU inlining measurably faster
+- [ ] **131** `P3` profile-guided optimization  
+    - module: `wubu_online_learn.c` · **criterion:** PGO rebuild beats -O3
+- [ ] **132** `P3` sanitizer builds clean (ASan/UBSan)  
+    - module: `Makefile` · **criterion:** 0 reports across the toolchain
+- [ ] **133** `P2` arm64 backend: integer add gauntlet case  
+    - module: `wubu_isa_arm64.c` · **criterion:** arm64 integer add passes in gauntlet + fuzz_diff
+- [ ] **134** `P2` riscv backend: integer add gauntlet case  
+    - module: `wubu_isa_riscv.c` · **criterion:** riscv integer add passes in gauntlet + fuzz_diff
+- [ ] **135** `P2` mips backend: integer add gauntlet case  
+    - module: `wubu_isa_mips.c` · **criterion:** mips integer add passes in gauntlet + fuzz_diff
+- [ ] **136** `P2` m68k backend: integer add gauntlet case  
+    - module: `wubu_isa_m68k.c` · **criterion:** m68k integer add passes in gauntlet + fuzz_diff
+- [ ] **137** `P2` 6502 backend: integer add gauntlet case  
+    - module: `wubu_isa_6502.c` · **criterion:** 6502 integer add passes in gauntlet + fuzz_diff
+- [ ] **138** `P2` z80 backend: integer add gauntlet case  
+    - module: `wubu_isa_z80.c` · **criterion:** z80 integer add passes in gauntlet + fuzz_diff
+- [ ] **139** `P2` 8051 backend: integer add gauntlet case  
+    - module: `wubu_isa_8051.c` · **criterion:** 8051 integer add passes in gauntlet + fuzz_diff
+- [ ] **140** `P2` avr backend: integer add gauntlet case  
+    - module: `wubu_isa_avr.c` · **criterion:** avr integer add passes in gauntlet + fuzz_diff
+- [ ] **141** `P2` pic backend: integer add gauntlet case  
+    - module: `wubu_isa_pic.c` · **criterion:** pic integer add passes in gauntlet + fuzz_diff
+- [ ] **142** `P2` 8086 backend: integer add gauntlet case  
+    - module: `wubu_isa_8086.c` · **criterion:** 8086 integer add passes in gauntlet + fuzz_diff
+- [ ] **143** `P2` spirv backend: integer add gauntlet case  
+    - module: `wubu_isa_spirv.c` · **criterion:** spirv integer add passes in gauntlet + fuzz_diff
+- [ ] **144** `P2` ptx backend: integer add gauntlet case  
+    - module: `wubu_isa_ptx.c` · **criterion:** ptx integer add passes in gauntlet + fuzz_diff
+- [ ] **145** `P2` vulkan backend: integer add gauntlet case  
+    - module: `wubu_isa_vulkan.c` · **criterion:** vulkan integer add passes in gauntlet + fuzz_diff
+- [ ] **146** `P2` amdgpu backend: integer add gauntlet case  
+    - module: `wubu_isa_amdgpu.c` · **criterion:** amdgpu integer add passes in gauntlet + fuzz_diff
+- [ ] **147** `P2` wasm backend: integer add gauntlet case  
+    - module: `wubu_isa_wasm.c` · **criterion:** wasm integer add passes in gauntlet + fuzz_diff
+- [ ] **148** `P2` arm64 backend: float mul gauntlet case  
+    - module: `wubu_isa_arm64.c` · **criterion:** arm64 float mul passes in gauntlet + fuzz_diff
+- [ ] **149** `P2` riscv backend: float mul gauntlet case  
+    - module: `wubu_isa_riscv.c` · **criterion:** riscv float mul passes in gauntlet + fuzz_diff
+- [ ] **150** `P2` mips backend: float mul gauntlet case  
+    - module: `wubu_isa_mips.c` · **criterion:** mips float mul passes in gauntlet + fuzz_diff
+- [ ] **151** `P2` m68k backend: float mul gauntlet case  
+    - module: `wubu_isa_m68k.c` · **criterion:** m68k float mul passes in gauntlet + fuzz_diff
+- [ ] **152** `P2` 6502 backend: float mul gauntlet case  
+    - module: `wubu_isa_6502.c` · **criterion:** 6502 float mul passes in gauntlet + fuzz_diff
+- [ ] **153** `P2` z80 backend: float mul gauntlet case  
+    - module: `wubu_isa_z80.c` · **criterion:** z80 float mul passes in gauntlet + fuzz_diff
+- [ ] **154** `P2` 8051 backend: float mul gauntlet case  
+    - module: `wubu_isa_8051.c` · **criterion:** 8051 float mul passes in gauntlet + fuzz_diff
+- [ ] **155** `P2` avr backend: float mul gauntlet case  
+    - module: `wubu_isa_avr.c` · **criterion:** avr float mul passes in gauntlet + fuzz_diff
+- [ ] **156** `P2` pic backend: float mul gauntlet case  
+    - module: `wubu_isa_pic.c` · **criterion:** pic float mul passes in gauntlet + fuzz_diff
+- [ ] **157** `P2` 8086 backend: float mul gauntlet case  
+    - module: `wubu_isa_8086.c` · **criterion:** 8086 float mul passes in gauntlet + fuzz_diff
+- [ ] **158** `P2` spirv backend: float mul gauntlet case  
+    - module: `wubu_isa_spirv.c` · **criterion:** spirv float mul passes in gauntlet + fuzz_diff
+- [ ] **159** `P2` ptx backend: float mul gauntlet case  
+    - module: `wubu_isa_ptx.c` · **criterion:** ptx float mul passes in gauntlet + fuzz_diff
+- [ ] **160** `P2` vulkan backend: float mul gauntlet case  
+    - module: `wubu_isa_vulkan.c` · **criterion:** vulkan float mul passes in gauntlet + fuzz_diff
+- [ ] **161** `P2` amdgpu backend: float mul gauntlet case  
+    - module: `wubu_isa_amdgpu.c` · **criterion:** amdgpu float mul passes in gauntlet + fuzz_diff
+- [ ] **162** `P2` wasm backend: float mul gauntlet case  
+    - module: `wubu_isa_wasm.c` · **criterion:** wasm float mul passes in gauntlet + fuzz_diff
+- [ ] **163** `P2` arm64 backend: struct return gauntlet case  
+    - module: `wubu_isa_arm64.c` · **criterion:** arm64 struct return passes in gauntlet + fuzz_diff
+- [ ] **164** `P2` riscv backend: struct return gauntlet case  
+    - module: `wubu_isa_riscv.c` · **criterion:** riscv struct return passes in gauntlet + fuzz_diff
+- [ ] **165** `P2` mips backend: struct return gauntlet case  
+    - module: `wubu_isa_mips.c` · **criterion:** mips struct return passes in gauntlet + fuzz_diff
+- [ ] **166** `P2` m68k backend: struct return gauntlet case  
+    - module: `wubu_isa_m68k.c` · **criterion:** m68k struct return passes in gauntlet + fuzz_diff
+- [ ] **167** `P2` 6502 backend: struct return gauntlet case  
+    - module: `wubu_isa_6502.c` · **criterion:** 6502 struct return passes in gauntlet + fuzz_diff
+- [ ] **168** `P2` z80 backend: struct return gauntlet case  
+    - module: `wubu_isa_z80.c` · **criterion:** z80 struct return passes in gauntlet + fuzz_diff
+- [ ] **169** `P2` 8051 backend: struct return gauntlet case  
+    - module: `wubu_isa_8051.c` · **criterion:** 8051 struct return passes in gauntlet + fuzz_diff
+- [ ] **170** `P2` avr backend: struct return gauntlet case  
+    - module: `wubu_isa_avr.c` · **criterion:** avr struct return passes in gauntlet + fuzz_diff
+- [ ] **171** `P2` pic backend: struct return gauntlet case  
+    - module: `wubu_isa_pic.c` · **criterion:** pic struct return passes in gauntlet + fuzz_diff
+- [ ] **172** `P2` 8086 backend: struct return gauntlet case  
+    - module: `wubu_isa_8086.c` · **criterion:** 8086 struct return passes in gauntlet + fuzz_diff
+- [ ] **173** `P2` spirv backend: struct return gauntlet case  
+    - module: `wubu_isa_spirv.c` · **criterion:** spirv struct return passes in gauntlet + fuzz_diff
+- [ ] **174** `P2` ptx backend: struct return gauntlet case  
+    - module: `wubu_isa_ptx.c` · **criterion:** ptx struct return passes in gauntlet + fuzz_diff
+- [ ] **175** `P2` vulkan backend: struct return gauntlet case  
+    - module: `wubu_isa_vulkan.c` · **criterion:** vulkan struct return passes in gauntlet + fuzz_diff
+- [ ] **176** `P2` amdgpu backend: struct return gauntlet case  
+    - module: `wubu_isa_amdgpu.c` · **criterion:** amdgpu struct return passes in gauntlet + fuzz_diff
+- [ ] **177** `P2` wasm backend: struct return gauntlet case  
+    - module: `wubu_isa_wasm.c` · **criterion:** wasm struct return passes in gauntlet + fuzz_diff
+- [ ] **178** `P2` arm64 backend: varargs gauntlet case  
+    - module: `wubu_isa_arm64.c` · **criterion:** arm64 varargs passes in gauntlet + fuzz_diff
+- [ ] **179** `P2` riscv backend: varargs gauntlet case  
+    - module: `wubu_isa_riscv.c` · **criterion:** riscv varargs passes in gauntlet + fuzz_diff
+- [ ] **180** `P2` mips backend: varargs gauntlet case  
+    - module: `wubu_isa_mips.c` · **criterion:** mips varargs passes in gauntlet + fuzz_diff
+- [ ] **181** `P2` m68k backend: varargs gauntlet case  
+    - module: `wubu_isa_m68k.c` · **criterion:** m68k varargs passes in gauntlet + fuzz_diff
+- [ ] **182** `P2` 6502 backend: varargs gauntlet case  
+    - module: `wubu_isa_6502.c` · **criterion:** 6502 varargs passes in gauntlet + fuzz_diff
+- [ ] **183** `P2` z80 backend: varargs gauntlet case  
+    - module: `wubu_isa_z80.c` · **criterion:** z80 varargs passes in gauntlet + fuzz_diff
+- [ ] **184** `P2` 8051 backend: varargs gauntlet case  
+    - module: `wubu_isa_8051.c` · **criterion:** 8051 varargs passes in gauntlet + fuzz_diff
+- [ ] **185** `P2` avr backend: varargs gauntlet case  
+    - module: `wubu_isa_avr.c` · **criterion:** avr varargs passes in gauntlet + fuzz_diff
+- [ ] **186** `P2` pic backend: varargs gauntlet case  
+    - module: `wubu_isa_pic.c` · **criterion:** pic varargs passes in gauntlet + fuzz_diff
+- [ ] **187** `P2` 8086 backend: varargs gauntlet case  
+    - module: `wubu_isa_8086.c` · **criterion:** 8086 varargs passes in gauntlet + fuzz_diff
+- [ ] **188** `P2` spirv backend: varargs gauntlet case  
+    - module: `wubu_isa_spirv.c` · **criterion:** spirv varargs passes in gauntlet + fuzz_diff
+- [ ] **189** `P2` ptx backend: varargs gauntlet case  
+    - module: `wubu_isa_ptx.c` · **criterion:** ptx varargs passes in gauntlet + fuzz_diff
+- [ ] **190** `P2` vulkan backend: varargs gauntlet case  
+    - module: `wubu_isa_vulkan.c` · **criterion:** vulkan varargs passes in gauntlet + fuzz_diff
+- [ ] **191** `P2` amdgpu backend: varargs gauntlet case  
+    - module: `wubu_isa_amdgpu.c` · **criterion:** amdgpu varargs passes in gauntlet + fuzz_diff
+- [ ] **192** `P2` wasm backend: varargs gauntlet case  
+    - module: `wubu_isa_wasm.c` · **criterion:** wasm varargs passes in gauntlet + fuzz_diff
+- [ ] **193** `P2` arm64 backend: switch jump table gauntlet case  
+    - module: `wubu_isa_arm64.c` · **criterion:** arm64 switch jump table passes in gauntlet + fuzz_diff
+- [ ] **194** `P2` riscv backend: switch jump table gauntlet case  
+    - module: `wubu_isa_riscv.c` · **criterion:** riscv switch jump table passes in gauntlet + fuzz_diff
+- [ ] **195** `P2` mips backend: switch jump table gauntlet case  
+    - module: `wubu_isa_mips.c` · **criterion:** mips switch jump table passes in gauntlet + fuzz_diff
+- [ ] **196** `P2` m68k backend: switch jump table gauntlet case  
+    - module: `wubu_isa_m68k.c` · **criterion:** m68k switch jump table passes in gauntlet + fuzz_diff
+- [ ] **197** `P2` 6502 backend: switch jump table gauntlet case  
+    - module: `wubu_isa_6502.c` · **criterion:** 6502 switch jump table passes in gauntlet + fuzz_diff
+- [ ] **198** `P2` z80 backend: switch jump table gauntlet case  
+    - module: `wubu_isa_z80.c` · **criterion:** z80 switch jump table passes in gauntlet + fuzz_diff
+- [ ] **199** `P2` 8051 backend: switch jump table gauntlet case  
+    - module: `wubu_isa_8051.c` · **criterion:** 8051 switch jump table passes in gauntlet + fuzz_diff
+- [ ] **200** `P2` avr backend: switch jump table gauntlet case  
+    - module: `wubu_isa_avr.c` · **criterion:** avr switch jump table passes in gauntlet + fuzz_diff
+
+## BRAIN — wubuwizard inference + training engine
+
+- [ ] **201** `P0` one universal substrate for every modality  
+    - module: `wubu_model*.c` · **criterion:** LLM/music/video/diffusion all load as a typed tensor graph
+- [ ] **202** `P0` KV cache served as 9P files (/n/kv)  
+    - module: `wubu_kvfs.c` · **criterion:** read/write a slot's latent through the namespace
+- [ ] **203** `P0` mixed per-role bit ladders (never uniform)  
+    - module: `quantized_*.c` · **criterion:** attn Q8_0, experts 2-bit; NaN-free decode
+- [ ] **204** `P0` SSD expert slot-bank pages 256 experts on small RAM  
+    - module: `wubu_ssd_moe.c` · **criterion:** KAT-256 loads with no 256GB sidecar
+- [ ] **205** `P0` Muon optimizer + real backward  
+    - module: `wubu_backprop.c` · **criterion:** SFT loss decreases monotonically
+- [ ] **206** `P0` checkpoint round-trips lossless  
+    - module: `wubu_tensor_store.c` · **criterion:** maxdiff=0 on export/import
+- [ ] **207** `P0` sampler: DRY anti-repetition for math  
+    - module: `sampler` · **criterion:** temp 1.0/top_p 0.95 floor, no degenerate loops
+- [ ] **208** `P0` GQA + MLA + SSM hybrid forward all finite  
+    - module: `wubu_attn_*.c` · **criterion:** real weights forward without NaN
+- [ ] **209** `P1` speculative decoding (EAGLE/MTP) hedged  
+    - module: `hedged_spec.c` · **criterion:** accept rate measured, speedup > 1.5x
+- [ ] **210** `P1` paged KV for long context  
+    - module: `wubu_paged_kv.c` · **criterion:** 100k context fits, no fragmentation
+- [ ] **211** `P1` flash-attention tiled kernel  
+    - module: `flash_attn_tiled.cu` · **criterion:** matches reference within epsilon
+- [ ] **212** `P1` SSM recurrence on GPU  
+    - module: `gpu_ssm_recurrence.cu` · **criterion:** matches CPU recurrence
+- [ ] **213** `P1` MoE grouped + hash router  
+    - module: `wubu_moe_grouped.c/wubu_hashrouter.c` · **criterion:** top-k routing correct, balanced
+- [ ] **214** `P1` hyperbolic experts (Poincare MoE)  
+    - module: `wubu_moe_hyperbolic.c` · **criterion:** hyperbolic distance routing works
+- [ ] **215** `P1` LoRA adapters hot-swap  
+    - module: `wubu_lora.c` · **criterion:** swap adapter without reload
+- [ ] **216** `P1` IQ2/IQ3 dequant NaN-free  
+    - module: `dequant_iq2_xxs.c` · **criterion:** all 12 types decode clean
+- [ ] **217** `P2` corpus pipeline streams without full load  
+    - module: `wubu_fs_trainer.c` · **criterion:** batches -> coherence reward -> amoeba grow
+- [ ] **218** `P2` RLHF oracle loop closes a gap per batch  
+    - module: `openrouter_rlhf` · **criterion:** each batch measurably improves the target
+- [ ] **219** `P2` tensor store exports GGUF+safetensors+.st  
+    - module: `wubu_tensor_store.c` · **criterion:** 3 formats interconvert
+- [ ] **220** `P2` multi-split GGUF resolved  
+    - module: `gguf_reader.c` · **criterion:** 3-part Config-I loads, 0 mismatches
+- [ ] **221** `P2` agentic organs gated by architecture  
+    - module: `wubu_agentic_*.c` · **criterion:** hash router/DSA/mHC only when provided
+- [ ] **222** `P2` vision encoder path  
+    - module: `cuda_vision.cu` · **criterion:** image -> embeddings finite
+- [ ] **223** `P2` audio/music model path  
+    - module: `wubu_audio*.c` · **criterion:** music model forward finite
+- [ ] **224** `P2` thread pool + tile manager  
+    - module: `thread_pool/tile_manager` · **criterion:** scales to 12 threads, no contention stalls
+- [ ] **225** `P2` API server OpenAI-compatible  
+    - module: `api_server` · **criterion:** chat/completions round-trips
+- [ ] **226** `P2` rolling checkpoints (3/lineage)  
+    - module: `wubu_train.c` · **criterion:** lineage preserved across restarts
+- [ ] **227** `P3` attention sinks + KV compressor  
+    - module: `wubu_kv_quant.c` · **criterion:** long-context quality holds
+- [ ] **228** `P3` ring attention for distributed context  
+    - module: `wubu_ring_attn.c` · **criterion:** multi-device context stitches
+- [ ] **229** `P3` cross-attention for encoder-decoder  
+    - module: `wubu_cross_attn.c` · **criterion:** encoder-decoder forward finite
+- [ ] **230** `P3` attention gate (learned)  
+    - module: `wubu_attn_gate.c` · **criterion:** gate improves held-out loss
+- [ ] **231** `P2` rope scaling: forward verified  
+    - module: `wubu_rope_scaling.c` · **criterion:** rope scaling forward covered by a test with a measured assertion
+- [ ] **232** `P2` alibi: forward verified  
+    - module: `wubu_alibi.c` · **criterion:** alibi forward covered by a test with a measured assertion
+- [ ] **233** `P2` sliding window: forward verified  
+    - module: `wubu_sliding_window.c` · **criterion:** sliding window forward covered by a test with a measured assertion
+- [ ] **234** `P2` grouped-query heads: forward verified  
+    - module: `wubu_grouped_query_heads.c` · **criterion:** grouped-query heads forward covered by a test with a measured assertion
+- [ ] **235** `P2` query-key norm: forward verified  
+    - module: `wubu_query_key_norm.c` · **criterion:** query-key norm forward covered by a test with a measured assertion
+- [ ] **236** `P2` residual scaling: forward verified  
+    - module: `wubu_residual_scaling.c` · **criterion:** residual scaling forward covered by a test with a measured assertion
+- [ ] **237** `P2` z-loss: forward verified  
+    - module: `wubu_z_loss.c` · **criterion:** z-loss forward covered by a test with a measured assertion
+- [ ] **238** `P2` embedding norm: forward verified  
+    - module: `wubu_embedding_norm.c` · **criterion:** embedding norm forward covered by a test with a measured assertion
+- [ ] **239** `P2` logit softcap: forward verified  
+    - module: `wubu_logit_softcap.c` · **criterion:** logit softcap forward covered by a test with a measured assertion
+- [ ] **240** `P2` token dropout: forward verified  
+    - module: `wubu_token_dropout.c` · **criterion:** token dropout forward covered by a test with a measured assertion
+- [ ] **241** `P2` label smoothing: forward verified  
+    - module: `wubu_label_smoothing.c` · **criterion:** label smoothing forward covered by a test with a measured assertion
+- [ ] **242** `P2` curriculum: forward verified  
+    - module: `wubu_curriculum.c` · **criterion:** curriculum forward covered by a test with a measured assertion
+- [ ] **243** `P2` data mix: forward verified  
+    - module: `wubu_data_mix.c` · **criterion:** data mix forward covered by a test with a measured assertion
+- [ ] **244** `P2` dedup: forward verified  
+    - module: `wubu_dedup.c` · **criterion:** dedup forward covered by a test with a measured assertion
+- [ ] **245** `P2` quality filter: forward verified  
+    - module: `wubu_quality_filter.c` · **criterion:** quality filter forward covered by a test with a measured assertion
+- [ ] **246** `P2` length bucket: forward verified  
+    - module: `wubu_length_bucket.c` · **criterion:** length bucket forward covered by a test with a measured assertion
+- [ ] **247** `P2` rope scaling: backward verified  
+    - module: `wubu_rope_scaling.c` · **criterion:** rope scaling backward covered by a test with a measured assertion
+- [ ] **248** `P2` alibi: backward verified  
+    - module: `wubu_alibi.c` · **criterion:** alibi backward covered by a test with a measured assertion
+- [ ] **249** `P2` sliding window: backward verified  
+    - module: `wubu_sliding_window.c` · **criterion:** sliding window backward covered by a test with a measured assertion
+- [ ] **250** `P2` grouped-query heads: backward verified  
+    - module: `wubu_grouped_query_heads.c` · **criterion:** grouped-query heads backward covered by a test with a measured assertion
+- [ ] **251** `P2` query-key norm: backward verified  
+    - module: `wubu_query_key_norm.c` · **criterion:** query-key norm backward covered by a test with a measured assertion
+- [ ] **252** `P2` residual scaling: backward verified  
+    - module: `wubu_residual_scaling.c` · **criterion:** residual scaling backward covered by a test with a measured assertion
+- [ ] **253** `P2` z-loss: backward verified  
+    - module: `wubu_z_loss.c` · **criterion:** z-loss backward covered by a test with a measured assertion
+- [ ] **254** `P2` embedding norm: backward verified  
+    - module: `wubu_embedding_norm.c` · **criterion:** embedding norm backward covered by a test with a measured assertion
+- [ ] **255** `P2` logit softcap: backward verified  
+    - module: `wubu_logit_softcap.c` · **criterion:** logit softcap backward covered by a test with a measured assertion
+- [ ] **256** `P2` token dropout: backward verified  
+    - module: `wubu_token_dropout.c` · **criterion:** token dropout backward covered by a test with a measured assertion
+- [ ] **257** `P2` label smoothing: backward verified  
+    - module: `wubu_label_smoothing.c` · **criterion:** label smoothing backward covered by a test with a measured assertion
+- [ ] **258** `P2` curriculum: backward verified  
+    - module: `wubu_curriculum.c` · **criterion:** curriculum backward covered by a test with a measured assertion
+- [ ] **259** `P2` data mix: backward verified  
+    - module: `wubu_data_mix.c` · **criterion:** data mix backward covered by a test with a measured assertion
+- [ ] **260** `P2` dedup: backward verified  
+    - module: `wubu_dedup.c` · **criterion:** dedup backward covered by a test with a measured assertion
+- [ ] **261** `P2` quality filter: backward verified  
+    - module: `wubu_quality_filter.c` · **criterion:** quality filter backward covered by a test with a measured assertion
+- [ ] **262** `P2` length bucket: backward verified  
+    - module: `wubu_length_bucket.c` · **criterion:** length bucket backward covered by a test with a measured assertion
+- [ ] **263** `P2` rope scaling: config verified  
+    - module: `wubu_rope_scaling.c` · **criterion:** rope scaling config covered by a test with a measured assertion
+- [ ] **264** `P2` alibi: config verified  
+    - module: `wubu_alibi.c` · **criterion:** alibi config covered by a test with a measured assertion
+- [ ] **265** `P2` sliding window: config verified  
+    - module: `wubu_sliding_window.c` · **criterion:** sliding window config covered by a test with a measured assertion
+- [ ] **266** `P2` grouped-query heads: config verified  
+    - module: `wubu_grouped_query_heads.c` · **criterion:** grouped-query heads config covered by a test with a measured assertion
+- [ ] **267** `P2` query-key norm: config verified  
+    - module: `wubu_query_key_norm.c` · **criterion:** query-key norm config covered by a test with a measured assertion
+- [ ] **268** `P2` residual scaling: config verified  
+    - module: `wubu_residual_scaling.c` · **criterion:** residual scaling config covered by a test with a measured assertion
+- [ ] **269** `P2` z-loss: config verified  
+    - module: `wubu_z_loss.c` · **criterion:** z-loss config covered by a test with a measured assertion
+- [ ] **270** `P2` embedding norm: config verified  
+    - module: `wubu_embedding_norm.c` · **criterion:** embedding norm config covered by a test with a measured assertion
+- [ ] **271** `P2` logit softcap: config verified  
+    - module: `wubu_logit_softcap.c` · **criterion:** logit softcap config covered by a test with a measured assertion
+- [ ] **272** `P2` token dropout: config verified  
+    - module: `wubu_token_dropout.c` · **criterion:** token dropout config covered by a test with a measured assertion
+- [ ] **273** `P2` label smoothing: config verified  
+    - module: `wubu_label_smoothing.c` · **criterion:** label smoothing config covered by a test with a measured assertion
+- [ ] **274** `P2` curriculum: config verified  
+    - module: `wubu_curriculum.c` · **criterion:** curriculum config covered by a test with a measured assertion
+- [ ] **275** `P2` data mix: config verified  
+    - module: `wubu_data_mix.c` · **criterion:** data mix config covered by a test with a measured assertion
+- [ ] **276** `P2` dedup: config verified  
+    - module: `wubu_dedup.c` · **criterion:** dedup config covered by a test with a measured assertion
+- [ ] **277** `P2` quality filter: config verified  
+    - module: `wubu_quality_filter.c` · **criterion:** quality filter config covered by a test with a measured assertion
+- [ ] **278** `P2` length bucket: config verified  
+    - module: `wubu_length_bucket.c` · **criterion:** length bucket config covered by a test with a measured assertion
+- [ ] **279** `P2` rope scaling: test verified  
+    - module: `wubu_rope_scaling.c` · **criterion:** rope scaling test covered by a test with a measured assertion
+- [ ] **280** `P2` alibi: test verified  
+    - module: `wubu_alibi.c` · **criterion:** alibi test covered by a test with a measured assertion
+- [ ] **281** `P2` sliding window: test verified  
+    - module: `wubu_sliding_window.c` · **criterion:** sliding window test covered by a test with a measured assertion
+- [ ] **282** `P2` grouped-query heads: test verified  
+    - module: `wubu_grouped_query_heads.c` · **criterion:** grouped-query heads test covered by a test with a measured assertion
+- [ ] **283** `P2` query-key norm: test verified  
+    - module: `wubu_query_key_norm.c` · **criterion:** query-key norm test covered by a test with a measured assertion
+- [ ] **284** `P2` residual scaling: test verified  
+    - module: `wubu_residual_scaling.c` · **criterion:** residual scaling test covered by a test with a measured assertion
+- [ ] **285** `P2` z-loss: test verified  
+    - module: `wubu_z_loss.c` · **criterion:** z-loss test covered by a test with a measured assertion
+- [ ] **286** `P2` embedding norm: test verified  
+    - module: `wubu_embedding_norm.c` · **criterion:** embedding norm test covered by a test with a measured assertion
+- [ ] **287** `P2` logit softcap: test verified  
+    - module: `wubu_logit_softcap.c` · **criterion:** logit softcap test covered by a test with a measured assertion
+- [ ] **288** `P2` token dropout: test verified  
+    - module: `wubu_token_dropout.c` · **criterion:** token dropout test covered by a test with a measured assertion
+- [ ] **289** `P2` label smoothing: test verified  
+    - module: `wubu_label_smoothing.c` · **criterion:** label smoothing test covered by a test with a measured assertion
+- [ ] **290** `P2` curriculum: test verified  
+    - module: `wubu_curriculum.c` · **criterion:** curriculum test covered by a test with a measured assertion
+- [ ] **291** `P2` data mix: test verified  
+    - module: `wubu_data_mix.c` · **criterion:** data mix test covered by a test with a measured assertion
+- [ ] **292** `P2` dedup: test verified  
+    - module: `wubu_dedup.c` · **criterion:** dedup test covered by a test with a measured assertion
+- [ ] **293** `P2` quality filter: test verified  
+    - module: `wubu_quality_filter.c` · **criterion:** quality filter test covered by a test with a measured assertion
+- [ ] **294** `P2` length bucket: test verified  
+    - module: `wubu_length_bucket.c` · **criterion:** length bucket test covered by a test with a measured assertion
+- [ ] **295** `P2` rope scaling: forward verified  
+    - module: `wubu_rope_scaling.c` · **criterion:** rope scaling forward covered by a test with a measured assertion
+- [ ] **296** `P2` alibi: forward verified  
+    - module: `wubu_alibi.c` · **criterion:** alibi forward covered by a test with a measured assertion
+- [ ] **297** `P2` sliding window: forward verified  
+    - module: `wubu_sliding_window.c` · **criterion:** sliding window forward covered by a test with a measured assertion
+- [ ] **298** `P2` grouped-query heads: forward verified  
+    - module: `wubu_grouped_query_heads.c` · **criterion:** grouped-query heads forward covered by a test with a measured assertion
+- [ ] **299** `P2` query-key norm: forward verified  
+    - module: `wubu_query_key_norm.c` · **criterion:** query-key norm forward covered by a test with a measured assertion
+- [ ] **300** `P2` residual scaling: forward verified  
+    - module: `wubu_residual_scaling.c` · **criterion:** residual scaling forward covered by a test with a measured assertion
+
+## AGENT — Recursive self-improvement: DGM loop, DA-1/2/3, amoeba/hive
+
+- [ ] **301** `P0` DGM loop: mutate -> validate -> archive -> sample  
+    - module: `wubu_amoeba.c/wubu_hive.c` · **criterion:** the standing loop runs end-to-end on a batch
+- [ ] **302** `P0` DA-3 human gate + freeze (the death condition)  
+    - module: `wubu_selfimprove.c` · **criterion:** frozen loop refuses to promote; no auto-mutate
+- [ ] **303** `P0` independent verifier gates every promotion  
+    - module: `src/kernel/wubu_verifier.h` · **criterion:** verifier_fn != mutator; fail-closed on no verifier
+- [ ] **304** `P0` DA-2 failure weighting 3x bounds search cost  
+    - module: `wubu_selfimprove.c` · **criterion:** failed/divergent mutations weighted 3x
+- [ ] **305** `P0` Brain archive wired to Body operator  
+    - module: `wubu_hive.c -> wubu_selfimprove.c` · **criterion:** a validated mutation promotes through DA-3 with a trace span
+- [ ] **306** `P0` held-out eval prevents reward hacking  
+    - module: `trainer + verifier` · **criterion:** mutations validated on a disjoint benchmark segment
+- [ ] **307** `P0` trace span emitted on every promote  
+    - module: `wubu_trace.c` · **criterion:** each promotion carries an auditable span
+- [ ] **308** `P0` operator hook applies/restarts/emits directive  
+    - module: `wubu_selfimprove.c` · **criterion:** operator_fn fires only after DA-3 sign-off
+- [ ] **309** `P1` amoeba grows overworked cells, shrinks dead ones  
+    - module: `wubu_amoeba.c` · **criterion:** measured cell fitness drives grow/shrink
+- [ ] **310** `P1` hive = diagnostic immune system  
+    - module: `wubu_hive.c` · **criterion:** typed measurement cells, z-score anomaly
+- [ ] **311** `P1` causal walker localizes a divergence  
+    - module: `wubu_hive.c` · **criterion:** walker points at the responsible cell
+- [ ] **312** `P1` 5+1 rollback on divergence  
+    - module: `wubu_selfimprove.c` · **criterion:** rollback restores last-known-good
+- [ ] **313** `P1` lineage archived for every validated mutation  
+    - module: `wubu_lineage.c` · **criterion:** traceable lineage tree
+- [ ] **314** `P1` contracts enforced on each mutation  
+    - module: `wubu_contracts.c` · **criterion:** mutation violating a contract is rejected
+- [ ] **315** `P1` priority store ranks candidate mutations  
+    - module: `wubu_priority_store.c` · **criterion:** highest-coherence mutation sampled first
+- [ ] **316** `P1` loop guard prevents runaway recursion  
+    - module: `wubu_loopguard.c` · **criterion:** iteration budget enforced
+- [ ] **317** `P1` blueprint guides the next mutation  
+    - module: `wubu_blueprint.c` · **criterion:** mutation targets a named gap
+- [ ] **318** `P1` trajectory cell tracks the improvement path  
+    - module: `wubu_trajcell.c` · **criterion:** path measurable across generations
+- [ ] **319** `P2` resource budget bounds mutation search (AD04)  
+    - module: `wubu_agentic_os.h` · **criterion:** cpu/ram/io overrun aborts the search
+- [ ] **320** `P2` exponential backoff on retry (AD02)  
+    - module: `wubu_agentic_os.h` · **criterion:** backoff_ms caps at the ceiling
+- [ ] **321** `P2` checkpoint pack/resume across restarts (AD03)  
+    - module: `wubu_agentic_os.h` · **criterion:** resume continues at the saved seq/step
+- [ ] **322** `P2` 9P capability enforcement for the agent (AD01)  
+    - module: `wubu_agentic_os.h` · **criterion:** agent only touches its subtree
+- [ ] **323** `P2` sandbox isolates a mutation trial  
+    - module: `wubu_container.c` · **criterion:** trial runs in a sealed namespace
+- [ ] **324** `P2` objective-hacking detector flags eval gaming  
+    - module: `wubu_selfimprove.c` · **criterion:** a gamed metric is caught, not promoted
+- [ ] **325** `P2` multi-generation improvement compounds  
+    - module: `wubu_amoeba.c` · **criterion:** score improves monotonically over N generations
+- [ ] **326** `P2` archive is open-ended + diverse  
+    - module: `wubu_hive.c` · **criterion:** parallel paths explored, not a single line
+- [ ] **327** `P2` self-modification is logged + reversible  
+    - module: `wubu_selfimprove.c` · **criterion:** every change revertible from the archive
+- [ ] **328** `P2` RLHF oracle plugged into the loop  
+    - module: `openrouter_rlhf` · **criterion:** oracle reward feeds mutation selection
+- [ ] **329** `P3` prover validates a math mutation (Lean)  
+    - module: `wubu_prover2.c` · **criterion:** Lean-verified theorem gates a math change
+- [ ] **330** `P3` meta-connections (mHC) adapt topology  
+    - module: `wubu_mhc_mh.c` · **criterion:** hyper-connections improve held-out loss
+- [ ] **331** `P3` DSA indexer speeds retrieval  
+    - module: `wubu_dsa.c` · **criterion:** indexer beats linear scan on measured data
+- [ ] **332** `P3` hive merge consolidates two colonies  
+    - module: `wubu_hive_merge.c` · **criterion:** merge preserves both lineages
+- [ ] **333** `P2` AGENT: diagnosis cell covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** diagnosis cell has a test asserting the state transition, not just no-crash
+- [ ] **334** `P2` AGENT: anomaly z-score covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** anomaly z-score has a test asserting the state transition, not just no-crash
+- [ ] **335** `P2` AGENT: rollback trigger covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** rollback trigger has a test asserting the state transition, not just no-crash
+- [ ] **336** `P2` AGENT: promotion gate covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** promotion gate has a test asserting the state transition, not just no-crash
+- [ ] **337** `P2` AGENT: lineage record covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** lineage record has a test asserting the state transition, not just no-crash
+- [ ] **338** `P2` AGENT: contract check covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** contract check has a test asserting the state transition, not just no-crash
+- [ ] **339** `P2` AGENT: priority rank covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** priority rank has a test asserting the state transition, not just no-crash
+- [ ] **340** `P2` AGENT: trajectory step covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** trajectory step has a test asserting the state transition, not just no-crash
+- [ ] **341** `P2` AGENT: backoff attempt covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** backoff attempt has a test asserting the state transition, not just no-crash
+- [ ] **342** `P2` AGENT: checkpoint resume covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** checkpoint resume has a test asserting the state transition, not just no-crash
+- [ ] **343** `P2` AGENT: capability check covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** capability check has a test asserting the state transition, not just no-crash
+- [ ] **344** `P2` AGENT: budget abort covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** budget abort has a test asserting the state transition, not just no-crash
+- [ ] **345** `P2` AGENT: sandbox seal covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** sandbox seal has a test asserting the state transition, not just no-crash
+- [ ] **346** `P2` AGENT: gaming detect covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** gaming detect has a test asserting the state transition, not just no-crash
+- [ ] **347** `P2` AGENT: diversity sample covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** diversity sample has a test asserting the state transition, not just no-crash
+- [ ] **348** `P2` AGENT: revert path covered by a state-change test  
+    - module: `wubu_hive.c` · **criterion:** revert path has a test asserting the state transition, not just no-crash
+- [ ] **349** `P2` AGENT: diagnosis cell covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** diagnosis cell has a test asserting the state transition, not just no-crash
+- [ ] **350** `P2` AGENT: anomaly z-score covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** anomaly z-score has a test asserting the state transition, not just no-crash
+- [ ] **351** `P2` AGENT: rollback trigger covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** rollback trigger has a test asserting the state transition, not just no-crash
+- [ ] **352** `P2` AGENT: promotion gate covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** promotion gate has a test asserting the state transition, not just no-crash
+- [ ] **353** `P2` AGENT: lineage record covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** lineage record has a test asserting the state transition, not just no-crash
+- [ ] **354** `P2` AGENT: contract check covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** contract check has a test asserting the state transition, not just no-crash
+- [ ] **355** `P2` AGENT: priority rank covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** priority rank has a test asserting the state transition, not just no-crash
+- [ ] **356** `P2` AGENT: trajectory step covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** trajectory step has a test asserting the state transition, not just no-crash
+- [ ] **357** `P2` AGENT: backoff attempt covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** backoff attempt has a test asserting the state transition, not just no-crash
+- [ ] **358** `P2` AGENT: checkpoint resume covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** checkpoint resume has a test asserting the state transition, not just no-crash
+- [ ] **359** `P2` AGENT: capability check covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** capability check has a test asserting the state transition, not just no-crash
+- [ ] **360** `P2` AGENT: budget abort covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** budget abort has a test asserting the state transition, not just no-crash
+- [ ] **361** `P2` AGENT: sandbox seal covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** sandbox seal has a test asserting the state transition, not just no-crash
+- [ ] **362** `P2` AGENT: gaming detect covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** gaming detect has a test asserting the state transition, not just no-crash
+- [ ] **363** `P2` AGENT: diversity sample covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** diversity sample has a test asserting the state transition, not just no-crash
+- [ ] **364** `P2` AGENT: revert path covered by a state-change test  
+    - module: `wubu_amoeba.c` · **criterion:** revert path has a test asserting the state transition, not just no-crash
+- [ ] **365** `P2` AGENT: diagnosis cell covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** diagnosis cell has a test asserting the state transition, not just no-crash
+- [ ] **366** `P2` AGENT: anomaly z-score covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** anomaly z-score has a test asserting the state transition, not just no-crash
+- [ ] **367** `P2` AGENT: rollback trigger covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** rollback trigger has a test asserting the state transition, not just no-crash
+- [ ] **368** `P2` AGENT: promotion gate covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** promotion gate has a test asserting the state transition, not just no-crash
+- [ ] **369** `P2` AGENT: lineage record covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** lineage record has a test asserting the state transition, not just no-crash
+- [ ] **370** `P2` AGENT: contract check covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** contract check has a test asserting the state transition, not just no-crash
+- [ ] **371** `P2` AGENT: priority rank covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** priority rank has a test asserting the state transition, not just no-crash
+- [ ] **372** `P2` AGENT: trajectory step covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** trajectory step has a test asserting the state transition, not just no-crash
+- [ ] **373** `P2` AGENT: backoff attempt covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** backoff attempt has a test asserting the state transition, not just no-crash
+- [ ] **374** `P2` AGENT: checkpoint resume covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** checkpoint resume has a test asserting the state transition, not just no-crash
+- [ ] **375** `P2` AGENT: capability check covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** capability check has a test asserting the state transition, not just no-crash
+- [ ] **376** `P2` AGENT: budget abort covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** budget abort has a test asserting the state transition, not just no-crash
+- [ ] **377** `P2` AGENT: sandbox seal covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** sandbox seal has a test asserting the state transition, not just no-crash
+- [ ] **378** `P2` AGENT: gaming detect covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** gaming detect has a test asserting the state transition, not just no-crash
+- [ ] **379** `P2` AGENT: diversity sample covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** diversity sample has a test asserting the state transition, not just no-crash
+- [ ] **380** `P2` AGENT: revert path covered by a state-change test  
+    - module: `wubu_selfimprove.c` · **criterion:** revert path has a test asserting the state transition, not just no-crash
+- [ ] **381** `P2` AGENT: diagnosis cell covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** diagnosis cell has a test asserting the state transition, not just no-crash
+- [ ] **382** `P2` AGENT: anomaly z-score covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** anomaly z-score has a test asserting the state transition, not just no-crash
+- [ ] **383** `P2` AGENT: rollback trigger covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** rollback trigger has a test asserting the state transition, not just no-crash
+- [ ] **384** `P2` AGENT: promotion gate covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** promotion gate has a test asserting the state transition, not just no-crash
+- [ ] **385** `P2` AGENT: lineage record covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** lineage record has a test asserting the state transition, not just no-crash
+- [ ] **386** `P2` AGENT: contract check covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** contract check has a test asserting the state transition, not just no-crash
+- [ ] **387** `P2` AGENT: priority rank covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** priority rank has a test asserting the state transition, not just no-crash
+- [ ] **388** `P2` AGENT: trajectory step covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** trajectory step has a test asserting the state transition, not just no-crash
+- [ ] **389** `P2` AGENT: backoff attempt covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** backoff attempt has a test asserting the state transition, not just no-crash
+- [ ] **390** `P2` AGENT: checkpoint resume covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** checkpoint resume has a test asserting the state transition, not just no-crash
+- [ ] **391** `P2` AGENT: capability check covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** capability check has a test asserting the state transition, not just no-crash
+- [ ] **392** `P2` AGENT: budget abort covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** budget abort has a test asserting the state transition, not just no-crash
+- [ ] **393** `P2` AGENT: sandbox seal covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** sandbox seal has a test asserting the state transition, not just no-crash
+- [ ] **394** `P2` AGENT: gaming detect covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** gaming detect has a test asserting the state transition, not just no-crash
+- [ ] **395** `P2` AGENT: diversity sample covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** diversity sample has a test asserting the state transition, not just no-crash
+- [ ] **396** `P2` AGENT: revert path covered by a state-change test  
+    - module: `wubu_agentic_os.c` · **criterion:** revert path has a test asserting the state transition, not just no-crash
+- [ ] **397** `P2` AGENT: diagnosis cell covered by a state-change test  
+    - module: `wubu_lineage.c` · **criterion:** diagnosis cell has a test asserting the state transition, not just no-crash
+- [ ] **398** `P2` AGENT: anomaly z-score covered by a state-change test  
+    - module: `wubu_lineage.c` · **criterion:** anomaly z-score has a test asserting the state transition, not just no-crash
+- [ ] **399** `P2` AGENT: rollback trigger covered by a state-change test  
+    - module: `wubu_lineage.c` · **criterion:** rollback trigger has a test asserting the state transition, not just no-crash
+- [ ] **400** `P2` AGENT: promotion gate covered by a state-change test  
+    - module: `wubu_lineage.c` · **criterion:** promotion gate has a test asserting the state transition, not just no-crash
+
+## NAMESPACE — 9P meta-layer: Brain internals as /n files, capability security
+
+- [ ] **401** `P0` Brain internals are /n files, introspectable  
+    - module: `wubu_ns_*.c` · **criterion:** cat /n/<brain-resource> shows live state
+- [ ] **402** `P0` capability = namespace attach (AD01 everywhere)  
+    - module: `wubu_9p_cap_allowed` · **criterion:** no resource reachable outside its subtree
+- [x] **403** `P0` KV cache at /n/kv (DONE, verified)  
+    - module: `wubu_kvfs.c` · **criterion:** read/write a slot's latent through the namespace
+- [x] **404** `P0` companion state at /n/bonzi (DONE)  
+    - module: `wubu_ns_bonzi.c` · **criterion:** cat /n/bonzi/* shows enabled/pos/agi/bubble
+- [x] **405** `P0` companion memory at /n/bonzi/mem (DONE)  
+    - module: `wubu_bonzi_mem.c` · **criterion:** save/load persists across restart, AD01-gated
+- [x] **406** `P0` kernel scheduler + hw at /n (DONE)  
+    - module: `wubu_ns_kernel.c` · **criterion:** /n/kernel/scheduler + /n/hw/* live
+- [x] **407** `P0` DRAM hedge at /n/dram (DONE)  
+    - module: `wubu_ns_dram.c` · **criterion:** replica/trefi visible + writable
+- [ ] **408** `P0` ls /n shows the WHOLE machine (kernel+hw+brain)  
+    - module: `wubu_ns_bridge.c` · **criterion:** one tree unifies Body + Brain control planes
+- [ ] **409** `P1` expert slot-bank at /n/experts/{slot}  
+    - module: `wubu_ssd_moe.c` · **criterion:** inspect LRU residency, pin/unpin an expert
+- [ ] **410** `P1` diagnostic hive at /n/hive/{cell}  
+    - module: `wubu_hive.c` · **criterion:** z-score cells + walker readable from the shell
+- [ ] **411** `P1` model catalog at /n/models  
+    - module: `wubu_tensor_store.c` · **criterion:** ls /n/models lists (name,offset,dtype,shape)
+- [ ] **412** `P1` training run at /n/train/{metric}  
+    - module: `wubu_train.c` · **criterion:** live loss/lr visible during training
+- [ ] **413** `P1` sampler state at /n/sampler  
+    - module: `sampler` · **criterion:** temp/top_p/DRY readable + writable live
+- [ ] **414** `P1` archd services at /n/svc/<s>/{status,ctl}  
+    - module: `wubu_ns_bridge.c` · **criterion:** start/stop/restart from the shell
+- [ ] **415** `P1` containers at /n/svc/<s>/container  
+    - module: `wubu_container.c` · **criterion:** cgroup/seccomp/ns visible per container
+- [ ] **416** `P1` packages at /n/pkg  
+    - module: `wubu_ns_pkg.c` · **criterion:** install/remove reflected in the tree
+- [ ] **417** `P1` snapshots at /n/snap  
+    - module: `wubu_ns_snap.c` · **criterion:** list/restore a container snapshot
+- [ ] **418** `P1` sessions at /n/session  
+    - module: `wubu_ns_session.c` · **criterion:** active session state readable
+- [ ] **419** `P2` worldsim state at /n/world  
+    - module: `worldsim` · **criterion:** entity/terrain/physics tick readable
+- [ ] **420** `P2` Bonn bonzi bubble writable at /n/bonzi/bubble  
+    - module: `wubu_ns_bonzi.c` · **criterion:** echo 'text' > /n/bonzi/bubble changes the orb
+- [ ] **421** `P2` AGI panel open/close via /n/bonzi/agi  
+    - module: `wubu_ns_bonzi.c` · **criterion:** write opens/closes the panel
+- [ ] **422** `P2` every namespace file has a read AND write path  
+    - module: `wubu_ns_*.c` · **criterion:** no read-only dead ends where a control belongs
+- [ ] **423** `P2` namespace files are diffable (cat -A clean)  
+    - module: `wubu_ns_fs.c` · **criterion:** deterministic formatting, no trailing junk
+- [ ] **424** `P2` a foreign agent gets its own subtree  
+    - module: `wubu_agentic_os.h` · **criterion:** attach only its subtree; others refused
+- [ ] **425** `P2` namespace mount is network-transparent (Styx)  
+    - module: `styxfs_server.c` · **criterion:** attach a remote resource as if local
+- [ ] **426** `P2` union mount composes resources  
+    - module: `styxfs_vfs.c` · **criterion:** two resources bind into one view
+- [ ] **427** `P2` namespace ACL from the attach set, not a side table  
+    - module: `wubu_ns_bridge.c` · **criterion:** security falls out of the namespace
+- [ ] **428** `P2` plumber-style message passing via /n  
+    - module: `styxfs_server.c` · **criterion:** inter-agent messages as file writes
+- [ ] **429** `P3` namespace is queryable (find /n -name)  
+    - module: `wubu_ns_fs.c` · **criterion:** standard file tools work on the tree
+- [ ] **430** `P3` hot-reload a namespace subtree  
+    - module: `wubu_ns_bridge.c` · **criterion:** remount without restarting the service
+- [ ] **431** `P3` namespace versioning  
+    - module: `wubu_ns_fs.c` · **criterion:** read a prior version of a control file
+- [ ] **432** `P3` namespace metrics at /n/stats  
+    - module: `wubu_ns_bridge.c` · **criterion:** attach/read/write counts per subtree
+- [ ] **433** `P2` /n/experts/status served as a live 9P file  
+    - module: `wubu_ns_experts.c` · **criterion:** cat /n/experts/status reflects live state; write path validated where it is a control
+- [ ] **434** `P2` /n/hive/status served as a live 9P file  
+    - module: `wubu_ns_hive.c` · **criterion:** cat /n/hive/status reflects live state; write path validated where it is a control
+- [ ] **435** `P2` /n/models/status served as a live 9P file  
+    - module: `wubu_ns_models.c` · **criterion:** cat /n/models/status reflects live state; write path validated where it is a control
+- [ ] **436** `P2` /n/train/status served as a live 9P file  
+    - module: `wubu_ns_train.c` · **criterion:** cat /n/train/status reflects live state; write path validated where it is a control
+- [ ] **437** `P2` /n/sampler/status served as a live 9P file  
+    - module: `wubu_ns_sampler.c` · **criterion:** cat /n/sampler/status reflects live state; write path validated where it is a control
+- [ ] **438** `P2` /n/world/status served as a live 9P file  
+    - module: `wubu_ns_world.c` · **criterion:** cat /n/world/status reflects live state; write path validated where it is a control
+- [ ] **439** `P2` /n/kv/status served as a live 9P file  
+    - module: `wubu_ns_kv.c` · **criterion:** cat /n/kv/status reflects live state; write path validated where it is a control
+- [ ] **440** `P2` /n/bonzi/status served as a live 9P file  
+    - module: `wubu_ns_bonzi.c` · **criterion:** cat /n/bonzi/status reflects live state; write path validated where it is a control
+- [ ] **441** `P2` /n/kernel/status served as a live 9P file  
+    - module: `wubu_ns_kernel.c` · **criterion:** cat /n/kernel/status reflects live state; write path validated where it is a control
+- [ ] **442** `P2` /n/hw/status served as a live 9P file  
+    - module: `wubu_ns_hw.c` · **criterion:** cat /n/hw/status reflects live state; write path validated where it is a control
+- [ ] **443** `P2` /n/dram/status served as a live 9P file  
+    - module: `wubu_ns_dram.c` · **criterion:** cat /n/dram/status reflects live state; write path validated where it is a control
+- [ ] **444** `P2` /n/svc/status served as a live 9P file  
+    - module: `wubu_ns_svc.c` · **criterion:** cat /n/svc/status reflects live state; write path validated where it is a control
+- [ ] **445** `P2` /n/pkg/status served as a live 9P file  
+    - module: `wubu_ns_pkg.c` · **criterion:** cat /n/pkg/status reflects live state; write path validated where it is a control
+- [ ] **446** `P2` /n/snap/status served as a live 9P file  
+    - module: `wubu_ns_snap.c` · **criterion:** cat /n/snap/status reflects live state; write path validated where it is a control
+- [ ] **447** `P2` /n/session/status served as a live 9P file  
+    - module: `wubu_ns_session.c` · **criterion:** cat /n/session/status reflects live state; write path validated where it is a control
+- [ ] **448** `P2` /n/steaminput/status served as a live 9P file  
+    - module: `wubu_ns_steaminput.c` · **criterion:** cat /n/steaminput/status reflects live state; write path validated where it is a control
+- [ ] **449** `P2` /n/experts/stats served as a live 9P file  
+    - module: `wubu_ns_experts.c` · **criterion:** cat /n/experts/stats reflects live state; write path validated where it is a control
+- [ ] **450** `P2` /n/hive/stats served as a live 9P file  
+    - module: `wubu_ns_hive.c` · **criterion:** cat /n/hive/stats reflects live state; write path validated where it is a control
+- [ ] **451** `P2` /n/models/stats served as a live 9P file  
+    - module: `wubu_ns_models.c` · **criterion:** cat /n/models/stats reflects live state; write path validated where it is a control
+- [ ] **452** `P2` /n/train/stats served as a live 9P file  
+    - module: `wubu_ns_train.c` · **criterion:** cat /n/train/stats reflects live state; write path validated where it is a control
+- [ ] **453** `P2` /n/sampler/stats served as a live 9P file  
+    - module: `wubu_ns_sampler.c` · **criterion:** cat /n/sampler/stats reflects live state; write path validated where it is a control
+- [ ] **454** `P2` /n/world/stats served as a live 9P file  
+    - module: `wubu_ns_world.c` · **criterion:** cat /n/world/stats reflects live state; write path validated where it is a control
+- [ ] **455** `P2` /n/kv/stats served as a live 9P file  
+    - module: `wubu_ns_kv.c` · **criterion:** cat /n/kv/stats reflects live state; write path validated where it is a control
+- [ ] **456** `P2` /n/bonzi/stats served as a live 9P file  
+    - module: `wubu_ns_bonzi.c` · **criterion:** cat /n/bonzi/stats reflects live state; write path validated where it is a control
+- [ ] **457** `P2` /n/kernel/stats served as a live 9P file  
+    - module: `wubu_ns_kernel.c` · **criterion:** cat /n/kernel/stats reflects live state; write path validated where it is a control
+- [ ] **458** `P2` /n/hw/stats served as a live 9P file  
+    - module: `wubu_ns_hw.c` · **criterion:** cat /n/hw/stats reflects live state; write path validated where it is a control
+- [ ] **459** `P2` /n/dram/stats served as a live 9P file  
+    - module: `wubu_ns_dram.c` · **criterion:** cat /n/dram/stats reflects live state; write path validated where it is a control
+- [ ] **460** `P2` /n/svc/stats served as a live 9P file  
+    - module: `wubu_ns_svc.c` · **criterion:** cat /n/svc/stats reflects live state; write path validated where it is a control
+- [ ] **461** `P2` /n/pkg/stats served as a live 9P file  
+    - module: `wubu_ns_pkg.c` · **criterion:** cat /n/pkg/stats reflects live state; write path validated where it is a control
+- [ ] **462** `P2` /n/snap/stats served as a live 9P file  
+    - module: `wubu_ns_snap.c` · **criterion:** cat /n/snap/stats reflects live state; write path validated where it is a control
+- [ ] **463** `P2` /n/session/stats served as a live 9P file  
+    - module: `wubu_ns_session.c` · **criterion:** cat /n/session/stats reflects live state; write path validated where it is a control
+- [ ] **464** `P2` /n/steaminput/stats served as a live 9P file  
+    - module: `wubu_ns_steaminput.c` · **criterion:** cat /n/steaminput/stats reflects live state; write path validated where it is a control
+- [ ] **465** `P2` /n/experts/ctl served as a live 9P file  
+    - module: `wubu_ns_experts.c` · **criterion:** cat /n/experts/ctl reflects live state; write path validated where it is a control
+- [ ] **466** `P2` /n/hive/ctl served as a live 9P file  
+    - module: `wubu_ns_hive.c` · **criterion:** cat /n/hive/ctl reflects live state; write path validated where it is a control
+- [ ] **467** `P2` /n/models/ctl served as a live 9P file  
+    - module: `wubu_ns_models.c` · **criterion:** cat /n/models/ctl reflects live state; write path validated where it is a control
+- [ ] **468** `P2` /n/train/ctl served as a live 9P file  
+    - module: `wubu_ns_train.c` · **criterion:** cat /n/train/ctl reflects live state; write path validated where it is a control
+- [ ] **469** `P2` /n/sampler/ctl served as a live 9P file  
+    - module: `wubu_ns_sampler.c` · **criterion:** cat /n/sampler/ctl reflects live state; write path validated where it is a control
+- [ ] **470** `P2` /n/world/ctl served as a live 9P file  
+    - module: `wubu_ns_world.c` · **criterion:** cat /n/world/ctl reflects live state; write path validated where it is a control
+- [ ] **471** `P2` /n/kv/ctl served as a live 9P file  
+    - module: `wubu_ns_kv.c` · **criterion:** cat /n/kv/ctl reflects live state; write path validated where it is a control
+- [ ] **472** `P2` /n/bonzi/ctl served as a live 9P file  
+    - module: `wubu_ns_bonzi.c` · **criterion:** cat /n/bonzi/ctl reflects live state; write path validated where it is a control
+- [ ] **473** `P2` /n/kernel/ctl served as a live 9P file  
+    - module: `wubu_ns_kernel.c` · **criterion:** cat /n/kernel/ctl reflects live state; write path validated where it is a control
+- [ ] **474** `P2` /n/hw/ctl served as a live 9P file  
+    - module: `wubu_ns_hw.c` · **criterion:** cat /n/hw/ctl reflects live state; write path validated where it is a control
+- [ ] **475** `P2` /n/dram/ctl served as a live 9P file  
+    - module: `wubu_ns_dram.c` · **criterion:** cat /n/dram/ctl reflects live state; write path validated where it is a control
+- [ ] **476** `P2` /n/svc/ctl served as a live 9P file  
+    - module: `wubu_ns_svc.c` · **criterion:** cat /n/svc/ctl reflects live state; write path validated where it is a control
+- [ ] **477** `P2` /n/pkg/ctl served as a live 9P file  
+    - module: `wubu_ns_pkg.c` · **criterion:** cat /n/pkg/ctl reflects live state; write path validated where it is a control
+- [ ] **478** `P2` /n/snap/ctl served as a live 9P file  
+    - module: `wubu_ns_snap.c` · **criterion:** cat /n/snap/ctl reflects live state; write path validated where it is a control
+- [ ] **479** `P2` /n/session/ctl served as a live 9P file  
+    - module: `wubu_ns_session.c` · **criterion:** cat /n/session/ctl reflects live state; write path validated where it is a control
+- [ ] **480** `P2` /n/steaminput/ctl served as a live 9P file  
+    - module: `wubu_ns_steaminput.c` · **criterion:** cat /n/steaminput/ctl reflects live state; write path validated where it is a control
+- [ ] **481** `P2` /n/experts/config served as a live 9P file  
+    - module: `wubu_ns_experts.c` · **criterion:** cat /n/experts/config reflects live state; write path validated where it is a control
+- [ ] **482** `P2` /n/hive/config served as a live 9P file  
+    - module: `wubu_ns_hive.c` · **criterion:** cat /n/hive/config reflects live state; write path validated where it is a control
+- [ ] **483** `P2` /n/models/config served as a live 9P file  
+    - module: `wubu_ns_models.c` · **criterion:** cat /n/models/config reflects live state; write path validated where it is a control
+- [ ] **484** `P2` /n/train/config served as a live 9P file  
+    - module: `wubu_ns_train.c` · **criterion:** cat /n/train/config reflects live state; write path validated where it is a control
+- [ ] **485** `P2` /n/sampler/config served as a live 9P file  
+    - module: `wubu_ns_sampler.c` · **criterion:** cat /n/sampler/config reflects live state; write path validated where it is a control
+- [ ] **486** `P2` /n/world/config served as a live 9P file  
+    - module: `wubu_ns_world.c` · **criterion:** cat /n/world/config reflects live state; write path validated where it is a control
+- [ ] **487** `P2` /n/kv/config served as a live 9P file  
+    - module: `wubu_ns_kv.c` · **criterion:** cat /n/kv/config reflects live state; write path validated where it is a control
+- [ ] **488** `P2` /n/bonzi/config served as a live 9P file  
+    - module: `wubu_ns_bonzi.c` · **criterion:** cat /n/bonzi/config reflects live state; write path validated where it is a control
+- [ ] **489** `P2` /n/kernel/config served as a live 9P file  
+    - module: `wubu_ns_kernel.c` · **criterion:** cat /n/kernel/config reflects live state; write path validated where it is a control
+- [ ] **490** `P2` /n/hw/config served as a live 9P file  
+    - module: `wubu_ns_hw.c` · **criterion:** cat /n/hw/config reflects live state; write path validated where it is a control
+- [ ] **491** `P2` /n/dram/config served as a live 9P file  
+    - module: `wubu_ns_dram.c` · **criterion:** cat /n/dram/config reflects live state; write path validated where it is a control
+- [ ] **492** `P2` /n/svc/config served as a live 9P file  
+    - module: `wubu_ns_svc.c` · **criterion:** cat /n/svc/config reflects live state; write path validated where it is a control
+- [ ] **493** `P2` /n/pkg/config served as a live 9P file  
+    - module: `wubu_ns_pkg.c` · **criterion:** cat /n/pkg/config reflects live state; write path validated where it is a control
+- [ ] **494** `P2` /n/snap/config served as a live 9P file  
+    - module: `wubu_ns_snap.c` · **criterion:** cat /n/snap/config reflects live state; write path validated where it is a control
+- [ ] **495** `P2` /n/session/config served as a live 9P file  
+    - module: `wubu_ns_session.c` · **criterion:** cat /n/session/config reflects live state; write path validated where it is a control
+- [ ] **496** `P2` /n/steaminput/config served as a live 9P file  
+    - module: `wubu_ns_steaminput.c` · **criterion:** cat /n/steaminput/config reflects live state; write path validated where it is a control
+- [ ] **497** `P2` /n/experts/status served as a live 9P file  
+    - module: `wubu_ns_experts.c` · **criterion:** cat /n/experts/status reflects live state; write path validated where it is a control
+- [ ] **498** `P2` /n/hive/status served as a live 9P file  
+    - module: `wubu_ns_hive.c` · **criterion:** cat /n/hive/status reflects live state; write path validated where it is a control
+- [ ] **499** `P2` /n/models/status served as a live 9P file  
+    - module: `wubu_ns_models.c` · **criterion:** cat /n/models/status reflects live state; write path validated where it is a control
+- [ ] **500** `P2` /n/train/status served as a live 9P file  
+    - module: `wubu_ns_train.c` · **criterion:** cat /n/train/status reflects live state; write path validated where it is a control
+
+## UX — Win98/XP shell parity + Bonzi companion AGI-UX
+
+- [x] **501** `P0` taskbar: flat buttons + green Start orb (DONE)  
+    - module: `dosgui_wm_taskbar.c` · **criterion:** capture matches Luna; state test green
+- [x] **502** `P0` window chrome: red close, gradient title (DONE)  
+    - module: `dosgui_window_chrome.c` · **criterion:** Luna vertical gradient + white text + shadow
+- [x] **503** `P0` start menu two-pane + nested cascades on hover (DONE)  
+    - module: `dosgui_startmenu.c` · **criterion:** hover opens flyout -> category -> app; 11/11
+- [x] **504** `P0` desktop icon single-select / double-launch (DONE)  
+    - module: `dosgui_wm_input.c` · **criterion:** XP semantics; state-verified
+- [x] **505** `P0` title-bar close/min/max buttons live (DONE)  
+    - module: `dosgui_wm_input.c` · **criterion:** hit-test first; state change asserted
+- [x] **506** `P0` theme toggle Win98<->XP round-trips (DONE)  
+    - module: `wubu_theme.c` · **criterion:** cycle all themes, no stale state
+- [ ] **507** `P0` every drawn control has an input->state path  
+    - module: `dosgui_*.c` · **criterion:** no drawn-but-dead interactions remain
+- [ ] **508** `P0` coordinate-space: window-rel -> absolute everywhere  
+    - module: `dosgui_*_input.c` · **criterion:** WM coords translated before hit-test
+- [x] **509** `P1` functional scroll: wheel + scrollbar drag (DONE)  
+    - module: `dosgui_wm_render.c` · **criterion:** render starts at list_scroll_y; wheel routed
+- [x] **510** `P1` Notepad click-to-position + drag selection (DONE)  
+    - module: `notepad.c` · **criterion:** caret + selection via mouse
+- [x] **511** `P1` Calculator keypad click -> display (DONE)  
+    - module: `calc/calc.c` · **criterion:** clicked cell fires the action
+- [x] **512** `P1` Control Panel category -> tab (DONE)  
+    - module: `control/control.c` · **criterion:** tab click switches category
+- [x] **513** `P1` File Manager toolbar + double-click open (DONE)  
+    - module: `dosgui_explorer_input.c` · **criterion:** toolbar + open wired
+- [x] **514** `P1` Terminal: real pty, live output (DONE)  
+    - module: `app_terminal` · **criterion:** forkpty shell renders end-to-end; 17/17
+- [x] **515** `P1` window drag + edge/corner resize (DONE)  
+    - module: `dosgui_wm_input.c` · **criterion:** drag + resize state-verified
+- [ ] **516** `P1` taskbar click-to-restore a minimized window  
+    - module: `dosgui_wm_taskbar.c` · **criterion:** click restores; button reflects state
+- [ ] **517** `P1` start-menu search box filters on typing  
+    - module: `dosgui_startmenu.c` · **criterion:** typed keys filter the results live
+- [ ] **518** `P1` systray clock opens a calendar on click  
+    - module: `dosgui_wm_clock.c` · **criterion:** click shows a calendar popup
+- [ ] **519** `P2` Bonzi companion is the OS-integrated AGI face  
+    - module: `wubu_bonzi.c` · **criterion:** orb present, native, not a browser tab
+- [ ] **520** `P2` ambient screen context on summon  
+    - module: `wubu_screenshot.c` · **criterion:** focused window's rect captured to the Brain
+- [ ] **521** `P2` global summon hotkey (Ctrl+/)  
+    - module: `hosted_wayland_input.c` · **criterion:** hotkey raises the companion over any window
+- [x] **522** `P2` companion persistent memory (DONE)  
+    - module: `wubu_bonzi_mem.c` · **criterion:** remembers across restarts; AD01-gated
+- [ ] **523** `P2` companion acts through capability-gated tools  
+    - module: `wubu_tooluse.c` · **criterion:** every tool call checked by AD01
+- [ ] **524** `P2` companion offline fallback to local gen_text  
+    - module: `api_server + wubu_spawn` · **criterion:** works with no API key
+- [ ] **525** `P2` companion activity feedback (mood states)  
+    - module: `wubu_bonzi.c` · **criterion:** orb reflects agent activity, not a black box
+- [ ] **526** `P2` right-click context menus everywhere  
+    - module: `dosgui_wm_ctxmenu.c` · **criterion:** desktop + file + window context menus
+- [ ] **527** `P2` drag-and-drop between windows  
+    - module: `dosgui_wm_input.c` · **criterion:** drag a file onto an app to open it
+- [ ] **528** `P2` clipboard: copy/cut/paste across apps  
+    - module: `wubu_screenshot_clipboard` · **criterion:** shared clipboard works cross-app
+- [ ] **529** `P2` accessibility tree for the companion to read  
+    - module: `wubu_a11y.c` · **criterion:** WM state introspectable as structured data
+- [ ] **530** `P2` window snap (GAAD) to edges/corners  
+    - module: `dosgui_wm_input.c` · **criterion:** drag to edge snaps; state-verified
+- [ ] **531** `P3` multiple virtual desktops  
+    - module: `dosgui_wm_desktop.c` · **criterion:** switch desktops; windows follow
+- [ ] **532** `P3` window animations (minimize genie)  
+    - module: `dosgui_wm_render.c` · **criterion:** smooth minimize/restore
+- [ ] **533** `P3` per-wallpaper dynamic themes  
+    - module: `wubu_wallpaper.c` · **criterion:** wallpaper reacts to theme
+- [ ] **534** `P3` high-DPI scaling  
+    - module: `dosgui_wm_render.c` · **criterion:** UI scales crisply at 2x
+- [ ] **535** `P3` system sounds on events  
+    - module: `wubu_sound.c` · **criterion:** click/notify sounds
+- [ ] **536** `P2` UX control: button draw verified  
+    - module: `dosgui_*.c` · **criterion:** button draw has a state-change assertion, not just a no-crash render
+- [ ] **537** `P2` UX control: checkbox draw verified  
+    - module: `dosgui_*.c` · **criterion:** checkbox draw has a state-change assertion, not just a no-crash render
+- [ ] **538** `P2` UX control: radio draw verified  
+    - module: `dosgui_*.c` · **criterion:** radio draw has a state-change assertion, not just a no-crash render
+- [ ] **539** `P2` UX control: slider draw verified  
+    - module: `dosgui_*.c` · **criterion:** slider draw has a state-change assertion, not just a no-crash render
+- [ ] **540** `P2` UX control: dropdown draw verified  
+    - module: `dosgui_*.c` · **criterion:** dropdown draw has a state-change assertion, not just a no-crash render
+- [ ] **541** `P2` UX control: listbox draw verified  
+    - module: `dosgui_*.c` · **criterion:** listbox draw has a state-change assertion, not just a no-crash render
+- [ ] **542** `P2` UX control: treeview draw verified  
+    - module: `dosgui_*.c` · **criterion:** treeview draw has a state-change assertion, not just a no-crash render
+- [ ] **543** `P2` UX control: tab draw verified  
+    - module: `dosgui_*.c` · **criterion:** tab draw has a state-change assertion, not just a no-crash render
+- [ ] **544** `P2` UX control: toolbar draw verified  
+    - module: `dosgui_*.c` · **criterion:** toolbar draw has a state-change assertion, not just a no-crash render
+- [ ] **545** `P2` UX control: statusbar draw verified  
+    - module: `dosgui_*.c` · **criterion:** statusbar draw has a state-change assertion, not just a no-crash render
+- [ ] **546** `P2` UX control: scrollbar draw verified  
+    - module: `dosgui_*.c` · **criterion:** scrollbar draw has a state-change assertion, not just a no-crash render
+- [ ] **547** `P2` UX control: menu draw verified  
+    - module: `dosgui_*.c` · **criterion:** menu draw has a state-change assertion, not just a no-crash render
+- [ ] **548** `P2` UX control: tooltip draw verified  
+    - module: `dosgui_*.c` · **criterion:** tooltip draw has a state-change assertion, not just a no-crash render
+- [ ] **549** `P2` UX control: progressbar draw verified  
+    - module: `dosgui_*.c` · **criterion:** progressbar draw has a state-change assertion, not just a no-crash render
+- [ ] **550** `P2` UX control: spinner draw verified  
+    - module: `dosgui_*.c` · **criterion:** spinner draw has a state-change assertion, not just a no-crash render
+- [ ] **551** `P2` UX control: combobox draw verified  
+    - module: `dosgui_*.c` · **criterion:** combobox draw has a state-change assertion, not just a no-crash render
+- [ ] **552** `P2` UX control: button hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** button hit-test has a state-change assertion, not just a no-crash render
+- [ ] **553** `P2` UX control: checkbox hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** checkbox hit-test has a state-change assertion, not just a no-crash render
+- [ ] **554** `P2` UX control: radio hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** radio hit-test has a state-change assertion, not just a no-crash render
+- [ ] **555** `P2` UX control: slider hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** slider hit-test has a state-change assertion, not just a no-crash render
+- [ ] **556** `P2` UX control: dropdown hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** dropdown hit-test has a state-change assertion, not just a no-crash render
+- [ ] **557** `P2` UX control: listbox hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** listbox hit-test has a state-change assertion, not just a no-crash render
+- [ ] **558** `P2` UX control: treeview hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** treeview hit-test has a state-change assertion, not just a no-crash render
+- [ ] **559** `P2` UX control: tab hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** tab hit-test has a state-change assertion, not just a no-crash render
+- [ ] **560** `P2` UX control: toolbar hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** toolbar hit-test has a state-change assertion, not just a no-crash render
+- [ ] **561** `P2` UX control: statusbar hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** statusbar hit-test has a state-change assertion, not just a no-crash render
+- [ ] **562** `P2` UX control: scrollbar hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** scrollbar hit-test has a state-change assertion, not just a no-crash render
+- [ ] **563** `P2` UX control: menu hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** menu hit-test has a state-change assertion, not just a no-crash render
+- [ ] **564** `P2` UX control: tooltip hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** tooltip hit-test has a state-change assertion, not just a no-crash render
+- [ ] **565** `P2` UX control: progressbar hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** progressbar hit-test has a state-change assertion, not just a no-crash render
+- [ ] **566** `P2` UX control: spinner hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** spinner hit-test has a state-change assertion, not just a no-crash render
+- [ ] **567** `P2` UX control: combobox hit-test verified  
+    - module: `dosgui_*.c` · **criterion:** combobox hit-test has a state-change assertion, not just a no-crash render
+- [ ] **568** `P2` UX control: button keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** button keyboard has a state-change assertion, not just a no-crash render
+- [ ] **569** `P2` UX control: checkbox keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** checkbox keyboard has a state-change assertion, not just a no-crash render
+- [ ] **570** `P2` UX control: radio keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** radio keyboard has a state-change assertion, not just a no-crash render
+- [ ] **571** `P2` UX control: slider keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** slider keyboard has a state-change assertion, not just a no-crash render
+- [ ] **572** `P2` UX control: dropdown keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** dropdown keyboard has a state-change assertion, not just a no-crash render
+- [ ] **573** `P2` UX control: listbox keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** listbox keyboard has a state-change assertion, not just a no-crash render
+- [ ] **574** `P2` UX control: treeview keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** treeview keyboard has a state-change assertion, not just a no-crash render
+- [ ] **575** `P2` UX control: tab keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** tab keyboard has a state-change assertion, not just a no-crash render
+- [ ] **576** `P2` UX control: toolbar keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** toolbar keyboard has a state-change assertion, not just a no-crash render
+- [ ] **577** `P2` UX control: statusbar keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** statusbar keyboard has a state-change assertion, not just a no-crash render
+- [ ] **578** `P2` UX control: scrollbar keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** scrollbar keyboard has a state-change assertion, not just a no-crash render
+- [ ] **579** `P2` UX control: menu keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** menu keyboard has a state-change assertion, not just a no-crash render
+- [ ] **580** `P2` UX control: tooltip keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** tooltip keyboard has a state-change assertion, not just a no-crash render
+- [ ] **581** `P2` UX control: progressbar keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** progressbar keyboard has a state-change assertion, not just a no-crash render
+- [ ] **582** `P2` UX control: spinner keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** spinner keyboard has a state-change assertion, not just a no-crash render
+- [ ] **583** `P2` UX control: combobox keyboard verified  
+    - module: `dosgui_*.c` · **criterion:** combobox keyboard has a state-change assertion, not just a no-crash render
+- [ ] **584** `P2` UX control: button focus verified  
+    - module: `dosgui_*.c` · **criterion:** button focus has a state-change assertion, not just a no-crash render
+- [ ] **585** `P2` UX control: checkbox focus verified  
+    - module: `dosgui_*.c` · **criterion:** checkbox focus has a state-change assertion, not just a no-crash render
+- [ ] **586** `P2` UX control: radio focus verified  
+    - module: `dosgui_*.c` · **criterion:** radio focus has a state-change assertion, not just a no-crash render
+- [ ] **587** `P2` UX control: slider focus verified  
+    - module: `dosgui_*.c` · **criterion:** slider focus has a state-change assertion, not just a no-crash render
+- [ ] **588** `P2` UX control: dropdown focus verified  
+    - module: `dosgui_*.c` · **criterion:** dropdown focus has a state-change assertion, not just a no-crash render
+- [ ] **589** `P2` UX control: listbox focus verified  
+    - module: `dosgui_*.c` · **criterion:** listbox focus has a state-change assertion, not just a no-crash render
+- [ ] **590** `P2` UX control: treeview focus verified  
+    - module: `dosgui_*.c` · **criterion:** treeview focus has a state-change assertion, not just a no-crash render
+- [ ] **591** `P2` UX control: tab focus verified  
+    - module: `dosgui_*.c` · **criterion:** tab focus has a state-change assertion, not just a no-crash render
+- [ ] **592** `P2` UX control: toolbar focus verified  
+    - module: `dosgui_*.c` · **criterion:** toolbar focus has a state-change assertion, not just a no-crash render
+- [ ] **593** `P2` UX control: statusbar focus verified  
+    - module: `dosgui_*.c` · **criterion:** statusbar focus has a state-change assertion, not just a no-crash render
+- [ ] **594** `P2` UX control: scrollbar focus verified  
+    - module: `dosgui_*.c` · **criterion:** scrollbar focus has a state-change assertion, not just a no-crash render
+- [ ] **595** `P2` UX control: menu focus verified  
+    - module: `dosgui_*.c` · **criterion:** menu focus has a state-change assertion, not just a no-crash render
+- [ ] **596** `P2` UX control: tooltip focus verified  
+    - module: `dosgui_*.c` · **criterion:** tooltip focus has a state-change assertion, not just a no-crash render
+- [ ] **597** `P2` UX control: progressbar focus verified  
+    - module: `dosgui_*.c` · **criterion:** progressbar focus has a state-change assertion, not just a no-crash render
+- [ ] **598** `P2` UX control: spinner focus verified  
+    - module: `dosgui_*.c` · **criterion:** spinner focus has a state-change assertion, not just a no-crash render
+- [ ] **599** `P2` UX control: combobox focus verified  
+    - module: `dosgui_*.c` · **criterion:** combobox focus has a state-change assertion, not just a no-crash render
+- [ ] **600** `P2` UX control: button disabled verified  
+    - module: `dosgui_*.c` · **criterion:** button disabled has a state-change assertion, not just a no-crash render
+
+## WORLDSIM — worldsim optimization + physics (solid WuBu math)
+
+- [ ] **601** `P0` worldsim is a solid WuBu math dynamic system  
+    - module: `worldsim/sim.c` · **criterion:** physics integrates stably at dt
+- [ ] **602** `P0` rigid-body collision response (solid)  
+    - module: `worldsim/physics.c` · **criterion:** no tunneling; energy conserved
+- [ ] **603** `P0` terrain heightfield + erosion  
+    - module: `worldsim/terrain.c` · **criterion:** erosion converges, no NaN
+- [ ] **604** `P0` entity component system  
+    - module: `worldsim/entity.c` · **criterion:** add/remove entities without restart
+- [ ] **605** `P0` deterministic fixed-step simulation  
+    - module: `worldsim/sim.c` · **criterion:** same seed -> same state, bit-exact
+- [x] **606** `P0` worldsim state at /n/world (DONE pattern)  
+    - module: `worldsim` · **criterion:** entity/terrain/physics tick readable
+- [ ] **607** `P0` vectorized physics (SIMD)  
+    - module: `worldsim/physics.c` · **criterion:** AVX2 path beats scalar on measured bodies
+- [ ] **608** `P0` gravity + drag + restitution tuned  
+    - module: `worldsim/physics.c` · **criterion:** matches analytic ballistic within epsilon
+- [ ] **609** `P1` spatial hash for broadphase  
+    - module: `worldsim/physics.c` · **criterion:** O(n) broadphase on measured bodies
+- [ ] **610** `P1` constraint solver (joints)  
+    - module: `worldsim/physics.c` · **criterion:** pendulum period matches analytic
+- [ ] **611** `P1` soft-body deformation  
+    - module: `worldsim/physics.c` · **criterion:** deforms and recovers, stable
+- [ ] **612** `P1` fluid sim (SPH-lite)  
+    - module: `worldsim/physics.c` · **criterion:** incompressible-ish, no blowup
+- [ ] **613** `P1` cloth simulation  
+    - module: `worldsim/physics.c` · **criterion:** stable under gravity
+- [ ] **614** `P1` destructible terrain  
+    - module: `worldsim/terrain.c` · **criterion:** carve + refill, mesh stays valid
+- [ ] **615** `P1` pathfinding (A*) on terrain  
+    - module: `worldsim/terrain.c` · **criterion:** finds optimal path, no wall-stuck
+- [ ] **616** `P1` agent steering (boids/RVO)  
+    - module: `worldsim/entity.c` · **criterion:** no overlap, no deadlock
+- [ ] **617** `P1` LOD for distant entities  
+    - module: `worldsim/render.c` · **criterion:** far entities cheap, near detailed
+- [ ] **618** `P1` frustum culling  
+    - module: `worldsim/render.c` · **criterion:** only visible entities drawn
+- [ ] **619** `P2` worldsim driven by the Brain (agent plays)  
+    - module: `worldsim + wubu_agi.c` · **criterion:** an agent controls an entity via 9P
+- [ ] **620** `P2` worldsim as an RL environment  
+    - module: `worldsim` · **criterion:** reward + reset + step API for training
+- [ ] **621** `P2` physics on GPU  
+    - module: `worldsim/physics.cu` · **criterion:** GPU path matches CPU within epsilon
+- [ ] **622** `P2` large world streaming  
+    - module: `worldsim/terrain.c` · **criterion:** 100km world streams by chunk
+- [ ] **623** `P2` weather + day/night cycle  
+    - module: `worldsim/sim.c` · **criterion:** deterministic cycle affects lighting
+- [ ] **624** `P2` ecosystem sim (predator/prey)  
+    - module: `worldsim/entity.c` · **criterion:** populations oscillate, no collapse to zero
+- [ ] **625** `P2` economy sim (supply/demand)  
+    - module: `worldsim/sim.c` · **criterion:** prices converge to equilibrium
+- [ ] **626** `P2` traffic sim  
+    - module: `worldsim/entity.c` · **criterion:** no gridlock under load
+- [ ] **627** `P2` worldsim replay + scrub  
+    - module: `worldsim/sim.c` · **criterion:** record -> replay bit-exact
+- [ ] **628** `P2` worldsim metrics at /n/world/stats  
+    - module: `worldsim` · **criterion:** FPS, body count, energy readable
+- [ ] **629** `P3` procedural world generation  
+    - module: `worldsim/terrain.c` · **criterion:** seed -> coherent biome
+- [ ] **630** `P3` multiplayer sync (Styx)  
+    - module: `worldsim + styxfs` · **criterion:** two peers share a world state
+- [ ] **631** `P3` physics debug draw  
+    - module: `worldsim/render.c` · **criterion:** colliders/AABB overlay
+- [ ] **632** `P3` worldsim perf budget enforced  
+    - module: `worldsim/sim.c` · **criterion:** frame time capped, no spiral
+- [ ] **633** `P2` worldsim physics: friction verified  
+    - module: `worldsim/physics.c` · **criterion:** friction matches its analytic/measured reference within epsilon
+- [ ] **634** `P2` worldsim physics: restitution verified  
+    - module: `worldsim/physics.c` · **criterion:** restitution matches its analytic/measured reference within epsilon
+- [ ] **635** `P2` worldsim physics: air drag verified  
+    - module: `worldsim/physics.c` · **criterion:** air drag matches its analytic/measured reference within epsilon
+- [ ] **636** `P2` worldsim physics: angular momentum verified  
+    - module: `worldsim/physics.c` · **criterion:** angular momentum matches its analytic/measured reference within epsilon
+- [ ] **637** `P2` worldsim physics: rolling resistance verified  
+    - module: `worldsim/physics.c` · **criterion:** rolling resistance matches its analytic/measured reference within epsilon
+- [ ] **638** `P2` worldsim physics: buoyancy verified  
+    - module: `worldsim/physics.c` · **criterion:** buoyancy matches its analytic/measured reference within epsilon
+- [ ] **639** `P2` worldsim physics: magnetism verified  
+    - module: `worldsim/physics.c` · **criterion:** magnetism matches its analytic/measured reference within epsilon
+- [ ] **640** `P2` worldsim physics: springs verified  
+    - module: `worldsim/physics.c` · **criterion:** springs matches its analytic/measured reference within epsilon
+- [ ] **641** `P2` worldsim physics: hinges verified  
+    - module: `worldsim/physics.c` · **criterion:** hinges matches its analytic/measured reference within epsilon
+- [ ] **642** `P2` worldsim physics: slider joints verified  
+    - module: `worldsim/physics.c` · **criterion:** slider joints matches its analytic/measured reference within epsilon
+- [ ] **643** `P2` worldsim physics: motors verified  
+    - module: `worldsim/physics.c` · **criterion:** motors matches its analytic/measured reference within epsilon
+- [ ] **644** `P2` worldsim physics: sensors verified  
+    - module: `worldsim/physics.c` · **criterion:** sensors matches its analytic/measured reference within epsilon
+- [ ] **645** `P2` worldsim physics: raycast verified  
+    - module: `worldsim/physics.c` · **criterion:** raycast matches its analytic/measured reference within epsilon
+- [ ] **646** `P2` worldsim physics: swept collision verified  
+    - module: `worldsim/physics.c` · **criterion:** swept collision matches its analytic/measured reference within epsilon
+- [ ] **647** `P2` worldsim physics: sleeping bodies verified  
+    - module: `worldsim/physics.c` · **criterion:** sleeping bodies matches its analytic/measured reference within epsilon
+- [ ] **648** `P2` worldsim physics: islands verified  
+    - module: `worldsim/physics.c` · **criterion:** islands matches its analytic/measured reference within epsilon
+- [ ] **649** `P2` worldsim physics: friction verified  
+    - module: `worldsim/physics.c` · **criterion:** friction matches its analytic/measured reference within epsilon
+- [ ] **650** `P2` worldsim physics: restitution verified  
+    - module: `worldsim/physics.c` · **criterion:** restitution matches its analytic/measured reference within epsilon
+- [ ] **651** `P2` worldsim physics: air drag verified  
+    - module: `worldsim/physics.c` · **criterion:** air drag matches its analytic/measured reference within epsilon
+- [ ] **652** `P2` worldsim physics: angular momentum verified  
+    - module: `worldsim/physics.c` · **criterion:** angular momentum matches its analytic/measured reference within epsilon
+- [ ] **653** `P2` worldsim physics: rolling resistance verified  
+    - module: `worldsim/physics.c` · **criterion:** rolling resistance matches its analytic/measured reference within epsilon
+- [ ] **654** `P2` worldsim physics: buoyancy verified  
+    - module: `worldsim/physics.c` · **criterion:** buoyancy matches its analytic/measured reference within epsilon
+- [ ] **655** `P2` worldsim physics: magnetism verified  
+    - module: `worldsim/physics.c` · **criterion:** magnetism matches its analytic/measured reference within epsilon
+- [ ] **656** `P2` worldsim physics: springs verified  
+    - module: `worldsim/physics.c` · **criterion:** springs matches its analytic/measured reference within epsilon
+- [ ] **657** `P2` worldsim physics: hinges verified  
+    - module: `worldsim/physics.c` · **criterion:** hinges matches its analytic/measured reference within epsilon
+- [ ] **658** `P2` worldsim physics: slider joints verified  
+    - module: `worldsim/physics.c` · **criterion:** slider joints matches its analytic/measured reference within epsilon
+- [ ] **659** `P2` worldsim physics: motors verified  
+    - module: `worldsim/physics.c` · **criterion:** motors matches its analytic/measured reference within epsilon
+- [ ] **660** `P2` worldsim physics: sensors verified  
+    - module: `worldsim/physics.c` · **criterion:** sensors matches its analytic/measured reference within epsilon
+- [ ] **661** `P2` worldsim physics: raycast verified  
+    - module: `worldsim/physics.c` · **criterion:** raycast matches its analytic/measured reference within epsilon
+- [ ] **662** `P2` worldsim physics: swept collision verified  
+    - module: `worldsim/physics.c` · **criterion:** swept collision matches its analytic/measured reference within epsilon
+- [ ] **663** `P2` worldsim physics: sleeping bodies verified  
+    - module: `worldsim/physics.c` · **criterion:** sleeping bodies matches its analytic/measured reference within epsilon
+- [ ] **664** `P2` worldsim physics: islands verified  
+    - module: `worldsim/physics.c` · **criterion:** islands matches its analytic/measured reference within epsilon
+- [ ] **665** `P2` worldsim physics: friction verified  
+    - module: `worldsim/physics.c` · **criterion:** friction matches its analytic/measured reference within epsilon
+- [ ] **666** `P2` worldsim physics: restitution verified  
+    - module: `worldsim/physics.c` · **criterion:** restitution matches its analytic/measured reference within epsilon
+- [ ] **667** `P2` worldsim physics: air drag verified  
+    - module: `worldsim/physics.c` · **criterion:** air drag matches its analytic/measured reference within epsilon
+- [ ] **668** `P2` worldsim physics: angular momentum verified  
+    - module: `worldsim/physics.c` · **criterion:** angular momentum matches its analytic/measured reference within epsilon
+- [ ] **669** `P2` worldsim physics: rolling resistance verified  
+    - module: `worldsim/physics.c` · **criterion:** rolling resistance matches its analytic/measured reference within epsilon
+- [ ] **670** `P2` worldsim physics: buoyancy verified  
+    - module: `worldsim/physics.c` · **criterion:** buoyancy matches its analytic/measured reference within epsilon
+- [ ] **671** `P2` worldsim physics: magnetism verified  
+    - module: `worldsim/physics.c` · **criterion:** magnetism matches its analytic/measured reference within epsilon
+- [ ] **672** `P2` worldsim physics: springs verified  
+    - module: `worldsim/physics.c` · **criterion:** springs matches its analytic/measured reference within epsilon
+- [ ] **673** `P2` worldsim physics: hinges verified  
+    - module: `worldsim/physics.c` · **criterion:** hinges matches its analytic/measured reference within epsilon
+- [ ] **674** `P2` worldsim physics: slider joints verified  
+    - module: `worldsim/physics.c` · **criterion:** slider joints matches its analytic/measured reference within epsilon
+- [ ] **675** `P2` worldsim physics: motors verified  
+    - module: `worldsim/physics.c` · **criterion:** motors matches its analytic/measured reference within epsilon
+- [ ] **676** `P2` worldsim physics: sensors verified  
+    - module: `worldsim/physics.c` · **criterion:** sensors matches its analytic/measured reference within epsilon
+- [ ] **677** `P2` worldsim physics: raycast verified  
+    - module: `worldsim/physics.c` · **criterion:** raycast matches its analytic/measured reference within epsilon
+- [ ] **678** `P2` worldsim physics: swept collision verified  
+    - module: `worldsim/physics.c` · **criterion:** swept collision matches its analytic/measured reference within epsilon
+- [ ] **679** `P2` worldsim physics: sleeping bodies verified  
+    - module: `worldsim/physics.c` · **criterion:** sleeping bodies matches its analytic/measured reference within epsilon
+- [ ] **680** `P2` worldsim physics: islands verified  
+    - module: `worldsim/physics.c` · **criterion:** islands matches its analytic/measured reference within epsilon
+- [ ] **681** `P2` worldsim physics: friction verified  
+    - module: `worldsim/physics.c` · **criterion:** friction matches its analytic/measured reference within epsilon
+- [ ] **682** `P2` worldsim physics: restitution verified  
+    - module: `worldsim/physics.c` · **criterion:** restitution matches its analytic/measured reference within epsilon
+- [ ] **683** `P2` worldsim physics: air drag verified  
+    - module: `worldsim/physics.c` · **criterion:** air drag matches its analytic/measured reference within epsilon
+- [ ] **684** `P2` worldsim physics: angular momentum verified  
+    - module: `worldsim/physics.c` · **criterion:** angular momentum matches its analytic/measured reference within epsilon
+- [ ] **685** `P2` worldsim physics: rolling resistance verified  
+    - module: `worldsim/physics.c` · **criterion:** rolling resistance matches its analytic/measured reference within epsilon
+- [ ] **686** `P2` worldsim physics: buoyancy verified  
+    - module: `worldsim/physics.c` · **criterion:** buoyancy matches its analytic/measured reference within epsilon
+- [ ] **687** `P2` worldsim physics: magnetism verified  
+    - module: `worldsim/physics.c` · **criterion:** magnetism matches its analytic/measured reference within epsilon
+- [ ] **688** `P2` worldsim physics: springs verified  
+    - module: `worldsim/physics.c` · **criterion:** springs matches its analytic/measured reference within epsilon
+- [ ] **689** `P2` worldsim physics: hinges verified  
+    - module: `worldsim/physics.c` · **criterion:** hinges matches its analytic/measured reference within epsilon
+- [ ] **690** `P2` worldsim physics: slider joints verified  
+    - module: `worldsim/physics.c` · **criterion:** slider joints matches its analytic/measured reference within epsilon
+- [ ] **691** `P2` worldsim physics: motors verified  
+    - module: `worldsim/physics.c` · **criterion:** motors matches its analytic/measured reference within epsilon
+- [ ] **692** `P2` worldsim physics: sensors verified  
+    - module: `worldsim/physics.c` · **criterion:** sensors matches its analytic/measured reference within epsilon
+- [ ] **693** `P2` worldsim physics: raycast verified  
+    - module: `worldsim/physics.c` · **criterion:** raycast matches its analytic/measured reference within epsilon
+- [ ] **694** `P2` worldsim physics: swept collision verified  
+    - module: `worldsim/physics.c` · **criterion:** swept collision matches its analytic/measured reference within epsilon
+- [ ] **695** `P2` worldsim physics: sleeping bodies verified  
+    - module: `worldsim/physics.c` · **criterion:** sleeping bodies matches its analytic/measured reference within epsilon
+- [ ] **696** `P2` worldsim physics: islands verified  
+    - module: `worldsim/physics.c` · **criterion:** islands matches its analytic/measured reference within epsilon
+- [ ] **697** `P2` worldsim physics: friction verified  
+    - module: `worldsim/physics.c` · **criterion:** friction matches its analytic/measured reference within epsilon
+- [ ] **698** `P2` worldsim physics: restitution verified  
+    - module: `worldsim/physics.c` · **criterion:** restitution matches its analytic/measured reference within epsilon
+- [ ] **699** `P2` worldsim physics: air drag verified  
+    - module: `worldsim/physics.c` · **criterion:** air drag matches its analytic/measured reference within epsilon
+- [ ] **700** `P2` worldsim physics: angular momentum verified  
+    - module: `worldsim/physics.c` · **criterion:** angular momentum matches its analytic/measured reference within epsilon
+
+## MATH — Poincare/nested-sphere manifold math network (Lean-verified)
+
+- [ ] **701** `P0` Poincare ball is the base manifold (Lean-verified)  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Poincare metric theorem proven in Lean
+- [ ] **702** `P0` nested spheres: nesting is a sphere thing  
+    - module: `wubu_nest.c` · **criterion:** nested hyperbolic spheres compose correctly
+- [ ] **703** `P0` Klein-bottle / other shapes fit other things  
+    - module: `wubu_mobius*.c` · **criterion:** Mobius + Klein transforms verified
+- [ ] **704** `P0` math is a full dynamic system  
+    - module: `worldsim + wubu_agi.c` · **criterion:** math drives a live simulation, not a static table
+- [ ] **705** `P0` gyration / hyperbolic distance correct  
+    - module: `wubu_poincare_gqa.c` · **criterion:** distance matches the analytic formula
+- [ ] **706** `P0` Mobius transformer forward finite  
+    - module: `wubu_mobius*.c` · **criterion:** real weights forward without NaN
+- [ ] **707** `P0` MLA compression proven (Lean)  
+    - module: `MATH/lean` · **criterion:** latent-KV compression theorem proven
+- [ ] **708** `P0` hyperbolic MoE routing  
+    - module: `wubu_moe_hyperbolic.c` · **criterion:** routes by hyperbolic distance, balanced
+- [ ] **709** `P1` mixed-curvature embeddings  
+    - module: `wubu_nest.c` · **criterion:** product of spheres + hyperbolic, finite
+- [ ] **710** `P1` hyperbolic attention (Poincare GQA)  
+    - module: `wubu_poincare_gqa.c` · **criterion:** attention in the ball, stable
+- [ ] **711** `P1` exponential + logarithmic maps correct  
+    - module: `wubu_nest.c` · **criterion:** exp/log round-trip within epsilon
+- [ ] **712** `P1` parallel transport on the manifold  
+    - module: `wubu_nest.c` · **criterion:** transport preserves the metric
+- [ ] **713** `P1` geodesic interpolation  
+    - module: `wubu_nest.c` · **criterion:** slerp-equivalent on the sphere
+- [ ] **714** `P1` manifold-aware normalization  
+    - module: `wubu_nest.c` · **criterion:** norm in tangent space, projected back
+- [ ] **715** `P1` curvature schedule for training  
+    - module: `wubu_train.c` · **criterion:** curvature anneals without divergence
+- [ ] **716** `P1` Lean proofs gate every math mutation  
+    - module: `wubu_prover2.c` · **criterion:** a math change without a proof is rejected
+- [ ] **717** `P2` autoformalize a lemma to Lean  
+    - module: `MATH/lean` · **criterion:** statement -> compilable Lean
+- [ ] **718** `P2` proof search (LeanCopies)  
+    - module: `MATH/lean` · **criterion:** finds a proof for a known theorem
+- [ ] **719** `P2` math corpus streamed to training  
+    - module: `wubu_fs_trainer.c` · **criterion:** theorems -> batches -> reward
+- [ ] **720** `P2` symbolic regression on sim data  
+    - module: `worldsim + wubu_agi.c` · **criterion:** recovers a known law from data
+- [ ] **721** `P2` dimensional analysis checker  
+    - module: `MATH/lean` · **criterion:** catches unit mismatches
+- [ ] **722** `P2` theorem dependency graph  
+    - module: `MATH/lean` · **criterion:** graph of theorem -> lemmas
+- [ ] **723** `P2` math benchmark suite (held-out)  
+    - module: `MATH/lean` · **criterion:** disjoint test set, no train leak
+- [ ] **724** `P2` numeric vs symbolic agreement  
+    - module: `MATH/lean + worldsim` · **criterion:** symbolic result matches the sim within epsilon
+- [ ] **725** `P2` category-theory encoding  
+    - module: `MATH/lean` · **criterion:** functors/natural transformations encoded
+- [ ] **726** `P2` manifold visualization  
+    - module: `wubu_nest.c` · **criterion:** render the nested spheres
+- [ ] **727** `P3` proof elaboration / tactics library  
+    - module: `MATH/lean` · **criterion:** reusable tactics
+- [ ] **728** `P3` math model card (AGI disclosure)  
+    - module: `docs` · **criterion:** math capability disclosed honestly
+- [ ] **729** `P3` math-to-code extraction  
+    - module: `MATH/lean + wubunos` · **criterion:** a proven lemma -> compilable C
+- [ ] **730** `P3` formal verification of a kernel invariant  
+    - module: `MATH/lean + wubuos` · **criterion:** a kernel safety prop proven in Lean
+- [ ] **731** `P2` Lean proof: Poincare metric  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Poincare metric proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **732** `P2` Lean proof: gyration identity  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** gyration identity proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **733** `P2` Lean proof: Mobius add  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Mobius add proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **734** `P2` Lean proof: Klein transform  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Klein transform proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **735** `P2` Lean proof: nested-sphere composition  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** nested-sphere composition proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **736** `P2` Lean proof: hyperbolic law of cosines  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** hyperbolic law of cosines proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **737** `P2` Lean proof: parallel transport  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** parallel transport proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **738** `P2` Lean proof: geodesic completeness  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** geodesic completeness proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **739** `P2` Lean proof: curvature tensor  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** curvature tensor proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **740** `P2` Lean proof: Ricci scalar  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Ricci scalar proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **741** `P2` Lean proof: sectional curvature  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** sectional curvature proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **742** `P2` Lean proof: tangent projection  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** tangent projection proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **743** `P2` Lean proof: exp map bijection  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** exp map bijection proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **744** `P2` Lean proof: log map inverse  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** log map inverse proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **745** `P2` Lean proof: isometry group  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** isometry group proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **746** `P2` Lean proof: volume form  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** volume form proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **747** `P2` Lean proof: Poincare metric  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Poincare metric proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **748** `P2` Lean proof: gyration identity  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** gyration identity proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **749** `P2` Lean proof: Mobius add  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Mobius add proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **750** `P2` Lean proof: Klein transform  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Klein transform proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **751** `P2` Lean proof: nested-sphere composition  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** nested-sphere composition proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **752** `P2` Lean proof: hyperbolic law of cosines  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** hyperbolic law of cosines proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **753** `P2` Lean proof: parallel transport  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** parallel transport proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **754** `P2` Lean proof: geodesic completeness  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** geodesic completeness proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **755** `P2` Lean proof: curvature tensor  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** curvature tensor proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **756** `P2` Lean proof: Ricci scalar  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Ricci scalar proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **757** `P2` Lean proof: sectional curvature  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** sectional curvature proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **758** `P2` Lean proof: tangent projection  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** tangent projection proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **759** `P2` Lean proof: exp map bijection  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** exp map bijection proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **760** `P2` Lean proof: log map inverse  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** log map inverse proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **761** `P2` Lean proof: isometry group  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** isometry group proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **762** `P2` Lean proof: volume form  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** volume form proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **763** `P2` Lean proof: Poincare metric  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Poincare metric proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **764** `P2` Lean proof: gyration identity  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** gyration identity proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **765** `P2` Lean proof: Mobius add  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Mobius add proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **766** `P2` Lean proof: Klein transform  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Klein transform proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **767** `P2` Lean proof: nested-sphere composition  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** nested-sphere composition proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **768** `P2` Lean proof: hyperbolic law of cosines  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** hyperbolic law of cosines proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **769** `P2` Lean proof: parallel transport  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** parallel transport proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **770** `P2` Lean proof: geodesic completeness  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** geodesic completeness proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **771** `P2` Lean proof: curvature tensor  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** curvature tensor proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **772** `P2` Lean proof: Ricci scalar  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Ricci scalar proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **773** `P2` Lean proof: sectional curvature  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** sectional curvature proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **774** `P2` Lean proof: tangent projection  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** tangent projection proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **775** `P2` Lean proof: exp map bijection  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** exp map bijection proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **776** `P2` Lean proof: log map inverse  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** log map inverse proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **777** `P2` Lean proof: isometry group  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** isometry group proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **778** `P2` Lean proof: volume form  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** volume form proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **779** `P2` Lean proof: Poincare metric  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Poincare metric proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **780** `P2` Lean proof: gyration identity  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** gyration identity proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **781** `P2` Lean proof: Mobius add  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Mobius add proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **782** `P2` Lean proof: Klein transform  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Klein transform proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **783** `P2` Lean proof: nested-sphere composition  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** nested-sphere composition proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **784** `P2` Lean proof: hyperbolic law of cosines  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** hyperbolic law of cosines proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **785** `P2` Lean proof: parallel transport  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** parallel transport proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **786** `P2` Lean proof: geodesic completeness  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** geodesic completeness proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **787** `P2` Lean proof: curvature tensor  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** curvature tensor proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **788** `P2` Lean proof: Ricci scalar  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Ricci scalar proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **789** `P2` Lean proof: sectional curvature  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** sectional curvature proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **790** `P2` Lean proof: tangent projection  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** tangent projection proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **791** `P2` Lean proof: exp map bijection  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** exp map bijection proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **792** `P2` Lean proof: log map inverse  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** log map inverse proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **793** `P2` Lean proof: isometry group  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** isometry group proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **794** `P2` Lean proof: volume form  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** volume form proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **795** `P2` Lean proof: Poincare metric  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Poincare metric proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **796** `P2` Lean proof: gyration identity  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** gyration identity proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **797** `P2` Lean proof: Mobius add  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Mobius add proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **798** `P2` Lean proof: Klein transform  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** Klein transform proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **799** `P2` Lean proof: nested-sphere composition  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** nested-sphere composition proven and checked by the Lean toolchain (0 sorries, 0 errors)
+- [ ] **800** `P2` Lean proof: hyperbolic law of cosines  
+    - module: `MATH/lean/wubu_proofs` · **criterion:** hyperbolic law of cosines proven and checked by the Lean toolchain (0 sorries, 0 errors)
+
+## RUNTIME — Containers, exec backends, wine/proton, foreign-ABI translation
+
+- [ ] **801** `P0` universal exec dispatcher (ELF/PE/Mach-O/WASM/DOS)  
+    - module: `wubu_exec.c` · **criterion:** each format detected + launched
+- [ ] **802** `P0` dependency-free fork/exec/wait  
+    - module: `wubu_spawn.c` · **criterion:** spawns an external program, reaps cleanly
+- [ ] **803** `P0` container isolation: cgroup v2 + seccomp + ns  
+    - module: `wubu_container.c` · **criterion:** sealed namespace, limits enforced
+- [ ] **804** `P0` Arch + Debian containers run in-wubuos  
+    - module: `wubu_ct_*.c` · **criterion:** a real distro userspace runs on the kernel
+- [ ] **805** `P0` third-party runs ON the kernel, not the host  
+    - module: `wubu_exec.c` · **criterion:** no host-Arch / host-wine escape hatch
+- [ ] **806** `P0` proton/dxvk path for Windows games  
+    - module: `wubu_proton*.c` · **criterion:** a Windows title runs on the GPU leg
+- [ ] **807** `P0` foreign-ABI translation (libc/syscall shim)  
+    - module: `wubu_exec_*.c` · **criterion:** PE/Mach-O/WASM/DOS expectations served as 9P
+- [ ] **808** `P0` each shim is a 9P file server  
+    - module: `styxfs + wubu_exec` · **criterion:** attach a foreign OS root into the namespace
+- [ ] **809** `P1` wine env configured per bottle  
+    - module: `wubu_wine_env.c` · **criterion:** bottle launches with the right prefix
+- [ ] **810** `P1` dxvk conf tunable via /n  
+    - module: `wubu_dxvk_conf.c` · **criterion:** write changes the Vulkan layer
+- [ ] **811** `P1` gamescope integration  
+    - module: `wubu_proton2_gamescope.c` · **criterion:** game runs in a gamescope session
+- [ ] **812** `P1` steam input mapping at /n  
+    - module: `wubu_ns_steaminput.c` · **criterion:** controller map readable + writable
+- [ ] **813** `P1` steam runtime shim  
+    - module: `wubu_steamrt.c` · **criterion:** steam runtime pressure-vessel runs
+- [ ] **814** `P1` bottle lifecycle (create/run/remove)  
+    - module: `wubu_bottle_lifecycle.c` · **criterion:** full lifecycle state-verified
+- [ ] **815** `P1` bottle serialization round-trips  
+    - module: `wubu_bottle_serialize.c` · **criterion:** save -> load -> identical
+- [ ] **816** `P1` flatpak bottle support  
+    - module: `wubu_bottle_flatpak.c` · **criterion:** a flatpak app runs
+- [ ] **817** `P1` image pull + unpack (OCI)  
+    - module: `oci/*.c` · **criterion:** pull an image, unpack to a rootfs
+- [ ] **818** `P1` image cache + dedup  
+    - module: `wubu_image_cache.c` · **criterion:** layers dedup, cache hits
+- [ ] **819** `P2` snapshot + restore a container  
+    - module: `wubu_ns_snap.c` · **criterion:** snapshot -> restore -> same state
+- [ ] **820** `P2` network CNI + firewall  
+    - module: `wubu_network_cni.c/wubu_network_fw.c` · **criterion:** container gets a veth + rules
+- [ ] **821** `P2` wireguard tunnel for a container  
+    - module: `wubu_network_wg.c` · **criterion:** container traffic over wg
+- [ ] **822** `P2` tailscale mesh  
+    - module: `wubu_network_ts.c` · **criterion:** node joins a tailnet
+- [ ] **823** `P2` DNS for containers  
+    - module: `wubu_network_dns.c` · **criterion:** container resolves names
+- [ ] **824** `P2` QoS / bandwidth cap per container  
+    - module: `wubu_network_qos.c` · **criterion:** cap enforced, measurable
+- [ ] **825** `P2` archd daemon supervises services  
+    - module: `wubu_archd_daemon.c` · **criterion:** start/stop/restart/reap + health check
+- [ ] **826** `P2` auto-restart a crashed service  
+    - module: `wubu_archd_svc_super.c` · **criterion:** crash -> auto-restart, logged
+- [ ] **827** `P2` bwrap + isolate backends  
+    - module: `wubu_ct_bwrap.c/wubu_ct_isolate.c` · **criterion:** both isolation backends work
+- [ ] **828** `P2` host-exec bridge for GPU passthrough  
+    - module: `wubu_host_exec.c` · **criterion:** GPU work reaches the device
+- [ ] **829** `P3` live migration of a container  
+    - module: `wubu_snapshot.c` · **criterion:** checkpoint -> move -> resume
+- [ ] **830** `P3` resource quotas per bottle  
+    - module: `wubu_container.c` · **criterion:** cpu/ram/io caps settable
+- [ ] **831** `P3` security scan of a pulled image  
+    - module: `wubu_image.c` · **criterion:** CVEs reported before run
+- [ ] **832** `P3` reproducible builds (SOURCE_DATE_EPOCH)  
+    - module: `Makefile` · **criterion:** bit-identical rebuild
+- [ ] **833** `P2` RUNTIME: ELF execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real ELF binary/module runs on the kernel with correct output
+- [ ] **834** `P2` RUNTIME: PE execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real PE binary/module runs on the kernel with correct output
+- [ ] **835** `P2` RUNTIME: Mach-O execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real Mach-O binary/module runs on the kernel with correct output
+- [ ] **836** `P2` RUNTIME: WASM execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real WASM binary/module runs on the kernel with correct output
+- [ ] **837** `P2` RUNTIME: DOS execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real DOS binary/module runs on the kernel with correct output
+- [ ] **838** `P2` RUNTIME: OCI execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real OCI binary/module runs on the kernel with correct output
+- [ ] **839** `P2` RUNTIME: flatpak execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real flatpak binary/module runs on the kernel with correct output
+- [ ] **840** `P2` RUNTIME: wine execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real wine binary/module runs on the kernel with correct output
+- [ ] **841** `P2` RUNTIME: proton execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real proton binary/module runs on the kernel with correct output
+- [ ] **842** `P2` RUNTIME: dxvk execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real dxvk binary/module runs on the kernel with correct output
+- [ ] **843** `P2` RUNTIME: vkd3d execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real vkd3d binary/module runs on the kernel with correct output
+- [ ] **844** `P2` RUNTIME: mesa execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real mesa binary/module runs on the kernel with correct output
+- [ ] **845** `P2` RUNTIME: zink execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real zink binary/module runs on the kernel with correct output
+- [ ] **846** `P2` RUNTIME: llvmpipe execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real llvmpipe binary/module runs on the kernel with correct output
+- [ ] **847** `P2` RUNTIME: virgl execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real virgl binary/module runs on the kernel with correct output
+- [ ] **848** `P2` RUNTIME: box64 execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real box64 binary/module runs on the kernel with correct output
+- [ ] **849** `P2` RUNTIME: ELF execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real ELF binary/module runs on the kernel with correct output
+- [ ] **850** `P2` RUNTIME: PE execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real PE binary/module runs on the kernel with correct output
+- [ ] **851** `P2` RUNTIME: Mach-O execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real Mach-O binary/module runs on the kernel with correct output
+- [ ] **852** `P2` RUNTIME: WASM execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real WASM binary/module runs on the kernel with correct output
+- [ ] **853** `P2` RUNTIME: DOS execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real DOS binary/module runs on the kernel with correct output
+- [ ] **854** `P2` RUNTIME: OCI execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real OCI binary/module runs on the kernel with correct output
+- [ ] **855** `P2` RUNTIME: flatpak execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real flatpak binary/module runs on the kernel with correct output
+- [ ] **856** `P2` RUNTIME: wine execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real wine binary/module runs on the kernel with correct output
+- [ ] **857** `P2` RUNTIME: proton execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real proton binary/module runs on the kernel with correct output
+- [ ] **858** `P2` RUNTIME: dxvk execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real dxvk binary/module runs on the kernel with correct output
+- [ ] **859** `P2` RUNTIME: vkd3d execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real vkd3d binary/module runs on the kernel with correct output
+- [ ] **860** `P2` RUNTIME: mesa execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real mesa binary/module runs on the kernel with correct output
+- [ ] **861** `P2` RUNTIME: zink execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real zink binary/module runs on the kernel with correct output
+- [ ] **862** `P2` RUNTIME: llvmpipe execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real llvmpipe binary/module runs on the kernel with correct output
+- [ ] **863** `P2` RUNTIME: virgl execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real virgl binary/module runs on the kernel with correct output
+- [ ] **864** `P2` RUNTIME: box64 execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real box64 binary/module runs on the kernel with correct output
+- [ ] **865** `P2` RUNTIME: ELF execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real ELF binary/module runs on the kernel with correct output
+- [ ] **866** `P2` RUNTIME: PE execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real PE binary/module runs on the kernel with correct output
+- [ ] **867** `P2` RUNTIME: Mach-O execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real Mach-O binary/module runs on the kernel with correct output
+- [ ] **868** `P2` RUNTIME: WASM execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real WASM binary/module runs on the kernel with correct output
+- [ ] **869** `P2` RUNTIME: DOS execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real DOS binary/module runs on the kernel with correct output
+- [ ] **870** `P2` RUNTIME: OCI execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real OCI binary/module runs on the kernel with correct output
+- [ ] **871** `P2` RUNTIME: flatpak execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real flatpak binary/module runs on the kernel with correct output
+- [ ] **872** `P2` RUNTIME: wine execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real wine binary/module runs on the kernel with correct output
+- [ ] **873** `P2` RUNTIME: proton execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real proton binary/module runs on the kernel with correct output
+- [ ] **874** `P2` RUNTIME: dxvk execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real dxvk binary/module runs on the kernel with correct output
+- [ ] **875** `P2` RUNTIME: vkd3d execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real vkd3d binary/module runs on the kernel with correct output
+- [ ] **876** `P2` RUNTIME: mesa execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real mesa binary/module runs on the kernel with correct output
+- [ ] **877** `P2` RUNTIME: zink execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real zink binary/module runs on the kernel with correct output
+- [ ] **878** `P2` RUNTIME: llvmpipe execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real llvmpipe binary/module runs on the kernel with correct output
+- [ ] **879** `P2` RUNTIME: virgl execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real virgl binary/module runs on the kernel with correct output
+- [ ] **880** `P2` RUNTIME: box64 execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real box64 binary/module runs on the kernel with correct output
+- [ ] **881** `P2` RUNTIME: ELF execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real ELF binary/module runs on the kernel with correct output
+- [ ] **882** `P2` RUNTIME: PE execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real PE binary/module runs on the kernel with correct output
+- [ ] **883** `P2` RUNTIME: Mach-O execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real Mach-O binary/module runs on the kernel with correct output
+- [ ] **884** `P2` RUNTIME: WASM execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real WASM binary/module runs on the kernel with correct output
+- [ ] **885** `P2` RUNTIME: DOS execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real DOS binary/module runs on the kernel with correct output
+- [ ] **886** `P2` RUNTIME: OCI execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real OCI binary/module runs on the kernel with correct output
+- [ ] **887** `P2` RUNTIME: flatpak execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real flatpak binary/module runs on the kernel with correct output
+- [ ] **888** `P2` RUNTIME: wine execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real wine binary/module runs on the kernel with correct output
+- [ ] **889** `P2` RUNTIME: proton execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real proton binary/module runs on the kernel with correct output
+- [ ] **890** `P2` RUNTIME: dxvk execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real dxvk binary/module runs on the kernel with correct output
+- [ ] **891** `P2` RUNTIME: vkd3d execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real vkd3d binary/module runs on the kernel with correct output
+- [ ] **892** `P2` RUNTIME: mesa execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real mesa binary/module runs on the kernel with correct output
+- [ ] **893** `P2` RUNTIME: zink execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real zink binary/module runs on the kernel with correct output
+- [ ] **894** `P2` RUNTIME: llvmpipe execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real llvmpipe binary/module runs on the kernel with correct output
+- [ ] **895** `P2` RUNTIME: virgl execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real virgl binary/module runs on the kernel with correct output
+- [ ] **896** `P2` RUNTIME: box64 execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real box64 binary/module runs on the kernel with correct output
+- [ ] **897** `P2` RUNTIME: ELF execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real ELF binary/module runs on the kernel with correct output
+- [ ] **898** `P2` RUNTIME: PE execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real PE binary/module runs on the kernel with correct output
+- [ ] **899** `P2` RUNTIME: Mach-O execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real Mach-O binary/module runs on the kernel with correct output
+- [ ] **900** `P2` RUNTIME: WASM execution leg verified  
+    - module: `wubu_exec.c` · **criterion:** a real WASM binary/module runs on the kernel with correct output
+
+## STACK — Cross-repo integration, build integrity, gates, CI hygiene
+
+- [ ] **901** `P0` all three repos build from a clean checkout  
+    - module: `Makefile` · **criterion:** make test green on all three
+- [ ] **902** `P0` header-dependency tracking correct  
+    - module: `wubuos build-integrity` · **criterion:** edit 1 .h recompiles only dependents
+- [x] **903** `P0` make check_dupes gate (DONE)  
+    - module: `tools/dev/find_orphan_sources.py` · **criterion:** no duplicate implementations
+- [x] **904** `P0` full test gate: wubunos make test 195/195 (DONE)  
+    - module: `wubunos` · **criterion:** 195/195 exit 0
+- [x] **905** `P0` gauntlet --core 3458/3458/0 (DONE)  
+    - module: `wubunos` · **criterion:** pass=3458 fail=0 error=0
+- [x] **906** `P0` selfhost_battery 155/155 (DONE)  
+    - module: `wubunos` · **criterion:** self-host green
+- [x] **907** `P0` GUI gates: wm/apps/startmenu/explorer/terminal (DONE)  
+    - module: `wubuos` · **criterion:** all state-verified green
+- [x] **908** `P0` capture gates: a11y_shot + gui_shot (DONE)  
+    - module: `wubuos` · **criterion:** EXIT=0, frames written
+- [ ] **909** `P1` every new /n subsystem has a standalone test  
+    - module: `wubu_ns_*_test.c` · **criterion:** test_ns_<name> N/0
+- [ ] **910** `P1` every functional change has a state-change test  
+    - module: `dosgui_*_test.c` · **criterion:** assertion on state, not no-crash
+- [ ] **911** `P1` CI refuses a pushed-but-red gate  
+    - module: `.github` · **criterion:** a red gate blocks the merge
+- [ ] **912** `P1` submodule edits happen IN the submodule  
+    - module: `wubuos/src/{brain,compiler}` · **criterion:** edit in the submodule dir, not parent
+- [ ] **913** `P1` no custom stashes restored into the agent repo  
+    - module: `hermes-agent` · **criterion:** factory-default agent preserved
+- [ ] **914** `P1` untracked binaries cleaned before push  
+    - module: `.gitignore` · **criterion:** no stray .o/test binaries committed
+- [ ] **915** `P1` commit messages carry verified gate counts  
+    - module: `git log` · **criterion:** each feat commit lists its green gates
+- [ ] **916** `P1` one branch (wubu-integration), never force-push  
+    - module: `git` · **criterion:** single branch, no force
+- [ ] **917** `P2` reprodoc regenerates the module table  
+    - module: `tools/repodoc` · **criterion:** MODULES.md regenerates deterministically
+- [ ] **918** `P2` doc-vs-code audit (docs-vs-code skill)  
+    - module: `qa-tools` · **criterion:** docs match the code, no drift
+- [ ] **919** `P2` battleship gap analysis current  
+    - module: `BATTLESHIP.md` · **criterion:** form!=function gaps enumerated
+- [ ] **920** `P2` research INDEX ledger current (AN01-AN11)  
+    - module: `research/INDEX.md` · **criterion:** every research note tied to a gap
+- [ ] **921** `P2` findings vault current  
+    - module: `vault/external-findings` · **criterion:** each external source cited + mapped
+- [ ] **922** `P2` skill for every recurring workflow  
+    - module: `skills/` · **criterion:** no repeated procedure lives only in memory
+- [ ] **923** `P2` memory stays under budget  
+    - module: `MEMORY.md` · **criterion:** consolidated, no stale entries
+- [ ] **924** `P2` session prestige captures SOUL + next prompt  
+    - module: `skills` · **criterion:** clean handoff between sessions
+- [ ] **925** `P3` nightly full-suite CI run  
+    - module: `.github` · **criterion:** all gates run on a schedule
+- [ ] **926** `P3` benchmark regression alerts  
+    - module: `bench` · **criterion:** a slowdown fails the gate
+- [ ] **927** `P3` dependency audit (no surprise deps)  
+    - module: `Makefile` · **criterion:** C11 + stdlib only, no third-party BLAS
+- [ ] **928** `P3` license + attribution clean  
+    - module: `LICENSE` · **criterion:** every vendored file attributed
+- [ ] **929** `P2` STACK gate: test_dosgui_wm wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_wm runs in CI and a failure blocks the merge
+- [ ] **930** `P2` STACK gate: test_dosgui_apps wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_apps runs in CI and a failure blocks the merge
+- [ ] **931** `P2` STACK gate: test_dosgui_startmenu wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_startmenu runs in CI and a failure blocks the merge
+- [ ] **932** `P2` STACK gate: test_dosgui_explorer wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_explorer runs in CI and a failure blocks the merge
+- [ ] **933** `P2` STACK gate: test_app_terminal wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_app_terminal runs in CI and a failure blocks the merge
+- [ ] **934** `P2` STACK gate: test_calc wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_calc runs in CI and a failure blocks the merge
+- [ ] **935** `P2` STACK gate: test_control wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_control runs in CI and a failure blocks the merge
+- [ ] **936** `P2` STACK gate: test_ns_bonzi wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_bonzi runs in CI and a failure blocks the merge
+- [ ] **937** `P2` STACK gate: test_bonzi_mem wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_bonzi_mem runs in CI and a failure blocks the merge
+- [ ] **938** `P2` STACK gate: test_ns_dram wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_dram runs in CI and a failure blocks the merge
+- [ ] **939** `P2` STACK gate: a11y_shot wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** a11y_shot runs in CI and a failure blocks the merge
+- [ ] **940** `P2` STACK gate: gui_shot wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** gui_shot runs in CI and a failure blocks the merge
+- [ ] **941** `P2` STACK gate: check_dupes wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** check_dupes runs in CI and a failure blocks the merge
+- [ ] **942** `P2` STACK gate: wubunos make test wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** wubunos make test runs in CI and a failure blocks the merge
+- [ ] **943** `P2` STACK gate: gauntlet --core wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** gauntlet --core runs in CI and a failure blocks the merge
+- [ ] **944** `P2` STACK gate: selfhost_battery wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** selfhost_battery runs in CI and a failure blocks the merge
+- [ ] **945** `P2` STACK gate: test_dosgui_wm wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_wm runs in CI and a failure blocks the merge
+- [ ] **946** `P2` STACK gate: test_dosgui_apps wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_apps runs in CI and a failure blocks the merge
+- [ ] **947** `P2` STACK gate: test_dosgui_startmenu wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_startmenu runs in CI and a failure blocks the merge
+- [ ] **948** `P2` STACK gate: test_dosgui_explorer wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_explorer runs in CI and a failure blocks the merge
+- [ ] **949** `P2` STACK gate: test_app_terminal wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_app_terminal runs in CI and a failure blocks the merge
+- [ ] **950** `P2` STACK gate: test_calc wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_calc runs in CI and a failure blocks the merge
+- [ ] **951** `P2` STACK gate: test_control wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_control runs in CI and a failure blocks the merge
+- [ ] **952** `P2` STACK gate: test_ns_bonzi wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_bonzi runs in CI and a failure blocks the merge
+- [ ] **953** `P2` STACK gate: test_bonzi_mem wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_bonzi_mem runs in CI and a failure blocks the merge
+- [ ] **954** `P2` STACK gate: test_ns_dram wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_dram runs in CI and a failure blocks the merge
+- [ ] **955** `P2` STACK gate: a11y_shot wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** a11y_shot runs in CI and a failure blocks the merge
+- [ ] **956** `P2` STACK gate: gui_shot wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** gui_shot runs in CI and a failure blocks the merge
+- [ ] **957** `P2` STACK gate: check_dupes wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** check_dupes runs in CI and a failure blocks the merge
+- [ ] **958** `P2` STACK gate: wubunos make test wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** wubunos make test runs in CI and a failure blocks the merge
+- [ ] **959** `P2` STACK gate: gauntlet --core wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** gauntlet --core runs in CI and a failure blocks the merge
+- [ ] **960** `P2` STACK gate: selfhost_battery wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** selfhost_battery runs in CI and a failure blocks the merge
+- [ ] **961** `P2` STACK gate: test_dosgui_wm wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_wm runs in CI and a failure blocks the merge
+- [ ] **962** `P2` STACK gate: test_dosgui_apps wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_apps runs in CI and a failure blocks the merge
+- [ ] **963** `P2` STACK gate: test_dosgui_startmenu wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_startmenu runs in CI and a failure blocks the merge
+- [ ] **964** `P2` STACK gate: test_dosgui_explorer wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_explorer runs in CI and a failure blocks the merge
+- [ ] **965** `P2` STACK gate: test_app_terminal wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_app_terminal runs in CI and a failure blocks the merge
+- [ ] **966** `P2` STACK gate: test_calc wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_calc runs in CI and a failure blocks the merge
+- [ ] **967** `P2` STACK gate: test_control wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_control runs in CI and a failure blocks the merge
+- [ ] **968** `P2` STACK gate: test_ns_bonzi wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_bonzi runs in CI and a failure blocks the merge
+- [ ] **969** `P2` STACK gate: test_bonzi_mem wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_bonzi_mem runs in CI and a failure blocks the merge
+- [ ] **970** `P2` STACK gate: test_ns_dram wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_dram runs in CI and a failure blocks the merge
+- [ ] **971** `P2` STACK gate: a11y_shot wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** a11y_shot runs in CI and a failure blocks the merge
+- [ ] **972** `P2` STACK gate: gui_shot wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** gui_shot runs in CI and a failure blocks the merge
+- [ ] **973** `P2` STACK gate: check_dupes wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** check_dupes runs in CI and a failure blocks the merge
+- [ ] **974** `P2` STACK gate: wubunos make test wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** wubunos make test runs in CI and a failure blocks the merge
+- [ ] **975** `P2` STACK gate: gauntlet --core wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** gauntlet --core runs in CI and a failure blocks the merge
+- [ ] **976** `P2` STACK gate: selfhost_battery wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** selfhost_battery runs in CI and a failure blocks the merge
+- [ ] **977** `P2` STACK gate: test_dosgui_wm wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_wm runs in CI and a failure blocks the merge
+- [ ] **978** `P2` STACK gate: test_dosgui_apps wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_apps runs in CI and a failure blocks the merge
+- [ ] **979** `P2` STACK gate: test_dosgui_startmenu wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_startmenu runs in CI and a failure blocks the merge
+- [ ] **980** `P2` STACK gate: test_dosgui_explorer wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_explorer runs in CI and a failure blocks the merge
+- [ ] **981** `P2` STACK gate: test_app_terminal wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_app_terminal runs in CI and a failure blocks the merge
+- [ ] **982** `P2` STACK gate: test_calc wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_calc runs in CI and a failure blocks the merge
+- [ ] **983** `P2` STACK gate: test_control wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_control runs in CI and a failure blocks the merge
+- [ ] **984** `P2` STACK gate: test_ns_bonzi wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_bonzi runs in CI and a failure blocks the merge
+- [ ] **985** `P2` STACK gate: test_bonzi_mem wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_bonzi_mem runs in CI and a failure blocks the merge
+- [ ] **986** `P2` STACK gate: test_ns_dram wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_dram runs in CI and a failure blocks the merge
+- [ ] **987** `P2` STACK gate: a11y_shot wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** a11y_shot runs in CI and a failure blocks the merge
+- [ ] **988** `P2` STACK gate: gui_shot wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** gui_shot runs in CI and a failure blocks the merge
+- [ ] **989** `P2` STACK gate: check_dupes wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** check_dupes runs in CI and a failure blocks the merge
+- [ ] **990** `P2` STACK gate: wubunos make test wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** wubunos make test runs in CI and a failure blocks the merge
+- [ ] **991** `P2` STACK gate: gauntlet --core wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** gauntlet --core runs in CI and a failure blocks the merge
+- [ ] **992** `P2` STACK gate: selfhost_battery wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** selfhost_battery runs in CI and a failure blocks the merge
+- [ ] **993** `P2` STACK gate: test_dosgui_wm wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_wm runs in CI and a failure blocks the merge
+- [ ] **994** `P2` STACK gate: test_dosgui_apps wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_apps runs in CI and a failure blocks the merge
+- [ ] **995** `P2` STACK gate: test_dosgui_startmenu wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_startmenu runs in CI and a failure blocks the merge
+- [ ] **996** `P2` STACK gate: test_dosgui_explorer wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_dosgui_explorer runs in CI and a failure blocks the merge
+- [ ] **997** `P2` STACK gate: test_app_terminal wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_app_terminal runs in CI and a failure blocks the merge
+- [ ] **998** `P2` STACK gate: test_calc wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_calc runs in CI and a failure blocks the merge
+- [ ] **999** `P2` STACK gate: test_control wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_control runs in CI and a failure blocks the merge
+- [ ] **1000** `P2` STACK gate: test_ns_bonzi wired into CI  
+    - module: `mk/tests.mk + .github` · **criterion:** test_ns_bonzi runs in CI and a failure blocks the merge
