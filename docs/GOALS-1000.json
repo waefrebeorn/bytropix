@@ -1888,7 +1888,7 @@
    "n": 235,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "query-key norm: forward verified",
+   "title": "query-key norm: forward verified (DONE)",
    "module": "wubu_query_key_norm.c",
    "criterion": "query-key norm forward covered by a test with a measured assertion"
   },
