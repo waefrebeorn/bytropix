@@ -1112,6 +1112,9 @@ test_provider_route: tools/test_provider_route.c src/wubu_provider_route.o
 test_heldout_eval: tools/test_heldout_eval.c src/wubu_heldout_eval.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+test_budget_search: tools/test_budget_search.c src/wubu_budget_search.o src/wubu_agentic_os.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 test_blueprint: tools/test_blueprint.c src/wubu_blueprint.o src/wubu_contracts.o src/wubu_hive.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
