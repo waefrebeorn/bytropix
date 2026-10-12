@@ -1896,7 +1896,7 @@
    "n": 236,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "residual scaling: forward verified",
+   "title": "residual scaling: forward verified (DONE)",
    "module": "wubu_residual_scaling.c",
    "criterion": "residual scaling forward covered by a test with a measured assertion"
   },
