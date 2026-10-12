@@ -1624,7 +1624,7 @@
    "n": 202,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "KV cache served as 9P files (/n/kv)",
+   "title": "KV cache served as 9P files (/n/kv) (DONE)",
    "module": "wubu_kvfs.c",
    "criterion": "read/write a slot's latent through the namespace"
   },
@@ -1648,7 +1648,7 @@
    "n": 205,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "Muon optimizer + real backward",
+   "title": "Muon optimizer + real backward (DONE)",
    "module": "wubu_backprop.c",
    "criterion": "SFT loss decreases monotonically"
   },
@@ -1656,7 +1656,7 @@
    "n": 206,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "checkpoint round-trips lossless",
+   "title": "checkpoint round-trips lossless (DONE)",
    "module": "wubu_tensor_store.c",
    "criterion": "maxdiff=0 on export/import"
   },
@@ -1672,7 +1672,7 @@
    "n": 208,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "GQA + MLA + SSM hybrid forward all finite",
+   "title": "GQA + MLA + SSM hybrid forward all finite (DONE)",
    "module": "wubu_attn_*.c",
    "criterion": "real weights forward without NaN"
   },
