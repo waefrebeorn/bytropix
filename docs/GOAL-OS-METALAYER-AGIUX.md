@@ -93,6 +93,8 @@ validated mutation can't actually promote through the human-gated verifier.
 
 > **C2 = DONE (2026-10-11).** `wubu_heldout_eval.{c,h}`: pure decision — PASS/FAIL/SUSPECT from train+held-out scores; SUSPECT = the reward-hacking signature (in-sample >> held-out). Only PASS promotes. wubuwizard 1dc0c97, test_heldout_eval 6/6. |
 | C3 | **Non-negotiable invariant**: verifier is independent of the mutator; promotion is fail-closed; DA-3 freeze is the death condition. Encode as a test so future work can't erode it. | `wubu_selfimprove_test` | the reward-hacking pitfall from the vault |
+
+> **C3 = DONE (2026-10-11).** `test_selfimprove_invariants` locks the three DA-3 fail-closed gates (no verifier / frozen / unsigned gate => no promote, operator never fires) + verifier independence (operator fires only on a verifier-passed span). wubuos f4a5889, 10/10. |
 | C4 | **Cost bounding**: weight failed/divergent mutations 3x (DA-2 already does) and bound mutation search by the AD04 resource budget so the sandbox isn't infinite (DGM's cost gap). | `wubu_selfimprove.c` + `wubu_agentic_os.h` AD04 | darwin-agents: "DGM didn't address the cost of failed mutations" |
 
 ## Track D — "Pure interpretation so all OS apps run in our stack"

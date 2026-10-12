@@ -648,9 +648,9 @@ already shipped + gate-verified this program of work.
 
 - [ ] **301** `P0` DGM loop: mutate -> validate -> archive -> sample  
     - module: `wubu_amoeba.c/wubu_hive.c` · **criterion:** the standing loop runs end-to-end on a batch
-- [ ] **302** `P0` DA-3 human gate + freeze (the death condition)  
+- [x] **302** `P0` DA-3 human gate + freeze (the death condition) (DONE)  
     - module: `wubu_selfimprove.c` · **criterion:** frozen loop refuses to promote; no auto-mutate
-- [ ] **303** `P0` independent verifier gates every promotion  
+- [x] **303** `P0` independent verifier gates every promotion (DONE)  
     - module: `src/kernel/wubu_verifier.h` · **criterion:** verifier_fn != mutator; fail-closed on no verifier
 - [ ] **304** `P0` DA-2 failure weighting 3x bounds search cost  
     - module: `wubu_selfimprove.c` · **criterion:** failed/divergent mutations weighted 3x

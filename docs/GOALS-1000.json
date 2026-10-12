@@ -2424,17 +2424,19 @@
    "n": 302,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "DA-3 human gate + freeze (the death condition)",
+   "title": "DA-3 human gate + freeze (the death condition) (DONE)",
    "module": "wubu_selfimprove.c",
-   "criterion": "frozen loop refuses to promote; no auto-mutate"
+   "criterion": "frozen loop refuses to promote; no auto-mutate",
+   "done": true
   },
   {
    "n": 303,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "independent verifier gates every promotion",
+   "title": "independent verifier gates every promotion (DONE)",
    "module": "src/kernel/wubu_verifier.h",
-   "criterion": "verifier_fn != mutator; fail-closed on no verifier"
+   "criterion": "verifier_fn != mutator; fail-closed on no verifier",
+   "done": true
   },
   {
    "n": 304,
