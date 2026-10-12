@@ -4241,9 +4241,10 @@
    "n": 527,
    "domain": "UX",
    "tier": "P2",
-   "title": "drag-and-drop between windows",
+   "title": "drag-and-drop between windows (DONE)",
    "module": "dosgui_wm_input.c",
-   "criterion": "drag a file onto an app to open it"
+   "criterion": "drag a file onto an app to open it",
+   "done": true
   },
   {
    "n": 528,

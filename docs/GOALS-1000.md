@@ -1104,7 +1104,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_bonzi.c` · **criterion:** orb reflects agent activity, not a black box
 - [x] **526** `P2` right-click context menus everywhere (DONE)  
     - module: `dosgui_wm_ctxmenu.c` · **criterion:** desktop + file + window context menus
-- [ ] **527** `P2` drag-and-drop between windows  
+- [x] **527** `P2` drag-and-drop between windows (DONE)  
     - module: `dosgui_wm_input.c` · **criterion:** drag a file onto an app to open it
 - [ ] **528** `P2` clipboard: copy/cut/paste across apps  
     - module: `wubu_screenshot_clipboard` · **criterion:** shared clipboard works cross-app
