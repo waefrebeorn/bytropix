@@ -1912,7 +1912,7 @@
    "n": 238,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "embedding norm: forward verified",
+   "title": "embedding norm: forward verified (DONE)",
    "module": "wubu_embedding_norm.c",
    "criterion": "embedding norm forward covered by a test with a measured assertion"
   },
