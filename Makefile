@@ -986,6 +986,11 @@ test_label_smoothing: tools/test_label_smoothing.c src/wubu_label_smoothing.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# BRAIN #242: curriculum forward with measured assertions.
+test_curriculum: tools/test_curriculum.c src/wubu_curriculum.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
