@@ -122,6 +122,10 @@ static void block_ffn(const wubu_block_t *b, const float *x, float *y)
 int main(void)
 {
     printf("=== test_amoeba_shrink (AM01: the symmetric amoeba) ===\n");
+    /* Seed the runtime dimension global (WUBU_DIM=448, WUBU_FFN_DIM=1228,
+     * WUBU_LAYERS_MAX=12, ...). Every WUBU_* macro reads from it; without
+     * this call the global is all zeros and every calloc is size 0. */
+    wubu_runtime_dims_default();
 
     wubu_model_t m;
     if (init_min_model(&m) != 0) {
