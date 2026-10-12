@@ -1090,7 +1090,7 @@ already shipped + gate-verified this program of work.
     - module: `dosgui_wm_clock.c` · **criterion:** click shows a calendar popup
 - [ ] **519** `P2` Bonzi companion is the OS-integrated AGI face  
     - module: `wubu_bonzi.c` · **criterion:** orb present, native, not a browser tab
-- [ ] **520** `P2` ambient screen context on summon  
+- [x] **520** `P2` ambient screen context on summon (DONE)  
     - module: `wubu_screenshot.c` · **criterion:** focused window's rect captured to the Brain
 - [ ] **521** `P2` global summon hotkey (Ctrl+/)  
     - module: `hosted_wayland_input.c` · **criterion:** hotkey raises the companion over any window

@@ -4170,9 +4170,10 @@
    "n": 520,
    "domain": "UX",
    "tier": "P2",
-   "title": "ambient screen context on summon",
+   "title": "ambient screen context on summon (DONE)",
    "module": "wubu_screenshot.c",
-   "criterion": "focused window's rect captured to the Brain"
+   "criterion": "focused window's rect captured to the Brain",
+   "done": true
   },
   {
    "n": 521,
