@@ -1632,7 +1632,7 @@
    "n": 203,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "mixed per-role bit ladders (never uniform)",
+   "title": "mixed per-role bit ladders (never uniform) (DONE)",
    "module": "quantized_*.c",
    "criterion": "attn Q8_0, experts 2-bit; NaN-free decode"
   },
@@ -1640,7 +1640,7 @@
    "n": 204,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "SSD expert slot-bank pages 256 experts on small RAM",
+   "title": "SSD expert slot-bank pages 256 experts on small RAM (DONE)",
    "module": "wubu_ssd_moe.c",
    "criterion": "KAT-256 loads with no 256GB sidecar"
   },
