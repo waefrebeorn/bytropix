@@ -89,6 +89,8 @@ validated mutation can't actually promote through the human-gated verifier.
 | # | Item | Module | Evidence |
 |---|---|---|---|
 | C1 | Wire the **Brain archive → Body operator**: a validated `wubu_hive` mutation emits a trace span; `wubu_selfimprove` ingests it, the independent verifier scores it, and on DA-3 sign-off the operator promotes it (apply / restart subsystem / emit trace directive). | `wubu_hive.c` → `wubu_selfimprove.c` + `src/kernel/wubu_verifier.h` | DGM propose→evaluate→archive→sample; DA-3 operator hook already exists |
+
+> **C1 = DONE (2026-10-11).** `wubu_mutation_bridge.{c,h}` translates an ACCEPTED Brain fitness cell into a `WUBU_TRACE_SELFMOD` span the Body's `wubu_selfimprove` ingests → verifies → (DA-3 gate) → operator fires. REJECTED cells never bridge. test_mutation_bridge 7/7 proves the loop closes end-to-end. **TRACK C COMPLETE (C1-C4).** |
 | C2 | **Held-out eval**: validate mutations on a disjoint benchmark segment (DGM used disjoint segments), so the verifier can't be gamed by the same data the mutator saw. | trainer + verifier | DGM + The Register reward-hacking failure mode |
 
 > **C2 = DONE (2026-10-11).** `wubu_heldout_eval.{c,h}`: pure decision — PASS/FAIL/SUSPECT from train+held-out scores; SUSPECT = the reward-hacking signature (in-sample >> held-out). Only PASS promotes. wubuwizard 1dc0c97, test_heldout_eval 6/6. |

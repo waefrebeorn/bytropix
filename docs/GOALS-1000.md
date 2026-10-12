@@ -654,7 +654,7 @@ already shipped + gate-verified this program of work.
     - module: `src/kernel/wubu_verifier.h` · **criterion:** verifier_fn != mutator; fail-closed on no verifier
 - [ ] **304** `P0` DA-2 failure weighting 3x bounds search cost  
     - module: `wubu_selfimprove.c` · **criterion:** failed/divergent mutations weighted 3x
-- [ ] **305** `P0` Brain archive wired to Body operator  
+- [x] **305** `P0` Brain archive wired to Body operator (DONE)  
     - module: `wubu_hive.c -> wubu_selfimprove.c` · **criterion:** a validated mutation promotes through DA-3 with a trace span
 - [x] **306** `P0` held-out eval prevents reward hacking (DONE)  
     - module: `trainer + verifier` · **criterion:** mutations validated on a disjoint benchmark segment

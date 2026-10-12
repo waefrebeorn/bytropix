@@ -2450,9 +2450,10 @@
    "n": 305,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "Brain archive wired to Body operator",
+   "title": "Brain archive wired to Body operator (DONE)",
    "module": "wubu_hive.c -> wubu_selfimprove.c",
-   "criterion": "a validated mutation promotes through DA-3 with a trace span"
+   "criterion": "a validated mutation promotes through DA-3 with a trace span",
+   "done": true
   },
   {
    "n": 306,
