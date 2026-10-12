@@ -2484,7 +2484,7 @@
    "n": 309,
    "domain": "AGENT",
    "tier": "P1",
-   "title": "amoeba grows overworked cells, shrinks dead ones",
+   "title": "amoeba grows overworked cells, shrinks dead ones (DONE)",
    "module": "wubu_amoeba.c",
    "criterion": "measured cell fitness drives grow/shrink"
   },
