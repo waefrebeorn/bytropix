@@ -941,6 +941,11 @@ test_alibi: tools/test_alibi.c src/wubu_alibi.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# BRAIN #233: sliding-window attention forward with measured assertions.
+test_sliding_window: tools/test_sliding_window.c src/wubu_sliding_window.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
