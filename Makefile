@@ -30,12 +30,20 @@ UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_M),x86_64)
 NOAVX512 = -mno-avx512f
 endif
-CFLAGS = -O3 -march=native $(NOAVX512) -funroll-loops -fno-fast-math -ffp-contract=fast -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include $(CUDA_INC) -fopenmp
+CFLAGS = -O3 -march=native $(NOAVX512) -funroll-loops -fno-fast-math -ffp-contract=fast -ftree-vectorize -Wall -Wextra -Wno-unused-parameter -I include $(CUDA_INC) -fopenmp -MMD -MP
 LDFLAGS = -lm -fopenmp -L$(CUDA_LIBDIR) -L$(WSL_LIB) -Wl,-rpath,$(WSL_LIB) -lcudart -lcublas -lpthread -lssl -lcrypto
 NVCC_FLAGS = -O3 -I include $(CUDA_INC) -arch=sm_89
 CUDA_INCS = $(CUDA_INC)
 CUDA_LIBS = -L$(CUDA_LIBDIR) -lcublas -lcudart
 CUDA_LIB = -L$(CUDA_LIBDIR) -lcudart
+
+# Header-dependency tracking (STACK P0 #902): -MMD -MP above makes every .c
+# compile emit a .d file listing its headers; including them makes `make`
+# rebuild an object whenever ANY header it includes changes -- including a
+# brand-new header, which the explicit per-object .h prerequisite lists below
+# cannot know about (that gap caused stale-.o link failures). -MP adds phony
+# targets so a deleted header doesn't break the build.
+-include $(wildcard src/*.d)
 
 # ---- CUDA sanity guard (so a broken CUDA layout can never silently
 # produce CPU-only binaries again). Runs before any GPU target. ----
