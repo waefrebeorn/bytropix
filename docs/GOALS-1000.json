@@ -6436,7 +6436,7 @@
    "n": 801,
    "domain": "RUNTIME",
    "tier": "P0",
-   "title": "universal exec dispatcher (ELF/PE/Mach-O/WASM/DOS)",
+   "title": "universal exec dispatcher (ELF/PE/Mach-O/WASM/DOS) (DONE)",
    "module": "wubu_exec.c",
    "criterion": "each format detected + launched"
   },
@@ -6444,7 +6444,7 @@
    "n": 802,
    "domain": "RUNTIME",
    "tier": "P0",
-   "title": "dependency-free fork/exec/wait",
+   "title": "dependency-free fork/exec/wait (DONE)",
    "module": "wubu_spawn.c",
    "criterion": "spawns an external program, reaps cleanly"
   },
