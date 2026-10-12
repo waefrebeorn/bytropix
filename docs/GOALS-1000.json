@@ -4250,9 +4250,10 @@
    "n": 528,
    "domain": "UX",
    "tier": "P2",
-   "title": "clipboard: copy/cut/paste across apps",
+   "title": "clipboard: copy/cut/paste across apps (DONE)",
    "module": "wubu_screenshot_clipboard",
-   "criterion": "shared clipboard works cross-app"
+   "criterion": "shared clipboard works cross-app",
+   "done": true
   },
   {
    "n": 529,

@@ -1106,7 +1106,7 @@ already shipped + gate-verified this program of work.
     - module: `dosgui_wm_ctxmenu.c` · **criterion:** desktop + file + window context menus
 - [x] **527** `P2` drag-and-drop between windows (DONE)  
     - module: `dosgui_wm_input.c` · **criterion:** drag a file onto an app to open it
-- [ ] **528** `P2` clipboard: copy/cut/paste across apps  
+- [x] **528** `P2` clipboard: copy/cut/paste across apps (DONE)  
     - module: `wubu_screenshot_clipboard` · **criterion:** shared clipboard works cross-app
 - [ ] **529** `P2` accessibility tree for the companion to read  
     - module: `wubu_a11y.c` · **criterion:** WM state introspectable as structured data
