@@ -48,7 +48,7 @@
    "n": 5,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "allocator exposes /n/kernel/mem stats",
+   "title": "allocator exposes /n/kernel/mem stats (DONE)",
    "module": "wubu_memmgr.c",
    "criterion": "cat /n/kernel/mem shows arena/highwater live"
   },
@@ -56,7 +56,7 @@
    "n": 6,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "interrupt latency budget reported per IRQ",
+   "title": "interrupt latency budget reported per IRQ (DONE)",
    "module": "wubu_ioprio.c",
    "criterion": "/n/kernel/irqlat reports p99 per IRQ"
   },
