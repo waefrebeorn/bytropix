@@ -16,7 +16,7 @@
    "n": 1,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "9P attach is the ONLY kernel IPC path",
+   "title": "9P attach is the ONLY kernel IPC path (DONE)",
    "module": "styxfs_server.c",
    "criterion": "every kernel service mounts as a 9P tree; zero bespoke syscalls added"
   },
@@ -24,7 +24,7 @@
    "n": 2,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "per-process namespace = capability set",
+   "title": "per-process namespace = capability set (DONE)",
    "module": "wubu_ns_bridge.c",
    "criterion": "a process's attach set is its security boundary"
   },
@@ -40,7 +40,7 @@
    "n": 4,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "scheduler policy settable via /n/kernel/scheduler",
+   "title": "scheduler policy settable via /n/kernel/scheduler (DONE)",
    "module": "wubu_ns_kernel.c",
    "criterion": "bore|eevdf|fair|rt writes take effect without a daemon"
   },
@@ -4844,7 +4844,7 @@
    "n": 602,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "rigid-body collision response (solid)",
+   "title": "rigid-body collision response (solid) (DONE)",
    "module": "worldsim/physics.c",
    "criterion": "no tunneling; energy conserved"
   },
@@ -4852,7 +4852,7 @@
    "n": 603,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "terrain heightfield + erosion",
+   "title": "terrain heightfield + erosion (DONE)",
    "module": "worldsim/terrain.c",
    "criterion": "erosion converges, no NaN"
   },
@@ -4860,7 +4860,7 @@
    "n": 604,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "entity component system",
+   "title": "entity component system (DONE)",
    "module": "worldsim/entity.c",
    "criterion": "add/remove entities without restart"
   },
@@ -4868,7 +4868,7 @@
    "n": 605,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "deterministic fixed-step simulation",
+   "title": "deterministic fixed-step simulation (DONE)",
    "module": "worldsim/sim.c",
    "criterion": "same seed -> same state, bit-exact"
   },
