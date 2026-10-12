@@ -6693,7 +6693,7 @@
    "n": 833,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "RUNTIME: ELF execution leg verified",
+   "title": "RUNTIME: ELF execution leg verified (DONE)",
    "module": "wubu_exec.c",
    "criterion": "a real ELF binary/module runs on the kernel with correct output"
   },
