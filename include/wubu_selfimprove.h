@@ -85,6 +85,14 @@ typedef struct {
     float eval_floor;
     float max_gap;
     uint64_t mutations_blocked;  /* blocked by the held-out guard */
+    /* Track C4: resource budget (AD04). When budget_enabled, each mutation
+     * carries a cpu/ram/io cost; the cumulative cost must stay within the
+     * bound or the search ABORTS before paying for the offending mutation
+     * (closes the DGM "infinite sandbox" cost gap). */
+    int   budget_enabled;
+    long  cpu_ms_max, ram_mb_max, io_kb_max;
+    long  cpu_ms_used, ram_mb_used, io_kb_used;
+    uint64_t mutations_cost_blocked;  /* aborted on budget overrun */
 } wubu_selfimprove_t;
 
 /* S1: init. The caller owns the hive. */
@@ -133,6 +141,22 @@ int wubu_selfimprove_step_guarded(wubu_selfimprove_t *si, float train_score,
                                   float heldout_score, float difficulty,
                                   float budget, float fitness_gate,
                                   wubu_mutation_t *out);
+
+/* Track C4: configure the resource budget (AD04). When enabled, each
+ * mutation's cost is accumulated and the search aborts on overrun. */
+void wubu_selfimprove_set_budget(wubu_selfimprove_t *si, int enabled,
+                                 long cpu_ms_max, long ram_mb_max, long io_kb_max);
+
+/* Track C4: the fully-guarded RSI step -- held-out guard (C2) AND resource
+ * budget (C4). cost is this mutation's cpu/ram/io cost; if the cumulative
+ * cost would overrun the AD04 budget, the step aborts (returns 0) BEFORE
+ * proposing. Returns 1 if proposed, 0 if a guard/budget blocked it, -1 on
+ * error. */
+int wubu_selfimprove_step_full(wubu_selfimprove_t *si, float train_score,
+                               float heldout_score, float difficulty,
+                               float budget, float fitness_gate,
+                               long cost_cpu_ms, long cost_ram_mb, long cost_io_kb,
+                               wubu_mutation_t *out);
 
 /* S7: the engine stats. */
 void wubu_selfimprove_stats(const wubu_selfimprove_t *si, char *buf, size_t cap);

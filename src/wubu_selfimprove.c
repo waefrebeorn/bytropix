@@ -5,6 +5,7 @@
  */
 #include "wubu_selfimprove.h"
 #include "wubu_heldout_eval.h"   /* Track C2: reward-hacking guard */
+#include "wubu_budget_search.h"  /* Track C4: AD04 resource bound */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -156,4 +157,42 @@ int wubu_selfimprove_step_guarded(wubu_selfimprove_t *si, float train_score,
     /* guard passed (or disabled) -> the ordinary gated step */
     return wubu_selfimprove_step(si, train_score, difficulty, budget,
                                  fitness_gate, out);
+}
+
+
+/* -- Track C4: the resource budget, wired into the loop --------------- */
+
+void wubu_selfimprove_set_budget(wubu_selfimprove_t *si, int enabled,
+                                 long cpu_ms_max, long ram_mb_max, long io_kb_max) {
+    if (!si) return;
+    si->budget_enabled = enabled ? 1 : 0;
+    si->cpu_ms_max = cpu_ms_max; si->ram_mb_max = ram_mb_max; si->io_kb_max = io_kb_max;
+    si->cpu_ms_used = si->ram_mb_used = si->io_kb_used = 0;
+}
+
+int wubu_selfimprove_step_full(wubu_selfimprove_t *si, float train_score,
+                               float heldout_score, float difficulty,
+                               float budget, float fitness_gate,
+                               long cost_cpu_ms, long cost_ram_mb, long cost_io_kb,
+                               wubu_mutation_t *out) {
+    if (!si) return -1;
+    /* Track C4: refuse to pay for a mutation that would overrun the AD04
+     * resource budget. The search aborts BEFORE the offending candidate --
+     * it never runs away (closes the DGM infinite-sandbox gap). */
+    if (si->budget_enabled) {
+        long ncpu = si->cpu_ms_used + cost_cpu_ms;
+        long nram = si->ram_mb_used + cost_ram_mb;
+        long nio  = si->io_kb_used  + cost_io_kb;
+        if (ncpu > si->cpu_ms_max || nram > si->ram_mb_max || nio > si->io_kb_max) {
+            si->mutations_cost_blocked++;
+            wubu_selfimprove_trace(si, WUBU_SPAN_MUTATION, 0,
+                                   (uint64_t)si->evals, 0.0f, 0, 0, 0xFF);
+            return 0;   /* aborted on budget overrun */
+        }
+        /* commit the cost only if we proceed past the guards below */
+        si->cpu_ms_used = ncpu; si->ram_mb_used = nram; si->io_kb_used = nio;
+    }
+    /* then the held-out guard + ordinary gated step */
+    return wubu_selfimprove_step_guarded(si, train_score, heldout_score,
+                                         difficulty, budget, fitness_gate, out);
 }

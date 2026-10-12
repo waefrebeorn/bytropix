@@ -50,6 +50,18 @@ int main(void)
     r = wubu_selfimprove_step_guarded(&si, 0.95f, 0.60f, 0.5f, 1.0f, 0.6f, &mut);
     CHECK(r == 1, "with the guard off, the high-train mutation proposes");
 
+
+    /* 5. Track C4: resource budget aborts a search that would overrun.
+     * Arm a tight budget, feed mutations whose cumulative cost exceeds it. */
+    wubu_selfimprove_set_budget(&si, 1, 100, 512, 1000);
+    /* first mutation: cost 60 cpu -> fits, proposes */
+    r = wubu_selfimprove_step_full(&si, 0.82f, 0.78f, 0.5f, 1.0f, 0.6f, 60, 100, 100, &mut);
+    CHECK(r == 1, "C4: first mutation within budget proposes");
+    /* second: +60 cpu = 120 > 100 -> aborted before paying */
+    r = wubu_selfimprove_step_full(&si, 0.82f, 0.78f, 0.5f, 1.0f, 0.6f, 60, 100, 100, &mut);
+    CHECK(r == 0, "C4: mutation that would overrun cpu is aborted");
+    CHECK(si.mutations_cost_blocked == 1, "C4: cost-blocked counter incremented");
+
     printf("=== test_selfimprove_guard: %d checks, %d failures ===\n", checks, fails);
     if (fails) return 1;
     printf("=== ALL SELFIMPROVE_GUARD TESTS PASSED (no reward hacking) ===\n");
