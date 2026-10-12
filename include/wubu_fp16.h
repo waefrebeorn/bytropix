@@ -79,4 +79,9 @@ static inline uint16_t wubu_f32_to_bf16(float f) {
     return (uint16_t)(bits >> 16);
 }
 
+/* Bare-name alias used by dequant_iq2_xxs.c (f16_to_f32_local). */
+static inline float f16_to_f32_local(uint16_t h) {
+    return wubu_f16_to_f32(h);
+}
+
 #endif /* WUBU_FP16_H */

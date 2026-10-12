@@ -18,6 +18,7 @@
 #include "wubu_ssd_moe.h"
 #include "wubu_safetensors_shard.h"
 #include "safetensors_reader.h"
+#include "wubu_fp16.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -78,7 +79,7 @@ static int read_expert_mat(wubu_ssd_moe_t *m, int layer, int expert,
         const float *f = (const float *)raw;
         for (int64_t i = 0; i < n; i++) out[i] = f[i];
     } else { /* BF16 (most common) or F16 -> use bf16 path for both */
-        for (int64_t i = 0; i < n; i++) out[i] = bf16_to_f32(b[i]);
+        for (int64_t i = 0; i < n; i++) out[i] = wubu_bf16_to_f32(b[i]);
     }
     return 0;
 }
