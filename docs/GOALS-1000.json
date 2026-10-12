@@ -4083,7 +4083,7 @@
    "n": 508,
    "domain": "UX",
    "tier": "P0",
-   "title": "coordinate-space: window-rel -> absolute everywhere",
+   "title": "coordinate-space: window-rel -> absolute everywhere (DONE)",
    "module": "dosgui_*_input.c",
    "criterion": "WM coords translated before hit-test"
   },
