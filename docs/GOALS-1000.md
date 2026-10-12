@@ -1100,7 +1100,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_tooluse.c` · **criterion:** every tool call checked by AD01
 - [x] **524** `P2` companion offline fallback (DONE) to local gen_text  
     - module: `api_server + wubu_spawn` · **criterion:** works with no API key
-- [ ] **525** `P2` companion activity feedback (mood states)  
+- [x] **525** `P2` companion activity feedback (DONE) (mood states)  
     - module: `wubu_bonzi.c` · **criterion:** orb reflects agent activity, not a black box
 - [ ] **526** `P2` right-click context menus everywhere  
     - module: `dosgui_wm_ctxmenu.c` · **criterion:** desktop + file + window context menus

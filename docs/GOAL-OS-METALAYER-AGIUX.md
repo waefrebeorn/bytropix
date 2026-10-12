@@ -78,6 +78,8 @@ capability-gated tools**. The orb is native; wire the rest.
 > **B5 = DONE (2026-10-11).** `wubu_provider_route.{c,h}` is the routing decision: pure `decide(has_key, allow_remote, has_local)` + env wrapper reading WUBU_API_KEY/OPENROUTER_API_KEY/NVIDIA_API_KEY. Remote only with a key + permission; local is the floor; never a silently-dead remote. wubuwizard aef2323, test_provider_route 6/6. |
 | B6 | **Activity feedback**: the orb shows what it's doing (mood/animation states tied to agent activity), so it feels present, not a black box. | `wubu_bonzi.c` | "remains accessible without disrupting workflow" |
 
+> **B6 = DONE (2026-10-11).** `wubu_bonzi_activity.{c,h}` maps activity (idle/thinking/working/alert) to blink/eye/bob modifiers; live activity pushed to `/n/bonzi/activity`. wubuos a499fe3, test_bonzi_activity 8/8. **Track B COMPLETE (B1-B6).** |
+
 ## Track C — Close the recursive-learning loop end to end
 
 The DGM loop is already built (Brain archive) and hardened (Body DA-1/2/3).

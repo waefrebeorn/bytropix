@@ -4215,9 +4215,10 @@
    "n": 525,
    "domain": "UX",
    "tier": "P2",
-   "title": "companion activity feedback (mood states)",
+   "title": "companion activity feedback (mood states) (DONE)",
    "module": "wubu_bonzi.c",
-   "criterion": "orb reflects agent activity, not a black box"
+   "criterion": "orb reflects agent activity, not a black box",
+   "done": true
   },
   {
    "n": 526,
