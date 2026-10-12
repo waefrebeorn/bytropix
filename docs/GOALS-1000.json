@@ -1880,7 +1880,7 @@
    "n": 234,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "grouped-query heads: forward verified",
+   "title": "grouped-query heads: forward verified (DONE)",
    "module": "wubu_grouped_query_heads.c",
    "criterion": "grouped-query heads forward covered by a test with a measured assertion"
   },
