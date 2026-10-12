@@ -869,9 +869,9 @@ already shipped + gate-verified this program of work.
     - module: `wubu_ssd_moe.c` · **criterion:** inspect LRU residency, pin/unpin an expert
 - [x] **410** `P1` diagnostic hive at /n/hive/{cell} (DONE)  
     - module: `wubu_hive.c` · **criterion:** z-score cells + walker readable from the shell
-- [ ] **411** `P1` model catalog at /n/models  
+- [x] **411** `P1` model catalog at /n/models (DONE)
     - module: `wubu_tensor_store.c` · **criterion:** ls /n/models lists (name,offset,dtype,shape)
-- [ ] **412** `P1` training run at /n/train/{metric}  
+- [x] **412** `P1` training run at /n/train/{metric} (DONE)
     - module: `wubu_train.c` · **criterion:** live loss/lr visible during training
 - [ ] **413** `P1` sampler state at /n/sampler  
     - module: `sampler` · **criterion:** temp/top_p/DRY readable + writable live

@@ -3277,9 +3277,10 @@
    "n": 408,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "ls /n shows the WHOLE machine (kernel+hw+brain)",
+   "title": "ls /n shows the WHOLE machine (kernel+hw+brain) (DONE)",
    "module": "wubu_ns_bridge.c",
-   "criterion": "one tree unifies Body + Brain control planes"
+   "criterion": "one tree unifies Body + Brain control planes",
+   "done": true
   },
   {
    "n": 409,
@@ -3303,17 +3304,19 @@
    "n": 411,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "model catalog at /n/models",
+   "title": "model catalog at /n/models (DONE)",
    "module": "wubu_tensor_store.c",
-   "criterion": "ls /n/models lists (name,offset,dtype,shape)"
+   "criterion": "ls /n/models lists (name,offset,dtype,shape)",
+   "done": true
   },
   {
    "n": 412,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "training run at /n/train/{metric}",
+   "title": "training run at /n/train/{metric} (DONE)",
    "module": "wubu_train.c",
-   "criterion": "live loss/lr visible during training"
+   "criterion": "live loss/lr visible during training",
+   "done": true
   },
   {
    "n": 413,

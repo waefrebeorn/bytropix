@@ -48,6 +48,8 @@ through the same namespace verbs that inspect the kernel.
 > **A4 = DONE (2026-10-11).** Two parts, both shipped: (1) `wubu_ns_bonzi.{c,h}` mirrors live companion state into `/n/bonzi/*`, pushed from the WM render tick, weak-linked (wubuos 48a3143, test_ns_bonzi 12/12). (2) `wubu_bonzi_mem.{c,h}` is the PERSISTENT store: save/load the agentic-mem vector index to `/n/bonzi/mem` (binary format WBMEM001), AD01-gated so only the companion's subtree may read/write (wubuos 5068d9f, test_bonzi_mem 11/11). Companion memory now survives restarts (JE26 continuity). |
 | A5 | A shell tool `cat /n/kernel/scheduler`-style that already works — **extend** the pattern to every Brain server so `ls /n` shows the whole machine (kernel+hw+brain). | `wubu_ns_bridge.c` | /n/{svc,dram,kernel,hw} already bridged |
 
+> **A5 = DONE (2026-10-11).** `wubu_ns_brain.{c,h}` adds `/n/models` (tensor catalog + per-tensor files) and `/n/train` (live loss/lr/step). `ls /n` now shows kernel+hw+brain together. wubuos 8fdd07f, test_ns_brain 10/10. |
+
 Doctrine (from the Styx paper): a resource is a file server you attach;
 attaching a remote one is a distributed system for free. Each of A1-A4 is
 one small 9P tree mounted under `/n`.
