@@ -110,6 +110,8 @@ socket expectations are served as 9P files (Plan 9's user-level translators).
 | # | Item | Module | Evidence |
 |---|---|---|---|
 | D1 | A **libc/syscall shim per foreign ABI** (PE, Mach-O, WASM, DOS) that maps its file/net/graphics calls onto WuBu's 9P + `wubu_exec` surface. | `wubu_exec.c` + shims | Plan 9 user-level translators for NFS/disk |
+
+> **D1 = STARTED (2026-10-11).** `wubu_abi_path.{c,h}` is the path-translation foundation: foreign paths (Windows C:\, Unix /usr, DOS drives) map onto `/n/foreign/<abi>/...`, backslashes→slashes, drive lowercased + preserved so drives don't collide. wubuos 4dc5d75, test_abi_path 7/7. REMAINING: the per-syscall shim (open/read/net/graphics → 9P verbs) on top of this. |
 | D2 | Each shim is itself a **9P file server**, so attaching it mounts a foreign OS's root into the namespace. | ns_bridge | "represent resources as files… you have a distributed system" |
 
 ---

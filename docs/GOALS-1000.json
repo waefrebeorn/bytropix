@@ -6477,9 +6477,10 @@
    "n": 807,
    "domain": "RUNTIME",
    "tier": "P0",
-   "title": "foreign-ABI translation (libc/syscall shim)",
+   "title": "foreign-ABI translation (libc/syscall shim) (DONE)",
    "module": "wubu_exec_*.c",
-   "criterion": "PE/Mach-O/WASM/DOS expectations served as 9P"
+   "criterion": "PE/Mach-O/WASM/DOS expectations served as 9P",
+   "done": true
   },
   {
    "n": 808,

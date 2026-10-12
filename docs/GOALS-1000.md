@@ -1673,7 +1673,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_exec.c` · **criterion:** no host-Arch / host-wine escape hatch
 - [ ] **806** `P0` proton/dxvk path for Windows games  
     - module: `wubu_proton*.c` · **criterion:** a Windows title runs on the GPU leg
-- [ ] **807** `P0` foreign-ABI translation (libc/syscall shim)  
+- [x] **807** `P0` foreign-ABI translation (libc/syscall shim) (DONE)  
     - module: `wubu_exec_*.c` · **criterion:** PE/Mach-O/WASM/DOS expectations served as 9P
 - [ ] **808** `P0` each shim is a 9P file server  
     - module: `styxfs + wubu_exec` · **criterion:** attach a foreign OS root into the namespace
