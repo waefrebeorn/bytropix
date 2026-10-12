@@ -77,6 +77,14 @@ typedef struct {
     uint64_t mutations_proposed;
     uint64_t mutations_accepted;
     float    last_delta;
+    /* Track C2: held-out eval guard (reward-hacking defense). When
+     * guard_enabled, a mutation is proposed only if its held-out score
+     * clears eval_floor AND the (train - held-out) gap is within max_gap.
+     * A SUSPECT verdict (in-sample >> held-out) blocks the mutation. */
+    int   guard_enabled;
+    float eval_floor;
+    float max_gap;
+    uint64_t mutations_blocked;  /* blocked by the held-out guard */
 } wubu_selfimprove_t;
 
 /* S1: init. The caller owns the hive. */
@@ -110,6 +118,21 @@ int wubu_selfimprove_step(wubu_selfimprove_t *si, float verifier_score,
 /* S6: report a mutation's outcome (feeds the experience loop + the
  * consecutive-fail counter the gate uses). */
 void wubu_selfimprove_report(wubu_selfimprove_t *si, int accepted);
+
+/* Track C2: configure the held-out eval guard. When enabled, the guarded
+ * step proposes a mutation only if its held-out score clears eval_floor
+ * and the (train - held-out) gap is within max_gap (SUSPECT/FAIL block). */
+void wubu_selfimprove_set_guard(wubu_selfimprove_t *si, int enabled,
+                                float eval_floor, float max_gap);
+
+/* Track C2: the guarded RSI step. Like wubu_selfimprove_step but takes a
+ * HELD-OUT score too and refuses to propose a mutation the guard rejects
+ * (reward-hacking / held-out collapse). Returns 1 if proposed, 0 if the
+ * gate or guard blocked it, -1 on error. */
+int wubu_selfimprove_step_guarded(wubu_selfimprove_t *si, float train_score,
+                                  float heldout_score, float difficulty,
+                                  float budget, float fitness_gate,
+                                  wubu_mutation_t *out);
 
 /* S7: the engine stats. */
 void wubu_selfimprove_stats(const wubu_selfimprove_t *si, char *buf, size_t cap);

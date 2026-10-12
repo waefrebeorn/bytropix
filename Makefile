@@ -1076,7 +1076,10 @@ test_pref: tools/test_pref.c src/wubu_pref.o
 test_colonel: tools/test_colonel.c src/wubu_colonel.o src/wubu_agentic_os.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-test_selfimprove: tools/test_selfimprove.c src/wubu_selfimprove.o src/wubu_rsi.o src/wubu_hive.o
+test_selfimprove: tools/test_selfimprove.c src/wubu_selfimprove.o src/wubu_rsi.o src/wubu_hive.o src/wubu_heldout_eval.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test_selfimprove_guard: tools/test_selfimprove_guard.c src/wubu_selfimprove.o src/wubu_rsi.o src/wubu_hive.o src/wubu_heldout_eval.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test_lineage: tools/test_lineage.c src/wubu_lineage.o

@@ -4,6 +4,7 @@
  * primitives into the live diagnose/mutate path (directive #4).
  */
 #include "wubu_selfimprove.h"
+#include "wubu_heldout_eval.h"   /* Track C2: reward-hacking guard */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -119,4 +120,40 @@ void wubu_selfimprove_stats(const wubu_selfimprove_t *si, char *buf, size_t cap)
              (unsigned long long)si->mutations_accepted,
              si->evals, si->wins, si->running,
              si->consecutive_fails, si->last_delta);
+}
+
+
+/* -- Track C2: the held-out eval guard, wired into the loop ----------- */
+
+void wubu_selfimprove_set_guard(wubu_selfimprove_t *si, int enabled,
+                                float eval_floor, float max_gap) {
+    if (!si) return;
+    si->guard_enabled = enabled ? 1 : 0;
+    si->eval_floor = eval_floor;
+    si->max_gap = max_gap;
+}
+
+int wubu_selfimprove_step_guarded(wubu_selfimprove_t *si, float train_score,
+                                  float heldout_score, float difficulty,
+                                  float budget, float fitness_gate,
+                                  wubu_mutation_t *out) {
+    if (!si) return -1;
+    /* The reward-hacking guard (C2): validate on the DISJOINT held-out
+     * score before proposing. SUSPECT (in-sample >> held-out) or FAIL
+     * (held-out below floor) blocks the mutation -- it never reaches the
+     * amoeba. This is the live loop refusing to game its own metric. */
+    if (si->guard_enabled) {
+        wubu_heldout_verdict_t v = wubu_heldout_eval_decide(
+            train_score, heldout_score, si->eval_floor, si->max_gap);
+        if (v != WUBU_HELDOUT_PASS) {
+            si->mutations_blocked++;
+            wubu_selfimprove_trace(si, WUBU_SPAN_MUTATION, 0,
+                                   (uint64_t)si->evals, heldout_score, 0,
+                                   0, 0xFF);
+            return 0;   /* blocked by the guard */
+        }
+    }
+    /* guard passed (or disabled) -> the ordinary gated step */
+    return wubu_selfimprove_step(si, train_score, difficulty, budget,
+                                 fitness_gate, out);
 }
