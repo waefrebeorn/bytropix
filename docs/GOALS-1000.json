@@ -1872,7 +1872,7 @@
    "n": 233,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "sliding window: forward verified",
+   "title": "sliding window: forward verified (DONE)",
    "module": "wubu_sliding_window.c",
    "criterion": "sliding window forward covered by a test with a measured assertion"
   },
