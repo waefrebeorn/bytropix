@@ -1928,7 +1928,7 @@
    "n": 240,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "token dropout: forward verified",
+   "title": "token dropout: forward verified (DONE)",
    "module": "wubu_token_dropout.c",
    "criterion": "token dropout forward covered by a test with a measured assertion"
   },
