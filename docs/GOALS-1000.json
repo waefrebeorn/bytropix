@@ -1856,7 +1856,7 @@
    "n": 231,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "rope scaling: forward verified",
+   "title": "rope scaling: forward verified (DONE)",
    "module": "wubu_rope_scaling.c",
    "criterion": "rope scaling forward covered by a test with a measured assertion"
   },
