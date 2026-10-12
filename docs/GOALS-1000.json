@@ -3280,9 +3280,10 @@
    "n": 409,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "expert slot-bank at /n/experts/{slot}",
+   "title": "expert slot-bank at /n/experts/{slot} (DONE)",
    "module": "wubu_ssd_moe.c",
-   "criterion": "inspect LRU residency, pin/unpin an expert"
+   "criterion": "inspect LRU residency, pin/unpin an expert",
+   "done": true
   },
   {
    "n": 410,

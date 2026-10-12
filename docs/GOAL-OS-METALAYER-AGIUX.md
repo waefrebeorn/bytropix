@@ -38,6 +38,8 @@ through the same namespace verbs that inspect the kernel.
 
 > **A1 = DONE (verified 2026-10-11).** Already built end-to-end: `src/kernel/wubu_kvfs.c` serves `/n/kv/*` reads+writes through a live `float *g_wubu_kv_base` tensor via a hash-resolved mount table; `styxfs_server.c` routes both sides. `test_kvfs_route` passes ("the OS IS the KV cache, served as 9P"). No work needed. |
 | A2 | Serve the **SSD expert slot-bank** as `/n/experts/{slot}` — inspect LRU residency, pin/unpin an expert. | wubuwizard `wubu_ssd_moe.c` + ns_bridge | KAT-Coder 256-expert slot-bank already pages experts |
+
+> **A2 = DONE (2026-10-11).** `wubu_ns_experts.{c,h}` mirrors the slot-bank into `/n/experts`: `config` (layers/experts/dims/slot_bank), `stats` (pageins/hits/bytes), and `layer/<L>` (one line per resident slot: slot:expert:lru). Dependency-light (links only wubu_ns_fs.o, not the slot-bank); owner pushes state via setters each forward pass. wubuos c536fbf, test_ns_experts 7/7. NOTE: exposed as inspect; pin/unpin is a future write-path addition. |
 | A3 | Serve the **diagnostic hive** as `/n/hive/{cell}` — z-score cells, anomaly walker, rollback state, readable from the shell. | wubuwizard `wubu_hive.c` + ns_bridge | hive = the diagnostic immune system |
 | A4 | Serve **companion memory** as `/n/bonzi/mem` — the persistent-memory store, readable/writable, gated by AD01 subtree cap. | `wubu_agentic_mem.h` + ns_bridge | desktop-assistant research: persistent memory is a defining trait |
 

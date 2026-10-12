@@ -865,7 +865,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_ns_dram.c` · **criterion:** replica/trefi visible + writable
 - [ ] **408** `P0` ls /n shows the WHOLE machine (kernel+hw+brain)  
     - module: `wubu_ns_bridge.c` · **criterion:** one tree unifies Body + Brain control planes
-- [ ] **409** `P1` expert slot-bank at /n/experts/{slot}  
+- [x] **409** `P1` expert slot-bank at /n/experts/{slot} (DONE)  
     - module: `wubu_ssd_moe.c` · **criterion:** inspect LRU residency, pin/unpin an expert
 - [ ] **410** `P1` diagnostic hive at /n/hive/{cell}  
     - module: `wubu_hive.c` · **criterion:** z-score cells + walker readable from the shell
