@@ -35,9 +35,13 @@ through the same namespace verbs that inspect the kernel.
 | # | Item | Module | Evidence / target |
 |---|---|---|---|
 | A1 | Serve the **KV cache arena** as `/n/kv/{layer}/{slot}` files (read a slot's latent, write to seed a prefix). Write side already doctrinally declared in `styxfs_server.c:301`. | wubuos `styxfs_server.c` + wubuwizard `wubu_agentic_kv.c` | the /n/kv write doctrine; agentic-kv already models per-agent KV |
+
+> **A1 = DONE (verified 2026-10-11).** Already built end-to-end: `src/kernel/wubu_kvfs.c` serves `/n/kv/*` reads+writes through a live `float *g_wubu_kv_base` tensor via a hash-resolved mount table; `styxfs_server.c` routes both sides. `test_kvfs_route` passes ("the OS IS the KV cache, served as 9P"). No work needed. |
 | A2 | Serve the **SSD expert slot-bank** as `/n/experts/{slot}` — inspect LRU residency, pin/unpin an expert. | wubuwizard `wubu_ssd_moe.c` + ns_bridge | KAT-Coder 256-expert slot-bank already pages experts |
 | A3 | Serve the **diagnostic hive** as `/n/hive/{cell}` — z-score cells, anomaly walker, rollback state, readable from the shell. | wubuwizard `wubu_hive.c` + ns_bridge | hive = the diagnostic immune system |
 | A4 | Serve **companion memory** as `/n/bonzi/mem` — the persistent-memory store, readable/writable, gated by AD01 subtree cap. | `wubu_agentic_mem.h` + ns_bridge | desktop-assistant research: persistent memory is a defining trait |
+
+> **A4 = STARTED (2026-10-11).** The companion is now a /n citizen: `wubu_ns_bonzi.{c,h}` mirrors live state (enabled/pos/size/agi/bubble) into `/n/bonzi/*`, pushed from the WM render tick, weak-linked so the GUI renders without the bridge. Committed wubuos 48a3143, test_ns_bonzi 12/12. REMAINING: the persistent-memory *store* itself (`/n/bonzi/mem`) — `wubu_agentic_mem.h` is a scoring library (no storage), so a 9P-backed store must be added, gated by AD01. |
 | A5 | A shell tool `cat /n/kernel/scheduler`-style that already works — **extend** the pattern to every Brain server so `ls /n` shows the whole machine (kernel+hw+brain). | `wubu_ns_bridge.c` | /n/{svc,dram,kernel,hw} already bridged |
 
 Doctrine (from the Styx paper): a resource is a file server you attach;
