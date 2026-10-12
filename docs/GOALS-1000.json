@@ -1664,7 +1664,7 @@
    "n": 207,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "sampler: DRY anti-repetition for math",
+   "title": "sampler: DRY anti-repetition for math (DONE)",
    "module": "sampler",
    "criterion": "temp 1.0/top_p 0.95 floor, no degenerate loops"
   },
