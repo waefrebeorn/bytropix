@@ -32,7 +32,7 @@
    "n": 3,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "measured-boot verifies to ring-0 (fail-closed)",
+   "title": "measured-boot verifies to ring-0 (fail-closed) (DONE)",
    "module": "firmware + wubu_verifier.h",
    "criterion": "boot refuses on failed attestation"
   },
