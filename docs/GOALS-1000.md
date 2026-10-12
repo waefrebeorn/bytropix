@@ -1102,7 +1102,7 @@ already shipped + gate-verified this program of work.
     - module: `api_server + wubu_spawn` · **criterion:** works with no API key
 - [x] **525** `P2` companion activity feedback (DONE) (mood states)  
     - module: `wubu_bonzi.c` · **criterion:** orb reflects agent activity, not a black box
-- [ ] **526** `P2` right-click context menus everywhere  
+- [x] **526** `P2` right-click context menus everywhere (DONE)  
     - module: `dosgui_wm_ctxmenu.c` · **criterion:** desktop + file + window context menus
 - [ ] **527** `P2` drag-and-drop between windows  
     - module: `dosgui_wm_input.c` · **criterion:** drag a file onto an app to open it

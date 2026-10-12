@@ -4232,9 +4232,10 @@
    "n": 526,
    "domain": "UX",
    "tier": "P2",
-   "title": "right-click context menus everywhere",
+   "title": "right-click context menus everywhere (DONE)",
    "module": "dosgui_wm_ctxmenu.c",
-   "criterion": "desktop + file + window context menus"
+   "criterion": "desktop + file + window context menus",
+   "done": true
   },
   {
    "n": 527,
