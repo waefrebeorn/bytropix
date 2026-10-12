@@ -114,6 +114,8 @@ socket expectations are served as 9P files (Plan 9's user-level translators).
 > **D1 = DONE (2026-10-11).** Two parts: (1) `wubu_abi_path.{c,h}` translates foreign paths onto `/n/foreign/<abi>/...` (wubuos 4dc5d75, 7/7). (2) `wubu_syscall_shim.{c,h}` maps foreign syscalls onto WuBu ops — file→9P on the translated path, graphics→VBE/WM, net→9P net, unmapped→REFUSE (fail-closed) (wubuos 226f988, 8/8). A foreign app's calls are now served by the stack. |
 | D2 | Each shim is itself a **9P file server**, so attaching it mounts a foreign OS's root into the namespace. | ns_bridge | "represent resources as files… you have a distributed system" |
 
+> **D2 = DONE (2026-10-11, user-directed).** `wubu_librarian.{c,h}` is the INTEROP LIBRARIAN: a registry where every participant (native/Windows/Unix/DOS) registers name/ABI/root/caps; a resolver so apps find each other by capability (fail-closed); and a GROWING translation table — each cross-ABI call is recorded so it's a lookup next time, the library builds itself as it goes. `wubu_librarian_route` is the full interop call. wubuos 2486a44, test_librarian 13/13. |
+
 ---
 
 ## Sequencing (my autonomous call)
