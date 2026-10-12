@@ -16,6 +16,23 @@ Status vocabulary: `candidate` (read, not yet triaged),
 
 ---
 
+## 02 — OS Meta-Layer, AGI-UX (Bonzi companion), and Recursive Self-Improvement
+
+Researched 2026-10-11 against the actual stack. Three primary sources:
+Plan 9 / Styx 9P (universal namespace), the 2025-2026 desktop-companion UX
+research (native / ambient-context / persistent-memory), and the Darwin
+Gödel Machine (arXiv:2505.22954). Full notes in
+`02-os-metalayer-agiux-recursive.md`.
+
+Status: **overlap-strong** on Styx (the stack already runs 9P with
+`/n/kv`, `/n/svc`, `/n/dram`, `/n/kernel`, `/n/hw` namespace files) and on
+recursive self-improvement (DGM loop already built as `wubu_amoeba`/`wubu_hive`,
+and *hardened* past DGM by DA-1/2/3: independent verifier, human gate,
+freeze — answering DGM's documented reward-hacking + unbounded-cost
+criticisms). **overlap-partial** on the companion: `wubu_bonzi` is already a
+native desktop orb, but lacks ambient screen context, a global summon
+hotkey, persistent-memory wiring, and capability-gated tool execution.
+
 ## 01 — Manifold geometry for neural substrates
 
 ### 1.1 Hyperbolic models: Poincaré ball vs hyperboloid vs Klein
