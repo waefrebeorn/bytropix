@@ -971,6 +971,11 @@ test_embedding_norm: tools/test_embedding_norm.c src/wubu_embedding_norm.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# BRAIN #239: logit softcap forward with measured assertions.
+test_logit_softcap: tools/test_logit_softcap.c src/wubu_logit_softcap.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
