@@ -840,7 +840,7 @@
    "n": 104,
    "domain": "COMPILER",
    "tier": "P0",
-   "title": "softfloat is IEEE-754 exact",
+   "title": "softfloat is IEEE-754 exact (DONE)",
    "module": "wubu_softfloat.c",
    "criterion": "test_softfloat 0 failures across all roundings"
   },
@@ -872,7 +872,7 @@
    "n": 108,
    "domain": "COMPILER",
    "tier": "P0",
-   "title": "register clobbering fixed across all backends",
+   "title": "register clobbering fixed across all backends (DONE)",
    "module": "wubu_isa_*.c",
    "criterion": "no live-range violation in fuzz_diff"
   },
