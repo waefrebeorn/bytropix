@@ -1968,7 +1968,7 @@
    "n": 245,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "quality filter: forward verified",
+   "title": "quality filter: forward verified (DONE)",
    "module": "wubu_quality_filter.c",
    "criterion": "quality filter forward covered by a test with a measured assertion"
   },
