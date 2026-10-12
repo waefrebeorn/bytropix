@@ -1944,7 +1944,7 @@
    "n": 242,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "curriculum: forward verified",
+   "title": "curriculum: forward verified (DONE)",
    "module": "wubu_curriculum.c",
    "criterion": "curriculum forward covered by a test with a measured assertion"
   },
