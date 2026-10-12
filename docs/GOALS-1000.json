@@ -1936,7 +1936,7 @@
    "n": 241,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "label smoothing: forward verified",
+   "title": "label smoothing: forward verified (DONE)",
    "module": "wubu_label_smoothing.c",
    "criterion": "label smoothing forward covered by a test with a measured assertion"
   },
