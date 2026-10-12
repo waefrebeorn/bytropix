@@ -1960,7 +1960,7 @@
    "n": 244,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "dedup: forward verified",
+   "title": "dedup: forward verified (DONE)",
    "module": "wubu_dedup.c",
    "criterion": "dedup forward covered by a test with a measured assertion"
   },
