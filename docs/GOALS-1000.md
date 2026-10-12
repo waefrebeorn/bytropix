@@ -1092,7 +1092,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_bonzi.c` · **criterion:** orb present, native, not a browser tab
 - [x] **520** `P2` ambient screen context on summon (DONE)  
     - module: `wubu_screenshot.c` · **criterion:** focused window's rect captured to the Brain
-- [ ] **521** `P2` global summon hotkey (Ctrl+/)  
+- [x] **521** `P2` global summon hotkey (DONE) (Ctrl+/)  
     - module: `hosted_wayland_input.c` · **criterion:** hotkey raises the companion over any window
 - [x] **522** `P2` companion persistent memory (DONE)  
     - module: `wubu_bonzi_mem.c` · **criterion:** remembers across restarts; AD01-gated

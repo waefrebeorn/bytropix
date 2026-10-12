@@ -65,6 +65,8 @@ capability-gated tools**. The orb is native; wire the rest.
 
 > **B1 = DONE (2026-10-11).** `wubu_bonzi_context.{c,h}` produces the structured ambient context (focused-window title+rect + WM window count + recent-focus ring), fed live from `dosgui_wm_get_focused()` each render frame. Text context always available; pixel capture via `wubu_screenshot_capture(WUBU_SSHOT_WINDOW)` is the caller's job when a vision model attaches. wubuos 1671acd, test_bonzi_context 7/7. |
 | B2 | **Global summon hotkey** (Ctrl+/ style) that raises the companion over any window, from the hosted input layer. | `wubu_bonzi.c` + `hosted_wayland_input.c` | summonable-from-anywhere trait |
+
+> **B2 = DONE (2026-10-11).** Ctrl+/ (evdev KEY_SLASH=53) in `hosted_wayland_input.c` calls `wubu_bonzi_open_agi()` — the companion's summon/AGI-panel action — mirroring the Ctrl+T / Alt+PrintScr combo pattern, modifier state from the existing g_key_map tracker. wubuos 6c9576e. |
 | B3 | **Persistent memory**: companion recalls projects/people/writing-style across sessions, stored at `/n/bonzi/mem` (A4). | `wubu_agentic_mem.h` | persistent-memory trait |
 | B4 | **Capability-gated tool execution**: the companion acts through `wubu_tooluse.h`/`wubu_toolreg.h`, every call checked by `wubu_9p_cap_allowed(agent_subtree, path)` (AD01). | `wubu_agentic_os.h` AD01 + tooluse | Styx private-namespace = capability security |
 

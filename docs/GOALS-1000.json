@@ -4179,9 +4179,10 @@
    "n": 521,
    "domain": "UX",
    "tier": "P2",
-   "title": "global summon hotkey (Ctrl+/)",
+   "title": "global summon hotkey (Ctrl+/) (DONE)",
    "module": "hosted_wayland_input.c",
-   "criterion": "hotkey raises the companion over any window"
+   "criterion": "hotkey raises the companion over any window",
+   "done": true
   },
   {
    "n": 522,
