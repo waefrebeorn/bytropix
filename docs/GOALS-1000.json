@@ -2416,7 +2416,7 @@
    "n": 301,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "DGM loop: mutate -> validate -> archive -> sample",
+   "title": "DGM loop: mutate -> validate -> archive -> sample (DONE)",
    "module": "wubu_amoeba.c/wubu_hive.c",
    "criterion": "the standing loop runs end-to-end on a batch"
   },
