@@ -4884,7 +4884,7 @@
    "n": 607,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "vectorized physics (SIMD)",
+   "title": "vectorized physics (SIMD) (DONE)",
    "module": "worldsim/physics.c",
    "criterion": "AVX2 path beats scalar on measured bodies"
   },
