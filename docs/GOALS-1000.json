@@ -4836,7 +4836,7 @@
    "n": 601,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "worldsim is a solid WuBu math dynamic system",
+   "title": "worldsim is a solid WuBu math dynamic system (DONE)",
    "module": "worldsim/sim.c",
    "criterion": "physics integrates stably at dt"
   },
@@ -4892,7 +4892,7 @@
    "n": 608,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "gravity + drag + restitution tuned",
+   "title": "gravity + drag + restitution tuned (DONE)",
    "module": "worldsim/physics.c",
    "criterion": "matches analytic ballistic within epsilon"
   },
