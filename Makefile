@@ -1021,6 +1021,11 @@ test_causal_walker: tools/test_causal_walker.c src/wubu_causal_walker.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# WORLDSIM #607: AVX2 vectorized physics beats scalar on measured bodies.
+test_avx2_physics: tools/test_avx2_physics.c src/wubu_simd_physics.o
+	$(CC) $(CFLAGS) -mavx2 -mfma -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
