@@ -961,6 +961,11 @@ test_residual_scaling: tools/test_residual_scaling.c src/wubu_residual_scaling.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# BRAIN #237: z-loss forward with measured assertions.
+test_zloss: tools/test_zloss.c src/wubu_zloss.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
