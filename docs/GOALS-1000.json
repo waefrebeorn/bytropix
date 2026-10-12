@@ -2532,7 +2532,7 @@
    "n": 315,
    "domain": "AGENT",
    "tier": "P1",
-   "title": "priority store ranks candidate mutations",
+   "title": "priority store ranks candidate mutations (DONE)",
    "module": "wubu_priority_store.c",
    "criterion": "highest-coherence mutation sampled first"
   },
