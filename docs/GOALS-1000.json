@@ -3289,9 +3289,10 @@
    "n": 410,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "diagnostic hive at /n/hive/{cell}",
+   "title": "diagnostic hive at /n/hive/{cell} (DONE)",
    "module": "wubu_hive.c",
-   "criterion": "z-score cells + walker readable from the shell"
+   "criterion": "z-score cells + walker readable from the shell",
+   "done": true
   },
   {
    "n": 411,
