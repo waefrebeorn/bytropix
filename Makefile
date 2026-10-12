@@ -996,6 +996,11 @@ test_data_mix: tools/test_data_mix.c src/wubu_data_mix.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# BRAIN #245: quality filter forward with measured assertions.
+test_quality_filter: tools/test_quality_filter.c src/wubu_quality_filter.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
