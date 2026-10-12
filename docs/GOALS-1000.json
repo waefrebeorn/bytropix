@@ -2508,7 +2508,7 @@
    "n": 312,
    "domain": "AGENT",
    "tier": "P1",
-   "title": "5+1 rollback on divergence",
+   "title": "5+1 rollback on divergence (DONE)",
    "module": "wubu_selfimprove.c",
    "criterion": "rollback restores last-known-good"
   },
