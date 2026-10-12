@@ -3229,7 +3229,7 @@
    "n": 402,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "capability = namespace attach (AD01 everywhere)",
+   "title": "capability = namespace attach (AD01 everywhere) (DONE)",
    "module": "wubu_9p_cap_allowed",
    "criterion": "no resource reachable outside its subtree"
   },
