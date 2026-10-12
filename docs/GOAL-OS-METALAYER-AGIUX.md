@@ -90,6 +90,8 @@ validated mutation can't actually promote through the human-gated verifier.
 |---|---|---|---|
 | C1 | Wire the **Brain archive → Body operator**: a validated `wubu_hive` mutation emits a trace span; `wubu_selfimprove` ingests it, the independent verifier scores it, and on DA-3 sign-off the operator promotes it (apply / restart subsystem / emit trace directive). | `wubu_hive.c` → `wubu_selfimprove.c` + `src/kernel/wubu_verifier.h` | DGM propose→evaluate→archive→sample; DA-3 operator hook already exists |
 | C2 | **Held-out eval**: validate mutations on a disjoint benchmark segment (DGM used disjoint segments), so the verifier can't be gamed by the same data the mutator saw. | trainer + verifier | DGM + The Register reward-hacking failure mode |
+
+> **C2 = DONE (2026-10-11).** `wubu_heldout_eval.{c,h}`: pure decision — PASS/FAIL/SUSPECT from train+held-out scores; SUSPECT = the reward-hacking signature (in-sample >> held-out). Only PASS promotes. wubuwizard 1dc0c97, test_heldout_eval 6/6. |
 | C3 | **Non-negotiable invariant**: verifier is independent of the mutator; promotion is fail-closed; DA-3 freeze is the death condition. Encode as a test so future work can't erode it. | `wubu_selfimprove_test` | the reward-hacking pitfall from the vault |
 | C4 | **Cost bounding**: weight failed/divergent mutations 3x (DA-2 already does) and bound mutation search by the AD04 resource budget so the sandbox isn't infinite (DGM's cost gap). | `wubu_selfimprove.c` + `wubu_agentic_os.h` AD04 | darwin-agents: "DGM didn't address the cost of failed mutations" |
 

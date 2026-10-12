@@ -656,7 +656,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_selfimprove.c` · **criterion:** failed/divergent mutations weighted 3x
 - [ ] **305** `P0` Brain archive wired to Body operator  
     - module: `wubu_hive.c -> wubu_selfimprove.c` · **criterion:** a validated mutation promotes through DA-3 with a trace span
-- [ ] **306** `P0` held-out eval prevents reward hacking  
+- [x] **306** `P0` held-out eval prevents reward hacking (DONE)  
     - module: `trainer + verifier` · **criterion:** mutations validated on a disjoint benchmark segment
 - [ ] **307** `P0` trace span emitted on every promote  
     - module: `wubu_trace.c` · **criterion:** each promotion carries an auditable span

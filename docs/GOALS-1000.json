@@ -2456,9 +2456,10 @@
    "n": 306,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "held-out eval prevents reward hacking",
+   "title": "held-out eval prevents reward hacking (DONE)",
    "module": "trainer + verifier",
-   "criterion": "mutations validated on a disjoint benchmark segment"
+   "criterion": "mutations validated on a disjoint benchmark segment",
+   "done": true
   },
   {
    "n": 307,
