@@ -1952,7 +1952,7 @@
    "n": 243,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "data mix: forward verified",
+   "title": "data mix: forward verified (DONE)",
    "module": "wubu_data_mix.c",
    "criterion": "data mix forward covered by a test with a measured assertion"
   },
