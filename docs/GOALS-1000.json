@@ -1920,7 +1920,7 @@
    "n": 239,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "logit softcap: forward verified",
+   "title": "logit softcap: forward verified (DONE)",
    "module": "wubu_logit_softcap.c",
    "criterion": "logit softcap forward covered by a test with a measured assertion"
   },
