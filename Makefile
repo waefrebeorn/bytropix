@@ -931,6 +931,11 @@ test_yarn: tools/test_yarn.c src/wubu_yarn.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# BRAIN #231: rope scaling forward (linear/NTK/YARN) with measured assertions.
+test_rope_scaling: tools/test_rope_scaling.c src/wubu_rope_scaling.o src/wubu_yarn.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
