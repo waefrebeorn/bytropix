@@ -65,6 +65,8 @@ capability-gated tools**. The orb is native; wire the rest.
 | B2 | **Global summon hotkey** (Ctrl+/ style) that raises the companion over any window, from the hosted input layer. | `wubu_bonzi.c` + `hosted_wayland_input.c` | summonable-from-anywhere trait |
 | B3 | **Persistent memory**: companion recalls projects/people/writing-style across sessions, stored at `/n/bonzi/mem` (A4). | `wubu_agentic_mem.h` | persistent-memory trait |
 | B4 | **Capability-gated tool execution**: the companion acts through `wubu_tooluse.h`/`wubu_toolreg.h`, every call checked by `wubu_9p_cap_allowed(agent_subtree, path)` (AD01). | `wubu_agentic_os.h` AD01 + tooluse | Styx private-namespace = capability security |
+
+> **B4 = DONE (2026-10-11).** `wubu_tool_cap.{c,h}` wraps every tool call with the AD01 check: a tool is bound to a capability subtree, a call is refused unless the caller owns it, unbound tools are deny-by-default, handler never runs on denial. The security spine B and D reuse. wubuwizard 7ded8b3, test_tool_cap 8/8. |
 | B5 | **Offline fallback**: when no API key, route to local `gen_text` (WuBu-35M) so the companion always works. | `api_server` + `wubu_spawn` | NOVA/Gemma Wagon both do local fallback |
 | B6 | **Activity feedback**: the orb shows what it's doing (mood/animation states tied to agent activity), so it feels present, not a black box. | `wubu_bonzi.c` | "remains accessible without disrupting workflow" |
 

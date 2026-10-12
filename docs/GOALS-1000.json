@@ -4194,9 +4194,10 @@
    "n": 523,
    "domain": "UX",
    "tier": "P2",
-   "title": "companion acts through capability-gated tools",
+   "title": "companion acts through capability-gated tools (DONE)",
    "module": "wubu_tooluse.c",
-   "criterion": "every tool call checked by AD01"
+   "criterion": "every tool call checked by AD01",
+   "done": true
   },
   {
    "n": 524,

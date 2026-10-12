@@ -1096,7 +1096,7 @@ already shipped + gate-verified this program of work.
     - module: `hosted_wayland_input.c` · **criterion:** hotkey raises the companion over any window
 - [x] **522** `P2` companion persistent memory (DONE)  
     - module: `wubu_bonzi_mem.c` · **criterion:** remembers across restarts; AD01-gated
-- [ ] **523** `P2` companion acts through capability-gated tools  
+- [x] **523** `P2` companion acts through capability-gated tools (DONE)  
     - module: `wubu_tooluse.c` · **criterion:** every tool call checked by AD01
 - [ ] **524** `P2` companion offline fallback to local gen_text  
     - module: `api_server + wubu_spawn` · **criterion:** works with no API key
