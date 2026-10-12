@@ -2524,7 +2524,7 @@
    "n": 314,
    "domain": "AGENT",
    "tier": "P1",
-   "title": "contracts enforced on each mutation",
+   "title": "contracts enforced on each mutation (DONE)",
    "module": "wubu_contracts.c",
    "criterion": "mutation violating a contract is rejected"
   },
