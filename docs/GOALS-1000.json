@@ -4147,7 +4147,7 @@
    "n": 516,
    "domain": "UX",
    "tier": "P1",
-   "title": "taskbar click-to-restore a minimized window",
+   "title": "taskbar click-to-restore a minimized window (DONE)",
    "module": "dosgui_wm_taskbar.c",
    "criterion": "click restores; button reflects state"
   },
