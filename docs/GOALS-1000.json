@@ -2500,7 +2500,7 @@
    "n": 311,
    "domain": "AGENT",
    "tier": "P1",
-   "title": "causal walker localizes a divergence",
+   "title": "causal walker localizes a divergence (DONE)",
    "module": "wubu_hive.c",
    "criterion": "walker points at the responsible cell"
   },
