@@ -4190,7 +4190,8 @@
    "tier": "P2",
    "title": "companion persistent memory (DONE)",
    "module": "wubu_bonzi_mem.c",
-   "criterion": "remembers across restarts; AD01-gated"
+   "criterion": "remembers across restarts; AD01-gated",
+   "done": true
   },
   {
    "n": 523,

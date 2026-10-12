@@ -68,6 +68,8 @@ capability-gated tools**. The orb is native; wire the rest.
 
 > **B2 = DONE (2026-10-11).** Ctrl+/ (evdev KEY_SLASH=53) in `hosted_wayland_input.c` calls `wubu_bonzi_open_agi()` — the companion's summon/AGI-panel action — mirroring the Ctrl+T / Alt+PrintScr combo pattern, modifier state from the existing g_key_map tracker. wubuos 6c9576e. |
 | B3 | **Persistent memory**: companion recalls projects/people/writing-style across sessions, stored at `/n/bonzi/mem` (A4). | `wubu_agentic_mem.h` | persistent-memory trait |
+
+> **B3 = DONE (2026-10-11).** `wubu_bonzi_greet.{c,h}` turns loaded memory into a personalized summon greeting (first-meeting vs welcome-back naming recent activity); `wubu_bonzi_mem_recall` loads `/n/bonzi/mem` and formats it; `wubu_bonzi_open_agi` sets the personalized bubble on summon (weak-linked so bonzi links without the store). wubuos 0a32a95, test_bonzi_greet 8/8. |
 | B4 | **Capability-gated tool execution**: the companion acts through `wubu_tooluse.h`/`wubu_toolreg.h`, every call checked by `wubu_9p_cap_allowed(agent_subtree, path)` (AD01). | `wubu_agentic_os.h` AD01 + tooluse | Styx private-namespace = capability security |
 
 > **B4 = DONE (2026-10-11).** `wubu_tool_cap.{c,h}` wraps every tool call with the AD01 check: a tool is bound to a capability subtree, a call is refused unless the caller owns it, unbound tools are deny-by-default, handler never runs on denial. The security spine B and D reuse. wubuwizard 7ded8b3, test_tool_cap 8/8. |
