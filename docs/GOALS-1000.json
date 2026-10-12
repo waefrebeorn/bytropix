@@ -6701,7 +6701,7 @@
    "n": 834,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "RUNTIME: PE execution leg verified",
+   "title": "RUNTIME: PE execution leg verified (DONE)",
    "module": "wubu_exec.c",
    "criterion": "a real PE binary/module runs on the kernel with correct output"
   },
