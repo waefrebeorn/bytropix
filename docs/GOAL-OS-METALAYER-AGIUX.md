@@ -97,6 +97,8 @@ validated mutation can't actually promote through the human-gated verifier.
 > **C3 = DONE (2026-10-11).** `test_selfimprove_invariants` locks the three DA-3 fail-closed gates (no verifier / frozen / unsigned gate => no promote, operator never fires) + verifier independence (operator fires only on a verifier-passed span). wubuos f4a5889, 10/10. |
 | C4 | **Cost bounding**: weight failed/divergent mutations 3x (DA-2 already does) and bound mutation search by the AD04 resource budget so the sandbox isn't infinite (DGM's cost gap). | `wubu_selfimprove.c` + `wubu_agentic_os.h` AD04 | darwin-agents: "DGM didn't address the cost of failed mutations" |
 
+> **C4 = DONE (2026-10-11).** `wubu_budget_search.{c,h}` bounds the search by the AD04 budget: accumulates per-candidate cpu/ram/io and aborts the moment `wubu_resbound_check` overruns, before paying for the offending candidate. Closes the DGM infinite-sandbox gap. wubuwizard 8ec93bf, test_budget_search 8/8. |
+
 ## Track D — "Pure interpretation so all OS apps run in our stack"
 
 Styx's translator model + `wubu_exec.c`'s format dispatch. The missing

@@ -682,7 +682,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_blueprint.c` · **criterion:** mutation targets a named gap
 - [ ] **318** `P1` trajectory cell tracks the improvement path  
     - module: `wubu_trajcell.c` · **criterion:** path measurable across generations
-- [ ] **319** `P2` resource budget bounds mutation search (AD04)  
+- [x] **319** `P2` resource budget bounds mutation search (AD04) (DONE)  
     - module: `wubu_agentic_os.h` · **criterion:** cpu/ram/io overrun aborts the search
 - [ ] **320** `P2` exponential backoff on retry (AD02)  
     - module: `wubu_agentic_os.h` · **criterion:** backoff_ms caps at the ceiling

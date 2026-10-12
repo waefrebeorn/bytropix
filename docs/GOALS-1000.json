@@ -2563,9 +2563,10 @@
    "n": 319,
    "domain": "AGENT",
    "tier": "P2",
-   "title": "resource budget bounds mutation search (AD04)",
+   "title": "resource budget bounds mutation search (AD04) (DONE)",
    "module": "wubu_agentic_os.h",
-   "criterion": "cpu/ram/io overrun aborts the search"
+   "criterion": "cpu/ram/io overrun aborts the search",
+   "done": true
   },
   {
    "n": 320,
