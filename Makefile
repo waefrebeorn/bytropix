@@ -1001,6 +1001,11 @@ test_quality_filter: tools/test_quality_filter.c src/wubu_quality_filter.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# BRAIN #246: length bucket forward with measured assertions.
+test_length_bucket: tools/test_length_bucket.c src/wubu_length_bucket.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
