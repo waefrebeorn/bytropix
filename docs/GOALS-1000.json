@@ -4206,9 +4206,10 @@
    "n": 524,
    "domain": "UX",
    "tier": "P2",
-   "title": "companion offline fallback to local gen_text",
+   "title": "companion offline fallback to local gen_text (DONE)",
    "module": "api_server + wubu_spawn",
-   "criterion": "works with no API key"
+   "criterion": "works with no API key",
+   "done": true
   },
   {
    "n": 525,

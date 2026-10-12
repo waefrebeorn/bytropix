@@ -74,6 +74,8 @@ capability-gated tools**. The orb is native; wire the rest.
 
 > **B4 = DONE (2026-10-11).** `wubu_tool_cap.{c,h}` wraps every tool call with the AD01 check: a tool is bound to a capability subtree, a call is refused unless the caller owns it, unbound tools are deny-by-default, handler never runs on denial. The security spine B and D reuse. wubuwizard 7ded8b3, test_tool_cap 8/8. |
 | B5 | **Offline fallback**: when no API key, route to local `gen_text` (WuBu-35M) so the companion always works. | `api_server` + `wubu_spawn` | NOVA/Gemma Wagon both do local fallback |
+
+> **B5 = DONE (2026-10-11).** `wubu_provider_route.{c,h}` is the routing decision: pure `decide(has_key, allow_remote, has_local)` + env wrapper reading WUBU_API_KEY/OPENROUTER_API_KEY/NVIDIA_API_KEY. Remote only with a key + permission; local is the floor; never a silently-dead remote. wubuwizard aef2323, test_provider_route 6/6. |
 | B6 | **Activity feedback**: the orb shows what it's doing (mood/animation states tied to agent activity), so it feels present, not a black box. | `wubu_bonzi.c` | "remains accessible without disrupting workflow" |
 
 ## Track C — Close the recursive-learning loop end to end

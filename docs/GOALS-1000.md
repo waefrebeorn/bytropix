@@ -1098,7 +1098,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_bonzi_mem.c` · **criterion:** remembers across restarts; AD01-gated
 - [x] **523** `P2` companion acts through capability-gated tools (DONE)  
     - module: `wubu_tooluse.c` · **criterion:** every tool call checked by AD01
-- [ ] **524** `P2` companion offline fallback to local gen_text  
+- [x] **524** `P2` companion offline fallback (DONE) to local gen_text  
     - module: `api_server + wubu_spawn` · **criterion:** works with no API key
 - [ ] **525** `P2` companion activity feedback (mood states)  
     - module: `wubu_bonzi.c` · **criterion:** orb reflects agent activity, not a black box
