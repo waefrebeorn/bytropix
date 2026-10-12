@@ -3221,7 +3221,7 @@
    "n": 401,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "Brain internals are /n files, introspectable",
+   "title": "Brain internals are /n files, introspectable (DONE)",
    "module": "wubu_ns_*.c",
    "criterion": "cat /n/<brain-resource> shows live state"
   },
@@ -3237,7 +3237,7 @@
    "n": 403,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "KV cache at /n/kv (DONE, verified)",
+   "title": "KV cache at /n/kv (DONE)",
    "module": "wubu_kvfs.c",
    "criterion": "read/write a slot's latent through the namespace"
   },
