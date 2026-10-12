@@ -4876,7 +4876,7 @@
    "n": 606,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "worldsim state at /n/world (DONE pattern)",
+   "title": "worldsim state at /n/world (DONE)",
    "module": "worldsim",
    "criterion": "entity/terrain/physics tick readable"
   },
