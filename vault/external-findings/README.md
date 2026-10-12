@@ -33,6 +33,16 @@ criticisms). **overlap-partial** on the companion: `wubu_bonzi` is already a
 native desktop orb, but lacks ambient screen context, a global summon
 hotkey, persistent-memory wiring, and capability-gated tool execution.
 
+## 03 — The Interop Librarian (self-growing cross-system translation)
+
+Researched + built 2026-10-11 against the actual stack, from the user's
+"building as it goes translation library" directive. Four modules
+(wubu_abi_path, wubu_syscall_shim, wubu_librarian, wubu_librarian_serve)
+turn foreign OS apps into findable, callable participants with a
+translation dictionary that learns itself from real crossings. Sits on
+Plan 9/Styx (resources-as-files, user-level translators) + capability
+security via namespace. Full notes in `03-interop-librarian.md`.
+
 ## 01 — Manifold geometry for neural substrates
 
 ### 1.1 Hyperbolic models: Poincaré ball vs hyperboloid vs Klein
