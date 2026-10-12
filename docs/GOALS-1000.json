@@ -1864,7 +1864,7 @@
    "n": 232,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "alibi: forward verified",
+   "title": "alibi: forward verified (DONE)",
    "module": "wubu_alibi.c",
    "criterion": "alibi forward covered by a test with a measured assertion"
   },
