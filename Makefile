@@ -1006,6 +1006,11 @@ test_length_bucket: tools/test_length_bucket.c src/wubu_length_bucket.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	./$@
 
+# AGENT #312: 5+1 rollback on divergence.
+test_rollback: tools/test_rollback.c src/wubu_rollback.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	./$@
+
 # ── Round-4 (Kimi K3: KDA, AttnRes, Stable LatentMoE, MXFP4/MXFP8) ──
 test_kda: tools/test_kda.c src/wubu_kda.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
