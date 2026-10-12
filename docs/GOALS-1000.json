@@ -7237,7 +7237,7 @@
    "n": 901,
    "domain": "STACK",
    "tier": "P0",
-   "title": "all three repos build from a clean checkout",
+   "title": "all three repos build from a clean checkout (DONE)",
    "module": "Makefile",
    "criterion": "make test green on all three"
   },
