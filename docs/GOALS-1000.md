@@ -905,7 +905,7 @@ already shipped + gate-verified this program of work.
     - module: `wubu_ns_bridge.c` · **criterion:** security falls out of the namespace
 - [ ] **428** `P2` plumber-style message passing via /n  
     - module: `styxfs_server.c` · **criterion:** inter-agent messages as file writes
-- [ ] **429** `P3` namespace is queryable (find /n -name)  
+- [x] **429** `P3` namespace is queryable (find /n -name) (DONE)  
     - module: `wubu_ns_fs.c` · **criterion:** standard file tools work on the tree
 - [ ] **430** `P3` hot-reload a namespace subtree  
     - module: `wubu_ns_bridge.c` · **criterion:** remount without restarting the service

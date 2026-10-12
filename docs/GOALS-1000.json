@@ -3450,9 +3450,10 @@
    "n": 429,
    "domain": "NAMESPACE",
    "tier": "P3",
-   "title": "namespace is queryable (find /n -name)",
+   "title": "namespace is queryable (find /n -name) (DONE)",
    "module": "wubu_ns_fs.c",
-   "criterion": "standard file tools work on the tree"
+   "criterion": "standard file tools work on the tree",
+   "done": true
   },
   {
    "n": 430,
