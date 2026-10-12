@@ -7245,7 +7245,7 @@
    "n": 902,
    "domain": "STACK",
    "tier": "P0",
-   "title": "header-dependency tracking correct",
+   "title": "header-dependency tracking correct (DONE)",
    "module": "wubuos build-integrity",
    "criterion": "edit 1 .h recompiles only dependents"
   },
