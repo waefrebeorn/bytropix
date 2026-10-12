@@ -2492,7 +2492,7 @@
    "n": 310,
    "domain": "AGENT",
    "tier": "P1",
-   "title": "hive = diagnostic immune system",
+   "title": "hive = diagnostic immune system (DONE)",
    "module": "wubu_hive.c",
    "criterion": "typed measurement cells, z-score anomaly"
   },
