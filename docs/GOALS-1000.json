@@ -1904,7 +1904,7 @@
    "n": 237,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "z-loss: forward verified",
+   "title": "z-loss: forward verified (DONE)",
    "module": "wubu_z_loss.c",
    "criterion": "z-loss forward covered by a test with a measured assertion"
   },
