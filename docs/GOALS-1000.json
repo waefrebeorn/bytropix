@@ -2442,7 +2442,7 @@
    "n": 304,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "DA-2 failure weighting 3x bounds search cost",
+   "title": "DA-2 failure weighting 3x bounds search cost (DONE)",
    "module": "wubu_selfimprove.c",
    "criterion": "failed/divergent mutations weighted 3x"
   },
