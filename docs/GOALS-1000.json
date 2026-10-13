@@ -322,9 +322,9 @@
    "n": 39,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "struct return > 2 cells correct",
+   "title": "struct return > 2 cells correct (DONE)",
    "module": "mir_eval.c",
-   "criterion": "multi-cell struct by-value return"
+   "criterion": "multi-cell struct by-value return [verified: gauntlet struct{int a,b,c,d} return sum=10]"
   },
   {
    "n": 40,
