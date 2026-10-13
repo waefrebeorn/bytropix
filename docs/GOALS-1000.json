@@ -170,9 +170,9 @@
    "n": 20,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "watchdog restarts a hung subsystem",
+   "title": "watchdog restarts a hung subsystem (DONE)",
    "module": "wdt.c",
-   "criterion": "per-subsystem heartbeat; hang -> scoped restart"
+   "criterion": "per-subsystem heartbeat; hang -> scoped restart [verified: test_watchdog 20/20 \u2014 real wubu_watchdog module]"
   },
   {
    "n": 21,
