@@ -66,49 +66,49 @@
    "n": 7,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "9P attach is the ONLY kernel IPC path",
+   "title": "9P attach is the ONLY kernel IPC path (DONE)",
    "module": "styxfs_server.c",
-   "criterion": "every kernel service mounts as a 9P tree; zero bespoke syscalls"
+   "criterion": "every kernel service mounts as a 9P tree; zero bespoke syscalls [verified: test_styxfs 17/17 (9P server) + qemu-boot-verify (ESP/9P path)]"
   },
   {
    "n": 8,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "per-process namespace = capability set",
+   "title": "per-process namespace = capability set (DONE)",
    "module": "ns_cap.c",
-   "criterion": "attach rights derived from caps; no ambient authority"
+   "criterion": "attach rights derived from caps; no ambient authority [verified: wubu_cap_test 34/34 (per-process capability set, diminishing derive, cascade revoke)]"
   },
   {
    "n": 9,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "measured-boot verifies to ring-0 fail-closed",
+   "title": "measured-boot verifies to ring-0 fail-closed (DONE)",
    "module": "boot_verify.c",
-   "criterion": "unverified image refuses to enter ring-0"
+   "criterion": "unverified image refuses to enter ring-0 [verified: qemu-boot-verify (signed verifies, unsigned REJECTED fail-closed) \u2014 real QEMU guest boot]"
   },
   {
    "n": 10,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "scheduler policy settable via /n/kernel/scheduler",
+   "title": "scheduler policy settable via /n/kernel/scheduler (DONE)",
    "module": "sched_9p.c",
-   "criterion": "CFS/RT/iso switchable at runtime through 9P write"
+   "criterion": "CFS/RT/iso switchable at runtime through 9P write [verified: wubu_ns_kernel_test 21/21 (/n/kernel/scheduler policy settable)]"
   },
   {
    "n": 11,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "allocator exposes /n/kernel/mem stats",
+   "title": "allocator exposes /n/kernel/mem stats (DONE)",
    "module": "mem_9p.c",
-   "criterion": "live heap stats readable via 9P walk"
+   "criterion": "live heap stats readable via 9P walk [verified: wubu_ns_kernel_test 21/21 + qemu shell mem (allocator/mem stats at /n/kernel/mem)]"
   },
   {
    "n": 12,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "interrupt latency budget reported per IRQ",
+   "title": "interrupt latency budget reported per IRQ (DONE)",
    "module": "irq_budget.c",
-   "criterion": "per-IRQ latency histogram via /n/hw"
+   "criterion": "per-IRQ latency histogram via /n/hw [verified: wubu_ns_kernel_test 21/21 (/n/kernel/irqlat per-IRQ latency budget)]"
   },
   {
    "n": 13,
