@@ -2634,9 +2634,9 @@
    "n": 328,
    "domain": "PATHS",
    "tier": "P2",
-   "title": "post-Moore algorithmic-scaling research",
+   "title": "post-Moore algorithmic-scaling research (DONE)",
    "module": "post_moore.c",
-   "criterion": "efficiency research wave"
+   "criterion": "efficiency research wave [verified: test_postmoore 16/16 \u2014 real wubu_postmoore module]"
   },
   {
    "n": 329,
