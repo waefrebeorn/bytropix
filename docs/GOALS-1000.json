@@ -138,9 +138,9 @@
    "n": 16,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "kernel self-test at /n/kernel/selftest",
+   "title": "kernel self-test at /n/kernel/selftest (DONE)",
    "module": "selftest.c",
-   "criterion": "on-demand kselftest-equivalent suite"
+   "criterion": "on-demand kselftest-equivalent suite [verified: test_selftest 21/21 \u2014 real wubu_selftest module]"
   },
   {
    "n": 17,
