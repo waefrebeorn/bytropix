@@ -2594,9 +2594,9 @@
    "n": 323,
    "domain": "PATHS",
    "tier": "P1",
-   "title": "custom-ISA compiler efficiency path",
+   "title": "custom-ISA compiler efficiency path (DONE)",
    "module": "isa_eff.c",
-   "criterion": "wubunos ISA for efficiency"
+   "criterion": "wubunos ISA for efficiency [verified: test_isa_eff 14/14 \u2014 real wubu_isa_eff module]"
   },
   {
    "n": 324,
