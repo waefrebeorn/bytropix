@@ -477,6 +477,7 @@ src/wubu_lockdep.o: src/wubu_lockdep.c include/wubu_lockdep.h
 src/wubu_klog.o: src/wubu_klog.c include/wubu_klog.h
 src/wubu_watchdog.o: src/wubu_watchdog.c include/wubu_watchdog.h
 src/wubu_modsign.o: src/wubu_modsign.c include/wubu_modsign.h
+src/wubu_nvmeqd.o: src/wubu_nvmeqd.c include/wubu_nvmeqd.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1399,6 +1400,10 @@ test_watchdog: tools/test_watchdog.c src/wubu_watchdog.o
 	./$@
 
 test_modsign: tools/test_modsign.c src/wubu_modsign.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_nvmeqd: tools/test_nvmeqd.c src/wubu_nvmeqd.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 

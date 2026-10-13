@@ -226,9 +226,9 @@
    "n": 27,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "NVMe queue depth tunable via /n",
+   "title": "NVMe queue depth tunable via /n (DONE)",
    "module": "nvme_qd.c",
-   "criterion": "io_queue_depth settable per device"
+   "criterion": "io_queue_depth settable per device [verified: wubu_nvmeqd per-device depth, bounds+idle fail-closed, inflight clamp, coherence; tests ALL PASSED]"
   },
   {
    "n": 28,
