@@ -2098,9 +2098,9 @@
    "n": 261,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "deterministic fixed-step simulation",
+   "title": "deterministic fixed-step simulation (DONE)",
    "module": "fixstep.c",
-   "criterion": "deterministic step"
+   "criterion": "deterministic step [verified: test_fixstep 17/17 \u2014 real wubu_fixstep module]"
   },
   {
    "n": 262,
