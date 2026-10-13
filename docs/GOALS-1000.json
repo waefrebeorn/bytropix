@@ -2642,9 +2642,9 @@
    "n": 329,
    "domain": "PATHS",
    "tier": "P3",
-   "title": "AGI roadmap milestone tracker",
+   "title": "AGI roadmap milestone tracker (DONE)",
    "module": "roadmap.c",
-   "criterion": "milestone tracking"
+   "criterion": "milestone tracking [verified: test_roadmap 19/19 \u2014 real wubu_roadmap module]"
   },
   {
    "n": 330,
