@@ -3141,6 +3141,14 @@
    "title": "Tabbed Web browser (DONE)",
    "module": "wubu_browser.c",
    "criterion": "per-tab back/forward history + tabs + bookmarks [verified: navigate builds history, back/forward + nowhere-to-go, new-nav-clears-forward, independent per-tab history, switch, bookmarks, close-tab + last-tab guard; 45+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 392,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Email client (DONE)",
+   "module": "wubu_mail.c",
+   "criterion": "mailbox with folders + read/unread + move/delete + counts [verified: 4 folders, receive unread-by-default, read/unread counts, move between folders, send, delete + gone, per-folder counts; 40+ assertions, ASAN-clean]"
   }
  ]
 }
