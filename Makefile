@@ -470,6 +470,7 @@ src/wubu_hypmom.o: src/wubu_hypmom.c include/wubu_hypmom.h
 src/wubu_synthfile.o: src/wubu_synthfile.c include/wubu_synthfile.h
 src/wubu_docverify.o: src/wubu_docverify.c include/wubu_docverify.h
 src/wubu_ro_usr.o: src/wubu_ro_usr.c include/wubu_ro_usr.h
+src/wubu_ctr_rt.o: src/wubu_ctr_rt.c include/wubu_ctr_rt.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1334,6 +1335,10 @@ test_docverify: tools/test_docverify.c src/wubu_docverify.o
 	./$@
 
 test_ro_usr: tools/test_ro_usr.c src/wubu_ro_usr.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_ctr_rt: tools/test_ctr_rt.c src/wubu_ctr_rt.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
