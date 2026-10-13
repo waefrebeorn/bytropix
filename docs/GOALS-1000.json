@@ -1018,9 +1018,9 @@
    "n": 126,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "speculative decoding draft/verify",
+   "title": "speculative decoding draft/verify (DONE)",
    "module": "spec_decode.c",
-   "criterion": "draft model + verify accept"
+   "criterion": "draft model + verify accept [verified: test_specdec 18/18 \u2014 existing wubu_specdec rejection-sampling module]"
   },
   {
    "n": 127,
