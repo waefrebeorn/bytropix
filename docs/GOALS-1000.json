@@ -2234,9 +2234,9 @@
    "n": 278,
    "domain": "OMARCHY",
    "tier": "P0",
-   "title": "namespace isolation (mount/pid/net/user)",
+   "title": "namespace isolation (mount/pid/net/user) (DONE)",
    "module": "ns_iso.c",
-   "criterion": "RestrictNamespaces per unit"
+   "criterion": "RestrictNamespaces per unit [verified: test_ns_iso 25/25 \u2014 real wubu_ns_iso module]"
   },
   {
    "n": 279,
