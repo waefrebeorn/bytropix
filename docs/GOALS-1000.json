@@ -2554,17 +2554,17 @@
    "n": 318,
    "domain": "PATHS",
    "tier": "P1",
-   "title": "Lean proof: containment preserves safety",
+   "title": "Lean proof: containment preserves safety (DONE)",
    "module": "lean_contain.c",
-   "criterion": "containment safety proof"
+   "criterion": "containment safety proof [verified: Lean 4.29.1 proof, no sorryAx -- tighten_reduces_actions, safety_preserved, killswitch_halts on 5-level containment ladder]"
   },
   {
    "n": 319,
    "domain": "PATHS",
    "tier": "P1",
-   "title": "Lean proof: proof-gate is sound",
+   "title": "Lean proof: proof-gate is sound (DONE)",
    "module": "lean_gate.c",
-   "criterion": "gate soundness proof"
+   "criterion": "gate soundness proof [verified: Lean 4.29.1 proof, no sorryAx -- accepted_implies_consistent, consistent_with_proof_accepted, gate_is_strict, fail_closed]"
   },
   {
    "n": 320,
