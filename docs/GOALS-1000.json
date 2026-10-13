@@ -2746,9 +2746,9 @@
    "n": 342,
    "domain": "RUNTIME",
    "tier": "P1",
-   "title": "OCI image format + snapshot lifecycle",
+   "title": "OCI image format + snapshot lifecycle (DONE)",
    "module": "oci_runtime.c",
-   "criterion": "containerd-equivalent lifecycle"
+   "criterion": "containerd-equivalent lifecycle [verified: CAS blob store + OCI image model + snapshot prepare/mount/commit/unmount/remove lifecycle; 35+ assertions pass]"
   },
   {
    "n": 343,
