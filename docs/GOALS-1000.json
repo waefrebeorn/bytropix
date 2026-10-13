@@ -2978,9 +2978,9 @@
    "n": 371,
    "domain": "STACK",
    "tier": "P3",
-   "title": "repo hygiene audit + push",
+   "title": "repo hygiene audit + push (DONE)",
    "module": "repo_hygiene.c",
-   "criterion": "one-command audit+push"
+   "criterion": "one-command audit+push [verified: repodoc audit on all 3 repos; wubunos 27 build-artifact ELFs untracked + gitignore hardened; 2 real wubuos kernel build regressions fixed; pushed]"
   }
  ]
 }
