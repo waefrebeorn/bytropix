@@ -425,6 +425,7 @@ src/wubu_fixstep.o: src/wubu_fixstep.c include/wubu_fixstep.h
 src/wubu_collision.o: src/wubu_collision.c include/wubu_collision.h
 src/wubu_physics.o: src/wubu_physics.c include/wubu_physics.h
 src/wubu_terrain.o: src/wubu_terrain.c include/wubu_terrain.h
+src/wubu_worldsim.o: src/wubu_worldsim.c include/wubu_worldsim.h src/wubu_physics.o src/wubu_collision.o src/wubu_fixstep.o
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1109,6 +1110,10 @@ test_physics: tools/test_physics.c src/wubu_physics.o
 	./$@
 
 test_terrain: tools/test_terrain.c src/wubu_terrain.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_worldsim: tools/test_worldsim.c src/wubu_worldsim.o src/wubu_physics.o src/wubu_collision.o src/wubu_fixstep.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
