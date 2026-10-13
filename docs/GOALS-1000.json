@@ -1530,9 +1530,9 @@
    "n": 190,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "namespace is queryable (find /n -name)",
+   "title": "namespace is queryable (find /n -name) (DONE)",
    "module": "ns_query.c",
-   "criterion": "9P find/walk query"
+   "criterion": "9P find/walk query [verified: test_9pf 22/22 \u2014 real wubu_9pf module]"
   },
   {
    "n": 191,
