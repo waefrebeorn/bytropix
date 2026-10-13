@@ -354,9 +354,9 @@
    "n": 43,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "compound literals with statement-expressions",
+   "title": "compound literals with statement-expressions (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "({ ... }) GNU extension"
+   "criterion": "({ ... }) GNU extension [verified: struct compound literal (struct T){10,20,30}=60, designated=34; core 247/247]"
   },
   {
    "n": 44,
