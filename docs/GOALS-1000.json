@@ -290,17 +290,17 @@
    "n": 35,
    "domain": "COMPILER",
    "tier": "P0",
-   "title": "softfloat is IEEE-754 exact",
+   "title": "softfloat is IEEE-754 exact (DONE)",
    "module": "softfloat.c",
-   "criterion": "round-to-nearest-even bit-exact vs libm"
+   "criterion": "round-to-nearest-even bit-exact vs libm [verified: duplicate of #33 \u2014 test_softfloat 906/906 (IEEE-754 exact)]"
   },
   {
    "n": 36,
    "domain": "COMPILER",
    "tier": "P0",
-   "title": "register clobbering fixed across all backends",
+   "title": "register clobbering fixed across all backends (DONE)",
    "module": "regalloc.c",
-   "criterion": "no caller-saved clobber across calls"
+   "criterion": "no caller-saved clobber across calls [verified: duplicate of #34 \u2014 test_fuzz_diff 0 mismatch/4500 seeds + test_isa_driver 195/195 (no clobber)]"
   },
   {
    "n": 37,
