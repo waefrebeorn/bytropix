@@ -453,6 +453,7 @@ src/wubu_protect_kt.o: src/wubu_protect_kt.c include/wubu_protect_kt.h
 src/wubu_distroless.o: src/wubu_distroless.c include/wubu_distroless.h
 src/wubu_consolidate.o: src/wubu_consolidate.c include/wubu_consolidate.h
 src/wubu_compute_eff.o: src/wubu_compute_eff.c include/wubu_compute_eff.h
+src/wubu_determ_ctrl.o: src/wubu_determ_ctrl.c include/wubu_determ_ctrl.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1249,6 +1250,10 @@ test_consolidate: tools/test_consolidate.c src/wubu_consolidate.o
 	./$@
 
 test_compute_eff: tools/test_compute_eff.c src/wubu_compute_eff.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_determ_ctrl: tools/test_determ_ctrl.c src/wubu_determ_ctrl.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
