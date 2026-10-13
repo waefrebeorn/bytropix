@@ -338,9 +338,9 @@
    "n": 41,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "anonymous-struct member offset resolution",
+   "title": "anonymous-struct member offset resolution (DONE)",
    "module": "mir_eval.c",
-   "criterion": "offset-based member lookup for anon structs"
+   "criterion": "offset-based member lookup for anon structs [verified: gauntlet anon-struct o.t.i1+o.t.i2+o.x=18, no overlap; core 247/247, MIR 112/117, selfhost 155/155 no regression]"
   },
   {
    "n": 42,
