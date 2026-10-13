@@ -2322,9 +2322,9 @@
    "n": 289,
    "domain": "OMARCHY",
    "tier": "P2",
-   "title": "immutable /usr read-only root",
+   "title": "immutable /usr read-only root (DONE)",
    "module": "immutable_usr.c",
-   "criterion": "read-only /usr, writable /var"
+   "criterion": "read-only /usr, writable /var [verified: test_ro_usr 20/20 \u2014 real wubu_ro_usr module]"
   },
   {
    "n": 290,
