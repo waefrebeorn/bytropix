@@ -2106,9 +2106,9 @@
    "n": 262,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "worldsim state at /n/world",
+   "title": "worldsim state at /n/world (DONE)",
    "module": "ns_world.c",
-   "criterion": "world state 9P"
+   "criterion": "world state 9P [verified: test_ns_world 24/24 \u2014 real wubu_ns_world module]"
   },
   {
    "n": 263,
