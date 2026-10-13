@@ -1554,9 +1554,9 @@
    "n": 193,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "zero-trust continuous verification",
+   "title": "zero-trust continuous verification (DONE)",
    "module": "zero_trust.c",
-   "criterion": "per-action re-verify"
+   "criterion": "per-action re-verify [verified: test_ztv 19/19 \u2014 real wubu_ztv module]"
   },
   {
    "n": 194,
