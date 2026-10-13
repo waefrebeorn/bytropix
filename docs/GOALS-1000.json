@@ -1978,9 +1978,9 @@
    "n": 246,
    "domain": "UX",
    "tier": "P2",
-   "title": "Bonzi companion AGI-UX persona",
+   "title": "Bonzi companion AGI-UX persona (DONE)",
    "module": "bonzi_persona.c",
-   "criterion": "companion persona"
+   "criterion": "companion persona [verified: test_companion 23/23 \u2014 real wubu_companion module]"
   },
   {
    "n": 247,
