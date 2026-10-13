@@ -437,6 +437,7 @@ src/wubu_failweight.o: src/wubu_failweight.c include/wubu_failweight.h
 src/wubu_ophook.o: src/wubu_ophook.c include/wubu_ophook.h
 src/wubu_output_guard.o: src/wubu_output_guard.c include/wubu_output_guard.h
 src/wubu_ztverify.o: src/wubu_ztverify.c include/wubu_ztverify.h
+src/wubu_broadphase.o: src/wubu_broadphase.c include/wubu_broadphase.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1169,6 +1170,10 @@ test_output_guard: tools/test_output_guard.c src/wubu_output_guard.o
 	./$@
 
 test_ztverify: tools/test_ztverify.c src/wubu_ztverify.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_broadphase: tools/test_broadphase.c src/wubu_broadphase.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
