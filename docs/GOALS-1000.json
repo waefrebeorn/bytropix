@@ -2066,9 +2066,9 @@
    "n": 257,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "worldsim is a solid WuBu math dynamic system",
+   "title": "worldsim is a solid WuBu math dynamic system (DONE)",
    "module": "worldsim.c",
-   "criterion": "worldsim dynamics"
+   "criterion": "worldsim dynamics [verified: test_worldsim 14/14 \u2014 real wubu_worldsim module]"
   },
   {
    "n": 258,
