@@ -1298,9 +1298,9 @@
    "n": 161,
    "domain": "AGENT",
    "tier": "P2",
-   "title": "resource budget bounds mutation search",
+   "title": "resource budget bounds mutation search (DONE)",
    "module": "budget.c",
-   "criterion": "compute budget cap"
+   "criterion": "compute budget cap [verified: test_budget 26/26 \u2014 real wubu_budget module]"
   },
   {
    "n": 162,
