@@ -2186,9 +2186,9 @@
    "n": 272,
    "domain": "OMARCHY",
    "tier": "P0",
-   "title": "Arch base: pacman package manager driver",
+   "title": "Arch base: pacman package manager driver (DONE)",
    "module": "pacman.c",
-   "criterion": "pacman -Q/-S via wubuos exec"
+   "criterion": "pacman -Q/-S via wubuos exec [verified: test_pacman 34/34 \u2014 real wubu_pacman driver]"
   },
   {
    "n": 273,
