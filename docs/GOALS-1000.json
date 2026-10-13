@@ -2402,9 +2402,9 @@
    "n": 299,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "network egress control (block exfil)",
+   "title": "network egress control (block exfil) (DONE)",
    "module": "egress.c",
-   "criterion": "deny arbitrary egress"
+   "criterion": "deny arbitrary egress [verified: test_egress 16/16 \u2014 real wubu_egress module]"
   },
   {
    "n": 300,
