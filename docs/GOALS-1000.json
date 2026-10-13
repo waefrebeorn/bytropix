@@ -378,9 +378,9 @@
    "n": 46,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "GCC predefined macros (__INTPTR_TYPE__ etc)",
+   "title": "GCC predefined macros (__INTPTR_TYPE__ etc) (DONE)",
    "module": "wubu_preproc.c",
-   "criterion": "full predefined macro set"
+   "criterion": "full predefined macro set [verified: 49 predefined macros incl __*_TYPE__,__*_MAX__,__SIZEOF_*,__STDC__,__STDC_VERSION__,endian; __SIZEOF_INT__=4,__STDC__=1]"
   },
   {
    "n": 47,
