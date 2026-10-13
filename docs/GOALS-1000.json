@@ -2818,9 +2818,9 @@
    "n": 351,
    "domain": "RUNTIME",
    "tier": "P3",
-   "title": "gVisor user-kernel isolation",
+   "title": "gVisor user-kernel isolation (DONE)",
    "module": "gvisor.c",
-   "criterion": "syscall interposition in userspace"
+   "criterion": "syscall interposition in userspace [verified: gVisor-style userspace syscall interposition -- deny-by-default interception table + user-space Sentry + seccomp-SVP trap-all + fail-closed deny-by-default policy; run-stream aborts -1 on denied syscall; 35+ assertions pass]"
   },
   {
    "n": 352,
