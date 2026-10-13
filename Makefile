@@ -1162,6 +1162,10 @@ test_ophook: tools/test_ophook.c src/wubu_ophook.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
+test_archive_wiring: tools/test_archive_wiring.c src/wubu_promote.o src/wubu_ophook.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
 # AGENT #311: causal walker localizes a divergence.
 test_causal_walker: tools/test_causal_walker.c src/wubu_causal_walker.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
