@@ -474,6 +474,7 @@ src/wubu_ctr_rt.o: src/wubu_ctr_rt.c include/wubu_ctr_rt.h
 src/wubu_gotplt.o: src/wubu_gotplt.c include/wubu_gotplt.h
 src/wubu_wasm.o: src/wubu_wasm.c include/wubu_wasm.h
 src/wubu_lockdep.o: src/wubu_lockdep.c include/wubu_lockdep.h
+src/wubu_klog.o: src/wubu_klog.c include/wubu_klog.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1354,6 +1355,10 @@ test_wasm: tools/test_wasm.c src/wubu_wasm.o
 	./$@
 
 test_lockdep: tools/test_lockdep.c src/wubu_lockdep.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_klog: tools/test_klog.c src/wubu_klog.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
