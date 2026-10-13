@@ -497,6 +497,7 @@ src/wubu_abi_shim.o: src/wubu_abi_shim.c include/wubu_abi_shim.h
 src/wubu_oci.o: src/wubu_oci.c include/wubu_oci.h
 src/wubu_ct_sandbox.o: src/wubu_ct_sandbox.c include/wubu_ct_sandbox.h
 src/wubu_shotgate.o: src/wubu_shotgate.c include/wubu_shotgate.h
+src/wubu_hotkey.o: src/wubu_hotkey.c include/wubu_hotkey.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1499,6 +1500,10 @@ test_ct_sandbox: tools/test_ct_sandbox.c src/wubu_ct_sandbox.o
 	./$@
 
 test_shotgate: tools/test_shotgate.c src/wubu_shotgate.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_hotkey: tools/test_hotkey.c src/wubu_hotkey.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
