@@ -524,6 +524,7 @@ src/wubu_sheet.o: src/wubu_sheet.c include/wubu_sheet.h
 src/wubu_wordproc.o: src/wubu_wordproc.c include/wubu_wordproc.h
 src/wubu_browser.o: src/wubu_browser.c include/wubu_browser.h
 src/wubu_mail.o: src/wubu_mail.c include/wubu_mail.h
+src/wubu_diskclean.o: src/wubu_diskclean.c include/wubu_diskclean.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1634,6 +1635,10 @@ test_browser: tools/test_browser.c src/wubu_browser.o
 	./$@
 
 test_mail: tools/test_mail.c src/wubu_mail.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_diskclean: tools/test_diskclean.c src/wubu_diskclean.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
