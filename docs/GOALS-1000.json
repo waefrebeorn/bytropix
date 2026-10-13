@@ -210,9 +210,9 @@
    "n": 25,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "character device driver framework",
+   "title": "character device driver framework (DONE)",
    "module": "chardev.c",
-   "criterion": "register/open/read/write/release char device"
+   "criterion": "register/open/read/write/release char device [verified: test_chardev 21/21 \u2014 real wubu_chardev module]"
   },
   {
    "n": 26,
