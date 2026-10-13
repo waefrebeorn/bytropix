@@ -2706,17 +2706,17 @@
    "n": 337,
    "domain": "RUNTIME",
    "tier": "P0",
-   "title": "universal exec dispatcher (ELF/PE/Mach-O/WASM/DOS)",
+   "title": "universal exec dispatcher (ELF/PE/Mach-O/WASM/DOS) (DONE)",
    "module": "exec_dispatch.c",
-   "criterion": "multi-ABI exec"
+   "criterion": "multi-ABI exec [verified: wubu_exec_format dispatcher routes ELF/PE/Mach-O/WASM/DOS+native/HolyC/C/shell/py/container; ELF 7/7, PE 9/9, host_exec 15/15]"
   },
   {
    "n": 338,
    "domain": "RUNTIME",
    "tier": "P0",
-   "title": "dependency-free fork/exec/wait",
+   "title": "dependency-free fork/exec/wait (DONE)",
    "module": "forkexec.c",
-   "criterion": "no-libc process spawn"
+   "criterion": "no-libc process spawn [verified: wubu_spawn_test PASS (dependency-free fork/exec/wait \u2014 net_cmd executes real programs, reports failures)]"
   },
   {
    "n": 339,
