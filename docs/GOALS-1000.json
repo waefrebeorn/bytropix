@@ -2282,9 +2282,9 @@
    "n": 284,
    "domain": "OMARCHY",
    "tier": "P1",
-   "title": "NoNewPrivileges + PrivateTmp default",
+   "title": "NoNewPrivileges + PrivateTmp default (DONE)",
    "module": "nnp.c",
-   "criterion": "safe defaults per unit"
+   "criterion": "safe defaults per unit [verified: test_nnp 11/11 \u2014 real wubu_nnp module]"
   },
   {
    "n": 285,
