@@ -3013,6 +3013,14 @@
    "title": "Steam Cloud Saves sync (DONE)",
    "module": "wubu_steam_cloud.c",
    "criterion": "per-game save backup w/ version+timestamp + conflict resolution + quota [verified: 6 sync states, upload/download, conflict under newer/keep-local/keep-cloud, offline gating, sync_all auto-sync, quota; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 376,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam update channel management (stable/beta/preview) (DONE)",
+   "module": "wubu_steam_update.c",
+   "criterion": "channel switching + version queue + download/install + rollback snapshot [verified: 3 channels w/ per-channel versions, queue->download->install lifecycle, auto-download-before-install vs manual, rollback restore + no-snapshot fail, channel switch queues version; 40+ assertions, ASAN-clean]"
   }
  ]
 }
