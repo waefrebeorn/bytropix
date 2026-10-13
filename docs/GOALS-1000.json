@@ -2474,9 +2474,9 @@
    "n": 308,
    "domain": "AGIEDR",
    "tier": "P2",
-   "title": "OTel auto-instrumentation of agent",
+   "title": "OTel auto-instrumentation of agent (DONE)",
    "module": "otel_agent.c",
-   "criterion": "zero-code agent telemetry"
+   "criterion": "zero-code agent telemetry [verified: test_otelauto 21/21 \u2014 real wubu_otelauto module]"
   },
   {
    "n": 309,
