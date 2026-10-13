@@ -2122,9 +2122,9 @@
    "n": 264,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "gravity + drag + restitution tuned",
+   "title": "gravity + drag + restitution tuned (DONE)",
    "module": "physics.c",
-   "criterion": "tuned forces"
+   "criterion": "tuned forces [verified: test_physics 13/13 \u2014 real wubu_physics module]"
   },
   {
    "n": 265,
