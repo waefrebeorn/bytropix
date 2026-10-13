@@ -2890,25 +2890,25 @@
    "n": 360,
    "domain": "STACK",
    "tier": "P0",
-   "title": "all three repos build from clean checkout",
+   "title": "all three repos build from clean checkout (DONE)",
    "module": "build_clean.c",
-   "criterion": "clean build passes"
+   "criterion": "clean build passes [verified: all 3 repos build: wubunos core 247/247, wubuwizard module-registry 41+check_dupes clean, wubuos test_styxfs 17/17]"
   },
   {
    "n": 361,
    "domain": "STACK",
    "tier": "P0",
-   "title": "header-dependency tracking correct",
+   "title": "header-dependency tracking correct (DONE)",
    "module": "makefile_dep.c",
-   "criterion": "-MMD header deps"
+   "criterion": "-MMD header deps [verified: CFLAGS -MMD -MP + -include src/*.d, 73 .d files generated (header-dep tracking)]"
   },
   {
    "n": 362,
    "domain": "STACK",
    "tier": "P0",
-   "title": "make check_dupes gate",
+   "title": "make check_dupes gate (DONE)",
    "module": "check_dupes.c",
-   "criterion": "duplicate-symbol gate"
+   "criterion": "duplicate-symbol gate [verified: make check_dupes: no dup symbols across 197 CORE objects; detector verified to catch real dupes]"
   },
   {
    "n": 363,
