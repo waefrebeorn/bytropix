@@ -506,6 +506,7 @@ src/wubu_postmoore.o: src/wubu_postmoore.c include/wubu_postmoore.h
 src/wubu_ssidoc.o: src/wubu_ssidoc.c include/wubu_ssidoc.h
 src/wubu_damage.o: src/wubu_damage.c include/wubu_damage.h
 src/wubu_framepace.o: src/wubu_framepace.c include/wubu_framepace.h
+src/wubu_companion.o: src/wubu_companion.c include/wubu_companion.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1514,6 +1515,10 @@ test_damage: tools/test_damage.c src/wubu_damage.o
 	./$@
 
 test_framepace: tools/test_framepace.c src/wubu_framepace.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_companion: tools/test_companion.c src/wubu_companion.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
