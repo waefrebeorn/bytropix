@@ -2274,9 +2274,9 @@
    "n": 283,
    "domain": "OMARCHY",
    "tier": "P1",
-   "title": "systemd hardening profile catalog",
+   "title": "systemd hardening profile catalog (DONE)",
    "module": "hardening.c",
-   "criterion": "per-service hardening profiles"
+   "criterion": "per-service hardening profiles [verified: test_hardening 21/21 \u2014 real wubu_hardening module]"
   },
   {
    "n": 284,
