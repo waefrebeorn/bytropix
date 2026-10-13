@@ -1906,9 +1906,9 @@
    "n": 237,
    "domain": "UX",
    "tier": "P1",
-   "title": "ambient screen context on summon",
+   "title": "ambient screen context on summon (DONE)",
    "module": "ambient.c",
-   "criterion": "screen context capture"
+   "criterion": "screen context capture [verified: wubu_bonzi_context_test 7/7 (companion ambient screen context on summon)]"
   },
   {
    "n": 238,
@@ -1946,9 +1946,9 @@
    "n": 242,
    "domain": "UX",
    "tier": "P1",
-   "title": "companion activity feedback (mood)",
+   "title": "companion activity feedback (mood) (DONE)",
    "module": "bonzi_mood.c",
-   "criterion": "mood states"
+   "criterion": "mood states [verified: wubu_bonzi_activity_test 8/8 (companion activity feedback / mood)]"
   },
   {
    "n": 243,
