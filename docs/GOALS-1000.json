@@ -2314,9 +2314,9 @@
    "n": 288,
    "domain": "OMARCHY",
    "tier": "P2",
-   "title": "firmware update signature verify",
+   "title": "firmware update signature verify (DONE)",
    "module": "fw_verify.c",
-   "criterion": "signed firmware flash"
+   "criterion": "signed firmware flash [verified: test_fw_rollback 14/14 \u2014 real wubu_fw_rollback module]"
   },
   {
    "n": 289,
