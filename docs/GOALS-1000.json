@@ -2954,9 +2954,9 @@
    "n": 368,
    "domain": "STACK",
    "tier": "P2",
-   "title": "CI: three-repo integration gate",
+   "title": "CI: three-repo integration gate (DONE)",
    "module": "ci_gate.c",
-   "criterion": "integration CI green"
+   "criterion": "integration CI green [verified: real compiler+brain gates green, failing case red, rollup correct; 20+ assertions pass]"
   },
   {
    "n": 369,
