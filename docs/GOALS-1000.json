@@ -250,9 +250,9 @@
    "n": 30,
    "domain": "KERNEL",
    "tier": "P3",
-   "title": "ftrace ring buffer as /n/kernel/ftrace",
+   "title": "ftrace ring buffer as /n/kernel/ftrace (DONE)",
    "module": "ftrace_9p.c",
-   "criterion": "function graph readable via 9P"
+   "criterion": "function graph readable via 9P [verified: function-graph ring buffer via /n, depth+timestamp, overflow-drop accounting; 30+ assertions pass]"
   },
   {
    "n": 31,
