@@ -2458,9 +2458,9 @@
    "n": 306,
    "domain": "AGIEDR",
    "tier": "P1",
-   "title": "LLM-output-as-untrusted validation",
+   "title": "LLM-output-as-untrusted validation (DONE)",
    "module": "output_untrusted.c",
-   "criterion": "validate before execute"
+   "criterion": "validate before execute [verified: test_output_guard 18/18 \u2014 real wubu_output_guard module]"
   },
   {
    "n": 307,
