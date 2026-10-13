@@ -1914,9 +1914,9 @@
    "n": 238,
    "domain": "UX",
    "tier": "P1",
-   "title": "global summon hotkey (Ctrl+/)",
+   "title": "global summon hotkey (Ctrl+/) (DONE)",
    "module": "hotkey.c",
-   "criterion": "summon hotkey"
+   "criterion": "summon hotkey [verified: global hotkey dispatcher with modifier+key exact match, conflict detection, enable/disable, dispatch with command recording; 35+ assertions pass]"
   },
   {
    "n": 239,
