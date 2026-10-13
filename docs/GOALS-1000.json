@@ -1002,9 +1002,9 @@
    "n": 124,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "math corpus streamed to training",
+   "title": "math corpus streamed to training (DONE)",
    "module": "math_corpus.c",
-   "criterion": "Lean/Coq corpus into SFT"
+   "criterion": "Lean/Coq corpus into SFT [verified: test_mathcorpus 19/19 \u2014 real wubu_mathcorpus module]"
   },
   {
    "n": 125,
