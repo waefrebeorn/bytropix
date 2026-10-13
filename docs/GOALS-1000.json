@@ -194,9 +194,9 @@
    "n": 23,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "kernel modules signed + verified on load",
+   "title": "kernel modules signed + verified on load (DONE)",
    "module": "mod_verify.c",
-   "criterion": "module signature gate; unsigned rejected"
+   "criterion": "module signature gate; unsigned rejected [verified: test_modsign 16/16 \u2014 real wubu_modsign module]"
   },
   {
    "n": 24,
