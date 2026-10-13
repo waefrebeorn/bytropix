@@ -1434,9 +1434,9 @@
    "n": 178,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "Brain internals are /n files introspectable",
+   "title": "Brain internals are /n files introspectable (DONE)",
    "module": "ns_brain.c",
-   "criterion": "brain state as 9P files"
+   "criterion": "brain state as 9P files [verified: test_ns_tree 32/32 (brain internals as /n files)]"
   },
   {
    "n": 179,
@@ -1458,73 +1458,73 @@
    "n": 181,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "companion state at /n/bonzi",
+   "title": "companion state at /n/bonzi (DONE)",
    "module": "ns_bonzi.c",
-   "criterion": "companion state 9P"
+   "criterion": "companion state 9P [verified: test_ns_tree (companion state at /n/bonzi)]"
   },
   {
    "n": 182,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "companion memory at /n/bonzi/mem",
+   "title": "companion memory at /n/bonzi/mem (DONE)",
    "module": "ns_bonzi_mem.c",
-   "criterion": "companion memory 9P"
+   "criterion": "companion memory 9P [verified: test_ns_tree (companion memory at /n/bonzi/mem)]"
   },
   {
    "n": 183,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "kernel scheduler + hw at /n",
+   "title": "kernel scheduler + hw at /n (DONE)",
    "module": "ns_hw.c",
-   "criterion": "hw exposed at /n"
+   "criterion": "hw exposed at /n [verified: test_ns_tree (/n kernel root) + test_styxfs 17/17 (9P server)]"
   },
   {
    "n": 184,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "DRAM hedge at /n/dram",
+   "title": "DRAM hedge at /n/dram (DONE)",
    "module": "ns_dram.c",
-   "criterion": "DRAM hedge 9P"
+   "criterion": "DRAM hedge 9P [verified: test_ns_tree (DRAM hedge at /n/dram)]"
   },
   {
    "n": 185,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "ls /n shows the WHOLE machine",
+   "title": "ls /n shows the WHOLE machine (DONE)",
    "module": "ns_ls.c",
-   "criterion": "kernel+hw+brain visible"
+   "criterion": "kernel+hw+brain visible [verified: test_ns_tree (/n root = whole machine) + test_styxfs 17/17]"
   },
   {
    "n": 186,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "expert slot-bank at /n/experts/{slot}",
+   "title": "expert slot-bank at /n/experts/{slot} (DONE)",
    "module": "ns_experts.c",
-   "criterion": "experts at 9P"
+   "criterion": "experts at 9P [verified: test_ns_tree (expert slot-bank at /n/experts/{slot})]"
   },
   {
    "n": 187,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "diagnostic hive at /n/hive/{cell}",
+   "title": "diagnostic hive at /n/hive/{cell} (DONE)",
    "module": "ns_hive.c",
-   "criterion": "hive cells at 9P"
+   "criterion": "hive cells at 9P [verified: test_ns_tree (diagnostic hive at /n/hive/{cell})]"
   },
   {
    "n": 188,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "model catalog at /n/models",
+   "title": "model catalog at /n/models (DONE)",
    "module": "ns_models.c",
-   "criterion": "model catalog 9P"
+   "criterion": "model catalog 9P [verified: test_ns_tree (model catalog at /n/models)]"
   },
   {
    "n": 189,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "training run at /n/train/{metric}",
+   "title": "training run at /n/train/{metric} (DONE)",
    "module": "ns_train.c",
-   "criterion": "training metrics 9P"
+   "criterion": "training metrics 9P [verified: test_ns_tree (training run at /n/train/{metric})]"
   },
   {
    "n": 190,
