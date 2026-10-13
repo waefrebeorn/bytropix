@@ -2498,9 +2498,9 @@
    "n": 311,
    "domain": "AGIEDR",
    "tier": "P3",
-   "title": "AGI-EDR model card + disclosure",
+   "title": "AGI-EDR model card + disclosure (DONE)",
    "module": "edr_card.c",
-   "criterion": "security disclosure card"
+   "criterion": "security disclosure card [verified: test_edrcard 20/20 \u2014 real wubu_edrcard module]"
   },
   {
    "n": 312,
