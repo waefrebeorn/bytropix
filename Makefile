@@ -505,6 +505,7 @@ src/wubu_offline_gen.o: src/wubu_offline_gen.c include/wubu_offline_gen.h
 src/wubu_novelty_search.o: src/wubu_novelty_search.c include/wubu_novelty_search.h
 src/wubu_steam_overlay.o: src/wubu_steam_overlay.c include/wubu_steam_overlay.h
 src/wubu_steam_power.o: src/wubu_steam_power.c include/wubu_steam_power.h
+src/wubu_gamepad_nav.o: src/wubu_gamepad_nav.c include/wubu_gamepad_nav.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1539,6 +1540,10 @@ test_steam_overlay: tools/test_steam_overlay.c src/wubu_steam_overlay.o
 	./$@
 
 test_steam_power: tools/test_steam_power.c src/wubu_steam_power.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_gamepad_nav: tools/test_gamepad_nav.c src/wubu_gamepad_nav.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
