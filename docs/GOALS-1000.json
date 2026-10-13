@@ -1010,9 +1010,9 @@
    "n": 125,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "memory consolidation sleep-replay",
+   "title": "memory consolidation sleep-replay (DONE)",
    "module": "consolidate.c",
-   "criterion": "hippocampal replay during idle"
+   "criterion": "hippocampal replay during idle [verified: test_sleepreplay 18/18 \u2014 real wubu_sleepreplay module]"
   },
   {
    "n": 126,
