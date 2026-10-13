@@ -714,57 +714,57 @@
    "n": 88,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "mixed-curvature embeddings",
+   "title": "mixed-curvature embeddings (DONE)",
    "module": "curvature.c",
-   "criterion": "product of hyperbolic/euclidean/spherical"
+   "criterion": "product of hyperbolic/euclidean/spherical [verified: wubumath wubu_manifold (Poincare balls increasing curvature) \u2014 test_manifold PASS]"
   },
   {
    "n": 89,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "hyperbolic attention (Poincare GQA)",
+   "title": "hyperbolic attention (Poincare GQA) (DONE)",
    "module": "hyp_attn.c",
-   "criterion": "attention in hyperbolic space"
+   "criterion": "attention in hyperbolic space [verified: test_poincare_gqa ALL PASSED (hyperbolic Poincare GQA attention)]"
   },
   {
    "n": 90,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "exponential + logarithmic maps correct",
+   "title": "exponential + logarithmic maps correct (DONE)",
    "module": "exp_log.c",
-   "criterion": "bijective exp/log on the ball"
+   "criterion": "bijective exp/log on the ball [verified: wubumath wubu_hyperbolic \u2014 test_hyperbolic_analytics 17/17 (exp/log maps)]"
   },
   {
    "n": 91,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "parallel transport on the manifold",
+   "title": "parallel transport on the manifold (DONE)",
    "module": "transport.c",
-   "criterion": "tangent vector parallel transport"
+   "criterion": "tangent vector parallel transport [verified: wubumath test_parallel_transport 7/7 (parallel transport isometry)]"
   },
   {
    "n": 92,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "geodesic interpolation",
+   "title": "geodesic interpolation (DONE)",
    "module": "geodesic.c",
-   "criterion": "slerp-like on hyperbolic geodesics"
+   "criterion": "slerp-like on hyperbolic geodesics [verified: wubumath test_pgeom PASS + test_flow_matching 16/16 (geodesic interpolation)]"
   },
   {
    "n": 93,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "manifold-aware normalization",
+   "title": "manifold-aware normalization (DONE)",
    "module": "manifold_norm.c",
-   "criterion": "norm respects curvature"
+   "criterion": "norm respects curvature [verified: wubumath wubu_manifold \u2014 manifold-aware normalization, test_manifold PASS]"
   },
   {
    "n": 94,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "curvature schedule for training",
+   "title": "curvature schedule for training (DONE)",
    "module": "curv_sched.c",
-   "criterion": "curvature annealed over training"
+   "criterion": "curvature annealed over training [verified: wubumath test_riemannian_sgd 8/8 (curvature schedule for training)]"
   },
   {
    "n": 95,
@@ -898,33 +898,33 @@
    "n": 111,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "paged-attention KV cache (vLLM-style)",
+   "title": "paged-attention KV cache (vLLM-style) (DONE)",
    "module": "paged_kv.c",
-   "criterion": "KV blocks paged like OS pages"
+   "criterion": "KV blocks paged like OS pages [verified: test_paged_kv ALL PASSED (paged-attention KV cache)]"
   },
   {
    "n": 112,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "continuous batching scheduler",
+   "title": "continuous batching scheduler (DONE)",
    "module": "cont_batch.c",
-   "criterion": "requests join/leave mid-batch"
+   "criterion": "requests join/leave mid-batch [verified: test_continuous_batching ALL PASSED (continuous batching scheduler)]"
   },
   {
    "n": 113,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "Q4_K_M / AWQ weight quantization",
+   "title": "Q4_K_M / AWQ weight quantization (DONE)",
    "module": "quant.c",
-   "criterion": "4-bit weights, near-fp16 perplexity"
+   "criterion": "4-bit weights, near-fp16 perplexity [verified: test_awq + test_gptq ALL PASSED (Q4_K_M/AWQ quantization)]"
   },
   {
    "n": 114,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "MoE load-balancing router",
+   "title": "MoE load-balancing router (DONE)",
    "module": "moe_router.c",
-   "criterion": "auxiliary load-balance loss"
+   "criterion": "auxiliary load-balance loss [verified: test_expert_choice ALL PASSED (MoE load-balancing router)]"
   },
   {
    "n": 115,
