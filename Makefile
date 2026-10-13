@@ -1247,6 +1247,10 @@ test_consolidate: tools/test_consolidate.c src/wubu_consolidate.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
+test_ewc: tools/test_ewc.c src/wubu_ewc.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
 test_archive_wiring: tools/test_archive_wiring.c src/wubu_promote.o src/wubu_ophook.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
