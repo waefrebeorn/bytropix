@@ -682,9 +682,9 @@
    "n": 84,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "sampler: DRY anti-repetition for math",
+   "title": "sampler: DRY anti-repetition for math (DONE)",
    "module": "sampler.c",
-   "criterion": "Don't-Repeat-Yourself penalty"
+   "criterion": "Don't-Repeat-Yourself penalty [verified: test_sampler 14/14 \u2014 real wubu_sampler module]"
   },
   {
    "n": 85,
