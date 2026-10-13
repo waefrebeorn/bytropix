@@ -3077,6 +3077,14 @@
    "title": "Steam Big Picture / 10-foot library grid (DONE)",
    "module": "wubu_steam_bigpicture.c",
    "criterion": "gamepad-navigable game tile grid + detail panel + launch [verified: grid-aware move (row/col deltas + clamp), detail open/back, confirm-opens-detail vs launch, move-in-detail, empty gating; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 384,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Per-application volume mixer (DONE)",
+   "module": "wubu_volmixer.c",
+   "criterion": "master + per-app volume/mute, effective = master*channel/100 [verified: master clamp, channel add, effective computation, overall max, channel+master mute, volume clamp; 40+ assertions, ASAN-clean]"
   }
  ]
 }
