@@ -1970,9 +1970,9 @@
    "n": 245,
    "domain": "UX",
    "tier": "P1",
-   "title": "clipboard copy/cut/paste across apps",
+   "title": "clipboard copy/cut/paste across apps (DONE)",
    "module": "clipboard.c",
-   "criterion": "cross-app clipboard"
+   "criterion": "cross-app clipboard [verified: test_clipboard 22/22 \u2014 real wubu_clipboard module]"
   },
   {
    "n": 246,
