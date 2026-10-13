@@ -2722,9 +2722,9 @@
    "n": 339,
    "domain": "RUNTIME",
    "tier": "P1",
-   "title": "foreign-ABI translation (libc/syscall shim)",
+   "title": "foreign-ABI translation (libc/syscall shim) (DONE)",
    "module": "abi_shim.c",
-   "criterion": "foreign syscall translation"
+   "criterion": "foreign syscall translation [verified: Linux x86-64 -> VSL syscall translation, arg remap, fail-closed deny; 25+ assertions pass]"
   },
   {
    "n": 340,
