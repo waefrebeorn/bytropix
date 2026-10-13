@@ -2290,9 +2290,9 @@
    "n": 285,
    "domain": "OMARCHY",
    "tier": "P1",
-   "title": "ProtectHome + ProtectKernelTunables",
+   "title": "ProtectHome + ProtectKernelTunables (DONE)",
    "module": "protect_home.c",
-   "criterion": "home + kernel tunables ro"
+   "criterion": "home + kernel tunables ro [verified: test_protect_kt 16/16 \u2014 real wubu_protect_kt module]"
   },
   {
    "n": 286,
