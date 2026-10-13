@@ -455,6 +455,7 @@ src/wubu_consolidate.o: src/wubu_consolidate.c include/wubu_consolidate.h
 src/wubu_compute_eff.o: src/wubu_compute_eff.c include/wubu_compute_eff.h
 src/wubu_determ_ctrl.o: src/wubu_determ_ctrl.c include/wubu_determ_ctrl.h
 src/wubu_indirect_pi.o: src/wubu_indirect_pi.c include/wubu_indirect_pi.h
+src/wubu_redteam.o: src/wubu_redteam.c include/wubu_redteam.h src/wubu_indirect_pi.o
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1259,6 +1260,10 @@ test_determ_ctrl: tools/test_determ_ctrl.c src/wubu_determ_ctrl.o
 	./$@
 
 test_indirect_pi: tools/test_indirect_pi.c src/wubu_indirect_pi.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_redteam: tools/test_redteam.c src/wubu_redteam.o src/wubu_indirect_pi.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
