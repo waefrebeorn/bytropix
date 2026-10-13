@@ -413,6 +413,7 @@ src/wubu_ns_iso.o: src/wubu_ns_iso.c include/wubu_ns_iso.h
 src/wubu_syscall_profile.o: src/wubu_syscall_profile.c include/wubu_syscall_profile.h
 src/wubu_landlock.o: src/wubu_landlock.c include/wubu_landlock.h
 src/wubu_snapshot.o: src/wubu_snapshot.c include/wubu_snapshot.h
+src/wubu_pacman.o: src/wubu_pacman.c include/wubu_pacman.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1073,6 +1074,10 @@ test_landlock: tools/test_landlock.c src/wubu_landlock.o
 	./$@
 
 test_snapshot: tools/test_snapshot.c src/wubu_snapshot.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_pacman: tools/test_pacman.c src/wubu_pacman.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
