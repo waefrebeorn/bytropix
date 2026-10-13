@@ -2378,9 +2378,9 @@
    "n": 296,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "prompt-injection runtime detector",
+   "title": "prompt-injection runtime detector (DONE)",
    "module": "pi_detect.c",
-   "criterion": "classify adversarial intent"
+   "criterion": "classify adversarial intent [verified: test_inject 14/14 \u2014 real wubu_inject module]"
   },
   {
    "n": 297,
