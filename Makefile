@@ -444,6 +444,7 @@ src/wubu_sph.o: src/wubu_sph.c include/wubu_sph.h
 src/wubu_bonzi_mem.o: src/wubu_bonzi_mem.c include/wubu_bonzi_mem.h
 src/wubu_softbody.o: src/wubu_softbody.c include/wubu_softbody.h
 src/wubu_clipboard.o: src/wubu_clipboard.c include/wubu_clipboard.h
+src/wubu_dnd.o: src/wubu_dnd.c include/wubu_dnd.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1204,6 +1205,10 @@ test_softbody: tools/test_softbody.c src/wubu_softbody.o
 	./$@
 
 test_clipboard: tools/test_clipboard.c src/wubu_clipboard.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_dnd: tools/test_dnd.c src/wubu_dnd.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
