@@ -404,6 +404,7 @@ src/wubu_safekern.o: src/wubu_safekern.c include/wubu_safekern.h
 src/wubu_behavior.o: src/wubu_behavior.c include/wubu_behavior.h include/wubu_anomaly.h include/wubu_safekern.h
 src/wubu_trace.o: src/wubu_trace.c include/wubu_trace.h
 src/wubu_egress.o: src/wubu_egress.c include/wubu_egress.h
+src/wubu_inject.o: src/wubu_inject.c include/wubu_inject.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1028,6 +1029,10 @@ test_trace: tools/test_trace.c src/wubu_trace.o
 	./$@
 
 test_egress: tools/test_egress.c src/wubu_egress.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_inject: tools/test_inject.c src/wubu_inject.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
