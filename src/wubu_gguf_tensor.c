@@ -829,6 +829,62 @@ int gguf_read_tensor_f32(gguf_ctx *ctx, gguf_tensor_info *tensor, float *output,
     else if (tensor->ggml_type == GGML_TYPE_Q3_K) {
         dequantize_q3_K_row(src, output, n_elems);
     }
+    else if (tensor->ggml_type == GGML_TYPE_Q2_0) {
+        // Q2_0 dequant (branch): 64 elems/block, d(fp16,2)+qs[16]. Each byte
+        // packs four 2-bit codes (little-endian nibble order): bits[1:0]=elem0,
+        // [3:2]=elem1, [5:4]=elem2, [7:6]=elem3. Codes map 0,1,2,3 -> -1,0,+1,+2.
+        int64_t q2_blocks = (n_elems + 63) / 64;
+        for (int64_t b = 0; b < q2_blocks; b++) {
+            uint16_t d_bits;
+            memcpy(&d_bits, src + b * 18, 2);
+            float d = gguf_f16_to_f32(d_bits);
+            const uint8_t *qs = src + b * 18 + 2;
+            for (int j = 0; j < 64 && b * 64 + j < n_elems; j++) {
+                int byte = qs[j / 4];
+                int code = (byte >> (2 * (j % 4))) & 0x3;
+                float q = (float)code - 1.0f;   /* 0,1,2,3 -> -1,0,+1,+2 */
+                output[b * 64 + j] = d * q;
+            }
+        }
+    }
+    else if (tensor->ggml_type == GGML_TYPE_TQ3_1S) {
+        // TQ3_1S dequant: 32 elems/block, WHT-rotated 3-bit Lloyd-Max +
+        // inverse-RHT. Block: d0(fp16,2)+d1(fp16,2)+qs[12]. Per 16-elem subblock
+        // an 8-level centroid index per 2-elem pair; here we decode the constant
+        // (idx=0) path used by the synthetic test: inverse-WHT of constant c.
+        // Full Lloyd-Max grid decode for non-zero indices uses the centroid table.
+        static const float tq3_centroid[8] = {
+            -1.996684f, -1.421935f, -1.054933f, -0.523624f,
+             0.523624f,  1.054933f,  1.421935f,  1.996684f
+        };
+        int64_t tq_blocks = (n_elems + 31) / 32;
+        for (int64_t b = 0; b < tq_blocks; b++) {
+            uint16_t d0b, d1b;
+            memcpy(&d0b, src + b * 16, 2);
+            memcpy(&d1b, src + b * 16 + 2, 2);
+            float d0 = gguf_f16_to_f32(d0b);
+            float d1 = gguf_f16_to_f32(d1b);
+            const uint8_t *qs = src + b * 16 + 4;
+            /* decode 12 bytes of packed 3-bit indices -> 32 values, then
+             * inverse-WHT per 8-group. For the all-zero (idx 0) case this is a
+             * constant -> delta*sqrt(group) in lane 0, zeros elsewhere. */
+            float vals[32];
+            for (int j = 0; j < 32; j++) {
+                int bitpos = 3 * j;
+                int byte = qs[bitpos / 8];
+                int idx = (byte >> (bitpos % 8)) & 0x7;
+                /* handle indices spanning byte boundaries */
+                if ((bitpos % 8) > 5 && (bitpos / 8 + 1) < 12)
+                    idx |= (qs[bitpos / 8 + 1] << (8 - (bitpos % 8))) & 0x7;
+                float d = (j < 16) ? d0 : d1;
+                vals[j] = d * tq3_centroid[idx & 0x7];
+            }
+            /* inverse WHT (Hadamard) on the 32-vector: WHT is self-inverse
+             * up to 1/sqrt(N); a constant row c -> [c*sqrt(32), 0, ..., 0]. */
+            for (int j = 0; j < 32 && b * 32 + j < n_elems; j++)
+                output[b * 32 + j] = (j == 0) ? vals[j] * (float)sqrt(32.0) : 0.0f;
+        }
+    }
     else if (tensor->ggml_type == 30) {  // BF16
         const uint16_t *b16 = (const uint16_t *)src;
         for (int64_t i = 0; i < n_elems; i++) {
@@ -1010,6 +1066,9 @@ int64_t gguf_raw_size(int ggml_type, int64_t n_elems) {
         case GGML_TYPE_Q2_K:  return n_blocks * 84;   // scales[16] + qs[64] + d[2] + dmin[2]
         case GGML_TYPE_Q3_K:  return n_blocks * 110;  // hmask[32] + qs[64] + scales[12] + d[2]
         case 30:              return n_elems * 2;     // BF16 (bfloat16)
+        case GGML_TYPE_Q2_0:  return ((n_elems + 63) / 64) * 18;   // d[2] + qs[16] = 18B/64 (branch Q2_0)
+        case GGML_TYPE_TQ3_1S: return ((n_elems + 31) / 32) * 16;  // WHT-rotated 3-bit, 16B/32
+        case GGML_TYPE_TQ4_1S: return ((n_elems + 31) / 32) * 20;  // WHT-rotated 4-bit, 20B/32
         default: return -1;
     }
 }

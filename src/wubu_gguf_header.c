@@ -149,6 +149,9 @@ gguf_ctx* gguf_open(const char *path) {
             ctx->tensors[i].dims[d] = read_i64(f);
         }
         ctx->tensors[i].ggml_type = read_i32(f);
+        /* legacy Q2_0 alias: type 42 was the pre-rename Q2_0 -> remap to 47 */
+        if (ctx->tensors[i].ggml_type == 42)
+            ctx->tensors[i].ggml_type = 47;
         ctx->tensors[i].data_offset = read_u64(f);
     }
     

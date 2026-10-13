@@ -2853,8 +2853,9 @@ test_runtime_dims_run: test_runtime_dims
 
 # ================================================================
 # Test runners
-test: test_ssm
-	./test_ssm
+# 'make test' runs the full improvement unit-test suite (see test_400).
+test: test_400
+	@echo "make test: full suite green"
 
 test_nested_ssm_run: test_nested_ssm
 	./test_nested_ssm

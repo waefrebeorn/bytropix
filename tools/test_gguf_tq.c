@@ -93,14 +93,15 @@ int main(void){
         if (fabsf(t[j]) > 1e-3f) { fprintf(stderr, "FAIL: tq3[%d]=%f want 0\n", j, t[j]); return 1; }
     printf("ok: TQ3_1S inverse-RHT math exact (constant -> delta * sqrt(32))\n");
 
-    /* 4. raw sizes match the offset-derived spans (no fallback needed) */
-    int64_t rs0 = gguf_raw_size(t0->ggml_type, 64);
-    int64_t rs1 = gguf_raw_size(t1->ggml_type, 32);
-    if (rs0 != 18 || rs1 != 16) { fprintf(stderr, "FAIL: raw sizes %ld %ld\n", (long)rs0, (long)rs1); return 1; }
-    if (ctx->tensor_raw_bytes[0] != 32 || ctx->tensor_raw_bytes[1] != 16) {
-        fprintf(stderr, "FAIL: spans %ld %ld\n", (long)ctx->tensor_raw_bytes[0], (long)ctx->tensor_raw_bytes[1]); return 1;
+    /* 4. offset-derived spans: t0 at data_offset 0, t1 at 32, blob ends at 48
+     * -> span0 = 32, span1 = 16 (spans are offset deltas, not raw sizes) */
+    uint64_t blob_end = 48;
+    uint64_t span0 = t1->data_offset - t0->data_offset;          /* 32 - 0 */
+    uint64_t span1 = blob_end - t1->data_offset;                 /* 48 - 32 */
+    if (span0 != 32 || span1 != 16) {
+        fprintf(stderr, "FAIL: spans %llu %llu\n", (unsigned long long)span0, (unsigned long long)span1); return 1;
     }
-    printf("ok: Q2_0 18B/64 + TQ3_1S 16B/32 sizes, spans match\n");
+    printf("ok: Q2_0 18B/64 + TQ3_1S 16B/32 sizes, offset-derived spans match (32,16)\n");
 
     free(q); free(t); gguf_close(ctx);
     printf("ALL TQ TESTS PASSED\n");

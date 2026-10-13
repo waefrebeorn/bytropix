@@ -35,6 +35,9 @@ enum ggml_type {
     GGML_TYPE_IQ4_XS  = 23,
     GGML_TYPE_IQ1_M   = 29,
     GGML_TYPE_BF16    = 30,  // bfloat16 (IEEE)
+    GGML_TYPE_TQ3_1S  = 45,  // WHT-rotated 3-bit Lloyd-Max, block 32, 16 B
+    GGML_TYPE_TQ4_1S  = 46,  // WHT-rotated 4-bit Lloyd-Max, block 32, 20 B
+    GGML_TYPE_Q2_0    = 47,  // 2-bit, block 64, 18 B (branch Q2_0; legacy alias 42)
 };
 
 // GGUF tensor info

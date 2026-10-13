@@ -55,7 +55,7 @@ int main(int argc, char **argv)
         int64_t min_step = INT64_MAX, max_step = 0;
         for (wubu_hive_block_t *blk = hive.head; blk; blk = blk->next)
             for (size_t i = 0; i < blk->cap; i++) {
-                if (blk->skip[i]) continue;
+                if (blk->skip[i >> 3] & (uint8_t)(1u << (i & 7))) continue;
                 wubu_diag_cell *c = (wubu_diag_cell *)blk->slots[i];
                 if (c->step < min_step) min_step = c->step;
                 if (c->step > max_step) max_step = c->step;
@@ -145,7 +145,7 @@ int main(int argc, char **argv)
         wubu_diag_record(d, WUBU_DIAG_LOSS, -1, 3.5f, 0.0f);
         for (wubu_hive_block_t *blk = hive.head; blk; blk = blk->next)
             for (size_t i = 0; i < blk->cap; i++) {
-                if (blk->skip[i]) continue;
+                if (blk->skip[i >> 3] & (uint8_t)(1u << (i & 7))) continue;
                 wubu_diag_cell *c = (wubu_diag_cell *)blk->slots[i];
                 if (c->kind == WUBU_DIAG_LOSS && c->value > 3.0f) drop_id = c->step;
             }
@@ -175,7 +175,7 @@ int main(int argc, char **argv)
         int64_t drop_id = -1;
         for (wubu_hive_block_t *blk = hive.head; blk; blk = blk->next)
             for (size_t i = 0; i < blk->cap; i++) {
-                if (blk->skip[i]) continue;
+                if (blk->skip[i >> 3] & (uint8_t)(1u << (i & 7))) continue;
                 wubu_diag_cell *c = (wubu_diag_cell *)blk->slots[i];
                 if (c->kind == WUBU_DIAG_LOSS && c->value > 3.0f) drop_id = c->step;
             }
@@ -246,7 +246,7 @@ int main(int argc, char **argv)
             int live = 0, finite_ok = 1;
             for (wubu_hive_block_t *blk = hive.head; blk; blk = blk->next)
                 for (size_t i = 0; i < blk->cap; i++) {
-                    if (blk->skip[i]) continue;
+                    if (blk->skip[i >> 3] & (uint8_t)(1u << (i & 7))) continue;
                     wubu_diag_cell *c = (wubu_diag_cell *)blk->slots[i];
                     if (c->kind == WUBU_DIAG_GRAD) {
                         live++;
