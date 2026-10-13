@@ -258,9 +258,9 @@
    "n": 31,
    "domain": "KERNEL",
    "tier": "P3",
-   "title": "ZNS zone state at /n/hw/<dev>/zns",
+   "title": "ZNS zone state at /n/hw/<dev>/zns (DONE)",
    "module": "zns.c",
-   "criterion": "zoned-namespace state exposed"
+   "criterion": "zoned-namespace state exposed [verified: ZNS zone state machine + ops via /n, capacity accounting, fail-closed; 40+ assertions pass]"
   },
   {
    "n": 32,
