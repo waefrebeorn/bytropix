@@ -7,10 +7,10 @@ Prints a status summary of all proofs and their current state.
 import WubuProofs
 
 def main : IO Unit := do
-  IO.println "=" * 60
+  IO.println (String.mk (List.replicate 60 '='))
   IO.println "  Wubu Nesting Formal Proofs — Status"
   IO.println "  Lean 4.29.1 + mathlib4"
-  IO.println "=" * 60
+  IO.println (String.mk (List.replicate 60 '='))
   IO.println ""
   IO.println "  📐 Proof 1: PoincaréBall.lean"
   IO.println "     Theorem: exp_0^c(log_0^c(y)) = y"
