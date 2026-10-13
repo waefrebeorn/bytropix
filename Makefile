@@ -519,6 +519,7 @@ src/wubu_volmixer.o: src/wubu_volmixer.c include/wubu_volmixer.h
 src/wubu_charmap.o: src/wubu_charmap.c include/wubu_charmap.h
 src/wubu_fontview.o: src/wubu_fontview.c include/wubu_fontview.h
 src/wubu_calendar.o: src/wubu_calendar.c include/wubu_calendar.h
+src/wubu_contacts.o: src/wubu_contacts.c include/wubu_contacts.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1609,6 +1610,10 @@ test_fontview: tools/test_fontview.c src/wubu_fontview.o
 	./$@
 
 test_calendar: tools/test_calendar.c src/wubu_calendar.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_contacts: tools/test_contacts.c src/wubu_contacts.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
