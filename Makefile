@@ -508,6 +508,7 @@ src/wubu_steam_power.o: src/wubu_steam_power.c include/wubu_steam_power.h
 src/wubu_gamepad_nav.o: src/wubu_gamepad_nav.c include/wubu_gamepad_nav.h
 src/wubu_steam_cloud.o: src/wubu_steam_cloud.c include/wubu_steam_cloud.h
 src/wubu_steam_update.o: src/wubu_steam_update.c include/wubu_steam_update.h
+src/wubu_steam_workshop.o: src/wubu_steam_workshop.c include/wubu_steam_workshop.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1554,6 +1555,10 @@ test_steam_cloud: tools/test_steam_cloud.c src/wubu_steam_cloud.o
 	./$@
 
 test_steam_update: tools/test_steam_update.c src/wubu_steam_update.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_steam_workshop: tools/test_steam_workshop.c src/wubu_steam_workshop.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
