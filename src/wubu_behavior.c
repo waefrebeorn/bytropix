@@ -89,3 +89,13 @@ void wubu_behavior_reset(wubu_behavior_t *b) {
     b->level = WUBU_CONT_NONE;
     b->halt = 0;
 }
+
+int wubu_behavior_arm_killswitch(const wubu_behavior_t *b, wubu_safekern_t *k) {
+    /* Fail-closed: a NULL classifier or NULL kernel halts/arms the stop. */
+    if (!k) return 1;
+    if (!b || b->halt) {
+        k->stop_flag = 1;          /* kernel-owned, one-way, agent cannot clear */
+        return 1;
+    }
+    return 0;
+}

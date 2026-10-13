@@ -50,4 +50,11 @@ double wubu_behavior_severity(const wubu_behavior_t *b);
 /* Reset the streak/severity (e.g. after an operator clears a WARN). */
 void wubu_behavior_reset(wubu_behavior_t *b);
 
+/* Tripwire kill-switch bridge (AGIEDR #294): when the classifier halts
+ * (SUSPEND/STOP), ARM the kernel-owned stop_flag on the safekern. The stop
+ * is one-way: once armed it cannot be cleared by the agent (wubu_safekern
+ * exposes no setter/clearer to the reasoner). Returns 1 if the stop is now
+ * armed, 0 otherwise. Fail-closed: NULL behavior halts and arms. */
+int wubu_behavior_arm_killswitch(const wubu_behavior_t *b, wubu_safekern_t *k);
+
 #endif
