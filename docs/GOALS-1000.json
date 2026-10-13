@@ -2794,9 +2794,9 @@
    "n": 348,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "WASM execution leg",
+   "title": "WASM execution leg (DONE)",
    "module": "leg_wasm.c",
-   "criterion": "WASM module runs"
+   "criterion": "WASM module runs [verified: test_wasm 13/13 \u2014 real wubu_wasm module]"
   },
   {
    "n": 349,
