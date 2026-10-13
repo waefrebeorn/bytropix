@@ -500,6 +500,7 @@ src/wubu_shotgate.o: src/wubu_shotgate.c include/wubu_shotgate.h
 src/wubu_hotkey.o: src/wubu_hotkey.c include/wubu_hotkey.h
 src/wubu_hyprland.o: src/wubu_hyprland.c include/wubu_hyprland.h
 src/wubu_hypr_perm.o: src/wubu_hypr_perm.c include/wubu_hypr_perm.h
+src/wubu_gvisor.o: src/wubu_gvisor.c include/wubu_gvisor.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1514,6 +1515,10 @@ test_hyprland: tools/test_hyprland.c src/wubu_hyprland.o
 	./$@
 
 test_hypr_perm: tools/test_hypr_perm.c src/wubu_hypr_perm.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_gvisor: tools/test_gvisor.c src/wubu_gvisor.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
