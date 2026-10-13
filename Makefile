@@ -511,6 +511,7 @@ src/wubu_steam_update.o: src/wubu_steam_update.c include/wubu_steam_update.h
 src/wubu_steam_workshop.o: src/wubu_steam_workshop.c include/wubu_steam_workshop.h
 src/wubu_steam_offline.o: src/wubu_steam_offline.c include/wubu_steam_offline.h
 src/wubu_steam_sharing.o: src/wubu_steam_sharing.c include/wubu_steam_sharing.h
+src/wubu_steam_replay.o: src/wubu_steam_replay.c include/wubu_steam_replay.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1569,6 +1570,10 @@ test_steam_offline: tools/test_steam_offline.c src/wubu_steam_offline.o
 	./$@
 
 test_steam_sharing: tools/test_steam_sharing.c src/wubu_steam_sharing.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_steam_replay: tools/test_steam_replay.c src/wubu_steam_replay.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
