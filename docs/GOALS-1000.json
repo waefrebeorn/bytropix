@@ -2946,9 +2946,9 @@
    "n": 367,
    "domain": "STACK",
    "tier": "P1",
-   "title": "capture gates a11y_shot + gui_shot",
+   "title": "capture gates a11y_shot + gui_shot (DONE)",
    "module": "capture_gate.c",
-   "criterion": "capture test gates"
+   "criterion": "capture test gates [verified: a11y_shot (label/contrast/focus) + gui_shot (bounds/overlap/non-empty) capture gates, fail-closed; 30+ assertions pass]"
   },
   {
    "n": 368,
