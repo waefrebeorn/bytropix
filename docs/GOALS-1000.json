@@ -674,9 +674,9 @@
    "n": 83,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "checkpoint round-trips lossless",
+   "title": "checkpoint round-trips lossless (DONE)",
    "module": "checkpoint.c",
-   "criterion": "save/load bit-identical"
+   "criterion": "save/load bit-identical [verified: test_checkpoint 16/16 \u2014 real wubu_checkpoint module]"
   },
   {
    "n": 84,
