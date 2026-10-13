@@ -421,6 +421,7 @@ src/wubu_landlock.o: src/wubu_landlock.c include/wubu_landlock.h
 src/wubu_snapshot.o: src/wubu_snapshot.c include/wubu_snapshot.h
 src/wubu_pacman.o: src/wubu_pacman.c include/wubu_pacman.h
 src/wubu_ns_tree.o: src/wubu_ns_tree.c include/wubu_ns_tree.h
+src/wubu_fixstep.o: src/wubu_fixstep.c include/wubu_fixstep.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1089,6 +1090,10 @@ test_pacman: tools/test_pacman.c src/wubu_pacman.o
 	./$@
 
 test_ns_tree: tools/test_ns_tree.c src/wubu_ns_tree.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_fixstep: tools/test_fixstep.c src/wubu_fixstep.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
