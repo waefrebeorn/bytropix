@@ -1450,9 +1450,9 @@
    "n": 180,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "KV cache at /n/kv",
+   "title": "KV cache at /n/kv (DONE)",
    "module": "ns_kv.c",
-   "criterion": "KV at 9P path"
+   "criterion": "KV at 9P path [verified: test_kv_styx PASS (KV cache served as 9P files)]"
   },
   {
    "n": 181,
