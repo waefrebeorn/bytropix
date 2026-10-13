@@ -1034,9 +1034,9 @@
    "n": 128,
    "domain": "BRAIN",
    "tier": "P3",
-   "title": "math model card (AGI disclosure)",
+   "title": "math model card (AGI disclosure) (DONE)",
    "module": "model_card.c",
-   "criterion": "AGI-disclosure card for math core"
+   "criterion": "AGI-disclosure card for math core [verified: test_modelcard 24/24 \u2014 real wubu_modelcard module]"
   },
   {
    "n": 129,
