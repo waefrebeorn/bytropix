@@ -481,6 +481,7 @@ src/wubu_nvmeqd.o: src/wubu_nvmeqd.c include/wubu_nvmeqd.h
 src/wubu_elfload.o: src/wubu_elfload.c include/wubu_elfload.h
 src/wubu_machoload.o: src/wubu_machoload.c include/wubu_machoload.h
 src/wubu_peload.o: src/wubu_peload.c include/wubu_peload.h
+src/wubu_dosload.o: src/wubu_dosload.c include/wubu_dosload.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1419,6 +1420,10 @@ test_machoload: tools/test_machoload.c src/wubu_machoload.o
 	./$@
 
 test_peload: tools/test_peload.c src/wubu_peload.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_dosload: tools/test_dosload.c src/wubu_dosload.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
