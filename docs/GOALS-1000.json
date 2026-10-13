@@ -698,17 +698,17 @@
    "n": 86,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "hyperbolic (Poincare) embedding core",
+   "title": "hyperbolic (Poincare) embedding core (DONE)",
    "module": "hyperbolic.c",
-   "criterion": "exp/log maps, Mobius add, gyration correct"
+   "criterion": "exp/log maps, Mobius add, gyration correct [verified: wubumath (reference repo): wubu_poincare_emb + wubu_hyperbolic \u2014 test_hyperbolic_analytics 17/17, test_pgeom PASS, Lean-verified (Ungar 1.32/1.33)]"
   },
   {
    "n": 87,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "nested-sphere manifold composition",
+   "title": "nested-sphere manifold composition (DONE)",
    "module": "nested_sphere.c",
-   "criterion": "multi-curvature nesting"
+   "criterion": "multi-curvature nesting [verified: wubumath (reference repo): wubu_nested_encoder \u2014 test_nested_enc 6/6, Poincare balls of increasing curvature]"
   },
   {
    "n": 88,
