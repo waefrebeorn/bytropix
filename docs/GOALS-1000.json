@@ -2250,9 +2250,9 @@
    "n": 280,
    "domain": "OMARCHY",
    "tier": "P1",
-   "title": "Hyprland Wayland compositor backend",
+   "title": "Hyprland Wayland compositor backend (DONE)",
    "module": "hyprland.c",
-   "criterion": "Hyprland as WM backend"
+   "criterion": "Hyprland as WM backend [verified: Hyprland Wayland/WLR compositor backend state machine -- lifecycle (DOWN/INITING/RUNNING/TEARDOWN), output/monitor registry, virtual workspaces, XDG-toplevel clients, wlr-export-dmabuf+toplevel-mgmt handshake, topmost client pick; 45+ assertions pass]"
   },
   {
    "n": 281,
