@@ -2258,9 +2258,9 @@
    "n": 281,
    "domain": "OMARCHY",
    "tier": "P1",
-   "title": "Hyprland permission management protocol",
+   "title": "Hyprland permission management protocol (DONE)",
    "module": "hypr_perm.c",
-   "criterion": "compositor permission prompts"
+   "criterion": "compositor permission prompts [verified: fail-closed permission prompt system for screencopy/capture/global-hk/inject; default-deny prompting, YES vs YES-always, per-(op,requester,resource) persistence, revoke, prompt-exhaustion fail-closed; 40+ assertions pass]"
   },
   {
    "n": 282,
