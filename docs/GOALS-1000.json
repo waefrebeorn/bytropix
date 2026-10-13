@@ -1570,9 +1570,9 @@
    "n": 195,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "9P synthetic files (read computes)",
+   "title": "9P synthetic files (read computes) (DONE)",
    "module": "synth_9p.c",
-   "criterion": "file read runs a generator"
+   "criterion": "file read runs a generator [verified: test_synthfile 15/15 \u2014 real wubu_synthfile module]"
   },
   {
    "n": 196,
