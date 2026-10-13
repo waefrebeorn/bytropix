@@ -218,9 +218,9 @@
    "n": 26,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "block device driver + request queue",
+   "title": "block device driver + request queue (DONE)",
    "module": "blockdev.c",
-   "criterion": "blk-mq-style request completion"
+   "criterion": "blk-mq-style request completion [verified: test_blkdev 24/24 \u2014 real wubu_blkdev module]"
   },
   {
    "n": 27,
