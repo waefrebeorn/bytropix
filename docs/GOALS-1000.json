@@ -2989,6 +2989,14 @@
    "title": "Steam Quick Access overlay (Shift+Tab) (DONE)",
    "module": "wubu_steam_overlay.c",
    "criterion": "in-game overlay: game pauses, panel stack (main/friends/achievements/guides/browser/settings/screenshots), friend messages w/ unread badge, achievement progress, F12 screenshots, resume on dismiss [verified: Shift+Tab summon/dismiss pauses+resumes, panel push/pop stack w/ root-lock, focus clamp+reset, friends w/ dup-reject + unread accumulation, achievement bound by total, screenshot count, non-SHTAB keys inert; 50+ assertions pass]"
+  },
+  {
+   "n": 373,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam Deck power management (TDP/fan/GPU) (DONE)",
+   "module": "wubu_steam_power.c",
+   "criterion": "TDP budget + fan curve + GPU/CPU clock control w/ thermal clamp + battery estimate [verified: 4 profiles w/ preset clamps, >=95C thermal clamp + recovery, temp-driven fan curve per policy, battery-life ordering perf<balanced<saver, battery-saver auto-clamp gated by lock+charging; 45+ assertions pass]"
   }
  ]
 }
