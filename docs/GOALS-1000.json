@@ -1202,9 +1202,9 @@
    "n": 149,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "Brain archive wired to Body operator",
+   "title": "Brain archive wired to Body operator (DONE)",
    "module": "archive_op.c",
-   "criterion": "archive -> operator apply"
+   "criterion": "archive -> operator apply [verified: test_archive_wiring 7/7]"
   },
   {
    "n": 150,
@@ -1218,9 +1218,9 @@
    "n": 151,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "operator hook applies/restarts/directive",
+   "title": "operator hook applies/restarts/directive (DONE)",
    "module": "op_hook.c",
-   "criterion": "operator applies mutations"
+   "criterion": "operator applies mutations [verified: test_ophook 16/16]"
   },
   {
    "n": 152,
