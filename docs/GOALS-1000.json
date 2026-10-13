@@ -234,9 +234,9 @@
    "n": 28,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "storage path inline AES via /n",
+   "title": "storage path inline AES via /n (DONE)",
    "module": "storage_aes.c",
-   "criterion": "dm-crypt-equivalent inline crypto"
+   "criterion": "dm-crypt-equivalent inline crypto [verified: test_dmcrypt 13/13 \u2014 real wubu_dmcrypt module]"
   },
   {
    "n": 29,
