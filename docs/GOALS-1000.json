@@ -2578,9 +2578,9 @@
    "n": 321,
    "domain": "PATHS",
    "tier": "P1",
-   "title": "continual learning without catastrophic forgetting",
+   "title": "continual learning without catastrophic forgetting (DONE)",
    "module": "cl_no_forget.c",
-   "criterion": "EWC/replay anti-forgetting"
+   "criterion": "EWC/replay anti-forgetting [verified: test_ewc 10/10 \u2014 wubu_ewc EWC importance-weighted protection]"
   },
   {
    "n": 322,
