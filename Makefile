@@ -493,6 +493,7 @@ src/wubu_sleepreplay.o: src/wubu_sleepreplay.c include/wubu_sleepreplay.h
 src/wubu_mathcorpus.o: src/wubu_mathcorpus.c include/wubu_mathcorpus.h
 src/wubu_modelcard.o: src/wubu_modelcard.c include/wubu_modelcard.h
 src/wubu_manifoldviz.o: src/wubu_manifoldviz.c include/wubu_manifoldviz.h
+src/wubu_toolattest.o: src/wubu_toolattest.c include/wubu_toolattest.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1449,6 +1450,10 @@ test_modelcard: tools/test_modelcard.c src/wubu_modelcard.o
 	./$@
 
 test_manifoldviz: tools/test_manifoldviz.c src/wubu_manifoldviz.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_toolattest: tools/test_toolattest.c src/wubu_toolattest.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
