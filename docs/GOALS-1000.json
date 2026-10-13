@@ -2418,9 +2418,9 @@
    "n": 301,
    "domain": "AGIEDR",
    "tier": "P1",
-   "title": "zero-trust continuous re-verification",
+   "title": "zero-trust continuous re-verification (DONE)",
    "module": "zt_verify.c",
-   "criterion": "per-action identity re-verify"
+   "criterion": "per-action identity re-verify [verified: test_ztverify 20/20 \u2014 real wubu_ztverify module]"
   },
   {
    "n": 302,
