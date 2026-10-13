@@ -1306,9 +1306,9 @@
    "n": 162,
    "domain": "AGENT",
    "tier": "P2",
-   "title": "mutation fitness landscape telemetry",
+   "title": "mutation fitness landscape telemetry (DONE)",
    "module": "fitness_land.c",
-   "criterion": "landscape shape logged per cycle"
+   "criterion": "landscape shape logged per cycle [verified: test_fitness_land 17/17 \u2014 real wubu_fitness_land module]"
   },
   {
    "n": 163,
