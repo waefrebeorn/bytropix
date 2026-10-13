@@ -3109,6 +3109,14 @@
    "title": "Calendar / scheduler (DONE)",
    "module": "wubu_calendar.c",
    "criterion": "date-keyed appointments + recurrence (daily/weekly/monthly) + reminder window [verified: YYYYMMDD validation (leap-aware), add gating, day count+list, reminder, recurrence expansion, remove; 45+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 388,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Address Book / contacts (DONE)",
+   "module": "wubu_contacts.c",
+   "criterion": "contact store + case-insensitive find + substring search + partial update [verified: add (dup/null reject), find, field access, partial update, search (ci substring, empty-match-all, truncation), remove+slot-reuse; 40+ assertions, ASAN-clean]"
   }
  ]
 }
