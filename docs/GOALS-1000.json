@@ -178,9 +178,9 @@
    "n": 21,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "IRQ affinity settable via /n",
+   "title": "IRQ affinity settable via /n (DONE)",
    "module": "irq_affinity.c",
-   "criterion": "smp_affinity exposed through 9P"
+   "criterion": "smp_affinity exposed through 9P [verified: test_irqaff 24/24 \u2014 real wubu_irqaff module]"
   },
   {
    "n": 22,
