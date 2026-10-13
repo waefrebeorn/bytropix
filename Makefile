@@ -467,6 +467,7 @@ src/wubu_canary.o: src/wubu_canary.c include/wubu_canary.h
 src/wubu_abs_arm.o: src/wubu_abs_arm.c include/wubu_abs_arm.h
 src/wubu_fw_rollback.o: src/wubu_fw_rollback.c include/wubu_fw_rollback.h
 src/wubu_hypmom.o: src/wubu_hypmom.c include/wubu_hypmom.h
+src/wubu_synthfile.o: src/wubu_synthfile.c include/wubu_synthfile.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1319,6 +1320,10 @@ test_fw_rollback: tools/test_fw_rollback.c src/wubu_fw_rollback.o
 	./$@
 
 test_hypmom: tools/test_hypmom.c src/wubu_hypmom.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_synthfile: tools/test_synthfile.c src/wubu_synthfile.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
