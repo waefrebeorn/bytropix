@@ -3061,6 +3061,14 @@
    "title": "Steam Remote Play (host/client streaming) (DONE)",
    "module": "wubu_steam_remote.c",
    "criterion": "streaming session + capability negotiation + adaptive bitrate + input latency [verified: bandwidth+GPU clamp of res/fps/bitrate/HDR, lifecycle states, frame-drop under congestion, rolling input RTT, disconnect/reconnect; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 382,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam shader pre-caching (DONE)",
+   "module": "wubu_steam_shader.c",
+   "criterion": "priority-ordered shader compile queue + rate-limited worker + progress [verified: enqueue, priority-ordered work, multi-tick completion, drain, fail+skip, stopped-worker refuse; 35+ assertions, ASAN-clean]"
   }
  ]
 }
