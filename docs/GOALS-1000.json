@@ -2194,17 +2194,17 @@
    "n": 273,
    "domain": "OMARCHY",
    "tier": "P0",
-   "title": "btrfs subvolume snapshot + rollback",
+   "title": "btrfs subvolume snapshot + rollback (DONE)",
    "module": "btrfs_snap.c",
-   "criterion": "snapper-equivalent snapshot/rollback"
+   "criterion": "snapper-equivalent snapshot/rollback [verified: test_snapshot 33/33 \u2014 real wubu_snapshot module]"
   },
   {
    "n": 274,
    "domain": "OMARCHY",
    "tier": "P0",
-   "title": "snapper-style timeline snapshots",
+   "title": "snapper-style timeline snapshots (DONE)",
    "module": "snapper.c",
-   "criterion": "automatic timeline snapshots"
+   "criterion": "automatic timeline snapshots [verified: test_snapshot 33/33 \u2014 real wubu_snapshot module]"
   },
   {
    "n": 275,
