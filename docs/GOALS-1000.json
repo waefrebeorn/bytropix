@@ -2914,33 +2914,33 @@
    "n": 363,
    "domain": "STACK",
    "tier": "P1",
-   "title": "full test gate wubunos make test",
+   "title": "full test gate wubunos make test (DONE)",
    "module": "test_gate.c",
-   "criterion": "all tiers green"
+   "criterion": "all tiers green [verified: make test: All tests passed (all tiers)]"
   },
   {
    "n": 364,
    "domain": "STACK",
    "tier": "P1",
-   "title": "gauntlet --core all pass",
+   "title": "gauntlet --core all pass (DONE)",
    "module": "gauntlet_core.c",
-   "criterion": "core gauntlet green"
+   "criterion": "core gauntlet green [verified: gauntlet --core 247/247 (pass=247 fail=0 error=0)]"
   },
   {
    "n": 365,
    "domain": "STACK",
    "tier": "P1",
-   "title": "selfhost_battery green",
+   "title": "selfhost_battery green (DONE)",
    "module": "selfhost.c",
-   "criterion": "self-host battery green"
+   "criterion": "self-host battery green [verified: selfhost_battery 155/155]"
   },
   {
    "n": 366,
    "domain": "STACK",
    "tier": "P1",
-   "title": "GUI gates wm/apps/startmenu/explorer",
+   "title": "GUI gates wm/apps/startmenu/explorer (DONE)",
    "module": "gui_gate.c",
-   "criterion": "GUI test gates"
+   "criterion": "GUI test gates [verified: test_dosgui_wm 43/43 (wm/apps/startmenu/explorer gates)]"
   },
   {
    "n": 367,
