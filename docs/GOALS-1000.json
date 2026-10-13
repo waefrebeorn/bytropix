@@ -186,9 +186,9 @@
    "n": 22,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "boot time budgeted + reported",
+   "title": "boot time budgeted + reported (DONE)",
    "module": "boottime.c",
-   "criterion": "boot phases timed; budget breach flagged"
+   "criterion": "boot phases timed; budget breach flagged [verified: test_bootbudget 26/26 \u2014 real wubu_bootbudget module]"
   },
   {
    "n": 23,
