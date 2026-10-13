@@ -3133,6 +3133,14 @@
    "title": "Word processor (rich text) (DONE)",
    "module": "wubu_wordproc.c",
    "criterion": "styled character runs + cursor insert/delete + selection + bold/italic/underline [verified: mid-buffer insert, overflow guard, delete + selection replace, cursor clamp, pending-style insert, selection-style toggle + combine, word/char count, dirty flag; 45+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 391,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Tabbed Web browser (DONE)",
+   "module": "wubu_browser.c",
+   "criterion": "per-tab back/forward history + tabs + bookmarks [verified: navigate builds history, back/forward + nowhere-to-go, new-nav-clears-forward, independent per-tab history, switch, bookmarks, close-tab + last-tab guard; 45+ assertions, ASAN-clean]"
   }
  ]
 }
