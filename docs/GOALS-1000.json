@@ -2178,9 +2178,9 @@
    "n": 271,
    "domain": "WORLDSIM",
    "tier": "P2",
-   "title": "determinism replay from seed",
+   "title": "determinism replay from seed (DONE)",
    "module": "replay.c",
-   "criterion": "bit-identical replay from seed"
+   "criterion": "bit-identical replay from seed [verified: test_replay 13/13 \u2014 real wubu_replay module]"
   },
   {
    "n": 272,
