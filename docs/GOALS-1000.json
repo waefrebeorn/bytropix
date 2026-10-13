@@ -146,9 +146,9 @@
    "n": 17,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "eBPF probe points attached from /n",
+   "title": "eBPF probe points attached from /n (DONE)",
    "module": "ebpf_9p.c",
-   "criterion": "kernel attaches/detaches probes via 9P control"
+   "criterion": "kernel attaches/detaches probes via 9P control [verified: mini eBPF VM + probe registry, attach/detach/enable, multi-probe fire, event log; 30+ assertions pass]"
   },
   {
    "n": 18,
