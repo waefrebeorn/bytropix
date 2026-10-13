@@ -1538,9 +1538,9 @@
    "n": 191,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "capability revocation propagates",
+   "title": "capability revocation propagates (DONE)",
    "module": "cap_revoke.c",
-   "criterion": "revoke detaches immediately"
+   "criterion": "revoke detaches immediately [verified: test_caprevoke 22/22 \u2014 real wubu_caprevoke module]"
   },
   {
    "n": 192,
