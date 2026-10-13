@@ -427,6 +427,7 @@ src/wubu_physics.o: src/wubu_physics.c include/wubu_physics.h
 src/wubu_terrain.o: src/wubu_terrain.c include/wubu_terrain.h
 src/wubu_worldsim.o: src/wubu_worldsim.c include/wubu_worldsim.h src/wubu_physics.o src/wubu_collision.o src/wubu_fixstep.o
 src/wubu_ns_world.o: src/wubu_ns_world.c include/wubu_ns_world.h src/wubu_worldsim.o src/wubu_ns_tree.o
+src/wubu_checkpoint.o: src/wubu_checkpoint.c include/wubu_checkpoint.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1119,6 +1120,10 @@ test_worldsim: tools/test_worldsim.c src/wubu_worldsim.o src/wubu_physics.o src/
 	./$@
 
 test_ns_world: tools/test_ns_world.c src/wubu_ns_world.o src/wubu_worldsim.o src/wubu_physics.o src/wubu_collision.o src/wubu_fixstep.o src/wubu_ns_tree.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_checkpoint: tools/test_checkpoint.c src/wubu_checkpoint.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
