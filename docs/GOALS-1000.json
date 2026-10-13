@@ -1026,9 +1026,9 @@
    "n": 127,
    "domain": "BRAIN",
    "tier": "P3",
-   "title": "manifold visualization",
+   "title": "manifold visualization (DONE)",
    "module": "viz.c",
-   "criterion": "Poincare ball renderer"
+   "criterion": "Poincare ball renderer [verified: test_manifoldviz 19/19 \u2014 real wubu_manifoldviz module]"
   },
   {
    "n": 128,
