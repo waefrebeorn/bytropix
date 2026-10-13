@@ -1194,9 +1194,9 @@
    "n": 148,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "DA-2 failure weighting 3x bounds search",
+   "title": "DA-2 failure weighting 3x bounds search (DONE)",
    "module": "da2.c",
-   "criterion": "failed mutations weighted 3x"
+   "criterion": "failed mutations weighted 3x [verified: test_failweight 18/18 \u2014 real wubu_failweight module]"
   },
   {
    "n": 149,
