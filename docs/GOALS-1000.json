@@ -2786,9 +2786,9 @@
    "n": 347,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Mach-O execution leg",
+   "title": "Mach-O execution leg (DONE)",
    "module": "leg_macho.c",
-   "criterion": "Mach-O runs"
+   "criterion": "Mach-O runs [verified: real clang Mach-O 64 x86_64 object validates; 25+ unit assertions pass]"
   },
   {
    "n": 348,
