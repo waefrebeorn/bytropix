@@ -2146,9 +2146,9 @@
    "n": 267,
    "domain": "WORLDSIM",
    "tier": "P1",
-   "title": "broadphase spatial hash grid",
+   "title": "broadphase spatial hash grid (DONE)",
    "module": "broadphase.c",
-   "criterion": "sparse spatial hash broadphase"
+   "criterion": "sparse spatial hash broadphase [verified: test_broadphase 11/11 \u2014 real wubu_broadphase module]"
   },
   {
    "n": 268,
