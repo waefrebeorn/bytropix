@@ -154,9 +154,9 @@
    "n": 18,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "structured kernel log at /n/kernel/klog",
+   "title": "structured kernel log at /n/kernel/klog (DONE)",
    "module": "klog_9p.c",
-   "criterion": "klog queryable 9P file, severity-filterable"
+   "criterion": "klog queryable 9P file, severity-filterable [verified: test_klog 16/16 \u2014 real wubu_klog module]"
   },
   {
    "n": 19,
