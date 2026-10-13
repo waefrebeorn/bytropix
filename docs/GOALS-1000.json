@@ -402,9 +402,9 @@
    "n": 49,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "_Alignof / _Alignas operators",
+   "title": "_Alignof / _Alignas operators (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "alignment query/request"
+   "criterion": "alignment query/request [verified: _Alignof int=4/double=8/char=1; core 247/247]"
   },
   {
    "n": 50,
