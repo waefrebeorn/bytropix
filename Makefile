@@ -408,6 +408,7 @@ src/wubu_inject.o: src/wubu_inject.c include/wubu_inject.h
 src/wubu_escape.o: src/wubu_escape.c include/wubu_escape.h
 src/wubu_coherence.o: src/wubu_coherence.c include/wubu_coherence.h
 src/wubu_dotfiles.o: src/wubu_dotfiles.c include/wubu_dotfiles.h
+src/wubu_unit_sandbox.o: src/wubu_unit_sandbox.c include/wubu_unit_sandbox.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1048,6 +1049,10 @@ test_coherence: tools/test_coherence.c src/wubu_coherence.o
 	./$@
 
 test_dotfiles: tools/test_dotfiles.c src/wubu_dotfiles.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_unit_sandbox: tools/test_unit_sandbox.c src/wubu_unit_sandbox.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
