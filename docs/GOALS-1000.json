@@ -3053,6 +3053,14 @@
    "title": "Steam background video recording / replay buffer (DONE)",
    "module": "wubu_steam_replay.c",
    "criterion": "ring-buffer capture + save-last-N + manual record [verified: 30fps tick, ring overflow + aging, replay-save slices duration*fps frames, manual start/stop clip, not-recording gating; 35+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 381,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam Remote Play (host/client streaming) (DONE)",
+   "module": "wubu_steam_remote.c",
+   "criterion": "streaming session + capability negotiation + adaptive bitrate + input latency [verified: bandwidth+GPU clamp of res/fps/bitrate/HDR, lifecycle states, frame-drop under congestion, rolling input RTT, disconnect/reconnect; 40+ assertions, ASAN-clean]"
   }
  ]
 }
