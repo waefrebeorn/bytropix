@@ -482,6 +482,7 @@ src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
 src/wubu_blkdev.o: src/wubu_blkdev.c include/wubu_blkdev.h
 src/wubu_systrace.o: src/wubu_systrace.c include/wubu_systrace.h
+src/wubu_irqaff.o: src/wubu_irqaff.c include/wubu_irqaff.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1394,6 +1395,10 @@ test_blkdev: tools/test_blkdev.c src/wubu_blkdev.o
 	./$@
 
 test_systrace: tools/test_systrace.c src/wubu_systrace.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_irqaff: tools/test_irqaff.c src/wubu_irqaff.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
