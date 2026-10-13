@@ -650,9 +650,9 @@
    "n": 80,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "mixed per-role bit ladders never uniform",
+   "title": "mixed per-role bit ladders never uniform (DONE)",
    "module": "bitmix.c",
-   "criterion": "per-role quant widths differ"
+   "criterion": "per-role quant widths differ [verified: test_bitmix 19/19 \u2014 real wubu_bitmix module]"
   },
   {
    "n": 81,
