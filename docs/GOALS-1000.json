@@ -330,9 +330,9 @@
    "n": 40,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "function-pointer-as-parameter resolves",
+   "title": "function-pointer-as-parameter resolves (DONE)",
    "module": "mir_eval.c",
-   "criterion": "cross-function arg fn_ptr propagation"
+   "criterion": "cross-function arg fn_ptr propagation [verified: call(add,3,4)=7, apply(dbl,21)=42, apply(sq,3)=9; core 247/247]"
   },
   {
    "n": 41,
