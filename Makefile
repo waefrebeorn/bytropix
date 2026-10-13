@@ -491,6 +491,7 @@ src/wubu_hmoe.o: src/wubu_hmoe.c include/wubu_hmoe.h
 src/wubu_specdec.o: src/wubu_specdec.c include/wubu_specdec.h
 src/wubu_sleepreplay.o: src/wubu_sleepreplay.c include/wubu_sleepreplay.h
 src/wubu_mathcorpus.o: src/wubu_mathcorpus.c include/wubu_mathcorpus.h
+src/wubu_modelcard.o: src/wubu_modelcard.c include/wubu_modelcard.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1439,6 +1440,10 @@ test_sleepreplay: tools/test_sleepreplay.c src/wubu_sleepreplay.o
 	./$@
 
 test_mathcorpus: tools/test_mathcorpus.c src/wubu_mathcorpus.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_modelcard: tools/test_modelcard.c src/wubu_modelcard.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
