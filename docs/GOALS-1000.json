@@ -394,9 +394,9 @@
    "n": 48,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "_Static_assert declarations",
+   "title": "_Static_assert declarations (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "compile-time assertion"
+   "criterion": "compile-time assertion [verified: _Static_assert(0)->build failed, (1)/(5)->ok; core 247/247]"
   },
   {
    "n": 49,
