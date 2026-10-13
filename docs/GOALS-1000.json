@@ -3093,6 +3093,14 @@
    "title": "Character Map accessory (DONE)",
    "module": "wubu_charmap.c",
    "criterion": "Unicode block grid + cursor nav + UTF-8 encode + select-to-clipboard [verified: 12-block table, grid-aware nav + clamp, UTF-8 1-4 byte + surrogate/range reject, select-append, clipboard full-guard; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 386,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Font viewer (DONE)",
+   "module": "wubu_fontview.c",
+   "criterion": "installed-font catalog + preview sample/size + active font selection [verified: install (family/style/size/mono), select+active, sample set+truncate, preview size, style-name table; 40+ assertions, ASAN-clean]"
   }
  ]
 }
