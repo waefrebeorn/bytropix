@@ -515,6 +515,7 @@ src/wubu_steam_replay.o: src/wubu_steam_replay.c include/wubu_steam_replay.h
 src/wubu_steam_remote.o: src/wubu_steam_remote.c include/wubu_steam_remote.h
 src/wubu_steam_shader.o: src/wubu_steam_shader.c include/wubu_steam_shader.h
 src/wubu_steam_bigpicture.o: src/wubu_steam_bigpicture.c include/wubu_steam_bigpicture.h
+src/wubu_volmixer.o: src/wubu_volmixer.c include/wubu_volmixer.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1589,6 +1590,10 @@ test_steam_shader: tools/test_steam_shader.c src/wubu_steam_shader.o
 	./$@
 
 test_steam_bigpicture: tools/test_steam_bigpicture.c src/wubu_steam_bigpicture.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_volmixer: tools/test_volmixer.c src/wubu_volmixer.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
