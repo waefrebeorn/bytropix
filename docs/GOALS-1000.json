@@ -2466,9 +2466,9 @@
    "n": 307,
    "domain": "AGIEDR",
    "tier": "P2",
-   "title": "agent incident-response playbook",
+   "title": "agent incident-response playbook (DONE)",
    "module": "ir_playbook.c",
-   "criterion": "kill/contain/rollback runbook"
+   "criterion": "kill/contain/rollback runbook [verified: test_irplaybook 24/24 \u2014 real wubu_irplaybook module]"
   },
   {
    "n": 308,
