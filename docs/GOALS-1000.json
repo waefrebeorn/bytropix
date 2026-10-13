@@ -3101,6 +3101,14 @@
    "title": "Font viewer (DONE)",
    "module": "wubu_fontview.c",
    "criterion": "installed-font catalog + preview sample/size + active font selection [verified: install (family/style/size/mono), select+active, sample set+truncate, preview size, style-name table; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 387,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Calendar / scheduler (DONE)",
+   "module": "wubu_calendar.c",
+   "criterion": "date-keyed appointments + recurrence (daily/weekly/monthly) + reminder window [verified: YYYYMMDD validation (leap-aware), add gating, day count+list, reminder, recurrence expansion, remove; 45+ assertions, ASAN-clean]"
   }
  ]
 }
