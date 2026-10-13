@@ -1322,9 +1322,9 @@
    "n": 164,
    "domain": "AGENT",
    "tier": "P3",
-   "title": "novelty-search anti-local-optimum",
+   "title": "novelty-search anti-local-optimum (DONE)",
    "module": "novelty.c",
-   "criterion": "behavioral novelty reward"
+   "criterion": "behavioral novelty reward [verified: behavioral novelty-search reward -- 8-dim descriptors, k-NN average novelty, frontier-expansion archive w/ min threshold, fail-closed duplicate rejection + full-archive rejection; 30+ assertions pass]"
   },
   {
    "n": 165,
