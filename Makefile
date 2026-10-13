@@ -485,6 +485,7 @@ src/wubu_dosload.o: src/wubu_dosload.c include/wubu_dosload.h
 src/wubu_rootfs_ct.o: src/wubu_rootfs_ct.c include/wubu_rootfs_ct.h include/wubu_elfload.h
 src/wubu_cigate.o: src/wubu_cigate.c include/wubu_cigate.h
 src/wubu_kataiso.o: src/wubu_kataiso.c include/wubu_kataiso.h
+src/wubu_thermal.o: src/wubu_thermal.c include/wubu_thermal.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1439,6 +1440,10 @@ test_cigate: tools/test_cigate.c src/wubu_cigate.o
 	./$@
 
 test_kataiso: tools/test_kataiso.c src/wubu_kataiso.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_thermal: tools/test_thermal.c src/wubu_thermal.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
