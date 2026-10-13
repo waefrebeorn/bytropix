@@ -436,6 +436,7 @@ src/wubu_humangate.o: src/wubu_humangate.c include/wubu_humangate.h
 src/wubu_failweight.o: src/wubu_failweight.c include/wubu_failweight.h
 src/wubu_ophook.o: src/wubu_ophook.c include/wubu_ophook.h
 src/wubu_output_guard.o: src/wubu_output_guard.c include/wubu_output_guard.h
+src/wubu_ztverify.o: src/wubu_ztverify.c include/wubu_ztverify.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1164,6 +1165,10 @@ test_ophook: tools/test_ophook.c src/wubu_ophook.o
 	./$@
 
 test_output_guard: tools/test_output_guard.c src/wubu_output_guard.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_ztverify: tools/test_ztverify.c src/wubu_ztverify.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
