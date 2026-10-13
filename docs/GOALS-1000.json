@@ -3021,6 +3021,14 @@
    "title": "Steam update channel management (stable/beta/preview) (DONE)",
    "module": "wubu_steam_update.c",
    "criterion": "channel switching + version queue + download/install + rollback snapshot [verified: 3 channels w/ per-channel versions, queue->download->install lifecycle, auto-download-before-install vs manual, rollback restore + no-snapshot fail, channel switch queues version; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 377,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam Workshop / mod manager (DONE)",
+   "module": "wubu_steam_workshop.c",
+   "criterion": "subscribe/unsubscribe + download state + load order + conflict detection [verified: subscribe/unsubscribe, download lifecycle + retry, load gating, reorder, deps, file-conflict detection + disable/unload clearing; 45+ assertions, ASAN-clean]"
   }
  ]
 }
