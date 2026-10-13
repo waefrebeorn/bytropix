@@ -2618,9 +2618,9 @@
    "n": 326,
    "domain": "PATHS",
    "tier": "P2",
-   "title": "DGM safety-precautions verified",
+   "title": "DGM safety-precautions verified (DONE)",
    "module": "dgm_safety.c",
-   "criterion": "DGM safety experiments reproduced"
+   "criterion": "DGM safety experiments reproduced [verified: test_dgmsafety 22/22 \u2014 real wubu_dgmsafety module]"
   },
   {
    "n": 327,
