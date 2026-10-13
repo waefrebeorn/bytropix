@@ -478,6 +478,7 @@ src/wubu_klog.o: src/wubu_klog.c include/wubu_klog.h
 src/wubu_watchdog.o: src/wubu_watchdog.c include/wubu_watchdog.h
 src/wubu_modsign.o: src/wubu_modsign.c include/wubu_modsign.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
+src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1374,6 +1375,10 @@ test_modsign: tools/test_modsign.c src/wubu_modsign.o
 	./$@
 
 test_bootbudget: tools/test_bootbudget.c src/wubu_bootbudget.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_chardev: tools/test_chardev.c src/wubu_chardev.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
