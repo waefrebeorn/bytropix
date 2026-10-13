@@ -1186,9 +1186,9 @@
    "n": 147,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "independent verifier gates every promotion",
+   "title": "independent verifier gates every promotion (DONE)",
    "module": "verifier.c",
-   "criterion": "separate verifier process"
+   "criterion": "separate verifier process [verified: test_promote 21/21 \u2014 real wubu_promote gate]"
   },
   {
    "n": 148,
@@ -1210,9 +1210,9 @@
    "n": 150,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "trace span emitted on every promote",
+   "title": "trace span emitted on every promote (DONE)",
    "module": "trace.c",
-   "criterion": "OTel span per promotion"
+   "criterion": "OTel span per promotion [verified: test_promote 21/21 \u2014 real wubu_promote gate]"
   },
   {
    "n": 151,
