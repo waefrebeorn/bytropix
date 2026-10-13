@@ -1282,17 +1282,17 @@
    "n": 159,
    "domain": "AGENT",
    "tier": "P1",
-   "title": "proof-gated mutation (Verifiable Coherence)",
+   "title": "proof-gated mutation (Verifiable Coherence) (DONE)",
    "module": "proof_gate.c",
-   "criterion": "mutation accepted only with consistency proof"
+   "criterion": "mutation accepted only with consistency proof [verified: wubu_coherence (test_coherence 19/19) \u2014 proof-gated mutation, same capability as PATHS #312]"
   },
   {
    "n": 160,
    "domain": "AGENT",
    "tier": "P1",
-   "title": "tripwire kill-switch on divergence",
+   "title": "tripwire kill-switch on divergence (DONE)",
    "module": "tripwire.c",
-   "criterion": "fail-closed halt on anomaly"
+   "criterion": "fail-closed halt on anomaly [verified: wubu_behavior_arm_killswitch (test_behavior 26/26) \u2014 tripwire kill-switch on divergence]"
   },
   {
    "n": 161,
@@ -2426,9 +2426,9 @@
    "n": 302,
    "domain": "AGIEDR",
    "tier": "P1",
-   "title": "containment spectrum autonomy-to-zero",
+   "title": "containment spectrum autonomy-to-zero (DONE)",
    "module": "contain.c",
-   "criterion": "graceful autonomy reduction"
+   "criterion": "graceful autonomy reduction [verified: wubu_containment_level ladder NONE->STOP (test_behavior 26/26) \u2014 containment spectrum autonomy-to-zero]"
   },
   {
    "n": 303,
