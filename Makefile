@@ -68,6 +68,12 @@ $(EXTRA_OBJ): src/%.o: src/%.c
 # the module-registry gate: all EXTRA objects compile
 .PHONY: module-registry
 module-registry: $(EXTRA_OBJ)
+
+# STACK #362 duplicate-symbol gate: no global symbol defined in 2+ of the
+# co-linked CORE objects (legacy aggregate vs split module are never co-linked).
+.PHONY: check_dupes
+check_dupes: $(CORE_OBJ)
+	@bash tools/check_dupes.sh $(CORE_OBJ)
 	@echo "=== MODULE REGISTRY: $(words $(EXTRA_OBJ)) EXTRA modules compiled ==="
 
 all: module-registry test_nested_ssm test_nested_ssm_backward load_model test_model test_cpu_timing test_model_adapter infer_moe infer_moe_lazy infer_unified infer_poincare test_256k test_kv_cache test_poincare_gqa test_tst test_moe_hyperbolic test_mobius_linear test_hyperbolic_output_proj train_integrated test_chunked_ssm api_server
