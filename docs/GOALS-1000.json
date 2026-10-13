@@ -2778,9 +2778,9 @@
    "n": 346,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "dynamic linker GOT/PLT relocation",
+   "title": "dynamic linker GOT/PLT relocation (DONE)",
    "module": "elf_reloc.c",
-   "criterion": "runtime relocation of shared objects"
+   "criterion": "runtime relocation of shared objects [verified: test_gotplt 26/26 \u2014 real wubu_gotplt module]"
   },
   {
    "n": 347,
