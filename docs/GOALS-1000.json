@@ -3045,6 +3045,14 @@
    "title": "Steam Family Sharing (DONE)",
    "module": "wubu_steam_sharing.c",
    "criterion": "lender-authorizes-borrowers + exclusivity lock + concurrency limit + revoke [verified: share grant, auth limit, borrow grant/deny (not-shared/concurrency/lender-playing/unknown/double-session), session-end, revoke kick; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 380,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam background video recording / replay buffer (DONE)",
+   "module": "wubu_steam_replay.c",
+   "criterion": "ring-buffer capture + save-last-N + manual record [verified: 30fps tick, ring overflow + aging, replay-save slices duration*fps frames, manual start/stop clip, not-recording gating; 35+ assertions, ASAN-clean]"
   }
  ]
 }
