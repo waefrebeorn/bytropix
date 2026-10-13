@@ -3005,6 +3005,14 @@
    "title": "Steam gamepad virtual cursor + radial menu (DONE)",
    "module": "wubu_gamepad_nav.c",
    "criterion": "virtual cursor w/ snap-to-focus, radial menu sectors, on-screen keyboard [verified: cursor move+clamp, snap-to-focus 120px, set_focus, confirm gating, radial open/select/close, 6x10 keyboard nav + typing + backspace + space + done; 55+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 375,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam Cloud Saves sync (DONE)",
+   "module": "wubu_steam_cloud.c",
+   "criterion": "per-game save backup w/ version+timestamp + conflict resolution + quota [verified: 6 sync states, upload/download, conflict under newer/keep-local/keep-cloud, offline gating, sync_all auto-sync, quota; 40+ assertions, ASAN-clean]"
   }
  ]
 }
