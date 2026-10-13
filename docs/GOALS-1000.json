@@ -1930,9 +1930,9 @@
    "n": 240,
    "domain": "UX",
    "tier": "P1",
-   "title": "companion capability-gated tools",
+   "title": "companion capability-gated tools (DONE)",
    "module": "bonzi_tools.c",
-   "criterion": "gated tool use"
+   "criterion": "gated tool use [verified: test_bonzi_tools 22/22 \u2014 real wubu_bonzi_tools module]"
   },
   {
    "n": 241,
