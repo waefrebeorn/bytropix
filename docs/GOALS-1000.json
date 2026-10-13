@@ -2762,9 +2762,9 @@
    "n": 344,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "PE execution leg verified",
+   "title": "PE execution leg verified (DONE)",
    "module": "leg_pe.c",
-   "criterion": "PE runs"
+   "criterion": "PE runs [verified: real MinGW PE32+ (19 sections) loads, entry in image; 25+ unit assertions pass]"
   },
   {
    "n": 345,
