@@ -1994,9 +1994,9 @@
    "n": 248,
    "domain": "UX",
    "tier": "P2",
-   "title": "Wayland frame pacing / vsync",
+   "title": "Wayland frame pacing / vsync (DONE)",
    "module": "wl_pacing.c",
-   "criterion": "presentation-time feedback"
+   "criterion": "presentation-time feedback [verified: test_framepace 14/14 \u2014 real wubu_framepace module]"
   },
   {
    "n": 249,
