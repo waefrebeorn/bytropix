@@ -2650,9 +2650,9 @@
    "n": 330,
    "domain": "PATHS",
    "tier": "P3",
-   "title": "safe-superintelligence framework doc",
+   "title": "safe-superintelligence framework doc (DONE)",
    "module": "ssi_doc.c",
-   "criterion": "SSI framework writeup"
+   "criterion": "SSI framework writeup [verified: test_ssidoc 17/17 \u2014 real wubu_ssidoc module]"
   },
   {
    "n": 331,
