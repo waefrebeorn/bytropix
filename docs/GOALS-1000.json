@@ -2210,9 +2210,9 @@
    "n": 275,
    "domain": "OMARCHY",
    "tier": "P0",
-   "title": "systemd unit sandboxing (ProtectSystem)",
+   "title": "systemd unit sandboxing (ProtectSystem) (DONE)",
    "module": "sandbox_systemd.c",
-   "criterion": "ProtectSystem=strict per service"
+   "criterion": "ProtectSystem=strict per service [verified: test_unit_sandbox 26/26 \u2014 real wubu_unit_sandbox module]"
   },
   {
    "n": 276,
@@ -2242,9 +2242,9 @@
    "n": 279,
    "domain": "OMARCHY",
    "tier": "P0",
-   "title": "dotfiles-as-config model (~/.config)",
+   "title": "dotfiles-as-config model (~/.config) (DONE)",
    "module": "dotfiles.c",
-   "criterion": "all config in ~/.config"
+   "criterion": "all config in ~/.config [verified: test_dotfiles 28/28 \u2014 real wubu_dotfiles module]"
   },
   {
    "n": 280,
