@@ -1954,9 +1954,9 @@
    "n": 243,
    "domain": "UX",
    "tier": "P1",
-   "title": "right-click context menus everywhere",
+   "title": "right-click context menus everywhere (DONE)",
    "module": "ctxmenu.c",
-   "criterion": "context menus"
+   "criterion": "context menus [verified: test_ctxmenu 19/19 \u2014 real wubu_ctxmenu module]"
   },
   {
    "n": 244,
