@@ -2738,9 +2738,9 @@
    "n": 341,
    "domain": "RUNTIME",
    "tier": "P1",
-   "title": "container isolation cgroups v2 + seccomp",
+   "title": "container isolation cgroups v2 + seccomp (DONE)",
    "module": "container_iso.c",
-   "criterion": "wubuos container sandbox"
+   "criterion": "wubuos container sandbox [verified: cgroup cpu/mem/pids/io + seccomp allowlist, isolation verdict; 30+ assertions pass]"
   },
   {
    "n": 342,
