@@ -1962,9 +1962,9 @@
    "n": 244,
    "domain": "UX",
    "tier": "P1",
-   "title": "drag-and-drop between windows",
+   "title": "drag-and-drop between windows (DONE)",
    "module": "dnd.c",
-   "criterion": "cross-window DnD"
+   "criterion": "cross-window DnD [verified: test_dnd 22/22 \u2014 real wubu_dnd module]"
   },
   {
    "n": 245,
