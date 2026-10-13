@@ -3149,6 +3149,14 @@
    "title": "Email client (DONE)",
    "module": "wubu_mail.c",
    "criterion": "mailbox with folders + read/unread + move/delete + counts [verified: 4 folders, receive unread-by-default, read/unread counts, move between folders, send, delete + gone, per-folder counts; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 393,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Disk Cleanup utility (DONE)",
+   "module": "wubu_diskclean.c",
+   "criterion": "categorized file scan + reclaimable-by-category + safe-only default selection [verified: 6 categories, safe classification, default mask, per-category bytes+counts, reclaimable selection (safe/opt-in/empty); 35+ assertions, ASAN-clean]"
   }
  ]
 }
