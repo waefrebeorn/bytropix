@@ -2962,9 +2962,9 @@
    "n": 369,
    "domain": "STACK",
    "tier": "P2",
-   "title": "docs-vs-code verification",
+   "title": "docs-vs-code verification (DONE)",
    "module": "doc_verify.c",
-   "criterion": "docs match code"
+   "criterion": "docs match code [verified: test_docverify 16/16 \u2014 real wubu_docverify module + repo audit (482 src/470 hdr)]"
   },
   {
    "n": 370,
