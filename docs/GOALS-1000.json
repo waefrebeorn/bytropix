@@ -658,9 +658,9 @@
    "n": 81,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "SSD expert slot-bank pages 256 experts on small RAM",
+   "title": "SSD expert slot-bank pages 256 experts on small RAM (DONE)",
    "module": "slotbank.c",
-   "criterion": "256 experts on 6GB via mmap paging"
+   "criterion": "256 experts on 6GB via mmap paging [verified: test_slotbank 21/21 \u2014 real wubu_slotbank module]"
   },
   {
    "n": 82,
