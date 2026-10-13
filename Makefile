@@ -410,6 +410,7 @@ src/wubu_coherence.o: src/wubu_coherence.c include/wubu_coherence.h
 src/wubu_dotfiles.o: src/wubu_dotfiles.c include/wubu_dotfiles.h
 src/wubu_unit_sandbox.o: src/wubu_unit_sandbox.c include/wubu_unit_sandbox.h
 src/wubu_ns_iso.o: src/wubu_ns_iso.c include/wubu_ns_iso.h
+src/wubu_syscall_profile.o: src/wubu_syscall_profile.c include/wubu_syscall_profile.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1058,6 +1059,10 @@ test_unit_sandbox: tools/test_unit_sandbox.c src/wubu_unit_sandbox.o
 	./$@
 
 test_ns_iso: tools/test_ns_iso.c src/wubu_ns_iso.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_syscall_profile: tools/test_syscall_profile.c src/wubu_syscall_profile.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
