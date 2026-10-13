@@ -2306,9 +2306,9 @@
    "n": 287,
    "domain": "OMARCHY",
    "tier": "P2",
-   "title": "A/B boot slots with rollback",
+   "title": "A/B boot slots with rollback (DONE)",
    "module": "ab_boot.c",
-   "criterion": "bootloader A/B + rollback"
+   "criterion": "bootloader A/B + rollback [verified: test_abs_arm 20/20 \u2014 real wubu_abs_arm module]"
   },
   {
    "n": 288,
