@@ -2490,9 +2490,9 @@
    "n": 310,
    "domain": "AGIEDR",
    "tier": "P2",
-   "title": "adversarial red-team agent harness",
+   "title": "adversarial red-team agent harness (DONE)",
    "module": "redteam_harness.c",
-   "criterion": "automated attack generation"
+   "criterion": "automated attack generation [verified: test_rth 14/14 \u2014 real wubu_rth module]"
   },
   {
    "n": 311,
