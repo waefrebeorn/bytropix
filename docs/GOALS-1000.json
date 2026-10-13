@@ -2218,9 +2218,9 @@
    "n": 276,
    "domain": "OMARCHY",
    "tier": "P0",
-   "title": "Landlock unprivileged filesystem sandbox",
+   "title": "Landlock unprivileged filesystem sandbox (DONE)",
    "module": "landlock.c",
-   "criterion": "Landlock LSM scoped access"
+   "criterion": "Landlock LSM scoped access [verified: test_landlock 22/22 \u2014 real wubu_landlock module]"
   },
   {
    "n": 277,
