@@ -1178,9 +1178,9 @@
    "n": 146,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "DA-3 human gate + freeze (death condition)",
+   "title": "DA-3 human gate + freeze (death condition) (DONE)",
    "module": "da3.c",
-   "criterion": "human veto stops the loop"
+   "criterion": "human veto stops the loop [verified: test_humangate 19/19 \u2014 real wubu_humangate module]"
   },
   {
    "n": 147,
