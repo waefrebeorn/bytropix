@@ -2981,6 +2981,14 @@
    "title": "repo hygiene audit + push (DONE)",
    "module": "repo_hygiene.c",
    "criterion": "one-command audit+push [verified: repodoc audit on all 3 repos; wubunos 27 build-artifact ELFs untracked + gitignore hardened; 2 real wubuos kernel build regressions fixed; pushed]"
+  },
+  {
+   "n": 372,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam Quick Access overlay (Shift+Tab) (DONE)",
+   "module": "wubu_steam_overlay.c",
+   "criterion": "in-game overlay: game pauses, panel stack (main/friends/achievements/guides/browser/settings/screenshots), friend messages w/ unread badge, achievement progress, F12 screenshots, resume on dismiss [verified: Shift+Tab summon/dismiss pauses+resumes, panel push/pop stack w/ root-lock, focus clamp+reset, friends w/ dup-reject + unread accumulation, achievement bound by total, screenshot count, non-SHTAB keys inert; 50+ assertions pass]"
   }
  ]
 }
