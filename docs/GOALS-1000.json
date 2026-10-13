@@ -2434,9 +2434,9 @@
    "n": 303,
    "domain": "AGIEDR",
    "tier": "P1",
-   "title": "red-team benchmark gate",
+   "title": "red-team benchmark gate (DONE)",
    "module": "redteam.c",
-   "criterion": "adversarial eval before action"
+   "criterion": "adversarial eval before action [verified: test_redteam 12/12 \u2014 real wubu_redteam module]"
   },
   {
    "n": 304,
