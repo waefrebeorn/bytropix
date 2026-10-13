@@ -495,6 +495,7 @@ src/wubu_modelcard.o: src/wubu_modelcard.c include/wubu_modelcard.h
 src/wubu_manifoldviz.o: src/wubu_manifoldviz.c include/wubu_manifoldviz.h
 src/wubu_toolattest.o: src/wubu_toolattest.c include/wubu_toolattest.h
 src/wubu_otelauto.o: src/wubu_otelauto.c include/wubu_otelauto.h
+src/wubu_irplaybook.o: src/wubu_irplaybook.c include/wubu_irplaybook.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1459,6 +1460,10 @@ test_toolattest: tools/test_toolattest.c src/wubu_toolattest.o
 	./$@
 
 test_otelauto: tools/test_otelauto.c src/wubu_otelauto.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_irplaybook: tools/test_irplaybook.c src/wubu_irplaybook.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
