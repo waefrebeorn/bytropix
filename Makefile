@@ -461,6 +461,7 @@ src/wubu_expressivity.o: src/wubu_expressivity.c include/wubu_expressivity.h
 src/wubu_selftest.o: src/wubu_selftest.c include/wubu_selftest.h
 src/wubu_fitness_land.o: src/wubu_fitness_land.c include/wubu_fitness_land.h
 src/wubu_islands.o: src/wubu_islands.c include/wubu_islands.h
+src/wubu_budget.o: src/wubu_budget.c include/wubu_budget.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1289,6 +1290,10 @@ test_fitness_land: tools/test_fitness_land.c src/wubu_fitness_land.o
 	./$@
 
 test_islands: tools/test_islands.c src/wubu_islands.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_budget: tools/test_budget.c src/wubu_budget.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
