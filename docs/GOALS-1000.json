@@ -1442,9 +1442,9 @@
    "n": 179,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "capability = namespace attach (AD01)",
+   "title": "capability = namespace attach (AD01) (DONE)",
    "module": "ns_cap.c",
-   "criterion": "attach grants capability"
+   "criterion": "attach grants capability [verified: test_capgate PASS + test_capzero PASS]"
   },
   {
    "n": 180,
@@ -1546,9 +1546,9 @@
    "n": 192,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "object-capability authority model",
+   "title": "object-capability authority model (DONE)",
    "module": "ocap.c",
-   "criterion": "ocap authority for all objects"
+   "criterion": "ocap authority for all objects [verified: test_tool_cap PASS (capability-gated agency)]"
   },
   {
    "n": 193,
