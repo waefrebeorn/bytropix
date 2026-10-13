@@ -451,6 +451,7 @@ src/wubu_hardening.o: src/wubu_hardening.c include/wubu_hardening.h src/wubu_uni
 src/wubu_nnp.o: src/wubu_nnp.c include/wubu_nnp.h src/wubu_unit_sandbox.o
 src/wubu_protect_kt.o: src/wubu_protect_kt.c include/wubu_protect_kt.h
 src/wubu_distroless.o: src/wubu_distroless.c include/wubu_distroless.h
+src/wubu_consolidate.o: src/wubu_consolidate.c include/wubu_consolidate.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1239,6 +1240,10 @@ test_protect_kt: tools/test_protect_kt.c src/wubu_protect_kt.o
 	./$@
 
 test_distroless: tools/test_distroless.c src/wubu_distroless.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_consolidate: tools/test_consolidate.c src/wubu_consolidate.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
