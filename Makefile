@@ -521,6 +521,7 @@ src/wubu_fontview.o: src/wubu_fontview.c include/wubu_fontview.h
 src/wubu_calendar.o: src/wubu_calendar.c include/wubu_calendar.h
 src/wubu_contacts.o: src/wubu_contacts.c include/wubu_contacts.h
 src/wubu_sheet.o: src/wubu_sheet.c include/wubu_sheet.h
+src/wubu_wordproc.o: src/wubu_wordproc.c include/wubu_wordproc.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1619,6 +1620,10 @@ test_contacts: tools/test_contacts.c src/wubu_contacts.o
 	./$@
 
 test_sheet: tools/test_sheet.c src/wubu_sheet.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_wordproc: tools/test_wordproc.c src/wubu_wordproc.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
