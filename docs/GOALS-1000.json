@@ -1938,9 +1938,9 @@
    "n": 241,
    "domain": "UX",
    "tier": "P1",
-   "title": "companion offline fallback",
+   "title": "companion offline fallback (DONE)",
    "module": "bonzi_offline.c",
-   "criterion": "local gen fallback"
+   "criterion": "local gen fallback [verified: offline-fallback gen_text daemon -- AUTO/ONLINE try-remote-fail-closed-to-local, explicit offline override, latency/error accounting; 35+ assertions pass]"
   },
   {
    "n": 242,
