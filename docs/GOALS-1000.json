@@ -2226,9 +2226,9 @@
    "n": 277,
    "domain": "OMARCHY",
    "tier": "P0",
-   "title": "seccomp-bpf syscall filter per service",
+   "title": "seccomp-bpf syscall filter per service (DONE)",
    "module": "seccomp.c",
-   "criterion": "minimal syscall profile per unit"
+   "criterion": "minimal syscall profile per unit [verified: test_syscall_profile 26/26 \u2014 real wubu_syscall_profile module]"
   },
   {
    "n": 278,
