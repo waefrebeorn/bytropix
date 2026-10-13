@@ -448,6 +448,7 @@ src/wubu_dnd.o: src/wubu_dnd.c include/wubu_dnd.h
 src/wubu_ctxmenu.o: src/wubu_ctxmenu.c include/wubu_ctxmenu.h
 src/wubu_bonzi_tools.o: src/wubu_bonzi_tools.c include/wubu_bonzi_tools.h
 src/wubu_hardening.o: src/wubu_hardening.c include/wubu_hardening.h src/wubu_unit_sandbox.o
+src/wubu_nnp.o: src/wubu_nnp.c include/wubu_nnp.h src/wubu_unit_sandbox.o
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1224,6 +1225,10 @@ test_bonzi_tools: tools/test_bonzi_tools.c src/wubu_bonzi_tools.o
 	./$@
 
 test_hardening: tools/test_hardening.c src/wubu_hardening.o src/wubu_unit_sandbox.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_nnp: tools/test_nnp.c src/wubu_nnp.o src/wubu_unit_sandbox.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
