@@ -1314,9 +1314,9 @@
    "n": 163,
    "domain": "AGENT",
    "tier": "P2",
-   "title": "island-model parallel evolution",
+   "title": "island-model parallel evolution (DONE)",
    "module": "islands.c",
-   "criterion": "populations evolve in isolation then migrate"
+   "criterion": "populations evolve in isolation then migrate [verified: test_islands 20/20 \u2014 real wubu_islands module]"
   },
   {
    "n": 164,
