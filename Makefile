@@ -407,6 +407,7 @@ src/wubu_egress.o: src/wubu_egress.c include/wubu_egress.h
 src/wubu_inject.o: src/wubu_inject.c include/wubu_inject.h
 src/wubu_escape.o: src/wubu_escape.c include/wubu_escape.h
 src/wubu_coherence.o: src/wubu_coherence.c include/wubu_coherence.h
+src/wubu_dotfiles.o: src/wubu_dotfiles.c include/wubu_dotfiles.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1043,6 +1044,10 @@ test_escape: tools/test_escape.c src/wubu_escape.o
 	./$@
 
 test_coherence: tools/test_coherence.c src/wubu_coherence.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_dotfiles: tools/test_dotfiles.c src/wubu_dotfiles.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
