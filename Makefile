@@ -483,6 +483,7 @@ src/wubu_machoload.o: src/wubu_machoload.c include/wubu_machoload.h
 src/wubu_peload.o: src/wubu_peload.c include/wubu_peload.h
 src/wubu_dosload.o: src/wubu_dosload.c include/wubu_dosload.h
 src/wubu_rootfs_ct.o: src/wubu_rootfs_ct.c include/wubu_rootfs_ct.h include/wubu_elfload.h
+src/wubu_cigate.o: src/wubu_cigate.c include/wubu_cigate.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1429,6 +1430,10 @@ test_dosload: tools/test_dosload.c src/wubu_dosload.o
 	./$@
 
 test_rootfs_ct: tools/test_rootfs_ct.c src/wubu_rootfs_ct.o src/wubu_elfload.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_cigate: tools/test_cigate.c src/wubu_cigate.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
