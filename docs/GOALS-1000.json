@@ -2970,9 +2970,9 @@
    "n": 370,
    "domain": "STACK",
    "tier": "P2",
-   "title": "ASAN/UBSAN clean test pass",
+   "title": "ASAN/UBSAN clean test pass (DONE)",
    "module": "sanitizers.c",
-   "criterion": "sanitizer-clean suite"
+   "criterion": "sanitizer-clean suite [verified: make test green (test_400) + ASAN/UBSAN clean on all new modules; fixed test_diag heap-buffer-overflow + restored gguf TurboQuant regression; tools/asan_suite.sh added]"
   },
   {
    "n": 371,
