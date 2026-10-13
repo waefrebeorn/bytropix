@@ -2442,9 +2442,9 @@
    "n": 304,
    "domain": "AGIEDR",
    "tier": "P1",
-   "title": "indirect prompt-injection defense",
+   "title": "indirect prompt-injection defense (DONE)",
    "module": "indirect_pi.c",
-   "criterion": "multi-layer indirect PI defense"
+   "criterion": "multi-layer indirect PI defense [verified: test_indirect_pi 12/12 \u2014 real wubu_indirect_pi module]"
   },
   {
    "n": 305,
