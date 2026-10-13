@@ -2997,6 +2997,14 @@
    "title": "Steam Deck power management (TDP/fan/GPU) (DONE)",
    "module": "wubu_steam_power.c",
    "criterion": "TDP budget + fan curve + GPU/CPU clock control w/ thermal clamp + battery estimate [verified: 4 profiles w/ preset clamps, >=95C thermal clamp + recovery, temp-driven fan curve per policy, battery-life ordering perf<balanced<saver, battery-saver auto-clamp gated by lock+charging; 45+ assertions pass]"
+  },
+  {
+   "n": 374,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam gamepad virtual cursor + radial menu (DONE)",
+   "module": "wubu_gamepad_nav.c",
+   "criterion": "virtual cursor w/ snap-to-focus, radial menu sectors, on-screen keyboard [verified: cursor move+clamp, snap-to-focus 120px, set_focus, confirm gating, radial open/select/close, 6x10 keyboard nav + typing + backspace + space + done; 55+ assertions, ASAN-clean]"
   }
  ]
 }
