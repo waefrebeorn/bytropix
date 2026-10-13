@@ -2330,9 +2330,9 @@
    "n": 290,
    "domain": "OMARCHY",
    "tier": "P2",
-   "title": "gVisor/Kata-style kernel isolation",
+   "title": "gVisor/Kata-style kernel isolation (DONE)",
    "module": "kernel_iso.c",
-   "criterion": "user-kernel or VM isolation"
+   "criterion": "user-kernel or VM isolation [verified: sentry boundary 3-way classify, default-deny, sealed immutability, deny-rate; 25+ assertions pass]"
   },
   {
    "n": 291,
