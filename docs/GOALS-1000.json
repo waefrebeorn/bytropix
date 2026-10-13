@@ -346,9 +346,9 @@
    "n": 42,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "K&R function definitions parse",
+   "title": "K&R function definitions parse (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "old-style param lists"
+   "criterion": "old-style param lists [verified: K&R decl-list=7, default-int=7, single=5; prototype no-regress; core 247/247]"
   },
   {
    "n": 43,
