@@ -162,9 +162,9 @@
    "n": 19,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "syscall trace streams to a 9P fifo",
+   "title": "syscall trace streams to a 9P fifo (DONE)",
    "module": "syscall_trace.c",
-   "criterion": "strace-equivalent to /n/kernel/trace"
+   "criterion": "strace-equivalent to /n/kernel/trace [verified: test_systrace 17/17 \u2014 real wubu_systrace module]"
   },
   {
    "n": 20,
