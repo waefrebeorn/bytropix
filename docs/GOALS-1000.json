@@ -666,9 +666,9 @@
    "n": 82,
    "domain": "BRAIN",
    "tier": "P0",
-   "title": "Muon optimizer + real backward",
+   "title": "Muon optimizer + real backward (DONE)",
    "module": "muon.c",
-   "criterion": "Newton-Schulz orthogonalized momentum"
+   "criterion": "Newton-Schulz orthogonalized momentum [verified: test_backprop PASS (Muon FD-verified)]"
   },
   {
    "n": 83,
@@ -770,17 +770,17 @@
    "n": 95,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "rope scaling: forward verified",
+   "title": "rope scaling: forward verified (DONE)",
    "module": "rope.c",
-   "criterion": "RoPE length extrapolation"
+   "criterion": "RoPE length extrapolation [verified: test_rope_scaling 21/21]"
   },
   {
    "n": 96,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "alibi: forward verified",
+   "title": "alibi: forward verified (DONE)",
    "module": "alibi.c",
-   "criterion": "linear bias attention"
+   "criterion": "linear bias attention [verified: test_alibi 10/10]"
   },
   {
    "n": 97,
@@ -874,25 +874,25 @@
    "n": 108,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "dedup: forward verified",
+   "title": "dedup: forward verified (DONE)",
    "module": "dedup.c",
-   "criterion": "near-duplicate removal"
+   "criterion": "near-duplicate removal [verified: test_dedup PASS]"
   },
   {
    "n": 109,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "quality filter: forward verified",
+   "title": "quality filter: forward verified (DONE)",
    "module": "quality.c",
-   "criterion": "heuristic doc quality score"
+   "criterion": "heuristic doc quality score [verified: test_quality_filter 10/10]"
   },
   {
    "n": 110,
    "domain": "BRAIN",
    "tier": "P1",
-   "title": "length bucket: forward verified",
+   "title": "length bucket: forward verified (DONE)",
    "module": "lengthbucket.c",
-   "criterion": "length-bucketed batching"
+   "criterion": "length-bucketed batching [verified: test_length_bucket 12/12]"
   },
   {
    "n": 111,
@@ -1170,9 +1170,9 @@
    "n": 145,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "DGM loop: mutate->validate->archive->sample",
+   "title": "DGM loop: mutate->validate->archive->sample (DONE)",
    "module": "dgm.c",
-   "criterion": "Darwin Godel Machine loop"
+   "criterion": "Darwin Godel Machine loop [verified: test_amoeba (DGM loop)]"
   },
   {
    "n": 146,
@@ -1226,33 +1226,33 @@
    "n": 152,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "amoeba grows overworked cells shrinks dead",
+   "title": "amoeba grows overworked cells shrinks dead (DONE)",
    "module": "amoeba.c",
-   "criterion": "capacity autoscaling"
+   "criterion": "capacity autoscaling [verified: test_amoeba_shrink PASS]"
   },
   {
    "n": 153,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "hive = diagnostic immune system",
+   "title": "hive = diagnostic immune system (DONE)",
    "module": "hive.c",
-   "criterion": "anomaly z-score immune response"
+   "criterion": "anomaly z-score immune response [verified: test_anomaly 12/12]"
   },
   {
    "n": 154,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "causal walker localizes a divergence",
+   "title": "causal walker localizes a divergence (DONE)",
    "module": "causal.c",
-   "criterion": "root-cause localization"
+   "criterion": "root-cause localization [verified: test_causal_walker 10/10]"
   },
   {
    "n": 155,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "5+1 rollback on divergence",
+   "title": "5+1 rollback on divergence (DONE)",
    "module": "rollback.c",
-   "criterion": "K=5 divergence rollback"
+   "criterion": "K=5 divergence rollback [verified: test_rollback 16/16]"
   },
   {
    "n": 156,
@@ -1266,17 +1266,17 @@
    "n": 157,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "contracts enforced on each mutation",
+   "title": "contracts enforced on each mutation (DONE)",
    "module": "contracts.c",
-   "criterion": "pre/post-condition contracts"
+   "criterion": "pre/post-condition contracts [verified: test_contracts PASS]"
   },
   {
    "n": 158,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "priority store ranks candidate mutations",
+   "title": "priority store ranks candidate mutations (DONE)",
    "module": "prio.c",
-   "criterion": "priority-ranked mutation queue"
+   "criterion": "priority-ranked mutation queue [verified: test_priority_store PASS]"
   },
   {
    "n": 159,
