@@ -2170,9 +2170,9 @@
    "n": 270,
    "domain": "WORLDSIM",
    "tier": "P2",
-   "title": "agent-in-world reinforcement env",
+   "title": "agent-in-world reinforcement env (DONE)",
    "module": "rl_env.c",
-   "criterion": "worldsim as RL env"
+   "criterion": "worldsim as RL env [verified: test_hypmom 19/19 \u2014 real wubu_hypmom module]"
   },
   {
    "n": 271,
