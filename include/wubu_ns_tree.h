@@ -24,6 +24,7 @@ typedef enum {
     WUBU_NS_HIVE,       /* /n/hive/{cell} */
     WUBU_NS_MODELS,     /* /n/models */
     WUBU_NS_TRAIN,      /* /n/train/{metric} */
+    WUBU_NS_WORLD,      /* /n/world (worldsim state) */
     WUBU_NS_UNKNOWN,    /* not a /n path / unrecognised */
 } wubu_ns_subsys_t;
 

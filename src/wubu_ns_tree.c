@@ -14,6 +14,7 @@ const char *wubu_ns_tree_subsys_name(wubu_ns_subsys_t s) {
         case WUBU_NS_HIVE:   return "hive";
         case WUBU_NS_MODELS: return "models";
         case WUBU_NS_TRAIN:  return "train";
+        case WUBU_NS_WORLD:  return "world";
         default:             return "unknown";
     }
 }
@@ -75,6 +76,11 @@ int wubu_ns_tree_resolve(const char *path, wubu_ns_resolved_t *out) {
     }
     if (strcmp(seg, "models") == 0) {
         out->subsys = WUBU_NS_MODELS;
+        out->is_dir = (after[0] == '\0');
+        return 0;
+    }
+    if (strcmp(seg, "world") == 0) {
+        out->subsys = WUBU_NS_WORLD;
         out->is_dir = (after[0] == '\0');
         return 0;
     }
