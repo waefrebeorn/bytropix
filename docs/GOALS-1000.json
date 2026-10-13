@@ -2074,9 +2074,9 @@
    "n": 258,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "rigid-body collision response (solid)",
+   "title": "rigid-body collision response (solid) (DONE)",
    "module": "collision.c",
-   "criterion": "solid collision"
+   "criterion": "solid collision [verified: test_collision 16/16 \u2014 real wubu_collision module]"
   },
   {
    "n": 259,
