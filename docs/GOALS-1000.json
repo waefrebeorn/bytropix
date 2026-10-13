@@ -2730,9 +2730,9 @@
    "n": 340,
    "domain": "RUNTIME",
    "tier": "P1",
-   "title": "wine/proton Windows backend",
+   "title": "wine/proton Windows backend (DONE)",
    "module": "wine_backend.c",
-   "criterion": "wine as exec backend"
+   "criterion": "wine as exec backend [verified: wubu_exec_win_pe -> wubu_ct_steamos -> Wine pipeline runs real PE binaries; test_exec_pe 9/9 (real PE exit code round-trips), test_proton 32/32 (DLL/API/DXVK)]"
   },
   {
    "n": 341,
