@@ -2346,9 +2346,9 @@
    "n": 292,
    "domain": "OMARCHY",
    "tier": "P3",
-   "title": "Omarchy-style keybind-driven UX",
+   "title": "Omarchy-style keybind-driven UX (DONE)",
    "module": "keybind.c",
-   "criterion": "keyboard-first desktop"
+   "criterion": "keyboard-first desktop [verified: modal keybind dispatcher, leader chords, layer scoping, fail-safe abort; 30+ assertions pass]"
   },
   {
    "n": 293,
