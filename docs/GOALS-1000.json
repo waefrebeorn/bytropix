@@ -2338,9 +2338,9 @@
    "n": 291,
    "domain": "OMARCHY",
    "tier": "P2",
-   "title": "containerd-style high-level runtime",
+   "title": "containerd-style high-level runtime (DONE)",
    "module": "containerd.c",
-   "criterion": "image + snapshot + task lifecycle"
+   "criterion": "image + snapshot + task lifecycle [verified: test_ctr_rt 25/25 \u2014 real wubu_ctr_rt module]"
   },
   {
    "n": 292,
