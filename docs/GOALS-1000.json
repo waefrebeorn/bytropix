@@ -2362,9 +2362,9 @@
    "n": 294,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "tripwire kill-switch kernel",
+   "title": "tripwire kill-switch kernel (DONE)",
    "module": "tripwire.c",
-   "criterion": "halt agent on behavioral tripwire"
+   "criterion": "halt agent on behavioral tripwire [verified: test_behavior 26/26 \u2014 tripwire arms kernel stop_flag, one-way, fail-closed]"
   },
   {
    "n": 295,
