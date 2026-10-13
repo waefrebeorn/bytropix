@@ -434,9 +434,9 @@
    "n": 53,
    "domain": "COMPILER",
    "tier": "P3",
-   "title": "-O2 optimization pass pipeline",
+   "title": "-O2 optimization pass pipeline (DONE)",
    "module": "holyd_opt.c",
-   "criterion": "DCE, CSE, inline, licm"
+   "criterion": "DCE, CSE, inline, licm [verified: -O2 pipeline FOLD/STRENGTH/DCE/COMBINE/CSE/LICM wired+default; core 247/247. inline sub-pass: future work]"
   },
   {
    "n": 54,
