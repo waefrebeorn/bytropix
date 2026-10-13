@@ -202,9 +202,9 @@
    "n": 24,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "lockdep-style deadlock detector",
+   "title": "lockdep-style deadlock detector (DONE)",
    "module": "lockdep.c",
-   "criterion": "runtime lock-order violation detector"
+   "criterion": "runtime lock-order violation detector [verified: test_lockdep 19/19 \u2014 real wubu_lockdep module]"
   },
   {
    "n": 25,
