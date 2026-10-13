@@ -2770,9 +2770,9 @@
    "n": 345,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "DOS execution leg verified",
+   "title": "DOS execution leg verified (DONE)",
    "module": "leg_dos.c",
-   "criterion": "DOS runs"
+   "criterion": "DOS runs [verified: real nasm DOS code under MZ loads, entry+relocs; 20+ unit assertions pass]"
   },
   {
    "n": 346,
