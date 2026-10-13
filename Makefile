@@ -423,6 +423,7 @@ src/wubu_pacman.o: src/wubu_pacman.c include/wubu_pacman.h
 src/wubu_ns_tree.o: src/wubu_ns_tree.c include/wubu_ns_tree.h
 src/wubu_fixstep.o: src/wubu_fixstep.c include/wubu_fixstep.h
 src/wubu_collision.o: src/wubu_collision.c include/wubu_collision.h
+src/wubu_physics.o: src/wubu_physics.c include/wubu_physics.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1099,6 +1100,10 @@ test_fixstep: tools/test_fixstep.c src/wubu_fixstep.o
 	./$@
 
 test_collision: tools/test_collision.c src/wubu_collision.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_physics: tools/test_physics.c src/wubu_physics.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
