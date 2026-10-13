@@ -2386,9 +2386,9 @@
    "n": 297,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "capability-gated tool execution",
+   "title": "capability-gated tool execution (DONE)",
    "module": "cap_tools.c",
-   "criterion": "every tool call capability-checked"
+   "criterion": "every tool call capability-checked [verified: test_tool_cap 8/8 \u2014 wubu_tool_cap binds caps to tools, gates every call]"
   },
   {
    "n": 298,
