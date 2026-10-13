@@ -3125,6 +3125,14 @@
    "title": "Spreadsheet (Excel-like formulas) (DONE)",
    "module": "wubu_sheet.c",
    "criterion": "A1 grid + ref formulas + dependency-ordered recalc + circular detection [verified: 4 operators, ref+ref/ref+num, bare ref/num, chained deps, div/0 error, circular (pair+self) detection, set-time syntax validation, recalc propagation; 45+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 390,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Word processor (rich text) (DONE)",
+   "module": "wubu_wordproc.c",
+   "criterion": "styled character runs + cursor insert/delete + selection + bold/italic/underline [verified: mid-buffer insert, overflow guard, delete + selection replace, cursor clamp, pending-style insert, selection-style toggle + combine, word/char count, dirty flag; 45+ assertions, ASAN-clean]"
   }
  ]
 }
