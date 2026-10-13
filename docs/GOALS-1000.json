@@ -1258,9 +1258,9 @@
    "n": 156,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "lineage archived for every mutation",
+   "title": "lineage archived for every mutation (DONE)",
    "module": "lineage.c",
-   "criterion": "full mutation lineage"
+   "criterion": "full mutation lineage [verified: test_lineage ALL PASSED (parent lineage, generations, survival, near-miss archive)]"
   },
   {
    "n": 157,
