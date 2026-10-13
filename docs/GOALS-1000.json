@@ -3037,6 +3037,14 @@
    "title": "Steam offline mode (cached library play) (DONE)",
    "module": "wubu_steam_offline.c",
    "criterion": "offline gating: installed+cached+not-always-online playable, DRM blocked [verified: online launch, offline gating, always-online/cached/installed checks, playable count, blocked-launch tracking, back-online restore; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 379,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam Family Sharing (DONE)",
+   "module": "wubu_steam_sharing.c",
+   "criterion": "lender-authorizes-borrowers + exclusivity lock + concurrency limit + revoke [verified: share grant, auth limit, borrow grant/deny (not-shared/concurrency/lender-playing/unknown/double-session), session-end, revoke kick; 40+ assertions, ASAN-clean]"
   }
  ]
 }
