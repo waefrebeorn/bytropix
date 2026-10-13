@@ -3117,6 +3117,14 @@
    "title": "Address Book / contacts (DONE)",
    "module": "wubu_contacts.c",
    "criterion": "contact store + case-insensitive find + substring search + partial update [verified: add (dup/null reject), find, field access, partial update, search (ci substring, empty-match-all, truncation), remove+slot-reuse; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 389,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Spreadsheet (Excel-like formulas) (DONE)",
+   "module": "wubu_sheet.c",
+   "criterion": "A1 grid + ref formulas + dependency-ordered recalc + circular detection [verified: 4 operators, ref+ref/ref+num, bare ref/num, chained deps, div/0 error, circular (pair+self) detection, set-time syntax validation, recalc propagation; 45+ assertions, ASAN-clean]"
   }
  ]
 }
