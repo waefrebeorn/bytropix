@@ -938,9 +938,9 @@
    "n": 116,
    "domain": "BRAIN",
    "tier": "P2",
-   "title": "hyperbolic MoE routing",
+   "title": "hyperbolic MoE routing (DONE)",
    "module": "hyp_moe.c",
-   "criterion": "router in hyperbolic space"
+   "criterion": "router in hyperbolic space [verified: test_hmoe 14/14 \u2014 real wubu_hmoe module]"
   },
   {
    "n": 117,
