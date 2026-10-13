@@ -2570,9 +2570,9 @@
    "n": 320,
    "domain": "PATHS",
    "tier": "P1",
-   "title": "memory consolidation (sleep replay)",
+   "title": "memory consolidation (sleep replay) (DONE)",
    "module": "consolidate.c",
-   "criterion": "hippocampal replay"
+   "criterion": "hippocampal replay [verified: test_consolidate 12/12 \u2014 real wubu_consolidate module]"
   },
   {
    "n": 321,
