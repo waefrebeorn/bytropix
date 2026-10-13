@@ -458,6 +458,7 @@ src/wubu_indirect_pi.o: src/wubu_indirect_pi.c include/wubu_indirect_pi.h
 src/wubu_redteam.o: src/wubu_redteam.c include/wubu_redteam.h src/wubu_indirect_pi.o
 src/wubu_isa_eff.o: src/wubu_isa_eff.c include/wubu_isa_eff.h
 src/wubu_expressivity.o: src/wubu_expressivity.c include/wubu_expressivity.h
+src/wubu_selftest.o: src/wubu_selftest.c include/wubu_selftest.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1274,6 +1275,10 @@ test_isa_eff: tools/test_isa_eff.c src/wubu_isa_eff.o
 	./$@
 
 test_expressivity: tools/test_expressivity.c src/wubu_expressivity.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_selftest: tools/test_selftest.c src/wubu_selftest.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
