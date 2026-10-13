@@ -440,6 +440,7 @@ src/wubu_ztverify.o: src/wubu_ztverify.c include/wubu_ztverify.h
 src/wubu_broadphase.o: src/wubu_broadphase.c include/wubu_broadphase.h
 src/wubu_sat.o: src/wubu_sat.c include/wubu_sat.h
 src/wubu_bvh.o: src/wubu_bvh.c include/wubu_bvh.h
+src/wubu_sph.o: src/wubu_sph.c include/wubu_sph.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1184,6 +1185,10 @@ test_sat: tools/test_sat.c src/wubu_sat.o
 	./$@
 
 test_bvh: tools/test_bvh.c src/wubu_bvh.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_sph: tools/test_sph.c src/wubu_sph.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
