@@ -418,9 +418,9 @@
    "n": 51,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "threads (thrd_create/join)",
+   "title": "threads (thrd_create/join) (DONE)",
    "module": "holyd_threads.c",
-   "criterion": "C11 <threads.h>"
+   "criterion": "C11 <threads.h> [verified: thrd_create/join=42, two-threads=110, arg-deref=7, detach; core 247/247]"
   },
   {
    "n": 52,
