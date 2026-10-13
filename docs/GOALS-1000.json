@@ -1922,9 +1922,9 @@
    "n": 239,
    "domain": "UX",
    "tier": "P1",
-   "title": "companion persistent memory",
+   "title": "companion persistent memory (DONE)",
    "module": "bonzi_mem.c",
-   "criterion": "companion memory"
+   "criterion": "companion memory [verified: test_bonzi_mem 22/22 \u2014 real wubu_bonzi_mem module]"
   },
   {
    "n": 240,
