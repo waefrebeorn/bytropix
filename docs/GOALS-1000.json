@@ -442,9 +442,9 @@
    "n": 54,
    "domain": "COMPILER",
    "tier": "P3",
-   "title": "designated array-init [index]=val",
+   "title": "designated array-init [index]=val (DONE)",
    "module": "mir_eval.c",
-   "criterion": "C99 array designators"
+   "criterion": "C99 array designators [verified: sparse+mixed designated init; core 247/247]"
   },
   {
    "n": 55,
