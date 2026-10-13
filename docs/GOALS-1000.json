@@ -2298,9 +2298,9 @@
    "n": 286,
    "domain": "OMARCHY",
    "tier": "P2",
-   "title": "rolling-release update safety gate",
+   "title": "rolling-release update safety gate (DONE)",
    "module": "update_gate.c",
-   "criterion": "pre-update snapshot + verify"
+   "criterion": "pre-update snapshot + verify [verified: test_canary 9/9 \u2014 real wubu_canary module]"
   },
   {
    "n": 287,
