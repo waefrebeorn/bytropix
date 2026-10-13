@@ -2506,9 +2506,9 @@
    "n": 312,
    "domain": "PATHS",
    "tier": "P0",
-   "title": "Verifiable Coherence: proof-gated self-improvement",
+   "title": "Verifiable Coherence: proof-gated self-improvement (DONE)",
    "module": "verif_coherence.c",
-   "criterion": "mutation needs consistency proof"
+   "criterion": "mutation needs consistency proof [verified: test_coherence 19/19 \u2014 real wubu_coherence proof-gate]"
   },
   {
    "n": 313,
