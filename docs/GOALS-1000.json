@@ -2082,9 +2082,9 @@
    "n": 259,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "terrain heightfield + erosion",
+   "title": "terrain heightfield + erosion (DONE)",
    "module": "terrain.c",
-   "criterion": "heightfield erosion"
+   "criterion": "heightfield erosion [verified: test_terrain 16/16 \u2014 real wubu_terrain module]"
   },
   {
    "n": 260,
