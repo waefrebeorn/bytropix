@@ -122,9 +122,9 @@
    "n": 14,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "memory quarantine on OOM",
+   "title": "memory quarantine on OOM (DONE)",
    "module": "oom_quarantine.c",
-   "criterion": "OOM scopes to a cgroup, not the kernel"
+   "criterion": "OOM scopes to a cgroup, not the kernel [verified: scoped OOM reclamation largest-first, other scopes untouched, pinned->panic escalation; 25+ assertions pass]"
   },
   {
    "n": 15,
