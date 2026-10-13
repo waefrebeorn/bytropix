@@ -2138,9 +2138,9 @@
    "n": 266,
    "domain": "WORLDSIM",
    "tier": "P1",
-   "title": "soft-body dynamics",
+   "title": "soft-body dynamics (DONE)",
    "module": "softbody.c",
-   "criterion": "mass-spring soft bodies"
+   "criterion": "mass-spring soft bodies [verified: test_softbody 18/18 \u2014 real wubu_softbody module]"
   },
   {
    "n": 267,
