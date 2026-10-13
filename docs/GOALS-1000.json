@@ -130,9 +130,9 @@
    "n": 15,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "cgroup v2 per-service via /n/svc",
+   "title": "cgroup v2 per-service via /n/svc (DONE)",
    "module": "cg_9p.c",
-   "criterion": "cpu/mem/io controllers bound per 9P service"
+   "criterion": "cpu/mem/io controllers bound per 9P service [verified: per-service cpu/mem/io cgroup controllers, throttle+exceed checks, unlimited semantics; 30+ assertions pass]"
   },
   {
    "n": 16,
