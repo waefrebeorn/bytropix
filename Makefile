@@ -401,6 +401,7 @@ src/wubu_ctxvm.o: src/wubu_ctxvm.c include/wubu_ctxvm.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_safekern.o: src/wubu_safekern.c include/wubu_safekern.h
+src/wubu_behavior.o: src/wubu_behavior.c include/wubu_behavior.h include/wubu_anomaly.h include/wubu_safekern.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1013,6 +1014,10 @@ test_rollback: tools/test_rollback.c src/wubu_rollback.o
 
 # AGENT #310: hive diagnostic immune system (z-score anomaly).
 test_anomaly: tools/test_anomaly.c src/wubu_anomaly.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_behavior: tools/test_behavior.c src/wubu_behavior.o src/wubu_anomaly.o src/wubu_safekern.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
