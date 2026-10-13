@@ -2370,9 +2370,9 @@
    "n": 295,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "runtime behavior classifier (halt on anomaly)",
+   "title": "runtime behavior classifier (halt on anomaly) (DONE)",
    "module": "behavior_cls.c",
-   "criterion": "real-time anomaly halt"
+   "criterion": "real-time anomaly halt [verified: test_behavior 17/17 \u2014 real wubu_behavior module]"
   },
   {
    "n": 296,
@@ -2410,9 +2410,9 @@
    "n": 300,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "agent trace span on every action",
+   "title": "agent trace span on every action (DONE)",
    "module": "agent_trace.c",
-   "criterion": "OTel/OpenInference span per action"
+   "criterion": "OTel/OpenInference span per action [verified: test_trace 30/30 \u2014 real wubu_trace module]"
   },
   {
    "n": 301,
