@@ -2266,9 +2266,9 @@
    "n": 282,
    "domain": "OMARCHY",
    "tier": "P1",
-   "title": "distroless minimal container images",
+   "title": "distroless minimal container images (DONE)",
    "module": "distroless.c",
-   "criterion": "no-shell no-pkgmgr images"
+   "criterion": "no-shell no-pkgmgr images [verified: test_distroless 19/19 \u2014 real wubu_distroless module]"
   },
   {
    "n": 283,
