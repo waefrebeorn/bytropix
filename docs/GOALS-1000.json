@@ -2162,9 +2162,9 @@
    "n": 269,
    "domain": "WORLDSIM",
    "tier": "P1",
-   "title": "BVH acceleration structure",
+   "title": "BVH acceleration structure (DONE)",
    "module": "bvh.c",
-   "criterion": "bounding-volume hierarchy"
+   "criterion": "bounding-volume hierarchy [verified: test_bvh 31/31 \u2014 real wubu_bvh module]"
   },
   {
    "n": 270,
