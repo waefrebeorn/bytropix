@@ -484,6 +484,7 @@ src/wubu_blkdev.o: src/wubu_blkdev.c include/wubu_blkdev.h
 src/wubu_systrace.o: src/wubu_systrace.c include/wubu_systrace.h
 src/wubu_irqaff.o: src/wubu_irqaff.c include/wubu_irqaff.h
 src/wubu_ztv.o: src/wubu_ztv.c include/wubu_ztv.h
+src/wubu_caprevoke.o: src/wubu_caprevoke.c include/wubu_caprevoke.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1404,6 +1405,10 @@ test_irqaff: tools/test_irqaff.c src/wubu_irqaff.o
 	./$@
 
 test_ztv: tools/test_ztv.c src/wubu_ztv.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_caprevoke: tools/test_caprevoke.c src/wubu_caprevoke.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
