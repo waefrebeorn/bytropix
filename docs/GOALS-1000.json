@@ -266,9 +266,9 @@
    "n": 32,
    "domain": "KERNEL",
    "tier": "P3",
-   "title": "thermal governor set via /n/hw/<dev>/thermal",
+   "title": "thermal governor set via /n/hw/<dev>/thermal (DONE)",
    "module": "thermal.c",
-   "criterion": "thermal governor 9P control"
+   "criterion": "thermal governor 9P control [verified: per-device governor via /n, thresholds+throttle levels, fail-closed; 30+ assertions pass]"
   },
   {
    "n": 33,
