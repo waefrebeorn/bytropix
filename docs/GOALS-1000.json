@@ -1986,9 +1986,9 @@
    "n": 247,
    "domain": "UX",
    "tier": "P2",
-   "title": "Wayland compositor damage tracking",
+   "title": "Wayland compositor damage tracking (DONE)",
    "module": "wl_damage.c",
-   "criterion": "per-surface damage regions"
+   "criterion": "per-surface damage regions [verified: test_damage 27/27 \u2014 real wubu_damage module]"
   },
   {
    "n": 248,
