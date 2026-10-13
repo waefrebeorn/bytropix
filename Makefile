@@ -502,6 +502,7 @@ src/wubu_codebench.o: src/wubu_codebench.c include/wubu_codebench.h
 src/wubu_dgmsafety.o: src/wubu_dgmsafety.c include/wubu_dgmsafety.h
 src/wubu_evosandbox.o: src/wubu_evosandbox.c include/wubu_evosandbox.h
 src/wubu_roadmap.o: src/wubu_roadmap.c include/wubu_roadmap.h
+src/wubu_postmoore.o: src/wubu_postmoore.c include/wubu_postmoore.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1494,6 +1495,10 @@ test_evosandbox: tools/test_evosandbox.c src/wubu_evosandbox.o
 	./$@
 
 test_roadmap: tools/test_roadmap.c src/wubu_roadmap.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_postmoore: tools/test_postmoore.c src/wubu_postmoore.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
