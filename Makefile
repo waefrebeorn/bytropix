@@ -497,6 +497,7 @@ src/wubu_toolattest.o: src/wubu_toolattest.c include/wubu_toolattest.h
 src/wubu_otelauto.o: src/wubu_otelauto.c include/wubu_otelauto.h
 src/wubu_irplaybook.o: src/wubu_irplaybook.c include/wubu_irplaybook.h
 src/wubu_rth.o: src/wubu_rth.c include/wubu_rth.h
+src/wubu_edrcard.o: src/wubu_edrcard.c include/wubu_edrcard.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1469,6 +1470,10 @@ test_irplaybook: tools/test_irplaybook.c src/wubu_irplaybook.o
 	./$@
 
 test_rth: tools/test_rth.c src/wubu_rth.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_edrcard: tools/test_edrcard.c src/wubu_edrcard.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
