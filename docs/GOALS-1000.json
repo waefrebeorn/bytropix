@@ -2394,9 +2394,9 @@
    "n": 298,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "sandbox-escape probe detection",
+   "title": "sandbox-escape probe detection (DONE)",
    "module": "escape_probe.c",
-   "criterion": "detect sandbox probing"
+   "criterion": "detect sandbox probing [verified: test_escape 19/19 \u2014 real wubu_escape module]"
   },
   {
    "n": 299,
