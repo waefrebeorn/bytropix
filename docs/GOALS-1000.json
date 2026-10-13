@@ -2626,9 +2626,9 @@
    "n": 327,
    "domain": "PATHS",
    "tier": "P2",
-   "title": "verifiable code generation benchmark",
+   "title": "verifiable code generation benchmark (DONE)",
    "module": "vericode.c",
-   "criterion": "verified-codegen eval"
+   "criterion": "verified-codegen eval [verified: test_codebench 20/20 \u2014 real wubu_codebench module]"
   },
   {
    "n": 328,
