@@ -493,6 +493,7 @@ src/wubu_keybind.o: src/wubu_keybind.c include/wubu_keybind.h
 src/wubu_oomquar.o: src/wubu_oomquar.c include/wubu_oomquar.h
 src/wubu_svc_cgroup.o: src/wubu_svc_cgroup.c include/wubu_svc_cgroup.h
 src/wubu_ebpf.o: src/wubu_ebpf.c include/wubu_ebpf.h
+src/wubu_abi_shim.o: src/wubu_abi_shim.c include/wubu_abi_shim.h
 src/wubu_bootbudget.o: src/wubu_bootbudget.c include/wubu_bootbudget.h
 src/wubu_chardev.o: src/wubu_chardev.c include/wubu_chardev.h
 src/wubu_dmcrypt.o: src/wubu_dmcrypt.c include/wubu_dmcrypt.h
@@ -1479,6 +1480,10 @@ test_svc_cgroup: tools/test_svc_cgroup.c src/wubu_svc_cgroup.o
 	./$@
 
 test_ebpf: tools/test_ebpf.c src/wubu_ebpf.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_abi_shim: tools/test_abi_shim.c src/wubu_abi_shim.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
