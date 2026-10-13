@@ -464,6 +464,7 @@ src/wubu_islands.o: src/wubu_islands.c include/wubu_islands.h
 src/wubu_budget.o: src/wubu_budget.c include/wubu_budget.h
 src/wubu_replay.o: src/wubu_replay.c include/wubu_replay.h
 src/wubu_canary.o: src/wubu_canary.c include/wubu_canary.h
+src/wubu_abs_arm.o: src/wubu_abs_arm.c include/wubu_abs_arm.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1304,6 +1305,10 @@ test_replay: tools/test_replay.c src/wubu_replay.o
 	./$@
 
 test_canary: tools/test_canary.c src/wubu_canary.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_abs_arm: tools/test_abs_arm.c src/wubu_abs_arm.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
