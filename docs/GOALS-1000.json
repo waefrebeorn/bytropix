@@ -2610,9 +2610,9 @@
    "n": 325,
    "domain": "PATHS",
    "tier": "P2",
-   "title": "self-referential code evolution sandbox",
+   "title": "self-referential code evolution sandbox (DONE)",
    "module": "self_evolve.c",
-   "criterion": "safe self-modifying code"
+   "criterion": "safe self-modifying code [verified: test_evosandbox 25/25 \u2014 real wubu_evosandbox module]"
   },
   {
    "n": 326,
