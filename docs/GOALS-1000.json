@@ -2450,9 +2450,9 @@
    "n": 305,
    "domain": "AGIEDR",
    "tier": "P1",
-   "title": "deterministic controls outside model plane",
+   "title": "deterministic controls outside model plane (DONE)",
    "module": "determ_ctrl.c",
-   "criterion": "controls enforced outside LLM"
+   "criterion": "controls enforced outside LLM [verified: test_determ_ctrl 17/17 \u2014 real wubu_determ_ctrl module]"
   },
   {
    "n": 306,
