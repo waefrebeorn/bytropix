@@ -362,9 +362,9 @@
    "n": 44,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "_Complex arithmetic",
+   "title": "_Complex arithmetic (DONE)",
    "module": "holyd_eval.c",
-   "criterion": "complex double add/mul"
+   "criterion": "complex double add/mul [verified: double _Complex add=7,mul=15,sub=3,assign=8; core 247/247]"
   },
   {
    "n": 45,
