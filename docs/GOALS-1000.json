@@ -2482,9 +2482,9 @@
    "n": 309,
    "domain": "AGIEDR",
    "tier": "P2",
-   "title": "supply-chain attestation of tools",
+   "title": "supply-chain attestation of tools (DONE)",
    "module": "tool_attest.c",
-   "criterion": "signed tool manifests"
+   "criterion": "signed tool manifests [verified: test_toolattest 12/12 \u2014 real wubu_toolattest module]"
   },
   {
    "n": 310,
