@@ -3029,6 +3029,14 @@
    "title": "Steam Workshop / mod manager (DONE)",
    "module": "wubu_steam_workshop.c",
    "criterion": "subscribe/unsubscribe + download state + load order + conflict detection [verified: subscribe/unsubscribe, download lifecycle + retry, load gating, reorder, deps, file-conflict detection + disable/unload clearing; 45+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 378,
+   "domain": "RUNTIME",
+   "tier": "P2",
+   "title": "Steam offline mode (cached library play) (DONE)",
+   "module": "wubu_steam_offline.c",
+   "criterion": "offline gating: installed+cached+not-always-online playable, DRM blocked [verified: online launch, offline gating, always-online/cached/installed checks, playable count, blocked-launch tracking, back-online restore; 40+ assertions, ASAN-clean]"
   }
  ]
 }
