@@ -2154,9 +2154,9 @@
    "n": 268,
    "domain": "WORLDSIM",
    "tier": "P1",
-   "title": "narrowphase SAT collision",
+   "title": "narrowphase SAT collision (DONE)",
    "module": "sat.c",
-   "criterion": "separating-axis narrowphase"
+   "criterion": "separating-axis narrowphase [verified: test_sat 11/11 \u2014 real wubu_sat module]"
   },
   {
    "n": 269,
