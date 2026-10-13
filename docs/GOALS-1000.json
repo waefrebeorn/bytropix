@@ -242,9 +242,9 @@
    "n": 29,
    "domain": "KERNEL",
    "tier": "P3",
-   "title": "KCSAN data-race detector port",
+   "title": "KCSAN data-race detector port (DONE)",
    "module": "kcsan.c",
-   "criterion": "watchpoint-based race detector"
+   "criterion": "watchpoint-based race detector [verified: watchpoint race detector, ww+rw races, rr/same-thread/disjoint/barrier clean, re-arm; 25+ assertions pass]"
   },
   {
    "n": 30,
