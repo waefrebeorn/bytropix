@@ -3085,6 +3085,14 @@
    "title": "Per-application volume mixer (DONE)",
    "module": "wubu_volmixer.c",
    "criterion": "master + per-app volume/mute, effective = master*channel/100 [verified: master clamp, channel add, effective computation, overall max, channel+master mute, volume clamp; 40+ assertions, ASAN-clean]"
+  },
+  {
+   "n": 385,
+   "domain": "UX",
+   "tier": "P2",
+   "title": "Character Map accessory (DONE)",
+   "module": "wubu_charmap.c",
+   "criterion": "Unicode block grid + cursor nav + UTF-8 encode + select-to-clipboard [verified: 12-block table, grid-aware nav + clamp, UTF-8 1-4 byte + surrogate/range reject, select-append, clipboard full-guard; 40+ assertions, ASAN-clean]"
   }
  ]
 }
