@@ -410,9 +410,9 @@
    "n": 50,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "atomic types + fences",
+   "title": "atomic types + fences (DONE)",
    "module": "holyd_atomic.c",
-   "criterion": "C11 _Atomic load/store/fence"
+   "criterion": "C11 _Atomic load/store/fence [verified: __atomic_fetch_add=13, load/store=9, exchange=12, fetch_sub=7, fence; core 247/247]"
   },
   {
    "n": 51,
