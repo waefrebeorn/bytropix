@@ -2754,9 +2754,9 @@
    "n": 343,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "ELF execution leg verified",
+   "title": "ELF execution leg verified (DONE)",
    "module": "leg_elf.c",
-   "criterion": "ELF runs"
+   "criterion": "ELF runs [verified: real static x86-64 ELF loads (4 PT_LOAD, entry=0x801740, image=0xb2000); 30+ unit assertions pass]"
   },
   {
    "n": 344,
