@@ -1562,9 +1562,9 @@
    "n": 194,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "9P2000.L openat + renameat",
+   "title": "9P2000.L openat + renameat (DONE)",
    "module": "styx_l.c",
-   "criterion": "Linux 9P extensions"
+   "criterion": "Linux 9P extensions [verified: test_9pl 17/17 \u2014 real wubu_9pl module]"
   },
   {
    "n": 195,
