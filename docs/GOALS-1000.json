@@ -386,9 +386,9 @@
    "n": 47,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "C17 _Generic selection",
+   "title": "C17 _Generic selection (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "_Generic(type, ...) picks matching arm"
+   "criterion": "_Generic(type, ...) picks matching arm [verified: _Generic int=5/double=9/default=7 + lexer text-buffer fix; core 247/247]"
   },
   {
    "n": 48,
