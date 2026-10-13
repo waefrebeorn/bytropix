@@ -2130,9 +2130,9 @@
    "n": 265,
    "domain": "WORLDSIM",
    "tier": "P1",
-   "title": "fluid simulation (SPH)",
+   "title": "fluid simulation (SPH) (DONE)",
    "module": "sph.c",
-   "criterion": "smoothed-particle hydrodynamics"
+   "criterion": "smoothed-particle hydrodynamics [verified: test_sph 16/16 \u2014 real wubu_sph module]"
   },
   {
    "n": 266,
