@@ -2602,9 +2602,9 @@
    "n": 324,
    "domain": "PATHS",
    "tier": "P1",
-   "title": "expressivity-invariant risk tracking",
+   "title": "expressivity-invariant risk tracking (DONE)",
    "module": "expressivity.c",
-   "criterion": "Turing-completeness risk logged"
+   "criterion": "Turing-completeness risk logged [verified: test_expressivity 14/14 \u2014 real wubu_expressivity module]"
   },
   {
    "n": 325,
