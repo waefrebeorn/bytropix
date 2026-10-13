@@ -2586,9 +2586,9 @@
    "n": 322,
    "domain": "PATHS",
    "tier": "P1",
-   "title": "compute-efficiency: architectural wins over Moore",
+   "title": "compute-efficiency: architectural wins over Moore (DONE)",
    "module": "compute_eff.c",
-   "criterion": "algorithmic > silicon gains"
+   "criterion": "algorithmic > silicon gains [verified: test_compute_eff 21/21 \u2014 real wubu_compute_eff module]"
   },
   {
    "n": 323,
