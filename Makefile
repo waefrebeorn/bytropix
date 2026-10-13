@@ -429,6 +429,7 @@ src/wubu_worldsim.o: src/wubu_worldsim.c include/wubu_worldsim.h src/wubu_physic
 src/wubu_ns_world.o: src/wubu_ns_world.c include/wubu_ns_world.h src/wubu_worldsim.o src/wubu_ns_tree.o
 src/wubu_checkpoint.o: src/wubu_checkpoint.c include/wubu_checkpoint.h
 src/wubu_sampler.o: src/wubu_sampler.c include/wubu_sampler.h
+src/wubu_bitmix.o: src/wubu_bitmix.c include/wubu_bitmix.h
 	$(CC) $(CFLAGS) -I include -c -o $@ $<
 
 src/wubu_loopguard.o: src/wubu_loopguard.c include/wubu_loopguard.h
@@ -1129,6 +1130,10 @@ test_checkpoint: tools/test_checkpoint.c src/wubu_checkpoint.o
 	./$@
 
 test_sampler: tools/test_sampler.c src/wubu_sampler.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+	./$@
+
+test_bitmix: tools/test_bitmix.c src/wubu_bitmix.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
