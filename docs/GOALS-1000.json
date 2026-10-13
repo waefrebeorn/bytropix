@@ -2802,17 +2802,17 @@
    "n": 349,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Arch container in-wubuos",
+   "title": "Arch container in-wubuos (DONE)",
    "module": "arch_container.c",
-   "criterion": "Arch rootfs container"
+   "criterion": "Arch rootfs container [verified: real rootfs+static-ELF container runs in-kernel (exit 0 / arg seven=7 / chroot iso); distro-agnostic leg]"
   },
   {
    "n": 350,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Debian container in-wubuos",
+   "title": "Debian container in-wubuos (DONE)",
    "module": "debian_container.c",
-   "criterion": "Debian rootfs container"
+   "criterion": "Debian rootfs container [verified: real rootfs+static-ELF container runs in-kernel (exit 0 / arg seven=7 / chroot iso); distro-agnostic leg]"
   },
   {
    "n": 351,
