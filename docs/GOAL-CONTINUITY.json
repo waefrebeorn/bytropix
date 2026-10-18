@@ -24,6 +24,22 @@
       "title": "PORTFOLIO-CLOSURE: anti-myopic controller for all 1000 goals across 16 domains",
       "module": "tools/goal_portfolio.py + docs/portfolio-cycles.jsonl + docs/GOALS-1000.json + docs/SI-ALIGNMENT-MATRIX.md",
       "criterion": "Each cycle: (1) run tools/goal_portfolio.py --json and publish the status of all 1000 goals, triaging every OPEN goal as active, blocked (reason), or deferred (dated expiry); (2) advance at least one goal in >=2 distinct domains and never let any domain appear in more than 2 consecutive cycles; (3) over any rolling 8 cycles touch >=8 of the 16 domains; (4) close a goal only when its module exists, a test runs in test_all, and the criterion evidence is recorded; (5) run the honest gate and record binaries/ALL-PASSED/failures; (6) refresh the SI matrix rows and the armor tests; (7) append the cycle to docs/portfolio-cycles.jsonl and pass tools/goal_portfolio.py --check-cycle. Done = the ledger validates and the gate is green with real counts."
+    },
+    {
+      "n": 1004,
+      "domain": "STACK",
+      "tier": "P0",
+      "title": "SELFHOST-L4: WuBuOS rebuilds kernel.elf on itself and boots the result",
+      "module": "wubuos/docs/SELFHOST-INDEPENDENCE.md + wubunos/holyd*.c + wubuos/src/kernel/boot.S",
+      "criterion": "Inside a booted WuBuOS, HolyD compiles src/kernel sources plus the linker script to kernel.elf on target; the image is written through the kernel's own FAT32 driver and the next boot reports the on-target build hash. Done = the on-target hash is recorded in the boot trace, the rebuilt image boots, and make boot-audit shows no host libc symbols in either build."
+    },
+    {
+      "n": 1005,
+      "domain": "STACK",
+      "tier": "P1",
+      "title": "SELFHOST-L5: reproducible off-network bootstrap with rollback slot",
+      "module": "wubuos/docs/SELFHOST-INDEPENDENCE.md + wubuos/Makefile + tools/repro_check.sh",
+      "criterion": "Two builds from the same snapshot, network off and different absolute paths, produce identical kernel.elf hashes (or a documented bounded delta); a previous image is retained as a rollback slot and boots after a forced failure. Done = tools/repro_check.sh reports the two hashes and the rollback boot trace."
     }
   ]
 }

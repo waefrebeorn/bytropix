@@ -2254,4 +2254,20 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   capability matrix: 2/16 VERIFIED, 6 PARTIAL, 7 UNVERIFIED, 2 ABSENT.
   `wubuos/docs/UX-CAPABILITY-MATRIX.md`, `wubuos/research/ux-2026-10-18/`. `wired`
 
+- JH01 JevAgentHarness delegation economics (2026-10-18): seed arXiv 2610.21412;
+  200-query 7×25+25 wave (1,000 records / 969 unique). Per-decision-point
+  threshold `tau = qL - dC/V` fitted on shadow trajectories; fitted cascade
+  14.2% cheaper with zero task loss, fixed 0.5 threshold loses 21.5 points;
+  4B on own GPU 86.3% cheaper / 2.5× faster; coding-agent routing only 7–10.5%
+  and negative in SWE-agent. Implemented `wubu_decision_analytic_threshold`,
+  `wubu_decision_fit_threshold`, `wubu_decision_ledger`; `test_decision` 31
+  checks. Paper/weights are CC BY-NC → research-only.
+  `research/075-jev-agent-harness-2026-10-18.md`. `wired`
+
+- SH01 Self-host independence ladder (2026-10-18): L0 hosted → L1 bare-metal
+  BIOS (exists) → L2 own loader (partial; no UEFI entry point in-tree) → L3
+  self-hosted toolchain (partial) → L4 on-device rebuild (absent) → L5
+  reproducible bootstrap (absent), each with a named acceptance test.
+  `wubuos/docs/SELFHOST-INDEPENDENCE.md`. `open`
+
 ## WaefreBeorn Umbrella License v3.0

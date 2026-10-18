@@ -79,6 +79,50 @@ int main(void)
     CHECK(wubu_decision_softmax(logits, 0, p) == -1, "zero n -> -1");
     CHECK(wubu_decision_ece(NULL, corr, 10, 10) == -1.0f, "NULL conf -> -1");
 
+    /* ---- delegation economics (JevAgentHarness 2610.21412) ---------- */
+    double tau_a = wubu_decision_analytic_threshold(0.90, 0.01, 1.0);
+    printf("  analytic tau = %.4f\n", tau_a);
+    CHECK(fabs(tau_a - 0.89) < 1e-9, "analytic threshold is qL - dC/V");
+    CHECK(wubu_decision_analytic_threshold(0.5, 2.0, 1.0) == 0.0,
+          "threshold clamps at 0 when the saving exceeds the risk");
+    CHECK(wubu_decision_analytic_threshold(1.5, 0.1, 1.0) == -1.0,
+          "impossible qL -> -1");
+
+    static wubu_decision_sample sh[200];
+    for (int i = 0; i < 100; i++) { sh[i].conf = 0.95f; sh[i].correct = (i < 90); }
+    for (int i = 0; i < 100; i++) { sh[100 + i].conf = 0.40f; sh[100 + i].correct = (i < 40); }
+
+    double tau = wubu_decision_fit_threshold(sh, 200, 0.85, 0.01, 1.0, 5.0, 0.03);
+    printf("  fitted tau = %.4f\n", tau);
+    CHECK(tau > 0.9 && tau <= 1.0, "fitted threshold lands in the reliable band");
+    CHECK(wubu_decision_fit_threshold(sh, 0, 0.85, 0.01, 1.0, 5.0, 0.03) == -1.0,
+          "no samples -> -1");
+    CHECK(wubu_decision_fit_threshold(NULL, 10, 0.85, 0.01, 1.0, 5.0, 0.03) == -1.0,
+          "NULL samples -> -1");
+
+    /* When every accepted answer risks a catastrophic cost, delegate nothing. */
+    static wubu_decision_sample bad[50];
+    for (int i = 0; i < 50; i++) { bad[i].conf = 0.90f; bad[i].correct = (i % 2); }
+    double tau_bad = wubu_decision_fit_threshold(bad, 50, 0.60, 0.01, 1.0, 1000.0, 0.03);
+    CHECK(tau_bad == 2.0, "catastrophic wrong-choice cost -> delegate nothing (tau 2.0)");
+
+    wubu_decision_ledger led;
+    wubu_decision_ledger_init(&led);
+    for (int i = 0; i < 100; i++)
+        wubu_decision_ledger_record(&led, 1, (i < 90), 0.01, 0.031, 1.0, 0.809, 5.0);
+    for (int i = 0; i < 100; i++)
+        wubu_decision_ledger_record(&led, 0, 1, 0.0, 0.0, 1.0, 0.809, 5.0);
+
+    double cost = wubu_decision_ledger_cost(&led);
+    printf("  ledger: delegated=%lu deferred=%lu wrong=%lu cost=%.3f\n",
+           led.delegated, led.deferred, led.wrong_delegated, cost);
+    CHECK(led.delegated == 100 && led.deferred == 100, "ledger counts both paths");
+    CHECK(led.wrong_delegated == 10, "ledger counts wrong delegations");
+    CHECK(fabs(cost - 151.0) < 1e-6, "cost = dm 1.0 + llm 100.0 + penalty 50.0");
+    CHECK(fabs(wubu_decision_ledger_saved_pct(&led, 200.0) - 24.5) < 1e-6,
+          "saved 24.5% against an LLM-always baseline");
+    CHECK(wubu_decision_ledger_cost(NULL) == -1.0, "NULL ledger -> -1");
+
     printf("\n=== test_decision: %d checks, %d failures ===\n", checks, fails);
     return fails ? 1 : 0;
 }
