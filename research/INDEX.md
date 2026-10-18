@@ -2270,4 +2270,11 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   reproducible bootstrap (absent), each with a named acceptance test.
   `wubuos/docs/SELFHOST-INDEPENDENCE.md`. `open`
 
+- RL01 Recursive Language Models (2026-10-18): seed arXiv 2512.24601v3
+  (CC BY 4.0); 200-query 7×25+25 wave (1,000 records / 933 unique). Prompt as an
+  environment variable, symbolic recursion, no `Finish(value)` path; GPT-5 depth
+  3: CodeQA 24→58, BrowseComp+ 0→92, OOLONG 44→58, OOLONG-Pairs 0.1→76.
+  Implemented `wubu_rlm_run` (chunk/depth/budget, exact coverage, abort on leaf
+  error); `test_rlm` 18 checks. `research/076-recursive-language-models-2026-10-18.md`. `wired`
+
 ## WaefreBeorn Umbrella License v3.0
