@@ -1,0 +1,46 @@
+{
+  "name": "WuBu STAR",
+  "kind": "model",
+  "reference_object": {
+    "designation": "WD J1330+6435",
+    "aliases": ["SDSS J1330+6435"],
+    "class": "white dwarf",
+    "spectral_type": "DZ",
+    "constellation": "Draco",
+    "distance_ly": 281.6,
+    "distance_pc": 86.35,
+    "effective_temperature_k": 4310,
+    "effective_temperature_sigma_k": 190,
+    "alternate_temperature_k": 3660,
+    "atmosphere": "nearly pure helium; hydrogen < 1e-4",
+    "metals": ["Na", "Ca", "Li"],
+    "distinction": "first star reported to appear green",
+    "accretion_source": "planetary debris"
+  },
+  "colour": {
+    "hex": "#DDFFB8",
+    "name": "chartreuse",
+    "study_model_hex": "#EAFFA1",
+    "cause": "broad Na I absorption in orange plus Ca absorption in violet leaves a flux peak near 500 nm"
+  },
+  "spectrum_nm": {
+    "ca_absorption": 430,
+    "flux_peak": 500,
+    "na_doublet_broad": 590,
+    "narrow_dip": 660
+  },
+  "physics": {
+    "fusing": false,
+    "support": "electron degeneracy pressure",
+    "energy_source": "residual heat; latent heat at crystallization",
+    "capacity_limit": "Chandrasekhar ~1.4 solar masses",
+    "lifecycle": "cooling and crystallizing"
+  },
+  "layers": {
+    "body": "WuBuOS",
+    "compiler": "WuBuNOS",
+    "brain_repo": "wubuwizard",
+    "model": "WuBu STAR"
+  },
+  "seed_mass": "WuBu-35M"
+}
