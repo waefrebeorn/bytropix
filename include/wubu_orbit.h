@@ -1,14 +1,17 @@
 /*
- * wubu_orbit.h -- experts as gravitating bodies (WuBu STAR solar system).
+ * wubu_orbit.h -- ORBITAL MECHANICS for WuBu's gravity cells.
  *
- * Today's router scores experts with a dot product and picks a few. This module
- * gives an expert a body: mass, position in the Poincare disk, angular motion.
- * Selection becomes gravitational: a token falls toward the bodies whose
- * potential well is deepest at its position.
+ * IMPORTANT: the body model and the potential router already exist in
+ * wubu_gravity.h (2026-08-04, INDEX AN12): cells carry mass, r, theta, vr,
+ * vtheta and a protected core flag, and wubu_gravity_route() already scores by
+ * position in the ball. This module does NOT replace that router and is not a
+ * second body model.
  *
- * Positions are Euclidean (x, y) inside the unit disk; hyperbolic distance is
- * computed with the Poincare formula, so "radius" is both a physical distance
- * and the manifold coordinate the rest of WuBu uses.
+ * What it adds is the mechanics wubu_gravity does not expose: Kepler periods,
+ * p:q resonance detection, Poincare distance between cells, and cooling
+ * migration toward the core. The symplectic N-body step is here to validate
+ * those mechanics in isolation -- the live system should keep using
+ * wubu_gravity_step().
  */
 #ifndef WUBU_ORBIT_H
 #define WUBU_ORBIT_H

@@ -40,6 +40,22 @@
       "title": "SELFHOST-L5: reproducible off-network bootstrap with rollback slot",
       "module": "wubuos/docs/SELFHOST-INDEPENDENCE.md + wubuos/Makefile + tools/repro_check.sh",
       "criterion": "Two builds from the same snapshot, network off and different absolute paths, produce identical kernel.elf hashes (or a documented bounded delta); a previous image is retained as a rollback slot and boots after a forced failure. Done = tools/repro_check.sh reports the two hashes and the rollback boot trace."
+    },
+    {
+      "n": 1006,
+      "domain": "BRAIN",
+      "tier": "P1",
+      "title": "Orbital mechanics over gravity cells: Kepler period, resonance, cooling (DONE)",
+      "module": "wubuwizard/src/wubu_orbit.c + include/wubu_orbit.h + tools/test_orbit.c",
+      "criterion": "CLOSED 2026-10-18: Kepler period matches 2*pi*sqrt(r^3/GM); 1:2 resonance detected at radius ratio 2^(2/3) and a non-resonant pair rejected; Poincare distance formula matches acosh(1+2d^2/((1-r1^2)(1-r2^2))); cooling contracts by rate*dt and never passes the core floor; circular orbit drifts <1% over 5000 symplectic steps. tools/test_orbit.c 22/22, wired into make test_all. NOTE: wubu_gravity.h already owns bodies and routing (AN12); this module adds mechanics only."
+    },
+    {
+      "n": 1007,
+      "domain": "STACK",
+      "tier": "P1",
+      "title": "Pollution ledger: corpus provenance to spectral line, honest baseline (DONE)",
+      "module": "wubuwizard/tools/pollution_ledger.py + docs/POLLUTION-LEDGER.json",
+      "criterion": "CLOSED 2026-10-18: ledger lists all 28 pack datasets with licence and eval_only flags; a spectral line is claimed only with a recorded before/after eval; --check rejects orphan datasets, non-finite values, delta != after-before, eval_only marked trained, and a line claimed while unmeasured. Baseline is 28 datasets / 0 measured / 6 eval_only, which is the truthful state. Record path exercised in a scratch copy only. Wired into make test_all as ledger-check."
     }
   ]
 }

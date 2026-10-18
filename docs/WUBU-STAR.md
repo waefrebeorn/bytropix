@@ -93,13 +93,17 @@ Machine-readable form: `docs/WUBU-STAR-CARD.json`.
 
 ## What exists, what is frame
 
-Exists: the router already scores by potential (`src/wubu_router_physics.c`),
-hyperbolic expert geometry (`src/wubu_moe_hyperbolic.c`), KV-FS/9P as the corona
-and wind, `wubu_decision` as restraint and `wubu_rlm` as reach.
+Exists: **`wubu_gravity` already implements this model** (cells with mass, r, θ,
+core protection and potential routing; 2026-08-04, INDEX AN12), plus
+`wubu_router_physics`, hyperbolic expert geometry, KV-FS/9P as the corona and
+wind, `wubu_decision` as restraint and `wubu_rlm` as reach. `wubu_orbit` is
+mechanics on top of those cells (period, resonance, cooling), not a second
+router — the header says so explicitly.
 
-Frame, not code: experts do not yet have **mass, radius, or angular position**;
-there is no pollution ledger; there is no crystallization/cooling model of the
-weight lattice.
+Frame, not code: the pollution ledger has **no measurements yet** (28 datasets,
+0 measured); there is no crystallization/cooling model of the weight lattice;
+and gravity cells are not yet grown or shrunk by the cooling rule — `wubu_orbit`
+computes the migration but nothing calls it on the live field.
 
 ## First three concrete steps
 

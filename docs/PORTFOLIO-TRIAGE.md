@@ -96,6 +96,26 @@ Rules used:
   pedantic diagnostics **162 → 105** across **13 → 6** files; errors remain 0.
   Ten braced-groups and a few const/plugin warnings remain, so it stays open.
 
+## Cycle 9 disposition
+
+- Domains: BRAIN, STACK (both had been idle for several cycles).
+- BRAIN 1006 closed: orbital mechanics over the existing gravity cells —
+  Kepler period, 1:2 resonance, Poincaré distance, cooling migration to the core
+  floor. `test_orbit` 22/22, circular orbit drifts 0.26% over 5,000 steps, wired
+  into `test_all`.
+- STACK 1007 closed: pollution ledger with the honest baseline — **28 datasets,
+  0 measured, 6 eval_only**. A spectral line is refused without a recorded
+  before/after eval; `--check` is now part of `test_all` as `ledger-check`.
+- **Red test found while looking for a third closure:** BRAIN #266
+  (`test_nested_moe_router_backward`) passes only **4/15**. Every gradient
+  assertion fails (`d_x`, `d_coarse`, `d_fine` all zero), and the NULL-pointer
+  cases inherit the same failure. This is recorded as a real defect, not closed
+  and not relabelled. It is the strongest BRAIN candidate for cycle 10.
+- **Duplication caught:** `wubu_gravity.h` (2026-08-04, INDEX AN12) already owns
+  gravitating cells and potential routing. `wubu_orbit` was re-scoped to
+  mechanics only, with the overlap documented in the header rather than left as
+  a second router.
+
 ## Cycle 8 disposition
 
 - Domains: KERNEL, SECURITY. KERNEL's #29 was chosen from the reality check as
