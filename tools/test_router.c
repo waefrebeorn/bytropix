@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "wubu_router.h"
+#include "wubu_dims.h"
 
 static int failures = 0;
 #define CHECK(c, m) do { if (!(c)) { printf("  FAIL: %s\n", m); failures++; } } while (0)
@@ -44,6 +45,11 @@ static float frand(void) {
 int main(void)
 {
     printf("=== test_router (THE ROUTER SLOT: one interface, any physics) ===\n");
+
+    /* WUBU_DIMS defaults from the 2048-hidden build; the MoE forward probe
+     * routes D_MODEL-wide tokens. Without this the global is {0}, making
+     * D_MODEL=0 -> zero-byte calloc -> memcpy overflow. */
+    wubu_dims_default();
 
     if (wubu_router_register_physics(N_BALLS, DIM, K_ACTIVE, 424242ull) != 0) {
         printf("  FAIL: physics registration\n");
