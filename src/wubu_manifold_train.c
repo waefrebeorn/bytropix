@@ -176,6 +176,115 @@ int wubu_manifold_lora(const float *h, int dim, float R,
     return 0;
 }
 
+float wubu_manifold_hierarchy_loss(const float *parent, const float *child,
+                                   const float *sibling, int dim, float R,
+                                   float margin)
+{
+    if (!parent || !child || !sibling || dim <= 0 || !(R > 0.0f)) return 0.0f;
+    float dp = wubu_poincare_dist(child, parent, dim, R);
+    float ds = wubu_poincare_dist(child, sibling, dim, R);
+    if (!isfinite(dp) || !isfinite(ds)) return 0.0f;
+    float loss = dp - ds + margin;
+    return loss > 0.0f ? loss : 0.0f;
+}
+
+float wubu_manifold_radius_penalty(const float *x, int dim, float R,
+                                   float lo, float hi, float *dtan)
+{
+    if (!x || dim <= 0 || !(R > 0.0f) || !(lo > 0.0f) || !(hi > lo) || !(hi < R))
+        return 0.0f;
+
+    float *u = (float *)malloc((size_t)dim * sizeof(float));
+    if (!u) return 0.0f;
+    wubu_log_map(x, dim, R, u);
+
+    float n2 = 0.0f;
+    for (int i = 0; i < dim; i++) n2 += u[i] * u[i];
+    float n = sqrtf(n2);
+    if (n < 1e-8f) { free(u); return 0.0f; }
+
+    /* Radii in tangent coordinates: r = R*tanh(||u||/R) => ||u|| = R*atanh(r/R) */
+    float lo_u = R * atanhf(lo / R);
+    float hi_u = R * atanhf(hi / R);
+
+    /* Hinge at a 5% inward margin. A hinge exactly on the boundary only
+     * converges asymptotically (radius approaches lo from below forever),
+     * so the band would never be strictly occupied in finite steps. */
+    float m = 0.05f * (hi_u - lo_u);
+    float lo_t = lo_u + m;
+    float hi_t = hi_u - m;
+
+    float pen = 0.0f, g = 0.0f;
+    if (n < lo_t)      { float d = lo_t - n; pen = d * d; g = -2.0f * d; }
+    else if (n > hi_t) { float d = n - hi_t; pen = d * d; g =  2.0f * d; }
+
+    if (dtan) {
+        if (pen > 0.0f) {
+            for (int i = 0; i < dim; i++) dtan[i] = g * (u[i] / n);
+        } else {
+            for (int i = 0; i < dim; i++) dtan[i] = 0.0f;
+        }
+    }
+    free(u);
+    return pen;
+}
+
+int wubu_manifold_lora_backward(const float *h, int dim, float R,
+                                const float *A, const float *B, int rank,
+                                const float *dout, float *dA, float *dB)
+{
+    if (!h || dim <= 0 || !(R > 0.0f) || !dout || !dA || !dB || rank <= 0 ||
+        !A || !B) return -1;
+
+    float *u   = (float *)malloc((size_t)dim * sizeof(float));
+    float *up  = (float *)malloc((size_t)dim * sizeof(float));
+    float *out = (float *)malloc((size_t)dim * sizeof(float));
+    float *dup = (float *)malloc((size_t)dim * sizeof(float));
+    float *r   = (float *)calloc((size_t)rank, sizeof(float));
+    float *dr  = (float *)calloc((size_t)rank, sizeof(float));
+    if (!u || !up || !out || !dup || !r || !dr) {
+        free(u); free(up); free(out); free(dup); free(r); free(dr);
+        return -1;
+    }
+
+    wubu_log_map(h, dim, R, u);
+    for (int i = 0; i < rank; i++) {
+        float s = 0.0f;
+        for (int j = 0; j < dim; j++)
+            s += A[(size_t)i * (size_t)dim + (size_t)j] * u[j];
+        r[i] = s;
+    }
+    for (int k = 0; k < dim; k++) {
+        float s = u[k];
+        for (int i = 0; i < rank; i++)
+            s += B[(size_t)k * (size_t)rank + (size_t)i] * r[i];
+        up[k] = s;
+    }
+    wubu_exp_map(up, dim, R, out);
+
+    /* dL/du' from dL/dout through the exp-map Jacobian. */
+    wubu_exp_map_backward(up, dim, R, out, dout, dup);
+
+    /* dL/dr = B^T dup ; dL/dB = dup (x) r ; dL/dA = dr (x) u */
+    for (int i = 0; i < rank; i++) {
+        float s = 0.0f;
+        for (int k = 0; k < dim; k++)
+            s += B[(size_t)k * (size_t)rank + (size_t)i] * dup[k];
+        dr[i] = s;
+    }
+    for (int k = 0; k < dim; k++) {
+        for (int i = 0; i < rank; i++)
+            dB[(size_t)k * (size_t)rank + (size_t)i] = dup[k] * r[i];
+    }
+    for (int i = 0; i < rank; i++) {
+        for (int j = 0; j < dim; j++)
+            dA[(size_t)i * (size_t)dim + (size_t)j] = dr[i] * u[j];
+    }
+
+    free(u); free(up); free(out); free(dup); free(r); free(dr);
+    return 0;
+}
+
 int wubu_manifold_train_selftest(void)
 {
     wubu_manifold_head_t h;

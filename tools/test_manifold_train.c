@@ -28,6 +28,19 @@ static float norm(const float *x, int d)
     return sqrtf(s);
 }
 
+/* Linear functional of the adapter output: L = <out, g>.
+ * Used to finite-difference dL/dA and dL/dB. */
+static float lin_loss(const float *h, int d, float R,
+                      const float *A, const float *B, int rank, const float *g)
+{
+    float out[64];
+    if (d > 64) return 0.0f;
+    if (wubu_manifold_lora(h, d, R, A, B, rank, out) != 0) return 0.0f;
+    float s = 0.0f;
+    for (int i = 0; i < d; i++) s += out[i] * g[i];
+    return s;
+}
+
 int main(void)
 {
     enum { D = 8, K = 3 };
@@ -112,6 +125,86 @@ int main(void)
     for (int i = 0; i < D; i++) { float d = hx[i] - out2[i]; change += d * d; }
     ok(sqrtf(change) > 1e-6f, "LoRA with B!=0 changes the representation");
     ok(norm(out2, D) < R, "LoRA output stays inside the ball (exp map invariant)");
+
+    /* --- (a) geodesic hierarchy loss ------------------------------- */
+    {
+        float par[D], chi[D], sib[D];
+        memset(par, 0, sizeof(par)); memset(chi, 0, sizeof(chi)); memset(sib, 0, sizeof(sib));
+        par[0] = 0.30f; chi[0] = 0.32f; sib[1] = 0.30f;
+        float dcp = wubu_poincare_dist(chi, par, D, R);
+        float dcs = wubu_poincare_dist(chi, sib, D, R);
+        ok(dcp < dcs, "child is geodesically closer to its parent than to a sibling");
+        ok(wubu_manifold_hierarchy_loss(par, chi, sib, D, R, 0.05f) == 0.0f,
+           "hierarchy loss is zero when the ordering already holds");
+        /* violating triple: the point sits on the sibling */
+        float bad = wubu_manifold_hierarchy_loss(chi, sib, par, D, R, 0.05f);
+        ok(bad > 0.0f, "hierarchy loss is positive when the ordering is violated");
+    }
+
+    /* --- (b) radius regulariser ------------------------------------ */
+    {
+        enum { NP = 64 };
+        float pts[NP][D];
+        for (int n = 0; n < NP; n++) {
+            memset(pts[n], 0, sizeof(pts[n]));
+            pts[n][0] = 0.05f;          /* start near the origin, below the band */
+        }
+        for (int it = 0; it < 300; it++) {
+            for (int n = 0; n < NP; n++) {
+                float du[D], uu[D];
+                (void)wubu_manifold_radius_penalty(pts[n], D, R, 0.2f, 0.8f, du);
+                wubu_log_map(pts[n], D, R, uu);
+                for (int i = 0; i < D; i++) uu[i] -= 0.1f * du[i];
+                wubu_exp_map(uu, D, R, pts[n]);
+            }
+        }
+        int in_band = 0;
+        for (int n = 0; n < NP; n++) {
+            float r = norm(pts[n], D);
+            if (r >= 0.2f * R && r <= 0.8f * R) in_band++;
+        }
+        printf("  radius band: %d/%d points inside [0.2R,0.8R] after 300 steps\n",
+               in_band, NP);
+        ok(in_band >= (NP * 9) / 10, "radius regulariser keeps >=90% of points in band");
+    }
+
+    /* --- (c) Mobius LoRA gradients vs finite differences ----------- */
+    {
+        const int rk = 2;
+        float Ag[D * 2], Bg[D * 2], dAg[D * 2], dBg[D * 2], gg[D];
+        for (int i = 0; i < D * 2; i++) {
+            Ag[i] = 0.05f * (float)((i % 5) - 2);
+            Bg[i] = 0.04f * (float)((i % 7) - 3);
+        }
+        for (int i = 0; i < D; i++) gg[i] = 0.1f * (float)((i % 3) - 1);
+
+        ok(wubu_manifold_lora_backward(hx, D, R, Ag, Bg, rk, gg, dAg, dBg) == 0,
+           "LoRA backward runs");
+
+        float eps = 1e-2f, maxrel = 0.0f;
+        float Asave;
+        for (int idx = 0; idx < rk * D; idx += 5) {
+            Asave = Ag[idx];
+            Ag[idx] = Asave + eps; float lp = lin_loss(hx, D, R, Ag, Bg, rk, gg);
+            Ag[idx] = Asave - eps; float lm = lin_loss(hx, D, R, Ag, Bg, rk, gg);
+            Ag[idx] = Asave;
+            float fd = (lp - lm) / (2.0f * eps);
+            float rel = fabsf(fd - dAg[idx]) / (fabsf(fd) + fabsf(dAg[idx]) + 1e-6f);
+            if (rel > maxrel) maxrel = rel;
+        }
+        float Bsave;
+        for (int idx = 0; idx < D * rk; idx += 5) {
+            Bsave = Bg[idx];
+            Bg[idx] = Bsave + eps; float lp = lin_loss(hx, D, R, Ag, Bg, rk, gg);
+            Bg[idx] = Bsave - eps; float lm = lin_loss(hx, D, R, Ag, Bg, rk, gg);
+            Bg[idx] = Bsave;
+            float fd = (lp - lm) / (2.0f * eps);
+            float rel = fabsf(fd - dBg[idx]) / (fabsf(fd) + fabsf(dBg[idx]) + 1e-6f);
+            if (rel > maxrel) maxrel = rel;
+        }
+        printf("  LoRA FD max relative error = %.3e\n", maxrel);
+        ok(maxrel < 1e-2f, "LoRA dA/dB match finite differences (rel < 1e-2)");
+    }
 
     ok(wubu_manifold_train_selftest() == 0, "internal selftest");
 

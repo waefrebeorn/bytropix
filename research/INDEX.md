@@ -2202,9 +2202,11 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
 - SI04 Manifold training design: pre-train on a hyperbolic hierarchy,
   post-train with geodesic preferences, fine-tune with Möbius LoRA, serve in
   tangent charts. Backed by WuBuMath's 17 Lean theorems. `wired` (doc + module)
-- SI05 `wubu_manifold_train`: hyperbolic classifier head with analytic
-  tangent-gradient + Möbius LoRA; 13 checks pass (loss 1.068→0.131, ball
-  closure, B=0 identity). `wired`
+- SI05 `wubu_manifold_train` (goal 1002 CLOSED): hyperbolic classifier head
+  with analytic tangent-gradient; geodesic hierarchy loss (child–parent <
+  child–sibling, 0 when ordered, >0 when violated); radius regulariser
+  (64/64 points in [0.2R,0.8R] after 300 steps); Möbius LoRA + dA/dB backward
+  (FD max rel 2.3e-03). 18 checks pass. `wired`
 - SI06 Geometry consolidation: `wubu_exp_map`/`wubu_log_map` now have their
   canonical definitions in `wubu_mobius.c`; duplicate copies removed from
   `wubu_gguf_bridge.c` and `gguf_reader.c` (latent duplicate-symbol bug).

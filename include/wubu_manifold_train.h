@@ -64,6 +64,33 @@ float wubu_manifold_ce(const wubu_manifold_head_t *h, const float *x, int label,
 int wubu_manifold_lora(const float *h, int dim, float R,
                        const float *A, const float *B, int rank, float *out);
 
+/* Geodesic hierarchy loss (pre-training):
+ *   loss = max(0, d(child, parent) - d(child, sibling) + margin)
+ * All three points must be inside the ball. True Poincare distance is used,
+ * not the tangent approximation, because the criterion is about hierarchy.
+ * Returns the loss (0 when the child is already closer to its parent). */
+float wubu_manifold_hierarchy_loss(const float *parent, const float *child,
+                                   const float *sibling, int dim, float R,
+                                   float margin);
+
+/* Radius regulariser: keeps representations off the origin and off the
+ * boundary, where hyperbolic gradients vanish.
+ * Penalty is a squared hinge against the band [lo, hi] (radii, 0 < lo < hi < R).
+ * The hinges sit 5% inward: a hinge exactly on the boundary only converges
+ * asymptotically, so the band would never be strictly occupied.
+ * If dtan != NULL, receives dPenalty/du in the tangent space at x.
+ * Returns the penalty (0 inside the band). */
+float wubu_manifold_radius_penalty(const float *x, int dim, float R,
+                                   float lo, float hi, float *dtan);
+
+/* Backward for the Mobius LoRA adapter.
+ * Given dL/dout (ambient, size dim), writes dL/dA (rank*dim) and
+ * dL/dB (dim*rank). Uses the exp-map Jacobian already in wubu_mobius.
+ * Returns 0 on success. */
+int wubu_manifold_lora_backward(const float *h, int dim, float R,
+                                const float *A, const float *B, int rank,
+                                const float *dout, float *dA, float *dB);
+
 /* Self-check of the identities this module relies on. Returns 0 when all
  * internal cases pass. The full matrix is tools/test_manifold_train.c. */
 int wubu_manifold_train_selftest(void);

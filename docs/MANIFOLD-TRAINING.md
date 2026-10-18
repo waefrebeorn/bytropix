@@ -69,15 +69,25 @@ From `wubumath/docs/LINKAGE.md` (Lean 4 + mathlib, 0 `sorry`):
 ### 2.3 What is implemented now
 
 - `src/wubu_manifold_train.c` — hyperbolic classifier head with an analytic
-  tangent-space gradient + Möbius LoRA.
+  tangent-space gradient; **geodesic hierarchy loss**; **radius regulariser**
+  (squared hinge with a 5% inward margin so the band is reachable in finite
+  steps); **Möbius LoRA** with **dA/dB backward**.
 - `src/wubu_hyperbolic_output_proj.c` — the hyperbolic LM head.
-- `src/wubu_mobius.c` — exp/log, Möbius add, geodesic distance, backward passes.
+- `src/wubu_mobius.c` — exp/log (canonical definitions), Möbius add, geodesic
+  distance, backward passes.
 - `src/wubu_nested_ssm.c`, `src/wubu_poincare_gqa.c` — manifold-native layers.
 - `src/wubu_manifoldviz.c` — visualisation.
 
-**Missing for a real pre-training run:** the hierarchy loss term, the radius
-regulariser, and a data loader that emits taxonomy pairs. Those are the next
-three implementation items; the geometry they need is done.
+Verified in `tools/test_manifold_train.c`:
+- hierarchy: child–parent distance < child–sibling; loss 0 when ordered,
+  positive when violated;
+- radius: **64/64** points inside `[0.2R, 0.8R]` after 300 steps;
+- LoRA gradients: dA/dB match finite differences, max relative error
+  **2.328e-03** (< 1e-2).
+
+**Still missing for a real pre-training run:** a data loader that emits
+taxonomy triples (parent, child, sibling). The loss and the geometry it needs
+are done.
 
 ## 3. Stage 2 — post-training (preferences on the manifold)
 
@@ -120,10 +130,12 @@ Properties (all covered by `tools/test_manifold_train.c`):
   the exp map (`u + Δ₁ + Δ₂`), not by adding ambient weights. This is the
   manifold-correct analogue of LoRA merging.
 
-**Missing:** backward through A/B (the forward is done), and a trainer that
-freezes the base and updates only A/B. The backward is a straight chain of
-matrix products plus the exp-map Jacobian, which already exists as
-`wubu_exp_map_backward`.
+**Done:** the backward through A/B (`wubu_manifold_lora_backward`, verified
+against finite differences at 2.3e-03 relative error) using the existing
+`wubu_exp_map_backward` Jacobian.
+
+**Missing:** the trainer that freezes the base and updates only A/B, and a
+two-adapter merge test (`u + Δ₁ + Δ₂` before the exp map).
 
 ## 5. Serving
 
@@ -162,13 +174,14 @@ matrix products plus the exp-map Jacobian, which already exists as
 - **No claim of superintelligence.** This is a training geometry with proven
   invariants. It is necessary, not sufficient.
 
-## 8. Implementation order (next five)
+## 8. Implementation order
 
-1. Hierarchy-pair loader + geodesic contrastive loss (Stage 1).
-2. Radius regulariser + boundary diagnostics (Stage 1).
-3. Backward for Möbius LoRA A/B (Stage 3) — reuse `wubu_exp_map_backward`.
-4. Geodesic Bradley–Terry reward + tangent KL (Stage 2).
-5. Curvature-scheduled RoPE for long context (serving).
+1. ~~Geodesic contrastive loss (Stage 1)~~ **done, tested**.
+2. ~~Radius regulariser (Stage 1)~~ **done, tested (64/64 in band)**.
+3. ~~Backward for Möbius LoRA A/B (Stage 3)~~ **done, FD-verified**.
+4. Taxonomy-triple loader (Stage 1) — next.
+5. Geodesic Bradley–Terry reward + tangent KL (Stage 2).
+6. Curvature-scheduled RoPE for long context (serving).
 
 Each lands with a test in `test_all`, and each cites the Lean theorem it
 depends on.
