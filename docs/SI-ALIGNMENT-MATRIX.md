@@ -131,3 +131,9 @@ gap.
   BRAIN #244 (public orthogonalization primitive) supports *standards* by
   giving the optimizer a testable convergence contract. Biosecurity,
   manufacturing and workforce remain the honest gaps.
+- **2026-10-18 (portfolio cycle 3)** — armor suite green again inside the gate.
+  No objective status changed. The cycle's work is internal hardening:
+  AGENT #333 (DA-1 contradiction screen, zero-eval refusal) strengthens the
+  *evaluations* objective's discipline; STACK #773 (strict-C11 audit, 10 errors
+  fixed) strengthens *standards* conformance. Biosecurity, manufacturing and
+  workforce still open.
