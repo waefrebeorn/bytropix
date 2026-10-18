@@ -18,14 +18,14 @@ Rules used:
 | Domain | Total | Done | Active | Blocked | Deferred |
 |---|---:|---:|---:|---:|---:|
 | COMPILER | 100 | 18 | 38 | 8 | 36 |
-| KERNEL | 92 | 26 | 33 | 1 | 32 |
+| KERNEL | 92 | 27 | 32 | 1 | 32 |
 | BRAIN | 112 | 43 | 30 | 9 | 30 |
 | UX | 95 | 53 | 21 | 0 | 21 |
 | AGENT | 70 | 30 | 19 | 0 | 21 |
 | DRIVERS | 50 | 1 | 19 | 9 | 21 |
 | NAMESPACE | 65 | 22 | 11 | 25 | 7 |
 | STACK | 45 | 18 | 10 | 8 | 9 |
-| SECURITY | 52 | 1 | 9 | 27 | 15 |
+| SECURITY | 52 | 2 | 8 | 27 | 15 |
 | FS | 50 | 0 | 8 | 32 | 10 |
 | PATHS | 32 | 18 | 7 | 0 | 7 |
 | RUNTIME | 65 | 30 | 7 | 16 | 12 |
@@ -33,7 +33,7 @@ Rules used:
 | NETWORK | 52 | 1 | 1 | 48 | 2 |
 | OMARCHY | 35 | 21 | 0 | 13 | 1 |
 | AGIEDR | 40 | 19 | 0 | 21 | 0 |
-| **Total** | **1000** | **316** | **216** | **237** | **231** |
+| **Total** | **1000** | **318** | **214** | **237** | **231** |
 
 ## What the split says
 
@@ -95,6 +95,22 @@ Rules used:
 - STACK #773 advanced: guarding the duplicate `GQA_KV_DIM` definition cut
   pedantic diagnostics **162 → 105** across **13 → 6** files; errors remain 0.
   Ten braced-groups and a few const/plugin warnings remain, so it stays open.
+
+## Cycle 8 disposition
+
+- Domains: KERNEL, SECURITY. KERNEL's #29 was chosen from the reality check as
+  a genuine build, not a relabel; SECURITY was refreshed with a stronger test.
+- KERNEL #29 closed with new code: `src/kernel/wubu_pt.c` implements a real
+  4-level walker over a caller-supplied physical arena — PML4 → PDPT → PD → PT,
+  4 KiB and 2 MiB leaves, PS-bit leaves, recursive-free unmap, and refusal of a
+  4 KiB map under a large leaf or a 2 MiB map over an existing table. The test
+  hand-walks every level and asserts P/RW/US bits: **34/34**.
+- SECURITY #911 closed: the criterion claims four aliases / five handles, but
+  the test only built one alias. The test now builds all four, revokes through
+  the first, and asserts all five stop resolving: **348/348**.
+- Correction to the reality check: KERNEL #29 was listed as nominal. It was
+  nominal *because nobody had written it*; it is now written. The other KERNEL
+  rows (buddy, bump handoff, callee-saved switch) remain nominal.
 
 ## Cycle 7 disposition
 

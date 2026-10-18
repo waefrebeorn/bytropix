@@ -246,8 +246,8 @@
    "n": 29,
    "domain": "KERNEL",
    "tier": "P0",
-   "title": "4-level page-table walker with 2 MiB leaf mapping",
-   "module": "wubuos/src/kernel/wubu_vmm.c",
+   "title": "4-level page-table walker with 2 MiB leaf mapping (DONE)",
+   "module": "wubuos/src/kernel/wubu_pt.c",
    "criterion": "make test_vmm: map/unmap a 4 KiB and a 2 MiB range, hand-walk the PML4/PDPT/PD/PT and assert P/RW/US bits at each level; unmap clears the entry"
   },
   {
@@ -7302,7 +7302,7 @@
    "n": 911,
    "domain": "SECURITY",
    "tier": "P1",
-   "title": "Revocation cascade to NT handle aliases",
+   "title": "Revocation cascade to NT handle aliases (DONE)",
    "module": "wubuos/src/runtime/vsl/vsl_nt_cap.c",
    "criterion": "make test_nt_sd green: after vsl_nt_cap_make_handle() creates 4 aliases of one object, vsl_nt_cap_revoke_handle() on any alias makes all 5 fail vsl_nt_cap_resolve_handle()"
   },

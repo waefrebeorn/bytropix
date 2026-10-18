@@ -11,7 +11,7 @@ below are exactly that case.
 
 | Goal | Claimed capability | What the code actually is | Evidence |
 |---|---|---|---|
-| KERNEL #29 | 4-level page-table walker, 2 MiB leaves, PML4/PDPT/PD/PT bit checks | a **physical frame bitmap allocator** | `test_vmm` asserts `wubu_vmm_free_count()`, alignment and bitmap bits; no page-table walk exists in `wubu_vmm.c` |
+| KERNEL #29 | 4-level page-table walker, 2 MiB leaves, PML4/PDPT/PD/PT bit checks | **implemented in cycle 8** as `src/kernel/wubu_pt.c`; `test_wubu_pt` hand-walks every level (34/34) | this row is now closed; the original bitmap allocator is untouched and still separate |
 | KERNEL #30/#31 | buddy orders 0..10 + per-CPU magazines; bump→buddy handoff | no `buddy`/`bump`/`magazine` symbols in `memory.c` | grep over `src/kernel/memory.c` |
 | KERNEL #32 | context switch asm: 1e6 switches, callee-saved GPRs + RFLAGS identical | cooperative scheduler test with **no r12–r15/RFLAGS assertions** | `src/kernel/test/legacy/tasking_test.c` |
 | KERNEL #984 | ACPI table checksum verification + XSDT/RSDT selection | XSDT preference exists; **no checksum function** | grep `checksum` in `wubu_acpi.c` returns comments only |
