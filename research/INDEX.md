@@ -2248,4 +2248,10 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   arXiv 2609.33209 measured Jev's 0.064 complement miss and 1.14 label mass.
   `research/073-two-lily-pads-decision-and-embedding.md`. `wired`
 
+- UX01 UX supplementation + honest gap registry (2026-10-18): 29-query wave,
+  7-hop synthesis (Win32 UX checklist, WCAG 2.2, GNOME HIG, latency thresholds);
+  `wubuos/tools/ux_gap_audit.py` → 155 shipped files, 43 stub markers, 22 flagged;
+  capability matrix: 2/16 VERIFIED, 6 PARTIAL, 7 UNVERIFIED, 2 ABSENT.
+  `wubuos/docs/UX-CAPABILITY-MATRIX.md`, `wubuos/research/ux-2026-10-18/`. `wired`
+
 ## WaefreBeorn Umbrella License v3.0
