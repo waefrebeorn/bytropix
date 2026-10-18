@@ -7278,7 +7278,7 @@
    "n": 908,
    "domain": "SECURITY",
    "tier": "P1",
-   "title": "Capability grant narrowing: requested mask must be subset of token rights",
+   "title": "Capability grant narrowing: requested mask must be subset of token rights (DONE)",
    "module": "wubuos/src/runtime/vsl/vsl_nt_cap.c",
    "criterion": "make test_nt_sd green: vsl_nt_cap_granted_mask() returns desired AND token-rights, and requesting a bit absent from the token yields a granted mask of 0 with NTSTATUS_ACCESS_DENIED"
   },
@@ -7662,7 +7662,7 @@
    "n": 956,
    "domain": "DRIVERS",
    "tier": "P0",
-   "title": "PS/2 keyboard scancode translation: set 1/2, make/break, E0 prefix",
+   "title": "PS/2 keyboard scancode translation: set 1/2, make/break, E0 prefix (DONE)",
    "module": "wubuos/src/kernel/ps2.c",
    "criterion": "make test_input green: set-2 codes 0x1C then 0xF0 0x1C produce keydown 'a' then keyup 'a'; 0xE0 0x48 maps to the Up arrow; 0xE1 0x1D 0x45 0xE1 0x9D 0xC5 produces exactly one Pause event"
   },

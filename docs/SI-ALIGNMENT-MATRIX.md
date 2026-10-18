@@ -152,3 +152,7 @@ gap.
   is refused, not served) — protocol-hardening for *standards*. STACK #773's
   third pass cut strict-C11 diagnostics to 105 lines across 6 files. Brain gate:
   177 binaries / 155 ALL-PASSED / 0 failures.
+- **2026-10-18 (portfolio cycle 7)** — no objective status change. DRIVERS #956
+  (PS/2 set-2 decoder) and SECURITY #908 (cap-ceiling refusal verified at
+  336/336) harden input trust and authority narrowing — both *standards*
+  surfaces. Nine of sixteen domains now touched.

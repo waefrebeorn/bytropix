@@ -22,10 +22,10 @@ Rules used:
 | BRAIN | 112 | 43 | 30 | 9 | 30 |
 | UX | 95 | 53 | 21 | 0 | 21 |
 | AGENT | 70 | 30 | 19 | 0 | 21 |
-| DRIVERS | 50 | 0 | 20 | 9 | 21 |
+| DRIVERS | 50 | 1 | 19 | 9 | 21 |
 | NAMESPACE | 65 | 22 | 11 | 25 | 7 |
 | STACK | 45 | 18 | 10 | 8 | 9 |
-| SECURITY | 52 | 0 | 10 | 27 | 15 |
+| SECURITY | 52 | 1 | 9 | 27 | 15 |
 | FS | 50 | 0 | 8 | 32 | 10 |
 | PATHS | 32 | 18 | 7 | 0 | 7 |
 | RUNTIME | 65 | 30 | 7 | 16 | 12 |
@@ -33,7 +33,7 @@ Rules used:
 | NETWORK | 52 | 1 | 1 | 48 | 2 |
 | OMARCHY | 35 | 21 | 0 | 13 | 1 |
 | AGIEDR | 40 | 19 | 0 | 21 | 0 |
-| **Total** | **1000** | **314** | **218** | **237** | **231** |
+| **Total** | **1000** | **316** | **216** | **237** | **231** |
 
 ## What the split says
 
@@ -95,4 +95,17 @@ Rules used:
 - STACK #773 advanced: guarding the duplicate `GQA_KV_DIM` definition cut
   pedantic diagnostics **162 → 105** across **13 → 6** files; errors remain 0.
   Ten braced-groups and a few const/plugin warnings remain, so it stays open.
+
+## Cycle 7 disposition
+
+- Domains: DRIVERS, SECURITY — both fresh, bringing the touched set to **9 of
+  16** (BRAIN, STACK, AGENT, COMPILER, UX, NAMESPACE, NETWORK, DRIVERS,
+  SECURITY).
+- DRIVERS #956 closed: `input_ps2_feed()` implements the set-2 wire format —
+  0xF0 break, E0 extended, and the six-byte E1 1D 45 E1 9D C5 Pause sequence as
+  exactly one event. `test_input` 12/12.
+- SECURITY #908 closed **by verification, not new code**: `test_vsl_nt` already
+  asserts the cap ceiling refuses a right the DACL allows and reports a zero
+  grant (336/336). Recorded as verified so the registry stops implying it is
+  unproven.
 
