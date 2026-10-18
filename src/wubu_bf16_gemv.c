@@ -15,6 +15,7 @@
  * Triple-DA: n<=0/stride<=0 -> 0; null -> 0; fallback always correct.
  */
 #include "wubu_bf16_gemv.h"
+#include "wubu_fp16.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -64,11 +65,11 @@ int wubu_bf16_gemv(const float *W_f32, const float *x, float *y,
      * capable host and still exercises the dispatch + accumulation path.) */
     unsigned short *Wb = (unsigned short *)malloc((size_t)n_out * n_in * sizeof(unsigned short));
     if (!Wb) { gemv_f32(W_f32, x, y, n_out, n_in); return n_out; }
-    for (size_t k = 0; k < (size_t)n_out * n_in; k++) Wb[k] = f32_to_bf16(W_f32[k]);
+    for (size_t k = 0; k < (size_t)n_out * n_in; k++) Wb[k] = wubu_f32_to_bf16(W_f32[k]);
     for (int i = 0; i < n_out; i++) {
         const unsigned short *Wi = Wb + (size_t)i * n_in;
         float acc = 0.0f;
-        for (int j = 0; j < n_in; j++) acc += bf16_to_f32(Wi[j]) * x[j];
+        for (int j = 0; j < n_in; j++) acc += wubu_bf16_to_f32(Wi[j]) * x[j];
         y[i] = acc;
     }
     free(Wb);

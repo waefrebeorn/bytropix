@@ -28,8 +28,8 @@ float wubu_der_loss(const wubu_der_buffer_t *b, const float *student_logits,
     int n = 0;
     for (int i = 0; i < WUBU_DER_BUFSZ; i++) {
         if (!b->used[i]) continue;
-        softmax_t(b->logits[i], ndim, temperature, t);
-        softmax_t(student_logits, ndim, temperature, s);
+        softmax_t(b->logits[i], t, ndim, temperature);
+        softmax_t(student_logits, s, ndim, temperature);
         for (int d = 0; d < ndim; d++) {
             if (t[d] > 1e-12f) {
                 float lt = logf(t[d]);
