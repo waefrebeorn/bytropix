@@ -2,6 +2,10 @@
  * wubu_kvvq.c -- data-independent residual subvector VQ for KV (doc 014).
  * Self-contained C11. See header.
  */
+#if defined(__STRICT_ANSI__)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+#endif
 #include "wubu_kvvq.h"
 #include <stdlib.h>
 #include <math.h>

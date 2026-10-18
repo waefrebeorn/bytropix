@@ -3,6 +3,7 @@
  * an invariant is rejected; a broken baseline is rejected; fail-closed on
  * empty invariant set / NULL transform; observability counts. */
 #include "wubu_coherence.h"
+#include "wubu_budget.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -90,6 +91,54 @@ int main(void) {
            c.n_checked, c.n_admitted, c.n_rejected);
     CHECK(c.n_checked == c.n_admitted + c.n_rejected, "checked == admitted + rejected");
     CHECK(c.n_admitted >= 2 && c.n_rejected >= 4, "counts reflect admits and rejects");
+
+    /* ---- DA-1 static contradiction screen (AGENT #333) ---- */
+    {
+        wubu_inv_decl_t ok[] = {
+            {"counter<=100", WUBU_CMP_LE, 100},
+            {"counter>=0",   WUBU_CMP_GE, 0}
+        };
+        const char *who = NULL;
+        CHECK(wubu_da1_screen(ok, 2, &who) == 1, "consistent declarations pass DA-1");
+
+        wubu_inv_decl_t bad[] = {
+            {"counter<=10", WUBU_CMP_LE, 10},
+            {"counter>=20", WUBU_CMP_GE, 20}
+        };
+        CHECK(wubu_da1_screen(bad, 2, &who) == 0, "contradictory bounds refused");
+        CHECK(who != NULL, "conflict names the offending declaration");
+
+        wubu_inv_decl_t eq2[] = {
+            {"counter==5", WUBU_CMP_EQ, 5},
+            {"counter==7", WUBU_CMP_EQ, 7}
+        };
+        CHECK(wubu_da1_screen(eq2, 2, &who) == 0, "two different equalities refused");
+
+        wubu_inv_decl_t eqne[] = {
+            {"counter==5", WUBU_CMP_EQ, 5},
+            {"counter!=5", WUBU_CMP_NE, 5}
+        };
+        CHECK(wubu_da1_screen(eqne, 2, &who) == 0, "equality excluded by NE refused");
+
+        wubu_inv_decl_t fine[] = {
+            {"counter==5", WUBU_CMP_EQ, 5},
+            {"counter!=6", WUBU_CMP_NE, 6},
+            {"counter<=5", WUBU_CMP_LE, 5}
+        };
+        CHECK(wubu_da1_screen(fine, 3, &who) == 1, "singleton not excluded by NE passes");
+
+        CHECK(wubu_da1_screen(NULL, 0, &who) == 0, "empty declaration set refused");
+
+        /* the budget contract: a contradiction spends zero evals */
+        wubu_budget_t b;
+        CHECK(wubu_budget_init(&b, 10, 10) == 0, "budget init");
+        uint64_t before = b.n_evals;
+        CHECK(wubu_da1_screen(bad, 2, &who) == 0, "DA-1 refuses before any eval");
+        CHECK(b.n_evals == before, "zero evals spent on a contradiction");
+        CHECK(wubu_da1_screen(ok, 2, &who) == 1, "consistent set proceeds");
+        CHECK(wubu_budget_eval(&b) == 0, "eval charged only after DA-1 passes");
+        CHECK(b.n_evals == before + 1, "exactly one eval spent");
+    }
 
     printf("\n=== test_coherence: %d checks, %d failures ===\n", checks, fails);
     return fails ? 1 : 0;

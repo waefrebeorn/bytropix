@@ -1214,7 +1214,7 @@ test_escape: tools/test_escape.c src/wubu_escape.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 
-test_coherence: tools/test_coherence.c src/wubu_coherence.o
+test_coherence: tools/test_coherence.c src/wubu_coherence.o src/wubu_budget.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 	./$@
 

@@ -1,6 +1,10 @@
 /*
  * wubu_gamebud.c — Game-design frame-budget governor (doc "gamebud"). C11.
  */
+#if defined(__STRICT_ANSI__)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+#endif
 #include "wubu_gamebud.h"
 #include <stdlib.h>
 #include <string.h>

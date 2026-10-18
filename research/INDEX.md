@@ -2224,6 +2224,13 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   domain-selective fetcher `tools/wubu_download_finefineweb.py`; one
   nuclear_science shard (347 MB) fetched as a proof. `wired`
 
+- ST01 strict-C11 audit (2026-10-18): `tools/audit_c11.sh` measures all 197
+  CORE_OBJ C sources under `-std=c11 -pedantic -fsyntax-only`. Feature-test
+  guards fixed 10 errors (CLOCK_MONOTONIC, M_PI, MADV_*) → **0 errors**;
+  386 pedantic warnings remain across 32 files (braced groups, implicit
+  declarations, `GQA_KV_DIM` redefinition). STACK #773 stays OPEN.
+  `docs/STRICT-C11-AUDIT.md`. `wired`
+
 - ND01 Two node brains (2026-10-18): **decision** (Clef / Jev / SystemOne typed
   decisions: state + typed questions → per-option probabilities, no text) and
   **embedding** (EmbeddingGemma 2: 740M, 768-d MRL to 128, 8K ctx, Apache-2.0).

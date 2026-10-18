@@ -6,6 +6,10 @@
  *     Checks: compiles clean, passes regression, doesn't OOM,
  *     doesn't exceed latency budget, passes safety kernel checks.
  */
+#if defined(__STRICT_ANSI__)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+#endif
 #include "wubu_codeexec.h"
 #include "wubu_spawn.h"
 #include <stdio.h>

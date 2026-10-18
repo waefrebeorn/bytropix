@@ -2678,7 +2678,7 @@
    "n": 333,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "DA-1 static contradiction screen rejects a mutation before any eval spend",
+   "title": "DA-1 static contradiction screen rejects a mutation before any eval spend (DONE)",
    "module": "wubuwizard/src/wubu_coherence.c",
    "criterion": "make test_coherence: a mutation whose declared invariants are mutually inconsistent is refused at DA-1 and wubu_budget_eval's counter is unchanged (zero evals spent)"
   },

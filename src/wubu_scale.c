@@ -9,6 +9,10 @@
  * probes; the probes degrade gracefully when those modules are absent
  * at link time -- the planner core is pure math on the hw struct).
  */
+#if defined(__STRICT_ANSI__)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+#endif
 #include "wubu_scale.h"
 #include "wubu_hwcaps.h"    /* SIMD ladder probe (minimal header) */
 

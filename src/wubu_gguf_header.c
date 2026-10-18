@@ -1,3 +1,7 @@
+#if defined(__STRICT_ANSI__)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+#endif
 #include "gguf_reader.h"
 #include "wubu_gguf_header.h"
 #include <stdio.h>

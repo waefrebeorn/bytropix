@@ -8,6 +8,10 @@
  *   At home: these score candidate configs; BO maximizes them to pick the next
  *   sweep to run. Balances exploit (high μ) with explore (high σ).
  */
+#if defined(__STRICT_ANSI__)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+#endif
 #include "wubu_acq.h"
 #include <math.h>
 

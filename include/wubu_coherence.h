@@ -64,4 +64,28 @@ int  wubu_coherence_admit(wubu_coherence_t *c,
         wubu_state_transform_fn transform, void *transform_ctx,
         void *proposed_state, void *invariant_ctx);
 
+/* ---- DA-1: static contradiction screen ----------------------------------
+ * Predicate invariants can only be tested by executing them. Declared
+ * invariants — a single integer field constrained by comparisons — can be
+ * screened BEFORE any evaluation: if their conjunction is unsatisfiable, no
+ * mutation can ever pass, so the search must not spend an eval on it.
+ *
+ * All declarations refer to the same integer field. Returns 1 when the
+ * constraint set is satisfiable, 0 when it is contradictory. *conflict (may be
+ * NULL) receives the name of the declaration that emptied the interval. */
+typedef enum {
+    WUBU_CMP_LE = 0,   /* field <= value */
+    WUBU_CMP_GE,       /* field >= value */
+    WUBU_CMP_EQ,       /* field == value */
+    WUBU_CMP_NE        /* field != value */
+} wubu_cmp_t;
+
+typedef struct {
+    const char *name;   /* label used in the conflict report */
+    wubu_cmp_t  op;
+    long        value;
+} wubu_inv_decl_t;
+
+int  wubu_da1_screen(const wubu_inv_decl_t *decls, int n, const char **conflict);
+
 #endif

@@ -21,7 +21,7 @@ Rules used:
 | KERNEL | 92 | 26 | 33 | 1 | 32 |
 | BRAIN | 112 | 43 | 30 | 9 | 30 |
 | UX | 95 | 52 | 22 | 0 | 21 |
-| AGENT | 70 | 29 | 20 | 0 | 21 |
+| AGENT | 70 | 30 | 19 | 0 | 21 |
 | DRIVERS | 50 | 0 | 20 | 9 | 21 |
 | NAMESPACE | 65 | 21 | 12 | 25 | 7 |
 | STACK | 45 | 18 | 10 | 8 | 9 |
@@ -33,7 +33,7 @@ Rules used:
 | NETWORK | 52 | 0 | 2 | 48 | 2 |
 | OMARCHY | 35 | 21 | 0 | 13 | 1 |
 | AGIEDR | 40 | 19 | 0 | 21 | 0 |
-| **Total** | **1000** | **309** | **223** | **237** | **231** |
+| **Total** | **1000** | **310** | **222** | **237** | **231** |
 
 ## What the split says
 
@@ -52,3 +52,13 @@ Rules used:
 - Deferred expiry: 2026-12-31 for all 231 P2/P3 goals.
 - No goal was silently dropped; every open goal appears in exactly one of
   active / blocked / deferred.
+
+## Cycle 3 disposition
+
+- Domains: AGENT, STACK (BRAIN sat out — it had run two cycles in a row).
+- AGENT #333 closed: DA-1 static contradiction screen plus a budget test
+  proving zero evals are spent on an unsatisfiable declaration set.
+- STACK #773 advanced, not closed: strict-C11 audit now reports 197 sources,
+  386 diagnostics and **0 errors** (10 fixed). The empty-diagnostic criterion
+  still fails, so the goal stays open.
+

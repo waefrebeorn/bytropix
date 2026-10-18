@@ -7,6 +7,10 @@
  *     power spectrogram → mel filterbank (40 bins, hz→mel) → log-mel.
  *   Implements a decimation-in-time radix-2 FFT (no deps).
  */
+#if defined(__STRICT_ANSI__)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+#endif
 #include "wubu_audio.h"
 #include <math.h>
 #include <string.h>
