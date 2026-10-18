@@ -29,4 +29,11 @@ int  wubu_mem_allowed(const wubu_memacl_t *a, const char *agent);
 const char *wubu_resolve_conflict(const char *a, int prio_a, const char *b, int prio_b);
 int  wubu_heartbeat_alive(long last_ms, long now_ms, long window_ms);
 
+/* AH05: cross-process promotion lock. The in-process lock table cannot stop
+ * two hive processes from promoting at once; this is an exclusive flock on a
+ * lock file. Returns an fd >= 0 on success, -1 if another process holds it
+ * or on error. Release with wubu_proc_lock_release(). */
+int  wubu_proc_lock_acquire(const char *path);
+int  wubu_proc_lock_release(int fd);
+
 #endif

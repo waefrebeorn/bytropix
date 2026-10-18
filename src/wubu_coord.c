@@ -17,6 +17,9 @@
 #include "wubu_coord.h"
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/file.h>
 
 /* AH01: try to lock a file for `agent`. Returns 1 if granted, 0 if held by
  * another agent (or stale-adopted by caller). now_ms drives stale reclamation. */
@@ -83,5 +86,29 @@ const char *wubu_resolve_conflict(const char *a, int prio_a,
 
 /* AH04: heartbeat staleness — is agent alive within window? */
 int wubu_heartbeat_alive(long last_ms, long now_ms, long window_ms) {
-    return (now_ms - last_ms) <= window_ms ? 1 : 0;
+    return (now_ms - last_ms) <= window_ms;
+}
+
+/* AH05: exclusive cross-process lock. O_CLOEXEC so a forked/exec'd child does
+ * not inherit the lock by accident; flock is released on close or process exit,
+ * so a crashed holder does not wedge the promotion path. */
+int wubu_proc_lock_acquire(const char *path) {
+    if (!path || !*path) return -1;
+    int fd = open(path, O_CREAT | O_RDWR, 0600);
+    if (fd < 0) return -1;
+    /* set FD_CLOEXEC explicitly: O_CLOEXEC needs _POSIX_C_SOURCE >= 200809,
+     * which the strict -std=c11 build does not expose. */
+    (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+int wubu_proc_lock_release(int fd) {
+    if (fd < 0) return -1;
+    int r = flock(fd, LOCK_UN);
+    close(fd);
+    return r;
 }

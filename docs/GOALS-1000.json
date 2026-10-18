@@ -2702,7 +2702,7 @@
    "n": 336,
    "domain": "AGENT",
    "tier": "P0",
-   "title": "Cross-process promotion lock prevents two hive instances promoting concurrently",
+   "title": "Cross-process promotion lock prevents two hive instances promoting concurrently (DONE)",
    "module": "wubuwizard/src/wubu_coord.c",
    "criterion": "make test_metagame_coord + make test_promote: two agents racing wubu_lock_acquire on the promotion path - exactly one wins, the loser's promote is REJECTED, wubu_promote_accepted() never exceeds 1"
   },

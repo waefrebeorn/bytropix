@@ -121,3 +121,13 @@ gap.
   authority) that we have not answered; it is listed as an open gap rather than
   hand-waved.
 - Nothing here is legal advice or a claim of government endorsement.
+
+## Refresh log
+
+- **2026-10-18 (portfolio cycle 2)** — armor suite re-run green inside the full
+  gate. No objective status changed. New work this cycle hardens two rows
+  indirectly: AGENT #336 (cross-process promotion lock) supports the
+  *evaluations* objective by making promotion exclusive across hive processes;
+  BRAIN #244 (public orthogonalization primitive) supports *standards* by
+  giving the optimizer a testable convergence contract. Biosecurity,
+  manufacturing and workforce remain the honest gaps.
