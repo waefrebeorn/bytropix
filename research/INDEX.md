@@ -2213,4 +2213,15 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   `wubu_poincare_dist` NULL checks added. `wired`
 - Raw sweep: `research/si-alignment-2026-10-18/`.
 
+- MD01 Micro-dataset pack (2026-10-18): 26 permissively licensed HF datasets,
+  ~1.04 GB at `/home/wubu/models/corpus/micro`. Funnel: 1,185 unique seen ->
+  332 small-tagged -> 236 measured <=300MB -> 79 licence+usage shaped ->
+  27 schema-verified -> 26 fetched. Five are **eval-only** (SWE-bench,
+  KernelBench, terminal-bench-2.1, SafetyBench, aya) and must never train.
+  `docs/micro-datasets.json`, `research/072-micro-datasets-2026-10-18.md`.
+  `wired`
+- MD02 FineFineWeb: Apache-2.0, 68 domains, 66,109 shards, >1T tokens;
+  domain-selective fetcher `tools/wubu_download_finefineweb.py`; one
+  nuclear_science shard (347 MB) fetched as a proof. `wired`
+
 ## WaefreBeorn Umbrella License v3.0
