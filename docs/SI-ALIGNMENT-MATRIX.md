@@ -142,3 +142,8 @@ gap.
   are *standards*-facing. The Jev-RAG corpus was acquired for **evaluation
   only** (licence: other, no training grant); its probability vectors are the
   first external test for the decision gate's coherence and ECE checks.
+- **2026-10-18 (portfolio cycle 5)** — no objective status change. UX #495
+  (start-menu search: ranking, state machine, a UB self-copy) and NAMESPACE #403
+  (Tclunk rejects unknown fids) are reliability fixes on the human and protocol
+  surfaces the *adoption* objective depends on. Body gate re-run: all tiers
+  passed.

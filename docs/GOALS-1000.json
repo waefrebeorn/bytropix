@@ -3238,7 +3238,7 @@
    "n": 403,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Tclunk on a clunked or unknown fid returns Rerror",
+   "title": "Tclunk on a clunked or unknown fid returns Rerror (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
    "criterion": "make test_styx green: second Tclunk on the same fid and Tclunk on a never-attached fid both yield Rerror EINVAL and leave the fid table count unchanged"
   },
@@ -3974,7 +3974,7 @@
    "n": 495,
    "domain": "UX",
    "tier": "P0",
-   "title": "Start menu incremental search filter with Enter-to-launch",
+   "title": "Start menu incremental search filter with Enter-to-launch (DONE)",
    "module": "wubuos/src/gui/dosgui_startmenu_search.c",
    "criterion": "make test_dosgui_startmenu green: typing 'cal' narrows results to matching SmProgramEntry names (case-insensitive prefix then substring), Backspace widens again, Enter launches the top hit and dosgui_startmenu_search_clear resets state"
   },

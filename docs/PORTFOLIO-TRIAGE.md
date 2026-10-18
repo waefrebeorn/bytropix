@@ -20,10 +20,10 @@ Rules used:
 | COMPILER | 100 | 18 | 38 | 8 | 36 |
 | KERNEL | 92 | 26 | 33 | 1 | 32 |
 | BRAIN | 112 | 43 | 30 | 9 | 30 |
-| UX | 95 | 52 | 22 | 0 | 21 |
+| UX | 95 | 53 | 21 | 0 | 21 |
 | AGENT | 70 | 30 | 19 | 0 | 21 |
 | DRIVERS | 50 | 0 | 20 | 9 | 21 |
-| NAMESPACE | 65 | 21 | 12 | 25 | 7 |
+| NAMESPACE | 65 | 22 | 11 | 25 | 7 |
 | STACK | 45 | 18 | 10 | 8 | 9 |
 | SECURITY | 52 | 0 | 10 | 27 | 15 |
 | FS | 50 | 0 | 8 | 32 | 10 |
@@ -33,7 +33,7 @@ Rules used:
 | NETWORK | 52 | 0 | 2 | 48 | 2 |
 | OMARCHY | 35 | 21 | 0 | 13 | 1 |
 | AGIEDR | 40 | 19 | 0 | 21 | 0 |
-| **Total** | **1000** | **311** | **221** | **237** | **231** |
+| **Total** | **1000** | **313** | **219** | **237** | **231** |
 
 ## What the split says
 
@@ -72,4 +72,16 @@ Rules used:
 - STACK #773 advanced again: diagnostics 386 → **162**, files 32 → **13**,
   errors remain 0. Implicit-declaration family eliminated; braced-groups and
   the `GQA_KV_DIM` redefinition remain.
+
+## Cycle 5 disposition
+
+- Domains: UX, NAMESPACE (both fresh; neither had run in the previous cycle).
+- UX #495 closed: `test_dosgui_startmenu` 12/12 after fixing five real defects —
+  prefix-before-substring ranking, an uninitialized `lower_query` terminator
+  (single-char queries matched nothing), a self-aliasing `strncpy` (UB at -O3),
+  Tab/Esc mode desynchronisation, and a launch stub that could not observe the
+  action.
+- NAMESPACE #403 closed: Tclunk now rejects unknown or already-clunked fids
+  with Rerror and leaves the fid table untouched; `test_styx` 31/31.
+- Body gate: `make test` run and recorded in the ledger.
 
