@@ -1,0 +1,21 @@
+{
+  "note": "Continuity goals for the SI alignment + manifold workstream. Kept OUTSIDE GOALS-1000.json so the exactly-1000, 16-domain invariant is not broken. Paste either or both into the goal queue.",
+  "goals": [
+    {
+      "n": 1001,
+      "domain": "STACK",
+      "tier": "P0",
+      "title": "SI-CONTINUITY: the standing alignment-and-manifold loop (broad, agnostic)",
+      "module": "docs/SI-ALIGNMENT-MATRIX.md + docs/MANIFOLD-TRAINING.md + docs/ALIGNMENT-ARMOR.md + research/INDEX.md",
+      "criterion": "Every session, without being re-asked: (1) re-read the three policy primaries (EO 14434, EO 14409, NSPM-11) and the current GOALS-1000; (2) run the honest wubuwizard gate and record the binary/pass/fail counts; (3) advance at least one open SI or manifold item from the matrix; (4) consult the accumulated research waves (deep technical, alignment, SI policy) and wubumath's Lean linkage map before inventing anything; (5) leave a pushed commit and an honest gap list. Done = the loop has advanced one item and the gate is green with real numbers."
+    },
+    {
+      "n": 1002,
+      "domain": "BRAIN",
+      "tier": "P0",
+      "title": "Manifold training closure: hierarchy loss, radius regulariser, LoRA backward",
+      "module": "src/wubu_manifold_train.c + wubu_hyperbolic_output_proj.c + wubu_mobius.c",
+      "criterion": "wubu_manifold_train exposes (a) a geodesic parent/child contrastive loss with a test proving child-parent distance < child-sibling on a synthetic taxonomy, (b) a radius regulariser with a test showing ball occupancy mass stays inside [0.2R, 0.8R] after 300 steps, and (c) dL/dA and dL/dB for Mobius LoRA verified against finite differences (rel error < 1e-2); all three run under tools/test_manifold_train.c and the full gate stays green."
+    }
+  ]
+}
