@@ -2590,9 +2590,9 @@ test_credit_dbstate: tools/test_credit_dbstate.c src/wubu_credit_sft.c src/wubu_
 	include/wubu_credit_sft.h include/wubu_dbstate.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_credit_dbstate.c src/wubu_credit_sft.c src/wubu_dbstate.c
 	./$@
-test_width: tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_moe2.c \
+test_width: tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_runtime_dims.c src/wubu_moe2.c \
 	include/wubu_width.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_moe2.c src/safetensors_reader.c src/wubu_dequant_nf4.c -lm
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_width.c src/wubu_width.c src/wubu.c src/wubu_runtime_dims.c src/wubu_moe2.c src/safetensors_reader.c src/wubu_dequant_nf4.c -lm
 	./$@
 test_seed: tools/test_seed.c src/wubu_seed.c include/wubu_seed.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_seed.c src/wubu_seed.c
@@ -2649,10 +2649,10 @@ test_plateau: tools/test_plateau.c src/wubu_plateau.c include/wubu_plateau.h
 src/wubu_ubus.o: include/wubu_ubus.h src/wubu_ubus.c
 	$(CC) $(CFLAGS) -I include -c -o $@ src/wubu_ubus.c
 
-test_grow: tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_backprop.c src/wubu_train.c \
+test_grow: tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_runtime_dims.c src/wubu_backprop.c src/wubu_train.c \
 	src/safetensors_reader.c src/wubu_dequant_nf4.c src/wubu_moe2.c src/wubu_ubus.c \
 	include/wubu_grow.h include/wubu.h include/wubu_backprop.h include/wubu_train.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_backprop.c src/wubu_train.c src/safetensors_reader.c src/wubu_dequant_nf4.c src/wubu_moe2.c src/wubu_ubus.c -lm
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_grow.c src/wubu_grow.c src/wubu.c src/wubu_runtime_dims.c src/wubu_backprop.c src/wubu_train.c src/safetensors_reader.c src/wubu_dequant_nf4.c src/wubu_moe2.c src/wubu_ubus.c -lm
 	./$@
 
 moondream_cli: tools/moondream_cli.c src/wubu_moondream.o

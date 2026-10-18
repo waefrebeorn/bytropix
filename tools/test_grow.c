@@ -43,6 +43,7 @@ static wubu_block_t make_block(unsigned *seed)
 
 int main(void)
 {
+    wubu_runtime_dims_default();   /* WUBU_DIM/LAYERS/... are runtime data */
     unsigned seed = 42;
     wubu_block_t blocks[WUBU_LAYERS];
     for (int i = 0; i < WUBU_LAYERS; i++) blocks[i] = make_block(&seed);

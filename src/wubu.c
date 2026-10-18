@@ -815,7 +815,7 @@ long wubu_parameter_count(const wubu_model_t *m)
     long n = 0;
     n += (long)vocab * d;               /* embedding (tied) */
     n += d;                             /* final_norm */
-    for (int i = 0; i < WUBU_LAYERS; i++) {
+    for (int i = 0; i < m->n_layers; i++) {
         n += (long)d * (heads * hd);          /* q_proj */
         n += (long)d * (kh * hd);             /* k_proj */
         n += (long)d * (kh * hd);             /* v_proj */
