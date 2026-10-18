@@ -2,8 +2,8 @@
   "wave": "micro-2026-10-18",
   "note": "Hand-picked small, permissively licensed datasets with verified schemas. Size cap 300 MB per dataset. 'fields' come from the HF datasets-server first-rows response, not from README prose.",
   "target_dir": "/home/wubu/models/corpus/micro",
-  "eval_only": ["SWE-bench/SWE-bench_Multilingual", "ScalingIntelligence/KernelBench", "harborframework/terminal-bench-2.1", "thu-coai/SafetyBench", "CohereLabs/aya_evaluation_suite"],
-  "note_eval": "These are benchmarks. They must never enter a training mix; keep them for measurement only or contamination invalidates every number.",
+  "eval_only": ["SWE-bench/SWE-bench_Multilingual", "ScalingIntelligence/KernelBench", "harborframework/terminal-bench-2.1", "thu-coai/SafetyBench", "CohereLabs/aya_evaluation_suite", "MaziyarPanahi/Jev-RAG-Claim-Verification-130K"],
+  "note_eval": "Eval/research only. Benchmarks here contaminate any training mix; the Jev-RAG corpus also carries no extra training/redistribution grant (license: other), so it is for inspection and measurement, not training.",
   "datasets": [
     {"id": "agentica-org/DeepScaleR-Preview-Dataset", "cat": "reasoning", "license": "mit", "fields": ["problem", "answer", "solution"]},
     {"id": "KbsdJames/Omni-MATH", "cat": "math", "license": "apache-2.0", "fields": ["domain", "difficulty", "problem", "solution", "answer", "source"]},
@@ -31,6 +31,7 @@
     {"id": "harborframework/terminal-bench-2.1", "cat": "os-agent", "license": "apache-2.0", "fields": ["name", "instruction", "description", "config", "files", "location"]},
     {"id": "jedisct1/security-audits", "cat": "os-agent", "license": "mit", "fields": ["harness", "session_id", "prompt", "messages", "tools", "trace", "num_tool_calls"]},
     {"id": "code-review-bench/code-review-bench", "cat": "code", "license": "cc-by-4.0", "fields": ["repo", "pr_number", "diff_lines", "language", "precision", "recall", "f1", "human_actions"]},
-    {"id": "LocalLLaMA/typed-decisions", "cat": "decision", "license": "apache-2.0", "fields": ["id", "workflow", "state", "questions", "gold", "n_questions", "label_agreement", "outcome__label", "action__label", "risk__score", "urgency__score"]}
+    {"id": "LocalLLaMA/typed-decisions", "cat": "decision", "license": "apache-2.0", "fields": ["id", "workflow", "state", "questions", "gold", "n_questions", "label_agreement", "outcome__label", "action__label", "risk__score", "urgency__score"]},
+    {"id": "MaziyarPanahi/Jev-RAG-Claim-Verification-130K", "cat": "decision-eval", "license": "other (MIT seed + upstream review required; no extra training rights)", "fields": ["row_id", "group_id", "task_family", "question_text", "state_preview", "gold_label", "label_source", "jev_prediction", "jev_confidence", "jev_probabilities_json", "jev_latency_ms", "source_license"]}
   ]
 }

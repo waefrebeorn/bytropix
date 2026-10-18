@@ -2,6 +2,7 @@
  * wubu_ecs.c — ECS-style component store for engine state (doc C06). C11.
  */
 #include "wubu_ecs.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 

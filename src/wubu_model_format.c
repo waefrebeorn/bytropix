@@ -10,6 +10,7 @@
  * the engine never knows or cares which serializer produced a checkpoint."
  */
 #include "wubu_model_format.h"
+#include <strings.h>
 #include <string.h>
 #include <stdlib.h>
 

@@ -17,7 +17,7 @@ Rules used:
 
 | Domain | Total | Done | Active | Blocked | Deferred |
 |---|---:|---:|---:|---:|---:|
-| COMPILER | 100 | 17 | 39 | 8 | 36 |
+| COMPILER | 100 | 18 | 38 | 8 | 36 |
 | KERNEL | 92 | 26 | 33 | 1 | 32 |
 | BRAIN | 112 | 43 | 30 | 9 | 30 |
 | UX | 95 | 52 | 22 | 0 | 21 |
@@ -33,7 +33,7 @@ Rules used:
 | NETWORK | 52 | 0 | 2 | 48 | 2 |
 | OMARCHY | 35 | 21 | 0 | 13 | 1 |
 | AGIEDR | 40 | 19 | 0 | 21 | 0 |
-| **Total** | **1000** | **310** | **222** | **237** | **231** |
+| **Total** | **1000** | **311** | **221** | **237** | **231** |
 
 ## What the split says
 
@@ -61,4 +61,15 @@ Rules used:
 - STACK #773 advanced, not closed: strict-C11 audit now reports 197 sources,
   386 diagnostics and **0 errors** (10 fixed). The empty-diagnostic criterion
   still fails, so the goal stays open.
+
+## Cycle 4 disposition
+
+- Domains: COMPILER, STACK (AGENT and STACK had run twice; AGENT sat out,
+  STACK continued a second cycle).
+- COMPILER #114 closed: lexer integer suffixes now classify 32/64-bit and
+  unsigned/signed, including hex and binary forms; `test_lexer_suffix` 13/13
+  in the wubunos `test` target.
+- STACK #773 advanced again: diagnostics 386 → **162**, files 32 → **13**,
+  errors remain 0. Implicit-declaration family eliminated; braced-groups and
+  the `GQA_KV_DIM` redefinition remain.
 

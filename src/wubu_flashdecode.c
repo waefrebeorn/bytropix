@@ -3,6 +3,7 @@
  * Self-contained C11. See header. Default chunk gives ~8 parallel KV chunks.
  */
 #include "wubu_flashdecode.h"
+#include <stdlib.h>
 #include <math.h>
 #include <string.h>
 #include <omp.h>

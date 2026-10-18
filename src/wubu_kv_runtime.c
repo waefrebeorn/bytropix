@@ -8,6 +8,7 @@
  * the scheme is no longer frozen at compile time.
  */
 #include "wubu_kv_runtime.h"
+#include <stdlib.h>
 #include "wubu_roofline.h"
 
 /* Default scheme from the compile-time macros (keeps existing builds working

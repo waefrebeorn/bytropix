@@ -137,3 +137,8 @@ gap.
   *evaluations* objective's discipline; STACK #773 (strict-C11 audit, 10 errors
   fixed) strengthens *standards* conformance. Biosecurity, manufacturing and
   workforce still open.
+- **2026-10-18 (portfolio cycle 4)** — armor green again. COMPILER #114 (literal
+  width classification) and the second strict-C11 pass (diagnostics 386 → 162)
+  are *standards*-facing. The Jev-RAG corpus was acquired for **evaluation
+  only** (licence: other, no training grant); its probability vectors are the
+  first external test for the decision gate's coherence and ECE checks.

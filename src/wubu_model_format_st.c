@@ -5,6 +5,7 @@
  * (src/safetensors_reader.c); this wraps it in the vtable.
  */
 #include "wubu_model_format.h"
+#include <strings.h>
 #include <string.h>
 #include <stdlib.h>
 

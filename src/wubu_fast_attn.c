@@ -25,6 +25,7 @@
  */
 
 #include "wubu_fast_attn.h"
+#include <alloca.h>
 #include "wubu_polarquant.h"
 #include <stdlib.h>
 #include <string.h>

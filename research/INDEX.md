@@ -2226,10 +2226,18 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
 
 - ST01 strict-C11 audit (2026-10-18): `tools/audit_c11.sh` measures all 197
   CORE_OBJ C sources under `-std=c11 -pedantic -fsyntax-only`. Feature-test
-  guards fixed 10 errors (CLOCK_MONOTONIC, M_PI, MADV_*) → **0 errors**;
-  386 pedantic warnings remain across 32 files (braced groups, implicit
-  declarations, `GQA_KV_DIM` redefinition). STACK #773 stays OPEN.
+  guards fixed 10 errors (CLOCK_MONOTONIC, M_PI, MADV_*) → **0 errors**; a
+  second pass added missing headers/feature-test macros, cutting diagnostics
+  **386 → 162** across **32 → 13** files. 10 braced-groups and the
+  `GQA_KV_DIM` redefinition remain. STACK #773 stays OPEN.
   `docs/STRICT-C11-AUDIT.md`. `wired`
+
+- MD03 Jev-RAG-Claim-Verification-130K (2026-10-18): 130,000 typed RAG
+  verification decisions with `gold_label`, `jev_prediction`, confidence and
+  full probability vectors; 21,181 teacher/reference disagreements, 1,265 at
+  ≥0.90 confidence. **Eval/research only** — licence `other` (MIT seed +
+  upstream review required, no training grant). 30.4 MB, 9 shards.
+  `research/074-jev-rag-lilypad.md`. `wired`
 
 - ND01 Two node brains (2026-10-18): **decision** (Clef / Jev / SystemOne typed
   decisions: state + typed questions → per-option probabilities, no text) and

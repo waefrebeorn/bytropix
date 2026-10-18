@@ -926,7 +926,7 @@
    "n": 114,
    "domain": "COMPILER",
    "tier": "P0",
-   "title": "suffixed integer literals classify to 64-bit unsigned/int width",
+   "title": "suffixed integer literals classify to 64-bit unsigned/int width (DONE)",
    "module": "holyd_lexer.c",
    "criterion": "make test_gauntlet_v3 bitwise+comparison suites pass; 0xFFFFFFFFFFFFFFFFu stays unsigned 64 in gen_expr, 42L stays signed 64"
   },

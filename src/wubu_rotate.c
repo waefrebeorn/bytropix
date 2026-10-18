@@ -3,6 +3,7 @@
  * Self-contained C11. See header for the invariance proof.
  */
 #include "wubu_rotate.h"
+#include <stdlib.h>
 #include <math.h>
 #include <string.h>
 

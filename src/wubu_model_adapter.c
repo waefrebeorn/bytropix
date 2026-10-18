@@ -1,3 +1,6 @@
+#if defined(__STRICT_ANSI__)
+#define _GNU_SOURCE 1
+#endif
 /*
  * wubu_model_adapter.c -- HF config.json -> wubuwizard dims (C11,
  * self-contained, opaque). Hand-parses the JSON we care about:

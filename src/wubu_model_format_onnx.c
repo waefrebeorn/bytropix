@@ -18,6 +18,7 @@
  * License: WaefreBeorn-UMV3
  */
 #include "wubu_model_format.h"
+#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -15,6 +15,7 @@
  */
 
 #include "wubu_polarquant.h"
+#include <alloca.h>
 #include "wubu_mobius.h"
 #include <stdlib.h>
 #include <string.h>

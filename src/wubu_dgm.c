@@ -1,3 +1,7 @@
+#if defined(__STRICT_ANSI__)
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
+#endif
 /*
  * wubu_dgm.c -- DGM empirical gate + regression test runner (AX01). C11.
  *

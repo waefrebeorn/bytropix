@@ -12,6 +12,7 @@
  * Pure C11, deterministic, testable.
  */
 #include "wubu_agentauth.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 

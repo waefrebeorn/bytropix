@@ -19,9 +19,15 @@ counts diagnostics per file.
 | | Before | After |
 |---|---:|---:|
 | CORE_OBJ C sources | 197 | 197 |
-| Diagnostic lines | 455 | **386** |
+| Diagnostic lines | 455 | **162** |
 | `error:` lines | 10 | **0** |
-| Files with diagnostics | 38 | 32 |
+| Files with diagnostics | 38 | 13 |
+
+Second pass (same day): 386 → 162 by adding the missing standard headers
+(`stdio.h`, `stdlib.h`, `strings.h`, `unistd.h`, `alloca.h`) and the
+feature-test macros the POSIX calls need (`_POSIX_C_SOURCE` for `posix_memalign`
+/ `popen` / `strdup` / `ftruncate`, `_GNU_SOURCE` for `memmem`). Those were
+correctness bugs: an implicit `snprintf` is assumed to return `int`.
 
 ## What was fixed
 
@@ -48,21 +54,20 @@ different libc) would have failed, while the default build hid them.
 | Warning | Count | What it means |
 |---|---:|---|
 | ISO C forbids braced-groups within expressions | 10 | GCC statement-expressions `({ ... })` — not C11 |
-| cast to pointer from integer of different size | 9 | 32/64-bit unsafe casts |
 | `GQA_KV_DIM` redefined | 6 | macro defined twice with different values |
-| implicit declaration of `free` | 5 | missing `<stdlib.h>` |
-| implicit declaration of `snprintf` | 8 | missing `<stdio.h>` |
-| implicit declaration of `strcasecmp` | 4 | missing `<strings.h>` |
-| pointer/integer mismatch in conditional | 2 | `?:` mixing pointer and int |
+| const-qualifier discards in tokenizer calls | 2 | `vocab_find` / `apply_bpe` take `char *` |
+| `wubu_plugin_api` declared inside a parameter list | 1 | struct scope leak |
+| incompatible pointer type on `api->cleanup` | 1 | plugin vtable signature mismatch |
 
-The implicit-declaration family is the cheapest next win (17 of the lines) and
-is a correctness issue, not just pedantry: an implicit `snprintf` returns `int`
-by assumption and a wrong prototype can corrupt varargs on some ABIs.
+The implicit-declaration family (17 lines in the first pass) is gone.
+
+Next: the 10 braced-groups need rewriting as ordinary C (or a helper function),
+and `GQA_KV_DIM` needs one definition in one header.
 
 ## Status
 
 **#773 stays OPEN.** Zero errors is progress; an empty diagnostic file is the
-criterion and 386 lines remain. The audit target is deliberately *not* in
+criterion and 162 lines remain. The audit target is deliberately *not* in
 `test_all`: a gate that fails on a known 386-line debt would be turned off
 within a day. It becomes a gate when the file is empty, and that is the point
 of the goal.

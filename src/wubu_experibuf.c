@@ -8,6 +8,7 @@
  *     stream in O(1) per-item — perfect for memory-bounded at-home use.
  */
 #include "wubu_experibuf.h"
+#include <stdio.h>
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>

@@ -8,6 +8,7 @@
  * through the vtable.
  */
 #include "wubu_model_format.h"
+#include <strings.h>
 #include "gguf_reader.h"
 #include "wubu_tokens.h"   /* green accent (shared CLI+GUI tokens) */
 #include <string.h>

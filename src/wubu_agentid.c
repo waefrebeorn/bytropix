@@ -11,6 +11,7 @@
  *     is the same.
  */
 #include "wubu_agentid.h"
+#include <stdio.h>
 #include <string.h>
 
 static unsigned simple_hash(const char *s) {
