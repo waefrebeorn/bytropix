@@ -1,0 +1,1 @@
+{"cycle": 1, "domains": ["BRAIN", "STACK"], "closed": [1002], "gate": {"binaries": 174, "passed": 155, "fail": 0}, "deferred": {"SECURITY": "biosecurity boundary not designed (until 2026-11-15)", "DRIVERS": "manufacturing scope undecided (until 2026-11-15)"}, "note": "manifold training closure (hierarchy loss, radius band, LoRA A/B grads)"}

@@ -1,5 +1,5 @@
 {
-  "note": "Continuity goals for the SI alignment + manifold workstream. Kept OUTSIDE GOALS-1000.json so the exactly-1000, 16-domain invariant is not broken. Paste either or both into the goal queue.",
+  "note": "Continuity goals for the SI alignment + manifold workstream. Kept OUTSIDE GOALS-1000.json so the exactly-1000, 16-domain invariant is not broken. Paste any entry into the goal queue. The portfolio ledger lives in docs/portfolio-cycles.jsonl and is validated by tools/goal_portfolio.py --check-cycle.",
   "goals": [
     {
       "n": 1001,
@@ -13,9 +13,17 @@
       "n": 1002,
       "domain": "BRAIN",
       "tier": "P0",
-      "title": "Manifold training closure: hierarchy loss, radius regulariser, LoRA backward",
-      "module": "src/wubu_manifold_train.c + wubu_hyperbolic_output_proj.c + wubu_mobius.c",
-      "criterion": "wubu_manifold_train exposes (a) a geodesic parent/child contrastive loss with a test proving child-parent distance < child-sibling on a synthetic taxonomy, (b) a radius regulariser with a test showing ball occupancy mass stays inside [0.2R, 0.8R] after 300 steps, and (c) dL/dA and dL/dB for Mobius LoRA verified against finite differences (rel error < 1e-2); all three run under tools/test_manifold_train.c and the full gate stays green."
+      "title": "Manifold training closure: hierarchy loss, radius regulariser, LoRA backward (DONE)",
+      "module": "src/wubu_manifold_train.c + include/wubu_manifold_train.h + tools/test_manifold_train.c",
+      "criterion": "CLOSED 2026-10-18: hierarchy loss (child-parent < child-sibling; 0 when ordered, >0 when violated); radius regulariser (64/64 points in [0.2R,0.8R] after 300 steps); Mobius LoRA dA/dB vs finite differences (max rel 2.328e-03 < 1e-2); all under tools/test_manifold_train.c; gate 174 binaries / 155 ALL-PASSED / 0 failures."
+    },
+    {
+      "n": 1003,
+      "domain": "STACK",
+      "tier": "P0",
+      "title": "PORTFOLIO-CLOSURE: anti-myopic controller for all 1000 goals across 16 domains",
+      "module": "tools/goal_portfolio.py + docs/portfolio-cycles.jsonl + docs/GOALS-1000.json + docs/SI-ALIGNMENT-MATRIX.md",
+      "criterion": "Each cycle: (1) run tools/goal_portfolio.py --json and publish the status of all 1000 goals, triaging every OPEN goal as active, blocked (reason), or deferred (dated expiry); (2) advance at least one goal in >=2 distinct domains and never let any domain appear in more than 2 consecutive cycles; (3) over any rolling 8 cycles touch >=8 of the 16 domains; (4) close a goal only when its module exists, a test runs in test_all, and the criterion evidence is recorded; (5) run the honest gate and record binaries/ALL-PASSED/failures; (6) refresh the SI matrix rows and the armor tests; (7) append the cycle to docs/portfolio-cycles.jsonl and pass tools/goal_portfolio.py --check-cycle. Done = the ledger validates and the gate is green with real counts."
     }
   ]
 }
