@@ -29,11 +29,11 @@ Rules used:
 | FS | 50 | 0 | 8 | 32 | 10 |
 | PATHS | 32 | 18 | 7 | 0 | 7 |
 | RUNTIME | 65 | 30 | 7 | 16 | 12 |
-| WORLDSIM | 45 | 15 | 3 | 20 | 7 |
+| WORLDSIM | 45 | 16 | 2 | 20 | 7 |
 | NETWORK | 52 | 1 | 1 | 48 | 2 |
 | OMARCHY | 35 | 21 | 0 | 13 | 1 |
 | AGIEDR | 40 | 19 | 0 | 21 | 0 |
-| **Total** | **1000** | **318** | **214** | **237** | **231** |
+| **Total** | **1000** | **319** | **213** | **237** | **231** |
 
 ## What the split says
 
@@ -95,6 +95,23 @@ Rules used:
 - STACK #773 advanced: guarding the duplicate `GQA_KV_DIM` definition cut
   pedantic diagnostics **162 → 105** across **13 → 6** files; errors remain 0.
   Ten braced-groups and a few const/plugin warnings remain, so it stays open.
+
+## Cycle 10 disposition
+
+- Domains: BRAIN, WORLDSIM.
+- WORLDSIM #564 **closed**: `src/worldsim/rng.c` implements PCG-XSH-RR
+  (64-bit LCG, XSH-RR output, integer-only). `test_worldsim` now runs the
+  statistical battery: pinned 8-word vector, 1e6-sample chi-square over 256 bins
+  (passes the 1% critical value 310.46), 32-bit run check with bit balance, and
+  a **10k-value FNV hash `0xf4b6ad7df17336c3`** as the cross-arch guard.
+  37/37 checks.
+- BRAIN #266 **advanced, not closed**: the test was running at `D_MODEL=0`
+  because `WUBU_DIMS` was never initialized — every loop was a no-op and every
+  gradient check read an empty buffer. With `wubu_dims_default()` the suite is
+  **15/15**. But the criterion asks for a **finite-difference check at 1e-4**
+  and zero gradients on unrouted tokens; neither exists yet, and the current
+  gradients reach **~1e9**, which is a saturation smell that an FD oracle would
+  probably catch. Leaving it open with the dims fix landed is the honest move.
 
 ## Cycle 9 disposition
 

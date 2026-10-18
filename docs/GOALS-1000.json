@@ -4526,7 +4526,7 @@
    "n": 564,
    "domain": "WORLDSIM",
    "tier": "P1",
-   "title": "PCG-XSH-RR world RNG with a statistical battery",
+   "title": "PCG-XSH-RR world RNG with a statistical battery (DONE)",
    "module": "wubuos/src/worldsim/rng.c",
    "criterion": "make test_worldsim: PCG-XSH-RR passes a 1e6-sample chi-square uniformity test with p > 0.01, a 32-bit-run check, and produces the identical 10k-value stream on x86-64 and aarch64"
   },

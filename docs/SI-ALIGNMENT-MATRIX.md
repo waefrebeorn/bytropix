@@ -152,6 +152,13 @@ gap.
   is refused, not served) — protocol-hardening for *standards*. STACK #773's
   third pass cut strict-C11 diagnostics to 105 lines across 6 files. Brain gate:
   177 binaries / 155 ALL-PASSED / 0 failures.
+- **2026-10-18 (portfolio cycle 10)** — determinism and measurement hygiene.
+  WORLDSIM #564's PCG-XSH-RR passes a 1e6-sample chi-square, a run/bit-balance
+  check, and a pinned 10k-value hash, so world state is reproducible across
+  architectures. BRAIN #266's test was running at `D_MODEL=0` (all gradients
+  read an empty buffer); fixed, 15/15, but still open pending the criterion's
+  finite-difference oracle — a green test that proves nothing is the failure mode
+  this portfolio exists to catch.
 - **2026-10-18 (portfolio cycle 9)** — provenance and independence. STACK 1007
   (pollution ledger) makes corpus attribution auditable, which is the *standards*
   precondition for any capability claim. BRAIN 1006 adds orbital mechanics to the

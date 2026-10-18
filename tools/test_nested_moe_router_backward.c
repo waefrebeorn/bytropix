@@ -15,6 +15,7 @@
 
 #include "wubu_moe_hyperbolic.h"
 #include "wubu_moe.h"
+#include "wubu_dims.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -371,6 +372,10 @@ static void test_deterministic(void) {
 // Main
 // ============================================================
 int main(void) {
+    /* WUBU_DIMS is the single source of D_MODEL; without this every loop is a
+     * zero-length no-op and every gradient check reads an empty buffer. */
+    wubu_dims_default();
+
     printf("=== Nested MoE Router Backward Tests ===\n");
     printf("D_MODEL=%d, N_EXPERTS=%d, N_ACTIVE_EXPTS=%d\n",
            D_MODEL, N_EXPERTS, N_ACTIVE_EXPTS);
