@@ -2133,4 +2133,32 @@ conv_dim=6144 d_state=128 value_dim=2048). RESOLVED 2026-08-09 (see AN61): the f
 or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
 (build next: loader roles + hybrid forward + GDN state + parity).
 
+## DEEP WAVE — 2026-10-18 (8 layers, 200 queries, 432 verified papers)
+
+- DW01 Lab landscape (verified technical reports): Gemma 4 (dense+MoE 2.3–31B,
+  encoder-free 12B), Qwen3-VL (256K, dense+MoE), Qwen3-Coder-Next (80B/3B
+  active), DeepSeek-V3 (MLA + loss-free balancing + MTP), GPT-5 router,
+  Ministral 3 cascade distillation, Hunyuan-A13B (80B/13B), Apple vllm-mlx
+  (+21–87 %), ANE-MoE constraints. `research` — see
+  `070-deep-research-2026-10-18.md`
+- DW02 COMPILER #37 informed by `2011.05608` (live ranges across calls →
+  split intervals at call boundaries, caller-saved only). `open` (hypothesis)
+- DW03 COMPILER #52 informed by `1010.2196` GCC WHOPR (partitioned summaries,
+  parallel LTO) + `1807.06735` BOLT (post-link layout). `open`
+- DW04 KERNEL #13 methodology: `2609.40141` LLTA (open WCET analyser),
+  `2604.27862` AnTi-MiCS, `2609.01077` JENGA (system property). Measure
+  in-guest, never cite WSL numbers. `open`
+- DW05 BRAIN #115–123: `2610.20573` mechanical numeric+vacuity checks,
+  `2610.00760` LeanSide, `2609.32908` JEPA-for-Lean; compare hyperbolic impls
+  `2602.23981`, `2609.28248`. Every proof ships a vacuity check. `open`
+- DW06 Verification stance: `2606.00279` bit-exact inference auditing — assert
+  bit-exact where integer paths allow; cosine is not verification. `open`
+- DW07 Agent-OS convergence: `2607.25076` POSIX/K8s moment validates our
+  9P/Styx + capability object-manager direction. `research`
+- DW08 Honest gaps: no dedicated computed-goto paper (#55 engineering task);
+  no recursive-JIT-frame paper (our globals_end fix is ours); no >70 %
+  gauntlet recipe (#38 must be earned); 2 PDFs 404'd.
+- Archive: `/home/wubu/research-archive/deep-2026-10-18/` (430 PDFs, 0.96 GiB,
+  `manifest.json`); raw layers in `research/deep-2026-10-18/`.
+
 ## WaefreBeorn Umbrella License v3.0
