@@ -30,6 +30,7 @@
     {"id": "gbharti/finance-alpaca", "cat": "finance", "license": "mit", "fields": ["instruction", "input", "output", "text"]},
     {"id": "harborframework/terminal-bench-2.1", "cat": "os-agent", "license": "apache-2.0", "fields": ["name", "instruction", "description", "config", "files", "location"]},
     {"id": "jedisct1/security-audits", "cat": "os-agent", "license": "mit", "fields": ["harness", "session_id", "prompt", "messages", "tools", "trace", "num_tool_calls"]},
-    {"id": "code-review-bench/code-review-bench", "cat": "code", "license": "cc-by-4.0", "fields": ["repo", "pr_number", "diff_lines", "language", "precision", "recall", "f1", "human_actions"]}
+    {"id": "code-review-bench/code-review-bench", "cat": "code", "license": "cc-by-4.0", "fields": ["repo", "pr_number", "diff_lines", "language", "precision", "recall", "f1", "human_actions"]},
+    {"id": "LocalLLaMA/typed-decisions", "cat": "decision", "license": "apache-2.0", "fields": ["id", "workflow", "state", "questions", "gold", "n_questions", "label_agreement", "outcome__label", "action__label", "risk__score", "urgency__score"]}
   ]
 }

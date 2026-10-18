@@ -2224,4 +2224,11 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   domain-selective fetcher `tools/wubu_download_finefineweb.py`; one
   nuclear_science shard (347 MB) fetched as a proof. `wired`
 
+- ND01 Two node brains (2026-10-18): **decision** (Clef / Jev / SystemOne typed
+  decisions: state + typed questions → per-option probabilities, no text) and
+  **embedding** (EmbeddingGemma 2: 740M, 768-d MRL to 128, 8K ctx, Apache-2.0).
+  Shipped `wubu_decision` coherence/calibration gate (19 checks) after
+  arXiv 2609.33209 measured Jev's 0.064 complement miss and 1.14 label mass.
+  `research/073-two-lily-pads-decision-and-embedding.md`. `wired`
+
 ## WaefreBeorn Umbrella License v3.0
