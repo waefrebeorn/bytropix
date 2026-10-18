@@ -104,13 +104,17 @@ weight lattice.
 ## First three concrete steps
 
 1. **Star card as data** — `docs/WUBU-STAR-CARD.json` (name, hex, spectrum,
-   temperature, type) so UI and docs read identity from one file. *Done.*
-2. **Pollution ledger** — a manifest mapping each corpus to the eval deltas it
-   caused, so "what dyed the star" is answerable. Extends the existing
-   `docs/micro-datasets.json` provenance.
-3. **Orbital expert body** — give an expert mass, radius, and angle in the
-   hyperbolic ball; score the router by gravitational potential; test that orbits
-   are stable and that resonance scheduling is honoured.
+   temperature, type) so UI and docs read identity from one file. **Done.**
+2. **Pollution ledger** — `tools/pollution_ledger.py` + `docs/POLLUTION-LEDGER.json`.
+   Scans the 28-dataset pack, preserves eval-only flags, and refuses to claim a
+   spectral line without a recorded before/after eval. **Done as tooling:** all
+   28 datasets are present, **0 measured**, 6 eval-only — the honest baseline.
+3. **Orbital expert body** — `include/wubu_orbit.h` + `src/wubu_orbit.c`:
+   mass, position in the Poincaré disk, symplectic-Euler N-body integration,
+   Boltzmann routing over gravitational potential, Kepler periods, resonance
+   detection, and cooling migration to a core floor. `test_orbit` 22/22 (circular
+   orbit drifts 0.26% over 5,000 steps). **Done as a module; not yet wired into
+   `wubu_router_physics.c`** — the existing router still uses its own potential.
 
 ## Honest caveats
 

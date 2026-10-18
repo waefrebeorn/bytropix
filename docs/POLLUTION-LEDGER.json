@@ -1,0 +1,264 @@
+{
+ "star": "WuBu STAR",
+ "reference": "WD J1330+6435",
+ "note": "A line is claimed only with a recorded before/after eval. Unmeasured datasets are provenance, not colour.",
+ "datasets": [
+  {
+   "id": "agentica-org/DeepScaleR-Preview-Dataset",
+   "category": "reasoning",
+   "licence": "mit",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "KbsdJames/Omni-MATH",
+   "category": "math",
+   "licence": "apache-2.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "reasoning-machines/gsm-hard",
+   "category": "math",
+   "licence": "mit",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "DigitalLearningGmbH/MATH-lighteval",
+   "category": "math",
+   "licence": "mit",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "EleutherAI/hendrycks_math",
+   "category": "math",
+   "licence": "mit",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "sahil2801/CodeAlpaca-20k",
+   "category": "code",
+   "licence": "cc-by-4.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "SWE-bench/SWE-bench_Multilingual",
+   "category": "code",
+   "licence": "mit",
+   "eval_only": true,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "ScalingIntelligence/KernelBench",
+   "category": "code",
+   "licence": "apache-2.0",
+   "eval_only": true,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "Infatoshi/kernelbench-mega-traces",
+   "category": "code",
+   "licence": "mit",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "NousResearch/hermes-function-calling-v1",
+   "category": "tools",
+   "licence": "apache-2.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "glaiveai/glaive-function-calling",
+   "category": "tools",
+   "licence": "apache-2.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "interstellarninja/tool-use-multiturn-reasoning",
+   "category": "tools",
+   "licence": "apache-2.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "nvidia/Aegis-AI-Content-Safety-Dataset-2.0",
+   "category": "safety",
+   "licence": "cc-by-4.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "thu-coai/SafetyBench",
+   "category": "safety",
+   "licence": "mit",
+   "eval_only": true,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "AlignmentResearch/DolusChat",
+   "category": "safety",
+   "licence": "cc-by-4.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "AxiomicLabs/Tiny_Theory_of_Mind",
+   "category": "science",
+   "licence": "apache-2.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "HuggingFaceH4/Multilingual-Thinking",
+   "category": "multilingual",
+   "licence": "apache-2.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "CohereLabs/aya_evaluation_suite",
+   "category": "multilingual",
+   "licence": "apache-2.0",
+   "eval_only": true,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "fka/prompts.chat",
+   "category": "instruction",
+   "licence": "cc0-1.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "allenai/tulu-3-sft-personas-instruction-following",
+   "category": "instruction",
+   "licence": "odc-by",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "google/Synthetic-Persona-Chat",
+   "category": "instruction",
+   "licence": "cc-by-4.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "FreedomIntelligence/medical-o1-reasoning-SFT",
+   "category": "medicine",
+   "licence": "apache-2.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "gbharti/finance-alpaca",
+   "category": "finance",
+   "licence": "mit",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "harborframework/terminal-bench-2.1",
+   "category": "os-agent",
+   "licence": "apache-2.0",
+   "eval_only": true,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "jedisct1/security-audits",
+   "category": "os-agent",
+   "licence": "mit",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "code-review-bench/code-review-bench",
+   "category": "code",
+   "licence": "cc-by-4.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "LocalLLaMA/typed-decisions",
+   "category": "decision",
+   "licence": "apache-2.0",
+   "eval_only": false,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  },
+  {
+   "id": "MaziyarPanahi/Jev-RAG-Claim-Verification-130K",
+   "category": "decision-eval",
+   "licence": "other (MIT seed + upstream review required; no extra training rights)",
+   "eval_only": true,
+   "line_nm": null,
+   "status": "unmeasured",
+   "evals": []
+  }
+ ],
+ "counts": {
+  "datasets": 28,
+  "measured": 0,
+  "eval_only": 6
+ }
+}
