@@ -103,10 +103,12 @@ void wubu_mobius_scalar_mul(float r, const float *x, int d, float R, float *z) {
 // ============================================================
 float wubu_poincare_dist(const float *x, const float *y, int d, float R) {
     // d(x,y) = R * artanh(||(-x) ⊕ y|| / R)
-    float *neg_x = (float *)malloc(d * sizeof(float));
+    if (d <= 0) return 0.0f;
+    float *neg_x = (float *)malloc((size_t)d * sizeof(float));
+    float *diff = (float *)malloc((size_t)d * sizeof(float));
+    if (!neg_x || !diff) { free(neg_x); free(diff); return NAN; }
     for (int i = 0; i < d; i++) neg_x[i] = -x[i];
     
-    float *diff = (float *)malloc(d * sizeof(float));
     wubu_mobius_add(neg_x, y, d, R, diff);
     
     float ndiff = 0.0f;
@@ -123,6 +125,34 @@ float wubu_poincare_dist(const float *x, const float *y, int d, float R) {
     free(neg_x);
     free(diff);
     return dist;
+}
+
+// ============================================================
+// Exponential and logarithmic maps (origin)
+// These are THE canonical definitions declared in wubu_mobius.h.
+// wubu_gguf_bridge.c and gguf_reader.c used to define identical
+// copies, which was a latent duplicate-symbol bug.
+// ============================================================
+void wubu_exp_map(const float *v, int d, float R, float *z) {
+    if (!v || !z || d <= 0 || !(R > 0.0f)) return;
+    float n2 = 0.0f;
+    for (int i = 0; i < d; i++) n2 += v[i] * v[i];
+    float n = sqrtf(n2);
+    if (n < 1e-8f) { memcpy(z, v, (size_t)d * sizeof(float)); return; }
+    float factor = R * tanhf(n / R) / n;
+    for (int i = 0; i < d; i++) z[i] = factor * v[i];
+}
+
+void wubu_log_map(const float *x, int d, float R, float *v) {
+    if (!x || !v || d <= 0 || !(R > 0.0f)) return;
+    float n2 = 0.0f;
+    for (int i = 0; i < d; i++) n2 += x[i] * x[i];
+    float n = sqrtf(n2);
+    if (n < 1e-8f) { memcpy(v, x, (size_t)d * sizeof(float)); return; }
+    float ratio = n / R;
+    if (ratio >= 0.9999f) ratio = 0.9999f;
+    float factor = R * atanhf(ratio) / n;
+    for (int i = 0; i < d; i++) v[i] = factor * x[i];
 }
 
 // ============================================================

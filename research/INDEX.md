@@ -2188,4 +2188,27 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   caller defeats it. Interpretability + audit + institutions are required.
 - Raw layers: `research/alignment-2026-10-18/`.
 
+## SI ALIGNMENT + MANIFOLD TRAINING — 2026-10-18
+
+- SI01 US SI policy verified from primaries: EO 14434 (SI terminology, 29 Sep
+  2026), EO 14409 (cyber + covered frontier models, no mandatory licensing),
+  NSPM-11 (defense adoption; no vendor disable), Action Plan 3 pillars, NIST
+  CAISSI/T&E. `research` — `docs/SI-ALIGNMENT-MATRIX.md`
+- SI02 Matrix: 20 US objectives mapped to goal IDs, armor invariants, status
+  and gaps. Strongest: evaluations (117), standards (72), provenance (72),
+  interpretability (65), defense adoption (51). `wired` (doc)
+- SI03 Honest gaps: biosecurity (2 goals), manufacturing (7), workforce (15),
+  vendor-disable policy unanswered. `open`
+- SI04 Manifold training design: pre-train on a hyperbolic hierarchy,
+  post-train with geodesic preferences, fine-tune with Möbius LoRA, serve in
+  tangent charts. Backed by WuBuMath's 17 Lean theorems. `wired` (doc + module)
+- SI05 `wubu_manifold_train`: hyperbolic classifier head with analytic
+  tangent-gradient + Möbius LoRA; 13 checks pass (loss 1.068→0.131, ball
+  closure, B=0 identity). `wired`
+- SI06 Geometry consolidation: `wubu_exp_map`/`wubu_log_map` now have their
+  canonical definitions in `wubu_mobius.c`; duplicate copies removed from
+  `wubu_gguf_bridge.c` and `gguf_reader.c` (latent duplicate-symbol bug).
+  `wubu_poincare_dist` NULL checks added. `wired`
+- Raw sweep: `research/si-alignment-2026-10-18/`.
+
 ## WaefreBeorn Umbrella License v3.0
