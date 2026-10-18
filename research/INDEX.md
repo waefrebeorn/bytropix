@@ -2161,4 +2161,31 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
 - Archive: `/home/wubu/research-archive/deep-2026-10-18/` (430 PDFs, 0.96 GiB,
   `manifest.json`); raw layers in `research/deep-2026-10-18/`.
 
+## ALIGNMENT WAVE — 2026-10-18 (8 layers, 200 queries, 1,197 records)
+
+- AL01 The critique of Asimov: lexicographic, hierarchical, scalable to a
+  Zeroth Law that sacrifices persons, and anthropologically defective
+  (human = master, machine = servant). `research` — 071
+- AL02 Anthropology: imago Dei (CCC 1738), freedom as power (CCC 1731),
+  freedom grows by good (1733), imputability defeasible (1735), conscience
+  inviolable (DH 2), "truth cannot impose itself" (DH 1). `research`
+- AL03 Moral grammar: object/intention/circumstance (CCC 1750); "the end does
+  not justify the means" (1753); natural law (ST I-II q.91). `wired` in
+  `wubu_armor` as monotone refusal.
+- AL04 Political layer: common good, subsidiarity, solidarity, option for the
+  poor; Kuyper's sphere sovereignty; Pettit's non-domination; the Umbrella
+  License's own populist/subsidiarity commitments. `research`
+- AL05 The Jesus principle: kenosis, agape, truth, mercy, jubilee, sabbath,
+  cross/resurrection. `research` — 071 §5
+- AL06 The armor (Eph 6:10-18) as architecture: 7 pieces → controls, six
+  defensive, one word. `wired` — `docs/ALIGNMENT-ARMOR.md`
+- AL07 Executable contract: 10 invariants (dignity, truth, means, consent,
+  subsidiarity, solidarity, non-domination, jubilee, sabbath, repair) +
+  shield/helmet/sword/prayer. `wired` — `src/wubu_armor.c`, 39 tests pass.
+- AL08 Forbidden: theocracy, coercion in belief, moralism, paternalism,
+  surveillance-as-sanctity, safety-as-control, servitude-as-design. `research`
+- AL09 Honest limit: the checker sees declarations, not intentions; a lying
+  caller defeats it. Interpretability + audit + institutions are required.
+- Raw layers: `research/alignment-2026-10-18/`.
+
 ## WaefreBeorn Umbrella License v3.0
