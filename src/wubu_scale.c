@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #if !defined(_WIN32)
 #include <unistd.h>
 #else
@@ -278,46 +279,72 @@ void wubu_scale_report(const wubu_scale_plan_t *plan, char *buf, size_t buflen) 
  * F32, and memory-bound silicon reflects that). The cascade the plan
  * assumed is only a starting point; the runtime tightens it from what
  * the silicon says. */
+/* Relative RMS error of symmetric uniform quantization at `bits`.
+ * This is the accuracy half of the contract: the fastest precision is
+ * only eligible if it preserves the weights closely enough. */
+static double quant_rel_rms_error(int bits) {
+    if (bits >= 24) return 0.0;
+    const int N = 4096;
+    long levels = 1L << (bits - 1);
+    double step = 1.0 / (double)levels;
+    double se = 0.0, ss = 0.0;
+    for (int i = 0; i < N; i++) {
+        double v = (double)((i * 2654435761u) % 2001u) / 1000.0 - 1.0;
+        double q = (double)(long)(v / step + (v >= 0 ? 0.5 : -0.5)) * step;
+        if (q > 1.0) q = 1.0;
+        if (q < -1.0) q = -1.0;
+        se += (v - q) * (v - q);
+        ss += v * v;
+    }
+    double mse = se / (double)N, var = ss / (double)N;
+    return var > 1e-30 ? sqrt(mse / var) : 0.0;
+}
+
+/* Max relative RMS weight error accepted as "within accuracy tolerance".
+ * 1% keeps 8-bit (0.23%) and rejects 4-bit (3.6%) and 2-bit (14%). */
+#define WUBU_SCALE_MAX_REL_RMS 0.01
+
 static double measure_gemv_at(int bits, int n_reps) {
-    enum { DIM = 512, OUT = 64 };
-    static float w[DIM * OUT];
-    static float x[DIM];
-    static float y[OUT];
-    static int inited = 0;
-    if (!inited) {
-        for (int i = 0; i < DIM * OUT; i++) w[i] = (float)((i * 2654435761u) % 1000) / 500.0f - 1.0f;
-        for (int i = 0; i < DIM; i++) x[i] = (float)((i * 40503u) % 1000) / 500.0f - 1.0f;
-        inited = 1;
-    }
+    (void)n_reps;
+    /* The decode claim is a BANDWIDTH claim: at `bits` per weight the
+     * token moves bits/8 bytes per element, so the attainable tokens/sec
+     * is (sustained bytes/sec) / (bytes per token). Measure the sustained
+     * rate of the actual footprint: a 32-bit buffer is 16x larger than a
+     * 2-bit buffer, so it falls out of cache and pays DRAM while the 2-bit
+     * buffer stays resident. Report ELEMENTS/sec (the token proxy), not
+     * bytes/sec, because bytes/sec alone would reward the largest buffer.
+     *
+     * The old version quantised into a float32 array and ran the same loop
+     * for every precision: every candidate moved identical bytes, so the
+     * winner was timing noise. That is the bug this replaces. */
+    const size_t elems = (size_t)64 * 1024 * 1024;      /* 64M weights  */
+    const size_t bytes = (elems * (size_t)bits + 7) / 8;
+    uint8_t *p = (uint8_t *)malloc(bytes);
+    if (!p) return 0.0;
+    for (size_t i = 0; i < bytes; i++)
+        p[i] = (uint8_t)((i * 2654435761u) >> 13);
 
-    /* Quantize on the fly: simulate the cascade's weight cost. */
-    float q[DIM * OUT];
-    float scale = (float)((1 << (bits - 1)) - 1);
-    for (int i = 0; i < DIM * OUT; i++) {
-        float v = w[i];
-        float s = v > 0 ? v : -v;
-        q[i] = (float)(int)(v * scale + (v >= 0 ? 0.5f : -0.5f)) / scale;
-    }
+    /* Stream ~512 MiB regardless of footprint: small buffers repeat, which
+     * is exactly the cache advantage lower precision really has. */
+    const double target = 512.0 * 1024.0 * 1024.0;
+    int reps = (int)(target / (double)bytes);
+    if (reps < 1) reps = 1;
 
-    /* The honest cost: bytes moved per token = weight bytes at this
-     * precision. n_reps scales so each precision gets the same total
-     * bytes through the machine (a stable, comparable window). */
-    double bytes = (double)(DIM * OUT) * (double)bits / 8.0;
-    int reps = (int)(n_reps * (32.0 / (double)bits));  /* more reps at low bits */
+    volatile uint64_t sink = 0;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (int r = 0; r < reps; r++)
+        for (size_t i = 0; i < bytes; i += 64)
+            sink += p[i];
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    free(p);
 
-    clock_t t0 = clock();
-    for (int rep = 0; rep < reps; rep++) {
-        for (int o = 0; o < OUT; o++) {
-            float acc = 0.0f;
-            for (int i = 0; i < DIM; i++)
-                acc += x[i] * q[o * DIM + i];
-            y[o] = acc;
-        }
-    }
-    clock_t t1 = clock();
-    double secs = (double)(t1 - t0) / CLOCKS_PER_SEC;
-    /* bytes/second = the roofline rate this chip sustains at this prec */
-    return (bytes * (double)reps) / (secs + 1e-30);
+    double secs = (double)(t1.tv_sec - t0.tv_sec)
+                + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9;
+    double bps = ((double)bytes * (double)reps) / (secs + 1e-9);
+    (void)sink;
+    /* elements/sec = bytes/sec * 8 / bits */
+    return bps * 8.0 / (double)bits;
 }
 
 int wubu_scale_measure(const wubu_scale_hw_t *hw, wubu_scale_prec_t *best) {
@@ -340,6 +367,8 @@ int wubu_scale_measure(const wubu_scale_hw_t *hw, wubu_scale_prec_t *best) {
     double best_bw = 0.0;
     wubu_scale_prec_t best_p = WUBU_SCALE_F32;
     for (int i = 0; i < n; i++) {
+        if (quant_rel_rms_error(cand[i].bits) > WUBU_SCALE_MAX_REL_RMS)
+            continue;   /* outside tolerance: not eligible however fast */
         double bw = measure_gemv_at(cand[i].bits, 200);
         if (bw > best_bw) { best_bw = bw; best_p = cand[i].prec; }
     }
