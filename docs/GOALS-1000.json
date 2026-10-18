@@ -6934,7 +6934,7 @@
    "n": 865,
    "domain": "NETWORK",
    "tier": "P1",
-   "title": "9P2000 msize negotiation with oversize-message Rerror guard",
+   "title": "9P2000 msize negotiation with oversize-message Rerror guard (DONE)",
    "module": "wubuos/src/runtime/styx_enc.c",
    "criterion": "make test_styx_msize green: TVERSION 8192 against a 4096 server negotiates 4096; a 5000-byte TWRITE returns Rerror and leaves the stream in sync for the next message"
   },

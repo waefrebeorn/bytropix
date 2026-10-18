@@ -30,10 +30,10 @@ Rules used:
 | PATHS | 32 | 18 | 7 | 0 | 7 |
 | RUNTIME | 65 | 30 | 7 | 16 | 12 |
 | WORLDSIM | 45 | 15 | 3 | 20 | 7 |
-| NETWORK | 52 | 0 | 2 | 48 | 2 |
+| NETWORK | 52 | 1 | 1 | 48 | 2 |
 | OMARCHY | 35 | 21 | 0 | 13 | 1 |
 | AGIEDR | 40 | 19 | 0 | 21 | 0 |
-| **Total** | **1000** | **313** | **219** | **237** | **231** |
+| **Total** | **1000** | **314** | **218** | **237** | **231** |
 
 ## What the split says
 
@@ -84,4 +84,15 @@ Rules used:
 - NAMESPACE #403 closed: Tclunk now rejects unknown or already-clunked fids
   with Rerror and leaves the fid table untouched; `test_styx` 31/31.
 - Body gate: `make test` run and recorded in the ledger.
+
+## Cycle 6 disposition
+
+- Domains: NETWORK, STACK (STACK resumed after one cycle out).
+- NETWORK #865 closed: `styx_server_t` now carries a negotiation ceiling
+  (`max_msize`, 0 = `STYX_MAX_MSG`); 8192 against a 4096 server negotiates 4096;
+  a 5000-byte TWRITE gets `Rerror` and the stream stays in sync for the next
+  message. `test_styx` 32/32.
+- STACK #773 advanced: guarding the duplicate `GQA_KV_DIM` definition cut
+  pedantic diagnostics **162 → 105** across **13 → 6** files; errors remain 0.
+  Ten braced-groups and a few const/plugin warnings remain, so it stays open.
 

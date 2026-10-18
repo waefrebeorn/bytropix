@@ -147,3 +147,8 @@ gap.
   (Tclunk rejects unknown fids) are reliability fixes on the human and protocol
   surfaces the *adoption* objective depends on. Body gate re-run: all tiers
   passed.
+- **2026-10-18 (portfolio cycle 6)** — no objective status change. NETWORK #865
+  binds the 9P session to its negotiated msize (a peer that ignores the ceiling
+  is refused, not served) — protocol-hardening for *standards*. STACK #773's
+  third pass cut strict-C11 diagnostics to 105 lines across 6 files. Brain gate:
+  177 binaries / 155 ALL-PASSED / 0 failures.

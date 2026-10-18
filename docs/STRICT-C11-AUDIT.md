@@ -19,15 +19,19 @@ counts diagnostics per file.
 | | Before | After |
 |---|---:|---:|
 | CORE_OBJ C sources | 197 | 197 |
-| Diagnostic lines | 455 | **162** |
+| Diagnostic lines | 455 | **105** |
 | `error:` lines | 10 | **0** |
-| Files with diagnostics | 38 | 13 |
+| Files with diagnostics | 38 | 6 |
 
 Second pass (same day): 386 → 162 by adding the missing standard headers
 (`stdio.h`, `stdlib.h`, `strings.h`, `unistd.h`, `alloca.h`) and the
 feature-test macros the POSIX calls need (`_POSIX_C_SOURCE` for `posix_memalign`
 / `popen` / `strdup` / `ftruncate`, `_GNU_SOURCE` for `memmem`). Those were
 correctness bugs: an implicit `snprintf` is assumed to return `int`.
+
+Third pass: 162 → 105 by guarding the duplicate `GQA_KV_DIM` definition in
+`wubu_model.h` (the runtime alias in `wubu_dims.h` is the owner), which removed
+the redefinition warnings and the knock-on format diagnostics.
 
 ## What was fixed
 
@@ -67,7 +71,7 @@ and `GQA_KV_DIM` needs one definition in one header.
 ## Status
 
 **#773 stays OPEN.** Zero errors is progress; an empty diagnostic file is the
-criterion and 162 lines remain. The audit target is deliberately *not* in
+criterion and 105 lines remain. The audit target is deliberately *not* in
 `test_all`: a gate that fails on a known 386-line debt would be turned off
 within a day. It becomes a gate when the file is empty, and that is the point
 of the goal.

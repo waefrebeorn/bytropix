@@ -2228,8 +2228,10 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   CORE_OBJ C sources under `-std=c11 -pedantic -fsyntax-only`. Feature-test
   guards fixed 10 errors (CLOCK_MONOTONIC, M_PI, MADV_*) → **0 errors**; a
   second pass added missing headers/feature-test macros, cutting diagnostics
-  **386 → 162** across **32 → 13** files. 10 braced-groups and the
-  `GQA_KV_DIM` redefinition remain. STACK #773 stays OPEN.
+  **386 → 162** across **32 → 13** files; a third pass guarded the duplicate
+  `GQA_KV_DIM` definition, taking it to **105 lines across 6 files**. 10
+  braced-groups and a few const/plugin signature warnings remain. STACK #773
+  stays OPEN.
   `docs/STRICT-C11-AUDIT.md`. `wired`
 
 - MD03 Jev-RAG-Claim-Verification-130K (2026-10-18): 130,000 typed RAG
