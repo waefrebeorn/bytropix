@@ -6,6 +6,7 @@
 #include "wubu_uplift.h"
 #include "wubu_flow.h"
 #include "wubu_sae.h"
+#include "wubu_glass.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -486,6 +487,47 @@ int main(void)
 
     for (int i = 0; i < 4; i++) wubu_img_free(&fr[i]);
     wubu_img_free(&sr); wubu_img_free(&naive);
+
+
+    /* --- GlassBox 64-D signature (wave 12) --- */
+    wubu_img ones = {0};
+    wubu_img_alloc(&ones, 16, 16);
+    wubu_img_fill(&ones, 1);
+    float gs[WUBU_GLASS_DIMS];
+    CHECK(wubu_glassbox64(&ones, gs) == 0, "glassbox runs");
+    CHECK(fabsf(gs[0] - 1.0f) < 1e-6f, "bitplane 0 is fully occupied for value 1");
+    CHECK(gs[1] == 0.0f && gs[7] == 0.0f, "higher bitplanes are empty");
+    int in_range = 1;
+    for (int i = 0; i < WUBU_GLASS_DIMS; i++)
+        if (gs[i] < 0.0f || gs[i] > 1.0f) in_range = 0;
+    CHECK(in_range, "every coordinate lands in [0,1]");
+    int reserved_zero = 1;
+    for (int i = 32; i < 40; i++) if (gs[i] != 0.0f) reserved_zero = 0;
+    CHECK(reserved_zero, "reserved worldtube block is honestly zero, not invented");
+
+    float gs2[WUBU_GLASS_DIMS];
+    wubu_glassbox64(&sqimg, gs2);
+    float gs3[WUBU_GLASS_DIMS];
+    wubu_glassbox64(&sqimg, gs3);
+    CHECK(memcmp(gs2, gs3, sizeof gs2) == 0, "signature is deterministic");
+
+    uint64_t gh0 = wubu_glassbox_hash(&sqimg);
+    wubu_img grot = {0};
+    wubu_img_alloc(&grot, sqimg.h, sqimg.w);
+    for (int y = 0; y < sqimg.h; y++)
+        for (int x = 0; x < sqimg.w; x++)
+            grot.data[(size_t)x * grot.stride + (size_t)(sqimg.h - 1 - y)] =
+                sqimg.data[(size_t)y * sqimg.stride + x];
+    uint64_t gh1 = wubu_glassbox_hash(&grot);
+    CHECK(gh0 != 0 && gh0 == gh1, "glassbox hash is D4-invariant");
+
+    wubu_img other = {0};
+    wubu_img_alloc(&other, 64, 64);
+    wubu_img_fill(&other, 200);
+    CHECK(wubu_glassbox_hash(&other) != gh0, "different content hashes differently");
+    CHECK(wubu_glassbox64(NULL, gs) == -1, "NULL image -> -1");
+
+    wubu_img_free(&ones); wubu_img_free(&grot); wubu_img_free(&other);
 
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");

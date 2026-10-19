@@ -21,14 +21,15 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 | `worldtube` ((3+1)D, CFL cones) | — | **queued** | requires metric camera calibration |
 | `realitycomb` (static/moving separation) | — | **queued** | depends on flow (video) |
 | `hardware` (NEON/Metal/PTX) | CPU C11 | **partial (deliberate)** | portable integer/SIMD-friendly code; no NEON/Metal; CUDA lives in the engine, not here |
-| `mechinterp` (SAE matcher, patch pruner, GlassBox) | `wubu_eye` + `wubu_sae` | **partial** | patch-token pruner (26 checks) and **256-bit Hamming argmin matcher** tested; the 64-D GlassBox signature queued |
+| `mechinterp` (SAE matcher, patch pruner, GlassBox) | `wubu_eye` + `wubu_sae` + `wubu_glass` | **done (core)** | patch-token pruner (26 checks), 256-bit Hamming argmin, and the **64-D GlassBox signature + D4 canonical hash** tested; worldtube coordinates reserved rather than invented |
 | `uplift` (mass-conserving zoom, burst SR, foveated ROIs) | `wubu_uplift` + `wubu_cv` | **partial** | 2× uplift / 2× box down round-trip and D4 hash tested; **foveated ROI tile selection** and **multi-frame burst SR** tested (RMSE 0.885 vs 7.642 for naive 2x) |
 | `cloud_ws` (metered WebSocket) | — | **rejected** | a paid external service; the run policy is third-party on our kernel, never the reverse |
 
 ## Tests
 
 - `test_eye` — 26 checks: patch masks, XOR/popcount, tolerance vs threshold, partial patches.
-- `test_cv` — **85 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
+- `test_look` — 6 checks: two frames -> ranked changed ROIs + reuse ratio (93.8% reuse for a 32x32 change in a 128x128 frame).
+- `test_cv` — **94 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
   Otsu on a bimodal image, Gaussian edge clamp, FAST-9 on a square, BRIEF determinism,
   Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance,
   Canny on one rectangle and two squares, contour bbox origin/size and thinness,
@@ -38,10 +39,9 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 
 ## Next rungs, in order
 
-1. **GlassBox 64-D signature** (mechinterp) — the hand-auditable descriptor.
-2. **Dense Farneback** (video) — per-pixel motion field.
-3. **calib3d** — chessboard corners, then PnP.
-4. **GrabCut** (imgproc) — interactive segmentation.
+1. **Dense Farneback** (video) — per-pixel motion field.
+2. **calib3d** — chessboard corners, then PnP.
+3. **GrabCut** (imgproc) — interactive segmentation.
 
 ## Honest note on the source
 
