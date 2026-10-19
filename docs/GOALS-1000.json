@@ -1246,9 +1246,9 @@
    "n": 154,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "HolyC `class` keyword parses with struct semantics (member list, methods, no vtables yet)",
+   "title": "HolyC `class` keyword parses with struct semantics (member list, methods, no vtables yet) (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "gauntlet: `class C { I64 x; } c; c.x=5;` compiles and returns 5; class and struct share the type registry without collision"
+   "criterion": "gauntlet: `class C { I64 x; } c; c.x=5;` compiles and returns 5; class and struct share the type registry without collision [verified: test_mir_battery goal154 \u2014 class C{I64 x;} c; c.x=5 returns 5, and class+struct coexist in one TU returning 5]"
   },
   {
    "n": 155,
