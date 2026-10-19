@@ -112,6 +112,62 @@ int main(void)
     uint64_t h0 = wubu_d4_hash(&rnd), h1 = wubu_d4_hash(&rot);
     CHECK(h0 != 0 && h0 == h1, "D4 hash is invariant under 90-degree rotation");
 
+    /* --- Canny + contours (wave 2) --- */
+    wubu_img rect = {0};
+    wubu_img_alloc(&rect, 64, 64);
+    wubu_img_fill(&rect, 20);
+    for (int y = 16; y < 48; y++)
+        for (int x = 16; x < 48; x++)
+            rect.data[y * rect.stride + x] = 220;
+
+    wubu_img edges = {0};
+    wubu_img_alloc(&edges, 64, 64);
+    CHECK(wubu_canny(&rect, 50, 150, &edges) == 0, "canny runs");
+    int edge_pixels = 0;
+    for (int i = 0; i < 64 * 64; i++) if (edges.data[i]) edge_pixels++;
+    printf("  canny edge pixels: %d\n", edge_pixels);
+    CHECK(edge_pixels > 40, "canny finds the rectangle border");
+    CHECK(edges.data[32 * 64 + 32] == 0, "canny leaves the interior empty");
+    int edge_near_border = 0;
+    for (int y = 14; y <= 18; y++)
+        for (int x = 30; x <= 34; x++)
+            if (edges.data[y * 64 + x]) edge_near_border = 1;
+    CHECK(edge_near_border == 1, "canny marks the top border");
+    CHECK(edge_pixels < 2 * (32 + 32) * 2, "edges are thin, not a filled band");
+
+    wubu_contour ct[8];
+    int nc = wubu_find_contours(&edges, ct, 8, 20);
+    printf("  contours: %d (first bbox %d,%d %dx%d area %d)\n",
+           nc, nc > 0 ? ct[0].x : -1, nc > 0 ? ct[0].y : -1,
+           nc > 0 ? ct[0].w : 0, nc > 0 ? ct[0].h : 0, nc > 0 ? ct[0].area : 0);
+    CHECK(nc == 1, "one contour for one rectangle");
+    if (nc == 1) {
+        CHECK(abs(ct[0].x - 16) <= 2 && abs(ct[0].y - 16) <= 2, "bbox origin matches the rectangle");
+        CHECK(abs(ct[0].w - 32) <= 3 && abs(ct[0].h - 32) <= 3, "bbox size matches the rectangle");
+        CHECK(ct[0].area >= 40, "contour area counts edge pixels");
+    }
+
+    /* Two squares -> two contours. */
+    wubu_img two = {0};
+    wubu_img_alloc(&two, 64, 64);
+    wubu_img_fill(&two, 20);
+    for (int y = 8; y < 24; y++)
+        for (int x = 8; x < 24; x++) two.data[y * two.stride + x] = 220;
+    for (int y = 40; y < 56; y++)
+        for (int x = 40; x < 56; x++) two.data[y * two.stride + x] = 220;
+    wubu_img edges2 = {0};
+    wubu_img_alloc(&edges2, 64, 64);
+    CHECK(wubu_canny(&two, 50, 150, &edges2) == 0, "canny on two squares");
+    CHECK(wubu_find_contours(&edges2, ct, 8, 12) == 2, "two contours for two squares");
+
+    /* Arguments. */
+    CHECK(wubu_canny(NULL, 10, 20, &edges) == -1, "NULL image -> -1");
+    CHECK(wubu_canny(&rect, 200, 100, &edges) == -1, "high < low -> -1");
+    CHECK(wubu_find_contours(NULL, ct, 8, 1) == -1, "NULL edges -> -1");
+
+    wubu_img_free(&rect); wubu_img_free(&edges);
+    wubu_img_free(&two); wubu_img_free(&edges2);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

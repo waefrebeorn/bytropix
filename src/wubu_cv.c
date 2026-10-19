@@ -171,3 +171,135 @@ int wubu_gauss3(const wubu_img *in, wubu_img *out)
     free(tmp);
     return 0;
 }
+/* ---------------- Canny + contours (wave 2) ---------------- */
+
+int wubu_canny(const wubu_img *in, int low, int high, wubu_img *edges)
+{
+    if (!in || !in->data || !edges || !edges->data) return -1;
+    if (low < 0 || high < low) return -1;
+    if (edges->w != in->w || edges->h != in->h) return -1;
+
+    int w = in->w, h = in->h;
+    int16_t *gx = (int16_t *)malloc((size_t)w * h * sizeof *gx);
+    int16_t *gy = (int16_t *)malloc((size_t)w * h * sizeof *gy);
+    int32_t *mag = (int32_t *)malloc((size_t)w * h * sizeof *mag);
+    uint8_t *state = (uint8_t *)calloc((size_t)w * h, 1); /* 0 none, 1 weak, 2 edge */
+    int *stack = (int *)malloc((size_t)w * h * sizeof *stack);
+    if (!gx || !gy || !mag || !state || !stack) {
+        free(gx); free(gy); free(mag); free(state); free(stack);
+        return -1;
+    }
+
+    wubu_sobel3(in, gx, gy);
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int32_t a = gx[(size_t)y * w + x], b = gy[(size_t)y * w + x];
+            mag[(size_t)y * w + x] = a * a + b * b;
+        }
+    }
+
+    /* Non-maximum suppression along the quantised gradient direction. */
+    for (int y = 1; y < h - 1; y++) {
+        for (int x = 1; x < w - 1; x++) {
+            size_t i = (size_t)y * w + x;
+            int32_t a = gx[i], b = gy[i];
+            int32_t m = mag[i];
+            int32_t n1, n2;
+            int aa = a < 0 ? -a : a, bb = b < 0 ? -b : b;
+
+            if (aa > 2 * bb) {                    /* horizontal gradient */
+                n1 = mag[i - 1]; n2 = mag[i + 1];
+            } else if (bb > 2 * aa) {             /* vertical */
+                n1 = mag[i - w]; n2 = mag[i + w];
+            } else if ((a > 0) == (b > 0)) {      /* main diagonal */
+                n1 = mag[i - w - 1]; n2 = mag[i + w + 1];
+            } else {                              /* anti-diagonal */
+                n1 = mag[i - w + 1]; n2 = mag[i + w - 1];
+            }
+            if (m < n1 || m < n2) mag[i] = 0;
+        }
+    }
+
+    /* Threshold in magnitude units (the caller's numbers, not squared ones). */
+    int32_t lo2 = (int32_t)low * (int32_t)low;
+    int32_t hi2 = (int32_t)high * (int32_t)high;
+    int sp = 0;
+
+    for (size_t i = 0; i < (size_t)w * h; i++) {
+        if (mag[i] >= hi2) { state[i] = 2; stack[sp++] = (int)i; }
+        else if (mag[i] >= lo2) state[i] = 1;
+    }
+
+    while (sp > 0) {
+        int i = stack[--sp];
+        int x = i % w, y = i / w;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                int nx = x + dx, ny = y + dy;
+                if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                size_t j = (size_t)ny * w + nx;
+                if (state[j] == 1) { state[j] = 2; stack[sp++] = (int)j; }
+            }
+        }
+    }
+
+    for (size_t i = 0; i < (size_t)w * h; i++)
+        edges->data[i] = state[i] == 2 ? 255 : 0;
+
+    free(gx); free(gy); free(mag); free(state); free(stack);
+    return 0;
+}
+
+int wubu_find_contours(const wubu_img *edges, wubu_contour *out,
+                       int max_contours, int min_area)
+{
+    if (!edges || !edges->data || !out || max_contours <= 0) return -1;
+    int w = edges->w, h = edges->h;
+    uint8_t *seen = (uint8_t *)calloc((size_t)w * h, 1);
+    int *stack = (int *)malloc((size_t)w * h * sizeof *stack);
+    if (!seen || !stack) { free(seen); free(stack); return -1; }
+
+    int found = 0;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            size_t start = (size_t)y * w + x;
+            if (!edges->data[start] || seen[start]) continue;
+
+            int sp = 0, area = 0;
+            int minx = x, maxx = x, miny = y, maxy = y;
+            stack[sp++] = (int)start;
+            seen[start] = 1;
+
+            while (sp > 0) {
+                int i = stack[--sp];
+                int cx = i % w, cy = i / w;
+                area++;
+                if (cx < minx) minx = cx;
+                if (cx > maxx) maxx = cx;
+                if (cy < miny) miny = cy;
+                if (cy > maxy) maxy = cy;
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        int nx = cx + dx, ny = cy + dy;
+                        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                        size_t j = (size_t)ny * w + nx;
+                        if (edges->data[j] && !seen[j]) { seen[j] = 1; stack[sp++] = (int)j; }
+                    }
+                }
+            }
+
+            if (area >= min_area && found < max_contours) {
+                out[found].x = minx;
+                out[found].y = miny;
+                out[found].w = maxx - minx + 1;
+                out[found].h = maxy - miny + 1;
+                out[found].area = area;
+                found++;
+            }
+        }
+    }
+
+    free(seen); free(stack);
+    return found;
+}

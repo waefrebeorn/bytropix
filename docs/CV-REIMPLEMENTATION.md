@@ -12,7 +12,7 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 | solidcv module | Ours | Status | Evidence / what is missing |
 |---|---|---|---|
 | `core` (Mat, Scalar, Rect, SVD, solve) | `wubu_cv` (`wubu_img`) | **partial** | alloc/clone/fill/at tested; SVD, linear solve and multi-channel types absent |
-| `imgproc` (filters, edges, Otsu, morphology, contours) | `wubu_cv` | **partial** | integral image, O(1) box mean/var, fused 3×3 Sobel, Otsu, 3×3 Gaussian tested; Canny, morphology, contours, GrabCut queued |
+| `imgproc` (filters, edges, Otsu, morphology, contours) | `wubu_cv` | **partial** | integral image, O(1) box mean/var, fused 3×3 Sobel, Otsu, 3×3 Gaussian, **Canny (NMS + hysteresis)** and **8-connected contour boxes** tested; morphology, GrabCut and full contour point tracing queued |
 | `features2d` (ORB, BFMatcher) | `wubu_features` | **partial** | FAST-9, 256-bit BRIEF, Hamming tested; ORB pyramid, Harris scoring and a full matcher queued |
 | `calib3d` (StereoSGBM, PnP, chessboard, ArUco) | — | **queued** | needs a calibrated camera pipeline; not on the eyes' critical path yet |
 | `video` (Lucas–Kanade, Farneback) | — | **queued** | optical flow is the next rung after patch differencing |
@@ -28,13 +28,14 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 ## Tests
 
 - `test_eye` — 26 checks: patch masks, XOR/popcount, tolerance vs threshold, partial patches.
-- `test_cv` — 25 checks: image core, integral + O(1) box stats, Sobel sign/orientation,
+- `test_cv` — **39 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
   Otsu on a bimodal image, Gaussian edge clamp, FAST-9 on a square, BRIEF determinism,
-  Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance.
+  Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance,
+  Canny on one rectangle and two squares, contour bbox origin/size and thinness.
 
 ## Next rungs, in order
 
-1. **Canny + contours** (imgproc) — the eye needs to name a window, not just see change.
+1. **Morphology + full contour tracing** (imgproc) — dilate/erode, then point lists rather than boxes.
 2. **ORB pyramid + matcher** (features2d) — track a widget across frames.
 3. **Lucas–Kanade** (video) — motion, which also unlocks `realitycomb`.
 4. **SAE binary matcher** (mechinterp) — 256-bit Hamming argmin is already half-written by `wubu_hamming256`.

@@ -38,4 +38,21 @@ int wubu_otsu(const wubu_img *im);
 /* Separable 3x3 Gaussian (1 2 1)/4, edge-clamped. */
 int wubu_gauss3(const wubu_img *in, wubu_img *out);
 
+/* --- Canny + contours (wave 2) ---------------------------------------- */
+
+/* Gradient magnitude, non-maximum suppression along the gradient direction,
+ * then hysteresis: strong >= high seeds, weak >= low connects. Edges are 0/255.
+ * Returns 0, or -1 on bad arguments. */
+int wubu_canny(const wubu_img *in, int low, int high, wubu_img *edges);
+
+typedef struct {
+    int x, y, w, h;   /* bounding box */
+    int area;         /* number of edge pixels in the component */
+} wubu_contour;
+
+/* 8-connected components of an edge image, skipping ones below min_area.
+ * Returns the number written (<= max_contours), or -1. */
+int wubu_find_contours(const wubu_img *edges, wubu_contour *out,
+                       int max_contours, int min_area);
+
 #endif /* WUBU_CV_H */
