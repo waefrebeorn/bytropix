@@ -83,4 +83,14 @@ int wubu_calibrate_focal(const double *p3, const double *p2, int n,
 int wubu_calibrate_principal(const double *p3, const double *p2, int n,
                              double K[9], double R[9], double t[3]);
 
+/* Radial distortion (Brown-Conrady, first two terms) around the principal point.
+ * r2 is measured in normalised (focal-length) units. */
+void wubu_distort_point(double x, double y, const double K[9], double k1, double k2,
+                        double *ox, double *oy);
+
+/* Inverse of wubu_distort_point by fixed-point iteration (20 steps).
+ * Returns 0, or -1 when the sample does not converge. */
+int wubu_undistort_point(double xd, double yd, const double K[9], double k1, double k2,
+                         double *ox, double *oy);
+
 #endif /* WUBU_CALIB_H */

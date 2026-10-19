@@ -752,3 +752,36 @@ int wubu_calibrate_principal(const double *p3, const double *p2, int n,
     if (wubu_pose_refine(p3, p2, n, K, R, t, 40) != 0) return -1;
     return 0;
 }
+
+
+void wubu_distort_point(double x, double y, const double K[9], double k1, double k2,
+                        double *ox, double *oy)
+{
+    double f = K[0];
+    double nx = (x - K[2]) / f, ny = (y - K[5]) / f;
+    double r2 = nx * nx + ny * ny;
+    double s = 1.0 + k1 * r2 + k2 * r2 * r2;
+    *ox = nx * s * f + K[2];
+    *oy = ny * s * f + K[5];
+}
+
+int wubu_undistort_point(double xd, double yd, const double K[9], double k1, double k2,
+                         double *ox, double *oy)
+{
+    if (!K || !ox || !oy || K[0] <= 0.0) return -1;
+
+    double f = K[0];
+    double nx = (xd - K[2]) / f, ny = (yd - K[5]) / f;
+    double x = nx, y = ny;                 /* start from the distorted position */
+
+    for (int i = 0; i < 20; i++) {
+        double r2 = x * x + y * y;
+        double s = 1.0 + k1 * r2 + k2 * r2 * r2;
+        if (fabs(s) < 1e-9) return -1;
+        x = nx / s;
+        y = ny / s;
+    }
+    *ox = x * f + K[2];
+    *oy = y * f + K[5];
+    return 0;
+}

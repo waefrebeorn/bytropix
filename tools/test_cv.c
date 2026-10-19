@@ -988,6 +988,28 @@ int main(void)
     CHECK(fabs(pK[0] - 500.0) < 1e-9, "focal length is left untouched");
     CHECK(wubu_calibrate_principal(cfp3, ppp2, 3, pK, pR, pT) == -1, "3 points -> -1");
 
+
+    /* --- radial distortion (wave 32) --- */
+    double dpts[6][2] = {{80,80},{120,60},{40,140},{200,80},{10,10},{300,20}};
+    double dworst = 0.0, did = 0.0;
+    for (int i = 0; i < 6; i++) {
+        double xd, yd, xu, yu;
+        wubu_distort_point(dpts[i][0], dpts[i][1], Kp, 0.12, -0.03, &xd, &yd);
+        CHECK(wubu_undistort_point(xd, yd, Kp, 0.12, -0.03, &xu, &yu) == 0,
+              "undistort converges");
+        double e = hypot(xu - dpts[i][0], yu - dpts[i][1]);
+        if (e > dworst) dworst = e;
+        double ix, iy;
+        wubu_distort_point(dpts[i][0], dpts[i][1], Kp, 0.0, 0.0, &ix, &iy);
+        double ie = hypot(ix - dpts[i][0], iy - dpts[i][1]);
+        if (ie > did) did = ie;
+    }
+    printf("  distortion round-trip worst error: %.3g px\n", dworst);
+    CHECK(dworst < 1e-9, "distort -> undistort returns the original point");
+    CHECK(did < 1e-12, "zero coefficients are the identity");
+    CHECK(wubu_undistort_point(0, 0, NULL, 0.1, 0.0, &dpts[0][0], &dpts[0][1]) == -1,
+          "NULL K -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");
