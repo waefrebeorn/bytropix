@@ -3262,7 +3262,7 @@
    "n": 406,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Tcreate mode validation: DMDIR/DMEXCL/DMAPPEND and OEXCL conflict",
+   "title": "Tcreate mode validation: DMDIR/DMEXCL/DMAPPEND and OEXCL conflict (DONE)",
    "module": "wubuos/src/runtime/styxfs_callbacks.c",
    "criterion": "make test_styxfs green: create with OEXCL on an existing name returns Rerror EEXIST, create with DMDIR on an existing file returns Rerror ENOTDIR, and each accepted mode bit round-trips through Tstat"
   },
