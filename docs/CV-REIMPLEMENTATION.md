@@ -53,6 +53,16 @@ own arithmetic; we do not inherit its performance claims.
 
 ## Rejected approaches (do not retry)
 
+### Multi-view distortion fit by undistort-then-pose (wave 34 attempt)
+Three synthetic views (0, 20 and -17 deg, depths 0.6/0.75/0.9 m) with true
+k1 = 0.12, k2 = -0.03. The alternating search returned **k1 = 0.112,
+k2 = -0.006** and did not improve when the pose solve went from 20 to 40
+iterations or the passes from 3 to 5. The bias is in the objective, not the
+search: undistorting the observations with a candidate k and then least-squares
+fitting the pose lets the pose absorb most of the distortion error, so the cost
+is nearly flat in k2. A correct fit needs one joint bundle over the poses and
+k1/k2 with residuals evaluated in the distorted domain.
+
 ### Distortion fit with a free pose (wave 32 attempt)
 Alternating golden-section on k1/k2 while re-solving the pose on undistorted
 observations is degenerate on a single near-planar view: it returned
