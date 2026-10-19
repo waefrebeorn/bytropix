@@ -1414,9 +1414,9 @@
    "n": 175,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "SSE2 f64 arithmetic encoding (addsd/mulsd/divsd/ucomisd) for the float path",
+   "title": "SSE2 f64 arithmetic encoding (addsd/mulsd/divsd/ucomisd) for the float path (DONE)",
    "module": "wubu_isa_x86_64.c",
-   "criterion": "make test_mir_float green: DADD/DMUL/DDIV/DGT results are bit-exact vs wubu_softfloat; disassembly shows the SSE2 mnemonics, not x87"
+   "criterion": "make test_mir_float green: DADD/DMUL/DDIV/DGT results are bit-exact vs wubu_softfloat; disassembly shows the SSE2 mnemonics, not x87 [verified: tools/test_sse2_dadd compiles CONST/CONST/DADD..DDIV/DGT through the x86-64 backend and decodes the output with x86_decode: addsd F2 0F 58 C1, subsd 5C, mulsd 59, divsd 5E, ucomisd 66 0F 2E C1, and zero instructions with primary opcode D8-DF (x87) on any of the five paths; test_mir_float is green in make test 200/200]"
   },
   {
    "n": 176,
