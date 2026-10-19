@@ -635,3 +635,55 @@ int wubu_markers_refine(const double *marker_xyz, const double *marker_uv,
     int n = nmarkers * 4;
     return wubu_pose_refine(marker_xyz, marker_uv, n, K, R, t, iters);
 }
+
+
+static double focal_cost(const double *p3, const double *p2, int n,
+                         double f0, double cx, double cy,
+                         double R[9], double t[3])
+{
+    double K[9] = {f0, 0, cx, 0, f0, cy, 0, 0, 1};
+    double Rl[9], tl[3];
+    memcpy(Rl, R, sizeof Rl);
+    memcpy(tl, t, sizeof tl);
+    if (wubu_pose_refine(p3, p2, n, K, Rl, tl, 15) != 0) return 1e300;
+    double cost = pose_cost(p3, p2, n, K, Rl, tl);
+    return cost;
+}
+
+int wubu_calibrate_focal(const double *p3, const double *p2, int n,
+                         double K[9], double R[9], double t[3])
+{
+    if (!p3 || !p2 || n < 4 || !K || !R || !t || K[0] <= 0) return -1;
+    double cx = K[2], cy = K[5];
+    double f_init = K[0];
+
+    double lo = 0.3 * f_init, hi = 3.0 * f_init;
+    const int samples = 60;
+    double best_f = f_init, best_c = 1e300;
+    double step = (hi - lo) / (samples - 1);
+
+    for (int i = 0; i < samples; i++) {
+        double f = lo + step * i;
+        double c = focal_cost(p3, p2, n, f, cx, cy, R, t);
+        if (c < best_c) { best_c = c; best_f = f; }
+    }
+
+    /* Golden-section around the best sample. */
+    double a = best_f - step, b = best_f + step;
+    if (a < lo) a = lo;
+    if (b > hi) b = hi;
+    const double gr = 0.6180339887498949;
+    double x1 = b - gr * (b - a), x2 = a + gr * (b - a);
+    double f1 = focal_cost(p3, p2, n, x1, cx, cy, R, t);
+    double f2 = focal_cost(p3, p2, n, x2, cx, cy, R, t);
+
+    for (int i = 0; i < 40; i++) {
+        if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = b - gr * (b - a); f1 = focal_cost(p3, p2, n, x1, cx, cy, R, t); }
+        else         { a = x1; x1 = x2; f1 = f2; x2 = a + gr * (b - a); f2 = focal_cost(p3, p2, n, x2, cx, cy, R, t); }
+    }
+    double f = (a + b) * 0.5;
+
+    K[0] = f; K[4] = f;
+    if (wubu_pose_refine(p3, p2, n, K, R, t, 40) != 0) return -1;
+    return 0;
+}

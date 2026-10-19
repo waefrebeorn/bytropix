@@ -71,4 +71,10 @@ int wubu_markers_refine(const double *marker_xyz, const double *marker_uv,
                         int nmarkers, const double K[9],
                         double R[9], double t[3], int iters);
 
+/* Recover a square-pixel focal length from correspondences: coarse log scan
+ * over [0.3, 3] * K0[0], then golden-section refinement, solving the pose at
+ * each trial. Updates K, R and t. Returns 0, or -1. */
+int wubu_calibrate_focal(const double *p3, const double *p2, int n,
+                         double K[9], double R[9], double t[3]);
+
 #endif /* WUBU_CALIB_H */

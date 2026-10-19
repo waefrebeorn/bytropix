@@ -948,6 +948,27 @@ int main(void)
           "joint rotation is identity");
     CHECK(wubu_markers_refine(mxyz, muv, 0, Kp, bR, bt, 10) == -1, "zero markers -> -1");
 
+
+    /* --- focal length calibration (wave 30) --- */
+    double cfp3[24] = {-1,-1,0, 1,-1,0, 1,1,0, -1,1,0,
+                       0,0,1, 0,0,-1, -1,1,2, 1,-1,2};
+    double cfp2[16];
+    for (int i = 0; i < 8; i++) {
+        double X = cfp3[3*i], Y = cfp3[3*i+1], Z = cfp3[3*i+2];
+        double w = Z + 0.5;
+        cfp2[2*i] = 500*X/w + 80;
+        cfp2[2*i+1] = 500*Y/w + 80;
+    }
+    double cK[9] = {380, 0, 80, 0, 380, 80, 0, 0, 1};
+    double cR[9] = {1,0,0, 0,1,0, 0,0,1};
+    double cT[3] = {0, 0, 0.5};
+    CHECK(wubu_calibrate_focal(cfp3, cfp2, 8, cK, cR, cT) == 0, "focal calibration runs");
+    printf("  calibrated f=%.4f from a 380 start\n", cK[0]);
+    CHECK(fabs(cK[0] - 500.0) < 0.01 && fabs(cK[4] - 500.0) < 0.01,
+          "square-pixel focal length recovered exactly");
+    CHECK(fabs(cT[2] - 0.5) < 1e-3, "pose is consistent after calibration");
+    CHECK(wubu_calibrate_focal(cfp3, cfp2, 3, cK, cR, cT) == -1, "3 points -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");
