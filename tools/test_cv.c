@@ -1010,6 +1010,46 @@ int main(void)
     CHECK(wubu_undistort_point(0, 0, NULL, 0.1, 0.0, &dpts[0][0], &dpts[0][1]) == -1,
           "NULL K -> -1");
 
+
+    /* --- whole-image undistortion (wave 33) --- */
+    double uK[9] = {120, 0, 64, 0, 120, 64, 0, 0, 1};
+    wubu_img upat = {0};
+    wubu_img_alloc(&upat, 128, 128);
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 128; x++) {
+            double r = sqrt((double)(x - 64) * (x - 64) + (double)(y - 64) * (y - 64));
+            double v = 40.0 + 200.0 * r / 90.0;
+            if (v > 255) v = 255;
+            upat.data[y * upat.stride + x] = (uint8_t)v;
+        }
+
+    wubu_img udis = {0};
+    wubu_img_alloc(&udis, 128, 128);
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 128; x++) {
+            double ux, uy;
+            wubu_undistort_point((double)x, (double)y, uK, 0.15, 0.0, &ux, &uy);
+            if (ux < 0 || uy < 0 || ux >= 127 || uy >= 127) continue;
+            int x0 = (int)ux, y0 = (int)uy;
+            double fx = ux - x0, fy = uy - y0;
+            double v = (wubu_img_at(&upat, x0, y0) * (1 - fx) + wubu_img_at(&upat, x0 + 1, y0) * fx) * (1 - fy)
+                     + (wubu_img_at(&upat, x0, y0 + 1) * (1 - fx) + wubu_img_at(&upat, x0 + 1, y0 + 1) * fx) * fy;
+            udis.data[y * udis.stride + x] = (uint8_t)(v + 0.5);
+        }
+
+    wubu_img uout = {0};
+    CHECK(wubu_undistort_image(&udis, uK, 0.15, 0.0, &uout) == 0, "image undistortion runs");
+    int umax = 0;
+    for (int y = 20; y < 108; y++)
+        for (int x = 20; x < 108; x++) {
+            int d = abs(wubu_img_at(&uout, x, y) - wubu_img_at(&upat, x, y));
+            if (d > umax) umax = d;
+        }
+    printf("  undistorted image max error: %d levels\n", umax);
+    CHECK(umax <= 2, "undistortion recovers the pattern it was distorted from");
+    CHECK(wubu_undistort_image(NULL, uK, 0.1, 0.0, &uout) == -1, "NULL image -> -1");
+    wubu_img_free(&upat); wubu_img_free(&udis); wubu_img_free(&uout);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

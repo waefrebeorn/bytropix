@@ -785,3 +785,31 @@ int wubu_undistort_point(double xd, double yd, const double K[9], double k1, dou
     *oy = y * f + K[5];
     return 0;
 }
+
+
+int wubu_undistort_image(const wubu_img *src, const double K[9], double k1, double k2,
+                         wubu_img *out)
+{
+    if (!src || !src->data || !K || !out || K[0] <= 0.0) return -1;
+    if (wubu_img_alloc(out, src->w, src->h) != 0) return -1;
+
+    for (int y = 0; y < src->h; y++) {
+        for (int x = 0; x < src->w; x++) {
+            double sx, sy;
+            wubu_distort_point((double)x, (double)y, K, k1, k2, &sx, &sy);
+
+            if (sx < 0 || sy < 0 || sx >= src->w - 1 || sy >= src->h - 1) {
+                out->data[(size_t)y * out->stride + x] = 0;
+                continue;
+            }
+            int x0 = (int)sx, y0 = (int)sy;
+            double fx = sx - x0, fy = sy - y0;
+            double v = (wubu_img_at(src, x0, y0) * (1 - fx) + wubu_img_at(src, x0 + 1, y0) * fx) * (1 - fy)
+                     + (wubu_img_at(src, x0, y0 + 1) * (1 - fx) + wubu_img_at(src, x0 + 1, y0 + 1) * fx) * fy;
+            if (v < 0) v = 0;
+            if (v > 255) v = 255;
+            out->data[(size_t)y * out->stride + x] = (uint8_t)(v + 0.5);
+        }
+    }
+    return 0;
+}

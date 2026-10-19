@@ -93,4 +93,9 @@ void wubu_distort_point(double x, double y, const double K[9], double k1, double
 int wubu_undistort_point(double xd, double yd, const double K[9], double k1, double k2,
                          double *ox, double *oy);
 
+/* Resample a distorted image into an undistorted one of the same size.
+ * Output pixel p samples the source at wubu_distort_point(p), bilinearly. */
+int wubu_undistort_image(const wubu_img *src, const double K[9], double k1, double k2,
+                         wubu_img *out);
+
 #endif /* WUBU_CALIB_H */
