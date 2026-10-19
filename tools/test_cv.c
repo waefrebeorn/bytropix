@@ -816,6 +816,33 @@ int main(void)
     CHECK(wubu_homography(NULL, wdst, Hw) == -1, "NULL src -> -1");
     wubu_img_free(&cbw); wubu_img_free(&wrp);
 
+
+    /* --- ArUco-style marker decode (wave 25) --- */
+    const uint16_t adict[4] = {0x1234, 0xEDCB, 0x0F0F, 0xF0F0};
+    wubu_img am = {0};
+    wubu_img_alloc(&am, 60, 60);
+    wubu_img_fill(&am, 0);
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) {
+            if (!((adict[2] >> (15 - (r * 4 + c))) & 1)) continue;
+            for (int y = (r + 1) * 10; y < (r + 2) * 10; y++)
+                for (int x = (c + 1) * 10; x < (c + 2) * 10; x++)
+                    am.data[y * am.stride + x] = 255;
+        }
+    double aquad[8] = {0, 0, 59, 0, 59, 59, 0, 59};
+    wubu_aruco_marker amk;
+    CHECK(wubu_aruco_decode(&am, aquad, adict, 4, 0, &amk) == 0, "marker decodes");
+    CHECK(amk.id == 2 && amk.hamming == 0 && amk.bits == 0x0F0F,
+          "decoded id, bits and zero Hamming distance are exact");
+
+    wubu_img ablank = {0};
+    wubu_img_alloc(&ablank, 60, 60);
+    wubu_img_fill(&ablank, 0);
+    CHECK(wubu_aruco_decode(&ablank, aquad, adict, 4, 0, &amk) == -1,
+          "an all-black payload matches nothing at Hamming 0");
+    CHECK(wubu_aruco_decode(NULL, aquad, adict, 4, 0, &amk) == -1, "NULL image -> -1");
+    wubu_img_free(&am); wubu_img_free(&ablank);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

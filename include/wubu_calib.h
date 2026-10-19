@@ -30,4 +30,18 @@ int wubu_homography(const double src[8], const double dst[8], double H[9]);
 int wubu_warp_perspective(const wubu_img *src, const double H[9],
                           wubu_img *out, int ow, int oh);
 
+typedef struct {
+    int id;              /* dictionary index, or -1 */
+    int hamming;         /* best Hamming distance found */
+    int bits;            /* decoded 16-bit payload */
+} wubu_aruco_marker;
+
+/* Decode a 4x4-payload marker (6x6 cells with a one-cell black border) from a
+ * quadrilateral in `im`. Samples cell centres after warping, then matches the
+ * 16-bit code against `dict` within `max_hamming`. Returns 0 on a match, -1 if
+ * nothing matched or the quad is degenerate. */
+int wubu_aruco_decode(const wubu_img *im, const double quad[8],
+                      const uint16_t *dict, int ndict, int max_hamming,
+                      wubu_aruco_marker *out);
+
 #endif /* WUBU_CALIB_H */

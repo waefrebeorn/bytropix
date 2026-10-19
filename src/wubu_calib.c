@@ -275,3 +275,46 @@ int wubu_warp_perspective(const wubu_img *src, const double H[9],
     }
     return 0;
 }
+
+
+int wubu_aruco_decode(const wubu_img *im, const double quad[8],
+                      const uint16_t *dict, int ndict, int max_hamming,
+                      wubu_aruco_marker *out)
+{
+    if (!im || !quad || !dict || !out || ndict <= 0 || max_hamming < 0) return -1;
+
+    const int cells = 6;          /* 4x4 payload + 1-cell border */
+    const int cell_px = 12;
+    const int side = cells * cell_px;
+
+    double dst[8] = {0, 0, side - 1, 0, side - 1, side - 1, 0, side - 1};
+    double H[9];
+    if (wubu_homography(quad, dst, H) != 0) return -1;
+
+    wubu_img flat = {0};
+    if (wubu_warp_perspective(im, H, &flat, side, side) != 0) return -1;
+
+    int bits = 0;
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            int px = (c + 2) * cell_px - cell_px / 2;   /* skip the border cell */
+            int py = (r + 2) * cell_px - cell_px / 2;
+            int v = wubu_img_at(&flat, px, py);
+            if (v > 128) bits |= 1 << (15 - (r * 4 + c));
+        }
+    }
+    wubu_img_free(&flat);
+
+    int best = 99, best_id = -1;
+    for (int i = 0; i < ndict; i++) {
+        unsigned x = (unsigned)(bits ^ dict[i]);
+        int dist = 0;
+        while (x) { dist += (int)(x & 1u); x >>= 1; }
+        if (dist < best) { best = dist; best_id = i; }
+    }
+
+    out->id = best_id;
+    out->hamming = best;
+    out->bits = bits;
+    return best <= max_hamming ? 0 : -1;
+}
