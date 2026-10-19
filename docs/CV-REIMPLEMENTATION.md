@@ -49,3 +49,14 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 The crate is days old with a small star count, and its benchmark table was not
 reproduced here. We are reimplementing the *ideas it describes*, and we test our
 own arithmetic; we do not inherit its performance claims.
+
+## Rejected approaches (do not retry)
+
+- **Farneback via linear moments.** Approximating the polynomial's linear
+  coefficient with `b = <Ix·I>` and solving `d = -0.5 A⁻¹ (b2 - b1)` produced
+  mean errors of 475 px in x and 351 px in y on a known (2,3) shift — the
+  shortcut drops the intensity-centering that the real expansion gets from
+  normalized convolution. Reverted rather than shipped. The correct route is a
+  6×6 normalized-convolution fit over the basis `[1, x, y, x², xy, y²]`
+  followed by the displacement solve; anything less is guesswork.
+
