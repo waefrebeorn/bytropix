@@ -107,13 +107,13 @@ invariant), all in the **GEO** pillar:
 
 | n | goal | criterion |
 |---|---|---|
-| 1014 | Möbius parallel transport `wubu_transport` | isometry test (distance preserved to 1e-6) + FD check of its pullback |
-| 1015 | per-ball adapter merge `wubu_merge_adapters` | zero-weight identity exact; ‖h'‖ < R for adversarial inputs; commutativity in the same frame |
 | 1011 | curvature-weighted merge weights | weights monotone in curvature on a synthetic two-ball case; a flat-space run reproduces plain averaging |
 | 1012 | diagonal Fisher + BI weighting | Fisher-weighted merge beats uniform on held-out loss in a synthetic two-task fixture |
 | 1013 | merge safety gate | merged body must pass ball containment, held-out loss tolerance, and the prover invariants, else rollback |
+| 1014 | Möbius parallel transport `wubu_transport` | isometry test (distance preserved to 1e-6) + FD check of its pullback |
+| 1015 | per-ball adapter merge `wubu_merge_adapters` | zero-weight identity exact; ‖h'‖ < R for adversarial inputs; commutativity in the same frame |
 
-1014 (transport) is the blocker: without transport, 1007–1010 are measuring a meaningless sum.
+1014 (transport) is the blocker: without it, 1011–1013 and 1015 are measuring a meaningless sum.
 
 ## 8. Verdict
 
