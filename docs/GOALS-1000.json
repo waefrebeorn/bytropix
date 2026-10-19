@@ -3334,7 +3334,7 @@
    "n": 415,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "NT access-mask to 9P open-mode translation table",
+   "title": "NT access-mask to 9P open-mode translation table (DONE)",
    "module": "wubuos/src/runtime/vsl/vsl_nt_ob.c",
    "criterion": "make test_nt_ob green: GENERIC_READ->OREAD, GENERIC_WRITE|GENERIC_READ->ORDWR, DELETE->ORCLOSE, SYNCHRONIZE->OREAD|OSYNC-ish equivalent; a mask naming no 9P mode returns STATUS_ACCESS_DENIED with the offending mask bit logged"
   },
@@ -3342,7 +3342,7 @@
    "n": 416,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "NT object-path canonicalization into /n paths",
+   "title": "NT object-path canonicalization into /n paths (DONE)",
    "module": "wubuos/src/runtime/vsl/vsl_nt_ob.c",
    "criterion": "make test_nt_ob green: L\"\\\\??\\\\C:\\\\Brain\\\\Kv\\\\slot0\", L\"/n/brain/kv/slot0\" and L\"/N/BRAIN/KV/SLOT0\" all canonicalize to the same /n path and resolve to the same node; a traversal via \"..\" escaping the root returns STATUS_OBJECT_PATH_INVALID"
   },
