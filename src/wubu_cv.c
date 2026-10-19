@@ -557,3 +557,41 @@ int wubu_chessboard_order(const wubu_corner *in, int n, int cols, int rows,
     free(tmp);
     return n;
 }
+
+
+int wubu_corner_refine_subpix(const wubu_img *im, wubu_corner *c, int n, int radius)
+{
+    if (!im || !im->data || !c || n < 0) return -1;
+    if (radius < 1 || radius > 8) return -1;
+
+    for (int k = 0; k < n; k++) {
+        int cx = c[k].x, cy = c[k].y;
+        double sw = 0.0, sx = 0.0, sy = 0.0, best = 0.0;
+
+        for (int oy = -radius; oy <= radius; oy++) {
+            for (int ox = -radius; ox <= radius; ox++) {
+                int x = cx + ox, y = cy + oy;
+                double A = 0, B = 0, C = 0;
+                for (int j = -1; j <= 1; j++)
+                    for (int i = -1; i <= 1; i++) {
+                        double gx = ((double)wubu_img_at(im, x + i + 1, y + j)
+                                   - (double)wubu_img_at(im, x + i - 1, y + j)) * 0.5;
+                        double gy = ((double)wubu_img_at(im, x + i, y + j + 1)
+                                   - (double)wubu_img_at(im, x + i, y + j - 1)) * 0.5;
+                        A += gx * gx; B += gx * gy; C += gy * gy;
+                    }
+                double r = A * C - B * B - 0.04 * (A + C) * (A + C);
+                if (r <= 0.0) continue;
+                double w = 1.0 / (1.0 + (double)(ox * ox + oy * oy));
+                sw += w; sx += w * (cx + ox); sy += w * (cy + oy);
+                if (r > best) best = r;
+            }
+        }
+        if (sw > 0.0) {
+            c[k].x = (int)(sx / sw + 0.5);
+            c[k].y = (int)(sy / sw + 0.5);
+            c[k].score = (float)best;
+        }
+    }
+    return 0;
+}

@@ -72,6 +72,12 @@ int wubu_harris_corners(const wubu_img *im, float thresh_ratio, int min_dist,
 int wubu_chessboard_order(const wubu_corner *in, int n, int cols, int rows,
                           wubu_corner *out);
 
+/* Corner refinement: move each corner to the Harris-response centroid within a
+ * (2*radius+1) window, weighted by inverse squared distance. The struct stores
+ * integers, so the result is rounded to the pixel grid -- this is centroid
+ * refinement, not true sub-pixel localisation. Returns 0, or -1. */
+int wubu_corner_refine_subpix(const wubu_img *im, wubu_corner *c, int n, int radius);
+
 /* Ordered boundary points of the 8-connected component containing (sx, sy).
  * Points are sorted counter-clockwise around the centroid, so the caller gets a
  * usable polyline rather than an unordered pixel set. Returns the count, or -1. */

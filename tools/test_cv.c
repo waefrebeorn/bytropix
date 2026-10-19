@@ -685,6 +685,35 @@ int main(void)
           "grid spans the expected lattice");
     CHECK(wubu_chessboard_order(shuf, 48, 7, 7, ordered) == -1, "count mismatch -> -1");
 
+
+    /* --- sub-pixel corner refinement (wave 20) --- */
+    wubu_img cb2 = {0};
+    wubu_img_alloc(&cb2, 160, 160);
+    for (int y = 0; y < 160; y++)
+        for (int x = 0; x < 160; x++)
+            cb2.data[y * cb2.stride + x] = ((x / 20 + y / 20) & 1) ? 220 : 30;
+    /* render the same board shifted by a known sub-pixel offset */
+    wubu_img cb3 = {0};
+    wubu_img_alloc(&cb3, 160, 160);
+    for (int y = 0; y < 160; y++)
+        for (int x = 0; x < 160; x++)
+            cb3.data[y * cb3.stride + x] = (uint8_t)(bilin(&cb2, (float)x - 0.4f, (float)y - 0.4f) + 0.5f);
+
+    wubu_corner sc[128];
+    int scn = wubu_harris_corners(&cb3, 0.02f, 5, sc, 128);
+    CHECK(scn >= 36, "shifted board still yields corners");
+    CHECK(wubu_corner_refine_subpix(&cb3, sc, scn, 3) == 0, "sub-pixel refinement runs");
+    int near = 0;
+    for (int i = 0; i < scn; i++) {
+        int mx = (sc[i].x + 10) / 20 * 20;
+        int my = (sc[i].y + 10) / 20 * 20;
+        if (abs(sc[i].x - mx) <= 1 && abs(sc[i].y - my) <= 1) near++;
+    }
+    printf("  refined corners within 1 px of lattice: %d/%d\n", near, scn);
+    CHECK(near >= (scn * 9) / 10, ">=90% of refined corners land within 1 px");
+    CHECK(wubu_corner_refine_subpix(&cb3, sc, scn, 0) == -1, "radius 0 -> -1");
+    wubu_img_free(&cb2); wubu_img_free(&cb3);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");
