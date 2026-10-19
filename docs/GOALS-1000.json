@@ -4550,7 +4550,7 @@
    "n": 567,
    "domain": "WORLDSIM",
    "tier": "P2",
-   "title": "collision-layer bitmask and filtered pair query API",
+   "title": "collision-layer bitmask and filtered pair query API (DONE)",
    "module": "wubuos/src/worldsim/physics.c",
    "criterion": "make test_worldsim: a 16-layer bitmask query returns only category-paired bodies, a mask-0 body collides with nothing, and filter changes take effect on the very next tick"
   },
@@ -7294,7 +7294,7 @@
    "n": 910,
    "domain": "SECURITY",
    "tier": "P1",
-   "title": "Audit event emitted on every failed capability resolve",
+   "title": "Audit event emitted on every failed capability resolve (DONE)",
    "module": "wubuos/src/runtime/wubu_cap/wubu_cap_audit.c",
    "criterion": "make test_cap green: after 100 deliberate audience and rights denials the audit ring holds exactly 100 denial records, each carrying caller pid, cap kind, requested rights and the failing check"
   },

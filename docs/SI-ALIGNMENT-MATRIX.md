@@ -152,6 +152,13 @@ gap.
   is refused, not served) — protocol-hardening for *standards*. STACK #773's
   third pass cut strict-C11 diagnostics to 105 lines across 6 files. Brain gate:
   177 binaries / 155 ALL-PASSED / 0 failures.
+- **2026-10-18 (portfolio cycle 11)** — capability auditability. SECURITY #910
+  gives every refused resolve a record (who, which object kind, what was asked,
+  which check failed), so authority denials are inspectable rather than silent.
+  The work also exposed a stack overread in the audience API
+  (`wubu_cap_system_install_to_pid` passed a 1-element array to a terminator
+  scan); ASan now runs clean on `test_cap`. WORLDSIM #567 adds deterministic
+  collision-layer queries.
 - **2026-10-18 (portfolio cycle 10)** — determinism and measurement hygiene.
   WORLDSIM #564's PCG-XSH-RR passes a 1e6-sample chi-square, a run/bit-balance
   check, and a pinned 10k-value hash, so world state is reproducible across

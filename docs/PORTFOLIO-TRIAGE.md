@@ -25,15 +25,15 @@ Rules used:
 | DRIVERS | 50 | 1 | 19 | 9 | 21 |
 | NAMESPACE | 65 | 22 | 11 | 25 | 7 |
 | STACK | 45 | 18 | 10 | 8 | 9 |
-| SECURITY | 52 | 2 | 8 | 27 | 15 |
+| SECURITY | 52 | 3 | 7 | 27 | 15 |
 | FS | 50 | 0 | 8 | 32 | 10 |
 | PATHS | 32 | 18 | 7 | 0 | 7 |
 | RUNTIME | 65 | 30 | 7 | 16 | 12 |
-| WORLDSIM | 45 | 16 | 2 | 20 | 7 |
+| WORLDSIM | 45 | 17 | 1 | 20 | 7 |
 | NETWORK | 52 | 1 | 1 | 48 | 2 |
 | OMARCHY | 35 | 21 | 0 | 13 | 1 |
 | AGIEDR | 40 | 19 | 0 | 21 | 0 |
-| **Total** | **1000** | **319** | **213** | **237** | **231** |
+| **Total** | **1000** | **321** | **211** | **237** | **231** |
 
 ## What the split says
 
@@ -95,6 +95,25 @@ Rules used:
 - STACK #773 advanced: guarding the duplicate `GQA_KV_DIM` definition cut
   pedantic diagnostics **162 → 105** across **13 → 6** files; errors remain 0.
   Ten braced-groups and a few const/plugin warnings remain, so it stays open.
+
+## Cycle 11 disposition
+
+- Domains: WORLDSIM, SECURITY (BRAIN sat out after two consecutive cycles).
+- WORLDSIM #567 **closed**: `ws_collision_t` + `ws_collision_allows()` +
+  `ws_query_layer_pairs()` in `physics.c`. The test covers mutual pairing,
+  mask-0 isolation, a filter change taking effect on the immediate next query,
+  the 16th bit, max_pairs capping and NULL arguments. `test_worldsim` **44/44**.
+- SECURITY #910 **closed**: `wubu_cap_audit.c` adds a 256-record denial ring
+  (pid, kind, requested rights, failing check, monotonic seq). Wired into every
+  refusal path in `wubu_cap_resolve` (audience, rights, revoked). Exactly 100
+  denials produce exactly 100 records; 300 more wrap at capacity while the total
+  keeps counting. `test_cap` **41/41**.
+- **Real bug found by the work**: the audience arrays are scanned to a
+  `WUBU_PID_NONE` terminator with no length argument, so any shorter array is a
+  stack overread. ASan caught `wubu_cap_system_install_to_pid()` passing a
+  one-element array — production code, not just the test. Fixed there and in the
+  test callers, and the contract is now written in `wubu_cap.h`. ASan is clean
+  on the whole suite.
 
 ## Cycle 10 disposition
 
