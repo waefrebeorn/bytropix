@@ -15,4 +15,9 @@ int wubu_pnp_dlt(const double *p3, const double *p2, int n, double P[12]);
 /* Root-mean-square reprojection error of P over the same points. */
 double wubu_pnp_rmse(const double *p3, const double *p2, int n, const double P[12]);
 
+/* Split P = K [R|t] by RQ decomposition of its 3x3 left block.
+ * K: 9 doubles row-major upper-triangular, normalised so K[2][2] == 1.
+ * R: 9 doubles row-major rotation, t: 3 doubles. Returns 0, or -1. */
+int wubu_pnp_decompose(const double P[12], double K[9], double R[9], double t[3]);
+
 #endif /* WUBU_CALIB_H */

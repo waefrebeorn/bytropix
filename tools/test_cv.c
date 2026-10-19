@@ -767,6 +767,25 @@ int main(void)
     CHECK(rms < 1e-6, "DLT recovers the camera to machine precision on exact data");
     CHECK(wubu_pnp_dlt(p3, p2d, 5, Pest) == -1, "5 points -> -1");
 
+
+    /* --- RQ decomposition to K/R/t (wave 23) --- */
+    double K9[9], R9[9], t3[3];
+    CHECK(wubu_pnp_decompose(Pest, K9, R9, t3) == 0, "RQ decomposition runs");
+    const double Kexp[9] = {500, 0, 80,  0, 500, 80,  0, 0, 1};
+    double kerr = 0.0;
+    for (int i = 0; i < 9; i++) kerr += fabs(K9[i] - Kexp[i]);
+    printf("  K error=%.3g  t=(%.3f,%.3f,%.3f)\n", kerr, t3[0], t3[1], t3[2]);
+    CHECK(kerr < 1e-6, "intrinsics recovered exactly from the DLT matrix");
+
+    double rerr = 0.0;
+    for (int i = 0; i < 9; i++) rerr += fabs(R9[i] - (i % 4 == 0 ? 1.0 : 0.0));
+    CHECK(rerr < 1e-6, "rotation is identity for an axis-aligned camera");
+
+    /* P0's translation column is (0,0,6), so K^-1 p4 = (-0.96,-0.96,6). */
+    CHECK(fabs(t3[0] + 0.96) < 1e-6 && fabs(t3[1] + 0.96) < 1e-6 &&
+          fabs(t3[2] - 6.0) < 1e-6, "translation is K^-1 p4, exactly as defined");
+    CHECK(wubu_pnp_decompose(NULL, K9, R9, t3) == -1, "NULL P -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

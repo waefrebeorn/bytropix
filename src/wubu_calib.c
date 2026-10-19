@@ -128,3 +128,55 @@ double wubu_pnp_rmse(const double *p3, const double *p2, int n, const double P[1
     if (!used) return -1.0;
     return sqrt(acc / used);
 }
+
+
+int wubu_pnp_decompose(const double P[12], double K[9], double R[9], double t[3])
+{
+    if (!P || !K || !R || !t) return -1;
+
+    /* RQ by Gram-Schmidt from the bottom row up: row i of M is expressed in
+     * the basis Q[i..2], so the coefficient matrix is upper triangular. */
+    double M[3][3], Q[3][3], Rk[3][3];
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++) M[r][c] = P[4 * r + c];
+
+    for (int i = 2; i >= 0; i--) {
+        double v[3] = {M[i][0], M[i][1], M[i][2]};
+
+        for (int j = i + 1; j < 3; j++) {
+            double dot = 0.0;
+            for (int c = 0; c < 3; c++) dot += v[c] * Q[j][c];
+            Rk[i][j] = dot;
+            for (int c = 0; c < 3; c++) v[c] -= dot * Q[j][c];
+        }
+        double norm = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (norm < 1e-12) return -1;
+        Rk[i][i] = norm;
+        for (int c = 0; c < 3; c++) Q[i][c] = v[c] / norm;
+    }
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < i; j++) Rk[i][j] = 0.0;
+
+    /* Positive diagonal: flip row i of both factors together. */
+    for (int i = 0; i < 3; i++) {
+        if (Rk[i][i] < 0.0) {
+            for (int c = 0; c < 3; c++) { Rk[i][c] = -Rk[i][c]; Q[i][c] = -Q[i][c]; }
+        }
+    }
+    if (fabs(Rk[2][2]) < 1e-12) return -1;
+
+    double scale = Rk[2][2];
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++) K[r * 3 + c] = Rk[r][c] / scale;
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++) R[r * 3 + c] = Q[r][c];
+
+    double b[3] = {P[3] / scale, P[7] / scale, P[11] / scale};
+    for (int i = 2; i >= 0; i--) {
+        double acc = b[i];
+        for (int j = i + 1; j < 3; j++) acc -= K[i * 3 + j] * t[j];
+        if (fabs(K[i * 3 + i]) < 1e-12) return -1;
+        t[i] = acc / K[i * 3 + i];
+    }
+    return 0;
+}
