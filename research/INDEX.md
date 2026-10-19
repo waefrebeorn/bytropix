@@ -2289,9 +2289,14 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   integral + O(1) box stats, fused Sobel, Otsu, 3x3 Gaussian), `wubu_features`
   (FAST-9, 256-bit BRIEF, Hamming), `wubu_uplift` (2x mass-conserving zoom that
   is the exact right-inverse of 2x2 box down, plus a D4-invariant hash).
-  `test_cv` 85 checks across 11 waves (ORB pyramid, matcher, morphology, LK +
+  `test_cv` 173 checks across 32 waves (ORB pyramid, matcher, morphology, LK +
   pyramid LK, SAE argmin, foveated ROIs, Harris/dedupe, contour polylines, burst
-  SR at RMSE 0.885). Registry of every solidcv module with honest status:
-  `docs/CV-REIMPLEMENTATION.md`. `wired`
+  SR at RMSE 0.885, block flow + parabolic sub-pixel, Horn-Schunck, GlassBox +
+  look/budget, homography + warp, DLT PnP + RQ to K/R/t, marker decode + pose,
+  quaternion pose fusion, Gauss-Newton and multi-marker refinement, focal and
+  principal-point calibration, radial distortion model). `test_eye` 26 and
+  `test_look` 9. Rejected and recorded: linear-moment Farneback (475 px error)
+  and single-view distortion fitting (degenerate against pose). Registry of
+  every solidcv module with honest status: `docs/CV-REIMPLEMENTATION.md`. `wired`
 
 ## WaefreBeorn Umbrella License v3.0
