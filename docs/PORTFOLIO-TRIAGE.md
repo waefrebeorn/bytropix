@@ -1,5 +1,10 @@
 # Portfolio triage — cycle 2 (2026-10-18)
 
+> **Superseded policy (2026-10-18).** This page is the cycle-2 snapshot. Current
+> counts are 321 done / 679 open, and the domain-rotation rule below is retired
+> in favour of cluster-first closure. See `docs/GOAL-LAYOUT-REASSESSMENT.md` and
+> `tools/goal_leverage.py`.
+
 Every one of the 1,000 registry goals is classified. The full per-goal
 machine-readable status is `python3 tools/goal_portfolio.py --json`; this page
 is the cycle's published summary.
