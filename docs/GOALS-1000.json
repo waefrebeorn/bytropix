@@ -1486,9 +1486,9 @@
    "n": 184,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "parser error recovery skips to the next semicolon and continues reporting",
+   "title": "parser error recovery skips to the next semicolon and continues reporting (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "make test_gauntlet_v3: a source with 3 independent syntax errors reports 3 diagnostics (not 1 fatal), each with a distinct line number"
+   "criterion": "make test_gauntlet_v3: a source with 3 independent syntax errors reports 3 diagnostics (not 1 fatal), each with a distinct line number [verified: tools/test_diag.c \u2014 three independent bad initialisers report three diagnostics on lines 1, 2, 3]"
   },
   {
    "n": 185,
