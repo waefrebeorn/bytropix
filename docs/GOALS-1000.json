@@ -3246,7 +3246,7 @@
    "n": 404,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Tread at an offset past EOF returns a zero-count Rread",
+   "title": "Tread at an offset past EOF returns a zero-count Rread (DONE)",
    "module": "wubuos/src/runtime/styxfs_callbacks.c",
    "criterion": "make test_styxfs green: read of a 37-byte synthetic file at offset 1000 returns count=0 (not Rerror), offset 36 returns 1 byte, offset 30 returns 7 bytes"
   },
