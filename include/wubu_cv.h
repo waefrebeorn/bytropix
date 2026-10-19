@@ -55,4 +55,20 @@ typedef struct {
 int wubu_find_contours(const wubu_img *edges, wubu_contour *out,
                        int max_contours, int min_area);
 
+/* 3x3 morphology. mode 0 = erode (min), 1 = dilate (max). Edge-clamped. */
+int wubu_morph3(const wubu_img *in, wubu_img *out, int mode);
+
+/* --- Foveated ROI selection (wave 7) ---------------------------------- */
+
+typedef struct {
+    int x, y, w, h;
+    double score;    /* summed |gx|+|gy| over the tile */
+} wubu_roi;
+
+/* Pick up to k non-overlapping (in tile space, nms_radius apart) regions with
+ * the highest edge energy. Tiles with zero energy are never returned.
+ * Returns the count, or -1. */
+int wubu_foveated_rois(const wubu_img *im, int tile, int k, int nms_radius,
+                       wubu_roi *out, int max_rois);
+
 #endif /* WUBU_CV_H */

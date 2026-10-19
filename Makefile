@@ -876,8 +876,8 @@ test_rlm: tools/test_rlm.c src/wubu_rlm.c include/wubu_rlm.h
 ledger-check:
 	python3 tools/pollution_ledger.py --check
 
-test_cv: tools/test_cv.c src/wubu_cv.c src/wubu_features.c src/wubu_uplift.c include/wubu_cv.h include/wubu_features.h include/wubu_uplift.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_cv.c src/wubu_cv.c src/wubu_features.c src/wubu_uplift.c -lm
+test_cv: tools/test_cv.c src/wubu_cv.c src/wubu_features.c src/wubu_uplift.c src/wubu_flow.c src/wubu_sae.c include/wubu_cv.h include/wubu_features.h include/wubu_uplift.h include/wubu_flow.h include/wubu_sae.h
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_cv.c src/wubu_cv.c src/wubu_features.c src/wubu_uplift.c src/wubu_flow.c src/wubu_sae.c -lm
 	./$@
 
 test_eye: tools/test_eye.c src/wubu_eye.c include/wubu_eye.h

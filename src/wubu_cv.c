@@ -303,3 +303,84 @@ int wubu_find_contours(const wubu_img *edges, wubu_contour *out,
     free(seen); free(stack);
     return found;
 }
+
+int wubu_morph3(const wubu_img *in, wubu_img *out, int mode)
+{
+    if (!in || !in->data || !out || !out->data) return -1;
+    if (mode != 0 && mode != 1) return -1;
+    if (in->w != out->w || in->h != out->h) return -1;
+
+    for (int y = 0; y < in->h; y++) {
+        for (int x = 0; x < in->w; x++) {
+            int v = mode ? 0 : 255;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    int p = wubu_img_at(in, x + dx, y + dy);
+                    if (mode) { if (p > v) v = p; }
+                    else      { if (p < v) v = p; }
+                }
+            }
+            out->data[(size_t)y * out->stride + x] = (uint8_t)v;
+        }
+    }
+    return 0;
+}
+
+int wubu_foveated_rois(const wubu_img *im, int tile, int k, int nms_radius,
+                       wubu_roi *out, int max_rois)
+{
+    if (!im || !im->data || !out || tile <= 0 || k <= 0 || max_rois <= 0) return -1;
+    if (nms_radius < 0) return -1;
+
+    int w = im->w, h = im->h;
+    int gw = (w + tile - 1) / tile, gh = (h + tile - 1) / tile;
+    size_t nt = (size_t)gw * (size_t)gh;
+
+    int16_t *gx = (int16_t *)malloc((size_t)w * h * sizeof *gx);
+    int16_t *gy = (int16_t *)malloc((size_t)w * h * sizeof *gy);
+    double *score = (double *)calloc(nt, sizeof *score);
+    uint8_t *used = (uint8_t *)calloc(nt, 1);
+    if (!gx || !gy || !score || !used) {
+        free(gx); free(gy); free(score); free(used);
+        return -1;
+    }
+
+    wubu_sobel3(im, gx, gy);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            size_t i = (size_t)y * w + x;
+            int a = gx[i], b = gy[i];
+            if (a < 0) a = -a;
+            if (b < 0) b = -b;
+            score[(size_t)(y / tile) * gw + (x / tile)] += (double)(a + b);
+        }
+    }
+
+    int found = 0;
+    while (found < k && found < max_rois) {
+        size_t best = nt;
+        double bestv = 0.0;
+        for (size_t i = 0; i < nt; i++)
+            if (!used[i] && score[i] > bestv) { bestv = score[i]; best = i; }
+        if (best == nt) break;   /* nothing left with energy */
+
+        int bx = (int)(best % (size_t)gw), by = (int)(best / (size_t)gw);
+        for (int dy = -nms_radius; dy <= nms_radius; dy++)
+            for (int dx = -nms_radius; dx <= nms_radius; dx++) {
+                int nx = bx + dx, ny = by + dy;
+                if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+                used[(size_t)ny * gw + nx] = 1;
+            }
+
+        int x0 = bx * tile, y0 = by * tile;
+        out[found].x = x0;
+        out[found].y = y0;
+        out[found].w = (x0 + tile <= w) ? tile : (w - x0);
+        out[found].h = (y0 + tile <= h) ? tile : (h - y0);
+        out[found].score = bestv;
+        found++;
+    }
+
+    free(gx); free(gy); free(score); free(used);
+    return found;
+}

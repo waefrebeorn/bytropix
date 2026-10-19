@@ -85,3 +85,71 @@ int wubu_hamming256(const uint8_t a[32], const uint8_t b[32])
     for (int i = 0; i < 32; i++) d += __builtin_popcount((unsigned)(a[i] ^ b[i]));
     return d;
 }
+/* ---------------- ORB pyramid + matching (wave 3) ---------------- */
+
+#include "wubu_uplift.h"
+#include <limits.h>
+
+int wubu_orb_detect(const wubu_img *im, int levels, int threshold,
+                    wubu_keypoint *out, int max_keypoints)
+{
+    if (!im || !im->data || !out || levels < 1 || max_keypoints <= 0) return -1;
+
+    wubu_img cur = {0};
+    if (wubu_img_clone(im, &cur) != 0) return -1;
+
+    int n = 0, scale = 1;
+    for (int L = 0; L < levels && n < max_keypoints; L++) {
+        wubu_keypoint tmp[256];
+        int k = wubu_fast9(&cur, threshold, 3, tmp, 256);
+        if (k < 0) break;
+
+        for (int i = 0; i < k && n < max_keypoints; i++) {
+            tmp[i].level = L;
+            wubu_brief256(&cur, &tmp[i]);
+            int ox = tmp[i].x * scale, oy = tmp[i].y * scale;
+            if (ox >= im->w || oy >= im->h) continue;
+            out[n] = tmp[i];
+            out[n].x = ox;
+            out[n].y = oy;
+            n++;
+        }
+
+        if (L + 1 < levels) {
+            wubu_img next = {0};
+            if (wubu_down2x_box(&cur, &next) != 0) break;
+            wubu_img_free(&cur);
+            cur = next;
+            scale *= 2;
+        }
+    }
+    wubu_img_free(&cur);
+    return n;
+}
+
+int wubu_match_descriptors(const wubu_keypoint *a, int na,
+                           const wubu_keypoint *b, int nb,
+                           int max_dist, float ratio,
+                           wubu_match *out, int max_matches)
+{
+    if (!a || !b || !out || na <= 0 || nb <= 0 || max_matches <= 0) return -1;
+    if (max_dist < 0 || ratio <= 0.0f) return -1;
+
+    int m = 0;
+    for (int i = 0; i < na && m < max_matches; i++) {
+        int best = INT_MAX, second = INT_MAX, bi = -1;
+        for (int j = 0; j < nb; j++) {
+            int d = wubu_hamming256(a[i].desc, b[j].desc);
+            if (d < best) { second = best; best = d; bi = j; }
+            else if (d < second) second = d;
+        }
+        if (bi < 0 || best > max_dist) continue;
+        /* Lowe ratio test: an ambiguous best (second close to it) is dropped. */
+        if (second != INT_MAX && !((float)best < ratio * (float)second)) continue;
+        out[m].a = i;
+        out[m].b = bi;
+        out[m].dist = best;
+        m++;
+    }
+    return m;
+}

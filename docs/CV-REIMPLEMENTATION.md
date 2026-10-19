@@ -12,34 +12,36 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 | solidcv module | Ours | Status | Evidence / what is missing |
 |---|---|---|---|
 | `core` (Mat, Scalar, Rect, SVD, solve) | `wubu_cv` (`wubu_img`) | **partial** | alloc/clone/fill/at tested; SVD, linear solve and multi-channel types absent |
-| `imgproc` (filters, edges, Otsu, morphology, contours) | `wubu_cv` | **partial** | integral image, O(1) box mean/var, fused 3×3 Sobel, Otsu, 3×3 Gaussian, **Canny (NMS + hysteresis)** and **8-connected contour boxes** tested; morphology, GrabCut and full contour point tracing queued |
-| `features2d` (ORB, BFMatcher) | `wubu_features` | **partial** | FAST-9, 256-bit BRIEF, Hamming tested; ORB pyramid, Harris scoring and a full matcher queued |
+| `imgproc` (filters, edges, Otsu, morphology, contours) | `wubu_cv` | **partial** | integral image, O(1) box mean/var, fused 3×3 Sobel, Otsu, 3×3 Gaussian, Canny (NMS + hysteresis), 8-connected contour boxes, **3×3 dilate/erode**, **foveated ROI tiles**; GrabCut and full contour point lists queued |
+| `features2d` (ORB, BFMatcher) | `wubu_features` | **done (core)** | FAST-9, 256-bit BRIEF, Hamming, **2-level ORB pyramid** and a **ratio-test matcher** tested; Harris scoring and multi-scale dedupe queued |
 | `calib3d` (StereoSGBM, PnP, chessboard, ArUco) | — | **queued** | needs a calibrated camera pipeline; not on the eyes' critical path yet |
-| `video` (Lucas–Kanade, Farneback) | — | **queued** | optical flow is the next rung after patch differencing |
+| `video` (Lucas–Kanade, Farneback) | `wubu_flow` | **partial** | single-scale sparse LK tested (recovers a known (2,3) shift exactly); pyramid and dense Farneback queued |
 | `pixelean` (bitplanes, D4, SE(2) jets) | `wubu_eye` + `wubu_uplift` | **partial** | XOR+popcount carrier and D4 canonical hash tested; bitplane partition and SE(2) jets queued |
 | `voxelean` (octree, Betti, wavelets) | — | **queued** | no 3D volume pipeline to attach it to |
 | `worldtube` ((3+1)D, CFL cones) | — | **queued** | requires metric camera calibration |
 | `realitycomb` (static/moving separation) | — | **queued** | depends on flow (video) |
 | `hardware` (NEON/Metal/PTX) | CPU C11 | **partial (deliberate)** | portable integer/SIMD-friendly code; no NEON/Metal; CUDA lives in the engine, not here |
-| `mechinterp` (SAE matcher, patch pruner, GlassBox) | `wubu_eye` | **partial** | patch-token pruner tested (26 checks); 256-bit SAE atom matcher and the 64-D signature queued |
-| `uplift` (mass-conserving zoom, burst SR, foveated ROIs) | `wubu_uplift` | **partial** | 2× uplift and 2× box down tested as an exact right-inverse (round-trip equality) plus D4-invariant hash; burst SR and foveated ROI selection queued |
+| `mechinterp` (SAE matcher, patch pruner, GlassBox) | `wubu_eye` + `wubu_sae` | **partial** | patch-token pruner (26 checks) and **256-bit Hamming argmin matcher** tested; the 64-D GlassBox signature queued |
+| `uplift` (mass-conserving zoom, burst SR, foveated ROIs) | `wubu_uplift` + `wubu_cv` | **partial** | 2× uplift / 2× box down round-trip and D4 hash tested; **foveated ROI tile selection** tested; burst SR queued |
 | `cloud_ws` (metered WebSocket) | — | **rejected** | a paid external service; the run policy is third-party on our kernel, never the reverse |
 
 ## Tests
 
 - `test_eye` — 26 checks: patch masks, XOR/popcount, tolerance vs threshold, partial patches.
-- `test_cv` — **39 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
+- `test_cv` — **68 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
   Otsu on a bimodal image, Gaussian edge clamp, FAST-9 on a square, BRIEF determinism,
   Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance,
-  Canny on one rectangle and two squares, contour bbox origin/size and thinness.
+  Canny on one rectangle and two squares, contour bbox origin/size and thinness,
+  ORB pyramid + ratio-test matcher, morphology cores, LK flow on a known shift,
+  SAE argmin/signature, foveated ROI selection.
 
 ## Next rungs, in order
 
-1. **Morphology + full contour tracing** (imgproc) — dilate/erode, then point lists rather than boxes.
-2. **ORB pyramid + matcher** (features2d) — track a widget across frames.
-3. **Lucas–Kanade** (video) — motion, which also unlocks `realitycomb`.
-4. **SAE binary matcher** (mechinterp) — 256-bit Hamming argmin is already half-written by `wubu_hamming256`.
-5. **Foveated ROI selection** (uplift) — the decision plane already knows what a token costs.
+1. **LK pyramid** (video) — coarse-to-fine so motion beyond ±2 px is recoverable.
+2. **Contour point lists** (imgproc) — boxes now; per-contour polylines next.
+3. **Harris scoring + keypoint dedupe** (features2d) — fewer, better corners.
+4. **Burst super-resolution** (uplift) — sub-pixel shift-and-add across frames.
+5. **GlassBox 64-D signature** (mechinterp) — the hand-auditable descriptor.
 
 ## Honest note on the source
 

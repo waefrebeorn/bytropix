@@ -4,6 +4,8 @@
 #include "wubu_cv.h"
 #include "wubu_features.h"
 #include "wubu_uplift.h"
+#include "wubu_flow.h"
+#include "wubu_sae.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -167,6 +169,172 @@ int main(void)
 
     wubu_img_free(&rect); wubu_img_free(&edges);
     wubu_img_free(&two); wubu_img_free(&edges2);
+
+    /* --- ORB pyramid + matcher (wave 3) --- */
+    wubu_keypoint orb[128];
+    int no = wubu_orb_detect(&sqimg, 2, 40, orb, 128);
+    printf("  orb keypoints: %d\n", no);
+    CHECK(no > 0, "ORB detects across the pyramid");
+    int in_bounds = 1, levels_ok = 1;
+    for (int i = 0; i < no; i++) {
+        if (orb[i].x < 0 || orb[i].y < 0 || orb[i].x >= 64 || orb[i].y >= 64) in_bounds = 0;
+        if (orb[i].level < 0 || orb[i].level > 1) levels_ok = 0;
+    }
+    CHECK(in_bounds, "ORB maps coordinates back inside the original image");
+    CHECK(levels_ok, "ORB records a valid pyramid level");
+
+    wubu_keypoint A[4], B[4];
+    memset(A, 0, sizeof A); memset(B, 0, sizeof B);
+    for (int i = 0; i < 4; i++) { A[i].desc[i] = 0xFF; B[i].desc[i] = 0xFF; }
+
+    wubu_match mm[8];
+    int nm = wubu_match_descriptors(A, 4, B, 4, 10, 0.8f, mm, 8);
+    CHECK(nm == 4, "self-matching yields one match per query");
+    int all_zero = 1;
+    for (int i = 0; i < nm; i++) if (mm[i].dist != 0) all_zero = 0;
+    CHECK(all_zero, "identical descriptors match at distance 0");
+
+    memcpy(B[1].desc, B[0].desc, 32);
+    CHECK(wubu_match_descriptors(A, 1, B, 2, 10, 0.8f, mm, 8) == 0,
+          "ratio test rejects an ambiguous best");
+
+    CHECK(wubu_match_descriptors(A, 1, B, 1, 0, 0.8f, mm, 8) == 1,
+          "max_dist=0 still accepts an exact match");
+    CHECK(wubu_match_descriptors(NULL, 1, B, 1, 0, 0.8f, mm, 8) == -1,
+          "NULL query set -> -1");
+
+    /* --- morphology (wave 4) --- */
+    wubu_img dot = {0}, dil = {0};
+    wubu_img_alloc(&dot, 16, 16);
+    wubu_img_alloc(&dil, 16, 16);
+    wubu_img_fill(&dot, 0);
+    dot.data[8 * dot.stride + 8] = 255;
+    CHECK(wubu_morph3(&dot, &dil, 1) == 0, "dilate runs");
+    int lit = 0;
+    for (int i = 0; i < 16 * 16; i++) if (dil.data[i]) lit++;
+    CHECK(lit == 9, "a single pixel dilates to a 3x3 block");
+
+    wubu_img block = {0}, ero = {0};
+    wubu_img_alloc(&block, 16, 16);
+    wubu_img_alloc(&ero, 16, 16);
+    for (int y = 5; y < 10; y++) for (int x = 5; x < 10; x++) block.data[y * block.stride + x] = 200;
+    CHECK(wubu_morph3(&block, &ero, 0) == 0, "erode runs");
+    int inside = 0, outside = 0;
+    for (int y = 0; y < 16; y++)
+        for (int x = 0; x < 16; x++) {
+            int v = ero.data[y * ero.stride + x];
+            if (x >= 6 && x <= 8 && y >= 6 && y <= 8) { if (v == 200) inside++; }
+            else if (v != 0) outside++;
+        }
+    CHECK(inside == 9 && outside == 0, "a 5x5 block erodes to its 3x3 core");
+    CHECK(wubu_morph3(&dot, &dil, 2) == -1, "unknown mode -> -1");
+
+    /* --- Lucas-Kanade (wave 5) --- */
+    wubu_img s2 = {0}, moved = {0};
+    wubu_img_alloc(&s2, 96, 96);
+    wubu_img_alloc(&moved, 96, 96);
+    /* A deterministic, well-conditioned texture: LK needs gradient in both axes. */
+    for (int y = 0; y < 96; y++) {
+        for (int x = 0; x < 96; x++) {
+            double v = 128.0 + 55.0 * sin(x * 0.31) + 45.0 * cos(y * 0.27)
+                     + 20.0 * sin((x + y) * 0.13);
+            if (v < 0.0) v = 0.0;
+            if (v > 255.0) v = 255.0;
+            s2.data[y * s2.stride + x] = (uint8_t)v;
+        }
+    }
+
+    for (int y = 0; y < 96; y++)
+        for (int x = 0; x < 96; x++)
+            moved.data[y * moved.stride + x] = wubu_img_at(&s2, x - 2, y - 3);
+
+    wubu_keypoint fp[3];
+    fp[0].x = 40; fp[0].y = 40;
+    fp[1].x = 48; fp[1].y = 52;
+    fp[2].x = 56; fp[2].y = 44;
+    float fdx[3], fdy[3];
+    CHECK(wubu_lk_flow(&s2, &moved, fp, 3, 15, 10, fdx, fdy) == 0, "LK runs");
+    printf("  flow: (%.2f,%.2f) (%.2f,%.2f) (%.2f,%.2f)\n",
+           fdx[0], fdy[0], fdx[1], fdy[1], fdx[2], fdy[2]);
+    int flow_ok = 1;
+    for (int i = 0; i < 3; i++)
+        if (fabsf(fdx[i] - 2.0f) > 0.6f || fabsf(fdy[i] - 3.0f) > 0.6f) flow_ok = 0;
+    CHECK(flow_ok, "LK recovers a known (2,3) shift within 0.6 px");
+
+    float idx_[3], idy[3];
+    CHECK(wubu_lk_flow(&s2, &s2, fp, 3, 15, 10, idx_, idy) == 0, "LK identity runs");
+    CHECK(fabsf(idx_[0]) < 0.05f && fabsf(idy[0]) < 0.05f, "identity pair gives ~zero flow");
+    CHECK(wubu_lk_flow(&s2, &s2, fp, 3, 4, 10, idx_, idy) == -1, "even window -> -1");
+
+    wubu_img_free(&dot); wubu_img_free(&dil); wubu_img_free(&block); wubu_img_free(&ero);
+    wubu_img_free(&s2); wubu_img_free(&moved);
+
+
+    /* --- SAE 256-bit matcher (wave 6) --- */
+    wubu_sae_atom atoms[3];
+    memset(atoms, 0, sizeof atoms);
+    atoms[0].id = 10; atoms[1].id = 20; atoms[2].id = 30;
+    atoms[1].sig[0] = 0xFF;
+    atoms[2].sig[1] = 0xFF;
+
+    uint8_t q[32]; memset(q, 0, sizeof q);
+    int sai = -1, sad = -1;
+    CHECK(wubu_sae_match(q, atoms, 3, &sai, &sad) == 0 && sai == 0 && sad == 0,
+          "SAE: exact match at distance 0");
+    q[0] = 0xFF;
+    CHECK(wubu_sae_match(q, atoms, 3, &sai, &sad) == 0 && sai == 1 && sad == 0,
+          "SAE: nearest atom by Hamming");
+    q[0] = 0x0F;
+    CHECK(wubu_sae_match(q, atoms, 3, &sai, &sad) == 0 && sai == 0 && sad == 4,
+          "SAE: equal distances resolve to the lowest index");
+
+    memset(q, 0, sizeof q); q[0] = 0xFF;
+    int oi = -9, od = -9;
+    CHECK(wubu_sae_match_batch(q, 1, atoms, 3, 0, &oi, &od) == 0 && oi == 1 && od == 0,
+          "SAE batch: max_dist accepts the exact hit");
+    memset(q, 0, sizeof q); q[5] = 0xFF;
+    CHECK(wubu_sae_match_batch(q, 1, atoms, 3, 0, &oi, &od) == 0 && oi == -1,
+          "SAE batch: unmatched query reports -1");
+
+    float vec[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    uint8_t sig[32];
+    wubu_sae_signature(vec, 4, sig);
+    CHECK(sig[0] == 0x0C && sig[1] == 0,
+          "SAE signature sets bits above the mean only");
+
+    /* --- foveated ROI selection (wave 7) --- */
+    wubu_img blank = {0};
+    wubu_img_alloc(&blank, 128, 128);
+    wubu_img_fill(&blank, 40);
+    wubu_roi rois[4];
+    CHECK(wubu_foveated_rois(&blank, 16, 2, 1, rois, 4) == 0,
+          "ROI: a featureless frame yields no regions");
+
+    wubu_img busy = {0};
+    wubu_img_alloc(&busy, 128, 128);
+    wubu_img_fill(&busy, 40);
+    for (int y = 16; y < 48; y++)
+        for (int x = 16; x < 48; x++)
+            busy.data[y * busy.stride + x] = ((x / 2 + y / 2) & 1) ? 220 : 30;
+    for (int y = 80; y < 112; y++)
+        for (int x = 80; x < 112; x++)
+            busy.data[y * busy.stride + x] = ((x / 2 + y / 2) & 1) ? 220 : 30;
+
+    int nr = wubu_foveated_rois(&busy, 16, 2, 1, rois, 4);
+    printf("  rois: %d (first %d,%d %dx%d)\n", nr,
+           nr > 0 ? rois[0].x : -1, nr > 0 ? rois[0].y : -1,
+           nr > 0 ? rois[0].w : 0, nr > 0 ? rois[0].h : 0);
+    CHECK(nr == 2, "ROI: two busy squares select two regions");
+    int hit_a = 0, hit_b = 0;
+    for (int i = 0; i < nr; i++) {
+        int cx = rois[i].x + rois[i].w / 2, cy = rois[i].y + rois[i].h / 2;
+        if (cx >= 16 && cx < 48 && cy >= 16 && cy < 48) hit_a = 1;
+        if (cx >= 80 && cx < 112 && cy >= 80 && cy < 112) hit_b = 1;
+    }
+    CHECK(hit_a && hit_b, "ROI: both regions are covered by the selected tiles");
+    CHECK(wubu_foveated_rois(&busy, 16, 1, 1, rois, 4) == 1, "ROI: k caps the selection");
+    CHECK(wubu_foveated_rois(NULL, 16, 1, 1, rois, 4) == -1, "ROI: NULL image -> -1");
+    wubu_img_free(&blank); wubu_img_free(&busy);
 
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
