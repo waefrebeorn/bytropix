@@ -6630,7 +6630,7 @@
    "n": 827,
    "domain": "FS",
    "tier": "P1",
-   "title": "9P Tlock/Tunlock byte-range file locking over the 9P path",
+   "title": "9P Tlock/Tunlock byte-range file locking over the 9P path (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
    "criterion": "make test_ns_9p green: two clients attaching the same file, the second Tlock on an overlapping byte range blocks until the first Tlocks's unlock, non-overlapping ranges proceed concurrently, and a client that vanishes has its locks released (no deadlock on the next lock request)"
   },
