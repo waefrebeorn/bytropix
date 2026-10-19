@@ -3414,7 +3414,7 @@
    "n": 425,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "NtCreateDirectoryObject and OB directory enumeration over /n",
+   "title": "NtCreateDirectoryObject and OB directory enumeration over /n (DONE)",
    "module": "wubuos/src/runtime/vsl/vsl_nt_ob.c",
    "criterion": "make test_nt_ob green: NtCreateDirectoryObject(L\"\\\\Brain\\\\Kv\\\\hot\") creates a cap-backed STYX_NODE directory visible as /n/brain/kv/hot, and NtQueryDirectoryObject lists it with the same names as a 9P readdir"
   },
@@ -3430,7 +3430,7 @@
    "n": 427,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "NtQueryDirectoryFile over a STYX_NODE directory",
+   "title": "NtQueryDirectoryFile over a STYX_NODE directory (DONE)",
    "module": "wubuos/src/runtime/vsl/vsl_nt_ob.c",
    "criterion": "make test_nt_ob green: repeated NtQueryDirectoryFile calls with RestartScan=false page through /n/models without repeating an entry, the last call returns STATUS_NO_MORE_ENTRIES, and a restart-scan re-read enumerates the identical set"
   },
