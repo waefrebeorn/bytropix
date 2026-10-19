@@ -3366,7 +3366,7 @@
    "n": 419,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "QTMOUNT QID type advertised in Tstat for every /n mount point",
+   "title": "QTMOUNT QID type advertised in Tstat for every /n mount point (DONE)",
    "module": "wubuos/src/runtime/styxfs_callbacks.c",
    "criterion": "make test_styxfs green: Tstat on a mounted /n path sets the QTMOUNT bit and a distinct qid.path from the underlying node, so a 9P2000 client can detect the boundary without walking it"
   },
