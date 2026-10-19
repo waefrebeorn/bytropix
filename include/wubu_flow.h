@@ -33,4 +33,9 @@ int wubu_lk_flow_pyr(const wubu_img *prev, const wubu_img *curr,
 int wubu_block_flow(const wubu_img *prev, const wubu_img *curr,
                     int block, int search, int16_t *dx, int16_t *dy);
 
+/* Sub-pixel refinement of block matching: the integer SAD minimum is refined
+ * with a 1-D parabola on each axis. Returns the block count, or -1. */
+int wubu_block_flow_subpix(const wubu_img *prev, const wubu_img *curr,
+                           int block, int search, float *dx, float *dy);
+
 #endif /* WUBU_FLOW_H */

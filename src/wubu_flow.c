@@ -185,3 +185,80 @@ int wubu_block_flow(const wubu_img *prev, const wubu_img *curr,
     }
     return n;
 }
+
+
+static long block_sad(const wubu_img *a, const wubu_img *b, int cx, int cy,
+                      int block, int sx, int sy)
+{
+    int w = a->w, h = a->h;
+    long sad = 0;
+    for (int oy = -block / 2; oy < block / 2; oy += 2) {
+        int py = cy + oy, qy = py + sy;
+        if (py < 0 || py >= h || qy < 0 || qy >= h) return -1;
+        for (int ox = -block / 2; ox < block / 2; ox += 2) {
+            int px = cx + ox, qx = px + sx;
+            if (px < 0 || px >= w || qx < 0 || qx >= w) return -1;
+            int va = a->data[(size_t)py * a->stride + px];
+            int vb = b->data[(size_t)qy * b->stride + qx];
+            sad += va > vb ? va - vb : vb - va;
+        }
+    }
+    return sad;
+}
+
+static float parabola(float sm, float s0, float sp)
+{
+    float den = sm - 2.0f * s0 + sp;
+    if (fabsf(den) < 1e-6f) return 0.0f;
+    float d = 0.5f * (sm - sp) / den;
+    if (d > 0.5f) d = 0.5f;
+    if (d < -0.5f) d = -0.5f;
+    return d;
+}
+
+int wubu_block_flow_subpix(const wubu_img *prev, const wubu_img *curr,
+                           int block, int search, float *dx, float *dy)
+{
+    if (!prev || !curr || !dx || !dy) return -1;
+    if (prev->w != curr->w || prev->h != curr->h) return -1;
+    if (block < 4 || block % 2 || search < 0 || search > 16) return -1;
+
+    int w = prev->w, h = prev->h;
+    int gw = (w + block - 1) / block, gh = (h + block - 1) / block;
+    int n = 0;
+
+    for (int by = 0; by < gh; by++) {
+        for (int bx = 0; bx < gw; bx++) {
+            int cx = bx * block + block / 2;
+            int cy = by * block + block / 2;
+            int bestx = 0, besty = 0;
+            long best = -1;
+
+            for (int sy = -search; sy <= search; sy++) {
+                for (int sx = -search; sx <= search; sx++) {
+                    long sad = block_sad(prev, curr, cx, cy, block, sx, sy);
+                    if (sad < 0) continue;
+                    if (best < 0 || sad < best) { best = sad; bestx = sx; besty = sy; }
+                }
+            }
+
+            float fx = (float)bestx, fy = (float)besty;
+            if (best >= 0) {
+                long l = block_sad(prev, curr, cx, cy, block, bestx - 1, besty);
+                long r = block_sad(prev, curr, cx, cy, block, bestx + 1, besty);
+                if (l >= 0 && r >= 0)
+                    fx += parabola((float)l, (float)best, (float)r);
+
+                long u = block_sad(prev, curr, cx, cy, block, bestx, besty - 1);
+                long d = block_sad(prev, curr, cx, cy, block, bestx, besty + 1);
+                if (u >= 0 && d >= 0)
+                    fy += parabola((float)u, (float)best, (float)d);
+            }
+
+            dx[n] = fx;
+            dy[n] = fy;
+            n++;
+        }
+    }
+    return n;
+}

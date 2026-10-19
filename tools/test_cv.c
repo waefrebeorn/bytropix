@@ -16,6 +16,18 @@ static int fails = 0, checks = 0;
 #define CHECK(c, m) do { checks++; if (!(c)) { printf("  [FAIL] %s\n", m); fails++; } \
                          else printf("  [PASS] %s\n", m); } while (0)
 
+
+static float bilin(const wubu_img *im, float x, float y)
+{
+    int x0 = (int)floorf(x), y0 = (int)floorf(y);
+    float fx = x - (float)x0, fy = y - (float)y0;
+    float a = (float)wubu_img_at(im, x0, y0);
+    float b = (float)wubu_img_at(im, x0 + 1, y0);
+    float c = (float)wubu_img_at(im, x0, y0 + 1);
+    float d = (float)wubu_img_at(im, x0 + 1, y0 + 1);
+    return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+}
+
 int main(void)
 {
     printf("=== test_cv (core, imgproc, features, uplift) ===\n");
@@ -556,6 +568,37 @@ int main(void)
     CHECK(agree >= (interior * 9) / 10, ">=90% of interior blocks recover the (3,4) shift");
     CHECK(wubu_block_flow(&bm_a, &bm_b, 15, 6, bfx, bfy) == -1, "odd block size -> -1");
     wubu_img_free(&bm_a); wubu_img_free(&bm_b);
+
+
+    /* --- sub-pixel block flow (wave 15) --- */
+    wubu_img sp_a = {0}, sp_s = {0}, sp_b = {0};
+    wubu_img_alloc(&sp_a, 128, 128);
+    wubu_img_alloc(&sp_s, 128, 128);
+    wubu_img_alloc(&sp_b, 128, 128);
+    unsigned ss = 1234;
+    for (int i = 0; i < 128 * 128; i++) { ss = ss * 1664525u + 1013904223u; sp_a.data[i] = (uint8_t)(ss >> 24); }
+    wubu_gauss3(&sp_a, &sp_s);
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 128; x++)
+            sp_b.data[y * sp_b.stride + x] = (uint8_t)(bilin(&sp_s, (float)x - 3.4f, (float)y - 4.6f) + 0.5f);
+
+    float sfx[128], sfy[128];
+    int snb = wubu_block_flow_subpix(&sp_s, &sp_b, 16, 8, sfx, sfy);
+    CHECK(snb == 64, "sub-pixel flow covers the block grid");
+    double ex = 0.0, ey = 0.0;
+    int cntb = 0;
+    for (int by = 1; by < 7; by++)
+        for (int bx = 1; bx < 7; bx++) {
+            int i = by * 8 + bx;
+            ex += fabs((double)sfx[i] - 3.4);
+            ey += fabs((double)sfy[i] - 4.6);
+            cntb++;
+        }
+    ex /= cntb; ey /= cntb;
+    printf("  sub-pixel flow mean error: dx=%.3f dy=%.3f\n", ex, ey);
+    CHECK(ex < 0.35 && ey < 0.35, "sub-pixel flow recovers (3.4,4.6) within 0.35 px");
+    CHECK(wubu_block_flow_subpix(&sp_s, &sp_b, 16, 20, sfx, sfy) == -1, "search > 16 -> -1");
+    wubu_img_free(&sp_a); wubu_img_free(&sp_s); wubu_img_free(&sp_b);
 
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
