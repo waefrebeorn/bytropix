@@ -153,3 +153,56 @@ int wubu_match_descriptors(const wubu_keypoint *a, int na,
     }
     return m;
 }
+
+
+int wubu_harris_score(const wubu_img *im, wubu_keypoint *kp, int n)
+{
+    if (!im || !im->data || !kp || n < 0) return -1;
+
+    for (int i = 0; i < n; i++) {
+        int px = kp[i].x, py = kp[i].y;
+        double A = 0, B = 0, C = 0;
+
+        for (int oy = -2; oy <= 2; oy++) {
+            for (int ox = -2; ox <= 2; ox++) {
+                int x = px + ox, y = py + oy;
+                float Ix = ((float)wubu_img_at(im, x + 1, y)
+                          - (float)wubu_img_at(im, x - 1, y)) * 0.5f;
+                float Iy = ((float)wubu_img_at(im, x, y + 1)
+                          - (float)wubu_img_at(im, x, y - 1)) * 0.5f;
+                A += (double)Ix * Ix;
+                B += (double)Ix * Iy;
+                C += (double)Iy * Iy;
+            }
+        }
+        double tr = A + C;
+        double det = A * C - B * B;
+        double r = det - 0.04 * tr * tr;
+        kp[i].score = r > 0.0 ? (uint32_t)r : 0u;
+    }
+    return 0;
+}
+
+int wubu_keypoint_dedupe(wubu_keypoint *kp, int n, int radius)
+{
+    if (!kp || n < 0 || radius < 0) return -1;
+
+    /* Selection sort by score descending (n is small at the call sites). */
+    for (int i = 0; i < n; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++)
+            if (kp[j].score > kp[best].score) best = j;
+        if (best != i) { wubu_keypoint t = kp[i]; kp[i] = kp[best]; kp[best] = t; }
+    }
+
+    int kept = 0;
+    for (int i = 0; i < n; i++) {
+        int near = 0;
+        for (int j = 0; j < kept; j++) {
+            int dx = kp[i].x - kp[j].x, dy = kp[i].y - kp[j].y;
+            if (dx * dx + dy * dy <= radius * radius) { near = 1; break; }
+        }
+        if (!near) kp[kept++] = kp[i];
+    }
+    return kept;
+}

@@ -13,9 +13,9 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 |---|---|---|---|
 | `core` (Mat, Scalar, Rect, SVD, solve) | `wubu_cv` (`wubu_img`) | **partial** | alloc/clone/fill/at tested; SVD, linear solve and multi-channel types absent |
 | `imgproc` (filters, edges, Otsu, morphology, contours) | `wubu_cv` | **partial** | integral image, O(1) box mean/var, fused 3×3 Sobel, Otsu, 3×3 Gaussian, Canny (NMS + hysteresis), 8-connected contour boxes, **3×3 dilate/erode**, **foveated ROI tiles**; GrabCut and full contour point lists queued |
-| `features2d` (ORB, BFMatcher) | `wubu_features` | **done (core)** | FAST-9, 256-bit BRIEF, Hamming, **2-level ORB pyramid** and a **ratio-test matcher** tested; Harris scoring and multi-scale dedupe queued |
+| `features2d` (ORB, BFMatcher) | `wubu_features` | **done (core)** | FAST-9, 256-bit BRIEF, Hamming, 2-level ORB pyramid, ratio-test matcher, **Harris response** and **NMS dedupe** tested; multi-scale descriptor fusion queued |
 | `calib3d` (StereoSGBM, PnP, chessboard, ArUco) | — | **queued** | needs a calibrated camera pipeline; not on the eyes' critical path yet |
-| `video` (Lucas–Kanade, Farneback) | `wubu_flow` | **partial** | single-scale sparse LK tested (recovers a known (2,3) shift exactly); pyramid and dense Farneback queued |
+| `video` (Lucas–Kanade, Farneback) | `wubu_flow` | **partial** | single-scale LK (recovers (2,3) exactly) and **coarse-to-fine pyramid LK** (recovers (6,7) exactly) tested; dense Farneback queued |
 | `pixelean` (bitplanes, D4, SE(2) jets) | `wubu_eye` + `wubu_uplift` | **partial** | XOR+popcount carrier and D4 canonical hash tested; bitplane partition and SE(2) jets queued |
 | `voxelean` (octree, Betti, wavelets) | — | **queued** | no 3D volume pipeline to attach it to |
 | `worldtube` ((3+1)D, CFL cones) | — | **queued** | requires metric camera calibration |
@@ -28,20 +28,19 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 ## Tests
 
 - `test_eye` — 26 checks: patch masks, XOR/popcount, tolerance vs threshold, partial patches.
-- `test_cv` — **68 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
+- `test_cv` — **75 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
   Otsu on a bimodal image, Gaussian edge clamp, FAST-9 on a square, BRIEF determinism,
   Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance,
   Canny on one rectangle and two squares, contour bbox origin/size and thinness,
   ORB pyramid + ratio-test matcher, morphology cores, LK flow on a known shift,
-  SAE argmin/signature, foveated ROI selection.
+  SAE argmin/signature, foveated ROI selection, Harris scoring, dedupe, pyramid LK.
 
 ## Next rungs, in order
 
-1. **LK pyramid** (video) — coarse-to-fine so motion beyond ±2 px is recoverable.
-2. **Contour point lists** (imgproc) — boxes now; per-contour polylines next.
-3. **Harris scoring + keypoint dedupe** (features2d) — fewer, better corners.
-4. **Burst super-resolution** (uplift) — sub-pixel shift-and-add across frames.
-5. **GlassBox 64-D signature** (mechinterp) — the hand-auditable descriptor.
+1. **Contour point lists** (imgproc) — boxes now; per-contour polylines next.
+2. **Burst super-resolution** (uplift) — sub-pixel shift-and-add across frames.
+3. **GlassBox 64-D signature** (mechinterp) — the hand-auditable descriptor.
+4. **Dense Farneback** (video) — per-pixel motion field.
 
 ## Honest note on the source
 

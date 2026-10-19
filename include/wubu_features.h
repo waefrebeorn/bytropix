@@ -49,4 +49,11 @@ int wubu_match_descriptors(const wubu_keypoint *a, int na,
                            int max_dist, float ratio,
                            wubu_match *out, int max_matches);
 
+/* Harris response at each keypoint (5x5 window, k = 0.04), written to score. */
+int wubu_harris_score(const wubu_img *im, wubu_keypoint *kp, int n);
+
+/* Sort by score (desc) and drop keypoints within `radius` of a kept one.
+ * Returns the number retained (the array is compacted in place). */
+int wubu_keypoint_dedupe(wubu_keypoint *kp, int n, int radius);
+
 #endif /* WUBU_FEATURES_H */

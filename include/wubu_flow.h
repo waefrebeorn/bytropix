@@ -19,4 +19,11 @@ int wubu_lk_flow(const wubu_img *prev, const wubu_img *curr,
                  const wubu_keypoint *kp, int n, int win, int iters,
                  float *dx, float *dy);
 
+/* Coarse-to-fine variant: build `levels` half-resolution images, solve at the
+ * coarsest, double the flow, refine at each finer level. Handles motion beyond
+ * the single-scale +/-2 px linearisation limit. levels 1..5. */
+int wubu_lk_flow_pyr(const wubu_img *prev, const wubu_img *curr,
+                     const wubu_keypoint *kp, int n, int levels,
+                     int win, int iters, float *dx, float *dy);
+
 #endif /* WUBU_FLOW_H */

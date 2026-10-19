@@ -336,6 +336,58 @@ int main(void)
     CHECK(wubu_foveated_rois(NULL, 16, 1, 1, rois, 4) == -1, "ROI: NULL image -> -1");
     wubu_img_free(&blank); wubu_img_free(&busy);
 
+
+    /* --- pyramid LK: motion beyond the single-scale limit (wave 8) --- */
+    wubu_img big = {0}, bigm = {0};
+    wubu_img_alloc(&big, 192, 192);
+    wubu_img_alloc(&bigm, 192, 192);
+    for (int y = 0; y < 192; y++) {
+        for (int x = 0; x < 192; x++) {
+            double v = 128.0 + 55.0 * sin(x * 0.29) + 45.0 * cos(y * 0.23)
+                     + 20.0 * sin((x + y) * 0.11);
+            if (v < 0.0) v = 0.0;
+            if (v > 255.0) v = 255.0;
+            big.data[y * big.stride + x] = (uint8_t)v;
+        }
+    }
+    for (int y = 0; y < 192; y++)
+        for (int x = 0; x < 192; x++)
+            bigm.data[y * bigm.stride + x] = wubu_img_at(&big, x - 6, y - 7);
+
+    wubu_keypoint bp[2];
+    bp[0].x = 96; bp[0].y = 96;
+    bp[1].x = 120; bp[1].y = 80;
+    float pdx[2], pdy[2];
+    CHECK(wubu_lk_flow_pyr(&big, &bigm, bp, 2, 3, 15, 10, pdx, pdy) == 0, "pyramid LK runs");
+    printf("  pyramid flow: (%.2f,%.2f) (%.2f,%.2f)\n", pdx[0], pdy[0], pdx[1], pdy[1]);
+    int pyr_ok = 1;
+    for (int i = 0; i < 2; i++)
+        if (fabsf(pdx[i] - 6.0f) > 0.8f || fabsf(pdy[i] - 7.0f) > 0.8f) pyr_ok = 0;
+    CHECK(pyr_ok, "pyramid LK recovers a (6,7) shift within 0.8 px");
+    CHECK(wubu_lk_flow_pyr(&big, &bigm, bp, 2, 0, 15, 10, pdx, pdy) == -1,
+          "levels=0 -> -1");
+    wubu_img_free(&big); wubu_img_free(&bigm);
+
+
+    /* --- Harris scoring + dedupe (wave 9) --- */
+    wubu_keypoint hk[64];
+    int hn = wubu_fast9(&sqimg, 40, 3, hk, 64);
+    CHECK(wubu_harris_score(&sqimg, hk, hn) == 0, "Harris scoring runs");
+    int scored = 0;
+    for (int i = 0; i < hn; i++) if (hk[i].score > 0) scored++;
+    CHECK(scored > 0, "corner responses are positive");
+
+    wubu_keypoint dup[4];
+    memset(dup, 0, sizeof dup);
+    dup[0].x = 30; dup[0].y = 30; dup[0].score = 100;
+    dup[1].x = 32; dup[1].y = 31; dup[1].score = 50;
+    dup[2].x = 60; dup[2].y = 60; dup[2].score = 70;
+    dup[3].x = 90; dup[3].y = 90; dup[3].score = 10;
+    int dn = wubu_keypoint_dedupe(dup, 4, 5);
+    CHECK(dn == 3 && dup[0].score == 100 && dup[1].score == 70,
+          "dedupe keeps the strongest of a cluster and sorts by score");
+    CHECK(wubu_harris_score(NULL, hk, hn) == -1, "Harris NULL -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");
