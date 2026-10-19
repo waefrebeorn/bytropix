@@ -2289,7 +2289,9 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   integral + O(1) box stats, fused Sobel, Otsu, 3x3 Gaussian), `wubu_features`
   (FAST-9, 256-bit BRIEF, Hamming), `wubu_uplift` (2x mass-conserving zoom that
   is the exact right-inverse of 2x2 box down, plus a D4-invariant hash).
-  `test_cv` 25 checks. Registry of every solidcv module with honest status:
+  `test_cv` 85 checks across 11 waves (ORB pyramid, matcher, morphology, LK +
+  pyramid LK, SAE argmin, foveated ROIs, Harris/dedupe, contour polylines, burst
+  SR at RMSE 0.885). Registry of every solidcv module with honest status:
   `docs/CV-REIMPLEMENTATION.md`. `wired`
 
 ## WaefreBeorn Umbrella License v3.0
