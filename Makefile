@@ -880,8 +880,8 @@ test_look: tools/test_look.c src/wubu_look.c src/wubu_cv.c src/wubu_eye.c includ
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_look.c src/wubu_look.c src/wubu_cv.c src/wubu_eye.c -lm
 	./$@
 
-test_cv: tools/test_cv.c src/wubu_cv.c src/wubu_features.c src/wubu_uplift.c src/wubu_flow.c src/wubu_sae.c src/wubu_glass.c include/wubu_cv.h include/wubu_features.h include/wubu_uplift.h include/wubu_flow.h include/wubu_sae.h include/wubu_glass.h
-	$(CC) $(CFLAGS) -I include -o $@ tools/test_cv.c src/wubu_cv.c src/wubu_features.c src/wubu_uplift.c src/wubu_flow.c src/wubu_sae.c src/wubu_glass.c -lm
+test_cv: tools/test_cv.c src/wubu_cv.c src/wubu_features.c src/wubu_uplift.c src/wubu_flow.c src/wubu_sae.c src/wubu_glass.c src/wubu_calib.c include/wubu_cv.h include/wubu_features.h include/wubu_uplift.h include/wubu_flow.h include/wubu_sae.h include/wubu_glass.h include/wubu_calib.h
+	$(CC) $(CFLAGS) -I include -o $@ tools/test_cv.c src/wubu_cv.c src/wubu_features.c src/wubu_uplift.c src/wubu_flow.c src/wubu_sae.c src/wubu_glass.c src/wubu_calib.c -lm
 	./$@
 
 test_eye: tools/test_eye.c src/wubu_eye.c include/wubu_eye.h

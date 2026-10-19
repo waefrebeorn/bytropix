@@ -1,0 +1,18 @@
+/*
+ * wubu_calib.h -- camera geometry: PnP by normalised DLT.
+ *
+ * Solves for the 3x4 projection matrix from >=6 3D<->2D correspondences with
+ * p34 fixed to 1, using Hartley normalisation on both sides. This recovers the
+ * camera matrix including intrinsics; it does not split K/R/t.
+ */
+#ifndef WUBU_CALIB_H
+#define WUBU_CALIB_H
+
+/* p3: n points as x,y,z triples. p2: n points as u,v pairs.
+ * P: 12 doubles, row-major 3x4. Returns 0, or -1. */
+int wubu_pnp_dlt(const double *p3, const double *p2, int n, double P[12]);
+
+/* Root-mean-square reprojection error of P over the same points. */
+double wubu_pnp_rmse(const double *p3, const double *p2, int n, const double P[12]);
+
+#endif /* WUBU_CALIB_H */

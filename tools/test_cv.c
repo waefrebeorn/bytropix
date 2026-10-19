@@ -7,6 +7,7 @@
 #include "wubu_flow.h"
 #include "wubu_sae.h"
 #include "wubu_glass.h"
+#include "wubu_calib.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -746,6 +747,25 @@ int main(void)
           "float centroids land within 0.30 px of the true sub-pixel corner");
     CHECK(wubu_corner_refine_centroid(&cb4, fc, fcn, 0, fout) == -1, "radius 0 -> -1");
     wubu_img_free(&cb4);
+
+
+    /* --- PnP by normalised DLT (wave 22) --- */
+    const double P0[12] = {500, 0, 80, 0,  0, 500, 80, 0,  0, 0, 1, 6};
+    double p3[24] = {-1,-1,0,  1,-1,0,  1,1,0,  -1,1,0,
+                     0,0,1,    0,0,-1,  -1,1,2,   1,-1,2};
+    double p2d[16];
+    for (int i = 0; i < 8; i++) {
+        double X = p3[3*i], Y = p3[3*i+1], Z = p3[3*i+2];
+        double w = P0[8]*X + P0[9]*Y + P0[10]*Z + P0[11];
+        p2d[2*i]   = (P0[0]*X + P0[1]*Y + P0[2]*Z + P0[3]) / w;
+        p2d[2*i+1] = (P0[4]*X + P0[5]*Y + P0[6]*Z + P0[7]) / w;
+    }
+    double Pest[12];
+    CHECK(wubu_pnp_dlt(p3, p2d, 8, Pest) == 0, "DLT PnP solves an 8-point system");
+    double rms = wubu_pnp_rmse(p3, p2d, 8, Pest);
+    printf("  PnP reprojection RMS: %.3g px\n", rms);
+    CHECK(rms < 1e-6, "DLT recovers the camera to machine precision on exact data");
+    CHECK(wubu_pnp_dlt(p3, p2d, 5, Pest) == -1, "5 points -> -1");
 
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
