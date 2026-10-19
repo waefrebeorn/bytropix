@@ -75,6 +75,14 @@ weighing of the star.
 
 Machine-readable form: `docs/WUBU-STAR-CARD.json`.
 
+## The eyes
+
+Eyes are the photosphere's instrument. `wubu_eye` compares consecutive frames on
+a patch grid and hands the model only the patches that changed, with a reuse
+mask for the rest — 1 active patch instead of 4,096 tokens when a cursor moves.
+`pixel_tol` filters sensor noise; `threshold` decides what is worth a prefill.
+Technique taken from solidsf-inc/solidcv (Apache-2.0); implementation is C11.
+
 ## Design rules that follow
 
 1. **No fusion at inference.** Every claim about capability must be a claim about

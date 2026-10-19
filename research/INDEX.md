@@ -2277,4 +2277,12 @@ or logit-parity vs the V1's llama.cpp, which supports qwen35). `research`
   Implemented `wubu_rlm_run` (chunk/depth/budget, exact coverage, abort on leaf
   error); `test_rlm` 18 checks. `research/076-recursive-language-models-2026-10-18.md`. `wired`
 
+- SC01 solidcv eyes: patch-level frame differencing (2026-10-18): seed
+  github.com/solidsf-inc/solidcv (Apache-2.0, 2 commits old, benchmark table
+  unverified). Took one technique — a VLM only re-encodes changed patches.
+  Built `wubu_eye_patch_mask` + `wubu_eye_xor_popcount` (C11, integer-only,
+  separate pixel tolerance vs patch threshold); `test_eye` 26 checks. Rejected
+  the cloud credits API, the Rust dependency and the 3D pillars (no calibrated
+  camera). `research/077-solidcv-eyeballs.md`. `wired`
+
 ## WaefreBeorn Umbrella License v3.0
