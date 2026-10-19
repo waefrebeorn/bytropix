@@ -398,7 +398,7 @@
    "n": 48,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "clone/fork/execve/exit task lifecycle",
+   "title": "clone/fork/execve/exit task lifecycle (DONE)",
    "module": "wubuos/src/kernel/tasking.c",
    "criterion": "make test_tasking: create 1k tasks, exec 100, destroy all; task_count returns to the pre-test baseline with zero TCBs leaked"
   },
