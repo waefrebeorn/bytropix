@@ -390,7 +390,7 @@
    "n": 47,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "Timer wheel for sleep over the full 1..2^32 tick range",
+   "title": "Timer wheel for sleep over the full 1..2^32 tick range (DONE)",
    "module": "wubuos/src/kernel/tasking.c",
    "criterion": "make test_tasking: task_sleep wakes within 1 tick of its target across a 2^32-tick span, with a verified cascade through all four wheel levels"
   },
