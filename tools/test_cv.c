@@ -786,6 +786,36 @@ int main(void)
           fabs(t3[2] - 6.0) < 1e-6, "translation is K^-1 p4, exactly as defined");
     CHECK(wubu_pnp_decompose(NULL, K9, R9, t3) == -1, "NULL P -> -1");
 
+
+    /* --- homography + perspective warp (wave 24) --- */
+    wubu_img cbw = {0};
+    wubu_img_alloc(&cbw, 160, 160);
+    for (int y = 0; y < 160; y++)
+        for (int x = 0; x < 160; x++)
+            cbw.data[y * cbw.stride + x] = ((x / 20 + y / 20) & 1) ? 220 : 30;
+
+    double wsrc[8] = {40, 40, 80, 40, 80, 80, 40, 80};
+    double wdst[8] = {0, 0, 40, 0, 40, 40, 0, 40};
+    double Hw[9];
+    CHECK(wubu_homography(wsrc, wdst, Hw) == 0, "homography from four pairs");
+    CHECK(fabs(Hw[0] - 1.0) < 1e-9 && fabs(Hw[2] + 40.0) < 1e-9,
+          "H is the expected translation for this quad");
+
+    wubu_img wrp = {0};
+    CHECK(wubu_warp_perspective(&cbw, Hw, &wrp, 40, 40) == 0, "warp runs");
+    CHECK(wrp.w == 40 && wrp.h == 40, "warp produces the requested size");
+
+    int wbad = 0, wtot = 0;
+    for (int y = 5; y < 40; y += 5)
+        for (int x = 5; x < 40; x += 5) {
+            wtot++;
+            if (wubu_img_at(&wrp, x, y) != wubu_img_at(&cbw, x + 40, y + 40)) wbad++;
+        }
+    printf("  warp mismatches: %d/%d\n", wbad, wtot);
+    CHECK(wbad == 0, "every sampled pixel matches the source under H");
+    CHECK(wubu_homography(NULL, wdst, Hw) == -1, "NULL src -> -1");
+    wubu_img_free(&cbw); wubu_img_free(&wrp);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

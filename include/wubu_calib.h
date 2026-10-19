@@ -20,4 +20,14 @@ double wubu_pnp_rmse(const double *p3, const double *p2, int n, const double P[1
  * R: 9 doubles row-major rotation, t: 3 doubles. Returns 0, or -1. */
 int wubu_pnp_decompose(const double P[12], double K[9], double R[9], double t[3]);
 
+#include "wubu_cv.h"
+
+/* Homography from four point pairs (src -> dst), given as x0,y0,...,x3,y3.
+ * H is row-major 3x3 with H[8] == 1. Returns 0, or -1. */
+int wubu_homography(const double src[8], const double dst[8], double H[9]);
+
+/* Sample src through H (src -> dst) into a new ow x oh image. */
+int wubu_warp_perspective(const wubu_img *src, const double H[9],
+                          wubu_img *out, int ow, int oh);
+
 #endif /* WUBU_CALIB_H */

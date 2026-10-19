@@ -180,3 +180,98 @@ int wubu_pnp_decompose(const double P[12], double K[9], double R[9], double t[3]
     }
     return 0;
 }
+
+
+static int solve8(double A[8][8], double b[8], double x[8])
+{
+    for (int col = 0; col < 8; col++) {
+        int piv = col;
+        for (int r = col + 1; r < 8; r++)
+            if (fabs(A[r][col]) > fabs(A[piv][col])) piv = r;
+        if (fabs(A[piv][col]) < 1e-12) return -1;
+        if (piv != col) {
+            for (int k = 0; k < 8; k++) { double t = A[col][k]; A[col][k] = A[piv][k]; A[piv][k] = t; }
+            double t = b[col]; b[col] = b[piv]; b[piv] = t;
+        }
+        for (int r = col + 1; r < 8; r++) {
+            double f = A[r][col] / A[col][col];
+            if (f == 0.0) continue;
+            for (int k = col; k < 8; k++) A[r][k] -= f * A[col][k];
+            b[r] -= f * b[col];
+        }
+    }
+    for (int i = 7; i >= 0; i--) {
+        double s = b[i];
+        for (int k = i + 1; k < 8; k++) s -= A[i][k] * x[k];
+        if (fabs(A[i][i]) < 1e-12) return -1;
+        x[i] = s / A[i][i];
+    }
+    return 0;
+}
+
+int wubu_homography(const double src[8], const double dst[8], double H[9])
+{
+    if (!src || !dst || !H) return -1;
+
+    double A[8][8], b[8], h[8];
+    for (int i = 0; i < 4; i++) {
+        double x = src[2 * i], y = src[2 * i + 1];
+        double u = dst[2 * i], v = dst[2 * i + 1];
+
+        A[2 * i][0] = x; A[2 * i][1] = y; A[2 * i][2] = 1;
+        A[2 * i][3] = 0; A[2 * i][4] = 0; A[2 * i][5] = 0;
+        A[2 * i][6] = -u * x; A[2 * i][7] = -u * y;
+        b[2 * i] = u;
+
+        A[2 * i + 1][0] = 0; A[2 * i + 1][1] = 0; A[2 * i + 1][2] = 0;
+        A[2 * i + 1][3] = x; A[2 * i + 1][4] = y; A[2 * i + 1][5] = 1;
+        A[2 * i + 1][6] = -v * x; A[2 * i + 1][7] = -v * y;
+        b[2 * i + 1] = v;
+    }
+    if (solve8(A, b, h) != 0) return -1;
+
+    for (int i = 0; i < 8; i++) H[i] = h[i];
+    H[8] = 1.0;
+    return 0;
+}
+
+int wubu_warp_perspective(const wubu_img *src, const double H[9],
+                          wubu_img *out, int ow, int oh)
+{
+    if (!src || !src->data || !H || !out || ow <= 0 || oh <= 0) return -1;
+    if (wubu_img_alloc(out, ow, oh) != 0) return -1;
+
+    /* Invert H (adjugate / det) so we can map destination pixels to source. */
+    double a = H[0], b = H[1], c = H[2];
+    double d = H[3], e = H[4], f = H[5];
+    double g = H[6], h = H[7], i = H[8];
+    double det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (fabs(det) < 1e-12) return -1;
+
+    double inv[9] = {
+        (e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det,
+        (f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det,
+        (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det
+    };
+
+    for (int y = 0; y < oh; y++) {
+        for (int x = 0; x < ow; x++) {
+            double w = inv[6] * x + inv[7] * y + inv[8];
+            if (fabs(w) < 1e-12) continue;
+            double sx = (inv[0] * x + inv[1] * y + inv[2]) / w;
+            double sy = (inv[3] * x + inv[4] * y + inv[5]) / w;
+
+            int x0 = (int)floor(sx), y0 = (int)floor(sy);
+            double fx = sx - x0, fy = sy - y0;
+            double p00 = wubu_img_at(src, x0, y0), p10 = wubu_img_at(src, x0 + 1, y0);
+            double p01 = wubu_img_at(src, x0, y0 + 1), p11 = wubu_img_at(src, x0 + 1, y0 + 1);
+            double v = (p00 * (1 - fx) + p10 * fx) * (1 - fy)
+                     + (p01 * (1 - fx) + p11 * fx) * fy;
+
+            if (v < 0) v = 0;
+            if (v > 255) v = 255;
+            out->data[(size_t)y * out->stride + x] = (uint8_t)(v + 0.5);
+        }
+    }
+    return 0;
+}
