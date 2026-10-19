@@ -44,4 +44,11 @@ int wubu_aruco_decode(const wubu_img *im, const double quad[8],
                       const uint16_t *dict, int ndict, int max_hamming,
                       wubu_aruco_marker *out);
 
+/* Pose of a planar square marker from its four image corners (TL,TR,BR,BL).
+ * Decomposes the homography: A = K^-1 H, lambda = 1/|a1|, r1 = lambda a1,
+ * r2 = lambda a2, r3 = r1 x r2, t = lambda a3 (sign chosen so t_z > 0).
+ * marker_size is the square's side in the same units as t. Returns 0, or -1. */
+int wubu_marker_pose(const double corners[8], double marker_size,
+                     const double K[9], double R[9], double t[3]);
+
 #endif /* WUBU_CALIB_H */

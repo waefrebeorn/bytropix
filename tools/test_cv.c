@@ -843,6 +843,34 @@ int main(void)
     CHECK(wubu_aruco_decode(NULL, aquad, adict, 4, 0, &amk) == -1, "NULL image -> -1");
     wubu_img_free(&am); wubu_img_free(&ablank);
 
+
+    /* --- planar marker pose (wave 26) --- */
+    const double Kp[9] = {500, 0, 80, 0, 500, 80, 0, 0, 1};
+    const double ms = 0.1;
+    double mplane[8] = {0, 0, ms, 0, ms, ms, 0, ms};
+    double mcorner[8];
+    for (int i = 0; i < 4; i++) {
+        mcorner[2 * i]     = 500.0 * mplane[2 * i] / 0.5 + 80.0;
+        mcorner[2 * i + 1] = 500.0 * mplane[2 * i + 1] / 0.5 + 80.0;
+    }
+    double Rp[9], tp[3];
+    CHECK(wubu_marker_pose(mcorner, ms, Kp, Rp, tp) == 0, "marker pose solves");
+    printf("  pose t=(%.4f,%.4f,%.4f)\n", tp[0], tp[1], tp[2]);
+    CHECK(fabs(tp[0]) < 1e-9 && fabs(tp[1]) < 1e-9 && fabs(tp[2] - 0.5) < 1e-9,
+          "translation recovered exactly");
+    double rp_err = 0.0;
+    for (int i = 0; i < 9; i++) rp_err += fabs(Rp[i] - (i % 4 == 0 ? 1.0 : 0.0));
+    CHECK(rp_err < 1e-9, "rotation recovered as identity");
+
+    double mcorner2[8];
+    for (int i = 0; i < 4; i++) {
+        mcorner2[2 * i]     = 500.0 * mplane[2 * i] / 1.2 + 80.0;
+        mcorner2[2 * i + 1] = 500.0 * mplane[2 * i + 1] / 1.2 + 80.0;
+    }
+    wubu_marker_pose(mcorner2, ms, Kp, Rp, tp);
+    CHECK(fabs(tp[2] - 1.2) < 1e-6, "depth scales correctly with the quad size");
+    CHECK(wubu_marker_pose(NULL, ms, Kp, Rp, tp) == -1, "NULL corners -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

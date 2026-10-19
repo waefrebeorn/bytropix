@@ -318,3 +318,73 @@ int wubu_aruco_decode(const wubu_img *im, const double quad[8],
     out->bits = bits;
     return best <= max_hamming ? 0 : -1;
 }
+
+
+int wubu_marker_pose(const double corners[8], double marker_size,
+                     const double K[9], double R[9], double t[3])
+{
+    if (!corners || !K || !R || !t || marker_size <= 0.0) return -1;
+
+    double s = marker_size;
+    double plane[8] = {0, 0, s, 0, s, s, 0, s};
+    double H[9];
+    if (wubu_homography(plane, corners, H) != 0) return -1;
+
+    /* Kinv: 3x3 inverse of K (assumed upper triangular, invertible). */
+    double a = K[0], b = K[1], c = K[2];
+    double d = K[3], e = K[4], f = K[5];
+    double g = K[6], h = K[7], i = K[8];
+    double det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (fabs(det) < 1e-12) return -1;
+    double Ki[9] = {
+        (e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det,
+        (f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det,
+        (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det
+    };
+
+    /* A = Kinv * H, column-major access via A[row*3+col]. */
+    double A[9];
+    for (int r = 0; r < 3; r++)
+        for (int col = 0; col < 3; col++) {
+            double acc = 0.0;
+            for (int k = 0; k < 3; k++) acc += Ki[r * 3 + k] * H[k * 3 + col];
+            A[r * 3 + col] = acc;
+        }
+
+    double n1 = sqrt(A[0] * A[0] + A[3] * A[3] + A[6] * A[6]);
+    double n2 = sqrt(A[1] * A[1] + A[4] * A[4] + A[7] * A[7]);
+    if (n1 < 1e-12 || n2 < 1e-12) return -1;
+    double lambda = 2.0 / (n1 + n2);
+
+    double r1[3] = {A[0] * lambda, A[3] * lambda, A[6] * lambda};
+    double r2[3] = {A[1] * lambda, A[4] * lambda, A[7] * lambda};
+    t[0] = A[2] * lambda; t[1] = A[5] * lambda; t[2] = A[8] * lambda;
+
+    if (t[2] < 0.0) {
+        for (int k = 0; k < 3; k++) { r1[k] = -r1[k]; r2[k] = -r2[k]; t[k] = -t[k]; }
+    }
+
+    /* Gram-Schmidt to kill noise, then r3 = r1 x r2. */
+    double n = sqrt(r1[0] * r1[0] + r1[1] * r1[1] + r1[2] * r1[2]);
+    if (n < 1e-12) return -1;
+    for (int k = 0; k < 3; k++) r1[k] /= n;
+
+    double dot = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2];
+    for (int k = 0; k < 3; k++) r2[k] -= dot * r1[k];
+    n = sqrt(r2[0] * r2[0] + r2[1] * r2[1] + r2[2] * r2[2]);
+    if (n < 1e-12) return -1;
+    for (int k = 0; k < 3; k++) r2[k] /= n;
+
+    double r3[3] = {
+        r1[1] * r2[2] - r1[2] * r2[1],
+        r1[2] * r2[0] - r1[0] * r2[2],
+        r1[0] * r2[1] - r1[1] * r2[0]
+    };
+
+    for (int k = 0; k < 3; k++) {
+        R[k * 3 + 0] = r1[k];
+        R[k * 3 + 1] = r2[k];
+        R[k * 3 + 2] = r3[k];
+    }
+    return 0;
+}
