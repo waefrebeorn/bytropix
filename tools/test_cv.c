@@ -431,6 +431,62 @@ int main(void)
     CHECK(wubu_contour_trace(NULL, 0, 0, tx, ty, 512) == -1, "NULL edges -> -1");
     wubu_img_free(&tr); wubu_img_free(&te);
 
+
+    /* --- burst super-resolution (wave 11) --- */
+    const int FW = 64, FH = 64;
+    wubu_img fr[4];
+    memset(fr, 0, sizeof fr);
+    for (int i = 0; i < 4; i++) wubu_img_alloc(&fr[i], FW, FH);
+
+    static const float odx[4] = {0.00f, 0.50f, 0.25f, 0.75f};
+    static const float ody[4] = {0.00f, 0.50f, 0.75f, 0.25f};
+
+    /* frame_i(x,y) samples the same 2x finer scene at (x + odx, y + ody). */
+    for (int i = 0; i < 4; i++) {
+        for (int y = 0; y < FH; y++) {
+            for (int x = 0; x < FW; x++) {
+                double sx = 2.0 * ((double)x + odx[i]);
+                double sy = 2.0 * ((double)y + ody[i]);
+                double v = 128.0 + 60.0 * sin(sx * 0.21) + 50.0 * cos(sy * 0.17);
+                if (v < 0.0) v = 0.0;
+                if (v > 255.0) v = 255.0;
+                fr[i].data[y * fr[i].stride + x] = (uint8_t)v;
+            }
+        }
+    }
+
+    const wubu_img *cf[4] = {&fr[0], &fr[1], &fr[2], &fr[3]};
+    wubu_img sr = {0};
+    CHECK(wubu_burst_super_resolve(cf, odx, ody, 4, 2, &sr) == 0, "burst SR runs");
+    CHECK(sr.w == 128 && sr.h == 128, "burst SR doubles the grid");
+
+    wubu_img naive = {0};
+    wubu_uplift2x(&fr[0], &naive);
+
+    double err_sr = 0, err_naive = 0;
+    int cnt = 0;
+    for (int y = 4; y < 124; y++) {
+        for (int x = 4; x < 124; x++) {
+            double sx = (double)x, sy = (double)y;
+            double v = 128.0 + 60.0 * sin(sx * 0.21) + 50.0 * cos(sy * 0.17);
+            if (v < 0.0) v = 0.0;
+            if (v > 255.0) v = 255.0;
+            double a = (double)sr.data[y * sr.stride + x] - v;
+            double b = (double)naive.data[y * naive.stride + x] - v;
+            err_sr += a * a;
+            err_naive += b * b;
+            cnt++;
+        }
+    }
+    err_sr = sqrt(err_sr / cnt);
+    err_naive = sqrt(err_naive / cnt);
+    printf("  burst RMSE: sr=%.3f naive=%.3f\n", err_sr, err_naive);
+    CHECK(err_sr < err_naive, "burst SR beats naive 2x upsampling in RMSE");
+    CHECK(err_sr < 6.0, "burst SR stays within 6 grey levels RMS");
+
+    for (int i = 0; i < 4; i++) wubu_img_free(&fr[i]);
+    wubu_img_free(&sr); wubu_img_free(&naive);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

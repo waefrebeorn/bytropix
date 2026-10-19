@@ -21,4 +21,12 @@ int wubu_down2x_box(const wubu_img *in, wubu_img *out);
  * a rotated or mirrored image hashes the same. */
 uint64_t wubu_d4_hash(const wubu_img *im);
 
+/* Multi-frame shift-and-add ("drizzle") super-resolution without hallucination.
+ * frames[i] is sampled at an offset (dx[i], dy[i]) in source pixels relative to
+ * the reference frame; each contributes bilinearly to a `factor`x finer grid.
+ * Returns 0, or -1. */
+int wubu_burst_super_resolve(const wubu_img *const *frames,
+                             const float *dx, const float *dy,
+                             int n, int factor, wubu_img *out);
+
 #endif /* WUBU_UPLIFT_H */

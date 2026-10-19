@@ -2,6 +2,7 @@
  * wubu_uplift.c -- mass-conserving 2x zoom + D4 canonical hash.
  */
 #include "wubu_uplift.h"
+#include <math.h>
 #include <stdlib.h>
 
 int wubu_uplift2x(const wubu_img *in, wubu_img *out)
@@ -75,4 +76,51 @@ uint64_t wubu_d4_hash(const wubu_img *im)
         if (h < best) best = h;
     }
     return best;
+}
+
+static float sample_bi(const wubu_img *im, float x, float y, int *inside)
+{
+    int x0 = (int)floorf(x), y0 = (int)floorf(y);
+    if (x0 < 0 || y0 < 0 || x0 + 1 >= im->w || y0 + 1 >= im->h) { *inside = 0; return 0.0f; }
+    *inside = 1;
+    float fx = x - (float)x0, fy = y - (float)y0;
+    float a = (float)wubu_img_at(im, x0, y0);
+    float b = (float)wubu_img_at(im, x0 + 1, y0);
+    float c = (float)wubu_img_at(im, x0, y0 + 1);
+    float d = (float)wubu_img_at(im, x0 + 1, y0 + 1);
+    float top = a * (1.0f - fx) + b * fx;
+    float bot = c * (1.0f - fx) + d * fx;
+    return top * (1.0f - fy) + bot * fy;
+}
+
+int wubu_burst_super_resolve(const wubu_img *const *frames,
+                             const float *dx, const float *dy,
+                             int n, int factor, wubu_img *out)
+{
+    if (!frames || !frames[0] || !dx || !dy || !out || n <= 0) return -1;
+    if (factor < 1 || factor > 4) return -1;
+
+    int w = frames[0]->w, h = frames[0]->h;
+    if (wubu_img_alloc(out, w * factor, h * factor) != 0) return -1;
+
+    for (int Y = 0; Y < out->h; Y++) {
+        for (int X = 0; X < out->w; X++) {
+            double acc = 0.0;
+            int used = 0;
+
+            for (int i = 0; i < n; i++) {
+                if (!frames[i]) continue;
+                float x = (float)X / (float)factor - dx[i];
+                float y = (float)Y / (float)factor - dy[i];
+                int inside = 0;
+                float v = sample_bi(frames[i], x, y, &inside);
+                if (!inside) continue;
+                acc += v;
+                used++;
+            }
+            out->data[(size_t)Y * out->stride + X] =
+                used ? (uint8_t)((acc / used) + 0.5) : 0;
+        }
+    }
+    return 0;
 }
