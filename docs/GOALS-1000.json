@@ -374,7 +374,7 @@
    "n": 45,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "EEVDF runqueue with vruntime and lag bounds",
+   "title": "EEVDF runqueue with vruntime and lag bounds (DONE)",
    "module": "wubuos/src/kernel/tasking.c",
    "criterion": "make test_tasking: two equal-weight tasks split CPU 50/50 within 2%; a task's lag never exceeds its slice bound; runqueue pick order is deterministic"
   },
