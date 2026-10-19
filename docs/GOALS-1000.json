@@ -3206,7 +3206,7 @@
    "n": 399,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "ObOpenByKeyName over cap-backed STYX_NODE objects",
+   "title": "ObOpenByKeyName over cap-backed STYX_NODE objects (DONE)",
    "module": "wubuos/src/runtime/vsl/vsl_nt_ob.c",
    "criterion": "make test_nt_ob green: ObOpenByKeyName(L\"\\Brain\\Kv\\slot0\", ...) resolves through the /n tree via wubu_cap_get(STYX_NODE) and returns a handle whose rights equal the cap rights; an ungranted path returns STATUS_ACCESS_DENIED"
   },
