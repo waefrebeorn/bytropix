@@ -28,7 +28,7 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 ## Tests
 
 - `test_eye` — 26 checks: patch masks, XOR/popcount, tolerance vs threshold, partial patches.
-- `test_look` — 6 checks: two frames -> ranked changed ROIs + reuse ratio (93.8% reuse for a 32x32 change in a 128x128 frame).
+- `test_look` — 9 checks: two frames -> ranked changed ROIs + reuse ratio (93.8% reuse for a 32x32 change) and a token-budgeted variant that stops at the paid budget.
 - `test_cv` — **100 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
   Otsu on a bimodal image, Gaussian edge clamp, FAST-9 on a square, BRIEF determinism,
   Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance,

@@ -19,6 +19,23 @@ int main(void){
   int covers=0; if(n) covers = r[0].x<80 && r[0].x+r[0].w>48 && r[0].y<80 && r[0].y+r[0].h>48;
   CHECK(covers, "the ROI overlaps the changed square");
   CHECK(wubu_look(&a,&b,0,32,4,r,&reuse)==-1, "patch 0 -> -1");
+
+  /* budgeted look: only as many ROIs as the token budget pays for */
+  wubu_img c={0}, d={0};
+  wubu_img_alloc(&c,128,128); wubu_img_fill(&c,30);
+  wubu_img_alloc(&d,128,128); wubu_img_fill(&d,30);
+  for(int k=0;k<4;k++){
+    int ox=16+k*24, oy=16+k*24;
+    for(int y=oy;y<oy+24;y++) for(int x=ox;x<ox+24;x++) d.data[y*d.stride+x]=((x/2+y/2)&1)?220:30;
+  }
+  wubu_look_roi br[8]; int used=-1;
+  int bn=wubu_look_budget(&c,&d,16,16,8,2*97,97,br,&reuse,&used);
+  printf("  budget: rois=%d used=%d reuse=%.3f\n",bn,used,reuse);
+  CHECK(bn==2, "budget of two tiles returns two ROIs");
+  CHECK(used==2*97, "tokens_used charges exactly the budget");
+  CHECK(wubu_look_budget(&c,&d,16,16,8,0,97,br,&reuse,&used)==-1, "zero budget -> -1");
+  wubu_img_free(&c); wubu_img_free(&d);
+
   wubu_img_free(&a); wubu_img_free(&b);
   printf("\n=== test_look: %d checks, %d failures ===\n",checks,fails);
   return fails?1:0;

@@ -22,4 +22,13 @@ int wubu_look(const wubu_img *prev, const wubu_img *curr,
               int patch, int tile, int max_rois,
               wubu_look_roi *out, float *reuse_ratio);
 
+/* Same, but stop before the encoded cost exceeds `token_budget`. Each ROI is
+ * charged `tokens_per_tile` (a tile is one ViT patch group), so the caller can
+ * price a look with wubu_decision_ledger. Returns the ROI count, or -1. */
+int wubu_look_budget(const wubu_img *prev, const wubu_img *curr,
+                     int patch, int tile, int max_rois,
+                     int token_budget, int tokens_per_tile,
+                     wubu_look_roi *out, float *reuse_ratio,
+                     int *tokens_used);
+
 #endif /* WUBU_LOOK_H */

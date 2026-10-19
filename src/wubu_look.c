@@ -63,3 +63,27 @@ int wubu_look(const wubu_img *prev, const wubu_img *curr,
     free(mask);
     return n;
 }
+
+
+int wubu_look_budget(const wubu_img *prev, const wubu_img *curr,
+                     int patch, int tile, int max_rois,
+                     int token_budget, int tokens_per_tile,
+                     wubu_look_roi *out, float *reuse_ratio,
+                     int *tokens_used)
+{
+    if (token_budget <= 0 || tokens_per_tile <= 0 || !tokens_used) return -1;
+    if (max_rois <= 0 || !out) return -1;
+
+    int n = wubu_look(prev, curr, patch, tile, max_rois, out, reuse_ratio);
+    if (n < 0) return -1;
+
+    /* ROI list arrives ranked by energy, so take the best that fit. */
+    int used = 0, kept = 0;
+    for (int i = 0; i < n; i++) {
+        if (used + tokens_per_tile > token_budget) break;
+        out[kept++] = out[i];
+        used += tokens_per_tile;
+    }
+    *tokens_used = used;
+    return kept;
+}
