@@ -1406,7 +1406,7 @@
    "n": 174,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "immediate size selection picks imm32 sign-extension vs movabs imm64 correctly",
+   "title": "immediate size selection picks imm32 sign-extension vs movabs imm64 correctly (DONE)",
    "module": "wubu_isa_x86_64.c",
    "criterion": "make test_isa_driver green: 0x1234 uses imm32, 0x123456789ABCDEF0 uses movabs; no truncation of the high 32 bits, verified by result value"
   },
