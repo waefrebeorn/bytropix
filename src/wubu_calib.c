@@ -687,3 +687,68 @@ int wubu_calibrate_focal(const double *p3, const double *p2, int n,
     if (wubu_pose_refine(p3, p2, n, K, R, t, 40) != 0) return -1;
     return 0;
 }
+
+
+static double pp_cost(const double *p3, const double *p2, int n,
+                      double f, double cx, double cy, const double R[9], const double t[3])
+{
+    double K[9] = {f, 0, cx, 0, f, cy, 0, 0, 1};
+    double Rl[9], tl[3];
+    memcpy(Rl, R, sizeof Rl);
+    memcpy(tl, t, sizeof tl);
+    if (wubu_pose_refine(p3, p2, n, K, Rl, tl, 15) != 0) return 1e300;
+    return pose_cost(p3, p2, n, K, Rl, tl);
+}
+
+static double golden1d(double a, double b, int iters,
+                       double (*fn)(const void *, double), const void *ctx)
+{
+    const double gr = 0.6180339887498949;
+    double x1 = b - gr * (b - a), x2 = a + gr * (b - a);
+    double f1 = fn(ctx, x1), f2 = fn(ctx, x2);
+    for (int i = 0; i < iters; i++) {
+        if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = b - gr * (b - a); f1 = fn(ctx, x1); }
+        else         { a = x1; x1 = x2; f1 = f2; x2 = a + gr * (b - a); f2 = fn(ctx, x2); }
+    }
+    return (a + b) * 0.5;
+}
+
+typedef struct {
+    const double *p3; const double *p2; int n;
+    double f, other; int axis;          /* axis 0: vary cx, axis 1: vary cy */
+    double R[9], t[3];
+} pp_ctx;
+
+static double pp_axis(const void *vctx, double val)
+{
+    const pp_ctx *c = (const pp_ctx *)vctx;
+    double cx = c->axis == 0 ? val : c->other;
+    double cy = c->axis == 0 ? c->other : val;
+    return pp_cost(c->p3, c->p2, c->n, c->f, cx, cy, c->R, c->t);
+}
+
+int wubu_calibrate_principal(const double *p3, const double *p2, int n,
+                             double K[9], double R[9], double t[3])
+{
+    if (!p3 || !p2 || n < 4 || !K || !R || !t || K[0] <= 0) return -1;
+
+    double f = K[0], cx = K[2], cy = K[5];
+    double span = 0.1 * f;
+
+    for (int pass = 0; pass < 2; pass++) {
+        pp_ctx c;
+        c.p3 = p3; c.p2 = p2; c.n = n; c.f = f;
+        memcpy(c.R, R, sizeof c.R);
+        memcpy(c.t, t, sizeof c.t);
+
+        c.axis = 0; c.other = cy;
+        cx = golden1d(cx - span, cx + span, 30, pp_axis, &c);
+        c.axis = 1; c.other = cx;
+        cy = golden1d(cy - span, cy + span, 30, pp_axis, &c);
+        span *= 0.25;                     /* narrow after the first pass */
+    }
+
+    K[2] = cx; K[5] = cy;
+    if (wubu_pose_refine(p3, p2, n, K, R, t, 40) != 0) return -1;
+    return 0;
+}

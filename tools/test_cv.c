@@ -969,6 +969,25 @@ int main(void)
     CHECK(fabs(cT[2] - 0.5) < 1e-3, "pose is consistent after calibration");
     CHECK(wubu_calibrate_focal(cfp3, cfp2, 3, cK, cR, cT) == -1, "3 points -> -1");
 
+
+    /* --- principal point calibration (wave 31) --- */
+    double ppp2[16];
+    for (int i = 0; i < 8; i++) {
+        double X = cfp3[3*i], Y = cfp3[3*i+1], Z = cfp3[3*i+2];
+        double w = Z + 0.5;
+        ppp2[2*i] = 500*X/w + 95;
+        ppp2[2*i+1] = 500*Y/w + 70;
+    }
+    double pK[9] = {500, 0, 72, 0, 500, 88, 0, 0, 1};
+    double pR[9] = {1,0,0, 0,1,0, 0,0,1};
+    double pT[3] = {0, 0, 0.5};
+    CHECK(wubu_calibrate_principal(cfp3, ppp2, 8, pK, pR, pT) == 0, "principal point calibration runs");
+    printf("  principal point (%.4f,%.4f) from (72,88)\n", pK[2], pK[5]);
+    CHECK(fabs(pK[2] - 95.0) < 0.01 && fabs(pK[5] - 70.0) < 0.01,
+          "principal point recovered exactly");
+    CHECK(fabs(pK[0] - 500.0) < 1e-9, "focal length is left untouched");
+    CHECK(wubu_calibrate_principal(cfp3, ppp2, 3, pK, pR, pT) == -1, "3 points -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

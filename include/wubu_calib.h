@@ -77,4 +77,10 @@ int wubu_markers_refine(const double *marker_xyz, const double *marker_uv,
 int wubu_calibrate_focal(const double *p3, const double *p2, int n,
                          double K[9], double R[9], double t[3]);
 
+/* Recover the principal point with the focal length held fixed: alternate
+ * golden-section searches on cx and cy, refining the pose at each trial.
+ * Returns 0, or -1. */
+int wubu_calibrate_principal(const double *p3, const double *p2, int n,
+                             double K[9], double R[9], double t[3]);
+
 #endif /* WUBU_CALIB_H */
