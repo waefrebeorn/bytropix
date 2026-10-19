@@ -382,7 +382,7 @@
    "n": 46,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "Real-time FIFO/RR classes with strict priority preemption",
+   "title": "Real-time FIFO/RR classes with strict priority preemption (DONE)",
    "module": "wubuos/src/kernel/tasking.c",
    "criterion": "make test_tasking: an RT task preempts a CFS task within one tick; two same-priority RT tasks round-robin on the tick boundary"
   },
