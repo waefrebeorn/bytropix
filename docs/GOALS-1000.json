@@ -1374,7 +1374,7 @@
    "n": 170,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "frame layout uses rbp-relative addressing with no red-zone assumptions",
+   "title": "frame layout uses rbp-relative addressing with no red-zone assumptions (DONE)",
    "module": "wubu_isa_x86_64.c",
    "criterion": "make test_isa_driver green; disassembly of a 3-local function shows only [rbp-N] locals and a sub rsp,N prologue, no leaf red-zone writes"
   },
