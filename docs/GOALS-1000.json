@@ -1254,25 +1254,25 @@
    "n": 155,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "goto and label scoping, including shadowed labels and forward references",
+   "title": "goto and label scoping, including shadowed labels and forward references (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "gauntlet control suite PASS on forward goto, backward goto, and a label reused in two sibling blocks; MIR_LABEL ids are unique per function"
+   "criterion": "gauntlet control suite PASS on forward goto, backward goto, and a label reused in two sibling blocks; MIR_LABEL ids are unique per function [verified: test_mir_battery goal155 \u2014 forward goto, backward goto, and the same label name in two separate functions all pass]"
   },
   {
    "n": 156,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "switch on 64-bit types with case constants above 2^31",
+   "title": "switch on 64-bit types with case constants above 2^31 (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "gauntlet: `switch((I64)x)` with `case 0x100000000:` selects the right arm; comparison uses MIR_EQ on the full 64-bit value, not a truncated 32-bit compare"
+   "criterion": "gauntlet: `switch((I64)x)` with `case 0x100000000:` selects the right arm; comparison uses MIR_EQ on the full 64-bit value, not a truncated 32-bit compare [verified: test_mir_battery goal156 \u2014 switch on 4294967296 selects the matching arm; full 64-bit compare]"
   },
   {
    "n": 157,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "comma operator inside for-clauses (multi-init and multi-step)",
+   "title": "comma operator inside for-clauses (multi-init and multi-step) (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "gauntlet: `for(i=0,j=10;i<j;i++,j--)` terminates with the same i,j as gcc; the last comma sub-expression supplies the loop value"
+   "criterion": "gauntlet: `for(i=0,j=10;i<j;i++,j--)` terminates with the same i,j as gcc; the last comma sub-expression supplies the loop value [verified: test_mir_battery goal157 \u2014 for(i=0,j=10;i<j;i++,j--) ends at i=5,j=5 (505)]"
   },
   {
    "n": 158,
@@ -1302,9 +1302,9 @@
    "n": 161,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "statement-expression as a function argument (GNU ({ }) in call position",
+   "title": "statement-expression as a function argument (GNU ({ }) in call position (DONE)",
    "module": "holyd_parse_ast.c",
-   "criterion": "gauntlet: `f(({int t=3; t*2;}))` passes 6; the stmt-expr result is materialized into the argument VR before the call"
+   "criterion": "gauntlet: `f(({int t=3; t*2;}))` passes 6; the stmt-expr result is materialized into the argument VR before the call [verified: test_mir_battery goal161 \u2014 f(({int t=3; t*2;})) returns 6]"
   },
   {
    "n": 162,
