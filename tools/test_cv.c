@@ -1050,6 +1050,27 @@ int main(void)
     CHECK(wubu_undistort_image(NULL, uK, 0.1, 0.0, &uout) == -1, "NULL image -> -1");
     wubu_img_free(&upat); wubu_img_free(&udis); wubu_img_free(&uout);
 
+
+    /* --- distortion-aware pose refinement (wave 34) --- */
+    double ddp2[16];
+    for (int i = 0; i < 8; i++) {
+        double X = cfp3[3*i], Y = cfp3[3*i+1], Z = cfp3[3*i+2];
+        double w = Z + 0.5;
+        double u = 500*X/w + 80, v = 500*Y/w + 80;
+        wubu_distort_point(u, v, Kp, 0.12, -0.03, &ddp2[2*i], &ddp2[2*i+1]);
+    }
+    double dth = 0.035;
+    double dR2[9] = {cos(dth), -sin(dth), 0, sin(dth), cos(dth), 0, 0, 0, 1};
+    double dt2[3] = {0.02, -0.01, 0.53};
+    CHECK(wubu_pose_refine_dist(cfp3, ddp2, 8, Kp, dR2, dt2, 30, 0.12, -0.03) == 0,
+          "distorted-domain refinement runs");
+    printf("  distorted-domain t=(%.6f,%.6f,%.6f)\n", dt2[0], dt2[1], dt2[2]);
+    CHECK(fabs(dt2[0]) < 1e-6 && fabs(dt2[1]) < 1e-6 && fabs(dt2[2] - 0.5) < 1e-6,
+          "pose recovered with distortion in the model");
+    CHECK(fabs(dR2[0] - 1.0) < 1e-6 && fabs(dR2[1]) < 1e-6, "rotation recovered as identity");
+    CHECK(wubu_pose_refine_dist(cfp3, ddp2, 8, Kp, dR2, dt2, 0, 0.12, -0.03) == -1,
+          "iters=0 -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

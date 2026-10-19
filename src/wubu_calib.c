@@ -813,3 +813,106 @@ int wubu_undistort_image(const wubu_img *src, const double K[9], double k1, doub
     }
     return 0;
 }
+
+
+static void project_dist(const double X[3], const double K[9], const double R[9],
+                         const double t[3], double k1, double k2, double uv[2])
+{
+    double c[3];
+    for (int i = 0; i < 3; i++)
+        c[i] = R[i * 3 + 0] * X[0] + R[i * 3 + 1] * X[1] + R[i * 3 + 2] * X[2] + t[i];
+    double w = c[2];
+    if (fabs(w) < 1e-12) w = 1e-12;
+    double u = K[0] * c[0] / w + K[2];
+    double v = K[4] * c[1] / w + K[5];
+    wubu_distort_point(u, v, K, k1, k2, &uv[0], &uv[1]);
+}
+
+static double cost_dist(const double *p3, const double *p2, int n, const double K[9],
+                        const double R[9], const double t[3], double k1, double k2)
+{
+    double acc = 0.0;
+    for (int i = 0; i < n; i++) {
+        double uv[2];
+        project_dist(&p3[3 * i], K, R, t, k1, k2, uv);
+        double du = uv[0] - p2[2 * i], dv = uv[1] - p2[2 * i + 1];
+        acc += du * du + dv * dv;
+    }
+    return acc;
+}
+
+int wubu_pose_refine_dist(const double *p3, const double *p2, int n, const double K[9],
+                       double R[9], double t[3], int iters, double k1, double k2)
+{
+    if (!p3 || !p2 || n < 3 || iters <= 0) return -1;
+    double cur = cost_dist(p3, p2, n, K, R, t, k1, k2);
+
+    for (int it = 0; it < iters; it++) {
+        double A[6][6], b[6];
+        memset(A, 0, sizeof A);
+        memset(b, 0, sizeof b);
+
+        for (int i = 0; i < n; i++) {
+            double uv0[2];
+            project_dist(&p3[3 * i], K, R, t, k1, k2, uv0);
+            double r[2] = {p2[2 * i] - uv0[0], p2[2 * i + 1] - uv0[1]};
+            if (fabs(r[0]) + fabs(r[1]) < 1e-14) continue;
+
+            double J[2][6];
+            const double eps = 1e-7;
+            for (int k = 0; k < 6; k++) {
+                double Rp[9], tp[3];
+                memcpy(Rp, R, sizeof Rp);
+                tp[0] = t[0]; tp[1] = t[1]; tp[2] = t[2];
+                if (k < 3) {
+                    double d[3] = {0, 0, 0};
+                    d[k] = eps;
+                    double dR[9], tmp[9];
+                    exp_so3(d, dR);
+                    for (int r0 = 0; r0 < 3; r0++)
+                        for (int c0 = 0; c0 < 3; c0++) {
+                            double s2 = 0;
+                            for (int m = 0; m < 3; m++) s2 += dR[r0 * 3 + m] * R[m * 3 + c0];
+                            tmp[r0 * 3 + c0] = s2;
+                        }
+                    memcpy(Rp, tmp, sizeof Rp);
+                } else {
+                    tp[k - 3] += eps;
+                }
+                double uvp[2];
+                project_dist(&p3[3 * i], K, Rp, tp, k1, k2, uvp);
+                J[0][k] = (uvp[0] - uv0[0]) / eps;
+                J[1][k] = (uvp[1] - uv0[1]) / eps;
+            }
+            for (int a = 0; a < 6; a++) {
+                for (int cc = 0; cc < 6; cc++) A[a][cc] += J[0][a] * J[0][cc] + J[1][a] * J[1][cc];
+                b[a] += J[0][a] * r[0] + J[1][a] * r[1];
+            }
+        }
+
+        double dx[6];
+        if (solve6(A, b, dx) != 0) return -1;
+
+        double Rold[9], told[3];
+        memcpy(Rold, R, sizeof Rold);
+        memcpy(told, t, sizeof told);
+
+        double dR[9], Rn[9];
+        exp_so3(dx, dR);
+        for (int r0 = 0; r0 < 3; r0++)
+            for (int c0 = 0; c0 < 3; c0++) {
+                double s2 = 0;
+                for (int m = 0; m < 3; m++) s2 += dR[r0 * 3 + m] * R[m * 3 + c0];
+                Rn[r0 * 3 + c0] = s2;
+            }
+        memcpy(R, Rn, sizeof Rn);
+        for (int k = 0; k < 3; k++) t[k] += dx[3 + k];
+
+        double nc = cost_dist(p3, p2, n, K, R, t, k1, k2);
+        if (nc <= cur) cur = nc;
+        else { memcpy(R, Rold, sizeof Rold); memcpy(t, told, sizeof told); break; }
+        if (cur < 1e-16) break;
+    }
+    return 0;
+}
+

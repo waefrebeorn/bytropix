@@ -29,7 +29,7 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 
 - `test_eye` — 26 checks: patch masks, XOR/popcount, tolerance vs threshold, partial patches.
 - `test_look` — 9 checks: two frames -> ranked changed ROIs + reuse ratio (93.8% reuse for a 32x32 change) and a token-budgeted variant that stops at the paid budget.
-- `test_cv` — **176 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
+- `test_cv` — **180 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
   Otsu on a bimodal image, Gaussian edge clamp, FAST-9 on a square, BRIEF determinism,
   Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance,
   Canny on one rectangle and two squares, contour bbox origin/size and thinness,
@@ -62,6 +62,16 @@ search: undistorting the observations with a candidate k and then least-squares
 fitting the pose lets the pose absorb most of the distortion error, so the cost
 is nearly flat in k2. A correct fit needs one joint bundle over the poses and
 k1/k2 with residuals evaluated in the distorted domain.
+
+### Joint multi-view distortion fit is still confounded (wave 34 attempt)
+Rewriting the residuals in the distorted domain (project -> distort -> compare),
+so the pose could no longer absorb the error, gave k1 = 0.112, k2 = -0.004 on the
+same three-view planar scene -- essentially unchanged. The reason is the target:
+a planar grid's homography absorbs radial distortion, so k1/k2 stay weakly
+identified unless points cover the full field of view at several depths.
+Dropped the estimator; kept `wubu_pose_refine_dist`, which is verified on its own
+(exact pose recovery from distorted observations) and is the piece a future fit
+needs.
 
 ### Distortion fit with a free pose (wave 32 attempt)
 Alternating golden-section on k1/k2 while re-solving the pose on undistorted

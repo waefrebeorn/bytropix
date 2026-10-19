@@ -98,4 +98,8 @@ int wubu_undistort_point(double xd, double yd, const double K[9], double k1, dou
 int wubu_undistort_image(const wubu_img *src, const double K[9], double k1, double k2,
                          wubu_img *out);
 
+/* Pose refinement with radial distortion in the projection model. */
+int wubu_pose_refine_dist(const double *p3, const double *p2, int n, const double K[9],
+                          double R[9], double t[3], int iters, double k1, double k2);
+
 #endif /* WUBU_CALIB_H */
