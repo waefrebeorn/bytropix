@@ -6998,7 +6998,7 @@
    "n": 873,
    "domain": "NETWORK",
    "tier": "P2",
-   "title": "Socket-to-9P bridge: serve a 9P session over a TCP socket",
+   "title": "Socket-to-9P bridge: serve a 9P session over a TCP socket (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
    "criterion": "make test_styx_bridge green: a remote 9P client mounts and reads /n/kernel/scheduler over TCP through wubu_tls; read/write/stat roundtrip byte-identical to the local path"
   },
