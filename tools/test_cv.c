@@ -895,6 +895,34 @@ int main(void)
     CHECK(fabs(pfR[0] - 0.70710678) < 1e-6, "halfway rotation is 45 degrees about z");
     CHECK(wubu_pose_fuse(NULL, 2, pfR, pft) == -1, "NULL poses -> -1");
 
+
+    /* --- pose refinement / bundle adjustment (wave 28) --- */
+    double rp3[24] = {-1,-1,0, 1,-1,0, 1,1,0, -1,1,0,
+                      0,0,1, 0,0,-1, -1,1,2, 1,-1,2};
+    double rp2[16];
+    for (int i = 0; i < 8; i++) {
+        double X = rp3[3*i], Y = rp3[3*i+1], Z = rp3[3*i+2];
+        double w = Z + 0.5;
+        rp2[2*i] = 500*X/w + 80;
+        rp2[2*i+1] = 500*Y/w + 80;
+    }
+    double rc_th = 0.035, rs_th = sin(0.035), rcc = cos(0.035);
+    double rR[9] = {rcc, -rs_th, 0, rs_th, rcc, 0, 0, 0, 1};
+    double rt[3] = {0.02, -0.01, 0.53};
+    CHECK(wubu_pose_refine(rp3, rp2, 8, Kp, rR, rt, 25) == 0, "pose refinement runs");
+    printf("  refined t=(%.6f,%.6f,%.6f)\n", rt[0], rt[1], rt[2]);
+    CHECK(fabs(rt[0]) < 1e-6 && fabs(rt[1]) < 1e-6 && fabs(rt[2] - 0.5) < 1e-6,
+          "Gauss-Newton recovers the true translation");
+    CHECK(fabs(rR[0] - 1.0) < 1e-6 && fabs(rR[1]) < 1e-6 &&
+          fabs(rR[4] - 1.0) < 1e-6, "Rodrigues update restores the identity rotation");
+    double rerr2 = 0.0;
+    for (int i = 0; i < 9; i++) {
+        double expect = (i % 4 == 0) ? 1.0 : 0.0;
+        rerr2 += fabs(rR[i] - expect);
+    }
+    CHECK(rerr2 < 1e-6, "the refined rotation stays on SO(3)");
+    CHECK(wubu_pose_refine(rp3, rp2, 8, Kp, rR, rt, 0) == -1, "iters=0 -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

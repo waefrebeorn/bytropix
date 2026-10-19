@@ -58,4 +58,10 @@ typedef struct { double R[9]; double t[3]; double weight; } wubu_pose;
  * Returns 0, or -1. */
 int wubu_pose_fuse(const wubu_pose *in, int n, double R[9], double t[3]);
 
+/* Gauss-Newton refinement of (R,t) against 3D-2D correspondences.
+ * The rotation update is R <- exp([dw]x) R (first-order exponential);
+ * the Jacobian is numeric. Returns 0, or -1. */
+int wubu_pose_refine(const double *p3, const double *p2, int n, const double K[9],
+                     double R[9], double t[3], int iters);
+
 #endif /* WUBU_CALIB_H */

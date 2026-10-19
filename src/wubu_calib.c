@@ -467,3 +467,161 @@ int wubu_pose_fuse(const wubu_pose *in, int n, double R[9], double t[3])
     quat_to_rot(acc, R);
     return 0;
 }
+
+
+static void project_pose(const double X[3], const double K[9], const double R[9],
+                         const double t[3], double uv[2])
+{
+    double c[3];
+    for (int i = 0; i < 3; i++)
+        c[i] = R[i * 3 + 0] * X[0] + R[i * 3 + 1] * X[1] + R[i * 3 + 2] * X[2] + t[i];
+    double w = K[6] * c[0] + K[7] * c[1] + K[8] * c[2];
+    if (fabs(w) < 1e-12) w = 1e-12;
+    uv[0] = (K[0] * c[0] + K[1] * c[1] + K[2] * c[2]) / w;
+    uv[1] = (K[3] * c[0] + K[4] * c[1] + K[5] * c[2]) / w;
+}
+
+static double pose_cost(const double *p3, const double *p2, int n,
+                        const double K[9], const double R[9], const double t[3])
+{
+    double acc = 0.0;
+    for (int i = 0; i < n; i++) {
+        double uv[2];
+        project_pose(&p3[3 * i], K, R, t, uv);
+        double du = uv[0] - p2[2 * i], dv = uv[1] - p2[2 * i + 1];
+        acc += du * du + dv * dv;
+    }
+    return acc;
+}
+
+static int solve6(double A[6][6], double b[6], double x[6])
+{
+    for (int col = 0; col < 6; col++) {
+        int piv = col;
+        for (int r = col + 1; r < 6; r++)
+            if (fabs(A[r][col]) > fabs(A[piv][col])) piv = r;
+        if (fabs(A[piv][col]) < 1e-14) return -1;
+        if (piv != col) {
+            for (int k = 0; k < 6; k++) { double s = A[col][k]; A[col][k] = A[piv][k]; A[piv][k] = s; }
+            double s = b[col]; b[col] = b[piv]; b[piv] = s;
+        }
+        for (int r = col + 1; r < 6; r++) {
+            double f = A[r][col] / A[col][col];
+            for (int k = col; k < 6; k++) A[r][k] -= f * A[col][k];
+            b[r] -= f * b[col];
+        }
+    }
+    for (int i = 5; i >= 0; i--) {
+        double s = b[i];
+        for (int k = i + 1; k < 6; k++) s -= A[i][k] * x[k];
+        x[i] = s / A[i][i];
+    }
+    return 0;
+}
+
+
+static void exp_so3(const double w[3], double R[9])
+{
+    double theta = sqrt(w[0]*w[0] + w[1]*w[1] + w[2]*w[2]);
+    double k[9] = {0, -w[2], w[1], w[2], 0, -w[0], -w[1], w[0], 0};
+    double c, sn;
+    if (theta < 1e-12) { c = 1.0; sn = 0.0; theta = 1e-12; }
+    else { c = cos(theta); sn = sin(theta); }
+
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            double kij = k[i * 3 + j] / theta;
+            double k2 = 0.0;
+            for (int m = 0; m < 3; m++) k2 += (k[i * 3 + m] / theta) * (k[m * 3 + j] / theta);
+            R[i * 3 + j] = (i == j ? 1.0 : 0.0) + sn * kij + (1.0 - c) * k2;
+        }
+}
+
+int wubu_pose_refine(const double *p3, const double *p2, int n, const double K[9],
+                     double R[9], double t[3], int iters)
+{
+    if (!p3 || !p2 || !n || n < 3 || !K || !R || !t || iters <= 0) return -1;
+
+    double cur = pose_cost(p3, p2, n, K, R, t);
+
+    for (int it = 0; it < iters; it++) {
+        double A[6][6], b[6];
+        memset(A, 0, sizeof A);
+        memset(b, 0, sizeof b);
+
+        for (int i = 0; i < n; i++) {
+            double uv0[2];
+            project_pose(&p3[3 * i], K, R, t, uv0);
+            double r[2] = {p2[2 * i] - uv0[0], p2[2 * i + 1] - uv0[1]};
+            if (sqrt(r[0] * r[0] + r[1] * r[1]) < 1e-14) continue;
+
+            /* numeric Jacobian: 3 rotation params, 3 translation params */
+            double J[2][6];
+            const double eps = 1e-7;
+            for (int k = 0; k < 6; k++) {
+                double Rp[9], tp[3];
+                memcpy(Rp, R, sizeof Rp);
+                tp[0] = t[0]; tp[1] = t[1]; tp[2] = t[2];
+
+                if (k < 3) {
+                    double d[3] = {0, 0, 0};
+                    d[k] = eps;
+                    double dR[9];
+                    exp_so3(d, dR);
+                    double tmp[9];
+                    for (int r0 = 0; r0 < 3; r0++)
+                        for (int c0 = 0; c0 < 3; c0++) {
+                            double s = 0;
+                            for (int m = 0; m < 3; m++) s += dR[r0 * 3 + m] * R[m * 3 + c0];
+                            tmp[r0 * 3 + c0] = s;
+                        }
+                    memcpy(Rp, tmp, sizeof Rp);
+                } else {
+                    tp[k - 3] += eps;
+                }
+
+                double uvp[2];
+                project_pose(&p3[3 * i], K, Rp, tp, uvp);
+                J[0][k] = (uvp[0] - uv0[0]) / eps;
+                J[1][k] = (uvp[1] - uv0[1]) / eps;
+            }
+
+            for (int a = 0; a < 6; a++) {
+                for (int c = 0; c < 6; c++) A[a][c] += J[0][a] * J[0][c] + J[1][a] * J[1][c];
+                b[a] += J[0][a] * r[0] + J[1][a] * r[1];
+            }
+        }
+
+        double dx[6];
+        if (solve6(A, b, dx) != 0) return -1;
+
+        /* Apply: R <- exp([dw]x) R, t += dt. */
+        double Rold[9], told[3];
+        memcpy(Rold, R, sizeof Rold);
+        memcpy(told, t, sizeof told);
+
+        double dw[3] = {dx[0], dx[1], dx[2]};
+        double dR[9];
+        exp_so3(dw, dR);
+        double Rn[9];
+        for (int r0 = 0; r0 < 3; r0++)
+            for (int c0 = 0; c0 < 3; c0++) {
+                double s = 0;
+                for (int m = 0; m < 3; m++) s += dR[r0 * 3 + m] * R[m * 3 + c0];
+                Rn[r0 * 3 + c0] = s;
+            }
+        memcpy(R, Rn, sizeof Rn);
+        t[0] += dx[3]; t[1] += dx[4]; t[2] += dx[5];
+
+        double nc = pose_cost(p3, p2, n, K, R, t);
+        if (nc <= cur) {
+            cur = nc;
+        } else {
+            memcpy(R, Rold, sizeof Rold);
+            memcpy(t, told, sizeof told);
+            break;               /* step made it worse; stop */
+        }
+        if (cur < 1e-16) break;
+    }
+    return 0;
+}
