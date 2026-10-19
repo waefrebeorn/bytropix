@@ -78,6 +78,13 @@ int wubu_chessboard_order(const wubu_corner *in, int n, int cols, int rows,
  * refinement, not true sub-pixel localisation. Returns 0, or -1. */
 int wubu_corner_refine_subpix(const wubu_img *im, wubu_corner *c, int n, int radius);
 
+typedef struct { float x, y; float score; } wubu_cornerf;
+
+/* True sub-pixel localisation: the Harris-response-weighted centroid over a
+ * (2*radius+1) window, kept in floating point (no rounding). Returns 0, or -1. */
+int wubu_corner_refine_centroid(const wubu_img *im, const wubu_corner *in, int n,
+                                int radius, wubu_cornerf *out);
+
 /* Ordered boundary points of the 8-connected component containing (sx, sy).
  * Points are sorted counter-clockwise around the centroid, so the caller gets a
  * usable polyline rather than an unordered pixel set. Returns the count, or -1. */

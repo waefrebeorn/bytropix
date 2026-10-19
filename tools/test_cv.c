@@ -714,6 +714,39 @@ int main(void)
     CHECK(wubu_corner_refine_subpix(&cb3, sc, scn, 0) == -1, "radius 0 -> -1");
     wubu_img_free(&cb2); wubu_img_free(&cb3);
 
+
+    /* --- true sub-pixel localisation (wave 21) --- */
+    wubu_img cb4 = {0};
+    wubu_img_alloc(&cb4, 160, 160);
+    for (int y = 0; y < 160; y++)
+        for (int x = 0; x < 160; x++) {
+            int cxcell = (int)floor((x - 0.4) / 20.0);
+            int cycell = (int)floor((y - 0.4) / 20.0);
+            cb4.data[y * cb4.stride + x] = ((cxcell + cycell) & 1) ? 220 : 30;
+        }
+
+    wubu_corner fc[128];
+    int fcn = wubu_harris_corners(&cb4, 0.02f, 5, fc, 128);
+    wubu_cornerf fout[128];
+    CHECK(wubu_corner_refine_centroid(&cb4, fc, fcn, 3, fout) == 0, "float centroid runs");
+
+    double fx_err = 0.0, fy_err = 0.0;
+    int fcount = 0;
+    for (int i = 0; i < fcn; i++) {
+        int mx = (int)((fout[i].x + 10) / 20) * 20;
+        int my = (int)((fout[i].y + 10) / 20) * 20;
+        if (mx < 20 || mx > 140 || my < 20 || my > 140) continue;
+        fx_err += fabs((double)fout[i].x - ((double)mx + 0.4));
+        fy_err += fabs((double)fout[i].y - ((double)my + 0.4));
+        fcount++;
+    }
+    if (fcount) { fx_err /= fcount; fy_err /= fcount; }
+    printf("  float centroid error vs (lattice+0.4): dx=%.3f dy=%.3f (n=%d)\n", fx_err, fy_err, fcount);
+    CHECK(fcount >= 36 && fx_err < 0.30 && fy_err < 0.30,
+          "float centroids land within 0.30 px of the true sub-pixel corner");
+    CHECK(wubu_corner_refine_centroid(&cb4, fc, fcn, 0, fout) == -1, "radius 0 -> -1");
+    wubu_img_free(&cb4);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");
