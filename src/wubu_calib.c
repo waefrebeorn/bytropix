@@ -388,3 +388,82 @@ int wubu_marker_pose(const double corners[8], double marker_size,
     }
     return 0;
 }
+
+
+static void rot_to_quat(const double R[9], double q[4])
+{
+    double tr = R[0] + R[4] + R[8];
+    if (tr > 0.0) {
+        double s = sqrt(tr + 1.0) * 2.0;
+        q[0] = 0.25 * s;
+        q[1] = (R[7] - R[5]) / s;
+        q[2] = (R[2] - R[6]) / s;
+        q[3] = (R[3] - R[1]) / s;
+    } else if (R[0] > R[4] && R[0] > R[8]) {
+        double s = sqrt(1.0 + R[0] - R[4] - R[8]) * 2.0;
+        q[0] = (R[7] - R[5]) / s;
+        q[1] = 0.25 * s;
+        q[2] = (R[1] + R[3]) / s;
+        q[3] = (R[2] + R[6]) / s;
+    } else if (R[4] > R[8]) {
+        double s = sqrt(1.0 + R[4] - R[0] - R[8]) * 2.0;
+        q[0] = (R[2] - R[6]) / s;
+        q[1] = (R[1] + R[3]) / s;
+        q[2] = 0.25 * s;
+        q[3] = (R[5] + R[7]) / s;
+    } else {
+        double s = sqrt(1.0 + R[8] - R[0] - R[4]) * 2.0;
+        q[0] = (R[3] - R[1]) / s;
+        q[1] = (R[2] + R[6]) / s;
+        q[2] = (R[5] + R[7]) / s;
+        q[3] = 0.25 * s;
+    }
+}
+
+static void quat_to_rot(const double q[4], double R[9])
+{
+    double w = q[0], x = q[1], y = q[2], z = q[3];
+    R[0] = 1 - 2 * (y * y + z * z);
+    R[1] = 2 * (x * y - w * z);
+    R[2] = 2 * (x * z + w * y);
+    R[3] = 2 * (x * y + w * z);
+    R[4] = 1 - 2 * (x * x + z * z);
+    R[5] = 2 * (y * z - w * x);
+    R[6] = 2 * (x * z - w * y);
+    R[7] = 2 * (y * z + w * x);
+    R[8] = 1 - 2 * (x * x + y * y);
+}
+
+int wubu_pose_fuse(const wubu_pose *in, int n, double R[9], double t[3])
+{
+    if (!in || !R || !t || n <= 0) return -1;
+
+    double acc[4] = {0, 0, 0, 0};
+    double wt = 0.0, tw = 0.0;
+    double q0[4] = {1, 0, 0, 0};
+    int have_ref = 0;
+
+    for (int i = 0; i < n; i++) {
+        double w = in[i].weight > 0.0 ? in[i].weight : 1.0;
+        double q[4];
+        rot_to_quat(in[i].R, q);
+
+        if (!have_ref) { for (int k = 0; k < 4; k++) q0[k] = q[k]; have_ref = 1; }
+
+        double dot = q0[0] * q[0] + q0[1] * q[1] + q0[2] * q[2] + q0[3] * q[3];
+        double sign = dot < 0.0 ? -1.0 : 1.0;    /* hemisphere alignment */
+
+        for (int k = 0; k < 4; k++) acc[k] += sign * w * q[k];
+        for (int k = 0; k < 3; k++) t[k] += w * in[i].t[k];
+        wt += w;
+    }
+
+    double norm = sqrt(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2] + acc[3] * acc[3]);
+    if (norm < 1e-12 || wt <= 0.0) return -1;
+    for (int k = 0; k < 4; k++) acc[k] /= norm;
+    for (int k = 0; k < 3; k++) t[k] /= wt;
+
+    (void)tw;
+    quat_to_rot(acc, R);
+    return 0;
+}

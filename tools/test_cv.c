@@ -871,6 +871,30 @@ int main(void)
     CHECK(fabs(tp[2] - 1.2) < 1e-6, "depth scales correctly with the quad size");
     CHECK(wubu_marker_pose(NULL, ms, Kp, Rp, tp) == -1, "NULL corners -> -1");
 
+
+    /* --- pose fusion (wave 27) --- */
+    wubu_pose pfposes[2];
+    const double I3[9] = {1,0,0, 0,1,0, 0,0,1};
+    for (int i = 0; i < 2; i++) {
+        for (int k = 0; k < 9; k++) pfposes[i].R[k] = I3[k];
+        pfposes[i].weight = 1.0;
+        pfposes[i].t[0] = pfposes[i].t[1] = 0.0;
+    }
+    pfposes[0].t[2] = 0.5; pfposes[1].t[2] = 1.5;
+    double pfR[9], pft[3];
+    CHECK(wubu_pose_fuse(pfposes, 2, pfR, pft) == 0, "pose fusion runs");
+    CHECK(fabs(pft[2] - 1.0) < 1e-9, "translation is the weighted mean");
+    CHECK(fabs(pfR[0] - 1.0) < 1e-9 && fabs(pfR[4] - 1.0) < 1e-9, "identical rotations fuse to identity");
+
+    /* 90 deg about z with identity should fuse to 45 deg */
+    const double R90[9] = {0,-1,0, 1,0,0, 0,0,1};
+    for (int k = 0; k < 9; k++) { pfposes[0].R[k] = I3[k]; pfposes[1].R[k] = R90[k]; }
+    pfposes[0].t[2] = pfposes[1].t[2] = 0.7;
+    wubu_pose_fuse(pfposes, 2, pfR, pft);
+    printf("  fused yaw cos=%.6f (expect 0.707107)\n", pfR[0]);
+    CHECK(fabs(pfR[0] - 0.70710678) < 1e-6, "halfway rotation is 45 degrees about z");
+    CHECK(wubu_pose_fuse(NULL, 2, pfR, pft) == -1, "NULL poses -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

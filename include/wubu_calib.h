@@ -51,4 +51,11 @@ int wubu_aruco_decode(const wubu_img *im, const double quad[8],
 int wubu_marker_pose(const double corners[8], double marker_size,
                      const double K[9], double R[9], double t[3]);
 
+typedef struct { double R[9]; double t[3]; double weight; } wubu_pose;
+
+/* Fuse n poses: weighted mean translation, and a quaternion average of the
+ * rotations (signs aligned to the first quaternion, then normalised).
+ * Returns 0, or -1. */
+int wubu_pose_fuse(const wubu_pose *in, int n, double R[9], double t[3]);
+
 #endif /* WUBU_CALIB_H */
