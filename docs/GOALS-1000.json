@@ -3254,7 +3254,7 @@
    "n": 405,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Twrite short-count and QTAPPEND write-at-end enforcement",
+   "title": "Twrite short-count and QTAPPEND write-at-end enforcement (DONE)",
    "module": "wubuos/src/runtime/styxfs_callbacks.c",
    "criterion": "make test_styxfs green: a write of 9000 bytes to a node capped at STYX_MAX_DATA returns count=8192 and leaves the file consistent; a write to a QTAPPEND node ignores the client offset and appends"
   },
