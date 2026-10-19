@@ -388,6 +388,49 @@ int main(void)
           "dedupe keeps the strongest of a cluster and sorts by score");
     CHECK(wubu_harris_score(NULL, hk, hn) == -1, "Harris NULL -> -1");
 
+
+    /* --- contour point tracing (wave 10) --- */
+    wubu_img tr = {0}, te = {0};
+    wubu_img_alloc(&tr, 64, 64);
+    wubu_img_fill(&tr, 20);
+    for (int y = 16; y < 48; y++)
+        for (int x = 16; x < 48; x++) tr.data[y * tr.stride + x] = 220;
+    wubu_img_alloc(&te, 64, 64);
+    wubu_canny(&tr, 50, 150, &te);
+
+    int sx0 = -1, sy0 = -1;
+    for (int y = 0; y < 64 && sy0 < 0; y++)
+        for (int x = 0; x < 64; x++) if (te.data[y * 64 + x]) { sx0 = x; sy0 = y; break; }
+
+    int tx[512], ty[512];
+    int tn = (sx0 >= 0) ? wubu_contour_trace(&te, sx0, sy0, tx, ty, 512) : -1;
+    printf("  traced boundary points: %d (seed %d,%d)\n", tn, sx0, sy0);
+    CHECK(tn > 20, "contour trace returns a boundary polyline");
+    int all_on_edge = 1;
+    for (int i = 0; i < tn; i++)
+        if (!te.data[ty[i] * 64 + tx[i]]) all_on_edge = 0;
+    CHECK(all_on_edge, "every traced point is an edge pixel");
+
+    if (tn > 3) {
+        double cx = 0, cy = 0;
+        for (int i = 0; i < tn; i++) { cx += tx[i]; cy += ty[i]; }
+        cx /= tn; cy /= tn;
+        int inversions = 0;
+        double prev = atan2(ty[0] - cy, tx[0] - cx);
+        for (int i = 1; i < tn; i++) {
+            double a = atan2(ty[i] - cy, tx[i] - cx);
+            if (a < prev - 1e-9) inversions++;
+            prev = a;
+        }
+        CHECK(inversions <= 1, "points are ordered around the centroid (one wrap allowed)");
+        CHECK(abs(tx[0] - tx[tn - 1]) + abs(ty[0] - ty[tn - 1]) <= 3,
+              "the polyline closes back near its start");
+    }
+    CHECK(wubu_contour_trace(&te, 0, 0, tx, ty, 512) == 0,
+          "tracing an empty pixel returns 0 points");
+    CHECK(wubu_contour_trace(NULL, 0, 0, tx, ty, 512) == -1, "NULL edges -> -1");
+    wubu_img_free(&tr); wubu_img_free(&te);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

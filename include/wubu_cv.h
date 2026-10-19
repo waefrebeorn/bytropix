@@ -58,6 +58,12 @@ int wubu_find_contours(const wubu_img *edges, wubu_contour *out,
 /* 3x3 morphology. mode 0 = erode (min), 1 = dilate (max). Edge-clamped. */
 int wubu_morph3(const wubu_img *in, wubu_img *out, int mode);
 
+/* Ordered boundary points of the 8-connected component containing (sx, sy).
+ * Points are sorted counter-clockwise around the centroid, so the caller gets a
+ * usable polyline rather than an unordered pixel set. Returns the count, or -1. */
+int wubu_contour_trace(const wubu_img *edges, int sx, int sy,
+                       int *xs, int *ys, int max_points);
+
 /* --- Foveated ROI selection (wave 7) ---------------------------------- */
 
 typedef struct {

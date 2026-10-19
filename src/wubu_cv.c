@@ -384,3 +384,65 @@ int wubu_foveated_rois(const wubu_img *im, int tile, int k, int nms_radius,
     free(gx); free(gy); free(score); free(used);
     return found;
 }
+
+
+int wubu_contour_trace(const wubu_img *edges, int sx, int sy,
+                       int *xs, int *ys, int max_points)
+{
+    if (!edges || !edges->data || !xs || !ys || max_points <= 0) return -1;
+    if (sx < 0 || sy < 0 || sx >= edges->w || sy >= edges->h) return -1;
+    if (!edges->data[(size_t)sy * edges->stride + sx]) return 0;
+
+    int w = edges->w, h = edges->h;
+    size_t n = (size_t)w * h;
+    uint8_t *seen = (uint8_t *)calloc(n, 1);
+    int *stack = (int *)malloc(n * sizeof *stack);
+    int *comp = (int *)malloc(n * sizeof *comp);
+    if (!seen || !stack || !comp) { free(seen); free(stack); free(comp); return -1; }
+
+    int sp = 0, cn = 0;
+    int start = sy * w + sx;
+    seen[start] = 1;
+    stack[sp++] = start;
+
+    double cx = 0, cy = 0;
+    while (sp > 0) {
+        int i = stack[--sp];
+        comp[cn++] = i;
+        int x = i % w, y = i / w;
+        cx += x; cy += y;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                int nx = x + dx, ny = y + dy;
+                if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                size_t j = (size_t)ny * w + nx;
+                if (edges->data[j] && !seen[j]) { seen[j] = 1; stack[sp++] = (int)j; }
+            }
+        }
+    }
+    cx /= (double)cn;
+    cy /= (double)cn;
+
+    /* Insertion sort by angle: components here are small (tens of points). */
+    for (int i = 1; i < cn; i++) {
+        int key = comp[i];
+        double ka = atan2((double)(key / w) - cy, (double)(key % w) - cx);
+        int j = i - 1;
+        while (j >= 0) {
+            double ja = atan2((double)(comp[j] / w) - cy, (double)(comp[j] % w) - cx);
+            if (ja <= ka) break;
+            comp[j + 1] = comp[j];
+            j--;
+        }
+        comp[j + 1] = key;
+    }
+
+    int out_n = cn < max_points ? cn : max_points;
+    for (int i = 0; i < out_n; i++) {
+        xs[i] = comp[i] % w;
+        ys[i] = comp[i] / w;
+    }
+
+    free(seen); free(stack); free(comp);
+    return out_n;
+}
