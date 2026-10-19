@@ -1062,9 +1062,9 @@
    "n": 131,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "function prototype arity and parameter-type checking at the call site (DONE)",
+   "title": "function prototype arity and parameter-type checking at the call site",
    "module": "holyd_parse.c",
-   "criterion": "gauntlet error tests: calling f(1) on `void f(int,int)` yields a diagnostic, not silent misalignment; correct-arity calls unaffected [verified: tools/test_diag.c \u2014 f(1) on void f(int,int) reports \"wrong number of arguments\"; 142 battery programs with correct arity are unaffected]"
+   "criterion": "gauntlet error tests: calling f(1) on `void f(int,int)` yields a diagnostic, not silent misalignment; correct-arity calls unaffected [partial: tools/test_diag.c proves the diagnostic; the checker is NOT wired into the compile path because enabling it cost 228 gauntlet passes (1581->1353, errors 907->1200) through false rejections]"
   },
   {
    "n": 132,
