@@ -4,6 +4,8 @@
 #include "wubu_flow.h"
 #include "wubu_uplift.h"
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 static float sample_bilinear(const wubu_img *im, float x, float y)
 {
@@ -261,4 +263,75 @@ int wubu_block_flow_subpix(const wubu_img *prev, const wubu_img *curr,
         }
     }
     return n;
+}
+
+
+int wubu_horn_schunck(const wubu_img *prev, const wubu_img *curr,
+                      int iters, float alpha, float *dx, float *dy)
+{
+    if (!prev || !curr || !dx || !dy) return -1;
+    if (prev->w != curr->w || prev->h != curr->h) return -1;
+    if (iters <= 0 || alpha <= 0.0f) return -1;
+
+    int w = prev->w, h = prev->h;
+    size_t n = (size_t)w * h;
+
+    float *ix = (float *)calloc(n, sizeof *ix);
+    float *iy = (float *)calloc(n, sizeof *iy);
+    float *it = (float *)calloc(n, sizeof *it);
+    float *ub = (float *)calloc(n, sizeof *ub);
+    float *vb = (float *)calloc(n, sizeof *vb);
+    if (!ix || !iy || !it || !ub || !vb) {
+        free(ix); free(iy); free(it); free(ub); free(vb);
+        return -1;
+    }
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            size_t i = (size_t)y * w + x;
+            float a = (float)wubu_img_at(prev, x, y);
+            float b = (float)wubu_img_at(curr, x, y);
+            float ax = 0.25f * ((float)wubu_img_at(prev, x + 1, y) - a
+                              + (float)wubu_img_at(curr, x + 1, y) - b
+                              + (float)wubu_img_at(prev, x + 1, y + 1) - (float)wubu_img_at(prev, x, y + 1)
+                              + (float)wubu_img_at(curr, x + 1, y + 1) - (float)wubu_img_at(curr, x, y + 1));
+            float ay = 0.25f * ((float)wubu_img_at(prev, x, y + 1) - a
+                              + (float)wubu_img_at(curr, x, y + 1) - b
+                              + (float)wubu_img_at(prev, x + 1, y + 1) - (float)wubu_img_at(prev, x + 1, y)
+                              + (float)wubu_img_at(curr, x + 1, y + 1) - (float)wubu_img_at(curr, x + 1, y));
+            ix[i] = ax;
+            iy[i] = ay;
+            it[i] = b - a;
+        }
+    }
+
+    memset(dx, 0, n * sizeof *dx);
+    memset(dy, 0, n * sizeof *dy);
+
+    float a2 = alpha * alpha;
+    for (int k = 0; k < iters; k++) {
+        /* neighbour averages */
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                size_t i = (size_t)y * w + x;
+                float su = 0, sv = 0;
+                int c = 0;
+                if (x > 0)     { su += dx[i - 1]; sv += dy[i - 1]; c++; }
+                if (x + 1 < w) { su += dx[i + 1]; sv += dy[i + 1]; c++; }
+                if (y > 0)     { su += dx[i - w]; sv += dy[i - w]; c++; }
+                if (y + 1 < h) { su += dx[i + w]; sv += dy[i + w]; c++; }
+                ub[i] = c ? su / (float)c : 0.0f;
+                vb[i] = c ? sv / (float)c : 0.0f;
+            }
+        }
+        for (size_t i = 0; i < n; i++) {
+            float den = a2 + ix[i] * ix[i] + iy[i] * iy[i];
+            float num = ix[i] * ub[i] + iy[i] * vb[i] + it[i];
+            dx[i] = ub[i] - ix[i] * num / den;
+            dy[i] = vb[i] - iy[i] * num / den;
+        }
+    }
+
+    free(ix); free(iy); free(it); free(ub); free(vb);
+    return 0;
 }

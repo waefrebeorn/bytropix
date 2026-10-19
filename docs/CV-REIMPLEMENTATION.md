@@ -15,7 +15,7 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 | `imgproc` (filters, edges, Otsu, morphology, contours) | `wubu_cv` | **partial** | integral image, O(1) box mean/var, fused 3×3 Sobel, Otsu, 3×3 Gaussian, Canny (NMS + hysteresis), 8-connected contour boxes, **ordered contour point lists**, **3×3 dilate/erode**, **foveated ROI tiles**; GrabCut queued |
 | `features2d` (ORB, BFMatcher) | `wubu_features` | **done (core)** | FAST-9, 256-bit BRIEF, Hamming, 2-level ORB pyramid, ratio-test matcher, **Harris response** and **NMS dedupe** tested; multi-scale descriptor fusion queued |
 | `calib3d` (StereoSGBM, PnP, chessboard, ArUco) | — | **queued** | needs a calibrated camera pipeline; not on the eyes' critical path yet |
-| `video` (Lucas–Kanade, Farneback) | `wubu_flow` | **partial** | single-scale LK (2,3 exact), coarse-to-fine pyramid LK (6,7 exact), dense block-matching flow (36/36 interior blocks) and **sub-pixel parabolic refinement** (mean error 0.125/0.109 px on a (3.4,4.6) shift) tested; Farneback itself queued |
+| `video` (Lucas–Kanade, Farneback) | `wubu_flow` | **partial** | single-scale LK (2,3 exact), coarse-to-fine pyramid LK (6,7 exact), dense block-matching flow (36/36 interior blocks) sub-pixel parabolic refinement (0.125/0.109 px) and **dense Horn-Schunck** (0.206/0.151 px on a (2,3) shift) tested; Farneback queued |
 | `pixelean` (bitplanes, D4, SE(2) jets) | `wubu_eye` + `wubu_uplift` | **partial** | XOR+popcount carrier and D4 canonical hash tested; bitplane partition and SE(2) jets queued |
 | `voxelean` (octree, Betti, wavelets) | — | **queued** | no 3D volume pipeline to attach it to |
 | `worldtube` ((3+1)D, CFL cones) | — | **queued** | requires metric camera calibration |
@@ -29,18 +29,18 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 
 - `test_eye` — 26 checks: patch masks, XOR/popcount, tolerance vs threshold, partial patches.
 - `test_look` — 9 checks: two frames -> ranked changed ROIs + reuse ratio (93.8% reuse for a 32x32 change) and a token-budgeted variant that stops at the paid budget.
-- `test_cv` — **100 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
+- `test_cv` — **104 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
   Otsu on a bimodal image, Gaussian edge clamp, FAST-9 on a square, BRIEF determinism,
   Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance,
   Canny on one rectangle and two squares, contour bbox origin/size and thinness,
   ORB pyramid + ratio-test matcher, morphology cores, LK flow on a known shift,
   SAE argmin/signature, foveated ROI selection, Harris scoring, dedupe, pyramid LK,
   ordered contour tracing (244 points, closed loop), burst super-resolution,
-  block-matching flow, sub-pixel refinement.
+  block-matching flow, sub-pixel refinement, dense Horn-Schunck.
 
 ## Next rungs, in order
 
-1. **Farneback proper** (video) — polynomial-expansion dense flow, beyond block matching.
+1. **Farneback proper** (video) — polynomial-expansion dense flow; the shortcut is documented as rejected, HS covers the dense need meanwhile.
 2. **calib3d** — chessboard corners, then PnP.
 3. **GrabCut** (imgproc) — interactive segmentation.
 

@@ -600,6 +600,42 @@ int main(void)
     CHECK(wubu_block_flow_subpix(&sp_s, &sp_b, 16, 20, sfx, sfy) == -1, "search > 16 -> -1");
     wubu_img_free(&sp_a); wubu_img_free(&sp_s); wubu_img_free(&sp_b);
 
+
+    /* --- dense Horn-Schunck flow (wave 16) --- */
+    wubu_img hs_a = {0}, hs_b = {0};
+    wubu_img_alloc(&hs_a, 128, 128);
+    wubu_img_alloc(&hs_b, 128, 128);
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 128; x++) {
+            double v = 128.0 + 60.0 * sin(x * 0.19) + 45.0 * cos(y * 0.23) + 15.0 * sin((x + y) * 0.07);
+            hs_a.data[y * hs_a.stride + x] = (uint8_t)v;
+        }
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 128; x++)
+            hs_b.data[y * hs_b.stride + x] = (uint8_t)(bilin(&hs_a, (float)x - 2.0f, (float)y - 3.0f) + 0.5f);
+
+    float hdx[128 * 128], hdy[128 * 128];
+    CHECK(wubu_horn_schunck(&hs_a, &hs_b, 300, 8.0f, hdx, hdy) == 0, "Horn-Schunck runs");
+    double hex = 0.0, hey = 0.0;
+    int hc = 0;
+    for (int y = 6; y < 122; y++)
+        for (int x = 6; x < 122; x++) {
+            hex += fabs((double)hdx[y * 128 + x] - 2.0);
+            hey += fabs((double)hdy[y * 128 + x] - 3.0);
+            hc++;
+        }
+    hex /= hc; hey /= hc;
+    printf("  dense HS mean error: dx=%.3f dy=%.3f\n", hex, hey);
+    CHECK(hex < 0.5 && hey < 0.5, "dense HS recovers (2,3) within 0.5 px");
+
+    float hdx0[128 * 128], hdy0[128 * 128];
+    wubu_horn_schunck(&hs_a, &hs_a, 100, 8.0f, hdx0, hdy0);
+    double zero_err = 0.0;
+    for (int i = 0; i < 128 * 128; i++) zero_err += fabs(hdx0[i]) + fabs(hdy0[i]);
+    CHECK(zero_err < 1e-3, "identical frames give a zero field");
+    CHECK(wubu_horn_schunck(&hs_a, &hs_b, 0, 8.0f, hdx, hdy) == -1, "iters=0 -> -1");
+    wubu_img_free(&hs_a); wubu_img_free(&hs_b);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

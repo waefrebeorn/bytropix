@@ -38,4 +38,10 @@ int wubu_block_flow(const wubu_img *prev, const wubu_img *curr,
 int wubu_block_flow_subpix(const wubu_img *prev, const wubu_img *curr,
                            int block, int search, float *dx, float *dy);
 
+/* Dense Horn-Schunck flow: global smoothness-constrained variational solution.
+ * iters = Jacobi sweeps, alpha = smoothness weight (larger = stiffer field).
+ * Writes w*h floats into dx/dy. Returns 0, or -1. */
+int wubu_horn_schunck(const wubu_img *prev, const wubu_img *curr,
+                      int iters, float alpha, float *dx, float *dy);
+
 #endif /* WUBU_FLOW_H */
