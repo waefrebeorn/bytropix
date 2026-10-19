@@ -3494,7 +3494,7 @@
    "n": 435,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "Styx tag-table allocation and out-of-order reply dispatch",
+   "title": "Styx tag-table allocation and out-of-order reply dispatch (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
    "criterion": "make test_styx green: 256 in-flight requests with distinct tags all get replies matching their own tag under random interleaving, the 257th distinct tag is refused with Rerror EAGAIN, and NOTAG is never used as a reply tag"
   },
