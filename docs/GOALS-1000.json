@@ -1398,7 +1398,7 @@
    "n": 173,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "REX.W/VEX prefix selection correct for r8-r15 and extended operands",
+   "title": "REX.W/VEX prefix selection correct for r8-r15 and extended operands (DONE)",
    "module": "wubu_isa_x86_64.c",
    "criterion": "make test_isa_driver green with all 14 physical registers in use; disassembly shows 0x49/0x4C REX prefixes and no `invalid operand` from objdump"
   },
