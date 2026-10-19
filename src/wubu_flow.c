@@ -138,3 +138,50 @@ int wubu_lk_flow_pyr(const wubu_img *prev, const wubu_img *curr,
     }
     return 0;
 }
+
+
+int wubu_block_flow(const wubu_img *prev, const wubu_img *curr,
+                    int block, int search, int16_t *dx, int16_t *dy)
+{
+    if (!prev || !curr || !dx || !dy) return -1;
+    if (prev->w != curr->w || prev->h != curr->h) return -1;
+    if (block < 4 || block % 2 || search < 0 || search > 16) return -1;
+
+    int w = prev->w, h = prev->h;
+    int gw = (w + block - 1) / block, gh = (h + block - 1) / block;
+    int n = 0;
+
+    for (int by = 0; by < gh; by++) {
+        for (int bx = 0; bx < gw; bx++) {
+            int cx = bx * block + block / 2;
+            int cy = by * block + block / 2;
+            int bestx = 0, besty = 0;
+            long best = -1;
+
+            for (int sy = -search; sy <= search; sy++) {
+                for (int sx = -search; sx <= search; sx++) {
+                    long sad = 0;
+                    int valid = 1;
+                    for (int oy = -block / 2; oy < block / 2 && valid; oy += 2) {
+                        int py = cy + oy;
+                        int qy = py + sy;
+                        if (py < 0 || py >= h || qy < 0 || qy >= h) { valid = 0; break; }
+                        for (int ox = -block / 2; ox < block / 2; ox += 2) {
+                            int px = cx + ox, qx = px + sx;
+                            if (px < 0 || px >= w || qx < 0 || qx >= w) { valid = 0; break; }
+                            int a = prev->data[(size_t)py * prev->stride + px];
+                            int b = curr->data[(size_t)qy * curr->stride + qx];
+                            sad += a > b ? a - b : b - a;
+                        }
+                    }
+                    if (!valid) continue;
+                    if (best < 0 || sad < best) { best = sad; bestx = sx; besty = sy; }
+                }
+            }
+            dx[n] = (int16_t)bestx;
+            dy[n] = (int16_t)besty;
+            n++;
+        }
+    }
+    return n;
+}

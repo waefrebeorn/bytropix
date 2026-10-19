@@ -529,6 +529,34 @@ int main(void)
 
     wubu_img_free(&ones); wubu_img_free(&grot); wubu_img_free(&other);
 
+
+    /* --- dense block-matching flow (wave 14) --- */
+    wubu_img bm_a = {0}, bm_b = {0};
+    wubu_img_alloc(&bm_a, 128, 128);
+    wubu_img_alloc(&bm_b, 128, 128);
+    unsigned bs = 99;
+    for (int i = 0; i < 128 * 128; i++) { bs = bs * 1664525u + 1013904223u; bm_a.data[i] = (uint8_t)(bs >> 24); }
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 128; x++)
+            bm_b.data[y * bm_b.stride + x] = wubu_img_at(&bm_a, x - 3, y - 4);
+
+    int16_t bfx[128], bfy[128];
+    int nb = wubu_block_flow(&bm_a, &bm_b, 16, 6, bfx, bfy);
+    CHECK(nb == 64, "block flow covers an 8x8 block grid");
+    /* Border blocks lose content to clamping, so measure the interior. */
+    int agree = 0, interior = 0;
+    for (int by = 1; by < 7; by++) {
+        for (int bx = 1; bx < 7; bx++) {
+            int i = by * 8 + bx;
+            interior++;
+            if (bfx[i] == 3 && bfy[i] == 4) agree++;
+        }
+    }
+    printf("  block flow agreement: %d/%d interior\n", agree, interior);
+    CHECK(agree >= (interior * 9) / 10, ">=90% of interior blocks recover the (3,4) shift");
+    CHECK(wubu_block_flow(&bm_a, &bm_b, 15, 6, bfx, bfy) == -1, "odd block size -> -1");
+    wubu_img_free(&bm_a); wubu_img_free(&bm_b);
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

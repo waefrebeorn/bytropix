@@ -26,4 +26,11 @@ int wubu_lk_flow_pyr(const wubu_img *prev, const wubu_img *curr,
                      const wubu_keypoint *kp, int n, int levels,
                      int win, int iters, float *dx, float *dy);
 
+/* Dense block-matching flow: for every `block`-sized cell, search +/-search for
+ * the minimum SAD displacement. Writes integer dx/dy per block (grid of
+ * ceil(w/block) x ceil(h/block)). This is block matching, not Farneback.
+ * Returns the number of blocks written, or -1. */
+int wubu_block_flow(const wubu_img *prev, const wubu_img *curr,
+                    int block, int search, int16_t *dx, int16_t *dy);
+
 #endif /* WUBU_FLOW_H */
