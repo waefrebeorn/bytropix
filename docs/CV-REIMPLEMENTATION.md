@@ -29,14 +29,14 @@ named. **queued** means nothing exists. **rejected** means we decided not to.
 
 - `test_eye` — 26 checks: patch masks, XOR/popcount, tolerance vs threshold, partial patches.
 - `test_look` — 9 checks: two frames -> ranked changed ROIs + reuse ratio (93.8% reuse for a 32x32 change) and a token-budgeted variant that stops at the paid budget.
-- `test_cv` — **104 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
+- `test_cv` — **107 checks**: image core, integral + O(1) box stats, Sobel sign/orientation,
   Otsu on a bimodal image, Gaussian edge clamp, FAST-9 on a square, BRIEF determinism,
   Hamming, uplift mass conservation, `down2x(uplift2x(x)) == x`, D4 rotation invariance,
   Canny on one rectangle and two squares, contour bbox origin/size and thinness,
   ORB pyramid + ratio-test matcher, morphology cores, LK flow on a known shift,
   SAE argmin/signature, foveated ROI selection, Harris scoring, dedupe, pyramid LK,
   ordered contour tracing (244 points, closed loop), burst super-resolution,
-  block-matching flow, sub-pixel refinement, dense Horn-Schunck.
+  block-matching flow, sub-pixel refinement, dense Horn-Schunck, checkerboard corners.
 
 ## Next rungs, in order
 

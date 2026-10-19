@@ -446,3 +446,66 @@ int wubu_contour_trace(const wubu_img *edges, int sx, int sy,
     free(seen); free(stack); free(comp);
     return out_n;
 }
+
+
+int wubu_harris_corners(const wubu_img *im, float thresh_ratio, int min_dist,
+                        wubu_corner *out, int max_out)
+{
+    if (!im || !im->data || !out || max_out <= 0 || min_dist < 0) return -1;
+    if (thresh_ratio < 0.0f || thresh_ratio >= 1.0f) return -1;
+
+    int w = im->w, h = im->h;
+    size_t n = (size_t)w * h;
+    float *r = (float *)calloc(n, sizeof *r);
+    if (!r) return -1;
+
+    float rmax = 0.0f;
+    for (int y = 1; y < h - 1; y++) {
+        for (int x = 1; x < w - 1; x++) {
+            double A = 0, B = 0, C = 0;
+            for (int oy = -1; oy <= 1; oy++)
+                for (int ox = -1; ox <= 1; ox++) {
+                    float gx = ((float)wubu_img_at(im, x + ox + 1, y + oy)
+                              - (float)wubu_img_at(im, x + ox - 1, y + oy)) * 0.5f;
+                    float gy = ((float)wubu_img_at(im, x + ox, y + oy + 1)
+                              - (float)wubu_img_at(im, x + ox, y + oy - 1)) * 0.5f;
+                    A += (double)gx * gx; B += (double)gx * gy; C += (double)gy * gy;
+                }
+            double det = A * C - B * B;
+            double tr = A + C;
+            float v = (float)(det - 0.04 * tr * tr);
+            r[(size_t)y * w + x] = v;
+            if (v > rmax) rmax = v;
+        }
+    }
+    if (rmax <= 0.0f) { free(r); return 0; }
+
+    float thr = thresh_ratio * rmax;
+    int count = 0;
+
+    /* Greedy: repeatedly take the strongest remaining response. */
+    while (count < max_out) {
+        float best = thr;
+        int bx = -1, by = -1;
+        for (int y = 1; y < h - 1; y++)
+            for (int x = 1; x < w - 1; x++) {
+                float v = r[(size_t)y * w + x];
+                if (v > best) { best = v; bx = x; by = y; }
+            }
+        if (bx < 0) break;
+
+        out[count].x = bx;
+        out[count].y = by;
+        out[count].score = best > 0 ? best : 0.0f;
+        count++;
+
+        for (int y = by - min_dist; y <= by + min_dist; y++)
+            for (int x = bx - min_dist; x <= bx + min_dist; x++) {
+                if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                r[(size_t)y * w + x] = 0.0f;
+            }
+    }
+
+    free(r);
+    return count;
+}

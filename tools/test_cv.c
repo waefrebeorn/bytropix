@@ -636,6 +636,29 @@ int main(void)
     CHECK(wubu_horn_schunck(&hs_a, &hs_b, 0, 8.0f, hdx, hdy) == -1, "iters=0 -> -1");
     wubu_img_free(&hs_a); wubu_img_free(&hs_b);
 
+
+    /* --- dense Harris corners / checkerboard lattice (wave 18) --- */
+    wubu_img cb = {0};
+    wubu_img_alloc(&cb, 160, 160);
+    for (int y = 0; y < 160; y++)
+        for (int x = 0; x < 160; x++)
+            cb.data[y * cb.stride + x] = ((x / 20 + y / 20) & 1) ? 220 : 30;
+
+    wubu_corner cc[128];
+    int ccn = wubu_harris_corners(&cb, 0.02f, 5, cc, 128);
+    printf("  checkerboard corners: %d\n", ccn);
+    CHECK(ccn >= 36, "checkerboard yields at least 36 corners");
+
+    int on_lattice = 0;
+    for (int i = 0; i < ccn; i++) {
+        int mx = (cc[i].x + 10) / 20 * 20;
+        int my = (cc[i].y + 10) / 20 * 20;
+        if (abs(cc[i].x - mx) <= 2 && abs(cc[i].y - my) <= 2) on_lattice++;
+    }
+    printf("  on lattice: %d/%d\n", on_lattice, ccn);
+    CHECK(on_lattice == ccn, "every corner sits within 2 px of the cell lattice");
+    CHECK(wubu_harris_corners(&cb, 1.0f, 5, cc, 128) == -1, "ratio 1.0 -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

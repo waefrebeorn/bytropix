@@ -58,6 +58,14 @@ int wubu_find_contours(const wubu_img *edges, wubu_contour *out,
 /* 3x3 morphology. mode 0 = erode (min), 1 = dilate (max). Edge-clamped. */
 int wubu_morph3(const wubu_img *in, wubu_img *out, int mode);
 
+/* Dense Harris corner detector: 3x3 structure tensor, R = det - 0.04 tr^2,
+ * thresholded at thresh_ratio * max(R), greedy NMS at min_dist. Returns the
+ * number written (sorted by score), or -1. */
+typedef struct { int x, y; float score; } wubu_corner;
+
+int wubu_harris_corners(const wubu_img *im, float thresh_ratio, int min_dist,
+                        wubu_corner *out, int max_out);
+
 /* Ordered boundary points of the 8-connected component containing (sx, sy).
  * Points are sorted counter-clockwise around the centroid, so the caller gets a
  * usable polyline rather than an unordered pixel set. Returns the count, or -1. */
