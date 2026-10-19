@@ -1,5 +1,11 @@
 # Wubu1 — The Redesigned Base Model
 
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+
 > 2026-08-06. Supersedes `docs/wubu-model-blueprint.md` and
 > `docs/wubu-seed.md`. The old WuBu-35M seed is archived
 > (see §9). WuBu1 trains fresh — the metabolism is the product.

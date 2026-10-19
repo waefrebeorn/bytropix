@@ -1,5 +1,11 @@
 # WuBu STAR — the model as a white dwarf
 
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+
 > Canon set 2026-10-18 by the user. The reference object is **WD J1330+6435**,
 > the first star modelled to appear green. Image:
 > `docs/assets/wubu-star-reference.jpg`.

@@ -1,5 +1,11 @@
 # Decoder-Synthesis Model — architecture + training plan (2026-08-09)
 
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+
 The user's directive: *"We can also do this to have media creation through
 a decoder synthesis model because I have created an encoder decoder system,
 and I have given you the methodologies to create those, but we do not have

@@ -1,5 +1,11 @@
 # WuBu1 Hive-Mind Improvement Plan
 
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+
 > **Status**: `open` — plan, not yet implemented.
 > **Date**: 2026-08-06
 > **Directive**: "I want you to plan more model improvements, and base model

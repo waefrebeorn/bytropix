@@ -1,5 +1,11 @@
 # THEORY/09 — The Folded Polynomial: One Poly, Multiple Outputs
 
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+
 > "because we designed the model, we can align everything and redesign
 > everything to make every trick work so that everything is the best."
 > — WaefreBeorn

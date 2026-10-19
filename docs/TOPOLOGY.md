@@ -1,5 +1,11 @@
 # WuBu Project Topology — the master map of BOTH repositories
 
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+
 > 2026-08-03. The user's directive: "start cohesively organizing our
 > project between our two repositories." This is the authoritative
 > map: what lives where, the layer boundaries, the data flow, and the

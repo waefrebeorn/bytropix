@@ -1,3 +1,10 @@
+> **Naming note (2026-10-18).** Entries in this ledger written before this date
+> call the model "WuBu-35M". That number is the checkpoint-native geometry
+> (35,073,216 params), not the model's identity; the body is runtime-dimensioned
+> and its default aligned geometry is 56,376,832. The historical entries are
+> left as written — they record what was believed on their date — but the naming
+> itself is corrected in `docs/MODEL-IDENTITY.md`.
+
 # Research INDEX — gaps, verdicts, convergence
 
 Method: Kevin-Bacon 7-hop across HPC / DB-buffer-pool / ML-systems / game-console /

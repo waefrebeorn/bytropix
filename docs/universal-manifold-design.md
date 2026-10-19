@@ -1,5 +1,11 @@
 # THE UNIVERSAL MANIFOLD — one mathematical substrate for every model
 
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+
 > 2026-08-06. User directive: "we need to go through pretty much every
 > part of our model design, every part of our model loading, every part
 > of our model saving, and every part of our model fine-tuning — and it

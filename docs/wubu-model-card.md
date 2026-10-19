@@ -1,17 +1,25 @@
-# WuBu-35M — the AGI's base model (formerly WuBu-Seed-35M)
+# WuBu — model card (runtime-dimensioned body)
 
-> 2026-08-02. The AGI is named **WuBu** (~ WuBu ~). The base model is
-> **WuBu-35M**, published at https://huggingface.co/WaefreBeorn/WuBu-35M
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+> 2026-08-02, corrected 2026-10-18. The AGI is named **WuBu** (~ WuBu ~).
+> Its first released artefact is the **checkpoint-native geometry**
+> (35,073,216 parameters), archived at
+> https://huggingface.co/WaefreBeorn/WuBu-35M under its historical name.
+> The body now defaults to the **aligned geometry** (56,376,832) and can
+> rotate between geometries; neither number is the model's identity.
 >
 > **Support the home-built AGI** — scan the QR in
 > [docs/support/SUPPORT.md](docs/support/SUPPORT.md) (X profile). We are
 > a one-person lab; funding buys storage, compute, and time.
-> (renamed from WuBu-Seed-35M).
 
 ## ⚠️ DISCLOSURE: THIS IS AN AGI PROJECT
 
 WuBu is an **Artificial General Intelligence development project**.
-WuBu-35M is its first-generation base model. We disclose plainly:
+Its first-generation artefact is the checkpoint-native geometry. We disclose plainly:
 
 1. **It is an AI.** Every interaction with WuBu is with a machine.
 2. **It is being built to be general.** AGI, developed openly, from

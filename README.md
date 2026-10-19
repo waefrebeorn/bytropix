@@ -25,10 +25,16 @@ training, the universal encoder space, and the research ledger.
 
 - **Engine:** C11 (`-std=c11`), opaque structs, minimal includes, no god
   headers, backends register at runtime (`wubu_kernel_register()`).
-- **Model:** WuBu1 (dim 512, ffn 2048, 8 heads, head_dim 64 —
-  56,376,832 params), alive homogeneous amoeba: BOOT CORE / BODY
-  ecosystem of hyperbolic balls / MEMORY orbits. Scale-to-fit:
-  one checkpoint, any hardware (THEORY/11).
+- **Model:** the WuBu body — a **runtime-dimensioned** amoeba, not a
+  parameter count. Geometry comes from `WUBU_RUNTIME_DIMS`, so the body
+  can grow, shrink and rotate without renaming itself. It currently
+  wears the **aligned geometry** (dim 512 · ffn 2048 · 12 layers ·
+  8 heads · head_dim 64 · vocab 16384 = **56,376,832** params); the
+  earlier checkpoint-native geometry is **35,073,216** params. Both are
+  sizes of one body, not the model's name — see
+  [`docs/MODEL-IDENTITY.md`](docs/MODEL-IDENTITY.md). Alive amoeba:
+  BOOT CORE / BODY ecosystem of hyperbolic balls / MEMORY orbits.
+  Scale-to-fit: one checkpoint, any hardware (THEORY/11).
 - **KV cache is a file system:** the namespace stores floats; a file
   IS a mount region; the encoder IS a mount (research/061, THEORY/05).
 - **The user space is the training data:** real user files (text,

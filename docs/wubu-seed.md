@@ -1,5 +1,11 @@
 # WuBu-35M: the Mustard Seed — Base Model, Training AGI Core, and License
 
+> **Naming correction (2026-10-18).** WuBu is a runtime-dimensioned body, not a
+> 35M model. 35,073,216 is the *checkpoint-native* geometry; the current
+> *aligned* geometry is 56,376,832. Never name the model by a parameter
+> count — see [`docs/MODEL-IDENTITY.md`](MODEL-IDENTITY.md).
+
+
 > **ARCHIVED 2026-08-06** — superseded by WuBu1, the redesigned base
 > model (`docs/wubu1-base-model-design.md`). WuBu-35M is the lineage
 > parent; weights cold-archived to the SD card

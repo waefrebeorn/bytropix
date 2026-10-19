@@ -2349,7 +2349,7 @@
   {
    "n": 292,
    "domain": "BRAIN",
-   "tier": "P2",
+   "tier": "P0",
    "title": "Mobius gyration-aware backward pass",
    "module": "wubuwizard/src/wubu_mobius_backward.c",
    "criterion": "make test_mobius_backward PASS: the gyration correction term appears in dL/dx, gradient check against finite differences on the ball holds to 1e-4, and iterates remain inside the ball"
@@ -7461,7 +7461,7 @@
   {
    "n": 931,
    "domain": "SECURITY",
-   "tier": "P2",
+   "tier": "P1",
    "title": "HKDF-Expand per-realm session keys for KV-FS",
    "module": "wubuos/src/kernel/wubu_kvfs.c",
    "criterion": "make test_kvfs_route green: two realms seeded from the same master key derive distinct session keys (first 32 bytes differ), and one realm's derived key is stable across a reopen of that realm"

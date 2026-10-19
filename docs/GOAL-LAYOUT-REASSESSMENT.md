@@ -121,3 +121,14 @@ python3 tools/goal_leverage.py            # ranked clusters
 python3 tools/goal_leverage.py --json     # machine-readable
 python3 tools/goal_leverage.py --min 3    # what the table above used
 ```
+
+## Update 2026-10-18 — pillar precedence (supersedes the batch order below)
+
+The six batches below were ordered by cluster size. They are now ordered by the
+design instead: **GEO → BODY → KVFS → ROUTE → REV → MANIFOLD**. Membership is
+unchanged; only precedence and two tiers moved (292 Möbius backward → P0,
+931 KV-FS session keys → P1). See `docs/GOAL-PILLARS.md`.
+
+Also fixed at the same time: the model is **not** "35M". It is a
+runtime-dimensioned body wearing either the checkpoint-native geometry
+(35,073,216) or the aligned geometry (56,376,832) — `docs/MODEL-IDENTITY.md`.
