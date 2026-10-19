@@ -3302,7 +3302,7 @@
    "n": 411,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Tauth + Tattach aname/uname attach selecting the namespace root",
+   "title": "Tauth + Tattach aname/uname attach selecting the namespace root (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
    "criterion": "make test_ns_9p green: attach with aname \"/n/kv\" roots the session at /n/kv (walk \"slot0\" succeeds, walk \"kernel\" returns EACCES), aname \"\" roots at /n, and an unknown aname returns Rerror ENOENT"
   },
@@ -6670,7 +6670,7 @@
    "n": 832,
    "domain": "FS",
    "tier": "P3",
-   "title": "9P auth-phase rejection with a capability gate on Tattach",
+   "title": "9P auth-phase rejection with a capability gate on Tattach (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
    "criterion": "make test_ns_9p green: a Tauth request on a no-auth server returns ENOTSUP and never allocates a fid; a Tattach without the required namespace capability is refused with EPERM; the refusal is logged at /n/kernel/klog and a successful attach is logged with the fid and tree name"
   },
