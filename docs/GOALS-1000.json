@@ -1038,9 +1038,9 @@
    "n": 128,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "sizeof operator on array, struct, pointer and typedef expressions",
+   "title": "sizeof operator on array, struct, pointer and typedef expressions (DONE)",
    "module": "holyd_parse.c",
-   "criterion": "gauntlet: sizeof(int[10])==40, sizeof(struct{char;int;double})==16 with padding, sizeof(void*)==8 \u2014 byte-exact vs gcc"
+   "criterion": "gauntlet: sizeof(int[10])==40, sizeof(struct{char;int;double})==16 with padding, sizeof(void*)==8 \u2014 byte-exact vs gcc [verified: test_mir_battery sizeof typedef array==40, padded struct==16, pointer==8; fixed parser to treat sizeof(typedef-name) as a type]"
   },
   {
    "n": 129,
