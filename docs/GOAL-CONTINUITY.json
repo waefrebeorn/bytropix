@@ -1,61 +1,101 @@
 {
-  "note": "Continuity goals for the SI alignment + manifold workstream. Kept OUTSIDE GOALS-1000.json so the exactly-1000, 16-domain invariant is not broken. Paste any entry into the goal queue. The portfolio ledger lives in docs/portfolio-cycles.jsonl and is validated by tools/goal_portfolio.py --check-cycle.",
-  "goals": [
-    {
-      "n": 1001,
-      "domain": "STACK",
-      "tier": "P0",
-      "title": "SI-CONTINUITY: the standing alignment-and-manifold loop (broad, agnostic)",
-      "module": "docs/SI-ALIGNMENT-MATRIX.md + docs/MANIFOLD-TRAINING.md + docs/ALIGNMENT-ARMOR.md + research/INDEX.md",
-      "criterion": "Every session, without being re-asked: (1) re-read the three policy primaries (EO 14434, EO 14409, NSPM-11) and the current GOALS-1000; (2) run the honest wubuwizard gate and record the binary/pass/fail counts; (3) advance at least one open SI or manifold item from the matrix; (4) consult the accumulated research waves (deep technical, alignment, SI policy) and wubumath's Lean linkage map before inventing anything; (5) leave a pushed commit and an honest gap list. Done = the loop has advanced one item and the gate is green with real numbers."
-    },
-    {
-      "n": 1002,
-      "domain": "BRAIN",
-      "tier": "P0",
-      "title": "Manifold training closure: hierarchy loss, radius regulariser, LoRA backward (DONE)",
-      "module": "src/wubu_manifold_train.c + include/wubu_manifold_train.h + tools/test_manifold_train.c",
-      "criterion": "CLOSED 2026-10-18: hierarchy loss (child-parent < child-sibling; 0 when ordered, >0 when violated); radius regulariser (64/64 points in [0.2R,0.8R] after 300 steps); Mobius LoRA dA/dB vs finite differences (max rel 2.328e-03 < 1e-2); all under tools/test_manifold_train.c; gate 174 binaries / 155 ALL-PASSED / 0 failures."
-    },
-    {
-      "n": 1003,
-      "domain": "STACK",
-      "tier": "P0",
-      "title": "PORTFOLIO-CLOSURE: anti-myopic controller for all 1000 goals across 16 domains",
-      "module": "tools/goal_portfolio.py + docs/portfolio-cycles.jsonl + docs/GOALS-1000.json + docs/SI-ALIGNMENT-MATRIX.md",
-      "criterion": "Each cycle: (1) run tools/goal_portfolio.py --json and publish the status of all 1000 goals, triaging every OPEN goal as active, blocked (reason), or deferred (dated expiry); (2) advance at least one goal in >=2 distinct domains and never let any domain appear in more than 2 consecutive cycles; (3) over any rolling 8 cycles touch >=8 of the 16 domains; (4) close a goal only when its module exists, a test runs in test_all, and the criterion evidence is recorded; (5) run the honest gate and record binaries/ALL-PASSED/failures; (6) refresh the SI matrix rows and the armor tests; (7) append the cycle to docs/portfolio-cycles.jsonl and pass tools/goal_portfolio.py --check-cycle. Done = the ledger validates and the gate is green with real counts."
-    },
-    {
-      "n": 1004,
-      "domain": "STACK",
-      "tier": "P0",
-      "title": "SELFHOST-L4: WuBuOS rebuilds kernel.elf on itself and boots the result",
-      "module": "wubuos/docs/SELFHOST-INDEPENDENCE.md + wubunos/holyd*.c + wubuos/src/kernel/boot.S",
-      "criterion": "Inside a booted WuBuOS, HolyD compiles src/kernel sources plus the linker script to kernel.elf on target; the image is written through the kernel's own FAT32 driver and the next boot reports the on-target build hash. Done = the on-target hash is recorded in the boot trace, the rebuilt image boots, and make boot-audit shows no host libc symbols in either build."
-    },
-    {
-      "n": 1005,
-      "domain": "STACK",
-      "tier": "P1",
-      "title": "SELFHOST-L5: reproducible off-network bootstrap with rollback slot",
-      "module": "wubuos/docs/SELFHOST-INDEPENDENCE.md + wubuos/Makefile + tools/repro_check.sh",
-      "criterion": "Two builds from the same snapshot, network off and different absolute paths, produce identical kernel.elf hashes (or a documented bounded delta); a previous image is retained as a rollback slot and boots after a forced failure. Done = tools/repro_check.sh reports the two hashes and the rollback boot trace."
-    },
-    {
-      "n": 1006,
-      "domain": "BRAIN",
-      "tier": "P1",
-      "title": "Orbital mechanics over gravity cells: Kepler period, resonance, cooling (DONE)",
-      "module": "wubuwizard/src/wubu_orbit.c + include/wubu_orbit.h + tools/test_orbit.c",
-      "criterion": "CLOSED 2026-10-18: Kepler period matches 2*pi*sqrt(r^3/GM); 1:2 resonance detected at radius ratio 2^(2/3) and a non-resonant pair rejected; Poincare distance formula matches acosh(1+2d^2/((1-r1^2)(1-r2^2))); cooling contracts by rate*dt and never passes the core floor; circular orbit drifts <1% over 5000 symplectic steps. tools/test_orbit.c 22/22, wired into make test_all. NOTE: wubu_gravity.h already owns bodies and routing (AN12); this module adds mechanics only."
-    },
-    {
-      "n": 1007,
-      "domain": "STACK",
-      "tier": "P1",
-      "title": "Pollution ledger: corpus provenance to spectral line, honest baseline (DONE)",
-      "module": "wubuwizard/tools/pollution_ledger.py + docs/POLLUTION-LEDGER.json",
-      "criterion": "CLOSED 2026-10-18: ledger lists all 28 pack datasets with licence and eval_only flags; a spectral line is claimed only with a recorded before/after eval; --check rejects orphan datasets, non-finite values, delta != after-before, eval_only marked trained, and a line claimed while unmeasured. Baseline is 28 datasets / 0 measured / 6 eval_only, which is the truthful state. Record path exercised in a scratch copy only. Wired into make test_all as ledger-check."
-    }
-  ]
+ "note": "Continuity goals for the SI alignment + manifold workstream. Kept OUTSIDE GOALS-1000.json so the exactly-1000, 16-domain invariant is not broken. Paste any entry into the goal queue. The portfolio ledger lives in docs/portfolio-cycles.jsonl and is validated by tools/goal_portfolio.py --check-cycle.",
+ "goals": [
+  {
+   "n": 1001,
+   "domain": "STACK",
+   "tier": "P0",
+   "title": "SI-CONTINUITY: the standing alignment-and-manifold loop (broad, agnostic)",
+   "module": "docs/SI-ALIGNMENT-MATRIX.md + docs/MANIFOLD-TRAINING.md + docs/ALIGNMENT-ARMOR.md + research/INDEX.md",
+   "criterion": "Every session, without being re-asked: (1) re-read the three policy primaries (EO 14434, EO 14409, NSPM-11) and the current GOALS-1000; (2) run the honest wubuwizard gate and record the binary/pass/fail counts; (3) advance at least one open SI or manifold item from the matrix; (4) consult the accumulated research waves (deep technical, alignment, SI policy) and wubumath's Lean linkage map before inventing anything; (5) leave a pushed commit and an honest gap list. Done = the loop has advanced one item and the gate is green with real numbers."
+  },
+  {
+   "n": 1002,
+   "domain": "BRAIN",
+   "tier": "P0",
+   "title": "Manifold training closure: hierarchy loss, radius regulariser, LoRA backward (DONE)",
+   "module": "src/wubu_manifold_train.c + include/wubu_manifold_train.h + tools/test_manifold_train.c",
+   "criterion": "CLOSED 2026-10-18: hierarchy loss (child-parent < child-sibling; 0 when ordered, >0 when violated); radius regulariser (64/64 points in [0.2R,0.8R] after 300 steps); Mobius LoRA dA/dB vs finite differences (max rel 2.328e-03 < 1e-2); all under tools/test_manifold_train.c; gate 174 binaries / 155 ALL-PASSED / 0 failures."
+  },
+  {
+   "n": 1003,
+   "domain": "STACK",
+   "tier": "P0",
+   "title": "PORTFOLIO-CLOSURE: anti-myopic controller for all 1000 goals across 16 domains",
+   "module": "tools/goal_portfolio.py + docs/portfolio-cycles.jsonl + docs/GOALS-1000.json + docs/SI-ALIGNMENT-MATRIX.md",
+   "criterion": "Each cycle: (1) run tools/goal_portfolio.py --json and publish the status of all 1000 goals, triaging every OPEN goal as active, blocked (reason), or deferred (dated expiry); (2) advance at least one goal in >=2 distinct domains and never let any domain appear in more than 2 consecutive cycles; (3) over any rolling 8 cycles touch >=8 of the 16 domains; (4) close a goal only when its module exists, a test runs in test_all, and the criterion evidence is recorded; (5) run the honest gate and record binaries/ALL-PASSED/failures; (6) refresh the SI matrix rows and the armor tests; (7) append the cycle to docs/portfolio-cycles.jsonl and pass tools/goal_portfolio.py --check-cycle. Done = the ledger validates and the gate is green with real counts."
+  },
+  {
+   "n": 1004,
+   "domain": "STACK",
+   "tier": "P0",
+   "title": "SELFHOST-L4: WuBuOS rebuilds kernel.elf on itself and boots the result",
+   "module": "wubuos/docs/SELFHOST-INDEPENDENCE.md + wubunos/holyd*.c + wubuos/src/kernel/boot.S",
+   "criterion": "Inside a booted WuBuOS, HolyD compiles src/kernel sources plus the linker script to kernel.elf on target; the image is written through the kernel's own FAT32 driver and the next boot reports the on-target build hash. Done = the on-target hash is recorded in the boot trace, the rebuilt image boots, and make boot-audit shows no host libc symbols in either build."
+  },
+  {
+   "n": 1005,
+   "domain": "STACK",
+   "tier": "P1",
+   "title": "SELFHOST-L5: reproducible off-network bootstrap with rollback slot",
+   "module": "wubuos/docs/SELFHOST-INDEPENDENCE.md + wubuos/Makefile + tools/repro_check.sh",
+   "criterion": "Two builds from the same snapshot, network off and different absolute paths, produce identical kernel.elf hashes (or a documented bounded delta); a previous image is retained as a rollback slot and boots after a forced failure. Done = tools/repro_check.sh reports the two hashes and the rollback boot trace."
+  },
+  {
+   "n": 1006,
+   "domain": "BRAIN",
+   "tier": "P1",
+   "title": "Orbital mechanics over gravity cells: Kepler period, resonance, cooling (DONE)",
+   "module": "wubuwizard/src/wubu_orbit.c + include/wubu_orbit.h + tools/test_orbit.c",
+   "criterion": "CLOSED 2026-10-18: Kepler period matches 2*pi*sqrt(r^3/GM); 1:2 resonance detected at radius ratio 2^(2/3) and a non-resonant pair rejected; Poincare distance formula matches acosh(1+2d^2/((1-r1^2)(1-r2^2))); cooling contracts by rate*dt and never passes the core floor; circular orbit drifts <1% over 5000 symplectic steps. tools/test_orbit.c 22/22, wired into make test_all. NOTE: wubu_gravity.h already owns bodies and routing (AN12); this module adds mechanics only."
+  },
+  {
+   "n": 1007,
+   "domain": "STACK",
+   "tier": "P1",
+   "title": "Pollution ledger: corpus provenance to spectral line, honest baseline (DONE)",
+   "module": "wubuwizard/tools/pollution_ledger.py + docs/POLLUTION-LEDGER.json",
+   "criterion": "CLOSED 2026-10-18: ledger lists all 28 pack datasets with licence and eval_only flags; a spectral line is claimed only with a recorded before/after eval; --check rejects orphan datasets, non-finite values, delta != after-before, eval_only marked trained, and a line claimed while unmeasured. Baseline is 28 datasets / 0 measured / 6 eval_only, which is the truthful state. Record path exercised in a scratch copy only. Wired into make test_all as ledger-check."
+  },
+  {
+   "n": 1011,
+   "domain": "BRAIN",
+   "tier": "P1",
+   "title": "Curvature-weighted merge coefficients per ball",
+   "module": "wubuwizard/src/wubu_merge_weights.c",
+   "criterion": "make test_merge_weights green: on a synthetic two-ball case the weight is monotone in curvature; with all curvatures equal the coefficients reduce to the uniform average within 1e-9"
+  },
+  {
+   "n": 1012,
+   "domain": "BRAIN",
+   "tier": "P1",
+   "title": "Diagonal Fisher and BI weighting for merges",
+   "module": "wubuwizard/src/wubu_merge_fisher.c",
+   "criterion": "make test_merge_fisher green: on a synthetic two-task fixture the Fisher/BI-weighted merge has lower held-out loss than the uniform merge by at least 5% relative, and the Fisher estimate is positive on every merged coordinate"
+  },
+  {
+   "n": 1013,
+   "domain": "BRAIN",
+   "tier": "P0",
+   "title": "Merge safety gate: containment, loss tolerance, prover invariants",
+   "module": "wubuwizard/src/wubu_merge_gate.c",
+   "criterion": "make test_merge_gate green: a merge that leaves the ball, exceeds the held-out loss tolerance, or violates a prover invariant is rejected and the pre-merge body is restored bit-identically"
+  },
+  {
+   "n": 1014,
+   "domain": "BRAIN",
+   "tier": "P0",
+   "title": "Mobius parallel transport between tangent anchors",
+   "module": "wubuwizard/src/wubu_mobius_transport.c",
+   "criterion": "make test_mobius_transport green: distance is preserved to 1e-6 under transport at radii 0.1R, 0.5R, 0.9R; a finite-difference check of the pullback matches within 1e-4; transport from a point to itself is the identity to 1e-9"
+  },
+  {
+   "n": 1015,
+   "domain": "BRAIN",
+   "tier": "P0",
+   "title": "Per-ball adapter merge in a shared tangent frame",
+   "module": "wubuwizard/src/wubu_merge_adapters.c",
+   "criterion": "make test_merge_adapters green: zero weights return the base point exactly; merged norm stays < R for adversarial transports at 0.99R; same-anchor merges commute and different-anchor merges do not, both asserted"
+  }
+ ]
 }

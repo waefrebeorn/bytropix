@@ -130,6 +130,15 @@ Properties (all covered by `tools/test_manifold_train.c`):
   the exp map (`u + Δ₁ + Δ₂`), not by adding ambient weights. This is the
   manifold-correct analogue of LoRA merging.
 
+  **Qualifier (2026-10-19):** that sum is only meaningful when both adapters
+  share the same base point. Adapters trained from different snapshots sit at
+  different anchors, and their tangent updates must be **parallel-transported**
+  into a common tangent space first:
+  `v = Σ w_i · P_{h_i→h}(u_i)`, then `h' = exp_h(v)`. There is no transport
+  implementation in the tree yet (`grep parallel_transport src include` is
+  empty), so multi-anchor merging is **not** currently correct — see
+  `docs/MANIFOLD-MERGING.md` §4 and goals 1011–1015.
+
 **Done:** the backward through A/B (`wubu_manifold_lora_backward`, verified
 against finite differences at 2.3e-03 relative error) using the existing
 `wubu_exp_map_backward` Jacobian.
