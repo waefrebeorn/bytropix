@@ -6646,7 +6646,7 @@
    "n": 829,
    "domain": "FS",
    "tier": "P2",
-   "title": "9P2000.L create/unlink/mkdir/renameat semantics matched to the VFS",
+   "title": "9P2000.L create/unlink/mkdir/renameat semantics matched to the VFS (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
    "criterion": "make test_ns_9p green: Tcreate with DMDIR makes a directory, with mode 0600 sets the permission bits on the underlying TXFS inode, Trenameat replaces a file and returns EEXIST when the target exists and the flag forbids it, and Tunlink of a non-empty directory fails EISDIR; every mutation is visible to a second attached client immediately"
   },
