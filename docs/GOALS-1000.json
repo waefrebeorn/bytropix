@@ -3438,7 +3438,7 @@
    "n": 428,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "NT reparse-point symbolic links mapped onto 9P symlinks",
+   "title": "NT reparse-point symbolic links mapped onto 9P symlinks (DONE)",
    "module": "wubuos/src/runtime/vsl/vsl_nt_ob.c",
    "criterion": "make test_nt_ob green: a node created with the IO_REPARSE_TAG_SYMLINK reparse resolves through ObOpenByKeyName to its /n target, Tstat reports DMSYMLINK for the same node, and the two views never disagree on the resolved target"
   },
