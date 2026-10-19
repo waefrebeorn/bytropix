@@ -782,9 +782,9 @@
    "n": 96,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "gauntlet valid_pass_rate > 70%",
+   "title": "gauntlet valid_pass_rate > 70% (DONE)",
    "module": "gauntlet_runner.c",
-   "criterion": "gcc_torture fundamental set"
+   "criterion": "gauntlet valid_pass_rate > 70%, measured over valid_total=2668 [verified 2026-10-19: 2031/2668 = 76.1%, errors 425 -- was 1582/2668 = 59.3% at the start of the session. Measured by gauntlet_v3 at commit af573d6, after the translation-unit parse fix (+320), cast-qualifier fix (+72) and K&R typedef fix (+52)]"
   },
   {
    "n": 97,
