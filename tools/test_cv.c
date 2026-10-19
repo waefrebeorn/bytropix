@@ -659,6 +659,32 @@ int main(void)
     CHECK(on_lattice == ccn, "every corner sits within 2 px of the cell lattice");
     CHECK(wubu_harris_corners(&cb, 1.0f, 5, cc, 128) == -1, "ratio 1.0 -> -1");
 
+
+    /* --- chessboard grid ordering (wave 19) --- */
+    wubu_corner shuf[49], ordered[49];
+    for (int i = 0; i < 49; i++) {           /* deterministic shuffle */
+        int j = (i * 17 + 11) % 49;
+        shuf[i] = cc[j];
+    }
+    int on = wubu_chessboard_order(shuf, 49, 7, 7, ordered);
+    CHECK(on == 49, "ordering accepts a 7x7 corner set in shuffled order");
+    int x_ok = 1, y_ok = 1;
+    for (int r = 0; r < 7; r++) {
+        for (int c = 1; c < 7; c++) {
+            int a = r * 7 + c - 1, b = r * 7 + c;
+            if (ordered[b].x <= ordered[a].x) x_ok = 0;
+            if (abs(ordered[b].y - ordered[a].y) > 2) y_ok = 0;
+        }
+        if (r) if (ordered[r * 7].y <= ordered[(r - 1) * 7].y) y_ok = 0;
+    }
+    CHECK(x_ok, "within each row x increases");
+    CHECK(y_ok, "rows are ordered top to bottom");
+    printf("  grid origin (%d,%d) far corner (%d,%d)\n",
+           ordered[0].x, ordered[0].y, ordered[48].x, ordered[48].y);
+    CHECK(abs(ordered[0].x - 20) <= 2 && abs(ordered[48].x - 140) <= 2,
+          "grid spans the expected lattice");
+    CHECK(wubu_chessboard_order(shuf, 48, 7, 7, ordered) == -1, "count mismatch -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

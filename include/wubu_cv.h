@@ -66,6 +66,12 @@ typedef struct { int x, y; float score; } wubu_corner;
 int wubu_harris_corners(const wubu_img *im, float thresh_ratio, int min_dist,
                         wubu_corner *out, int max_out);
 
+/* Order `n` = cols*rows corners into row-major grid order (top-left first,
+ * left-to-right within each row). Input order is irrelevant. Writes the
+ * ordered corners to out. Returns n, or -1 if the counts do not match. */
+int wubu_chessboard_order(const wubu_corner *in, int n, int cols, int rows,
+                          wubu_corner *out);
+
 /* Ordered boundary points of the 8-connected component containing (sx, sy).
  * Points are sorted counter-clockwise around the centroid, so the caller gets a
  * usable polyline rather than an unordered pixel set. Returns the count, or -1. */

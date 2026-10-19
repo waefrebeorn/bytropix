@@ -509,3 +509,51 @@ int wubu_harris_corners(const wubu_img *im, float thresh_ratio, int min_dist,
     free(r);
     return count;
 }
+
+
+static int cmp_yx(const void *a, const void *b)
+{
+    const wubu_corner *p = (const wubu_corner *)a, *q = (const wubu_corner *)b;
+    if (p->y != q->y) return p->y - q->y;
+    return p->x - q->x;
+}
+
+static int cmp_x(const void *a, const void *b)
+{
+    const wubu_corner *p = (const wubu_corner *)a, *q = (const wubu_corner *)b;
+    if (p->x != q->x) return p->x - q->x;
+    return p->y - q->y;
+}
+
+int wubu_chessboard_order(const wubu_corner *in, int n, int cols, int rows,
+                          wubu_corner *out)
+{
+    if (!in || !out || cols <= 0 || rows <= 0) return -1;
+    if (n != cols * rows) return -1;
+
+    wubu_corner *tmp = (wubu_corner *)malloc((size_t)n * sizeof *tmp);
+    if (!tmp) return -1;
+    memcpy(tmp, in, (size_t)n * sizeof *tmp);
+
+    qsort(tmp, (size_t)n, sizeof *tmp, cmp_yx);
+
+    /* Row pitch from the vertical extent, then cluster by proximity. */
+    int ymin = tmp[0].y, ymax = tmp[n - 1].y;
+    int tol = rows > 1 ? (ymax - ymin) / (rows - 1) / 2 : 1;
+    if (tol < 1) tol = 1;
+
+    int idx = 0;
+    for (int r = 0; r < rows; r++) {
+        int start = idx;
+        int base = tmp[idx].y;
+        while (idx < n && tmp[idx].y - base <= tol) idx++;
+        int cnt = idx - start;
+        if (cnt != cols) { free(tmp); return -1; }
+        qsort(tmp + start, (size_t)cnt, sizeof *tmp, cmp_x);
+    }
+    if (idx != n) { free(tmp); return -1; }
+
+    memcpy(out, tmp, (size_t)n * sizeof *out);
+    free(tmp);
+    return n;
+}
