@@ -3294,7 +3294,7 @@
    "n": 410,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Directory read batching across read boundaries in Rread",
+   "title": "Directory read batching across read boundaries in Rread (DONE)",
    "module": "wubuos/src/runtime/styxfs_callbacks.c",
    "criterion": "make test_styxfs green: reading a 12-entry synthetic directory with msize forcing 4 Dir records per Rread yields 3 reads whose concatenation equals one full-directory Tstat walk, with no duplicated or dropped entry"
   },

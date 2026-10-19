@@ -1,4 +1,4 @@
-# Defect: directory Rread paging mixes two entry sources (goal 410)
+# RESOLVED: directory Rread paging mixes two entry sources (goal 410)
 
 Found while writing the test for goal 410 (directory read batching). The test is
 not committed, because it fails for a real reason.
@@ -49,3 +49,17 @@ are only meaningful once offsets are bytes.
 
 The other four B4 goals closed on the callback harness (404, 405, 406, 419) do
 not touch directory reads.
+
+## Resolution
+
+`styxfs_dir_encode` now writes one record and returns its exact length; the
+directory branch builds a single de-duplicated name list (mounts then host
+entries) and pages it by byte offset, skipping records that end before `offset`
+and stopping before `count` would be exceeded.
+
+`make test_styxfs_callbacks` (16 checks) shows a record for a 3-char name is
+**64 bytes with size field 62**, the name at offset 43, and 12 entries page in
+**3 reads of 4 records**: names=12, uniq=12.
+
+The earlier "nread=62 vs record=64" confusion was a test-side parsing error:
+this wire format is little-endian (`styx_put16`), and my parser read big-endian.
