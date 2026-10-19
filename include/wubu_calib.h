@@ -64,4 +64,11 @@ int wubu_pose_fuse(const wubu_pose *in, int n, double R[9], double t[3]);
 int wubu_pose_refine(const double *p3, const double *p2, int n, const double K[9],
                      double R[9], double t[3], int iters);
 
+/* Refine one camera pose against several markers at once. marker_xyz holds
+ * nmarkers*12 doubles (4 corners x 3D each); marker_uv holds nmarkers*8.
+ * Returns 0, or -1. */
+int wubu_markers_refine(const double *marker_xyz, const double *marker_uv,
+                        int nmarkers, const double K[9],
+                        double R[9], double t[3], int iters);
+
 #endif /* WUBU_CALIB_H */

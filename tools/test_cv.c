@@ -923,6 +923,31 @@ int main(void)
     CHECK(rerr2 < 1e-6, "the refined rotation stays on SO(3)");
     CHECK(wubu_pose_refine(rp3, rp2, 8, Kp, rR, rt, 0) == -1, "iters=0 -> -1");
 
+
+    /* --- multi-marker bundle refinement (wave 29) --- */
+    double mxyz[24], muv[16];
+    for (int m = 0; m < 2; m++) {
+        double z = (double)m;   /* z = 0 and z = 1 */
+        double c4[4][3] = {{-0.05,-0.05,z}, {0.05,-0.05,z}, {0.05,0.05,z}, {-0.05,0.05,z}};
+        for (int i = 0; i < 4; i++) {
+            mxyz[12*m + 3*i]     = c4[i][0];
+            mxyz[12*m + 3*i + 1] = c4[i][1];
+            mxyz[12*m + 3*i + 2] = c4[i][2];
+            double w = c4[i][2] + 0.5;
+            muv[8*m + 2*i]     = 500*c4[i][0]/w + 80;
+            muv[8*m + 2*i + 1] = 500*c4[i][1]/w + 80;
+        }
+    }
+    double bR[9] = {1,0,0, 0,1,0, 0,0,1};
+    double bt[3] = {0.03, -0.02, 0.6};
+    CHECK(wubu_markers_refine(mxyz, muv, 2, Kp, bR, bt, 25) == 0, "multi-marker refinement runs");
+    printf("  multi-marker t=(%.6f,%.6f,%.6f)\n", bt[0], bt[1], bt[2]);
+    CHECK(fabs(bt[0]) < 1e-6 && fabs(bt[1]) < 1e-6 && fabs(bt[2] - 0.5) < 1e-6,
+          "two markers jointly recover the camera translation");
+    CHECK(fabs(bR[0] - 1.0) < 1e-6 && fabs(bR[4] - 1.0) < 1e-6,
+          "joint rotation is identity");
+    CHECK(wubu_markers_refine(mxyz, muv, 0, Kp, bR, bt, 10) == -1, "zero markers -> -1");
+
     /* --- argument guards --- */
     CHECK(wubu_img_alloc(NULL, 4, 4) == -1, "NULL img -> -1");
     CHECK(wubu_fast9(NULL, 10, 3, kps, 4) == -1, "NULL im -> -1");

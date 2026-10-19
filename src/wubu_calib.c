@@ -625,3 +625,13 @@ int wubu_pose_refine(const double *p3, const double *p2, int n, const double K[9
     }
     return 0;
 }
+
+
+int wubu_markers_refine(const double *marker_xyz, const double *marker_uv,
+                        int nmarkers, const double K[9],
+                        double R[9], double t[3], int iters)
+{
+    if (!marker_xyz || !marker_uv || nmarkers <= 0) return -1;
+    int n = nmarkers * 4;
+    return wubu_pose_refine(marker_xyz, marker_uv, n, K, R, t, iters);
+}
