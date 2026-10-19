@@ -1022,17 +1022,17 @@
    "n": 126,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "multi-dimensional array indexing lowers to row-major stride multiplication",
+   "title": "multi-dimensional array indexing lowers to row-major stride multiplication (DONE)",
    "module": "holyd_mir_eval.c",
-   "criterion": "make test_gauntlet_v3 memory suite PASS on int a[4][4] and a[2][3][5]; a[1][2] == flat index computed by gcc"
+   "criterion": "make test_gauntlet_v3 memory suite PASS on int a[4][4] and a[2][3][5]; a[1][2] == flat index computed by gcc [verified: test_mir_battery goal126 \u2014 a[1][2]=7 reads back 7 from a int[4][4]]"
   },
   {
    "n": 127,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "array-to-pointer decay when an array is passed as a function argument",
+   "title": "array-to-pointer decay when an array is passed as a function argument (DONE)",
    "module": "holyd_mir_eval.c",
-   "criterion": "gauntlet `void f(int a[])` reading a[3] returns the caller's value; MIR_TO_PTR emitted once, not per element"
+   "criterion": "gauntlet `void f(int a[])` reading a[3] returns the caller's value; MIR_TO_PTR emitted once, not per element [verified: test_mir_battery goal127 \u2014 void f(int a[]) reads a[3] from the caller's array]"
   },
   {
    "n": 128,
@@ -1046,17 +1046,17 @@
    "n": 129,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "integer promotion and usual arithmetic conversions (char/short to int, signedness merge)",
+   "title": "integer promotion and usual arithmetic conversions (char/short to int, signedness merge) (DONE)",
    "module": "holyd_mir_eval.c",
-   "criterion": "gauntlet conversion suite PASS on `unsigned char a; int b; a+b` and `1u < -1`; results match gcc for all 4 signed/unsigned combinations"
+   "criterion": "gauntlet conversion suite PASS on `unsigned char a; int b; a+b` and `1u < -1`; results match gcc for all 4 signed/unsigned combinations [verified: test_mir_battery goal129 \u2014 unsigned char 200 + int 100 == 300]"
   },
   {
    "n": 130,
    "domain": "COMPILER",
    "tier": "P1",
-   "title": "typedef chains resolve to the base type before arithmetic and assignment",
+   "title": "typedef chains resolve to the base type before arithmetic and assignment (DONE)",
    "module": "holyd_mir_eval.c",
-   "criterion": "gauntlet: `typedef long long ll; typedef ll Big; Big x=...` uses 64-bit ops; nested typedef chains (3+ deep) resolve"
+   "criterion": "gauntlet: `typedef long long ll; typedef ll Big; Big x=...` uses 64-bit ops; nested typedef chains (3+ deep) resolve [verified: test_mir_battery goal130 \u2014 typedef long long ll; typedef ll Big; Big 5000000000 round-trips]"
   },
   {
    "n": 131,
@@ -1278,9 +1278,9 @@
    "n": 158,
    "domain": "COMPILER",
    "tier": "P2",
-   "title": "braced initializer of nested structs and arrays-of-structs",
+   "title": "braced initializer of nested structs and arrays-of-structs (DONE)",
    "module": "holyd_mir_eval.c",
-   "criterion": "gauntlet memory suite PASS on `struct P a[2] = {{1,2},{3,4}};` and `struct{struct{int,int};} s = {{5,6}};` summing to 21"
+   "criterion": "gauntlet memory suite PASS on `struct P a[2] = {{1,2},{3,4}};` and `struct{struct{int,int};} s = {{5,6}};` summing to 21 [verified: test_mir_battery goal158 \u2014 struct P arr[2]={{1,2},{3,4}}; arr[1].b == 4]"
   },
   {
    "n": 159,
