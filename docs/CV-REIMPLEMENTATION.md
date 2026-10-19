@@ -53,6 +53,17 @@ own arithmetic; we do not inherit its performance claims.
 
 ## Rejected approaches (do not retry)
 
+### Distortion fit with a free pose (wave 32 attempt)
+Alternating golden-section on k1/k2 while re-solving the pose on undistorted
+observations is degenerate on a single near-planar view: it returned
+**k1 = k2 = 0.780, t_z = 6.817** against a true (0.12, -0.03) and t_z = 0.5, and
+the search ran to the bracket edge. Radial distortion trades directly against
+focal length and depth, so both cannot be free at once from one viewpoint.
+The model (`wubu_distort_point` / `wubu_undistort_point`) is kept; the fit is
+not. A real fit needs multi-view data with varied orientation and depth, or
+distortion estimated with the pose and focal length fixed by a separate step.
+
+
 - **Farneback via linear moments.** Approximating the polynomial's linear
   coefficient with `b = <Ix·I>` and solving `d = -0.5 A⁻¹ (b2 - b1)` produced
   mean errors of 475 px in x and 351 px in y on a known (2,3) shift — the
