@@ -7414,7 +7414,7 @@
    "n": 925,
    "domain": "SECURITY",
    "tier": "P2",
-   "title": "Per-process capability ceiling enforced at tasking fork and exec",
+   "title": "Per-process capability ceiling enforced at tasking fork and exec (DONE)",
    "module": "wubuos/src/kernel/tasking.c",
    "criterion": "make test_tasking green: a forked child's inherited rights equal parent rights AND child own caps, an exec'd image drops WUBU_RIGHT_GRANT unless the ELF carries an inheritable flag, and WUBU_RIGHT_TERMINATE on a task applies only to itself"
   },
