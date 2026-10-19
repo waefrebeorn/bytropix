@@ -3270,7 +3270,7 @@
    "n": 407,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Tflush aborts an in-flight Tread and frees the tag for reuse",
+   "title": "Tflush aborts an in-flight Tread and frees the tag for reuse (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
    "criterion": "make test_styx green: a Tread blocked on a synthetic generator is cancelled by Tflush(oldtag), the pending request is dropped, and a later message reusing oldtag gets a fresh Rerror/Rreply"
   },
