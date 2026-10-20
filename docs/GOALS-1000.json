@@ -3582,9 +3582,9 @@
    "n": 446,
    "domain": "FS",
    "tier": "P2",
-   "title": "Verify 9P iounit handling and message fragmentation above 8 KiB",
+   "title": "Verify 9P iounit handling and message fragmentation above 8 KiB (DONE)",
    "module": "wubuos/src/runtime/styx_enc.c",
-   "criterion": "capability evidence for \"9P iounit handling and message fragmentation above 8 KiB\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styx_enc.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"9P iounit handling and message fragmentation above 8 KiB\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styx_enc.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: make test_styx_socket 5/0 -- a 20,480-byte file over msize 8192 pages across exactly 3 Rreads with every reply capped at msize-11 (iounit), byte-exact content at each offset, terminated by an EOF count=0 Rread]"
   },
   {
    "n": 447,
@@ -3886,9 +3886,9 @@
    "n": 484,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "Verify Twalk/Topen attach-path resolution across the /n tree",
+   "title": "Verify Twalk/Topen attach-path resolution across the /n tree (DONE)",
    "module": "wubuos/src/runtime/styxfs_server.c",
-   "criterion": "capability evidence for \"Twalk/Topen attach-path resolution across the /n tree\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_server.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Twalk/Topen attach-path resolution across the /n tree\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_server.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: Twalk/Topen resolution across the live /n tree is styxfs_walk at src/runtime/styxfs_server.c:131-165 (path built from the mount root + walk names, stat-validated per component, vtable-wired at :461); make test_ns_9p 18/0 walks /snap/deck-root/list, opens+reads it, walks /snap/deck-root/create, opens it for write, and reads the change back through the live /n view]"
   },
   {
    "n": 485,
@@ -4686,9 +4686,9 @@
    "n": 584,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "9P socket bridge round-trips Tversion/Tattach/Tread over a socket",
+   "title": "9P socket bridge round-trips Tversion/Tattach/Tread over a socket (DONE)",
    "module": "wubuos/src/runtime/styx_socket.c",
-   "criterion": "a socketpair test completes all three exchanges; the first attempt returned -1 because the client double-prefixed"
+   "criterion": "a socketpair test completes all three exchanges; the first attempt returned -1 because the client double-prefixed [verified: verified, not written: make test_styx_socket (4 passed, 0 failed) round-trips Tversion->Rversion, Tattach->Rattach, and the full attach->walk->open->READ chain with byte-exact file content over an AF_UNIX socketpair, plus the bad-size-prefix framing refusal]"
   },
   {
    "n": 585,
@@ -5862,9 +5862,9 @@
    "n": 731,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styxfs_host has no test target",
+   "title": "Test coverage: styxfs_host has no test target (DONE)",
    "module": "wubuos/src/runtime/styxfs_host.c",
-   "criterion": "a make target test_styxfs_host exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styxfs_host exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: test_styxfs rebuilt from the green closure (mk/tests.mk): styxfs_host.c's opendir/readdir/readdir_r asserted against real host dirs + the namespace-mount->host-source mapping; make test_styxfs Results: 17/17 passed, 0 failed]"
   },
   {
    "n": 732,
@@ -5872,7 +5872,7 @@
    "tier": "P2",
    "title": "Test coverage: styxfs_path has no test target",
    "module": "wubuos/src/runtime/styxfs_path.c",
-   "criterion": "a make target test_styxfs_path exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styxfs_path exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN]"
   },
   {
    "n": 733,
@@ -5880,7 +5880,7 @@
    "tier": "P2",
    "title": "Test coverage: styxfs_posix has no test target",
    "module": "wubuos/src/runtime/styxfs_posix.c",
-   "criterion": "a make target test_styxfs_posix exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styxfs_posix exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN]"
   },
   {
    "n": 734,
@@ -5888,31 +5888,31 @@
    "tier": "P2",
    "title": "Test coverage: styxfs_server has no test target",
    "module": "wubuos/src/runtime/styxfs_server.c",
-   "criterion": "a make target test_styxfs_server exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styxfs_server exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN]"
   },
   {
    "n": 735,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styxfs_test has no test target",
+   "title": "Test coverage: styxfs_test has no test target (DONE)",
    "module": "wubuos/src/runtime/styxfs_test.c",
-   "criterion": "a make target test_styxfs_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styxfs_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styxfs: recipe rebuilt from the proven test_styxfs_callbacks closure (the old recipe linked wubu_wine_env.c + wubu_hw_detect.c whose 181-symbol kernel-probe surface caused 194 undefined refs, and its run line executed the WRONG binary); now links the minimal styxfs set and runs styxfs_test; Results: 17/17 passed, 0 failed]"
   },
   {
    "n": 736,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styxfs_util has no test target",
+   "title": "Test coverage: styxfs_util has no test target (DONE)",
    "module": "wubuos/src/runtime/styxfs_util.c",
-   "criterion": "a make target test_styxfs_util exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styxfs_util exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: styxfs_util.c asserted by test_styxfs (styxfs_is_wubu_container .wubu detection, styxfs_find_mount hit + NULL miss); Results: 17/17 passed, 0 failed]"
   },
   {
    "n": 737,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styxfs_vfs has no test target",
+   "title": "Test coverage: styxfs_vfs has no test target (DONE)",
    "module": "wubuos/src/runtime/styxfs_vfs.c",
-   "criterion": "a make target test_styxfs_vfs exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styxfs_vfs exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: styxfs_vfs.c asserted by test_styxfs (styxfs_init/mount/multi-mount/unmount/unmount-miss/set_readonly/find_mount/scan_repo); Results: 17/17 passed, 0 failed]"
   },
   {
    "n": 738,
