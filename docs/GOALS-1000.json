@@ -4526,9 +4526,9 @@
    "n": 564,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "Verify Per-fid 9P flock/tlock leases for cross-process exclusion",
+   "title": "Verify Per-fid 9P flock/tlock leases for cross-process exclusion (DONE)",
    "module": "wubuos/src/runtime/styxfs_vfs.c",
-   "criterion": "capability evidence for \"Per-fid 9P flock/tlock leases for cross-process exclusion\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_vfs.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Per-fid 9P flock/tlock leases for cross-process exclusion\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_vfs.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: verified: the per-fid byte-range lease table (styx_locktab_t) is embedded in the server struct and initialized by styxfs_init (src/runtime/styxfs_vfs.c:124); the cross-process exclusion contract is fully asserted by make test_styx_locks ALL PASSED: two owners' readers share overlapping ranges, any writer conflicts with an overlapping reader, a re-lock of the same range updates in place, unlock is exact-range + owner-only, and the 32-slot table exhausts loudly]"
   },
   {
    "n": 565,
@@ -5870,25 +5870,25 @@
    "n": 732,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styxfs_path has no test target",
+   "title": "Test coverage: styxfs_path has no test target (DONE)",
    "module": "wubuos/src/runtime/styxfs_path.c",
-   "criterion": "a make target test_styxfs_path exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN]"
+   "criterion": "a make target test_styxfs_path exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN] [verified: make test_styxfs_path wired into mk/tests.mk + test_medium_other: build_path root/non-root joins, path_is_mounted exact+boundary (a root mount covers the whole namespace; /n/kv2 is not under /n/kv), count_children direct-children-only; ALL PASSED]"
   },
   {
    "n": 733,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styxfs_posix has no test target",
+   "title": "Test coverage: styxfs_posix has no test target (DONE)",
    "module": "wubuos/src/runtime/styxfs_posix.c",
-   "criterion": "a make target test_styxfs_posix exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN]"
+   "criterion": "a make target test_styxfs_posix exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN] [verified: make test_styxfs_posix: the in-memory fid-table contract -- create/duplicate refusal, stat type+size, the shared cursor (an immediate read after write is at EOF), close COMMITS the buffer then clunks the entry (stat -1 after close), dir read/write refusal, rename path-rewrite + dest-exists refusal, remove drops the slot, readonly refusals, NULL-server boundary; ALL PASSED]"
   },
   {
    "n": 734,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styxfs_server has no test target",
+   "title": "Test coverage: styxfs_server has no test target (DONE)",
    "module": "wubuos/src/runtime/styxfs_server.c",
-   "criterion": "a make target test_styxfs_server exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN]"
+   "criterion": "a make target test_styxfs_server exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [advanced: make test_styxfs now exists and links these modules (17/17), but no assertion names their API directly -- styxfs_server.c is not in the recipe at all; keep OPEN] [verified: make test_styxfs_server: styxfs_server_create's full vtable driven through the wire (Tversion/Tattach/Twalk/Topen/Tread with byte-exact content/Tstat/clunk), create's NULL/missing/non-dir refusals, the spec-legal partial walk (Rwalk nwqid=0 for a missing name), and the Tstat + re-Topen of an ALREADY-OPEN fid -- which found and fixed a real defect: styxfs_open used to overwrite the fid's path (file_state) with the open-file slot index, breaking every post-open stat/walk/reopen; the slot now lives in the server's fid_slot map and the path survives; ALL PASSED]"
   },
   {
    "n": 735,
