@@ -4568,7 +4568,7 @@
    "tier": "P2",
    "title": "Verify Tcreate/Tremove/Tclunk fid lifecycle with clunk-on-task-exit",
    "module": "wubuos/src/runtime/styxfs_server.c",
-   "criterion": "capability evidence for \"Tcreate/Tremove/Tclunk fid lifecycle with clunk-on-task-exit\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_server.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Tcreate/Tremove/Tclunk fid lifecycle with clunk-on-task-exit\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_server.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [ADVANCE (not closed): test_styx_serve now covers the Tcreate wire arm + fid re-root + Tclunk-frees-fid lifecycle (ALL PASSED), but the criterion's Tremove leg and clunk-on-task-exit are still unproven; keep OPEN]"
   },
   {
    "n": 570,
@@ -4576,7 +4576,7 @@
    "tier": "P2",
    "title": "Verify Tflush racing an in-flight Tread",
    "module": "wubuos/src/runtime/styxfs_callbacks.c",
-   "criterion": "capability evidence for \"Tflush racing an in-flight Tread\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_callbacks.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Tflush racing an in-flight Tread\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_callbacks.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [ADVANCE (not closed): Tflush now answers Rflush for any oldtag and the flushtable begin/cancel/is_cancelled/end cycle is asserted green, but the criterion's actual race (Tflush vs an in-flight Tread through the socket loop) is still unproven; keep OPEN]"
   },
   {
    "n": 571,
@@ -4742,17 +4742,17 @@
    "n": 591,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Verify Tstat/Twstat 9P2000 Dir encode/decode round-trip fidelity",
+   "title": "Verify Tstat/Twstat 9P2000 Dir encode/decode round-trip fidelity (DONE)",
    "module": "wubuos/src/runtime/styx_enc.c",
-   "criterion": "capability evidence for \"Tstat/Twstat 9P2000 Dir encode/decode round-trip fidelity\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styx_enc.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Tstat/Twstat 9P2000 Dir encode/decode round-trip fidelity\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styx_enc.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: test_styx_serve test_wStat_rstat_roundtrip: Twstat Dir round-trips field-exactly through the wstat callback (dev/qid/mode/atime/mtime/length/name/uid/gid/muid) and answers Rwstat; Tstat Rstat decodes back with the same fidelity; make test_styx_serve ALL PASSED]"
   },
   {
    "n": 592,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Verify Tversion msize negotiation floor, ceiling and Rversion echo",
+   "title": "Verify Tversion msize negotiation floor, ceiling and Rversion echo (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
-   "criterion": "capability evidence for \"Tversion msize negotiation floor, ceiling and Rversion echo\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styx_serve.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Tversion msize negotiation floor, ceiling and Rversion echo\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styx_serve.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: test_styx_serve test_version_negotiation: msize floor 64 (below -> Rerror), ceiling clamp to srv->max_msize, NOTAG(0xFFFF) echoed in Rversion, oversized-post-negotiation refused, bad version refused; make test_styx_serve ALL PASSED]"
   },
   {
    "n": 593,
@@ -5742,25 +5742,25 @@
    "n": 716,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_enc has no test target",
+   "title": "Test coverage: styx_enc has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_enc.c",
-   "criterion": "a make target test_styx_enc exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_enc exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styx_enc wired into mk/tests.mk + test_medium_other aggregate; asserts all 13 client builder wire layouts incl. the 5 new (tauth/tflush/tcreate/tremove/twstat) + Rerror; ALL PASSED]"
   },
   {
    "n": 717,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_flush has no test target",
+   "title": "Test coverage: styx_flush has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_flush.c",
-   "criterion": "a make target test_styx_flush exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_flush exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styx_flush: 6 passed, 0 failed (verified, not written this cycle)]"
   },
   {
    "n": 718,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_flush_test has no test target",
+   "title": "Test coverage: styx_flush_test has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_flush_test.c",
-   "criterion": "a make target test_styx_flush_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_flush_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: styx_flush_test.c is compiled and executed by the green make target test_styx_flush (6 passed, 0 failed)]"
   },
   {
    "n": 719,
@@ -5798,25 +5798,25 @@
    "n": 723,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_serve has no test target",
+   "title": "Test coverage: styx_serve has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_serve.c",
-   "criterion": "a make target test_styx_serve exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_serve exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styx_serve: 9P2000 conformance suite for the dispatch (floor/ceiling/NOTAG echo, Tauth refusal, Tflush always-Rflush, Tcreate fid re-root lifecycle, Twstat->Rwstat, Tstat decode); ALL PASSED]"
   },
   {
    "n": 724,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_socket has no test target",
+   "title": "Test coverage: styx_socket has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_socket.c",
-   "criterion": "a make target test_styx_socket exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_socket exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styx_socket: 4 passed, 0 failed (verified, not written this cycle)]"
   },
   {
    "n": 725,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_socket_test has no test target",
+   "title": "Test coverage: styx_socket_test has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_socket_test.c",
-   "criterion": "a make target test_styx_socket_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_socket_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: styx_socket_test.c is compiled and executed by the green make target test_styx_socket (4 passed, 0 failed)]"
   },
   {
    "n": 726,
@@ -5830,25 +5830,25 @@
    "n": 727,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_tags_test has no test target",
+   "title": "Test coverage: styx_tags_test has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_tags_test.c",
-   "criterion": "a make target test_styx_tags_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_tags_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styx_tags: 5 passed, 0 failed (verified, not written this cycle)]"
   },
   {
    "n": 728,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_test has no test target",
+   "title": "Test coverage: styx_test has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_test.c",
-   "criterion": "a make target test_styx_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_test exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: styx_test.c is compiled and executed by the green make target test_styx (Results: 32/32 passed, 0 failed)]"
   },
   {
    "n": 729,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styxfs_callbacks has no test target",
+   "title": "Test coverage: styxfs_callbacks has no test target (DONE)",
    "module": "wubuos/src/runtime/styxfs_callbacks.c",
-   "criterion": "a make target test_styxfs_callbacks exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styxfs_callbacks exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: styxfs_callbacks.c is compiled and asserted by the green make target test_styxfs_callbacks (23 passed, 0 failed)]"
   },
   {
    "n": 730,
