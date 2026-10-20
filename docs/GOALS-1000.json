@@ -3878,9 +3878,9 @@
    "n": 483,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "Verify Tread/Twrite with fid offsets and the iounit cap",
+   "title": "Verify Tread/Twrite with fid offsets and the iounit cap (DONE)",
    "module": "wubuos/src/runtime/styxfs_server.c",
-   "criterion": "capability evidence for \"Tread/Twrite with fid offsets and the iounit cap\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_server.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Tread/Twrite with fid offsets and the iounit cap\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in styxfs_server.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: make test_styx_serve test_read_iounit_and_offsets + the Twrite arm: Tread count capped to negotiated msize-11 (ask 1000 at msize=128 -> callback sees 117), offsets pass through, the fid offset advances by bytes returned/read on both Tread (500->508) and Twrite (100->104), the Rread/Rwrite frames fit the negotiated msize, a payload-overrunning Twrite is refused, and a no-callback read reports EOF count=0; ALL PASSED]"
   },
   {
    "n": 484,
@@ -5766,9 +5766,9 @@
    "n": 719,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_locks has no test target",
+   "title": "Test coverage: styx_locks has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_locks.c",
-   "criterion": "a make target test_styx_locks exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_locks exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styx_locks wired into mk/tests.mk + test_medium_other: readers share, writers conflict, same-range relock updates in place, unlock is exact-range/owner-only, UNLCK routes to unlock, NULL table refused, 32-slot exhaustion refused; ALL PASSED]"
   },
   {
    "n": 720,
@@ -5782,17 +5782,17 @@
    "n": 721,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_names has no test target",
+   "title": "Test coverage: styx_names has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_names.c",
-   "criterion": "a make target test_styx_names exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_names exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styx_names wired in: all 28 seeded 9P2000 names resolve exactly, unmapped types say 'Unknown' (never NULL), runtime registration adds/overrides names across the full uint8 range, NULL name refused; ALL PASSED]"
   },
   {
    "n": 722,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_parse has no test target",
+   "title": "Test coverage: styx_parse has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_parse.c",
-   "criterion": "a make target test_styx_parse exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_parse exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: make test_styx_parse wired in: all 8 client decoders round-trip builder output field-exactly and refuse short buffers, wrong type bytes and NULL bufs; found + fixed two real module defects (styx_parse_version/attach dereferenced buf before any NULL guard and ignored len); ALL PASSED]"
   },
   {
    "n": 723,
@@ -5822,9 +5822,9 @@
    "n": 726,
    "domain": "RUNTIME",
    "tier": "P2",
-   "title": "Test coverage: styx_tags has no test target",
+   "title": "Test coverage: styx_tags has no test target (DONE)",
    "module": "wubuos/src/runtime/styx_tags.c",
-   "criterion": "a make target test_styx_tags exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test"
+   "criterion": "a make target test_styx_tags exists, exercises the module primary entry point, and prints ALL PASSED; the module currently ships with no regression test [verified: closed by the same target as #722: make test_styx_parse (duplicate row naming styx_parse); ALL PASSED]"
   },
   {
    "n": 727,
