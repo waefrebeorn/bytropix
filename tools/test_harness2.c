@@ -191,6 +191,92 @@ int main(void) {
     CHECK(wubu_h2_verdict(&ref, &cand) == WUBU_H2_CONFOUNDED);
     CHECK(wubu_h2_verdict(NULL, &cand) == WUBU_H2_CONFOUNDED);
 
+    /* ---- stage_named ---- */
+    {
+        char outd[512];
+        CHECK(wubu_h2_harness_stage_named(two, dir, "cand-a", outd, sizeof outd) == 0);
+        char p1[600];
+        snprintf(p1, sizeof p1, "%s/AGENTS.md", outd);
+        CHECK(access(p1, R_OK) == 0);
+        CHECK(wubu_h2_harness_stage_named(two, dir, "..", outd, sizeof outd) == -1);
+        CHECK(wubu_h2_harness_stage_named(two, dir, "bad/label", outd, sizeof outd) == -1);
+        char outd2[512];
+        CHECK(wubu_h2_harness_stage_named(empty, dir, "cand-b", outd2, sizeof outd2) == 0);
+        char p2[600];
+        snprintf(p2, sizeof p2, "%s/AGENTS.md", outd2);
+        char *c1 = slurp(p1), *c2 = slurp(p2);
+        CHECK(c1 && c2 && strcmp(c1, c2) != 0);   /* different harness, different bytes */
+        free(c1); free(c2);
+    }
+
+    /* ---- probe cwd ---- */
+    {
+        wubu_h2_probe_t pw;
+        CHECK(wubu_h2_probe_run_in(&pw, 6, empty, "pwd", 5, "/tmp") == 0);
+        CHECK(strcmp(pw.check_tail, "/tmp\n") == 0);
+        CHECK(wubu_h2_probe_run_in(&pw, 7, empty, "true", 5, "/nonexistent-dir-xyz") == 126);
+    }
+
+    /* ---- parallel probes ---- */
+    {
+        wubu_h2_probe_t many[3];
+        const wubu_h2_harness_t *hs[3] = { empty, empty, empty };
+        const char *cmds[3] = { "sleep 0.2; exit 0", "sleep 0.2; exit 3", "sleep 0.2; echo p3" };
+        int got = wubu_h2_probe_many(many, hs, cmds, 3, 10, NULL);
+        CHECK(got == 3);
+        CHECK(many[0].check_rc == 0);
+        CHECK(many[1].check_rc == 3);                 /* results by input index */
+        CHECK(strstr(many[2].check_tail, "p3") != NULL);
+        CHECK(many[0].elapsed_ms < 1500);             /* ran concurrently, not 600ms+ */
+    }
+
+    /* ---- compose_evidence ---- */
+    {
+        wubu_h2_probe_t e[3];
+        memset(e, 0, sizeof e);
+        e[0].probe_index = 0; e[0].check_rc = 0; e[0].harness = empty;
+        e[1].probe_index = 1; e[1].check_rc = 0; e[1].rules_count = 1; e[1].harness = two;
+        CHECK(wubu_h2_compose_evidence(e, 2) == -1);  /* no behavioural change */
+        e[0].check_rc = 1;
+        CHECK(wubu_h2_compose_evidence(e, 2) == 1);   /* single edit flipped it */
+        e[1].rules_count = 3;
+        CHECK(wubu_h2_compose_evidence(e, 2) == -1);  /* confounded: keep baseline */
+        e[1].check_rc = 1;
+        CHECK(wubu_h2_compose_evidence(e, 2) == -1);  /* nothing passed */
+    }
+
+    /* ---- library ---- */
+    {
+        char lib[600];
+        snprintf(lib, sizeof lib, "%s/lib", dir);
+        CHECK(wubu_h2_library_record(lib, "task-b", two, "cue B", "lesson B", "ev B") == 0);
+        CHECK(wubu_h2_library_record(lib, "task-a", empty, "cue A", "lesson A", "ev A") == 0);
+        CHECK(wubu_h2_library_record(lib, "../evil", two, "x", "y", "z") == -1);
+        char cues[4][WUBU_H2_RULE_LEN];
+        int nc = wubu_h2_library_load(lib, cues, 4);
+        CHECK(nc == 2);
+        CHECK(nc == 2 && strcmp(cues[0], "cue A") == 0);   /* sorted by task id */
+        CHECK(nc == 2 && strcmp(cues[1], "cue B") == 0);
+        char exp[700];
+        snprintf(exp, sizeof exp, "%s/task-a/EXPERIENCE.md", lib);
+        char *body3 = slurp(exp);
+        CHECK(body3 && strstr(body3, "lesson: lesson A") != NULL);
+        free(body3);
+    }
+
+    /* ---- proposals ---- */
+    {
+        char rules[4][WUBU_H2_RULE_LEN];
+        int np = wubu_h2_parse_proposals("# comment\n- run the check first\n- quote output\n",
+                                         rules, 4);
+        CHECK(np == 2);
+        CHECK(np == 2 && strcmp(rules[0], "run the check first") == 0);
+        CHECK(wubu_h2_parse_proposals("- uses $HOME\n", rules, 4) == -1);
+        CHECK(wubu_h2_parse_proposals("- pipes | things\n", rules, 4) == -1);
+        CHECK(wubu_h2_parse_proposals("I think you should refactor\n", rules, 4) == -1);
+        CHECK(wubu_h2_parse_proposals("", rules, 4) == 0);
+    }
+
     wubu_h2_harness_free(two);
     wubu_h2_harness_free(empty);
 

@@ -70,6 +70,11 @@ int wubu_h2_harness_render(const wubu_h2_harness_t *h, char *out, size_t cap);
  * when needed. Returns 0 on success, -1 on I/O error. */
 int wubu_h2_harness_stage(const wubu_h2_harness_t *h, const char *dir);
 
+/* Stage into <root>/<label>/AGENTS.md. `label` is sanitised to [A-Za-z0-9_.-]
+ * and must not be "." or ".."; anything else is refused. Returns 0 or -1. */
+int wubu_h2_harness_stage_named(const wubu_h2_harness_t *h, const char *root,
+                                const char *label, char *out_dir, size_t cap);
+
 /* -- probes ------------------------------------------------------------ */
 /* Run `check_cmd` (shell) with `timeout_s` seconds. 0 = pass. A timeout is
  * reported as 124 so it can never be mistaken for success. */
@@ -77,11 +82,30 @@ int wubu_h2_probe_run(wubu_h2_probe_t *out, int probe_index,
                       const wubu_h2_harness_t *h, const char *check_cmd,
                       int timeout_s);
 
+/* Same, but the check runs in `cwd` (NULL = caller's directory). A failing
+ * chdir in the child exits 126, which is never success. */
+int wubu_h2_probe_run_in(wubu_h2_probe_t *out, int probe_index,
+                         const wubu_h2_harness_t *h, const char *check_cmd,
+                         int timeout_s, const char *cwd);
+
+/* Run up to WUBU_H2_MAX_PROBES checks concurrently. Results are written by
+ * INPUT INDEX, never by completion order. Returns the number of probes run, or
+ * -1 on setup failure. */
+int wubu_h2_probe_many(wubu_h2_probe_t *out, const wubu_h2_harness_t *const *hs,
+                       const char *const *cmds, int n, int timeout_s,
+                       const char *cwd);
+
 /* -- composition ------------------------------------------------------- */
 /* Index of the first passing probe, or -1 when none passed. The baseline
  * probe (index 0, no edits) participates like any other: a harness only adopts
  * an edit when an edit is what passed. */
 int wubu_h2_compose(const wubu_h2_probe_t *probes, int n);
+
+/* Composition that obeys attribution: a passing candidate with more than one
+ * edit is CONFOUNDED and is NOT adopted; when the reference passes, a candidate
+ * that also passes changes nothing, so the reference is preserved. Returns the
+ * adopted probe index, or -1 to keep the current harness. */
+int wubu_h2_compose_evidence(const wubu_h2_probe_t *probes, int n);
 
 /* Classify a candidate against the reference probe (index 0 by convention). */
 wubu_h2_verdict_t wubu_h2_verdict(const wubu_h2_probe_t *ref,
@@ -101,6 +125,24 @@ int wubu_h2_ledger_append(const char *path, const char *task_id,
 
 /* Number of well-formed records in `path` (0 when absent). */
 int wubu_h2_ledger_count(const char *path);
+
+/* -- improvement library ----------------------------------------------- */
+/* Persist an adopted harness and its lesson as <root>/<task>/AGENTS.md and
+ * <root>/<task>/EXPERIENCE.md. Returns 0, or -1 on I/O error / bad label. */
+int wubu_h2_library_record(const char *root, const char *task_id,
+                           const wubu_h2_harness_t *h, const char *cue,
+                           const char *lesson, const char *evidence);
+
+/* Collect up to `cap` cues from every <root>/<task>/EXPERIENCE.md in sorted order.
+ * Writes NUL-terminated strings into `out`; returns the count, or -1. */
+int wubu_h2_library_load(const char *root, char out[][WUBU_H2_RULE_LEN], int cap);
+
+/* -- proposals ---------------------------------------------------------- */
+/* Parse an editor's reply: only "- <rule>" bullet lines are accepted. Any line
+ * carrying a shell metacharacter (backtick, $, ;, |, >) or exceeding the rule
+ * length is refused, so a proposal can never rewrite the check. Returns the
+ * number accepted, or -1 when the text contains an unsafe line. */
+int wubu_h2_parse_proposals(const char *text, char rules[][WUBU_H2_RULE_LEN], int cap);
 
 /* -- executor argv ----------------------------------------------------- */
 /* Build: hermes -z <prompt> --in <workspace> [-m <model>] --pass-session-id

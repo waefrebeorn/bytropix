@@ -190,3 +190,23 @@ runs in the caller's directory with the caller's environment. Recorded here rath
 than papered over.
 
 `make test_harness2`: **75 checks, ALL PASSED** after these changes.
+
+## Built: the loop is executable
+
+| piece | command | evidence |
+|---|---|---|
+| controller | `make test_harness2` | **106 checks, ALL PASSED** |
+| one full cycle (fake editor) | `make test_cycle` | baseline fails, candidate passes, adopted, ledger + library written; impossible check adopts nothing and exits 1 |
+| honesty gate | `make check_h2` | rejects adopted-confounded, adopted-failing, and adopted-without-lesson records |
+| registry projection | `python3 tools/goal_tasks.py` | **487** goals carry a runnable `make test_*` check |
+
+Implemented from the plan: probe `cwd`, `probe_many` (parallel, results by input
+index), `stage_named`, evidence-based `compose_evidence`, `verdict` attribution,
+ledger escaping, lesson library (`EXPERIENCE.md` + cue loader), proposal parsing
+that refuses shell metacharacters, and the `h2_cycle` driver with an editor
+command (so the loop is testable without spending tokens).
+
+**Still open:** the cycle reads one task per invocation (not yet `docs/tasks/
+goals.json` in a batch); the real editor is wired by passing `--editor 'hermes -z ...'`
+but no dry-run budget guard yet; the OS exec backend (`H2_EXEC_BACKEND=os`) and a
+first real closed goal remain.
