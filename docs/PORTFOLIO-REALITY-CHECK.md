@@ -62,3 +62,10 @@ next cycle's target would be chosen from a list that can actually be finished.
 Cycle 8 is **paused at this decision**. No goal was closed from these domains;
 no test was written to fit a goal after the fact. The body gate is unchanged
 and green from cycle 7 (45 suites, 1506 checks, 14 XFAIL).
+
+## Cycle 12 (2026-10-20) — verified rows, measured with QEMU ground truth
+
+| Goal | Claimed capability | What the code actually is now | Evidence |
+|---|---|---|---|
+| KERNEL #474 | LAPIC + IOAPIC init and the EOI path | **verified + fixed this cycle** (wubuos 4aaba3a6): apic_init enables the LAPIC via MSR + masks LVTs (`src/kernel/interrupt_apic.c:14-73`); `lapic_eoi` writes LAPIC_EOI (`interrupt_apic.c:147-153`); `interrupt_eoi` covers LAPIC-owned vectors, not just I/O-APIC-routed ones (`src/kernel/interrupt.c:222-241`); `pit_handler` EOIs FIRST so an abandoned frame can never poison the priority class (`interrupt.c:290-311`); `wubu_apic_enable` reads back the LVT and panics loudly on a dead MMIO window (`src/kernel/wubu_apic.c:100-117`). QEMU HMP `info lapic` during the freeze showed `ISR 32` stuck + `IRR 32` pending + `PPR 0x20` (abandoned-EOI signature) and after the fix `ISR (none)`, timer armed, tick chain live | two-tier `tools/boot_gate.sh` PASS 2/2 (firmware milestones + full chain: kernel_main entered, attestation VALID, bonzi heartbeat); `src/firmware/run-agi.sh` RESULT: PASS |
+| KERNEL #560 | Idle task with HLT and a per-CPU jiffy wakeup | **verified + fixed this cycle**: `task_idle` hlt + `task_yield` per wake so a woken task actually schedules (`src/kernel/tasking.c:405-417`); the trampoline stis so a first-run task takes interrupts (`tasking.c:433-438`); a resumed task always runs IF=1 (`tasking.c:483-495`). The heartbeat arriving at ~1s of supervisor uptime is the observable: the timer wakes the hlt, the rotation schedules the sleeping bonzi task, and `bonzi: heartbeat regions=34 attest=VALID` appears on the serial log | `run-agi.sh` RESULT: PASS (heartbeat check); boot gate 2/2 |

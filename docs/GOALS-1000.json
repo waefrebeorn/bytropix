@@ -3806,9 +3806,9 @@
    "n": 474,
    "domain": "KERNEL",
    "tier": "P1",
-   "title": "Verify LAPIC + IOAPIC init and the EOI path",
+   "title": "Verify LAPIC + IOAPIC init and the EOI path (DONE)",
    "module": "wubuos/src/kernel/interrupt_apic.c",
-   "criterion": "capability evidence for \"LAPIC + IOAPIC init and the EOI path\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in interrupt_apic.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"LAPIC + IOAPIC init and the EOI path\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in interrupt_apic.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: cycle-12 reality-check row + wubuos 4aaba3a6: EOI-first pit_handler, LAPIC-owned EOI coverage, LVT readback; QEMU info lapic before/after; two-tier boot gate PASS 2/2]"
   },
   {
    "n": 475,
@@ -4494,9 +4494,9 @@
    "n": 560,
    "domain": "KERNEL",
    "tier": "P2",
-   "title": "Verify Idle task with HLT and a per-CPU jiffy wakeup",
+   "title": "Verify Idle task with HLT and a per-CPU jiffy wakeup (DONE)",
    "module": "wubuos/src/kernel/tasking.c",
-   "criterion": "capability evidence for \"Idle task with HLT and a per-CPU jiffy wakeup\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in tasking.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Idle task with HLT and a per-CPU jiffy wakeup\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in tasking.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: cycle-12 reality-check row + wubuos 4aaba3a6: task_idle hlt+yield per wake, trampoline sti, resume-sti invariant; bonzi heartbeat on the serial log is the observable]"
   },
   {
    "n": 561,
@@ -4662,25 +4662,25 @@
    "n": 581,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "Build wubu_ns_audit.c: Namespace audit log at /n/audit/log recording every 9P transaction",
+   "title": "Build wubu_ns_audit.c: Namespace audit log at /n/audit/log recording every 9P transaction (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_audit.c",
-   "criterion": "wubu_ns_audit.c exists and exports the capability the title names; a make target test_wubu_ns_audit exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_audit.c exists and exports the capability the title names; a make target test_wubu_ns_audit exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_audit ALL PASSED -- every 9P tx recorded (seq, tx, fid, path, status) with an FNV-1a chain; /n/audit/log offset reads]"
   },
   {
    "n": 582,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "Build wubu_ns_mount.c: /n mount table: bind-mount a subtree at another namespace path",
+   "title": "Build wubu_ns_mount.c: /n mount table: bind-mount a subtree at another namespace path (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_mount.c",
-   "criterion": "wubu_ns_mount.c exists and exports the capability the title names; a make target test_wubu_ns_mount exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_mount.c exists and exports the capability the title names; a make target test_wubu_ns_mount exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_mount ALL PASSED -- bind + resolve with longest-prefix; non-union duplicate rejected; unbind removes the stack]"
   },
   {
    "n": 583,
    "domain": "NAMESPACE",
    "tier": "P0",
-   "title": "Build wubu_ns_root.c: Per-process /n root derived from the process capability set",
+   "title": "Build wubu_ns_root.c: Per-process /n root derived from the process capability set (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_root.c",
-   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_root ALL PASSED -- per-process view from capability grants: longest-prefix component-aligned lookup, rights gate, duplicate-at rejection, fail-closed]"
   },
   {
    "n": 584,
@@ -4694,17 +4694,17 @@
    "n": 585,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Build wubu_ns_audit.c: Capability-denial trace at /n/audit/denied",
+   "title": "Build wubu_ns_audit.c: Capability-denial trace at /n/audit/denied (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_audit.c",
-   "criterion": "wubu_ns_audit.c exists and exports the capability the title names; a make target test_wubu_ns_audit exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_audit.c exists and exports the capability the title names; a make target test_wubu_ns_audit exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_audit ALL PASSED -- denial trace records path + missing rights; /n/audit/denied offset reads]"
   },
   {
    "n": 586,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Build wubu_ns_mount.c: Read-only /n mount enforcement at the VFS callback layer",
+   "title": "Build wubu_ns_mount.c: Read-only /n mount enforcement at the VFS callback layer (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_mount.c",
-   "criterion": "wubu_ns_mount.c exists and exports the capability the title names; a make target test_wubu_ns_mount exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_mount.c exists and exports the capability the title names; a make target test_wubu_ns_mount exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_mount ALL PASSED -- RO mount denies WRITE rights at the callback gate; a single RO layer in a union denies the stack]"
   },
   {
    "n": 587,
@@ -4766,9 +4766,9 @@
    "n": 594,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "Build wubu_ns_audit.c: Namespace audit log rotation with deterministic replay",
+   "title": "Build wubu_ns_audit.c: Namespace audit log rotation with deterministic replay (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_audit.c",
-   "criterion": "wubu_ns_audit.c exists and exports the capability the title names; a make target test_wubu_ns_audit exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_audit.c exists and exports the capability the title names; a make target test_wubu_ns_audit exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_audit ALL PASSED -- rotate seals segments, chain crosses the boundary, replay digest deterministic across calls, verify intact]"
   },
   {
    "n": 595,
@@ -4790,9 +4790,9 @@
    "n": 597,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "Build wubu_ns_mount.c: Union mount readdir merge across stacked /n layers",
+   "title": "Build wubu_ns_mount.c: Union mount readdir merge across stacked /n layers (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_mount.c",
-   "criterion": "wubu_ns_mount.c exists and exports the capability the title names; a make target test_wubu_ns_mount exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_mount.c exists and exports the capability the title names; a make target test_wubu_ns_mount exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_mount ALL PASSED -- union readdir merges real layers in bind order, dedup by first occurrence; missing layers are holes]"
   },
   {
    "n": 598,
@@ -4806,33 +4806,33 @@
    "n": 599,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "Build wubu_ns_root.c: Cross-container /n sharing by explicit capability grant",
+   "title": "Build wubu_ns_root.c: Cross-container /n sharing by explicit capability grant (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_root.c",
-   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_root ALL PASSED -- share/adopt handle with issuer magic; forged/zeroed handles rejected; rights capped by the handle]"
   },
   {
    "n": 600,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "Build wubu_ns_root.c: Host control-plane files hidden inside a container /n view",
+   "title": "Build wubu_ns_root.c: Host control-plane files hidden inside a container /n view (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_root.c",
-   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_root ALL PASSED -- CONTAINER-class view hides HOST_CP grants; HOST view sees them]"
   },
   {
    "n": 601,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "Build wubu_ns_root.c: Namespace capability inheritance across fork and exec",
+   "title": "Build wubu_ns_root.c: Namespace capability inheritance across fork and exec (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_root.c",
-   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_root ALL PASSED -- fork deep-copies the grant table; exec drops only EPHEMERAL grants (count returned)]"
   },
   {
    "n": 602,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "Build wubu_ns_root.c: Per-process /n root rebase (namespace unshare-equivalent)",
+   "title": "Build wubu_ns_root.c: Per-process /n root rebase (namespace unshare-equivalent) (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_root.c",
-   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_root.c exists and exports the capability the title names; a make target test_wubu_ns_root exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_root ALL PASSED -- rebase prefixes every grant's mount point; the old base then fails lookup]"
   },
   {
    "n": 603,
