@@ -1,0 +1,17 @@
+{
+ "note": "Tasks for tools/harness2_agi.py. Each check command must be able to FAIL; a candidate that does not make it exit 0 is discarded.",
+ "tasks": [
+  {
+   "id": "compiler-battery",
+   "prompt": "Repository: /home/wubu/wubunos (HolyD compiler). Run `make test_mir_battery` and report the PASS and WRONG counts exactly as printed. Do not modify any source file in this task.",
+   "check": "cd /home/wubu/wubunos && make test_mir_battery 2>&1 | grep -qE 'WRONG:[[:space:]]*0'",
+   "cwd": "/home/wubu/wubunos"
+  },
+  {
+   "id": "body-timer-wheel",
+   "prompt": "Repository: /home/wubu/wubuos (kernel). Build and run the timer wheel test target and report whether it prints ALL PASSED. Do not modify any source file in this task.",
+   "check": "cd /home/wubu/wubuos && make test_timer_wheel 2>&1 | grep -qE '0 failures'",
+   "cwd": "/home/wubu/wubuos"
+  }
+ ]
+}

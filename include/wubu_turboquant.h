@@ -4,6 +4,8 @@
 #define WUBU_TURBOQUANT_H
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <cuda_fp16.h>
 
 #define KV_BLOCK_SIZE 16
@@ -140,6 +142,10 @@ typedef struct {
     float quat[ROTOR_KV_HEADS][ROTOR_HEAD_DIM / 4][4];  // [2][64][4]
 } rotor_tables_t;
 
+
+
+#endif /* __CUDACC__ — tile_manager below is CPU */
+
 // ================================================================
 // Framebuffer Tile Structure
 // ================================================================
@@ -157,7 +163,6 @@ typedef struct {
 #define MAX_TILES (524288 / 64)  // 8192 tiles for 512k context
 #define TILES_PER_WINDOW (8192 / 64)  // 128 tiles for 8k window
 
-#endif /* __CUDACC__ — tile_manager below is CPU */
 
 typedef struct {
     kv_tile_t tiles[MAX_TILES];
