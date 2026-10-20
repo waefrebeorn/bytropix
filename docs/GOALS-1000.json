@@ -350,9 +350,9 @@
    "n": 42,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "Build wubu_dualcontrol.c: kill-switch rearm dual-authorization (two-party rule)",
+   "title": "Build wubu_dualcontrol.c: kill-switch rearm dual-authorization (two-party rule) (DONE)",
    "module": "wubuwizard/src/wubu_dualcontrol.c",
-   "criterion": "wubu_dualcontrol.c exists and exports the capability the title names; a make target test_wubu_dualcontrol exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_dualcontrol.c exists and exports the capability the title names; a make target test_wubu_dualcontrol exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_dualcontrol ALL PASSED -- boots tripped; two DISTINCT principals required to rearm; duplicate-principal votes rejected without progress; every transition and rejection lands in the hash-chained kernel audit log (count-delta asserted); votes while armed rejected]"
   },
   {
    "n": 43,
@@ -366,9 +366,9 @@
    "n": 44,
    "domain": "AGIEDR",
    "tier": "P0",
-   "title": "Build wubu_measured_agent.c: agent self-integrity verification against measured-boot PCRs",
+   "title": "Build wubu_measured_agent.c: agent self-integrity verification against measured-boot PCRs (DONE)",
    "module": "wubuwizard/src/wubu_measured_agent.c",
-   "criterion": "wubu_measured_agent.c exists and exports the capability the title names; a make target test_wubu_measured_agent exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_measured_agent.c exists and exports the capability the title names; a make target test_wubu_measured_agent exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_measured_agent ALL PASSED -- baseline lock from PCR4 + the sealed runtime-PCR origin (fail-closed without a live root of trust); checkpoints chain into the runtime PCR; verify distinguishes tampered (-1) from unreadable-after-trust-death (-2); unauthorized extends detected; may_selfmodify is the single promotion gate]"
   },
   {
    "n": 45,
@@ -2894,9 +2894,9 @@
    "n": 360,
    "domain": "DRIVERS",
    "tier": "P0",
-   "title": "Build wubu_dma.c: Coherent DMA buffer allocator: physically contiguous, cache-aligned, zeroed",
+   "title": "Build wubu_dma.c: Coherent DMA buffer allocator: physically contiguous, cache-aligned, zeroed (DONE)",
    "module": "wubuos/src/kernel/wubu_dma.c",
-   "criterion": "wubu_dma.c exists and exports the capability the title names; a make target test_wubu_dma exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_dma.c exists and exports the capability the title names; a make target test_wubu_dma exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_dma ALL PASSED -- static 48KB identity-mapped pool; physically-contiguous first-fit runs (block-aligned); fragmentation reported honestly (a 3-block run fails in a 2-block hole); whole-pool alloc/free; double-free rejected; ownership-transfer barriers; identity phys via one accessor]"
   },
   {
    "n": 361,
