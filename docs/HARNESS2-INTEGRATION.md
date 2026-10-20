@@ -19,6 +19,25 @@ skills, orchestration — by contrast rather than by labels:
 That is the same shape as our standing loop (measure, adopt what moved a number,
 discard what did not), so it is used as the controller rather than reinvented.
 
+## Execution path: C11, not Python
+
+The loop that runs is **`src/wubu_harness2.c`** (`include/wubu_harness2.h`):
+
+| function | what it owns |
+|---|---|
+| `wubu_h2_harness_add_rule/render/stage` | the editable rule set and the exact bytes of `AGENTS.md` (deterministic) |
+| `wubu_h2_probe_run` | runs the task's **check command** with `alarm()` timeout; 124 on timeout, never success |
+| `wubu_h2_compose` | first passing probe wins, baseline included |
+| `wubu_h2_adopt` | the adopted rule count for the winning harness |
+| `wubu_h2_ledger_append/count` | append-only JSONL lessons, refusing strings that would not parse |
+| `wubu_h2_executor_argv` | `hermes -z <prompt> --in <ws> [-m model] --pass-session-id` |
+
+`make test_harness2` runs **58 checks** (rules, capacity, determinism, staging,
+probe exit codes and timeout, composition order, adoption, ledger append/parse,
+argv shape and overflow). The vendored Python tree under `third_party/harness2/`
+is **reference only** — it documents the upstream design and is not executed by
+the loop.
+
 ## What was added
 
 1. `harness2/substrate/hermes.py` — **HermesSubstrate** (`name = "hm"`):
