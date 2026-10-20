@@ -1,0 +1,578 @@
+{
+ "measured_at": "2026-10-19 (gauntlet_v3 @ af573d6)",
+ "classes": [
+  {
+   "class": "expected identifier",
+   "count": 54,
+   "samples": [
+    "llvm_065120_bitfld_1",
+    "gcc_torture_001078_const_addr_expr_1",
+    "extern_gcc_050294_pr34176"
+   ]
+  },
+  {
+   "class": "expected token before 'ts'",
+   "count": 35,
+   "samples": [
+    "fujitsu_0183_0000",
+    "fujitsu_0183_0001",
+    "fujitsu_0183_0002"
+   ]
+  },
+  {
+   "class": "undeclared identifier",
+   "count": 32,
+   "samples": [
+    "extern_gcc_058779_main_11",
+    "extern_gcc_058780_main_6",
+    "extern_gcc_058782_main_10"
+   ]
+  },
+  {
+   "class": "expected token before 'i'",
+   "count": 25,
+   "samples": [
+    "extern_gcc_050286_complex_2",
+    "extern_gcc_050328_complex_1",
+    "gcc_torture_001292_ffs_1"
+   ]
+  },
+  {
+   "class": "expected token before 'c'",
+   "count": 16,
+   "samples": [
+    "extern_gcc_064346_test_basic_alignment",
+    "extern_gcc_064347_test_basic_sizes",
+    "extern_gcc_064348_test_basic_union_size_and_align"
+   ]
+  },
+  {
+   "class": "expected token before 'f'",
+   "count": 15,
+   "samples": [
+    "extern_gcc_050270_921110_1",
+    "gcc_torture_001126_pr79043",
+    "extern_gcc_050348_func_ptr_1"
+   ]
+  },
+  {
+   "class": "expected token before '['",
+   "count": 14,
+   "samples": [
+    "gcc_torture_001216_pr22098_1",
+    "gcc_torture_001650_pr22098_2",
+    "fujitsu_0201_0044"
+   ]
+  },
+  {
+   "class": "expected token before '('",
+   "count": 14,
+   "samples": [
+    "gcc_torture_001267_pr22061_2",
+    "gcc_dg_001901_pr47426_2",
+    "c_testsuite_064773_00124"
+   ]
+  },
+  {
+   "class": "expected token before '+'",
+   "count": 11,
+   "samples": [
+    "extern_gcc_050245_970217_1",
+    "gcc_torture_000012_pr22061_4",
+    "extern_gcc_050371_pr22061_3"
+   ]
+  },
+  {
+   "class": "expected token before '_'",
+   "count": 11,
+   "samples": [
+    "gcc_torture_001336_pr49644",
+    "fujitsu_0201_0018",
+    "fujitsu_0201_0021"
+   ]
+  },
+  {
+   "class": "expected token before 'r'",
+   "count": 8,
+   "samples": [
+    "gcc_torture_000964_pr103255",
+    "wcc_chapter_8_valid_extra_credit_switch_no_case",
+    "extern_gcc_052258_convert_bfp_3"
+   ]
+  },
+  {
+   "class": "expected token before 's'",
+   "count": 5,
+   "samples": [
+    "gcc_torture_000233_pr44468",
+    "gcc_torture_000778_pr28865",
+    "wcc_chapter_18_valid_extra_credit_other_features_struct_decl_in_switch_statement"
+   ]
+  },
+  {
+   "class": "other parse error",
+   "count": 5,
+   "samples": [
+    "c_testsuite_064784_00084",
+    "c_testsuite_064874_00083",
+    "extern_gcc_050885_pr28289"
+   ]
+  },
+  {
+   "class": "expected token before '0'",
+   "count": 4,
+   "samples": [
+    "extern_gcc_050268_931018_1",
+    "gcc_torture_000454_pr61306_2",
+    "gcc_torture_000967_pr61306_1"
+   ]
+  },
+  {
+   "class": "expected token before ')'",
+   "count": 4,
+   "samples": [
+    "gcc_torture_001191_930526_1",
+    "wcc_chapter_14_valid_declarators_declarators",
+    "wcc_chapter_15_valid_declarators_equivalent_declarators"
+   ]
+  },
+  {
+   "class": "expected token before 'd'",
+   "count": 4,
+   "samples": [
+    "fujitsu_0181_0127",
+    "fujitsu_0181_0128",
+    "fujitsu_0181_0130"
+   ]
+  },
+  {
+   "class": "expected expression",
+   "count": 3,
+   "samples": [
+    "extern_gcc_050274_compndlit_1",
+    "gcc_torture_000144_compndlit_1",
+    "gcc_compile_004646_20011217_2"
+   ]
+  },
+  {
+   "class": "expected token before '/'",
+   "count": 3,
+   "samples": [
+    "llvm_065137_980605_1",
+    "extern_gcc_050515_980605_1",
+    "gcc_torture_000731_980605_1"
+   ]
+  },
+  {
+   "class": "expected token before ','",
+   "count": 3,
+   "samples": [
+    "extern_gcc_050411_930603_1",
+    "extern_gcc_045827_pr63530",
+    "c_testsuite_064869_00121"
+   ]
+  },
+  {
+   "class": "expected token before 'mylabel'",
+   "count": 3,
+   "samples": [
+    "llvm_065202_930406_1",
+    "extern_gcc_050636_930406_1",
+    "gcc_torture_001008_930406_1"
+   ]
+  },
+  {
+   "class": "expected token before 'ATTRIBUTE_UNUSED'",
+   "count": 3,
+   "samples": [
+    "extern_gcc_064342_test_passing_structs_and_unions",
+    "extern_gcc_058194_test_passing_structs_and_unions",
+    "extern_gcc_058205_test_empty_structs_and_unions"
+   ]
+  },
+  {
+   "class": "expected token before '.'",
+   "count": 3,
+   "samples": [
+    "gcc_torture_000339_va_arg_7",
+    "gcc_torture_000647_20050613_1",
+    "extern_gcc_050979_pr28634"
+   ]
+  },
+  {
+   "class": "expected token before 'C'",
+   "count": 2,
+   "samples": [
+    "gcc_torture_000023_pr84478",
+    "llvm_064971_pr84478"
+   ]
+  },
+  {
+   "class": "expected token before 'TN'",
+   "count": 2,
+   "samples": [
+    "extern_gcc_050275_memcpy_bi",
+    "gcc_torture_000147_memcpy_bi"
+   ]
+  },
+  {
+   "class": "expected token before 'S'",
+   "count": 2,
+   "samples": [
+    "gcc_torture_001239_pr85582_3",
+    "gcc_torture_000258_pr85582_2"
+   ]
+  },
+  {
+   "class": "expected token before '\"'",
+   "count": 2,
+   "samples": [
+    "gcc_torture_001295_pr86659_1",
+    "gcc_torture_000412_pr86659_2"
+   ]
+  },
+  {
+   "class": "expected token before 'T'",
+   "count": 2,
+   "samples": [
+    "gcc_torture_000140_pr84169",
+    "gcc_torture_000870_pr98474"
+   ]
+  },
+  {
+   "class": "expected token before '*'",
+   "count": 2,
+   "samples": [
+    "gcc_torture_001451_fprintf_chk_1",
+    "extern_gcc_050807_fprintf_chk_1"
+   ]
+  },
+  {
+   "class": "expected token before '}'",
+   "count": 2,
+   "samples": [
+    "gcc_compile_005264_pr111911_2",
+    "extern_gcc_050687_20000403_1"
+   ]
+  },
+  {
+   "class": "expected token before 'in1'",
+   "count": 2,
+   "samples": [
+    "extern_gcc_061230_vexts64_1",
+    "extern_gcc_061243_vextu64_1"
+   ]
+  },
+  {
+   "class": "expected token before 'g'",
+   "count": 2,
+   "samples": [
+    "gcc_torture_000276_pr68249",
+    "llvm_065032_pr68249"
+   ]
+  },
+  {
+   "class": "expected token before 'thr'",
+   "count": 2,
+   "samples": [
+    "slimcc_067694_tls",
+    "chibicc_065960_tls"
+   ]
+  },
+  {
+   "class": "expected token before 'size'",
+   "count": 2,
+   "samples": [
+    "gcc_compile_004186_20010605_1",
+    "gcc_torture_000638_pr82210"
+   ]
+  },
+  {
+   "class": "expected token before 'help'",
+   "count": 2,
+   "samples": [
+    "gcc_compile_004670_20000105_1",
+    "extern_gcc_051209_20000105_1"
+   ]
+  },
+  {
+   "class": "expected token before '{'",
+   "count": 2,
+   "samples": [
+    "extern_gcc_048480_trans_mem_3_1",
+    "extern_gcc_051091_BUG18"
+   ]
+  },
+  {
+   "class": "expected token before 'u'",
+   "count": 2,
+   "samples": [
+    "wcc_chapter_16_valid_chars_type_specifiers",
+    "gcc_torture_001009_pr104604"
+   ]
+  },
+  {
+   "class": "expected token before ':'",
+   "count": 2,
+   "samples": [
+    "gcc_torture_000867_pr123978",
+    "gcc_torture_001020_pr124358"
+   ]
+  },
+  {
+   "class": "expected token before 'dl'",
+   "count": 2,
+   "samples": [
+    "extern_gcc_052274_compare_eq_const",
+    "extern_gcc_052331_compare_rel_const"
+   ]
+  },
+  {
+   "class": "expected token before 'd64a'",
+   "count": 2,
+   "samples": [
+    "extern_gcc_052306_operator_cond",
+    "extern_gcc_052310_operator_comma"
+   ]
+  },
+  {
+   "class": "expected token before '-'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_001054_20050826_1"
+   ]
+  },
+  {
+   "class": "expected token before '#'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_000058_pr88904"
+   ]
+  },
+  {
+   "class": "expected token before 'L'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_001328_pr49218"
+   ]
+  },
+  {
+   "class": "member declaration",
+   "count": 1,
+   "samples": [
+    "gcc_torture_001340_pr71700"
+   ]
+  },
+  {
+   "class": "expected token before '__attribute__'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_000118_pr123625"
+   ]
+  },
+  {
+   "class": "expected token before 'y'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_001427_20070919_1"
+   ]
+  },
+  {
+   "class": "expected token before 'B'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_000131_pr38533"
+   ]
+  },
+  {
+   "class": "expected token before 'in'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_063431_vld1_lane_o0"
+   ]
+  },
+  {
+   "class": "expected token before 'fun_test_returning___m64'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_064353_test_m64m128_returning"
+   ]
+  },
+  {
+   "class": "expected token before 'iF'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_000217_20070614_1"
+   ]
+  },
+  {
+   "class": "expected token before 'thr1'",
+   "count": 1,
+   "samples": [
+    "slimcc_067658_tls2"
+   ]
+  },
+  {
+   "class": "expected token before 'attr'",
+   "count": 1,
+   "samples": [
+    "tinycc_065785_106_versym"
+   ]
+  },
+  {
+   "class": "expected token before 'p'",
+   "count": 1,
+   "samples": [
+    "tinycc_065857_117_builtins"
+   ]
+  },
+  {
+   "class": "expected token before 'n'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_000337_pr41935"
+   ]
+  },
+  {
+   "class": "expected token before 'foo'",
+   "count": 1,
+   "samples": [
+    "c_testsuite_064797_00141"
+   ]
+  },
+  {
+   "class": "expected token before 'ui'",
+   "count": 1,
+   "samples": [
+    "wcc_chapter_12_valid_explicit_casts_chained_casts"
+   ]
+  },
+  {
+   "class": "expected token before 'XXX'",
+   "count": 1,
+   "samples": [
+    "c_testsuite_064858_00062"
+   ]
+  },
+  {
+   "class": "expected token before 'X'",
+   "count": 1,
+   "samples": [
+    "c_testsuite_064872_00069"
+   ]
+  },
+  {
+   "class": "expected token before 'func'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_046577_ic_misattribution_1a"
+   ]
+  },
+  {
+   "class": "expected token before 'aa'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_046579_indir_call_prof"
+   ]
+  },
+  {
+   "class": "expected token before 'go'",
+   "count": 1,
+   "samples": [
+    "c_testsuite_064903_00089"
+   ]
+  },
+  {
+   "class": "expected token before 'I'",
+   "count": 1,
+   "samples": [
+    "fujitsu_0201_0047"
+   ]
+  },
+  {
+   "class": "expected token before 'value'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_048409_20090210_1"
+   ]
+  },
+  {
+   "class": "expected token before 't'",
+   "count": 1,
+   "samples": [
+    "gcc_compile_004765_pr82564"
+   ]
+  },
+  {
+   "class": "expected token before 'V'",
+   "count": 1,
+   "samples": [
+    "gcc_torture_000858_pr65170"
+   ]
+  },
+  {
+   "class": "expected token before 'expect'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_050933_mzero2"
+   ]
+  },
+  {
+   "class": "expected token before ';'",
+   "count": 1,
+   "samples": [
+    "wcc_chapter_8_valid_extra_credit_switch_empty"
+   ]
+  },
+  {
+   "class": "expected token before 'q'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_051610_blk"
+   ]
+  },
+  {
+   "class": "expected token before 'sd'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_052260_signbit_1"
+   ]
+  },
+  {
+   "class": "expected token before 'd32a'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_052289_convert_dfp_2"
+   ]
+  },
+  {
+   "class": "expected token before 'DF'",
+   "count": 1,
+   "samples": [
+    "extern_gcc_052328_convert_bfp_12"
+   ]
+  }
+ ],
+ "runtime_fail_suites": [
+  {
+   "suite": "gcc",
+   "count": 82
+  },
+  {
+   "suite": "extern",
+   "count": 64
+  },
+  {
+   "suite": "wcc",
+   "count": 40
+  },
+  {
+   "suite": "llvm",
+   "count": 18
+  },
+  {
+   "suite": "c",
+   "count": 6
+  }
+ ]
+}
