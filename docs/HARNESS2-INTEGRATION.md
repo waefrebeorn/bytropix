@@ -147,7 +147,7 @@ final agentic selector, and an improvement harness holding `EXPERIENCE.md` lesso
 with edit attribution (`helped | hurt | no observed effect | confounded`).
 
 **Implemented.** Attribution now exists and is honest about its regime:
-`wubu_h2_verdict()` returns HELDED/HURT/NO_EFFECT/CONFOUNDED, and a probe carrying
+`wubu_h2_verdict()` returns HELPED/HURT/NO_EFFECT/CONFOUNDED, and a probe carrying
 more than one edit is reported **CONFOUNDED** rather than credited. The ledger
 records `result` and `verdict` per probe.
 
