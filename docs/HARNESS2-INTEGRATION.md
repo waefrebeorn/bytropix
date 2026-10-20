@@ -60,7 +60,27 @@ The upstream benchmark adapters (`--bench jb|wb|lab`, substrates `oc|cx`) are le
 untouched: they carry benchmark-specific launchers. WuBu drives the substrate
 directly.
 
-## Usage
+## Runnable C11 driver
+
+```
+make harness2_c11
+./harness2_c11 <task-id> <ledger.jsonl> <check-cmd> [rule ...]
+```
+
+Baseline probe plus one probe per rule, each scored by the check; adoption is the
+first passing probe and one JSONL record is appended. Measured:
+
+```
+./harness2_c11 demo  /tmp/h2ledger.jsonl 'test -f /tmp/h2_marker' 'noop rule A'
+  probe 0 check_rc=1 · probe 1 check_rc=1 · compose: no probe passed -> rc 1
+./harness2_c11 demo2 /tmp/h2ledger.jsonl 'true' 'rule A' 'rule B'
+  probe 0 check_rc=0 · adopted probe 0 · ledger now holds 2 records
+```
+
+The Python driver below is a reference implementation of the same loop; the
+system path is the C11 one.
+
+## Usage (reference)
 
 ```bash
 # no model calls: prints the argv each probe would run

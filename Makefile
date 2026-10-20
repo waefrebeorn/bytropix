@@ -865,6 +865,9 @@ test_muon_ortho: tools/test_muon_ortho.c src/wubu_muon.c include/wubu_muon.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_muon_ortho.c src/wubu_muon.c -lm
 	./$@
 
+harness2_c11: tools/harness2_c11.c src/wubu_harness2.c include/wubu_harness2.h
+	$(CC) $(CFLAGS) -I include -o $@ tools/harness2_c11.c src/wubu_harness2.c
+
 test_harness2: tools/test_harness2.c src/wubu_harness2.c include/wubu_harness2.h
 	$(CC) $(CFLAGS) -I include -o $@ tools/test_harness2.c src/wubu_harness2.c
 	./$@
