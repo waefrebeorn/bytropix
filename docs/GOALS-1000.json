@@ -4798,9 +4798,9 @@
    "n": 598,
    "domain": "NAMESPACE",
    "tier": "P2",
-   "title": "Build wubu_ns_pid.c: Per-task namespace subtree at /n/pid/{tid}",
+   "title": "Build wubu_ns_pid.c: Per-task namespace subtree at /n/pid/{tid} (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_pid.c",
-   "criterion": "wubu_ns_pid.c exists and exports the capability the title names; a make target test_wubu_ns_pid exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_pid.c exists and exports the capability the title names; a make target test_wubu_ns_pid exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_pid ALL PASSED -- per-task view at /n/pid/{tid} built on wubu_ns_root; cross-task isolation asserted both directions (task 42 cannot resolve /n/pid/7, task 7 cannot resolve /n/pid/42); duplicate tid rejected; unregister destroys the view, re-register makes a fresh one; full registry fail-closed]"
   },
   {
    "n": 599,
@@ -6214,9 +6214,9 @@
    "n": 775,
    "domain": "SECURITY",
    "tier": "P0",
-   "title": "Build wubu_audit.c: Hash-chained kernel audit log with tamper detection",
+   "title": "Build wubu_audit.c: Hash-chained kernel audit log with tamper detection (DONE)",
    "module": "wubuos/src/kernel/wubu_audit.c",
-   "criterion": "wubu_audit.c exists and exports the capability the title names; a make target test_wubu_audit exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_audit.c exists and exports the capability the title names; a make target test_wubu_audit exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_audit ALL PASSED -- SHA-256 chain (the kernel's own FIPS 180-4 core, wubu_sha256.c) over seq/ts/event/pid/msg; tamper detection proven white-box: payload or hash mutation flips verify() to -1, restore flips it back; ring wrap keeps every retained link intact; head digest exported for measured-boot sealing]"
   },
   {
    "n": 776,
