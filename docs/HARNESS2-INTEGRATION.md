@@ -130,3 +130,63 @@ passed. A probe is only evidence once its check can fail.
   once a run has more than one task with a passing probe.
 - Wire `harness2_agi.py --k 1` into a nightly job so harness edits accumulate
   evidence instead of being re-proposed each session.
+## Devil's advocate: three rounds, and what each changed
+
+### Round 1 — algorithm fidelity
+
+**Criticism.** The paper's composition runs on *behavioural contrast without a
+ground-truth verifier* (§2.2.1: "without ground-truth feedback", "contrasts inform
+composition rather than verify task correctness"). The C11 loop scores probes by a
+check command's exit status. That is a verifier — a different regime, and exactly
+what the paper says does not exist in the open world. Calling the module "the
+two-level loop" overstated it.
+
+**Also under-modelled:** two candidates per step (invariant + domain-specific),
+k-way parallel or sequential recursion, selective merge/revise composition, a
+final agentic selector, and an improvement harness holding `EXPERIENCE.md` lessons
+with edit attribution (`helped | hurt | no observed effect | confounded`).
+
+**Implemented.** Attribution now exists and is honest about its regime:
+`wubu_h2_verdict()` returns HELDED/HURT/NO_EFFECT/CONFOUNDED, and a probe carrying
+more than one edit is reported **CONFOUNDED** rather than credited. The ledger
+records `result` and `verdict` per probe.
+
+**Still different, on purpose:** selection is deterministic (first passing probe,
+baseline included) and there is no invariant/domain split, no k-way scheduling, no
+agentic final selector. Those need a model in the loop; the controller does not
+pretend to have one.
+
+### Round 2 — measurement credibility
+
+**Criticism.** The compiler numbers may have counted tests that never ran.
+
+**Found.** Real defect: without `.PHONY`, `make test_X` on an already-built target
+printed "up to date" and skipped `./$@`. Fixed in the body repo for all 36 targets;
+`make test` then still reported 200/200 — so the claim moved from assumed to
+verified. The gauntlet is unaffected (it forks and executes directly).
+
+**Also measured:** raising `HD_MAX_PARAMS` 16 → 64 grew `HDASTNode` to **9,592
+bytes** (inline `param_names[64][64]` + two pointer arrays). Peak RSS compiling the
+largest suite file: **4.6 MB**. Accepted, with the cost recorded rather than
+hidden.
+
+### Round 3 — implementation defects
+
+Four, all fixed:
+
+| defect | fix |
+|---|---|
+| `wubu_h2_adopt` promised rule text, returned only a count, and never wrote `out` | copies the winning harness's rules (the probe now carries a `harness` pointer) |
+| the C11 driver freed each harness before adoption read it — dangling pointer | harnesses are kept alive until after compose/adopt |
+| `check_tail` was a dead field; no output was captured | pipe captures the **last** bytes the check printed |
+| ledger refused any string containing a quote (lost lessons) | proper JSON escaping, including control characters |
+
+And one robustness gap found while probing the timeout path: `alarm()` kills the
+shell but not its children. The child now gets its own process group and the
+parent `kill(-pid, SIGKILL)`s the group when the alarm fires.
+
+**Known gap left open:** probes have no `cwd` or environment restriction — a check
+runs in the caller's directory with the caller's environment. Recorded here rather
+than papered over.
+
+`make test_harness2`: **75 checks, ALL PASSED** after these changes.

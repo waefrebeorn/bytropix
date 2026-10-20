@@ -93,6 +93,15 @@ int main(void) {
     CHECK(p2.check_rc == 124);                       /* timeout != success */
     CHECK(wubu_h2_probe_run(&p2, 3, empty, "true", 0) == -1); /* bad timeout */
     CHECK(wubu_h2_probe_run(&p2, 3, empty, "", 5) == -1);     /* empty command */
+    CHECK(p0.harness == empty);                              /* probe knows its harness */
+    CHECK(p0.elapsed_ms >= 0);
+    {
+        wubu_h2_probe_t pc;
+        CHECK(wubu_h2_probe_run(&pc, 4, empty, "echo hello-tail", 5) == 0);
+        CHECK(strstr(pc.check_tail, "hello-tail") != NULL);   /* output captured */
+        wubu_h2_probe_t pf;
+        CHECK(wubu_h2_probe_run(&pf, 5, empty, "exit 7", 5) == 7);
+    }
 
     /* ---- composition ---- */
     wubu_h2_probe_t set[3];
@@ -107,9 +116,15 @@ int main(void) {
     CHECK(wubu_h2_compose(set, 3) == -1);            /* nothing passed */
     CHECK(wubu_h2_compose(NULL, 0) == -1);
 
+    wubu_h2_harness_t *two = wubu_h2_harness_new();
+    wubu_h2_harness_add_rule(two, "rule one");
+    wubu_h2_harness_add_rule(two, "rule two");
+    for (int i = 0; i < 3; i++) set[i].harness = two;
     set[1].rules_count = 2;
     char adopted[4][WUBU_H2_RULE_LEN];
     CHECK(wubu_h2_adopt(set, 3, 1, adopted, 4) == 2);
+    CHECK(strcmp(adopted[0], "rule one") == 0);            /* text, not a count */
+    CHECK(strcmp(adopted[1], "rule two") == 0);
     CHECK(wubu_h2_adopt(set, 3, 9, adopted, 4) == -1);
     CHECK(wubu_h2_adopt(set, 3, -1, adopted, 4) == 0);
 
@@ -120,14 +135,27 @@ int main(void) {
     CHECK(wubu_h2_ledger_append(ledger, "task-a", set, 3, 1) == 0);
     CHECK(wubu_h2_ledger_append(ledger, "task-b", set, 3, -1) == 0);
     CHECK(wubu_h2_ledger_count(ledger) == 2);
-    CHECK(wubu_h2_ledger_append(ledger, "bad\"id", set, 3, 1) == -1);
-    CHECK(wubu_h2_ledger_count(ledger) == 2);        /* refused line absent */
+    CHECK(wubu_h2_ledger_append(ledger, "task-\"quoted\"", set, 3, 1) == 0);
+    CHECK(wubu_h2_ledger_count(ledger) == 3);        /* escaped, not refused */
     char *body = slurp(ledger);
     CHECK(body != NULL);
     if (body) {
         CHECK(strstr(body, "\"task\":\"task-a\"") != NULL);
         CHECK(strstr(body, "\"adopted\":1") != NULL);
         CHECK(strstr(body, "\"check_rc\":3") != NULL);
+    CHECK(strstr(body, "\\\"quoted\\\"") != NULL);          /* quotes escaped */
+    CHECK(strstr(body, "\"verdict\":\"confounded\"") != NULL); /* 2 edits at once */
+
+    /* A single-edit flip IS attributable, so the same contrast reads as helped. */
+    wubu_h2_probe_t one[2];
+    memset(one, 0, sizeof one);
+    one[0].probe_index = 0; one[0].check_rc = 1; one[0].harness = two;
+    one[1].probe_index = 1; one[1].check_rc = 0; one[1].rules_count = 1; one[1].harness = two;
+    CHECK(wubu_h2_ledger_append(ledger, "task-single", one, 2, 1) == 0);
+    CHECK(wubu_h2_ledger_count(ledger) == 4);
+    char *body2 = slurp(ledger);
+    CHECK(body2 && strstr(body2, "\"verdict\":\"helped\"") != NULL);
+    free(body2);
         free(body);
     }
 
@@ -150,6 +178,20 @@ int main(void) {
     CHECK(wubu_h2_executor_argv(argv, 4, "/h", "p", "/w", NULL) == -1);
     CHECK(wubu_h2_executor_argv(NULL, 8, "/h", "p", "/w", NULL) == -1);
 
+    /* ---- verdicts (paper's edit attribution, adapted) ---- */
+    wubu_h2_probe_t ref, cand;
+    memset(&ref, 0, sizeof ref); memset(&cand, 0, sizeof cand);
+    ref.check_rc = 1; cand.check_rc = 0; cand.rules_count = 1;
+    CHECK(wubu_h2_verdict(&ref, &cand) == WUBU_H2_HELPED);
+    ref.check_rc = 0; cand.check_rc = 1;
+    CHECK(wubu_h2_verdict(&ref, &cand) == WUBU_H2_HURT);
+    cand.check_rc = 0;
+    CHECK(wubu_h2_verdict(&ref, &cand) == WUBU_H2_NO_EFFECT);
+    ref.check_rc = 1; cand.check_rc = 0; cand.rules_count = 3; ref.rules_count = 0;
+    CHECK(wubu_h2_verdict(&ref, &cand) == WUBU_H2_CONFOUNDED);
+    CHECK(wubu_h2_verdict(NULL, &cand) == WUBU_H2_CONFOUNDED);
+
+    wubu_h2_harness_free(two);
     wubu_h2_harness_free(empty);
 
     /* cleanup: the staged tree is under mkdtemp, remove the files we made */

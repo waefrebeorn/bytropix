@@ -36,8 +36,19 @@ typedef struct {
     int  rules_count;               /* rules the probe ran with */
     int  check_rc;
     long elapsed_ms;
-    char check_tail[256];
+    char check_tail[256];           /* last bytes the check printed */
+    const wubu_h2_harness_t *harness; /* the harness this probe ran (not owned) */
 } wubu_h2_probe_t;
+
+/* Contrast verdict, after the paper's edit attribution. Our setting DOES have a
+ * check command, so a pass/fail flip is real evidence; anything else is
+ * confounded rather than credited. */
+typedef enum {
+    WUBU_H2_HELPED = 0,      /* reference failed, candidate passed */
+    WUBU_H2_HURT,            /* reference passed, candidate failed */
+    WUBU_H2_NO_EFFECT,       /* same result both ways */
+    WUBU_H2_CONFOUNDED       /* several edits at once, or missing reference */
+} wubu_h2_verdict_t;
 
 /* -- harness ---------------------------------------------------------- */
 wubu_h2_harness_t *wubu_h2_harness_new(void);
@@ -72,8 +83,12 @@ int wubu_h2_probe_run(wubu_h2_probe_t *out, int probe_index,
  * an edit when an edit is what passed. */
 int wubu_h2_compose(const wubu_h2_probe_t *probes, int n);
 
-/* Copy the adopted rules (those of probe `winner`) into `out`. Returns the
- * count copied, or -1 for a bad index. */
+/* Classify a candidate against the reference probe (index 0 by convention). */
+wubu_h2_verdict_t wubu_h2_verdict(const wubu_h2_probe_t *ref,
+                                  const wubu_h2_probe_t *cand);
+
+/* Copy the adopted harness's rule text (the harness probe `winner` ran with)
+ * into `out`. Returns the count copied, -1 for a bad index. */
 int wubu_h2_adopt(const wubu_h2_probe_t *probes, int n, int winner,
                   char out[][WUBU_H2_RULE_LEN], int cap);
 

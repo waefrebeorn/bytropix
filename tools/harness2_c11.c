@@ -24,10 +24,12 @@ int main(int argc, char **argv) {
     const char *check = argv[3];
 
     wubu_h2_probe_t probes[WUBU_H2_MAX_PROBES];
+    wubu_h2_harness_t *keep[WUBU_H2_MAX_PROBES];
     int n = 0;
 
     wubu_h2_harness_t *base = wubu_h2_harness_new();
     if (!base) return 2;
+    keep[n] = base;
     probes[n].probe_index = 0;
     wubu_h2_probe_run(&probes[n], 0, base, check, 30);
     printf("probe 0 (baseline, 0 rules): check_rc=%d\n", probes[n].check_rc);
@@ -41,25 +43,29 @@ int main(int argc, char **argv) {
             wubu_h2_harness_free(h);
             continue;
         }
+        keep[n] = h;   /* adoption reads the harness, so it must outlive the probe */
         wubu_h2_probe_run(&probes[n], n, h, check, 30);
         printf("probe %d (%d rule): check_rc=%d  %s\n",
                n, wubu_h2_harness_rule_count(h), probes[n].check_rc, argv[i]);
-        wubu_h2_harness_free(h);
         n++;
     }
-    wubu_h2_harness_free(base);
 
     int winner = wubu_h2_compose(probes, n);
     if (winner < 0) {
         printf("compose: no probe passed; nothing adopted\n");
         (void)wubu_h2_ledger_append(ledger, task, probes, n, -1);
+        for (int i = 0; i < n; i++) wubu_h2_harness_free(keep[i]);
         return 1;
     }
     printf("compose: adopted probe %d\n", winner);
+    char adopted[WUBU_H2_MAX_RULES][WUBU_H2_RULE_LEN];
+    int na = wubu_h2_adopt(probes, n, winner, adopted, WUBU_H2_MAX_RULES);
+    for (int i = 0; i < na; i++) printf("  adopted rule: %s\n", adopted[i]);
     if (wubu_h2_ledger_append(ledger, task, probes, n, winner) != 0) {
         fprintf(stderr, "ledger append failed: %s\n", ledger);
         return 2;
     }
     printf("ledger: %s now holds %d record(s)\n", ledger, wubu_h2_ledger_count(ledger));
+    for (int i = 0; i < n; i++) wubu_h2_harness_free(keep[i]);
     return 0;
 }
