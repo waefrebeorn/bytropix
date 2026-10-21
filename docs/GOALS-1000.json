@@ -552,7 +552,7 @@
    "tier": "P1",
    "title": "Micro-pretrain corpus reaches 150M tokens with a recorded licence per shard",
    "module": "wubuwizard/tools/gather_micro_pretrain.py",
-   "criterion": "models/corpus/micro_pretrain INDEX.json totals >=150M tokens; every shard has a MANIFEST.json with licence and sha256"
+   "criterion": "models/corpus/micro_pretrain INDEX.json totals >=150M tokens; every shard has a MANIFEST.json with licence and sha256 [fast-hack lever: NCM (Next Concept Modeling) -- arXiv:2610.14162 / HazyResearch/ncm (Kumbong, Khare, Mlauzi, Woen, Ding, Buchanan, Arora, Mirhoseini, Re); fast parallel coarse-to-fine text generation folded into the micro-pretrain corpus sharder as the WuBuOS AGI pretrain fast-hack]"
   },
   {
    "n": 68,
