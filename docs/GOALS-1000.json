@@ -4918,9 +4918,9 @@
    "n": 613,
    "domain": "NETWORK",
    "tier": "P0",
-   "title": "Build wubu_socket.c: In-kernel BSD socket object layer: socket/bind/listen/accept/connect on kernel fds, no host passthrough",
+   "title": "Build wubu_socket.c: In-kernel BSD socket object layer: socket/bind/listen/accept/connect on kernel fds, no host passthrough (DONE)",
    "module": "wubuos/src/kernel/wubu_socket.c",
-   "criterion": "wubu_socket.c exists and exports the capability the title names; a make target test_wubu_socket exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_socket.c exists and exports the capability the title names; a make target test_wubu_socket exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_socket ALL PASSED (55/55); code commit 23aba831 wubunos/master (ff 741178d7..23aba831); in-kernel BSD socket object layer: kernel fd_table + port_bitmap; socket/bind/listen/accept/connect (STREAM) + connect/sendto (DGRAM); SO_REUSEADDR/SO_REUSEPORT + ephemeral port allocation; TCP sendmsg iovec scatter + recvmsg gather; errno guards EADDRINUSE/EINVAL/ENOTCONN/EOPNOTSUPP/EBADF/EISCONN; zero host socket*() calls (no passthrough), pure C11 userspaceelftest]"
   },
   {
    "n": 614,
@@ -5182,17 +5182,17 @@
    "n": 646,
    "domain": "NETWORK",
    "tier": "P2",
-   "title": "Build wubu_socket.c: SO_REUSEADDR/SO_REUSEPORT plus kernel port allocation with bind races",
+   "title": "Build wubu_socket.c: SO_REUSEADDR/SO_REUSEPORT plus kernel port allocation with bind races (DONE)",
    "module": "wubuos/src/kernel/wubu_socket.c",
-   "criterion": "wubu_socket.c exists and exports the capability the title names; a make target test_wubu_socket exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_socket.c exists and exports the capability the title names; a make target test_wubu_socket exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_socket ALL PASSED (55/55); code commit 23aba831 wubunos/master (ff 741178d7..23aba831); in-kernel BSD socket object layer: kernel fd_table + port_bitmap; socket/bind/listen/accept/connect (STREAM) + connect/sendto (DGRAM); SO_REUSEADDR/SO_REUSEPORT + ephemeral port allocation; TCP sendmsg iovec scatter + recvmsg gather; errno guards EADDRINUSE/EINVAL/ENOTCONN/EOPNOTSUPP/EBADF/EISCONN; zero host socket*() calls (no passthrough), pure C11 userspaceelftest]"
   },
   {
    "n": 647,
    "domain": "NETWORK",
    "tier": "P2",
-   "title": "Build wubu_socket.c: TCP scatter/gather send: sendmsg iovec handling with UDP zero-copy-style batching",
+   "title": "Build wubu_socket.c: TCP scatter/gather send: sendmsg iovec handling with UDP zero-copy-style batching (DONE)",
    "module": "wubuos/src/kernel/wubu_socket.c",
-   "criterion": "wubu_socket.c exists and exports the capability the title names; a make target test_wubu_socket exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_socket.c exists and exports the capability the title names; a make target test_wubu_socket exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_socket ALL PASSED (55/55); code commit 23aba831 wubunos/master (ff 741178d7..23aba831); in-kernel BSD socket object layer: kernel fd_table + port_bitmap; socket/bind/listen/accept/connect (STREAM) + connect/sendto (DGRAM); SO_REUSEADDR/SO_REUSEPORT + ephemeral port allocation; TCP sendmsg iovec scatter + recvmsg gather; errno guards EADDRINUSE/EINVAL/ENOTCONN/EOPNOTSUPP/EBADF/EISCONN; zero host socket*() calls (no passthrough), pure C11 userspaceelftest]"
   },
   {
    "n": 648,
