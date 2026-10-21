@@ -4710,9 +4710,9 @@
    "n": 587,
    "domain": "NAMESPACE",
    "tier": "P1",
-   "title": "Build wubu_ns_symlink.c: Namespace symlink create and walk resolution on /n",
+   "title": "Build wubu_ns_symlink.c: Namespace symlink create and walk resolution on /n (DONE)",
    "module": "wubuos/src/runtime/wubu_ns_symlink.c",
-   "criterion": "wubu_ns_symlink.c exists and exports the capability the title names; a make target test_wubu_ns_symlink exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_ns_symlink.c exists and exports the capability the title names; a make target test_wubu_ns_symlink exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_ns_symlink -> ALL PASSED (37 checks); symlink create + walk resolving single/multi-hop chains, 2-link cycle ELOOP, 16-link hop-ceiling ELOOP, host-target passthrough, reset isolation; kernel.elf still builds]"
   },
   {
    "n": 588,
@@ -4902,9 +4902,9 @@
    "n": 611,
    "domain": "NETWORK",
    "tier": "P0",
-   "title": "Build wubu_gcm.c: Own C11 AES-128/256 core plus GCM AEAD with AESNI fast path (no OpenSSL)",
+   "title": "Build wubu_gcm.c: Own C11 AES-128/256 core plus GCM AEAD with AESNI fast path (no OpenSSL) (DONE)",
    "module": "wubuos/src/kernel/wubu_gcm.c",
-   "criterion": "wubu_gcm.c exists and exports the capability the title names; a make target test_wubu_gcm exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_gcm.c exists and exports the capability the title names; a make target test_wubu_gcm exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_gcm -> 35 checks, 0 failures (NIST TC1/TC2/TC3 AES-128, AES-256 key schedule, non-empty AAD full+partial-block GHASH path, CTR ciphertext + tag, decrypt round-trip, tag-tamper rejection); algorithm = wubu_crypto_gcm_core.h (canonical GF(2^128) McGrew&Viega, validated against Python cryptography AESGCM for TC1/2/3 + AAD KATs); kernel.elf builds]"
   },
   {
    "n": 612,
@@ -6222,25 +6222,25 @@
    "n": 776,
    "domain": "SECURITY",
    "tier": "P0",
-   "title": "Build wubu_crypto_aes.c: AES-128/192/256 block cipher with FIPS-197 vectors",
+   "title": "Build wubu_crypto_aes.c: AES-128/192/256 block cipher with FIPS-197 vectors (DONE)",
    "module": "wubuos/src/runtime/wubu_crypto_aes.c",
-   "criterion": "wubu_crypto_aes.c exists and exports the capability the title names; a make target test_wubu_crypto_aes exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_crypto_aes.c exists and exports the capability the title names; a make target test_wubu_crypto_aes exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_crypto_aes -> ALL PASSED (8 checks); FIPS-197 Appendix C.1/C.2/C.3 ciphertext KATs for AES-128/192/256, decrypt round-trip, bad-keybits rejection; kernel.elf still builds]"
   },
   {
    "n": 777,
    "domain": "SECURITY",
    "tier": "P0",
-   "title": "Build wubu_crypto_aesgcm.c: AES-GCM AEAD encrypt/decrypt/tag-verify",
+   "title": "Build wubu_crypto_aesgcm.c: AES-GCM AEAD encrypt/decrypt/tag-verify (DONE)",
    "module": "wubuos/src/runtime/wubu_crypto_aesgcm.c",
-   "criterion": "wubu_crypto_aesgcm.c exists and exports the capability the title names; a make target test_wubu_crypto_aesgcm exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_crypto_aesgcm.c exists and exports the capability the title names; a make target test_wubu_crypto_aesgcm exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_crypto_aesgcm -> 35 checks, 0 failures (identical battery to #611 via shared WUBU_GCM_TEST_BODY: NIST TC1/TC2/TC3, AES-256, AAD path, round-trip, tamper rejection); runtime facade wubu_aes_gcm_* forwards to shared static core wubu_crypto_gcm_core.h so kernel (#611) and runtime (#777) cannot drift]"
   },
   {
    "n": 778,
    "domain": "SECURITY",
    "tier": "P0",
-   "title": "Build wubu_crypto_sha512.c: SHA-512 and SHA-384 core with FIPS 180-4 known-answer vectors",
+   "title": "Build wubu_crypto_sha512.c: SHA-512 and SHA-384 core with FIPS 180-4 known-answer vectors (DONE)",
    "module": "wubuos/src/runtime/wubu_crypto_sha512.c",
-   "criterion": "wubu_crypto_sha512.c exists and exports the capability the title names; a make target test_wubu_crypto_sha512 exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_crypto_sha512.c exists and exports the capability the title names; a make target test_wubu_crypto_sha512 exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_crypto_sha512 -> 12 checks, 0 failures (NIST FIPS 180-4 B.1 known-answer vectors: empty, 'abc', 56-byte 448-bit alphabet-walk, 1,000,000-'a' multi-block, chain*3 168-byte; SHA-384 distinct tag vs SHA-512 (IV-distinction assertion); streaming 1+7+160 chunk == one-shot); constants derived from first principles (FIPS 180-4 K[i]=floor(2^64*frac(cbrt(p_i))), H[i]=floor(2^64*frac(sqrt(p_i)))) via exact integer floor-identity proof, cross-checked against the NIST FIPS 180-4 PDF; freestanding C11, _Static_assert(sizeof(ctx)==208==WUBU_SHA512_CTX_SZ), no external deps)]"
   },
   {
    "n": 779,
