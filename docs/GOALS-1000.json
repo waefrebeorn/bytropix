@@ -5168,7 +5168,7 @@
    "tier": "P2",
    "title": "Build wubu_p2p_repl.c: Distributed namespace: write-through replication of an /n subtree to N peers",
    "module": "wubuos/src/runtime/wubu_p2p_repl.c",
-   "criterion": "wubu_p2p_repl.c exists and exports the capability the title names; a make target test_wubu_p2p_repl exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_p2p_repl.c exists and exports the capability the title names; a make target test_wubu_p2p_repl exists, asserts that capability, and prints ALL PASSED [fast-hack lever: Lilypad (docs.lilypad.tech litepaper) -- open decentralized verifiable-compute protocol: container job execution via Bacalhau, on-chain job commitments, mediator-sampled audits, roles (job creators, resource/GPU providers, module providers, solvers, mediators), token payments/staking/routing, OpenAI-compatible inference API, permissionless + enterprise; folded into the /n distributed-namespace replication substrate as the WuBuOS decentralized compute-network fast-hack]"
   },
   {
    "n": 645,
@@ -5496,7 +5496,7 @@
    "tier": "P2",
    "title": "Verify Long-horizon autonomy: blueprint-driven colony schedule with skill-cell task handoff",
    "module": "wubuwizard/src/wubu_blueprint.c",
-   "criterion": "capability evidence for \"Long-horizon autonomy: blueprint-driven colony schedule with skill-cell task handoff\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in wubu_blueprint.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"Long-horizon autonomy: blueprint-driven colony schedule with skill-cell task handoff\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in wubu_blueprint.c, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [fast-hack lever: Kevin Bacon / small-world network science (Watts-Strogatz 1998 Nature small-world model; betweenness centrality; dokb gene, Rooke et al. Nature Communications 15:3339 2024) -- high clustering plus a few long-range shortcut edges and betweenness-centrality linchpins applied to colony skill-cell handoff routing: prefer hub skills as shortcuts and measure centrality to find load-bearing handoff nodes]"
   },
   {
    "n": 686,
@@ -7848,7 +7848,7 @@
    "tier": "P1",
    "title": "Build wubu_gjk.c: GJK closest-point plus EPA penetration-depth narrowphase",
    "module": "wubuwizard/src/wubu_gjk.c",
-   "criterion": "wubu_gjk.c exists and exports the capability the title names; a make target test_wubu_gjk exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_gjk.c exists and exports the capability the title names; a make target test_wubu_gjk exists, asserts that capability, and prints ALL PASSED [fast-hack lever: Blind Precise Assembly (arXiv:2610.23849; github younghyopark/mjfit) -- proprioception-only sim-to-real peg-in-hole at tight clearance; mjfit procedurally generates exact convex-prism collision geometry (preserves clearance where V-HACD/CoACD jam) plus heavy domain randomization; folded into the GJK/EPA narrowphase as the exact-geometry tight-clearance collision fast-hack]"
   },
   {
    "n": 980,
