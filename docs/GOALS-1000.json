@@ -6662,9 +6662,9 @@
    "n": 831,
    "domain": "STACK",
    "tier": "P1",
-   "title": "Verify wubunos Makefile header-dependency tracking (-MMD -MP + -include .d)",
+   "title": "Verify wubunos Makefile header-dependency tracking (-MMD -MP + -include .d) (DONE)",
    "module": "wubunos/Makefile",
-   "criterion": "capability evidence for \"wubunos Makefile header-dependency tracking (-MMD -MP + -include .d)\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in Makefile, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"wubunos Makefile header-dependency tracking (-MMD -MP + -include .d)\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in Makefile, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: make test_header_deps prints ALL PASSED (code commit b7b82f0); -MMD -MP wired into CFLAGS (Makefile:18); -include of depfiles via wildcard at Makefile:32; test_header_deps target at Makefile:150 compiles tools/test_header_deps.c and greps the emitted depfile to prove header tracking; existing make test_lexer_suffix remains 13 checks/0 failures, -MMD -MP is non-breaking]"
   },
   {
    "n": 832,
