@@ -7806,9 +7806,9 @@
    "n": 974,
    "domain": "WORLDSIM",
    "tier": "P0",
-   "title": "Build wubu_quat.c: quaternion rigid-body orientation + torque integration",
+   "title": "Build wubu_quat.c: quaternion rigid-body orientation + torque integration (DONE)",
    "module": "wubuwizard/src/wubu_quat.c",
-   "criterion": "wubu_quat.c exists and exports the capability the title names; a make target test_wubu_quat exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_quat.c exists and exports the capability the title names; a make target test_wubu_quat exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_quat -> 24 checks, 0 failures; KAT vectors cross-validated against independent Python reference quat_oracle.py (w,x,y,z scalar-first): two-180deg product -> (-1,0,0,0) = full-turn double cover, slerp(I,PI,0.5)=90deg/x-axis, shortest-path flip (dot<0) and zero-norm->identity, 90deg-about-z maps x->y and y->-x, integrate 2pi about z -> -I double cover, squad endpoints == q1/q2; C float vs double oracle agree to ~1e-7 within the 1e-5 KAT tolerance.]"
   },
   {
    "n": 975,
@@ -7998,9 +7998,9 @@
    "n": 998,
    "domain": "WORLDSIM",
    "tier": "P3",
-   "title": "Build wubu_quat.c: quaternion slerp and squad interpolation for entity pose",
+   "title": "Build wubu_quat.c: quaternion slerp and squad interpolation for entity pose (DONE)",
    "module": "wubuwizard/src/wubu_quat.c",
-   "criterion": "wubu_quat.c exists and exports the capability the title names; a make target test_wubu_quat exists, asserts that capability, and prints ALL PASSED"
+   "criterion": "wubu_quat.c exists and exports the capability the title names; a make target test_wubu_quat exists, asserts that capability, and prints ALL PASSED [verified: make test_wubu_quat -> 24 checks, 0 failures; KAT vectors cross-validated against independent Python reference quat_oracle.py (w,x,y,z scalar-first): two-180deg product -> (-1,0,0,0) = full-turn double cover, slerp(I,PI,0.5)=90deg/x-axis, shortest-path flip (dot<0) and zero-norm->identity, 90deg-about-z maps x->y and y->-x, integrate 2pi about z -> -I double cover, squad endpoints == q1/q2; C float vs double oracle agree to ~1e-7 within the 1e-5 KAT tolerance.]"
   },
   {
    "n": 999,
