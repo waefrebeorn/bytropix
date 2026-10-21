@@ -6686,9 +6686,9 @@
    "n": 834,
    "domain": "STACK",
    "tier": "P1",
-   "title": "Verify wubunos zero-warning gate (-Wall -Wextra with a locked warning baseline)",
+   "title": "Verify wubunos zero-warning gate (-Wall -Wextra with a locked warning baseline) (DONE)",
    "module": "wubunos/Makefile",
-   "criterion": "capability evidence for \"wubunos zero-warning gate (-Wall -Wextra with a locked warning baseline)\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in Makefile, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"wubunos zero-warning gate (-Wall -Wextra with a locked warning baseline)\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in Makefile, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: make test_zero_warnings prints ALL PASSED (zero-new-warnings vs locked baseline tools/warning_baseline.txt, 125 entries; code commit 0fd673d2); -Wall -Wextra added to CFLAGS (Makefile:19); test_zero_warnings target at Makefile:358 rebuilds via make -B test_isa_driver and diffs warning: lines against baseline; full compiler builds under -Wall -Wextra with 0 errors]"
   },
   {
    "n": 835,
