@@ -6766,9 +6766,9 @@
    "n": 844,
    "domain": "STACK",
    "tier": "P2",
-   "title": "Verify compile-flag parity gate documenting every target that deviates from CFLAGS",
+   "title": "Verify compile-flag parity gate documenting every target that deviates from CFLAGS (DONE)",
    "module": "wubunos/Makefile",
-   "criterion": "capability evidence for \"compile-flag parity gate documenting every target that deviates from CFLAGS\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in Makefile, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this"
+   "criterion": "capability evidence for \"compile-flag parity gate documenting every target that deviates from CFLAGS\" is recorded in docs/PORTFOLIO-REALITY-CHECK.md with file:line in Makefile, and the owning test target prints ALL PASSED; a module that merely exists does not satisfy this [verified: make test_compile_flag_parity prints ALL PASSED against the committed tools/compile_flag_parity.txt manifest (49 recipes, 8 documented deviations; code commit 0b8fc282); target at Makefile test_compile_flag_parity; tools/check_compile_flags.py classifies only genuine codegen tokens; self-contained Makefile text scan, no compiler build]"
   },
   {
    "n": 845,
